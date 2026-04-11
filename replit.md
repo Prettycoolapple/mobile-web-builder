@@ -56,10 +56,23 @@ AI-powered NZ real estate development feasibility analysis mobile app built with
 ### API Server (Express)
 
 - `artifacts/api-server/src/routes/auth.ts` — `/auth/signup`, `/auth/login`, `/auth/me`, `/auth/profile`
-- `artifacts/api-server/src/routes/analyse.ts` — `/analyse`, `/search`, `/chat` (unified: accepts `{messages, currentReport}` → returns `{content, mode}`)
-- `artifacts/api-server/src/lib/claude.ts` — Gemini AI wrapper with `generateUnifiedResponse()` (server-side intent detection: analyse/discover/followup)
-- `artifacts/api-server/src/lib/prompts.ts` — SYSTEM_PROMPT + ANALYSE_AUGMENTATION + DISCOVER_AUGMENTATION (structured nested camelCase JSON format)
+- `artifacts/api-server/src/routes/analyse.ts` — `/analyse`, `/search`, `/chat` (unified endpoint; analyse mode runs full pipeline before AI)
+- `artifacts/api-server/src/routes/pipeline-test.ts` — Debug endpoint: `GET /api/pipeline-test?address=...` returns raw pipeline JSON
+- `artifacts/api-server/src/lib/claude.ts` — Gemini AI wrapper with `generateUnifiedResponse()` + exported `detectMode()`
+- `artifacts/api-server/src/lib/prompts.ts` — SYSTEM_PROMPT + ANALYSE_AUGMENTATION + DISCOVER_AUGMENTATION
 - `artifacts/api-server/src/lib/auth.ts` — JWT signing/verification, requireAuth middleware, password hashing
+
+### Phase 3 Pipeline (`artifacts/api-server/src/lib/`)
+
+- `address-parser.ts` — `extractNZAddress()`: regex first-pass + Gemini fallback to extract NZ street addresses from free text
+- `geocode.ts` — `geocodeAddress()`: Nominatim (OSM) primary, Google Maps fallback (needs `GOOGLE_MAPS_API_KEY`)
+- `linz.ts` — `fetchLINZParcel()` + `fetchLINZTitle()`: LINZ API layer 50804 (needs `LINZ_API_KEY`)
+- `auckland-council.ts` — `fetchUnitaryPlanZone()` + `fetchOverlays()` + `fetchContour()`: Auckland Council GIS at `mapspublic.aucklandcouncil.govt.nz/arcgis3`
+  - Zone service: `NonCouncil/UnitaryPlanZones/MapServer/1` (56-code numeric domain map)
+  - Overlays: layers 33 (heritage), 19 (notable trees, 30m buffer), 25/27 (viewshafts), 58 (coastal inundation), 24 (Waitakere), 29 (ridgeline)
+- `property-data.ts` — `fetchPropertyHistory()` + `checkAsbestosRisk()`: Auckland Council rating GIS + QV fallback; asbestos risk by build year (<=1940=low, 1941-1990=high, >1990=low)
+- `infrastructure.ts` — `fetchInfrastructure()`: stormwater/wastewater/water supply distance from parcel
+- `pipeline.ts` — `runPropertyPipeline()`: orchestrates all sources with `Promise.allSettled()`, logs timing (~1.5s), gracefully handles partial failures
 
 ### Database Schema (`lib/db/src/schema/`)
 

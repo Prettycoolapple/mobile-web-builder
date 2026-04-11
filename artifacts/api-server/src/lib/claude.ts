@@ -9,7 +9,7 @@ export interface Message {
 
 export type ChatMode = "analyse" | "discover" | "followup";
 
-function detectMode(lastMessage: string): ChatMode {
+export function detectMode(lastMessage: string): ChatMode {
   const lower = lastMessage.toLowerCase().trim();
 
   const searchKeywords = ["find me", "find properties", "search for", "show me properties", "discover", "looking for properties", "what properties", "properties in", "sections in", "land in"];

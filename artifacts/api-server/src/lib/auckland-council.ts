@@ -1,0 +1,273 @@
+import { logger } from "./logger";
+
+const GIS_BASE = "https://mapspublic.aucklandcouncil.govt.nz/arcgis3/rest/services";
+const ZONE_SERVICE = `${GIS_BASE}/NonCouncil/UnitaryPlanZones/MapServer`;
+const OVERLAY_SERVICE = `${GIS_BASE}/NonCouncil/UnitaryPlanManagementLayers/MapServer`;
+
+export interface ZoneResult {
+  zone_code: string;
+  zone_description: string;
+  min_lot_size_sqm: number | null;
+  raw_zone: string | null;
+}
+
+export interface Overlay {
+  name: string;
+  status: "clear" | "moderate" | "restricted" | "unknown";
+  detail: string;
+}
+
+export interface ContourResult {
+  slope_degrees: number | null;
+  classification: "flat" | "gentle" | "moderate" | "steep";
+  retaining_cost_low: number;
+  retaining_cost_high: number;
+  source: string;
+}
+
+const ZONE_DOMAIN: Record<number, { code: string; description: string; minLot: number | null }> = {
+  8:  { code: "THAB", description: "Terrace Housing and Apartment Buildings", minLot: 0 },
+  18: { code: "MHS",  description: "Mixed Housing Suburban", minLot: 400 },
+  60: { code: "MHU",  description: "Mixed Housing Urban", minLot: 300 },
+  19: { code: "SHZ",  description: "Single House Zone", minLot: 600 },
+  23: { code: "LLRZ", description: "Large Lot Residential Zone", minLot: 4000 },
+  20: { code: "RCSZ", description: "Rural and Coastal Settlement Zone", minLot: 2000 },
+  72: { code: "LDRZ", description: "Low Density Residential Zone", minLot: 600 },
+  70: { code: "2SDA", description: "Two-Storey Single Dwelling Area", minLot: 600 },
+  71: { code: "2SMDA", description: "Two-Storey Medium Density Area", minLot: 400 },
+  4:  { code: "FUZ",  description: "Future Urban Zone", minLot: null },
+  1:  { code: "BPZ",  description: "Business - Business Park Zone", minLot: 0 },
+  35: { code: "CCZ",  description: "Business - City Centre Zone", minLot: 0 },
+  49: { code: "GBZ",  description: "Business - General Business Zone", minLot: 0 },
+  5:  { code: "HIZ",  description: "Business - Heavy Industry Zone", minLot: 0 },
+  17: { code: "BPIZ", description: "Business - Light Industry Zone", minLot: 0 },
+  7:  { code: "LCZ",  description: "Business - Local Centre Zone", minLot: 0 },
+  10: { code: "MCZ",  description: "Business - Metropolitan Centre Zone", minLot: 0 },
+  12: { code: "MUZ",  description: "Business - Mixed Use Zone", minLot: 0 },
+  44: { code: "NCZ",  description: "Business - Neighbourhood Centre Zone", minLot: 0 },
+  22: { code: "TCZ",  description: "Business - Town Centre Zone", minLot: 0 },
+};
+
+async function arcgisQuery(
+  serviceUrl: string,
+  layerId: number,
+  lat: number,
+  lng: number,
+  outFields = "*",
+  distanceM?: number,
+  timeoutMs = 10000,
+): Promise<Record<string, unknown>[]> {
+  const url = new URL(`${serviceUrl}/${layerId}/query`);
+  url.searchParams.set("geometry", `${lng},${lat}`);
+  url.searchParams.set("geometryType", "esriGeometryPoint");
+  url.searchParams.set("inSR", "4326");
+  url.searchParams.set("spatialRel", "esriSpatialRelIntersects");
+  url.searchParams.set("outFields", outFields);
+  url.searchParams.set("returnGeometry", "false");
+  url.searchParams.set("f", "json");
+  if (distanceM != null) {
+    url.searchParams.set("distance", String(distanceM));
+    url.searchParams.set("units", "esriSRUnit_Meter");
+  }
+
+  const resp = await fetch(url.toString(), { signal: AbortSignal.timeout(timeoutMs) });
+  if (!resp.ok) throw new Error(`ArcGIS HTTP ${resp.status}`);
+
+  const data = (await resp.json()) as {
+    features?: Array<{ attributes: Record<string, unknown> }>;
+    error?: { message: string };
+  };
+
+  if (data.error) throw new Error(`ArcGIS error: ${data.error.message}`);
+  return (data.features ?? []).map((f) => f.attributes);
+}
+
+export async function fetchUnitaryPlanZone(lat: number, lng: number): Promise<ZoneResult> {
+  try {
+    const features = await arcgisQuery(ZONE_SERVICE, 1, lat, lng);
+    if (features.length > 0) {
+      const attrs = features[0];
+      const rawZoneCode = attrs["ZONE"] as number | null;
+
+      if (rawZoneCode != null && ZONE_DOMAIN[rawZoneCode]) {
+        const { code, description, minLot } = ZONE_DOMAIN[rawZoneCode];
+        logger.debug({ rawZoneCode, code, description }, "Zone resolved from Auckland Council GIS");
+        return {
+          zone_code: code,
+          zone_description: description,
+          min_lot_size_sqm: minLot,
+          raw_zone: String(rawZoneCode),
+        };
+      }
+
+      return {
+        zone_code: `Z${rawZoneCode ?? "?"}`,
+        zone_description: `Zone code ${rawZoneCode} — refer to Auckland Unitary Plan`,
+        min_lot_size_sqm: null,
+        raw_zone: rawZoneCode != null ? String(rawZoneCode) : null,
+      };
+    }
+  } catch (err) {
+    logger.warn({ err }, "Zone query failed");
+  }
+
+  return { zone_code: "UNKNOWN", zone_description: "Unknown — data unavailable", min_lot_size_sqm: null, raw_zone: null };
+}
+
+export async function fetchOverlays(lat: number, lng: number): Promise<Overlay[]> {
+  const OVERLAY_LAYERS: Array<{
+    name: string;
+    layerId: number;
+    distanceM?: number;
+    mapStatus: (attrs: Record<string, unknown>) => "clear" | "moderate" | "restricted";
+    mapDetail: (attrs: Record<string, unknown>) => string;
+  }> = [
+    {
+      name: "Heritage",
+      layerId: 33,
+      mapStatus: () => "restricted",
+      mapDetail: (attrs) => {
+        const name = String(attrs["NAME"] ?? attrs["HERITAGE_NAME"] ?? "Heritage place");
+        return `Historic Heritage Overlay applies — ${name}. Demolition or alteration requires Resource Consent. Contact heritage team.`;
+      },
+    },
+    {
+      name: "Notable Trees",
+      layerId: 19,
+      distanceM: 30,
+      mapStatus: () => "moderate",
+      mapDetail: (attrs) => {
+        const species = String(attrs["NAME"] ?? attrs["COMMON_NAME"] ?? attrs["SPECIES"] ?? "tree");
+        const schedule = String(attrs["SCHEDULE"] ?? "");
+        return `Notable tree on or near site: ${species}${schedule ? ` (Schedule ${schedule})` : ""}. Tree removal requires Resource Consent from Auckland Council.`;
+      },
+    },
+    {
+      name: "Volcanic Viewshaft",
+      layerId: 25,
+      mapStatus: () => "restricted",
+      mapDetail: () =>
+        "Regionally Significant Volcanic Viewshaft — height restrictions apply. Maximum building height may be below zone standard. Requires urban designer input.",
+    },
+    {
+      name: "Locally Significant Viewshaft",
+      layerId: 27,
+      mapStatus: () => "moderate",
+      mapDetail: () =>
+        "Locally Significant Volcanic Viewshaft — additional height assessment required at Resource Consent stage.",
+    },
+    {
+      name: "Coastal Inundation",
+      layerId: 58,
+      mapStatus: () => "restricted",
+      mapDetail: () =>
+        "Coastal Inundation Area (1% AEP + 1m sea level rise) — floor level controls apply. Check NES-F compliance requirements.",
+    },
+    {
+      name: "Waitakere Ranges Heritage",
+      layerId: 24,
+      mapStatus: () => "restricted",
+      mapDetail: () =>
+        "Waitakere Ranges Heritage Area — strict development controls. Most earthworks and vegetation clearance require consent.",
+    },
+    {
+      name: "Ridgeline Protection",
+      layerId: 29,
+      mapStatus: () => "moderate",
+      mapDetail: () =>
+        "Ridgeline Protection Overlay — skyline development controls apply. Building bulk and location may be restricted.",
+    },
+  ];
+
+  const overlays: Overlay[] = [];
+
+  await Promise.allSettled(
+    OVERLAY_LAYERS.map(async (overlay) => {
+      try {
+        const features = await arcgisQuery(
+          OVERLAY_SERVICE,
+          overlay.layerId,
+          lat,
+          lng,
+          "*",
+          overlay.distanceM,
+          8000,
+        );
+        if (features.length > 0) {
+          overlays.push({
+            name: overlay.name,
+            status: overlay.mapStatus(features[0]),
+            detail: overlay.mapDetail(features[0]),
+          });
+          logger.debug({ overlay: overlay.name }, "Overlay found");
+        }
+      } catch (err) {
+        logger.debug({ err, overlay: overlay.name }, "Overlay query failed");
+      }
+    }),
+  );
+
+  return overlays;
+}
+
+export async function fetchContour(lat: number, lng: number): Promise<ContourResult> {
+  const LINZ_ELEVATION_URL = "https://data.linz.govt.nz/services/api/v1/layers/104687/features/";
+  const linzKey = process.env["LINZ_API_KEY"];
+
+  if (linzKey) {
+    try {
+      const OFFSET = 0.0001;
+      const points = [
+        { lat, lng },
+        { lat: lat + OFFSET, lng },
+        { lat: lat - OFFSET, lng },
+        { lat, lng: lng + OFFSET },
+        { lat, lng: lng - OFFSET },
+      ];
+
+      const elevations: number[] = [];
+      for (const pt of points) {
+        const url = new URL(LINZ_ELEVATION_URL);
+        url.searchParams.set("q", `geometry INTERSECTS POINT(${pt.lng} ${pt.lat})`);
+        url.searchParams.set("count", "1");
+
+        const resp = await fetch(url.toString(), {
+          headers: { Authorization: `key ${linzKey}` },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!resp.ok) continue;
+
+        const data = (await resp.json()) as {
+          features?: Array<{ properties: Record<string, unknown> }>;
+        };
+        const elev = Number(data.features?.[0]?.properties?.["elevation"] ?? NaN);
+        if (!isNaN(elev)) elevations.push(elev);
+      }
+
+      if (elevations.length >= 2) {
+        const elevDiff = Math.max(...elevations) - Math.min(...elevations);
+        const distanceM = OFFSET * 111320;
+        const slopeDeg = Math.atan(elevDiff / distanceM) * (180 / Math.PI);
+        return classifySlope(slopeDeg, "LINZ DEM");
+      }
+    } catch (err) {
+      logger.debug({ err }, "LINZ elevation query failed");
+    }
+  }
+
+  return {
+    slope_degrees: null,
+    classification: "gentle",
+    retaining_cost_low: 10000,
+    retaining_cost_high: 30000,
+    source: "estimated (no elevation data available)",
+  };
+}
+
+function classifySlope(slopeDeg: number, source: string): ContourResult {
+  const rounded = Math.round(slopeDeg * 10) / 10;
+  if (slopeDeg < 5) return { slope_degrees: rounded, classification: "flat", retaining_cost_low: 0, retaining_cost_high: 0, source };
+  if (slopeDeg < 15) return { slope_degrees: rounded, classification: "gentle", retaining_cost_low: 10000, retaining_cost_high: 30000, source };
+  if (slopeDeg < 25) return { slope_degrees: rounded, classification: "moderate", retaining_cost_low: 50000, retaining_cost_high: 150000, source };
+  return { slope_degrees: rounded, classification: "steep", retaining_cost_low: 200000, retaining_cost_high: 400000, source };
+}

@@ -6,9 +6,12 @@ import {
   generateSearchResults,
   generateChatReply,
   generateUnifiedResponse,
+  detectMode,
   Message,
 } from "../lib/claude";
 import { verifyToken } from "../lib/auth";
+import { extractNZAddress } from "../lib/address-parser";
+import { runPropertyPipeline } from "../lib/pipeline";
 
 const router = Router();
 
@@ -154,8 +157,55 @@ router.post("/chat", async (req, res) => {
 
   if (messages && messages.length > 0) {
     try {
-      const { content, mode } = await generateUnifiedResponse(messages, currentReport);
-      res.json({ content, mode });
+      const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
+      const userText = lastUserMessage?.content ?? "";
+      const mode = detectMode(userText);
+
+      if (mode === "analyse") {
+        const [extractedAddress, aiResponseEarly] = await Promise.all([
+          extractNZAddress(userText).catch(() => null),
+          Promise.resolve(null),
+        ]);
+
+        if (extractedAddress) {
+          req.log.info({ address: extractedAddress }, "Running property pipeline for analyse mode");
+
+          const pipelineResult = await runPropertyPipeline(extractedAddress).catch((err) => {
+            req.log.warn({ err }, "Pipeline failed — falling back to AI-only analysis");
+            return null;
+          });
+
+          if (pipelineResult) {
+            const failedStr =
+              pipelineResult.failed_sources.length > 0
+                ? `\n\nDATA SOURCES THAT FAILED (treat as unknown): ${pipelineResult.failed_sources.join(", ")}`
+                : "";
+
+            const enrichedMessages: Message[] = [
+              ...messages.slice(0, -1),
+              {
+                role: "user",
+                content: `Analyse this NZ property for development feasibility.
+
+REAL DATA FETCHED FROM LINZ, AUCKLAND COUNCIL GIS, AND RATING DATABASES:
+${JSON.stringify(pipelineResult, null, 2)}
+${failedStr}
+
+Based on this real data, generate a complete FeasibilityReport JSON following your system instructions exactly. Use the fetched data as your primary source (prefer confirmed data over estimates). Where data is missing or a source failed, make reasonable NZ-market estimates and flag them in riskSummary. Return ONLY valid JSON — no markdown code fences, no other text.`,
+              },
+            ];
+
+            const { content, mode: responseMode } = await generateUnifiedResponse(enrichedMessages, currentReport);
+            res.json({ content, mode: responseMode });
+            return;
+          }
+        }
+
+        void aiResponseEarly;
+      }
+
+      const { content, mode: responseMode } = await generateUnifiedResponse(messages, currentReport);
+      res.json({ content, mode: responseMode });
     } catch (error) {
       req.log.error({ error }, "Failed to generate unified chat reply");
       res.status(500).json({

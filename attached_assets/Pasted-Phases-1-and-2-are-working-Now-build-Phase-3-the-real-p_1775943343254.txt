@@ -1,0 +1,160 @@
+Phases 1 and 2 are working. Now build Phase 3: the real property 
+data pipeline. This replaces Claude's placeholder data with actual 
+fetched data before Claude analyses it.
+
+IMPORTANT: The chat flow changes in this phase. When a user sends 
+an address:
+1. Backend extracts the address
+2. Fetches real data from external APIs in parallel
+3. Passes that data to Claude as context
+4. Claude analyses the real data and returns the FeasibilityReport JSON
+
+TASKS:
+
+1. ADDRESS EXTRACTION — /lib/address-parser.ts
+   Function: extractNZAddress(message: string): string | null
+   - Use Claude (a quick, cheap call) to extract a NZ address from 
+     free-text if present, or return null
+   - Example: "Can you check 42 Arney Road Remuera for me" → 
+     "42 Arney Road, Remuera, Auckland"
+
+2. GEOCODING — /lib/geocode.ts
+   Function: geocodeAddress(address: string): Promise<{lat, lng, formatted}>
+   - Call Google Maps Geocoding API
+   - Filter to NZ results only (components: country=NZ)
+   - Return lat, lng, formatted_address
+   - Throw descriptive error if not found
+
+3. LINZ API — /lib/linz.ts
+   Base URL: https://data.linz.govt.nz/services/api/v1
+   API key from env: LINZ_API_KEY
+
+   Function: fetchLINZParcel(lat: number, lng: number): Promise<LinzParcel>
+   - Query the NZ Primary Parcels layer (layer id: 50804)
+   - Use a point-in-polygon spatial query at the geocoded lat/lng
+   - Return: { 
+       parcel_id, appellation, area_sqm, title_no,
+       legal_description, topology_type
+     }
+
+   Function: fetchLINZTitle(title_no: string): Promise<LinzTitle>
+   - Query NZ Certificate of Title layer
+   - Return: { owners, estate_type, title_no, issue_date }
+
+   If LINZ API is rate limited or fails: return null and flag 
+   data_source as "unavailable" — do not throw, continue with 
+   what data is available.
+
+4. AUCKLAND COUNCIL GIS — /lib/auckland-council.ts
+   Use Auckland Council's ArcGIS REST API (public, no key needed):
+   Base: https://gis.aucklandcouncil.govt.nz/arcgis/rest/services
+
+   Function: fetchUnitaryPlanZone(lat, lng): Promise<ZoneResult>
+   - Layer: Auckland_Council/Auckland_Council_Hybrid_Overlay/MapServer/0
+     (or current Unitary Plan layer — verify URL is live)
+   - Spatial query: geometryType=esriGeometryPoint, inSR=4326
+   - Return: { zone_code, zone_description, min_lot_size_sqm }
+   - Map common zone codes to plain English:
+     THAB → "Terrace Housing and Apartment Buildings"
+     MHS → "Mixed Housing Suburban"
+     MHU → "Mixed Housing Urban"
+     SHZ → "Single House Zone"
+
+   Function: fetchOverlays(lat, lng): Promise<Overlay[]>
+   - Query these layers sequentially (or in parallel):
+     * Flood plain / flooding overlay
+     * Heritage overlay (Schedule of Historic Heritage)
+     * Notable trees overlay
+     * Volcanic viewshaft overlay
+     * Coastal protection overlay
+   - Return array of Overlay objects with status and detail
+   - If a layer query fails, return { name, status: 'unknown', detail: 'data unavailable' }
+
+   Function: fetchContour(lat, lng): Promise<ContourResult>
+   - Use LINZ elevation data or Auckland Council DEM layer
+   - Sample elevation at the point and 4 surrounding points (10m away)
+   - Calculate approximate slope in degrees
+   - Classify: 0-5° = flat, 5-15° = gentle, 15-25° = moderate, 25°+ = steep
+   - Return: { slope_degrees, classification, retaining_cost_low, retaining_cost_high }
+   - Retaining cost lookup:
+     flat → $0/$0
+     gentle → $10000/$30000
+     moderate → $50000/$150000
+     steep → $200000/$400000
+
+5. PROPERTY HISTORY — /lib/property-data.ts
+   Function: fetchPropertyHistory(address: string): Promise<PropertyHistory>
+   - Attempt to scrape QV.co.nz OR use Auckland Council rating data
+   - Return: { cv_nzd, cv_year, build_year, floor_area_sqm, 
+               land_area_sqm, property_type }
+   - If scraping fails: return partial data from LINZ (land area at least)
+   - Flag any fields that are estimated vs confirmed
+
+   Function: checkAsbestosRisk(build_year: number | null): AsbestosRisk
+   - If build_year is null → return 'unknown'
+   - If build_year <= 1940 → 'low' (pre-asbestos era)
+   - If 1940 < build_year <= 1990 → 'high' (peak asbestos era)
+     Note: "Buildings from this era frequently contain asbestos 
+     cement products, textured ceiling coatings (Artex), vinyl 
+     floor tiles, and pipe lagging. WorkSafe NZ requires a licensed 
+     assessor before demolition."
+   - If build_year > 1990 → 'low'
+   - Return: { risk: 'low'|'moderate'|'high', notes: string,
+               demo_cost_low: number, demo_cost_high: number }
+   - Demo costs: low risk → $15000/$30000, high risk → $35000/$80000
+
+6. INFRASTRUCTURE — /lib/infrastructure.ts
+   Function: fetchInfrastructure(lat, lng): Promise<InfrastructureItem[]>
+   For now: use Auckland Council GIS to query:
+   - Stormwater network layer (pipes, manholes)
+   - Wastewater network layer  
+   - Water supply mains layer
+   For each, find nearest feature, calculate distance in metres.
+   Classify:
+   - Within parcel boundary → 'on-parcel' (low cost)
+   - 0-5m from boundary → 'boundary' (moderate cost)  
+   - 5-20m on neighbouring private land → 'neighbour' (requires negotiation)
+   - On road/public land → 'public-land' (standard connection, consented)
+   Return cost estimates:
+   - on-parcel: $0–$5,000
+   - boundary: $5,000–$20,000
+   - neighbour: $20,000–$60,000 + legal
+   - public-land: $10,000–$40,000
+
+7. PIPELINE ORCHESTRATOR — /lib/pipeline.ts
+   Function: runPropertyPipeline(address: string): Promise<PipelineResult>
+   - Run all fetches in parallel using Promise.allSettled()
+   - Collect results, note which sources succeeded/failed
+   - Return a structured context object with all data
+   - Log timing for each source (for debugging slow APIs)
+
+8. UPDATE /app/api/chat/route.ts
+   When mode = "analyse":
+   - Extract address using extractNZAddress()
+   - Run runPropertyPipeline(address)
+   - Build an enriched prompt:
+     "Analyse this NZ property for development feasibility.
+     
+     REAL DATA FETCHED:
+     ${JSON.stringify(pipelineResult, null, 2)}
+     
+     DATA SOURCES THAT FAILED (treat as unknown):
+     ${failedSources.join(', ')}
+     
+     Based on this real data, generate a FeasibilityReport JSON. 
+     Use the fetched data as your primary source. Where data is 
+     missing, make reasonable NZ-market estimates and flag them 
+     in the report. Return ONLY valid JSON."
+   - Pass this as the final user message to Claude
+
+9. VERIFICATION CHECKLIST
+   [ ] "Analyse 42 Arney Road, Remuera" triggers the full pipeline
+   [ ] LINZ returns real parcel area for a test address
+   [ ] Auckland Council GIS returns the correct zone (verify manually)
+   [ ] At least one overlay check works
+   [ ] Pipeline completes in under 15 seconds total
+   [ ] Failures in individual APIs don't crash the whole pipeline
+   [ ] Claude receives the real data and returns a populated report
+   [ ] Add /app/api/pipeline-test/route.ts endpoint that returns 
+       raw pipeline JSON for a hardcoded test address — useful for 
+       debugging without going through chat
