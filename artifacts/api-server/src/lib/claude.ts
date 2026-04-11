@@ -1,9 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { ai } from "@workspace/integrations-gemini-ai";
 import { logger } from "./logger";
-
-const anthropic = new Anthropic({
-  apiKey: process.env["ANTHROPIC_API_KEY"],
-});
 
 export interface Message {
   role: "user" | "assistant";
@@ -47,18 +43,18 @@ NZ-specific knowledge to apply:
 - Finance: Construction finance at 7-9% p.a.
 - Consent & professional fees: 12-15% of construction cost`;
 
+function buildGeminiHistory(conversationHistory: Message[]) {
+  return conversationHistory.map((m) => ({
+    role: m.role === "assistant" ? ("model" as const) : ("user" as const),
+    parts: [{ text: m.content }],
+  }));
+}
+
 export async function generateFeasibilityReport(
   address: string,
   conversationHistory: Message[] = [],
 ): Promise<string> {
-  const messages: Anthropic.MessageParam[] = [
-    ...conversationHistory.map((m) => ({
-      role: m.role as "user" | "assistant",
-      content: m.content,
-    })),
-    {
-      role: "user",
-      content: `Analyse this NZ property for development feasibility: ${address}
+  const prompt = `Analyse this NZ property for development feasibility: ${address}
 
 Please return a comprehensive feasibility report as a JSON object. The JSON must follow this exact structure:
 
@@ -137,21 +133,23 @@ Please return a comprehensive feasibility report as a JSON object. The JSON must
   "disclaimer": "These are indicative estimates only. Engage a quantity surveyor for accurate figures."
 }
 
-Use your deep NZ real estate knowledge to estimate all values realistically based on the suburb and property type. Return ONLY the JSON object, no other text.`,
-    },
-  ];
+Use your deep NZ real estate knowledge to estimate all values realistically based on the suburb and property type. Return ONLY the JSON object, no other text.`;
+
+  const history = buildGeminiHistory(conversationHistory);
 
   try {
-    const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-5",
-      max_tokens: 4000,
-      system: SYSTEM_PROMPT,
-      messages,
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-pro",
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
+        maxOutputTokens: 8192,
+      },
+      contents: [
+        ...history,
+        { role: "user", parts: [{ text: prompt }] },
+      ],
     });
-
-    const text =
-      response.content[0].type === "text" ? response.content[0].text : "";
-    return text;
+    return response.text ?? "";
   } catch (error) {
     logger.error({ error }, "Failed to generate feasibility report");
     throw error;
@@ -164,10 +162,7 @@ export async function generateSearchResults(
   minPrice?: number,
   maxPrice?: number,
 ): Promise<string> {
-  const messages: Anthropic.MessageParam[] = [
-    {
-      role: "user",
-      content: `I'm looking for NZ property development opportunities. My query: "${query}"
+  const prompt = `I'm looking for NZ property development opportunities. My query: "${query}"
 
 ${suburb ? `Suburb: ${suburb}` : ""}
 ${minPrice ? `Min price: NZD ${minPrice.toLocaleString()}` : ""}
@@ -195,21 +190,18 @@ Return a JSON object with this structure:
   ]
 }
 
-Return ONLY the JSON, no other text.`,
-    },
-  ];
+Return ONLY the JSON, no other text.`;
 
   try {
-    const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-5",
-      max_tokens: 2000,
-      system: SYSTEM_PROMPT,
-      messages,
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-pro",
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
+        maxOutputTokens: 8192,
+      },
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
     });
-
-    const text =
-      response.content[0].type === "text" ? response.content[0].text : "";
-    return text;
+    return response.text ?? "";
   } catch (error) {
     logger.error({ error }, "Failed to generate search results");
     throw error;
@@ -225,28 +217,21 @@ export async function generateChatReply(
     ? `${SYSTEM_PROMPT}\n\nCURRENT PROPERTY CONTEXT:\n${reportContext}`
     : SYSTEM_PROMPT;
 
-  const messages: Anthropic.MessageParam[] = [
-    ...conversationHistory.map((m) => ({
-      role: m.role as "user" | "assistant",
-      content: m.content,
-    })),
-    {
-      role: "user",
-      content: message,
-    },
-  ];
+  const history = buildGeminiHistory(conversationHistory);
 
   try {
-    const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-5",
-      max_tokens: 1500,
-      system: systemWithContext,
-      messages,
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-pro",
+      config: {
+        systemInstruction: systemWithContext,
+        maxOutputTokens: 8192,
+      },
+      contents: [
+        ...history,
+        { role: "user", parts: [{ text: message }] },
+      ],
     });
-
-    const text =
-      response.content[0].type === "text" ? response.content[0].text : "";
-    return text;
+    return response.text ?? "";
   } catch (error) {
     logger.error({ error }, "Failed to generate chat reply");
     throw error;
