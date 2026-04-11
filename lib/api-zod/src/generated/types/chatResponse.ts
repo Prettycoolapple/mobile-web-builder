@@ -5,7 +5,9 @@
  * DevFeasible NZ API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { ChatResponseType } from "./chatResponseType";
 
-export interface HealthStatus {
-  status: string;
+export interface ChatResponse {
+  message: string;
+  type: ChatResponseType;
 }

@@ -6,6 +6,10 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface HealthStatus {
-  status: string;
+export interface ComparableSale {
+  address: string;
+  saleDate: string;
+  price: number;
+  size: number;
+  pricePerSqm: number;
 }

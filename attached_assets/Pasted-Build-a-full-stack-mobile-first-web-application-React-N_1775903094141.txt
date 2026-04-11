@@ -1,0 +1,313 @@
+Build a full-stack mobile-first web application (React Native with Expo, or Next.js with a mobile-responsive UI) called "DevFeasible NZ" — a dedicated AI-powered chat assistant for New Zealand real estate development feasibility analysis.
+
+═══════════════════════════════════════════
+TECH STACK
+═══════════════════════════════════════════
+
+Frontend:
+- React Native (Expo) OR Next.js 14+ (App Router) with TailwindCSS
+- Mobile-first responsive design
+- Framer Motion for animations
+- Recharts or Victory Native for charts
+
+Backend:
+- Next.js API routes OR Express.js on Node
+- Anthropic Claude API (claude-sonnet-4-5) as the AI brain
+- Supabase for auth + database (PostgreSQL)
+- Stripe for subscriptions
+- Playwright or Puppeteer for web crawling (OneRoof, Relab)
+- Axios for external API calls
+
+External APIs to integrate:
+- LINZ Data Service API (https://data.linz.govt.nz) — land parcels, titles
+- Auckland Council GeoMaps API — zoning, overlays, contour
+- Stats NZ API — area stats
+- Watercare API or scrape (infrastructure proximity)
+- OneRoof.co.nz — listings, CV, property history (crawl/scrape)
+- Relab.co.nz — market analytics (crawl/scrape)
+- Google Maps API — address geocoding, street view snips
+
+Database (Supabase):
+- users table (id, email, subscription_tier, created_at)
+- searches table (id, user_id, address, result_json, created_at)
+- subscriptions table (stripe_customer_id, plan, status)
+
+═══════════════════════════════════════════
+AUTH & SUBSCRIPTION
+═══════════════════════════════════════════
+
+1. Auth:
+   - Supabase Auth with email/password + Google OAuth
+   - Login and Signup screens with clean card UI
+   - JWT tokens stored securely
+   - Protected routes — redirect unauthenticated users to /login
+
+2. Subscription tiers via Stripe:
+   - Free tier: 3 feasibility reports/month
+   - Pro ($49/month NZD): unlimited reports + PDF export
+   - Stripe Checkout session on upgrade
+   - Stripe webhook to update Supabase subscription status
+   - Show current plan and usage in a Profile/Settings screen
+
+═══════════════════════════════════════════
+CORE CHAT INTERFACE
+═══════════════════════════════════════════
+
+Build a chat UI that:
+- Has a message thread (user messages on right, AI responses on left)
+- Has a text input bar at the bottom with a send button
+- Supports two primary query types:
+
+  TYPE A — Specific address lookup:
+  User: "Analyse 42 Arney Road, Remuera"
+  → App fetches all data for that address and returns a full feasibility report card
+
+  TYPE B — Discovery search:
+  User: "Find subdividable sections with old homes in Remuera between $1.2M and $2M"
+  → App crawls OneRoof/Relab, filters by price range + zone + age, returns up to 5 best candidates as cards with brief scores, user can then tap any to get the full report
+
+- Follow-up questions like "what are the risks?", "tell me more about the flooding overlay", "show me the 3-year ROI scenario" should work in context — maintain conversation history per session and pass it back to Claude
+
+═══════════════════════════════════════════
+DATA FETCHING PIPELINE (run on every address)
+═══════════════════════════════════════════
+
+When a specific address is analysed, the backend must in parallel:
+
+1. PROPERTY DATA
+   - Fetch CV (capital value), land area (m²), floor area from LINZ + QV/OneRoof
+   - Fetch listing price if currently on market
+   - Fetch property age / year built (if unavailable, estimate from suburb averages)
+   - Flag: if built between 1940–1990 → "Possible asbestos — specialist demolition required"
+   - Check if there is an existing dwelling to demolish and estimate demo cost ($15,000–$40,000 standard, $30,000–$80,000 if asbestos suspected)
+
+2. PLANNING & ZONING
+   - Hit Auckland Council GeoMaps API to fetch:
+     a. Unitary Plan zone (e.g., Residential - Mixed Housing Suburban, Terrace Housing etc.)
+     b. Minimum lot size for subdivision
+     c. Number of potential lots calculable from land area
+     d. Flood plain overlay (if yes, flag HIGH RISK)
+     e. Heritage overlay (if yes, flag RESTRICTION — may prevent demolition)
+     f. Notable trees overlay
+     g. Volcanic view shaft overlay
+   - Capture a GIS map snip / screenshot of the overlay for display in the report
+
+3. CONTOUR / TERRAIN
+   - Use LINZ elevation data or Auckland Council GIS to determine site slope
+   - Classify: Flat (0–5°), Gentle (5–15°), Moderate (15–25°, retaining wall likely), Steep (25°+, significant retaining cost)
+   - Estimate retaining cost premium: Flat = $0 extra, Gentle = $10k–$30k, Moderate = $50k–$150k, Steep = $200k+
+
+4. INFRASTRUCTURE PROXIMITY
+   - Check proximity to:
+     a. Public stormwater main — if on neighbouring land, flag "negotiation with neighbour required"
+     b. Wastewater / sewer main
+     c. Potable water main
+   - For each: is it within the land parcel (easy, low cost), at the boundary (moderate), or on a neighbour's land / public land (complex, cost + consent risk)?
+   - Estimate connection cost accordingly
+
+5. COMPARABLE SALES
+   - Scrape/crawl OneRoof or Relab for last 12 months' sold prices of similar new builds (same zone, within 500m–1km, similar size)
+   - Return avg $/m² and avg sale price
+   - Use this to estimate Gross Development Value (GDV) of proposed new units
+
+═══════════════════════════════════════════
+SCORING ENGINE — Rate each category out of 5
+═══════════════════════════════════════════
+
+After all data is gathered, score the following:
+
+1. EASE OF DEVELOPMENT (out of 5)
+   Factors: zoning suitability, overlay restrictions (flood/heritage/trees), contour, infrastructure proximity, asbestos risk
+   - 5 = flat land, correct zone, no overlays, all services on-site
+   - 1 = heritage zone, steep site, flood overlay, asbestos likely, services off-site
+
+2. COST TO DEVELOP (out of 5 — 5 = low cost, 1 = very high cost)
+   Estimate total development cost:
+   - Demo cost (include asbestos premium if applicable)
+   - Retaining walls (from contour classification)
+   - Service connections (from infrastructure check)
+   - Construction cost: use NZS avg of $2,800–$3,500/m² for new residential build
+   - Consent & professional fees: est. 12–15% of construction cost
+   - Holding costs (finance): est. 7% p.a. on land + construction
+   Show a total cost estimate range (e.g., $1.8M–$2.4M)
+
+3. POTENTIAL ROI (out of 5)
+   Calculate:
+   - GDV from comparable sales × number of units
+   - Subtract total development cost
+   - = Gross profit
+   Show 3 scenarios:
+     • 2-year completion: annualise profit, show ROI%
+     • 3-year completion: annualise profit, show ROI%
+     • 4-year completion: annualise profit, show ROI%
+   Score 5 = >25% ROI, 4 = 15–25%, 3 = 10–15%, 2 = 5–10%, 1 = <5% or negative
+
+═══════════════════════════════════════════
+REPORT UI — How the response must look
+═══════════════════════════════════════════
+
+When Claude returns the feasibility report, render it as a structured visual card (NOT plain chat text), containing:
+
+HEADER:
+- Address in large bold text
+- Google Street View thumbnail (via Google Maps Static API)
+- Zone badge (e.g., "MHS Zone") + land area + CV
+
+SCORE SUMMARY ROW:
+- 3 circular score badges side by side:
+  "Ease" [4.0/5], "Cost" [3.5/5], "ROI" [4.5/5]
+- Each badge uses a colour scale: green (4–5), amber (2.5–4), red (<2.5)
+- Overall composite score shown prominently below
+
+SECTIONS (collapsible accordions, expanded by default):
+
+  📍 PROPERTY OVERVIEW
+  - CV, land size, build year, zone
+  - Current listing price (if on market)
+
+  🏗️ PLANNING & OVERLAYS
+  - List each overlay with a coloured status chip: ✓ Clear / ⚠ Moderate / ✗ Restricted
+  - Embed a GIS map screenshot/snip of the Unitary Plan overlay for that address
+  - Subdivision potential: "Possible to create X lots of minimum Ym²"
+
+  ⚠️ ASBESTOS & DEMOLITION
+  - Build year + flag if era indicates asbestos risk
+  - Demo cost estimate range
+  - Note on WorkSafe NZ requirements if asbestos likely
+
+  📐 TERRAIN & CONTOUR
+  - Classification (Flat / Gentle / Moderate / Steep)
+  - Retaining cost estimate
+  - Visual: a simple slope gradient illustration
+
+  🔧 INFRASTRUCTURE
+  - Table: Service | Location | Est. Connection Cost | Risk
+  - Flag any off-parcel services with "⚠ Neighbour negotiation may be required"
+
+  💰 DEVELOPMENT COST ESTIMATE
+  - Itemised cost table: Land (CV) | Demo | Construction | Retaining | Services | Consents | Finance
+  - Total range (low–high)
+  - Visual: stacked bar chart of cost components
+
+  📈 ROI SCENARIOS
+  - Card for each: 2yr / 3yr / 4yr
+  - Show: GDV | Total cost | Gross profit | ROI% | Annualised ROI%
+  - Highlight the best scenario
+
+  🔍 COMPARABLE SALES
+  - List of 3–5 recent sales: address, sale date, price, size, $/m²
+  - Average $/m² used in calculation
+
+  💬 AI RISK SUMMARY
+  - Claude writes 3–5 bullet points of the top risks and opportunities in plain English
+  - E.g., "The heritage overlay on the rear portion of the site significantly limits what can be built without resource consent..."
+
+At the bottom:
+- "Ask a follow-up question about this property" pre-filled suggestion chips:
+  → "What are the main risks?"
+  → "What building typology suits this zone?"
+  → "Compare to nearby alternatives"
+  → "Show me the 3yr ROI in detail"
+
+═══════════════════════════════════════════
+DISCOVERY MODE (search queries)
+═══════════════════════════════════════════
+
+When user asks "find properties", the app:
+1. Parses the query using Claude to extract: suburb, price range, key criteria
+2. Crawls OneRoof with those filters (Playwright headless browser)
+3. Runs a quick pre-screen on each result (zone + overlay check)
+4. Returns a results list (max 5) — each as a compact card:
+   - Address | Price | Land size | Zone | Quick score (Ease/Cost/ROI out of 5 coloured circles)
+   - "Full Analysis" button → triggers the full pipeline for that address
+
+═══════════════════════════════════════════
+CONVERSATION CONTEXT
+═══════════════════════════════════════════
+
+- Maintain a conversation_history array in state per session
+- On every follow-up message, include the last full report JSON + message history in Claude's context
+- Claude should be able to answer follow-ups like "is there asbestos risk?" or "what if I build 4 units instead of 3?" with full awareness of the property already analysed
+- System prompt for Claude must include:
+  - Role: "You are a senior NZ real estate development feasibility analyst..."
+  - Instruction to always respond in structured JSON when analysing a property (the frontend renders this)
+  - Instruction to respond in plain conversational text for follow-up questions
+
+═══════════════════════════════════════════
+FILE STRUCTURE
+═══════════════════════════════════════════
+
+/app
+  /api
+    /analyse         → POST: runs full property pipeline
+    /search          → POST: discovery search + pre-screen
+    /stripe
+      /webhook       → Stripe webhook handler
+      /checkout      → Creates Stripe checkout session
+  /auth
+    /login           → Login page
+    /signup          → Signup page
+  /chat              → Main chat interface
+  /profile           → Subscription + usage stats
+  /layout.tsx        → Root layout with nav
+
+/lib
+  /claude.ts         → Anthropic API calls + prompt builder
+  /linz.ts           → LINZ API integration
+  /auckland-council.ts → GeoMaps API
+  /oneroof.ts        → Playwright crawler
+  /scoring.ts        → Scoring engine (ease/cost/roi)
+  /roi-calculator.ts → ROI scenarios calculator
+  /supabase.ts       → Supabase client
+
+/components
+  /ChatThread.tsx    → Message list
+  /ChatInput.tsx     → Input bar
+  /FeasibilityReport.tsx → Full report card renderer
+  /ScoreBadge.tsx    → Circular score component
+  /PropertyCard.tsx  → Compact discovery result card
+  /CostChart.tsx     → Stacked bar chart
+  /ROIScenarios.tsx  → 2yr/3yr/4yr scenario cards
+  /OverlayMap.tsx    → GIS map screenshot embed
+
+═══════════════════════════════════════════
+ENVIRONMENT VARIABLES NEEDED
+═══════════════════════════════════════════
+
+ANTHROPIC_API_KEY=
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
+STRIPE_PRO_PRICE_ID=
+GOOGLE_MAPS_API_KEY=
+LINZ_API_KEY=
+NEXT_PUBLIC_APP_URL=
+
+═══════════════════════════════════════════
+DESIGN SYSTEM
+═══════════════════════════════════════════
+
+- Colour palette: Deep navy (#0F172A) for headers, Emerald green (#10B981) for positive scores, Amber (#F59E0B) for moderate, Red (#EF4444) for risk flags, White cards on light grey (#F8FAFC) background
+- Typography: Inter font. Bold 700 for address/headings. Regular 400 for body.
+- All score badges: circular, 72px, with animated fill on load
+- Sections: white rounded cards with subtle shadow, 16px border radius
+- Status chips: pill-shaped, colour-coded (green/amber/red)
+- Mobile-first: full-width cards, bottom-sticky chat input, top nav with hamburger on mobile
+- Skeleton loaders while data is fetching (each section loads independently as data arrives)
+- Toast notifications for errors (e.g., "Property not found in LINZ database — try another address")
+
+═══════════════════════════════════════════
+IMPORTANT CONSTRAINTS
+═══════════════════════════════════════════
+
+1. All dollar figures must display in NZD
+2. Always caveat AI-generated cost estimates with: "These are indicative estimates only. Engage a quantity surveyor for accurate figures."
+3. Feasibility reports must be saved to Supabase searches table for the user's history
+4. Free tier users: after 3 reports, show a paywall modal prompting Stripe upgrade
+5. Rate limit the /analyse endpoint to 1 concurrent request per user
+6. Handle API failures gracefully — if LINZ is down, show what data is available and flag what couldn't be retrieved
+7. Add a "Report an error" button on every report card that emails the dev team
+
+Start by scaffolding the project with Next.js 14, Supabase auth, and the main chat interface. Then build the /api/analyse pipeline. Then the scoring engine. Then Stripe. Then the discovery search mode last.

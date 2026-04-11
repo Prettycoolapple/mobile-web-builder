@@ -3,13 +3,17 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: DevFeasible NZ API specification
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: analyse
+    description: Property feasibility analysis
+  - name: chat
+    description: AI chat operations
 paths:
   /healthz:
     get:
@@ -24,6 +28,93 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /analyse:
+    post:
+      operationId: analyseProperty
+      tags: [analyse]
+      summary: Analyse a specific property address
+      description: Runs the full feasibility pipeline for a given NZ property address
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnalyseRequest"
+      responses:
+        "200":
+          description: Feasibility report generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyseResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /chat:
+    post:
+      operationId: chat
+      tags: [chat]
+      summary: Send a chat message to the AI
+      description: Sends a message to Claude with full conversation context
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+      responses:
+        "200":
+          description: AI response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatResponse"
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /search:
+    post:
+      operationId: searchProperties
+      tags: [analyse]
+      summary: Discovery search for development opportunities
+      description: Search for subdividable properties matching given criteria
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +124,344 @@ components:
           type: string
       required:
         - status
-
+    AnalyseRequest:
+      type: object
+      properties:
+        address:
+          type: string
+          description: The NZ property address to analyse
+        conversationHistory:
+          type: array
+          items:
+            $ref: "#/components/schemas/Message"
+      required:
+        - address
+    ChatRequest:
+      type: object
+      properties:
+        message:
+          type: string
+          description: The user message
+        conversationHistory:
+          type: array
+          items:
+            $ref: "#/components/schemas/Message"
+        reportContext:
+          type: string
+          description: JSON string of the current property report for context
+      required:
+        - message
+    SearchRequest:
+      type: object
+      properties:
+        query:
+          type: string
+          description: Natural language search query
+        suburb:
+          type: string
+        minPrice:
+          type: number
+        maxPrice:
+          type: number
+        criteria:
+          type: string
+      required:
+        - query
+    Message:
+      type: object
+      properties:
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+      required:
+        - role
+        - content
+    Score:
+      type: object
+      properties:
+        ease:
+          type: number
+          description: Ease of development score out of 5
+        cost:
+          type: number
+          description: Cost to develop score out of 5 (5 = low cost)
+        roi:
+          type: number
+          description: Potential ROI score out of 5
+        composite:
+          type: number
+          description: Composite overall score out of 5
+      required:
+        - ease
+        - cost
+        - roi
+        - composite
+    PropertyOverview:
+      type: object
+      properties:
+        address:
+          type: string
+        cv:
+          type: string
+        landArea:
+          type: string
+        floorArea:
+          type: string
+        buildYear:
+          type: string
+        zone:
+          type: string
+        listingPrice:
+          type: string
+        isOnMarket:
+          type: boolean
+    PlanningOverlay:
+      type: object
+      properties:
+        name:
+          type: string
+        status:
+          type: string
+          enum: [clear, moderate, restricted]
+        detail:
+          type: string
+      required:
+        - name
+        - status
+        - detail
+    PlanningInfo:
+      type: object
+      properties:
+        zone:
+          type: string
+        minLotSize:
+          type: string
+        potentialLots:
+          type: number
+        overlays:
+          type: array
+          items:
+            $ref: "#/components/schemas/PlanningOverlay"
+        subdivisionSummary:
+          type: string
+    AsbestosInfo:
+      type: object
+      properties:
+        buildYear:
+          type: string
+        riskLevel:
+          type: string
+          enum: [low, moderate, high]
+        flagged:
+          type: boolean
+        demoCostLow:
+          type: number
+        demoCostHigh:
+          type: number
+        worksafeNote:
+          type: string
+    TerrainInfo:
+      type: object
+      properties:
+        classification:
+          type: string
+          enum: [flat, gentle, moderate, steep]
+        slope:
+          type: string
+        retainingCostLow:
+          type: number
+        retainingCostHigh:
+          type: number
+    InfrastructureService:
+      type: object
+      properties:
+        name:
+          type: string
+        location:
+          type: string
+          enum: [on-parcel, boundary, off-parcel]
+        estimatedCostLow:
+          type: number
+        estimatedCostHigh:
+          type: number
+        risk:
+          type: string
+          enum: [low, moderate, high]
+        note:
+          type: string
+      required:
+        - name
+        - location
+        - risk
+    CostItem:
+      type: object
+      properties:
+        label:
+          type: string
+        low:
+          type: number
+        high:
+          type: number
+      required:
+        - label
+        - low
+        - high
+    ROIScenario:
+      type: object
+      properties:
+        years:
+          type: number
+        gdv:
+          type: number
+        totalCost:
+          type: number
+        grossProfit:
+          type: number
+        roi:
+          type: number
+        annualisedRoi:
+          type: number
+        isBest:
+          type: boolean
+      required:
+        - years
+        - gdv
+        - totalCost
+        - grossProfit
+        - roi
+        - annualisedRoi
+        - isBest
+    ComparableSale:
+      type: object
+      properties:
+        address:
+          type: string
+        saleDate:
+          type: string
+        price:
+          type: number
+        size:
+          type: number
+        pricePerSqm:
+          type: number
+      required:
+        - address
+        - saleDate
+        - price
+        - size
+        - pricePerSqm
+    FeasibilityReport:
+      type: object
+      properties:
+        address:
+          type: string
+        scores:
+          $ref: "#/components/schemas/Score"
+        propertyOverview:
+          $ref: "#/components/schemas/PropertyOverview"
+        planning:
+          $ref: "#/components/schemas/PlanningInfo"
+        asbestos:
+          $ref: "#/components/schemas/AsbestosInfo"
+        terrain:
+          $ref: "#/components/schemas/TerrainInfo"
+        infrastructure:
+          type: array
+          items:
+            $ref: "#/components/schemas/InfrastructureService"
+        costItems:
+          type: array
+          items:
+            $ref: "#/components/schemas/CostItem"
+        totalCostLow:
+          type: number
+        totalCostHigh:
+          type: number
+        roiScenarios:
+          type: array
+          items:
+            $ref: "#/components/schemas/ROIScenario"
+        comparableSales:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComparableSale"
+        avgPricePerSqm:
+          type: number
+        riskSummary:
+          type: array
+          items:
+            type: string
+        disclaimer:
+          type: string
+      required:
+        - address
+        - scores
+    PropertyCandidate:
+      type: object
+      properties:
+        address:
+          type: string
+        price:
+          type: number
+        landArea:
+          type: number
+        zone:
+          type: string
+        scores:
+          $ref: "#/components/schemas/Score"
+        briefSummary:
+          type: string
+      required:
+        - address
+        - price
+        - scores
+    AnalyseResponse:
+      type: object
+      properties:
+        report:
+          $ref: "#/components/schemas/FeasibilityReport"
+        type:
+          type: string
+          enum: [report]
+      required:
+        - report
+        - type
+    SearchResponse:
+      type: object
+      properties:
+        candidates:
+          type: array
+          items:
+            $ref: "#/components/schemas/PropertyCandidate"
+        suburb:
+          type: string
+        query:
+          type: string
+        type:
+          type: string
+          enum: [search]
+      required:
+        - candidates
+        - type
+    ChatResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        type:
+          type: string
+          enum: [chat]
+      required:
+        - message
+        - type
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+      required:
+        - error

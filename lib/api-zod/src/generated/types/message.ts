@@ -5,7 +5,9 @@
  * DevFeasible NZ API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { MessageRole } from "./messageRole";
 
-export interface HealthStatus {
-  status: string;
+export interface Message {
+  role: MessageRole;
+  content: string;
 }
