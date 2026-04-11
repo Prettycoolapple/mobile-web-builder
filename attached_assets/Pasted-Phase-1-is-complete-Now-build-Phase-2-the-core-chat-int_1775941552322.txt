@@ -1,0 +1,178 @@
+Phase 1 is complete. Now build Phase 2: the core chat interface and 
+Claude AI integration. Do not touch auth code. Do not build data 
+fetching yet — Claude will return mock/placeholder property data 
+in this phase.
+
+TASKS:
+
+1. CLAUDE API SETUP
+   Create /lib/claude.ts
+
+   import Anthropic from "@anthropic-ai/sdk";
+   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+   Export a function: 
+   buildSystemPrompt() → returns the system prompt string (see below)
+   
+   SYSTEM PROMPT (store in /lib/prompts.ts):
+   """
+   You are a senior New Zealand real estate development feasibility analyst 
+   with 20 years of experience in Auckland, Wellington, and Christchurch 
+   markets. You have deep expertise in:
+   - Auckland Unitary Plan zoning rules
+   - NZ building costs and construction methodology
+   - Development feasibility analysis and ROI modelling
+   - NZ Resource Management Act (RMA) and consent processes
+   - Infrastructure servicing requirements
+   - Asbestos regulations (WorkSafe NZ guidelines)
+
+   When the user provides a specific address to analyse, you must respond 
+   with ONLY a valid JSON object matching the FeasibilityReport schema.
+   Do not include any text outside the JSON.
+
+   When the user asks a follow-up question (not requesting a new address 
+   analysis), respond conversationally in plain text as a knowledgeable 
+   advisor would. Be direct, specific, and reference NZ context.
+
+   For discovery queries ("find me properties in X area"), respond with 
+   ONLY a valid JSON array of SearchResult objects. No text outside JSON.
+
+   Always use NZD. Always include the disclaimer that estimates are 
+   indicative only and professional advice should be sought.
+   """
+
+2. API ROUTE — /app/api/chat/route.ts
+   POST endpoint that:
+   - Requires authenticated user (check Supabase session via server client)
+   - Accepts: { messages: Message[], currentReport?: object }
+   - Detects intent from the last user message:
+     * If it contains an address pattern → set mode = "analyse"
+     * If it starts with find/search/show me properties → set mode = "discover"
+     * Otherwise → set mode = "followup"
+   - Calls Claude claude-sonnet-4-5 with:
+     * system: buildSystemPrompt()
+     * messages: the full conversation history
+     * max_tokens: 4000
+   - In "analyse" mode: append to the user's message:
+     "Please analyse this property. Return ONLY a JSON FeasibilityReport. 
+     Use realistic placeholder data for any fields you cannot know yet — 
+     we will replace with real API data in a later phase."
+   - Returns: { content: string, mode: string }
+   - Handle errors with proper HTTP status codes
+
+3. TYPESCRIPT TYPES
+   Create /types/feasibility.ts with these interfaces:
+
+   export interface FeasibilityReport {
+     address: string;
+     suburb: string;
+     land_area_sqm: number;
+     cv_nzd: number;
+     build_year: number | null;
+     zone_code: string;
+     zone_description: string;
+     listing_price_nzd: number | null;
+     potential_lots: number;
+     min_lot_size_sqm: number;
+     overlays: Overlay[];
+     asbestos_risk: 'low' | 'moderate' | 'high';
+     asbestos_notes: string;
+     demo_cost_low: number;
+     demo_cost_high: number;
+     contour: 'flat' | 'gentle' | 'moderate' | 'steep';
+     contour_degrees: number;
+     retaining_cost_low: number;
+     retaining_cost_high: number;
+     infrastructure: InfrastructureItem[];
+     construction_cost_low: number;
+     construction_cost_high: number;
+     total_dev_cost_low: number;
+     total_dev_cost_high: number;
+     gdv_estimate: number;
+     comparables: ComparableSale[];
+     roi_scenarios: ROIScenario[];
+     scores: { ease: number; cost: number; roi: number; };
+     risk_summary: string[];
+     disclaimer: string;
+   }
+
+   export interface Overlay {
+     name: string;
+     status: 'clear' | 'moderate' | 'restricted';
+     detail: string;
+   }
+
+   export interface InfrastructureItem {
+     service: string;
+     location: 'on-parcel' | 'boundary' | 'neighbour' | 'public-land';
+     cost_estimate_low: number;
+     cost_estimate_high: number;
+     risk_note: string;
+   }
+
+   export interface ComparableSale {
+     address: string;
+     sale_date: string;
+     price_nzd: number;
+     land_sqm: number;
+     floor_sqm: number;
+     price_per_sqm: number;
+   }
+
+   export interface ROIScenario {
+     years: 2 | 3 | 4;
+     gdv: number;
+     total_cost: number;
+     gross_profit: number;
+     roi_percent: number;
+     annualised_roi_percent: number;
+   }
+
+4. CHAT UI — /app/(app)/chat/page.tsx
+   Build the complete chat interface:
+
+   LAYOUT (mobile-first):
+   - Full height screen (100dvh)
+   - Top: slim header bar with address/context if a property is loaded
+   - Middle: scrollable message thread (flex-col, overflow-y-auto)
+   - Bottom: sticky input bar (stays above keyboard on mobile)
+
+   MESSAGE THREAD:
+   - User messages: right-aligned, emerald green (#10B981) bubble, 
+     white text, max-width 75%
+   - AI messages: left-aligned, white card with light border, 
+     dark text, max-width 90%
+   - If the AI response is a valid JSON FeasibilityReport → render a 
+     placeholder card that says "Feasibility report loaded — 
+     full UI coming in Phase 5" with the address and 3 score numbers
+   - If plain text → render as markdown-formatted text
+   - Show a typing indicator (3 animated dots) while awaiting response
+
+   INPUT BAR:
+   - White background, top border
+   - Textarea (auto-expands up to 4 lines) on the left
+   - Send button (emerald, arrow icon) on the right
+   - Suggestion chips above the input on first load:
+     "Analyse 42 Arney Road, Remuera"
+     "Find subdividable land in Remuera under $2M"
+     "What zones allow terraced housing?"
+   - Tapping a chip fills the input
+
+   STATE MANAGEMENT:
+   - messages: Message[] in useState
+   - isLoading: boolean
+   - currentReport: FeasibilityReport | null (set when AI returns report JSON)
+   - On send: append user message, call /api/chat, append AI response
+   - Persist messages to localStorage keyed by session (so refresh 
+     doesn't lose context)
+   - "New search" button in header clears messages and currentReport
+
+5. VERIFICATION CHECKLIST
+   [ ] User can type a message and receive a response from Claude
+   [ ] Conversation history is maintained across multiple turns
+   [ ] Typing "Analyse 42 Arney Road, Remuera" returns a JSON report 
+       (may be placeholder data — that's fine)
+   [ ] Follow-up questions get conversational plain-text responses
+   [ ] Typing indicator shows while waiting
+   [ ] No console errors
+   [ ] Works on mobile viewport (375px wide)

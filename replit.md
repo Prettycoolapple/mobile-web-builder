@@ -56,9 +56,10 @@ AI-powered NZ real estate development feasibility analysis mobile app built with
 ### API Server (Express)
 
 - `artifacts/api-server/src/routes/auth.ts` — `/auth/signup`, `/auth/login`, `/auth/me`, `/auth/profile`
-- `artifacts/api-server/src/routes/analyse.ts` — `/analyse`, `/search`, `/chat` (with optional auth, usage tracking, free limit enforcement)
+- `artifacts/api-server/src/routes/analyse.ts` — `/analyse`, `/search`, `/chat` (unified: accepts `{messages, currentReport}` → returns `{content, mode}`)
+- `artifacts/api-server/src/lib/claude.ts` — Gemini AI wrapper with `generateUnifiedResponse()` (server-side intent detection: analyse/discover/followup)
+- `artifacts/api-server/src/lib/prompts.ts` — SYSTEM_PROMPT + ANALYSE_AUGMENTATION + DISCOVER_AUGMENTATION (structured nested camelCase JSON format)
 - `artifacts/api-server/src/lib/auth.ts` — JWT signing/verification, requireAuth middleware, password hashing
-- `artifacts/api-server/src/lib/claude.ts` — Gemini 2.5 Pro AI calls
 
 ### Database Schema (`lib/db/src/schema/`)
 

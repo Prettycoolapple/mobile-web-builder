@@ -28,29 +28,15 @@ const SUGGESTION_QUERIES = [
   "Analyse 42 Arney Road, Remuera",
   "Find subdividable sections in Grey Lynn under $2M",
   "Analyse 12 Jervois Road, Herne Bay",
-  "Find properties with old homes in Sandringham",
+  "Find terrace housing sites in Sandringham",
 ];
 
-function detectQueryType(query: string): "analyse" | "search" | "chat" {
-  const lower = query.toLowerCase();
-  const analyseKeywords = ["analyse", "analyze", "analysis", "feasibility", "check", "look at", "assess"];
-  const searchKeywords = ["find", "search", "looking for", "show me properties", "discover", "what properties"];
-
-  if (analyseKeywords.some((k) => lower.includes(k)) && (lower.match(/\d+/) || lower.includes("road") || lower.includes("street") || lower.includes("avenue") || lower.includes("crescent") || lower.includes("place") || lower.includes("drive"))) {
-    return "analyse";
-  }
-  if (searchKeywords.some((k) => lower.includes(k))) {
-    return "search";
-  }
-  if (lower.includes(",") && (lower.includes("road") || lower.includes("street") || lower.includes("avenue") || lower.includes("crescent") || lower.includes("place") || lower.includes("drive") || lower.includes("way"))) {
-    return "analyse";
-  }
-  return "chat";
-}
-
-function extractAddress(query: string): string {
-  const match = query.match(/(?:analyse|analyze|analysis|check|assess|at|:\s*)?\s*(.+)/i);
-  return match ? match[1].trim() : query;
+function extractJSON(text: string): unknown | null {
+  try {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) return JSON.parse(match[0]);
+  } catch {}
+  return null;
 }
 
 export default function ChatScreen() {
@@ -61,6 +47,7 @@ export default function ChatScreen() {
     currentSession,
     currentSessionId,
     createSession,
+    startNewChat,
     addMessage,
     updateLastMessage,
     setCurrentReport,
@@ -95,70 +82,65 @@ export default function ChatScreen() {
     addMessage({ role: "user", content: text, type: "text" });
     setIsLoading(true);
 
-    const queryType = detectQueryType(text);
-
-    addMessage({
-      role: "assistant",
-      content: "",
-      type: "loading",
-    });
+    addMessage({ role: "assistant", content: "", type: "loading" });
 
     try {
-      const conversationHistory = messages
-        .filter((m) => m.type === "text")
-        .map((m) => ({ role: m.role, content: m.content }));
-
       const headers = getApiHeaders();
 
-      if (queryType === "analyse") {
-        const address = extractAddress(text);
-        const resp = await fetch(`${getApiBase()}/analyse`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ address, conversationHistory }),
-        });
-        const data = (await resp.json()) as { report: FeasibilityReport; type: string; error?: string; code?: string };
-        if (!resp.ok) {
-          if (resp.status === 402) {
-            updateLastMessage({
-              type: "text",
-              content: `⚠️ ${data.error || "Monthly report limit reached. Upgrade to Pro for unlimited reports."}`,
-            });
-          } else {
-            updateLastMessage({ type: "text", content: data.error || "Analysis failed. Please try again." });
-          }
-          return;
+      const allMessages = [
+        ...messages
+          .filter((m) => m.type === "text" || m.type === "report" || m.type === "search")
+          .map((m) => ({
+            role: m.role as "user" | "assistant",
+            content: m.type === "text" ? m.content : m.type === "report" ? `[Feasibility report for ${m.report?.address || "property"}]` : "[Search results shown]",
+          })),
+        { role: "user" as const, content: text },
+      ];
+
+      const currentReport = currentSession?.currentReport ?? undefined;
+
+      const resp = await fetch(`${getApiBase()}/chat`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          messages: allMessages,
+          currentReport,
+        }),
+      });
+
+      if (!resp.ok) {
+        const err = (await resp.json()) as { error?: string; code?: string };
+        if (resp.status === 402) {
+          updateLastMessage({
+            type: "text",
+            content: `⚠️ ${err.error || "Monthly report limit reached. Upgrade to Pro for unlimited reports."}`,
+          });
+        } else {
+          updateLastMessage({ type: "text", content: err.error || "Something went wrong. Please try again." });
         }
-        setCurrentReport(data.report);
-        updateLastMessage({ type: "report", report: data.report, content: "" });
-        refreshProfile().catch(() => {});
-      } else if (queryType === "search") {
-        const resp = await fetch(`${getApiBase()}/search`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ query: text }),
-        });
-        const data = (await resp.json()) as { candidates: PropertyCandidate[]; type: string };
-        if (!resp.ok) {
-          updateLastMessage({ type: "text", content: "Search failed. Please try again." });
-          return;
+        return;
+      }
+
+      const data = (await resp.json()) as { content: string; mode: string };
+
+      if (data.mode === "analyse") {
+        const parsed = extractJSON(data.content) as FeasibilityReport | null;
+        if (parsed && parsed.scores) {
+          setCurrentReport(parsed);
+          updateLastMessage({ type: "report", report: parsed, content: "" });
+          refreshProfile().catch(() => {});
+        } else {
+          updateLastMessage({ type: "text", content: data.content });
         }
-        updateLastMessage({ type: "search", searchResults: data.candidates, content: "" });
+      } else if (data.mode === "discover") {
+        const parsed = extractJSON(data.content) as { candidates?: PropertyCandidate[] } | null;
+        if (parsed?.candidates && parsed.candidates.length > 0) {
+          updateLastMessage({ type: "search", searchResults: parsed.candidates, content: "" });
+        } else {
+          updateLastMessage({ type: "text", content: data.content });
+        }
       } else {
-        const reportContext = currentSession?.currentReport
-          ? JSON.stringify(currentSession.currentReport)
-          : undefined;
-        const resp = await fetch(`${getApiBase()}/chat`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ message: text, conversationHistory, reportContext }),
-        });
-        const data = (await resp.json()) as { message: string; type: string };
-        if (!resp.ok) {
-          updateLastMessage({ type: "text", content: "Couldn't get a reply. Please try again." });
-          return;
-        }
-        updateLastMessage({ type: "text", content: data.message });
+        updateLastMessage({ type: "text", content: data.content });
       }
     } catch (err) {
       updateLastMessage({
@@ -239,13 +221,35 @@ export default function ChatScreen() {
               </Text>
             </View>
           </View>
-          <View style={styles.statusRow}>
-            <View style={[styles.statusDot, { backgroundColor: colors.success }]} />
-            <Text style={[styles.statusText, { color: colors.headerSubtext, fontFamily: "DM_Sans_400Regular" }]}>
-              AI ready
-            </Text>
+          <View style={styles.headerActions}>
+            {!isEmpty && (
+              <TouchableOpacity
+                style={[styles.newChatBtn, { borderColor: "rgba(250,249,246,0.2)" }]}
+                onPress={() => {
+                  startNewChat();
+                }}
+                activeOpacity={0.7}
+              >
+                <Feather name="plus" size={14} color="rgba(250,249,246,0.7)" />
+                <Text style={[styles.newChatText, { fontFamily: "DM_Sans_500Medium" }]}>New</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
+
+        {currentSession?.currentReport && (
+          <View style={[styles.contextBanner, { borderTopColor: "rgba(250,249,246,0.1)" }]}>
+            <Feather name="map-pin" size={12} color={colors.accent} />
+            <Text style={[styles.contextAddress, { color: "rgba(250,249,246,0.75)", fontFamily: "DM_Sans_500Medium" }]} numberOfLines={1}>
+              {currentSession.currentReport.address || currentSession.currentReport.propertyOverview?.address || "Property loaded"}
+            </Text>
+            <View style={[styles.contextBadge, { backgroundColor: colors.accent + "25" }]}>
+              <Text style={[styles.contextBadgeText, { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" }]}>
+                {currentSession.currentReport.scores?.ease}/5
+              </Text>
+            </View>
+          </View>
+        )}
       </View>
 
       <Pressable style={{ flex: 1 }} onPress={Keyboard.dismiss}>
@@ -386,18 +390,44 @@ const styles = StyleSheet.create({
     letterSpacing: 0.1,
     marginTop: 1,
   },
-  statusRow: {
+  headerActions: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
+    gap: 8,
   },
-  statusDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
+  newChatBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderWidth: 1,
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
-  statusText: {
+  newChatText: {
+    fontSize: 13,
+    color: "rgba(250,249,246,0.7)",
+  },
+  contextBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  contextAddress: {
+    flex: 1,
     fontSize: 12,
+    letterSpacing: 0.1,
+  },
+  contextBadge: {
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  contextBadgeText: {
+    fontSize: 11,
   },
   emptyContainer: {
     flex: 1,

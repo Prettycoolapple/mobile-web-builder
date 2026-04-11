@@ -5,6 +5,8 @@ import {
   generateFeasibilityReport,
   generateSearchResults,
   generateChatReply,
+  generateUnifiedResponse,
+  Message,
 } from "../lib/claude";
 import { verifyToken } from "../lib/auth";
 
@@ -142,11 +144,27 @@ router.post("/search", async (req, res) => {
 });
 
 router.post("/chat", async (req, res) => {
-  const { message, conversationHistory, reportContext } = req.body as {
-    message: string;
+  const { messages, currentReport, message, conversationHistory, reportContext } = req.body as {
+    messages?: Message[];
+    currentReport?: object;
+    message?: string;
     conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
     reportContext?: string;
   };
+
+  if (messages && messages.length > 0) {
+    try {
+      const { content, mode } = await generateUnifiedResponse(messages, currentReport);
+      res.json({ content, mode });
+    } catch (error) {
+      req.log.error({ error }, "Failed to generate unified chat reply");
+      res.status(500).json({
+        error: "Failed to generate reply. Please try again.",
+        code: "CHAT_FAILED",
+      });
+    }
+    return;
+  }
 
   if (!message) {
     res.status(400).json({ error: "message is required", code: "MISSING_MESSAGE" });
