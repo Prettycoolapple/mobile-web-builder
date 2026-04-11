@@ -135,6 +135,7 @@ interface ChatContextValue {
   currentSessionId: string | null;
   currentSession: Session | null;
   createSession: () => string;
+  startNewChat: () => void;
   switchSession: (id: string) => void;
   addMessage: (msg: Omit<ChatMessage, "id" | "timestamp">) => void;
   updateLastMessage: (updates: Partial<ChatMessage>) => void;
@@ -162,9 +163,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       if (raw) {
         try {
           const parsed = JSON.parse(raw) as Session[];
-          setSessions(parsed);
-          if (parsed.length > 0) {
-            setCurrentSessionId(parsed[0].id);
+          const withMessages = parsed.filter(
+            (s) => s.messages.some((m) => m.type !== "loading" && m.content.length > 0),
+          );
+          setSessions(withMessages);
+          if (withMessages.length > 0) {
+            setCurrentSessionId(withMessages[0].id);
           }
         } catch {
         }
@@ -173,7 +177,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const saveSessions = useCallback((newSessions: Session[]) => {
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(newSessions));
+    const withMessages = newSessions.filter(
+      (s) => s.messages.some((m) => m.type !== "loading" && m.content.length > 0),
+    );
+    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(withMessages));
   }, []);
 
   const currentSession = sessions.find((s) => s.id === currentSessionId) || null;
@@ -195,6 +202,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setCurrentSessionId(id);
     return id;
   }, [saveSessions]);
+
+  const startNewChat = useCallback(() => {
+    setCurrentSessionId(null);
+  }, []);
 
   const switchSession = useCallback((id: string) => {
     setCurrentSessionId(id);
@@ -282,6 +293,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         currentSessionId,
         currentSession,
         createSession,
+        startNewChat,
         switchSession,
         addMessage,
         updateLastMessage,

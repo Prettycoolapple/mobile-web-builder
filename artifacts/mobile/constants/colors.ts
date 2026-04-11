@@ -26,6 +26,7 @@ const colors = {
 
     destructive: "#D94F4F",
     destructiveForeground: "#FFFFFF",
+    danger: "#D94F4F",
 
     warning: "#E8A84B",
     warningForeground: "#FFFFFF",
@@ -71,6 +72,7 @@ const colors = {
 
     destructive: "#D94F4F",
     destructiveForeground: "#FFFFFF",
+    danger: "#D94F4F",
 
     warning: "#E8A84B",
     warningForeground: "#1C1917",

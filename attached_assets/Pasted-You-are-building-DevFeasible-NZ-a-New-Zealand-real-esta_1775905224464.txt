@@ -1,0 +1,121 @@
+You are building "DevFeasible NZ" — a New Zealand real estate development 
+feasibility AI app. This is Phase 1. Build ONLY what is listed here. 
+Do not build any AI or property features yet.
+
+STACK:
+- Next.js 14 (App Router, TypeScript)
+- TailwindCSS
+- Supabase (auth + database)
+- Stripe (install library only, no logic yet)
+- Deployment target: Replit
+
+TASKS:
+
+1. SCAFFOLD
+   - Initialise Next.js 14 with TypeScript and TailwindCSS
+   - Install: @supabase/supabase-js @supabase/ssr stripe @stripe/stripe-js
+   - Install: framer-motion lucide-react recharts
+   - Set up /lib/supabase/client.ts and /lib/supabase/server.ts 
+     using createBrowserClient and createServerClient from @supabase/ssr
+   - Create .env.local with these placeholder keys:
+     NEXT_PUBLIC_SUPABASE_URL=
+     NEXT_PUBLIC_SUPABASE_ANON_KEY=
+     SUPABASE_SERVICE_ROLE_KEY=
+     STRIPE_SECRET_KEY=
+     NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=
+     STRIPE_WEBHOOK_SECRET=
+     STRIPE_PRO_PRICE_ID=
+     ANTHROPIC_API_KEY=
+     GOOGLE_MAPS_API_KEY=
+     NEXT_PUBLIC_APP_URL=http://localhost:3000
+
+2. SUPABASE DATABASE SCHEMA
+   Create a migration file at /supabase/migrations/001_init.sql with:
+
+   CREATE TABLE public.profiles (
+     id uuid REFERENCES auth.users ON DELETE CASCADE PRIMARY KEY,
+     email text,
+     full_name text,
+     subscription_tier text DEFAULT 'free',
+     reports_used_this_month integer DEFAULT 0,
+     stripe_customer_id text,
+     created_at timestamptz DEFAULT now()
+   );
+
+   CREATE TABLE public.searches (
+     id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+     user_id uuid REFERENCES public.profiles(id) ON DELETE CASCADE,
+     query text,
+     address text,
+     result_json jsonb,
+     created_at timestamptz DEFAULT now()
+   );
+
+   ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE public.searches ENABLE ROW LEVEL SECURITY;
+
+   CREATE POLICY "Users can view own profile" ON public.profiles
+     FOR SELECT USING (auth.uid() = id);
+   CREATE POLICY "Users can update own profile" ON public.profiles
+     FOR UPDATE USING (auth.uid() = id);
+   CREATE POLICY "Users can view own searches" ON public.searches
+     FOR ALL USING (auth.uid() = user_id);
+
+   CREATE OR REPLACE FUNCTION public.handle_new_user()
+   RETURNS trigger AS $$
+   BEGIN
+     INSERT INTO public.profiles (id, email)
+     VALUES (new.id, new.email);
+     RETURN new;
+   END;
+   $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+   CREATE TRIGGER on_auth_user_created
+     AFTER INSERT ON auth.users
+     FOR EACH ROW EXECUTE PROCEDURE public.handle_new_user();
+
+3. AUTH PAGES
+   Build /app/(auth)/login/page.tsx and /app/(auth)/signup/page.tsx
+
+   Design requirements:
+   - Dark navy background: #0F172A
+   - Centered white card (max-width 400px) with 24px border-radius
+   - App name "DevFeasible NZ" in white above the card, with tagline 
+     "AI-powered development feasibility for New Zealand property"
+   - Card has: email input, password input, submit button (emerald green 
+     #10B981, white text), link to toggle between login/signup
+   - On signup: also show full_name input
+   - Use Supabase auth: supabase.auth.signUp() and supabase.auth.signInWithPassword()
+   - On success: redirect to /chat
+   - Show inline error messages under the form on failure
+   - Add a subtle "Powered by AI" badge at the bottom of the card
+
+4. MIDDLEWARE & ROUTE PROTECTION
+   Create middleware.ts in root:
+   - If user visits /chat, /profile, or any protected route without a 
+     session → redirect to /login
+   - If user visits /login or /signup with an active session → redirect to /chat
+   - Use @supabase/ssr updateSession pattern
+
+5. ROOT LAYOUT
+   /app/layout.tsx:
+   - Import TailwindCSS globals
+   - Set background to #0F172A (dark navy) for the whole app
+   - Add a top navigation bar (only visible when logged in):
+     - Left: "DevFeasible NZ" logo text in white/emerald
+     - Right: "Profile" icon link + "Sign out" button
+   - Sign out calls supabase.auth.signOut() then redirects to /login
+
+6. PLACEHOLDER PAGES
+   Create these as empty shells (just a heading for now):
+   - /app/(app)/chat/page.tsx → "Chat — coming in Phase 2"
+   - /app/(app)/profile/page.tsx → "Profile — coming in Phase 7"
+
+7. VERIFICATION CHECKLIST
+   Before finishing, confirm:
+   [ ] npm run dev starts without errors
+   [ ] Visiting /chat without login redirects to /login
+   [ ] Signup creates a user in Supabase auth + profiles table
+   [ ] Login redirects to /chat
+   [ ] Sign out clears session and redirects to /login
+   [ ] No TypeScript errors (run tsc --noEmit)

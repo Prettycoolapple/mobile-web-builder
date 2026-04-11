@@ -6,10 +6,13 @@ import {
   ScrollView,
   TouchableOpacity,
   Platform,
+  Alert,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
+import { useAuth } from "@/context/AuthContext";
 import { useChat } from "@/context/ChatContext";
 
 const PLAN_FEATURES = {
@@ -60,18 +63,33 @@ function SectionHeader({ title }: { title: string }) {
 export default function ProfileScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
+  const { user, signOut } = useAuth();
+  const router = useRouter();
   const { sessions } = useChat();
 
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
 
+  const isPro = user?.subscriptionTier === "pro";
+  const freeLimit = 3;
+  const usage = user?.reportsUsedThisMonth ?? 0;
+  const usagePct = isPro ? 100 : Math.min((usage / freeLimit) * 100, 100);
+
   const reportCount = sessions.filter((s) =>
     s.messages.some((m) => m.type === "report")
   ).length;
 
-  const freeLimit = 3;
-  const usage = Math.min(reportCount, freeLimit);
-  const usagePct = (usage / freeLimit) * 100;
+  const handleSignOut = () => {
+    Alert.alert("Sign out", "Are you sure you want to sign out?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Sign out", style: "destructive", onPress: async () => {
+          await signOut();
+          router.replace("/(auth)/login");
+        },
+      },
+    ]);
+  };
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -80,6 +98,11 @@ export default function ProfileScreen() {
           <Text style={[styles.headerTitle, { color: colors.headerText, fontFamily: "DM_Sans_600SemiBold" }]}>
             Account
           </Text>
+          {user?.email && (
+            <Text style={[styles.headerEmail, { color: "rgba(250,249,246,0.5)", fontFamily: "DM_Sans_400Regular" }]}>
+              {user.fullName ? `${user.fullName} · ` : ""}{user.email}
+            </Text>
+          )}
         </View>
       </View>
 
@@ -94,12 +117,12 @@ export default function ProfileScreen() {
                 Current plan
               </Text>
               <Text style={[styles.planName, { color: colors.headerText, fontFamily: "DM_Sans_700Bold" }]}>
-                Free
+                {isPro ? "Pro" : "Free"}
               </Text>
             </View>
-            <View style={[styles.freeBadge, { borderColor: "rgba(250,250,249,0.2)" }]}>
-              <Text style={[styles.freeBadgeText, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_500Medium" }]}>
-                Free tier
+            <View style={[styles.freeBadge, { borderColor: isPro ? colors.accent + "80" : "rgba(250,250,249,0.2)", backgroundColor: isPro ? colors.accent + "20" : "transparent" }]}>
+              <Text style={[styles.freeBadgeText, { color: isPro ? colors.accent : "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_500Medium" }]}>
+                {isPro ? "Pro" : "Free tier"}
               </Text>
             </View>
           </View>
@@ -110,21 +133,25 @@ export default function ProfileScreen() {
                 Monthly reports used
               </Text>
               <Text style={[styles.usageCount, { color: colors.headerText, fontFamily: "DM_Sans_700Bold" }]}>
-                {usage}/{freeLimit}
+                {isPro ? `${usage} / ∞` : `${usage}/${freeLimit}`}
               </Text>
             </View>
-            <View style={[styles.usageTrack, { backgroundColor: "rgba(250,250,249,0.12)" }]}>
-              <View
-                style={[styles.usageFill, {
-                  width: `${usagePct}%`,
-                  backgroundColor: usage >= freeLimit ? colors.red : colors.accent,
-                }]}
-              />
-            </View>
-            {usage >= freeLimit && (
-              <Text style={[styles.limitNote, { color: colors.amber, fontFamily: "DM_Sans_500Medium" }]}>
-                Monthly limit reached — upgrade to continue
-              </Text>
+            {!isPro && (
+              <>
+                <View style={[styles.usageTrack, { backgroundColor: "rgba(250,250,249,0.12)" }]}>
+                  <View
+                    style={[styles.usageFill, {
+                      width: `${usagePct}%`,
+                      backgroundColor: usage >= freeLimit ? colors.red : colors.accent,
+                    }]}
+                  />
+                </View>
+                {usage >= freeLimit && (
+                  <Text style={[styles.limitNote, { color: colors.amber, fontFamily: "DM_Sans_500Medium" }]}>
+                    Monthly limit reached — upgrade to continue
+                  </Text>
+                )}
+              </>
             )}
           </View>
         </View>
@@ -217,6 +244,17 @@ export default function ProfileScreen() {
             </Text>
           </View>
         </View>
+
+        <TouchableOpacity
+          style={[styles.signOutBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+          onPress={handleSignOut}
+          activeOpacity={0.7}
+        >
+          <Feather name="log-out" size={18} color={colors.danger} />
+          <Text style={[styles.signOutText, { color: colors.danger, fontFamily: "DM_Sans_500Medium" }]}>
+            Sign out
+          </Text>
+        </TouchableOpacity>
       </ScrollView>
     </View>
   );
@@ -236,6 +274,10 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 20,
     letterSpacing: -0.3,
+  },
+  headerEmail: {
+    fontSize: 13,
+    marginTop: 2,
   },
   content: {
     padding: 16,
@@ -411,6 +453,19 @@ const styles = StyleSheet.create({
   disclaimerBox: {
     padding: 12,
     marginTop: 4,
+  },
+  signOutBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    marginTop: 16,
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  signOutText: {
+    fontSize: 15,
   },
   disclaimerText: {
     fontSize: 12,

@@ -59,11 +59,15 @@ function SessionItem({ session, onPress, onDelete }: { session: Session; onPress
 export default function HistoryScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { sessions, switchSession, deleteSession, createSession } = useChat();
+  const { sessions, switchSession, deleteSession, startNewChat } = useChat();
   const router = useRouter();
 
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
+
+  const realSessions = sessions.filter(
+    (s) => s.messages.some((m) => m.type !== "loading" && m.content.length > 0),
+  );
 
   const handleSelect = (id: string) => {
     switchSession(id);
@@ -71,7 +75,7 @@ export default function HistoryScreen() {
   };
 
   const handleNew = () => {
-    createSession();
+    startNewChat();
     router.push("/(tabs)");
   };
 
@@ -93,7 +97,7 @@ export default function HistoryScreen() {
         </View>
       </View>
 
-      {sessions.length === 0 ? (
+      {realSessions.length === 0 ? (
         <View style={styles.empty}>
           <View style={[styles.emptyIcon, { backgroundColor: colors.muted }]}>
             <Feather name="clock" size={28} color={colors.mutedForeground} />
@@ -114,7 +118,7 @@ export default function HistoryScreen() {
         </View>
       ) : (
         <FlatList
-          data={sessions}
+          data={realSessions}
           keyExtractor={(s) => s.id}
           renderItem={({ item }) => (
             <SessionItem

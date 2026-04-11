@@ -16,6 +16,7 @@ import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useColors } from "@/hooks/useColors";
 import { useChat, ChatMessage, FeasibilityReport, PropertyCandidate } from "@/context/ChatContext";
+import { useAuth } from "@/context/AuthContext";
 import { ChatBubble } from "@/components/ChatBubble";
 import { setBaseUrl } from "@workspace/api-client-react";
 
@@ -55,6 +56,7 @@ function extractAddress(query: string): string {
 export default function ChatScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
+  const { getApiHeaders, refreshProfile } = useAuth();
   const {
     currentSession,
     currentSessionId,
@@ -106,23 +108,41 @@ export default function ChatScreen() {
         .filter((m) => m.type === "text")
         .map((m) => ({ role: m.role, content: m.content }));
 
+      const headers = getApiHeaders();
+
       if (queryType === "analyse") {
         const address = extractAddress(text);
         const resp = await fetch(`${getApiBase()}/analyse`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers,
           body: JSON.stringify({ address, conversationHistory }),
         });
-        const data = (await resp.json()) as { report: FeasibilityReport; type: string };
+        const data = (await resp.json()) as { report: FeasibilityReport; type: string; error?: string; code?: string };
+        if (!resp.ok) {
+          if (resp.status === 402) {
+            updateLastMessage({
+              type: "text",
+              content: `⚠️ ${data.error || "Monthly report limit reached. Upgrade to Pro for unlimited reports."}`,
+            });
+          } else {
+            updateLastMessage({ type: "text", content: data.error || "Analysis failed. Please try again." });
+          }
+          return;
+        }
         setCurrentReport(data.report);
         updateLastMessage({ type: "report", report: data.report, content: "" });
+        refreshProfile().catch(() => {});
       } else if (queryType === "search") {
         const resp = await fetch(`${getApiBase()}/search`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers,
           body: JSON.stringify({ query: text }),
         });
         const data = (await resp.json()) as { candidates: PropertyCandidate[]; type: string };
+        if (!resp.ok) {
+          updateLastMessage({ type: "text", content: "Search failed. Please try again." });
+          return;
+        }
         updateLastMessage({ type: "search", searchResults: data.candidates, content: "" });
       } else {
         const reportContext = currentSession?.currentReport
@@ -130,10 +150,14 @@ export default function ChatScreen() {
           : undefined;
         const resp = await fetch(`${getApiBase()}/chat`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers,
           body: JSON.stringify({ message: text, conversationHistory, reportContext }),
         });
         const data = (await resp.json()) as { message: string; type: string };
+        if (!resp.ok) {
+          updateLastMessage({ type: "text", content: "Couldn't get a reply. Please try again." });
+          return;
+        }
         updateLastMessage({ type: "text", content: data.message });
       }
     } catch (err) {
@@ -157,6 +181,8 @@ export default function ChatScreen() {
     setIsLoading,
     messages,
     getApiBase,
+    getApiHeaders,
+    refreshProfile,
   ]);
 
   const handleFollowUp = useCallback(
@@ -190,7 +216,8 @@ export default function ChatScreen() {
   const isEmpty = messages.length === 0;
 
   const topInset = Platform.OS === "web" ? 67 : insets.top;
-  const bottomInset = Platform.OS === "web" ? 34 : 0;
+  const TAB_BAR_HEIGHT = Platform.OS === "web" ? 84 : 49;
+  const tabBarOffset = Platform.OS === "web" ? TAB_BAR_HEIGHT : TAB_BAR_HEIGHT + insets.bottom;
   const canSend = inputText.trim().length > 0 && !isLoading;
 
   return (
@@ -275,7 +302,7 @@ export default function ChatScreen() {
       <View style={[styles.inputBar, {
         backgroundColor: colors.background,
         borderTopColor: colors.border,
-        paddingBottom: Math.max(bottomInset, insets.bottom) + 8,
+        paddingBottom: tabBarOffset + 8,
       }]}>
         <View style={[styles.inputWrapper, {
           backgroundColor: colors.card,
