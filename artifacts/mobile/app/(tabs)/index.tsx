@@ -191,6 +191,7 @@ export default function ChatScreen() {
 
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const bottomInset = Platform.OS === "web" ? 34 : 0;
+  const canSend = inputText.trim().length > 0 && !isLoading;
 
   return (
     <KeyboardAvoidingView
@@ -198,15 +199,24 @@ export default function ChatScreen() {
       behavior="padding"
       keyboardVerticalOffset={0}
     >
-      <View style={[styles.topBar, { paddingTop: topInset, backgroundColor: colors.navy, borderBottomColor: "rgba(255,255,255,0.1)" }]}>
+      <View style={[styles.topBar, { paddingTop: topInset, backgroundColor: colors.headerBg }]}>
         <View style={styles.topBarContent}>
-          <View>
-            <Text style={[styles.appName, { fontFamily: "Inter_700Bold" }]}>DevFeasible</Text>
-            <Text style={[styles.appSubtitle, { fontFamily: "Inter_400Regular" }]}>NZ Property Analysis</Text>
+          <View style={styles.brandRow}>
+            <View style={[styles.logoMark, { backgroundColor: colors.accent }]}>
+              <Text style={styles.logoLetter}>D</Text>
+            </View>
+            <View>
+              <Text style={[styles.appName, { fontFamily: "DM_Sans_700Bold" }]}>DevFeasible</Text>
+              <Text style={[styles.appSubtitle, { color: colors.headerSubtext, fontFamily: "DM_Sans_400Regular" }]}>
+                NZ Property Analysis
+              </Text>
+            </View>
           </View>
-          <View style={styles.topBarRight}>
-            <View style={[styles.onlineDot, { backgroundColor: colors.emerald }]} />
-            <Text style={[styles.onlineText, { color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" }]}>AI Ready</Text>
+          <View style={styles.statusRow}>
+            <View style={[styles.statusDot, { backgroundColor: colors.success }]} />
+            <Text style={[styles.statusText, { color: colors.headerSubtext, fontFamily: "DM_Sans_400Regular" }]}>
+              AI ready
+            </Text>
           </View>
         </View>
       </View>
@@ -214,34 +224,37 @@ export default function ChatScreen() {
       <Pressable style={{ flex: 1 }} onPress={Keyboard.dismiss}>
         {isEmpty ? (
           <View style={styles.emptyContainer}>
-            <View style={[styles.emptyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <Text style={[styles.emptyTitle, { color: colors.foreground, fontFamily: "Inter_700Bold" }]}>
-                NZ Property Feasibility
+            <View style={styles.emptyHero}>
+              <Text style={[styles.emptyTitle, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>
+                What would you like to{"\n"}analyse today?
               </Text>
-              <Text style={[styles.emptySubtitle, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
-                Analyse any Auckland property or discover development opportunities using AI and real NZ data.
+              <Text style={[styles.emptySubtitle, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                Ask about any NZ property address, or discover development opportunities by suburb and budget.
               </Text>
             </View>
-            <Text style={[styles.suggestionsLabel, { color: colors.mutedForeground, fontFamily: "Inter_500Medium" }]}>
-              Try asking...
-            </Text>
-            <View style={styles.suggestions}>
-              {SUGGESTION_QUERIES.map((q) => (
-                <TouchableOpacity
-                  key={q}
-                  style={[styles.suggestionChip, { backgroundColor: colors.card, borderColor: colors.border }]}
-                  onPress={() => {
-                    setInputText(q);
-                    inputRef.current?.focus();
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Feather name="search" size={12} color={colors.emerald} />
-                  <Text style={[styles.suggestionText, { color: colors.foreground, fontFamily: "Inter_400Regular" }]}>
-                    {q}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+
+            <View style={styles.suggestionsSection}>
+              <Text style={[styles.suggestionsLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>
+                Try a query
+              </Text>
+              <View style={styles.suggestions}>
+                {SUGGESTION_QUERIES.map((q) => (
+                  <TouchableOpacity
+                    key={q}
+                    style={[styles.suggestionChip, { backgroundColor: colors.card, borderColor: colors.border }]}
+                    onPress={() => {
+                      setInputText(q);
+                      inputRef.current?.focus();
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.suggestionText, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}>
+                      {q}
+                    </Text>
+                    <Feather name="arrow-up-right" size={14} color={colors.accent} />
+                  </TouchableOpacity>
+                ))}
+              </View>
             </View>
           </View>
         ) : (
@@ -260,15 +273,19 @@ export default function ChatScreen() {
       </Pressable>
 
       <View style={[styles.inputBar, {
-        backgroundColor: colors.card,
+        backgroundColor: colors.background,
         borderTopColor: colors.border,
         paddingBottom: Math.max(bottomInset, insets.bottom) + 8,
       }]}>
-        <View style={[styles.inputWrapper, { backgroundColor: colors.background, borderColor: colors.border }]}>
+        <View style={[styles.inputWrapper, {
+          backgroundColor: colors.card,
+          borderColor: canSend ? colors.accent + "60" : colors.border,
+          shadowColor: colors.shadow,
+        }]}>
           <TextInput
             ref={inputRef}
-            style={[styles.input, { color: colors.foreground, fontFamily: "Inter_400Regular" }]}
-            placeholder="Analyse an address or find properties..."
+            style={[styles.input, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+            placeholder="Ask about an address or area..."
             placeholderTextColor={colors.mutedForeground}
             value={inputText}
             onChangeText={setInputText}
@@ -282,16 +299,19 @@ export default function ChatScreen() {
             style={[
               styles.sendBtn,
               {
-                backgroundColor: inputText.trim() && !isLoading ? colors.emerald : colors.muted,
+                backgroundColor: canSend ? colors.accent : colors.muted,
               },
             ]}
             onPress={handleSend}
-            disabled={!inputText.trim() || isLoading}
-            activeOpacity={0.85}
+            disabled={!canSend}
+            activeOpacity={0.8}
           >
-            <Feather name="send" size={16} color={inputText.trim() && !isLoading ? "#fff" : colors.mutedForeground} />
+            <Feather name="arrow-up" size={17} color={canSend ? "#fff" : colors.mutedForeground} />
           </TouchableOpacity>
         </View>
+        <Text style={[styles.inputHint, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+          NZ property data · Gemini AI
+        </Text>
       </View>
     </KeyboardAvoidingView>
   );
@@ -302,67 +322,81 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   topBar: {
-    borderBottomWidth: 1,
-    paddingHorizontal: 16,
-    paddingBottom: 12,
+    paddingHorizontal: 20,
+    paddingBottom: 14,
   },
   topBarContent: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingTop: 8,
+    paddingTop: 10,
+  },
+  brandRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  logoMark: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  logoLetter: {
+    fontSize: 17,
+    color: "#fff",
+    fontFamily: "DM_Sans_700Bold",
+    lineHeight: 20,
   },
   appName: {
-    fontSize: 20,
-    color: "#fff",
-    letterSpacing: -0.5,
+    fontSize: 17,
+    color: "#FAFAF9",
+    letterSpacing: -0.3,
   },
   appSubtitle: {
     fontSize: 11,
-    color: "rgba(255,255,255,0.5)",
-    letterSpacing: 0.3,
+    letterSpacing: 0.1,
+    marginTop: 1,
   },
-  topBarRight: {
+  statusRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
+    gap: 5,
   },
-  onlineDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+  statusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
   },
-  onlineText: {
+  statusText: {
     fontSize: 12,
   },
   emptyContainer: {
     flex: 1,
-    padding: 20,
-    gap: 16,
-    justifyContent: "center",
+    paddingHorizontal: 24,
+    paddingTop: 48,
+    gap: 40,
   },
-  emptyCard: {
-    borderRadius: 16,
-    borderWidth: 1,
-    padding: 20,
-    gap: 8,
-    alignItems: "center",
+  emptyHero: {
+    gap: 12,
   },
   emptyTitle: {
-    fontSize: 20,
-    textAlign: "center",
-    letterSpacing: -0.3,
+    fontSize: 24,
+    lineHeight: 32,
+    letterSpacing: -0.4,
   },
   emptySubtitle: {
-    fontSize: 14,
-    textAlign: "center",
-    lineHeight: 22,
+    fontSize: 15,
+    lineHeight: 24,
+  },
+  suggestionsSection: {
+    gap: 12,
   },
   suggestionsLabel: {
     fontSize: 11,
     textTransform: "uppercase",
-    letterSpacing: 0.8,
-    paddingHorizontal: 4,
+    letterSpacing: 1,
   },
   suggestions: {
     gap: 8,
@@ -370,49 +404,63 @@ const styles = StyleSheet.create({
   suggestionChip: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    justifyContent: "space-between",
     borderWidth: 1,
     borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+    shadowColor: "rgba(28,25,23,0.05)",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 1,
+    shadowRadius: 3,
+    elevation: 1,
   },
   suggestionText: {
-    fontSize: 13,
+    fontSize: 14,
     flex: 1,
-    lineHeight: 18,
+    lineHeight: 20,
   },
   messageList: {
-    gap: 12,
+    gap: 4,
     paddingTop: 16,
-    paddingHorizontal: 0,
   },
   inputBar: {
-    borderTopWidth: 1,
-    paddingHorizontal: 12,
-    paddingTop: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    gap: 8,
   },
   inputWrapper: {
     flexDirection: "row",
     alignItems: "flex-end",
-    borderWidth: 1,
-    borderRadius: 24,
-    paddingLeft: 14,
-    paddingRight: 6,
-    paddingVertical: 6,
+    borderWidth: 1.5,
+    borderRadius: 16,
+    paddingLeft: 16,
+    paddingRight: 7,
+    paddingVertical: 7,
     gap: 8,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 1,
+    shadowRadius: 8,
+    elevation: 3,
   },
   input: {
     flex: 1,
-    fontSize: 14,
-    maxHeight: 100,
-    lineHeight: 20,
-    paddingVertical: 4,
+    fontSize: 15,
+    maxHeight: 120,
+    lineHeight: 22,
+    paddingVertical: 3,
   },
   sendBtn: {
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: 10,
     justifyContent: "center",
     alignItems: "center",
+  },
+  inputHint: {
+    fontSize: 11,
+    textAlign: "center",
+    letterSpacing: 0.2,
   },
 });

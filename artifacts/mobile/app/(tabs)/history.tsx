@@ -16,28 +16,41 @@ import { useRouter } from "expo-router";
 function SessionItem({ session, onPress, onDelete }: { session: Session; onPress: () => void; onDelete: () => void }) {
   const colors = useColors();
   const date = new Date(session.updatedAt);
-  const dateStr = date.toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "2-digit" });
+  const dateStr = date.toLocaleDateString("en-NZ", { day: "numeric", month: "short" });
   const timeStr = date.toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit" });
+  const hasReport = session.messages.some((m) => m.type === "report");
 
   return (
     <TouchableOpacity
       style={[styles.sessionItem, { backgroundColor: colors.card, borderColor: colors.border }]}
       onPress={onPress}
-      activeOpacity={0.75}
+      activeOpacity={0.7}
     >
-      <View style={[styles.sessionIcon, { backgroundColor: colors.emerald + "20" }]}>
-        <Feather name="file-text" size={18} color={colors.emerald} />
+      <View style={[styles.sessionIconWrapper, {
+        backgroundColor: hasReport ? colors.accent + "15" : colors.muted,
+      }]}>
+        <Feather
+          name={hasReport ? "file-text" : "message-circle"}
+          size={17}
+          color={hasReport ? colors.accent : colors.mutedForeground}
+        />
       </View>
+
       <View style={styles.sessionContent}>
-        <Text style={[styles.sessionTitle, { color: colors.foreground, fontFamily: "Inter_600SemiBold" }]} numberOfLines={2}>
+        <Text style={[styles.sessionTitle, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]} numberOfLines={1}>
           {session.title}
         </Text>
-        <Text style={[styles.sessionMeta, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
-          {session.messages.length} messages · {dateStr} {timeStr}
+        <Text style={[styles.sessionMeta, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+          {session.messages.length} messages · {dateStr}, {timeStr}
         </Text>
       </View>
-      <TouchableOpacity onPress={onDelete} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-        <Feather name="trash-2" size={16} color={colors.mutedForeground} />
+
+      <TouchableOpacity
+        onPress={onDelete}
+        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        style={[styles.deleteBtn, { backgroundColor: colors.muted }]}
+      >
+        <Feather name="trash-2" size={14} color={colors.mutedForeground} />
       </TouchableOpacity>
     </TouchableOpacity>
   );
@@ -64,29 +77,40 @@ export default function HistoryScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <View style={[styles.header, { paddingTop: topInset, backgroundColor: colors.navy, borderBottomColor: "rgba(255,255,255,0.1)" }]}>
+      <View style={[styles.header, { paddingTop: topInset, backgroundColor: colors.headerBg }]}>
         <View style={styles.headerContent}>
-          <Text style={[styles.headerTitle, { fontFamily: "Inter_700Bold" }]}>History</Text>
+          <Text style={[styles.headerTitle, { color: colors.headerText, fontFamily: "DM_Sans_600SemiBold" }]}>
+            History
+          </Text>
           <TouchableOpacity
-            style={[styles.newBtn, { backgroundColor: colors.emerald }]}
+            style={[styles.newBtn, { backgroundColor: colors.accent }]}
             onPress={handleNew}
-            activeOpacity={0.85}
+            activeOpacity={0.8}
           >
-            <Feather name="plus" size={16} color="#fff" />
-            <Text style={[styles.newBtnText, { fontFamily: "Inter_600SemiBold" }]}>New</Text>
+            <Feather name="plus" size={15} color="#fff" />
+            <Text style={[styles.newBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>New chat</Text>
           </TouchableOpacity>
         </View>
       </View>
 
       {sessions.length === 0 ? (
         <View style={styles.empty}>
-          <Feather name="inbox" size={48} color={colors.mutedForeground} />
-          <Text style={[styles.emptyTitle, { color: colors.foreground, fontFamily: "Inter_600SemiBold" }]}>
-            No analyses yet
+          <View style={[styles.emptyIcon, { backgroundColor: colors.muted }]}>
+            <Feather name="clock" size={28} color={colors.mutedForeground} />
+          </View>
+          <Text style={[styles.emptyTitle, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>
+            No conversations yet
           </Text>
-          <Text style={[styles.emptyText, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
-            Start by analysing a property or searching for development opportunities.
+          <Text style={[styles.emptyText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+            Your property analyses and chat sessions will appear here.
           </Text>
+          <TouchableOpacity
+            style={[styles.emptyBtn, { backgroundColor: colors.accent }]}
+            onPress={handleNew}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.emptyBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>Start analysing</Text>
+          </TouchableOpacity>
         </View>
       ) : (
         <FlatList
@@ -99,8 +123,9 @@ export default function HistoryScreen() {
               onDelete={() => deleteSession(item.id)}
             />
           )}
-          contentContainerStyle={[styles.list, { paddingBottom: bottomInset + 16 }]}
+          contentContainerStyle={[styles.list, { paddingBottom: bottomInset + 24 }]}
           showsVerticalScrollIndicator={false}
+          ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
         />
       )}
     </View>
@@ -112,25 +137,23 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    borderBottomWidth: 1,
-    paddingHorizontal: 16,
-    paddingBottom: 14,
+    paddingHorizontal: 20,
+    paddingBottom: 16,
   },
   headerContent: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingTop: 8,
+    paddingTop: 10,
   },
   headerTitle: {
-    fontSize: 22,
-    color: "#fff",
-    letterSpacing: -0.5,
+    fontSize: 20,
+    letterSpacing: -0.3,
   },
   newBtn: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
+    gap: 5,
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 100,
@@ -141,7 +164,6 @@ const styles = StyleSheet.create({
   },
   list: {
     padding: 16,
-    gap: 10,
   },
   sessionItem: {
     flexDirection: "row",
@@ -150,14 +172,19 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     padding: 14,
     gap: 12,
-    marginBottom: 10,
+    shadowColor: "rgba(28,25,23,0.05)",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 1,
+    shadowRadius: 3,
+    elevation: 1,
   },
-  sessionIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  sessionIconWrapper: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
     justifyContent: "center",
     alignItems: "center",
+    flexShrink: 0,
   },
   sessionContent: {
     flex: 1,
@@ -168,22 +195,49 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   sessionMeta: {
-    fontSize: 11,
+    fontSize: 12,
+  },
+  deleteBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    justifyContent: "center",
+    alignItems: "center",
   },
   empty: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
     padding: 40,
-    gap: 12,
+    gap: 16,
+  },
+  emptyIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 20,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 4,
   },
   emptyTitle: {
     fontSize: 18,
     textAlign: "center",
+    letterSpacing: -0.3,
   },
   emptyText: {
     fontSize: 14,
     textAlign: "center",
     lineHeight: 22,
+    maxWidth: 260,
+  },
+  emptyBtn: {
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 100,
+    marginTop: 4,
+  },
+  emptyBtnText: {
+    fontSize: 14,
+    color: "#fff",
   },
 });

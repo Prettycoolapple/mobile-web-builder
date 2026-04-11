@@ -34,14 +34,26 @@ function FeatureRow({ text, included }: { text: string; included: boolean }) {
   return (
     <View style={styles.featureRow}>
       <Feather
-        name={included ? "check-circle" : "circle"}
-        size={16}
-        color={included ? colors.emerald : colors.mutedForeground}
+        name={included ? "check" : "minus"}
+        size={15}
+        color={included ? colors.success : colors.mutedForeground}
       />
-      <Text style={[styles.featureText, { color: included ? colors.foreground : colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
+      <Text style={[styles.featureText, {
+        color: included ? colors.foreground : colors.mutedForeground,
+        fontFamily: "DM_Sans_400Regular",
+      }]}>
         {text}
       </Text>
     </View>
+  );
+}
+
+function SectionHeader({ title }: { title: string }) {
+  const colors = useColors();
+  return (
+    <Text style={[styles.sectionHeader, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>
+      {title}
+    </Text>
   );
 }
 
@@ -59,148 +71,151 @@ export default function ProfileScreen() {
 
   const freeLimit = 3;
   const usage = Math.min(reportCount, freeLimit);
+  const usagePct = (usage / freeLimit) * 100;
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <View style={[styles.header, { paddingTop: topInset, backgroundColor: colors.navy, borderBottomColor: "rgba(255,255,255,0.1)" }]}>
+      <View style={[styles.header, { paddingTop: topInset, backgroundColor: colors.headerBg }]}>
         <View style={styles.headerContent}>
-          <Text style={[styles.headerTitle, { fontFamily: "Inter_700Bold" }]}>Profile</Text>
+          <Text style={[styles.headerTitle, { color: colors.headerText, fontFamily: "DM_Sans_600SemiBold" }]}>
+            Account
+          </Text>
         </View>
       </View>
 
       <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: bottomInset + 24 }]}
+        contentContainerStyle={[styles.content, { paddingBottom: bottomInset + 32 }]}
         showsVerticalScrollIndicator={false}
       >
-        <View style={[styles.planCard, { backgroundColor: colors.navy }]}>
+        <View style={[styles.planCard, { backgroundColor: colors.headerBg }]}>
           <View style={styles.planTop}>
             <View>
-              <Text style={[styles.planLabel, { color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" }]}>
-                Current Plan
+              <Text style={[styles.planLabel, { color: "rgba(250,250,249,0.45)", fontFamily: "DM_Sans_400Regular" }]}>
+                Current plan
               </Text>
-              <Text style={[styles.planName, { fontFamily: "Inter_700Bold" }]}>Free Tier</Text>
+              <Text style={[styles.planName, { color: colors.headerText, fontFamily: "DM_Sans_700Bold" }]}>
+                Free
+              </Text>
             </View>
-            <View style={[styles.planBadge, { backgroundColor: colors.emerald + "30", borderColor: colors.emerald }]}>
-              <Text style={[styles.planBadgeText, { color: colors.emerald, fontFamily: "Inter_700Bold" }]}>FREE</Text>
+            <View style={[styles.freeBadge, { borderColor: "rgba(250,250,249,0.2)" }]}>
+              <Text style={[styles.freeBadgeText, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_500Medium" }]}>
+                Free tier
+              </Text>
             </View>
           </View>
 
-          <View style={styles.usageContainer}>
-            <View style={styles.usageHeader}>
-              <Text style={[styles.usageLabel, { color: "rgba(255,255,255,0.7)", fontFamily: "Inter_400Regular" }]}>
-                Monthly reports
+          <View style={styles.usageSection}>
+            <View style={styles.usageRow}>
+              <Text style={[styles.usageLabel, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
+                Monthly reports used
               </Text>
-              <Text style={[styles.usageCount, { color: "#fff", fontFamily: "Inter_700Bold" }]}>
+              <Text style={[styles.usageCount, { color: colors.headerText, fontFamily: "DM_Sans_700Bold" }]}>
                 {usage}/{freeLimit}
               </Text>
             </View>
-            <View style={[styles.usageBar, { backgroundColor: "rgba(255,255,255,0.15)" }]}>
+            <View style={[styles.usageTrack, { backgroundColor: "rgba(250,250,249,0.12)" }]}>
               <View
-                style={[
-                  styles.usageFill,
-                  {
-                    width: `${(usage / freeLimit) * 100}%`,
-                    backgroundColor: usage >= freeLimit ? colors.red : colors.emerald,
-                  },
-                ]}
+                style={[styles.usageFill, {
+                  width: `${usagePct}%`,
+                  backgroundColor: usage >= freeLimit ? colors.red : colors.accent,
+                }]}
               />
             </View>
             {usage >= freeLimit && (
-              <Text style={[styles.limitWarning, { color: colors.amber, fontFamily: "Inter_500Medium" }]}>
-                Monthly limit reached. Upgrade to continue.
+              <Text style={[styles.limitNote, { color: colors.amber, fontFamily: "DM_Sans_500Medium" }]}>
+                Monthly limit reached — upgrade to continue
               </Text>
             )}
           </View>
         </View>
 
-        <View style={[styles.upgradeCard, { backgroundColor: colors.card, borderColor: colors.emerald + "40", borderWidth: 1.5 }]}>
-          <View style={styles.upgradeTop}>
+        <SectionHeader title="Upgrade" />
+
+        <View style={[styles.proCard, { backgroundColor: colors.card, borderColor: colors.accent + "35" }]}>
+          <View style={styles.proTop}>
             <View>
-              <Text style={[styles.upgradeTitle, { color: colors.foreground, fontFamily: "Inter_700Bold" }]}>
+              <Text style={[styles.proTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
                 Pro Plan
               </Text>
               <View style={styles.priceRow}>
-                <Text style={[styles.price, { color: colors.emerald, fontFamily: "Inter_700Bold" }]}>$49</Text>
-                <Text style={[styles.pricePeriod, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
-                  /month NZD
+                <Text style={[styles.price, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>$49</Text>
+                <Text style={[styles.pricePer, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                  /mo NZD
                 </Text>
               </View>
             </View>
-            <View style={[styles.proBadge, { backgroundColor: colors.emerald }]}>
-              <Text style={[styles.proBadgeText, { fontFamily: "Inter_700Bold" }]}>PRO</Text>
+            <View style={[styles.proBadge, { backgroundColor: colors.accent }]}>
+              <Text style={[styles.proBadgeText, { fontFamily: "DM_Sans_700Bold" }]}>PRO</Text>
             </View>
           </View>
 
-          <View style={styles.featuresContainer}>
+          <View style={styles.featuresList}>
             {PLAN_FEATURES.pro.map((f) => (
               <FeatureRow key={f} text={f} included />
             ))}
           </View>
 
           <TouchableOpacity
-            style={[styles.upgradeBtn, { backgroundColor: colors.emerald }]}
-            activeOpacity={0.85}
+            style={[styles.upgradeBtn, { backgroundColor: colors.accent }]}
+            activeOpacity={0.8}
           >
-            <Text style={[styles.upgradeBtnText, { fontFamily: "Inter_700Bold" }]}>
+            <Text style={[styles.upgradeBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>
               Upgrade to Pro
             </Text>
             <Feather name="arrow-right" size={16} color="#fff" />
           </TouchableOpacity>
         </View>
 
+        <SectionHeader title="Free plan includes" />
+
         <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <Text style={[styles.sectionTitle, { color: colors.foreground, fontFamily: "Inter_700Bold" }]}>
-            Free Plan Includes
-          </Text>
           {PLAN_FEATURES.free.map((f) => (
             <FeatureRow key={f} text={f} included />
           ))}
         </View>
 
-        <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <Text style={[styles.sectionTitle, { color: colors.foreground, fontFamily: "Inter_700Bold" }]}>
-            Your Stats
-          </Text>
-          <View style={styles.statsRow}>
-            <View style={styles.statItem}>
-              <Text style={[styles.statNumber, { color: colors.emerald, fontFamily: "Inter_700Bold" }]}>
-                {sessions.length}
-              </Text>
-              <Text style={[styles.statLabel, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
-                Sessions
-              </Text>
-            </View>
-            <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
-            <View style={styles.statItem}>
-              <Text style={[styles.statNumber, { color: colors.emerald, fontFamily: "Inter_700Bold" }]}>
-                {reportCount}
-              </Text>
-              <Text style={[styles.statLabel, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
-                Reports
-              </Text>
-            </View>
-            <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
-            <View style={styles.statItem}>
-              <Text style={[styles.statNumber, { color: colors.emerald, fontFamily: "Inter_700Bold" }]}>
-                {sessions.reduce((acc, s) => acc + s.messages.length, 0)}
-              </Text>
-              <Text style={[styles.statLabel, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
-                Messages
-              </Text>
-            </View>
+        <SectionHeader title="Your stats" />
+
+        <View style={[styles.statsCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.statItem}>
+            <Text style={[styles.statNum, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
+              {sessions.length}
+            </Text>
+            <Text style={[styles.statLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+              Sessions
+            </Text>
+          </View>
+          <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
+          <View style={styles.statItem}>
+            <Text style={[styles.statNum, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
+              {reportCount}
+            </Text>
+            <Text style={[styles.statLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+              Reports
+            </Text>
+          </View>
+          <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
+          <View style={styles.statItem}>
+            <Text style={[styles.statNum, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
+              {sessions.reduce((acc, s) => acc + s.messages.length, 0)}
+            </Text>
+            <Text style={[styles.statLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+              Messages
+            </Text>
           </View>
         </View>
 
+        <SectionHeader title="About" />
+
         <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <Text style={[styles.sectionTitle, { color: colors.foreground, fontFamily: "Inter_700Bold" }]}>
-            About
+          <Text style={[styles.aboutText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+            DevFeasible NZ is an AI-powered real estate development feasibility tool designed for New Zealand property markets. Powered by Gemini AI with deep NZ-specific knowledge.
           </Text>
-          <Text style={[styles.aboutText, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
-            DevFeasible NZ is an AI-powered real estate development feasibility tool designed specifically for New Zealand property markets. All analysis is powered by Claude AI with NZ-specific knowledge.
-          </Text>
-          <Text style={[styles.aboutText, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
-            All cost estimates are indicative only. Always engage qualified professionals for development decisions.
-          </Text>
+          <View style={[styles.disclaimerBox, { backgroundColor: colors.muted, borderRadius: 8 }]}>
+            <Text style={[styles.disclaimerText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+              All cost estimates are indicative only. Always engage qualified professionals before making development decisions.
+            </Text>
+          </View>
         </View>
       </ScrollView>
     </View>
@@ -212,26 +227,33 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    borderBottomWidth: 1,
-    paddingHorizontal: 16,
-    paddingBottom: 14,
+    paddingHorizontal: 20,
+    paddingBottom: 16,
   },
   headerContent: {
-    paddingTop: 8,
+    paddingTop: 10,
   },
   headerTitle: {
-    fontSize: 22,
-    color: "#fff",
-    letterSpacing: -0.5,
+    fontSize: 20,
+    letterSpacing: -0.3,
   },
   content: {
     padding: 16,
-    gap: 12,
+    gap: 8,
+  },
+  sectionHeader: {
+    fontSize: 11,
+    textTransform: "uppercase",
+    letterSpacing: 1,
+    paddingHorizontal: 4,
+    marginTop: 12,
+    marginBottom: 4,
   },
   planCard: {
     borderRadius: 16,
-    padding: 18,
-    gap: 16,
+    padding: 20,
+    gap: 18,
+    marginBottom: 4,
   },
   planTop: {
     flexDirection: "row",
@@ -239,32 +261,30 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
   },
   planLabel: {
-    fontSize: 11,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginBottom: 2,
+    fontSize: 12,
+    marginBottom: 3,
+    letterSpacing: 0.2,
   },
   planName: {
-    fontSize: 22,
-    color: "#fff",
+    fontSize: 26,
     letterSpacing: -0.5,
   },
-  planBadge: {
+  freeBadge: {
     borderWidth: 1,
+    borderRadius: 100,
     paddingHorizontal: 10,
     paddingVertical: 4,
-    borderRadius: 100,
   },
-  planBadgeText: {
-    fontSize: 11,
-    letterSpacing: 1,
+  freeBadgeText: {
+    fontSize: 12,
   },
-  usageContainer: {
+  usageSection: {
     gap: 8,
   },
-  usageHeader: {
+  usageRow: {
     flexDirection: "row",
     justifyContent: "space-between",
+    alignItems: "center",
   },
   usageLabel: {
     fontSize: 13,
@@ -272,8 +292,8 @@ const styles = StyleSheet.create({
   usageCount: {
     fontSize: 13,
   },
-  usageBar: {
-    height: 6,
+  usageTrack: {
+    height: 5,
     borderRadius: 3,
     overflow: "hidden",
   },
@@ -281,34 +301,41 @@ const styles = StyleSheet.create({
     height: "100%",
     borderRadius: 3,
   },
-  limitWarning: {
+  limitNote: {
     fontSize: 12,
+    marginTop: 2,
   },
-  upgradeCard: {
+  proCard: {
     borderRadius: 16,
+    borderWidth: 1.5,
     padding: 18,
     gap: 16,
+    shadowColor: "rgba(217,119,87,0.1)",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 1,
+    shadowRadius: 12,
+    elevation: 3,
   },
-  upgradeTop: {
+  proTop: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "flex-start",
   },
-  upgradeTitle: {
+  proTitle: {
     fontSize: 20,
     letterSpacing: -0.3,
   },
   priceRow: {
     flexDirection: "row",
     alignItems: "baseline",
-    gap: 2,
-    marginTop: 2,
+    gap: 3,
+    marginTop: 3,
   },
   price: {
-    fontSize: 28,
+    fontSize: 30,
     letterSpacing: -1,
   },
-  pricePeriod: {
+  pricePer: {
     fontSize: 13,
   },
   proBadge: {
@@ -319,10 +346,10 @@ const styles = StyleSheet.create({
   proBadgeText: {
     fontSize: 11,
     color: "#fff",
-    letterSpacing: 1,
+    letterSpacing: 0.5,
   },
-  featuresContainer: {
-    gap: 8,
+  featuresList: {
+    gap: 10,
   },
   featureRow: {
     flexDirection: "row",
@@ -330,7 +357,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   featureText: {
-    fontSize: 13,
+    fontSize: 14,
   },
   upgradeBtn: {
     flexDirection: "row",
@@ -339,6 +366,7 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingVertical: 14,
     borderRadius: 12,
+    marginTop: 2,
   },
   upgradeBtnText: {
     fontSize: 15,
@@ -350,35 +378,42 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 12,
   },
-  sectionTitle: {
-    fontSize: 15,
-    marginBottom: 2,
-  },
-  statsRow: {
+  statsCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 20,
     flexDirection: "row",
-    justifyContent: "space-around",
     alignItems: "center",
+    justifyContent: "space-around",
   },
   statItem: {
     alignItems: "center",
     flex: 1,
+    gap: 4,
   },
-  statNumber: {
-    fontSize: 28,
+  statNum: {
+    fontSize: 30,
     letterSpacing: -1,
   },
   statLabel: {
     fontSize: 11,
     textTransform: "uppercase",
     letterSpacing: 0.5,
-    marginTop: 2,
   },
   statDivider: {
     width: 1,
-    height: 40,
+    height: 44,
   },
   aboutText: {
-    fontSize: 13,
-    lineHeight: 20,
+    fontSize: 14,
+    lineHeight: 22,
+  },
+  disclaimerBox: {
+    padding: 12,
+    marginTop: 4,
+  },
+  disclaimerText: {
+    fontSize: 12,
+    lineHeight: 18,
   },
 });

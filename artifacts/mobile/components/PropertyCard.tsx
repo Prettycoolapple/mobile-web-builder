@@ -9,17 +9,16 @@ interface Props {
   onAnalyse: (address: string) => void;
 }
 
-function MiniScore({ score, label }: { score: number; label: string }) {
+function ScorePip({ score, label }: { score: number; label: string }) {
   const colors = useColors();
-  const color = score >= 4 ? colors.emerald : score >= 2.5 ? colors.amber : colors.red;
+  const color = score >= 4 ? colors.success : score >= 2.5 ? colors.amber : colors.red;
   return (
-    <View style={styles.miniScore}>
-      <View style={[styles.miniDot, { backgroundColor: color }]} />
-      <Text style={[styles.miniLabel, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
-        {label}
-      </Text>
-      <Text style={[styles.miniValue, { color, fontFamily: "Inter_700Bold" }]}>
+    <View style={styles.pip}>
+      <Text style={[styles.pipValue, { color, fontFamily: "DM_Sans_700Bold" }]}>
         {score.toFixed(1)}
+      </Text>
+      <Text style={[styles.pipLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+        {label}
       </Text>
     </View>
   );
@@ -30,77 +29,71 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
 
   const compositeColor =
     candidate.scores.composite >= 4
-      ? colors.emerald
+      ? colors.success
       : candidate.scores.composite >= 2.5
         ? colors.amber
         : colors.red;
 
   return (
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-      <View style={styles.top}>
-        <View style={styles.addressRow}>
-          <View style={[styles.scorePill, { backgroundColor: compositeColor }]}>
-            <Text style={[styles.scorePillText, { fontFamily: "Inter_700Bold" }]}>
+      <View style={styles.body}>
+        <View style={styles.topRow}>
+          <View style={[styles.scoreCircle, { backgroundColor: compositeColor + "15", borderColor: compositeColor + "40" }]}>
+            <Text style={[styles.scoreCircleText, { color: compositeColor, fontFamily: "DM_Sans_700Bold" }]}>
               {candidate.scores.composite.toFixed(1)}
             </Text>
           </View>
-          <Text style={[styles.address, { color: colors.foreground, fontFamily: "Inter_600SemiBold" }]} numberOfLines={2}>
-            {candidate.address}
-          </Text>
-        </View>
-
-        <View style={styles.metaRow}>
-          {candidate.price > 0 && (
-            <View style={styles.metaItem}>
-              <Text style={[styles.metaLabel, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
-                Price
-              </Text>
-              <Text style={[styles.metaValue, { color: colors.emerald, fontFamily: "Inter_700Bold" }]}>
-                ${(candidate.price / 1_000_000).toFixed(2)}M
-              </Text>
+          <View style={styles.addressBlock}>
+            <Text style={[styles.address, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]} numberOfLines={2}>
+              {candidate.address}
+            </Text>
+            <View style={styles.tagRow}>
+              {candidate.price > 0 && (
+                <View style={[styles.tag, { backgroundColor: colors.muted }]}>
+                  <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
+                    ${(candidate.price / 1_000_000).toFixed(2)}M
+                  </Text>
+                </View>
+              )}
+              {candidate.landArea && (
+                <View style={[styles.tag, { backgroundColor: colors.muted }]}>
+                  <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
+                    {candidate.landArea}m²
+                  </Text>
+                </View>
+              )}
+              {candidate.zone && (
+                <View style={[styles.tag, { backgroundColor: colors.muted }]}>
+                  <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
+                    {candidate.zone}
+                  </Text>
+                </View>
+              )}
             </View>
-          )}
-          {candidate.landArea && (
-            <View style={styles.metaItem}>
-              <Text style={[styles.metaLabel, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
-                Land
-              </Text>
-              <Text style={[styles.metaValue, { color: colors.foreground, fontFamily: "Inter_600SemiBold" }]}>
-                {candidate.landArea}m²
-              </Text>
-            </View>
-          )}
-          {candidate.zone && (
-            <View style={styles.metaItem}>
-              <Text style={[styles.metaLabel, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
-                Zone
-              </Text>
-              <Text style={[styles.metaValue, { color: colors.foreground, fontFamily: "Inter_600SemiBold" }]}>
-                {candidate.zone}
-              </Text>
-            </View>
-          )}
-        </View>
-
-        <View style={[styles.scoresRow, { borderTopColor: colors.border }]}>
-          <MiniScore score={candidate.scores.ease} label="Ease" />
-          <MiniScore score={candidate.scores.cost} label="Cost" />
-          <MiniScore score={candidate.scores.roi} label="ROI" />
+          </View>
         </View>
 
         {candidate.briefSummary && (
-          <Text style={[styles.summary, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]} numberOfLines={3}>
+          <Text style={[styles.summary, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]} numberOfLines={2}>
             {candidate.briefSummary}
           </Text>
         )}
+
+        <View style={[styles.scoresRow, { borderTopColor: colors.border }]}>
+          <ScorePip score={candidate.scores.ease} label="Ease" />
+          <View style={[styles.scoreDivider, { backgroundColor: colors.border }]} />
+          <ScorePip score={candidate.scores.cost} label="Cost" />
+          <View style={[styles.scoreDivider, { backgroundColor: colors.border }]} />
+          <ScorePip score={candidate.scores.roi} label="ROI" />
+        </View>
       </View>
 
       <TouchableOpacity
-        style={[styles.analyseBtn, { backgroundColor: colors.navy }]}
+        style={[styles.analyseBtn, { backgroundColor: colors.accent }]}
         onPress={() => onAnalyse(candidate.address)}
-        activeOpacity={0.85}
+        activeOpacity={0.8}
       >
-        <Text style={[styles.analyseBtnText, { fontFamily: "Inter_600SemiBold" }]}>
+        <Text style={[styles.analyseBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>
           Full Analysis
         </Text>
         <Feather name="arrow-right" size={14} color="#fff" />
@@ -114,88 +107,92 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     overflow: "hidden",
-    shadowColor: "#000",
+    shadowColor: "rgba(28,25,23,0.06)",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
+    shadowOpacity: 1,
+    shadowRadius: 8,
     elevation: 2,
   },
-  top: {
-    padding: 14,
-    gap: 10,
+  body: {
+    padding: 16,
+    gap: 12,
   },
-  addressRow: {
+  topRow: {
     flexDirection: "row",
+    gap: 12,
     alignItems: "flex-start",
-    gap: 10,
   },
-  scorePill: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  scoreCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1.5,
     justifyContent: "center",
     alignItems: "center",
     flexShrink: 0,
   },
-  scorePillText: {
-    fontSize: 15,
-    color: "#fff",
+  scoreCircleText: {
+    fontSize: 16,
+  },
+  addressBlock: {
+    flex: 1,
+    gap: 6,
   },
   address: {
     fontSize: 14,
-    flex: 1,
     lineHeight: 20,
   },
-  metaRow: {
+  tagRow: {
     flexDirection: "row",
-    gap: 16,
+    gap: 5,
+    flexWrap: "wrap",
   },
-  metaItem: {
-    gap: 1,
+  tag: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 100,
   },
-  metaLabel: {
-    fontSize: 10,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
+  tagText: {
+    fontSize: 11,
   },
-  metaValue: {
+  summary: {
     fontSize: 13,
+    lineHeight: 19,
   },
   scoresRow: {
     flexDirection: "row",
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: 12,
     justifyContent: "space-around",
-    borderTopWidth: 1,
-    paddingTop: 8,
-  },
-  miniScore: {
     alignItems: "center",
-    gap: 3,
-    flexDirection: "row",
   },
-  miniDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+  pip: {
+    alignItems: "center",
+    flex: 1,
+    gap: 2,
   },
-  miniLabel: {
+  pipValue: {
+    fontSize: 17,
+    letterSpacing: -0.3,
+  },
+  pipLabel: {
     fontSize: 11,
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
   },
-  miniValue: {
-    fontSize: 13,
-  },
-  summary: {
-    fontSize: 12,
-    lineHeight: 18,
+  scoreDivider: {
+    width: 1,
+    height: 28,
   },
   analyseBtn: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
-    paddingVertical: 12,
+    paddingVertical: 13,
   },
   analyseBtnText: {
     color: "#fff",
-    fontSize: 13,
+    fontSize: 14,
   },
 });

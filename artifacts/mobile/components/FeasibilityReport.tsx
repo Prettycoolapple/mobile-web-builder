@@ -5,7 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Platform,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
@@ -49,17 +48,17 @@ function SectionCard({
         onPress={() => setOpen(!open)}
         activeOpacity={0.7}
       >
-        <Text style={[styles.sectionIcon]}>{icon}</Text>
-        <Text style={[styles.sectionTitle, { color: colors.foreground, fontFamily: "Inter_600SemiBold" }]}>
+        <Text style={styles.sectionIcon}>{icon}</Text>
+        <Text style={[styles.sectionTitle, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>
           {title}
         </Text>
         <Feather
           name={open ? "chevron-up" : "chevron-down"}
-          size={16}
+          size={15}
           color={colors.mutedForeground}
         />
       </TouchableOpacity>
-      {open && <View style={styles.sectionBody}>{children}</View>}
+      {open && <View style={[styles.sectionBody, { borderTopColor: colors.border }]}>{children}</View>}
     </View>
   );
 }
@@ -67,11 +66,11 @@ function SectionCard({
 function InfoRow({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
   const colors = useColors();
   return (
-    <View style={styles.infoRow}>
-      <Text style={[styles.infoLabel, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
+    <View style={[styles.infoRow, { borderBottomColor: colors.border }]}>
+      <Text style={[styles.infoLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
         {label}
       </Text>
-      <Text style={[styles.infoValue, { color: valueColor || colors.foreground, fontFamily: "Inter_600SemiBold" }]}>
+      <Text style={[styles.infoValue, { color: valueColor || colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>
         {value}
       </Text>
     </View>
@@ -81,12 +80,12 @@ function InfoRow({ label, value, valueColor }: { label: string; value: string; v
 function CostBar({ items, total }: { items: CostItem[]; total: number }) {
   const colors = useColors();
   const barColors = [
-    colors.navy, colors.emerald, "#6366F1", colors.amber, "#EC4899", "#8B5CF6", "#06B6D4",
+    colors.accent, colors.success, "#7C6AF7", colors.amber, "#E46899", "#9B72E8", "#3BB8CF",
   ];
 
   return (
     <View style={styles.costBarContainer}>
-      <View style={styles.costBar}>
+      <View style={[styles.costBar, { backgroundColor: colors.muted }]}>
         {items.map((item, idx) => {
           const pct = ((item.low + item.high) / 2 / total) * 100;
           return (
@@ -101,7 +100,7 @@ function CostBar({ items, total }: { items: CostItem[]; total: number }) {
         {items.map((item, idx) => (
           <View key={item.label} style={styles.costLegendItem}>
             <View style={[styles.costLegendDot, { backgroundColor: barColors[idx % barColors.length] }]} />
-            <Text style={[styles.costLegendLabel, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
+            <Text style={[styles.costLegendLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
               {item.label}
             </Text>
           </View>
@@ -120,33 +119,48 @@ function ROICard({ scenario }: { scenario: ROIScenario }) {
       style={[
         styles.roiCard,
         {
-          backgroundColor: isBest ? colors.emerald : colors.card,
-          borderColor: isBest ? colors.emerald : colors.border,
+          backgroundColor: isBest ? colors.accent : colors.card,
+          borderColor: isBest ? colors.accent : colors.border,
         },
       ]}
     >
       {isBest && (
-        <View style={[styles.bestBadge, { backgroundColor: colors.card }]}>
-          <Text style={[styles.bestBadgeText, { color: colors.emerald, fontFamily: "Inter_700Bold" }]}>
+        <View style={[styles.bestBadge, { backgroundColor: "rgba(255,255,255,0.25)" }]}>
+          <Text style={[styles.bestBadgeText, { fontFamily: "DM_Sans_700Bold" }]}>
             BEST
           </Text>
         </View>
       )}
-      <Text style={[styles.roiYears, { color: isBest ? "#fff" : colors.foreground, fontFamily: "Inter_700Bold" }]}>
-        {scenario.years}yr
+      <Text style={[styles.roiYears, {
+        color: isBest ? "rgba(255,255,255,0.7)" : colors.mutedForeground,
+        fontFamily: "DM_Sans_400Regular",
+      }]}>
+        {scenario.years} years
       </Text>
-      <Text style={[styles.roiPercent, { color: isBest ? "#fff" : colors.emerald, fontFamily: "Inter_700Bold" }]}>
+      <Text style={[styles.roiPercent, {
+        color: isBest ? "#fff" : colors.accent,
+        fontFamily: "DM_Sans_700Bold",
+      }]}>
         {scenario.annualisedRoi.toFixed(1)}%
       </Text>
-      <Text style={[styles.roiLabel, { color: isBest ? "rgba(255,255,255,0.8)" : colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
-        p.a. ROI
+      <Text style={[styles.roiLabel, {
+        color: isBest ? "rgba(255,255,255,0.6)" : colors.mutedForeground,
+        fontFamily: "DM_Sans_400Regular",
+      }]}>
+        p.a. return
       </Text>
-      <View style={[styles.roiDivider, { backgroundColor: isBest ? "rgba(255,255,255,0.3)" : colors.border }]} />
-      <Text style={[styles.roiGdv, { color: isBest ? "rgba(255,255,255,0.9)" : colors.foreground, fontFamily: "Inter_500Medium" }]}>
+      <View style={[styles.roiDivider, { backgroundColor: isBest ? "rgba(255,255,255,0.2)" : colors.border }]} />
+      <Text style={[styles.roiGdv, {
+        color: isBest ? "rgba(255,255,255,0.8)" : colors.mutedForeground,
+        fontFamily: "DM_Sans_400Regular",
+      }]}>
         GDV {formatNZD(scenario.gdv)}
       </Text>
-      <Text style={[styles.roiProfit, { color: isBest ? "rgba(255,255,255,0.9)" : colors.emerald, fontFamily: "Inter_600SemiBold" }]}>
-        Profit {formatNZD(scenario.grossProfit)}
+      <Text style={[styles.roiProfit, {
+        color: isBest ? "#fff" : colors.foreground,
+        fontFamily: "DM_Sans_600SemiBold",
+      }]}>
+        {formatNZD(scenario.grossProfit)} profit
       </Text>
     </View>
   );
@@ -164,52 +178,59 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
 
   const compositeColor =
     report.scores.composite >= 4
-      ? colors.emerald
+      ? colors.success
       : report.scores.composite >= 2.5
         ? colors.amber
         : colors.red;
 
   return (
     <View style={styles.container}>
-      <View style={[styles.header, { backgroundColor: colors.navy }]}>
-        <Text style={[styles.address, { fontFamily: "Inter_700Bold" }]} numberOfLines={2}>
-          {report.address}
-        </Text>
-        {report.propertyOverview && (
-          <View style={styles.headerMeta}>
-            {report.propertyOverview.zone && (
-              <View style={[styles.zoneBadge, { backgroundColor: colors.emerald + "30", borderColor: colors.emerald }]}>
-                <Text style={[styles.zoneBadgeText, { color: colors.emerald, fontFamily: "Inter_600SemiBold" }]}>
-                  {report.propertyOverview.zone.split(" ")[0]}
-                </Text>
+      <View style={[styles.reportHeader, { backgroundColor: colors.headerBg }]}>
+        <View style={[styles.reportHeaderTop]}>
+          <View style={[styles.reportIcon, { backgroundColor: colors.accent }]}>
+            <Feather name="map-pin" size={14} color="#fff" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.address, { color: colors.headerText, fontFamily: "DM_Sans_600SemiBold" }]} numberOfLines={2}>
+              {report.address}
+            </Text>
+            {report.propertyOverview && (
+              <View style={styles.headerMeta}>
+                {report.propertyOverview.zone && (
+                  <View style={[styles.zoneBadge, { backgroundColor: "rgba(250,250,249,0.15)" }]}>
+                    <Text style={[styles.zoneBadgeText, { color: "rgba(250,250,249,0.85)", fontFamily: "DM_Sans_500Medium" }]}>
+                      {report.propertyOverview.zone.split(" ")[0]}
+                    </Text>
+                  </View>
+                )}
+                {report.propertyOverview.cv && (
+                  <Text style={[styles.headerMetaText, { color: colors.headerSubtext }]}>
+                    CV {report.propertyOverview.cv}
+                  </Text>
+                )}
+                {report.propertyOverview.landArea && (
+                  <Text style={[styles.headerMetaText, { color: colors.headerSubtext }]}>
+                    · {report.propertyOverview.landArea}
+                  </Text>
+                )}
               </View>
             )}
-            {report.propertyOverview.cv && (
-              <Text style={[styles.cvText, { color: "rgba(255,255,255,0.7)", fontFamily: "Inter_400Regular" }]}>
-                CV {report.propertyOverview.cv}
-              </Text>
-            )}
-            {report.propertyOverview.landArea && (
-              <Text style={[styles.cvText, { color: "rgba(255,255,255,0.7)", fontFamily: "Inter_400Regular" }]}>
-                {report.propertyOverview.landArea}
-              </Text>
-            )}
           </View>
-        )}
-      </View>
-
-      <View style={[styles.scoresRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        <ScoreBadge score={report.scores.ease} label="Ease" size={68} />
-        <View style={styles.compositeContainer}>
-          <Text style={[styles.compositeScore, { color: compositeColor, fontFamily: "Inter_700Bold" }]}>
-            {report.scores.composite.toFixed(1)}
-          </Text>
-          <Text style={[styles.compositeLabel, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
-            Overall
-          </Text>
         </View>
-        <ScoreBadge score={report.scores.cost} label="Cost" size={68} />
-        <ScoreBadge score={report.scores.roi} label="ROI" size={68} />
+
+        <View style={[styles.scoresRow, { borderTopColor: "rgba(250,250,249,0.1)" }]}>
+          <ScoreBadge score={report.scores.ease} label="Ease" size={64} />
+          <View style={styles.compositeContainer}>
+            <Text style={[styles.compositeScore, { color: compositeColor, fontFamily: "DM_Sans_700Bold" }]}>
+              {report.scores.composite.toFixed(1)}
+            </Text>
+            <Text style={[styles.compositeLabel, { color: colors.headerSubtext, fontFamily: "DM_Sans_400Regular" }]}>
+              Overall
+            </Text>
+          </View>
+          <ScoreBadge score={report.scores.cost} label="Cost" size={64} />
+          <ScoreBadge score={report.scores.roi} label="ROI" size={64} />
+        </View>
       </View>
 
       {report.propertyOverview && (
@@ -225,7 +246,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
             <InfoRow
               label="Listing Price"
               value={report.propertyOverview.listingPrice}
-              valueColor={colors.emerald}
+              valueColor={colors.success}
             />
           )}
         </SectionCard>
@@ -234,7 +255,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
       {report.planning && (
         <SectionCard title="Planning & Overlays" icon="🏗️">
           {report.planning.subdivisionSummary && (
-            <Text style={[styles.planningText, { color: colors.foreground, fontFamily: "Inter_400Regular" }]}>
+            <Text style={[styles.planningText, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}>
               {report.planning.subdivisionSummary}
             </Text>
           )}
@@ -246,7 +267,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
                   style={[
                     styles.overlayItem,
                     i < report.planning!.overlays!.length - 1 && {
-                      borderBottomWidth: 1,
+                      borderBottomWidth: StyleSheet.hairlineWidth,
                       borderBottomColor: colors.border,
                     },
                   ]}
@@ -273,7 +294,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
                 ? colors.red
                 : report.asbestos.riskLevel === "moderate"
                   ? colors.amber
-                  : colors.emerald
+                  : colors.success
             }
           />
           {report.asbestos.demoCostLow && report.asbestos.demoCostHigh && (
@@ -283,8 +304,9 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
             />
           )}
           {report.asbestos.flagged && report.asbestos.worksafeNote && (
-            <View style={[styles.warningBox, { backgroundColor: colors.amber + "18", borderColor: colors.amber + "40" }]}>
-              <Text style={[styles.warningText, { color: colors.amber, fontFamily: "Inter_500Medium" }]}>
+            <View style={[styles.warningBox, { backgroundColor: colors.amber + "12", borderColor: colors.amber + "30" }]}>
+              <Feather name="alert-triangle" size={14} color={colors.amber} />
+              <Text style={[styles.warningText, { color: colors.amber, fontFamily: "DM_Sans_500Medium" }]}>
                 {report.asbestos.worksafeNote}
               </Text>
             </View>
@@ -302,7 +324,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
                 ? colors.red
                 : report.terrain.classification === "moderate"
                   ? colors.amber
-                  : colors.emerald
+                  : colors.success
             }
           />
           {report.terrain.slope && <InfoRow label="Slope" value={report.terrain.slope} />}
@@ -326,19 +348,21 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
               key={i}
               style={[
                 styles.infraRow,
-                { borderBottomColor: colors.border },
-                i < report.infrastructure!.length - 1 && { borderBottomWidth: 1 },
+                i < report.infrastructure!.length - 1 && {
+                  borderBottomWidth: StyleSheet.hairlineWidth,
+                  borderBottomColor: colors.border,
+                },
               ]}
             >
               <View style={styles.infraLeft}>
-                <Text style={[styles.infraName, { color: colors.foreground, fontFamily: "Inter_600SemiBold" }]}>
+                <Text style={[styles.infraName, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>
                   {service.name}
                 </Text>
-                <Text style={[styles.infraLocation, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
+                <Text style={[styles.infraLocation, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
                   {service.location === "on-parcel" ? "On parcel" : service.location === "boundary" ? "At boundary" : "Off parcel"}
                 </Text>
                 {service.note && (
-                  <Text style={[styles.infraNote, { color: colors.amber, fontFamily: "Inter_400Regular" }]}>
+                  <Text style={[styles.infraNote, { color: colors.amber, fontFamily: "DM_Sans_400Regular" }]}>
                     {service.note}
                   </Text>
                 )}
@@ -346,23 +370,23 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
               <View style={styles.infraRight}>
                 <View style={[styles.riskBadge, {
                   backgroundColor:
-                    service.risk === "high" ? colors.red + "20" :
-                    service.risk === "moderate" ? colors.amber + "20" : colors.emerald + "20",
+                    service.risk === "high" ? colors.red + "15" :
+                    service.risk === "moderate" ? colors.amber + "15" : colors.success + "15",
                   borderColor:
-                    service.risk === "high" ? colors.red :
-                    service.risk === "moderate" ? colors.amber : colors.emerald,
+                    service.risk === "high" ? colors.red + "40" :
+                    service.risk === "moderate" ? colors.amber + "40" : colors.success + "40",
                 }]}>
                   <Text style={[styles.riskText, {
                     color:
                       service.risk === "high" ? colors.red :
-                      service.risk === "moderate" ? colors.amber : colors.emerald,
-                    fontFamily: "Inter_600SemiBold",
+                      service.risk === "moderate" ? colors.amber : colors.success,
+                    fontFamily: "DM_Sans_600SemiBold",
                   }]}>
-                    {service.risk.toUpperCase()}
+                    {service.risk.charAt(0).toUpperCase() + service.risk.slice(1)}
                   </Text>
                 </View>
                 {service.estimatedCostLow !== undefined && service.estimatedCostHigh !== undefined && (
-                  <Text style={[styles.infraCost, { color: colors.foreground, fontFamily: "Inter_500Medium" }]}>
+                  <Text style={[styles.infraCost, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
                     {formatNZD(service.estimatedCostLow)}–{formatNZD(service.estimatedCostHigh)}
                   </Text>
                 )}
@@ -373,33 +397,33 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
       )}
 
       {report.costItems && report.costItems.length > 0 && (
-        <SectionCard title="Development Cost Estimate" icon="💰">
+        <SectionCard title="Cost Estimate" icon="💰">
           <CostBar
             items={report.costItems}
             total={(report.totalCostLow || 0 + (report.totalCostHigh || 0)) / 2 || report.costItems.reduce((s, i) => s + (i.low + i.high) / 2, 0)}
           />
           {report.costItems.map((item, i) => (
-            <View key={i} style={[styles.costRow, { borderBottomColor: colors.border }, i < report.costItems!.length - 1 && { borderBottomWidth: 1 }]}>
-              <Text style={[styles.costLabel, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
+            <View key={i} style={[styles.costRow, i < report.costItems!.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}>
+              <Text style={[styles.costLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
                 {item.label}
               </Text>
-              <Text style={[styles.costValue, { color: colors.foreground, fontFamily: "Inter_600SemiBold" }]}>
+              <Text style={[styles.costValue, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>
                 {formatNZD(item.low)} – {formatNZD(item.high)}
               </Text>
             </View>
           ))}
           {report.totalCostLow !== undefined && report.totalCostHigh !== undefined && (
-            <View style={[styles.totalRow, { backgroundColor: colors.navy + "10", borderRadius: 8, borderColor: colors.navy + "30", borderWidth: 1 }]}>
-              <Text style={[styles.totalLabel, { color: colors.navy, fontFamily: "Inter_700Bold" }]}>
-                TOTAL ESTIMATE
+            <View style={[styles.totalRow, { backgroundColor: colors.muted, borderRadius: 10 }]}>
+              <Text style={[styles.totalLabel, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
+                Total Estimate
               </Text>
-              <Text style={[styles.totalValue, { color: colors.navy, fontFamily: "Inter_700Bold" }]}>
+              <Text style={[styles.totalValue, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
                 {formatNZD(report.totalCostLow)} – {formatNZD(report.totalCostHigh)}
               </Text>
             </View>
           )}
-          <Text style={[styles.disclaimer, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
-            {report.disclaimer || "These are indicative estimates only. Engage a quantity surveyor for accurate figures."}
+          <Text style={[styles.disclaimer, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+            {report.disclaimer || "Indicative estimates only. Engage a quantity surveyor for accurate figures."}
           </Text>
         </SectionCard>
       )}
@@ -417,27 +441,27 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
       )}
 
       {report.comparableSales && report.comparableSales.length > 0 && (
-        <SectionCard title="Comparable Sales" icon="🔍">
+        <SectionCard title="Comparable Sales" icon="🔍" defaultOpen={false}>
           {report.avgPricePerSqm && (
             <InfoRow
-              label="Avg $/m² (used for GDV)"
+              label="Avg $/m² (GDV basis)"
               value={`$${Math.round(report.avgPricePerSqm).toLocaleString()}/m²`}
-              valueColor={colors.emerald}
+              valueColor={colors.success}
             />
           )}
           {report.comparableSales.map((sale, i) => (
-            <View key={i} style={[styles.saleRow, { borderBottomColor: colors.border }, i < report.comparableSales!.length - 1 && { borderBottomWidth: 1 }]}>
-              <Text style={[styles.saleAddress, { color: colors.foreground, fontFamily: "Inter_500Medium" }]} numberOfLines={1}>
+            <View key={i} style={[styles.saleRow, i < report.comparableSales!.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}>
+              <Text style={[styles.saleAddress, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]} numberOfLines={1}>
                 {sale.address}
               </Text>
               <View style={styles.saleMeta}>
-                <Text style={[styles.saleDate, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
+                <Text style={[styles.saleDate, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
                   {sale.saleDate}
                 </Text>
-                <Text style={[styles.salePrice, { color: colors.emerald, fontFamily: "Inter_700Bold" }]}>
+                <Text style={[styles.salePrice, { color: colors.success, fontFamily: "DM_Sans_700Bold" }]}>
                   {formatNZD(sale.price)}
                 </Text>
-                <Text style={[styles.saleSqm, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
+                <Text style={[styles.saleSqm, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
                   ${Math.round(sale.pricePerSqm).toLocaleString()}/m²
                 </Text>
               </View>
@@ -449,9 +473,9 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
       {report.riskSummary && report.riskSummary.length > 0 && (
         <SectionCard title="AI Risk Summary" icon="💬">
           {report.riskSummary.map((risk, i) => (
-            <View key={i} style={styles.riskItem}>
+            <View key={i} style={[styles.riskItem, { borderBottomColor: colors.border }, i < report.riskSummary!.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth }]}>
               <View style={[styles.riskDot, { backgroundColor: colors.amber }]} />
-              <Text style={[styles.riskText2, { color: colors.foreground, fontFamily: "Inter_400Regular" }]}>
+              <Text style={[styles.riskItemText, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}>
                 {risk}
               </Text>
             </View>
@@ -460,18 +484,18 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
       )}
 
       <View style={[styles.followUpsContainer, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        <Text style={[styles.followUpsTitle, { color: colors.mutedForeground, fontFamily: "Inter_500Medium" }]}>
-          Ask a follow-up question
+        <Text style={[styles.followUpsTitle, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>
+          Ask a follow-up
         </Text>
         <View style={styles.followUpsGrid}>
           {FOLLOW_UPS.map((q) => (
             <TouchableOpacity
               key={q}
-              style={[styles.followUpChip, { backgroundColor: colors.navy + "10", borderColor: colors.navy + "30" }]}
+              style={[styles.followUpChip, { backgroundColor: colors.muted, borderColor: colors.border }]}
               onPress={() => onFollowUp(q)}
               activeOpacity={0.7}
             >
-              <Text style={[styles.followUpText, { color: colors.navy, fontFamily: "Inter_500Medium" }]}>
+              <Text style={[styles.followUpText, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}>
                 {q}
               </Text>
             </TouchableOpacity>
@@ -486,46 +510,60 @@ const styles = StyleSheet.create({
   container: {
     gap: 8,
   },
-  header: {
+  reportHeader: {
     borderRadius: 16,
+    overflow: "hidden",
+  },
+  reportHeaderTop: {
+    flexDirection: "row",
+    gap: 12,
     padding: 16,
-    gap: 8,
+    alignItems: "flex-start",
+  },
+  reportIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    justifyContent: "center",
+    alignItems: "center",
+    flexShrink: 0,
+    marginTop: 2,
   },
   address: {
-    fontSize: 17,
-    color: "#fff",
-    letterSpacing: -0.3,
+    fontSize: 16,
+    lineHeight: 22,
+    letterSpacing: -0.2,
   },
   headerMeta: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 6,
+    marginTop: 5,
     flexWrap: "wrap",
   },
   zoneBadge: {
-    borderWidth: 1,
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 100,
   },
   zoneBadgeText: {
     fontSize: 11,
-    letterSpacing: 0.5,
   },
-  cvText: {
+  headerMetaText: {
     fontSize: 12,
+    fontFamily: "DM_Sans_400Regular",
   },
   scoresRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-around",
-    borderRadius: 16,
-    borderWidth: 1,
+    borderTopWidth: StyleSheet.hairlineWidth,
     paddingVertical: 16,
     paddingHorizontal: 8,
   },
   compositeContainer: {
     alignItems: "center",
+    gap: 2,
   },
   compositeScore: {
     fontSize: 36,
@@ -535,36 +573,43 @@ const styles = StyleSheet.create({
     fontSize: 11,
     textTransform: "uppercase",
     letterSpacing: 0.5,
-    marginTop: 2,
   },
   sectionCard: {
     borderRadius: 16,
     borderWidth: 1,
     overflow: "hidden",
+    shadowColor: "rgba(28,25,23,0.04)",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 1,
+    shadowRadius: 4,
+    elevation: 1,
   },
   sectionHeader: {
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 13,
     gap: 8,
   },
   sectionIcon: {
-    fontSize: 16,
+    fontSize: 15,
   },
   sectionTitle: {
     fontSize: 14,
     flex: 1,
   },
   sectionBody: {
+    borderTopWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: 16,
     paddingBottom: 14,
+    paddingTop: 4,
   },
   infoRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingVertical: 6,
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
   infoLabel: {
     fontSize: 13,
@@ -578,34 +623,38 @@ const styles = StyleSheet.create({
   planningText: {
     fontSize: 13,
     lineHeight: 20,
-    marginBottom: 8,
+    paddingTop: 8,
+    paddingBottom: 4,
   },
   overlaysContainer: {
-    borderTopWidth: 1,
-    marginTop: 4,
-    paddingTop: 4,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    marginTop: 8,
   },
   overlayItem: {
-    paddingVertical: 2,
+    paddingHorizontal: 0,
   },
   warningBox: {
-    borderRadius: 8,
+    flexDirection: "row",
+    gap: 8,
+    alignItems: "flex-start",
+    borderRadius: 10,
     borderWidth: 1,
-    padding: 10,
+    padding: 12,
     marginTop: 8,
   },
   warningText: {
     fontSize: 12,
     lineHeight: 18,
+    flex: 1,
   },
   infraRow: {
     flexDirection: "row",
-    paddingVertical: 10,
-    gap: 8,
+    paddingVertical: 12,
+    gap: 10,
   },
   infraLeft: {
     flex: 1,
-    gap: 2,
+    gap: 3,
   },
   infraName: {
     fontSize: 13,
@@ -619,31 +668,31 @@ const styles = StyleSheet.create({
   },
   infraRight: {
     alignItems: "flex-end",
-    gap: 4,
+    gap: 5,
+    justifyContent: "center",
   },
   riskBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
     borderRadius: 100,
     borderWidth: 1,
   },
   riskText: {
-    fontSize: 10,
-    letterSpacing: 0.5,
-  },
-  infraCost: {
     fontSize: 11,
   },
+  infraCost: {
+    fontSize: 12,
+  },
   costBarContainer: {
-    gap: 8,
+    gap: 10,
+    marginTop: 8,
     marginBottom: 12,
   },
   costBar: {
-    height: 10,
-    borderRadius: 5,
+    height: 8,
+    borderRadius: 4,
     overflow: "hidden",
     flexDirection: "row",
-    backgroundColor: "#E2E8F0",
   },
   costBarSegment: {
     height: "100%",
@@ -659,9 +708,9 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   costLegendDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
   },
   costLegendLabel: {
     fontSize: 10,
@@ -669,7 +718,8 @@ const styles = StyleSheet.create({
   costRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingVertical: 7,
+    alignItems: "center",
+    paddingVertical: 8,
   },
   costLabel: {
     fontSize: 13,
@@ -687,68 +737,64 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   totalLabel: {
-    fontSize: 12,
-    letterSpacing: 0.5,
+    fontSize: 13,
   },
   totalValue: {
     fontSize: 15,
   },
   disclaimer: {
     fontSize: 11,
-    fontStyle: "italic",
     lineHeight: 16,
-    marginTop: 8,
-    opacity: 0.7,
+    marginTop: 10,
+    fontStyle: "italic",
   },
   roiScroll: {
-    marginHorizontal: -4,
+    marginTop: 4,
   },
   roiRow: {
     flexDirection: "row",
     gap: 10,
-    paddingHorizontal: 4,
     paddingBottom: 4,
   },
   roiCard: {
-    width: 130,
+    width: 150,
     borderRadius: 14,
-    borderWidth: 1.5,
+    borderWidth: 1,
     padding: 14,
-    alignItems: "center",
-    gap: 2,
-    position: "relative",
+    gap: 3,
+    shadowColor: "rgba(28,25,23,0.05)",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 1,
+    shadowRadius: 6,
+    elevation: 2,
   },
   bestBadge: {
-    position: "absolute",
-    top: -8,
-    paddingHorizontal: 8,
+    alignSelf: "flex-start",
+    paddingHorizontal: 7,
     paddingVertical: 2,
     borderRadius: 100,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
+    marginBottom: 6,
   },
   bestBadgeText: {
     fontSize: 9,
-    letterSpacing: 1,
+    color: "#fff",
+    letterSpacing: 0.8,
   },
   roiYears: {
-    fontSize: 24,
-    marginTop: 8,
+    fontSize: 11,
+    marginBottom: 2,
   },
   roiPercent: {
-    fontSize: 28,
-    letterSpacing: -0.5,
+    fontSize: 30,
+    letterSpacing: -1,
   },
   roiLabel: {
     fontSize: 11,
+    marginBottom: 8,
   },
   roiDivider: {
     height: 1,
-    width: "80%",
-    marginVertical: 8,
+    marginVertical: 6,
   },
   roiGdv: {
     fontSize: 11,
@@ -757,8 +803,8 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   saleRow: {
-    paddingVertical: 8,
-    gap: 3,
+    paddingVertical: 10,
+    gap: 4,
   },
   saleAddress: {
     fontSize: 13,
@@ -770,6 +816,7 @@ const styles = StyleSheet.create({
   },
   saleDate: {
     fontSize: 11,
+    flex: 1,
   },
   salePrice: {
     fontSize: 13,
@@ -780,7 +827,7 @@ const styles = StyleSheet.create({
   riskItem: {
     flexDirection: "row",
     gap: 10,
-    paddingVertical: 5,
+    paddingVertical: 10,
     alignItems: "flex-start",
   },
   riskDot: {
@@ -790,7 +837,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
     flexShrink: 0,
   },
-  riskText2: {
+  riskItemText: {
     fontSize: 13,
     lineHeight: 20,
     flex: 1,
@@ -798,26 +845,31 @@ const styles = StyleSheet.create({
   followUpsContainer: {
     borderRadius: 16,
     borderWidth: 1,
-    padding: 14,
-    gap: 10,
+    padding: 16,
+    gap: 12,
+    shadowColor: "rgba(28,25,23,0.04)",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 1,
+    shadowRadius: 4,
+    elevation: 1,
   },
   followUpsTitle: {
     fontSize: 12,
     textTransform: "uppercase",
-    letterSpacing: 0.5,
+    letterSpacing: 0.8,
   },
   followUpsGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 6,
+    gap: 8,
   },
   followUpChip: {
     borderWidth: 1,
     borderRadius: 100,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 13,
+    paddingVertical: 8,
   },
   followUpText: {
-    fontSize: 12,
+    fontSize: 13,
   },
 });

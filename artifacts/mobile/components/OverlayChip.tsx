@@ -13,24 +13,26 @@ export function OverlayChip({ name, status, detail }: OverlayChipProps) {
   const colors = useColors();
 
   const config = {
-    clear: { color: colors.emerald, icon: "check-circle" as const, label: "Clear" },
+    clear: { color: colors.success, icon: "check-circle" as const, label: "Clear" },
     moderate: { color: colors.amber, icon: "alert-circle" as const, label: "Moderate" },
     restricted: { color: colors.red, icon: "x-circle" as const, label: "Restricted" },
   }[status];
 
   return (
     <View style={styles.wrapper}>
-      <View style={[styles.chip, { backgroundColor: config.color + "18", borderColor: config.color + "40" }]}>
-        <Feather name={config.icon} size={14} color={config.color} />
-        <Text style={[styles.statusText, { color: config.color, fontFamily: "Inter_600SemiBold" }]}>
-          {config.label}
+      <View style={styles.row}>
+        <View style={[styles.chip, { backgroundColor: config.color + "15", borderColor: config.color + "35" }]}>
+          <Feather name={config.icon} size={13} color={config.color} />
+          <Text style={[styles.statusText, { color: config.color, fontFamily: "DM_Sans_600SemiBold" }]}>
+            {config.label}
+          </Text>
+        </View>
+        <Text style={[styles.name, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
+          {name}
         </Text>
       </View>
-      <Text style={[styles.name, { color: colors.foreground, fontFamily: "Inter_500Medium" }]}>
-        {name}
-      </Text>
       {detail && (
-        <Text style={[styles.detail, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
+        <Text style={[styles.detail, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
           {detail}
         </Text>
       )}
@@ -41,7 +43,12 @@ export function OverlayChip({ name, status, detail }: OverlayChipProps) {
 const styles = StyleSheet.create({
   wrapper: {
     paddingVertical: 8,
-    gap: 3,
+    gap: 4,
+  },
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
   chip: {
     flexDirection: "row",
@@ -51,18 +58,18 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 100,
     borderWidth: 1,
-    alignSelf: "flex-start",
   },
   statusText: {
     fontSize: 11,
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
   },
   name: {
     fontSize: 13,
-    marginTop: 2,
+    flex: 1,
   },
   detail: {
     fontSize: 12,
-    lineHeight: 16,
+    lineHeight: 17,
+    paddingLeft: 2,
   },
 });

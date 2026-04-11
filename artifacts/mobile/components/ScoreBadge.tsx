@@ -9,7 +9,7 @@ interface ScoreBadgeProps {
 }
 
 function getScoreColor(score: number, colors: ReturnType<typeof useColors>): string {
-  if (score >= 4) return colors.emerald;
+  if (score >= 4) return colors.success;
   if (score >= 2.5) return colors.amber;
   return colors.red;
 }
@@ -21,14 +21,14 @@ export function ScoreBadge({ score, label, size = 72 }: ScoreBadgeProps) {
   useEffect(() => {
     Animated.timing(animatedValue, {
       toValue: score / 5,
-      duration: 800,
+      duration: 700,
       useNativeDriver: false,
     }).start();
   }, [score, animatedValue]);
 
   const scoreColor = getScoreColor(score, colors);
-  const fontSize = size * 0.28;
-  const labelFontSize = size * 0.18;
+  const fontSize = size * 0.27;
+  const labelFontSize = size * 0.17;
 
   return (
     <View style={[styles.container, { width: size + 16, alignItems: "center" }]}>
@@ -39,24 +39,22 @@ export function ScoreBadge({ score, label, size = 72 }: ScoreBadgeProps) {
             width: size,
             height: size,
             borderRadius: size / 2,
-            borderColor: scoreColor,
-            backgroundColor: colors.card,
+            borderColor: scoreColor + "60",
+            backgroundColor: scoreColor + "10",
           },
         ]}
       >
-        <Text
-          style={[styles.score, { fontSize, color: scoreColor, fontFamily: "Inter_700Bold" }]}
-        >
+        <Text style={[styles.score, { fontSize, color: scoreColor, fontFamily: "DM_Sans_700Bold" }]}>
           {score.toFixed(1)}
         </Text>
-        <Text style={[styles.outOf, { fontSize: fontSize * 0.55, color: colors.mutedForeground }]}>
+        <Text style={[styles.outOf, { fontSize: fontSize * 0.5, color: colors.mutedForeground }]}>
           /5
         </Text>
       </View>
       <Text
         style={[
           styles.label,
-          { fontSize: labelFontSize, color: colors.mutedForeground, fontFamily: "Inter_600SemiBold" },
+          { fontSize: labelFontSize, color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" },
         ]}
         numberOfLines={1}
       >
@@ -72,18 +70,12 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   badge: {
-    borderWidth: 3,
+    borderWidth: 2,
     justifyContent: "center",
     alignItems: "center",
     flexDirection: "row",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    elevation: 3,
   },
   score: {
-    fontWeight: "700",
     letterSpacing: -0.5,
   },
   outOf: {
@@ -91,7 +83,7 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
   label: {
-    letterSpacing: 0.5,
+    letterSpacing: 0.3,
     textTransform: "uppercase",
   },
 });

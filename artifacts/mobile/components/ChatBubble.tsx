@@ -17,14 +17,15 @@ export function ChatBubble({ message, onFollowUp, onAnalyse }: Props) {
 
   if (message.type === "loading") {
     return (
-      <View style={[styles.aiRow]}>
-        <View style={[styles.aiBubble, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <View style={styles.typingContainer}>
-            <ActivityIndicator size="small" color={colors.primary} />
-            <Text style={[styles.typingText, { color: colors.mutedForeground, fontFamily: "Inter_400Regular" }]}>
-              Analysing property...
-            </Text>
-          </View>
+      <View style={styles.aiRow}>
+        <View style={[styles.aiAvatar, { backgroundColor: colors.accent }]}>
+          <Text style={styles.aiAvatarText}>D</Text>
+        </View>
+        <View style={[styles.loadingBubble, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <ActivityIndicator size="small" color={colors.accent} />
+          <Text style={[styles.loadingText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+            Analysing property…
+          </Text>
         </View>
       </View>
     );
@@ -41,8 +42,8 @@ export function ChatBubble({ message, onFollowUp, onAnalyse }: Props) {
   if (message.type === "search" && message.searchResults) {
     return (
       <View style={styles.searchContainer}>
-        <Text style={[styles.searchHeader, { color: colors.mutedForeground, fontFamily: "Inter_500Medium" }]}>
-          Found {message.searchResults.length} development opportunities
+        <Text style={[styles.searchHeader, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>
+          {message.searchResults.length} opportunities found
         </Text>
         {message.searchResults.map((candidate, i) => (
           <PropertyCard key={i} candidate={candidate} onAnalyse={onAnalyse} />
@@ -54,8 +55,8 @@ export function ChatBubble({ message, onFollowUp, onAnalyse }: Props) {
   if (isUser) {
     return (
       <View style={styles.userRow}>
-        <View style={[styles.userBubble, { backgroundColor: colors.navy }]}>
-          <Text style={[styles.userText, { fontFamily: "Inter_400Regular" }]}>
+        <View style={[styles.userBubble, { backgroundColor: colors.accent }]}>
+          <Text style={[styles.userText, { fontFamily: "DM_Sans_400Regular" }]}>
             {message.content}
           </Text>
         </View>
@@ -65,11 +66,11 @@ export function ChatBubble({ message, onFollowUp, onAnalyse }: Props) {
 
   return (
     <View style={styles.aiRow}>
-      <View style={[styles.aiAvatar, { backgroundColor: colors.emerald }]}>
-        <Text style={styles.aiAvatarText}>AI</Text>
+      <View style={[styles.aiAvatar, { backgroundColor: colors.accent }]}>
+        <Text style={styles.aiAvatarText}>D</Text>
       </View>
       <View style={[styles.aiBubble, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        <Text style={[styles.aiText, { color: colors.foreground, fontFamily: "Inter_400Regular" }]}>
+        <Text style={[styles.aiText, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}>
           {message.content}
         </Text>
       </View>
@@ -82,69 +83,85 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "flex-end",
     paddingHorizontal: 16,
+    paddingVertical: 4,
   },
   userBubble: {
-    maxWidth: "80%",
+    maxWidth: "78%",
     borderRadius: 18,
-    borderBottomRightRadius: 4,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    borderBottomRightRadius: 5,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
   },
   userText: {
-    fontSize: 14,
+    fontSize: 15,
     color: "#fff",
-    lineHeight: 20,
+    lineHeight: 22,
   },
   aiRow: {
     flexDirection: "row",
     alignItems: "flex-end",
     paddingHorizontal: 16,
+    paddingVertical: 4,
     gap: 8,
   },
   aiAvatar: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    width: 28,
+    height: 28,
+    borderRadius: 7,
     justifyContent: "center",
     alignItems: "center",
     flexShrink: 0,
   },
   aiAvatarText: {
-    fontSize: 10,
+    fontSize: 13,
     color: "#fff",
-    fontWeight: "700",
+    fontFamily: "DM_Sans_700Bold",
   },
   aiBubble: {
     flex: 1,
     borderRadius: 18,
-    borderBottomLeftRadius: 4,
+    borderBottomLeftRadius: 5,
     borderWidth: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+    shadowColor: "rgba(28,25,23,0.05)",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 1,
+    shadowRadius: 3,
+    elevation: 1,
   },
   aiText: {
-    fontSize: 14,
-    lineHeight: 22,
+    fontSize: 15,
+    lineHeight: 23,
   },
-  typingContainer: {
+  loadingBubble: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 10,
+    borderRadius: 18,
+    borderBottomLeftRadius: 5,
+    borderWidth: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 13,
   },
-  typingText: {
-    fontSize: 13,
+  loadingText: {
+    fontSize: 14,
   },
   reportContainer: {
     paddingHorizontal: 12,
+    paddingVertical: 4,
   },
   searchContainer: {
     paddingHorizontal: 12,
+    paddingVertical: 4,
     gap: 10,
   },
   searchHeader: {
     fontSize: 12,
     textTransform: "uppercase",
-    letterSpacing: 0.5,
+    letterSpacing: 0.8,
     paddingHorizontal: 4,
+    paddingBottom: 2,
   },
 });
