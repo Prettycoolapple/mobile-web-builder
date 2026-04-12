@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -7,6 +7,8 @@ import {
   TouchableOpacity,
   Platform,
   Alert,
+  Linking,
+  ActivityIndicator,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -24,13 +26,20 @@ const PLAN_FEATURES = {
   ],
   pro: [
     "Unlimited feasibility reports",
-    "PDF export",
+    "PDF export (coming soon)",
     "Priority AI analysis",
     "Full comparable sales data",
     "Advanced ROI modelling",
     "Email report sharing",
   ],
 };
+
+function getApiBase(): string {
+  if (process.env["EXPO_PUBLIC_DOMAIN"]) {
+    return `https://${process.env["EXPO_PUBLIC_DOMAIN"]}/api`;
+  }
+  return "/api";
+}
 
 function FeatureRow({ text, included }: { text: string; included: boolean }) {
   const colors = useColors();
@@ -63,9 +72,12 @@ function SectionHeader({ title }: { title: string }) {
 export default function ProfileScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { user, signOut } = useAuth();
+  const { user, signOut, getApiHeaders, refreshProfile } = useAuth();
   const router = useRouter();
   const { sessions } = useChat();
+
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [portalLoading, setPortalLoading] = useState(false);
 
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
@@ -78,6 +90,47 @@ export default function ProfileScreen() {
   const reportCount = sessions.filter((s) =>
     s.messages.some((m) => m.type === "report")
   ).length;
+
+  const handleUpgrade = useCallback(async () => {
+    setCheckoutLoading(true);
+    try {
+      const resp = await fetch(`${getApiBase()}/stripe/checkout`, {
+        method: "POST",
+        headers: getApiHeaders(),
+      });
+      const data = (await resp.json()) as { url?: string; error?: string };
+      if (!resp.ok || !data.url) {
+        Alert.alert("Payment Error", data.error ?? "Could not start checkout. Please try again.");
+        return;
+      }
+      await Linking.openURL(data.url);
+      setTimeout(() => refreshProfile().catch(() => {}), 3000);
+    } catch {
+      Alert.alert("Payment Error", "Could not connect to payment service. Please try again.");
+    } finally {
+      setCheckoutLoading(false);
+    }
+  }, [getApiHeaders]);
+
+  const handleManageBilling = useCallback(async () => {
+    setPortalLoading(true);
+    try {
+      const resp = await fetch(`${getApiBase()}/stripe/portal`, {
+        method: "POST",
+        headers: getApiHeaders(),
+      });
+      const data = (await resp.json()) as { url?: string; error?: string };
+      if (!resp.ok || !data.url) {
+        Alert.alert("Billing Error", data.error ?? "Could not open billing portal.");
+        return;
+      }
+      await Linking.openURL(data.url);
+    } catch {
+      Alert.alert("Billing Error", "Could not connect to billing service. Please try again.");
+    } finally {
+      setPortalLoading(false);
+    }
+  }, [getApiHeaders]);
 
   const handleSignOut = () => {
     Alert.alert("Sign out", "Are you sure you want to sign out?", [
@@ -120,8 +173,14 @@ export default function ProfileScreen() {
                 {isPro ? "Pro" : "Free"}
               </Text>
             </View>
-            <View style={[styles.freeBadge, { borderColor: isPro ? colors.accent + "80" : "rgba(250,250,249,0.2)", backgroundColor: isPro ? colors.accent + "20" : "transparent" }]}>
-              <Text style={[styles.freeBadgeText, { color: isPro ? colors.accent : "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_500Medium" }]}>
+            <View style={[styles.freeBadge, {
+              borderColor: isPro ? colors.accent + "80" : "rgba(250,250,249,0.2)",
+              backgroundColor: isPro ? colors.accent + "20" : "transparent",
+            }]}>
+              <Text style={[styles.freeBadgeText, {
+                color: isPro ? colors.accent : "rgba(250,250,249,0.6)",
+                fontFamily: "DM_Sans_500Medium",
+              }]}>
                 {isPro ? "Pro" : "Free tier"}
               </Text>
             </View>
@@ -154,49 +213,78 @@ export default function ProfileScreen() {
               </>
             )}
           </View>
-        </View>
 
-        <SectionHeader title="Upgrade" />
-
-        <View style={[styles.proCard, { backgroundColor: colors.card, borderColor: colors.accent + "35" }]}>
-          <View style={styles.proTop}>
-            <View>
-              <Text style={[styles.proTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
-                Pro Plan
+          {isPro && (
+            <TouchableOpacity
+              style={[styles.portalBtn, { borderColor: "rgba(250,250,249,0.2)" }]}
+              onPress={handleManageBilling}
+              activeOpacity={0.7}
+              disabled={portalLoading}
+            >
+              {portalLoading
+                ? <ActivityIndicator size="small" color="rgba(250,250,249,0.6)" />
+                : <Feather name="credit-card" size={14} color="rgba(250,250,249,0.6)" />
+              }
+              <Text style={[styles.portalBtnText, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
+                Manage billing
               </Text>
-              <View style={styles.priceRow}>
-                <Text style={[styles.price, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>$49</Text>
-                <Text style={[styles.pricePer, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                  /mo NZD
-                </Text>
-              </View>
-            </View>
-            <View style={[styles.proBadge, { backgroundColor: colors.accent }]}>
-              <Text style={[styles.proBadgeText, { fontFamily: "DM_Sans_700Bold" }]}>PRO</Text>
-            </View>
-          </View>
-
-          <View style={styles.featuresList}>
-            {PLAN_FEATURES.pro.map((f) => (
-              <FeatureRow key={f} text={f} included />
-            ))}
-          </View>
-
-          <TouchableOpacity
-            style={[styles.upgradeBtn, { backgroundColor: colors.accent }]}
-            activeOpacity={0.8}
-          >
-            <Text style={[styles.upgradeBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>
-              Upgrade to Pro
-            </Text>
-            <Feather name="arrow-right" size={16} color="#fff" />
-          </TouchableOpacity>
+            </TouchableOpacity>
+          )}
         </View>
 
-        <SectionHeader title="Free plan includes" />
+        {!isPro && (
+          <>
+            <SectionHeader title="Upgrade to Pro" />
+
+            <View style={[styles.proCard, { backgroundColor: colors.card, borderColor: colors.accent + "35" }]}>
+              <View style={styles.proTop}>
+                <View>
+                  <Text style={[styles.proTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
+                    Pro Plan
+                  </Text>
+                  <View style={styles.priceRow}>
+                    <Text style={[styles.price, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>$49</Text>
+                    <Text style={[styles.pricePer, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                      /mo NZD
+                    </Text>
+                  </View>
+                </View>
+                <View style={[styles.proBadge, { backgroundColor: colors.accent }]}>
+                  <Text style={[styles.proBadgeText, { fontFamily: "DM_Sans_700Bold" }]}>PRO</Text>
+                </View>
+              </View>
+
+              <View style={styles.featuresList}>
+                {PLAN_FEATURES.pro.map((f) => (
+                  <FeatureRow key={f} text={f} included />
+                ))}
+              </View>
+
+              <TouchableOpacity
+                style={[styles.upgradeBtn, { backgroundColor: colors.accent, opacity: checkoutLoading ? 0.8 : 1 }]}
+                activeOpacity={0.8}
+                onPress={handleUpgrade}
+                disabled={checkoutLoading}
+              >
+                {checkoutLoading ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <Text style={[styles.upgradeBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>
+                      Upgrade to Pro
+                    </Text>
+                    <Feather name="arrow-right" size={16} color="#fff" />
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
+
+        <SectionHeader title={isPro ? "Pro plan includes" : "Free plan includes"} />
 
         <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          {PLAN_FEATURES.free.map((f) => (
+          {(isPro ? PLAN_FEATURES.pro : PLAN_FEATURES.free).map((f) => (
             <FeatureRow key={f} text={f} included />
           ))}
         </View>
@@ -347,6 +435,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
   },
+  portalBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignSelf: "flex-start",
+  },
+  portalBtnText: {
+    fontSize: 13,
+  },
   proCard: {
     borderRadius: 16,
     borderWidth: 1.5,
@@ -409,6 +510,7 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 12,
     marginTop: 2,
+    minHeight: 50,
   },
   upgradeBtnText: {
     fontSize: 15,

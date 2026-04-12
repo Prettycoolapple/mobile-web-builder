@@ -9,6 +9,7 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   type: "text" | "report" | "search" | "loading";
+  loadingMode?: "analyse" | "discover" | "followup";
   report?: FeasibilityReport;
   searchResults?: PropertyCandidate[];
   isMockData?: boolean;

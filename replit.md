@@ -116,14 +116,29 @@ AI-powered NZ real estate development feasibility analysis mobile app built with
 - **Success**: `#2E9E72`, **Amber**: `#E8A84B`, **Red/Danger**: `#D94F4F`
 - `useColors()` hook auto-switches light/dark from `constants/colors.ts`
 
+## Phase 7: Stripe Integration & Payments
+
+- **Stripe client**: `artifacts/api-server/src/lib/stripeClient.ts` — `getUncachableStripeClient()`, Replit connector credentials (dev/prod environments)
+- **Stripe routes**: `artifacts/api-server/src/routes/stripe.ts`
+  - `POST /api/stripe/checkout` — Creates Stripe Checkout session; auto-creates Pro product/price if missing ($49 NZD/month); requires Bearer token
+  - `POST /api/stripe/portal` — Opens Stripe Customer Portal for Pro subscribers to manage billing
+  - `POST /api/stripe/webhook` — Processes `customer.subscription.created/updated/deleted`; updates `profiles.subscriptionTier` in DB
+- **Raw body for webhooks**: `app.ts` registers `/api/stripe/webhook` path with `express.raw()` before `express.json()` so signature verification works
+- **PaywallModal**: `artifacts/mobile/components/PaywallModal.tsx` — Bottom sheet modal with spring animation, feature list, price badge; triggered on 402 response from `/api/chat`; opens Stripe Checkout URL via `Linking.openURL`
+- **AnalysisProgress**: `artifacts/mobile/components/AnalysisProgress.tsx` — Animated progress bar + step-by-step status messages (5 steps × 4s each) shown when loading mode is `analyse`; replaces simple typing dots for feasibility analysis
+- **loadingMode detection**: Chat screen auto-detects intent (analyse/discover/followup) from message text; shows `AnalysisProgress` for analyse mode, typing dots for others
+- **Profile page** upgraded: Upgrade button calls `/api/stripe/checkout`, activity indicators during checkout/portal loading; "Manage billing" button shown for Pro users
+
 ## Features
 
 1. **Address Analysis** — Analyse specific NZ property addresses with full feasibility reports
 2. **Discovery Search** — Find subdividable properties by suburb/price criteria
 3. **Feasibility Report** — Scores (Ease/Cost/ROI), planning overlays, terrain, infrastructure, cost breakdown, ROI scenarios, comparable sales, AI risk summary
 4. **Session History** — AsyncStorage-persisted chat sessions (only non-empty sessions shown)
-5. **Profile & Subscription** — Free (3 reports/month) vs Pro ($49/month NZD), real usage counter from DB
+5. **Profile & Subscription** — Free (3 reports/month) vs Pro ($49/month NZD), real usage counter from DB; Stripe checkout wired
 6. **Follow-up Chat** — Maintains conversation context per session
 7. **Auth** — Email/password auth with JWT, protected routes, sign-out
+8. **Paywall** — PaywallModal bottom sheet triggers on 402 (limit reached); upgrades via Stripe Checkout
+9. **Animated Loading** — AnalysisProgress component shows step-by-step progress for feasibility analysis requests
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.

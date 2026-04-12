@@ -6,6 +6,7 @@ import { useColors } from "@/hooks/useColors";
 import { ChatMessage } from "@/context/ChatContext";
 import { FeasibilityReportCard } from "./FeasibilityReport";
 import { PropertyCard } from "./PropertyCard";
+import { AnalysisProgress } from "./AnalysisProgress";
 
 class ReportErrorBoundary extends Component<
   { children: React.ReactNode },
@@ -108,6 +109,10 @@ export function ChatBubble({ message, onFollowUp, onAnalyse }: Props) {
   const isUser = message.role === "user";
 
   if (message.type === "loading") {
+    const isAnalysing = message.loadingMode === "analyse";
+    if (isAnalysing) {
+      return <AnalysisProgress />;
+    }
     return (
       <View style={styles.aiRow}>
         <View style={[styles.aiAvatar, { backgroundColor: colors.accent }]}>

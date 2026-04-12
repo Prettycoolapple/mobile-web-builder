@@ -18,6 +18,7 @@ import { useColors } from "@/hooks/useColors";
 import { useChat, ChatMessage, FeasibilityReport, PropertyCandidate } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
 import { ChatBubble } from "@/components/ChatBubble";
+import { PaywallModal } from "@/components/PaywallModal";
 import { setBaseUrl } from "@workspace/api-client-react";
 
 if (process.env.EXPO_PUBLIC_DOMAIN) {
@@ -56,6 +57,7 @@ export default function ChatScreen() {
   } = useChat();
 
   const [inputText, setInputText] = useState("");
+  const [showPaywall, setShowPaywall] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
 
@@ -82,7 +84,14 @@ export default function ChatScreen() {
     addMessage({ role: "user", content: text, type: "text" });
     setIsLoading(true);
 
-    addMessage({ role: "assistant", content: "", type: "loading" });
+    const detectedMode = text.toLowerCase().match(/find\s+|search\s+|discover\s+|looking\s+for\s+|show\s+me\s+properties/)
+      ? "discover"
+      : text.match(/\d+\s+\w+\s+(road|street|ave|avenue|crescent|place|drive|way|lane|terrace)/i) ||
+        text.toLowerCase().match(/analys[ei]|feasibility|check|assess|evaluate/)
+        ? "analyse"
+        : "followup";
+
+    addMessage({ role: "assistant", content: "", type: "loading", loadingMode: detectedMode as any });
 
     try {
       const headers = getApiHeaders();
@@ -113,8 +122,11 @@ export default function ChatScreen() {
         if (resp.status === 402) {
           updateLastMessage({
             type: "text",
-            content: `⚠️ ${err.error || "Monthly report limit reached. Upgrade to Pro for unlimited reports."}`,
+            content: "You've used all 3 free reports this month. Upgrade to Pro for unlimited analysis.",
           });
+          setShowPaywall(true);
+        } else if (resp.status === 401) {
+          updateLastMessage({ type: "text", content: "Session expired. Please sign in again." });
         } else {
           updateLastMessage({ type: "text", content: err.error || "Something went wrong. Please try again." });
         }
@@ -344,6 +356,7 @@ export default function ChatScreen() {
           NZ property data · Gemini AI
         </Text>
       </View>
+      <PaywallModal visible={showPaywall} onClose={() => setShowPaywall(false)} />
     </KeyboardAvoidingView>
   );
 }
