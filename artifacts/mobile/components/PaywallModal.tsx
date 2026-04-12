@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from "react";
+import React, { useRef, useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -6,22 +6,25 @@ import {
   Modal,
   TouchableOpacity,
   Animated,
-  Linking,
   Platform,
   Alert,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
+import { purchasePro, restorePurchases } from "@/lib/revenuecat";
 
 interface Props {
   visible: boolean;
   onClose: () => void;
+  onPurchaseSuccess?: () => void;
 }
 
 const FEATURES = [
   "Unlimited feasibility reports",
   "Full data pipeline (LINZ, Hougarden, GIS)",
+  "AI risk assessments & ROI modelling",
+  "Save and revisit past reports",
   "Export to PDF (coming soon)",
 ];
 
@@ -32,11 +35,13 @@ function getApiBase(): string {
   return "/api";
 }
 
-export function PaywallModal({ visible, onClose }: Props) {
+export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
   const colors = useColors();
-  const { getApiHeaders } = useAuth();
+  const { getApiHeaders, refreshProfile } = useAuth();
   const slideAnim = useRef(new Animated.Value(300)).current;
   const overlayAnim = useRef(new Animated.Value(0)).current;
+  const [loading, setLoading] = useState(false);
+  const [restoring, setRestoring] = useState(false);
 
   useEffect(() => {
     if (visible) {
@@ -52,24 +57,54 @@ export function PaywallModal({ visible, onClose }: Props) {
     }
   }, [visible]);
 
-  const handleUpgrade = async () => {
+  const syncToBackend = async (tier: "pro" | "free") => {
     try {
-      const resp = await fetch(`${getApiBase()}/stripe/checkout`, {
+      await fetch(`${getApiBase()}/subscription/sync`, {
         method: "POST",
         headers: getApiHeaders(),
+        body: JSON.stringify({ tier }),
       });
-      if (!resp.ok) {
-        const err = (await resp.json()) as { error?: string };
-        Alert.alert("Payment setup failed", err.error ?? "Please try again or contact support.");
-        return;
-      }
-      const { url } = (await resp.json()) as { url: string };
-      if (url) {
-        await Linking.openURL(url);
+      await refreshProfile().catch(() => {});
+    } catch {
+    }
+  };
+
+  const handleUpgrade = async () => {
+    setLoading(true);
+    try {
+      const isPro = await purchasePro();
+      if (isPro) {
+        await syncToBackend("pro");
+        onPurchaseSuccess?.();
         onClose();
+        Alert.alert("Welcome to Pro!", "You now have unlimited feasibility reports.");
+      }
+    } catch (err: any) {
+      Alert.alert(
+        "Purchase failed",
+        err?.message ?? "Something went wrong. Please try again.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRestore = async () => {
+    setRestoring(true);
+    try {
+      const isPro = await restorePurchases();
+      if (isPro) {
+        await syncToBackend("pro");
+        onPurchaseSuccess?.();
+        onClose();
+        Alert.alert("Purchases restored", "Your Pro subscription is active.");
+      } else {
+        Alert.alert("No purchases found", "No active Pro subscription was found for this account.");
       }
     } catch {
-      Alert.alert("Payment setup failed", "Please try again or contact support.");
+      Alert.alert("Restore failed", "Could not restore purchases. Please try again.");
+    } finally {
+      setRestoring(false);
     }
   };
 
@@ -110,12 +145,29 @@ export function PaywallModal({ visible, onClose }: Props) {
           </View>
 
           <TouchableOpacity
-            style={[styles.upgradeBtn, { backgroundColor: colors.accent }]}
+            style={[styles.upgradeBtn, { backgroundColor: loading ? colors.accent + "80" : colors.accent }]}
             onPress={handleUpgrade}
             activeOpacity={0.85}
+            disabled={loading || restoring}
           >
-            <Text style={[styles.upgradeBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>Upgrade to Pro</Text>
-            <Feather name="arrow-right" size={16} color="#fff" />
+            {loading
+              ? <Text style={[styles.upgradeBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>Processing…</Text>
+              : <>
+                  <Text style={[styles.upgradeBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>Upgrade to Pro</Text>
+                  <Feather name="arrow-right" size={16} color="#fff" />
+                </>
+            }
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={handleRestore}
+            style={styles.restoreBtn}
+            activeOpacity={0.7}
+            disabled={loading || restoring}
+          >
+            <Text style={[styles.restoreText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+              {restoring ? "Restoring…" : "Restore purchases"}
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity onPress={onClose} style={styles.dismissBtn} activeOpacity={0.7}>
@@ -123,6 +175,12 @@ export function PaywallModal({ visible, onClose }: Props) {
               Maybe later
             </Text>
           </TouchableOpacity>
+
+          <Text style={[styles.legalText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+            Payment will be charged to your {Platform.OS === "ios" ? "Apple ID" : "Google Play"} account at confirmation.
+            Subscription automatically renews unless cancelled at least 24 hours before the end of the current period.
+            Manage in your device Settings.
+          </Text>
         </Animated.View>
       </Animated.View>
     </Modal>
@@ -140,7 +198,8 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 24,
     padding: 28,
     paddingTop: 12,
-    gap: 16,
+    paddingBottom: 32,
+    gap: 14,
     alignItems: "center",
   },
   handle: {
@@ -186,7 +245,7 @@ const styles = StyleSheet.create({
   },
   features: {
     alignSelf: "stretch",
-    gap: 10,
+    gap: 8,
   },
   featureRow: {
     flexDirection: "row",
@@ -206,16 +265,29 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignSelf: "stretch",
     marginTop: 4,
+    minHeight: 52,
   },
   upgradeBtnText: {
     fontSize: 16,
     color: "#fff",
   },
+  restoreBtn: {
+    paddingVertical: 6,
+  },
+  restoreText: {
+    fontSize: 13,
+  },
   dismissBtn: {
-    paddingVertical: 8,
-    marginBottom: Platform.OS === "ios" ? 8 : 0,
+    paddingVertical: 6,
   },
   dismissText: {
     fontSize: 14,
+  },
+  legalText: {
+    fontSize: 11,
+    textAlign: "center",
+    lineHeight: 16,
+    marginTop: 4,
+    opacity: 0.7,
   },
 });

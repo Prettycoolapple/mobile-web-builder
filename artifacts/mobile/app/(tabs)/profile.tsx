@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import {
   View,
   Text,
@@ -7,8 +7,8 @@ import {
   TouchableOpacity,
   Platform,
   Alert,
-  Linking,
   ActivityIndicator,
+  Linking,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -16,6 +16,7 @@ import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { useChat } from "@/context/ChatContext";
+import { getSubscriptionStatus, restorePurchases, purchasePro } from "@/lib/revenuecat";
 
 const PLAN_FEATURES = {
   free: [
@@ -26,10 +27,10 @@ const PLAN_FEATURES = {
   ],
   pro: [
     "Unlimited feasibility reports",
-    "PDF export (coming soon)",
-    "Priority AI analysis",
+    "Full data pipeline — live property data",
+    "AI risk assessments & ROI modelling",
     "Full comparable sales data",
-    "Advanced ROI modelling",
+    "PDF export (coming soon)",
     "Email report sharing",
   ],
 };
@@ -76,8 +77,8 @@ export default function ProfileScreen() {
   const router = useRouter();
   const { sessions } = useChat();
 
-  const [checkoutLoading, setCheckoutLoading] = useState(false);
-  const [portalLoading, setPortalLoading] = useState(false);
+  const [upgradeLoading, setUpgradeLoading] = useState(false);
+  const [restoreLoading, setRestoreLoading] = useState(false);
 
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
@@ -91,46 +92,67 @@ export default function ProfileScreen() {
     s.messages.some((m) => m.type === "report")
   ).length;
 
-  const handleUpgrade = useCallback(async () => {
-    setCheckoutLoading(true);
+  const syncToBackend = useCallback(async (tier: "pro" | "free") => {
     try {
-      const resp = await fetch(`${getApiBase()}/stripe/checkout`, {
+      await fetch(`${getApiBase()}/subscription/sync`, {
         method: "POST",
         headers: getApiHeaders(),
+        body: JSON.stringify({ tier }),
       });
-      const data = (await resp.json()) as { url?: string; error?: string };
-      if (!resp.ok || !data.url) {
-        Alert.alert("Payment Error", data.error ?? "Could not start checkout. Please try again.");
-        return;
-      }
-      await Linking.openURL(data.url);
-      setTimeout(() => refreshProfile().catch(() => {}), 3000);
+      await refreshProfile().catch(() => {});
     } catch {
-      Alert.alert("Payment Error", "Could not connect to payment service. Please try again.");
-    } finally {
-      setCheckoutLoading(false);
     }
-  }, [getApiHeaders]);
+  }, [getApiHeaders, refreshProfile]);
 
-  const handleManageBilling = useCallback(async () => {
-    setPortalLoading(true);
-    try {
-      const resp = await fetch(`${getApiBase()}/stripe/portal`, {
-        method: "POST",
-        headers: getApiHeaders(),
-      });
-      const data = (await resp.json()) as { url?: string; error?: string };
-      if (!resp.ok || !data.url) {
-        Alert.alert("Billing Error", data.error ?? "Could not open billing portal.");
-        return;
+  useEffect(() => {
+    async function checkRevenueCat() {
+      const isPro = await getSubscriptionStatus();
+      if (isPro) {
+        await syncToBackend("pro");
       }
-      await Linking.openURL(data.url);
-    } catch {
-      Alert.alert("Billing Error", "Could not connect to billing service. Please try again.");
-    } finally {
-      setPortalLoading(false);
     }
-  }, [getApiHeaders]);
+    checkRevenueCat();
+  }, []);
+
+  const handleUpgrade = useCallback(async () => {
+    setUpgradeLoading(true);
+    try {
+      const success = await purchasePro();
+      if (success) {
+        await syncToBackend("pro");
+        Alert.alert("Welcome to Pro!", "You now have unlimited feasibility reports.");
+      }
+    } catch (err: any) {
+      Alert.alert("Purchase failed", err?.message ?? "Something went wrong. Please try again.");
+    } finally {
+      setUpgradeLoading(false);
+    }
+  }, [syncToBackend]);
+
+  const handleRestore = useCallback(async () => {
+    setRestoreLoading(true);
+    try {
+      const success = await restorePurchases();
+      if (success) {
+        await syncToBackend("pro");
+        Alert.alert("Purchases restored", "Your Pro subscription is active.");
+      } else {
+        Alert.alert("No purchases found", "No active Pro subscription was found.");
+      }
+    } catch {
+      Alert.alert("Restore failed", "Could not restore purchases. Please try again.");
+    } finally {
+      setRestoreLoading(false);
+    }
+  }, [syncToBackend]);
+
+  const handleManageSubscription = useCallback(() => {
+    if (Platform.OS === "ios") {
+      Linking.openURL("https://apps.apple.com/account/subscriptions");
+    } else {
+      Linking.openURL("https://play.google.com/store/account/subscriptions");
+    }
+  }, []);
 
   const handleSignOut = () => {
     Alert.alert("Sign out", "Are you sure you want to sign out?", [
@@ -173,11 +195,11 @@ export default function ProfileScreen() {
                 {isPro ? "Pro" : "Free"}
               </Text>
             </View>
-            <View style={[styles.freeBadge, {
+            <View style={[styles.planBadge, {
               borderColor: isPro ? colors.accent + "80" : "rgba(250,250,249,0.2)",
               backgroundColor: isPro ? colors.accent + "20" : "transparent",
             }]}>
-              <Text style={[styles.freeBadgeText, {
+              <Text style={[styles.planBadgeText, {
                 color: isPro ? colors.accent : "rgba(250,250,249,0.6)",
                 fontFamily: "DM_Sans_500Medium",
               }]}>
@@ -215,20 +237,32 @@ export default function ProfileScreen() {
           </View>
 
           {isPro && (
-            <TouchableOpacity
-              style={[styles.portalBtn, { borderColor: "rgba(250,250,249,0.2)" }]}
-              onPress={handleManageBilling}
-              activeOpacity={0.7}
-              disabled={portalLoading}
-            >
-              {portalLoading
-                ? <ActivityIndicator size="small" color="rgba(250,250,249,0.6)" />
-                : <Feather name="credit-card" size={14} color="rgba(250,250,249,0.6)" />
-              }
-              <Text style={[styles.portalBtnText, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
-                Manage billing
-              </Text>
-            </TouchableOpacity>
+            <View style={styles.proActions}>
+              <TouchableOpacity
+                style={[styles.actionBtn, { borderColor: "rgba(250,250,249,0.2)" }]}
+                onPress={handleManageSubscription}
+                activeOpacity={0.7}
+              >
+                <Feather name="credit-card" size={14} color="rgba(250,250,249,0.6)" />
+                <Text style={[styles.actionBtnText, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
+                  Manage subscription
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.actionBtn, { borderColor: "rgba(250,250,249,0.2)" }]}
+                onPress={handleRestore}
+                activeOpacity={0.7}
+                disabled={restoreLoading}
+              >
+                {restoreLoading
+                  ? <ActivityIndicator size="small" color="rgba(250,250,249,0.6)" />
+                  : <Feather name="refresh-cw" size={14} color="rgba(250,250,249,0.6)" />
+                }
+                <Text style={[styles.actionBtnText, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
+                  Restore purchases
+                </Text>
+              </TouchableOpacity>
+            </View>
           )}
         </View>
 
@@ -261,12 +295,12 @@ export default function ProfileScreen() {
               </View>
 
               <TouchableOpacity
-                style={[styles.upgradeBtn, { backgroundColor: colors.accent, opacity: checkoutLoading ? 0.8 : 1 }]}
+                style={[styles.upgradeBtn, { backgroundColor: upgradeLoading ? colors.accent + "80" : colors.accent }]}
                 activeOpacity={0.8}
                 onPress={handleUpgrade}
-                disabled={checkoutLoading}
+                disabled={upgradeLoading || restoreLoading}
               >
-                {checkoutLoading ? (
+                {upgradeLoading ? (
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
                   <>
@@ -276,6 +310,20 @@ export default function ProfileScreen() {
                     <Feather name="arrow-right" size={16} color="#fff" />
                   </>
                 )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={handleRestore}
+                activeOpacity={0.7}
+                disabled={upgradeLoading || restoreLoading}
+                style={styles.restoreLink}
+              >
+                {restoreLoading
+                  ? <ActivityIndicator size="small" color={colors.mutedForeground} />
+                  : <Text style={[styles.restoreLinkText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                      Restore purchases
+                    </Text>
+                }
               </TouchableOpacity>
             </View>
           </>
@@ -324,7 +372,7 @@ export default function ProfileScreen() {
 
         <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <Text style={[styles.aboutText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-            DevFeasible NZ is an AI-powered real estate development feasibility tool designed for New Zealand property markets. Powered by Gemini AI with deep NZ-specific knowledge.
+            DevFeasible NZ is an AI-powered real estate development feasibility tool designed for the New Zealand property market. Powered by Gemini AI with deep NZ-specific knowledge.
           </Text>
           <View style={[styles.disclaimerBox, { backgroundColor: colors.muted, borderRadius: 8 }]}>
             <Text style={[styles.disclaimerText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
@@ -349,28 +397,12 @@ export default function ProfileScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  header: {
-    paddingHorizontal: 20,
-    paddingBottom: 16,
-  },
-  headerContent: {
-    paddingTop: 10,
-  },
-  headerTitle: {
-    fontSize: 20,
-    letterSpacing: -0.3,
-  },
-  headerEmail: {
-    fontSize: 13,
-    marginTop: 2,
-  },
-  content: {
-    padding: 16,
-    gap: 8,
-  },
+  container: { flex: 1 },
+  header: { paddingHorizontal: 20, paddingBottom: 16 },
+  headerContent: { paddingTop: 10 },
+  headerTitle: { fontSize: 20, letterSpacing: -0.3 },
+  headerEmail: { fontSize: 13, marginTop: 2 },
+  content: { padding: 16, gap: 8 },
   sectionHeader: {
     fontSize: 11,
     textTransform: "uppercase",
@@ -379,63 +411,21 @@ const styles = StyleSheet.create({
     marginTop: 12,
     marginBottom: 4,
   },
-  planCard: {
-    borderRadius: 16,
-    padding: 20,
-    gap: 18,
-    marginBottom: 4,
-  },
-  planTop: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-  },
-  planLabel: {
-    fontSize: 12,
-    marginBottom: 3,
-    letterSpacing: 0.2,
-  },
-  planName: {
-    fontSize: 26,
-    letterSpacing: -0.5,
-  },
-  freeBadge: {
-    borderWidth: 1,
-    borderRadius: 100,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  freeBadgeText: {
-    fontSize: 12,
-  },
-  usageSection: {
-    gap: 8,
-  },
-  usageRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  usageLabel: {
-    fontSize: 13,
-  },
-  usageCount: {
-    fontSize: 13,
-  },
-  usageTrack: {
-    height: 5,
-    borderRadius: 3,
-    overflow: "hidden",
-  },
-  usageFill: {
-    height: "100%",
-    borderRadius: 3,
-  },
-  limitNote: {
-    fontSize: 12,
-    marginTop: 2,
-  },
-  portalBtn: {
+  planCard: { borderRadius: 16, padding: 20, gap: 18, marginBottom: 4 },
+  planTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
+  planLabel: { fontSize: 12, marginBottom: 3, letterSpacing: 0.2 },
+  planName: { fontSize: 26, letterSpacing: -0.5 },
+  planBadge: { borderWidth: 1, borderRadius: 100, paddingHorizontal: 10, paddingVertical: 4 },
+  planBadgeText: { fontSize: 12 },
+  usageSection: { gap: 8 },
+  usageRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  usageLabel: { fontSize: 13 },
+  usageCount: { fontSize: 13 },
+  usageTrack: { height: 5, borderRadius: 3, overflow: "hidden" },
+  usageFill: { height: "100%", borderRadius: 3 },
+  limitNote: { fontSize: 12, marginTop: 2 },
+  proActions: { gap: 8 },
+  actionBtn: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
@@ -445,9 +435,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     alignSelf: "flex-start",
   },
-  portalBtnText: {
-    fontSize: 13,
-  },
+  actionBtnText: { fontSize: 13 },
   proCard: {
     borderRadius: 16,
     borderWidth: 1.5,
@@ -459,49 +447,16 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 3,
   },
-  proTop: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-  },
-  proTitle: {
-    fontSize: 20,
-    letterSpacing: -0.3,
-  },
-  priceRow: {
-    flexDirection: "row",
-    alignItems: "baseline",
-    gap: 3,
-    marginTop: 3,
-  },
-  price: {
-    fontSize: 30,
-    letterSpacing: -1,
-  },
-  pricePer: {
-    fontSize: 13,
-  },
-  proBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 100,
-  },
-  proBadgeText: {
-    fontSize: 11,
-    color: "#fff",
-    letterSpacing: 0.5,
-  },
-  featuresList: {
-    gap: 10,
-  },
-  featureRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  featureText: {
-    fontSize: 14,
-  },
+  proTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
+  proTitle: { fontSize: 20, letterSpacing: -0.3 },
+  priceRow: { flexDirection: "row", alignItems: "baseline", gap: 3, marginTop: 3 },
+  price: { fontSize: 30, letterSpacing: -1 },
+  pricePer: { fontSize: 13 },
+  proBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 100 },
+  proBadgeText: { fontSize: 11, color: "#fff", letterSpacing: 0.5 },
+  featuresList: { gap: 10 },
+  featureRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  featureText: { fontSize: 14 },
   upgradeBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -512,16 +467,10 @@ const styles = StyleSheet.create({
     marginTop: 2,
     minHeight: 50,
   },
-  upgradeBtnText: {
-    fontSize: 15,
-    color: "#fff",
-  },
-  section: {
-    borderRadius: 16,
-    borderWidth: 1,
-    padding: 16,
-    gap: 12,
-  },
+  upgradeBtnText: { fontSize: 15, color: "#fff" },
+  restoreLink: { alignItems: "center", paddingVertical: 6 },
+  restoreLinkText: { fontSize: 13 },
+  section: { borderRadius: 16, borderWidth: 1, padding: 16, gap: 12 },
   statsCard: {
     borderRadius: 16,
     borderWidth: 1,
@@ -530,32 +479,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-around",
   },
-  statItem: {
-    alignItems: "center",
-    flex: 1,
-    gap: 4,
-  },
-  statNum: {
-    fontSize: 30,
-    letterSpacing: -1,
-  },
-  statLabel: {
-    fontSize: 11,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-  },
-  statDivider: {
-    width: 1,
-    height: 44,
-  },
-  aboutText: {
-    fontSize: 14,
-    lineHeight: 22,
-  },
-  disclaimerBox: {
-    padding: 12,
-    marginTop: 4,
-  },
+  statItem: { alignItems: "center", flex: 1, gap: 4 },
+  statNum: { fontSize: 30, letterSpacing: -1 },
+  statLabel: { fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5 },
+  statDivider: { width: 1, height: 44 },
+  aboutText: { fontSize: 14, lineHeight: 22 },
+  disclaimerBox: { padding: 12, marginTop: 4 },
+  disclaimerText: { fontSize: 12, lineHeight: 18 },
   signOutBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -566,11 +496,5 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
   },
-  signOutText: {
-    fontSize: 15,
-  },
-  disclaimerText: {
-    fontSize: 12,
-    lineHeight: 18,
-  },
+  signOutText: { fontSize: 15 },
 });

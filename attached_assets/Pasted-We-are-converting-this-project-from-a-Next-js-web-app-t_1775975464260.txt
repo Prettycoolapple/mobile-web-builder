@@ -1,0 +1,768 @@
+We are converting this project from a Next.js web app to a 
+proper native iOS and Android app using Expo (React Native).
+
+The entire backend (API routes, pipeline, scoring, scrapers, 
+Supabase) stays exactly as-is and does not change. We are 
+rebuilding the frontend only, as a new Expo app that calls 
+the existing backend API.
+
+════════════════════════════════
+ARCHITECTURE OVERVIEW
+════════════════════════════════
+
+Backend (keep running on Replit, no changes):
+  - Next.js API routes at https://your-replit-url.replit.app
+  - All /api/* endpoints remain identical
+  - Supabase database unchanged
+
+Frontend (new — what we are building now):
+  - Expo SDK 51 (React Native)
+  - Calls the existing backend API over HTTPS
+  - RevenueCat for in-app subscriptions (Apple + Google)
+  - Builds to .ipa (iOS) and .apk/.aab (Android)
+
+════════════════════════════════
+1. PROJECT SETUP
+════════════════════════════════
+
+Create a NEW folder /mobile in the repo root.
+Do not modify the existing Next.js app.
+
+cd mobile
+npx create-expo-app@latest . --template blank-typescript
+
+Install dependencies:
+npx expo install expo-router expo-secure-store expo-constants
+npx expo install @supabase/supabase-js @react-native-async-storage/async-storage
+npx expo install react-native-purchases        ← RevenueCat
+npx expo install react-native-reanimated react-native-gesture-handler
+npx expo install expo-linear-gradient expo-haptics
+npx expo install @expo/vector-icons
+npm install react-native-safe-area-context react-native-screens
+
+Configure app.json:
+{
+  "expo": {
+    "name": "DevFeasible NZ",
+    "slug": "devfeasible-nz",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "devfeasible",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "backgroundColor": "#0F172A"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "nz.devfeasible.app",
+      "buildNumber": "1"
+    },
+    "android": {
+      "package": "nz.devfeasible.app",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0F172A"
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "react-native-purchases"
+    ]
+  }
+}
+
+Environment variables in /mobile/.env:
+  EXPO_PUBLIC_API_URL=https://your-replit-app.replit.app
+  EXPO_PUBLIC_SUPABASE_URL=your_supabase_url
+  EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+  EXPO_PUBLIC_REVENUECAT_APPLE_KEY=your_apple_key
+  EXPO_PUBLIC_REVENUECAT_GOOGLE_KEY=your_google_key
+
+════════════════════════════════
+2. FILE STRUCTURE
+════════════════════════════════
+
+/mobile
+  /app                          ← Expo Router pages
+    _layout.tsx                 ← Root layout + auth guard
+    index.tsx                   ← Redirect to /chat or /login
+    /auth
+      login.tsx
+      signup.tsx
+    /(tabs)
+      _layout.tsx               ← Tab bar
+      chat.tsx                  ← Main chat screen
+      profile.tsx               ← Profile + subscription
+  /components
+    /chat
+      ChatBubble.tsx
+      ChatInput.tsx
+      MessageList.tsx
+      TypingIndicator.tsx
+      AnalysisProgress.tsx
+    /report
+      FeasibilityReport.tsx     ← Scroll view wrapper
+      ScoreRing.tsx             ← SVG rings (react-native-svg)
+      PropertyHeader.tsx
+      ScoreSummaryRow.tsx
+      AccordionSection.tsx
+      OverlayChecklist.tsx
+      AsbestosPanel.tsx
+      ContourCard.tsx
+      CostBreakdownChart.tsx    ← Victory Native chart
+      ROIScenarioCards.tsx
+      ComparableSalesTable.tsx
+      RiskSummaryPanel.tsx
+      FollowUpChips.tsx
+    /search
+      SearchResultCard.tsx
+    PaywallSheet.tsx
+  /lib
+    supabase.ts
+    api.ts                      ← All calls to backend
+    revenuecat.ts
+  /hooks
+    useAuth.ts
+    useSubscription.ts
+    useChat.ts
+  /types
+    index.ts                    ← Same FeasibilityReport types
+
+════════════════════════════════
+3. SUPABASE AUTH (React Native)
+/mobile/lib/supabase.ts
+════════════════════════════════
+
+import { createClient } from '@supabase/supabase-js';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+export const supabase = createClient(
+  process.env.EXPO_PUBLIC_SUPABASE_URL!,
+  process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!,
+  {
+    auth: {
+      storage: AsyncStorage,
+      autoRefreshToken: true,
+      persistSession: true,
+      detectSessionInUrl: false,  // Important for React Native
+    },
+  }
+);
+
+════════════════════════════════
+4. API CLIENT
+/mobile/lib/api.ts
+════════════════════════════════
+
+All backend calls go through this file.
+Never call the backend directly from components.
+
+const BASE_URL = process.env.EXPO_PUBLIC_API_URL;
+
+async function apiCall(
+  path: string, 
+  options: RequestInit = {},
+  session: Session | null
+): Promise<any> {
+  const response = await fetch(`${BASE_URL}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${session?.access_token}`,
+      ...options.headers,
+    },
+  });
+  
+  if (response.status === 402) {
+    throw { type: 'usage_limit' };
+  }
+  if (!response.ok) {
+    const err = await response.json();
+    throw { type: err.error ?? 'unknown', message: err.message };
+  }
+  return response.json();
+}
+
+export const api = {
+  chat: (messages: any[], session: Session | null) =>
+    apiCall('/api/chat', {
+      method: 'POST',
+      body: JSON.stringify({ messages }),
+    }, session),
+    
+  saveSearch: (address: string, result: any, session: Session | null) =>
+    apiCall('/api/save-search', {
+      method: 'POST', 
+      body: JSON.stringify({ address, result_json: result }),
+    }, session),
+    
+  getSearchHistory: (session: Session | null) =>
+    apiCall('/api/searches', {}, session),
+};
+
+════════════════════════════════
+5. REVENUECAT SETUP
+/mobile/lib/revenuecat.ts
+════════════════════════════════
+
+RevenueCat handles Apple IAP + Google Play Billing.
+It requires setup in their dashboard before coding.
+
+SETUP STEPS (do these before writing code):
+1. Create account at revenuecat.com (free to start)
+2. Create new Project: "DevFeasible NZ"
+3. Add iOS app — paste Apple Bundle ID: nz.devfeasible.app
+4. Add Android app — paste package: nz.devfeasible.app
+5. Create Entitlement: "pro_access"
+6. Create Product in each store:
+   - Apple: create subscription in App Store Connect first
+     * Go to App Store Connect → Your App → Subscriptions
+     * Create subscription group: "Pro"
+     * Add product: "devfeasible_pro_monthly"
+     * Price: NZD $10.99/month (or closest tier to $49)
+     * Note: Apple uses price tiers, not exact amounts
+   - Google: create subscription in Play Console first
+     * Monetisation → Subscriptions → Create
+     * Product ID: devfeasible_pro_monthly
+     * Price: NZD $49.00/month
+7. Link products to the "pro_access" entitlement
+8. Copy API keys (Apple + Google) to .env
+
+CODE:
+import Purchases, { 
+  PurchasesPackage,
+  CustomerInfo 
+} from 'react-native-purchases';
+import { Platform } from 'react-native';
+
+export async function initRevenueCat(userId: string) {
+  const apiKey = Platform.OS === 'ios' 
+    ? process.env.EXPO_PUBLIC_REVENUECAT_APPLE_KEY!
+    : process.env.EXPO_PUBLIC_REVENUECAT_GOOGLE_KEY!;
+  
+  await Purchases.configure({ apiKey, appUserID: userId });
+}
+
+export async function getSubscriptionStatus(): Promise<boolean> {
+  try {
+    const info: CustomerInfo = await Purchases.getCustomerInfo();
+    return typeof info.entitlements.active['pro_access'] !== 'undefined';
+  } catch {
+    return false;
+  }
+}
+
+export async function purchasePro(): Promise<boolean> {
+  try {
+    const offerings = await Purchases.getOfferings();
+    const pkg: PurchasesPackage | undefined = 
+      offerings.current?.monthly;
+    
+    if (!pkg) throw new Error('No package available');
+    
+    const { customerInfo } = await Purchases.purchasePackage(pkg);
+    return typeof customerInfo.entitlements.active['pro_access'] 
+      !== 'undefined';
+  } catch (err: any) {
+    if (err.userCancelled) return false;
+    throw err;
+  }
+}
+
+export async function restorePurchases(): Promise<boolean> {
+  const info = await Purchases.restorePurchases();
+  return typeof info.entitlements.active['pro_access'] !== 'undefined';
+}
+
+SYNC WITH SUPABASE:
+After successful purchase, update Supabase so the 
+backend knows about the subscription:
+
+async function syncSubscriptionToSupabase(
+  userId: string, 
+  isPro: boolean
+) {
+  await supabase
+    .from('profiles')
+    .update({ subscription_tier: isPro ? 'pro' : 'free' })
+    .eq('id', userId);
+}
+
+Call this after purchasePro() and on app launch.
+
+════════════════════════════════
+6. AUTH SCREENS
+Rebuild login and signup in React Native
+════════════════════════════════
+
+/mobile/app/auth/login.tsx:
+
+Design to match web app:
+- Dark navy background (#0F172A) full screen
+- Centered white card (borderRadius: 16, padding: 24)
+- "DevFeasible NZ" title in white above card
+- Tagline: "AI-powered development feasibility" in gray
+- TextInput for email (keyboardType='email-address')
+- TextInput for password (secureTextEntry)
+- TouchableOpacity "Sign in" button (emerald #10B981)
+- Link to signup screen
+- Error text in red below form
+
+Use supabase.auth.signInWithPassword()
+On success: router.replace('/(tabs)/chat')
+
+/mobile/app/auth/signup.tsx:
+Same design + full name field
+Use supabase.auth.signUp()
+On success: router.replace('/(tabs)/chat')
+
+/mobile/app/_layout.tsx:
+Check session on load:
+- If session exists: redirect to /(tabs)/chat
+- If not: redirect to /auth/login
+
+Use supabase.auth.onAuthStateChange() to listen 
+for login/logout events.
+
+════════════════════════════════
+7. TAB NAVIGATION
+/mobile/app/(tabs)/_layout.tsx
+════════════════════════════════
+
+Two tabs only (keep it simple):
+
+import { Tabs } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+
+<Tabs screenOptions={{
+  tabBarStyle: { backgroundColor: '#0F172A' },
+  tabBarActiveTintColor: '#10B981',
+  tabBarInactiveTintColor: '#6B7280',
+  headerStyle: { backgroundColor: '#0F172A' },
+  headerTintColor: '#FFFFFF',
+}}>
+  <Tabs.Screen 
+    name="chat" 
+    options={{
+      title: 'Analysis',
+      tabBarIcon: ({ color }) => 
+        <Ionicons name="search" size={24} color={color} />,
+      headerTitle: 'DevFeasible NZ',
+    }}
+  />
+  <Tabs.Screen 
+    name="profile"
+    options={{
+      title: 'Profile',
+      tabBarIcon: ({ color }) => 
+        <Ionicons name="person" size={24} color={color} />,
+    }}
+  />
+</Tabs>
+
+════════════════════════════════
+8. CHAT SCREEN
+/mobile/app/(tabs)/chat.tsx
+════════════════════════════════
+
+This is the core screen. Rebuild the web chat UI 
+in React Native.
+
+Key differences from web:
+- Use <FlatList> instead of a scrollable div
+  (inverted={true} so newest message at bottom)
+- Use <KeyboardAvoidingView> to handle keyboard
+- Use <TextInput multiline> for input
+- Use <TouchableOpacity> for send button
+
+State:
+  messages: Message[]
+  isLoading: boolean  
+  currentReport: FeasibilityReport | null
+  showPaywall: boolean
+
+Structure:
+<SafeAreaView style={{ flex: 1, backgroundColor: '#F8FAFC' }}>
+  <KeyboardAvoidingView 
+    style={{ flex: 1 }}
+    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    keyboardVerticalOffset={90}
+  >
+    {/* Message list */}
+    <FlatList
+      data={messages}
+      inverted
+      renderItem={({ item }) => <ChatBubble message={item} />}
+      keyExtractor={item => item.id}
+      contentContainerStyle={{ padding: 16 }}
+    />
+    
+    {/* Suggestion chips (show when no messages) */}
+    {messages.length === 0 && <SuggestionChips />}
+    
+    {/* Loading progress */}
+    {isLoading && <AnalysisProgress />}
+    
+    {/* Input bar */}
+    <ChatInputBar onSend={handleSend} disabled={isLoading} />
+    
+  </KeyboardAvoidingView>
+  
+  {/* Paywall bottom sheet */}
+  <PaywallSheet 
+    visible={showPaywall} 
+    onClose={() => setShowPaywall(false)}
+    onPurchase={handlePurchase}
+  />
+</SafeAreaView>
+
+ChatBubble logic:
+- If message.role === 'assistant' and content is valid 
+  FeasibilityReport JSON:
+  → Render <FeasibilityReport report={parsed} />
+  → Wrap in a ScrollView section within the FlatList
+- If discovery results JSON:
+  → Render <SearchResultCards results={parsed} />
+- Otherwise:
+  → Render plain text bubble
+
+Suggestion chips (first load):
+<ScrollView horizontal showsHorizontalScrollIndicator={false}>
+  {[
+    'Analyse 42 Arney Road, Remuera',
+    'Find land in Grey Lynn under $1.5M',
+    'What zones allow townhouses in Auckland?',
+  ].map(chip => (
+    <TouchableOpacity 
+      key={chip}
+      onPress={() => handleSend(chip)}
+      style={chipStyle}
+    >
+      <Text style={chipTextStyle}>{chip}</Text>
+    </TouchableOpacity>
+  ))}
+</ScrollView>
+
+════════════════════════════════
+9. REPORT COMPONENTS (React Native)
+Rebuild key web components as RN equivalents
+════════════════════════════════
+
+General rules:
+- Replace <div> with <View>
+- Replace <p>/<span> with <Text>
+- Replace <img> with <Image>
+- Replace onClick with onPress
+- Replace CSS classes with StyleSheet objects
+- All dimensions in dp (density-independent pixels)
+
+ScoreRing.tsx:
+  Use react-native-svg (install: npx expo install react-native-svg)
+  Same SVG circle logic as web version but using 
+  react-native-svg components: <Svg>, <Circle>, <Text>
+  
+  Animate with Animated.Value + useEffect:
+  const progress = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(progress, {
+      toValue: score / 5,
+      duration: 1000,
+      useNativeDriver: false,
+    }).start();
+  }, []);
+
+AccordionSection.tsx:
+  Use LayoutAnimation for smooth collapse:
+  import { LayoutAnimation, UIManager, Platform } from 'react-native';
+  
+  if (Platform.OS === 'android') {
+    UIManager.setLayoutAnimationEnabledExperimental?.(true);
+  }
+  
+  const toggle = () => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setOpen(!open);
+  };
+
+CostBreakdownChart.tsx:
+  Install Victory Native:
+  npx expo install victory-native@^41 react-native-reanimated
+  
+  Use <VictoryBar> with horizontal layout.
+  Victory Native 41 is compatible with Expo SDK 51.
+
+ROIScenarioCards.tsx:
+  Use a horizontal <ScrollView> with 3 cards.
+  Each card ~280dp wide.
+  Snap to card width with pagingEnabled on mobile.
+
+PropertyHeader.tsx:
+  Street view image:
+  <Image 
+    source={{ uri: `https://maps.googleapis.com/maps/api/streetview
+      ?size=640x200
+      &location=${encodeURIComponent(address)}
+      &key=${GOOGLE_MAPS_KEY}` }}
+    style={{ width: '100%', height: 160 }}
+    resizeMode="cover"
+  />
+
+FollowUpChips.tsx:
+  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+  Same chip generation logic as web version.
+  onPress → adds message to chat and calls handleSend.
+
+════════════════════════════════
+10. PAYWALL BOTTOM SHEET
+/mobile/components/PaywallSheet.tsx
+════════════════════════════════
+
+Use a modal bottom sheet (no library needed — 
+build with Modal + Animated):
+
+<Modal
+  visible={visible}
+  transparent
+  animationType="slide"
+  onRequestClose={onClose}
+>
+  <View style={{ 
+    flex: 1, 
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.5)' 
+  }}>
+    <View style={{ 
+      backgroundColor: 'white',
+      borderRadius: 20,
+      padding: 24,
+      paddingBottom: 40,
+    }}>
+      <Text style={styles.title}>
+        Upgrade to Pro
+      </Text>
+      
+      <Text style={styles.price}>NZD $10.99 / month</Text>
+      
+      {[
+        'Unlimited feasibility reports',
+        'Full data pipeline — live property data',
+        'Save and revisit past reports',
+        'AI risk assessments',
+      ].map(feature => (
+        <View key={feature} style={styles.featureRow}>
+          <Text style={styles.tick}>✓</Text>
+          <Text style={styles.feature}>{feature}</Text>
+        </View>
+      ))}
+      
+      <TouchableOpacity 
+        style={styles.upgradeButton}
+        onPress={onPurchase}
+      >
+        <Text style={styles.upgradeText}>Upgrade to Pro</Text>
+      </TouchableOpacity>
+      
+      <TouchableOpacity onPress={handleRestore}>
+        <Text style={styles.restoreText}>Restore purchases</Text>
+      </TouchableOpacity>
+      
+      <TouchableOpacity onPress={onClose}>
+        <Text style={styles.cancelText}>Maybe later</Text>
+      </TouchableOpacity>
+      
+      {/* Required by App Store */}
+      <Text style={styles.legalText}>
+        Payment will be charged to your Apple ID / Google 
+        Play account at confirmation. Subscription 
+        automatically renews unless cancelled at least 
+        24 hours before the end of the current period.
+        Manage in your device Settings.
+      </Text>
+    </View>
+  </View>
+</Modal>
+
+════════════════════════════════
+11. PROFILE SCREEN
+/mobile/app/(tabs)/profile.tsx
+════════════════════════════════
+
+Sections:
+A) User card — email, member since
+B) Plan card:
+   - If free: show usage (X of 3), [Upgrade] button
+   - If pro: "Pro Plan ✓", [Restore Purchases] link
+C) Search history — FlatList of last 10 searches
+D) Sign out button
+
+Pro detection: use RevenueCat getSubscriptionStatus()
+NOT Supabase (RevenueCat is source of truth for IAP).
+After checking RevenueCat, sync result to Supabase.
+
+useEffect(() => {
+  async function checkStatus() {
+    const isPro = await getSubscriptionStatus();
+    await syncSubscriptionToSupabase(user.id, isPro);
+    setIsPro(isPro);
+  }
+  checkStatus();
+}, []);
+
+════════════════════════════════
+12. BUILDING FOR STORES
+════════════════════════════════
+
+Use EAS Build (Expo Application Services):
+
+Install:
+npm install -g eas-cli
+eas login
+
+Configure:
+eas build:configure
+(creates eas.json)
+
+eas.json:
+{
+  "build": {
+    "preview": {
+      "android": { "buildType": "apk" }
+    },
+    "production": {
+      "ios": { "credentialsSource": "remote" },
+      "android": { "buildType": "app-bundle" }
+    }
+  }
+}
+
+Build for iOS (creates .ipa):
+eas build --platform ios --profile production
+
+Build for Android (creates .aab):
+eas build --platform android --profile production
+
+EAS handles signing certificates automatically.
+For iOS it will ask to link your Apple Developer account.
+For Android it generates a keystore automatically.
+
+Submit to stores:
+eas submit --platform ios
+eas submit --platform android
+
+════════════════════════════════
+13. REVENUECAT DASHBOARD SETUP
+(Do this before building the paywall)
+════════════════════════════════
+
+Required steps IN ORDER:
+
+APPLE SETUP:
+1. App Store Connect → Your App → Features → 
+   In-App Purchases → Subscriptions
+2. Create subscription group: "DevFeasible Pro"
+3. Create subscription:
+   - Reference name: DevFeasible Pro Monthly
+   - Product ID: devfeasible_pro_monthly  
+   - Duration: 1 Month
+   - Price: select NZD tier closest to $49 
+     (App Store uses fixed price tiers)
+4. Add English localisation:
+   - Display name: "DevFeasible NZ Pro"
+   - Description: "Unlimited AI property feasibility reports"
+5. Submit for review (subscriptions need review too)
+
+GOOGLE SETUP:
+1. Play Console → Your App → Monetise → 
+   Subscriptions → Create subscription
+2. Product ID: devfeasible_pro_monthly
+3. Add base plan: Monthly, NZD $49.00
+4. Activate the subscription
+
+REVENUECAT:
+1. Add both apps to RevenueCat project
+2. Create Entitlement: "pro_access"
+3. Create Offering: "default"
+4. Create Package: "Monthly" linked to both store products
+5. Copy API keys to Expo .env file
+
+════════════════════════════════
+14. VERIFICATION CHECKLIST
+════════════════════════════════
+
+LOCAL TESTING:
+[ ] npx expo start launches without errors
+[ ] Login screen renders on iOS Simulator
+[ ] Login screen renders on Android Emulator
+[ ] Signup creates Supabase user
+[ ] Chat screen loads after login
+[ ] Suggestion chips appear on first load
+[ ] Typing an address and sending triggers API call
+[ ] Loading progress animation shows during analysis
+[ ] Feasibility report renders in chat on success
+[ ] All accordion sections open/close
+[ ] Score rings animate
+[ ] Follow-up chips send messages
+[ ] Discovery search returns property cards
+[ ] "Full Analysis" from discovery card works
+[ ] Sign out clears session and returns to login
+
+PAYWALL TESTING:
+[ ] After 3 analyses, paywall sheet appears
+[ ] Paywall shows correct price
+[ ] RevenueCat sandbox purchase completes
+[ ] Profile shows "Pro Plan" after purchase
+[ ] Restore purchases works
+[ ] Pro user can do unlimited analyses
+
+BUILD TESTING:
+[ ] eas build --platform ios succeeds
+[ ] eas build --platform android succeeds
+[ ] TestFlight build installs on real iPhone
+[ ] APK installs on real Android device
+[ ] All features work on real devices
+[ ] No crashes on real devices
+
+STORE SUBMISSION:
+[ ] App icon created (1024x1024 PNG, no transparency)
+[ ] Splash screen created
+[ ] Screenshots taken on correct device sizes
+[ ] App Store listing written
+[ ] Privacy policy URL ready (required by both stores)
+[ ] Support URL ready
+[ ] Age rating completed (likely 4+)
+[ ] Submit for review
+
+════════════════════════════════
+IMPORTANT NOTES FOR REPLIT
+════════════════════════════════
+
+1. The /mobile folder is a completely separate 
+   Expo project from the Next.js app. They share 
+   nothing except the backend API URL and Supabase 
+   credentials.
+
+2. Keep the Next.js app running — it is the backend 
+   that the mobile app calls. Both run simultaneously.
+
+3. Do not mix React Native components with React 
+   web components. They are different and incompatible.
+
+4. RevenueCat cannot be tested in Expo Go — 
+   use a development build:
+   eas build --profile development --platform ios
+   
+5. Apple requires a privacy policy before App Store 
+   review. Create a simple one at 
+   privacypolicygenerator.info before submitting.
+
+6. Apple subscription review takes 1-3 days extra 
+   on top of regular app review (usually 1-2 days).
+   Budget a week for first submission.
+
+Start with: scaffold the Expo project, get login 
+working, get chat screen calling the backend, 
+get a basic report rendering. Get that working 
+on simulator first before touching RevenueCat.

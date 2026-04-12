@@ -167,4 +167,34 @@ router.post("/stripe/webhook", async (req, res) => {
   }
 });
 
+router.post("/subscription/sync", async (req, res) => {
+  const authHeader = req.headers["authorization"];
+  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  if (!token) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const { verifyToken } = await import("../lib/auth");
+  const payload = verifyToken(token);
+  if (!payload) {
+    res.status(401).json({ error: "Invalid token" });
+    return;
+  }
+
+  const { tier } = req.body as { tier?: string };
+  if (tier !== "pro" && tier !== "free") {
+    res.status(400).json({ error: "Invalid tier" });
+    return;
+  }
+
+  try {
+    await db.update(profiles).set({ subscriptionTier: tier }).where(eq(profiles.id, payload.sub));
+    res.json({ success: true, tier });
+  } catch (err) {
+    logger.error({ err }, "Failed to sync subscription");
+    res.status(500).json({ error: "Failed to sync subscription" });
+  }
+});
+
 export default router;

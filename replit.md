@@ -116,18 +116,38 @@ AI-powered NZ real estate development feasibility analysis mobile app built with
 - **Success**: `#2E9E72`, **Amber**: `#E8A84B`, **Red/Danger**: `#D94F4F`
 - `useColors()` hook auto-switches light/dark from `constants/colors.ts`
 
-## Phase 7: Stripe Integration & Payments
+## Phase 7: Stripe Integration (Web) + RevenueCat (Native IAP)
 
-- **Stripe client**: `artifacts/api-server/src/lib/stripeClient.ts` — `getUncachableStripeClient()`, Replit connector credentials (dev/prod environments)
+### Stripe (web fallback, still active)
+- **Stripe client**: `artifacts/api-server/src/lib/stripeClient.ts` — `getUncachableStripeClient()`, Replit connector credentials
 - **Stripe routes**: `artifacts/api-server/src/routes/stripe.ts`
-  - `POST /api/stripe/checkout` — Creates Stripe Checkout session; auto-creates Pro product/price if missing ($49 NZD/month); requires Bearer token
-  - `POST /api/stripe/portal` — Opens Stripe Customer Portal for Pro subscribers to manage billing
-  - `POST /api/stripe/webhook` — Processes `customer.subscription.created/updated/deleted`; updates `profiles.subscriptionTier` in DB
-- **Raw body for webhooks**: `app.ts` registers `/api/stripe/webhook` path with `express.raw()` before `express.json()` so signature verification works
-- **PaywallModal**: `artifacts/mobile/components/PaywallModal.tsx` — Bottom sheet modal with spring animation, feature list, price badge; triggered on 402 response from `/api/chat`; opens Stripe Checkout URL via `Linking.openURL`
-- **AnalysisProgress**: `artifacts/mobile/components/AnalysisProgress.tsx` — Animated progress bar + step-by-step status messages (5 steps × 4s each) shown when loading mode is `analyse`; replaces simple typing dots for feasibility analysis
-- **loadingMode detection**: Chat screen auto-detects intent (analyse/discover/followup) from message text; shows `AnalysisProgress` for analyse mode, typing dots for others
-- **Profile page** upgraded: Upgrade button calls `/api/stripe/checkout`, activity indicators during checkout/portal loading; "Manage billing" button shown for Pro users
+  - `POST /api/stripe/checkout` — Creates Stripe Checkout session ($49 NZD/month)
+  - `POST /api/stripe/portal` — Opens Stripe Customer Portal
+  - `POST /api/stripe/webhook` — Handles subscription lifecycle events
+  - `POST /api/subscription/sync` — Syncs RevenueCat IAP status to our DB (JWT-authenticated)
+- **Raw body for webhooks**: `app.ts` registers `/api/stripe/webhook` with `express.raw()` before `express.json()`
+
+### RevenueCat (Native IAP — required for App Store/Play Store)
+- **RevenueCat client**: `artifacts/mobile/lib/revenuecat.ts` — `initRevenueCat(userId)`, `getSubscriptionStatus()`, `purchasePro()`, `restorePurchases()`; gracefully degrades in Expo Go (no native modules available)
+- **Env vars needed**: `EXPO_PUBLIC_REVENUECAT_APPLE_KEY`, `EXPO_PUBLIC_REVENUECAT_GOOGLE_KEY`
+- **Entitlement ID**: `pro_access` (must match RevenueCat dashboard)
+- **Package**: `react-native-purchases@8.x` installed; plugin registered in `app.json`
+
+### Subscription sync flow (native app)
+1. App launch: `getSubscriptionStatus()` → if pro, `POST /api/subscription/sync { tier: "pro" }`
+2. Upgrade: `purchasePro()` → native Apple/Google IAP → on success `POST /api/subscription/sync { tier: "pro" }`
+3. Restore: `restorePurchases()` → same sync flow
+
+### Native Build
+- **`app.json`**: Bundle ID `nz.devfeasible.app` (iOS + Android), slug `devfeasible-nz`, scheme `devfeasible`
+- **`eas.json`**: EAS Build config with development (simulator), preview (internal APK), production (IPA + AAB) profiles
+- **Build command**: `eas build --platform ios --profile production` / `eas build --platform android --profile production`
+- **RevenueCat cannot be tested in Expo Go** — use `eas build --profile development` for a dev client
+
+### PaywallModal & Profile
+- **PaywallModal**: Triggers native IAP via RevenueCat; "Restore purchases" button; App Store–required legal text; syncs to backend on success
+- **Profile**: Checks RevenueCat on mount and syncs; Pro users see "Manage subscription" (opens device Settings) + "Restore purchases"; free users see RevenueCat upgrade flow
+- **AnalysisProgress**: `artifacts/mobile/components/AnalysisProgress.tsx` — Animated step-by-step progress for analyse mode
 
 ## Features
 
