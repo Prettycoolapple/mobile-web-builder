@@ -10,7 +10,7 @@ import {
   Pressable,
   Keyboard,
 } from "react-native";
-import { KeyboardAvoidingView } from "react-native-keyboard-controller";
+import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -94,6 +94,9 @@ export default function ChatScreen() {
     addMessage({ role: "assistant", content: "", type: "loading", loadingMode: detectedMode as any });
 
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 90_000);
+
       const headers = getApiHeaders();
 
       const allMessages = [
@@ -115,7 +118,9 @@ export default function ChatScreen() {
           messages: allMessages,
           currentReport,
         }),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
       if (!resp.ok) {
         const err = (await resp.json()) as { error?: string; code?: string };
@@ -154,10 +159,13 @@ export default function ChatScreen() {
       } else {
         updateLastMessage({ type: "text", content: data.content });
       }
-    } catch (err) {
+    } catch (err: any) {
+      const isAbort = err?.name === "AbortError";
       updateLastMessage({
         type: "text",
-        content: "Sorry, I couldn't connect to the analysis service. Please try again.",
+        content: isAbort
+          ? "The analysis is taking longer than usual — NZ property scraping can be slow. Please try again and it should be faster the second time."
+          : "Couldn't connect to the analysis service. Check your connection and try again.",
       });
     } finally {
       setIsLoading(false);
@@ -215,11 +223,7 @@ export default function ChatScreen() {
   const canSend = inputText.trim().length > 0 && !isLoading;
 
   return (
-    <KeyboardAvoidingView
-      style={[styles.container, { backgroundColor: colors.background }]}
-      behavior="padding"
-      keyboardVerticalOffset={0}
-    >
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={[styles.topBar, { paddingTop: topInset, backgroundColor: colors.headerBg }]}>
         <View style={styles.topBarContent}>
           <View style={styles.brandRow}>
@@ -307,57 +311,60 @@ export default function ChatScreen() {
             renderItem={renderItem}
             keyExtractor={keyExtractor}
             inverted
-            contentContainerStyle={[styles.messageList, { paddingBottom: 16 }]}
+            contentContainerStyle={[styles.messageList, { paddingBottom: 16, paddingTop: tabBarOffset + 8 }]}
             keyboardDismissMode="interactive"
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
+            automaticallyAdjustKeyboardInsets
           />
         )}
       </Pressable>
 
-      <View style={[styles.inputBar, {
-        backgroundColor: colors.background,
-        borderTopColor: colors.border,
-        paddingBottom: tabBarOffset + 8,
-      }]}>
-        <View style={[styles.inputWrapper, {
-          backgroundColor: colors.card,
-          borderColor: canSend ? colors.accent + "60" : colors.border,
-          shadowColor: colors.shadow,
+      <KeyboardStickyView offset={{ closed: tabBarOffset, opened: 0 }}>
+        <View style={[styles.inputBar, {
+          backgroundColor: colors.background,
+          borderTopColor: colors.border,
+          paddingBottom: insets.bottom > 0 ? insets.bottom - 4 : 12,
         }]}>
-          <TextInput
-            ref={inputRef}
-            style={[styles.input, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-            placeholder="Ask about an address or area..."
-            placeholderTextColor={colors.mutedForeground}
-            value={inputText}
-            onChangeText={setInputText}
-            multiline
-            maxLength={500}
-            onSubmitEditing={handleSend}
-            returnKeyType="send"
-            blurOnSubmit={false}
-          />
-          <TouchableOpacity
-            style={[
-              styles.sendBtn,
-              {
-                backgroundColor: canSend ? colors.accent : colors.muted,
-              },
-            ]}
-            onPress={handleSend}
-            disabled={!canSend}
-            activeOpacity={0.8}
-          >
-            <Feather name="arrow-up" size={17} color={canSend ? "#fff" : colors.mutedForeground} />
-          </TouchableOpacity>
+          <View style={[styles.inputWrapper, {
+            backgroundColor: colors.card,
+            borderColor: canSend ? colors.accent + "60" : colors.border,
+            shadowColor: colors.shadow,
+          }]}>
+            <TextInput
+              ref={inputRef}
+              style={[styles.input, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+              placeholder="Ask about an address or area..."
+              placeholderTextColor={colors.mutedForeground}
+              value={inputText}
+              onChangeText={setInputText}
+              multiline
+              maxLength={500}
+              onSubmitEditing={handleSend}
+              returnKeyType="send"
+              blurOnSubmit={false}
+            />
+            <TouchableOpacity
+              style={[
+                styles.sendBtn,
+                {
+                  backgroundColor: canSend ? colors.accent : colors.muted,
+                },
+              ]}
+              onPress={handleSend}
+              disabled={!canSend}
+              activeOpacity={0.8}
+            >
+              <Feather name="arrow-up" size={17} color={canSend ? "#fff" : colors.mutedForeground} />
+            </TouchableOpacity>
+          </View>
+          <Text style={[styles.inputHint, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+            NZ property data · Gemini AI
+          </Text>
         </View>
-        <Text style={[styles.inputHint, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-          NZ property data · Gemini AI
-        </Text>
-      </View>
+      </KeyboardStickyView>
       <PaywallModal visible={showPaywall} onClose={() => setShowPaywall(false)} />
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
