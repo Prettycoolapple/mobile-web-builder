@@ -1,4 +1,4 @@
-# DevFeasible NZ
+# Lecorb
 
 ## Overview
 
@@ -130,7 +130,7 @@ AI-powered NZ real estate development feasibility analysis mobile app built with
 ### RevenueCat (Native IAP — required for App Store/Play Store)
 - **RevenueCat client**: `artifacts/mobile/lib/revenuecat.ts` — `initRevenueCat(userId)`, `getSubscriptionStatus()`, `purchasePro()`, `restorePurchases()`; gracefully degrades in Expo Go (no native modules available)
 - **Env vars needed**: `EXPO_PUBLIC_REVENUECAT_APPLE_KEY`, `EXPO_PUBLIC_REVENUECAT_GOOGLE_KEY`
-- **Entitlement ID**: `pro_access` (must match RevenueCat dashboard)
+- **Entitlement ID**: `Pro` (must match RevenueCat dashboard)
 - **Package**: `react-native-purchases@8.x` installed; plugin registered in `app.json`
 
 ### Subscription sync flow (native app)

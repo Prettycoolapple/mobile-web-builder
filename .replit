@@ -42,3 +42,8 @@ externalPort = 3002
 
 [nix]
 channel = "stable-25_05"
+
+[userenv]
+
+[userenv.shared]
+EXPO_PUBLIC_REVENUECAT_APPLE_KEY = "test_KGUcqRynbnTBbtktcsmfhybQqvZ"

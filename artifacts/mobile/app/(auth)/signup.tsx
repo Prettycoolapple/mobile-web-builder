@@ -71,11 +71,11 @@ export default function SignupScreen() {
 
           <View style={styles.logoRow}>
             <View style={[styles.logoMark, { backgroundColor: colors.accent }]}>
-              <Text style={styles.logoMarkText}>DF</Text>
+              <Text style={styles.logoMarkText}>L</Text>
             </View>
             <View>
               <Text style={[styles.logoTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
-                DevFeasible NZ
+                Lecorb
               </Text>
               <Text style={[styles.logoTagline, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
                 Property development intelligence

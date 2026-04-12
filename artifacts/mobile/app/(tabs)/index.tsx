@@ -239,10 +239,10 @@ export default function ChatScreen() {
         <View style={styles.topBarContent}>
           <View style={styles.brandRow}>
             <View style={[styles.logoMark, { backgroundColor: colors.accent }]}>
-              <Text style={styles.logoLetter}>D</Text>
+              <Text style={styles.logoLetter}>L</Text>
             </View>
             <View>
-              <Text style={[styles.appName, { fontFamily: "DM_Sans_700Bold" }]}>DevFeasible</Text>
+              <Text style={[styles.appName, { fontFamily: "DM_Sans_700Bold" }]}>Lecorb</Text>
               <Text style={[styles.appSubtitle, { color: colors.headerSubtext, fontFamily: "DM_Sans_400Regular" }]}>
                 NZ Property Analysis
               </Text>

@@ -372,7 +372,7 @@ export default function ProfileScreen() {
 
         <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <Text style={[styles.aboutText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-            DevFeasible NZ is an AI-powered real estate development feasibility tool designed for the New Zealand property market. Powered by Gemini AI with deep NZ-specific knowledge.
+            Lecorb is an AI-powered real estate development feasibility tool designed for the New Zealand property market. Powered by Gemini AI with deep NZ-specific knowledge.
           </Text>
           <View style={[styles.disclaimerBox, { backgroundColor: colors.muted, borderRadius: 8 }]}>
             <Text style={[styles.disclaimerText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
