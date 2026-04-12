@@ -11,6 +11,7 @@ export interface ChatMessage {
   type: "text" | "report" | "search" | "loading";
   report?: FeasibilityReport;
   searchResults?: PropertyCandidate[];
+  isMockData?: boolean;
 }
 
 export interface Score {

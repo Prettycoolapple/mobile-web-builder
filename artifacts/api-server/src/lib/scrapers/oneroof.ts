@@ -2,6 +2,148 @@ import { logger } from "../logger";
 import { launchBrowser, newStealthPage, randomDelay, logScrapeAttempt } from "./browser";
 import { fetchWithScrapingBee } from "./scrapingbee";
 
+export interface ListingResult {
+  address: string;
+  price: number | null;
+  priceText: string;
+  landArea: number | null;
+  photoUrl: string | null;
+  listingUrl: string;
+  zone: string | null;
+}
+
+async function searchOneRoofPlaywright(params: {
+  suburb: string;
+  price_min: number;
+  price_max: number;
+}): Promise<ListingResult[]> {
+  const suburbSlug = params.suburb.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+  const url = `https://www.oneroof.co.nz/find/buy?suburb=${encodeURIComponent(suburbSlug)}&priceMin=${params.price_min}&priceMax=${params.price_max}&propertyType=residential`;
+
+  let browser;
+  const results: ListingResult[] = [];
+
+  try {
+    browser = await launchBrowser();
+    const { context, page } = await newStealthPage(browser);
+
+    await page.goto(url, { timeout: 18000, waitUntil: "domcontentloaded" });
+    await randomDelay(2000, 3500);
+    await page.evaluate(() => window.scrollBy(0, 600));
+    await randomDelay(800, 1400);
+
+    const cards = await page
+      .locator('[class*="listing-card"], [class*="property-card"], [class*="result-card"], article[class*="card"], [data-testid*="listing"]')
+      .all();
+
+    if (cards.length === 0) {
+      logger.debug("OneRoof search: no listing cards found in DOM");
+      await context.close().catch(() => {});
+      return [];
+    }
+
+    for (const card of cards.slice(0, 10)) {
+      try {
+        const text = await card.innerText().catch(() => "");
+        const href = await card.locator("a").first().getAttribute("href").catch(() => null);
+        const imgSrc = await card.locator("img").first().getAttribute("src").catch(() => null);
+
+        const listingUrl = href
+          ? href.startsWith("http") ? href : `https://www.oneroof.co.nz${href}`
+          : url;
+
+        const priceM = text.match(/\$([0-9,.]+(?:[mk])?)/i);
+        const priceText = priceM ? priceM[0] : "Price on application";
+        const price = priceM ? parseNZDollar(priceM[1]) : null;
+
+        const landM = text.match(/([0-9,]+)\s*m[²2]/i);
+        const landArea = landM ? Math.round(parseFloat(landM[1].replace(/,/g, ""))) : null;
+
+        const addressM = text.match(/\d+\s+[A-Z][a-zA-Z\s]+(?:Road|Street|Ave|Avenue|Crescent|Place|Drive|Way|Lane|Terrace|Close|Grove)[,\s]+[A-Za-z\s]+/i);
+        const address = addressM ? addressM[0].trim() : text.split("\n")[0]?.trim().slice(0, 80) || "Unknown address";
+
+        if (address && href) {
+          results.push({ address, price, priceText, landArea, photoUrl: imgSrc, listingUrl, zone: null });
+        }
+      } catch { /* skip card */ }
+    }
+
+    await context.close().catch(() => {});
+    logScrapeAttempt("OneRoofSearch", "stealth-playwright", results.length > 0, `${results.length} listings for ${params.suburb}`);
+  } finally {
+    await browser?.close().catch(() => {});
+  }
+
+  return results;
+}
+
+async function searchOneRoofViaBee(params: {
+  suburb: string;
+  price_min: number;
+  price_max: number;
+}): Promise<ListingResult[]> {
+  const suburbSlug = params.suburb.toLowerCase().replace(/\s+/g, "-");
+  const url = `https://www.oneroof.co.nz/find/buy?suburb=${encodeURIComponent(suburbSlug)}&priceMin=${params.price_min}&priceMax=${params.price_max}&propertyType=residential`;
+
+  const html = await fetchWithScrapingBee(url, { render_js: true, premium_proxy: false, wait: 4000 });
+  if (!html || html.length < 500) return [];
+
+  const { load } = await import("cheerio");
+  const $ = load(html);
+
+  const results: ListingResult[] = [];
+  $('[class*="listing-card"], [class*="property-card"], article, [class*="result"]').slice(0, 10).each((_, el) => {
+    const text = $(el).text().trim();
+    const href = $(el).find("a").first().attr("href");
+    const imgSrc = $(el).find("img").first().attr("src") ?? null;
+
+    if (!href) return;
+
+    const listingUrl = href.startsWith("http") ? href : `https://www.oneroof.co.nz${href}`;
+    const priceM = text.match(/\$([0-9,.]+(?:[mk])?)/i);
+    const priceText = priceM ? priceM[0] : "Price on application";
+    const price = priceM ? parseNZDollar(priceM[1]) : null;
+    const landM = text.match(/([0-9,]+)\s*m[²2]/i);
+    const landArea = landM ? Math.round(parseFloat(landM[1].replace(/,/g, ""))) : null;
+    const addressM = text.match(/\d+\s+[A-Z][a-zA-Z\s]+(?:Road|Street|Ave|Avenue|Crescent|Place|Drive|Way|Lane|Terrace|Close|Grove)[,\s]+[A-Za-z\s]+/i);
+    const address = addressM ? addressM[0].trim() : text.split("\n")[0]?.trim().slice(0, 80) || "";
+
+    if (address) {
+      results.push({ address, price, priceText, landArea, photoUrl: imgSrc, listingUrl, zone: null });
+    }
+  });
+
+  logScrapeAttempt("OneRoofSearch", "scrapingbee", results.length > 0, `${results.length} listings`);
+  return results;
+}
+
+export async function searchOneRoofListings(params: {
+  suburb: string;
+  price_min: number;
+  price_max: number;
+}): Promise<ListingResult[]> {
+  try {
+    const results = await Promise.race([
+      searchOneRoofPlaywright(params),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Playwright search timeout")), 22000)),
+    ]);
+    if (results.length > 0) return results;
+    logScrapeAttempt("OneRoofSearch", "stealth-playwright", false, "empty result — trying ScrapingBee");
+  } catch (err) {
+    logScrapeAttempt("OneRoofSearch", "stealth-playwright", false, String(err));
+  }
+
+  try {
+    const results = await searchOneRoofViaBee(params);
+    if (results.length > 0) return results;
+  } catch (err) {
+    logScrapeAttempt("OneRoofSearch", "scrapingbee", false, String(err));
+  }
+
+  logger.warn({ params }, "OneRoofSearch: all attempts failed");
+  return [];
+}
+
 export interface ComparableSale {
   address: string;
   sale_date: string | null;

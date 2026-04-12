@@ -1,0 +1,101 @@
+Phase 6 now uses OneRoof as the primary discovery source 
+(the scraper is already built in Phase 3.5). 
+Discovery = crawl OneRoof listings + pre-screen each result.
+
+════════════════════════════════
+1. LISTING SEARCH — reuse oneroof.ts
+════════════════════════════════
+
+Add a new function to /lib/scrapers/oneroof.ts:
+
+Function: searchOneRoofListings(params: {
+  suburb: string,
+  price_min: number,
+  price_max: number
+}): Promise<ListingResult[]>
+
+Steps:
+a) Navigate to:
+   https://www.oneroof.co.nz/find/buy?suburb={suburb}
+   &priceMin={price_min}&priceMax={price_max}&propertyType=residential
+
+b) Wait for listing cards to load
+
+c) For each card (up to 10), extract:
+   - Full address
+   - Price (or price range)
+   - Land area (m²)
+   - Main photo URL
+   - Listing URL
+   - Zone (if shown in listing card)
+
+d) Return array of ListingResult
+
+════════════════════════════════
+2. PRE-SCREENING
+/lib/pre-screen.ts
+════════════════════════════════
+
+For each listing (max 3 concurrent):
+- Geocode the address
+- Run scrapeHougarden(lat, lng, address) — ALREADY BUILT
+- From Hougarden data: get zone_code, overlays, potential_lots
+- Calculate quick_score as per original Phase 6 spec
+- Sort descending, return top 5
+
+NOTE: This reuses the Hougarden scraper already built in Phase 3.5.
+No new scraper needed. This is why 3.5 was worth building first.
+
+════════════════════════════════
+3. FALLBACK MOCK DATA
+/lib/mock-data.ts
+════════════════════════════════
+
+Create realistic mock listings for Auckland suburbs:
+Remuera, Epsom, Mt Eden, Grey Lynn, Ponsonby, Parnell, 
+Sandringham, Onehunga, New Lynn, Titirangi
+
+Each suburb: 5 mock listings
+Each listing: realistic address, price, land_sqm, zone, 
+              2-3 overlays, quick score
+
+Show a banner: "Showing example properties — live search 
+coming shortly. Enter a specific address for a full analysis."
+
+════════════════════════════════
+4. DISCOVERY API + CHAT INTEGRATION
+════════════════════════════════
+
+Same as original Phase 6 spec — no changes to the API 
+route or SearchResultCard UI.
+
+════════════════════════════════
+5. ADD RELAB SUBURB CONTEXT (bonus if time allows)
+════════════════════════════════
+
+Function: scrapeRelabSuburb(suburb: string): Promise<RelabData>
+
+Relab URL: https://www.relab.co.nz/suburb/{suburb-slug}
+
+Extract:
+- Median sale price (last 12 months)
+- Number of sales
+- Price trend % (year on year)
+- Days to sell median
+
+Use this data in the report's ROI section to contextualise:
+"In Remuera, median new build sale price was $X over the 
+last 12 months across X sales, up X% year-on-year."
+
+If scraping fails: omit gracefully with a note.
+
+════════════════════════════════
+6. VERIFICATION CHECKLIST
+════════════════════════════════
+[ ] "Find subdividable land in Remuera under $2M" 
+    returns listing cards
+[ ] Each card shows photo, address, price, zone, quick scores
+[ ] "Run full analysis" triggers full pipeline for that address
+[ ] If OneRoof blocked: mock data shows with banner
+[ ] Relab suburb context appears in ROI section (if built)
+[ ] Mobile layout: cards stack cleanly

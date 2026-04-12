@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, Component } from "react";
 import { View, Text, StyleSheet, Animated, Easing } from "react-native";
 import Markdown from "react-native-markdown-display";
+import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { ChatMessage } from "@/context/ChatContext";
 import { FeasibilityReportCard } from "./FeasibilityReport";
@@ -132,8 +133,16 @@ export function ChatBubble({ message, onFollowUp, onAnalyse }: Props) {
   if (message.type === "search" && message.searchResults) {
     return (
       <View style={styles.searchContainer}>
+        {message.isMockData && (
+          <View style={[styles.mockBanner, { backgroundColor: colors.amber + "18", borderColor: colors.amber + "40" }]}>
+            <Feather name="info" size={13} color={colors.amber} />
+            <Text style={[styles.mockBannerText, { color: colors.amber, fontFamily: "DM_Sans_500Medium" }]}>
+              Showing example properties — live search coming shortly. Enter a specific address for a full analysis.
+            </Text>
+          </View>
+        )}
         <Text style={[styles.searchHeader, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>
-          {message.searchResults.length} opportunities found
+          {message.searchResults.length} {message.isMockData ? "example" : ""} opportunities
         </Text>
         {message.searchResults.map((candidate, i) => (
           <PropertyCard key={i} candidate={candidate} onAnalyse={onAnalyse} />
@@ -319,5 +328,19 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     paddingHorizontal: 4,
     paddingBottom: 2,
+  },
+  mockBanner: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  mockBannerText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 18,
   },
 });

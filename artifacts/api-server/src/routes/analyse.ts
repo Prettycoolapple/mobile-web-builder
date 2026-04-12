@@ -13,6 +13,9 @@ import { verifyToken } from "../lib/auth";
 import { extractNZAddress } from "../lib/address-parser";
 import { runPropertyPipeline } from "../lib/pipeline";
 import { formatNZD } from "../lib/utils";
+import { searchOneRoofListings } from "../lib/scrapers/oneroof";
+import { preScreenListings } from "../lib/pre-screen";
+import { getMockListings } from "../lib/mock-data";
 
 const router = Router();
 
@@ -24,6 +27,71 @@ function extractJSON(text: string): unknown {
     return JSON.parse(jsonMatch[0]);
   }
   throw new Error("No JSON found in response");
+}
+
+function parseDiscoverParams(text: string): { suburb: string | null; minPrice: number; maxPrice: number } {
+  const lower = text.toLowerCase();
+
+  const SUBURBS = [
+    "remuera", "epsom", "mt eden", "mt. eden", "grey lynn", "ponsonby", "parnell",
+    "sandringham", "onehunga", "new lynn", "titirangi", "herne bay", "westmere",
+    "kingsland", "mt albert", "mt roskill", "avondale", "henderson", "botany",
+    "howick", "pakuranga", "manukau", "papakura", "pukekohe", "albany",
+    "takapuna", "devonport", "northcote", "glenfield", "milford", "browns bay",
+    "east tamaki", "mangere", "otahuhu", "penrose", "ellerslie", "glen innes",
+    "st heliers", "kohimarama", "mission bay", "st johns", "glendowie",
+  ];
+
+  let suburb: string | null = null;
+  for (const s of SUBURBS) {
+    if (lower.includes(s)) {
+      suburb = s.replace(/\./g, "").replace(/\s+/g, " ").trim();
+      break;
+    }
+  }
+
+  const pricePatterns = [
+    /under\s+\$?([0-9]+(?:\.[0-9]+)?)\s*([mk]?)/i,
+    /below\s+\$?([0-9]+(?:\.[0-9]+)?)\s*([mk]?)/i,
+    /less than\s+\$?([0-9]+(?:\.[0-9]+)?)\s*([mk]?)/i,
+    /up to\s+\$?([0-9]+(?:\.[0-9]+)?)\s*([mk]?)/i,
+    /max(?:imum)?\s+\$?([0-9]+(?:\.[0-9]+)?)\s*([mk]?)/i,
+  ];
+
+  let maxPrice = 3_000_000;
+  for (const p of pricePatterns) {
+    const m = p.exec(text);
+    if (m) {
+      let v = parseFloat(m[1]);
+      const suffix = m[2]?.toLowerCase();
+      if (suffix === "m") v *= 1_000_000;
+      else if (suffix === "k") v *= 1_000;
+      else if (v < 100) v *= 1_000_000;
+      maxPrice = Math.round(v);
+      break;
+    }
+  }
+
+  const rangeM = /\$?([0-9]+(?:\.[0-9]+)?)\s*([mk]?)\s*(?:to|-)\s*\$?([0-9]+(?:\.[0-9]+)?)\s*([mk]?)/i.exec(text);
+  let minPrice = Math.max(0, maxPrice - 1_500_000);
+  if (rangeM) {
+    let lo = parseFloat(rangeM[1]);
+    const loS = rangeM[2]?.toLowerCase();
+    if (loS === "m") lo *= 1_000_000;
+    else if (loS === "k") lo *= 1_000;
+    else if (lo < 100) lo *= 1_000_000;
+
+    let hi = parseFloat(rangeM[3]);
+    const hiS = rangeM[4]?.toLowerCase();
+    if (hiS === "m") hi *= 1_000_000;
+    else if (hiS === "k") hi *= 1_000;
+    else if (hi < 100) hi *= 1_000_000;
+
+    minPrice = Math.round(lo);
+    maxPrice = Math.round(hi);
+  }
+
+  return { suburb, minPrice: Math.max(0, minPrice), maxPrice };
 }
 
 function getUserIdFromHeader(req: any): string | null {
@@ -161,6 +229,40 @@ router.post("/chat", async (req, res) => {
       const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
       const userText = lastUserMessage?.content ?? "";
       const mode = detectMode(userText);
+
+      if (mode === "discover") {
+        try {
+          const { suburb, minPrice, maxPrice } = parseDiscoverParams(userText);
+          req.log.info({ suburb, minPrice, maxPrice }, "Discovery search started");
+
+          let candidates: import("../lib/pre-screen").PropertyCandidate[] = [];
+          let isMockData = false;
+
+          if (suburb) {
+            const listings = await searchOneRoofListings({ suburb, price_min: minPrice, price_max: maxPrice })
+              .catch((err) => { req.log.warn({ err }, "OneRoof search failed"); return []; });
+
+            if (listings.length > 0) {
+              candidates = await preScreenListings(listings, 3).catch((err) => {
+                req.log.warn({ err }, "Pre-screening failed");
+                return [];
+              });
+            }
+          }
+
+          if (candidates.length === 0) {
+            isMockData = true;
+            candidates = getMockListings(suburb ?? undefined);
+            req.log.info({ suburb, count: candidates.length }, "Discovery: using mock data fallback");
+          }
+
+          const responsePayload = JSON.stringify({ candidates, isMockData });
+          res.json({ content: responsePayload, mode: "discover" });
+          return;
+        } catch (err) {
+          req.log.warn({ err }, "Discovery mode error — falling through to AI");
+        }
+      }
 
       if (mode === "analyse") {
         const [extractedAddress, aiResponseEarly] = await Promise.all([

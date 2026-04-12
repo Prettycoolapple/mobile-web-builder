@@ -133,9 +133,9 @@ export default function ChatScreen() {
           updateLastMessage({ type: "text", content: data.content });
         }
       } else if (data.mode === "discover") {
-        const parsed = extractJSON(data.content) as { candidates?: PropertyCandidate[] } | null;
+        const parsed = extractJSON(data.content) as { candidates?: PropertyCandidate[]; isMockData?: boolean } | null;
         if (parsed?.candidates && parsed.candidates.length > 0) {
-          updateLastMessage({ type: "search", searchResults: parsed.candidates, content: "" });
+          updateLastMessage({ type: "search", searchResults: parsed.candidates, content: "", isMockData: parsed.isMockData ?? false });
         } else {
           updateLastMessage({ type: "text", content: data.content });
         }
