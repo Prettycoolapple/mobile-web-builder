@@ -72,11 +72,12 @@ AI-powered NZ real estate development feasibility analysis mobile app built with
   - Overlays: layers 33 (heritage), 19 (notable trees, 30m buffer), 25/27 (viewshafts), 58 (coastal inundation), 24 (Waitakere), 29 (ridgeline)
 - `property-data.ts` — `fetchPropertyHistory()` + `checkAsbestosRisk()`: Auckland Council rating GIS + QV fallback; asbestos risk by build year (<=1940=low, 1941-1990=high, >1990=low)
 - `infrastructure.ts` — `fetchInfrastructure()`: stormwater/wastewater/water supply distance from parcel
-- `pipeline.ts` — `runPropertyPipeline()`: orchestrates all sources with `Promise.allSettled()`, ~18s total (dominated by scraper timeout); result includes `merged` (priority-merged field set)
-- `scrapers/browser.ts` — `getChromiumPath()`: resolves NixOS system Chromium path (Playwright uses `/nix/store/.../chromium`); `BROWSER_ARGS` for headless/no-sandbox
-- `scrapers/hougarden.ts` — `scrapeHougarden()`: Playwright scraper for zone, CV, overlays, school zones; 18s timeout wrapper; graceful empty result on block/timeout
-- `scrapers/oneroof.ts` — `scrapeOneRoof()`: Playwright scraper for CV, sale history, comparables, photo; 18s timeout wrapper; graceful empty result on block/timeout  
-- `scrapers/merge.ts` — `mergePropertyData()`: priority-merges LINZ + Hougarden + OneRoof + Auckland Council GIS; priority rules: land_area=LINZ>HG>OR, cv=OR>HG, zone=HG>ACGIS, overlays=HG>ACGIS
+- `pipeline.ts` — `runPropertyPipeline()`: orchestrates all sources with `Promise.allSettled()`, ~4-5s total; result includes `merged` (priority-merged field set)
+- `scrapers/browser.ts` — `launchBrowser()` + `newStealthPage()`: NixOS system Chromium with full stealth evasion (hides webdriver, mocks plugins/chrome.runtime, NZ locale/timezone, proper sec-ch-ua headers); `withBrowserSlot()` (max 2 concurrent); `delay/randomDelay` helpers
+- `scrapers/scrapingbee.ts` — `fetchWithScrapingBee()`: calls ScrapingBee API with render_js=true, country_code=nz; silently skips if `SCRAPINGBEE_API_KEY` not set
+- `scrapers/hougarden.ts` — `scrapeHougarden()`: 3-attempt chain: 1) stealth Playwright 2) ScrapingBee + cheerio HTML parse 3) empty fallback; text extraction via regex on page.body.innerText
+- `scrapers/oneroof.ts` — `scrapeOneRoof()`: same 3-attempt chain; navigates to search then clicks first result; extracts CV, sale history, comparables, bedrooms
+- `scrapers/merge.ts` — `mergePropertyData()`: priority-merges LINZ + Hougarden + OneRoof + Auckland Council GIS; priority: land_area=LINZ>HG>OR, cv=OR>HG, zone=HG>ACGIS, overlays=HG>ACGIS
 
 ### Database Schema (`lib/db/src/schema/`)
 

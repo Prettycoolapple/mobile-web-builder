@@ -7,6 +7,7 @@ import { fetchInfrastructure, type InfrastructureItem } from "./infrastructure";
 import { scrapeHougarden, type HougardenData } from "./scrapers/hougarden";
 import { scrapeOneRoof, type OneRoofData } from "./scrapers/oneroof";
 import { mergePropertyData, type MergedPropertyData } from "./scrapers/merge";
+import { withBrowserSlot } from "./scrapers/browser";
 
 export interface PipelineResult {
   address_input: string;
@@ -44,20 +45,6 @@ async function timed<T>(
   }
 }
 
-const MAX_SCRAPER_CONCURRENCY = 2;
-let activeBrowsers = 0;
-
-async function withBrowserSlot<T>(fn: () => Promise<T>): Promise<T> {
-  while (activeBrowsers >= MAX_SCRAPER_CONCURRENCY) {
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  activeBrowsers++;
-  try {
-    return await fn();
-  } finally {
-    activeBrowsers--;
-  }
-}
 
 export async function runPropertyPipeline(address: string): Promise<PipelineResult> {
   const timing: Record<string, number> = {};

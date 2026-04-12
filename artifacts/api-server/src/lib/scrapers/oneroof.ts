@@ -1,6 +1,6 @@
-import { chromium } from "playwright";
 import { logger } from "../logger";
-import { getChromiumPath, BROWSER_ARGS } from "./browser";
+import { launchBrowser, newStealthPage, randomDelay, logScrapeAttempt } from "./browser";
+import { fetchWithScrapingBee } from "./scrapingbee";
 
 export interface ComparableSale {
   address: string;
@@ -28,14 +28,24 @@ export interface OneRoofData {
   scraped_at: string;
 }
 
+export function emptyOneRoofData(): OneRoofData {
+  return {
+    found: false, cv_nzd: null, cv_year: null, last_sale_price: null, last_sale_date: null,
+    listing_price: null, listing_active: false, floor_area_sqm: null, land_area_sqm: null,
+    build_year: null, bedrooms: null, main_photo_url: null, comparables: [],
+    data_source: "oneroof", scraped_at: new Date().toISOString(),
+  };
+}
+
 function parseNZDollar(text: string): number | null {
   const clean = text.replace(/[,$\s]/g, "");
   const m = clean.match(/([\d.]+)([mk]?)/i);
   if (!m) return null;
   let v = parseFloat(m[1]);
   if (isNaN(v) || v <= 0) return null;
-  if (m[2].toLowerCase() === "m") v *= 1_000_000;
-  if (m[2].toLowerCase() === "k") v *= 1_000;
+  const suffix = m[2].toLowerCase();
+  if (suffix === "m") v *= 1_000_000;
+  if (suffix === "k") v *= 1_000;
   return Math.round(v);
 }
 
@@ -53,195 +63,194 @@ function parseYear(text: string): number | null {
   return y >= 1800 && y <= new Date().getFullYear() + 1 ? y : null;
 }
 
-const SCRAPER_TIMEOUT_MS = 18000;
+function extractDataFromText(pageText: string): Partial<OneRoofData> {
+  const result: Partial<OneRoofData> = { found: true, comparables: [] };
 
-export async function scrapeOneRoof(address: string): Promise<OneRoofData> {
-  return Promise.race([
-    _scrapeOneRoof(address),
-    new Promise<OneRoofData>((_, reject) =>
-      setTimeout(() => reject(new Error("OneRoof scraper timeout")), SCRAPER_TIMEOUT_MS)
-    ),
-  ]).catch((err) => {
-    logger.warn({ err }, "OneRoof: timed out or failed — returning empty data");
-    return {
-      found: false, cv_nzd: null, cv_year: null, last_sale_price: null, last_sale_date: null,
-      listing_price: null, listing_active: false, floor_area_sqm: null, land_area_sqm: null,
-      build_year: null, bedrooms: null, main_photo_url: null, comparables: [],
-      data_source: "oneroof" as const, scraped_at: new Date().toISOString(),
-    };
-  });
-}
-
-async function _scrapeOneRoof(address: string): Promise<OneRoofData> {
-  const result: OneRoofData = {
-    found: false,
-    cv_nzd: null,
-    cv_year: null,
-    last_sale_price: null,
-    last_sale_date: null,
-    listing_price: null,
-    listing_active: false,
-    floor_area_sqm: null,
-    land_area_sqm: null,
-    build_year: null,
-    bedrooms: null,
-    main_photo_url: null,
-    comparables: [],
-    data_source: "oneroof",
-    scraped_at: new Date().toISOString(),
-  };
-
-  let browser;
-  try {
-    const chromiumPath = getChromiumPath();
-    browser = await chromium.launch({
-      executablePath: chromiumPath,
-      args: BROWSER_ARGS,
-    });
-
-    const context = await browser.newContext({
-      userAgent:
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      viewport: { width: 1280, height: 900 },
-    });
-
-    const page = await context.newPage();
-
-    const searchUrl = `https://www.oneroof.co.nz/find?q=${encodeURIComponent(address)}`;
-    logger.debug({ url: searchUrl }, "OneRoof: navigating to search");
-
-    await page.goto(searchUrl, { timeout: 12000, waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(2000);
-
-    const firstResult = page.locator('[data-testid*="result"], [class*="result-card"], [class*="property-card"], [href*="/property/"]').first();
-    const resultExists = await firstResult.count();
-    if (resultExists === 0) {
-      logger.debug("OneRoof: no search results found");
-      return result;
-    }
-
-    try {
-      const href = await firstResult.getAttribute("href");
-      if (href) {
-        const targetUrl = href.startsWith("http") ? href : `https://www.oneroof.co.nz${href}`;
-        logger.debug({ targetUrl }, "OneRoof: navigating to property page");
-        await page.goto(targetUrl, { timeout: 20000, waitUntil: "domcontentloaded" });
-        await page.waitForTimeout(3000);
-      } else {
-        await firstResult.click();
-        await page.waitForTimeout(3000);
+  const cvPatterns = [
+    /CV[:\s$]+([0-9,]+(?:\.[0-9]+)?(?:[mk])?)\s*(?:\((\d{4})\))?/i,
+    /Capital Value[:\s$]+([0-9,]+(?:\.[0-9]+)?(?:[mk])?)/i,
+    /Rateable Value[:\s$]+([0-9,]+(?:\.[0-9]+)?(?:[mk])?)/i,
+  ];
+  for (const p of cvPatterns) {
+    const m = p.exec(pageText);
+    if (m) {
+      const cv = parseNZDollar(m[1]);
+      if (cv && cv > 100_000) {
+        result.cv_nzd = cv;
+        if (m[2]) result.cv_year = parseInt(m[2]);
+        break;
       }
-    } catch {
-      logger.debug("OneRoof: failed to navigate to property page");
-      return result;
     }
+  }
 
-    result.found = true;
+  if (!result.cv_year) {
+    const yearM = /(?:CV year|valuation year|as at)[:\s]+(\d{4})/.exec(pageText);
+    if (yearM) result.cv_year = parseInt(yearM[1]);
+  }
 
-    const pageText = await page.evaluate(() => document.body.innerText);
+  const salePriceM = /[Ss]old\s+(?:for\s+)?\$([0-9,]+(?:\.[0-9]+)?(?:[mk])?)/i.exec(pageText);
+  if (salePriceM) {
+    const p = parseNZDollar(salePriceM[1]);
+    if (p && p > 100_000) result.last_sale_price = p;
+  }
 
-    const cvPatterns = [
-      /[Cc][Vv]\s+\$?([\d,]+(?:\.\d+)?(?:[mk])?)\s*(?:\((\d{4})\))?/,
-      /[Cc]apital [Vv]alue\s*\$?([\d,]+(?:\.\d+)?(?:[mk])?)/,
-      /[Rr]ateable [Vv]alue\s*\$?([\d,]+(?:\.\d+)?(?:[mk])?)/,
-    ];
-    for (const p of cvPatterns) {
-      const m = p.exec(pageText);
-      if (m) {
-        const cv = parseNZDollar(m[1]);
-        if (cv && cv > 100000) {
-          result.cv_nzd = cv;
-          if (m[2]) result.cv_year = parseInt(m[2]);
-          break;
+  const saleDateM = /[Ss]old\s+(?:for\s+\$[0-9,]+(?:[mk])?\s+)?(?:on\s+)?(\d{1,2}\s+\w+\s+\d{4}|\w+\s+\d{4})/i.exec(pageText);
+  if (saleDateM) result.last_sale_date = saleDateM[1];
+
+  for (const p of [/[Aa]sking[:\s$]+([0-9,]+(?:\.[0-9]+)?(?:[mk])?)/i, /[Pp]rice[:\s$]+([0-9,]+(?:\.[0-9]+)?(?:[mk])?)/i]) {
+    const m = p.exec(pageText);
+    if (m) { const lp = parseNZDollar(m[1]); if (lp && lp > 100_000) { result.listing_price = lp; result.listing_active = true; break; } }
+  }
+
+  const floorM = /[Ff]loor\s+(?:[Aa]rea\s+)?([0-9,]+\.?[0-9]*)\s*m/.exec(pageText);
+  if (floorM) { const a = parseArea(floorM[1]); if (a && a > 10) result.floor_area_sqm = a; }
+
+  const landM = /[Ll]and\s+(?:[Aa]rea\s+)?([0-9,]+\.?[0-9]*)\s*m/.exec(pageText);
+  if (landM) { const a = parseArea(landM[1]); if (a && a > 10) result.land_area_sqm = a; }
+
+  const buildM = /[Bb]uilt?[:\s]+(\d{4})/.exec(pageText);
+  if (buildM) { const y = parseYear(buildM[1]); if (y) result.build_year = y; }
+
+  const bedM = /(\d+)\s+[Bb]ed/.exec(pageText);
+  if (bedM) result.bedrooms = parseInt(bedM[1]);
+
+  const comparablesSection = pageText.split(/[Nn]earby [Ss]ales|[Rr]ecently [Ss]old|[Cc]omparable/i)[1];
+  if (comparablesSection) {
+    const pricePattern = /\$([0-9,]+(?:\.[0-9]+)?(?:[mk])?)/gi;
+    const sales: ComparableSale[] = [];
+    let pm;
+    const lines = comparablesSection.split("\n").slice(0, 40);
+    for (const line of lines) {
+      if (sales.length >= 6) break;
+      pm = /\$([0-9,]+(?:[mk])?)/i.exec(line);
+      if (pm) {
+        const price = parseNZDollar(pm[1]);
+        if (price && price > 100_000) {
+          sales.push({ address: line.trim().slice(0, 80), sale_date: null, price_nzd: price, bedrooms: null, land_area_sqm: null });
         }
       }
+      void pricePattern;
     }
-
-    const cvYearPattern = /CV year[:\s]+(\d{4})|(\d{4})\s+[Vv]aluation/;
-    if (!result.cv_year) {
-      const m = cvYearPattern.exec(pageText);
-      if (m) result.cv_year = parseInt(m[1] || m[2]);
-    }
-
-    const salePricePattern = /[Ss]old\s+(?:for\s+)?\$?([\d,]+(?:\.\d+)?(?:[mk])?)/;
-    const saleDatePattern = /[Ss]old\s+(?:for\s+\$[\d,]+(?:[mk])?\s+)?(?:on\s+)?(\d{1,2}\s+\w+\s+\d{4}|\w+\s+\d{4})/;
-    const salePriceM = salePricePattern.exec(pageText);
-    if (salePriceM) {
-      const price = parseNZDollar(salePriceM[1]);
-      if (price && price > 100000) result.last_sale_price = price;
-    }
-    const saleDateM = saleDatePattern.exec(pageText);
-    if (saleDateM) result.last_sale_date = saleDateM[1];
-
-    const listingPatterns = [
-      /[Aa]sking[:\s]+\$?([\d,]+(?:\.\d+)?(?:[mk])?)/,
-      /[Pp]rice[:\s]+\$?([\d,]+(?:\.\d+)?(?:[mk])?)/,
-      /[Ff]or [Ss]ale[:\s]+\$?([\d,]+(?:\.\d+)?(?:[mk])?)/,
-    ];
-    for (const p of listingPatterns) {
-      const m = p.exec(pageText);
-      if (m) {
-        const price = parseNZDollar(m[1]);
-        if (price && price > 100000) {
-          result.listing_price = price;
-          result.listing_active = true;
-          break;
-        }
-      }
-    }
-
-    const floorM = /[Ff]loor\s+(?:[Aa]rea\s+)?(\d+)\s*m/.exec(pageText);
-    if (floorM) result.floor_area_sqm = parseArea(floorM[1]);
-
-    const landM = /[Ll]and\s+(?:[Aa]rea\s+)?(\d[\d,]*)\s*m/.exec(pageText);
-    if (landM) result.land_area_sqm = parseArea(landM[1]);
-
-    const yearM = /[Bb]uilt?[\s:]+(\d{4})/.exec(pageText);
-    if (yearM) result.build_year = parseYear(yearM[1]);
-
-    const bedroomM = /(\d+)\s+[Bb]ed/.exec(pageText);
-    if (bedroomM) result.bedrooms = parseInt(bedroomM[1]);
-
-    try {
-      const imgEl = page.locator('img[src*="property"], img[src*="listing"], [class*="hero"] img, [class*="gallery"] img').first();
-      const src = await imgEl.getAttribute("src", { timeout: 2000 });
-      if (src) result.main_photo_url = src;
-    } catch { /* non-critical */ }
-
-    try {
-      const comparablesText = pageText.split(/[Nn]earby [Ss]ales|[Rr]ecently [Ss]old|[Cc]omparables/i)[1];
-      if (comparablesText) {
-        const lines = comparablesText.split("\n").filter((l) => l.trim().length > 5).slice(0, 30);
-        const sales: ComparableSale[] = [];
-        for (let i = 0; i < lines.length && sales.length < 6; i++) {
-          const line = lines[i];
-          const priceM = /\$([\d,]+(?:\.\d+)?(?:[mk])?)/i.exec(line);
-          if (priceM) {
-            const price = parseNZDollar(priceM[1]);
-            if (price && price > 100000) {
-              sales.push({
-                address: line.slice(0, 80).trim(),
-                sale_date: null,
-                price_nzd: price,
-                bedrooms: null,
-                land_area_sqm: null,
-              });
-            }
-          }
-        }
-        result.comparables = sales;
-      }
-    } catch { /* non-critical */ }
-
-    logger.debug(
-      { found: result.found, cv: result.cv_nzd, comparables: result.comparables.length },
-      "OneRoof: extraction complete",
-    );
-  } catch (err) {
-    logger.warn({ err }, "OneRoof: scrape failed — returning partial data");
-  } finally {
-    try { await browser?.close(); } catch { /* ignore */ }
+    result.comparables = sales;
   }
 
   return result;
+}
+
+function hasUsefulData(data: OneRoofData | Partial<OneRoofData>): boolean {
+  return !!(data.cv_nzd || data.last_sale_price || data.floor_area_sqm);
+}
+
+const PLAYWRIGHT_TIMEOUT_MS = 16000;
+
+async function scrapeOneRoofPlaywright(address: string): Promise<OneRoofData> {
+  const result = emptyOneRoofData();
+  let browser;
+  try {
+    browser = await launchBrowser();
+    const { context, page } = await newStealthPage(browser);
+
+    const searchUrl = `https://www.oneroof.co.nz/find?q=${encodeURIComponent(address)}`;
+    await page.goto(searchUrl, { timeout: 12000, waitUntil: "domcontentloaded" });
+    await randomDelay(1500, 2500);
+
+    await page.evaluate(() => window.scrollBy(0, 300));
+    await randomDelay(500, 1000);
+
+    const firstResult = page.locator('[data-testid*="result"], [class*="result-card"], [class*="property-card"], a[href*="/property/"]').first();
+    const hasResults = await firstResult.count();
+    if (hasResults === 0) {
+      logger.debug("OneRoof: no search results found");
+      await context.close().catch(() => {});
+      return result;
+    }
+
+    const href = await firstResult.getAttribute("href").catch(() => null);
+    if (href) {
+      const targetUrl = href.startsWith("http") ? href : `https://www.oneroof.co.nz${href}`;
+      await randomDelay(800, 1500);
+      await page.goto(targetUrl, { timeout: 12000, waitUntil: "domcontentloaded" });
+      await randomDelay(1500, 2000);
+      await page.evaluate(() => window.scrollBy(0, 400));
+      await randomDelay(500, 800);
+    } else {
+      await firstResult.click().catch(() => {});
+      await randomDelay(2000, 3000);
+    }
+
+    result.found = true;
+    const pageText = await page.evaluate(() => document.body.innerText || "");
+    const extracted = extractDataFromText(pageText);
+    Object.assign(result, extracted);
+
+    try {
+      const imgSrc = await page
+        .locator('img[src*="oneroof"], img[src*="property"], [class*="hero"] img, [class*="gallery"] img')
+        .first()
+        .getAttribute("src", { timeout: 2000 })
+        .catch(() => null);
+      if (imgSrc) result.main_photo_url = imgSrc;
+    } catch { /* non-critical */ }
+
+    await context.close().catch(() => {});
+  } finally {
+    await browser?.close().catch(() => {});
+  }
+  return result;
+}
+
+async function scrapeOneRoofViaBee(address: string): Promise<OneRoofData | null> {
+  const searchUrl = `https://www.oneroof.co.nz/find?q=${encodeURIComponent(address)}`;
+  const html = await fetchWithScrapingBee(searchUrl, { render_js: true, premium_proxy: false, wait: 3000 });
+  if (!html || html.length < 500) return null;
+
+  const { load } = await import("cheerio");
+  const $ = load(html);
+
+  const firstLink = $('a[href*="/property/"], a[href*="/residential/"]').first().attr("href");
+  if (!firstLink) {
+    logger.debug("OneRoof ScrapingBee: no property link found in search results");
+    return null;
+  }
+
+  const propertyUrl = firstLink.startsWith("http") ? firstLink : `https://www.oneroof.co.nz${firstLink}`;
+  const propHtml = await fetchWithScrapingBee(propertyUrl, { render_js: true, premium_proxy: false, wait: 3000 });
+  if (!propHtml || propHtml.length < 500) return null;
+
+  const $prop = load(propHtml);
+  const pageText = $prop("body").text();
+
+  const extracted = extractDataFromText(pageText);
+  if (!hasUsefulData(extracted)) return null;
+
+  return { ...emptyOneRoofData(), ...extracted, found: true, scraped_at: new Date().toISOString() };
+}
+
+export async function scrapeOneRoof(address: string): Promise<OneRoofData> {
+  try {
+    const result = await Promise.race([
+      scrapeOneRoofPlaywright(address),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Playwright timeout")), PLAYWRIGHT_TIMEOUT_MS)),
+    ]);
+    if (hasUsefulData(result)) {
+      logScrapeAttempt("OneRoof", "stealth-playwright", true, `cv=${result.cv_nzd}, comparables=${result.comparables.length}`);
+      return result;
+    }
+    logScrapeAttempt("OneRoof", "stealth-playwright", false, "no useful data — trying ScrapingBee");
+  } catch (err) {
+    logScrapeAttempt("OneRoof", "stealth-playwright", false, String(err));
+  }
+
+  try {
+    const result = await scrapeOneRoofViaBee(address);
+    if (result) {
+      logScrapeAttempt("OneRoof", "scrapingbee", true, `cv=${result.cv_nzd}, comparables=${result.comparables.length}`);
+      return result;
+    }
+  } catch (err) {
+    logScrapeAttempt("OneRoof", "scrapingbee", false, String(err));
+  }
+
+  logger.warn("OneRoof: all attempts failed — returning empty data");
+  return emptyOneRoofData();
 }

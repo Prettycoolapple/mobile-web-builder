@@ -1,0 +1,251 @@
+The Hougarden and OneRoof scrapers are built correctly but blocked 
+by Cloudflare bot detection. Fix this before we proceed to Phase 4.
+Use a layered approach: try stealth mode first (free), then fall 
+back to a scraping API service for reliability.
+
+════════════════════════════════
+STEP 1 — ADD STEALTH MODE TO PLAYWRIGHT
+════════════════════════════════
+
+Install:
+npm install playwright-extra playwright-extra-plugin-stealth
+
+Update /lib/scrapers/browser.ts to use playwright-extra:
+
+import { chromium } from 'playwright-extra';
+import StealthPlugin from 'playwright-extra-plugin-stealth';
+
+chromium.use(StealthPlugin());
+
+export async function launchBrowser() {
+  const browser = await chromium.launch({
+    headless: true,
+    executablePath: process.env.CHROMIUM_PATH || undefined,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--window-size=1280,900',
+    ],
+  });
+  return browser;
+}
+
+export async function newStealthPage(browser: any) {
+  const context = await browser.newContext({
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ' +
+      'AppleWebKit/537.36 (KHTML, like Gecko) ' +
+      'Chrome/120.0.0.0 Safari/537.36',
+    viewport: { width: 1280, height: 900 },
+    locale: 'en-NZ',
+    timezoneId: 'Pacific/Auckland',
+    extraHTTPHeaders: {
+      'Accept-Language': 'en-NZ,en;q=0.9',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120"',
+      'sec-ch-ua-platform': '"macOS"',
+      'sec-fetch-dest': 'document',
+      'sec-fetch-mode': 'navigate',
+      'sec-fetch-site': 'none',
+    },
+  });
+  const page = await context.newPage();
+  
+  // Hide automation signals
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
+    Object.defineProperty(navigator, 'languages', { 
+      get: () => ['en-NZ', 'en'] 
+    });
+    (window as any).chrome = { runtime: {} };
+  });
+  
+  return { context, page };
+}
+
+════════════════════════════════
+STEP 2 — ADD HUMAN-LIKE DELAYS
+════════════════════════════════
+
+Add to /lib/scrapers/browser.ts:
+
+export const delay = (ms: number) => 
+  new Promise(resolve => setTimeout(resolve, ms));
+
+export const randomDelay = (min = 1000, max = 3000) =>
+  delay(Math.floor(Math.random() * (max - min) + min));
+
+Update hougarden.ts and oneroof.ts:
+- Add randomDelay() after page.goto()
+- Add randomDelay() before each page.click()
+- Add randomDelay() after waitForSelector
+- Simulate scroll before extracting: 
+  await page.evaluate(() => window.scrollBy(0, 300));
+  await randomDelay(500, 1000);
+
+════════════════════════════════
+STEP 3 — SCRAPINGBEE FALLBACK
+(used if stealth still gets blocked)
+════════════════════════════════
+
+ScrapingBee is a scraping API that handles Cloudflare bypass 
+for you. Free tier: 1,000 credits/month (enough for testing).
+
+Sign up at: scrapingbee.com (free, no credit card)
+Add to Replit Secrets: SCRAPINGBEE_API_KEY=your_key_here
+
+Create /lib/scrapers/scrapingbee.ts:
+
+const SCRAPINGBEE_URL = 'https://app.scrapingbee.com/api/v1/';
+
+export async function fetchWithScrapingBee(
+  targetUrl: string,
+  options: { render_js?: boolean; premium_proxy?: boolean } = {}
+): Promise<string | null> {
+  const apiKey = process.env.SCRAPINGBEE_API_KEY;
+  if (!apiKey) return null;
+  
+  try {
+    const params = new URLSearchParams({
+      api_key: apiKey,
+      url: targetUrl,
+      render_js: String(options.render_js ?? true),
+      premium_proxy: String(options.premium_proxy ?? false),
+      country_code: 'nz',
+      block_ads: 'true',
+      wait: '2000',
+    });
+    
+    const response = await fetch(
+      `${SCRAPINGBEE_URL}?${params.toString()}`,
+      { signal: AbortSignal.timeout(30000) }
+    );
+    
+    if (!response.ok) {
+      console.warn(`ScrapingBee error: ${response.status}`);
+      return null;
+    }
+    
+    return await response.text();
+  } catch (err) {
+    console.warn('ScrapingBee fetch failed:', err);
+    return null;
+  }
+}
+
+════════════════════════════════
+STEP 4 — UPDATE HOUGARDEN SCRAPER
+════════════════════════════════
+
+Update /lib/scrapers/hougarden.ts with this retry logic:
+
+export async function scrapeHougarden(
+  lat: number, lng: number, address: string
+): Promise<HougardenData> {
+  
+  // ATTEMPT 1: Playwright stealth
+  try {
+    const result = await scrapeHougardenPlaywright(lat, lng, address);
+    if (result.zone_code || result.overlays.length > 0) {
+      console.log('Hougarden: stealth playwright succeeded');
+      return result;
+    }
+  } catch (err) {
+    console.warn('Hougarden stealth attempt failed:', err);
+  }
+  
+  // ATTEMPT 2: ScrapingBee
+  try {
+    const result = await scrapeHougardenViaBee(address);
+    if (result) {
+      console.log('Hougarden: ScrapingBee succeeded');
+      return result;
+    }
+  } catch (err) {
+    console.warn('Hougarden ScrapingBee attempt failed:', err);
+  }
+  
+  // FALLBACK: return empty with flag
+  console.warn('Hougarden: all attempts failed, returning empty');
+  return emptyHougardenData();
+}
+
+async function scrapeHougardenViaBee(
+  address: string
+): Promise<HougardenData | null> {
+  const { fetchWithScrapingBee } = await import('./scrapingbee');
+  
+  const searchUrl = `https://www.hougarden.com/search/` +
+    `#ac=1&address=${encodeURIComponent(address)}`;
+  
+  const html = await fetchWithScrapingBee(searchUrl, { 
+    render_js: true,
+    premium_proxy: false
+  });
+  
+  if (!html) return null;
+  
+  // Parse the returned HTML with cheerio
+  // (npm install cheerio)
+  const cheerio = await import('cheerio');
+  const $ = cheerio.load(html);
+  
+  // Extract using same selectors as Playwright version
+  // but using cheerio's jQuery-like API on the rendered HTML
+  const cvText = $('[class*="cv"], [class*="capital-value"]').first().text();
+  const zoneText = $('[class*="zone"]').first().text();
+  // ... extract other fields similarly
+  
+  return parseHougardenFields({ cvText, zoneText });
+}
+
+════════════════════════════════
+STEP 5 — UPDATE ONEROOF SCRAPER
+(same pattern)
+════════════════════════════════
+
+Apply the same retry pattern to oneroof.ts:
+1. Try Playwright stealth first
+2. Fall back to ScrapingBee with render_js: true
+3. Parse returned HTML with cheerio
+4. Return empty gracefully if both fail
+
+Install cheerio: npm install cheerio @types/cheerio
+
+════════════════════════════════
+STEP 6 — TEST & VERIFY
+════════════════════════════════
+
+Hit the debug endpoint with a test address:
+GET /api/pipeline-test?address=42+Arney+Road+Remuera+Auckland
+
+Check the console output for which method succeeded:
+- "Hougarden: stealth playwright succeeded" ← best outcome
+- "Hougarden: ScrapingBee succeeded" ← also fine for MVP
+- "Hougarden: all attempts failed" ← check ScrapingBee key
+
+In the returned JSON, check merged.data_sources to confirm:
+- zone_code: 'hougarden' (not 'auckland_council_fallback')
+- overlays: populated array with real overlay data
+- cv_nzd: from 'oneroof' source
+
+Target outcome: at least ONE of Hougarden or OneRoof 
+returning real data for a Remuera address.
+
+════════════════════════════════
+IMPORTANT NOTE FOR REPLIT
+════════════════════════════════
+
+If SCRAPINGBEE_API_KEY is not yet set in Secrets, the 
+ScrapingBee fallback is silently skipped — it will not 
+error. The app remains functional with Auckland Council 
+GIS as the overlay source (which already works). 
+ScrapingBee just improves data richness.
+
+Priority for now:
+1. Get stealth working → biggest win
+2. If not, confirm ScrapingBee key is added and retry
+3. If both fail → proceed to Phase 4 anyway, the Auckland 
+   Council GIS fallback is good enough for MVP launch
