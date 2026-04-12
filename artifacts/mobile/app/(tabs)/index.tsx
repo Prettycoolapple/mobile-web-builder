@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback } from "react";
+import React, { useRef, useState, useCallback, useEffect } from "react";
 import {
   View,
   Text,
@@ -9,8 +9,8 @@ import {
   Platform,
   Pressable,
   Keyboard,
+  KeyboardAvoidingView,
 } from "react-native";
-import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -58,8 +58,17 @@ export default function ChatScreen() {
 
   const [inputText, setInputText] = useState("");
   const [showPaywall, setShowPaywall] = useState(false);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+    const showSub = Keyboard.addListener(showEvent, () => setKeyboardVisible(true));
+    const hideSub = Keyboard.addListener(hideEvent, () => setKeyboardVisible(false));
+    return () => { showSub.remove(); hideSub.remove(); };
+  }, []);
 
   const messages = currentSession?.messages || [];
 
@@ -223,7 +232,11 @@ export default function ChatScreen() {
   const canSend = inputText.trim().length > 0 && !isLoading;
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
+    <KeyboardAvoidingView
+      style={[styles.container, { backgroundColor: colors.background }]}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      keyboardVerticalOffset={0}
+    >
       <View style={[styles.topBar, { paddingTop: topInset, backgroundColor: colors.headerBg }]}>
         <View style={styles.topBarContent}>
           <View style={styles.brandRow}>
@@ -311,7 +324,7 @@ export default function ChatScreen() {
             renderItem={renderItem}
             keyExtractor={keyExtractor}
             inverted
-            contentContainerStyle={[styles.messageList, { paddingBottom: 16, paddingTop: tabBarOffset + 8 }]}
+            contentContainerStyle={[styles.messageList, { paddingBottom: 16 }]}
             keyboardDismissMode="interactive"
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
@@ -320,51 +333,49 @@ export default function ChatScreen() {
         )}
       </Pressable>
 
-      <KeyboardStickyView offset={{ closed: tabBarOffset, opened: 0 }}>
-        <View style={[styles.inputBar, {
-          backgroundColor: colors.background,
-          borderTopColor: colors.border,
-          paddingBottom: insets.bottom > 0 ? insets.bottom - 4 : 12,
+      <View style={[styles.inputBar, {
+        backgroundColor: colors.background,
+        borderTopColor: colors.border,
+        paddingBottom: keyboardVisible ? 12 : tabBarOffset + 8,
+      }]}>
+        <View style={[styles.inputWrapper, {
+          backgroundColor: colors.card,
+          borderColor: canSend ? colors.accent + "60" : colors.border,
+          shadowColor: colors.shadow,
         }]}>
-          <View style={[styles.inputWrapper, {
-            backgroundColor: colors.card,
-            borderColor: canSend ? colors.accent + "60" : colors.border,
-            shadowColor: colors.shadow,
-          }]}>
-            <TextInput
-              ref={inputRef}
-              style={[styles.input, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-              placeholder="Ask about an address or area..."
-              placeholderTextColor={colors.mutedForeground}
-              value={inputText}
-              onChangeText={setInputText}
-              multiline
-              maxLength={500}
-              onSubmitEditing={handleSend}
-              returnKeyType="send"
-              blurOnSubmit={false}
-            />
-            <TouchableOpacity
-              style={[
-                styles.sendBtn,
-                {
-                  backgroundColor: canSend ? colors.accent : colors.muted,
-                },
-              ]}
-              onPress={handleSend}
-              disabled={!canSend}
-              activeOpacity={0.8}
-            >
-              <Feather name="arrow-up" size={17} color={canSend ? "#fff" : colors.mutedForeground} />
-            </TouchableOpacity>
-          </View>
-          <Text style={[styles.inputHint, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-            NZ property data · Gemini AI
-          </Text>
+          <TextInput
+            ref={inputRef}
+            style={[styles.input, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+            placeholder="Ask about an address or area..."
+            placeholderTextColor={colors.mutedForeground}
+            value={inputText}
+            onChangeText={setInputText}
+            multiline
+            maxLength={500}
+            onSubmitEditing={handleSend}
+            returnKeyType="send"
+            blurOnSubmit={false}
+          />
+          <TouchableOpacity
+            style={[
+              styles.sendBtn,
+              {
+                backgroundColor: canSend ? colors.accent : colors.muted,
+              },
+            ]}
+            onPress={handleSend}
+            disabled={!canSend}
+            activeOpacity={0.8}
+          >
+            <Feather name="arrow-up" size={17} color={canSend ? "#fff" : colors.mutedForeground} />
+          </TouchableOpacity>
         </View>
-      </KeyboardStickyView>
+        <Text style={[styles.inputHint, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+          NZ property data · Gemini AI
+        </Text>
+      </View>
       <PaywallModal visible={showPaywall} onClose={() => setShowPaywall(false)} />
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
