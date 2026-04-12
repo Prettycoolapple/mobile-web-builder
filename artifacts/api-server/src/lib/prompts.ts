@@ -34,16 +34,19 @@ RESPONSE RULES:
 4. Always use NZD. Always include the disclaimer that estimates are indicative only and professional advice should be sought.
 5. Be commercially-minded — developers want actionable intel, not watered-down advice. Flag risks clearly.`;
 
-export const ANALYSE_AUGMENTATION = `Please analyse this NZ property for development feasibility. Return ONLY a valid JSON FeasibilityReport. Use realistic placeholder data for any fields you cannot know with certainty — we will layer in real API data in later phases.
+export const ANALYSE_AUGMENTATION = `Please analyse this NZ property for development feasibility. Return ONLY a valid JSON FeasibilityReport. Use realistic NZ-market data for any fields not provided.
 
 The JSON must follow this exact structure:
 {
   "address": "full address string",
   "scores": {
-    "ease": <1-5>,
-    "cost": <1-5, where 5=low cost/easy>,
-    "roi": <1-5>,
-    "composite": <weighted average>
+    "ease": <number 0.5-5.0>,
+    "cost": <number 0.5-5.0, where 5=low cost>,
+    "roi": <number 0.5-5.0>,
+    "composite": <weighted average>,
+    "ease_reasons": ["reason 1", "reason 2"],
+    "cost_reasons": ["reason 1", "reason 2"],
+    "roi_reasons": ["reason 1", "reason 2"]
   },
   "propertyOverview": {
     "address": "full address",
@@ -64,13 +67,18 @@ The JSON must follow this exact structure:
     ],
     "subdivisionSummary": "2-3 sentence plain English summary of subdivision feasibility"
   },
+  "potential_lots": <number>,
+  "zone_label": "zone full name e.g. Single House Zone",
   "asbestos": {
-    "buildYear": "year",
-    "riskLevel": "low|moderate|high",
+    "buildYear": "year or null",
+    "riskLevel": "low|high|unknown",
+    "risk": "low|high|unknown",
     "flagged": <boolean>,
+    "notes": "detailed notes including WorkSafe NZ requirements",
+    "worksafe_required": <boolean>,
     "demoCostLow": <NZD number>,
     "demoCostHigh": <NZD number>,
-    "worksafeNote": "guidance note or null"
+    "worksafeNote": "brief guidance note or null"
   },
   "terrain": {
     "classification": "flat|gentle|moderate|steep",
@@ -81,7 +89,8 @@ The JSON must follow this exact structure:
   "infrastructure": [
     {
       "name": "Stormwater|Wastewater|Water Supply",
-      "location": "on-parcel|boundary|off-parcel",
+      "location": "on-parcel|boundary|neighbour|public-land|unknown",
+      "distance_metres": <number or null>,
       "estimatedCostLow": <NZD number>,
       "estimatedCostHigh": <NZD number>,
       "risk": "low|moderate|high",
@@ -95,27 +104,32 @@ The JSON must follow this exact structure:
     {"label": "Retaining Walls", "low": <NZD>, "high": <NZD>},
     {"label": "Services & Infrastructure", "low": <NZD>, "high": <NZD>},
     {"label": "Consents & Professionals", "low": <NZD>, "high": <NZD>},
-    {"label": "Finance (Holding)", "low": <NZD>, "high": <NZD>}
+    {"label": "Finance (Holding)", "low": <NZD>, "high": <NZD>},
+    {"label": "Contingency", "low": <NZD>, "high": <NZD>}
   ],
   "totalCostLow": <NZD number>,
   "totalCostHigh": <NZD number>,
+  "cost_per_unit_avg": <NZD number>,
   "roiScenarios": [
-    {"years": 2, "gdv": <NZD>, "totalCost": <NZD>, "grossProfit": <NZD>, "roi": <percent number>, "annualisedRoi": <percent number>, "isBest": <boolean>},
-    {"years": 3, "gdv": <NZD>, "totalCost": <NZD>, "grossProfit": <NZD>, "roi": <percent number>, "annualisedRoi": <percent number>, "isBest": <boolean>},
-    {"years": 4, "gdv": <NZD>, "totalCost": <NZD>, "grossProfit": <NZD>, "roi": <percent number>, "annualisedRoi": <percent number>, "isBest": <boolean>}
+    {"years": 2, "gdv": <NZD>, "total_cost_mid": <NZD>, "gross_profit": <NZD>, "roi_percent": <percent number>, "annualised_roi_percent": <percent number>, "viable": <boolean>},
+    {"years": 3, "gdv": <NZD>, "total_cost_mid": <NZD>, "gross_profit": <NZD>, "roi_percent": <percent number>, "annualised_roi_percent": <percent number>, "viable": <boolean>},
+    {"years": 4, "gdv": <NZD>, "total_cost_mid": <NZD>, "gross_profit": <NZD>, "roi_percent": <percent number>, "annualised_roi_percent": <percent number>, "viable": <boolean>}
   ],
   "comparableSales": [
     {
       "address": "street address only",
-      "saleDate": "Mon YYYY",
-      "price": <NZD number>,
-      "size": <land m² number>,
-      "pricePerSqm": <NZD/m² number>
+      "sale_date": "YYYY-MM-DD",
+      "price_nzd": <NZD number>,
+      "land_sqm": <land m² number>,
+      "floor_sqm": <floor m² number>,
+      "price_per_sqm": <NZD/m² number>
     }
   ],
+  "comparables_quality": "live|estimated",
+  "avg_sale_price": <NZD number>,
   "avgPricePerSqm": <NZD/m² number>,
-  "riskSummary": ["specific risk 1", "specific risk 2", "specific risk 3", "specific risk 4"],
-  "disclaimer": "These are indicative estimates only. Always engage a quantity surveyor, lawyer, and urban planner before making any development decisions."
+  "riskSummary": ["specific risk or opportunity 1", "specific risk or opportunity 2", "specific risk or opportunity 3", "specific risk or opportunity 4", "specific risk or opportunity 5"],
+  "disclaimer": "These are indicative estimates only. Always engage a quantity surveyor, lawyer, and urban planner before making any development decisions. Figures in NZD."
 }
 
 Return ONLY the JSON object, no other text.`;

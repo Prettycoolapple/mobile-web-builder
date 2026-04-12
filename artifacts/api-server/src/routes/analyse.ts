@@ -235,13 +235,48 @@ ${scenarioLines}
 ASBESTOS: ${asbestos_detail.risk} risk — ${asbestos_detail.notes}
 
 YOUR TASK:
-Return a FeasibilityReport JSON using all of the above data.
-- Copy scores and financial figures EXACTLY as provided above
-- Write 4–6 risk_summary bullet points in plain NZ English
-- Contextualise the numbers for a NZ developer audience
-- Flag any data gaps where sources were unavailable
-- Do not invent data — mark unknown fields as null
-- Return ONLY valid JSON, no surrounding text`;
+Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT schema:
+{
+  "address": "full address",
+  "scores": {
+    "ease": ${scores.ease}, "cost": ${scores.cost}, "roi": ${scores.roi}, "composite": ${scores.composite},
+    "ease_reasons": [${scores.ease_reasons.map((r) => `"${r}"`).join(", ")}],
+    "cost_reasons": [${scores.cost_reasons.map((r) => `"${r}"`).join(", ")}],
+    "roi_reasons": [${scores.roi_reasons.map((r) => `"${r}"`).join(", ")}]
+  },
+  "propertyOverview": { "address": "...", "cv": "NZD as string", "landArea": "Xm²", "floorArea": "...", "buildYear": "...", "zone": "...", "listingPrice": null, "isOnMarket": false },
+  "planning": { "zone": "...", "minLotSize": "Xm²", "potentialLots": ${lots.lots}, "overlays": [{ "name": "...", "status": "clear|moderate|restricted", "detail": "..." }], "subdivisionSummary": "..." },
+  "potential_lots": ${lots.lots},
+  "zone_label": "${lots.zone_label}",
+  "asbestos": { "buildYear": "year or null", "riskLevel": "${asbestos_detail.risk}", "risk": "${asbestos_detail.risk}", "flagged": ${asbestos_detail.risk === "high"}, "notes": "${asbestos_detail.notes}", "worksafe_required": ${asbestos_detail.risk === "high"}, "demoCostLow": ${costs.demo_low}, "demoCostHigh": ${costs.demo_high} },
+  "terrain": { "classification": "flat|gentle|moderate|steep", "slope": "...", "retainingCostLow": ${costs.retaining_low}, "retainingCostHigh": ${costs.retaining_high} },
+  "infrastructure": [ { "name": "Wastewater|Stormwater|Water Supply", "location": "on-parcel|boundary|neighbour|public-land", "distance_metres": <number or null>, "estimatedCostLow": <NZD>, "estimatedCostHigh": <NZD>, "risk": "low|moderate|high", "note": "..." } ],
+  "costItems": [
+    { "label": "Land (CV)", "low": <NZD>, "high": <NZD> },
+    { "label": "Demolition", "low": ${costs.demo_low}, "high": ${costs.demo_high} },
+    { "label": "Construction", "low": ${costs.construction_low}, "high": ${costs.construction_high} },
+    { "label": "Retaining Walls", "low": ${costs.retaining_low}, "high": ${costs.retaining_high} },
+    { "label": "Services & Infrastructure", "low": ${costs.services_low}, "high": ${costs.services_high} },
+    { "label": "Consents & Professionals", "low": ${costs.consents_low}, "high": ${costs.consents_high} },
+    { "label": "Finance (Holding)", "low": ${costs.finance_low}, "high": ${costs.finance_high} },
+    { "label": "Contingency", "low": ${costs.contingency_low}, "high": ${costs.contingency_high} }
+  ],
+  "totalCostLow": ${costs.total_low},
+  "totalCostHigh": ${costs.total_high},
+  "cost_per_unit_avg": ${costs.cost_per_unit_avg},
+  "roiScenarios": [
+${scenarios.map((s) => `    { "years": ${s.years}, "gdv": ${s.gdv}, "total_cost_mid": ${s.total_cost_mid}, "gross_profit": ${s.gross_profit}, "roi_percent": ${s.roi_percent.toFixed(1)}, "annualised_roi_percent": ${s.annualised_roi_percent.toFixed(1)}, "viable": ${s.viable} }`).join(",\n")}
+  ],
+  "comparableSales": [<3 comparable sales: { "address": "...", "sale_date": "YYYY-MM-DD", "price_nzd": <NZD>, "land_sqm": <number>, "floor_sqm": <number>, "price_per_sqm": <NZD> }>],
+  "comparables_quality": "${comparables_quality}",
+  "avg_sale_price": ${Math.round(scenarios[0]?.gdv / Math.max(1, lots.lots))},
+  "avgPricePerSqm": <NZD/m²>,
+  "riskSummary": ["risk/opportunity 1 in plain NZ English", "risk/opportunity 2", "risk/opportunity 3", "risk/opportunity 4", "risk/opportunity 5"],
+  "disclaimer": "These are indicative estimates only. Always engage a quantity surveyor, lawyer, and urban planner before making any development decisions. Figures in NZD."
+}
+- Fill in ALL fields. Do not leave any blank. Mark truly unknown fields as null.
+- Write riskSummary items as 1-sentence developer-focused statements in plain NZ English.
+- Return ONLY valid JSON, no markdown fences, no other text.`;
             } else {
               const dataSummary = {
                 address: geocode?.formatted ?? extractedAddress,

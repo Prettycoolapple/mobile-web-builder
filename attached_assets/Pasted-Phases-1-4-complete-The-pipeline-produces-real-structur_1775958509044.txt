@@ -1,0 +1,743 @@
+Phases 1–4 complete. The pipeline produces real structured data 
+with pre-computed scores. Phase 5 renders this into a beautiful, 
+trustworthy feasibility report that users will judge the product by.
+
+This phase is UI-heavy. Prioritise clarity, spacing, and mobile 
+layout over feature completeness. A clean half-finished report 
+beats a cluttered full one.
+
+INSTALL any missing dependencies:
+npm install recharts
+npm install react-circular-progressbar
+(or build score rings from scratch SVG — see Section 2)
+
+════════════════════════════════
+1. COMPONENT ARCHITECTURE
+Create /components/report/ directory
+════════════════════════════════
+
+Files to create:
+  FeasibilityReport.tsx       ← master container
+  ScoreRing.tsx               ← animated circular score badge
+  PropertyHeader.tsx          ← address + street view + badges
+  ScoreSummaryRow.tsx         ← 3 rings + composite bar
+  AccordionSection.tsx        ← reusable collapsible section
+  OverlayChecklist.tsx        ← planning overlays
+  AsbestosPanel.tsx           ← asbestos risk card
+  ContourCard.tsx             ← terrain with SVG slope diagram
+  InfrastructureTable.tsx     ← services table
+  CostBreakdownChart.tsx      ← stacked bar (Recharts)
+  ROIScenarioCards.tsx        ← 2yr/3yr/4yr cards
+  ComparableSalesTable.tsx    ← recent sales
+  RiskSummaryPanel.tsx        ← AI bullet points
+  FollowUpChips.tsx           ← suggestion chips
+  DataSourceBadge.tsx         ← "Source: Hougarden" label
+
+════════════════════════════════
+2. SCORE RING COMPONENT
+/components/report/ScoreRing.tsx
+════════════════════════════════
+
+Build with raw SVG — no library needed.
+
+Props: { score: number, label: string, size?: number }
+
+const SIZE = size ?? 88;
+const STROKE = 7;
+const R = (SIZE - STROKE) / 2;
+const CIRC = 2 * Math.PI * R;
+const pct = score / 5;
+const color = score >= 4 ? '#10B981'    // emerald
+            : score >= 2.5 ? '#F59E0B'  // amber  
+            : '#EF4444';                 // red
+
+Render:
+<svg width={SIZE} height={SIZE} style={{ transform: 'rotate(-90deg)' }}>
+  {/* Track */}
+  <circle cx={SIZE/2} cy={SIZE/2} r={R}
+    fill="none" stroke="#E5E7EB" strokeWidth={STROKE} />
+  {/* Fill — animated */}
+  <circle cx={SIZE/2} cy={SIZE/2} r={R}
+    fill="none" stroke={color} strokeWidth={STROKE}
+    strokeDasharray={CIRC}
+    strokeDashoffset={CIRC * (1 - pct)}
+    strokeLinecap="round"
+    style={{ transition: 'stroke-dashoffset 1s ease-in-out' }}
+  />
+  {/* Score text — counter-rotate so it reads upright */}
+  <text x={SIZE/2} y={SIZE/2} 
+    textAnchor="middle" dominantBaseline="central"
+    style={{ transform: `rotate(90deg) translate(0, -${SIZE/2}px) 
+             translate(${SIZE/2}px, 0)`, 
+             fontSize: 20, fontWeight: 600, fill: color }}
+  >
+    {score.toFixed(1)}
+  </text>
+</svg>
+
+SIMPLER approach for the text (avoids SVG transform complexity):
+Use position:relative wrapper div, absolute-position the text 
+over the SVG using a <div> overlay, not SVG <text>.
+
+<div style={{ position: 'relative', width: SIZE, height: SIZE }}>
+  <svg ...>rings only, no text</svg>
+  <div style={{
+    position: 'absolute', inset: 0,
+    display: 'flex', flexDirection: 'column',
+    alignItems: 'center', justifyContent: 'center'
+  }}>
+    <span style={{ fontSize: 20, fontWeight: 700, color }}>
+      {score.toFixed(1)}
+    </span>
+    <span style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>
+      {label}
+    </span>
+  </div>
+</div>
+
+Animate on mount using useEffect + setTimeout to trigger 
+the CSS transition after initial render.
+
+════════════════════════════════
+3. PROPERTY HEADER
+/components/report/PropertyHeader.tsx
+════════════════════════════════
+
+Props: { report: FeasibilityReport }
+
+Layout (stacked):
+
+A) STREET VIEW IMAGE
+   <img
+     src={`https://maps.googleapis.com/maps/api/streetview
+           ?size=640x200
+           &location=${encodeURIComponent(report.address)}
+           &key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}
+           &return_error_codes=true`}
+     alt="Street view"
+     style={{ width: '100%', height: 180, objectFit: 'cover',
+              borderRadius: '12px 12px 0 0' }}
+     onError={(e) => {
+       // Replace with a plain dark banner + address text
+       e.currentTarget.style.display = 'none';
+     }}
+   />
+   
+   If GOOGLE_MAPS_API_KEY not set: skip the image entirely,
+   show a placeholder div with the address in large text.
+
+B) ADDRESS BAR
+   Directly below the image:
+   <h1 style={{ fontSize: 20, fontWeight: 700, 
+                color: '#0F172A', margin: '12px 0 8px' }}>
+     {report.address}
+   </h1>
+
+C) PROPERTY BADGES ROW
+   Horizontal scrollable row of pill badges:
+   
+   Zone badge — colour by zone type:
+     THAB/MHU → emerald background
+     MHS      → blue background
+     SHZ/LSZ  → amber background
+   
+   Pills to show (each as small pill):
+   - Zone: "{zone_code} — {zone_description}"
+   - Land: "{land_area_sqm}m² land"
+   - CV: "CV: ${formatNZD(cv_nzd)}" (if available, else "CV: Unavailable")
+   - Build year: "Built ~{build_year}" or "Build year unknown"
+   - Lots: "{potential_lots} potential lot{s}"
+   - Listing: "${formatNZD(listing_price)}" (only if listing_active)
+
+D) DATA QUALITY BANNER (show if any sources failed)
+   If comparables_quality === 'estimated' OR 
+   merged data_sources has any 'unavailable':
+   
+   Slim amber banner:
+   "Some data is estimated — add LINZ and Google Maps API keys 
+    for more accurate results"
+   
+   Small, non-alarming. Don't let it dominate the UI.
+
+════════════════════════════════
+4. SCORE SUMMARY ROW
+/components/report/ScoreSummaryRow.tsx
+════════════════════════════════
+
+Props: { scores: ScoringResult }
+
+Layout:
+┌────────────────────────────────────┐
+│  [Ease]    [Cost]    [ROI]         │
+│   2.5/5     3.0/5    5.0/5         │
+│                                    │
+│  Overall  ████████░░░░  3.6/5      │
+└────────────────────────────────────┘
+
+3 ScoreRings side by side, centered, with label below each.
+Below them: a composite progress bar.
+
+Composite bar:
+<div style={{ 
+  display: 'flex', alignItems: 'center', gap: 12, marginTop: 16 
+}}>
+  <span style={{ fontSize: 13, color: '#6B7280', whiteSpace: 'nowrap' }}>
+    Overall
+  </span>
+  <div style={{ 
+    flex: 1, height: 8, background: '#E5E7EB', borderRadius: 4 
+  }}>
+    <div style={{
+      width: `${(scores.composite / 5) * 100}%`,
+      height: '100%',
+      background: compositeColor,
+      borderRadius: 4,
+      transition: 'width 1s ease-in-out'
+    }} />
+  </div>
+  <span style={{ 
+    fontSize: 16, fontWeight: 700, color: compositeColor,
+    whiteSpace: 'nowrap'
+  }}>
+    {scores.composite.toFixed(1)}/5
+  </span>
+</div>
+
+════════════════════════════════
+5. ACCORDION SECTION
+/components/report/AccordionSection.tsx
+════════════════════════════════
+
+Props: { 
+  title: string, 
+  icon: string,         // emoji or icon char
+  status?: 'good' | 'warning' | 'risk' | 'neutral',
+  defaultOpen?: boolean,
+  children: ReactNode 
+}
+
+status dot colours:
+  good    → #10B981 (emerald)
+  warning → #F59E0B (amber)
+  risk    → #EF4444 (red)
+  neutral → #9CA3AF (gray)
+
+Header row (clickable):
+[status dot] [icon] [title]           [chevron ↑/↓]
+
+Body: show/hide with useState isOpen.
+Use CSS max-height transition for smooth animation:
+  max-height: isOpen ? '2000px' : '0'
+  overflow: hidden
+  transition: max-height 0.3s ease
+
+Default: all sections open (defaultOpen={true}).
+
+════════════════════════════════
+6. OVERLAYS SECTION
+/components/report/OverlayChecklist.tsx
+════════════════════════════════
+
+Props: { overlays: Overlay[], overlay_map_image_base64?: string }
+
+If overlays is empty or all 'clear':
+  Show green card: "No significant planning overlays detected"
+
+Otherwise, render each overlay as a row:
+  [status icon] [overlay name]    [status chip]
+                [detail text in smaller gray text below]
+
+Status icons:
+  clear      → ✓ (green)
+  moderate   → ⚠ (amber)
+  restricted → ✗ (red)
+  unknown    → ? (gray)
+
+Status chips (pill badges):
+  clear      → green bg, green text: "Clear"
+  moderate   → amber bg, amber text: "Moderate risk"
+  restricted → red bg, red text: "Restricted"
+  unknown    → gray bg, gray text: "Unverified"
+
+If overlay_map_image_base64 is present:
+  Show the Hougarden screenshot below the list:
+  <img 
+    src={`data:image/png;base64,${overlay_map_image_base64}`}
+    alt="Planning overlay map"
+    style={{ width: '100%', borderRadius: 8, marginTop: 12 }}
+  />
+  <p style={{ fontSize: 11, color: '#9CA3AF', marginTop: 4 }}>
+    Planning overlay map via Hougarden
+  </p>
+
+If no image: show a Google Static Maps link button instead:
+  "View on Auckland Council GIS →" 
+  href="https://www.aucklandcouncil.govt.nz/maps"
+
+════════════════════════════════
+7. ASBESTOS PANEL
+/components/report/AsbestosPanel.tsx
+════════════════════════════════
+
+Props: { asbestos: AsbestosResult, costs: CostBreakdown }
+
+risk === 'high':
+  Red-tinted card (#FEF2F2 bg, #EF4444 left border, 4px)
+  Title: "Asbestos risk — specialist demolition required"
+  Body: asbestos.notes
+  Cost line: "Est. demolition cost: 
+              $${formatNZD(costs.demo_low)}–$${formatNZD(costs.demo_high)}"
+  Link: "WorkSafe NZ asbestos guidance" 
+        → https://www.worksafe.govt.nz/topic-and-industry/asbestos/
+
+risk === 'low':
+  Green-tinted card
+  Title: "Low asbestos risk"
+  Body: asbestos.notes
+
+risk === 'unknown':
+  Amber-tinted card
+  Title: "Asbestos risk unknown — survey recommended"
+  Body: asbestos.notes
+
+All cards: border-radius 8px, padding 16px, margin-bottom 0.
+
+════════════════════════════════
+8. CONTOUR CARD
+/components/report/ContourCard.tsx
+════════════════════════════════
+
+Props: { contour: string, costs: CostBreakdown }
+
+Show classification badge + SVG slope illustration + cost.
+
+SVG slope illustration (simple triangle):
+const angles = { flat: 3, gentle: 10, moderate: 20, steep: 32 };
+const deg = angles[contour] ?? 5;
+const rad = (deg * Math.PI) / 180;
+const baseW = 160;
+const h = Math.tan(rad) * baseW;
+
+<svg width={baseW + 20} height={Math.max(h + 20, 40)} 
+     viewBox={`0 0 ${baseW + 20} ${Math.max(h + 20, 40)}`}>
+  <polygon 
+    points={`10,${h + 10} ${baseW + 10},${h + 10} ${baseW + 10},10`}
+    fill="#E5E7EB" stroke="#9CA3AF" strokeWidth="1.5"
+  />
+  <text x="15" y={h + 8} fontSize="11" fill="#6B7280">
+    {deg}° slope
+  </text>
+</svg>
+
+Below the SVG:
+Classification: "{Flat|Gentle|Moderate|Steep} terrain"
+Retaining cost: "Estimated retaining wall cost: 
+                 $${formatNZD(costs.retaining_low)}–
+                 $${formatNZD(costs.retaining_high)}"
+If flat: "No significant retaining walls anticipated"
+
+════════════════════════════════
+9. INFRASTRUCTURE TABLE
+/components/report/InfrastructureTable.tsx
+════════════════════════════════
+
+Props: { infrastructure: InfrastructureItem[] }
+
+If empty: "Infrastructure data unavailable — 
+           check Auckland Council GIS directly"
+
+Table columns: Service | Location | Risk | Est. cost
+
+Location display:
+  on-parcel   → green chip "On parcel"
+  boundary    → blue chip "At boundary"
+  neighbour   → amber chip "Neighbour land ⚠"
+  public-land → gray chip "Public road"
+
+Risk column:
+  neighbour → "Easement may be required"
+  others    → "Standard connection"
+
+If ANY item is 'neighbour':
+  Show amber info box below table:
+  "One or more services are located on neighbouring 
+   property. A registered easement or private agreement 
+   with the neighbour will be required before building 
+   consent can be granted. Allow additional time and 
+   legal cost."
+
+════════════════════════════════
+10. COST BREAKDOWN CHART
+/components/report/CostBreakdownChart.tsx
+════════════════════════════════
+
+Props: { costs: CostBreakdown }
+
+Use Recharts horizontal BarChart.
+Show midpoint value for each component (low+high)/2.
+
+Data structure:
+const data = [{
+  name: 'Cost breakdown',
+  land:         costs.land_cv_nzd,
+  demo:         (costs.demo_low + costs.demo_high) / 2,
+  construction: (costs.construction_low + costs.construction_high) / 2,
+  retaining:    (costs.retaining_low + costs.retaining_high) / 2,
+  services:     (costs.services_low + costs.services_high) / 2,
+  consents:     (costs.consents_low + costs.consents_high) / 2,
+  finance:      (costs.finance_low + costs.finance_high) / 2,
+  contingency:  (costs.contingency_low + costs.contingency_high) / 2,
+}];
+
+Colours per segment:
+  land:         '#3B82F6'  blue
+  demo:         '#EF4444'  red
+  construction: '#10B981'  emerald
+  retaining:    '#F59E0B'  amber
+  services:     '#8B5CF6'  purple
+  consents:     '#EC4899'  pink
+  finance:      '#F97316'  orange
+  contingency:  '#6B7280'  gray
+
+Use StackedBarChart, horizontal layout (layout="vertical").
+Add Legend below chart.
+Format Y-axis with formatNZD.
+
+Below the chart: itemised table showing low–high range:
+| Item           | Low          | High         |
+|----------------|--------------|--------------|
+| Land (CV)      | $1,200,000   | $1,200,000   |
+| Demolition     | $35,000      | $80,000      |
+| Construction   | $336,000     | $420,000     |
+| ...            |              |              |
+| TOTAL          | $X,XXX,XXX   | $X,XXX,XXX   |
+
+TOTAL row: bold, slightly larger font.
+
+Below table:
+"Per unit average: $${formatNZD(costs.cost_per_unit_avg)}"
+
+════════════════════════════════
+11. ROI SCENARIO CARDS
+/components/report/ROIScenarioCards.tsx
+════════════════════════════════
+
+Props: { scenarios: ROIScenario[], gdv: number }
+
+3 cards in a row (stack on mobile < 640px).
+Highlight the best ROI scenario with emerald border.
+
+Each card:
+┌─────────────────────┐
+│  2-Year scenario    │
+│─────────────────────│
+│  GDV        $2.1M  │
+│  Total cost  $1.6M  │
+│─────────────────────│
+│  Profit    +$500k   │  ← green if positive, red if negative
+│  ROI        31.2%   │  ← large, coloured
+│  Annualised 14.6%pa │
+└─────────────────────┘
+
+If !scenario.viable:
+  Show red border + "Not viable at current values" banner
+
+Best scenario card gets:
+  border: '2px solid #10B981'
+  Small "Best case" badge in top-right corner
+
+GDV note below cards:
+"Gross Development Value based on 
+ {units} units × ${formatNZD(avg_sale_price)} avg comparable sale"
+
+If comparables_quality === 'estimated':
+  "(Based on suburb average estimates — 
+    live comparable data will improve accuracy)"
+
+════════════════════════════════
+12. COMPARABLE SALES TABLE
+/components/report/ComparableSalesTable.tsx
+════════════════════════════════
+
+Props: { 
+  comparables: ComparableSale[], 
+  quality: 'live' | 'estimated' 
+}
+
+If quality === 'estimated':
+  Amber banner: "Comparable data estimated from suburb 
+  averages. Live data will load once OneRoof scraping 
+  is active."
+
+Table: Address | Sold | Price | Land | $/m²
+Last row: "Average" | — | avg_price | — | avg_per_sqm
+
+Keep table compact (font-size 13px).
+On mobile: hide Land column, show only Address/Price/$/m².
+
+════════════════════════════════
+13. RISK SUMMARY PANEL
+/components/report/RiskSummaryPanel.tsx
+════════════════════════════════
+
+Props: { risk_summary: string[] }
+
+Render each bullet as a styled list item:
+- Left: amber warning icon (⚠ or SVG)
+- Text: the risk/opportunity statement
+- Generous line-height (1.6)
+
+Title: "AI risk & opportunity assessment"
+Subtitle: "Generated by Claude based on all available data"
+
+Add disclaimer below:
+"These estimates are indicative only and based on available 
+ public data. Engage a licensed quantity surveyor, resource 
+ management consultant, and solicitor before making any 
+ development decision. Figures in NZD."
+
+Disclaimer style: very small (11px), gray, italic.
+
+════════════════════════════════
+14. FOLLOW-UP CHIPS
+/components/report/FollowUpChips.tsx
+════════════════════════════════
+
+Props: { report: FeasibilityReport, onChipClick: (msg: string) => void }
+
+Generate chips dynamically based on report content:
+
+const chips: string[] = [
+  'What are the main development risks here?',
+  'What building typology suits this zone?',
+];
+
+if (report.asbestos.risk === 'high')
+  chips.push('What does the asbestos removal process involve?');
+
+if (hasOverlay(report, 'flood'))
+  chips.push('How does the flooding overlay affect consent?');
+
+if (hasOverlay(report, 'heritage'))
+  chips.push('What can I still build with a heritage overlay?');
+
+if (report.scores.roi < 2.5)
+  chips.push('How could the ROI be improved on this site?');
+
+if (report.lots.lots >= 3)
+  chips.push('What are the consent steps for ${lots} lots?');
+
+chips.push('Find similar properties nearby with better scores');
+chips.push('Explain the ${zone_code} zone rules in plain English');
+
+Render as horizontally scrollable row of pill buttons.
+On click: call onChipClick(chip) which sends to chat.
+
+Pill style:
+  background: #F0FDF4  (light emerald)
+  border: 1px solid #10B981
+  color: #065F46
+  border-radius: 20px
+  padding: 8px 16px
+  font-size: 13px
+  white-space: nowrap
+  cursor: pointer
+
+════════════════════════════════
+15. MASTER REPORT COMPONENT
+/components/report/FeasibilityReport.tsx
+════════════════════════════════
+
+Props: { report: FeasibilityReport, onFollowUp: (msg: string) => void }
+
+Full layout (all sections, top to bottom):
+
+<div style={{ maxWidth: 800, margin: '0 auto', padding: '0 16px 40px' }}>
+
+  <PropertyHeader report={report} />
+  
+  <ScoreSummaryRow scores={report.scores} />
+  
+  <AccordionSection 
+    title="Planning & overlays" 
+    icon="🏛" 
+    status={overlayStatus(report)}
+    defaultOpen={true}
+  >
+    <OverlayChecklist 
+      overlays={report.overlays}
+      overlay_map_image_base64={report.overlay_map_image_base64}
+    />
+  </AccordionSection>
+
+  <AccordionSection 
+    title="Asbestos & demolition" 
+    icon="⚠"
+    status={report.asbestos.risk === 'high' ? 'risk' : 'good'}
+    defaultOpen={true}
+  >
+    <AsbestosPanel asbestos={report.asbestos} costs={report.costs} />
+  </AccordionSection>
+
+  <AccordionSection 
+    title="Terrain & contour" 
+    icon="⛰"
+    status={contourStatus(report.merged.contour)}
+    defaultOpen={true}
+  >
+    <ContourCard 
+      contour={report.merged.contour} 
+      costs={report.costs} 
+    />
+  </AccordionSection>
+
+  <AccordionSection 
+    title="Infrastructure & services" 
+    icon="🔧"
+    status={infraStatus(report.infrastructure)}
+    defaultOpen={true}
+  >
+    <InfrastructureTable infrastructure={report.infrastructure} />
+  </AccordionSection>
+
+  <AccordionSection 
+    title="Development cost estimate" 
+    icon="💰"
+    status="neutral"
+    defaultOpen={true}
+  >
+    <CostBreakdownChart costs={report.costs} />
+  </AccordionSection>
+
+  <AccordionSection 
+    title="ROI scenarios" 
+    icon="📈"
+    status={roiStatus(report.scores.roi)}
+    defaultOpen={true}
+  >
+    <ROIScenarioCards 
+      scenarios={report.scenarios}
+      gdv={report.gdv_estimate}
+    />
+  </AccordionSection>
+
+  <AccordionSection 
+    title="Comparable sales" 
+    icon="🏘"
+    status="neutral"
+    defaultOpen={true}
+  >
+    <ComparableSalesTable 
+      comparables={report.comparables}
+      quality={report.comparables_quality}
+    />
+  </AccordionSection>
+
+  <AccordionSection 
+    title="AI risk assessment" 
+    icon="🤖"
+    status="neutral"
+    defaultOpen={true}
+  >
+    <RiskSummaryPanel risk_summary={report.risk_summary} />
+  </AccordionSection>
+
+  <FollowUpChips 
+    report={report} 
+    onChipClick={onFollowUp} 
+  />
+
+  <button 
+    onClick={() => saveReport(report)}
+    style={{
+      marginTop: 24,
+      width: '100%',
+      padding: '12px 0',
+      background: '#0F172A',
+      color: 'white',
+      borderRadius: 8,
+      fontSize: 15,
+      fontWeight: 600,
+      border: 'none',
+      cursor: 'pointer'
+    }}
+  >
+    Save this report
+  </button>
+</div>
+
+Helper status functions:
+overlayStatus: if any 'restricted' → 'risk', any 'moderate' → 'warning', else 'good'
+contourStatus: steep → 'risk', moderate → 'warning', else 'good'
+infraStatus: any 'neighbour' → 'warning', else 'good'
+roiStatus: score >= 4 → 'good', >= 2.5 → 'warning', else 'risk'
+
+════════════════════════════════
+16. WIRE INTO CHAT
+Update /app/(app)/chat/page.tsx
+════════════════════════════════
+
+Replace the Phase 2 placeholder report rendering:
+
+In the message rendering logic:
+if (message.role === 'assistant' && message.mode === 'analyse') {
+  try {
+    const report = JSON.parse(message.content) as FeasibilityReport;
+    return (
+      <FeasibilityReport 
+        report={report} 
+        onFollowUp={(msg) => handleSendMessage(msg)}
+      />
+    );
+  } catch {
+    // Not valid JSON — render as text
+    return <MarkdownMessage content={message.content} />;
+  }
+}
+
+Save report to Supabase on "Save this report" click:
+POST /api/save-search with { address, result_json: report }
+Show toast: "Report saved to your history"
+
+════════════════════════════════
+17. VERIFICATION CHECKLIST
+════════════════════════════════
+
+Test with: "Analyse 42 Arney Road, Remuera, Auckland"
+
+Visual checks:
+[ ] Street view image loads (or graceful fallback)
+[ ] All 3 score rings render with correct colours
+[ ] Score rings animate on load (fill transition)
+[ ] Composite progress bar animates
+[ ] All 8 accordion sections render
+[ ] Sections collapse and expand smoothly
+[ ] Asbestos panel shows correct risk colour
+[ ] Slope SVG renders (not a blank space)
+[ ] Cost chart renders with coloured segments
+[ ] Cost table shows all line items + TOTAL
+[ ] All 3 ROI cards present
+[ ] Best ROI card has emerald border
+[ ] Follow-up chips are horizontally scrollable
+[ ] Chips send correct message to chat when tapped
+
+Data checks:
+[ ] Scores match what pipeline-test endpoint returns
+[ ] Costs show NZD formatted correctly (commas, no decimals)
+[ ] ROI percentages show 1 decimal place
+[ ] No "undefined" or "NaN" visible anywhere in the UI
+
+Mobile checks (resize browser to 375px wide):
+[ ] No horizontal overflow (no sideways scroll)
+[ ] ROI cards stack vertically
+[ ] Chips scroll horizontally without page overflow
+[ ] Score rings don't clip at edges
+[ ] Text is readable (no overflow or truncation issues)
+[ ] Cost table is usable (scroll or simplified)
+
+Polish pass — before marking complete:
+[ ] Consistent spacing between sections (16–24px gaps)
+[ ] Section headers all same height and alignment  
+[ ] Color usage consistent (emerald=good, amber=warning, red=risk)
+[ ] Disclaimer visible at bottom of risk summary
+[ ] "Save report" button visible and functional

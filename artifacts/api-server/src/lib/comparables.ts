@@ -94,14 +94,19 @@ export function getComparables(
   const suburbKey = suburb.toLowerCase().trim();
 
   if (existingComparables && existingComparables.length >= 3) {
-    const liveSales: ComparableSale[] = existingComparables.map((c) => ({
-      address: c.address,
-      sale_date: c.sale_date ?? new Date().toISOString().slice(0, 10),
-      price_nzd: c.price_nzd ?? 0,
-      land_sqm: c.land_sqm ?? 0,
-      floor_sqm: c.floor_sqm ?? 120,
-      price_per_sqm: c.price_nzd && c.floor_sqm ? Math.round(c.price_nzd / c.floor_sqm) : 0,
-    }));
+    const liveSales: ComparableSale[] = existingComparables.map((c) => {
+      const landSqm = (c as any).land_area_sqm ?? (c as any).land_sqm ?? 0;
+      const floorSqm = (c as any).floor_sqm ?? (Math.round(landSqm * 0.4) || 120);
+      const priceNzd = c.price_nzd ?? 0;
+      return {
+        address: c.address,
+        sale_date: c.sale_date ?? new Date().toISOString().slice(0, 10),
+        price_nzd: priceNzd,
+        land_sqm: landSqm,
+        floor_sqm: floorSqm,
+        price_per_sqm: priceNzd && floorSqm ? Math.round(priceNzd / floorSqm) : 0,
+      };
+    });
 
     const prices = liveSales.map((s) => s.price_nzd).filter((p) => p > 0);
     const avg_sale_price = prices.length > 0 ? Math.round(prices.reduce((a, b) => a + b, 0) / prices.length) : 0;

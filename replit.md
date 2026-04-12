@@ -46,7 +46,9 @@ AI-powered NZ real estate development feasibility analysis mobile app built with
 - `artifacts/mobile/context/ChatContext.tsx` — Global chat/session state with AsyncStorage persistence
 
 **Components**:
-- `artifacts/mobile/components/FeasibilityReport.tsx` — Full report renderer with collapsible sections
+- `artifacts/mobile/components/FeasibilityReport.tsx` — Full Phase 5 report renderer: animated SVG score rings, planning/asbestos/terrain/infrastructure/cost/ROI/comparables/risk sections, dynamic follow-up chips
+- `artifacts/mobile/components/report/ScoreRing.tsx` — Animated SVG circular progress ring (react-native-svg)
+- `artifacts/mobile/components/report/AccordionSection.tsx` — Collapsible section with status dot
 - `artifacts/mobile/components/PropertyCard.tsx` — Discovery result card
 - `artifacts/mobile/components/ChatBubble.tsx` — Chat message bubble (text/report/search)
 - `artifacts/mobile/components/ScoreBadge.tsx` — Circular score badge (Ease/Cost/ROI)

@@ -18,6 +18,9 @@ export interface Score {
   cost: number;
   roi: number;
   composite: number;
+  ease_reasons?: string[];
+  cost_reasons?: string[];
+  roi_reasons?: string[];
 }
 
 export interface PropertyOverview {
@@ -47,8 +50,11 @@ export interface PlanningInfo {
 
 export interface AsbestosInfo {
   buildYear?: string;
-  riskLevel: "low" | "moderate" | "high";
+  riskLevel: "low" | "moderate" | "high" | "unknown";
+  risk?: "low" | "high" | "unknown";
   flagged: boolean;
+  notes?: string;
+  worksafe_required?: boolean;
   demoCostLow?: number;
   demoCostHigh?: number;
   worksafeNote?: string;
@@ -63,9 +69,12 @@ export interface TerrainInfo {
 
 export interface InfrastructureService {
   name: string;
-  location: "on-parcel" | "boundary" | "off-parcel";
+  location: "on-parcel" | "boundary" | "neighbour" | "public-land" | "off-parcel" | "unknown";
+  distance_metres?: number | null;
   estimatedCostLow?: number;
   estimatedCostHigh?: number;
+  estimated_cost_low?: number;
+  estimated_cost_high?: number;
   risk: "low" | "moderate" | "high";
   note?: string;
 }
@@ -79,19 +88,29 @@ export interface CostItem {
 export interface ROIScenario {
   years: number;
   gdv: number;
-  totalCost: number;
-  grossProfit: number;
-  roi: number;
-  annualisedRoi: number;
-  isBest: boolean;
+  totalCost?: number;
+  total_cost_mid?: number;
+  grossProfit?: number;
+  gross_profit?: number;
+  roi?: number;
+  roi_percent?: number;
+  annualisedRoi?: number;
+  annualised_roi_percent?: number;
+  isBest?: boolean;
+  viable?: boolean;
 }
 
 export interface ComparableSale {
   address: string;
-  saleDate: string;
-  price: number;
-  size: number;
-  pricePerSqm: number;
+  saleDate?: string;
+  sale_date?: string;
+  price?: number;
+  price_nzd?: number;
+  size?: number;
+  land_sqm?: number;
+  floor_sqm?: number;
+  pricePerSqm?: number;
+  price_per_sqm?: number;
 }
 
 export interface FeasibilityReport {
@@ -99,17 +118,23 @@ export interface FeasibilityReport {
   scores: Score;
   propertyOverview?: PropertyOverview;
   planning?: PlanningInfo;
+  potential_lots?: number;
+  zone_label?: string;
   asbestos?: AsbestosInfo;
   terrain?: TerrainInfo;
   infrastructure?: InfrastructureService[];
   costItems?: CostItem[];
   totalCostLow?: number;
   totalCostHigh?: number;
+  cost_per_unit_avg?: number;
   roiScenarios?: ROIScenario[];
   comparableSales?: ComparableSale[];
+  comparables_quality?: "live" | "estimated";
   avgPricePerSqm?: number;
+  avg_sale_price?: number;
   riskSummary?: string[];
   disclaimer?: string;
+  overlay_map_image_base64?: string;
 }
 
 export interface PropertyCandidate {
