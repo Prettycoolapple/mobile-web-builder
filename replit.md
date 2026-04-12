@@ -62,7 +62,7 @@ AI-powered NZ real estate development feasibility analysis mobile app built with
 - `artifacts/api-server/src/lib/prompts.ts` — SYSTEM_PROMPT + ANALYSE_AUGMENTATION + DISCOVER_AUGMENTATION
 - `artifacts/api-server/src/lib/auth.ts` — JWT signing/verification, requireAuth middleware, password hashing
 
-### Phase 3 Pipeline (`artifacts/api-server/src/lib/`)
+### Phase 3 + 4 Pipeline (`artifacts/api-server/src/lib/`)
 
 - `address-parser.ts` — `extractNZAddress()`: regex first-pass + Gemini fallback to extract NZ street addresses from free text
 - `geocode.ts` — `geocodeAddress()`: Nominatim (OSM) primary, Google Maps fallback (needs `GOOGLE_MAPS_API_KEY`)
@@ -72,7 +72,11 @@ AI-powered NZ real estate development feasibility analysis mobile app built with
   - Overlays: layers 33 (heritage), 19 (notable trees, 30m buffer), 25/27 (viewshafts), 58 (coastal inundation), 24 (Waitakere), 29 (ridgeline)
 - `property-data.ts` — `fetchPropertyHistory()` + `checkAsbestosRisk()`: Auckland Council rating GIS + QV fallback; asbestos risk by build year (<=1940=low, 1941-1990=high, >1990=low)
 - `infrastructure.ts` — `fetchInfrastructure()`: stormwater/wastewater/water supply distance from parcel
-- `pipeline.ts` — `runPropertyPipeline()`: orchestrates all sources with `Promise.allSettled()`, logs timing (~1.5s), gracefully handles partial failures
+- `pipeline.ts` — `runPropertyPipeline()`: orchestrates all sources with `Promise.allSettled()`, ~18s total (dominated by scraper timeout); result includes `merged` (priority-merged field set)
+- `scrapers/browser.ts` — `getChromiumPath()`: resolves NixOS system Chromium path (Playwright uses `/nix/store/.../chromium`); `BROWSER_ARGS` for headless/no-sandbox
+- `scrapers/hougarden.ts` — `scrapeHougarden()`: Playwright scraper for zone, CV, overlays, school zones; 18s timeout wrapper; graceful empty result on block/timeout
+- `scrapers/oneroof.ts` — `scrapeOneRoof()`: Playwright scraper for CV, sale history, comparables, photo; 18s timeout wrapper; graceful empty result on block/timeout  
+- `scrapers/merge.ts` — `mergePropertyData()`: priority-merges LINZ + Hougarden + OneRoof + Auckland Council GIS; priority rules: land_area=LINZ>HG>OR, cv=OR>HG, zone=HG>ACGIS, overlays=HG>ACGIS
 
 ### Database Schema (`lib/db/src/schema/`)
 

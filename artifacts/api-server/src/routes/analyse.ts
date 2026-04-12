@@ -178,20 +178,34 @@ router.post("/chat", async (req, res) => {
           if (pipelineResult) {
             const failedStr =
               pipelineResult.failed_sources.length > 0
-                ? `\n\nDATA SOURCES THAT FAILED (treat as unknown): ${pipelineResult.failed_sources.join(", ")}`
+                ? `\nFailed sources (treat as unknown): ${pipelineResult.failed_sources.join(", ")}`
                 : "";
+
+            const { merged, geocode, linz_parcel, contour, property_history, asbestos, infrastructure } = pipelineResult;
+
+            const dataSummary = {
+              address: geocode?.formatted ?? extractedAddress,
+              geocode: geocode ? { lat: geocode.lat, lng: geocode.lng } : null,
+              merged_property: merged,
+              contour,
+              infrastructure,
+              linz: linz_parcel,
+              property_history,
+              asbestos,
+              data_sources: merged?.data_sources ?? {},
+              failed_sources: pipelineResult.failed_sources,
+            };
 
             const enrichedMessages: Message[] = [
               ...messages.slice(0, -1),
               {
                 role: "user",
-                content: `Analyse this NZ property for development feasibility.
+                content: `Analyse this NZ property for development feasibility. Real data has been fetched from Hougarden, OneRoof, LINZ, and Auckland Council GIS sources.${failedStr}
 
-REAL DATA FETCHED FROM LINZ, AUCKLAND COUNCIL GIS, AND RATING DATABASES:
-${JSON.stringify(pipelineResult, null, 2)}
-${failedStr}
+VERIFIED PROPERTY DATA:
+${JSON.stringify(dataSummary, null, 2)}
 
-Based on this real data, generate a complete FeasibilityReport JSON following your system instructions exactly. Use the fetched data as your primary source (prefer confirmed data over estimates). Where data is missing or a source failed, make reasonable NZ-market estimates and flag them in riskSummary. Return ONLY valid JSON — no markdown code fences, no other text.`,
+Generate a complete FeasibilityReport JSON following your system instructions exactly. Use the fetched data as your primary source — prefer confirmed data over estimates. Where data is missing or a source failed, make reasonable NZ-market estimates and flag in riskSummary. Return ONLY valid JSON — no markdown code fences, no other text.`,
               },
             ];
 

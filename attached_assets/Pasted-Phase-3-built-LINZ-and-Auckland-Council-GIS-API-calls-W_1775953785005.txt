@@ -1,0 +1,262 @@
+Phase 3 built LINZ and Auckland Council GIS API calls. 
+We are now adding a smarter data layer on top: scraping 
+Hougarden and OneRoof to enrich the pipeline with richer, 
+pre-aggregated property data. This SUPPLEMENTS Phase 3 — 
+it does not replace the LINZ calls.
+
+WHY: Hougarden aggregates zoning, flood overlays, heritage, 
+and infrastructure onto a single per-address page. OneRoof 
+has CV, sale history, photos, and comparable listings. 
+Both are faster and richer than raw Council GIS calls for MVP.
+
+INSTALL:
+npm install playwright
+npx playwright install chromium
+
+════════════════════════════════
+1. HOUGARDEN SCRAPER
+/lib/scrapers/hougarden.ts
+════════════════════════════════
+
+Hougarden URL pattern:
+https://www.hougarden.com/search/#ac=1&address={encoded_address}
+
+Or direct suburb search:
+https://www.hougarden.com/map/#lat={lat}&lng={lng}&zoom=17
+
+Function: scrapeHougarden(lat: number, lng: number, address: string): 
+          Promise<HougardenData>
+
+Steps:
+a) Launch headless Chromium
+   - userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) 
+     AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+   - viewport: 1280x900
+
+b) Navigate to Hougarden address search:
+   https://www.hougarden.com/search/#ac=1&address={encodeURIComponent(address)}
+   
+   waitForSelector('.property-detail', { timeout: 15000 })
+   OR waitForSelector('[class*="detail"]', { timeout: 15000 })
+
+c) Extract from the property detail panel:
+   PROPERTY BASICS:
+   - CV (Capital Value) — look for text containing "CV" or "Rateable Value"
+   - Land area (m²)
+   - Floor area (m²)  
+   - Build year / decade
+   - Property type
+   - Legal description
+
+   ZONING:
+   - Zone name (e.g., "Mixed Housing Suburban")
+   - Zone code (e.g., "MHS")
+   - Look for a zoning info panel or tooltip
+
+   OVERLAYS — scrape each overlay chip/badge visible on the page:
+   Map these to our Overlay type:
+   - "Flood plain" / "Flood sensitivity" → flood overlay
+   - "Heritage" / "Historic heritage" → heritage overlay
+   - "Notable tree" → tree overlay
+   - "Volcanic viewshaft" → viewshaft overlay
+   - "Coastal inundation" → coastal overlay
+   - "Overland flow path" → overland flow overlay
+   
+   For each overlay found: status = 'restricted' or 'moderate' 
+   based on severity language used on the page.
+   If overlay label is present but no severity: default to 'moderate'
+
+   SCHOOL ZONES (bonus — users love this):
+   - Primary school zone name
+   - Intermediate school zone name
+   - Secondary school zone name
+
+   INFRASTRUCTURE HINTS:
+   - Any watercare/services information shown
+   - Stormwater network proximity if shown
+
+d) Take a screenshot of the overlay map panel:
+   await page.screenshot({ 
+     path: `/tmp/overlay_${Date.now()}.png`,
+     clip: { x: mapPanelX, y: mapPanelY, width: 600, height: 400 }
+   })
+   Convert to base64 and store in result as overlay_map_image_base64
+   (This image will be embedded in the report UI in Phase 5)
+
+e) Graceful failure: if any element not found, return partial data 
+   with missing fields as null. Never throw — always return something.
+
+Return type HougardenData:
+{
+  cv_nzd: number | null,
+  land_area_sqm: number | null,
+  floor_area_sqm: number | null,
+  build_year: number | null,
+  zone_code: string | null,
+  zone_description: string | null,
+  overlays: Overlay[],
+  school_zones: { primary: string, intermediate: string, secondary: string },
+  overlay_map_image_base64: string | null,
+  data_source: 'hougarden',
+  scraped_at: string  // ISO timestamp
+}
+
+════════════════════════════════
+2. ONEROOF SCRAPER
+/lib/scrapers/oneroof.ts
+════════════════════════════════
+
+OneRoof URL pattern:
+https://www.oneroof.co.nz/find?q={encoded_address}
+
+Or direct property page if listing exists:
+https://www.oneroof.co.nz/{suburb}/{street}-{number}
+
+Function: scrapeOneRoof(address: string): Promise<OneRoofData>
+
+Steps:
+a) Launch headless Chromium (same settings as Hougarden)
+
+b) Navigate to search:
+   https://www.oneroof.co.nz/find?q={encodeURIComponent(address)}
+   Wait for results, click first result that matches the address
+
+c) Extract from property page:
+   CV HISTORY:
+   - Current CV and CV year
+   - Previous CV values if shown
+   - CV change % if shown
+
+   SALE HISTORY:
+   - Each sale: { date, price, method (auction/private/deadline) }
+   - Last sale date and price
+
+   LISTING (if currently on market):
+   - Listing price or price range
+   - Days on market
+   - Agent name (for context only)
+   - Main listing photo URL
+
+   PROPERTY SPECS:
+   - Bedrooms, bathrooms, garage spaces
+   - Floor area, land area
+   - Property type
+
+   COMPARABLE SALES (if shown):
+   - OneRoof often shows "recently sold nearby" section
+   - Extract: address, sale date, price, bedrooms, land size
+   - Take up to 6 comparables
+
+d) Take a screenshot of the property page hero section 
+   (address + CV + main photo) as base64
+
+e) If property not found on OneRoof: return { found: false }
+
+Return type OneRoofData:
+{
+  found: boolean,
+  cv_nzd: number | null,
+  cv_year: number | null,
+  last_sale_price: number | null,
+  last_sale_date: string | null,
+  listing_price: number | null,
+  listing_active: boolean,
+  floor_area_sqm: number | null,
+  land_area_sqm: number | null,
+  build_year: number | null,
+  bedrooms: number | null,
+  main_photo_url: string | null,
+  comparables: ComparableSale[],
+  data_source: 'oneroof',
+  scraped_at: string
+}
+
+════════════════════════════════
+3. DATA MERGE LAYER
+/lib/scrapers/merge.ts
+════════════════════════════════
+
+Function: mergePropertyData(
+  linz: LinzParcel | null,
+  hougarden: HougardenData,
+  oneroof: OneRoofData,
+): MergedPropertyData
+
+Priority rules (which source wins when data conflicts):
+- land_area_sqm: LINZ first, then Hougarden, then OneRoof
+- cv_nzd: OneRoof first, then Hougarden
+- build_year: OneRoof first, then Hougarden
+- overlays: Hougarden only (it's the overlay authority)
+- zone_code: Hougarden only
+- comparables: OneRoof first; if <3 results, flag as limited
+- main_photo_url: OneRoof
+- overlay_map_image: Hougarden screenshot
+
+Log data source for each field (for transparency in report).
+
+════════════════════════════════
+4. UPDATE PIPELINE ORCHESTRATOR
+/lib/pipeline.ts
+════════════════════════════════
+
+Update runPropertyPipeline() to:
+
+1. Run in parallel:
+   - LINZ parcel fetch (existing)
+   - scrapeHougarden(lat, lng, address)  ← NEW
+   - scrapeOneRoof(address)              ← NEW
+
+2. Merge using mergePropertyData()
+
+3. Remove Auckland Council GIS calls that duplicate 
+   what Hougarden now provides (overlays, zoning).
+   KEEP: LINZ parcel fetch (it's fast and authoritative 
+   for land area and title number).
+   REMOVE or COMMENT OUT: fetchUnitaryPlanZone(), 
+   fetchOverlays(), fetchContour() if Hougarden covers them.
+
+4. For contour/terrain: 
+   Hougarden doesn't show slope data.
+   Keep the LINZ elevation estimate from Phase 3, OR 
+   as a simpler approach: use Google Maps Elevation API
+   GET https://maps.googleapis.com/maps/api/elevation/json
+     ?locations={lat},{lng}|{lat+0.0001},{lng+0.0001}
+     &key={GOOGLE_MAPS_API_KEY}
+   Sample 5 points around the address, calculate slope.
+   This is 1 API call and very reliable.
+
+5. Add rate limiting between scraper calls:
+   - 2 second minimum delay before each Playwright launch
+   - Never run more than 2 browsers concurrently
+   - Add 1 second between page navigations within a session
+
+════════════════════════════════
+5. RELAB (OPTIONAL FOR MVP)
+════════════════════════════════
+
+Relab (relab.co.nz) provides market analytics and suburb 
+trends. Treat as a Phase 6+ enhancement, not required now.
+For MVP: stub it with a placeholder:
+{
+  suburb_median_price: null,
+  price_trend_12m: null,
+  data_source: 'relab_pending'
+}
+
+════════════════════════════════
+6. VERIFICATION CHECKLIST
+════════════════════════════════
+
+Test with: 42 Arney Road, Remuera, Auckland
+
+[ ] Hougarden scraper returns zone_code (should be MHS or similar)
+[ ] Hougarden scraper returns at least 1 overlay (or confirmed clear)
+[ ] Hougarden overlay map screenshot captured as base64
+[ ] OneRoof scraper returns CV value
+[ ] OneRoof returns at least 1 comparable sale
+[ ] mergePropertyData() produces no undefined fields on main props
+[ ] Pipeline completes in under 20 seconds total
+[ ] If Hougarden is slow or blocked: pipeline continues with LINZ data
+[ ] If OneRoof not found: pipeline continues, CV shown as "unavailable"
+[ ] No Playwright processes left hanging (always close in finally block)
+[ ] Log to console which fields came from which source

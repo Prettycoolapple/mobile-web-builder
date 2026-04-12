@@ -4,6 +4,9 @@ import { fetchLINZParcel, fetchLINZTitle, type LinzParcel, type LinzTitle } from
 import { fetchUnitaryPlanZone, fetchOverlays, fetchContour, type ZoneResult, type Overlay, type ContourResult } from "./auckland-council";
 import { fetchPropertyHistory, checkAsbestosRisk, type PropertyHistory, type AsbestosRisk } from "./property-data";
 import { fetchInfrastructure, type InfrastructureItem } from "./infrastructure";
+import { scrapeHougarden, type HougardenData } from "./scrapers/hougarden";
+import { scrapeOneRoof, type OneRoofData } from "./scrapers/oneroof";
+import { mergePropertyData, type MergedPropertyData } from "./scrapers/merge";
 
 export interface PipelineResult {
   address_input: string;
@@ -16,6 +19,9 @@ export interface PipelineResult {
   property_history: PropertyHistory | null;
   asbestos: AsbestosRisk | null;
   infrastructure: InfrastructureItem[];
+  hougarden: HougardenData | null;
+  oneroof: OneRoofData | null;
+  merged: MergedPropertyData | null;
   failed_sources: string[];
   timing_ms: Record<string, number>;
   completed_at: string;
@@ -35,6 +41,21 @@ async function timed<T>(
     timing[label] = Date.now() - start;
     logger.warn({ err, label }, `Pipeline source failed: ${label}`);
     return { value: null, failed: true };
+  }
+}
+
+const MAX_SCRAPER_CONCURRENCY = 2;
+let activeBrowsers = 0;
+
+async function withBrowserSlot<T>(fn: () => Promise<T>): Promise<T> {
+  while (activeBrowsers >= MAX_SCRAPER_CONCURRENCY) {
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  activeBrowsers++;
+  try {
+    return await fn();
+  } finally {
+    activeBrowsers--;
   }
 }
 
@@ -70,6 +91,9 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       property_history: propHistoryOnly.value,
       asbestos,
       infrastructure: [],
+      hougarden: null,
+      oneroof: null,
+      merged: null,
       failed_sources: failedSources,
       timing_ms: { ...timing, total: Date.now() - pipelineStart },
       completed_at: new Date().toISOString(),
@@ -85,6 +109,8 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     contourResult,
     propertyHistoryResult,
     infrastructureResult,
+    hougardenResult,
+    oneRoofResult,
   ] = await Promise.allSettled([
     timed("linz_parcel", () => fetchLINZParcel(lat, lng), timing),
     timed("zone", () => fetchUnitaryPlanZone(lat, lng), timing),
@@ -92,6 +118,8 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     timed("contour", () => fetchContour(lat, lng), timing),
     timed("property_history", () => fetchPropertyHistory(address), timing),
     timed("infrastructure", () => fetchInfrastructure(lat, lng), timing),
+    timed("hougarden", () => withBrowserSlot(() => scrapeHougarden(lat, lng, address)), timing),
+    timed("oneroof", () => withBrowserSlot(() => scrapeOneRoof(address)), timing),
   ]);
 
   const linzParcelData = linzParcelResult.status === "fulfilled" ? linzParcelResult.value.value : null;
@@ -112,6 +140,12 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   const infrastructureData = infrastructureResult.status === "fulfilled" ? (infrastructureResult.value.value ?? []) : [];
   if (infrastructureResult.status === "rejected" || (infrastructureResult.status === "fulfilled" && infrastructureResult.value.failed)) failedSources.push("infrastructure");
 
+  const hougardenData = hougardenResult.status === "fulfilled" ? hougardenResult.value.value : null;
+  if (hougardenResult.status === "rejected" || (hougardenResult.status === "fulfilled" && hougardenResult.value.failed)) failedSources.push("hougarden");
+
+  const oneRoofData = oneRoofResult.status === "fulfilled" ? oneRoofResult.value.value : null;
+  if (oneRoofResult.status === "rejected" || (oneRoofResult.status === "fulfilled" && oneRoofResult.value.failed)) failedSources.push("oneroof");
+
   let linzTitle: LinzTitle | null = null;
   if (linzParcelData?.title_no) {
     const titleResult = await timed("linz_title", () => fetchLINZTitle(linzParcelData.title_no!), timing);
@@ -119,7 +153,11 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     if (titleResult.failed) failedSources.push("linz_title");
   }
 
-  const asbestos = checkAsbestosRisk(propertyHistoryData?.build_year ?? null);
+  const merged = mergePropertyData(linzParcelData, hougardenData, oneRoofData, zoneData, overlaysData);
+
+  const asbestos = checkAsbestosRisk(
+    merged.build_year ?? propertyHistoryData?.build_year ?? null,
+  );
 
   timing["total"] = Date.now() - pipelineStart;
   logger.info({ timing, failedSources }, "Pipeline complete");
@@ -135,6 +173,9 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     property_history: propertyHistoryData,
     asbestos,
     infrastructure: infrastructureData,
+    hougarden: hougardenData,
+    oneroof: oneRoofData,
+    merged,
     failed_sources: failedSources,
     timing_ms: timing,
     completed_at: new Date().toISOString(),
