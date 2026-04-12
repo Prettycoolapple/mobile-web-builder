@@ -1,10 +1,57 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, Component } from "react";
 import { View, Text, StyleSheet, Animated, Easing } from "react-native";
 import Markdown from "react-native-markdown-display";
 import { useColors } from "@/hooks/useColors";
 import { ChatMessage } from "@/context/ChatContext";
 import { FeasibilityReportCard } from "./FeasibilityReport";
 import { PropertyCard } from "./PropertyCard";
+
+class ReportErrorBoundary extends Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error?: string }
+> {
+  state = { hasError: false, error: undefined as string | undefined };
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error: error.message };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={reportErrorStyles.box}>
+          <Text style={reportErrorStyles.title}>Report rendering issue</Text>
+          <Text style={reportErrorStyles.body}>
+            {this.state.error ?? "Could not display this report."}{"\n\n"}
+            The report data was saved. Try asking the same question again.
+          </Text>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+const reportErrorStyles = StyleSheet.create({
+  box: {
+    backgroundColor: "#FEF2F2",
+    borderColor: "#FECACA",
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 16,
+    margin: 4,
+    gap: 6,
+  },
+  title: {
+    color: "#991B1B",
+    fontFamily: "DM_Sans_600SemiBold",
+    fontSize: 14,
+  },
+  body: {
+    color: "#B91C1C",
+    fontFamily: "DM_Sans_400Regular",
+    fontSize: 13,
+    lineHeight: 19,
+  },
+});
 
 interface Props {
   message: ChatMessage;
@@ -75,7 +122,9 @@ export function ChatBubble({ message, onFollowUp, onAnalyse }: Props) {
   if (message.type === "report" && message.report) {
     return (
       <View style={styles.reportContainer}>
-        <FeasibilityReportCard report={message.report} onFollowUp={onFollowUp} />
+        <ReportErrorBoundary>
+          <FeasibilityReportCard report={message.report} onFollowUp={onFollowUp} />
+        </ReportErrorBoundary>
       </View>
     );
   }

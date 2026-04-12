@@ -27,11 +27,17 @@ interface Props {
   onFollowUp: (question: string) => void;
 }
 
-function formatNZD(n: number | undefined | null): string {
-  if (n == null || isNaN(n)) return "—";
-  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
-  if (n >= 1_000) return `$${Math.round(n / 1_000).toLocaleString()}k`;
-  return `$${Math.round(n).toLocaleString()}`;
+function formatNZD(n: number | string | undefined | null): string {
+  const num = n == null ? NaN : Number(n);
+  if (isNaN(num)) return "—";
+  if (num >= 1_000_000) return `$${(num / 1_000_000).toFixed(2)}M`;
+  if (num >= 1_000) return `$${Math.round(num / 1_000).toLocaleString()}k`;
+  return `$${Math.round(num).toLocaleString()}`;
+}
+
+function safeNum(v: unknown, fallback = 0): number {
+  const n = Number(v);
+  return isNaN(n) ? fallback : n;
 }
 
 function capitalize(s: string | undefined): string {
@@ -94,20 +100,24 @@ function roiStatus(score: number): "good" | "warning" | "risk" | "neutral" {
   return "risk";
 }
 
-function getScenarioRoi(s: ROIScenario): number {
-  return s.roi_percent ?? s.roi ?? 0;
+function getScenarioRoi(s: ROIScenario | undefined): number {
+  if (!s) return 0;
+  return safeNum(s.roi_percent ?? s.roi);
 }
 
-function getScenarioAnnualisedRoi(s: ROIScenario): number {
-  return s.annualised_roi_percent ?? s.annualisedRoi ?? 0;
+function getScenarioAnnualisedRoi(s: ROIScenario | undefined): number {
+  if (!s) return 0;
+  return safeNum(s.annualised_roi_percent ?? s.annualisedRoi);
 }
 
-function getScenarioProfit(s: ROIScenario): number {
-  return s.gross_profit ?? s.grossProfit ?? 0;
+function getScenarioProfit(s: ROIScenario | undefined): number {
+  if (!s) return 0;
+  return safeNum(s.gross_profit ?? s.grossProfit);
 }
 
-function getScenarioTotalCost(s: ROIScenario): number {
-  return s.total_cost_mid ?? s.totalCost ?? 0;
+function getScenarioTotalCost(s: ROIScenario | undefined): number {
+  if (!s) return 0;
+  return safeNum(s.total_cost_mid ?? s.totalCost);
 }
 
 function getSaleDate(c: ComparableSale): string {
@@ -115,15 +125,15 @@ function getSaleDate(c: ComparableSale): string {
 }
 
 function getSalePrice(c: ComparableSale): number {
-  return c.price_nzd ?? c.price ?? 0;
+  return safeNum(c.price_nzd ?? c.price);
 }
 
 function getSaleSize(c: ComparableSale): number {
-  return c.floor_sqm ?? c.land_sqm ?? c.size ?? 0;
+  return safeNum(c.floor_sqm ?? c.land_sqm ?? c.size);
 }
 
 function getSalePsm(c: ComparableSale): number {
-  return c.price_per_sqm ?? c.pricePerSqm ?? 0;
+  return safeNum(c.price_per_sqm ?? c.pricePerSqm);
 }
 
 function getScenarioBest(scenarios: ROIScenario[]): ROIScenario | undefined {
@@ -133,8 +143,8 @@ function getScenarioBest(scenarios: ROIScenario[]): ROIScenario | undefined {
   );
 }
 
-function getCostLow(item: CostItem): number { return item.low ?? 0; }
-function getCostHigh(item: CostItem): number { return item.high ?? 0; }
+function getCostLow(item: CostItem): number { return safeNum(item.low); }
+function getCostHigh(item: CostItem): number { return safeNum(item.high); }
 
 function SectionCard({
   title,
@@ -262,7 +272,12 @@ function CompositeBar({ score, colors }: { score: number; colors: ReturnType<typ
 }
 
 function ScoreSummaryRow({ report, colors }: { report: Report; colors: ReturnType<typeof useColors> }) {
-  const { ease, cost, roi, composite, ease_reasons, cost_reasons, roi_reasons } = report.scores;
+  const raw = report.scores ?? {};
+  const ease = safeNum(raw.ease);
+  const cost = safeNum(raw.cost);
+  const roi = safeNum(raw.roi);
+  const composite = safeNum(raw.composite);
+  const { ease_reasons, cost_reasons, roi_reasons } = raw;
 
   return (
     <View style={[styles.scoresSection, { backgroundColor: colors.headerBg }]}>
@@ -709,8 +724,8 @@ function FollowUpChips({ report, onChipClick, colors }: {
     "What building typology suits this zone?",
   ];
 
-  const risk = getAsbestosRisk(report.asbestos!);
-  if (report.asbestos && (risk === "high")) {
+  const asbestosRisk = report.asbestos ? getAsbestosRisk(report.asbestos) : "unknown";
+  if (report.asbestos && asbestosRisk === "high") {
     chips.push("What does the asbestos removal process involve?");
   }
   if (hasOverlay(report, "flood")) {
@@ -719,7 +734,7 @@ function FollowUpChips({ report, onChipClick, colors }: {
   if (hasOverlay(report, "heritage")) {
     chips.push("What can I still build with a heritage overlay?");
   }
-  if (report.scores.roi < 2.5) {
+  if (safeNum(report.scores?.roi) < 2.5) {
     chips.push("How could the ROI be improved on this site?");
   }
   if (lots >= 3) {
@@ -755,10 +770,9 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
   const colors = useColors();
 
   const planningSection = overlayStatus(report);
-  const asbestosStatus = (() => {
-    const risk = getAsbestosRisk(report.asbestos!);
-    return risk === "high" ? "risk" : "good";
-  })();
+  const asbestosStatus: "good" | "warning" | "risk" | "neutral" = report.asbestos
+    ? (getAsbestosRisk(report.asbestos) === "high" ? "risk" : "good")
+    : "neutral";
 
   return (
     <View style={styles.container}>
@@ -858,7 +872,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
       )}
 
       {report.roiScenarios && report.roiScenarios.length > 0 && (
-        <SectionCard title="ROI scenarios" icon="📈" status={roiStatus(report.scores.roi)} colors={colors}>
+        <SectionCard title="ROI scenarios" icon="📈" status={roiStatus(safeNum(report.scores?.roi))} colors={colors}>
           <ROIScenarioCards
             scenarios={report.roiScenarios}
             gdv={report.roiScenarios[0]?.gdv}
