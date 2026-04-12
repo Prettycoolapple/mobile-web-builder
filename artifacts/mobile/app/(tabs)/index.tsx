@@ -348,7 +348,7 @@ export default function ChatScreen() {
             onChangeText={setInputText}
             multiline
             maxLength={500}
-            onSubmitEditing={handleSend}
+            onSubmitEditing={() => handleSend()}
             returnKeyType="send"
             blurOnSubmit={false}
           />
@@ -359,7 +359,7 @@ export default function ChatScreen() {
                 backgroundColor: canSend ? colors.accent : colors.muted,
               },
             ]}
-            onPress={handleSend}
+            onPress={() => handleSend()}
             disabled={!canSend}
             activeOpacity={0.8}
           >
