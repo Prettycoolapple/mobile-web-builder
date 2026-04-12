@@ -77,6 +77,25 @@ export async function generateUnifiedResponse(
   }
 }
 
+export async function generateAnalysis(
+  enrichedContent: string,
+): Promise<string> {
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-pro",
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
+        maxOutputTokens: 8192,
+      },
+      contents: [{ role: "user", parts: [{ text: enrichedContent }] }],
+    });
+    return response.text ?? "";
+  } catch (error) {
+    logger.error({ error }, "Failed to generate property analysis");
+    throw error;
+  }
+}
+
 export async function generateFeasibilityReport(
   address: string,
   conversationHistory: Message[] = [],

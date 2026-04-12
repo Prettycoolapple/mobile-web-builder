@@ -34,7 +34,8 @@ const SUGGESTION_QUERIES = [
 
 function extractJSON(text: string): unknown | null {
   try {
-    const match = text.match(/\{[\s\S]*\}/);
+    const stripped = text.replace(/```(?:json)?\s*/gi, "").replace(/```\s*/g, "").trim();
+    const match = stripped.match(/\{[\s\S]*\}/);
     if (match) return JSON.parse(match[0]);
   } catch {}
   return null;
@@ -79,8 +80,8 @@ export default function ChatScreen() {
     return "/api";
   }, []);
 
-  const handleSend = useCallback(async () => {
-    const text = inputText.trim();
+  const handleSend = useCallback(async (overrideText?: string) => {
+    const text = (overrideText !== undefined ? overrideText : inputText).trim();
     if (!text || isLoading) return;
 
     setInputText("");
@@ -204,11 +205,8 @@ export default function ChatScreen() {
 
   const handleAnalyse = useCallback(
     (address: string) => {
-      setInputText(`Analyse ${address}`);
-      setTimeout(() => {
-        setInputText(`Analyse ${address}`);
-        handleSend();
-      }, 50);
+      setInputText("");
+      handleSend(`Analyse ${address}`);
     },
     [handleSend],
   );

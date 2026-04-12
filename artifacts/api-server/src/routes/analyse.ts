@@ -6,6 +6,7 @@ import {
   generateSearchResults,
   generateChatReply,
   generateUnifiedResponse,
+  generateAnalysis,
   detectMode,
   Message,
 } from "../lib/claude";
@@ -299,6 +300,11 @@ router.post("/chat", async (req, res) => {
                   `Profit $${formatNZD(s.gross_profit)}, ROI ${s.roi_percent.toFixed(1)}%`,
               ).join("\n");
 
+              const cvNzd = costs.land_cv_nzd;
+              const cvNote = cvNzd > 0
+                ? `$${formatNZD(cvNzd)} (confirmed from ${(merged as any).data_sources?.cv || "Hougarden/OneRoof"})`
+                : `NOT AVAILABLE from scrapers — you MUST estimate a realistic CV for ${geocode?.formatted ?? extractedAddress} in ${suburb} based on the zone (${merged.zone_code ?? "unknown"}), land area (${(merged as any).land_sqm ?? "?"}m²), and current Auckland Council CV rates. Do NOT use $0. Research typical CV values for this suburb and property type — for Remuera/inner eastern suburbs THAB/MHU properties, CVs are typically $1.5M–$3M+ NZD.`;
+
               enrichedContent = `Analyse this NZ property for development feasibility.${failedStr}
 
 ADDRESS: ${geocode?.formatted ?? extractedAddress}
@@ -322,8 +328,9 @@ PRE-COMPUTED SCORES — copy these numbers exactly, do not recalculate or second
 PRE-COMPUTED FINANCIALS — use verbatim:
   Potential lots: ${lots.lots}
   Zone: ${lots.zone_label} (${merged.zone_code ?? "unknown"})
+  Land / CV: ${cvNote}
 
-  Total development cost:
+  Total development cost (INCLUDES land if CV available):
     Low:  $${formatNZD(costs.total_low)}
     High: $${formatNZD(costs.total_high)}
   Cost per unit (avg): $${formatNZD(costs.cost_per_unit_avg)}
@@ -346,7 +353,7 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
     "cost_reasons": [${scores.cost_reasons.map((r) => `"${r}"`).join(", ")}],
     "roi_reasons": [${scores.roi_reasons.map((r) => `"${r}"`).join(", ")}]
   },
-  "propertyOverview": { "address": "...", "cv": "NZD as string", "landArea": "Xm²", "floorArea": "...", "buildYear": "...", "zone": "...", "listingPrice": null, "isOnMarket": false },
+  "propertyOverview": { "address": "...", "cv": "${cvNzd > 0 ? `$${formatNZD(cvNzd)}` : "estimate based on suburb/zone/land area — do NOT use $0"}", "landArea": "Xm²", "floorArea": "...", "buildYear": "...", "zone": "...", "listingPrice": null, "isOnMarket": false },
   "planning": { "zone": "...", "minLotSize": "Xm²", "potentialLots": ${lots.lots}, "overlays": [{ "name": "...", "status": "clear|moderate|restricted", "detail": "..." }], "subdivisionSummary": "..." },
   "potential_lots": ${lots.lots},
   "zone_label": "${lots.zone_label}",
@@ -354,7 +361,7 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
   "terrain": { "classification": "flat|gentle|moderate|steep", "slope": "...", "retainingCostLow": ${costs.retaining_low}, "retainingCostHigh": ${costs.retaining_high} },
   "infrastructure": [ { "name": "Wastewater|Stormwater|Water Supply", "location": "on-parcel|boundary|neighbour|public-land", "distance_metres": <number or null>, "estimatedCostLow": <NZD>, "estimatedCostHigh": <NZD>, "risk": "low|moderate|high", "note": "..." } ],
   "costItems": [
-    { "label": "Land (CV)", "low": <NZD>, "high": <NZD> },
+    { "label": "Land (CV)", "low": ${cvNzd > 0 ? cvNzd : "ESTIMATE_REALISTIC_NZD — must not be 0"}, "high": ${cvNzd > 0 ? cvNzd : "ESTIMATE_REALISTIC_NZD — must not be 0"} },
     { "label": "Demolition", "low": ${costs.demo_low}, "high": ${costs.demo_high} },
     { "label": "Construction", "low": ${costs.construction_low}, "high": ${costs.construction_high} },
     { "label": "Retaining Walls", "low": ${costs.retaining_low}, "high": ${costs.retaining_high} },
@@ -363,21 +370,23 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
     { "label": "Finance (Holding)", "low": ${costs.finance_low}, "high": ${costs.finance_high} },
     { "label": "Contingency", "low": ${costs.contingency_low}, "high": ${costs.contingency_high} }
   ],
-  "totalCostLow": ${costs.total_low},
-  "totalCostHigh": ${costs.total_high},
+  "totalCostLow": ${costs.total_low > 0 ? costs.total_low : "recalculate including your estimated land CV"},
+  "totalCostHigh": ${costs.total_high > 0 ? costs.total_high : "recalculate including your estimated land CV"},
   "cost_per_unit_avg": ${costs.cost_per_unit_avg},
   "roiScenarios": [
 ${scenarios.map((s) => `    { "years": ${s.years}, "gdv": ${s.gdv}, "total_cost_mid": ${s.total_cost_mid}, "gross_profit": ${s.gross_profit}, "roi_percent": ${s.roi_percent.toFixed(1)}, "annualised_roi_percent": ${s.annualised_roi_percent.toFixed(1)}, "viable": ${s.viable} }`).join(",\n")}
   ],
-  "comparableSales": [<3 comparable sales: { "address": "...", "sale_date": "YYYY-MM-DD", "price_nzd": <NZD>, "land_sqm": <number>, "floor_sqm": <number>, "price_per_sqm": <NZD> }>],
+  "comparableSales": [<3 real recent comparable sales for this suburb: { "address": "...", "sale_date": "YYYY-MM-DD", "price_nzd": <NZD>, "land_sqm": <number>, "floor_sqm": <number>, "price_per_sqm": <NZD> }>],
   "comparables_quality": "${comparables_quality}",
   "avg_sale_price": ${Math.round(scenarios[0]?.gdv / Math.max(1, lots.lots))},
-  "avgPricePerSqm": <NZD/m²>,
-  "riskSummary": ["risk/opportunity 1 in plain NZ English", "risk/opportunity 2", "risk/opportunity 3", "risk/opportunity 4", "risk/opportunity 5"],
+  "avgPricePerSqm": <NZD/m² based on comparables>,
+  "riskSummary": ["specific risk/opportunity 1 for this exact property", "risk/opportunity 2", "risk/opportunity 3", "risk/opportunity 4", "risk/opportunity 5"],
   "disclaimer": "These are indicative estimates only. Always engage a quantity surveyor, lawyer, and urban planner before making any development decisions. Figures in NZD."
 }
+CRITICAL RULES:
+- Land (CV) MUST be a realistic NZD number — never 0. If not confirmed, estimate from suburb/zone knowledge.
 - Fill in ALL fields. Do not leave any blank. Mark truly unknown fields as null.
-- Write riskSummary items as 1-sentence developer-focused statements in plain NZ English.
+- Write riskSummary items as specific, developer-focused 1-sentence statements about THIS property.
 - Return ONLY valid JSON, no markdown fences, no other text.`;
             } else {
               const dataSummary = {
@@ -399,16 +408,13 @@ ${scenarios.map((s) => `    { "years": ${s.years}, "gdv": ${s.gdv}, "total_cost_
 VERIFIED PROPERTY DATA:
 ${JSON.stringify(dataSummary, null, 2)}
 
+CRITICAL: Land (CV) cost MUST be a realistic NZD estimate based on the suburb, zone, and land area — never use $0. Research current Auckland Council CV rates for the suburb.
+
 Generate a complete FeasibilityReport JSON following your system instructions exactly. Use the fetched data as your primary source — prefer confirmed data over estimates. Where data is missing or a source failed, make reasonable NZ-market estimates and flag in riskSummary. Return ONLY valid JSON — no markdown code fences, no other text.`;
             }
 
-            const enrichedMessages: Message[] = [
-              ...messages.slice(0, -1),
-              { role: "user", content: enrichedContent },
-            ];
-
-            const { content, mode: responseMode } = await generateUnifiedResponse(enrichedMessages, currentReport);
-            res.json({ content, mode: responseMode });
+            const content = await generateAnalysis(enrichedContent);
+            res.json({ content, mode: "analyse" });
             return;
           }
         }
