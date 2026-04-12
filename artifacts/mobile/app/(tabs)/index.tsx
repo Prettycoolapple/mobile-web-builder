@@ -86,11 +86,9 @@ export default function ChatScreen() {
     setInputText("");
     inputRef.current?.focus();
 
-    if (!currentSessionId) {
-      createSession();
-    }
+    const sessionId = currentSessionId ?? createSession();
 
-    addMessage({ role: "user", content: text, type: "text" });
+    addMessage({ role: "user", content: text, type: "text" }, sessionId);
     setIsLoading(true);
 
     const detectedMode = text.toLowerCase().match(/find\s+|search\s+|discover\s+|looking\s+for\s+|show\s+me\s+properties/)
@@ -100,7 +98,7 @@ export default function ChatScreen() {
         ? "analyse"
         : "followup";
 
-    addMessage({ role: "assistant", content: "", type: "loading", loadingMode: detectedMode as any });
+    addMessage({ role: "assistant", content: "", type: "loading", loadingMode: detectedMode as any }, sessionId);
 
     try {
       const controller = new AbortController();
@@ -137,12 +135,12 @@ export default function ChatScreen() {
           updateLastMessage({
             type: "text",
             content: "You've used all 3 free reports this month. Upgrade to Pro for unlimited analysis.",
-          });
+          }, sessionId);
           setShowPaywall(true);
         } else if (resp.status === 401) {
-          updateLastMessage({ type: "text", content: "Session expired. Please sign in again." });
+          updateLastMessage({ type: "text", content: "Session expired. Please sign in again." }, sessionId);
         } else {
-          updateLastMessage({ type: "text", content: err.error || "Something went wrong. Please try again." });
+          updateLastMessage({ type: "text", content: err.error || "Something went wrong. Please try again." }, sessionId);
         }
         return;
       }
@@ -153,20 +151,20 @@ export default function ChatScreen() {
         const parsed = extractJSON(data.content) as FeasibilityReport | null;
         if (parsed && parsed.scores) {
           setCurrentReport(parsed);
-          updateLastMessage({ type: "report", report: parsed, content: "" });
+          updateLastMessage({ type: "report", report: parsed, content: "" }, sessionId);
           refreshProfile().catch(() => {});
         } else {
-          updateLastMessage({ type: "text", content: data.content });
+          updateLastMessage({ type: "text", content: data.content }, sessionId);
         }
       } else if (data.mode === "discover") {
         const parsed = extractJSON(data.content) as { candidates?: PropertyCandidate[]; isMockData?: boolean } | null;
         if (parsed?.candidates && parsed.candidates.length > 0) {
-          updateLastMessage({ type: "search", searchResults: parsed.candidates, content: "", isMockData: parsed.isMockData ?? false });
+          updateLastMessage({ type: "search", searchResults: parsed.candidates, content: "", isMockData: parsed.isMockData ?? false }, sessionId);
         } else {
-          updateLastMessage({ type: "text", content: data.content });
+          updateLastMessage({ type: "text", content: data.content }, sessionId);
         }
       } else {
-        updateLastMessage({ type: "text", content: data.content });
+        updateLastMessage({ type: "text", content: data.content }, sessionId);
       }
     } catch (err: any) {
       const isAbort = err?.name === "AbortError";
@@ -175,7 +173,7 @@ export default function ChatScreen() {
         content: isAbort
           ? "The analysis is taking longer than usual — NZ property scraping can be slow. Please try again and it should be faster the second time."
           : "Couldn't connect to the analysis service. Check your connection and try again.",
-      });
+      }, sessionId);
     } finally {
       setIsLoading(false);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);

@@ -164,8 +164,8 @@ interface ChatContextValue {
   createSession: () => string;
   startNewChat: () => void;
   switchSession: (id: string) => void;
-  addMessage: (msg: Omit<ChatMessage, "id" | "timestamp">) => void;
-  updateLastMessage: (updates: Partial<ChatMessage>) => void;
+  addMessage: (msg: Omit<ChatMessage, "id" | "timestamp">, sessionId?: string) => void;
+  updateLastMessage: (updates: Partial<ChatMessage>, sessionId?: string) => void;
   setCurrentReport: (report: FeasibilityReport) => void;
   deleteSession: (id: string) => void;
   isLoading: boolean;
@@ -239,15 +239,16 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const addMessage = useCallback(
-    (msg: Omit<ChatMessage, "id" | "timestamp">) => {
+    (msg: Omit<ChatMessage, "id" | "timestamp">, sessionId?: string) => {
       const fullMsg: ChatMessage = {
         ...msg,
         id: generateId(),
         timestamp: Date.now(),
       };
       setSessions((prev) => {
+        const targetId = sessionId ?? currentSessionId;
         const updated = prev.map((s) => {
-          if (s.id !== currentSessionId) return s;
+          if (s.id !== targetId) return s;
           const newMessages = [...s.messages, fullMsg];
           let title = s.title;
           if (s.messages.length === 0 && msg.role === "user") {
@@ -263,10 +264,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   );
 
   const updateLastMessage = useCallback(
-    (updates: Partial<ChatMessage>) => {
+    (updates: Partial<ChatMessage>, sessionId?: string) => {
       setSessions((prev) => {
+        const targetId = sessionId ?? currentSessionId;
         const updated = prev.map((s) => {
-          if (s.id !== currentSessionId) return s;
+          if (s.id !== targetId) return s;
           const messages = [...s.messages];
           const lastIdx = messages.length - 1;
           if (lastIdx >= 0) {
