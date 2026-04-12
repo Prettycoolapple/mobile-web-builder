@@ -64,20 +64,30 @@ AI-powered NZ real estate development feasibility analysis mobile app built with
 
 ### Phase 3 + 4 Pipeline (`artifacts/api-server/src/lib/`)
 
+**Data collection** (run in parallel via `Promise.allSettled()`):
 - `address-parser.ts` — `extractNZAddress()`: regex first-pass + Gemini fallback to extract NZ street addresses from free text
-- `geocode.ts` — `geocodeAddress()`: Nominatim (OSM) primary, Google Maps fallback (needs `GOOGLE_MAPS_API_KEY`)
+- `geocode.ts` — `geocodeAddress()`: Nominatim (OSM) primary, Google Maps fallback (needs `GOOGLE_MAPS_API_KEY`); `GeoResult` now includes `suburb: string | null` from Nominatim's `address.suburb` field
 - `linz.ts` — `fetchLINZParcel()` + `fetchLINZTitle()`: LINZ API layer 50804 (needs `LINZ_API_KEY`)
 - `auckland-council.ts` — `fetchUnitaryPlanZone()` + `fetchOverlays()` + `fetchContour()`: Auckland Council GIS at `mapspublic.aucklandcouncil.govt.nz/arcgis3`
   - Zone service: `NonCouncil/UnitaryPlanZones/MapServer/1` (56-code numeric domain map)
   - Overlays: layers 33 (heritage), 19 (notable trees, 30m buffer), 25/27 (viewshafts), 58 (coastal inundation), 24 (Waitakere), 29 (ridgeline)
-- `property-data.ts` — `fetchPropertyHistory()` + `checkAsbestosRisk()`: Auckland Council rating GIS + QV fallback; asbestos risk by build year (<=1940=low, 1941-1990=high, >1990=low)
+- `property-data.ts` — `fetchPropertyHistory()` + `checkAsbestosRisk()`: Auckland Council rating GIS + QV fallback; asbestos risk by build year
 - `infrastructure.ts` — `fetchInfrastructure()`: stormwater/wastewater/water supply distance from parcel
-- `pipeline.ts` — `runPropertyPipeline()`: orchestrates all sources with `Promise.allSettled()`, ~4-5s total; result includes `merged` (priority-merged field set)
-- `scrapers/browser.ts` — `launchBrowser()` + `newStealthPage()`: NixOS system Chromium with full stealth evasion (hides webdriver, mocks plugins/chrome.runtime, NZ locale/timezone, proper sec-ch-ua headers); `withBrowserSlot()` (max 2 concurrent); `delay/randomDelay` helpers
-- `scrapers/scrapingbee.ts` — `fetchWithScrapingBee()`: calls ScrapingBee API with render_js=true, country_code=nz; silently skips if `SCRAPINGBEE_API_KEY` not set
-- `scrapers/hougarden.ts` — `scrapeHougarden()`: 3-attempt chain: 1) stealth Playwright 2) ScrapingBee + cheerio HTML parse 3) empty fallback; text extraction via regex on page.body.innerText
-- `scrapers/oneroof.ts` — `scrapeOneRoof()`: same 3-attempt chain; navigates to search then clicks first result; extracts CV, sale history, comparables, bedrooms
-- `scrapers/merge.ts` — `mergePropertyData()`: priority-merges LINZ + Hougarden + OneRoof + Auckland Council GIS; priority: land_area=LINZ>HG>OR, cv=OR>HG, zone=HG>ACGIS, overlays=HG>ACGIS
+- `scrapers/browser.ts` — `launchBrowser()` + `newStealthPage()`: NixOS system Chromium with full stealth evasion; `withBrowserSlot()` (max 2 concurrent)
+- `scrapers/scrapingbee.ts` — `fetchWithScrapingBee()`: ScrapingBee API fallback; silently skips if `SCRAPINGBEE_API_KEY` not set
+- `scrapers/hougarden.ts` — `scrapeHougarden()`: 3-attempt chain: stealth Playwright → ScrapingBee+cheerio → empty
+- `scrapers/oneroof.ts` — `scrapeOneRoof()`: same 3-attempt chain
+- `scrapers/merge.ts` — `mergePropertyData()`: priority-merges all sources; now includes `contour`, `asbestos_risk`, `infrastructure` in `MergedPropertyData`
+
+**Phase 4 scoring engine** (deterministic, no AI, runs after merge):
+- `asbestos.ts` — `classifyAsbestos(build_year)`: returns `{ risk, notes, worksafe_required }` with full WorkSafe NZ legal context
+- `lot-calculator.ts` — `calculatePotentialLots(area, zone)`: AUP min lot sizes per zone, capped 1–20 lots
+- `cost-estimator.ts` — `estimateCosts(merged, units)`: full breakdown — land CV + demo + retaining + services + construction (2800–3500/m²) + consents (13–16%) + finance (7.5%pa) + contingency (8–12%)
+- `comparables.ts` — `getComparables(suburb, zone, lat, lng, existing?)`: uses live OneRoof comparables if ≥3, otherwise suburb lookup table (20 Auckland suburbs + default) with synthetic comparables
+- `roi-calculator.ts` — `calculateROIScenarios(costs, avgPrice, units)`: 3 scenarios (2/3/4 years), compound annualised ROI
+- `scoring.ts` — `scoreProperty(merged, costs, scenarios, lots)`: ease (deductions from 5.0), cost (bracket), ROI (bracket); composite = ease×0.30 + cost×0.30 + roi×0.40
+- `utils.ts` — `formatNZD()`, `extractSuburb()`, `roundToHalf()`, `clamp()`
+- `pipeline.ts` — `runPropertyPipeline()`: orchestrates all; ~10s total; result includes `lots`, `costs`, `comparables`, `comparables_quality`, `scenarios`, `scores`, `asbestos_detail`, `suburb`
 
 ### Database Schema (`lib/db/src/schema/`)
 

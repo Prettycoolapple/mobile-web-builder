@@ -1,0 +1,575 @@
+Phase 3.5A is complete. Now build Phase 4: the deterministic 
+scoring and ROI calculation engine. This runs as pure TypeScript 
+logic — no AI calls, no external APIs. It takes the merged 
+property data from the pipeline and produces reliable, consistent 
+scores and financial projections that Claude then uses verbatim.
+
+CRITICAL DESIGN RULE: Claude must NEVER recalculate scores or 
+financials. All numbers are computed here deterministically and 
+passed to Claude as facts. Claude's job is interpretation and 
+risk narrative only.
+
+════════════════════════════════
+1. TYPES — update /types/feasibility.ts
+════════════════════════════════
+
+Add these if not already present:
+
+export interface CostBreakdown {
+  land_cv_nzd: number;
+  demo_low: number;
+  demo_high: number;
+  retaining_low: number;
+  retaining_high: number;
+  services_low: number;
+  services_high: number;
+  construction_low: number;
+  construction_high: number;
+  consents_low: number;
+  consents_high: number;
+  finance_low: number;
+  finance_high: number;
+  contingency_low: number;
+  contingency_high: number;
+  total_low: number;
+  total_high: number;
+  units: number;
+  cost_per_unit_avg: number;
+}
+
+export interface ROIScenario {
+  years: 2 | 3 | 4;
+  gdv: number;
+  total_cost_mid: number;
+  gross_profit: number;
+  roi_percent: number;
+  annualised_roi_percent: number;
+  viable: boolean;
+}
+
+export interface ScoringResult {
+  ease: number;          // 0.5 – 5.0
+  cost: number;          // 0.5 – 5.0
+  roi: number;           // 0.5 – 5.0
+  composite: number;     // weighted average
+  ease_reasons: string[];
+  cost_reasons: string[];
+  roi_reasons: string[];
+}
+
+export interface ComparableSale {
+  address: string;
+  sale_date: string;
+  price_nzd: number;
+  land_sqm: number;
+  floor_sqm: number;
+  price_per_sqm: number;
+}
+
+════════════════════════════════
+2. COMPARABLE SALES
+/lib/comparables.ts
+════════════════════════════════
+
+Function: getComparables(
+  suburb: string,
+  zone_code: string | null,
+  lat: number,
+  lng: number
+): Promise<{ 
+  comparables: ComparableSale[],
+  avg_sale_price: number,
+  avg_price_per_sqm: number,
+  data_quality: 'live' | 'estimated'
+}>
+
+STRATEGY A — OneRoof comparables (already scraped):
+Check if pipeline already returned comparables from 
+the OneRoof scraper (oneroof.comparables array).
+If length >= 3: use these directly. data_quality = 'live'.
+
+STRATEGY B — Suburb average estimates (fallback):
+Use this lookup table when live data unavailable.
+These are realistic Auckland new build values (2024–2025):
+
+const SUBURB_ESTIMATES: Record<string, {
+  avg_sale_price: number,
+  avg_price_per_sqm: number
+}> = {
+  'remuera':      { avg_sale_price: 2100000, avg_price_per_sqm: 17500 },
+  'epsom':        { avg_sale_price: 1850000, avg_price_per_sqm: 15400 },
+  'mt eden':      { avg_sale_price: 1750000, avg_price_per_sqm: 14600 },
+  'ponsonby':     { avg_sale_price: 1950000, avg_price_per_sqm: 16200 },
+  'grey lynn':    { avg_sale_price: 1650000, avg_price_per_sqm: 13800 },
+  'parnell':      { avg_sale_price: 1900000, avg_price_per_sqm: 15800 },
+  'sandringham':  { avg_sale_price: 1450000, avg_price_per_sqm: 12100 },
+  'mt albert':    { avg_sale_price: 1350000, avg_price_per_sqm: 11200 },
+  'onehunga':     { avg_sale_price: 1250000, avg_price_per_sqm: 10400 },
+  'new lynn':     { avg_sale_price: 1100000, avg_price_per_sqm: 9200  },
+  'henderson':    { avg_sale_price: 980000,  avg_price_per_sqm: 8200  },
+  'titirangi':    { avg_sale_price: 1050000, avg_price_per_sqm: 8750  },
+  'north shore':  { avg_sale_price: 1400000, avg_price_per_sqm: 11700 },
+  'takapuna':     { avg_sale_price: 1550000, avg_price_per_sqm: 12900 },
+  'default':      { avg_sale_price: 1300000, avg_price_per_sqm: 10800 },
+};
+
+Normalise suburb string: lowercase, trim.
+If not in lookup: use 'default'.
+data_quality = 'estimated'.
+
+Generate 3 synthetic comparables for display:
+Each one: slightly randomised price (±8%), 
+realistic address in same suburb, 
+floor_sqm between 110–145m².
+
+════════════════════════════════
+3. COST ESTIMATOR
+/lib/cost-estimator.ts
+════════════════════════════════
+
+Function: estimateCosts(
+  data: MergedPropertyData,
+  units: number
+): CostBreakdown
+
+INPUT DEPENDENCIES (from merged data):
+- cv_nzd: land value proxy
+- contour: 'flat'|'gentle'|'moderate'|'steep'
+- asbestos_risk: 'low'|'high'|'unknown'
+- infrastructure: InfrastructureItem[]
+- has_existing_dwelling: boolean (true if build_year exists)
+
+CALCULATIONS:
+
+a) LAND: land_cv_nzd = merged.cv_nzd ?? 0
+
+b) DEMOLITION (only if has_existing_dwelling):
+   low risk:     { low: 15000,  high: 30000 }
+   high risk:    { low: 35000,  high: 80000 }
+   unknown risk: { low: 20000,  high: 60000 }
+   no dwelling:  { low: 0,      high: 0     }
+
+c) RETAINING WALLS (from contour):
+   flat:     { low: 0,      high: 0      }
+   gentle:   { low: 10000,  high: 30000  }
+   moderate: { low: 50000,  high: 150000 }
+   steep:    { low: 200000, high: 400000 }
+
+d) SERVICE CONNECTIONS (sum infrastructure items):
+   Sum all InfrastructureItem cost_estimate_low/high
+
+e) CONSTRUCTION:
+   floor_area_per_unit = 120  // m², NZ townhouse standard
+   rate_low  = 2800  // $/m²
+   rate_high = 3500  // $/m²
+   
+   // Steep site premium
+   if contour === 'steep':
+     rate_low  *= 1.18
+     rate_high *= 1.18
+   else if contour === 'moderate':
+     rate_low  *= 1.08
+     rate_high *= 1.08
+   
+   construction_low  = rate_low  × floor_area_per_unit × units
+   construction_high = rate_high × floor_area_per_unit × units
+
+f) CONSENTS & PROFESSIONAL FEES:
+   consents_low  = construction_low  × 0.13
+   consents_high = construction_high × 0.16
+
+g) FINANCE / HOLDING COSTS:
+   // 7.5% p.a. on land + 50% of construction midpoint
+   construction_mid = (construction_low + construction_high) / 2
+   loan_base = (cv_nzd ?? 0) + (construction_mid * 0.5)
+   finance_low  = loan_base × 0.075 × 1.5  // 18 months
+   finance_high = loan_base × 0.075 × 2.5  // 30 months
+
+h) CONTINGENCY:
+   subtotal_low  = demo_low  + retaining_low  + services_low  + 
+                   construction_low  + consents_low  + finance_low
+   subtotal_high = demo_high + retaining_high + services_high + 
+                   construction_high + consents_high + finance_high
+   contingency_low  = subtotal_low  × 0.08
+   contingency_high = subtotal_high × 0.12
+
+i) TOTALS:
+   total_low  = cv_nzd + subtotal_low  + contingency_low
+   total_high = cv_nzd + subtotal_high + contingency_high
+   cost_per_unit_avg = ((total_low + total_high) / 2) / units
+
+════════════════════════════════
+4. LOT CALCULATOR
+/lib/lot-calculator.ts
+════════════════════════════════
+
+Function: calculatePotentialLots(
+  land_area_sqm: number,
+  zone_code: string | null
+): { lots: number, min_lot_size: number, zone_label: string }
+
+Zone minimum lot sizes (Auckland Unitary Plan):
+const ZONE_RULES: Record<string, { 
+  min_lot_sqm: number, 
+  label: string 
+}> = {
+  'THAB': { min_lot_sqm: 0,   label: 'Terrace Housing & Apartments' },
+  'MHU':  { min_lot_sqm: 150, label: 'Mixed Housing Urban' },
+  'MHS':  { min_lot_sqm: 400, label: 'Mixed Housing Suburban' },
+  'SHZ':  { min_lot_sqm: 600, label: 'Single House Zone' },
+  'MIX':  { min_lot_sqm: 200, label: 'Mixed Use' },
+  'LSZ':  { min_lot_sqm: 1200,label: 'Large Lot' },
+  'RUR':  { min_lot_sqm: 4000,label: 'Rural' },
+};
+
+If zone unknown: default to MHS (400m² min).
+
+For THAB: lots = Math.floor(land_area_sqm / 60) 
+  (floor area ratio based — approximate)
+For others: lots = Math.floor(land_area_sqm / min_lot_sqm)
+
+Cap at 20 lots maximum.
+Minimum 1 lot always.
+
+════════════════════════════════
+5. ROI CALCULATOR
+/lib/roi-calculator.ts
+════════════════════════════════
+
+Function: calculateROIScenarios(
+  costs: CostBreakdown,
+  avg_sale_price_per_unit: number,
+  units: number
+): ROIScenario[]
+
+gdv = avg_sale_price_per_unit × units
+total_cost_mid = (costs.total_low + costs.total_high) / 2
+
+For years in [2, 3, 4]:
+  gross_profit = gdv - total_cost_mid
+  roi_percent  = (gross_profit / total_cost_mid) × 100
+  
+  // Annualised using compound formula
+  annualised_roi_percent = 
+    (Math.pow(1 + roi_percent / 100, 1 / years) - 1) × 100
+  
+  viable = gross_profit > 0
+
+Round all percentages to 1 decimal place.
+Round all dollar values to nearest 1000.
+
+════════════════════════════════
+6. SCORING ENGINE
+/lib/scoring.ts
+════════════════════════════════
+
+Function: scoreProperty(
+  merged: MergedPropertyData,
+  costs: CostBreakdown,
+  scenarios: ROIScenario[],
+  lots: number
+): ScoringResult
+
+— EASE SCORE (start at 5.0, deduct) —
+
+const easeDeductions: Array<{ condition: boolean, points: number, reason: string }> = [
+  {
+    condition: merged.zone_code === 'SHZ',
+    points: 1.5,
+    reason: 'Single House Zone — subdivision heavily restricted'
+  },
+  {
+    condition: merged.zone_code === 'LSZ' || merged.zone_code === 'RUR',
+    points: 2.0,
+    reason: 'Large Lot / Rural zone — development very limited'
+  },
+  {
+    condition: hasOverlay(merged, 'heritage'),
+    points: 1.5,
+    reason: 'Heritage overlay — demolition may require resource consent'
+  },
+  {
+    condition: hasOverlay(merged, 'flood'),
+    points: 1.2,
+    reason: 'Flood overlay — engineering and consent complexity'
+  },
+  {
+    condition: hasOverlay(merged, 'tree'),
+    points: 0.5,
+    reason: 'Notable tree overlay — design constraints apply'
+  },
+  {
+    condition: hasOverlay(merged, 'viewshaft'),
+    points: 0.5,
+    reason: 'Volcanic viewshaft — height restrictions apply'
+  },
+  {
+    condition: hasOverlay(merged, 'coastal'),
+    points: 0.8,
+    reason: 'Coastal protection overlay — additional consenting required'
+  },
+  {
+    condition: merged.contour === 'steep',
+    points: 0.8,
+    reason: 'Steep terrain — significant earthworks required'
+  },
+  {
+    condition: merged.contour === 'moderate',
+    points: 0.4,
+    reason: 'Moderate slope — some retaining wall work expected'
+  },
+  {
+    condition: merged.asbestos_risk === 'high',
+    points: 0.4,
+    reason: 'Probable asbestos — specialist demolition required'
+  },
+  {
+    condition: hasNeighbourInfrastructure(merged),
+    points: 0.4,
+    reason: 'Service infrastructure on neighbouring land — easement needed'
+  },
+  {
+    condition: lots <= 1,
+    points: 0.5,
+    reason: 'Land area limits subdivision to single dwelling'
+  },
+];
+
+Apply all matching deductions, collect reasons.
+ease = Math.max(0.5, 5.0 - total_deductions)
+Round to nearest 0.5.
+
+Helper: hasOverlay(merged, keyword) — checks if any overlay 
+name contains the keyword (case-insensitive) and status 
+is 'restricted' or 'moderate'.
+
+Helper: hasNeighbourInfrastructure(merged) — returns true 
+if any InfrastructureItem has location === 'neighbour'.
+
+— COST SCORE (5 = low cost, 1 = very high) —
+
+costPerUnit = costs.cost_per_unit_avg
+
+const costBrackets = [
+  { max: 400000,  score: 5.0, reason: 'Excellent cost efficiency per unit' },
+  { max: 550000,  score: 4.0, reason: 'Good cost per unit for NZ market' },
+  { max: 700000,  score: 3.0, reason: 'Moderate cost — market viable' },
+  { max: 900000,  score: 2.0, reason: 'High cost per unit — margin is thin' },
+  { max: 1200000, score: 1.0, reason: 'Very high cost — ROI challenging' },
+  { max: Infinity,score: 0.5, reason: 'Extreme cost — feasibility doubtful' },
+];
+
+Find first bracket where costPerUnit <= bracket.max.
+cost = bracket.score
+cost_reasons = [bracket.reason, 
+  `Cost per unit: $${formatNZD(costPerUnit)}`]
+
+— ROI SCORE —
+
+bestScenario = scenarios with highest roi_percent.
+
+const roiBrackets = [
+  { min: 35,  score: 5.0, reason: 'Exceptional return — strong development opportunity' },
+  { min: 25,  score: 4.0, reason: 'Strong return — well above typical NZ threshold' },
+  { min: 15,  score: 3.0, reason: 'Solid return — meets typical developer hurdle rate' },
+  { min: 8,   score: 2.0, reason: 'Marginal return — viable but sensitive to cost overruns' },
+  { min: 0,   score: 1.0, reason: 'Low return — high risk of negative outcome' },
+  { min: -Infinity, score: 0.5, reason: 'Negative return — not viable at current market values' },
+];
+
+Find first bracket where bestScenario.roi_percent >= bracket.min.
+roi = bracket.score
+roi_reasons = [bracket.reason,
+  `Best case: ${bestScenario.roi_percent.toFixed(1)}% ROI ` +
+  `over ${bestScenario.years} years`]
+
+— COMPOSITE SCORE —
+composite = (ease × 0.30) + (cost × 0.30) + (roi × 0.40)
+Round to 1 decimal place.
+
+════════════════════════════════
+7. ASBESTOS CLASSIFIER
+/lib/asbestos.ts
+════════════════════════════════
+
+Function: classifyAsbestos(build_year: number | null): {
+  risk: 'low' | 'high' | 'unknown',
+  notes: string,
+  worksafe_required: boolean
+}
+
+build_year === null → 'unknown':
+  notes: 'Build year unknown. A pre-demolition asbestos 
+  survey is recommended before any demolition works, as 
+  required under WorkSafe NZ guidelines.'
+  worksafe_required: true
+
+build_year <= 1940 → 'low':
+  notes: 'Pre-1940 construction. Asbestos cement products 
+  were not in widespread use in NZ at this time.'
+  worksafe_required: false
+
+1940 < build_year <= 1990 → 'high':
+  notes: 'Built during the peak NZ asbestos use period 
+  (1940–1990). Buildings of this era commonly contain 
+  asbestos cement cladding (fibrolite), textured ceiling 
+  coatings, vinyl floor tiles, and pipe lagging. A 
+  licensed asbestos assessor is legally required before 
+  demolition under the Health and Safety at Work 
+  (Asbestos) Regulations 2016.'
+  worksafe_required: true
+
+build_year > 1990 → 'low':
+  notes: 'Post-1990 construction. Asbestos was largely 
+  phased out of NZ building products by this time. 
+  Low risk.'
+  worksafe_required: false
+
+════════════════════════════════
+8. PIPELINE INTEGRATION
+Update /lib/pipeline.ts
+════════════════════════════════
+
+After mergePropertyData(), add this scoring block:
+
+import { calculatePotentialLots } from './lot-calculator';
+import { estimateCosts } from './cost-estimator';
+import { getComparables } from './comparables';
+import { calculateROIScenarios } from './roi-calculator';
+import { scoreProperty } from './scoring';
+import { classifyAsbestos } from './asbestos';
+
+// 1. Lots
+const lotResult = calculatePotentialLots(
+  merged.land_area_sqm ?? 400,
+  merged.zone_code
+);
+
+// 2. Asbestos
+const asbestos = classifyAsbestos(merged.build_year);
+
+// 3. Costs
+const costs = estimateCosts(merged, lotResult.lots);
+
+// 4. Comparables
+const { comparables, avg_sale_price, data_quality } = 
+  await getComparables(suburb, merged.zone_code, lat, lng);
+
+// 5. ROI
+const scenarios = calculateROIScenarios(
+  costs, avg_sale_price, lotResult.lots
+);
+
+// 6. Scores
+const scores = scoreProperty(merged, costs, scenarios, lotResult.lots);
+
+// 7. Add to pipeline result
+return {
+  ...existingPipelineResult,
+  merged,
+  lots: lotResult,
+  asbestos,
+  costs,
+  comparables,
+  comparables_quality: data_quality,
+  scenarios,
+  scores,
+};
+
+════════════════════════════════
+9. UPDATE CLAUDE PROMPT
+In /lib/claude.ts or /lib/prompts.ts
+════════════════════════════════
+
+Update the enriched property prompt to include scores:
+
+const enrichedPrompt = `
+Analyse this NZ property for development feasibility.
+
+ADDRESS: ${address}
+SUBURB: ${suburb}
+
+PROPERTY DATA (from LINZ, Hougarden, OneRoof):
+${JSON.stringify(merged, null, 2)}
+
+PRE-COMPUTED SCORES — use these numbers exactly, do not 
+recalculate or second-guess them:
+  Ease of development: ${scores.ease}/5
+  Reasons: ${scores.ease_reasons.join('; ')}
+  
+  Cost score: ${scores.cost}/5  
+  Reasons: ${scores.cost_reasons.join('; ')}
+  
+  ROI score: ${scores.roi}/5
+  Reasons: ${scores.roi_reasons.join('; ')}
+  
+  Composite score: ${scores.composite}/5
+
+PRE-COMPUTED FINANCIALS — use verbatim:
+  Potential lots: ${lots.lots}
+  Zone: ${lots.zone_label} (${merged.zone_code})
+  
+  Total development cost: 
+    Low: $${formatNZD(costs.total_low)} 
+    High: $${formatNZD(costs.total_high)}
+  Cost per unit (avg): $${formatNZD(costs.cost_per_unit_avg)}
+  
+  ROI Scenarios:
+  ${scenarios.map(s => 
+    `${s.years}-year: GDV $${formatNZD(s.gdv)}, ` +
+    `Cost $${formatNZD(s.total_cost_mid)}, ` +
+    `Profit $${formatNZD(s.gross_profit)}, ` +
+    `ROI ${s.roi_percent.toFixed(1)}%`
+  ).join('\n  ')}
+  
+  Comparables quality: ${data_quality}
+  Avg comparable sale: $${formatNZD(avg_sale_price)}
+
+ASBESTOS: ${asbestos.risk} risk — ${asbestos.notes}
+
+YOUR TASK:
+Return a FeasibilityReport JSON using all of the above data.
+- Copy scores and financial figures EXACTLY as provided above
+- Write 4–6 risk_summary bullet points in plain NZ English
+- Contextualise the numbers for a NZ developer audience
+- Flag any data gaps where sources were unavailable
+- Do not invent data — mark unknown fields as null
+- Return ONLY valid JSON, no surrounding text
+`;
+
+════════════════════════════════
+10. HELPER: formatNZD
+/lib/utils.ts
+════════════════════════════════
+
+export function formatNZD(amount: number): string {
+  return new Intl.NumberFormat('en-NZ', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(Math.round(amount));
+}
+
+════════════════════════════════
+11. VERIFICATION
+════════════════════════════════
+
+Run: GET /api/pipeline-test?address=42+Arney+Road+Remuera
+
+Confirm in the returned JSON:
+[ ] scores.ease is a number between 0.5 and 5.0
+[ ] scores.cost is a number between 0.5 and 5.0
+[ ] scores.roi is a number between 0.5 and 5.0
+[ ] scores.composite is a number between 0.5 and 5.0
+[ ] costs.total_low and total_high are both > 0
+[ ] costs.cost_per_unit_avg is > 0
+[ ] All 3 ROI scenarios present (years: 2, 3, 4)
+[ ] scenarios[0].gross_profit is a number (can be negative)
+[ ] lots.lots is >= 1
+[ ] asbestos.risk is 'low', 'high', or 'unknown'
+[ ] comparables array has >= 1 entry
+[ ] No NaN or Infinity values anywhere in the JSON
+[ ] Claude's returned FeasibilityReport contains 
+    scores that match the pre-computed values exactly
+
+Run a second test with a steep site or heritage zone 
+address to verify deductions apply correctly.

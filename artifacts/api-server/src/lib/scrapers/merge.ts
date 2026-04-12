@@ -1,6 +1,7 @@
 import { logger } from "../logger";
 import type { LinzParcel } from "../linz";
 import type { Overlay, ZoneResult } from "../auckland-council";
+import type { InfrastructureItem } from "../infrastructure";
 import type { HougardenData } from "./hougarden";
 import type { OneRoofData, ComparableSale } from "./oneroof";
 
@@ -24,6 +25,9 @@ export interface MergedPropertyData {
   overlay_map_image_base64: string | null;
   comparables: ComparableSale[];
   data_sources: Record<string, string>;
+  contour: "flat" | "gentle" | "moderate" | "steep" | null;
+  asbestos_risk: "low" | "high" | "unknown";
+  infrastructure: InfrastructureItem[];
 }
 
 function first<T>(label: string, sources: Record<string, string>, ...candidates: Array<[string, T | null | undefined]>): T | null {
@@ -42,6 +46,11 @@ export function mergePropertyData(
   oneroof: OneRoofData | null,
   councilZone: ZoneResult | null,
   councilOverlays: Overlay[],
+  extra?: {
+    contour: "flat" | "gentle" | "moderate" | "steep" | null;
+    asbestos_risk: "low" | "high" | "unknown";
+    infrastructure: InfrastructureItem[];
+  },
 ): MergedPropertyData {
   const sources: Record<string, string> = {};
 
@@ -148,5 +157,8 @@ export function mergePropertyData(
     overlay_map_image_base64,
     comparables,
     data_sources: sources,
+    contour: extra?.contour ?? null,
+    asbestos_risk: extra?.asbestos_risk ?? "unknown",
+    infrastructure: extra?.infrastructure ?? [],
   };
 }

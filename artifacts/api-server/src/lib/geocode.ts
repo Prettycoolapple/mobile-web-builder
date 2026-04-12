@@ -4,6 +4,7 @@ export interface GeoResult {
   lat: number;
   lng: number;
   formatted: string;
+  suburb: string | null;
 }
 
 async function nominatimGeocode(address: string): Promise<GeoResult | null> {
@@ -26,15 +27,28 @@ async function nominatimGeocode(address: string): Promise<GeoResult | null> {
     display_name: string;
     type: string;
     importance: number;
+    address?: {
+      suburb?: string;
+      town?: string;
+      city_district?: string;
+      county?: string;
+    };
   }>;
 
   if (!results || results.length === 0) return null;
 
   const best = results[0];
+  const suburb =
+    best.address?.suburb ??
+    best.address?.town ??
+    best.address?.city_district ??
+    null;
+
   return {
     lat: parseFloat(best.lat),
     lng: parseFloat(best.lon),
     formatted: best.display_name.split(", New Zealand")[0],
+    suburb: suburb ? suburb.toLowerCase().trim() : null,
   };
 }
 
@@ -60,6 +74,7 @@ async function googleGeocode(address: string, apiKey: string): Promise<GeoResult
     lat: r.geometry.location.lat,
     lng: r.geometry.location.lng,
     formatted: r.formatted_address,
+    suburb: null,
   };
 }
 
