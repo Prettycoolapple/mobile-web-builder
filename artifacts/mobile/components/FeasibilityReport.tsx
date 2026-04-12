@@ -6,6 +6,7 @@ import {
   ScrollView,
   TouchableOpacity,
   Animated,
+  Image,
 } from "react-native";
 import Svg, { Circle, Polygon } from "react-native-svg";
 import { Feather } from "@expo/vector-icons";
@@ -811,6 +812,24 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
             </View>
           </View>
         </View>
+
+        {report.overlay_map_image_base64 && (
+          <View style={styles.overlayMapWrapper}>
+            <Image
+              source={{ uri: `data:image/png;base64,${report.overlay_map_image_base64}` }}
+              style={styles.overlayMapImage}
+              resizeMode="cover"
+            />
+            <View style={styles.overlayMapFooter}>
+              <View style={styles.overlayMapLabelRow}>
+                <Feather name="layers" size={11} color="rgba(250,249,246,0.7)" />
+                <Text style={styles.overlayMapLabel}>Planning overlay map (via Hougarden)</Text>
+              </View>
+              <Text style={styles.overlayMapSource}>Source: hougarden.com</Text>
+            </View>
+          </View>
+        )}
+
         <ScoreSummaryRow report={report} colors={colors} />
       </View>
 
@@ -945,4 +964,10 @@ const styles = StyleSheet.create({
   tableHeader: { flexDirection: "row", paddingBottom: 6, borderBottomWidth: 1 },
   tableHeaderCell: { fontFamily: "DM_Sans_600SemiBold", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.3 },
   tableRow: { flexDirection: "row", alignItems: "center", paddingVertical: 8, gap: 4 },
+  overlayMapWrapper: { width: "100%", height: 200 },
+  overlayMapImage: { width: "100%", height: 200 },
+  overlayMapFooter: { position: "absolute", bottom: 0, left: 0, right: 0, flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 12, paddingVertical: 7, backgroundColor: "rgba(0,0,0,0.45)" },
+  overlayMapLabelRow: { flexDirection: "row", alignItems: "center", gap: 5 },
+  overlayMapLabel: { color: "rgba(250,249,246,0.85)", fontFamily: "DM_Sans_500Medium", fontSize: 11 },
+  overlayMapSource: { color: "rgba(250,249,246,0.45)", fontFamily: "DM_Sans_400Regular", fontSize: 10 },
 });
