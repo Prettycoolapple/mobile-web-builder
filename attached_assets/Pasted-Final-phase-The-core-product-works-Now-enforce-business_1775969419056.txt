@@ -1,0 +1,155 @@
+Final phase. The core product works. Now enforce business logic, 
+polish the UX, and prepare for production.
+
+TASKS:
+
+1. STRIPE SUBSCRIPTION FLOW
+
+   a) /app/api/stripe/checkout/route.ts
+      POST endpoint:
+      - Authenticate user
+      - Create or retrieve Stripe customer (store in profiles.stripe_customer_id)
+      - Create Stripe Checkout Session:
+        mode: 'subscription'
+        line_items: [{ price: STRIPE_PRO_PRICE_ID, quantity: 1 }]
+        success_url: /profile?upgraded=true
+        cancel_url: /profile
+        customer: existing customer ID
+        metadata: { user_id: session.user.id }
+      - Return { url: checkoutSession.url }
+
+   b) /app/api/stripe/webhook/route.ts
+      Handle events:
+      - customer.subscription.created / updated:
+        → Set profiles.subscription_tier = 'pro'
+        → Reset profiles.reports_used_this_month = 0
+      - customer.subscription.deleted:
+        → Set profiles.subscription_tier = 'free'
+      Verify Stripe signature using STRIPE_WEBHOOK_SECRET
+      Return 200 immediately, process async
+
+   c) /app/api/stripe/portal/route.ts
+      Create a Stripe Customer Portal session for managing billing.
+      Return portal URL.
+
+2. USAGE ENFORCEMENT
+   Create /lib/usage.ts:
+   
+   Function: checkUsageLimit(userId: string): Promise<UsageCheck>
+   - Fetch profile from Supabase
+   - If subscription_tier = 'pro' → always allow
+   - If subscription_tier = 'free' AND reports_used_this_month >= 3 
+     → return { allowed: false, reason: 'limit_reached' }
+   - Otherwise → return { allowed: true }
+   
+   Function: incrementUsage(userId: string): Promise<void>
+   - Increment reports_used_this_month by 1 in Supabase
+
+   Add a cron job (or Supabase scheduled function) to reset 
+   reports_used_this_month = 0 on the 1st of each month.
+
+   Update /app/api/chat/route.ts:
+   - Before running analysis: call checkUsageLimit()
+   - If not allowed: return { error: 'usage_limit', message: 
+     'You have used your 3 free reports this month.' }
+   - After successful analysis: call incrementUsage()
+
+3. PAYWALL MODAL — /components/PaywallModal.tsx
+   Shown when usage limit is hit:
+   
+   ┌─────────────────────────────────────┐
+   │  You've used all 3 free reports     │
+   │  this month                         │
+   │                                     │
+   │  Upgrade to Pro for unlimited       │
+   │  feasibility reports                │
+   │                                     │
+   │  Pro plan: NZD $49/month            │
+   │  ✓ Unlimited reports                │
+   │  ✓ Full data pipeline               │
+   │  ✓ Export to PDF (coming soon)      │
+   │                                     │
+   │  [Upgrade to Pro →]  [Maybe later]  │
+   └─────────────────────────────────────┘
+
+   "Upgrade to Pro" calls /api/stripe/checkout and redirects to Stripe.
+
+4. PROFILE PAGE — /app/(app)/profile/page.tsx
+   Show:
+   - User email and name
+   - Current plan badge (Free / Pro) with colour coding
+   - Usage meter: "X of 3 reports used this month" (free tier only)
+     Horizontal progress bar, red when 3/3
+   - Searches history: last 10 analyses from Supabase searches table
+     Each row: address | date | composite score | "View" button
+   - If free: "Upgrade to Pro" button → Stripe checkout
+   - If pro: "Manage billing" button → Stripe portal
+   - Sign out button
+
+5. ERROR HANDLING POLISH
+   Add global error states:
+
+   a) API timeout (> 20 seconds): 
+      "Our data providers are responding slowly. 
+       Results may be partial — try again in a moment."
+
+   b) Address not found in LINZ:
+      "We couldn't find this address in the NZ property database. 
+       Try including the suburb (e.g., 42 Arney Road, Remuera, Auckland)"
+
+   c) Not an NZ address:
+      "DevFeasible NZ analyses New Zealand properties only."
+
+   d) Stripe checkout failed:
+      Toast: "Payment setup failed. Please try again or contact support."
+
+   Add a "Report an error" button on every FeasibilityReport card.
+   It opens a modal with a pre-filled mailto link to support.
+
+6. LOADING STATES
+   While the full pipeline runs (can take 10–15 seconds):
+   - Show an animated progress indicator in the chat
+   - Update status messages every 3 seconds:
+     "Fetching property details from LINZ..."
+     "Checking Auckland Council planning overlays..."
+     "Analysing contour and infrastructure..."
+     "Calculating development costs and ROI..."
+     "Generating your feasibility report..."
+   
+   Use Server-Sent Events (SSE) or polling on 
+   /api/pipeline-status/[jobId] to stream progress.
+   
+   Alternatively (simpler): use a fixed-step animation with 
+   realistic timing per step.
+
+7. MOBILE POLISH
+   Test and fix on 375px (iPhone SE) and 390px (iPhone 14):
+   - Chat input stays above keyboard (use dvh units)
+   - Report cards don't overflow horizontally
+   - ROI scenario cards stack vertically on mobile
+   - Score rings remain legible (don't shrink below 64px)
+   - Comparable sales table scrolls horizontally if needed
+   - All tap targets minimum 44×44px
+
+8. SEO & META (for web version)
+   /app/layout.tsx:
+   - Title: "DevFeasible NZ — AI Property Development Feasibility"
+   - Description: "Instant AI-powered development feasibility analysis 
+     for New Zealand property. Zoning, overlays, ROI, and more."
+   - og:image, twitter:card meta tags
+   - favicon: simple "DF" monogram
+
+9. FINAL LAUNCH CHECKLIST
+   [ ] Stripe webhook tested with Stripe CLI (stripe listen)
+   [ ] Free user hits 3-report limit → paywall modal appears
+   [ ] Upgrade flow completes → tier updates to 'pro' in Supabase
+   [ ] Pro user has no usage limit
+   [ ] Profile page shows correct plan and usage
+   [ ] History loads last 10 searches correctly
+   [ ] All error states tested manually
+   [ ] No console.log statements left in production code
+   [ ] Environment variables all set in Replit Secrets
+   [ ] Run npm run build — zero build errors
+   [ ] Run lighthouse on /chat — score > 80 on mobile
+   [ ] Test on real iPhone (not just simulator)
+   [ ] Add README.md with setup instructions and env var list
