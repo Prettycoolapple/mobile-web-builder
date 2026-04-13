@@ -1,7 +1,14 @@
 import { logger } from "./logger";
 
 const LINZ_BASE = "https://data.linz.govt.nz/services/api/v1";
-const PARCEL_LAYER = 50804;
+
+const LAYER_PRIMARY_PARCELS = 50772;
+const LAYER_NZ_TITLES = 50804;
+const LAYER_TITLE_OWNERS = 50805;
+
+const LINZ_HEADERS = {
+  Accept: "application/json",
+};
 
 export interface LinzParcel {
   parcel_id: string;
@@ -23,6 +30,108 @@ function getKey(): string | null {
   return process.env["LINZ_API_KEY"] ?? null;
 }
 
+async function queryLinzLayer(
+  layerId: number,
+  cqlFilter: string,
+  key: string,
+  timeoutMs = 12000,
+): Promise<Record<string, unknown>[] | null> {
+  const url = new URL(`${LINZ_BASE}/layers/${layerId}/features/`);
+  url.searchParams.set("q", cqlFilter);
+  url.searchParams.set("count", "1");
+  url.searchParams.set("api_key", key);
+
+  const resp = await fetch(url.toString(), {
+    headers: {
+      ...LINZ_HEADERS,
+      Authorization: `key ${key}`,
+    },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+
+  if (resp.status === 429) {
+    logger.warn("LINZ API rate limited");
+    return null;
+  }
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    logger.warn(
+      { status: resp.status, body: body.slice(0, 200), cqlFilter, layerId },
+      "LINZ layer query failed",
+    );
+    return null;
+  }
+
+  const data = (await resp.json()) as {
+    features?: Array<{ id: string | number; properties: Record<string, unknown> }>;
+    type?: string;
+  };
+
+  if (!data.features) {
+    logger.warn({ layerId, cqlFilter }, "LINZ response missing features array");
+    return null;
+  }
+
+  return data.features.map((f) => ({ ...f.properties, _id: f.id }));
+}
+
+async function queryLinzLayerWFS(
+  layerId: number,
+  cqlFilter: string,
+  key: string,
+  timeoutMs = 12000,
+): Promise<Record<string, unknown>[] | null> {
+  const url = new URL(`https://data.linz.govt.nz/services/wfs/${key}/wfs`);
+  url.searchParams.set("service", "WFS");
+  url.searchParams.set("version", "2.0.0");
+  url.searchParams.set("request", "GetFeature");
+  url.searchParams.set("typeNames", `layer-${layerId}`);
+  url.searchParams.set("CQL_FILTER", cqlFilter);
+  url.searchParams.set("outputFormat", "application/json");
+  url.searchParams.set("count", "1");
+
+  const resp = await fetch(url.toString(), {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    logger.warn(
+      { status: resp.status, body: body.slice(0, 300), cqlFilter, layerId },
+      "LINZ WFS query failed",
+    );
+    return null;
+  }
+
+  const contentType = resp.headers.get("content-type") ?? "";
+  if (!contentType.includes("json") && !contentType.includes("text")) {
+    logger.warn({ contentType }, "LINZ WFS: unexpected content-type");
+    return null;
+  }
+
+  const text = await resp.text();
+  if (text.includes("ExceptionReport") || text.includes("<!DOCTYPE")) {
+    logger.warn({ preview: text.slice(0, 300) }, "LINZ WFS: got error/HTML response");
+    return null;
+  }
+
+  try {
+    const data = JSON.parse(text) as {
+      features?: Array<{ id: string; properties: Record<string, unknown> }>;
+      type?: string;
+    };
+    if (!data.features) {
+      logger.warn({ layerId }, "LINZ WFS response missing features array");
+      return null;
+    }
+    return data.features.map((f) => ({ ...f.properties, _id: f.id }));
+  } catch (e) {
+    logger.warn({ err: (e as Error).message, preview: text.slice(0, 200) }, "LINZ WFS: JSON parse failed");
+    return null;
+  }
+}
+
 export async function fetchLINZParcel(lat: number, lng: number): Promise<LinzParcel | null> {
   const key = getKey();
   if (!key) {
@@ -30,88 +139,90 @@ export async function fetchLINZParcel(lat: number, lng: number): Promise<LinzPar
     return null;
   }
 
-  const wkt = `POINT(${lng} ${lat})`;
-  const url = new URL(`${LINZ_BASE}/layers/${PARCEL_LAYER}/features/`);
-  url.searchParams.set("q", `geometry INTERSECTS ${wkt}`);
-  url.searchParams.set("count", "1");
+  const cqlFormats = [
+    `INTERSECTS(shape,SRID=4326;POINT(${lng} ${lat}))`,
+    `INTERSECTS(shape,SRID=4167;POINT(${lng} ${lat}))`,
+    `INTERSECTS(shape,POINT(${lng} ${lat}))`,
+  ];
 
-  try {
-    const resp = await fetch(url.toString(), {
-      headers: { Authorization: `key ${key}` },
-      signal: AbortSignal.timeout(12000),
-    });
+  for (const cql of cqlFormats) {
+    try {
+      let features = await queryLinzLayer(LAYER_PRIMARY_PARCELS, cql, key);
+      if (features === null) {
+        logger.debug({ cql }, "LINZ REST failed — trying WFS");
+        features = await queryLinzLayerWFS(LAYER_PRIMARY_PARCELS, cql, key);
+      }
+      if (features === null) continue;
+      if (features.length === 0) {
+        logger.debug({ cql }, "LINZ parcel: no features for this CQL format");
+        continue;
+      }
 
-    if (resp.status === 429) {
-      logger.warn("LINZ API rate limited");
-      return null;
+      const props = features[0];
+      logger.info({ props }, "LINZ primary parcel found");
+
+      const calcArea = props["calc_area"] ?? props["survey_area"] ?? null;
+      const areaSqm = calcArea != null ? Math.round(Number(calcArea)) : null;
+
+      const titlesRaw = props["titles"] ?? props["title_no"];
+      const titleNo = titlesRaw ? String(titlesRaw).split(",")[0].trim() : null;
+
+      return {
+        parcel_id: String(props["_id"] ?? props["id"] ?? ""),
+        appellation: (props["appellation"] as string) ?? null,
+        area_sqm: areaSqm && areaSqm > 0 ? areaSqm : null,
+        title_no: titleNo,
+        legal_description: (props["appellation"] as string) ?? null,
+        topology_type: (props["topology_type"] as string) ?? null,
+      };
+    } catch (err) {
+      logger.warn({ err: (err as Error).message, cql }, "LINZ parcel fetch attempt failed");
     }
-    if (!resp.ok) {
-      logger.warn({ status: resp.status }, "LINZ parcel query failed");
-      return null;
-    }
-
-    const data = (await resp.json()) as {
-      features?: Array<{
-        id: string | number;
-        properties: Record<string, unknown>;
-        geometry?: unknown;
-      }>;
-    };
-
-    if (!data.features || data.features.length === 0) return null;
-
-    const props = data.features[0].properties;
-    return {
-      parcel_id: String(data.features[0].id ?? props["id"] ?? ""),
-      appellation: (props["appellation"] as string) ?? null,
-      area_sqm: props["area_sqm"] != null ? Number(props["area_sqm"]) : null,
-      title_no: (props["title_no"] as string) ?? null,
-      legal_description: (props["legal_description"] as string) ?? null,
-      topology_type: (props["topology_type"] as string) ?? null,
-    };
-  } catch (err) {
-    logger.warn({ err }, "LINZ parcel fetch failed");
-    return null;
   }
+
+  logger.warn({ lat, lng }, "LINZ parcel: all CQL formats exhausted with no result");
+  return null;
 }
 
 export async function fetchLINZTitle(title_no: string): Promise<LinzTitle | null> {
   const key = getKey();
   if (!key || !title_no) return null;
 
-  const TITLE_LAYER = 50805;
-  const url = new URL(`${LINZ_BASE}/layers/${TITLE_LAYER}/features/`);
-  url.searchParams.set("q", `title_no='${title_no}'`);
-  url.searchParams.set("count", "1");
-
   try {
-    const resp = await fetch(url.toString(), {
-      headers: { Authorization: `key ${key}` },
-      signal: AbortSignal.timeout(10000),
-    });
+    const features = await queryLinzLayer(
+      LAYER_NZ_TITLES,
+      `title_no='${title_no}'`,
+      key,
+      10000,
+    );
+    if (!features || features.length === 0) return null;
 
-    if (!resp.ok) return null;
+    const props = features[0];
 
-    const data = (await resp.json()) as {
-      features?: Array<{ properties: Record<string, unknown> }>;
-    };
-
-    if (!data.features || data.features.length === 0) return null;
-    const props = data.features[0].properties;
-
-    const ownersRaw = props["owners"] ?? props["proprietors"] ?? "";
-    const owners = typeof ownersRaw === "string"
-      ? ownersRaw.split(";").map((s: string) => s.trim()).filter(Boolean)
-      : [];
+    let owners: string[] = [];
+    try {
+      const ownersResult = await queryLinzLayer(
+        LAYER_TITLE_OWNERS,
+        `title_no='${title_no}'`,
+        key,
+        8000,
+      );
+      if (ownersResult && ownersResult.length > 0) {
+        owners = ownersResult
+          .map((o) => String(o["name"] ?? o["owner_name"] ?? ""))
+          .filter(Boolean);
+      }
+    } catch {
+    }
 
     return {
       title_no,
       owners,
-      estate_type: (props["estate_type"] as string) ?? null,
+      estate_type: (props["estate_description"] as string) ?? null,
       issue_date: (props["issue_date"] as string) ?? null,
     };
   } catch (err) {
-    logger.warn({ err }, "LINZ title fetch failed");
+    logger.warn({ err: (err as Error).message, title_no }, "LINZ title fetch failed");
     return null;
   }
 }

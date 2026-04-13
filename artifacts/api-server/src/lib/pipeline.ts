@@ -6,6 +6,8 @@ import { fetchPropertyHistory, checkAsbestosRisk, type PropertyHistory, type Asb
 import { fetchInfrastructure, type InfrastructureItem } from "./infrastructure";
 import { scrapeHougarden, type HougardenData } from "./scrapers/hougarden";
 import { scrapeOneRoof, type OneRoofData } from "./scrapers/oneroof";
+import { scrapeHomes, type HomesData } from "./scrapers/homes";
+import { scrapeQV, type QVData } from "./scrapers/qv";
 import { mergePropertyData, type MergedPropertyData } from "./scrapers/merge";
 import { withBrowserSlot } from "./scrapers/browser";
 import { classifyAsbestos, type AsbestosClassification } from "./asbestos";
@@ -31,6 +33,8 @@ export interface PipelineResult {
   infrastructure: InfrastructureItem[];
   hougarden: HougardenData | null;
   oneroof: OneRoofData | null;
+  homes: HomesData | null;
+  qv: QVData | null;
   merged: MergedPropertyData | null;
   lots: LotResult | null;
   costs: CostBreakdown | null;
@@ -98,6 +102,8 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       infrastructure: [],
       hougarden: null,
       oneroof: null,
+      homes: null,
+      qv: null,
       merged: null,
       lots: null,
       costs: null,
@@ -128,7 +134,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     timed("zone",             () => fetchUnitaryPlanZone(lat, lng),                          timing),
     timed("overlays",         () => fetchOverlays(lat, lng),                                 timing),
     timed("contour",          () => fetchContour(lat, lng),                                  timing),
-    timed("property_history", () => fetchPropertyHistory(address),                           timing),
+    timed("property_history", () => fetchPropertyHistory(address, lat, lng),                 timing),
     timed("infrastructure",   () => fetchInfrastructure(lat, lng),                           timing),
     timed("hougarden",        () => withBrowserSlot(() => scrapeHougarden(lat, lng, address)), timing),
     timed("oneroof",          () => withBrowserSlot(() => scrapeOneRoof(address)),            timing),
@@ -159,12 +165,36 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     if (titleResult.failed) failedSources.push("linz_title");
   }
 
+  let homesData: HomesData | null = null;
+  let qvData: QVData | null = null;
+
+  const cv_from_scrapers = hougardenData?.cv_nzd ?? oneRoofData?.cv_nzd ?? null;
+  const land_from_scrapers = hougardenData?.land_area_sqm ?? oneRoofData?.land_area_sqm ?? null;
+  const ac_cv = propertyHistoryData?.cv_nzd ?? null;
+
+  if (!cv_from_scrapers && !ac_cv && !land_from_scrapers && !linzParcelData?.area_sqm) {
+    logger.info("Primary scrapers empty — trying QV.co.nz first");
+    const qvResult = await timed("qv", () => withBrowserSlot(() => scrapeQV(address)), timing);
+    qvData = qvResult.value;
+    if (qvResult.failed) failedSources.push("qv");
+
+    const qvHasData = qvData?.cv_nzd && qvData?.land_area_sqm;
+    if (!qvHasData) {
+      logger.info("QV empty — trying homes.co.nz as fallback");
+      const homesResult = await timed("homes", () => withBrowserSlot(() => scrapeHomes(address, suburb, geocode!.formatted ?? address)), timing);
+      homesData = homesResult.value;
+      if (homesResult.failed) failedSources.push("homes");
+    }
+  }
+
   const asbestos = checkAsbestosRisk(
     propertyHistoryData?.build_year ?? null,
   );
 
-  const buildYear = propertyHistoryData?.build_year ?? null;
+  const buildYear = propertyHistoryData?.build_year ?? hougardenData?.build_year ?? oneRoofData?.build_year ?? null;
   const asbestosDetail = classifyAsbestos(buildYear);
+
+  const linzAreaSqm = linzParcelData?.area_sqm ?? null;
 
   const merged = mergePropertyData(
     linzParcelData,
@@ -176,10 +206,25 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       contour: contourData?.classification ?? null,
       contour_slope_degrees: contourData?.slope_degrees ?? null,
       contour_source: contourData?.source ?? null,
-      asbestos_risk: asbestosDetail.risk,
+      asbestos_risk: asbestosDetail.risk === "moderate" ? "high" : (asbestosDetail.risk ?? "unknown"),
       infrastructure: infrastructureData,
+      property_history: propertyHistoryData,
     },
   );
+
+  for (const [src, d] of [["homes", homesData], ["qv", qvData]] as const) {
+    if (!d) continue;
+    if (!merged.cv_nzd && d.cv_nzd) { merged.cv_nzd = d.cv_nzd; merged.cv_year = d.cv_year; merged.data_sources["cv_nzd"] = src; }
+    if (!merged.land_area_sqm && d.land_area_sqm) { merged.land_area_sqm = d.land_area_sqm; merged.data_sources["land_area_sqm"] = src; }
+    if (!merged.build_year && d.build_year) { merged.build_year = d.build_year; merged.data_sources["build_year"] = src; }
+    if (!merged.floor_area_sqm && d.floor_area_sqm) { merged.floor_area_sqm = d.floor_area_sqm; merged.data_sources["floor_area_sqm"] = src; }
+  }
+
+  merged.missing_critical_fields = [
+    ...(merged.cv_nzd === null ? ["cv_nzd"] : []),
+    ...(merged.land_area_sqm === null ? ["land_area_sqm"] : []),
+    ...(merged.contour === null ? ["contour"] : []),
+  ];
 
   const lotResult = calculatePotentialLots(
     merged.land_area_sqm ?? 400,
@@ -205,7 +250,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   const scores = scoreProperty(merged, costs, scenarios, lotResult.lots);
 
   timing["total"] = Date.now() - pipelineStart;
-  logger.info({ timing, failedSources }, "Pipeline complete");
+  logger.info({ timing, failedSources, cv_nzd: merged.cv_nzd, land_area_sqm: merged.land_area_sqm }, "Pipeline complete");
 
   return {
     address_input: address,
@@ -222,6 +267,8 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     infrastructure: infrastructureData,
     hougarden: hougardenData,
     oneroof: oneRoofData,
+    homes: homesData,
+    qv: qvData,
     merged,
     lots: lotResult,
     costs,

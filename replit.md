@@ -80,6 +80,8 @@ AI-powered NZ real estate development feasibility analysis mobile app built with
 - `scrapers/scrapingbee.ts` — `fetchWithScrapingBee()`: ScrapingBee API fallback; silently skips if `SCRAPINGBEE_API_KEY` not set
 - `scrapers/hougarden.ts` — `scrapeHougarden()`: 3-attempt chain: stealth Playwright → ScrapingBee+cheerio → empty
 - `scrapers/oneroof.ts` — `scrapeOneRoof()`: same 3-attempt chain
+- `scrapers/homes.ts` — `scrapeHomes()`: ScrapingBee direct URL (multiple suburb slugs) → Playwright disabled (blocked). Used only as fallback when QV fails.
+- `scrapers/qv.ts` — `scrapeQV()`: **PRIMARY fallback** — stealth Playwright; types search term via `page.keyboard.type()`, waits for autocomplete via `waitForFunction` TreeWalker, clicks suggestion via `page.evaluate` TreeWalker, extracts data from property detail page (~8s). Returns CV, land area, floor area, build year.
 - `scrapers/merge.ts` — `mergePropertyData()`: priority-merges all sources; tracks `data_sources` (per-field source labels), `missing_critical_fields` (list of unavailable key fields), and `cv_unavailable`; includes `contour_slope_degrees`, `contour_source`
 
 **Phase 4 scoring engine** (deterministic, no AI, runs after merge):
@@ -90,7 +92,7 @@ AI-powered NZ real estate development feasibility analysis mobile app built with
 - `roi-calculator.ts` — `calculateROIScenarios(costs, avgPrice, units)`: 3 scenarios (2/3/4 years), compound annualised ROI
 - `scoring.ts` — `scoreProperty(merged, costs, scenarios, lots)`: ease (deductions from 5.0), cost (bracket), ROI (bracket); composite = ease×0.30 + cost×0.30 + roi×0.40
 - `utils.ts` — `formatNZD()`, `extractSuburb()`, `roundToHalf()`, `clamp()`
-- `pipeline.ts` — `runPropertyPipeline()`: orchestrates all; ~10s total; result includes `lots`, `costs`, `comparables`, `comparables_quality`, `scenarios`, `scores`, `asbestos_detail`, `suburb`
+- `pipeline.ts` — `runPropertyPipeline()`: orchestrates all; ~17s typical when QV succeeds; fallback chain: hougarden+oneroof (parallel) → if empty, QV (primary, ~8s) → if QV empty, homes.co.nz (ScrapingBee-only fallback). After QV/homes patch, `missing_critical_fields` is recomputed so it correctly reflects whether cv_nzd/land_area_sqm are available. Result includes `lots`, `costs`, `comparables`, `comparables_quality`, `scenarios`, `scores`, `asbestos_detail`, `suburb`, `qv`, `homes`
 
 ### Database Schema (`lib/db/src/schema/`)
 

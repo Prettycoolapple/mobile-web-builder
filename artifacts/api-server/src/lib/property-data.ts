@@ -18,126 +18,164 @@ export interface AsbestosRisk {
   demo_cost_high: number;
 }
 
-async function fetchFromAucklandCouncilRating(address: string): Promise<Partial<PropertyHistory>> {
+const AC_MAPSERVER = "https://mapspublic.aucklandcouncil.govt.nz/arcgis3/rest/services/Website/ACWebsite2007/MapServer";
+
+async function arcgisPointQuery(
+  layerId: number,
+  lat: number,
+  lng: number,
+  outFields: string,
+  timeoutMs = 18000,
+): Promise<Record<string, unknown> | null> {
+  const url = new URL(`${AC_MAPSERVER}/${layerId}/query`);
+  url.searchParams.set("geometry", `${lng},${lat}`);
+  url.searchParams.set("geometryType", "esriGeometryPoint");
+  url.searchParams.set("inSR", "4326");
+  url.searchParams.set("spatialRel", "esriSpatialRelIntersects");
+  url.searchParams.set("outFields", outFields);
+  url.searchParams.set("returnGeometry", "false");
+  url.searchParams.set("f", "json");
+
+  const resp = await fetch(url.toString(), { signal: AbortSignal.timeout(timeoutMs) });
+  if (!resp.ok) {
+    logger.warn({ status: resp.status, layer: layerId }, "AC MapServer layer query failed");
+    return null;
+  }
+
+  const data = (await resp.json()) as {
+    features?: Array<{ attributes: Record<string, unknown> }>;
+    error?: { message: string };
+  };
+
+  if (data.error) {
+    logger.warn({ error: data.error.message, layer: layerId }, "AC MapServer layer error");
+    return null;
+  }
+
+  return data.features?.[0]?.attributes ?? null;
+}
+
+async function fetchFromACRateAssessment(lat: number, lng: number, timeoutMs = 8000): Promise<Partial<PropertyHistory>> {
   try {
-    const encoded = encodeURIComponent(address);
-    const url = `https://gis.aucklandcouncil.govt.nz/arcgis/rest/services/Auckland_Council/Rating_Valuations/MapServer/0/query?where=FULL_ADDRESS+LIKE+%27%25${encoded}%25%27&outFields=CV,CAPITAL_VALUE,IMPROVEMENT_VALUE,LAND_VALUE,LAND_AREA,FLOOR_AREA,BUILD_YEAR,PROPERTY_TYPE,CV_YEAR&returnGeometry=false&f=json`;
+    const attrs = await arcgisPointQuery(
+      3,
+      lat,
+      lng,
+      "LCV,LLV,LIV,CV,LV,LATESTVALUATIONDATE,VALUATIONDATE,FORMATTEDADDRESS,LANDUSEDESCRIPTION",
+      timeoutMs,
+    );
+    if (!attrs) return {};
 
-    const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
-    if (!resp.ok) return {};
+    const lcv = Number(attrs["LCV"] ?? NaN);
+    const cv = Number(attrs["CV"] ?? NaN);
+    const cvFinal = !isNaN(lcv) && lcv > 0 ? lcv : (!isNaN(cv) && cv > 0 ? cv : NaN);
 
-    const data = (await resp.json()) as {
-      features?: Array<{ attributes: Record<string, unknown> }>;
-      error?: unknown;
-    };
+    const latestDateMs = attrs["LATESTVALUATIONDATE"] ?? attrs["VALUATIONDATE"];
+    const cvYear = latestDateMs ? new Date(Number(latestDateMs)).getFullYear() : null;
 
-    if (data.error || !data.features || data.features.length === 0) return {};
-
-    const attrs = data.features[0].attributes;
-
-    const cv = Number(attrs["CV"] ?? attrs["CAPITAL_VALUE"] ?? NaN);
-    const cvYear = Number(attrs["CV_YEAR"] ?? NaN);
-    const buildYear = Number(attrs["BUILD_YEAR"] ?? NaN);
-    const floorArea = Number(attrs["FLOOR_AREA"] ?? NaN);
-    const landArea = Number(attrs["LAND_AREA"] ?? NaN);
-    const propType = (attrs["PROPERTY_TYPE"] as string) ?? null;
+    logger.info({ lcv, cv, cvFinal, cvYear, addr: attrs["FORMATTEDADDRESS"] }, "AC Rate Assessment result");
 
     return {
-      cv_nzd: !isNaN(cv) && cv > 0 ? cv : null,
-      cv_year: !isNaN(cvYear) && cvYear > 2000 ? cvYear : null,
-      build_year: !isNaN(buildYear) && buildYear > 1800 ? buildYear : null,
-      floor_area_sqm: !isNaN(floorArea) && floorArea > 0 ? floorArea : null,
-      land_area_sqm: !isNaN(landArea) && landArea > 0 ? landArea : null,
-      property_type: propType,
+      cv_nzd: !isNaN(cvFinal) && cvFinal > 0 ? cvFinal : null,
+      cv_year: cvYear && cvYear > 2000 ? cvYear : null,
+      property_type: (attrs["LANDUSEDESCRIPTION"] as string) ?? null,
     };
   } catch (err) {
-    logger.debug({ err }, "Auckland Council rating query failed");
+    logger.warn({ err: (err as Error).message }, "AC Rate Assessment fetch failed");
     return {};
   }
 }
 
-async function fetchFromQVSearch(address: string): Promise<Partial<PropertyHistory>> {
+async function fetchFromACPropertyLayer(lat: number, lng: number, timeoutMs = 8000): Promise<Partial<PropertyHistory>> {
   try {
-    const query = encodeURIComponent(address);
-    const url = `https://api.qv.co.nz/api/v1/properties/search?query=${query}&limit=1`;
+    const attrs = await arcgisPointQuery(
+      2,
+      lat,
+      lng,
+      "PROPERTYAREA,AREAUNIT,PROPERTYTYPE,ADDRESSINONELINE",
+      timeoutMs,
+    );
+    if (!attrs) return {};
 
-    const resp = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; DevFeasible/1.0)",
-        "Accept": "application/json",
-      },
-      signal: AbortSignal.timeout(8000),
-    });
+    const areaRaw = attrs["PROPERTYAREA"];
+    const areaUnit = String(attrs["AREAUNIT"] ?? "").toLowerCase();
+    let land_area_sqm: number | null = null;
 
-    if (!resp.ok) return {};
+    if (areaRaw != null) {
+      const num = parseFloat(String(areaRaw).replace(/[^0-9.]/g, ""));
+      if (!isNaN(num) && num > 0) {
+        if (areaUnit.includes("ha") || areaUnit.includes("hectare")) {
+          land_area_sqm = Math.round(num * 10000);
+        } else {
+          land_area_sqm = Math.round(num);
+        }
+      }
+    }
 
-    const data = (await resp.json()) as {
-      results?: Array<{
-        capitalValue?: number;
-        landValue?: number;
-        landArea?: number;
-        floorArea?: number;
-        yearBuilt?: number;
-        propertyType?: string;
-      }>;
-    };
-
-    if (!data.results || data.results.length === 0) return {};
-    const r = data.results[0];
+    logger.info({ areaRaw, areaUnit, land_area_sqm, addr: attrs["ADDRESSINONELINE"] }, "AC Property layer result");
 
     return {
-      cv_nzd: r.capitalValue ?? null,
-      build_year: r.yearBuilt ?? null,
-      floor_area_sqm: r.floorArea ?? null,
-      land_area_sqm: r.landArea ?? null,
-      property_type: r.propertyType ?? null,
+      land_area_sqm: land_area_sqm && land_area_sqm > 0 ? land_area_sqm : null,
+      property_type: (attrs["PROPERTYTYPE"] as string) ?? null,
     };
-  } catch {
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "AC Property layer fetch failed");
     return {};
   }
 }
 
-export async function fetchPropertyHistory(address: string, linzAreaSqm?: number | null): Promise<PropertyHistory> {
-  const [ratingData, qvData] = await Promise.allSettled([
-    fetchFromAucklandCouncilRating(address),
-    fetchFromQVSearch(address),
-  ]);
+export async function fetchPropertyHistory(
+  address: string,
+  lat?: number | null,
+  lng?: number | null,
+  linzAreaSqm?: number | null,
+): Promise<PropertyHistory> {
+  const results: Partial<PropertyHistory>[] = [];
 
-  const rating = ratingData.status === "fulfilled" ? ratingData.value : {};
-  const qv = qvData.status === "fulfilled" ? qvData.value : {};
+  if (lat != null && lng != null) {
+    const [rateResult, propertyResult] = await Promise.allSettled([
+      fetchFromACRateAssessment(lat, lng, 8000),
+      fetchFromACPropertyLayer(lat, lng, 8000),
+    ]);
+    if (rateResult.status === "fulfilled") results.push(rateResult.value);
+    if (propertyResult.status === "fulfilled") results.push(propertyResult.value);
+  } else {
+    logger.warn({ address }, "fetchPropertyHistory: no lat/lng — skipping AC GIS queries");
+  }
 
   const confirmed: string[] = [];
   const estimated: string[] = [];
 
-  const cv_nzd = rating.cv_nzd ?? qv.cv_nzd ?? null;
+  const cv_nzd = results.reduce((acc: number | null, r) => acc ?? r.cv_nzd ?? null, null);
+  const cv_year = results.reduce((acc: number | null, r) => acc ?? r.cv_year ?? null, null);
+  const build_year = results.reduce((acc: number | null, r) => acc ?? r.build_year ?? null, null);
+  const floor_area_sqm = results.reduce((acc: number | null, r) => acc ?? r.floor_area_sqm ?? null, null);
+
+  const land_area_sqm = results.reduce((acc: number | null, r) => acc ?? r.land_area_sqm ?? null, null)
+    ?? linzAreaSqm ?? null;
+
+  const property_type = results.reduce((acc: string | null, r) => acc ?? r.property_type ?? null, null);
+
   if (cv_nzd) confirmed.push("cv_nzd");
+  else estimated.push("cv_nzd");
 
-  const build_year = rating.build_year ?? qv.build_year ?? null;
   if (build_year) confirmed.push("build_year");
+  else estimated.push("build_year");
 
-  const floor_area_sqm = rating.floor_area_sqm ?? qv.floor_area_sqm ?? null;
   if (floor_area_sqm) confirmed.push("floor_area_sqm");
+  else estimated.push("floor_area_sqm");
 
-  const land_area_sqm = rating.land_area_sqm ?? qv.land_area_sqm ?? linzAreaSqm ?? null;
   if (land_area_sqm) {
-    if (rating.land_area_sqm ?? qv.land_area_sqm) confirmed.push("land_area_sqm");
+    if (results.some((r) => r.land_area_sqm != null)) confirmed.push("land_area_sqm");
     else if (linzAreaSqm) estimated.push("land_area_sqm (from LINZ parcel)");
-  }
+  } else estimated.push("land_area_sqm");
 
-  if (!cv_nzd) estimated.push("cv_nzd");
-  if (!build_year) estimated.push("build_year");
-  if (!floor_area_sqm) estimated.push("floor_area_sqm");
+  logger.info(
+    { cv_nzd, land_area_sqm, build_year, floor_area_sqm, confirmed, estimated },
+    "fetchPropertyHistory result",
+  );
 
-  return {
-    cv_nzd,
-    cv_year: rating.cv_year ?? null,
-    build_year,
-    floor_area_sqm,
-    land_area_sqm,
-    property_type: rating.property_type ?? qv.property_type ?? null,
-    sources_confirmed: confirmed,
-    sources_estimated: estimated,
-  };
+  return { cv_nzd, cv_year, build_year, floor_area_sqm, land_area_sqm, property_type, sources_confirmed: confirmed, sources_estimated: estimated };
 }
 
 export function checkAsbestosRisk(build_year: number | null): AsbestosRisk {

@@ -4,6 +4,7 @@ import type { Overlay, ZoneResult } from "../auckland-council";
 import type { InfrastructureItem } from "../infrastructure";
 import type { HougardenData } from "./hougarden";
 import type { OneRoofData, ComparableSale } from "./oneroof";
+import type { PropertyHistory } from "../property-data";
 
 export interface MergedPropertyData {
   cv_nzd: number | null;
@@ -55,12 +56,15 @@ export function mergePropertyData(
     contour_source?: string | null;
     asbestos_risk: "low" | "high" | "unknown";
     infrastructure: InfrastructureItem[];
+    property_history?: PropertyHistory | null;
   },
 ): MergedPropertyData {
   const sources: Record<string, string> = {};
+  const ph = extra?.property_history ?? null;
 
   const land_area_sqm = first("land_area_sqm", sources,
     ["linz", linz?.area_sqm],
+    ["auckland_council_gis", ph?.land_area_sqm],
     ["hougarden", hougarden?.land_area_sqm],
     ["oneroof", oneroof?.land_area_sqm],
   );
@@ -68,20 +72,24 @@ export function mergePropertyData(
   const cv_nzd = first("cv_nzd", sources,
     ["oneroof", oneroof?.cv_nzd],
     ["hougarden", hougarden?.cv_nzd],
+    ["auckland_council_gis", ph?.cv_nzd],
   );
 
   const cv_year = first("cv_year", sources,
     ["oneroof", oneroof?.cv_year],
+    ["auckland_council_gis", ph?.cv_year],
   );
 
   const build_year = first("build_year", sources,
     ["oneroof", oneroof?.build_year],
     ["hougarden", hougarden?.build_year],
+    ["auckland_council_gis", ph?.build_year],
   );
 
   const floor_area_sqm = first("floor_area_sqm", sources,
     ["oneroof", oneroof?.floor_area_sqm],
     ["hougarden", hougarden?.floor_area_sqm],
+    ["auckland_council_gis", ph?.floor_area_sqm],
   );
 
   const bedrooms = first("bedrooms", sources,
@@ -119,33 +127,23 @@ export function mergePropertyData(
     min_lot_size_sqm = LOT_SIZES[zone_code] ?? null;
   }
 
-  const last_sale_price = first("last_sale_price", sources,
-    ["oneroof", oneroof?.last_sale_price],
-  );
-  const last_sale_date = first("last_sale_date", sources,
-    ["oneroof", oneroof?.last_sale_date],
-  );
-  const listing_price = first("listing_price", sources,
-    ["oneroof", oneroof?.listing_price],
-  );
+  const last_sale_price = first("last_sale_price", sources, ["oneroof", oneroof?.last_sale_price]);
+  const last_sale_date = first("last_sale_date", sources, ["oneroof", oneroof?.last_sale_date]);
+  const listing_price = first("listing_price", sources, ["oneroof", oneroof?.listing_price]);
 
   const school_zones = hougarden?.school_zones ?? { primary: null, intermediate: null, secondary: null };
   const main_photo_url = oneroof?.main_photo_url ?? null;
   const overlay_map_image_base64 = hougarden?.overlay_map_image_base64 ?? null;
 
   const comparables: ComparableSale[] = oneroof?.comparables ?? [];
-  if (comparables.length < 3) {
-    sources["comparables"] = "oneroof (limited)";
-  } else {
-    sources["comparables"] = "oneroof";
-  }
+  sources["comparables"] = comparables.length >= 3 ? "oneroof" : "oneroof (limited)";
 
   const missing_critical_fields: string[] = [];
   if (cv_nzd === null) missing_critical_fields.push("cv_nzd");
   if (land_area_sqm === null) missing_critical_fields.push("land_area_sqm");
   if (extra?.contour === null || extra?.contour === undefined) missing_critical_fields.push("contour");
 
-  logger.debug({ sources, missing_critical_fields }, "Merge: data sources selected");
+  logger.info({ sources, missing_critical_fields, cv_nzd, land_area_sqm, build_year }, "Merge: data sources selected");
 
   return {
     cv_nzd,
