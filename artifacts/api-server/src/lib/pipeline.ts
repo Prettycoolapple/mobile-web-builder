@@ -196,19 +196,26 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
 
   const linzAreaSqm = linzParcelData?.area_sqm ?? null;
 
-  const scrapedContour =
+  // Priority: elevation API (actual measured degrees) always wins over scraped text labels.
+  // QV/Hougarden text like "easy/moderate rise" is just a broad administrative rating —
+  // the elevation API calculates real slope from DEM data and is far more accurate.
+  const scrapedContourText =
     qvData?.contour_classification
       ? { classification: qvData.contour_classification, text: qvData.contour_text, source: "QV Rating Valuation" }
       : hougardenData?.contour_classification
         ? { classification: hougardenData.contour_classification, text: hougardenData.contour_text, source: "Hougarden" }
         : null;
 
-  const resolvedContour = scrapedContour ?? (contourData ? { classification: contourData.classification, text: null, source: contourData.source } : null);
+  // Use elevation API when it returned actual slope degrees; fall back to scraped text only when elevation API failed.
+  const elevationMeasured = contourData?.slope_degrees != null;
+  const resolvedContour = elevationMeasured
+    ? { classification: contourData!.classification, text: scrapedContourText?.text ?? null, source: contourData!.source }
+    : (scrapedContourText ?? (contourData ? { classification: contourData.classification, text: null, source: contourData.source } : null));
 
-  if (scrapedContour) {
-    logger.info({ classification: scrapedContour.classification, text: scrapedContour.text, source: scrapedContour.source }, "Contour: using official rating valuation data");
-  } else if (contourData) {
-    logger.info({ classification: contourData.classification, slope_degrees: contourData.slope_degrees, source: contourData.source }, "Contour: using elevation API fallback");
+  if (elevationMeasured) {
+    logger.info({ classification: contourData!.classification, slope_degrees: contourData!.slope_degrees, source: contourData!.source, qv_text: scrapedContourText?.text }, "Contour: using measured elevation API (overrides QV text)");
+  } else if (scrapedContourText) {
+    logger.info({ classification: scrapedContourText.classification, text: scrapedContourText.text }, "Contour: elevation API unavailable — using scraped text fallback");
   }
 
   const merged = mergePropertyData(
@@ -219,9 +226,9 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     overlaysData,
     {
       contour: resolvedContour?.classification ?? null,
-      contour_slope_degrees: scrapedContour ? null : (contourData?.slope_degrees ?? null),
+      contour_slope_degrees: elevationMeasured ? (contourData?.slope_degrees ?? null) : null,
       contour_source: resolvedContour?.source ?? null,
-      contour_text: scrapedContour?.text ?? null,
+      contour_text: resolvedContour?.text ?? null,
       asbestos_risk: asbestosDetail.risk === "moderate" ? "high" : (asbestosDetail.risk ?? "unknown"),
       infrastructure: infrastructureData,
       property_history: propertyHistoryData,

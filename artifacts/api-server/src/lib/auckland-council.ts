@@ -242,16 +242,64 @@ function slopeFromGrid9(elevations: number[], offsetDeg: number): { slopeDeg: nu
 }
 
 async function fetchElevationViaOpenTopoData(lat: number, lng: number): Promise<ContourResult | null> {
-  // Use 0.001° (~111m) offset so each sample lands in a distinct SRTM 30m pixel.
-  // The 0.00025° (25m) grid used previously often hit the same 30m pixel, causing near-zero variance.
-  const OFFSET = 0.001;
-  const points = buildElevationGrid(lat, lng, OFFSET);
-  const locationStr = points.map((p) => `${p.lat},${p.lng}`).join("|");
-  const url = `https://api.opentopodata.org/v1/srtm30m?locations=${locationStr}`;
+  // Build a 5×5 grid at ~10m spacing to measure slope within the parcel itself.
+  // nzdem8m is NZ's purpose-built 8m DEM — far more accurate for Auckland than global SRTM 30m.
+  // At 0.00009° ≈ 10m steps, the 5×5 grid covers ~40m × 40m — typical suburban parcel size.
+  const FINE_OFFSET = 0.00009;
 
-  logger.info({ lat, lng, offsetM: Math.round(OFFSET * 111320) }, "OpenTopoData: querying SRTM30m elevation grid");
+  const finePoints: { lat: number; lng: number }[] = [];
+  for (let i = -2; i <= 2; i++) {
+    for (let j = -2; j <= 2; j++) {
+      finePoints.push({ lat: lat + i * FINE_OFFSET, lng: lng + j * FINE_OFFSET });
+    }
+  }
+  const fineLocStr = finePoints.map((p) => `${p.lat},${p.lng}`).join("|");
+
+  // Also add a broader 3×3 grid at 200m spacing to capture neighbourhood-scale slopes
+  // (catches situations where the parcel sits on a valley/ridge edge)
+  const BROAD_OFFSET = 0.0018; // ~200m
+  const broadPoints = buildElevationGrid(lat, lng, BROAD_OFFSET);
+  const broadLocStr = broadPoints.map((p) => `${p.lat},${p.lng}`).join("|");
+
+  // Try nzdem8m (NZ-specific 8m DEM) first with the fine parcel-scale grid
+  try {
+    const url = `https://api.opentopodata.org/v1/nzdem8m?locations=${fineLocStr}`;
+    logger.info({ lat, lng, points: finePoints.length, offsetM: Math.round(FINE_OFFSET * 111320) }, "OpenTopoData: querying nzdem8m (NZ 8m DEM) with parcel-scale grid");
+    const resp = await fetch(url, { signal: AbortSignal.timeout(12000) });
+    if (!resp.ok) throw new Error(`OpenTopoData nzdem8m HTTP ${resp.status}`);
+
+    const data = (await resp.json()) as { status: string; results?: Array<{ elevation: number }> };
+    if (data.status !== "OK" || !data.results || data.results.length < 25) throw new Error("nzdem8m: insufficient results");
+
+    const elevs = data.results.map((r) => r.elevation).filter((e) => e != null && !isNaN(e));
+    const centerElevation = elevs[12]; // centre of 5×5 grid
+    const stepM = FINE_OFFSET * 111320; // metres per grid step
+
+    // Find maximum gradient between any adjacent pair of points (EW and NS directions).
+    // This is more accurate than range/diagonal, which averages out local peaks.
+    let maxGrad = 0;
+    const COLS = 5;
+    for (let r = 0; r < COLS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const idx = r * COLS + c;
+        if (c + 1 < COLS) maxGrad = Math.max(maxGrad, Math.abs(elevs[idx] - elevs[idx + 1]) / stepM);
+        if (r + 1 < COLS) maxGrad = Math.max(maxGrad, Math.abs(elevs[idx] - elevs[idx + COLS]) / stepM);
+      }
+    }
+    const slopeDeg = Math.atan(maxGrad) * (180 / Math.PI);
+    const elevRange = Math.max(...elevs) - Math.min(...elevs);
+
+    logger.info({ lat, lng, centerElevation, elevRange, slopeDeg, maxGradPct: (maxGrad*100).toFixed(1), points: elevs.length }, "OpenTopoData nzdem8m: parcel-scale slope measurement");
+    return classifySlope(slopeDeg, "Auckland Council / LINZ NZ 8m DEM", centerElevation);
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "OpenTopoData nzdem8m failed — falling back to SRTM30m broad grid");
+  }
+
+  // Fallback: SRTM 30m with broader grid (works globally, lower resolution)
+  const url = `https://api.opentopodata.org/v1/srtm30m?locations=${broadLocStr}`;
+  logger.info({ lat, lng, offsetM: Math.round(BROAD_OFFSET * 111320) }, "OpenTopoData: querying SRTM30m broad grid fallback");
   const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
-  if (!resp.ok) throw new Error(`OpenTopoData HTTP ${resp.status}`);
+  if (!resp.ok) throw new Error(`OpenTopoData SRTM30m HTTP ${resp.status}`);
 
   const data = (await resp.json()) as {
     status: string;
@@ -263,10 +311,10 @@ async function fetchElevationViaOpenTopoData(lat: number, lng: number): Promise<
   }
 
   const elevations = data.results.map((r) => r.elevation);
-  const { slopeDeg, centerElevation } = slopeFromGrid9(elevations, OFFSET);
+  const { slopeDeg, centerElevation } = slopeFromGrid9(elevations, BROAD_OFFSET);
 
-  logger.info({ lat, lng, centerElevation, elevations, slopeDeg }, "OpenTopoData SRTM30m: raw values");
-  return classifySlope(slopeDeg, "Open-Topo-Data (SRTM 30m)", centerElevation);
+  logger.info({ lat, lng, centerElevation, elevations, slopeDeg }, "OpenTopoData SRTM30m broad fallback: raw values");
+  return classifySlope(slopeDeg, "Open-Topo-Data (SRTM 30m, broad grid)", centerElevation);
 }
 
 async function fetchElevationViaOpenElevation(lat: number, lng: number): Promise<ContourResult | null> {
@@ -423,8 +471,13 @@ export async function fetchContour(lat: number, lng: number): Promise<ContourRes
 
 function classifySlope(slopeDeg: number, source: string, elevationCenter?: number): ContourResult {
   const rounded = Math.round(slopeDeg * 10) / 10;
-  if (slopeDeg < 5) return { slope_degrees: rounded, classification: "flat",     retaining_cost_low: 0,      retaining_cost_high: 0,      source, elevation_center: elevationCenter ?? null };
-  if (slopeDeg < 12) return { slope_degrees: rounded, classification: "gentle",   retaining_cost_low: 10000,  retaining_cost_high: 30000,  source, elevation_center: elevationCenter ?? null };
-  if (slopeDeg < 22) return { slope_degrees: rounded, classification: "moderate", retaining_cost_low: 50000,  retaining_cost_high: 150000, source, elevation_center: elevationCenter ?? null };
-  return { slope_degrees: rounded, classification: "steep",    retaining_cost_low: 200000, retaining_cost_high: 400000, source, elevation_center: elevationCenter ?? null };
+  // Thresholds calibrated for NZ residential development feasibility:
+  // <3°  = effectively flat, no meaningful retaining needed
+  // 3-10° = gentle slope, minor level changes / retaining required
+  // 10-20° = moderate, significant retaining and earthworks budget needed
+  // >20°  = steep, major geotechnical and retaining cost implications
+  if (slopeDeg < 3)  return { slope_degrees: rounded, classification: "flat",     retaining_cost_low: 0,      retaining_cost_high: 5000,   source, elevation_center: elevationCenter ?? null };
+  if (slopeDeg < 10) return { slope_degrees: rounded, classification: "gentle",   retaining_cost_low: 15000,  retaining_cost_high: 60000,  source, elevation_center: elevationCenter ?? null };
+  if (slopeDeg < 20) return { slope_degrees: rounded, classification: "moderate", retaining_cost_low: 60000,  retaining_cost_high: 200000, source, elevation_center: elevationCenter ?? null };
+  return { slope_degrees: rounded, classification: "steep",    retaining_cost_low: 200000, retaining_cost_high: 500000, source, elevation_center: elevationCenter ?? null };
 }
