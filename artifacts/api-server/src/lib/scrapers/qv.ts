@@ -11,6 +11,17 @@ export interface QVData {
   floor_area_sqm: number | null;
   build_year: number | null;
   address_confirmed: string | null;
+  contour_text: string | null;
+  contour_classification: "flat" | "gentle" | "moderate" | "steep" | null;
+}
+
+export function mapNZContour(raw: string): "flat" | "gentle" | "moderate" | "steep" | null {
+  const lower = raw.toLowerCase().trim();
+  if (lower.includes("level") || lower.includes("flat")) return "flat";
+  if (lower.includes("easy") || lower.includes("gentle")) return "gentle";
+  if (lower.includes("moderate")) return "moderate";
+  if (lower.includes("steep") || lower.includes("very steep") || lower.includes("extreme")) return "steep";
+  return null;
 }
 
 function parseNZD(raw: string): number | null {
@@ -188,7 +199,15 @@ export async function scrapeQV(address: string): Promise<QVData | null> {
       ?? allText.match(/(?:year\s*built|construction\s*year)\s*\n?\s*(\d{4})/i);
     if (buildMatch) data.build_year = parseYear(buildMatch[1]);
 
-    logger.info({ cv_nzd: data.cv_nzd, lv: data.lv_nzd, land: data.land_area_sqm }, "QV.co.nz extraction result");
+    const contourMatch = allText.match(/\bcontour[:\s\n]+([A-Za-z][A-Za-z /]{1,30}?)(?:\n|\r|$)/im);
+    let contourText: string | null = null;
+    let contourClass: "flat" | "gentle" | "moderate" | "steep" | null = null;
+    if (contourMatch) {
+      contourText = contourMatch[1].trim().replace(/\s+/g, " ");
+      contourClass = mapNZContour(contourText);
+    }
+
+    logger.info({ cv_nzd: data.cv_nzd, lv: data.lv_nzd, land: data.land_area_sqm, contour: contourText }, "QV.co.nz extraction result");
 
     if (!data.cv_nzd && !data.land_area_sqm && !data.lv_nzd) {
       logger.warn({ url: currentUrl }, "QV.co.nz: no usable data extracted");
@@ -204,6 +223,8 @@ export async function scrapeQV(address: string): Promise<QVData | null> {
       floor_area_sqm: data.floor_area_sqm ?? null,
       build_year: data.build_year ?? null,
       address_confirmed: currentUrl,
+      contour_text: contourText,
+      contour_classification: contourClass,
     };
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "QV.co.nz scrape failed");

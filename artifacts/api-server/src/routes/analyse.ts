@@ -310,6 +310,7 @@ router.post("/chat", async (req, res) => {
               const floorSource = (merged as any).data_sources?.floor_area_sqm ?? null;
               const contourSlope = (merged as any).contour_slope_degrees ?? null;
               const contourSrc = (merged as any).contour_source ?? null;
+              const contourTxt = (merged as any).contour_text ?? null;
               const missingCritical = (merged as any).missing_critical_fields ?? [];
 
               enrichedContent = `Analyse this NZ property for development feasibility.${failedStr}
@@ -384,8 +385,9 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
   "asbestos": { "buildYear": "${merged.build_year ?? "null"}", "riskLevel": "${asbestos_detail.risk}", "risk": "${asbestos_detail.risk}", "flagged": ${asbestos_detail.risk === "high"}, "notes": "${asbestos_detail.notes}", "worksafe_required": ${asbestos_detail.risk === "high"}, "demoCostLow": ${costs.demo_low}, "demoCostHigh": ${costs.demo_high} },
   "terrain": {
     "classification": ${merged.contour ? `"${merged.contour}"` : "null"},
+    "official_label": ${contourTxt ? `"${contourTxt}"` : "null"},
     "slope_degrees": ${contourSlope ?? "null"},
-    "slope": ${merged.contour ? `"~${contourSlope ?? "?"}° slope — ${merged.contour}"` : "null"},
+    "slope": ${merged.contour ? `"${contourTxt ? contourTxt : `~${contourSlope ?? "?"}° slope`} — ${merged.contour}"` : "null"},
     "source": ${contourSrc ? `"${contourSrc}"` : "null"},
     "retainingCostLow": ${costs.retaining_low},
     "retainingCostHigh": ${costs.retaining_high}

@@ -196,6 +196,21 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
 
   const linzAreaSqm = linzParcelData?.area_sqm ?? null;
 
+  const scrapedContour =
+    qvData?.contour_classification
+      ? { classification: qvData.contour_classification, text: qvData.contour_text, source: "QV Rating Valuation" }
+      : hougardenData?.contour_classification
+        ? { classification: hougardenData.contour_classification, text: hougardenData.contour_text, source: "Hougarden" }
+        : null;
+
+  const resolvedContour = scrapedContour ?? (contourData ? { classification: contourData.classification, text: null, source: contourData.source } : null);
+
+  if (scrapedContour) {
+    logger.info({ classification: scrapedContour.classification, text: scrapedContour.text, source: scrapedContour.source }, "Contour: using official rating valuation data");
+  } else if (contourData) {
+    logger.info({ classification: contourData.classification, slope_degrees: contourData.slope_degrees, source: contourData.source }, "Contour: using elevation API fallback");
+  }
+
   const merged = mergePropertyData(
     linzParcelData,
     hougardenData,
@@ -203,9 +218,10 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     zoneData,
     overlaysData,
     {
-      contour: contourData?.classification ?? null,
-      contour_slope_degrees: contourData?.slope_degrees ?? null,
-      contour_source: contourData?.source ?? null,
+      contour: resolvedContour?.classification ?? null,
+      contour_slope_degrees: scrapedContour ? null : (contourData?.slope_degrees ?? null),
+      contour_source: resolvedContour?.source ?? null,
+      contour_text: scrapedContour?.text ?? null,
       asbestos_risk: asbestosDetail.risk === "moderate" ? "high" : (asbestosDetail.risk ?? "unknown"),
       infrastructure: infrastructureData,
       property_history: propertyHistoryData,

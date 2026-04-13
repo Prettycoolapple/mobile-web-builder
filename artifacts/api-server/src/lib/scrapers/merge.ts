@@ -29,6 +29,7 @@ export interface MergedPropertyData {
   contour: "flat" | "gentle" | "moderate" | "steep" | null;
   contour_slope_degrees: number | null;
   contour_source: string | null;
+  contour_text: string | null;
   asbestos_risk: "low" | "high" | "unknown";
   infrastructure: InfrastructureItem[];
   missing_critical_fields: string[];
@@ -54,6 +55,7 @@ export function mergePropertyData(
     contour: "flat" | "gentle" | "moderate" | "steep" | null;
     contour_slope_degrees?: number | null;
     contour_source?: string | null;
+    contour_text?: string | null;
     asbestos_risk: "low" | "high" | "unknown";
     infrastructure: InfrastructureItem[];
     property_history?: PropertyHistory | null;
@@ -168,6 +170,7 @@ export function mergePropertyData(
     contour: extra?.contour ?? null,
     contour_slope_degrees: extra?.contour_slope_degrees ?? null,
     contour_source: extra?.contour_source ?? null,
+    contour_text: extra?.contour_text ?? null,
     asbestos_risk: extra?.asbestos_risk ?? "unknown",
     infrastructure: extra?.infrastructure ?? [],
     missing_critical_fields,

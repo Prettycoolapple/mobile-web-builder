@@ -2,6 +2,7 @@ import { logger } from "../logger";
 import { launchBrowser, newStealthPage, randomDelay, logScrapeAttempt } from "./browser";
 import { fetchWithScrapingBee } from "./scrapingbee";
 import type { Overlay } from "../auckland-council";
+import { mapNZContour } from "./qv";
 
 export interface HougardenData {
   cv_nzd: number | null;
@@ -15,6 +16,8 @@ export interface HougardenData {
   overlay_map_image_base64: string | null;
   data_source: "hougarden";
   scraped_at: string;
+  contour_text: string | null;
+  contour_classification: "flat" | "gentle" | "moderate" | "steep" | null;
 }
 
 export function emptyHougardenData(): HougardenData {
@@ -23,6 +26,7 @@ export function emptyHougardenData(): HougardenData {
     zone_code: null, zone_description: null, overlays: [],
     school_zones: { primary: null, intermediate: null, secondary: null },
     overlay_map_image_base64: null, data_source: "hougarden", scraped_at: new Date().toISOString(),
+    contour_text: null, contour_classification: null,
   };
 }
 
@@ -143,6 +147,13 @@ function extractDataFromText(pageText: string): Partial<HougardenData> {
   ]) {
     const m = pattern.exec(pageText);
     if (m && result.school_zones) result.school_zones[key] = m[1].trim().slice(0, 80);
+  }
+
+  const contourM = pageText.match(/\bcontour[:\s\n]+([A-Za-z][A-Za-z /]{1,30}?)(?:\n|\r|$)/im);
+  if (contourM) {
+    const raw = contourM[1].trim().replace(/\s+/g, " ");
+    result.contour_text = raw;
+    result.contour_classification = mapNZContour(raw);
   }
 
   return result;
