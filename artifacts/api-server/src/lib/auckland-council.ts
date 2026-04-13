@@ -225,25 +225,31 @@ function buildElevationGrid(lat: number, lng: number, offset = 0.00025) {
   ];
 }
 
-function slopeFromGrid9(elevations: number[]): { slopeDeg: number; centerElevation: number } {
+function slopeFromGrid9(elevations: number[], offsetDeg: number): { slopeDeg: number; centerElevation: number } {
   const centerElevation = elevations[4];
-  const cornerElevations = [elevations[0], elevations[2], elevations[6], elevations[8]];
-  const maxCornerDiff = Math.max(...cornerElevations.map((e) => Math.abs(e - centerElevation)));
-  const slopeDegCorner = Math.atan(maxCornerDiff / 35) * (180 / Math.PI);
+  const adjacentDistM = offsetDeg * 111320;
+  const cornerDistM   = adjacentDistM * Math.SQRT2;
+
+  const cornerElevations   = [elevations[0], elevations[2], elevations[6], elevations[8]];
+  const maxCornerDiff      = Math.max(...cornerElevations.map((e) => Math.abs(e - centerElevation)));
+  const slopeDegCorner     = Math.atan(maxCornerDiff / cornerDistM) * (180 / Math.PI);
 
   const adjacentElevations = [elevations[1], elevations[3], elevations[5], elevations[7]];
-  const maxAdjacentDiff = Math.max(...adjacentElevations.map((e) => Math.abs(e - centerElevation)));
-  const slopeDegAdjacent = Math.atan(maxAdjacentDiff / 25) * (180 / Math.PI);
+  const maxAdjacentDiff    = Math.max(...adjacentElevations.map((e) => Math.abs(e - centerElevation)));
+  const slopeDegAdjacent   = Math.atan(maxAdjacentDiff / adjacentDistM) * (180 / Math.PI);
 
   return { slopeDeg: Math.max(slopeDegCorner, slopeDegAdjacent), centerElevation };
 }
 
 async function fetchElevationViaOpenTopoData(lat: number, lng: number): Promise<ContourResult | null> {
-  const points = buildElevationGrid(lat, lng);
+  // Use 0.001° (~111m) offset so each sample lands in a distinct SRTM 30m pixel.
+  // The 0.00025° (25m) grid used previously often hit the same 30m pixel, causing near-zero variance.
+  const OFFSET = 0.001;
+  const points = buildElevationGrid(lat, lng, OFFSET);
   const locationStr = points.map((p) => `${p.lat},${p.lng}`).join("|");
   const url = `https://api.opentopodata.org/v1/srtm30m?locations=${locationStr}`;
 
-  logger.info({ lat, lng }, "OpenTopoData: querying SRTM30m elevation grid");
+  logger.info({ lat, lng, offsetM: Math.round(OFFSET * 111320) }, "OpenTopoData: querying SRTM30m elevation grid");
   const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
   if (!resp.ok) throw new Error(`OpenTopoData HTTP ${resp.status}`);
 
@@ -257,14 +263,15 @@ async function fetchElevationViaOpenTopoData(lat: number, lng: number): Promise<
   }
 
   const elevations = data.results.map((r) => r.elevation);
-  const { slopeDeg, centerElevation } = slopeFromGrid9(elevations);
+  const { slopeDeg, centerElevation } = slopeFromGrid9(elevations, OFFSET);
 
   logger.info({ lat, lng, centerElevation, elevations, slopeDeg }, "OpenTopoData SRTM30m: raw values");
   return classifySlope(slopeDeg, "Open-Topo-Data (SRTM 30m)", centerElevation);
 }
 
 async function fetchElevationViaOpenElevation(lat: number, lng: number): Promise<ContourResult | null> {
-  const d = 0.00025;
+  // Use 0.001° (~111m) offset for same reason — ensures distinct SRTM pixels
+  const d = 0.001;
   const locations = [
     { latitude: lat - d, longitude: lng - d },
     { latitude: lat,     longitude: lng     },
@@ -284,7 +291,8 @@ async function fetchElevationViaOpenElevation(lat: number, lng: number): Promise
 
   const elevs = data.results.map((r) => r.elevation);
   const diff = Math.abs(elevs[2] - elevs[0]);
-  const slopeDeg = Math.atan(diff / 50) * (180 / Math.PI);
+  const diagonalDistM = d * 111320 * Math.SQRT2;
+  const slopeDeg = Math.atan(diff / diagonalDistM) * (180 / Math.PI);
   const centerElevation = elevs[1];
 
   logger.info({ lat, lng, centerElevation, elevs, slopeDeg }, "Open-Elevation API: raw values");
@@ -298,7 +306,9 @@ async function fetchElevationViaGoogle(lat: number, lng: number): Promise<Contou
     return null;
   }
 
-  const points = buildElevationGrid(lat, lng);
+  // Keep fine 0.00025° (25m) offset for Google — it has true high-res data for NZ
+  const OFFSET = 0.00025;
+  const points = buildElevationGrid(lat, lng, OFFSET);
   const locationStr = points.map((p) => `${p.lat},${p.lng}`).join("|");
   const url = `https://maps.googleapis.com/maps/api/elevation/json?locations=${locationStr}&key=${apiKey}`;
 
@@ -316,7 +326,7 @@ async function fetchElevationViaGoogle(lat: number, lng: number): Promise<Contou
   }
 
   const elevations = data.results.map((r) => r.elevation);
-  const { slopeDeg, centerElevation } = slopeFromGrid9(elevations);
+  const { slopeDeg, centerElevation } = slopeFromGrid9(elevations, OFFSET);
 
   logger.info({ lat, lng, centerElevation, elevations, slopeDeg }, "Google Elevation: raw values");
   return classifySlope(slopeDeg, "Google Elevation API", centerElevation);
