@@ -10,6 +10,8 @@ export interface ChatMessage {
   timestamp: number;
   type: "text" | "report" | "search" | "loading";
   loadingMode?: "analyse" | "discover" | "followup";
+  retryLabel?: string;
+  retryText?: string;
   report?: FeasibilityReport;
   searchResults?: PropertyCandidate[];
   isMockData?: boolean;

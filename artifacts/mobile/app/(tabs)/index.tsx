@@ -84,8 +84,10 @@ export default function ChatScreen() {
     const text = (overrideText !== undefined ? overrideText : inputText).trim();
     if (!text || isLoading) return;
 
+    // Clear input IMMEDIATELY before any async work
     setInputText("");
-    inputRef.current?.focus();
+    inputRef.current?.clear();
+    Keyboard.dismiss();
 
     const sessionId = currentSessionId ?? createSession();
 
@@ -101,79 +103,93 @@ export default function ChatScreen() {
 
     addMessage({ role: "assistant", content: "", type: "loading", loadingMode: detectedMode as any }, sessionId);
 
+    const MAX_RETRIES = 2;
+    const TIMEOUT_MS = 55_000;
+
+    const allMessages = [
+      ...messages
+        .filter((m) => m.type === "text" || m.type === "report" || m.type === "search")
+        .map((m) => ({
+          role: m.role as "user" | "assistant",
+          content: m.type === "text" ? m.content : m.type === "report" ? `[Feasibility report for ${m.report?.address || "property"}]` : "[Search results shown]",
+        })),
+      { role: "user" as const, content: text },
+    ];
+    const currentReport = currentSession?.currentReport ?? undefined;
+    const headers = getApiHeaders();
+
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 90_000);
-
-      const headers = getApiHeaders();
-
-      const allMessages = [
-        ...messages
-          .filter((m) => m.type === "text" || m.type === "report" || m.type === "search")
-          .map((m) => ({
-            role: m.role as "user" | "assistant",
-            content: m.type === "text" ? m.content : m.type === "report" ? `[Feasibility report for ${m.report?.address || "property"}]` : "[Search results shown]",
-          })),
-        { role: "user" as const, content: text },
-      ];
-
-      const currentReport = currentSession?.currentReport ?? undefined;
-
-      const resp = await fetch(`${getApiBase()}/chat`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          messages: allMessages,
-          currentReport,
-        }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-
-      if (!resp.ok) {
-        const err = (await resp.json()) as { error?: string; code?: string };
-        if (resp.status === 402) {
+      let lastErr: any = null;
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        if (attempt > 1) {
           updateLastMessage({
-            type: "text",
-            content: "You've used all 3 free reports this month. Upgrade to Pro for unlimited analysis.",
+            retryLabel: `Data sources slow — retrying (${attempt} of ${MAX_RETRIES})…`,
           }, sessionId);
-          setShowPaywall(true);
-        } else if (resp.status === 401) {
-          updateLastMessage({ type: "text", content: "Session expired. Please sign in again." }, sessionId);
-        } else {
-          updateLastMessage({ type: "text", content: err.error || "Something went wrong. Please try again." }, sessionId);
+          await new Promise<void>((r) => setTimeout(r, 1500));
         }
-        return;
+
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+          const resp = await fetch(`${getApiBase()}/chat`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ messages: allMessages, currentReport }),
+            signal: controller.signal,
+          });
+          clearTimeout(timeoutId);
+
+          if (!resp.ok) {
+            const err = (await resp.json()) as { error?: string; code?: string };
+            if (resp.status === 402) {
+              updateLastMessage({ type: "text", content: "You've used all 3 free reports this month. Upgrade to Pro for unlimited analysis." }, sessionId);
+              setShowPaywall(true);
+            } else if (resp.status === 401) {
+              updateLastMessage({ type: "text", content: "Session expired. Please sign in again." }, sessionId);
+            } else {
+              updateLastMessage({ type: "text", content: err.error || "Something went wrong. Please try again." }, sessionId);
+            }
+            return;
+          }
+
+          const data = (await resp.json()) as { content: string; mode: string };
+
+          if (data.mode === "analyse") {
+            const parsed = extractJSON(data.content) as FeasibilityReport | null;
+            if (parsed && parsed.scores) {
+              setCurrentReport(parsed);
+              updateLastMessage({ type: "report", report: parsed, content: "" }, sessionId);
+              refreshProfile().catch(() => {});
+            } else {
+              updateLastMessage({ type: "text", content: data.content }, sessionId);
+            }
+          } else if (data.mode === "discover") {
+            const parsed = extractJSON(data.content) as { candidates?: PropertyCandidate[]; isMockData?: boolean } | null;
+            if (parsed?.candidates && parsed.candidates.length > 0) {
+              updateLastMessage({ type: "search", searchResults: parsed.candidates, content: "", isMockData: parsed.isMockData ?? false }, sessionId);
+            } else {
+              updateLastMessage({ type: "text", content: data.content }, sessionId);
+            }
+          } else {
+            updateLastMessage({ type: "text", content: data.content }, sessionId);
+          }
+          return;
+        } catch (err: any) {
+          lastErr = err;
+          const isAbort = err?.name === "AbortError";
+          if (!isAbort || attempt >= MAX_RETRIES) break;
+        }
       }
 
-      const data = (await resp.json()) as { content: string; mode: string };
-
-      if (data.mode === "analyse") {
-        const parsed = extractJSON(data.content) as FeasibilityReport | null;
-        if (parsed && parsed.scores) {
-          setCurrentReport(parsed);
-          updateLastMessage({ type: "report", report: parsed, content: "" }, sessionId);
-          refreshProfile().catch(() => {});
-        } else {
-          updateLastMessage({ type: "text", content: data.content }, sessionId);
-        }
-      } else if (data.mode === "discover") {
-        const parsed = extractJSON(data.content) as { candidates?: PropertyCandidate[]; isMockData?: boolean } | null;
-        if (parsed?.candidates && parsed.candidates.length > 0) {
-          updateLastMessage({ type: "search", searchResults: parsed.candidates, content: "", isMockData: parsed.isMockData ?? false }, sessionId);
-        } else {
-          updateLastMessage({ type: "text", content: data.content }, sessionId);
-        }
-      } else {
-        updateLastMessage({ type: "text", content: data.content }, sessionId);
-      }
-    } catch (err: any) {
-      const isAbort = err?.name === "AbortError";
+      // All retries exhausted
+      const isTimeout = lastErr?.name === "AbortError";
       updateLastMessage({
         type: "text",
-        content: isAbort
-          ? "The analysis is taking longer than usual — NZ property scraping can be slow. Please try again and it should be faster the second time."
-          : "Couldn't connect to the analysis service. Check your connection and try again.",
+        content: isTimeout
+          ? "Analysis timed out after 2 attempts — NZ property data sources may be slow right now."
+          : "Couldn't connect to the analysis service. Check your connection.",
+        retryText: text,
       }, sessionId);
     } finally {
       setIsLoading(false);
@@ -213,9 +229,9 @@ export default function ChatScreen() {
 
   const renderItem = useCallback(
     ({ item }: { item: ChatMessage }) => (
-      <ChatBubble message={item} onFollowUp={handleFollowUp} onAnalyse={handleAnalyse} />
+      <ChatBubble message={item} onFollowUp={handleFollowUp} onAnalyse={handleAnalyse} onRetry={handleSend} />
     ),
-    [handleFollowUp, handleAnalyse],
+    [handleFollowUp, handleAnalyse, handleSend],
   );
 
   const keyExtractor = useCallback((item: ChatMessage) => item.id, []);
@@ -325,6 +341,7 @@ export default function ChatScreen() {
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
             automaticallyAdjustKeyboardInsets
+            nestedScrollEnabled
           />
         )}
       </Pressable>

@@ -12,7 +12,11 @@ const STEPS = [
 
 const STEP_DURATION_MS = 4000;
 
-export function AnalysisProgress() {
+interface Props {
+  retryLabel?: string;
+}
+
+export function AnalysisProgress({ retryLabel }: Props) {
   const colors = useColors();
   const [stepIndex, setStepIndex] = useState(0);
   const dotAnim = useRef(new Animated.Value(0)).current;
@@ -53,7 +57,7 @@ export function AnalysisProgress() {
       <View style={styles.header}>
         <Animated.View style={[styles.dot, { backgroundColor: colors.accent, opacity: dotOpacity }]} />
         <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-          Analysing property
+          {retryLabel ? "Retrying analysis" : "Analysing property"}
         </Text>
       </View>
 
@@ -70,23 +74,25 @@ export function AnalysisProgress() {
       </View>
 
       <Text
-        key={stepIndex}
+        key={retryLabel ?? stepIndex}
         style={[styles.step, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}
       >
-        {STEPS[stepIndex]}
+        {retryLabel ?? STEPS[stepIndex]}
       </Text>
 
-      <View style={styles.stepDots}>
-        {STEPS.map((_, i) => (
-          <View
-            key={i}
-            style={[
-              styles.stepDot,
-              { backgroundColor: i <= stepIndex ? colors.accent : colors.border },
-            ]}
-          />
-        ))}
-      </View>
+      {!retryLabel && (
+        <View style={styles.stepDots}>
+          {STEPS.map((_, i) => (
+            <View
+              key={i}
+              style={[
+                styles.stepDot,
+                { backgroundColor: i <= stepIndex ? colors.accent : colors.border },
+              ]}
+            />
+          ))}
+        </View>
+      )}
     </View>
   );
 }

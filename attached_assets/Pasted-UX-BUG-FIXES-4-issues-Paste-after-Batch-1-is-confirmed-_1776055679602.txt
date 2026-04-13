@@ -1,0 +1,362 @@
+UX BUG FIXES — 4 issues. Paste after Batch 1 is confirmed.
+
+════════════════════════════════
+ISSUE 1 — WRONG SUBURB IN DISCOVERY SEARCH
+Root cause: suburb extraction failing — "St Heliers" 
+being ignored, search defaulting to wrong location.
+════════════════════════════════
+
+STEP 1 — Fix suburb extraction with Claude.
+The current parser is likely using regex or simple 
+string matching. Replace with a Claude API call:
+
+async function extractSearchIntent(message: string): Promise<{
+  suburb: string | null,
+  price_min: number | null,
+  price_max: number | null,
+  criteria: string[]
+}> {
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-5',
+    max_tokens: 200,
+    messages: [{
+      role: 'user',
+      content: `Extract the search intent from this NZ property 
+      search query. Return ONLY valid JSON, no other text.
+      
+      Query: "${message}"
+      
+      Return:
+      {
+        "suburb": "exact suburb name as mentioned",
+        "city": "Auckland/Wellington/etc or null",
+        "price_min": number in NZD or null,
+        "price_max": number in NZD or null,
+        "criteria": ["list", "of", "requirements"]
+      }
+      
+      Examples:
+      "St Heliers" → suburb: "St Heliers"
+      "Grey Lynn" → suburb: "Grey Lynn"  
+      "$1.7M" → price_min: 1700000
+      "$2.2M" → price_max: 2200000
+      "subdividable" → criteria: ["subdividable"]
+      
+      The suburb must be extracted exactly as stated.
+      Do not substitute or guess a different suburb.`
+    }]
+  });
+  
+  return JSON.parse(response.content[0].text);
+}
+
+STEP 2 — Pass suburb correctly to OneRoof search.
+OneRoof suburb URL encoding matters:
+"St Heliers" → "st-heliers" (lowercase, hyphenated)
+"Grey Lynn" → "grey-lynn"
+
+const suburbanSlug = suburb
+  .toLowerCase()
+  .replace(/\s+/g, '-')
+  .replace(/[^a-z0-9-]/g, '');
+
+STEP 3 — Validate results before returning.
+After getting listings back from OneRoof or mock data,
+filter to only return listings that actually match 
+the requested suburb:
+
+const validated = results.filter(listing => {
+  const listingSuburb = listing.address.toLowerCase();
+  const targetSuburb = suburb.toLowerCase();
+  return listingSuburb.includes(targetSuburb) ||
+         targetSuburb.includes(extractSuburbFromAddress(listingSuburb));
+});
+
+if (validated.length === 0) {
+  // Don't return wrong-suburb results
+  // Return mock data for that specific suburb instead
+  return getMockDataForSuburb(suburb);
+}
+
+STEP 4 — Update mock data to include St Heliers.
+Add to mock-data.ts:
+
+'st heliers': [
+  {
+    address: '14 Cliff Road, St Heliers, Auckland',
+    price: 2100000,
+    land_sqm: 720,
+    zone_code: 'MHS',
+    quick_score: 3.2,
+    summary: 'MHS zone, 720m² — potential for 1 additional lot',
+    photo_url: null,
+  },
+  {
+    address: '7 Roberta Avenue, St Heliers, Auckland',
+    price: 1850000,
+    land_sqm: 850,
+    zone_code: 'MHS',
+    quick_score: 3.5,
+    summary: 'Large MHS section, flat to gentle slope',
+    photo_url: null,
+  },
+  {
+    address: '23 Polygon Road, St Heliers, Auckland',
+    price: 2050000,
+    land_sqm: 680,
+    zone_code: 'MHS',
+    quick_score: 2.8,
+    summary: 'Elevated site with views, some slope complexity',
+    photo_url: null,
+  },
+  {
+    address: '5 Lombard Street, St Heliers, Auckland',
+    price: 1950000,
+    land_sqm: 790,
+    zone_code: 'MHS',
+    quick_score: 3.0,
+    summary: 'Corner site, dual access potential',
+    photo_url: null,
+  },
+  {
+    address: '31 Tāmaki Drive, St Heliers, Auckland',
+    price: 2180000,
+    land_sqm: 650,
+    zone_code: 'SHZ',
+    quick_score: 2.0,
+    summary: 'SHZ zone — limited subdivision potential',
+    photo_url: null,
+  },
+],
+
+Also add: 'eastern suburbs', 'mission bay', 'kohimarama', 
+'glendowie' as common nearby alternatives.
+
+════════════════════════════════
+ISSUE 3 — TIMEOUT WITH NO AUTO-RETRY
+Root cause: single attempt with no retry logic.
+Bad UX to ask user to try again manually.
+════════════════════════════════
+
+STEP 1 — Add automatic retry in the API route.
+In /api/chat/route.ts for analyse mode:
+
+const MAX_RETRIES = 2;
+const TIMEOUT_MS = 25000;
+
+async function runPipelineWithRetry(
+  address: string, 
+  attempt: number = 1
+): Promise<PipelineResult> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(
+      () => controller.abort(), 
+      TIMEOUT_MS
+    );
+    
+    const result = await runPropertyPipeline(address);
+    clearTimeout(timeoutId);
+    return result;
+    
+  } catch (err: any) {
+    const isTimeout = err.name === 'AbortError' || 
+                      err.message?.includes('timeout');
+    
+    if (isTimeout && attempt < MAX_RETRIES) {
+      console.log(`Pipeline timeout, retry ${attempt}/${MAX_RETRIES}`);
+      // Wait 2s before retry
+      await new Promise(r => setTimeout(r, 2000));
+      return runPipelineWithRetry(address, attempt + 1);
+    }
+    
+    // All retries exhausted — return partial result
+    // rather than throwing completely
+    if (isTimeout) {
+      return {
+        partial: true,
+        error: 'timeout_after_retries',
+        // Return whatever data we have from fast sources
+        // (LINZ usually responds quickly even if scrapers don't)
+      };
+    }
+    
+    throw err;
+  }
+}
+
+STEP 2 — On partial result, still generate a report.
+If pipeline returns partial: true, pass to Claude with:
+
+"NOTE: Some data sources timed out. 
+Work with available data only. 
+Mark missing sections as 'Data retrieval timeout — 
+please try again for complete analysis.'
+Still generate the report with whatever data is available."
+
+STEP 3 — Update loading UI.
+In the mobile app AnalysisProgress component:
+If retry is happening, update the status message:
+
+"Data sources responding slowly — retrying..."
+"Retry attempt 2 of 2..."
+
+Do NOT show the user a failure message unless 
+all retries are exhausted AND no partial data exists.
+
+If all retries fail with zero data:
+Show inline in chat (not a toast):
+"Analysis failed after 2 attempts. The property 
+data APIs may be temporarily slow. 
+[Try again ↻]" 
+
+The [Try again] button resends the same message 
+automatically — user doesn't have to retype.
+
+════════════════════════════════
+ISSUE 5 — INPUT NOT CLEARING AFTER SEND
+Root cause: input state not being reset after send.
+════════════════════════════════
+
+In ChatInput component (React Native):
+
+const [inputText, setInputText] = useState('');
+const inputRef = useRef<TextInput>(null);
+
+const handleSend = async () => {
+  if (!inputText.trim() || isLoading) return;
+  
+  const messageToSend = inputText.trim();
+  
+  // Clear input IMMEDIATELY before async operations
+  setInputText('');
+  inputRef.current?.clear(); // Also call .clear() for safety
+  
+  // Dismiss keyboard on send
+  Keyboard.dismiss();
+  
+  // Now process the message
+  await sendMessage(messageToSend);
+};
+
+<TextInput
+  ref={inputRef}
+  value={inputText}
+  onChangeText={setInputText}
+  onSubmitEditing={handleSend}
+  ...
+/>
+
+The key fix: setInputText('') must happen BEFORE 
+the await call, not after. Otherwise React batches 
+the state update and it appears to not clear.
+
+Also add long-press to copy on chat bubbles:
+In ChatBubble component:
+
+import { Clipboard, Alert } from 'react-native';
+
+<TouchableOpacity
+  onLongPress={() => {
+    // Only for text messages, not report cards
+    if (message.type === 'text') {
+      Clipboard.setString(message.content);
+      // Show brief feedback
+      Alert.alert('Copied', 'Message copied to clipboard', 
+        [{ text: 'OK' }],
+        { cancelable: true }
+      );
+      // Or use a toast if you have one:
+      // showToast('Copied to clipboard');
+    }
+  }}
+  delayLongPress={400}
+>
+  {/* bubble content */}
+</TouchableOpacity>
+
+════════════════════════════════
+ISSUE 6 — SCROLL STUCK ON REPORT CARDS
+Root cause: nested scroll views competing for 
+touch events. When finger lands on a child 
+ScrollView or touchable inside the report, 
+the parent FlatList doesn't receive scroll events.
+════════════════════════════════
+
+STEP 1 — Fix scroll competition in FlatList.
+In the main chat FlatList:
+
+<FlatList
+  ...
+  // These two props fix nested scroll competition:
+  nestedScrollEnabled={true}
+  keyboardShouldPersistTaps="handled"
+/>
+
+STEP 2 — Wrap FeasibilityReport in a ScrollView 
+that passes scroll events to parent:
+
+// In FeasibilityReport.tsx (React Native version)
+<ScrollView
+  scrollEnabled={true}
+  nestedScrollEnabled={true}
+  // This is the key prop — allows parent to scroll
+  // when this component's content is fully visible
+  onStartShouldSetResponder={() => false}
+  onMoveShouldSetResponder={() => false}
+>
+  {/* report content */}
+</ScrollView>
+
+STEP 3 — Make all touchable areas within report 
+NOT intercept scroll gestures:
+
+For AccordionSection headers (TouchableOpacity):
+<TouchableOpacity
+  activeOpacity={0.7}
+  onPress={toggle}
+  // Don't steal scroll gestures
+  delayLongPress={500}
+>
+
+STEP 4 — Alternative approach if above doesn't fix it:
+Convert the FeasibilityReport from a nested ScrollView 
+to a flat list of sections that the parent FlatList renders:
+
+Instead of rendering <FeasibilityReport> as one item 
+in the FlatList, render each section as a separate 
+FlatList item. This completely eliminates nested 
+scroll competition because there's only one scroll 
+view in the hierarchy.
+
+reportSections = [
+  { type: 'header', data: report },
+  { type: 'scores', data: report.scores },
+  { type: 'overlays', data: report.overlays },
+  { type: 'asbestos', data: report.asbestos },
+  // ... etc
+]
+
+messages.flatMap(msg => 
+  msg.type === 'report' 
+    ? expandReportToSections(msg.report)
+    : [msg]
+)
+
+This is the cleanest solution — try Step 3 first, 
+use this approach if scrolling is still unreliable.
+
+════════════════════════════════
+VERIFICATION
+════════════════════════════════
+
+[ ] "Find properties in St Heliers under $2.2M" 
+    returns St Heliers results, not New Lynn/Glen Innes
+[ ] Result cards show correct Auckland eastern suburbs
+[ ] Typing an address and pressing send clears the input
+[ ] Long-pressing a chat bubble shows copy confirmation
+[ ] Scrolling through a full report is smooth — 
+    test with finger starting ON a card section
+[ ] Timeout on analysis auto-retries silently
+[ ] After retry failure: inline retry button appears
+[ ] No more "please try again" dead-end messages

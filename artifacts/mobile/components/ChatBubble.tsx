@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, Component } from "react";
-import { View, Text, StyleSheet, Animated, Easing } from "react-native";
+import { View, Text, StyleSheet, Animated, Easing, TouchableOpacity, TouchableWithoutFeedback, Clipboard, Alert } from "react-native";
 import Markdown from "react-native-markdown-display";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
@@ -59,6 +59,7 @@ interface Props {
   message: ChatMessage;
   onFollowUp: (question: string) => void;
   onAnalyse: (address: string) => void;
+  onRetry?: (text: string) => void;
 }
 
 function TypingDots() {
@@ -104,14 +105,14 @@ function TypingDots() {
   );
 }
 
-export function ChatBubble({ message, onFollowUp, onAnalyse }: Props) {
+export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry }: Props) {
   const colors = useColors();
   const isUser = message.role === "user";
 
   if (message.type === "loading") {
     const isAnalysing = message.loadingMode === "analyse";
     if (isAnalysing) {
-      return <AnalysisProgress />;
+      return <AnalysisProgress retryLabel={message.retryLabel} />;
     }
     return (
       <View style={styles.aiRow}>
@@ -119,7 +120,13 @@ export function ChatBubble({ message, onFollowUp, onAnalyse }: Props) {
           <Text style={styles.aiAvatarText}>D</Text>
         </View>
         <View style={[styles.loadingBubble, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <TypingDots />
+          {message.retryLabel ? (
+            <Text style={[styles.retryLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+              {message.retryLabel}
+            </Text>
+          ) : (
+            <TypingDots />
+          )}
         </View>
       </View>
     );
@@ -157,14 +164,20 @@ export function ChatBubble({ message, onFollowUp, onAnalyse }: Props) {
   }
 
   if (isUser) {
+    const handleLongPress = () => {
+      Clipboard.setString(message.content);
+      Alert.alert("Copied", "Message copied to clipboard.");
+    };
     return (
-      <View style={styles.userRow}>
-        <View style={[styles.userBubble, { backgroundColor: colors.accent }]}>
-          <Text style={[styles.userText, { fontFamily: "DM_Sans_400Regular" }]}>
-            {message.content}
-          </Text>
+      <TouchableWithoutFeedback onLongPress={handleLongPress}>
+        <View style={styles.userRow}>
+          <View style={[styles.userBubble, { backgroundColor: colors.accent }]}>
+            <Text style={[styles.userText, { fontFamily: "DM_Sans_400Regular" }]}>
+              {message.content}
+            </Text>
+          </View>
         </View>
-      </View>
+      </TouchableWithoutFeedback>
     );
   }
 
@@ -239,6 +252,18 @@ export function ChatBubble({ message, onFollowUp, onAnalyse }: Props) {
         <Markdown style={markdownStyles as any}>
           {message.content}
         </Markdown>
+        {message.retryText && onRetry && (
+          <TouchableOpacity
+            onPress={() => onRetry(message.retryText!)}
+            style={[styles.retryButton, { borderColor: colors.border, backgroundColor: colors.muted }]}
+            activeOpacity={0.7}
+          >
+            <Feather name="refresh-cw" size={13} color={colors.accent} />
+            <Text style={[styles.retryButtonText, { color: colors.accent, fontFamily: "DM_Sans_500Medium" }]}>
+              Try again
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
@@ -347,5 +372,24 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 12,
     lineHeight: 18,
+  },
+  retryLabel: {
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  retryButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    alignSelf: "flex-start",
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+    borderWidth: 1,
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  retryButtonText: {
+    fontSize: 13,
   },
 });

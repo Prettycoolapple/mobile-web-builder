@@ -3,6 +3,7 @@ import type { PropertyCandidate } from "./pre-screen";
 export const MOCK_SUBURBS = [
   "remuera", "epsom", "mt-eden", "grey-lynn", "ponsonby",
   "parnell", "sandringham", "onehunga", "new-lynn", "titirangi",
+  "st-heliers", "kohimarama", "mission-bay", "glendowie", "eastern-suburbs",
 ];
 
 type MockEntry = {
@@ -87,6 +88,41 @@ const MOCK_LISTINGS: Record<string, MockEntry[]> = {
     { address: "6 Domain Rd, Titirangi", price: 1250000, landArea: 900, zone: "MHS", ease: 2.5, cost: 2.5, roi: 2.5, composite: 2.5, briefSummary: "Outside heritage area. Steep terrain adds cost. 2 lots potentially achievable." },
     { address: "22 Wood Bay Rd, Titirangi", price: 1050000, landArea: 1100, zone: "LSZ", ease: 1.5, cost: 2.0, roi: 1.5, composite: 1.7, briefSummary: "Bush setting. No subdivision potential in LSZ. Lifestyle property only." },
     { address: "9 Atkinson Rd, Titirangi", price: 900000, landArea: 750, zone: "MHS", ease: 2.5, cost: 3.0, roi: 2.5, composite: 2.7, briefSummary: "MHS but outside main village. Moderate slope. One additional dwelling possible." },
+  ],
+  "st-heliers": [
+    { address: "14 Cliff Road, St Heliers, Auckland", price: 2100000, landArea: 720, zone: "MHS", ease: 3.2, cost: 2.5, roi: 3.0, composite: 3.0, briefSummary: "MHS zone, 720m² — potential for 1 additional lot. Coastal suburb premium." },
+    { address: "7 Roberta Avenue, St Heliers, Auckland", price: 1850000, landArea: 850, zone: "MHS", ease: 3.5, cost: 3.0, roi: 3.5, composite: 3.4, briefSummary: "Large MHS section, flat to gentle slope. Two lots comfortably achievable." },
+    { address: "23 Polygon Road, St Heliers, Auckland", price: 2050000, landArea: 680, zone: "MHS", ease: 2.8, cost: 2.5, roi: 2.5, composite: 2.7, briefSummary: "Elevated site with sea views, some slope complexity — retaining likely required." },
+    { address: "5 Lombard Street, St Heliers, Auckland", price: 1950000, landArea: 790, zone: "MHS", ease: 3.0, cost: 3.0, roi: 3.0, composite: 3.0, briefSummary: "Corner site, dual access potential. Strong eastern suburb resale demand." },
+    { address: "31 Tāmaki Drive, St Heliers, Auckland", price: 2180000, landArea: 650, zone: "SHZ", ease: 2.0, cost: 2.0, roi: 2.0, composite: 2.0, briefSummary: "SHZ zone — limited subdivision potential. Value in premium beachfront location." },
+  ],
+  kohimarama: [
+    { address: "12 Selwyn Avenue, Kohimarama, Auckland", price: 1980000, landArea: 760, zone: "MHS", ease: 3.5, cost: 2.5, roi: 3.0, composite: 3.0, briefSummary: "MHS zone 760m², 2 lots feasible. Walk to Kohimarama Beach boosts resale." },
+    { address: "38 Kohimarama Road, Kohimarama, Auckland", price: 2200000, landArea: 820, zone: "MHS", ease: 3.0, cost: 2.5, roi: 3.0, composite: 2.9, briefSummary: "Flat site, clean overlays. Premium suburb supports strong new-build pricing." },
+    { address: "4 Aldred Road, Kohimarama, Auckland", price: 1750000, landArea: 700, zone: "MHS", ease: 3.5, cost: 3.0, roi: 3.5, composite: 3.4, briefSummary: "Good value for Kohimarama. 700m² with clear development potential." },
+    { address: "21 Watene Crescent, Kohimarama, Auckland", price: 1900000, landArea: 780, zone: "SHZ", ease: 2.0, cost: 2.5, roi: 2.5, composite: 2.3, briefSummary: "SHZ limits options — best as luxury renovation or owner-occupied hold." },
+    { address: "9 Godden Crescent, Kohimarama, Auckland", price: 2050000, landArea: 890, zone: "MHS", ease: 3.5, cost: 3.0, roi: 3.5, composite: 3.4, briefSummary: "Large MHS section. 2–3 lots achievable. Strong owner-occupier exit market." },
+  ],
+  "mission-bay": [
+    { address: "16 Misson Bay Parade, Mission Bay, Auckland", price: 2350000, landArea: 650, zone: "MHS", ease: 2.5, cost: 2.0, roi: 2.5, composite: 2.3, briefSummary: "Prime Mission Bay location, higher entry cost. One additional lot possible." },
+    { address: "8 Rawhiti Road, Mission Bay, Auckland", price: 2050000, landArea: 720, zone: "MHS", ease: 3.0, cost: 2.5, roi: 3.0, composite: 2.9, briefSummary: "720m² MHS, 2 lots feasible. Beach proximity commands new-build premium." },
+    { address: "33 Atkin Avenue, Mission Bay, Auckland", price: 1900000, landArea: 680, zone: "MHS", ease: 3.5, cost: 3.0, roi: 3.0, composite: 3.2, briefSummary: "Accessible site, good development metrics for Mission Bay price point." },
+    { address: "5 Turama Road, Mission Bay, Auckland", price: 2100000, landArea: 740, zone: "MHS", ease: 3.0, cost: 2.5, roi: 3.0, composite: 2.9, briefSummary: "Near Tamaki Drive strip. Strong rental and resale demand from coastal position." },
+    { address: "19 Patteson Avenue, Mission Bay, Auckland", price: 1980000, landArea: 800, zone: "MHS", ease: 3.5, cost: 3.0, roi: 3.5, composite: 3.4, briefSummary: "Best value option in Mission Bay. 800m² with solid 2-lot subdivision case." },
+  ],
+  glendowie: [
+    { address: "14 Riddell Road, Glendowie, Auckland", price: 1850000, landArea: 780, zone: "MHS", ease: 3.5, cost: 3.0, roi: 3.5, composite: 3.4, briefSummary: "Flat Glendowie section, 2 lots clearly achievable. Family suburb with strong demand." },
+    { address: "27 Glendowie Road, Glendowie, Auckland", price: 1700000, landArea: 850, zone: "MHS", ease: 3.5, cost: 3.5, roi: 3.5, composite: 3.5, briefSummary: "Large MHS site, excellent value for eastern suburbs. Good school zone." },
+    { address: "6 Eastern Beach Road, Glendowie, Auckland", price: 1950000, landArea: 720, zone: "SHZ", ease: 2.0, cost: 2.5, roi: 2.0, composite: 2.2, briefSummary: "SHZ zone restricts subdivision. Quality coastal position for long-term hold." },
+    { address: "41 Crossfield Road, Glendowie, Auckland", price: 1600000, landArea: 900, zone: "MHS", ease: 4.0, cost: 3.5, roi: 3.5, composite: 3.7, briefSummary: "Best development value in Glendowie. Large MHS section, 2–3 lots viable." },
+    { address: "9 Glenvar Road, Glendowie, Auckland", price: 1750000, landArea: 760, zone: "MHS", ease: 3.5, cost: 3.0, roi: 3.0, composite: 3.2, briefSummary: "End-of-road privacy. 2 lots feasible on flat 760m² section." },
+  ],
+  "eastern-suburbs": [
+    { address: "52 Point England Road, Glen Innes, Auckland", price: 1050000, landArea: 810, zone: "MHU", ease: 4.0, cost: 4.0, roi: 4.0, composite: 4.0, briefSummary: "MHU zoning with strong yield. 3 lots achievable. Excellent entry-level value." },
+    { address: "18 Shires Road, Howick, Auckland", price: 1350000, landArea: 750, zone: "MHS", ease: 3.5, cost: 3.5, roi: 3.5, composite: 3.5, briefSummary: "Flat Howick section. 2 lots feasible, good family suburb exit market." },
+    { address: "34 Pakuranga Road, Pakuranga, Auckland", price: 1200000, landArea: 820, zone: "MHS", ease: 3.5, cost: 4.0, roi: 4.0, composite: 3.9, briefSummary: "Good development fundamentals at lower eastern suburbs price point." },
+    { address: "9 Kupe Street, Māngere East, Auckland", price: 850000, landArea: 760, zone: "MHU", ease: 4.5, cost: 4.5, roi: 4.5, composite: 4.5, briefSummary: "Highest composite score — MHU zoning, flat site, low entry cost. Strong ROI." },
+    { address: "21 Sandspit Road, Shelly Park, Auckland", price: 1600000, landArea: 900, zone: "MHS", ease: 3.5, cost: 3.0, roi: 3.0, composite: 3.2, briefSummary: "Eastern Howick fringe, large section with sea glimpse. 2 lots viable." },
   ],
 };
 
