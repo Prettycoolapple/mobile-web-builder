@@ -396,10 +396,22 @@ router.post("/chat", async (req, res) => {
       }
 
       if (mode === "analyse") {
-        const [extractedAddress, aiResponseEarly] = await Promise.all([
-          extractNZAddress(userText).catch(() => null),
-          Promise.resolve(null),
-        ]);
+        // Try to get the address from the current message; if not found, look back in history.
+        // This handles follow-ups like "just analyze the property" / "analyze it" where the
+        // address was mentioned in an earlier message.
+        let extractedAddress = await extractNZAddress(userText).catch(() => null);
+
+        if (!extractedAddress) {
+          for (const msg of [...messages].reverse()) {
+            if (msg.role === "user" && msg.content !== userText) {
+              const prev = await extractNZAddress(msg.content).catch(() => null);
+              if (prev) { extractedAddress = prev; break; }
+            }
+          }
+        }
+
+        const aiResponseEarly = null;
+        void aiResponseEarly;
 
         if (extractedAddress) {
           req.log.info({ address: extractedAddress }, "Running property pipeline for analyse mode");
@@ -602,7 +614,6 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
           }
         }
 
-        void aiResponseEarly;
       }
 
       const { content, mode: responseMode } = await generateUnifiedResponse(messages, currentReport);
@@ -656,22 +667,26 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
         }
       }
 
-      // Safety net B: if the AI returned raw JSON with candidates in a non-discover response,
-      // re-classify it as discover so the frontend can render property cards instead of raw JSON
+      // Safety net B: catch any raw JSON the AI leaked and re-classify it properly
       if (responseMode !== "discover" && responseMode !== "analyse") {
-        const trimmed = content.trim();
-        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+        const cleaned = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+        if (cleaned.startsWith("{") || cleaned.startsWith("[")) {
           try {
-            const parsed = JSON.parse(trimmed.replace(/```(?:json)?\s*/gi, "").replace(/```\s*/g, "").trim());
+            const parsed = JSON.parse(cleaned);
             if (parsed && Array.isArray(parsed.candidates)) {
-              res.json({ content: trimmed, mode: "discover" });
+              // Leaked discover JSON — render as property cards
+              res.json({ content: cleaned, mode: "discover" });
+              return;
+            }
+            if (parsed && (parsed.reportId || (parsed.address && parsed.zoning) || parsed.propertyOverview)) {
+              // Leaked feasibility report JSON — render as analyse report
+              res.json({ content: JSON.stringify(parsed), mode: "analyse" });
               return;
             }
           } catch {
-            // Not valid JSON — strip any partial JSON and return an error message
-            const isLikelyBrokenJson = /^\s*\{[\s\S]{20,}/.test(trimmed);
+            const isLikelyBrokenJson = /^\s*\{[\s\S]{20,}/.test(cleaned);
             if (isLikelyBrokenJson) {
-              res.json({ content: "I'm sorry, I couldn't retrieve that information right now. Please try rephrasing your question.", mode: "text" });
+              res.json({ content: "I'm sorry, I couldn't generate that right now. Please try again.", mode: "text" });
               return;
             }
           }

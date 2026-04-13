@@ -12,42 +12,46 @@ export type ChatMode = "analyse" | "discover" | "followup";
 export function detectMode(lastMessage: string): ChatMode {
   const lower = lastMessage.toLowerCase().trim();
 
+  // ─── ANALYSE: highest priority — check before any discover logic ───────────
+  // A specific street address always means analyse, regardless of suburb mentions.
+  const hasStreetAddress = /\d+\s+\w[\w''-]*(\s+\w[\w''-]*)?\s+(road|street|avenue|crescent|place|drive|way|lane|terrace|parade|close|grove|rise|view|heights|ridge|court|hill|boulevard|esplanade|quay)\b/i.test(lastMessage);
+  const hasAddressCity = /,\s*(auckland|wellington|christchurch|hamilton|tauranga|dunedin|napier|hastings|palmerston|rotorua|new zealand|nz)\b/i.test(lastMessage);
+  // Explicit analyse intent — even without an address in the current message (e.g. "just analyze the property")
+  const hasAnalyseVerb = /\b(analyse|analyze|analysis|feasibility|assess|evaluate)\b/i.test(lower);
+
+  if (hasStreetAddress || hasAddressCity || hasAnalyseVerb) return "analyse";
+
+  // ─── DISCOVER: property search intent ─────────────────────────────────────
   const searchKeywords = [
     "find me", "find properties", "search for", "show me properties", "discover",
     "looking for properties", "what properties", "properties in", "sections in", "land in",
     "subdividable", "subdivision opportunities", "development sites", "lifestyle properties",
     "investment properties", "find sites", "show properties",
-    // broader natural-language search patterns
     "any properties", "any homes", "any houses", "any sections", "any land",
     "properties for sale", "homes for sale", "houses for sale", "land for sale",
     "on the market", "on sale", "for sale in", "listed in", "listings in",
     "available in", "available properties",
     "land bigger", "land larger", "land size", "bigger than", "larger than",
-    "more than", "over 1", "over 2", "over 3", "over 4", "over 5",
     "at least", "minimum land", "sites in", "sites near",
     "price around", "budget of", "under $", "below $", "above $",
     "looking to buy", "want to buy", "buying in",
   ];
   if (searchKeywords.some((k) => lower.includes(k))) return "discover";
 
-  // Pattern-based search detection (regex)
   const searchPatterns = [
     /any\s+\w+\s+propert/i,
     /propert\w*\s+(on\s+sale|for\s+sale|available|listed)/i,
     /land\s+(area\s+)?(bigger|larger|over|above|more\s+than|greater\s+than)\s+\w*\s*\d/i,
     /\d+\s*(m2|sqm|m²|square\s+met)\s*(or\s+)?(bigger|larger|more|plus|above|over)/i,
-    /\d+\s*k?\s*(or\s+)?(less|under|below)\s+(in|at|near)/i,
     /show\s+(me\s+)?(all|some|any)\s+/i,
     /what('s|\s+is|\s+are)\s+(available|on\s+(the\s+)?market|for\s+sale)/i,
-    // Conversational follow-up patterns: "what about [suburb]", "how about [suburb]", "try [suburb]"
     /^(what|how)\s+about\s+(in\s+)?[\w\s]+/i,
     /^(try|check|look\s+in|look\s+at)\s+[\w\s]+/i,
     /^(ok|okay|and)[\s,]*(what|how)\s+about/i,
-    /\b(in|near|around)\s+[\w\s]+\??\s*$/i,
   ];
   if (searchPatterns.some((p) => p.test(lower))) return "discover";
 
-  // If the message is very short and contains a known suburb name (or similar), treat as discover follow-up
+  // Short message with only a suburb name → discover follow-up
   const KNOWN_SUBURBS = [
     "remuera", "epsom", "mt eden", "grey lynn", "ponsonby", "parnell", "herne bay",
     "westmere", "kingsland", "sandringham", "mt albert", "mt roskill", "onehunga",
@@ -57,12 +61,11 @@ export function detectMode(lastMessage: string): ChatMode {
     "milford", "browns bay", "glen innes", "penrose", "ellerslie", "mangere",
     "birkenhead", "massey", "royal oak", "mt wellington", "manurewa", "papatoetoe",
     "papakura", "glen eden", "st johns", "otahuhu", "panmure",
-    // Variants
     "saint heliers", "saint johns", "mount eden", "mount albert", "mount roskill", "mount wellington",
   ];
   const hasKnownSuburb = KNOWN_SUBURBS.some((s) => lower.includes(s));
-  const isShortOrVague = lower.length < 60 || /^(ok|okay|yes|sure|and|what|how|try|check|look)\b/i.test(lower);
-  if (hasKnownSuburb && isShortOrVague) return "discover";
+  const isVagueShort = lower.length < 50 || /^(ok|okay|yes|sure|and|what|how|try)\b/i.test(lower);
+  if (hasKnownSuburb && isVagueShort) return "discover";
 
   const followUpDiscoverKeywords = [
     "any others", "any more", "show more", "more properties", "more options",
@@ -71,13 +74,6 @@ export function detectMode(lastMessage: string): ChatMode {
     "keep looking", "find more", "another one", "few more",
   ];
   if (followUpDiscoverKeywords.some((k) => lower.includes(k))) return "discover";
-
-  const analyseKeywords = ["analyse", "analyze", "analysis", "feasibility", "check", "look at", "assess", "evaluate", "review"];
-  const hasAddress = /\d+\s+\w+\s+(road|street|avenue|crescent|place|drive|way|lane|terrace|parade|close|grove|rise|view|heights|ridge|court|hill)/i.test(lastMessage);
-  const hasAddressComma = /,\s*(auckland|wellington|christchurch|hamilton|tauranga|dunedin|napier|hastings|palmerston|rotorua|new zealand|nz)/i.test(lastMessage);
-
-  if (hasAddress || hasAddressComma) return "analyse";
-  if (analyseKeywords.some((k) => lower.includes(k)) && lower.match(/\d+/)) return "analyse";
 
   return "followup";
 }
