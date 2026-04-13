@@ -73,7 +73,7 @@ AI-powered NZ real estate development feasibility analysis mobile app built with
 - `auckland-council.ts` — `fetchUnitaryPlanZone()` + `fetchOverlays()` + `fetchContour()`: Auckland Council GIS at `mapspublic.aucklandcouncil.govt.nz/arcgis3`
   - Zone service: `NonCouncil/UnitaryPlanZones/MapServer/1` (56-code numeric domain map)
   - Overlays: layers 33 (heritage), 19 (notable trees, 30m buffer), 25/27 (viewshafts), 58 (coastal inundation), 24 (Waitakere), 29 (ridgeline)
-  - `fetchContour()`: Google Maps Elevation API (9-point grid, ~25-35m offset) → LINZ DEM fallback → returns `{ slope_degrees: null, classification: null, source: "unavailable" }` when both fail. **Requires `GOOGLE_MAPS_API_KEY` secret** for Google elevation; LINZ uses `LINZ_API_KEY`
+  - `fetchContour()`: **4-source waterfall** — Google Elevation (if `GOOGLE_MAPS_API_KEY` set) → **Open-Topo-Data SRTM30m (free, no key, primary)** → Open-Elevation API (free backup) → LINZ DEM. 9-point grid, ~25m offset, slope from max corner/adjacent diff. Returns `{ slope_degrees, classification, source }`. Always returns data for NZ thanks to free SRTM30m coverage.
 - `property-data.ts` — `fetchPropertyHistory()` + `checkAsbestosRisk()`: Auckland Council rating GIS + QV fallback; asbestos risk by build year
 - `infrastructure.ts` — `fetchInfrastructure()`: stormwater/wastewater/water supply distance from parcel
 - `scrapers/browser.ts` — `launchBrowser()` + `newStealthPage()`: NixOS system Chromium with full stealth evasion; `withBrowserSlot()` (max 2 concurrent)

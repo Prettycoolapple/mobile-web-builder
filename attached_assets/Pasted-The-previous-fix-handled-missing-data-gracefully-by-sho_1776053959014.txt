@@ -1,0 +1,683 @@
+The previous fix handled missing data gracefully by showing 
+"unavailable". That is NOT acceptable for a feasibility tool.
+Every critical field must be fetched from real sources.
+
+This prompt replaces the null-handling approach with 
+aggressive multi-source fetching. "Unavailable" is only 
+the last resort after ALL sources have been tried.
+
+TEST ADDRESS: 8 Hampton Drive, St Heliers, Auckland
+
+════════════════════════════════
+PRIORITY 1 — TERRAIN/ELEVATION
+Fix this first — it requires zero API keys.
+════════════════════════════════
+
+GOOD NEWS: There is a completely free elevation API 
+that requires NO key and works right now.
+
+Use Open-Topo-Data (opentopodata.org):
+
+async function fetchElevationFree(
+  lat: number, lng: number
+): Promise<ContourResult> {
+  
+  // Sample 9 points in a grid around the property
+  const d = 0.00025; // ~25m offset
+  const points = [
+    [lat-d, lng-d], [lat-d, lng], [lat-d, lng+d],
+    [lat,   lng-d], [lat,   lng], [lat,   lng+d],
+    [lat+d, lng-d], [lat+d, lng], [lat+d, lng+d],
+  ];
+  
+  const locationStr = points
+    .map(([la, ln]) => `${la},${ln}`)
+    .join('|');
+  
+  // SRTM 30m dataset — covers all of NZ, free, no key
+  const url = `https://api.opentopodata.org/v1/srtm30m` +
+    `?locations=${locationStr}`;
+  
+  const res = await fetch(url, {
+    signal: AbortSignal.timeout(8000)
+  });
+  const data = await res.json();
+  
+  if (data.status !== 'OK') throw new Error('Elevation fetch failed');
+  
+  const elevations = data.results.map((r: any) => r.elevation);
+  const center = elevations[4];
+  
+  // Max elevation change across the 50m grid
+  const maxDiff = Math.max(
+    ...elevations.map((e: number) => Math.abs(e - center))
+  );
+  
+  // Steepest slope — using 35m diagonal distance
+  const slopeDeg = Math.atan(maxDiff / 35) * (180 / Math.PI);
+  
+  const classification =
+    slopeDeg < 5  ? 'flat'     :
+    slopeDeg < 12 ? 'gentle'   :
+    slopeDeg < 22 ? 'moderate' : 'steep';
+  
+  return {
+    slope_degrees: Math.round(slopeDeg * 10) / 10,
+    classification,
+    data_source: 'Open-Topo-Data (SRTM 30m)',
+    elevation_center_m: Math.round(center),
+  };
+}
+
+// If opentopodata fails, try Open-Elevation as backup:
+async function fetchElevationBackup(
+  lat: number, lng: number
+): Promise<number[]> {
+  const d = 0.00025;
+  const points = [
+    {latitude: lat-d, longitude: lng-d},
+    {latitude: lat,   longitude: lng  },
+    {latitude: lat+d, longitude: lng+d},
+  ];
+  const res = await fetch('https://api.open-elevation.com/api/v1/lookup', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ locations: points }),
+    signal: AbortSignal.timeout(8000),
+  });
+  const data = await res.json();
+  return data.results.map((r: any) => r.elevation);
+}
+
+// Master elevation fetcher — tries both, no key needed
+export async function getContour(
+  lat: number, lng: number
+): Promise<ContourResult> {
+  try {
+    return await fetchElevationFree(lat, lng);
+  } catch (e1) {
+    console.warn('OpenTopoData failed, trying backup:', e1);
+    try {
+      const elevs = await fetchElevationBackup(lat, lng);
+      const diff = Math.abs(elevs[2] - elevs[0]);
+      const slopeDeg = Math.atan(diff / 50) * (180 / Math.PI);
+      return {
+        slope_degrees: Math.round(slopeDeg * 10) / 10,
+        classification: slopeDeg < 5 ? 'flat' :
+                        slopeDeg < 12 ? 'gentle' :
+                        slopeDeg < 22 ? 'moderate' : 'steep',
+        data_source: 'Open-Elevation API',
+      };
+    } catch (e2) {
+      console.error('Both elevation APIs failed:', e2);
+      // Only now do we give up
+      return { slope_degrees: null, classification: null, 
+               data_source: 'unavailable' };
+    }
+  }
+}
+
+// Also add Google Elevation as a THIRD option if key exists:
+// Check process.env.GOOGLE_MAPS_API_KEY — if present use it 
+// as the primary (most accurate), otherwise use the free APIs.
+// The free APIs above work perfectly for NZ terrain.
+
+VERIFY: 8 Hampton Drive St Heliers must return 
+classification: 'steep' or 'moderate' (NOT gentle or null).
+Log slope_degrees to console — expect > 15 degrees.
+
+════════════════════════════════
+PRIORITY 2 — CV (CAPITAL VALUE)
+Fetch from 3 sources simultaneously.
+════════════════════════════════
+
+CV is publicly available in NZ. Hit all 3 sources
+in parallel and use the first one that returns data.
+
+SOURCE A: homes.co.nz (easiest to scrape, no login)
+URL: https://homes.co.nz/address/{suburb-slug}/{address-slug}
+Example: https://homes.co.nz/address/st-heliers/8-hampton-drive
+
+async function fetchCVFromHomes(
+  address: string, suburb: string
+): Promise<number | null> {
+  
+  const addressSlug = address
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, '')
+    .trim()
+    .replace(/\s+/g, '-');
+  
+  const suburbSlug = suburb.toLowerCase().replace(/\s+/g, '-');
+  
+  // Try direct URL first
+  const url = `https://homes.co.nz/address/${suburbSlug}/${addressSlug}`;
+  
+  const html = await fetchWithBrowser(url); 
+  // Use existing Playwright stealth browser function
+  
+  if (!html) return null;
+  
+  // homes.co.nz shows CV prominently
+  // Look for patterns like "$1,200,000" near "Capital Value" or "CV"
+  const cvPatterns = [
+    /capital\s*value[^$]*\$([\d,]+)/gi,
+    /cv[:\s]+\$([\d,]+)/gi,
+    /"cv"[:\s]+"?\$([\d,]+)/gi,
+    /rateable\s*value[^$]*\$([\d,]+)/gi,
+    // homes.co.nz specific data attributes
+    /data-cv="([\d]+)"/i,
+    /"capitalValue"\s*:\s*([\d]+)/i,
+    /"cv"\s*:\s*([\d]+)/i,
+  ];
+  
+  for (const pattern of cvPatterns) {
+    const match = pattern.exec(html);
+    if (match) {
+      const value = parseInt(match[1].replace(/,/g, ''));
+      if (value > 100000 && value < 50000000) { // sanity check
+        console.log(`[CV] homes.co.nz returned: $${value}`);
+        return value;
+      }
+    }
+  }
+  return null;
+}
+
+SOURCE B: Hougarden (update existing scraper)
+The existing Hougarden scraper should be pulling CV.
+If it's returning null, the selectors are wrong.
+Update the scraper to try these additional approaches:
+
+async function extractCVFromHougardenPage(page: Page): 
+Promise<number | null> {
+  
+  // Method 1: Look for CV in all text content
+  const bodyText = await page.textContent('body') ?? '';
+  
+  const patterns = [
+    /CV[:\s]+\$?([\d,]+)/g,
+    /Capital Value[:\s]+\$?([\d,]+)/gi,
+    /Rateable Value[:\s]+\$?([\d,]+)/gi,
+    /\$?([\d,]+)\s*CV\b/g,
+  ];
+  
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(bodyText)) !== null) {
+      const value = parseInt(match[1].replace(/,/g, ''));
+      if (value > 200000 && value < 30000000) {
+        return value;
+      }
+    }
+  }
+  
+  // Method 2: Look for specific Hougarden data elements
+  const selectors = [
+    '[class*="cv-value"]',
+    '[class*="capital-value"]',
+    '[data-field="cv"]',
+    '[class*="rating-valuation"]',
+    'td:has-text("CV") + td',
+    'dt:has-text("Capital Value") + dd',
+    'dt:has-text("CV") + dd',
+  ];
+  
+  for (const selector of selectors) {
+    try {
+      const text = await page.$eval(selector, 
+        (el: Element) => el.textContent?.trim()
+      );
+      if (text) {
+        const value = parseInt(text.replace(/[$,]/g, ''));
+        if (value > 200000) return value;
+      }
+    } catch { continue; }
+  }
+  
+  // Method 3: Look in page's __NEXT_DATA__ or window state
+  const jsonData = await page.evaluate(() => {
+    const scripts = Array.from(
+      document.querySelectorAll('script[type="application/json"]')
+    );
+    return scripts.map(s => s.textContent).join(' ');
+  });
+  
+  const jsonCVMatch = /"capitalValue"\s*:\s*(\d+)/.exec(jsonData);
+  if (jsonCVMatch) return parseInt(jsonCVMatch[1]);
+  
+  return null;
+}
+
+SOURCE C: Auckland Council property search
+The public rates search has CV for every Auckland property.
+URL to try: 
+https://www.aucklandcouncil.govt.nz/property-rates-valuations/
+Pages/property-details.aspx
+
+OR the direct API used by their search:
+https://propertyrates.aucklandcouncil.govt.nz/
+
+async function fetchCVFromAucklandCouncil(
+  address: string
+): Promise<{ cv: number | null, land_area: number | null, 
+             floor_area: number | null }> {
+  
+  // Try the Auckland Council property rates search
+  const searchUrl = 
+    `https://www.aucklandcouncil.govt.nz/` +
+    `property-rates-valuations/Pages/rate-search.aspx`;
+  
+  // Use Playwright to navigate and search
+  const browser = await launchBrowser();
+  const { page } = await newStealthPage(browser);
+  
+  try {
+    await page.goto(searchUrl, { waitUntil: 'networkidle' });
+    
+    // Find and fill the search input
+    const searchInput = await page.$('input[type="search"], ' + 
+      'input[placeholder*="address"], #address-search, ' +
+      'input[name*="address"]');
+    
+    if (searchInput) {
+      await searchInput.fill(address);
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(3000);
+      
+      // Click first result
+      const firstResult = await page.$('[class*="result"], ' + 
+        '[class*="search-result"], li:first-child a');
+      if (firstResult) {
+        await firstResult.click();
+        await page.waitForTimeout(2000);
+      }
+    }
+    
+    // Extract from property detail page
+    const pageText = await page.textContent('body') ?? '';
+    
+    const cvMatch = /Capital Value[^\d$]*\$?([\d,]+)/i.exec(pageText) ||
+                    /CV[^\d$]*\$?([\d,]+)/i.exec(pageText);
+    const landMatch = /Land[^\d]*area[^\d]*([\d,]+)\s*m²/i.exec(pageText) ||
+                      /Land[^\d]*([\d,]+)\s*m²/i.exec(pageText);
+    const floorMatch = /Floor[^\d]*([\d,]+)\s*m²/i.exec(pageText) ||
+                       /Total\s*floor[^\d]*([\d,]+)\s*m²/i.exec(pageText);
+    
+    return {
+      cv: cvMatch ? parseInt(cvMatch[1].replace(/,/g, '')) : null,
+      land_area: landMatch ? parseInt(landMatch[1].replace(/,/g, '')) : null,
+      floor_area: floorMatch ? parseInt(floorMatch[1].replace(/,/g, '')) : null,
+    };
+    
+  } finally {
+    await browser.close();
+  }
+}
+
+ORCHESTRATE all 3 CV sources in parallel:
+
+async function fetchCV(address: string, suburb: string): 
+Promise<{ value: number | null, source: string }> {
+  
+  const [homesResult, councilResult] = await Promise.allSettled([
+    fetchCVFromHomes(address, suburb),
+    fetchCVFromAucklandCouncil(address),
+  ]);
+  
+  // Also check if Hougarden already returned CV
+  // (it runs in parallel in the main pipeline)
+  
+  const homesCV = homesResult.status === 'fulfilled' 
+    ? homesResult.value : null;
+  const councilCV = councilResult.status === 'fulfilled' 
+    ? councilResult.value?.cv : null;
+  
+  // Priority: Auckland Council > homes.co.nz > Hougarden
+  if (councilCV) return { value: councilCV, source: 'Auckland Council' };
+  if (homesCV)   return { value: homesCV,   source: 'homes.co.nz' };
+  
+  return { value: null, source: 'unavailable' };
+}
+
+════════════════════════════════
+PRIORITY 3 — LAND AREA & FLOOR AREA
+LINZ should be working — find out why it isn't.
+════════════════════════════════
+
+STEP 1 — Debug the LINZ call.
+Add this to the pipeline test endpoint output:
+
+console.log('[LINZ] Raw response:', JSON.stringify(linzResult));
+console.log('[LINZ] Land area extracted:', linzResult?.area_sqm);
+
+The LINZ parcel API for 8 Hampton Drive should return 
+a parcel with area. If it's returning null, the 
+coordinate-to-parcel spatial query is failing.
+
+STEP 2 — Fix the LINZ spatial query.
+The correct LINZ API call for parcel lookup by coordinate:
+
+const LINZ_API_KEY = process.env.LINZ_API_KEY;
+
+async function fetchLINZParcelByCoord(
+  lat: number, lng: number
+): Promise<{ area_sqm: number | null, parcel_id: string | null }> {
+  
+  // NZ Primary Parcels layer ID: 50804
+  const url = 
+    `https://data.linz.govt.nz/services/api/v1/layers/50804/` +
+    `features/?` +
+    `api_key=${LINZ_API_KEY}` +
+    `&intersects=POINT(${lng} ${lat})` +  // Note: lng first for WKT
+    `&limit=1` +
+    `&fields=id,calculated_area_sqm,appellation,topology_type`;
+  
+  console.log('[LINZ] Querying URL:', url);
+  
+  const res = await fetch(url, {
+    signal: AbortSignal.timeout(10000)
+  });
+  
+  console.log('[LINZ] Response status:', res.status);
+  
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error('[LINZ] Error:', errText);
+    return { area_sqm: null, parcel_id: null };
+  }
+  
+  const data = await res.json();
+  console.log('[LINZ] Features returned:', data.count);
+  console.log('[LINZ] First feature:', JSON.stringify(data.features?.[0]));
+  
+  const feature = data.features?.[0];
+  if (!feature) return { area_sqm: null, parcel_id: null };
+  
+  const area = feature.properties?.calculated_area_sqm 
+             ?? feature.properties?.area_sqm
+             ?? null;
+  
+  return {
+    area_sqm: area ? Math.round(area) : null,
+    parcel_id: feature.id ?? null,
+  };
+}
+
+STEP 3 — If LINZ coordinate query still fails,
+try the LINZ address search endpoint:
+
+async function fetchLINZByAddress(address: string): 
+Promise<{ area_sqm: number | null }> {
+  
+  // LINZ address search
+  const encoded = encodeURIComponent(address);
+  const url = 
+    `https://data.linz.govt.nz/services/api/v1/layers/53353/` +
+    `features/?` +
+    `api_key=${LINZ_API_KEY}` +
+    `&q=${encoded}` +
+    `&limit=1`;
+  
+  const res = await fetch(url, { 
+    signal: AbortSignal.timeout(10000) 
+  });
+  const data = await res.json();
+  
+  console.log('[LINZ address] Result:', JSON.stringify(data));
+  return { area_sqm: data.features?.[0]?.properties?.area_sqm ?? null };
+}
+
+STEP 4 — Use Auckland Council result as fallback for land area.
+If LINZ fails, the Auckland Council scrape from Priority 2 
+above also returns land_area. Use it.
+
+STEP 5 — Floor area from OneRoof and homes.co.nz.
+OneRoof property pages show floor area clearly.
+Update the OneRoof scraper to specifically target floor area:
+
+const floorPatterns = [
+  /floor\s*area[:\s]+([\d.]+)\s*m²/i,
+  /([\d.]+)\s*m²\s*floor/i,
+  /total\s*floor[:\s]+([\d.]+)/i,
+  /house\s*size[:\s]+([\d.]+)\s*m²/i,
+  /"floorArea"\s*:\s*([\d.]+)/i,
+  /"floor_area"\s*:\s*([\d.]+)/i,
+];
+
+Try all patterns against the full page text.
+
+════════════════════════════════
+PRIORITY 4 — INFRASTRUCTURE
+Use Auckland Council GIS to actually query service locations.
+════════════════════════════════
+
+Auckland Council has a public GIS server.
+These layers ARE queryable without authentication:
+
+Base URL: 
+https://gis.aucklandcouncil.govt.nz/arcgis/rest/services/
+
+Query pattern (find features within 100m of point):
+
+async function queryInfrastructureLayer(
+  layerUrl: string,
+  lat: number, lng: number,
+  radiusMetres: number = 100
+): Promise<any[]> {
+  
+  // Convert lat/lng to the map extent for the query
+  const offset = radiusMetres / 111320; // degrees per metre
+  
+  const params = new URLSearchParams({
+    geometry: `${lng},${lat}`,
+    geometryType: 'esriGeometryPoint',
+    inSR: '4326',
+    spatialRel: 'esriSpatialRelIntersects',
+    distance: String(radiusMetres),
+    units: 'esriSRUnit_Meter',
+    outFields: '*',
+    returnGeometry: 'true',
+    outSR: '4326',
+    f: 'json',
+  });
+  
+  const res = await fetch(`${layerUrl}/query?${params}`, {
+    signal: AbortSignal.timeout(10000)
+  });
+  
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.features ?? [];
+}
+
+// Find the correct layer IDs by checking:
+// https://gis.aucklandcouncil.govt.nz/arcgis/rest/services/
+// Look for services containing "Infrastructure", "Water", 
+// "Stormwater", "Wastewater"
+
+// Try these service paths:
+const INFRA_LAYERS = {
+  wastewater: 'https://gis.aucklandcouncil.govt.nz/arcgis/rest/services/' +
+    'Infrastructure/AC_Wastewater_Network/MapServer/0',
+  stormwater: 'https://gis.aucklandcouncil.govt.nz/arcgis/rest/services/' +
+    'Infrastructure/AC_Stormwater_Network/MapServer/0',
+  water: 'https://gis.aucklandcouncil.govt.nz/arcgis/rest/services/' +
+    'Infrastructure/AC_Water_Network/MapServer/0',
+};
+
+// If above paths 404, enumerate available services:
+// GET https://gis.aucklandcouncil.govt.nz/arcgis/rest/services/?f=json
+// Find infrastructure-related service names, then check their layers.
+
+async function fetchInfrastructure(
+  lat: number, lng: number,
+  parcelBoundaryWKT?: string  // from LINZ if available
+): Promise<InfrastructureItem[]> {
+  
+  const results = await Promise.allSettled(
+    Object.entries(INFRA_LAYERS).map(async ([type, url]) => {
+      const features = await queryInfrastructureLayer(url, lat, lng, 100);
+      
+      if (!features.length) return { 
+        service: type, location: 'unknown', features: [] 
+      };
+      
+      // Calculate distance from property center to nearest pipe
+      const distances = features.map(f => {
+        // Feature geometry is a polyline or point
+        // Calculate distance from (lat,lng) to nearest point on geometry
+        return calculateDistance(lat, lng, f.geometry);
+      });
+      
+      const minDistance = Math.min(...distances);
+      
+      let location: string;
+      if (minDistance < 5)       location = 'on-parcel';
+      else if (minDistance < 15) location = 'boundary';
+      else if (minDistance < 40) location = 'neighbour';
+      else                       location = 'public-land';
+      
+      return { service: type, location, min_distance_m: minDistance };
+    })
+  );
+  
+  return results.map((r, i) => {
+    const type = Object.keys(INFRA_LAYERS)[i];
+    const serviceNames: Record<string, string> = {
+      wastewater: 'Wastewater',
+      stormwater: 'Stormwater', 
+      water: 'Water supply',
+    };
+    
+    if (r.status === 'fulfilled' && r.value.location !== 'unknown') {
+      return {
+        service: serviceNames[type],
+        location: r.value.location,
+        data_source: 'Auckland Council GIS',
+        min_distance_m: r.value.min_distance_m,
+        ...getCostEstimate(r.value.location),
+      };
+    }
+    
+    return {
+      service: serviceNames[type],
+      location: 'unknown',
+      data_source: 'unavailable — check Auckland Council GIS',
+      cost_estimate_low: null,
+      cost_estimate_high: null,
+    };
+  });
+}
+
+// Helper: calculate distance from point to GIS geometry
+function calculateDistance(
+  lat: number, lng: number, 
+  geometry: any
+): number {
+  // For polyline geometry, check distance to each segment
+  // Use simple Euclidean distance in degrees × 111320 m/degree
+  if (geometry?.paths) {
+    let minDist = Infinity;
+    for (const path of geometry.paths) {
+      for (const [gLng, gLat] of path) {
+        const dist = Math.sqrt(
+          Math.pow((lat - gLat) * 111320, 2) +
+          Math.pow((lng - gLng) * 111320 * Math.cos(lat * Math.PI/180), 2)
+        );
+        minDist = Math.min(minDist, dist);
+      }
+    }
+    return minDist;
+  }
+  if (geometry?.x) { // point geometry
+    return Math.sqrt(
+      Math.pow((lat - geometry.y) * 111320, 2) +
+      Math.pow((lng - geometry.x) * 111320 * Math.cos(lat * Math.PI/180), 2)
+    );
+  }
+  return Infinity;
+}
+
+════════════════════════════════
+PIPELINE INTEGRATION
+Update runPropertyPipeline() to use all new fetchers
+════════════════════════════════
+
+Run ALL of these in parallel:
+
+const [
+  linzResult,
+  hougardenResult,
+  oneRoofResult,
+  elevationResult,
+  cvResult,
+  councilResult,
+  infrastructureResult,
+] = await Promise.allSettled([
+  fetchLINZParcelByCoord(lat, lng),
+  scrapeHougarden(lat, lng, address),
+  scrapeOneRoof(address),
+  getContour(lat, lng),              // FREE — no key needed
+  fetchCV(address, suburb),          // homes.co.nz + Council
+  fetchCVFromAucklandCouncil(address),
+  fetchInfrastructure(lat, lng),
+]);
+
+Log every result:
+console.log('[Pipeline] LINZ:', linzResult);
+console.log('[Pipeline] Elevation:', elevationResult);
+console.log('[Pipeline] CV:', cvResult);
+console.log('[Pipeline] Infrastructure:', infrastructureResult);
+
+Merge with priority rules:
+land_area_sqm:
+  LINZ > councilResult.land_area > hougarden > oneroof
+  
+cv_nzd:
+  councilResult.cv > cvResult (homes.co.nz) > oneroof > hougarden
+
+floor_area_sqm:  
+  oneroof > hougarden > councilResult.floor_area
+  
+contour:
+  elevationResult (always try — it's free and fast)
+
+infrastructure:
+  infrastructureResult (Auckland Council GIS)
+
+════════════════════════════════
+VERIFICATION — expected results for test address
+════════════════════════════════
+
+Run: GET /api/pipeline-test?address=8+Hampton+Drive+St+Heliers
+
+Expected console output:
+[ ] [Pipeline] Elevation: { slope_degrees: >15, 
+    classification: 'steep' or 'moderate' }
+    If still null — check opentopodata.org is reachable 
+    from Replit (test: fetch('https://api.opentopodata.org/v1/srtm30m?locations=-36.8509,174.8645'))
+
+[ ] [Pipeline] CV: { value: >500000, source: 'Auckland Council' 
+    or 'homes.co.nz' }
+    If null — log raw HTML length from both sources to confirm 
+    pages are loading (not being blocked)
+
+[ ] [LINZ] Features returned: 1 (not 0)
+    If 0 — the WKT coordinate order may be wrong (try lat,lng vs lng,lat)
+
+[ ] Infrastructure: at least 'unknown' with source logged
+    If Auckland Council GIS layers 404 — enumerate available 
+    services at the base URL and find correct layer IDs
+
+[ ] Full report for 8 Hampton Drive shows:
+    - Terrain: steep or moderate (NOT gentle, NOT unavailable)
+    - CV: real dollar value with source label
+    - Land area: real m² (expect 600–900m² for this property)
+    - Infrastructure: real locations OR honest 'unknown' 
+      with GIS link (not fake 'off-parcel')
+
+If any source is still returning null after all attempts,
+add detailed error logging showing EXACTLY what was 
+returned (status code, first 500 chars of response body)
+so we can see what the API is actually saying.

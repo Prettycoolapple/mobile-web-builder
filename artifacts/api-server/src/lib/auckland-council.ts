@@ -211,6 +211,86 @@ export async function fetchOverlays(lat: number, lng: number): Promise<Overlay[]
   return overlays;
 }
 
+function buildElevationGrid(lat: number, lng: number, offset = 0.00025) {
+  return [
+    { lat: lat - offset, lng: lng - offset },
+    { lat: lat - offset, lng: lng           },
+    { lat: lat - offset, lng: lng + offset  },
+    { lat: lat,          lng: lng - offset  },
+    { lat: lat,          lng: lng           },
+    { lat: lat,          lng: lng + offset  },
+    { lat: lat + offset, lng: lng - offset  },
+    { lat: lat + offset, lng: lng           },
+    { lat: lat + offset, lng: lng + offset  },
+  ];
+}
+
+function slopeFromGrid9(elevations: number[]): { slopeDeg: number; centerElevation: number } {
+  const centerElevation = elevations[4];
+  const cornerElevations = [elevations[0], elevations[2], elevations[6], elevations[8]];
+  const maxCornerDiff = Math.max(...cornerElevations.map((e) => Math.abs(e - centerElevation)));
+  const slopeDegCorner = Math.atan(maxCornerDiff / 35) * (180 / Math.PI);
+
+  const adjacentElevations = [elevations[1], elevations[3], elevations[5], elevations[7]];
+  const maxAdjacentDiff = Math.max(...adjacentElevations.map((e) => Math.abs(e - centerElevation)));
+  const slopeDegAdjacent = Math.atan(maxAdjacentDiff / 25) * (180 / Math.PI);
+
+  return { slopeDeg: Math.max(slopeDegCorner, slopeDegAdjacent), centerElevation };
+}
+
+async function fetchElevationViaOpenTopoData(lat: number, lng: number): Promise<ContourResult | null> {
+  const points = buildElevationGrid(lat, lng);
+  const locationStr = points.map((p) => `${p.lat},${p.lng}`).join("|");
+  const url = `https://api.opentopodata.org/v1/srtm30m?locations=${locationStr}`;
+
+  logger.info({ lat, lng }, "OpenTopoData: querying SRTM30m elevation grid");
+  const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  if (!resp.ok) throw new Error(`OpenTopoData HTTP ${resp.status}`);
+
+  const data = (await resp.json()) as {
+    status: string;
+    results?: Array<{ elevation: number; location: { lat: number; lng: number } }>;
+  };
+
+  if (data.status !== "OK" || !data.results || data.results.length < 9) {
+    throw new Error(`OpenTopoData: status=${data.status} results=${data.results?.length ?? 0}`);
+  }
+
+  const elevations = data.results.map((r) => r.elevation);
+  const { slopeDeg, centerElevation } = slopeFromGrid9(elevations);
+
+  logger.info({ lat, lng, centerElevation, elevations, slopeDeg }, "OpenTopoData SRTM30m: raw values");
+  return classifySlope(slopeDeg, "Open-Topo-Data (SRTM 30m)", centerElevation);
+}
+
+async function fetchElevationViaOpenElevation(lat: number, lng: number): Promise<ContourResult | null> {
+  const d = 0.00025;
+  const locations = [
+    { latitude: lat - d, longitude: lng - d },
+    { latitude: lat,     longitude: lng     },
+    { latitude: lat + d, longitude: lng + d },
+  ];
+
+  const resp = await fetch("https://api.open-elevation.com/api/v1/lookup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ locations }),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!resp.ok) throw new Error(`Open-Elevation HTTP ${resp.status}`);
+
+  const data = (await resp.json()) as { results?: Array<{ elevation: number }> };
+  if (!data.results || data.results.length < 3) throw new Error("Open-Elevation: insufficient results");
+
+  const elevs = data.results.map((r) => r.elevation);
+  const diff = Math.abs(elevs[2] - elevs[0]);
+  const slopeDeg = Math.atan(diff / 50) * (180 / Math.PI);
+  const centerElevation = elevs[1];
+
+  logger.info({ lat, lng, centerElevation, elevs, slopeDeg }, "Open-Elevation API: raw values");
+  return classifySlope(slopeDeg, "Open-Elevation API", centerElevation);
+}
+
 async function fetchElevationViaGoogle(lat: number, lng: number): Promise<ContourResult | null> {
   const apiKey = process.env["GOOGLE_MAPS_API_KEY"];
   if (!apiKey) {
@@ -218,19 +298,7 @@ async function fetchElevationViaGoogle(lat: number, lng: number): Promise<Contou
     return null;
   }
 
-  const offset = 0.00025;
-  const points = [
-    { lat: lat - offset, lng: lng - offset },
-    { lat: lat - offset, lng: lng },
-    { lat: lat - offset, lng: lng + offset },
-    { lat: lat,          lng: lng - offset },
-    { lat: lat,          lng: lng },
-    { lat: lat,          lng: lng + offset },
-    { lat: lat + offset, lng: lng - offset },
-    { lat: lat + offset, lng: lng },
-    { lat: lat + offset, lng: lng + offset },
-  ];
-
+  const points = buildElevationGrid(lat, lng);
   const locationStr = points.map((p) => `${p.lat},${p.lng}`).join("|");
   const url = `https://maps.googleapis.com/maps/api/elevation/json?locations=${locationStr}&key=${apiKey}`;
 
@@ -248,24 +316,10 @@ async function fetchElevationViaGoogle(lat: number, lng: number): Promise<Contou
   }
 
   const elevations = data.results.map((r) => r.elevation);
-  const centerElevation = elevations[4];
+  const { slopeDeg, centerElevation } = slopeFromGrid9(elevations);
 
-  const cornerElevations = [elevations[0], elevations[2], elevations[6], elevations[8]];
-  const maxCornerDiff = Math.max(...cornerElevations.map((e) => Math.abs(e - centerElevation)));
-  const slopeDegCorner = Math.atan(maxCornerDiff / 35) * (180 / Math.PI);
-
-  const adjacentElevations = [elevations[1], elevations[3], elevations[5], elevations[7]];
-  const maxAdjacentDiff = Math.max(...adjacentElevations.map((e) => Math.abs(e - centerElevation)));
-  const slopeDegAdjacent = Math.atan(maxAdjacentDiff / 25) * (180 / Math.PI);
-
-  const finalSlope = Math.max(slopeDegCorner, slopeDegAdjacent);
-
-  logger.info(
-    { lat, lng, centerElevation, elevations, slopeDegCorner, slopeDegAdjacent, finalSlope },
-    "Google Elevation: raw values",
-  );
-
-  return classifySlope(finalSlope, "Google Elevation API", centerElevation);
+  logger.info({ lat, lng, centerElevation, elevations, slopeDeg }, "Google Elevation: raw values");
+  return classifySlope(slopeDeg, "Google Elevation API", centerElevation);
 }
 
 async function fetchElevationViaLINZ(lat: number, lng: number): Promise<ContourResult | null> {
@@ -313,16 +367,36 @@ async function fetchElevationViaLINZ(lat: number, lng: number): Promise<ContourR
 }
 
 export async function fetchContour(lat: number, lng: number): Promise<ContourResult> {
-  try {
-    const googleResult = await fetchElevationViaGoogle(lat, lng);
-    if (googleResult) return googleResult;
-  } catch (err) {
-    logger.warn({ err: (err as Error).message }, "Google elevation query failed");
+  // 1. Google Elevation (most accurate) — only if key present
+  if (process.env["GOOGLE_MAPS_API_KEY"]) {
+    try {
+      const result = await fetchElevationViaGoogle(lat, lng);
+      if (result) return result;
+    } catch (err) {
+      logger.warn({ err: (err as Error).message }, "Google elevation query failed — trying OpenTopoData");
+    }
   }
 
+  // 2. Open-Topo-Data SRTM 30m — free, no key, covers all NZ
   try {
-    const linzResult = await fetchElevationViaLINZ(lat, lng);
-    if (linzResult) return linzResult;
+    const result = await fetchElevationViaOpenTopoData(lat, lng);
+    if (result) return result;
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "OpenTopoData query failed — trying Open-Elevation");
+  }
+
+  // 3. Open-Elevation API — free backup
+  try {
+    const result = await fetchElevationViaOpenElevation(lat, lng);
+    if (result) return result;
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "Open-Elevation query failed — trying LINZ DEM");
+  }
+
+  // 4. LINZ DEM — requires LINZ_API_KEY
+  try {
+    const result = await fetchElevationViaLINZ(lat, lng);
+    if (result) return result;
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "LINZ elevation query failed");
   }
