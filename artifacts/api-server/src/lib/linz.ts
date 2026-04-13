@@ -108,7 +108,8 @@ async function queryLinzLayerWFS(
   key: string,
   timeoutMs = 12000,
 ): Promise<Record<string, unknown>[] | null> {
-  const url = new URL(`https://data.linz.govt.nz/services/wfs/${key}/wfs`);
+  // Correct LINZ WFS URL format: /services;key={key}/wfs  (NOT /services/wfs/{key}/wfs)
+  const url = new URL(`https://data.linz.govt.nz/services;key=${key}/wfs`);
   url.searchParams.set("service", "WFS");
   url.searchParams.set("version", "2.0.0");
   url.searchParams.set("request", "GetFeature");
