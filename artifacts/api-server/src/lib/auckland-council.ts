@@ -1,4 +1,6 @@
 import { logger } from "./logger";
+import * as zlib from "zlib";
+import type { ParcelBbox } from "./linz";
 
 const GIS_BASE = "https://mapspublic.aucklandcouncil.govt.nz/arcgis3/rest/services";
 const ZONE_SERVICE = `${GIS_BASE}/NonCouncil/UnitaryPlanZones/MapServer`;
@@ -225,6 +227,154 @@ function buildElevationGrid(lat: number, lng: number, offset = 0.00025) {
   ];
 }
 
+// ---------------------------------------------------------------------------
+// Terrain tile elevation (Terrarium / AWS Elevation Tiles)
+// ---------------------------------------------------------------------------
+// Uses the public AWS Elevation Tiles (Terrarium RGB encoding).
+// Zoom 15 gives ~3.8m pixel resolution for NZ — backed by Mapzen's 1m NZ LiDAR
+// where available, falling back to SRTM 30m elsewhere.
+// Formula: elevation = R×256 + G + B/256 − 32768  (metres)
+// No API key required.
+// ---------------------------------------------------------------------------
+
+function terrariumTileCoords(lat: number, lng: number, zoom: number) {
+  const n = Math.pow(2, zoom);
+  const x = Math.floor(((lng + 180) / 360) * n);
+  const latRad = (lat * Math.PI) / 180;
+  const y = Math.floor(((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n);
+  // Pixel offset within tile
+  const fx = ((lng + 180) / 360) * n;
+  const fy = ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n;
+  const px = Math.floor((fx - Math.floor(fx)) * 256);
+  const py = Math.floor((fy - Math.floor(fy)) * 256);
+  // Resolution in metres per pixel at this latitude
+  const pixelSizeM = (40075016.686 * Math.cos((lat * Math.PI) / 180)) / (256 * n);
+  return { tileX: x, tileY: y, px, py, pixelSizeM };
+}
+
+function decodeTerrariumPng(buf: Buffer): {
+  getPixel: (x: number, y: number) => { r: number; g: number; b: number };
+  terrarium: (px: { r: number; g: number; b: number }) => number;
+  width: number;
+  height: number;
+} {
+  const PNG_SIGNATURE = "89504e470d0a1a0a";
+  if (buf.slice(0, 8).toString("hex") !== PNG_SIGNATURE) throw new Error("Not a valid PNG");
+
+  let pos = 8, width = 0, height = 0;
+  const idatChunks: Buffer[] = [];
+  while (pos < buf.length - 4) {
+    const len = buf.readUInt32BE(pos); pos += 4;
+    const type = buf.slice(pos, pos + 4).toString(); pos += 4;
+    const data = buf.slice(pos, pos + len); pos += len + 4; // +4 for CRC
+    if (type === "IHDR") { width = data.readUInt32BE(0); height = data.readUInt32BE(4); }
+    if (type === "IDAT") idatChunks.push(data);
+    if (type === "IEND") break;
+  }
+
+  const raw = zlib.inflateSync(Buffer.concat(idatChunks));
+  const bpp = 3; // RGB
+  const stride = width * bpp;
+  const pixels = Buffer.alloc(height * stride);
+
+  for (let y = 0; y < height; y++) {
+    const srcRow = y * (stride + 1);
+    const filter = raw[srcRow];
+    const dst = y * stride;
+    for (let x = 0; x < stride; x++) {
+      const b = raw[srcRow + 1 + x];
+      const left    = x >= bpp         ? pixels[dst + x - bpp]                   : 0;
+      const up      = y > 0            ? pixels[dst - stride + x]                : 0;
+      const upLeft  = (y > 0 && x >= bpp) ? pixels[dst - stride + x - bpp]      : 0;
+      let val: number;
+      switch (filter) {
+        case 0: val = b; break;
+        case 1: val = (b + left) & 0xFF; break;
+        case 2: val = (b + up)   & 0xFF; break;
+        case 3: val = (b + Math.floor((left + up) / 2)) & 0xFF; break;
+        case 4: {
+          const pa = Math.abs(up - upLeft), pb = Math.abs(left - upLeft), pc = Math.abs(left + up - 2 * upLeft);
+          val = (b + (pa <= pb && pa <= pc ? left : pb <= pc ? up : upLeft)) & 0xFF;
+          break;
+        }
+        default: val = b;
+      }
+      pixels[dst + x] = val;
+    }
+  }
+
+  const getPixel = (x: number, y: number) => {
+    const off = y * stride + x * bpp;
+    return { r: pixels[off], g: pixels[off + 1], b: pixels[off + 2] };
+  };
+  const terrarium = (px: { r: number; g: number; b: number }) => px.r * 256 + px.g + px.b / 256 - 32768;
+  return { getPixel, terrarium, width, height };
+}
+
+async function fetchElevationViaTerrarium(lat: number, lng: number, parcelBbox?: ParcelBbox | null): Promise<ContourResult | null> {
+  const ZOOM = 15; // ~3.8m per pixel for Auckland — uses Mapzen 1m NZ LiDAR where available
+  const { tileX, tileY, px, py, pixelSizeM } = terrariumTileCoords(lat, lng, ZOOM);
+  const url = `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${ZOOM}/${tileX}/${tileY}.png`;
+
+  logger.info({ lat, lng, tileX, tileY, px, py, pixelSizeM: pixelSizeM.toFixed(2) }, "Terrarium tiles: downloading elevation tile");
+
+  const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  if (!resp.ok) throw new Error(`Terrarium tile HTTP ${resp.status}`);
+  const buf = Buffer.from(await resp.arrayBuffer());
+  const png = decodeTerrariumPng(buf);
+
+  // Sample a 7×7 grid at 3-pixel spacing (~11m) around the geocoded point.
+  // If a parcel bbox is available, compute its pixel extent and sample across that instead.
+  const GRID = 7;
+  let stepPx: number;
+  let startPx: number, startPy: number;
+
+  if (parcelBbox) {
+    // Convert bbox corners to tile-relative pixel positions
+    const sw = terrariumTileCoords(parcelBbox.minLat, parcelBbox.minLng, ZOOM);
+    const ne = terrariumTileCoords(parcelBbox.maxLat, parcelBbox.maxLng, ZOOM);
+    const bboxWidthPx  = Math.abs(ne.px - sw.px) || 4;
+    const bboxHeightPx = Math.abs(ne.py - sw.py) || 4;
+    stepPx = Math.max(1, Math.round(Math.max(bboxWidthPx, bboxHeightPx) / (GRID - 1)));
+    startPx = Math.min(sw.px, ne.px);
+    startPy = Math.min(sw.py, ne.py);
+  } else {
+    stepPx = 3; // ~11m per step at zoom 15
+    startPx = px - Math.floor(GRID / 2) * stepPx;
+    startPy = py - Math.floor(GRID / 2) * stepPx;
+  }
+
+  const elevs: number[] = [];
+  for (let r = 0; r < GRID; r++) {
+    for (let c = 0; c < GRID; c++) {
+      const tx = Math.min(Math.max(startPx + c * stepPx, 0), png.width - 1);
+      const ty = Math.min(Math.max(startPy + r * stepPx, 0), png.height - 1);
+      elevs.push(png.terrarium(png.getPixel(tx, ty)));
+    }
+  }
+
+  const elevMin = Math.min(...elevs);
+  const elevMax = Math.max(...elevs);
+  const centerElev = elevs[Math.floor(elevs.length / 2)];
+  const stepM = stepPx * pixelSizeM;
+
+  let maxGrad = 0;
+  for (let r = 0; r < GRID; r++) {
+    for (let c = 0; c < GRID; c++) {
+      const idx = r * GRID + c;
+      if (c + 1 < GRID) maxGrad = Math.max(maxGrad, Math.abs(elevs[idx] - elevs[idx + 1]) / stepM);
+      if (r + 1 < GRID) maxGrad = Math.max(maxGrad, Math.abs(elevs[idx] - elevs[idx + GRID]) / stepM);
+    }
+  }
+  const slopeDeg = Math.atan(maxGrad) * (180 / Math.PI);
+
+  logger.info(
+    { lat, lng, elevMin: elevMin.toFixed(1), elevMax: elevMax.toFixed(1), elevRange: (elevMax - elevMin).toFixed(1), slopeDeg: slopeDeg.toFixed(1), stepM: stepM.toFixed(1), pixelSizeM: pixelSizeM.toFixed(2) },
+    "Terrarium tiles: slope measurement complete"
+  );
+  return classifySlope(slopeDeg, "LINZ/Mapzen 1m NZ LiDAR (terrain tiles)", centerElev);
+}
+
 function slopeFromGrid9(elevations: number[], offsetDeg: number): { slopeDeg: number; centerElevation: number } {
   const centerElevation = elevations[4];
   const adjacentDistM = offsetDeg * 111320;
@@ -241,19 +391,53 @@ function slopeFromGrid9(elevations: number[], offsetDeg: number): { slopeDeg: nu
   return { slopeDeg: Math.max(slopeDegCorner, slopeDegAdjacent), centerElevation };
 }
 
-async function fetchElevationViaOpenTopoData(lat: number, lng: number): Promise<ContourResult | null> {
-  // Build a 5×5 grid at ~10m spacing to measure slope within the parcel itself.
-  // nzdem8m is NZ's purpose-built 8m DEM — far more accurate for Auckland than global SRTM 30m.
-  // At 0.00009° ≈ 10m steps, the 5×5 grid covers ~40m × 40m — typical suburban parcel size.
-  const FINE_OFFSET = 0.00009;
+async function fetchElevationViaOpenTopoData(lat: number, lng: number, parcelBbox?: ParcelBbox | null): Promise<ContourResult | null> {
+  // Strategy: if we have the parcel polygon bbox from LINZ, sample uniformly across it.
+  // This captures the lowest and highest contour within the actual parcel — even for elongated
+  // hillside properties where the geocoded point (road frontage) sits at the top and the
+  // steep downhill portion is missed by a fixed-offset box.
+  //
+  // Without bbox: fall back to a 5×5 grid at ~10m spacing centred on the geocoded point.
+  // nzdem8m is NZ's purpose-built 8m DEM — far more accurate than global SRTM 30m.
 
-  const finePoints: { lat: number; lng: number }[] = [];
-  for (let i = -2; i <= 2; i++) {
-    for (let j = -2; j <= 2; j++) {
-      finePoints.push({ lat: lat + i * FINE_OFFSET, lng: lng + j * FINE_OFFSET });
+  let finePoints: { lat: number; lng: number }[] = [];
+  let stepM: number;
+  let gridLabel: string;
+
+  if (parcelBbox) {
+    // Build a 7×7 grid evenly distributed across the parcel bounding box.
+    // 7×7 = 49 points — comfortably within OpenTopoData's 100-point limit.
+    const GRID = 7;
+    const latRange = parcelBbox.maxLat - parcelBbox.minLat;
+    const lngRange = parcelBbox.maxLng - parcelBbox.minLng;
+    const stepLat = latRange / (GRID - 1);
+    const stepLng = lngRange / (GRID - 1);
+    for (let r = 0; r < GRID; r++) {
+      for (let c = 0; c < GRID; c++) {
+        finePoints.push({
+          lat: parcelBbox.minLat + r * stepLat,
+          lng: parcelBbox.minLng + c * stepLng,
+        });
+      }
     }
+    // Use the shorter axis as the step distance for slope calculation
+    const widthM  = lngRange * 111320 * Math.cos(lat * Math.PI / 180);
+    const heightM = latRange * 111320;
+    stepM = Math.min(widthM, heightM) / (GRID - 1);
+    gridLabel = `parcel-bbox 7×7 (${(widthM).toFixed(0)}m×${(heightM).toFixed(0)}m)`;
+  } else {
+    // Fallback: 5×5 grid at ~10m spacing around geocoded point
+    const FINE_OFFSET = 0.00009; // ~10m
+    for (let i = -2; i <= 2; i++) {
+      for (let j = -2; j <= 2; j++) {
+        finePoints.push({ lat: lat + i * FINE_OFFSET, lng: lng + j * FINE_OFFSET });
+      }
+    }
+    stepM = FINE_OFFSET * 111320;
+    gridLabel = "geocode-centred 5×5 (40m×40m fallback)";
   }
-  const fineLocStr = finePoints.map((p) => `${p.lat},${p.lng}`).join("|");
+
+  const fineLocStr = finePoints.map((p) => `${p.lat.toFixed(7)},${p.lng.toFixed(7)}`).join("|");
 
   // Also add a broader 3×3 grid at 200m spacing to capture neighbourhood-scale slopes
   // (catches situations where the parcel sits on a valley/ridge edge)
@@ -261,35 +445,46 @@ async function fetchElevationViaOpenTopoData(lat: number, lng: number): Promise<
   const broadPoints = buildElevationGrid(lat, lng, BROAD_OFFSET);
   const broadLocStr = broadPoints.map((p) => `${p.lat},${p.lng}`).join("|");
 
-  // Try nzdem8m (NZ-specific 8m DEM) first with the fine parcel-scale grid
+  // Determine grid columns (7 for bbox mode, 5 for fallback)
+  const GRID_COLS = parcelBbox ? 7 : 5;
+  const minPoints = parcelBbox ? 40 : 20; // accept partial results gracefully
+
+  // Try nzdem8m (NZ-specific 8m DEM) first
   try {
     const url = `https://api.opentopodata.org/v1/nzdem8m?locations=${fineLocStr}`;
-    logger.info({ lat, lng, points: finePoints.length, offsetM: Math.round(FINE_OFFSET * 111320) }, "OpenTopoData: querying nzdem8m (NZ 8m DEM) with parcel-scale grid");
-    const resp = await fetch(url, { signal: AbortSignal.timeout(12000) });
+    logger.info({ lat, lng, points: finePoints.length, gridLabel, stepM: stepM.toFixed(0) }, "OpenTopoData: querying nzdem8m (NZ 8m DEM)");
+    const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
     if (!resp.ok) throw new Error(`OpenTopoData nzdem8m HTTP ${resp.status}`);
 
     const data = (await resp.json()) as { status: string; results?: Array<{ elevation: number }> };
-    if (data.status !== "OK" || !data.results || data.results.length < 25) throw new Error("nzdem8m: insufficient results");
+    if (data.status !== "OK" || !data.results || data.results.length < minPoints) throw new Error(`nzdem8m: insufficient results (${data.results?.length ?? 0})`);
 
     const elevs = data.results.map((r) => r.elevation).filter((e) => e != null && !isNaN(e));
-    const centerElevation = elevs[12]; // centre of 5×5 grid
-    const stepM = FINE_OFFSET * 111320; // metres per grid step
+    const centerIdx = Math.floor(elevs.length / 2);
+    const centerElevation = elevs[centerIdx];
+    const elevMin = Math.min(...elevs);
+    const elevMax = Math.max(...elevs);
+    const elevRange = elevMax - elevMin;
 
-    // Find maximum gradient between any adjacent pair of points (EW and NS directions).
-    // This is more accurate than range/diagonal, which averages out local peaks.
+    // Find maximum gradient between any adjacent pair of points (row and column neighbours).
+    // With parcel-bbox sampling this measures the steepest gradient anywhere within the parcel.
     let maxGrad = 0;
-    const COLS = 5;
-    for (let r = 0; r < COLS; r++) {
-      for (let c = 0; c < COLS; c++) {
-        const idx = r * COLS + c;
-        if (c + 1 < COLS) maxGrad = Math.max(maxGrad, Math.abs(elevs[idx] - elevs[idx + 1]) / stepM);
-        if (r + 1 < COLS) maxGrad = Math.max(maxGrad, Math.abs(elevs[idx] - elevs[idx + COLS]) / stepM);
+    for (let r = 0; r < GRID_COLS; r++) {
+      for (let c = 0; c < GRID_COLS; c++) {
+        const idx = r * GRID_COLS + c;
+        if (idx >= elevs.length) continue;
+        if (c + 1 < GRID_COLS && idx + 1 < elevs.length)
+          maxGrad = Math.max(maxGrad, Math.abs(elevs[idx] - elevs[idx + 1]) / stepM);
+        if (r + 1 < GRID_COLS && idx + GRID_COLS < elevs.length)
+          maxGrad = Math.max(maxGrad, Math.abs(elevs[idx] - elevs[idx + GRID_COLS]) / stepM);
       }
     }
     const slopeDeg = Math.atan(maxGrad) * (180 / Math.PI);
-    const elevRange = Math.max(...elevs) - Math.min(...elevs);
 
-    logger.info({ lat, lng, centerElevation, elevRange, slopeDeg, maxGradPct: (maxGrad*100).toFixed(1), points: elevs.length }, "OpenTopoData nzdem8m: parcel-scale slope measurement");
+    logger.info(
+      { lat, lng, centerElevation, elevMin, elevMax, elevRange: elevRange.toFixed(1), slopeDeg: slopeDeg.toFixed(1), maxGradPct: (maxGrad*100).toFixed(1), gridLabel },
+      "OpenTopoData nzdem8m: slope measurement complete"
+    );
     return classifySlope(slopeDeg, "Auckland Council / LINZ NZ 8m DEM", centerElevation);
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "OpenTopoData nzdem8m failed — falling back to SRTM30m broad grid");
@@ -424,8 +619,18 @@ async function fetchElevationViaLINZ(lat: number, lng: number): Promise<ContourR
   return null;
 }
 
-export async function fetchContour(lat: number, lng: number): Promise<ContourResult> {
-  // 1. Google Elevation (most accurate) — only if key present
+export async function fetchContour(lat: number, lng: number, parcelBbox?: ParcelBbox | null): Promise<ContourResult> {
+  // 1. AWS Terrarium terrain tiles — public, no key, ~3.8m resolution backed by 1m NZ LiDAR
+  //    This is the most accurate freely available source for NZ.  SRTM-based sources (Google,
+  //    nzdem8m) are smoothed at 30m and systematically underestimate slope on urban hillsides.
+  try {
+    const result = await fetchElevationViaTerrarium(lat, lng, parcelBbox);
+    if (result) return result;
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "Terrarium tiles failed — trying Google Elevation");
+  }
+
+  // 2. Google Elevation — fallback when Terrarium unavailable
   if (process.env["GOOGLE_MAPS_API_KEY"]) {
     try {
       const result = await fetchElevationViaGoogle(lat, lng);
@@ -435,15 +640,15 @@ export async function fetchContour(lat: number, lng: number): Promise<ContourRes
     }
   }
 
-  // 2. Open-Topo-Data SRTM 30m — free, no key, covers all NZ
+  // 3. Open-Topo-Data NZ 8m DEM — free, no key, NZ-specific
   try {
-    const result = await fetchElevationViaOpenTopoData(lat, lng);
+    const result = await fetchElevationViaOpenTopoData(lat, lng, parcelBbox);
     if (result) return result;
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "OpenTopoData query failed — trying Open-Elevation");
   }
 
-  // 3. Open-Elevation API — free backup
+  // 4. Open-Elevation API — free backup
   try {
     const result = await fetchElevationViaOpenElevation(lat, lng);
     if (result) return result;

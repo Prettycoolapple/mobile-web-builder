@@ -120,8 +120,14 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   const { lat, lng } = geocode;
   const suburb = geocode.suburb ?? extractSuburb(geocode.formatted ?? address);
 
+  // LINZ parcel is fetched first so its parcel polygon bbox can be passed to the contour
+  // elevation fetch — this ensures we sample across the full parcel extent (not just a
+  // fixed box centred on the street address, which misses the downhill portion of a property).
+  const linzParcelResult = await timed("linz_parcel", () => fetchLINZParcel(lat, lng), timing);
+  const linzParcelData = linzParcelResult.value;
+  if (linzParcelResult.failed) failedSources.push("linz_parcel");
+
   const [
-    linzParcelResult,
     zoneResult,
     overlaysResult,
     contourResult,
@@ -130,17 +136,15 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     hougardenResult,
     oneRoofResult,
   ] = await Promise.allSettled([
-    timed("linz_parcel",      () => fetchLINZParcel(lat, lng),                              timing),
     timed("zone",             () => fetchUnitaryPlanZone(lat, lng),                          timing),
     timed("overlays",         () => fetchOverlays(lat, lng),                                 timing),
-    timed("contour",          () => fetchContour(lat, lng),                                  timing),
+    timed("contour",          () => fetchContour(lat, lng, linzParcelData?.bbox ?? null),    timing),
     timed("property_history", () => fetchPropertyHistory(address, lat, lng),                 timing),
     timed("infrastructure",   () => fetchInfrastructure(lat, lng),                           timing),
     timed("hougarden",        () => withBrowserSlot(() => scrapeHougarden(lat, lng, address)), timing),
     timed("oneroof",          () => withBrowserSlot(() => scrapeOneRoof(address)),            timing),
   ]);
 
-  const linzParcelData    = linzParcelResult.status    === "fulfilled" ? linzParcelResult.value.value    : null;
   const zoneData          = zoneResult.status          === "fulfilled" ? zoneResult.value.value          : null;
   const overlaysData      = overlaysResult.status      === "fulfilled" ? (overlaysResult.value.value ?? [])  : [];
   const contourData       = contourResult.status       === "fulfilled" ? contourResult.value.value       : null;
@@ -149,7 +153,6 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   const hougardenData     = hougardenResult.status     === "fulfilled" ? hougardenResult.value.value     : null;
   const oneRoofData       = oneRoofResult.status       === "fulfilled" ? oneRoofResult.value.value       : null;
 
-  if (linzParcelResult.status    === "rejected" || (linzParcelResult.status    === "fulfilled" && linzParcelResult.value.failed))    failedSources.push("linz_parcel");
   if (zoneResult.status          === "rejected" || (zoneResult.status          === "fulfilled" && zoneResult.value.failed))          failedSources.push("zone");
   if (overlaysResult.status      === "rejected" || (overlaysResult.status      === "fulfilled" && overlaysResult.value.failed))      failedSources.push("overlays");
   if (contourResult.status       === "rejected" || (contourResult.status       === "fulfilled" && contourResult.value.failed))       failedSources.push("contour");

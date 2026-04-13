@@ -10,6 +10,13 @@ const LINZ_HEADERS = {
   Accept: "application/json",
 };
 
+export interface ParcelBbox {
+  minLat: number;
+  maxLat: number;
+  minLng: number;
+  maxLng: number;
+}
+
 export interface LinzParcel {
   parcel_id: string;
   appellation: string | null;
@@ -17,6 +24,26 @@ export interface LinzParcel {
   title_no: string | null;
   legal_description: string | null;
   topology_type: string | null;
+  bbox: ParcelBbox | null;
+}
+
+function extractBbox(geometry: { type: string; coordinates: unknown } | null | undefined): ParcelBbox | null {
+  if (!geometry) return null;
+  let coords: [number, number][] = [];
+  if (geometry.type === "Polygon") {
+    coords = (geometry.coordinates as [number, number][][])[0] ?? [];
+  } else if (geometry.type === "MultiPolygon") {
+    coords = (geometry.coordinates as [number, number][][][]).flatMap((poly) => poly[0] ?? []);
+  }
+  if (coords.length === 0) return null;
+  const lngs = coords.map((c) => c[0]);
+  const lats = coords.map((c) => c[1]);
+  return {
+    minLat: Math.min(...lats),
+    maxLat: Math.max(...lats),
+    minLng: Math.min(...lngs),
+    maxLng: Math.max(...lngs),
+  };
 }
 
 export interface LinzTitle {
@@ -63,7 +90,7 @@ async function queryLinzLayer(
   }
 
   const data = (await resp.json()) as {
-    features?: Array<{ id: string | number; properties: Record<string, unknown> }>;
+    features?: Array<{ id: string | number; properties: Record<string, unknown>; geometry?: { type: string; coordinates: unknown } }>;
     type?: string;
   };
 
@@ -72,7 +99,7 @@ async function queryLinzLayer(
     return null;
   }
 
-  return data.features.map((f) => ({ ...f.properties, _id: f.id }));
+  return data.features.map((f) => ({ ...f.properties, _id: f.id, _geometry: f.geometry ?? null }));
 }
 
 async function queryLinzLayerWFS(
@@ -118,14 +145,14 @@ async function queryLinzLayerWFS(
 
   try {
     const data = JSON.parse(text) as {
-      features?: Array<{ id: string; properties: Record<string, unknown> }>;
+      features?: Array<{ id: string; properties: Record<string, unknown>; geometry?: { type: string; coordinates: unknown } }>;
       type?: string;
     };
     if (!data.features) {
       logger.warn({ layerId }, "LINZ WFS response missing features array");
       return null;
     }
-    return data.features.map((f) => ({ ...f.properties, _id: f.id }));
+    return data.features.map((f) => ({ ...f.properties, _id: f.id, _geometry: f.geometry ?? null }));
   } catch (e) {
     logger.warn({ err: (e as Error).message, preview: text.slice(0, 200) }, "LINZ WFS: JSON parse failed");
     return null;
@@ -159,7 +186,9 @@ export async function fetchLINZParcel(lat: number, lng: number): Promise<LinzPar
       }
 
       const props = features[0];
-      logger.info({ props }, "LINZ primary parcel found");
+      const geometry = props["_geometry"] as { type: string; coordinates: unknown } | null | undefined;
+      const bbox = extractBbox(geometry);
+      logger.info({ parcel_id: props["_id"], bbox }, "LINZ primary parcel found");
 
       const calcArea = props["calc_area"] ?? props["survey_area"] ?? null;
       const areaSqm = calcArea != null ? Math.round(Number(calcArea)) : null;
@@ -174,6 +203,7 @@ export async function fetchLINZParcel(lat: number, lng: number): Promise<LinzPar
         title_no: titleNo,
         legal_description: (props["appellation"] as string) ?? null,
         topology_type: (props["topology_type"] as string) ?? null,
+        bbox,
       };
     } catch (err) {
       logger.warn({ err: (err as Error).message, cql }, "LINZ parcel fetch attempt failed");
