@@ -63,10 +63,12 @@ export interface AsbestosInfo {
 }
 
 export interface TerrainInfo {
-  classification: "flat" | "gentle" | "moderate" | "steep";
+  classification: "flat" | "gentle" | "moderate" | "steep" | null;
   slope?: string;
+  slope_degrees?: number | null;
   retainingCostLow?: number;
   retainingCostHigh?: number;
+  source?: string;
 }
 
 export interface InfrastructureService {
@@ -128,6 +130,8 @@ export interface FeasibilityReport {
   costItems?: CostItem[];
   totalCostLow?: number;
   totalCostHigh?: number;
+  total_excludes_land?: boolean;
+  cv_unavailable?: boolean;
   cost_per_unit_avg?: number;
   roiScenarios?: ROIScenario[];
   comparableSales?: ComparableSale[];
@@ -137,6 +141,8 @@ export interface FeasibilityReport {
   riskSummary?: string[];
   disclaimer?: string;
   overlay_map_image_base64?: string;
+  data_sources?: Record<string, string>;
+  missing_critical_fields?: string[];
 }
 
 export interface PropertyCandidate {

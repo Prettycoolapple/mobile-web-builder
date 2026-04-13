@@ -174,6 +174,8 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     overlaysData,
     {
       contour: contourData?.classification ?? null,
+      contour_slope_degrees: contourData?.slope_degrees ?? null,
+      contour_source: contourData?.source ?? null,
       asbestos_risk: asbestosDetail.risk,
       infrastructure: infrastructureData,
     },

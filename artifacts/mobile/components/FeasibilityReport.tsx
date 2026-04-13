@@ -62,7 +62,8 @@ function getInfraLabel(loc: string): string {
     case "boundary":   return "At boundary";
     case "neighbour":  return "Neighbour land ⚠";
     case "public-land":return "Public road";
-    default:           return "Off parcel";
+    case "unknown":    return "Unknown";
+    default:           return "Unknown";
   }
 }
 
@@ -83,7 +84,7 @@ function overlayStatus(report: Report): "good" | "warning" | "risk" | "neutral" 
 }
 
 function contourStatus(terrain: Report["terrain"]): "good" | "warning" | "risk" | "neutral" {
-  if (!terrain) return "neutral";
+  if (!terrain || terrain.classification === null) return "neutral";
   if (terrain.classification === "steep") return "risk";
   if (terrain.classification === "moderate") return "warning";
   return "good";
@@ -340,6 +341,10 @@ function AsbestosPanel({ asbestos, colors }: { asbestos: AsbestosInfo; colors: R
   const riskColor = risk === "high" ? colors.red : risk === "moderate" ? colors.amber : risk === "unknown" ? colors.amber : colors.success;
   const riskLabel = risk === "high" ? "HIGH — Built 1940–1990 (likely contains ACM)" : risk === "low" ? "LOW — Post-1990 build" : "UNKNOWN — Survey required";
 
+  const demoCostLow = asbestos.demoCostLow ?? 0;
+  const demoCostHigh = asbestos.demoCostHigh ?? 0;
+  const isVacant = demoCostLow === 0 && demoCostHigh === 0;
+
   return (
     <View style={{ gap: 10 }}>
       <View style={[styles.riskBanner, { backgroundColor: riskColor + "15", borderColor: riskColor + "30", borderRadius: 10 }]}>
@@ -353,10 +358,17 @@ function AsbestosPanel({ asbestos, colors }: { asbestos: AsbestosInfo; colors: R
           )}
         </View>
       </View>
-      {(asbestos.demoCostLow != null || asbestos.demoCostHigh != null) && (
+      {isVacant ? (
+        <View style={[styles.warningBox, { backgroundColor: colors.success + "12", borderColor: colors.success + "30" }]}>
+          <Feather name="check-circle" size={13} color={colors.success} />
+          <Text style={{ color: colors.success, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1, lineHeight: 17 }}>
+            No demolition required — vacant land or no existing dwelling detected.
+          </Text>
+        </View>
+      ) : (
         <InfoRow
           label="Demo cost estimate"
-          value={`${formatNZD(asbestos.demoCostLow)} – ${formatNZD(asbestos.demoCostHigh)}`}
+          value={`${formatNZD(demoCostLow)} – ${formatNZD(demoCostHigh)}`}
           colors={colors}
         />
       )}
@@ -383,10 +395,24 @@ function AsbestosPanel({ asbestos, colors }: { asbestos: AsbestosInfo; colors: R
 }
 
 function ContourCard({ terrain, colors }: { report: Report; terrain: NonNullable<Report["terrain"]>; colors: ReturnType<typeof useColors> }) {
-  const steepness = terrain.classification === "steep" ? 40 : terrain.classification === "moderate" ? 22 : terrain.classification === "gentle" ? 10 : 3;
+  const cls = terrain.classification;
+  if (!cls) {
+    return (
+      <View style={{ gap: 8 }}>
+        <View style={[styles.warningBox, { backgroundColor: colors.mutedForeground + "12", borderColor: colors.mutedForeground + "30" }]}>
+          <Feather name="info" size={13} color={colors.mutedForeground} />
+          <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1, lineHeight: 17 }}>
+            Terrain data could not be retrieved automatically. Inspect on-site or obtain a contour survey.
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
+  const steepness = cls === "steep" ? 40 : cls === "moderate" ? 22 : cls === "gentle" ? 10 : 3;
   const W = 120, H = 70;
   const slopeY = H - (steepness / 45) * H;
-  const terrainColor = terrain.classification === "steep" ? colors.red : terrain.classification === "moderate" ? colors.amber : colors.success;
+  const terrainColor = cls === "steep" ? colors.red : cls === "moderate" ? colors.amber : colors.success;
 
   return (
     <View style={{ gap: 10 }}>
@@ -401,11 +427,21 @@ function ContourCard({ terrain, colors }: { report: Report; terrain: NonNullable
         </Svg>
         <View style={{ flex: 1, gap: 4 }}>
           <Text style={{ color: terrainColor, fontFamily: "DM_Sans_700Bold", fontSize: 15 }}>
-            {capitalize(terrain.classification)}
+            {capitalize(cls)}
           </Text>
+          {terrain.slope_degrees != null && (
+            <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
+              ~{terrain.slope_degrees}° slope
+            </Text>
+          )}
           {terrain.slope && (
             <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 13, lineHeight: 18 }}>
               {terrain.slope}
+            </Text>
+          )}
+          {terrain.source && (
+            <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11 }}>
+              Source: {terrain.source}
             </Text>
           )}
         </View>
@@ -418,23 +454,38 @@ function ContourCard({ terrain, colors }: { report: Report; terrain: NonNullable
           colors={colors}
         />
       )}
+      {(cls === "steep" || cls === "moderate") && (
+        <View style={[styles.warningBox, { backgroundColor: terrainColor + "12", borderColor: terrainColor + "30" }]}>
+          <Feather name="alert-triangle" size={13} color={terrainColor} />
+          <Text style={{ color: terrainColor, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1, lineHeight: 17 }}>
+            {cls === "steep"
+              ? "Steep terrain significantly increases foundation and retaining costs. Single dwelling: $50k–$150k. Subdivision (multiple lots): $200k–$500k+. Engage a geotechnical engineer for site-specific assessment."
+              : "Moderate slope — retaining walls and cut-and-fill earthworks will add cost. Engineering assessment recommended."}
+          </Text>
+        </View>
+      )}
     </View>
   );
 }
 
 function InfrastructureTable({ infrastructure, colors }: { infrastructure: InfrastructureService[]; colors: ReturnType<typeof useColors> }) {
   const hasNeighbour = infrastructure.some((s) => s.location === "neighbour");
+  const hasUnknown = infrastructure.some((s) => s.location === "unknown");
 
   return (
     <View style={{ gap: 0 }}>
       {infrastructure.map((svc, i) => {
         const locLabel = getInfraLabel(svc.location);
+        const isUnknown = svc.location === "unknown";
         const locColor =
           svc.location === "on-parcel" ? colors.success
           : svc.location === "boundary" ? "#3B82F6"
           : svc.location === "neighbour" ? colors.amber
+          : isUnknown ? colors.mutedForeground
           : colors.mutedForeground;
-        const riskAssessment = svc.location === "neighbour" ? "Easement may be required" : "Standard connection";
+        const riskAssessment = svc.location === "neighbour" ? "Easement may be required"
+          : isUnknown ? "Location unverified"
+          : "Standard connection";
         const costLow = svc.estimatedCostLow ?? svc.estimated_cost_low;
         const costHigh = svc.estimatedCostHigh ?? svc.estimated_cost_high;
 
@@ -475,6 +526,14 @@ function InfrastructureTable({ infrastructure, colors }: { infrastructure: Infra
           <Feather name="alert-triangle" size={13} color={colors.amber} />
           <Text style={{ color: colors.amber, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1, lineHeight: 17 }}>
             One or more services are located on neighbouring property. A registered easement or private agreement will be required before building consent can be granted.
+          </Text>
+        </View>
+      )}
+      {hasUnknown && (
+        <View style={[styles.warningBox, { backgroundColor: colors.mutedForeground + "12", borderColor: colors.mutedForeground + "30", marginTop: 10 }]}>
+          <Feather name="info" size={13} color={colors.mutedForeground} />
+          <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1, lineHeight: 17 }}>
+            Infrastructure location could not be determined automatically. Verify service locations at geomapspublic.aucklandcouncil.govt.nz or engage a civil engineer.
           </Text>
         </View>
       )}
@@ -833,11 +892,58 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
         <ScoreSummaryRow report={report} colors={colors} />
       </View>
 
+      {(report.cv_unavailable || (report.missing_critical_fields && report.missing_critical_fields.length > 0)) && (
+        <View style={[styles.warningBox, { backgroundColor: "#FEF08A20", borderColor: "#CA8A0450", borderRadius: 12, padding: 12 }]}>
+          <Feather name="alert-triangle" size={14} color="#CA8A04" />
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: "#92400E", fontFamily: "DM_Sans_600SemiBold", fontSize: 13 }}>
+              Some property data could not be retrieved automatically
+            </Text>
+            <Text style={{ color: "#92400E", fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 17, marginTop: 3 }}>
+              CV and land area affect ROI accuracy — verify manually at aucklandcouncil.govt.nz
+            </Text>
+          </View>
+        </View>
+      )}
+
       {report.propertyOverview && (
         <SectionCard title="Property overview" icon="📍" defaultOpen={false} colors={colors}>
-          <InfoRow label="Capital Value" value={report.propertyOverview.cv || "N/A"} colors={colors} />
-          <InfoRow label="Land Area" value={report.propertyOverview.landArea || "N/A"} colors={colors} />
-          {report.propertyOverview.floorArea && <InfoRow label="Floor Area" value={report.propertyOverview.floorArea} colors={colors} />}
+          <View>
+            <InfoRow
+              label="Capital Value"
+              value={report.propertyOverview.cv || "Unavailable — check Auckland Council"}
+              valueColor={!report.propertyOverview.cv ? colors.amber : undefined}
+              colors={colors}
+            />
+            {report.data_sources?.cv_nzd && (
+              <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, marginTop: -4, marginBottom: 4, textAlign: "right" }}>
+                Source: {report.data_sources.cv_nzd}
+              </Text>
+            )}
+          </View>
+          <View>
+            <InfoRow
+              label="Land Area"
+              value={report.propertyOverview.landArea || "Unavailable — check LINZ"}
+              valueColor={!report.propertyOverview.landArea ? colors.amber : undefined}
+              colors={colors}
+            />
+            {report.data_sources?.land_area_sqm && (
+              <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, marginTop: -4, marginBottom: 4, textAlign: "right" }}>
+                Source: {report.data_sources.land_area_sqm}
+              </Text>
+            )}
+          </View>
+          {report.propertyOverview.floorArea && (
+            <View>
+              <InfoRow label="Floor Area" value={report.propertyOverview.floorArea} colors={colors} />
+              {report.data_sources?.floor_area_sqm && (
+                <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, marginTop: -4, marginBottom: 4, textAlign: "right" }}>
+                  Source: {report.data_sources.floor_area_sqm}
+                </Text>
+              )}
+            </View>
+          )}
           <InfoRow label="Build Year" value={report.propertyOverview.buildYear || "N/A"} colors={colors} />
           <InfoRow label="Zone" value={report.propertyOverview.zone || "N/A"} colors={colors} />
           {report.planning?.potentialLots != null && (
@@ -892,6 +998,14 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
 
       {report.roiScenarios && report.roiScenarios.length > 0 && (
         <SectionCard title="ROI scenarios" icon="📈" status={roiStatus(safeNum(report.scores?.roi))} colors={colors}>
+          {(report.cv_unavailable || report.roiScenarios[0]?.cv_unavailable) && (
+            <View style={[styles.warningBox, { backgroundColor: colors.amber + "12", borderColor: colors.amber + "30", marginBottom: 10 }]}>
+              <Feather name="alert-triangle" size={13} color={colors.amber} />
+              <Text style={{ color: colors.amber, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1, lineHeight: 17 }}>
+                Cannot calculate accurate ROI — CV data unavailable. Land cost is excluded from these totals. Verify CV at aucklandcouncil.govt.nz before relying on these figures.
+              </Text>
+            </View>
+          )}
           <ROIScenarioCards
             scenarios={report.roiScenarios}
             gdv={report.roiScenarios[0]?.gdv}

@@ -302,8 +302,15 @@ router.post("/chat", async (req, res) => {
 
               const cvNzd = costs.land_cv_nzd;
               const cvNote = cvNzd > 0
-                ? `$${formatNZD(cvNzd)} (confirmed from ${(merged as any).data_sources?.cv || "Hougarden/OneRoof"})`
-                : `NOT AVAILABLE from scrapers — you MUST estimate a realistic CV for ${geocode?.formatted ?? extractedAddress} in ${suburb} based on the zone (${merged.zone_code ?? "unknown"}), land area (${(merged as any).land_sqm ?? "?"}m²), and current Auckland Council CV rates. Do NOT use $0. Research typical CV values for this suburb and property type — for Remuera/inner eastern suburbs THAB/MHU properties, CVs are typically $1.5M–$3M+ NZD.`;
+                ? `$${formatNZD(cvNzd)} (confirmed from ${(merged as any).data_sources?.cv_nzd || "Hougarden/OneRoof"})`
+                : `NOT AVAILABLE from any data source — cv_unavailable is TRUE. Set propertyOverview.cv to null in the JSON output. ROI calculations exclude land cost.`;
+
+              const cvSource = (merged as any).data_sources?.cv_nzd ?? null;
+              const landSource = (merged as any).data_sources?.land_area_sqm ?? null;
+              const floorSource = (merged as any).data_sources?.floor_area_sqm ?? null;
+              const contourSlope = (merged as any).contour_slope_degrees ?? null;
+              const contourSrc = (merged as any).contour_source ?? null;
+              const missingCritical = (merged as any).missing_critical_fields ?? [];
 
               enrichedContent = `Analyse this NZ property for development feasibility.${failedStr}
 
@@ -329,8 +336,10 @@ PRE-COMPUTED FINANCIALS — use verbatim:
   Potential lots: ${lots.lots}
   Zone: ${lots.zone_label} (${merged.zone_code ?? "unknown"})
   Land / CV: ${cvNote}
+  CV unavailable: ${costs.cv_unavailable}
+  Missing critical fields: ${missingCritical.join(", ") || "none"}
 
-  Total development cost (INCLUDES land if CV available):
+  Total development cost (${costs.cv_unavailable ? "EXCLUDES land — CV unavailable" : "INCLUDES land"}):
     Low:  $${formatNZD(costs.total_low)}
     High: $${formatNZD(costs.total_high)}
   Cost per unit (avg): $${formatNZD(costs.cost_per_unit_avg)}
@@ -353,15 +362,37 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
     "cost_reasons": [${scores.cost_reasons.map((r) => `"${r}"`).join(", ")}],
     "roi_reasons": [${scores.roi_reasons.map((r) => `"${r}"`).join(", ")}]
   },
-  "propertyOverview": { "address": "...", "cv": "${cvNzd > 0 ? `$${formatNZD(cvNzd)}` : "estimate based on suburb/zone/land area — do NOT use $0"}", "landArea": "Xm²", "floorArea": "...", "buildYear": "...", "zone": "...", "listingPrice": null, "isOnMarket": false },
+  "propertyOverview": {
+    "address": "...",
+    "cv": ${cvNzd > 0 ? `"$${formatNZD(cvNzd)}"` : "null"},
+    "landArea": "${merged.land_area_sqm != null ? `${merged.land_area_sqm}m²` : "null — check LINZ"}",
+    "floorArea": "${merged.floor_area_sqm != null ? `${merged.floor_area_sqm}m²` : "null"}",
+    "buildYear": "${merged.build_year ?? "null"}",
+    "zone": "...", "listingPrice": null, "isOnMarket": false
+  },
   "planning": { "zone": "...", "minLotSize": "Xm²", "potentialLots": ${lots.lots}, "overlays": [{ "name": "...", "status": "clear|moderate|restricted", "detail": "..." }], "subdivisionSummary": "..." },
   "potential_lots": ${lots.lots},
   "zone_label": "${lots.zone_label}",
-  "asbestos": { "buildYear": "year or null", "riskLevel": "${asbestos_detail.risk}", "risk": "${asbestos_detail.risk}", "flagged": ${asbestos_detail.risk === "high"}, "notes": "${asbestos_detail.notes}", "worksafe_required": ${asbestos_detail.risk === "high"}, "demoCostLow": ${costs.demo_low}, "demoCostHigh": ${costs.demo_high} },
-  "terrain": { "classification": "flat|gentle|moderate|steep", "slope": "...", "retainingCostLow": ${costs.retaining_low}, "retainingCostHigh": ${costs.retaining_high} },
-  "infrastructure": [ { "name": "Wastewater|Stormwater|Water Supply", "location": "on-parcel|boundary|neighbour|public-land", "distance_metres": <number or null>, "estimatedCostLow": <NZD>, "estimatedCostHigh": <NZD>, "risk": "low|moderate|high", "note": "..." } ],
+  "cv_unavailable": ${costs.cv_unavailable},
+  "total_excludes_land": ${costs.cv_unavailable},
+  "missing_critical_fields": ${JSON.stringify(missingCritical)},
+  "data_sources": {
+    "cv_nzd": ${cvSource ? `"${cvSource}"` : "null"},
+    "land_area_sqm": ${landSource ? `"${landSource}"` : "null"},
+    "floor_area_sqm": ${floorSource ? `"${floorSource}"` : "null"}
+  },
+  "asbestos": { "buildYear": "${merged.build_year ?? "null"}", "riskLevel": "${asbestos_detail.risk}", "risk": "${asbestos_detail.risk}", "flagged": ${asbestos_detail.risk === "high"}, "notes": "${asbestos_detail.notes}", "worksafe_required": ${asbestos_detail.risk === "high"}, "demoCostLow": ${costs.demo_low}, "demoCostHigh": ${costs.demo_high} },
+  "terrain": {
+    "classification": ${merged.contour ? `"${merged.contour}"` : "null"},
+    "slope_degrees": ${contourSlope ?? "null"},
+    "slope": ${merged.contour ? `"~${contourSlope ?? "?"}° slope — ${merged.contour}"` : "null"},
+    "source": ${contourSrc ? `"${contourSrc}"` : "null"},
+    "retainingCostLow": ${costs.retaining_low},
+    "retainingCostHigh": ${costs.retaining_high}
+  },
+  "infrastructure": [ { "name": "Wastewater|Stormwater|Water Supply", "location": "on-parcel|boundary|neighbour|public-land|unknown", "distance_metres": <number or null>, "estimatedCostLow": <NZD or null>, "estimatedCostHigh": <NZD or null>, "risk": "low|moderate|high", "note": "..." } ],
   "costItems": [
-    { "label": "Land (CV)", "low": ${cvNzd > 0 ? cvNzd : "ESTIMATE_REALISTIC_NZD — must not be 0"}, "high": ${cvNzd > 0 ? cvNzd : "ESTIMATE_REALISTIC_NZD — must not be 0"} },
+    ${cvNzd > 0 ? `{ "label": "Land (CV)", "low": ${cvNzd}, "high": ${cvNzd} },` : `{ "label": "Land (CV — unavailable)", "low": 0, "high": 0 },`}
     { "label": "Demolition", "low": ${costs.demo_low}, "high": ${costs.demo_high} },
     { "label": "Construction", "low": ${costs.construction_low}, "high": ${costs.construction_high} },
     { "label": "Retaining Walls", "low": ${costs.retaining_low}, "high": ${costs.retaining_high} },
@@ -370,11 +401,11 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
     { "label": "Finance (Holding)", "low": ${costs.finance_low}, "high": ${costs.finance_high} },
     { "label": "Contingency", "low": ${costs.contingency_low}, "high": ${costs.contingency_high} }
   ],
-  "totalCostLow": ${costs.total_low > 0 ? costs.total_low : "recalculate including your estimated land CV"},
-  "totalCostHigh": ${costs.total_high > 0 ? costs.total_high : "recalculate including your estimated land CV"},
+  "totalCostLow": ${costs.total_low},
+  "totalCostHigh": ${costs.total_high},
   "cost_per_unit_avg": ${costs.cost_per_unit_avg},
   "roiScenarios": [
-${scenarios.map((s) => `    { "years": ${s.years}, "gdv": ${s.gdv}, "total_cost_mid": ${s.total_cost_mid}, "gross_profit": ${s.gross_profit}, "roi_percent": ${s.roi_percent.toFixed(1)}, "annualised_roi_percent": ${s.annualised_roi_percent.toFixed(1)}, "viable": ${s.viable} }`).join(",\n")}
+${scenarios.map((s) => `    { "years": ${s.years}, "gdv": ${s.gdv}, "total_cost_mid": ${s.total_cost_mid}, "gross_profit": ${s.gross_profit}, "roi_percent": ${s.roi_percent.toFixed(1)}, "annualised_roi_percent": ${s.annualised_roi_percent.toFixed(1)}, "viable": ${s.viable}, "cv_unavailable": ${costs.cv_unavailable} }`).join(",\n")}
   ],
   "comparableSales": [<3 real recent comparable sales for this suburb: { "address": "...", "sale_date": "YYYY-MM-DD", "price_nzd": <NZD>, "land_sqm": <number>, "floor_sqm": <number>, "price_per_sqm": <NZD> }>],
   "comparables_quality": "${comparables_quality}",
@@ -384,8 +415,10 @@ ${scenarios.map((s) => `    { "years": ${s.years}, "gdv": ${s.gdv}, "total_cost_
   "disclaimer": "These are indicative estimates only. Always engage a quantity surveyor, lawyer, and urban planner before making any development decisions. Figures in NZD."
 }
 CRITICAL RULES:
-- Land (CV) MUST be a realistic NZD number — never 0. If not confirmed, estimate from suburb/zone knowledge.
-- Fill in ALL fields. Do not leave any blank. Mark truly unknown fields as null.
+- If cv_unavailable is true: set propertyOverview.cv to null, include a riskSummary note about CV being unavailable.
+- If terrain.classification is null: terrain data was unavailable — keep it null, do not guess.
+- Infrastructure location "unknown" means GIS data was unavailable — keep as "unknown", do not guess.
+- Fill in ALL fields. Mark truly unknown fields as null (not empty string, not 0).
 - Write riskSummary items as specific, developer-focused 1-sentence statements about THIS property.
 - Return ONLY valid JSON, no markdown fences, no other text.`;
             } else {
@@ -452,6 +485,70 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
       error: "Failed to generate reply. Please try again.",
       code: "CHAT_FAILED",
     });
+  }
+});
+
+router.get("/pipeline-test", async (req, res) => {
+  const address = (req.query["address"] as string) || "8 Hampton Drive St Heliers Auckland";
+
+  req.log.info({ address }, "Pipeline test started");
+
+  try {
+    const pipelineResult = await runPropertyPipeline(address);
+
+    const debug = {
+      address_input: pipelineResult.address_input,
+      geocode: pipelineResult.geocode,
+      failed_sources: pipelineResult.failed_sources,
+      timing_ms: pipelineResult.timing_ms,
+      raw_linz_parcel: {
+        parcel_id: pipelineResult.linz_parcel?.parcel_id,
+        area_sqm: pipelineResult.linz_parcel?.area_sqm,
+        title_no: pipelineResult.linz_parcel?.title_no,
+      },
+      raw_hougarden: {
+        cv_nzd: pipelineResult.hougarden?.cv_nzd,
+        land_area_sqm: pipelineResult.hougarden?.land_area_sqm,
+        floor_area_sqm: pipelineResult.hougarden?.floor_area_sqm,
+        build_year: pipelineResult.hougarden?.build_year,
+        zone_code: pipelineResult.hougarden?.zone_code,
+      },
+      raw_oneroof: {
+        found: pipelineResult.oneroof?.found,
+        cv_nzd: pipelineResult.oneroof?.cv_nzd,
+        land_area_sqm: pipelineResult.oneroof?.land_area_sqm,
+        floor_area_sqm: pipelineResult.oneroof?.floor_area_sqm,
+        build_year: pipelineResult.oneroof?.build_year,
+        last_sale_price: pipelineResult.oneroof?.last_sale_price,
+      },
+      raw_contour: pipelineResult.contour,
+      merged_final: {
+        cv_nzd: pipelineResult.merged?.cv_nzd,
+        land_area_sqm: pipelineResult.merged?.land_area_sqm,
+        floor_area_sqm: pipelineResult.merged?.floor_area_sqm,
+        zone_code: pipelineResult.merged?.zone_code,
+        contour: pipelineResult.merged?.contour,
+        contour_slope_degrees: pipelineResult.merged?.contour_slope_degrees,
+        contour_source: pipelineResult.merged?.contour_source,
+        data_sources: pipelineResult.merged?.data_sources,
+        missing_critical_fields: pipelineResult.merged?.missing_critical_fields,
+      },
+      infrastructure: pipelineResult.infrastructure,
+      costs_summary: {
+        land_cv_nzd: pipelineResult.costs?.land_cv_nzd,
+        cv_unavailable: pipelineResult.costs?.cv_unavailable,
+        total_low: pipelineResult.costs?.total_low,
+        total_high: pipelineResult.costs?.total_high,
+        retaining_unknown: pipelineResult.costs?.retaining_unknown,
+      },
+      roi_first_scenario: pipelineResult.scenarios[0],
+    };
+
+    req.log.info(debug, "Pipeline test result");
+    res.json(debug);
+  } catch (err) {
+    req.log.error({ err }, "Pipeline test failed");
+    res.status(500).json({ error: String(err) });
   }
 });
 

@@ -2,11 +2,14 @@ import type { MergedPropertyData } from "./scrapers/merge";
 import { roundToNearest } from "./utils";
 
 export interface CostBreakdown {
-  land_cv_nzd: number;
+  land_cv_nzd: number | null;
+  cv_unavailable: boolean;
   demo_low: number;
   demo_high: number;
+  demo_vacant: boolean;
   retaining_low: number;
   retaining_high: number;
+  retaining_unknown: boolean;
   services_low: number;
   services_high: number;
   construction_low: number;
@@ -19,13 +22,16 @@ export interface CostBreakdown {
   contingency_high: number;
   total_low: number;
   total_high: number;
+  total_excludes_land: boolean;
   units: number;
   cost_per_unit_avg: number;
+  has_existing_dwelling: boolean;
 }
 
 export function estimateCosts(data: MergedPropertyData, units: number): CostBreakdown {
-  const cv = data.cv_nzd ?? 0;
-  const contour = data.contour ?? "flat";
+  const cv = data.cv_nzd ?? null;
+  const cvUnavailable = cv === null;
+  const contour = data.contour ?? null;
   const asbestos = data.asbestos_risk ?? "unknown";
   const hasDwelling = data.build_year != null;
 
@@ -33,6 +39,7 @@ export function estimateCosts(data: MergedPropertyData, units: number): CostBrea
 
   let demo_low = 0;
   let demo_high = 0;
+  const demoVacant = !hasDwelling;
   if (hasDwelling) {
     if (asbestos === "low") {
       demo_low = 15000; demo_high = 30000;
@@ -45,6 +52,7 @@ export function estimateCosts(data: MergedPropertyData, units: number): CostBrea
 
   let retaining_low = 0;
   let retaining_high = 0;
+  const retainingUnknown = contour === null;
   if (contour === "gentle") {
     retaining_low = 10000;  retaining_high = 30000;
   } else if (contour === "moderate") {
@@ -75,7 +83,7 @@ export function estimateCosts(data: MergedPropertyData, units: number): CostBrea
   const consents_high = construction_high * 0.16;
 
   const construction_mid = (construction_low + construction_high) / 2;
-  const loan_base = cv + construction_mid * 0.5;
+  const loan_base = (cv ?? 0) + construction_mid * 0.5;
   const finance_low  = loan_base * 0.075 * 1.5;
   const finance_high = loan_base * 0.075 * 2.5;
 
@@ -85,18 +93,24 @@ export function estimateCosts(data: MergedPropertyData, units: number): CostBrea
   const contingency_low  = subtotal_low  * 0.08;
   const contingency_high = subtotal_high * 0.12;
 
-  const total_low  = cv + subtotal_low  + contingency_low;
-  const total_high = cv + subtotal_high + contingency_high;
+  const dev_cost_low  = subtotal_low  + contingency_low;
+  const dev_cost_high = subtotal_high + contingency_high;
+
+  const total_low  = (cv ?? 0) + dev_cost_low;
+  const total_high = (cv ?? 0) + dev_cost_high;
   const cost_per_unit_avg = ((total_low + total_high) / 2) / safeUnits;
 
   const r = (n: number) => roundToNearest(n, 1000);
 
   return {
-    land_cv_nzd:       r(cv),
+    land_cv_nzd:       cv !== null ? r(cv) : null,
+    cv_unavailable:    cvUnavailable,
     demo_low:          r(demo_low),
     demo_high:         r(demo_high),
+    demo_vacant:       demoVacant,
     retaining_low:     r(retaining_low),
     retaining_high:    r(retaining_high),
+    retaining_unknown: retainingUnknown,
     services_low:      r(services_low),
     services_high:     r(services_high),
     construction_low:  r(construction_low),
@@ -109,7 +123,9 @@ export function estimateCosts(data: MergedPropertyData, units: number): CostBrea
     contingency_high:  r(contingency_high),
     total_low:         r(total_low),
     total_high:        r(total_high),
+    total_excludes_land: cvUnavailable,
     units:             safeUnits,
     cost_per_unit_avg: r(cost_per_unit_avg),
+    has_existing_dwelling: hasDwelling,
   };
 }

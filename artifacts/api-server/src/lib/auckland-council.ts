@@ -19,10 +19,11 @@ export interface Overlay {
 
 export interface ContourResult {
   slope_degrees: number | null;
-  classification: "flat" | "gentle" | "moderate" | "steep";
+  classification: "flat" | "gentle" | "moderate" | "steep" | null;
   retaining_cost_low: number;
   retaining_cost_high: number;
   source: string;
+  elevation_center?: number | null;
 }
 
 const ZONE_DOMAIN: Record<number, { code: string; description: string; minLot: number | null }> = {
@@ -210,64 +211,136 @@ export async function fetchOverlays(lat: number, lng: number): Promise<Overlay[]
   return overlays;
 }
 
-export async function fetchContour(lat: number, lng: number): Promise<ContourResult> {
-  const LINZ_ELEVATION_URL = "https://data.linz.govt.nz/services/api/v1/layers/104687/features/";
-  const linzKey = process.env["LINZ_API_KEY"];
-
-  if (linzKey) {
-    try {
-      const OFFSET = 0.0001;
-      const points = [
-        { lat, lng },
-        { lat: lat + OFFSET, lng },
-        { lat: lat - OFFSET, lng },
-        { lat, lng: lng + OFFSET },
-        { lat, lng: lng - OFFSET },
-      ];
-
-      const elevations: number[] = [];
-      for (const pt of points) {
-        const url = new URL(LINZ_ELEVATION_URL);
-        url.searchParams.set("q", `geometry INTERSECTS POINT(${pt.lng} ${pt.lat})`);
-        url.searchParams.set("count", "1");
-
-        const resp = await fetch(url.toString(), {
-          headers: { Authorization: `key ${linzKey}` },
-          signal: AbortSignal.timeout(8000),
-        });
-        if (!resp.ok) continue;
-
-        const data = (await resp.json()) as {
-          features?: Array<{ properties: Record<string, unknown> }>;
-        };
-        const elev = Number(data.features?.[0]?.properties?.["elevation"] ?? NaN);
-        if (!isNaN(elev)) elevations.push(elev);
-      }
-
-      if (elevations.length >= 2) {
-        const elevDiff = Math.max(...elevations) - Math.min(...elevations);
-        const distanceM = OFFSET * 111320;
-        const slopeDeg = Math.atan(elevDiff / distanceM) * (180 / Math.PI);
-        return classifySlope(slopeDeg, "LINZ DEM");
-      }
-    } catch (err) {
-      logger.debug({ err }, "LINZ elevation query failed");
-    }
+async function fetchElevationViaGoogle(lat: number, lng: number): Promise<ContourResult | null> {
+  const apiKey = process.env["GOOGLE_MAPS_API_KEY"];
+  if (!apiKey) {
+    logger.warn("Google Elevation: GOOGLE_MAPS_API_KEY not set — skipping");
+    return null;
   }
 
+  const offset = 0.00025;
+  const points = [
+    { lat: lat - offset, lng: lng - offset },
+    { lat: lat - offset, lng: lng },
+    { lat: lat - offset, lng: lng + offset },
+    { lat: lat,          lng: lng - offset },
+    { lat: lat,          lng: lng },
+    { lat: lat,          lng: lng + offset },
+    { lat: lat + offset, lng: lng - offset },
+    { lat: lat + offset, lng: lng },
+    { lat: lat + offset, lng: lng + offset },
+  ];
+
+  const locationStr = points.map((p) => `${p.lat},${p.lng}`).join("|");
+  const url = `https://maps.googleapis.com/maps/api/elevation/json?locations=${locationStr}&key=${apiKey}`;
+
+  const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  if (!resp.ok) throw new Error(`Google Elevation HTTP ${resp.status}`);
+
+  const data = (await resp.json()) as {
+    status: string;
+    results?: Array<{ elevation: number; location: { lat: number; lng: number } }>;
+  };
+
+  if (data.status !== "OK" || !data.results || data.results.length < 9) {
+    logger.warn({ status: data.status, resultsCount: data.results?.length ?? 0, errorMessage: (data as any).error_message }, "Google Elevation API returned unexpected result");
+    return null;
+  }
+
+  const elevations = data.results.map((r) => r.elevation);
+  const centerElevation = elevations[4];
+
+  const cornerElevations = [elevations[0], elevations[2], elevations[6], elevations[8]];
+  const maxCornerDiff = Math.max(...cornerElevations.map((e) => Math.abs(e - centerElevation)));
+  const slopeDegCorner = Math.atan(maxCornerDiff / 35) * (180 / Math.PI);
+
+  const adjacentElevations = [elevations[1], elevations[3], elevations[5], elevations[7]];
+  const maxAdjacentDiff = Math.max(...adjacentElevations.map((e) => Math.abs(e - centerElevation)));
+  const slopeDegAdjacent = Math.atan(maxAdjacentDiff / 25) * (180 / Math.PI);
+
+  const finalSlope = Math.max(slopeDegCorner, slopeDegAdjacent);
+
+  logger.info(
+    { lat, lng, centerElevation, elevations, slopeDegCorner, slopeDegAdjacent, finalSlope },
+    "Google Elevation: raw values",
+  );
+
+  return classifySlope(finalSlope, "Google Elevation API", centerElevation);
+}
+
+async function fetchElevationViaLINZ(lat: number, lng: number): Promise<ContourResult | null> {
+  const linzKey = process.env["LINZ_API_KEY"];
+  if (!linzKey) return null;
+
+  const LINZ_ELEVATION_URL = "https://data.linz.govt.nz/services/api/v1/layers/104687/features/";
+  const OFFSET = 0.0001;
+  const points = [
+    { lat, lng },
+    { lat: lat + OFFSET, lng },
+    { lat: lat - OFFSET, lng },
+    { lat, lng: lng + OFFSET },
+    { lat, lng: lng - OFFSET },
+  ];
+
+  const elevations: number[] = [];
+  for (const pt of points) {
+    const url = new URL(LINZ_ELEVATION_URL);
+    url.searchParams.set("q", `geometry INTERSECTS POINT(${pt.lng} ${pt.lat})`);
+    url.searchParams.set("count", "1");
+
+    const resp = await fetch(url.toString(), {
+      headers: { Authorization: `key ${linzKey}` },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!resp.ok) continue;
+
+    const data = (await resp.json()) as {
+      features?: Array<{ properties: Record<string, unknown> }>;
+    };
+    const elev = Number(data.features?.[0]?.properties?.["elevation"] ?? NaN);
+    if (!isNaN(elev)) elevations.push(elev);
+  }
+
+  if (elevations.length >= 2) {
+    const elevDiff = Math.max(...elevations) - Math.min(...elevations);
+    const distanceM = OFFSET * 111320;
+    const slopeDeg = Math.atan(elevDiff / distanceM) * (180 / Math.PI);
+    logger.info({ lat, lng, elevations, slopeDeg }, "LINZ elevation: raw values");
+    return classifySlope(slopeDeg, "LINZ DEM");
+  }
+
+  return null;
+}
+
+export async function fetchContour(lat: number, lng: number): Promise<ContourResult> {
+  try {
+    const googleResult = await fetchElevationViaGoogle(lat, lng);
+    if (googleResult) return googleResult;
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "Google elevation query failed");
+  }
+
+  try {
+    const linzResult = await fetchElevationViaLINZ(lat, lng);
+    if (linzResult) return linzResult;
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "LINZ elevation query failed");
+  }
+
+  logger.warn({ lat, lng }, "All elevation sources failed — returning unknown contour");
   return {
     slope_degrees: null,
-    classification: "gentle",
-    retaining_cost_low: 10000,
-    retaining_cost_high: 30000,
-    source: "estimated (no elevation data available)",
+    classification: null,
+    retaining_cost_low: 0,
+    retaining_cost_high: 0,
+    source: "unavailable",
   };
 }
 
-function classifySlope(slopeDeg: number, source: string): ContourResult {
+function classifySlope(slopeDeg: number, source: string, elevationCenter?: number): ContourResult {
   const rounded = Math.round(slopeDeg * 10) / 10;
-  if (slopeDeg < 5) return { slope_degrees: rounded, classification: "flat", retaining_cost_low: 0, retaining_cost_high: 0, source };
-  if (slopeDeg < 15) return { slope_degrees: rounded, classification: "gentle", retaining_cost_low: 10000, retaining_cost_high: 30000, source };
-  if (slopeDeg < 25) return { slope_degrees: rounded, classification: "moderate", retaining_cost_low: 50000, retaining_cost_high: 150000, source };
-  return { slope_degrees: rounded, classification: "steep", retaining_cost_low: 200000, retaining_cost_high: 400000, source };
+  if (slopeDeg < 5) return { slope_degrees: rounded, classification: "flat",     retaining_cost_low: 0,      retaining_cost_high: 0,      source, elevation_center: elevationCenter ?? null };
+  if (slopeDeg < 12) return { slope_degrees: rounded, classification: "gentle",   retaining_cost_low: 10000,  retaining_cost_high: 30000,  source, elevation_center: elevationCenter ?? null };
+  if (slopeDeg < 22) return { slope_degrees: rounded, classification: "moderate", retaining_cost_low: 50000,  retaining_cost_high: 150000, source, elevation_center: elevationCenter ?? null };
+  return { slope_degrees: rounded, classification: "steep",    retaining_cost_low: 200000, retaining_cost_high: 400000, source, elevation_center: elevationCenter ?? null };
 }

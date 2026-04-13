@@ -73,18 +73,19 @@ AI-powered NZ real estate development feasibility analysis mobile app built with
 - `auckland-council.ts` — `fetchUnitaryPlanZone()` + `fetchOverlays()` + `fetchContour()`: Auckland Council GIS at `mapspublic.aucklandcouncil.govt.nz/arcgis3`
   - Zone service: `NonCouncil/UnitaryPlanZones/MapServer/1` (56-code numeric domain map)
   - Overlays: layers 33 (heritage), 19 (notable trees, 30m buffer), 25/27 (viewshafts), 58 (coastal inundation), 24 (Waitakere), 29 (ridgeline)
+  - `fetchContour()`: Google Maps Elevation API (9-point grid, ~25-35m offset) → LINZ DEM fallback → returns `{ slope_degrees: null, classification: null, source: "unavailable" }` when both fail. **Requires `GOOGLE_MAPS_API_KEY` secret** for Google elevation; LINZ uses `LINZ_API_KEY`
 - `property-data.ts` — `fetchPropertyHistory()` + `checkAsbestosRisk()`: Auckland Council rating GIS + QV fallback; asbestos risk by build year
 - `infrastructure.ts` — `fetchInfrastructure()`: stormwater/wastewater/water supply distance from parcel
 - `scrapers/browser.ts` — `launchBrowser()` + `newStealthPage()`: NixOS system Chromium with full stealth evasion; `withBrowserSlot()` (max 2 concurrent)
 - `scrapers/scrapingbee.ts` — `fetchWithScrapingBee()`: ScrapingBee API fallback; silently skips if `SCRAPINGBEE_API_KEY` not set
 - `scrapers/hougarden.ts` — `scrapeHougarden()`: 3-attempt chain: stealth Playwright → ScrapingBee+cheerio → empty
 - `scrapers/oneroof.ts` — `scrapeOneRoof()`: same 3-attempt chain
-- `scrapers/merge.ts` — `mergePropertyData()`: priority-merges all sources; now includes `contour`, `asbestos_risk`, `infrastructure` in `MergedPropertyData`
+- `scrapers/merge.ts` — `mergePropertyData()`: priority-merges all sources; tracks `data_sources` (per-field source labels), `missing_critical_fields` (list of unavailable key fields), and `cv_unavailable`; includes `contour_slope_degrees`, `contour_source`
 
 **Phase 4 scoring engine** (deterministic, no AI, runs after merge):
 - `asbestos.ts` — `classifyAsbestos(build_year)`: returns `{ risk, notes, worksafe_required }` with full WorkSafe NZ legal context
 - `lot-calculator.ts` — `calculatePotentialLots(area, zone)`: AUP min lot sizes per zone, capped 1–20 lots
-- `cost-estimator.ts` — `estimateCosts(merged, units)`: full breakdown — land CV + demo + retaining + services + construction (2800–3500/m²) + consents (13–16%) + finance (7.5%pa) + contingency (8–12%)
+- `cost-estimator.ts` — `estimateCosts(merged, units)`: full breakdown — tracks `cv_unavailable` flag; if CV is null, land cost = 0 and `total_excludes_land: true`; demo + retaining + services + construction (2800–3500/m²) + consents (13–16%) + finance (7.5%pa) + contingency (8–12%)
 - `comparables.ts` — `getComparables(suburb, zone, lat, lng, existing?)`: uses live OneRoof comparables if ≥3, otherwise suburb lookup table (20 Auckland suburbs + default) with synthetic comparables
 - `roi-calculator.ts` — `calculateROIScenarios(costs, avgPrice, units)`: 3 scenarios (2/3/4 years), compound annualised ROI
 - `scoring.ts` — `scoreProperty(merged, costs, scenarios, lots)`: ease (deductions from 5.0), cost (bracket), ROI (bracket); composite = ease×0.30 + cost×0.30 + roi×0.40
@@ -153,7 +154,12 @@ AI-powered NZ real estate development feasibility analysis mobile app built with
 
 1. **Address Analysis** — Analyse specific NZ property addresses with full feasibility reports
 2. **Discovery Search** — Find subdividable properties by suburb/price criteria
-3. **Feasibility Report** — Scores (Ease/Cost/ROI), planning overlays, terrain, infrastructure, cost breakdown, ROI scenarios, comparable sales, AI risk summary
+3. **Feasibility Report** — Scores (Ease/Cost/ROI), planning overlays, terrain, infrastructure, cost breakdown, ROI scenarios, comparable sales, AI risk summary. Includes:
+   - Yellow missing-data warning banner when CV or land area is unavailable
+   - Per-field data source labels (e.g. "Source: OneRoof") under CV, land area, floor area
+   - ROI section warning when `cv_unavailable: true` — land cost excluded from totals
+   - CV shown as `null` in JSON (never AI-estimated); missing fields tracked in `missing_critical_fields[]`
+   - Terrain `classification` is `null` when elevation APIs fail (no fake 'gentle' fallback)
 4. **Session History** — AsyncStorage-persisted chat sessions (only non-empty sessions shown)
 5. **Profile & Subscription** — Free (3 reports/month) vs Pro ($49/month NZD), real usage counter from DB; Stripe checkout wired
 6. **Follow-up Chat** — Maintains conversation context per session

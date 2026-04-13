@@ -9,6 +9,7 @@ export interface ROIScenario {
   roi_percent: number;
   annualised_roi_percent: number;
   viable: boolean;
+  cv_unavailable?: boolean;
 }
 
 export function calculateROIScenarios(
@@ -25,6 +26,8 @@ export function calculateROIScenarios(
     ? parseFloat(((gross_profit / total_cost_mid) * 100).toFixed(1))
     : 0;
 
+  const cvUnavailable = costs.cv_unavailable === true;
+
   return ([2, 3, 4] as const).map((years) => {
     const rawAnnualised = total_cost_mid > 0
       ? (Math.pow(1 + roi_percent / 100, 1 / years) - 1) * 100
@@ -39,6 +42,7 @@ export function calculateROIScenarios(
       roi_percent,
       annualised_roi_percent,
       viable: gross_profit > 0,
+      cv_unavailable: cvUnavailable,
     };
   });
 }

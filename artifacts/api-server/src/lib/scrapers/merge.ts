@@ -26,8 +26,11 @@ export interface MergedPropertyData {
   comparables: ComparableSale[];
   data_sources: Record<string, string>;
   contour: "flat" | "gentle" | "moderate" | "steep" | null;
+  contour_slope_degrees: number | null;
+  contour_source: string | null;
   asbestos_risk: "low" | "high" | "unknown";
   infrastructure: InfrastructureItem[];
+  missing_critical_fields: string[];
 }
 
 function first<T>(label: string, sources: Record<string, string>, ...candidates: Array<[string, T | null | undefined]>): T | null {
@@ -48,6 +51,8 @@ export function mergePropertyData(
   councilOverlays: Overlay[],
   extra?: {
     contour: "flat" | "gentle" | "moderate" | "steep" | null;
+    contour_slope_degrees?: number | null;
+    contour_source?: string | null;
     asbestos_risk: "low" | "high" | "unknown";
     infrastructure: InfrastructureItem[];
   },
@@ -135,7 +140,12 @@ export function mergePropertyData(
     sources["comparables"] = "oneroof";
   }
 
-  logger.debug({ sources }, "Merge: data sources selected");
+  const missing_critical_fields: string[] = [];
+  if (cv_nzd === null) missing_critical_fields.push("cv_nzd");
+  if (land_area_sqm === null) missing_critical_fields.push("land_area_sqm");
+  if (extra?.contour === null || extra?.contour === undefined) missing_critical_fields.push("contour");
+
+  logger.debug({ sources, missing_critical_fields }, "Merge: data sources selected");
 
   return {
     cv_nzd,
@@ -158,7 +168,10 @@ export function mergePropertyData(
     comparables,
     data_sources: sources,
     contour: extra?.contour ?? null,
+    contour_slope_degrees: extra?.contour_slope_degrees ?? null,
+    contour_source: extra?.contour_source ?? null,
     asbestos_risk: extra?.asbestos_risk ?? "unknown",
     infrastructure: extra?.infrastructure ?? [],
+    missing_critical_fields,
   };
 }
