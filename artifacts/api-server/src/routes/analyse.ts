@@ -8,6 +8,7 @@ import {
   generateUnifiedResponse,
   generateAnalysis,
   detectMode,
+  selectCandidatesByIntent,
   Message,
 } from "../lib/claude";
 import { verifyToken } from "../lib/auth";
@@ -233,14 +234,45 @@ router.post("/chat", async (req, res) => {
 
       if (mode === "discover") {
         try {
-          const { suburb, minPrice, maxPrice } = parseDiscoverParams(userText);
-          req.log.info({ suburb, minPrice, maxPrice }, "Discovery search started");
+          const { suburb: parsedSuburb, minPrice, maxPrice } = parseDiscoverParams(userText);
+
+          const isFollowUp = !parsedSuburb && /any\s+(others?|more)|show\s+more|more\s+(properties|options|results|sites)|what\s+else|anything\s+else|few\s+more|find\s+more|keep\s+looking|another\s+one/i.test(userText);
+
+          let suburb = parsedSuburb;
+          let effectiveMinPrice = minPrice;
+          let effectiveMaxPrice = maxPrice;
+          let alreadyShown: string[] = [];
+
+          if (isFollowUp && !suburb) {
+            const history = [...messages].reverse();
+            for (const msg of history) {
+              if (msg.role === "assistant") {
+                try {
+                  const prevPayload = JSON.parse(msg.content ?? "{}");
+                  if (prevPayload?.candidates?.length > 0) {
+                    alreadyShown = prevPayload.candidates.map((c: { address?: string }) => c.address ?? "").filter(Boolean);
+                  }
+                } catch {}
+              }
+              if (msg.role === "user" && !suburb) {
+                const { suburb: prevSuburb, minPrice: prevMin, maxPrice: prevMax } = parseDiscoverParams(msg.content ?? "");
+                if (prevSuburb) {
+                  suburb = prevSuburb;
+                  if (!effectiveMinPrice) effectiveMinPrice = prevMin;
+                  if (!effectiveMaxPrice) effectiveMaxPrice = prevMax;
+                  break;
+                }
+              }
+            }
+          }
+
+          req.log.info({ suburb, effectiveMinPrice, effectiveMaxPrice, isFollowUp, alreadyShown: alreadyShown.length }, "Discovery search started");
 
           let candidates: import("../lib/pre-screen").PropertyCandidate[] = [];
           let isMockData = false;
 
           if (suburb) {
-            const listings = await searchOneRoofListings({ suburb, price_min: minPrice, price_max: maxPrice })
+            const listings = await searchOneRoofListings({ suburb, price_min: effectiveMinPrice, price_max: effectiveMaxPrice })
               .catch((err) => { req.log.warn({ err }, "OneRoof search failed"); return []; });
 
             if (listings.length > 0) {
@@ -253,11 +285,18 @@ router.post("/chat", async (req, res) => {
 
           if (candidates.length === 0) {
             isMockData = true;
-            candidates = getMockListings(suburb ?? undefined);
-            req.log.info({ suburb, count: candidates.length }, "Discovery: using mock data fallback");
+            const mockPool = getMockListings(suburb ?? undefined);
+            req.log.info({ suburb, count: mockPool.length }, "Discovery: using mock data fallback — selecting by intent");
+            candidates = await selectCandidatesByIntent(userText, mockPool, 5, alreadyShown);
+            if (candidates.length === 0) {
+              candidates = mockPool
+                .filter((c) => !alreadyShown.includes(c.address))
+                .sort((a, b) => b.scores.composite - a.scores.composite)
+                .slice(0, 5);
+            }
           }
 
-          const responsePayload = JSON.stringify({ candidates, isMockData });
+          const responsePayload = JSON.stringify({ candidates, isMockData, suburb });
           res.json({ content: responsePayload, mode: "discover" });
           return;
         } catch (err) {

@@ -94,12 +94,15 @@ export default function ChatScreen() {
     addMessage({ role: "user", content: text, type: "text" }, sessionId);
     setIsLoading(true);
 
-    const detectedMode = text.toLowerCase().match(/find\s+|search\s+|discover\s+|looking\s+for\s+|show\s+me\s+properties/)
-      ? "discover"
-      : text.match(/\d+\s+\w+\s+(road|street|ave|avenue|crescent|place|drive|way|lane|terrace)/i) ||
-        text.toLowerCase().match(/analys[ei]|feasibility|check|assess|evaluate/)
-        ? "analyse"
-        : "followup";
+    const lowerText = text.toLowerCase();
+    const detectedMode =
+      lowerText.match(/find\s+|search\s+|discover\s+|looking\s+for\s+|show\s+me\s+properties|subdividable|subdivision\s+opp|development\s+sites|lifestyle\s+prop|investment\s+prop/) ||
+      lowerText.match(/any\s+(others?|more)|show\s+more|more\s+(properties|options|results|sites)|what\s+else|anything\s+else|few\s+more|find\s+more|keep\s+looking|another\s+one|any\s+other|more\s+sites|other\s+options/)
+        ? "discover"
+        : text.match(/\d+\s+\w+\s+(road|street|ave|avenue|crescent|place|drive|way|lane|terrace)/i) ||
+          lowerText.match(/analys[ei]|feasibility|check|assess|evaluate/)
+          ? "analyse"
+          : "followup";
 
     addMessage({ role: "assistant", content: "", type: "loading", loadingMode: detectedMode as any }, sessionId);
 
@@ -169,7 +172,7 @@ export default function ChatScreen() {
             if (parsed?.candidates && parsed.candidates.length > 0) {
               updateLastMessage({ type: "search", searchResults: parsed.candidates, content: "", isMockData: parsed.isMockData ?? false }, sessionId);
             } else {
-              updateLastMessage({ type: "text", content: data.content }, sessionId);
+              updateLastMessage({ type: "text", content: "I couldn't find any more properties matching your criteria. Try adjusting your budget or specifying a different suburb." }, sessionId);
             }
           } else {
             updateLastMessage({ type: "text", content: data.content }, sessionId);
@@ -293,8 +296,8 @@ export default function ChatScreen() {
         )}
       </View>
 
-      <Pressable style={{ flex: 1 }} onPress={Keyboard.dismiss}>
-        {isEmpty ? (
+      {isEmpty ? (
+        <Pressable style={{ flex: 1 }} onPress={Keyboard.dismiss}>
           <View style={styles.emptyContainer}>
             <View style={styles.emptyHero}>
               <Text style={[styles.emptyTitle, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>
@@ -329,22 +332,22 @@ export default function ChatScreen() {
               </View>
             </View>
           </View>
-        ) : (
-          <FlatList
-            ref={flatListRef}
-            data={[...messages].reverse()}
-            renderItem={renderItem}
-            keyExtractor={keyExtractor}
-            inverted
-            contentContainerStyle={[styles.messageList, { paddingBottom: 16 }]}
-            keyboardDismissMode="interactive"
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-            automaticallyAdjustKeyboardInsets
-            nestedScrollEnabled
-          />
-        )}
-      </Pressable>
+        </Pressable>
+      ) : (
+        <FlatList
+          ref={flatListRef}
+          data={[...messages].reverse()}
+          renderItem={renderItem}
+          keyExtractor={keyExtractor}
+          inverted
+          contentContainerStyle={[styles.messageList, { paddingBottom: 16 }]}
+          keyboardDismissMode="interactive"
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          automaticallyAdjustKeyboardInsets
+          nestedScrollEnabled
+        />
+      )}
 
       <View style={[styles.inputBar, {
         backgroundColor: colors.background,

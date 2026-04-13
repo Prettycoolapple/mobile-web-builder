@@ -12,8 +12,21 @@ export type ChatMode = "analyse" | "discover" | "followup";
 export function detectMode(lastMessage: string): ChatMode {
   const lower = lastMessage.toLowerCase().trim();
 
-  const searchKeywords = ["find me", "find properties", "search for", "show me properties", "discover", "looking for properties", "what properties", "properties in", "sections in", "land in"];
+  const searchKeywords = [
+    "find me", "find properties", "search for", "show me properties", "discover",
+    "looking for properties", "what properties", "properties in", "sections in", "land in",
+    "subdividable", "subdivision opportunities", "development sites", "lifestyle properties",
+    "investment properties", "find sites", "show properties",
+  ];
   if (searchKeywords.some((k) => lower.includes(k))) return "discover";
+
+  const followUpDiscoverKeywords = [
+    "any others", "any more", "show more", "more properties", "more options",
+    "what else", "other properties", "more results", "others like", "more like",
+    "anything else", "show me more", "any other", "more sites", "other options",
+    "keep looking", "find more", "another one", "few more",
+  ];
+  if (followUpDiscoverKeywords.some((k) => lower.includes(k))) return "discover";
 
   const analyseKeywords = ["analyse", "analyze", "analysis", "feasibility", "check", "look at", "assess", "evaluate", "review"];
   const hasAddress = /\d+\s+\w+\s+(road|street|avenue|crescent|place|drive|way|lane|terrace|parade|close|grove|rise|view|heights|ridge|court|hill)/i.test(lastMessage);
@@ -148,6 +161,71 @@ ${DISCOVER_AUGMENTATION}`;
   } catch (error) {
     logger.error({ error }, "Failed to generate search results");
     throw error;
+  }
+}
+
+export async function selectCandidatesByIntent(
+  query: string,
+  candidates: Array<{
+    address: string;
+    price: number;
+    landArea: number;
+    zone: string;
+    scores: { ease: number; cost: number; roi: number; composite: number };
+    briefSummary: string;
+  }>,
+  maxResults: number = 5,
+  alreadyShown: string[] = [],
+): Promise<typeof candidates> {
+  if (candidates.length === 0) return [];
+
+  const available = alreadyShown.length > 0
+    ? candidates.filter((c) => !alreadyShown.some((a) => a.toLowerCase() === c.address.toLowerCase()))
+    : candidates;
+
+  if (available.length === 0) return [];
+
+  const prompt = `You are a NZ property development advisor. A user searched for: "${query}"
+
+Here are available property candidates (JSON array):
+${JSON.stringify(available.map((c, i) => ({ index: i, ...c })), null, 2)}
+
+Your task:
+1. Understand the user's intent (subdivision? lifestyle? investment yield? flat section? specific zone? price range?)
+2. Select the ${maxResults} most relevant candidates that best match their intent
+3. For each selected candidate, rewrite the "briefSummary" to directly address why it matches the user's specific request
+4. Return ONLY a valid JSON array of the selected candidates (same structure, with updated briefSummary)
+
+Rules:
+- If user wants "subdividable" or "subdivision": prefer MHS/MHU zones with ease score ≥ 3.0, exclude SHZ/LSZ
+- If user wants "lifestyle": prefer larger land, rural, SHZ, LSZ zones
+- If user wants "high yield" or "investment": prefer high ROI and composite scores  
+- If user mentions a price range, only include candidates within that range
+- Always return valid JSON array only — no explanation text, no markdown code fences
+- Return between 3 and ${maxResults} candidates`;
+
+  try {
+    const timeoutPromise = new Promise<typeof candidates>((_, reject) =>
+      setTimeout(() => reject(new Error("Selection timeout")), 20000),
+    );
+
+    const selectionPromise = ai.models.generateContent({
+      model: "gemini-2.0-flash",
+      config: { maxOutputTokens: 2048 },
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+    }).then((response) => {
+      const text = (response.text ?? "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
+      const match = text.match(/\[[\s\S]*\]/);
+      if (!match) throw new Error("No JSON array in response");
+      const parsed = JSON.parse(match[0]) as typeof candidates;
+      if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("Empty array");
+      return parsed.slice(0, maxResults);
+    });
+
+    return await Promise.race([selectionPromise, timeoutPromise]);
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "selectCandidatesByIntent failed — using score fallback");
+    return available.sort((a, b) => b.scores.composite - a.scores.composite).slice(0, maxResults);
   }
 }
 
