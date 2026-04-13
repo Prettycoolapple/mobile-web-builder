@@ -15,6 +15,7 @@ export interface ChatMessage {
   report?: FeasibilityReport;
   searchResults?: PropertyCandidate[];
   isMockData?: boolean;
+  aiIntro?: string;
 }
 
 export interface Score {

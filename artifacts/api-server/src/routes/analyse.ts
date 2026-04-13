@@ -246,6 +246,7 @@ router.post("/chat", async (req, res) => {
 
           const isFollowUp = !parsedSuburb && /any\s+(others?|more)|show\s+(me\s+)?more|more\s+(properties|options|results|sites)|what\s+else|other\s+properties|more\s+results|others?\s+like|more\s+like|anything\s+else|few\s+more|find\s+more|keep\s+looking|another\s+one|more\s+sites|other\s+options/i.test(userText);
           const userTextHasPrice = /\$|\bunder\b|\babove\b|\bbelow\b|\bbetween\b|\brange\b|\b\d+[mk]\b/i.test(userText);
+          const includeNegotiation = /negotiat|without\s+price|no\s+price|price\s+on\s+applic|poa|by\s+applic|tender|auction/i.test(userText);
 
           let suburb = parsedSuburb;
           let effectiveMinPrice = minPrice;
@@ -275,11 +276,12 @@ router.post("/chat", async (req, res) => {
             }
           }
 
-          req.log.info({ suburb, effectiveMinPrice, effectiveMaxPrice, isFollowUp }, "Discovery search started");
+          req.log.info({ suburb, effectiveMinPrice, effectiveMaxPrice, isFollowUp, includeNegotiation }, "Discovery search started");
 
           let candidates: import("../lib/pre-screen").PropertyCandidate[] = [];
           let isMockData = false;
           let dataSource = "realestate.co.nz";
+          let prescreenedIntro = "";
 
           if (suburb) {
             const cacheKey = makeCacheKey(suburb, effectiveMinPrice, effectiveMaxPrice);
@@ -301,9 +303,11 @@ router.post("/chat", async (req, res) => {
               const searchResult = await searchRealEstateListings({
                 suburb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
                 skipUrls: shownUrls,
+                includeNegotiation,
               }).catch((err) => { req.log.warn({ err }, "realestate.co.nz search failed"); return null; });
 
               if (searchResult && searchResult.firstBatch.length > 0) {
+                // Allow null-priced (negotiation) listings through unconditionally; price-range filter still applies to priced ones
                 const inRange = (l: { price: number | null }) =>
                   l.price == null || (l.price >= effectiveMinPrice && l.price <= effectiveMaxPrice * 1.1);
 
@@ -316,13 +320,32 @@ router.post("/chat", async (req, res) => {
                   suburb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
                 });
                 req.log.info({ fetched: firstFiltered.length, cached: remainingFiltered.length }, "realestate.co.nz: prescreening listings");
-                candidates = await preScreenListingsFast(firstFiltered, 5).catch(() => []);
+                // Run pre-screening and AI intro generation in parallel to save time
+                const introPromptPreScreen = `The user asked: "${userText}". You found ${firstFiltered.length} matching propert${firstFiltered.length === 1 ? "y" : "ies"} in ${suburb || "the area"} on realestate.co.nz. In 1 sentence, acknowledge this result conversationally (e.g. "I found a few options in St Heliers matching your criteria:"). Be natural and brief — no JSON.`;
+                const [screened, introFromPreScreen] = await Promise.all([
+                  preScreenListingsFast(firstFiltered, 5).catch(() => []),
+                  generateAnalysis(introPromptPreScreen).catch(() => ""),
+                ]);
+                candidates = screened;
+                prescreenedIntro = introFromPreScreen;
               }
             }
           }
 
           const noListings = candidates.length === 0;
-          const responsePayload = JSON.stringify({ candidates, isMockData, suburb, dataSource, noListings });
+
+          // Use pre-computed intro if available, otherwise generate one now for the no-results case
+          let aiIntro = (!noListings && prescreenedIntro) ? prescreenedIntro : "";
+          if (!aiIntro) {
+            try {
+              const introPrompt = noListings
+                ? `The user asked: "${userText}". No matching listings were found on realestate.co.nz right now for ${suburb || "this area"}. In 1-2 sentences, acknowledge this warmly and suggest they try a different suburb, adjust their budget, or check back soon. Do NOT output any JSON.`
+                : `The user asked: "${userText}". You found ${candidates.length} matching propert${candidates.length === 1 ? "y" : "ies"} in ${suburb || "the area"} on realestate.co.nz. In 1 sentence, acknowledge the results conversationally. Be natural and brief — no JSON.`;
+              aiIntro = await generateAnalysis(introPrompt).catch(() => "");
+            } catch { /* silent */ }
+          }
+
+          const responsePayload = JSON.stringify({ candidates, isMockData, suburb, dataSource, noListings, aiIntro });
           res.json({ content: responsePayload, mode: "discover" });
           return;
         } catch (err) {

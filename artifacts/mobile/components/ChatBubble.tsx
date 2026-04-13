@@ -144,24 +144,23 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry }: Props) {
 
   if (message.type === "search") {
     const results = message.searchResults ?? [];
-    if (results.length === 0) {
-      return (
-        <View style={styles.aiRow}>
-          <View style={[styles.aiAvatar, { backgroundColor: colors.accent }]}>
-            <Text style={styles.aiAvatarText}>D</Text>
-          </View>
-          <View style={[styles.aiBubble, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={[styles.noListingsText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-              No suitable listings currently found in this area. Try a different suburb, adjust your budget, or enter a specific address for a full analysis.
-            </Text>
-          </View>
-        </View>
-      );
-    }
+    const aiIntro = message.aiIntro;
     return (
       <View style={styles.searchContainer}>
+        {aiIntro ? (
+          <View style={styles.aiRow}>
+            <View style={[styles.aiAvatar, { backgroundColor: colors.accent }]}>
+              <Text style={styles.aiAvatarText}>D</Text>
+            </View>
+            <View style={[styles.aiBubble, { backgroundColor: colors.card, borderColor: colors.border, flex: 1 }]}>
+              <Text style={[styles.noListingsText, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}>
+                {aiIntro}
+              </Text>
+            </View>
+          </View>
+        ) : null}
         <Text style={[styles.searchHeader, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>
-          {results.length} {results.length === 1 ? "opportunity" : "opportunities"}
+          {results.length} {results.length === 1 ? "opportunity" : "opportunities"} found
         </Text>
         {results.map((candidate, i) => (
           <PropertyCard key={i} candidate={candidate} onAnalyse={onAnalyse} />

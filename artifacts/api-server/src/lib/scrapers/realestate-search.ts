@@ -52,16 +52,16 @@ const SUBURB_SLUG_MAP: Record<string, { slug: string; district: string }> = {
   "panmure": { slug: "panmure", district: "maungakiekie-tamaki" },
 };
 
-function suburbToUrl(suburb: string, minPrice: number, maxPrice: number): string | null {
+function suburbToUrl(suburb: string, minPrice?: number, maxPrice?: number): string | null {
   const key = suburb.toLowerCase().trim();
   const mapped = SUBURB_SLUG_MAP[key];
   if (!mapped) return null;
 
-  const params = new URLSearchParams({
-    priceMin: String(minPrice),
-    priceMax: String(maxPrice),
-    sort: "recent",
-  });
+  const paramObj: Record<string, string> = { sort: "recent" };
+  if (minPrice != null && minPrice > 0) paramObj["priceMin"] = String(minPrice);
+  if (maxPrice != null && maxPrice > 0) paramObj["priceMax"] = String(maxPrice);
+
+  const params = new URLSearchParams(paramObj);
   return `https://www.realestate.co.nz/residential/sale/auckland/${mapped.district}/${mapped.slug}?${params}`;
 }
 
@@ -154,9 +154,26 @@ export async function fetchListingBatch(
   return results.filter((r): r is ListingResult => r !== null);
 }
 
+// Common suburb name aliases (short form ↔ full form)
+const SUBURB_SLUG_ALIASES: Record<string, string[]> = {
+  "st-heliers": ["saint-heliers", "st-heliers"],
+  "saint-heliers": ["saint-heliers", "st-heliers"],
+  "st-johns": ["saint-johns", "st-johns"],
+  "saint-johns": ["saint-johns", "st-johns"],
+  "mt-eden": ["mount-eden", "mt-eden"],
+  "mount-eden": ["mount-eden", "mt-eden"],
+  "mt-albert": ["mount-albert", "mt-albert"],
+  "mount-albert": ["mount-albert", "mt-albert"],
+  "mt-roskill": ["mount-roskill", "mt-roskill"],
+  "mount-roskill": ["mount-roskill", "mt-roskill"],
+  "mt-wellington": ["mount-wellington", "mt-wellington"],
+  "mount-wellington": ["mount-wellington", "mt-wellington"],
+};
+
 function urlMatchesSuburb(urlPath: string, suburbSlug: string): boolean {
   const slugPart = urlPath.replace(/^\/\d+\/residential\/sale\//, "").toLowerCase();
-  return slugPart.includes(suburbSlug.replace(/-/g, "-"));
+  const aliases = SUBURB_SLUG_ALIASES[suburbSlug] ?? [suburbSlug];
+  return aliases.some((alias) => slugPart.includes(alias));
 }
 
 export interface RealestateSearchResult {
@@ -166,14 +183,50 @@ export interface RealestateSearchResult {
   source: "realestate.co.nz";
 }
 
+async function fetchListingUrlsFromPage(
+  searchUrl: string,
+  suburbMeta: { slug: string; district: string } | undefined,
+  skipUrls: string[],
+  seen: Set<string>,
+): Promise<string[]> {
+  const resp = await fetch(searchUrl, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+      "Accept": "text/html",
+      "Accept-Language": "en-NZ,en;q=0.9",
+      "Referer": "https://www.realestate.co.nz/",
+    },
+    signal: AbortSignal.timeout(20000),
+  });
+
+  if (!resp.ok) {
+    logger.warn({ status: resp.status, searchUrl }, "realestate-search: search page returned non-200");
+    return [];
+  }
+
+  const html = await resp.text();
+  const urls: string[] = [];
+
+  for (const m of html.matchAll(/href="(\/\d+\/residential\/sale\/[^"?#]+)"/g)) {
+    const fullUrl = `https://www.realestate.co.nz${m[1]}`;
+    if (!seen.has(fullUrl) && !skipUrls.includes(fullUrl) && (!suburbMeta || urlMatchesSuburb(m[1], suburbMeta.slug))) {
+      seen.add(fullUrl);
+      urls.push(fullUrl);
+    }
+  }
+
+  return urls;
+}
+
 export async function searchRealEstateListings(params: {
   suburb: string;
   minPrice: number;
   maxPrice: number;
   skipUrls?: string[];
   firstBatchSize?: number;
+  includeNegotiation?: boolean;
 }): Promise<RealestateSearchResult> {
-  const { suburb, minPrice, maxPrice, skipUrls = [], firstBatchSize = 6 } = params;
+  const { suburb, minPrice, maxPrice, skipUrls = [], firstBatchSize = 6, includeNegotiation = false } = params;
   const priceMidpoint = Math.round((minPrice + maxPrice) / 2);
   const suburbKey = suburb.toLowerCase().trim();
   const suburbMeta = SUBURB_SLUG_MAP[suburbKey];
@@ -184,40 +237,31 @@ export async function searchRealEstateListings(params: {
     return { firstBatch: [], remainingListings: [], totalFound: 0, source: "realestate.co.nz" };
   }
 
-  logger.info({ suburb, searchUrl }, "realestate-search: fetching search results page");
+  logger.info({ suburb, searchUrl, includeNegotiation }, "realestate-search: fetching search results page");
 
+  const seen = new Set<string>();
   let allListingUrls: string[] = [];
+
   try {
-    const resp = await fetch(searchUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "text/html",
-        "Accept-Language": "en-NZ,en;q=0.9",
-        "Referer": "https://www.realestate.co.nz/",
-      },
-      signal: AbortSignal.timeout(20000),
-    });
+    // Primary search: with price filters
+    const primaryUrls = await fetchListingUrlsFromPage(searchUrl, suburbMeta, skipUrls, seen);
+    allListingUrls.push(...primaryUrls);
+    logger.info({ suburb, count: primaryUrls.length }, "realestate-search: extracted listing URLs (price-filtered)");
 
-    if (!resp.ok) {
-      logger.warn({ status: resp.status }, "realestate-search: search page returned non-200");
-      return { firstBatch: [], remainingListings: [], totalFound: 0, source: "realestate.co.nz" };
-    }
-
-    const html = await resp.text();
-    const seen = new Set<string>();
-
-    for (const m of html.matchAll(/href="(\/\d+\/residential\/sale\/[^"?#]+)"/g)) {
-      const fullUrl = `https://www.realestate.co.nz${m[1]}`;
-      if (!seen.has(fullUrl) && !skipUrls.includes(fullUrl) && (!suburbMeta || urlMatchesSuburb(m[1], suburbMeta.slug))) {
-        seen.add(fullUrl);
-        allListingUrls.push(fullUrl);
+    // Secondary search: no price filters, to catch negotiation/POA listings
+    if (includeNegotiation) {
+      const noPriceUrl = suburbToUrl(suburb);
+      if (noPriceUrl) {
+        const noPriceUrls = await fetchListingUrlsFromPage(noPriceUrl, suburbMeta, skipUrls, seen).catch(() => []);
+        allListingUrls.push(...noPriceUrls);
+        logger.info({ suburb, count: noPriceUrls.length }, "realestate-search: extracted listing URLs (no-price/negotiation)");
       }
     }
-
-    logger.info({ suburb, count: allListingUrls.length }, "realestate-search: extracted listing URLs");
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "realestate-search: failed to fetch search page");
-    return { firstBatch: [], remainingListings: [], totalFound: 0, source: "realestate.co.nz" };
+    if (allListingUrls.length === 0) {
+      return { firstBatch: [], remainingListings: [], totalFound: 0, source: "realestate.co.nz" };
+    }
   }
 
   if (allListingUrls.length === 0) {

@@ -174,11 +174,14 @@ export default function ChatScreen() {
               updateLastMessage({ type: "text", content: data.content }, sessionId);
             }
           } else if (data.mode === "discover") {
-            const parsed = extractJSON(data.content) as { candidates?: PropertyCandidate[]; isMockData?: boolean; noListings?: boolean } | null;
+            const parsed = extractJSON(data.content) as { candidates?: PropertyCandidate[]; isMockData?: boolean; noListings?: boolean; aiIntro?: string } | null;
+            const aiIntro = parsed?.aiIntro ?? "";
             if (parsed?.candidates && parsed.candidates.length > 0) {
-              updateLastMessage({ type: "search", searchResults: parsed.candidates, content: "" }, sessionId);
+              updateLastMessage({ type: "search", searchResults: parsed.candidates, content: "", aiIntro }, sessionId);
             } else {
-              updateLastMessage({ type: "search", searchResults: [], content: "" }, sessionId);
+              // No listings found — show the AI's conversational response instead of empty cards
+              const noResultMsg = aiIntro || "No matching listings found right now. Try a different suburb, adjust your budget, or ask again shortly — new listings appear daily.";
+              updateLastMessage({ type: "text", content: noResultMsg }, sessionId);
             }
           } else {
             // Safety net: if the AI leaked raw JSON into a text response, never show it
