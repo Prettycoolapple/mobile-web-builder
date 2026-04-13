@@ -236,7 +236,7 @@ router.post("/chat", async (req, res) => {
         try {
           const { suburb: parsedSuburb, minPrice, maxPrice } = parseDiscoverParams(userText);
 
-          const isFollowUp = !parsedSuburb && /any\s+(others?|more)|show\s+more|more\s+(properties|options|results|sites)|what\s+else|anything\s+else|few\s+more|find\s+more|keep\s+looking|another\s+one/i.test(userText);
+          const isFollowUp = !parsedSuburb && /any\s+(others?|more)|show\s+(me\s+)?more|more\s+(properties|options|results|sites)|what\s+else|other\s+properties|more\s+results|others?\s+like|more\s+like|anything\s+else|few\s+more|find\s+more|keep\s+looking|another\s+one|more\s+sites|other\s+options/i.test(userText);
           const userTextHasPrice = /\$|\bunder\b|\babove\b|\bbelow\b|\bbetween\b|\brange\b|\b\d+[mk]\b/i.test(userText);
 
           let suburb = parsedSuburb;
@@ -305,8 +305,9 @@ router.post("/chat", async (req, res) => {
             req.log.info({ suburb, count: mockPool.length }, "Discovery: using mock data fallback — selecting by intent");
             candidates = await selectCandidatesByIntent(userText, mockPool, 5, alreadyShown);
             if (candidates.length === 0) {
+              const shownLower = alreadyShown.map((a) => a.toLowerCase());
               candidates = mockPool
-                .filter((c) => !alreadyShown.includes(c.address))
+                .filter((c) => !shownLower.includes(c.address.toLowerCase()))
                 .sort((a, b) => b.scores.composite - a.scores.composite)
                 .slice(0, 5);
             }
