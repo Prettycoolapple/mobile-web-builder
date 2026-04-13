@@ -36,6 +36,18 @@ function extractJSON(text: string): unknown {
   throw new Error("No JSON found in response");
 }
 
+// Simple edit-distance (Levenshtein) for fuzzy suburb matching
+function editDistance(a: string, b: string): number {
+  const dp: number[][] = Array.from({ length: a.length + 1 }, (_, i) => [i, ...new Array(b.length).fill(0)]);
+  for (let j = 0; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return dp[a.length][b.length];
+}
+
 function parseDiscoverParams(text: string): { suburb: string | null; minPrice: number; maxPrice: number } {
   const lower = text.toLowerCase();
 
@@ -46,17 +58,42 @@ function parseDiscoverParams(text: string): { suburb: string | null; minPrice: n
     "howick", "pakuranga", "manukau", "papakura", "pukekohe", "albany",
     "takapuna", "devonport", "northcote", "glenfield", "milford", "browns bay",
     "east tamaki", "mangere", "otahuhu", "penrose", "ellerslie", "glen innes",
-    "st heliers", "kohimarama", "mission bay", "st johns", "glendowie",
-    "meadowbank", "pakuranga",
-    "birkenhead", "massey", "royal oak", "mt wellington", "manurewa",
+    "st heliers", "saint heliers", "kohimarama", "mission bay", "st johns", "saint johns", "glendowie",
+    "meadowbank", "birkenhead", "massey", "royal oak", "mt wellington", "manurewa",
     "papatoetoe", "glen eden", "panmure",
   ];
 
   let suburb: string | null = null;
   for (const s of SUBURBS) {
     if (lower.includes(s)) {
-      suburb = s.replace(/\./g, "").replace(/\s+/g, " ").trim();
+      suburb = s.replace(/\./g, "").replace(/\s+/g, " ").replace("saint ", "st ").trim();
       break;
+    }
+  }
+
+  // Fuzzy match: extract the location phrase after "in/around/near/at/about" and try each suburb
+  if (!suburb) {
+    const locationPhrase = lower.match(/\b(?:in|around|near|at|about\s+in|about)\s+([\w\s]+?)(?:\s+under|\s+below|\s+above|\s+around|\s+price|\s+budget|\?|$)/i)?.[1]?.trim();
+    if (locationPhrase && locationPhrase.length >= 3) {
+      // Exact substring match first
+      const exactMatch = SUBURBS.find((s) => locationPhrase.includes(s) || s.includes(locationPhrase));
+      if (exactMatch) {
+        suburb = exactMatch.replace(/\./g, "").replace(/\s+/g, " ").replace("saint ", "st ").trim();
+      } else {
+        // Fuzzy match: allow up to 2 character edits for multi-word suburbs
+        let bestMatch: string | null = null;
+        let bestDist = 3; // max allowed distance
+        for (const s of SUBURBS) {
+          const dist = editDistance(locationPhrase.replace(/\s+/g, ""), s.replace(/\s+/g, ""));
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestMatch = s;
+          }
+        }
+        if (bestMatch) {
+          suburb = bestMatch.replace(/\./g, "").replace(/\s+/g, " ").replace("saint ", "st ").trim();
+        }
+      }
     }
   }
 
@@ -244,7 +281,10 @@ router.post("/chat", async (req, res) => {
         try {
           const { suburb: parsedSuburb, minPrice, maxPrice } = parseDiscoverParams(userText);
 
-          const isFollowUp = !parsedSuburb && /any\s+(others?|more)|show\s+(me\s+)?more|more\s+(properties|options|results|sites)|what\s+else|other\s+properties|more\s+results|others?\s+like|more\s+like|anything\s+else|few\s+more|find\s+more|keep\s+looking|another\s+one|more\s+sites|other\s+options/i.test(userText);
+          const isFollowUpKeyword = /any\s+(others?|more)|show\s+(me\s+)?more|more\s+(properties|options|results|sites)|what\s+else|other\s+properties|more\s+results|others?\s+like|more\s+like|anything\s+else|few\s+more|find\s+more|keep\s+looking|another\s+one|more\s+sites|other\s+options/i.test(userText);
+          // Also treat "what about [suburb]", "how about [suburb]", etc. as context-inheriting
+          const isLocationSwitch = !parsedSuburb && /^(ok|okay|and|what|how|try|check|how\s+about|what\s+about)\b/i.test(userText.trim());
+          const isFollowUp = !parsedSuburb && (isFollowUpKeyword || isLocationSwitch);
           const userTextHasPrice = /\$|\bunder\b|\babove\b|\bbelow\b|\bbetween\b|\brange\b|\b\d+[mk]\b/i.test(userText);
           const includeNegotiation = /negotiat|without\s+price|no\s+price|price\s+on\s+applic|poa|by\s+applic|tender|auction/i.test(userText);
 
@@ -253,12 +293,14 @@ router.post("/chat", async (req, res) => {
           let effectiveMaxPrice = maxPrice;
           let alreadyShownAddresses: string[] = [];
 
-          if (isFollowUp && !suburb) {
+          // When suburb isn't found from the current message, always look back in history
+          // (covers follow-ups, typos, and conversational switches like "what about in [suburb]")
+          if (!suburb) {
             const history = [...messages].reverse();
             for (const msg of history) {
               if (msg.role === "assistant") {
                 const searchResultsMatch = /\[Search results shown: ([^\]]+)\]/.exec(msg.content ?? "");
-                if (searchResultsMatch) {
+                if (searchResultsMatch && isFollowUp) {
                   alreadyShownAddresses = searchResultsMatch[1].split(";").map((a) => a.trim()).filter(Boolean);
                 }
               }
@@ -565,7 +607,56 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
 
       const { content, mode: responseMode } = await generateUnifiedResponse(messages, currentReport);
 
-      // Safety net: if the AI returned raw JSON with candidates in a non-discover response,
+      // Safety net A: if the AI said "I'm searching..." but the discover pipeline didn't run,
+      // extract the suburb from the AI's text and actually run the search now.
+      const isSearchingPhrase = /\b(searching|i'm searching|i am searching|let me search|looking for properties|i'll search|i will search)\b/i.test(content);
+      if (isSearchingPhrase && responseMode !== "discover") {
+        // Try to extract suburb from the AI's response (it often names the suburb)
+        const aiSuburbMatch = content.match(/\b(?:in|for)\s+([\w\s]+?)(?:\s+matching|\s+that|\s+on|\s+currently|\s+now|[.,!?]|$)/i);
+        const aiSuburb = aiSuburbMatch?.[1]?.trim().toLowerCase();
+        // Also try the user text  
+        const { suburb: userSuburb, minPrice, maxPrice } = parseDiscoverParams(userText);
+        const suburb = userSuburb || (aiSuburb && aiSuburb.length > 3 ? aiSuburb : null);
+        const includeNegotiation = /negotiat|without\s+price|no\s+price|poa|tender|auction/i.test(userText);
+
+        if (suburb) {
+          req.log.info({ suburb, aiContent: content.slice(0, 100) }, "AI said 'searching' — running actual discover pipeline");
+          try {
+            const cacheKey = makeCacheKey(suburb, minPrice, maxPrice);
+            const shownUrls = getShownUrls(cacheKey);
+            const searchResult = await searchRealEstateListings({
+              suburb, minPrice, maxPrice, skipUrls: shownUrls, includeNegotiation,
+            }).catch(() => null);
+
+            if (searchResult && searchResult.firstBatch.length > 0) {
+              const inRange = (l: { price: number | null }) =>
+                l.price == null || (l.price >= minPrice && l.price <= maxPrice * 1.1);
+              const firstFiltered = searchResult.firstBatch.filter(inRange);
+              const remainingFiltered = searchResult.remainingListings.filter(inRange);
+              setListingCache(cacheKey, {
+                remainingListings: remainingFiltered,
+                shownUrls: firstFiltered.map((l) => l.listingUrl),
+                suburb, minPrice, maxPrice,
+              });
+              const candidates = await preScreenListingsFast(firstFiltered, 5).catch(() => []);
+              if (candidates.length > 0) {
+                const aiIntro = content; // Use what the AI already said as the intro
+                const payload = JSON.stringify({ candidates, isMockData: false, suburb, dataSource: "realestate.co.nz", noListings: false, aiIntro });
+                res.json({ content: payload, mode: "discover" });
+                return;
+              }
+            }
+            // No results — use AI's text as the no-results message
+            const noResultMsg = `${content.trim()} Unfortunately, I couldn't find any matching listings right now in ${suburb}. Try a different suburb or adjust your budget.`;
+            res.json({ content: noResultMsg, mode: "text" });
+            return;
+          } catch (searchErr) {
+            req.log.warn({ searchErr }, "Fallback discover search failed — using AI text response");
+          }
+        }
+      }
+
+      // Safety net B: if the AI returned raw JSON with candidates in a non-discover response,
       // re-classify it as discover so the frontend can render property cards instead of raw JSON
       if (responseMode !== "discover" && responseMode !== "analyse") {
         const trimmed = content.trim();

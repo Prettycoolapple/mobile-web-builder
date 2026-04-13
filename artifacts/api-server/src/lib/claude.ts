@@ -39,8 +39,30 @@ export function detectMode(lastMessage: string): ChatMode {
     /\d+\s*k?\s*(or\s+)?(less|under|below)\s+(in|at|near)/i,
     /show\s+(me\s+)?(all|some|any)\s+/i,
     /what('s|\s+is|\s+are)\s+(available|on\s+(the\s+)?market|for\s+sale)/i,
+    // Conversational follow-up patterns: "what about [suburb]", "how about [suburb]", "try [suburb]"
+    /^(what|how)\s+about\s+(in\s+)?[\w\s]+/i,
+    /^(try|check|look\s+in|look\s+at)\s+[\w\s]+/i,
+    /^(ok|okay|and)[\s,]*(what|how)\s+about/i,
+    /\b(in|near|around)\s+[\w\s]+\??\s*$/i,
   ];
   if (searchPatterns.some((p) => p.test(lower))) return "discover";
+
+  // If the message is very short and contains a known suburb name (or similar), treat as discover follow-up
+  const KNOWN_SUBURBS = [
+    "remuera", "epsom", "mt eden", "grey lynn", "ponsonby", "parnell", "herne bay",
+    "westmere", "kingsland", "sandringham", "mt albert", "mt roskill", "onehunga",
+    "new lynn", "titirangi", "avondale", "st heliers", "kohimarama", "mission bay",
+    "glendowie", "meadowbank", "howick", "pakuranga", "botany", "east tamaki",
+    "henderson", "albany", "takapuna", "devonport", "northcote", "glenfield",
+    "milford", "browns bay", "glen innes", "penrose", "ellerslie", "mangere",
+    "birkenhead", "massey", "royal oak", "mt wellington", "manurewa", "papatoetoe",
+    "papakura", "glen eden", "st johns", "otahuhu", "panmure",
+    // Variants
+    "saint heliers", "saint johns", "mount eden", "mount albert", "mount roskill", "mount wellington",
+  ];
+  const hasKnownSuburb = KNOWN_SUBURBS.some((s) => lower.includes(s));
+  const isShortOrVague = lower.length < 60 || /^(ok|okay|yes|sure|and|what|how|try|check|look)\b/i.test(lower);
+  if (hasKnownSuburb && isShortOrVague) return "discover";
 
   const followUpDiscoverKeywords = [
     "any others", "any more", "show more", "more properties", "more options",

@@ -113,7 +113,7 @@ export default function ChatScreen() {
     addMessage({ role: "assistant", content: "", type: "loading", loadingMode: detectedMode as any }, sessionId);
 
     const MAX_RETRIES = 2;
-    const TIMEOUT_MS = 55_000;
+    const TIMEOUT_MS = 90_000;
 
     const allMessages = [
       ...messages
