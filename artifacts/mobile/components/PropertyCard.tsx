@@ -9,14 +9,23 @@ interface Props {
   onAnalyse: (address: string) => void;
 }
 
-function ScorePip({ score, label }: { score: number; label: string }) {
+function toStars(score: number, max = 5): string {
+  const filled = Math.min(max, Math.max(0, Math.round(score)));
+  return "★".repeat(filled) + "☆".repeat(max - filled);
+}
+
+function starColor(score: number, colors: ReturnType<typeof useColors>): string {
+  if (score >= 4) return colors.success;
+  if (score >= 2.5) return "#F59E0B";
+  return colors.red;
+}
+
+function StarPip({ score, label }: { score: number; label: string }) {
   const colors = useColors();
-  const color = score >= 4 ? colors.success : score >= 2.5 ? colors.amber : colors.red;
+  const color = starColor(score, colors);
   return (
     <View style={styles.pip}>
-      <Text style={[styles.pipValue, { color, fontFamily: "DM_Sans_700Bold" }]}>
-        {score.toFixed(1)}
-      </Text>
+      <Text style={[styles.pipStars, { color }]}>{toStars(score)}</Text>
       <Text style={[styles.pipLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
         {label}
       </Text>
@@ -26,22 +35,16 @@ function ScorePip({ score, label }: { score: number; label: string }) {
 
 export function PropertyCard({ candidate, onAnalyse }: Props) {
   const colors = useColors();
-
-  const compositeColor =
-    candidate.scores.composite >= 4
-      ? colors.success
-      : candidate.scores.composite >= 2.5
-        ? colors.amber
-        : colors.red;
+  const composite = candidate.scores.composite;
+  const overallColor = starColor(composite, colors);
+  const overallStars = toStars(composite);
 
   return (
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
       <View style={styles.body}>
         <View style={styles.topRow}>
-          <View style={[styles.scoreCircle, { backgroundColor: compositeColor + "15", borderColor: compositeColor + "40" }]}>
-            <Text style={[styles.scoreCircleText, { color: compositeColor, fontFamily: "DM_Sans_700Bold" }]}>
-              {candidate.scores.composite.toFixed(1)}
-            </Text>
+          <View style={[styles.starBadge, { backgroundColor: overallColor + "12", borderColor: overallColor + "35" }]}>
+            <Text style={[styles.starBadgeText, { color: overallColor }]}>{overallStars}</Text>
           </View>
           <View style={styles.addressBlock}>
             <Text style={[styles.address, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]} numberOfLines={2}>
@@ -80,11 +83,11 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
         )}
 
         <View style={[styles.scoresRow, { borderTopColor: colors.border }]}>
-          <ScorePip score={candidate.scores.ease} label="Ease" />
+          <StarPip score={candidate.scores.ease} label="Ease" />
           <View style={[styles.scoreDivider, { backgroundColor: colors.border }]} />
-          <ScorePip score={candidate.scores.cost} label="Cost" />
+          <StarPip score={candidate.scores.cost} label="Cost" />
           <View style={[styles.scoreDivider, { backgroundColor: colors.border }]} />
-          <ScorePip score={candidate.scores.roi} label="ROI" />
+          <StarPip score={candidate.scores.roi} label="ROI" />
         </View>
       </View>
 
@@ -122,17 +125,18 @@ const styles = StyleSheet.create({
     gap: 12,
     alignItems: "flex-start",
   },
-  scoreCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    borderWidth: 1.5,
+  starBadge: {
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
     justifyContent: "center",
     alignItems: "center",
     flexShrink: 0,
   },
-  scoreCircleText: {
-    fontSize: 16,
+  starBadgeText: {
+    fontSize: 15,
+    letterSpacing: 1,
   },
   addressBlock: {
     flex: 1,
@@ -169,11 +173,11 @@ const styles = StyleSheet.create({
   pip: {
     alignItems: "center",
     flex: 1,
-    gap: 2,
+    gap: 3,
   },
-  pipValue: {
-    fontSize: 17,
-    letterSpacing: -0.3,
+  pipStars: {
+    fontSize: 14,
+    letterSpacing: 1,
   },
   pipLabel: {
     fontSize: 11,

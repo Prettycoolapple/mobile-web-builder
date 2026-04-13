@@ -168,11 +168,11 @@ export default function ChatScreen() {
               updateLastMessage({ type: "text", content: data.content }, sessionId);
             }
           } else if (data.mode === "discover") {
-            const parsed = extractJSON(data.content) as { candidates?: PropertyCandidate[]; isMockData?: boolean } | null;
+            const parsed = extractJSON(data.content) as { candidates?: PropertyCandidate[]; isMockData?: boolean; noListings?: boolean } | null;
             if (parsed?.candidates && parsed.candidates.length > 0) {
-              updateLastMessage({ type: "search", searchResults: parsed.candidates, content: "", isMockData: parsed.isMockData ?? false }, sessionId);
+              updateLastMessage({ type: "search", searchResults: parsed.candidates, content: "" }, sessionId);
             } else {
-              updateLastMessage({ type: "text", content: "I couldn't find any more properties matching your criteria. Try adjusting your budget or specifying a different suburb." }, sessionId);
+              updateLastMessage({ type: "search", searchResults: [], content: "" }, sessionId);
             }
           } else {
             updateLastMessage({ type: "text", content: data.content }, sessionId);

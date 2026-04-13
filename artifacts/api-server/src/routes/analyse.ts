@@ -8,7 +8,6 @@ import {
   generateUnifiedResponse,
   generateAnalysis,
   detectMode,
-  selectCandidatesByIntent,
   Message,
 } from "../lib/claude";
 import { verifyToken } from "../lib/auth";
@@ -17,7 +16,6 @@ import { runPropertyPipeline } from "../lib/pipeline";
 import { formatNZD } from "../lib/utils";
 import { searchRealEstateListings } from "../lib/scrapers/realestate-search";
 import { preScreenListingsFast } from "../lib/pre-screen";
-import { getMockListings } from "../lib/mock-data";
 import {
   makeCacheKey,
   setListingCache,
@@ -323,30 +321,8 @@ router.post("/chat", async (req, res) => {
             }
           }
 
-          if (candidates.length === 0) {
-            isMockData = true;
-            dataSource = "mock";
-            let mockPool = getMockListings(suburb ?? undefined);
-            if (effectiveMinPrice || effectiveMaxPrice) {
-              mockPool = mockPool.filter((c) => {
-                if (effectiveMinPrice && c.price < effectiveMinPrice) return false;
-                if (effectiveMaxPrice && c.price > effectiveMaxPrice) return false;
-                return true;
-              });
-              if (mockPool.length === 0) mockPool = getMockListings(suburb ?? undefined);
-            }
-            const shownLower = alreadyShownAddresses.map((a) => a.toLowerCase());
-            const filteredPool = shownLower.length > 0
-              ? mockPool.filter((c) => !shownLower.includes(c.address.toLowerCase()))
-              : mockPool;
-            req.log.info({ suburb, count: filteredPool.length }, "Discovery: using mock data fallback — selecting by intent");
-            candidates = await selectCandidatesByIntent(userText, filteredPool, 5, []);
-            if (candidates.length === 0) {
-              candidates = filteredPool.sort((a, b) => b.scores.composite - a.scores.composite).slice(0, 5);
-            }
-          }
-
-          const responsePayload = JSON.stringify({ candidates, isMockData, suburb, dataSource });
+          const noListings = candidates.length === 0;
+          const responsePayload = JSON.stringify({ candidates, isMockData, suburb, dataSource, noListings });
           res.json({ content: responsePayload, mode: "discover" });
           return;
         } catch (err) {

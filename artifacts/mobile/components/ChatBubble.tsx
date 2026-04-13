@@ -142,21 +142,28 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry }: Props) {
     );
   }
 
-  if (message.type === "search" && message.searchResults) {
-    return (
-      <View style={styles.searchContainer}>
-        {message.isMockData && (
-          <View style={[styles.mockBanner, { backgroundColor: colors.amber + "18", borderColor: colors.amber + "40" }]}>
-            <Feather name="info" size={13} color={colors.amber} />
-            <Text style={[styles.mockBannerText, { color: colors.amber, fontFamily: "DM_Sans_500Medium" }]}>
-              Showing example properties — live search coming shortly. Enter a specific address for a full analysis.
+  if (message.type === "search") {
+    const results = message.searchResults ?? [];
+    if (results.length === 0) {
+      return (
+        <View style={styles.aiRow}>
+          <View style={[styles.aiAvatar, { backgroundColor: colors.accent }]}>
+            <Text style={styles.aiAvatarText}>D</Text>
+          </View>
+          <View style={[styles.aiBubble, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Text style={[styles.noListingsText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+              No suitable listings currently found in this area. Try a different suburb, adjust your budget, or enter a specific address for a full analysis.
             </Text>
           </View>
-        )}
+        </View>
+      );
+    }
+    return (
+      <View style={styles.searchContainer}>
         <Text style={[styles.searchHeader, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>
-          {message.searchResults.length} {message.isMockData ? "example" : ""} opportunities
+          {results.length} {results.length === 1 ? "opportunity" : "opportunities"}
         </Text>
-        {message.searchResults.map((candidate, i) => (
+        {results.map((candidate, i) => (
           <PropertyCard key={i} candidate={candidate} onAnalyse={onAnalyse} />
         ))}
       </View>
@@ -359,19 +366,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     paddingBottom: 2,
   },
-  mockBanner: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 10,
-    borderWidth: 1,
-  },
-  mockBannerText: {
-    flex: 1,
-    fontSize: 12,
-    lineHeight: 18,
+  noListingsText: {
+    fontSize: 15,
+    lineHeight: 23,
   },
   retryLabel: {
     fontSize: 13,

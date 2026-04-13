@@ -1,14 +1,13 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Animated,
   Image,
 } from "react-native";
-import Svg, { Circle, Polygon } from "react-native-svg";
+import Svg, { Polygon } from "react-native-svg";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import {
@@ -20,8 +19,6 @@ import {
   AsbestosInfo,
   PlanningOverlay,
 } from "@/context/ChatContext";
-
-const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
 interface Props {
   report: Report;
@@ -197,78 +194,36 @@ function InfoRow({ label, value, valueColor, colors }: {
   );
 }
 
-function ScoreRingInline({
-  score, label, size = 86, colors,
+function toStars(score: number, max = 5): string {
+  const filled = Math.min(max, Math.max(0, Math.round(score)));
+  return "★".repeat(filled) + "☆".repeat(max - filled);
+}
+
+function ScoreStarBlock({
+  score, label, colors,
 }: {
-  score: number; label: string; size?: number;
+  score: number; label: string;
   colors: ReturnType<typeof useColors>;
 }) {
-  const STROKE = 7;
-  const R = (size - STROKE) / 2;
-  const CIRC = 2 * Math.PI * R;
-  const progress = useRef(new Animated.Value(0)).current;
   const color = scoreColor(score, colors);
-
-  useEffect(() => {
-    Animated.timing(progress, {
-      toValue: score / 5,
-      duration: 900,
-      useNativeDriver: false,
-    }).start();
-  }, [score]);
-
-  const strokeDashoffset = progress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [CIRC, 0],
-  });
-
   return (
-    <View style={{ alignItems: "center" }}>
-      <View style={{ width: size, height: size }}>
-        <Svg width={size} height={size} style={{ transform: [{ rotate: "-90deg" }] }}>
-          <Circle cx={size / 2} cy={size / 2} r={R} fill="none" stroke={colors.border} strokeWidth={STROKE} />
-          <AnimatedCircle
-            cx={size / 2} cy={size / 2} r={R} fill="none"
-            stroke={color} strokeWidth={STROKE}
-            strokeDasharray={CIRC}
-            strokeDashoffset={strokeDashoffset}
-            strokeLinecap="round"
-          />
-        </Svg>
-        <View style={[StyleSheet.absoluteFillObject, { alignItems: "center", justifyContent: "center" }]}>
-          <Text style={{ color, fontFamily: "DM_Sans_700Bold", fontSize: size * 0.24, letterSpacing: -0.5 }}>
-            {isNaN(score) ? "—" : score.toFixed(1)}
-          </Text>
-          <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: size * 0.135, textTransform: "uppercase", letterSpacing: 0.3 }}>
-            {label}
-          </Text>
-        </View>
-      </View>
+    <View style={{ alignItems: "center", gap: 5 }}>
+      <Text style={{ color, fontSize: 18, letterSpacing: 2 }}>{toStars(score)}</Text>
+      <Text style={{ color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
+        {label}
+      </Text>
     </View>
   );
 }
 
-function CompositeBar({ score, colors }: { score: number; colors: ReturnType<typeof useColors> }) {
-  const progress = useRef(new Animated.Value(0)).current;
+function CompositeStars({ score, colors }: { score: number; colors: ReturnType<typeof useColors> }) {
   const color = scoreColor(score, colors);
-
-  useEffect(() => {
-    Animated.timing(progress, { toValue: score / 5, duration: 900, useNativeDriver: false }).start();
-  }, [score]);
-
-  const widthInterp = progress.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] });
-
   return (
-    <View style={{ alignItems: "center", gap: 6 }}>
-      <Text style={{ color: colors.headerSubtext, fontFamily: "DM_Sans_400Regular", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5 }}>
+    <View style={{ alignItems: "center", gap: 5 }}>
+      <Text style={{ color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5 }}>
         Overall
       </Text>
-      <Text style={{ color, fontFamily: "DM_Sans_700Bold", fontSize: 36, letterSpacing: -1 }}>
-        {isNaN(score) ? "—" : score.toFixed(1)}
-      </Text>
-      <View style={{ width: 72, height: 6, backgroundColor: colors.border, borderRadius: 3, overflow: "hidden" }}>
-        <Animated.View style={{ height: 6, width: widthInterp, backgroundColor: color, borderRadius: 3 }} />
-      </View>
+      <Text style={{ color, fontSize: 26, letterSpacing: 3 }}>{toStars(score)}</Text>
     </View>
   );
 }
@@ -284,10 +239,10 @@ function ScoreSummaryRow({ report, colors }: { report: Report; colors: ReturnTyp
   return (
     <View style={[styles.scoresSection, { backgroundColor: colors.headerBg }]}>
       <View style={[styles.scoresRow, { borderTopColor: "rgba(250,250,249,0.1)" }]}>
-        <ScoreRingInline score={ease} label="Ease" size={86} colors={colors} />
-        <CompositeBar score={composite} colors={colors} />
-        <ScoreRingInline score={cost} label="Cost" size={86} colors={colors} />
-        <ScoreRingInline score={roi} label="ROI" size={86} colors={colors} />
+        <ScoreStarBlock score={ease} label="Ease" colors={colors} />
+        <CompositeStars score={composite} colors={colors} />
+        <ScoreStarBlock score={cost} label="Cost" colors={colors} />
+        <ScoreStarBlock score={roi} label="ROI" colors={colors} />
       </View>
       {(ease_reasons || cost_reasons || roi_reasons) && (
         <View style={[styles.reasonsRow, { borderTopColor: "rgba(250,250,249,0.1)" }]}>
