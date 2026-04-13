@@ -447,6 +447,24 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             }
 
             const content = await generateAnalysis(enrichedContent);
+
+            // Persist to search history (non-blocking, silent fail)
+            const chatUserId = getUserIdFromHeader(req);
+            if (chatUserId) {
+              try {
+                const parsedForSave = extractJSON(content);
+                await db.insert(searches).values({
+                  userId: chatUserId,
+                  query: extractedAddress,
+                  address: geocode?.formatted ?? extractedAddress,
+                  resultJson: parsedForSave as any,
+                });
+                req.log.info({ address: extractedAddress }, "Chat analysis saved to history");
+              } catch {
+                // silent — don't interrupt the response
+              }
+            }
+
             res.json({ content, mode: "analyse" });
             return;
           }

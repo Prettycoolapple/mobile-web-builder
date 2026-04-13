@@ -176,6 +176,7 @@ interface ChatContextValue {
   updateLastMessage: (updates: Partial<ChatMessage>, sessionId?: string) => void;
   setCurrentReport: (report: FeasibilityReport) => void;
   deleteSession: (id: string) => void;
+  openHistoryReport: (address: string, report: FeasibilityReport) => string;
   isLoading: boolean;
   setIsLoading: (v: boolean) => void;
 }
@@ -323,6 +324,45 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     [currentSessionId, saveSessions],
   );
 
+  const openHistoryReport = useCallback(
+    (address: string, report: FeasibilityReport): string => {
+      const now = Date.now();
+      const sessionId = generateId();
+      const newSession: Session = {
+        id: sessionId,
+        title: address.slice(0, 50),
+        messages: [
+          {
+            id: generateId(),
+            role: "user",
+            content: address,
+            timestamp: now,
+            type: "text",
+          },
+          {
+            id: generateId(),
+            role: "assistant",
+            content: "",
+            timestamp: now + 1,
+            type: "report",
+            report,
+          },
+        ],
+        createdAt: now,
+        updatedAt: now,
+        currentReport: report,
+      };
+      setSessions((prev) => {
+        const updated = [newSession, ...prev];
+        saveSessions(updated);
+        return updated;
+      });
+      setCurrentSessionId(sessionId);
+      return sessionId;
+    },
+    [saveSessions],
+  );
+
   return (
     <ChatContext.Provider
       value={{
@@ -336,6 +376,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         updateLastMessage,
         setCurrentReport,
         deleteSession,
+        openHistoryReport,
         isLoading,
         setIsLoading,
       }}

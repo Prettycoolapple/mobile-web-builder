@@ -4,6 +4,7 @@ import analyseRouter from "./analyse";
 import authRouter from "./auth";
 import pipelineTestRouter from "./pipeline-test";
 import stripeRouter from "./stripe";
+import searchesRouter from "./searches";
 
 const router: IRouter = Router();
 
@@ -12,5 +13,6 @@ router.use("/auth", authRouter);
 router.use(analyseRouter);
 router.use(pipelineTestRouter);
 router.use(stripeRouter);
+router.use(searchesRouter);
 
 export default router;

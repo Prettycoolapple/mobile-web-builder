@@ -15,7 +15,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
-import { useChat } from "@/context/ChatContext";
+import { useChat, FeasibilityReport } from "@/context/ChatContext";
 import { getSubscriptionStatus, restorePurchases, purchasePro } from "@/lib/revenuecat";
 
 const PLAN_FEATURES = {
@@ -33,6 +33,14 @@ const PLAN_FEATURES = {
     "PDF export (coming soon)",
     "Email report sharing",
   ],
+};
+
+type SearchSummary = {
+  id: string;
+  address: string;
+  created_at: string;
+  composite_score: number | null;
+  zone: string | null;
 };
 
 function getApiBase(): string {
@@ -70,15 +78,87 @@ function SectionHeader({ title }: { title: string }) {
   );
 }
 
+function formatDate(dateStr: string): string {
+  try {
+    const d = new Date(dateStr);
+    return d.toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" });
+  } catch {
+    return dateStr;
+  }
+}
+
+function ScoreDot({ score }: { score: number }) {
+  const colors = useColors();
+  const color = score >= 4 ? colors.success : score >= 3 ? colors.accent : colors.amber;
+  return (
+    <View style={[styles.scoreDot, { backgroundColor: color + "20", borderColor: color + "40" }]}>
+      <Text style={[styles.scoreDotText, { color, fontFamily: "DM_Sans_700Bold" }]}>
+        {score.toFixed(1)}
+      </Text>
+    </View>
+  );
+}
+
+interface HistoryItemProps {
+  item: SearchSummary;
+  onTap: (item: SearchSummary) => void;
+  onDelete: (item: SearchSummary) => void;
+  isLast: boolean;
+}
+
+function HistoryItem({ item, onTap, onDelete, isLast }: HistoryItemProps) {
+  const colors = useColors();
+  return (
+    <TouchableOpacity
+      onPress={() => onTap(item)}
+      onLongPress={() => onDelete(item)}
+      activeOpacity={0.7}
+      style={[
+        styles.historyItem,
+        { borderBottomColor: colors.border, borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth },
+      ]}
+    >
+      <View style={styles.historyItemMain}>
+        <Text style={[styles.historyAddress, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]} numberOfLines={1}>
+          {item.address}
+        </Text>
+        <View style={styles.historyMeta}>
+          <Feather name="calendar" size={11} color={colors.mutedForeground} />
+          <Text style={[styles.historyMetaText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+            {formatDate(item.created_at)}
+          </Text>
+          {item.zone && (
+            <>
+              <Text style={[styles.historyMetaDot, { color: colors.mutedForeground }]}>·</Text>
+              <View style={[styles.zoneChip, { backgroundColor: colors.muted, borderColor: colors.border }]}>
+                <Text style={[styles.zoneChipText, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>
+                  {item.zone}
+                </Text>
+              </View>
+            </>
+          )}
+        </View>
+      </View>
+      <View style={styles.historyItemRight}>
+        {item.composite_score != null && <ScoreDot score={item.composite_score} />}
+        <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+      </View>
+    </TouchableOpacity>
+  );
+}
+
 export default function ProfileScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { user, signOut, getApiHeaders, refreshProfile } = useAuth();
   const router = useRouter();
-  const { sessions } = useChat();
+  const { sessions, openHistoryReport } = useChat();
 
   const [upgradeLoading, setUpgradeLoading] = useState(false);
   const [restoreLoading, setRestoreLoading] = useState(false);
+  const [historySearches, setHistorySearches] = useState<SearchSummary[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [openingId, setOpeningId] = useState<string | null>(null);
 
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
@@ -91,6 +171,27 @@ export default function ProfileScreen() {
   const reportCount = sessions.filter((s) =>
     s.messages.some((m) => m.type === "report")
   ).length;
+
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const resp = await fetch(`${getApiBase()}/searches`, {
+        headers: getApiHeaders(),
+      });
+      if (resp.ok) {
+        const data = await resp.json() as { searches: SearchSummary[] };
+        setHistorySearches(data.searches ?? []);
+      }
+    } catch {
+      // silent fail
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [getApiHeaders]);
+
+  useEffect(() => {
+    loadHistory();
+  }, [loadHistory]);
 
   const syncToBackend = useCallback(async (tier: "pro" | "free") => {
     try {
@@ -153,6 +254,53 @@ export default function ProfileScreen() {
       Linking.openURL("https://play.google.com/store/account/subscriptions");
     }
   }, []);
+
+  const handleHistoryTap = useCallback(async (item: SearchSummary) => {
+    setOpeningId(item.id);
+    try {
+      const resp = await fetch(`${getApiBase()}/searches/${item.id}`, {
+        headers: getApiHeaders(),
+      });
+      if (!resp.ok) {
+        Alert.alert("Error", "Could not load this report. Please try again.");
+        return;
+      }
+      const data = await resp.json() as { search: { result_json: FeasibilityReport; address: string } };
+      const report = data.search.result_json;
+      const address = data.search.address ?? item.address;
+      openHistoryReport(address, report);
+      router.push("/(tabs)/");
+    } catch {
+      Alert.alert("Error", "Could not load this report. Please try again.");
+    } finally {
+      setOpeningId(null);
+    }
+  }, [getApiHeaders, openHistoryReport, router]);
+
+  const handleHistoryDelete = useCallback((item: SearchSummary) => {
+    Alert.alert(
+      "Delete report",
+      "Remove this analysis from your history?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await fetch(`${getApiBase()}/searches/${item.id}`, {
+                method: "DELETE",
+                headers: getApiHeaders(),
+              });
+              setHistorySearches((prev) => prev.filter((s) => s.id !== item.id));
+            } catch {
+              Alert.alert("Error", "Could not delete this report. Please try again.");
+            }
+          },
+        },
+      ],
+    );
+  }, [getApiHeaders]);
 
   const handleSignOut = () => {
     Alert.alert("Sign out", "Are you sure you want to sign out?", [
@@ -337,6 +485,43 @@ export default function ProfileScreen() {
           ))}
         </View>
 
+        <SectionHeader title="Analysis history" />
+
+        <View style={[styles.historyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          {historyLoading ? (
+            <View style={styles.historyEmpty}>
+              <ActivityIndicator size="small" color={colors.mutedForeground} />
+              <Text style={[styles.historyEmptyText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                Loading history…
+              </Text>
+            </View>
+          ) : historySearches.length === 0 ? (
+            <View style={styles.historyEmpty}>
+              <Feather name="clock" size={20} color={colors.mutedForeground} />
+              <Text style={[styles.historyEmptyText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                No analysis history yet.{"\n"}Run a feasibility check to save your first report.
+              </Text>
+            </View>
+          ) : (
+            historySearches.map((item, i) => (
+              <View key={item.id} style={openingId === item.id ? { opacity: 0.5 } : undefined}>
+                <HistoryItem
+                  item={item}
+                  onTap={handleHistoryTap}
+                  onDelete={handleHistoryDelete}
+                  isLast={i === historySearches.length - 1}
+                />
+              </View>
+            ))
+          )}
+        </View>
+
+        {historySearches.length > 0 && (
+          <Text style={[styles.historyHint, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+            Tap to reopen · Long-press to delete
+          </Text>
+        )}
+
         <SectionHeader title="Your stats" />
 
         <View style={[styles.statsCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -351,7 +536,7 @@ export default function ProfileScreen() {
           <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
           <View style={styles.statItem}>
             <Text style={[styles.statNum, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
-              {reportCount}
+              {historySearches.length > 0 ? historySearches.length : reportCount}
             </Text>
             <Text style={[styles.statLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
               Reports
@@ -471,6 +656,78 @@ const styles = StyleSheet.create({
   restoreLink: { alignItems: "center", paddingVertical: 6 },
   restoreLinkText: { fontSize: 13 },
   section: { borderRadius: 16, borderWidth: 1, padding: 16, gap: 12 },
+  historyCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    overflow: "hidden",
+  },
+  historyEmpty: {
+    padding: 24,
+    alignItems: "center",
+    gap: 10,
+  },
+  historyEmptyText: {
+    fontSize: 13,
+    lineHeight: 20,
+    textAlign: "center",
+  },
+  historyItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+    gap: 12,
+  },
+  historyItemMain: {
+    flex: 1,
+    gap: 4,
+  },
+  historyAddress: {
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  historyMeta: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    flexWrap: "wrap",
+  },
+  historyMetaText: {
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  historyMetaDot: {
+    fontSize: 11,
+  },
+  zoneChip: {
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  zoneChipText: {
+    fontSize: 10,
+  },
+  historyItemRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  scoreDot: {
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  scoreDotText: {
+    fontSize: 12,
+  },
+  historyHint: {
+    fontSize: 11,
+    textAlign: "center",
+    marginTop: 2,
+    marginBottom: 4,
+  },
   statsCard: {
     borderRadius: 16,
     borderWidth: 1,

@@ -58,6 +58,7 @@ AI-powered NZ real estate development feasibility analysis mobile app built with
 ### API Server (Express)
 
 - `artifacts/api-server/src/routes/auth.ts` — `/auth/signup`, `/auth/login`, `/auth/me`, `/auth/profile`
+- `artifacts/api-server/src/routes/searches.ts` — `GET /searches` (history summary), `GET /searches/:id` (full report), `DELETE /searches/:id` (delete)
 - `artifacts/api-server/src/routes/analyse.ts` — `/analyse`, `/search`, `/chat` (unified endpoint; analyse mode runs full pipeline before AI)
 - `artifacts/api-server/src/routes/pipeline-test.ts` — Debug endpoint: `GET /api/pipeline-test?address=...` returns raw pipeline JSON
 - `artifacts/api-server/src/lib/claude.ts` — Gemini AI wrapper with `generateUnifiedResponse()` + exported `detectMode()`

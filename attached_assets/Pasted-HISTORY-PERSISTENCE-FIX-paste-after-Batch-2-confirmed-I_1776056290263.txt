@@ -1,0 +1,230 @@
+HISTORY & PERSISTENCE FIX — paste after Batch 2 confirmed.
+
+════════════════════════════════
+ISSUE 2 — HISTORY NOT SAVING
+Root cause: save-search API call either not being 
+made, failing silently, or writing to wrong table.
+════════════════════════════════
+
+STEP 1 — Debug what's actually happening.
+Add logging to the save flow to find the break:
+
+In the chat screen, after receiving a successful report:
+
+console.log('[History] Attempting to save report for:', address);
+
+try {
+  const result = await api.saveSearch(address, report, session);
+  console.log('[History] Save succeeded:', result);
+} catch (err) {
+  console.error('[History] Save FAILED:', err);
+  // Show non-blocking error (don't interrupt the user)
+}
+
+Check: is this code even being reached? 
+If not — the report JSON parsing may be failing 
+before the save call is triggered.
+
+STEP 2 — Verify /api/save-search route exists and works.
+Test directly:
+
+POST /api/save-search
+Headers: Authorization: Bearer {token}
+Body: {
+  "address": "8 Hampton Drive, St Heliers",
+  "result_json": { "test": true }
+}
+
+Expected: 200 OK with { id: "..." }
+If 401: session token not being passed correctly
+If 500: check Supabase RLS policies
+
+STEP 3 — Fix RLS policy if needed.
+Run in Supabase SQL editor:
+
+-- Check current policy
+SELECT * FROM pg_policies 
+WHERE tablename = 'searches';
+
+-- If missing insert policy, add it:
+CREATE POLICY "Users can insert own searches" 
+ON public.searches
+FOR INSERT 
+WITH CHECK (auth.uid() = user_id);
+
+-- Verify the searches table has user_id column:
+SELECT column_name, data_type 
+FROM information_schema.columns
+WHERE table_name = 'searches';
+
+STEP 4 — Fix the save call in the mobile app.
+The save should happen in TWO places:
+
+A) Automatically after every successful analysis:
+In useChat.ts or chat.tsx, after setting the report:
+
+setCurrentReport(parsedReport);
+
+// Auto-save immediately — don't wait for user to tap "Save"
+try {
+  await api.saveSearch(
+    parsedReport.address,
+    parsedReport,
+    session
+  );
+  console.log('[History] Auto-saved:', parsedReport.address);
+} catch (err) {
+  // Silent fail — don't show error to user for auto-save
+  console.error('[History] Auto-save failed:', err);
+}
+
+B) Keep the manual "Save report" button too.
+It should show "Saved ✓" after tapping (or "Already saved").
+
+Track saved state: 
+const [isSaved, setIsSaved] = useState(false);
+
+// Set to true after auto-save succeeds
+// Button then shows "Saved ✓" and is disabled
+
+STEP 5 — Fix profile history screen.
+In /mobile/app/(tabs)/profile.tsx:
+
+const [searches, setSearches] = useState([]);
+const [loading, setLoading] = useState(true);
+
+useEffect(() => {
+  async function loadHistory() {
+    try {
+      const data = await api.getSearchHistory(session);
+      console.log('[History] Loaded:', data?.length, 'searches');
+      setSearches(data ?? []);
+    } catch (err) {
+      console.error('[History] Load failed:', err);
+    } finally {
+      setLoading(false);
+    }
+  }
+  loadHistory();
+}, [session]);
+
+STEP 6 — Create /api/searches GET endpoint if missing.
+
+// /app/api/searches/route.ts
+export async function GET(request: Request) {
+  const supabase = createServerClient(...);
+  const { data: { user } } = await supabase.auth.getUser();
+  
+  if (!user) return Response.json({ error: 'Unauthorized' }, 
+    { status: 401 });
+  
+  const { data, error } = await supabase
+    .from('searches')
+    .select('id, address, created_at, result_json')
+    .eq('user_id', user.id)
+    .order('created_at', { ascending: false })
+    .limit(20);
+  
+  if (error) return Response.json({ error }, { status: 500 });
+  
+  // Return lightweight version — don't send full JSON to list
+  const summary = data.map(s => ({
+    id: s.id,
+    address: s.address,
+    created_at: s.created_at,
+    composite_score: s.result_json?.scores?.composite ?? null,
+    zone: s.result_json?.merged?.zone_code ?? null,
+  }));
+  
+  return Response.json(summary);
+}
+
+STEP 7 — History list UI improvements.
+In profile screen history section:
+
+Each history item should show:
+┌──────────────────────────────────┐
+│ 8 Hampton Drive, St Heliers      │
+│ 12 Apr 2025  •  Score: 3.6/5    │
+│ MHS Zone                    [→]  │
+└──────────────────────────────────┘
+
+Tapping [→] should re-open the full report.
+To do this: store the full result_json and 
+re-render the FeasibilityReport component 
+with that data when tapped.
+
+Pass the report back into chat as a new message:
+// When user taps a history item:
+const handleHistoryTap = (search: SearchSummary) => {
+  // Navigate to chat tab
+  router.push('/(tabs)/chat');
+  
+  // Load the saved report into chat
+  // Fetch full result_json for this search id
+  api.getSearchById(search.id, session).then(full => {
+    addMessageToChat({
+      role: 'assistant',
+      content: JSON.stringify(full.result_json),
+      mode: 'analyse',
+      fromHistory: true,
+    });
+  });
+};
+
+Add swipe-to-delete on history items:
+Use react-native's built-in Swipeable or 
+a simple long-press delete:
+
+<TouchableOpacity
+  onLongPress={() => confirmDelete(search.id)}
+>
+
+confirmDelete shows Alert:
+Alert.alert(
+  'Delete report',
+  'Remove this analysis from your history?',
+  [
+    { text: 'Cancel', style: 'cancel' },
+    { text: 'Delete', style: 'destructive', 
+      onPress: () => deleteSearch(search.id) }
+  ]
+);
+
+════════════════════════════════
+VERIFICATION
+════════════════════════════════
+
+[ ] Run: POST /api/save-search with test data
+    Confirm 200 response
+    Confirm row appears in Supabase searches table
+
+[ ] Analyse an address in chat
+    Confirm auto-save happens (check console log)
+    Confirm row in Supabase immediately after
+
+[ ] Open Profile tab
+    Confirm history list is populated
+    Shows correct address, date, score
+
+[ ] Tap a history item
+    Opens full report in chat tab
+
+[ ] Long-press a history item
+    Delete confirmation appears
+    Deletion removes from list and Supabase
+
+[ ] Analyse 3 different addresses
+    All 3 appear in history
+    Most recent first
+
+After all 3 batches are confirmed working, 
+do a full end-to-end test:
+1. Fresh login
+2. Search for properties in St Heliers
+3. Run full analysis on one result
+4. Verify report has real data, no $0 values
+5. Scroll through full report smoothly
+6. Follow-up question works
+7. Check history shows the saved report
+8. Tap history item to reopen
