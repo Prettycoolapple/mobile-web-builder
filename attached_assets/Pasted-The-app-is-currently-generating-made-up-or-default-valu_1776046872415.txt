@@ -1,0 +1,344 @@
+The app is currently generating made-up or default values for 
+CV, land area, floor area, terrain, and infrastructure. This 
+is unacceptable for a feasibility tool — every number in the 
+report must come from a real data source or be explicitly 
+flagged as unavailable. Fix all four issues below.
+
+TEST ADDRESS FOR ALL FIXES: 8 Hampton Drive, St Heliers, Auckland
+
+════════════════════════════════
+ISSUE 4 + 9 — CV, LAND AREA, FLOOR AREA
+Root cause: scrapers returning null/empty and pipeline 
+falling back to $0 defaults silently.
+════════════════════════════════
+
+RULE: If a value is unknown, store it as null and display 
+"Unavailable" in the UI. Never default to $0 or 0m².
+A $0 CV fed into ROI calculations produces nonsense results.
+
+STEP 1 — Multi-source data fetch for property basics.
+Update /lib/pipeline.ts to fetch from ALL of these 
+in parallel and merge by priority:
+
+SOURCE A: LINZ API (already integrated)
+  Fetch: land_area_sqm, legal_description, title_no
+  This is the most reliable source for land area.
+  If LINZ returns a parcel: land_area_sqm is confirmed.
+  
+SOURCE B: Hougarden scraper (already built)
+  Target fields: cv_nzd, land_area_sqm, floor_area_sqm, 
+                 build_year, zone_code
+  
+  Hougarden shows CV prominently on property pages.
+  Update the Hougarden scraper to specifically target:
+  
+  // CV — look for patterns like "$1,450,000" near "CV" text
+  const cvPatterns = [
+    /CV[:\s]+\$?([\d,]+)/i,
+    /Capital Value[:\s]+\$?([\d,]+)/i,
+    /Rateable Value[:\s]+\$?([\d,]+)/i,
+    /\$?([\d,]+)\s*CV/i,
+  ];
+  
+  // Land area — look for m² near "land" text
+  const landPatterns = [
+    /land[:\s]+([\d,]+)\s*m²/i,
+    /([\d,]+)\s*m²\s*land/i,
+    /site[:\s]+([\d,]+)\s*m²/i,
+  ];
+  
+  // Floor area
+  const floorPatterns = [
+    /floor[:\s]+([\d,]+)\s*m²/i,
+    /house[:\s]+([\d,]+)\s*m²/i,
+    /([\d,]+)\s*m²\s*floor/i,
+  ];
+  
+  Try each pattern against page text content.
+  Also try: page.$eval('[data-testid*="cv"]', ...) 
+  and similar attribute selectors.
+
+SOURCE C: OneRoof scraper (already built)
+  Target same fields. OneRoof shows CV on property pages.
+  
+  Also scrape: 
+  https://www.oneroof.co.nz/find?q=8+Hampton+Drive+St+Heliers
+  
+  Look for CV in:
+  - Property stats section
+  - "Capital Value" text nodes
+  - Any element containing "$" near "CV" text
+
+SOURCE D: Auckland Council property search (new)
+  URL: https://www.aucklandcouncil.govt.nz/property-rates-valuations
+  
+  Try fetching:
+  https://www.aucklandcouncil.govt.nz/online-services/
+  Pages/rate-search.aspx?q={encoded_address}
+  
+  This is the authoritative source for CV in Auckland.
+  Extract CV, land value, improvements value, 
+  land area, and floor area if shown.
+
+MERGE PRIORITY for each field:
+  land_area_sqm:  LINZ > Auckland Council > Hougarden > OneRoof
+  cv_nzd:         Auckland Council > OneRoof > Hougarden  
+  floor_area_sqm: OneRoof > Hougarden > Auckland Council
+  build_year:     OneRoof > Hougarden > Auckland Council
+
+STEP 2 — If ALL sources fail for a field:
+  Store as null. 
+  In cost estimator: if cv_nzd is null, set land cost 
+  to null and mark ROI as "Cannot calculate — CV unavailable"
+  Do NOT use $0 as land cost. Ever.
+  
+  Display in report:
+  CV: "Unavailable — check Auckland Council rates search"
+  Land area: "Unavailable — check LINZ"
+  
+  Add a yellow banner at top of report if any critical 
+  field is null:
+  "Some property data could not be retrieved automatically. 
+   CV and land area affect ROI accuracy — verify manually 
+   at aucklandcouncil.govt.nz"
+
+STEP 3 — Add data source labels to report UI
+  Every value in PropertyHeader must show its source:
+  "CV: $1,450,000 (Source: Auckland Council)"
+  "Land: 842m² (Source: LINZ)"
+  "Floor: 210m² (Source: OneRoof)"
+  
+  Small gray text below each value, 11px.
+  This builds user trust and flags estimated values.
+
+════════════════════════════════
+ISSUE 7 — TERRAIN / CONTOUR
+Root cause: elevation API not being called or returning 
+wrong data, falling back to 'gentle' default.
+════════════════════════════════
+
+8 Hampton Drive St Heliers is a notoriously steep site.
+The current output of 'gentle' is incorrect.
+
+STEP 1 — Fix the elevation data fetch.
+Use Google Maps Elevation API with 9-point grid sampling:
+
+async function fetchElevationContour(
+  lat: number, lng: number
+): Promise<ContourResult> {
+  
+  // Sample a 3x3 grid of points ~25m apart
+  const offset = 0.00025; // ~25m in decimal degrees
+  const points = [
+    { lat: lat - offset, lng: lng - offset },
+    { lat: lat - offset, lng: lng },
+    { lat: lat - offset, lng: lng + offset },
+    { lat: lat,          lng: lng - offset },
+    { lat: lat,          lng: lng },          // center
+    { lat: lat,          lng: lng + offset },
+    { lat: lat + offset, lng: lng - offset },
+    { lat: lat + offset, lng: lng },
+    { lat: lat + offset, lng: lng + offset },
+  ];
+  
+  const locationStr = points
+    .map(p => `${p.lat},${p.lng}`)
+    .join('|');
+  
+  const url = `https://maps.googleapis.com/maps/api/elevation/json` +
+    `?locations=${locationStr}` +
+    `&key=${process.env.GOOGLE_MAPS_API_KEY}`;
+  
+  const res = await fetch(url);
+  const data = await res.json();
+  
+  if (data.status !== 'OK' || !data.results?.length) {
+    return { classification: 'unknown', slope_degrees: null };
+  }
+  
+  const elevations = data.results.map((r: any) => r.elevation);
+  const centerElevation = elevations[4]; // center point
+  
+  // Calculate max slope from center to any corner
+  // Distance between center and corner = ~35m
+  const cornerElevations = [
+    elevations[0], elevations[2], 
+    elevations[6], elevations[8]
+  ];
+  const maxElevDiff = Math.max(
+    ...cornerElevations.map(e => Math.abs(e - centerElevation))
+  );
+  
+  // Slope = rise/run, ~35m horizontal distance to corner
+  const slopeDegrees = Math.atan(maxElevDiff / 35) * (180 / Math.PI);
+  
+  // Also check adjacent points (~25m away) for local slope
+  const adjacentElevations = [
+    elevations[1], elevations[3],
+    elevations[5], elevations[7]
+  ];
+  const maxAdjacentDiff = Math.max(
+    ...adjacentElevations.map(e => Math.abs(e - centerElevation))
+  );
+  const adjacentSlopeDegrees = Math.atan(maxAdjacentDiff / 25) 
+    * (180 / Math.PI);
+  
+  // Use the steeper of the two measurements
+  const finalSlope = Math.max(slopeDegrees, adjacentSlopeDegrees);
+  
+  let classification: 'flat' | 'gentle' | 'moderate' | 'steep';
+  if (finalSlope < 5)       classification = 'flat';
+  else if (finalSlope < 12) classification = 'gentle';
+  else if (finalSlope < 22) classification = 'moderate';
+  else                      classification = 'steep';
+  
+  return {
+    slope_degrees: Math.round(finalSlope * 10) / 10,
+    classification,
+    elevation_center: centerElevation,
+    data_source: 'Google Elevation API',
+  };
+}
+
+STEP 2 — Remove the hardcoded fallback default.
+Current code likely has: contour = result ?? 'gentle'
+Change to: contour = result ?? null
+Display: "Terrain data unavailable" if null.
+
+STEP 3 — Verify fix with test address.
+8 Hampton Drive St Heliers should return 
+slope_degrees > 20 and classification = 'steep' or 'moderate'.
+If it still returns gentle, log the raw elevation values 
+to console so we can debug.
+
+STEP 4 — Update retaining cost estimates for steep sites:
+Current steep estimate ($200k–$400k) is for subdivision.
+Add a note in the UI:
+"Steep terrain significantly increases foundation and 
+ retaining costs. For a single dwelling: $50k–$150k. 
+ For subdivision with multiple lots: $200k–$500k+. 
+ Engage a geotechnical engineer for site-specific assessment."
+
+════════════════════════════════
+ISSUE 8 — INFRASTRUCTURE & SERVICES
+Root cause: defaulting to 'off-parcel' for all services 
+instead of fetching real data.
+════════════════════════════════
+
+This is the hardest data problem. NZ infrastructure data 
+is in GIS layers that require spatial queries.
+
+APPROACH: Multi-source with honest fallback.
+
+SOURCE A: Watercare GIS (Auckland water/wastewater)
+  Watercare has a public asset map. Try:
+  
+  // Watercare asset viewer
+  const watercareUrl = 
+    `https://geomapspublic.aucklandcouncil.govt.nz/server/rest/services/` +
+    `UrbanDesign/SD_Infrastructure/MapServer/identify` +
+    `?geometry=${lng},${lat}` +
+    `&geometryType=esriGeometryPoint` +
+    `&sr=4326` +
+    `&layers=all` +
+    `&tolerance=50` +       // 50 pixel search radius
+    `&mapExtent=${lng-0.001},${lat-0.001},${lng+0.001},${lat+0.001}` +
+    `&imageDisplay=800,600,96` +
+    `&returnGeometry=true` +
+    `&f=json`;
+  
+  Layer IDs to check (verify these are current):
+  - Water mains
+  - Wastewater pipes  
+  - Stormwater pipes
+  
+  For each feature found:
+  - Calculate distance from property centroid to pipe geometry
+  - If distance < 2m: 'on-parcel'
+  - If distance 2–10m: 'boundary'  
+  - If distance 10–30m: 'neighbour' or 'public-land'
+  - If > 30m: 'public-land' (probably road main)
+
+SOURCE B: Auckland Council GIS Infrastructure layers
+  Try the Auckland Council GIS server:
+  
+  Base: https://gis.aucklandcouncil.govt.nz/arcgis/rest/services/
+  
+  Query nearby infrastructure features within 50m of the 
+  property coordinate. If layers return results, use 
+  geometry distance to classify location.
+
+SOURCE C: Hougarden infrastructure section
+  Hougarden sometimes shows service connection info.
+  Scrape any "services" or "infrastructure" section 
+  on the property page.
+
+IF ALL SOURCES FAIL (likely for MVP):
+  Do NOT default to 'off-parcel'.
+  Return each service as:
+  {
+    service: 'Water supply',
+    location: 'unknown',
+    cost_estimate_low: null,
+    cost_estimate_high: null,
+    risk_note: 'Infrastructure location could not be 
+    determined automatically. Check Auckland Council 
+    GIS or engage a civil engineer.',
+    data_source: 'unavailable'
+  }
+  
+  In the UI, show gray "Unknown" chips instead of 
+  amber "off-parcel" chips.
+  
+  Add a note:
+  "Infrastructure data requires manual verification.
+   View service locations at: 
+   geomapspublic.aucklandcouncil.govt.nz"
+  
+  This is more honest than wrong data.
+
+STEP 2 — Fix demolition cost for subdivisions.
+Issue: demo cost shows $0 when there is no existing 
+dwelling, which is correct for vacant land but 
+the UI shows "$0" which looks like a bug.
+
+Fix display logic:
+if (demo_low === 0 && demo_high === 0) {
+  Show: "No demolition required — vacant land or 
+         no existing dwelling detected"
+  Do not show "$0 – $0"
+}
+
+For subdivision feasibility (multiple lots):
+If has_existing_dwelling === true AND lots > 1:
+  Add a note: "Demolition of existing dwelling 
+  required before subdivision can proceed."
+  Ensure demo cost is included in total for multi-lot scenarios.
+
+════════════════════════════════
+VERIFICATION — run these checks
+════════════════════════════════
+
+Test address: 8 Hampton Drive, St Heliers, Auckland
+
+[ ] CV shows a real dollar value with source label
+    (not $0, not "unavailable" if sources work)
+[ ] Land area shows real m² from LINZ or Council
+    (8 Hampton Dr should be ~700-900m² approx)
+[ ] Floor area shows real m² or "Unavailable"
+[ ] Terrain shows 'steep' or 'moderate' 
+    (NOT 'gentle' — this is a steep site)
+[ ] slope_degrees logged to console — should be > 15°
+[ ] Infrastructure shows 'unknown' with honest message
+    if GIS layers unavailable (not fake 'off-parcel')
+[ ] Demo cost shows real estimate if dwelling exists,
+    not $0 silently feeding ROI calculations
+[ ] If CV is null: ROI section shows 
+    "Cannot calculate ROI — CV data unavailable"
+    instead of wildly wrong numbers
+[ ] Every displayed value has a "Source: X" label
+
+Add the debug endpoint test:
+GET /api/pipeline-test?address=8+Hampton+Drive+St+Heliers
+Log to console: all raw values from each source, 
+clearly labelled, so we can see what each API returned.
