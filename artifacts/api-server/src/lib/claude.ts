@@ -17,8 +17,30 @@ export function detectMode(lastMessage: string): ChatMode {
     "looking for properties", "what properties", "properties in", "sections in", "land in",
     "subdividable", "subdivision opportunities", "development sites", "lifestyle properties",
     "investment properties", "find sites", "show properties",
+    // broader natural-language search patterns
+    "any properties", "any homes", "any houses", "any sections", "any land",
+    "properties for sale", "homes for sale", "houses for sale", "land for sale",
+    "on the market", "on sale", "for sale in", "listed in", "listings in",
+    "available in", "available properties",
+    "land bigger", "land larger", "land size", "bigger than", "larger than",
+    "more than", "over 1", "over 2", "over 3", "over 4", "over 5",
+    "at least", "minimum land", "sites in", "sites near",
+    "price around", "budget of", "under $", "below $", "above $",
+    "looking to buy", "want to buy", "buying in",
   ];
   if (searchKeywords.some((k) => lower.includes(k))) return "discover";
+
+  // Pattern-based search detection (regex)
+  const searchPatterns = [
+    /any\s+\w+\s+propert/i,
+    /propert\w*\s+(on\s+sale|for\s+sale|available|listed)/i,
+    /land\s+(area\s+)?(bigger|larger|over|above|more\s+than|greater\s+than)\s+\w*\s*\d/i,
+    /\d+\s*(m2|sqm|m²|square\s+met)\s*(or\s+)?(bigger|larger|more|plus|above|over)/i,
+    /\d+\s*k?\s*(or\s+)?(less|under|below)\s+(in|at|near)/i,
+    /show\s+(me\s+)?(all|some|any)\s+/i,
+    /what('s|\s+is|\s+are)\s+(available|on\s+(the\s+)?market|for\s+sale)/i,
+  ];
+  if (searchPatterns.some((p) => p.test(lower))) return "discover";
 
   const followUpDiscoverKeywords = [
     "any others", "any more", "show more", "more properties", "more options",

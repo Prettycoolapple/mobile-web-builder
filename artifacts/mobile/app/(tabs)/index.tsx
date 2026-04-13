@@ -95,9 +95,15 @@ export default function ChatScreen() {
     setIsLoading(true);
 
     const lowerText = text.toLowerCase();
-    const detectedMode =
+    const isDiscoverQuery =
       lowerText.match(/find\s+|search\s+|discover\s+|looking\s+for\s+|show\s+me\s+properties|subdividable|subdivision\s+opp|development\s+sites|lifestyle\s+prop|investment\s+prop/) ||
-      lowerText.match(/any\s+(others?|more)|show\s+(me\s+)?more|more\s+(properties|options|results|sites)|what\s+else|anything\s+else|few\s+more|find\s+more|keep\s+looking|another\s+one|any\s+other|more\s+sites|other\s+options/)
+      lowerText.match(/any\s+(others?|more|properties|homes|houses|sections|land)|show\s+(me\s+)?more|more\s+(properties|options|results|sites)|what\s+else|anything\s+else|few\s+more|find\s+more|keep\s+looking|another\s+one|any\s+other|more\s+sites|other\s+options/) ||
+      lowerText.match(/properties\s+(for\s+sale|on\s+sale|available|listed|in\s+)/i) ||
+      lowerText.match(/land\s+(bigger|larger|over|above|more\s+than|greater\s+than)/i) ||
+      lowerText.match(/(for\s+sale|on\s+sale|on\s+the\s+market)\s+in/i) ||
+      lowerText.match(/\d+\s*(m2|sqm|m²)\s*(or\s+)?(bigger|larger|above|over)/i);
+    const detectedMode =
+      isDiscoverQuery
         ? "discover"
         : text.match(/\d+\s+\w+\s+(road|street|ave|avenue|crescent|place|drive|way|lane|terrace)/i) ||
           lowerText.match(/analys[ei]|feasibility|check|assess|evaluate/)
@@ -175,7 +181,21 @@ export default function ChatScreen() {
               updateLastMessage({ type: "search", searchResults: [], content: "" }, sessionId);
             }
           } else {
-            updateLastMessage({ type: "text", content: data.content }, sessionId);
+            // Safety net: if the AI leaked raw JSON into a text response, never show it
+            const rawContent = data.content ?? "";
+            const trimmed = rawContent.trim();
+            if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+              // Try to parse as candidates (discover that slipped through)
+              const maybeParsed = extractJSON(trimmed) as { candidates?: PropertyCandidate[] } | null;
+              if (maybeParsed?.candidates && maybeParsed.candidates.length > 0) {
+                updateLastMessage({ type: "search", searchResults: maybeParsed.candidates, content: "" }, sessionId);
+              } else {
+                // JSON but not candidates — show a friendly fallback instead of raw JSON
+                updateLastMessage({ type: "text", content: "I couldn't format that response properly. Please try rephrasing your question." }, sessionId);
+              }
+            } else {
+              updateLastMessage({ type: "text", content: rawContent }, sessionId);
+            }
           }
           return;
         } catch (err: any) {

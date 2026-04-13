@@ -541,6 +541,29 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
       }
 
       const { content, mode: responseMode } = await generateUnifiedResponse(messages, currentReport);
+
+      // Safety net: if the AI returned raw JSON with candidates in a non-discover response,
+      // re-classify it as discover so the frontend can render property cards instead of raw JSON
+      if (responseMode !== "discover" && responseMode !== "analyse") {
+        const trimmed = content.trim();
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+          try {
+            const parsed = JSON.parse(trimmed.replace(/```(?:json)?\s*/gi, "").replace(/```\s*/g, "").trim());
+            if (parsed && Array.isArray(parsed.candidates)) {
+              res.json({ content: trimmed, mode: "discover" });
+              return;
+            }
+          } catch {
+            // Not valid JSON — strip any partial JSON and return an error message
+            const isLikelyBrokenJson = /^\s*\{[\s\S]{20,}/.test(trimmed);
+            if (isLikelyBrokenJson) {
+              res.json({ content: "I'm sorry, I couldn't retrieve that information right now. Please try rephrasing your question.", mode: "text" });
+              return;
+            }
+          }
+        }
+      }
+
       res.json({ content, mode: responseMode });
     } catch (error) {
       req.log.error({ error }, "Failed to generate unified chat reply");
