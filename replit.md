@@ -153,10 +153,28 @@ AI-powered NZ real estate development feasibility analysis mobile app built with
 - **Profile**: Checks RevenueCat on mount and syncs; Pro users see "Manage subscription" (opens device Settings) + "Restore purchases"; free users see RevenueCat upgrade flow
 - **AnalysisProgress**: `artifacts/mobile/components/AnalysisProgress.tsx` — Animated step-by-step progress for analyse mode
 
+## Real Listing Pipeline (Discovery Mode)
+
+**Primary source**: realestate.co.nz (static HTML scraper)
+**Fast pre-screen**: geocode → Auckland Council GIS zone lookup → composite score (no Hougarden)
+**Caching**: full `ListingResult[]` stored in-memory (30-min TTL); follow-ups pop from cache (no re-fetch)
+**Filtering**: apartments excluded via regex (`/^[\dA-Za-z]+\/[\dA-Za-z]+/i` etc); prices filtered ±10% of max
+**Slug filter**: listing URLs checked against suburb slug to prevent out-of-area results from SPA side effects
+**Fallback**: mock data when suburb not in slug map or no listings found in static HTML
+
+**Key files**:
+- `artifacts/api-server/src/lib/scrapers/realestate-search.ts` — search page scraper + listing meta fetcher (HTML entity decode, slug filter, full batch fetch)
+- `artifacts/api-server/src/lib/listing-cache.ts` — in-memory `ListingResult[]` cache with `popNextListings()`
+- `artifacts/api-server/src/lib/pre-screen.ts` — `preScreenListingsFast()` — geocode + Auckland Council GIS zone/overlay + apartment filter
+
+**Suburb coverage** (48 suburbs): All major Auckland suburbs mapped to realestate.co.nz district/slug (see SUBURB_SLUG_MAP in realestate-search.ts). Suburbs not in map fall back to mock data.
+
+**Performance**: Initial search ~4-6s; follow-up ~0.7s (from cache)
+
 ## Features
 
 1. **Address Analysis** — Analyse specific NZ property addresses with full feasibility reports
-2. **Discovery Search** — Find subdividable properties by suburb/price criteria
+2. **Discovery Search** — Find subdividable properties by suburb/price via live realestate.co.nz data; "show more" follow-ups served from pre-fetched cache
 3. **Feasibility Report** — Scores (Ease/Cost/ROI), planning overlays, terrain, infrastructure, cost breakdown, ROI scenarios, comparable sales, AI risk summary. Includes:
    - Yellow missing-data warning banner when CV or land area is unavailable
    - Per-field data source labels (e.g. "Source: OneRoof") under CV, land area, floor area

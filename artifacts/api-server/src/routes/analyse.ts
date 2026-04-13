@@ -15,9 +15,16 @@ import { verifyToken } from "../lib/auth";
 import { extractNZAddress } from "../lib/address-parser";
 import { runPropertyPipeline } from "../lib/pipeline";
 import { formatNZD } from "../lib/utils";
-import { searchOneRoofListings } from "../lib/scrapers/oneroof";
-import { preScreenListings } from "../lib/pre-screen";
+import { searchRealEstateListings } from "../lib/scrapers/realestate-search";
+import { preScreenListingsFast } from "../lib/pre-screen";
 import { getMockListings } from "../lib/mock-data";
+import {
+  makeCacheKey,
+  setListingCache,
+  popNextListings,
+  markShown,
+  getShownUrls,
+} from "../lib/listing-cache";
 
 const router = Router();
 
@@ -42,6 +49,9 @@ function parseDiscoverParams(text: string): { suburb: string | null; minPrice: n
     "takapuna", "devonport", "northcote", "glenfield", "milford", "browns bay",
     "east tamaki", "mangere", "otahuhu", "penrose", "ellerslie", "glen innes",
     "st heliers", "kohimarama", "mission bay", "st johns", "glendowie",
+    "meadowbank", "pakuranga",
+    "birkenhead", "massey", "royal oak", "mt wellington", "manurewa",
+    "papatoetoe", "glen eden", "panmure",
   ];
 
   let suburb: string | null = null;
@@ -242,7 +252,7 @@ router.post("/chat", async (req, res) => {
           let suburb = parsedSuburb;
           let effectiveMinPrice = minPrice;
           let effectiveMaxPrice = maxPrice;
-          let alreadyShown: string[] = [];
+          let alreadyShownAddresses: string[] = [];
 
           if (isFollowUp && !suburb) {
             const history = [...messages].reverse();
@@ -250,14 +260,7 @@ router.post("/chat", async (req, res) => {
               if (msg.role === "assistant") {
                 const searchResultsMatch = /\[Search results shown: ([^\]]+)\]/.exec(msg.content ?? "");
                 if (searchResultsMatch) {
-                  alreadyShown = searchResultsMatch[1].split(";").map((a) => a.trim()).filter(Boolean);
-                } else {
-                  try {
-                    const prevPayload = JSON.parse(msg.content ?? "{}");
-                    if (prevPayload?.candidates?.length > 0) {
-                      alreadyShown = prevPayload.candidates.map((c: { address?: string }) => c.address ?? "").filter(Boolean);
-                    }
-                  } catch {}
+                  alreadyShownAddresses = searchResultsMatch[1].split(";").map((a) => a.trim()).filter(Boolean);
                 }
               }
               if (msg.role === "user" && !suburb) {
@@ -274,25 +277,55 @@ router.post("/chat", async (req, res) => {
             }
           }
 
-          req.log.info({ suburb, effectiveMinPrice, effectiveMaxPrice, isFollowUp, alreadyShown: alreadyShown.length }, "Discovery search started");
+          req.log.info({ suburb, effectiveMinPrice, effectiveMaxPrice, isFollowUp }, "Discovery search started");
 
           let candidates: import("../lib/pre-screen").PropertyCandidate[] = [];
           let isMockData = false;
+          let dataSource = "realestate.co.nz";
 
           if (suburb) {
-            const listings = await searchOneRoofListings({ suburb, price_min: effectiveMinPrice, price_max: effectiveMaxPrice })
-              .catch((err) => { req.log.warn({ err }, "OneRoof search failed"); return []; });
+            const cacheKey = makeCacheKey(suburb, effectiveMinPrice, effectiveMaxPrice);
 
-            if (listings.length > 0) {
-              candidates = await preScreenListings(listings, 3).catch((err) => {
-                req.log.warn({ err }, "Pre-screening failed");
-                return [];
-              });
+            if (isFollowUp) {
+              let attempts = 0;
+              while (candidates.length === 0 && attempts < 3) {
+                const { listings: nextListings, remaining } = popNextListings(cacheKey, 8);
+                if (nextListings.length === 0) break;
+                req.log.info({ nextListings: nextListings.length, remaining, attempt: attempts + 1 }, "Follow-up: popping next listings from cache");
+                markShown(cacheKey, nextListings.map((l) => l.listingUrl));
+                candidates = await preScreenListingsFast(nextListings, 5).catch(() => []);
+                attempts++;
+              }
+            }
+
+            if (candidates.length === 0 && !isFollowUp) {
+              const shownUrls = getShownUrls(cacheKey);
+              const searchResult = await searchRealEstateListings({
+                suburb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
+                skipUrls: shownUrls,
+              }).catch((err) => { req.log.warn({ err }, "realestate.co.nz search failed"); return null; });
+
+              if (searchResult && searchResult.firstBatch.length > 0) {
+                const inRange = (l: { price: number | null }) =>
+                  l.price == null || (l.price >= effectiveMinPrice && l.price <= effectiveMaxPrice * 1.1);
+
+                const firstFiltered = searchResult.firstBatch.filter(inRange);
+                const remainingFiltered = searchResult.remainingListings.filter(inRange);
+
+                setListingCache(cacheKey, {
+                  remainingListings: remainingFiltered,
+                  shownUrls: firstFiltered.map((l) => l.listingUrl),
+                  suburb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
+                });
+                req.log.info({ fetched: firstFiltered.length, cached: remainingFiltered.length }, "realestate.co.nz: prescreening listings");
+                candidates = await preScreenListingsFast(firstFiltered, 5).catch(() => []);
+              }
             }
           }
 
           if (candidates.length === 0) {
             isMockData = true;
+            dataSource = "mock";
             let mockPool = getMockListings(suburb ?? undefined);
             if (effectiveMinPrice || effectiveMaxPrice) {
               mockPool = mockPool.filter((c) => {
@@ -302,18 +335,18 @@ router.post("/chat", async (req, res) => {
               });
               if (mockPool.length === 0) mockPool = getMockListings(suburb ?? undefined);
             }
-            req.log.info({ suburb, count: mockPool.length }, "Discovery: using mock data fallback — selecting by intent");
-            candidates = await selectCandidatesByIntent(userText, mockPool, 5, alreadyShown);
+            const shownLower = alreadyShownAddresses.map((a) => a.toLowerCase());
+            const filteredPool = shownLower.length > 0
+              ? mockPool.filter((c) => !shownLower.includes(c.address.toLowerCase()))
+              : mockPool;
+            req.log.info({ suburb, count: filteredPool.length }, "Discovery: using mock data fallback — selecting by intent");
+            candidates = await selectCandidatesByIntent(userText, filteredPool, 5, []);
             if (candidates.length === 0) {
-              const shownLower = alreadyShown.map((a) => a.toLowerCase());
-              candidates = mockPool
-                .filter((c) => !shownLower.includes(c.address.toLowerCase()))
-                .sort((a, b) => b.scores.composite - a.scores.composite)
-                .slice(0, 5);
+              candidates = filteredPool.sort((a, b) => b.scores.composite - a.scores.composite).slice(0, 5);
             }
           }
 
-          const responsePayload = JSON.stringify({ candidates, isMockData, suburb });
+          const responsePayload = JSON.stringify({ candidates, isMockData, suburb, dataSource });
           res.json({ content: responsePayload, mode: "discover" });
           return;
         } catch (err) {

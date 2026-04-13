@@ -1,6 +1,7 @@
 import { logger } from "./logger";
 import { geocodeAddress } from "./geocode";
 import { scrapeHougarden } from "./scrapers/hougarden";
+import { fetchUnitaryPlanZone, fetchOverlays } from "./auckland-council";
 import type { ListingResult } from "./scrapers/oneroof";
 
 export interface PropertyCandidate {
@@ -10,6 +11,7 @@ export interface PropertyCandidate {
   zone?: string;
   scores: { ease: number; cost: number; roi: number; composite: number };
   briefSummary?: string;
+  listingUrl?: string;
 }
 
 const ZONE_EASE_SCORE: Record<string, number> = {
@@ -78,6 +80,74 @@ function makeSummary(
   const overlayPart = overlayNames.length > 0 ? `Overlays: ${overlayNames.join(", ")}.` : "No major overlays.";
   const sizePart = land ? `${land}m² site.` : "";
   return [zonePart, sizePart, lotPart + ".", overlayPart, "Pre-screen estimate only."].filter(Boolean).join(" ");
+}
+
+function isApartmentAddress(address: string): boolean {
+  const a = address.trim();
+  return /^[\dA-Za-z]+\/[\dA-Za-z]+/i.test(a) ||
+    /^[\d&, ]+\/\d+/i.test(a) ||
+    /^(unit|apt|apartment|level|flat|suite)\s+[\dA-Za-z]/i.test(a) ||
+    /^\d+[A-Za-z]+\/\d+/i.test(a);
+}
+
+async function screenOneFast(listing: ListingResult): Promise<PropertyCandidate | null> {
+  try {
+    if (isApartmentAddress(listing.address)) {
+      logger.debug({ address: listing.address }, "Pre-screen: skipping apartment/unit address");
+      return null;
+    }
+
+    const geo = await geocodeAddress(listing.address);
+    const [zoneResult, overlays] = await Promise.allSettled([
+      fetchUnitaryPlanZone(geo.lat, geo.lng),
+      fetchOverlays(geo.lat, geo.lng),
+    ]);
+
+    const zone = zoneResult.status === "fulfilled" ? zoneResult.value?.zone_code : null;
+    const resolvedOverlays = overlays.status === "fulfilled" ? overlays.value : [];
+
+    const land = listing.landArea;
+    const price = listing.price;
+
+    if (!price) return null;
+
+    const lots = estimateLots(zone, land ?? null);
+    const scores = quickScore(zone, resolvedOverlays, land ?? null, price);
+
+    return {
+      address: listing.address,
+      price,
+      landArea: land ?? undefined,
+      zone: zone ?? undefined,
+      scores,
+      briefSummary: makeSummary(zone, lots, resolvedOverlays, land ?? null),
+      listingUrl: listing.listingUrl,
+    };
+  } catch (err) {
+    logger.warn({ err, address: listing.address }, "Pre-screen fast: failed for listing");
+    return null;
+  }
+}
+
+export async function preScreenListingsFast(
+  listings: ListingResult[],
+  maxConcurrent = 5,
+): Promise<PropertyCandidate[]> {
+  const nonApartments = listings.filter((l) => !isApartmentAddress(l.address));
+  const results: PropertyCandidate[] = [];
+  const queue = [...nonApartments];
+
+  while (queue.length > 0) {
+    const batch = queue.splice(0, maxConcurrent);
+    const batchResults = await Promise.all(batch.map(screenOneFast));
+    for (const r of batchResults) {
+      if (r) results.push(r);
+    }
+  }
+
+  return results
+    .sort((a, b) => b.scores.composite - a.scores.composite)
+    .slice(0, 6);
 }
 
 async function screenOne(listing: ListingResult): Promise<PropertyCandidate | null> {
