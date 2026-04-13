@@ -206,11 +206,11 @@ Rules:
 
   try {
     const timeoutPromise = new Promise<typeof candidates>((_, reject) =>
-      setTimeout(() => reject(new Error("Selection timeout")), 20000),
+      setTimeout(() => reject(new Error("Selection timeout")), 5000),
     );
 
     const selectionPromise = ai.models.generateContent({
-      model: "gemini-2.0-flash",
+      model: "gemini-2.5-flash",
       config: { maxOutputTokens: 2048 },
       contents: [{ role: "user", parts: [{ text: prompt }] }],
     }).then((response) => {

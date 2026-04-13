@@ -237,6 +237,7 @@ router.post("/chat", async (req, res) => {
           const { suburb: parsedSuburb, minPrice, maxPrice } = parseDiscoverParams(userText);
 
           const isFollowUp = !parsedSuburb && /any\s+(others?|more)|show\s+more|more\s+(properties|options|results|sites)|what\s+else|anything\s+else|few\s+more|find\s+more|keep\s+looking|another\s+one/i.test(userText);
+          const userTextHasPrice = /\$|\bunder\b|\babove\b|\bbelow\b|\bbetween\b|\brange\b|\b\d+[mk]\b/i.test(userText);
 
           let suburb = parsedSuburb;
           let effectiveMinPrice = minPrice;
@@ -247,19 +248,26 @@ router.post("/chat", async (req, res) => {
             const history = [...messages].reverse();
             for (const msg of history) {
               if (msg.role === "assistant") {
-                try {
-                  const prevPayload = JSON.parse(msg.content ?? "{}");
-                  if (prevPayload?.candidates?.length > 0) {
-                    alreadyShown = prevPayload.candidates.map((c: { address?: string }) => c.address ?? "").filter(Boolean);
-                  }
-                } catch {}
+                const searchResultsMatch = /\[Search results shown: ([^\]]+)\]/.exec(msg.content ?? "");
+                if (searchResultsMatch) {
+                  alreadyShown = searchResultsMatch[1].split(";").map((a) => a.trim()).filter(Boolean);
+                } else {
+                  try {
+                    const prevPayload = JSON.parse(msg.content ?? "{}");
+                    if (prevPayload?.candidates?.length > 0) {
+                      alreadyShown = prevPayload.candidates.map((c: { address?: string }) => c.address ?? "").filter(Boolean);
+                    }
+                  } catch {}
+                }
               }
               if (msg.role === "user" && !suburb) {
                 const { suburb: prevSuburb, minPrice: prevMin, maxPrice: prevMax } = parseDiscoverParams(msg.content ?? "");
                 if (prevSuburb) {
                   suburb = prevSuburb;
-                  if (!effectiveMinPrice) effectiveMinPrice = prevMin;
-                  if (!effectiveMaxPrice) effectiveMaxPrice = prevMax;
+                  if (!userTextHasPrice) {
+                    effectiveMinPrice = prevMin;
+                    effectiveMaxPrice = prevMax;
+                  }
                   break;
                 }
               }
@@ -285,7 +293,15 @@ router.post("/chat", async (req, res) => {
 
           if (candidates.length === 0) {
             isMockData = true;
-            const mockPool = getMockListings(suburb ?? undefined);
+            let mockPool = getMockListings(suburb ?? undefined);
+            if (effectiveMinPrice || effectiveMaxPrice) {
+              mockPool = mockPool.filter((c) => {
+                if (effectiveMinPrice && c.price < effectiveMinPrice) return false;
+                if (effectiveMaxPrice && c.price > effectiveMaxPrice) return false;
+                return true;
+              });
+              if (mockPool.length === 0) mockPool = getMockListings(suburb ?? undefined);
+            }
             req.log.info({ suburb, count: mockPool.length }, "Discovery: using mock data fallback — selecting by intent");
             candidates = await selectCandidatesByIntent(userText, mockPool, 5, alreadyShown);
             if (candidates.length === 0) {

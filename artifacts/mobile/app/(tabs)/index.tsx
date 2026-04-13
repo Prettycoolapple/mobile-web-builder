@@ -114,7 +114,7 @@ export default function ChatScreen() {
         .filter((m) => m.type === "text" || m.type === "report" || m.type === "search")
         .map((m) => ({
           role: m.role as "user" | "assistant",
-          content: m.type === "text" ? m.content : m.type === "report" ? `[Feasibility report for ${m.report?.address || "property"}]` : "[Search results shown]",
+          content: m.type === "text" ? m.content : m.type === "report" ? `[Feasibility report for ${m.report?.address || "property"}]` : `[Search results shown: ${(m.searchResults ?? []).map((r) => r.address).join("; ")}]`,
         })),
       { role: "user" as const, content: text },
     ];
