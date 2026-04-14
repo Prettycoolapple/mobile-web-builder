@@ -4,6 +4,8 @@ import type { Overlay, ZoneResult } from "../auckland-council";
 import type { InfrastructureItem } from "../infrastructure";
 import type { HougardenData } from "./hougarden";
 import type { OneRoofData, ComparableSale } from "./oneroof";
+import type { QVData } from "./qv";
+import type { HomesData } from "./homes";
 import type { PropertyHistory } from "../property-data";
 
 export interface MergedPropertyData {
@@ -35,6 +37,7 @@ export interface MergedPropertyData {
   missing_critical_fields: string[];
 }
 
+// ─── Simple "first non-null" helper ──────────────────────────────────────────
 function first<T>(label: string, sources: Record<string, string>, ...candidates: Array<[string, T | null | undefined]>): T | null {
   for (const [src, val] of candidates) {
     if (val != null && val !== undefined) {
@@ -43,6 +46,125 @@ function first<T>(label: string, sources: Record<string, string>, ...candidates:
     }
   }
   return null;
+}
+
+// ─── Smart CV merge: pick the value with the most recent valuation year ───────
+// All NZ scrapers pull from the same Auckland Council ratings database. If
+// sources differ it is because one cached an older valuation year. The most
+// recent year is always the ground truth.
+function bestCV(
+  sources: Record<string, string>,
+  candidates: Array<{ src: string; cv_nzd: number | null | undefined; cv_year: number | null | undefined }>,
+): { cv_nzd: number | null; cv_year: number | null } {
+  let bestNzd: number | null = null;
+  let bestYear: number | null = null;
+  let bestSrc: string | null = null;
+
+  for (const c of candidates) {
+    if (c.cv_nzd == null) continue;
+    const year = c.cv_year ?? null;
+    if (bestNzd === null) {
+      // First valid value — take it
+      bestNzd = c.cv_nzd; bestYear = year; bestSrc = c.src;
+    } else if (year != null && (bestYear == null || year > bestYear)) {
+      // More recent valuation year — upgrade
+      bestNzd = c.cv_nzd; bestYear = year; bestSrc = c.src;
+    }
+  }
+
+  if (bestSrc) sources["cv_nzd"] = bestSrc;
+  return { cv_nzd: bestNzd, cv_year: bestYear };
+}
+
+// ─── Smart build-year merge: majority consensus with conflict detection ────────
+// Scrapers all derive from AC records but may parse "year of last renovation"
+// vs "original construction". We group values within ±3 years and pick the
+// largest agreement group. On conflict we take the earliest value — original
+// construction is always what matters for development feasibility.
+function consensusBuildYear(
+  sources: Record<string, string>,
+  candidates: Array<{ src: string; build_year: number | null | undefined }>,
+): number | null {
+  const valid = candidates.filter((c): c is { src: string; build_year: number } => c.build_year != null);
+  if (valid.length === 0) return null;
+  if (valid.length === 1) {
+    sources["build_year"] = valid[0].src;
+    return valid[0].build_year;
+  }
+
+  // Group values that are within ±3 years of each other
+  const groups: Array<{ key: number; members: Array<{ src: string; build_year: number }> }> = [];
+  for (const item of valid) {
+    const existing = groups.find((g) => Math.abs(item.build_year - g.key) <= 3);
+    if (existing) {
+      existing.members.push(item);
+    } else {
+      groups.push({ key: item.build_year, members: [item] });
+    }
+  }
+
+  // Sort groups: largest first, then earliest year (original construction)
+  groups.sort((a, b) => {
+    if (b.members.length !== a.members.length) return b.members.length - a.members.length;
+    return a.key - b.key; // earlier year wins tiebreak
+  });
+
+  const winner = groups[0];
+  const avgYear = Math.round(
+    winner.members.reduce((sum, m) => sum + m.build_year, 0) / winner.members.length,
+  );
+
+  if (groups.length > 1) {
+    logger.warn(
+      { agreed: winner.members.map((m) => `${m.src}:${m.build_year}`), rejected: groups.slice(1).flatMap((g) => g.members.map((m) => `${m.src}:${m.build_year}`)) },
+      "Build year conflict between sources — using majority/earliest group",
+    );
+  }
+
+  sources["build_year"] = winner.members.length > 1
+    ? `consensus(${winner.members.map((m) => m.src).join(",")})`
+    : winner.members[0].src;
+
+  return avgYear;
+}
+
+// ─── Smart floor-area merge: median of credible values ───────────────────────
+// Scrapers may include/exclude garage (20-40m² diff). Median filters outliers.
+// Values outside [40, 2000] m² are treated as parse errors and excluded.
+function medianFloorArea(
+  sources: Record<string, string>,
+  candidates: Array<{ src: string; floor_area_sqm: number | null | undefined }>,
+): number | null {
+  const valid = candidates.filter(
+    (c): c is { src: string; floor_area_sqm: number } =>
+      c.floor_area_sqm != null && c.floor_area_sqm >= 40 && c.floor_area_sqm <= 2000,
+  );
+
+  if (valid.length === 0) return null;
+
+  const sorted = [...valid].sort((a, b) => a.floor_area_sqm - b.floor_area_sqm);
+  const mid = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 === 0
+    ? Math.round((sorted[mid - 1].floor_area_sqm + sorted[mid].floor_area_sqm) / 2)
+    : sorted[mid].floor_area_sqm;
+
+  // Log if sources differ significantly (>20%)
+  if (valid.length > 1) {
+    const max = sorted[sorted.length - 1].floor_area_sqm;
+    const min = sorted[0].floor_area_sqm;
+    if ((max - min) / min > 0.2) {
+      logger.warn(
+        { values: valid.map((v) => `${v.src}:${v.floor_area_sqm}`), median },
+        "Floor area varies >20% across sources — using median",
+      );
+    }
+  }
+
+  sources["floor_area_sqm"] = valid.length > 1
+    ? `median(${valid.map((v) => v.src).join(",")})`
+    : valid[0].src;
+
+  return median;
 }
 
 export function mergePropertyData(
@@ -59,40 +181,51 @@ export function mergePropertyData(
     asbestos_risk: "low" | "high" | "unknown";
     infrastructure: InfrastructureItem[];
     property_history?: PropertyHistory | null;
+    qv?: QVData | null;
+    homes?: HomesData | null;
   },
 ): MergedPropertyData {
   const sources: Record<string, string> = {};
   const ph = extra?.property_history ?? null;
+  const qv = extra?.qv ?? null;
+  const homes = extra?.homes ?? null;
 
+  // Land area: LINZ is the authoritative cadastral measurement — always wins.
   const land_area_sqm = first("land_area_sqm", sources,
     ["linz", linz?.area_sqm],
     ["auckland_council_gis", ph?.land_area_sqm],
     ["hougarden", hougarden?.land_area_sqm],
     ["oneroof", oneroof?.land_area_sqm],
+    ["qv", qv?.land_area_sqm],
+    ["homes", homes?.land_area_sqm],
   );
 
-  const cv_nzd = first("cv_nzd", sources,
-    ["oneroof", oneroof?.cv_nzd],
-    ["hougarden", hougarden?.cv_nzd],
-    ["auckland_council_gis", ph?.cv_nzd],
-  );
+  // CV: pick the valuation with the most recent year, not just the first non-null.
+  const { cv_nzd, cv_year } = bestCV(sources, [
+    { src: "oneroof",            cv_nzd: oneroof?.cv_nzd,  cv_year: oneroof?.cv_year },
+    { src: "hougarden",          cv_nzd: hougarden?.cv_nzd, cv_year: undefined },
+    { src: "auckland_council_gis", cv_nzd: ph?.cv_nzd,     cv_year: ph?.cv_year },
+    { src: "qv",                 cv_nzd: qv?.cv_nzd,       cv_year: qv?.cv_year },
+    { src: "homes",              cv_nzd: homes?.cv_nzd,    cv_year: undefined },
+  ]);
 
-  const cv_year = first("cv_year", sources,
-    ["oneroof", oneroof?.cv_year],
-    ["auckland_council_gis", ph?.cv_year],
-  );
+  // Build year: consensus across all sources.
+  const build_year = consensusBuildYear(sources, [
+    { src: "oneroof",            build_year: oneroof?.build_year },
+    { src: "hougarden",          build_year: hougarden?.build_year },
+    { src: "auckland_council_gis", build_year: ph?.build_year },
+    { src: "qv",                 build_year: qv?.build_year },
+    { src: "homes",              build_year: homes?.build_year },
+  ]);
 
-  const build_year = first("build_year", sources,
-    ["oneroof", oneroof?.build_year],
-    ["hougarden", hougarden?.build_year],
-    ["auckland_council_gis", ph?.build_year],
-  );
-
-  const floor_area_sqm = first("floor_area_sqm", sources,
-    ["oneroof", oneroof?.floor_area_sqm],
-    ["hougarden", hougarden?.floor_area_sqm],
-    ["auckland_council_gis", ph?.floor_area_sqm],
-  );
+  // Floor area: median of credible values.
+  const floor_area_sqm = medianFloorArea(sources, [
+    { src: "oneroof",            floor_area_sqm: oneroof?.floor_area_sqm },
+    { src: "hougarden",          floor_area_sqm: hougarden?.floor_area_sqm },
+    { src: "auckland_council_gis", floor_area_sqm: ph?.floor_area_sqm },
+    { src: "qv",                 floor_area_sqm: qv?.floor_area_sqm },
+    { src: "homes",              floor_area_sqm: homes?.floor_area_sqm },
+  ]);
 
   const bedrooms = first("bedrooms", sources,
     ["oneroof", oneroof?.bedrooms],
@@ -130,22 +263,22 @@ export function mergePropertyData(
   }
 
   const last_sale_price = first("last_sale_price", sources, ["oneroof", oneroof?.last_sale_price]);
-  const last_sale_date = first("last_sale_date", sources, ["oneroof", oneroof?.last_sale_date]);
-  const listing_price = first("listing_price", sources, ["oneroof", oneroof?.listing_price]);
+  const last_sale_date  = first("last_sale_date",  sources, ["oneroof", oneroof?.last_sale_date]);
+  const listing_price   = first("listing_price",   sources, ["oneroof", oneroof?.listing_price]);
 
-  const school_zones = hougarden?.school_zones ?? { primary: null, intermediate: null, secondary: null };
-  const main_photo_url = oneroof?.main_photo_url ?? null;
+  const school_zones          = hougarden?.school_zones ?? { primary: null, intermediate: null, secondary: null };
+  const main_photo_url        = oneroof?.main_photo_url ?? null;
   const overlay_map_image_base64 = hougarden?.overlay_map_image_base64 ?? null;
 
   const comparables: ComparableSale[] = oneroof?.comparables ?? [];
   sources["comparables"] = comparables.length >= 3 ? "oneroof" : "oneroof (limited)";
 
   const missing_critical_fields: string[] = [];
-  if (cv_nzd === null) missing_critical_fields.push("cv_nzd");
-  if (land_area_sqm === null) missing_critical_fields.push("land_area_sqm");
-  if (extra?.contour === null || extra?.contour === undefined) missing_critical_fields.push("contour");
+  if (cv_nzd === null)                                                          missing_critical_fields.push("cv_nzd");
+  if (land_area_sqm === null)                                                   missing_critical_fields.push("land_area_sqm");
+  if (extra?.contour === null || extra?.contour === undefined)                  missing_critical_fields.push("contour");
 
-  logger.info({ sources, missing_critical_fields, cv_nzd, land_area_sqm, build_year }, "Merge: data sources selected");
+  logger.info({ sources, missing_critical_fields, cv_nzd, cv_year, land_area_sqm, build_year, floor_area_sqm }, "Merge: data sources selected");
 
   return {
     cv_nzd,

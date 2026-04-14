@@ -306,8 +306,11 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     logger.info({ classification: scrapedContourText.classification, text: scrapedContourText.text }, "Contour: elevation API unavailable — using scraped text fallback");
   }
 
-  // Merge first with placeholder asbestos_risk — will be recomputed after merge using
-  // the canonical merged.build_year so asbestos classification is consistent with what the UI displays.
+  // Merge all data sources together. QV and Homes are now passed directly into
+  // mergePropertyData (not patched in afterwards) so the smart merge rules
+  // (best CV year, consensus build year, median floor area) apply across all
+  // four scrapers in one pass. Asbestos risk is a placeholder here — it is
+  // recomputed below once the canonical build_year is resolved.
   const merged = mergePropertyData(
     linzParcelData,
     hougardenData,
@@ -322,16 +325,10 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       asbestos_risk: "unknown", // placeholder — updated below after build_year is resolved
       infrastructure: infrastructureData,
       property_history: propertyHistoryData,
+      qv: qvData,
+      homes: homesData,
     },
   );
-
-  for (const [src, d] of [["homes", homesData], ["qv", qvData]] as const) {
-    if (!d) continue;
-    if (!merged.cv_nzd && d.cv_nzd) { merged.cv_nzd = d.cv_nzd; merged.cv_year = d.cv_year; merged.data_sources["cv_nzd"] = src; }
-    if (!merged.land_area_sqm && d.land_area_sqm) { merged.land_area_sqm = d.land_area_sqm; merged.data_sources["land_area_sqm"] = src; }
-    if (!merged.build_year && d.build_year) { merged.build_year = d.build_year; merged.data_sources["build_year"] = src; }
-    if (!merged.floor_area_sqm && d.floor_area_sqm) { merged.floor_area_sqm = d.floor_area_sqm; merged.data_sources["floor_area_sqm"] = src; }
-  }
 
   // Cross-validate land area between LINZ and scrapers — log warning if they diverge >10%.
   // LINZ is already the canonical source (first priority in mergePropertyData), but we surface
