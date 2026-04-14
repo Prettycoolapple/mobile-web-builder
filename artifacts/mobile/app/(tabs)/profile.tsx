@@ -24,11 +24,12 @@ const STANDARD_LIMIT = 20;
 const PLAN_FEATURES = {
   free: [
     "2 feasibility reports/month",
-    "AI chat & property discovery",
+    "Chat & property discovery",
   ],
   standard: [
-    "20 feasibility reports/month",
-    "AI chat & property discovery",
+    "More feasibility reports/month",
+    "Chat & property discovery",
+    "Access to architect/designer & other disciplines",
   ],
 };
 
@@ -474,9 +475,6 @@ export default function ProfileScreen() {
                       /mo NZD
                     </Text>
                   </View>
-                </View>
-                <View style={[styles.proBadge, { backgroundColor: colors.accent }]}>
-                  <Text style={[styles.proBadgeText, { fontFamily: "DM_Sans_700Bold" }]}>STD</Text>
                 </View>
               </View>
 

@@ -5,6 +5,7 @@ import {
   TextInput,
   StyleSheet,
   FlatList,
+  ScrollView,
   TouchableOpacity,
   Platform,
   Pressable,
@@ -396,22 +397,27 @@ export default function ChatScreen() {
                 </TouchableOpacity>
               </View>
 
-              {/* Suggestion chips */}
-              <View style={styles.suggestions}>
+              {/* Suggestion chips — compact horizontal pills */}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.suggestions}
+                contentContainerStyle={{ gap: 8, paddingHorizontal: 2 }}
+              >
                 {SUGGESTION_QUERIES.map((q) => (
                   <TouchableOpacity
                     key={q}
-                    style={[styles.suggestionChip, { backgroundColor: colors.card, borderColor: colors.border }]}
+                    style={[styles.suggestionChip, { backgroundColor: colors.accent + "12", borderColor: colors.accent + "35" }]}
                     onPress={() => handleSend(q)}
-                    activeOpacity={0.7}
+                    activeOpacity={0.75}
                   >
-                    <Feather name="search" size={13} color={colors.accent} style={{ marginTop: 1 }} />
+                    <Feather name="search" size={11} color={colors.accent} />
                     <Text style={[styles.suggestionText, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}>
                       {q}
                     </Text>
                   </TouchableOpacity>
                 ))}
-              </View>
+              </ScrollView>
             </View>
           </View>
         </Pressable>
@@ -585,28 +591,20 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   suggestions: {
-    width: "100%",
-    gap: 8,
-    marginTop: 4,
+    marginTop: 8,
   },
   suggestionChip: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
+    gap: 6,
     borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 13,
-    shadowColor: "rgba(28,25,23,0.04)",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 1,
-    shadowRadius: 3,
-    elevation: 1,
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
   },
   suggestionText: {
-    fontSize: 14,
-    flex: 1,
-    lineHeight: 20,
+    fontSize: 12,
+    lineHeight: 17,
   },
   // ── Chat state ─────────────────────────────────────────────────────
   messageList: {
