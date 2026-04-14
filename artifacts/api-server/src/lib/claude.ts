@@ -46,37 +46,100 @@ const INTENT_SCHEMA = `{
   "reasoning": "<1 sentence explaining your classification>"
 }`;
 
-const INTENT_RULES = `CLASSIFICATION RULES:
-- mode="analyse": user wants a development feasibility analysis of a specific property. Detect specific street addresses (e.g. "8 Hampton Drive, St Heliers", "123 Queen St").
-- mode="discover": user wants to find/browse/search properties currently for sale. Detect phrases like "what's on the market", "show me properties", "find me something", "any listings", "for sale in X", "what's available", "currently for sale", "looking to buy", "any homes", "what about in X suburb" — even if no suburb is specified in the message.
-- mode="followup": anything else — questions about the current analysis, general advice, clarifications, "what does X mean", "tell me more about", etc.
+const INTENT_RULES = `## MODE CLASSIFICATION
 
-SUBURB RESOLUTION (for discover mode):
-- If the user mentions a suburb explicitly → use it.
-- If the user says "this area", "around here", "nearby", "this suburb", "currently" with no location specified → infer suburb from the CURRENT REPORT ADDRESS (if provided in context).
-- If no suburb can be determined at all → leave suburb as null.
+mode="analyse"
+  Trigger: user mentions a specific NZ street address OR uses words like "analyse",
+  "feasibility", "assess", "evaluate" for a specific property.
+  Examples: "8 Hampton Drive, St Heliers", "can you assess 12 Remuera Rd?",
+  "run a feasibility on this one"
 
-PRICE EXTRACTION:
+mode="discover"
+  Trigger: ANY expression of wanting to find, buy, browse, or invest in property —
+  even vague ones with no suburb or price. Cast a wide net here. Include:
+  • explicit search: "find me", "show me", "what's on the market", "any listings",
+    "anything for sale", "what's available", "search for", "look for", "browse"
+  • buying intent: "I want to buy", "I'm looking to buy", "I'm in the market",
+    "I want to purchase", "I want to invest", "I have $X to spend", "I have a budget of"
+  • development intent: "looking for a development opportunity", "any subdivisions",
+    "any good sections", "development sites"
+  • vague browsing: "anything good out there?", "what would you recommend?",
+    "what should I look at?", "help me find something", "show me what's around"
+  → Even if the user gives NO suburb and NO price, still classify as discover.
+  → Do NOT classify buy/invest/search intent as "followup" — that kills the search flow.
+
+mode="followup"
+  Trigger: questions or comments about a current analysis, general property advice,
+  "what does X mean", "tell me more", "explain that", "how does this work", etc.
+  This is the LAST resort — only use it when there is no search or analyse intent.
+
+## CONTEXT ACCUMULATION (check history before acting)
+
+Before deciding what to do, scan the RECENT CONVERSATION for information already given:
+- Has the user mentioned a suburb in any earlier message? → use it
+- Has the user mentioned a price range in any earlier message? → use it
+- Has the user given an address in any earlier message? → use it
+- Did the last ASSISTANT message ask a clarifying question? → the user's reply answers it
+
+Combine all accumulated info across turns. You must not ask for something the user
+has already told you in an earlier turn.
+
+## SUBURB RESOLUTION
+
+- Explicit mention in any turn → use it (check full history, not just latest message)
+- "this area", "around here", "this suburb", "currently" → infer from CURRENT REPORT ADDRESS
+- Short reply like "St Heliers" or "Grey Lynn" after an assistant question → that IS the suburb
+- If truly undetermined after checking all history → leave null
+
+## PRICE EXTRACTION (check full history)
+
 - "under $2m" / "below 2 million" / "up to 2M" → maxPrice: 2000000
-- "$1.5m to $2.5m" → minPrice: 1500000, maxPrice: 2500000
+- "$1.5m to $2.5m" / "between 1.5 and 2.5" → minPrice: 1500000, maxPrice: 2500000
 - "around $1.8m" → minPrice: 1600000, maxPrice: 2000000
-- If no price mentioned → both null.
+- "I have $2M" / "my budget is 2M" / "spending up to 2M" → maxPrice: 2000000
+- If no price anywhere in history → both null (system will use defaults — do NOT ask)
 
-FOLLOW-UP DETECT: isFollowUp=true for: "show more", "any others", "what else", "more like that", "find more", "keep looking", "any other options", "more properties".
-ANSWERING A CLARIFICATION: If the immediately preceding ASSISTANT message was a clarifying question (ends with "?") and the user's reply directly answers it (e.g. "St heliers", "around $1.5M"), set isFollowUp=true, needsClarification=false, and extract suburb/price/address from the answer combined with the original intent from history.
+## FOLLOW-UP AND CLARIFICATION ANSWERS
 
-CLARIFICATION RULES (needsClarification):
-- Set needsClarification=true ONLY when ALL of these apply:
-  1. mode is "discover" AND suburb is null (cannot be inferred from context or history)
-  2. OR mode is "analyse" AND address is null
-  3. AND the previous message was NOT already a clarification question about the same thing
-- For discover with missing suburb: clarificationQuestion should be short and conversational, e.g. "Any particular suburb in mind?" or "Which area are you looking at?"
-- For discover with suburb but no price: do NOT ask for price — just search with defaults
-- For analyse with missing address: ask "Which property would you like me to analyse?"
-- Set needsClarification=false for mode="followup" (always)
-- If the user's message is clearly casual browsing ("show me what's out there", "anything good?") and no context exists, ask for suburb
+isFollowUp=true for: "show more", "any others", "what else", "more like that",
+"find more", "keep looking", "any other options", "more properties", or when the
+user's message is a direct answer to a clarification question in the prior turn.
 
-NORMALISE suburb names: "Saint Heliers" → "st heliers", "Mt Eden" → "mt eden", "Grey Lynn" → "grey lynn".`;
+When the user answers a clarification question:
+  → Set isFollowUp=true
+  → Set needsClarification=false
+  → Extract suburb/price/address from the answer and combine with history
+
+## CLARIFICATION RULES — ONE QUESTION AT A TIME
+
+Only set needsClarification=true when:
+  1. You have determined the mode (discover or analyse)
+  2. A REQUIRED piece of information is missing after checking all history
+  3. The previous assistant message did NOT already ask about the same thing
+
+Required pieces:
+  • discover mode → suburb (REQUIRED). Price is NOT required; use defaults if absent.
+  • analyse mode → full address (REQUIRED)
+
+Ask ONE question at a time. Priority order for discover:
+  1st: suburb (most important — without it, search cannot run)
+  That's it. Do not ask for price, bedrooms, section size, etc.
+
+For analyse:
+  1st: full street address
+
+Question style: short, conversational, friendly. Examples:
+  "Which suburb are you thinking of?"
+  "Any area in particular?"
+  "Which neighbourhood?"
+  "Which property did you have in mind — do you have an address?"
+
+Never ask for price if suburb is provided. Never ask multiple questions at once.
+Set needsClarification=false for mode="followup" always.
+
+## SUBURB NORMALISATION
+"Saint Heliers" → "st heliers", "Mt Eden" → "mt eden", "Grey Lynn" → "grey lynn",
+"Remuera" → "remuera", "Mission Bay" → "mission bay", etc.`;
 
 export async function extractChatIntent(
   messages: Message[],
@@ -103,10 +166,10 @@ export async function extractChatIntent(
     };
   }
 
-  // Build compact conversation history (last 6 turns to keep context manageable)
-  const recentHistory = messages.slice(-6).filter((m) => m !== lastUserMessage);
+  // Build conversation history (last 12 turns) for context accumulation across multiple Q&A loops
+  const recentHistory = messages.slice(-12).filter((m) => m !== lastUserMessage);
   const historyText = recentHistory.length > 0
-    ? recentHistory.map((m) => `[${m.role.toUpperCase()}]: ${m.content.slice(0, 300)}`).join("\n")
+    ? recentHistory.map((m) => `[${m.role.toUpperCase()}]: ${m.content.slice(0, 400)}`).join("\n")
     : "(no prior conversation)";
 
   const contextLines: string[] = [];
@@ -117,12 +180,15 @@ export async function extractChatIntent(
   }
   const contextText = contextLines.length > 0 ? contextLines.join("\n") : "(no open report)";
 
-  const prompt = `You are an intent parser for a NZ property development app called DevFeasible. Parse the user's latest message into structured intent JSON.
+  const prompt = `You are an intent parser for a NZ property development app called DevFeasible.
+Your job: read the FULL CONVERSATION HISTORY and the user's latest message, accumulate all
+information given across all turns (suburb, price, address, criteria), then classify intent
+and decide whether you have enough to act or need to ask one more question.
 
-CONTEXT:
+APP CONTEXT:
 ${contextText}
 
-RECENT CONVERSATION:
+CONVERSATION HISTORY (read all of it — earlier turns contain important accumulated info):
 ${historyText}
 
 USER'S LATEST MESSAGE:

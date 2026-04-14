@@ -363,7 +363,12 @@ router.post("/chat", async (req, res) => {
           if (suburb) {
             const cacheKey = makeCacheKey(suburb, effectiveMinPrice, effectiveMaxPrice);
 
-            if (isFollowUp) {
+            // "Show more" follow-up: only try the cache if we've actually shown results before.
+            // When isFollowUp=true because the user answered a clarification question (first search
+            // for this suburb), hasShownAny=false so we skip straight to the fresh search below.
+            const hasShownAny = getShownUrls(cacheKey).length > 0;
+
+            if (isFollowUp && hasShownAny) {
               let attempts = 0;
               while (candidates.length === 0 && attempts < 3) {
                 const { listings: nextListings, remaining } = popNextListings(cacheKey, 8);
@@ -375,7 +380,8 @@ router.post("/chat", async (req, res) => {
               }
             }
 
-            if (candidates.length === 0 && !isFollowUp) {
+            // Fresh search when: first search, clarification answer, or cache exhausted
+            if (candidates.length === 0) {
               const shownUrls = getShownUrls(cacheKey);
               const searchResult = await searchRealEstateListings({
                 suburb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
