@@ -9,6 +9,7 @@ import {
 } from "react-native";
 import Svg, { Polygon } from "react-native-svg";
 import { Feather } from "@expo/vector-icons";
+import { StarRating } from "@/components/StarRating";
 import { useColors } from "@/hooks/useColors";
 import {
   FeasibilityReport as Report,
@@ -195,11 +196,6 @@ function InfoRow({ label, value, valueColor, colors }: {
   );
 }
 
-function toStars(score: number, max = 5): string {
-  const filled = Math.min(max, Math.max(0, Math.round(score)));
-  return "★".repeat(filled) + "☆".repeat(max - filled);
-}
-
 function ScoreStarBlock({
   score, label, colors,
 }: {
@@ -208,8 +204,8 @@ function ScoreStarBlock({
 }) {
   const color = scoreColor(score, colors);
   return (
-    <View style={{ alignItems: "center", gap: 5 }}>
-      <Text style={{ color, fontSize: 18, letterSpacing: 2 }}>{toStars(score)}</Text>
+    <View style={{ alignItems: "center", gap: 6 }}>
+      <StarRating score={score} maxStars={3} size={15} gap={3} color={color} emptyColor="rgba(250,250,249,0.2)" />
       <Text style={{ color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
         {label}
       </Text>
@@ -220,11 +216,11 @@ function ScoreStarBlock({
 function CompositeStars({ score, colors }: { score: number; colors: ReturnType<typeof useColors> }) {
   const color = scoreColor(score, colors);
   return (
-    <View style={{ alignItems: "center", gap: 5 }}>
+    <View style={{ alignItems: "center", gap: 6 }}>
       <Text style={{ color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5 }}>
         Overall
       </Text>
-      <Text style={{ color, fontSize: 26, letterSpacing: 3 }}>{toStars(score)}</Text>
+      <StarRating score={score} maxStars={3} size={20} gap={4} color={color} emptyColor="rgba(250,250,249,0.2)" />
     </View>
   );
 }
@@ -869,7 +865,18 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
   return (
     <View style={styles.container}>
       <View style={[styles.reportHeader, { backgroundColor: colors.headerBg }]}>
-        <View style={styles.reportHeaderTop}>
+        {report.photoUrl && (
+          <View style={styles.reportPhotoWrapper}>
+            <Image
+              source={{ uri: report.photoUrl }}
+              style={styles.reportPhoto}
+              resizeMode="cover"
+            />
+            <View style={styles.reportPhotoOverlay} />
+          </View>
+        )}
+
+        <View style={[styles.reportHeaderTop, report.photoUrl ? { paddingTop: 12 } : undefined]}>
           <View style={[styles.reportIcon, { backgroundColor: colors.accent }]}>
             <Feather name="map-pin" size={14} color="#fff" />
           </View>
@@ -1072,6 +1079,9 @@ const styles = StyleSheet.create({
   container: { gap: 10 },
   reportHeader: { borderRadius: 16, overflow: "hidden" },
   reportHeaderTop: { flexDirection: "row", gap: 12, padding: 16, alignItems: "flex-start" },
+  reportPhotoWrapper: { width: "100%", height: 180, position: "relative" },
+  reportPhoto: { width: "100%", height: 180 },
+  reportPhotoOverlay: { position: "absolute", bottom: 0, left: 0, right: 0, height: 80, backgroundColor: "transparent" },
   reportIcon: { width: 32, height: 32, borderRadius: 8, justifyContent: "center", alignItems: "center", flexShrink: 0, marginTop: 2 },
   address: { fontSize: 16, lineHeight: 22, letterSpacing: -0.2 },
   headerMeta: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 5, flexWrap: "wrap" },

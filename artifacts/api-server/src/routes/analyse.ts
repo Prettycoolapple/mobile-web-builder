@@ -603,7 +603,22 @@ CRITICAL: Land (CV) cost MUST be a realistic NZD estimate based on the suburb, z
 Generate a complete FeasibilityReport JSON following your system instructions exactly. Use the fetched data as your primary source — prefer confirmed data over estimates. Where data is missing or a source failed, make reasonable NZ-market estimates and flag in riskSummary. Return ONLY valid JSON — no markdown code fences, no other text.`;
             }
 
-            const content = await generateAnalysis(enrichedContent);
+            const rawContent = await generateAnalysis(enrichedContent);
+
+            // Inject photo URL from scrapers into the report JSON
+            const photoUrl = pipelineResult.oneroof?.main_photo_url ?? null;
+            let content = rawContent;
+            if (photoUrl) {
+              try {
+                const parsed = extractJSON(rawContent) as Record<string, unknown>;
+                if (parsed && typeof parsed === "object") {
+                  parsed.photoUrl = photoUrl;
+                  content = JSON.stringify(parsed);
+                }
+              } catch {
+                // silent — keep original content
+              }
+            }
 
             // Persist to search history (non-blocking, silent fail)
             const chatUserId = getUserIdFromHeader(req);

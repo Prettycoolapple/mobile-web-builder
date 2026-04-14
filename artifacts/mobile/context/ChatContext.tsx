@@ -164,6 +164,7 @@ export interface FeasibilityReport {
   overlay_map_image_base64?: string;
   data_sources?: Record<string, string>;
   missing_critical_fields?: string[];
+  photoUrl?: string;
 }
 
 export interface PropertyCandidate {
@@ -173,6 +174,8 @@ export interface PropertyCandidate {
   zone?: string;
   scores: Score;
   briefSummary?: string;
+  photoUrl?: string;
+  listingUrl?: string;
 }
 
 export interface Session {

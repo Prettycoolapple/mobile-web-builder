@@ -1,31 +1,27 @@
 import React from "react";
-import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, Image } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { PropertyCandidate } from "@/context/ChatContext";
+import { StarRating } from "@/components/StarRating";
 
 interface Props {
   candidate: PropertyCandidate;
   onAnalyse: (address: string) => void;
 }
 
-function toStars(score: number, max = 5): string {
-  const filled = Math.min(max, Math.max(0, Math.round(score)));
-  return "★".repeat(filled) + "☆".repeat(max - filled);
-}
-
-function starColor(score: number, colors: ReturnType<typeof useColors>): string {
+function scoreColor(score: number, colors: ReturnType<typeof useColors>): string {
   if (score >= 4) return colors.success;
   if (score >= 2.5) return "#F59E0B";
   return colors.red;
 }
 
-function StarPip({ score, label }: { score: number; label: string }) {
+function ScorePip({ score, label }: { score: number; label: string }) {
   const colors = useColors();
-  const color = starColor(score, colors);
+  const color = scoreColor(score, colors);
   return (
     <View style={styles.pip}>
-      <Text style={[styles.pipStars, { color }]}>{toStars(score)}</Text>
+      <StarRating score={score} maxStars={3} size={13} gap={2} color={color} emptyColor={colors.border} />
       <Text style={[styles.pipLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
         {label}
       </Text>
@@ -36,58 +32,77 @@ function StarPip({ score, label }: { score: number; label: string }) {
 export function PropertyCard({ candidate, onAnalyse }: Props) {
   const colors = useColors();
   const composite = candidate.scores.composite;
-  const overallColor = starColor(composite, colors);
-  const overallStars = toStars(composite);
+  const overallColor = scoreColor(composite, colors);
 
   return (
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      {candidate.photoUrl ? (
+        <View style={styles.photoWrapper}>
+          <Image
+            source={{ uri: candidate.photoUrl }}
+            style={styles.photo}
+            resizeMode="cover"
+          />
+          <View style={[styles.overallBadge, { backgroundColor: colors.headerBg + "E8", borderColor: "rgba(255,255,255,0.12)" }]}>
+            <StarRating score={composite} maxStars={3} size={12} gap={2} color={overallColor} emptyColor="rgba(255,255,255,0.25)" />
+          </View>
+        </View>
+      ) : (
+        <View style={[styles.photoPlaceholder, { backgroundColor: colors.muted }]}>
+          <Feather name="home" size={28} color={colors.mutedForeground} style={{ opacity: 0.4 }} />
+          <View style={[styles.overallBadgePlain, { backgroundColor: overallColor + "15", borderColor: overallColor + "35" }]}>
+            <StarRating score={composite} maxStars={3} size={12} gap={2} color={overallColor} emptyColor={colors.border} />
+          </View>
+        </View>
+      )}
+
       <View style={styles.body}>
-        <View style={styles.topRow}>
-          <View style={[styles.starBadge, { backgroundColor: overallColor + "12", borderColor: overallColor + "35" }]}>
-            <Text style={[styles.starBadgeText, { color: overallColor }]}>{overallStars}</Text>
-          </View>
-          <View style={styles.addressBlock}>
-            <Text style={[styles.address, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]} numberOfLines={2}>
-              {candidate.address}
-            </Text>
-            <View style={styles.tagRow}>
-              {candidate.price > 0 && (
-                <View style={[styles.tag, { backgroundColor: colors.muted }]}>
-                  <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                    ${(candidate.price / 1_000_000).toFixed(2)}M
-                  </Text>
-                </View>
-              )}
-              {candidate.landArea && (
-                <View style={[styles.tag, { backgroundColor: colors.muted }]}>
-                  <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                    {candidate.landArea}m²
-                  </Text>
-                </View>
-              )}
-              {candidate.zone && (
-                <View style={[styles.tag, { backgroundColor: colors.muted }]}>
-                  <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                    {candidate.zone}
-                  </Text>
-                </View>
-              )}
+        <Text
+          style={[styles.address, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}
+          numberOfLines={2}
+        >
+          {candidate.address}
+        </Text>
+
+        <View style={styles.tagRow}>
+          {candidate.price > 0 && (
+            <View style={[styles.tag, { backgroundColor: colors.muted }]}>
+              <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
+                ${(candidate.price / 1_000_000).toFixed(2)}M
+              </Text>
             </View>
-          </View>
+          )}
+          {candidate.landArea && (
+            <View style={[styles.tag, { backgroundColor: colors.muted }]}>
+              <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
+                {candidate.landArea}m²
+              </Text>
+            </View>
+          )}
+          {candidate.zone && (
+            <View style={[styles.tag, { backgroundColor: colors.muted }]}>
+              <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
+                {candidate.zone}
+              </Text>
+            </View>
+          )}
         </View>
 
         {candidate.briefSummary && (
-          <Text style={[styles.summary, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]} numberOfLines={2}>
+          <Text
+            style={[styles.summary, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}
+            numberOfLines={2}
+          >
             {candidate.briefSummary}
           </Text>
         )}
 
         <View style={[styles.scoresRow, { borderTopColor: colors.border }]}>
-          <StarPip score={candidate.scores.ease} label="Ease" />
+          <ScorePip score={candidate.scores.ease} label="Ease" />
           <View style={[styles.scoreDivider, { backgroundColor: colors.border }]} />
-          <StarPip score={candidate.scores.cost} label="Cost" />
+          <ScorePip score={candidate.scores.cost} label="Cost" />
           <View style={[styles.scoreDivider, { backgroundColor: colors.border }]} />
-          <StarPip score={candidate.scores.roi} label="ROI" />
+          <ScorePip score={candidate.scores.roi} label="ROI" />
         </View>
       </View>
 
@@ -116,31 +131,45 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 2,
   },
-  body: {
-    padding: 16,
-    gap: 12,
+  photoWrapper: {
+    position: "relative",
+    height: 140,
   },
-  topRow: {
-    flexDirection: "row",
-    gap: 12,
-    alignItems: "flex-start",
+  photo: {
+    width: "100%",
+    height: 140,
   },
-  starBadge: {
-    borderRadius: 10,
+  overallBadge: {
+    position: "absolute",
+    top: 10,
+    right: 10,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 20,
     borderWidth: 1,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    justifyContent: "center",
+    flexDirection: "row",
     alignItems: "center",
-    flexShrink: 0,
   },
-  starBadgeText: {
-    fontSize: 15,
-    letterSpacing: 1,
+  photoPlaceholder: {
+    height: 100,
+    alignItems: "center",
+    justifyContent: "center",
+    position: "relative",
   },
-  addressBlock: {
-    flex: 1,
-    gap: 6,
+  overallBadgePlain: {
+    position: "absolute",
+    top: 8,
+    right: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 20,
+    borderWidth: 1,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  body: {
+    padding: 14,
+    gap: 10,
   },
   address: {
     fontSize: 14,
@@ -166,23 +195,19 @@ const styles = StyleSheet.create({
   scoresRow: {
     flexDirection: "row",
     borderTopWidth: StyleSheet.hairlineWidth,
-    paddingTop: 12,
+    paddingTop: 11,
     justifyContent: "space-around",
     alignItems: "center",
   },
   pip: {
     alignItems: "center",
     flex: 1,
-    gap: 3,
-  },
-  pipStars: {
-    fontSize: 14,
-    letterSpacing: 1,
+    gap: 5,
   },
   pipLabel: {
-    fontSize: 11,
+    fontSize: 10,
     textTransform: "uppercase",
-    letterSpacing: 0.3,
+    letterSpacing: 0.4,
   },
   scoreDivider: {
     width: 1,

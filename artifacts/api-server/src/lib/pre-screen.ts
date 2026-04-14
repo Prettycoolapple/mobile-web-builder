@@ -12,6 +12,7 @@ export interface PropertyCandidate {
   scores: { ease: number; cost: number; roi: number; composite: number };
   briefSummary?: string;
   listingUrl?: string;
+  photoUrl?: string;
 }
 
 const ZONE_EASE_SCORE: Record<string, number> = {
@@ -122,6 +123,7 @@ async function screenOneFast(listing: ListingResult): Promise<PropertyCandidate 
       scores,
       briefSummary: makeSummary(zone, lots, resolvedOverlays, land ?? null),
       listingUrl: listing.listingUrl,
+      photoUrl: listing.photoUrl ?? undefined,
     };
   } catch (err) {
     logger.warn({ err, address: listing.address }, "Pre-screen fast: failed for listing");
@@ -173,6 +175,7 @@ async function screenOne(listing: ListingResult): Promise<PropertyCandidate | nu
       zone: zone ?? undefined,
       scores,
       briefSummary: makeSummary(zone, lots, overlays, land),
+      photoUrl: listing.photoUrl ?? undefined,
     };
   } catch (err) {
     logger.warn({ err, address: listing.address }, "Pre-screen: failed for listing");
