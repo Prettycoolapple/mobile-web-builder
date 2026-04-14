@@ -841,23 +841,173 @@ async function fetchElevationViaLINZ(lat: number, lng: number): Promise<ContourR
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// LINZ Topo Contours — slope cross-check (WFS, layer 50768, 20m interval)
+// ---------------------------------------------------------------------------
+// Even though LINZ LiDAR DEM data requires a paid data subscription, the
+// 20m-interval topo contours are freely accessible via WFS.  If one or more
+// 20m contour lines pass THROUGH the actual parcel polygon we can infer a
+// minimum slope that is often more accurate than SRTM for steep urban sites.
+//
+// Upgrade logic:
+//   1 contour through parcel → ≥20m rise across ≤parcel_diagonal → ≥16°  (steep)
+//   Any through parcel        → slope ≥ arctan(20 / diagonal_m)
+//
+// This is used to UPGRADE (never downgrade) the SRTM-based classification.
+// ---------------------------------------------------------------------------
+
+// Cohen-Sutherland segment-bbox intersection check
+function segmentIntersectsBbox(
+  x1: number, y1: number, x2: number, y2: number,
+  minX: number, maxX: number, minY: number, maxY: number,
+): boolean {
+  const outCode = (x: number, y: number) =>
+    (x < minX ? 1 : 0) | (x > maxX ? 2 : 0) | (y < minY ? 4 : 0) | (y > maxY ? 8 : 0);
+  let a = outCode(x1, y1), b = outCode(x2, y2);
+  if (a & b) return false; // both on same outside
+  if (!(a | b)) return true; // both inside
+  // Walk the segment toward the bbox
+  let px1 = x1, py1 = y1, px2 = x2, py2 = y2;
+  for (let i = 0; i < 8; i++) {
+    a = outCode(px1, py1); b = outCode(px2, py2);
+    if (!(a | b)) return true;
+    if (a & b) return false;
+    const code = a || b;
+    let x = 0, y = 0;
+    if (code & 8) { x = px1 + (px2 - px1) * (maxY - py1) / (py2 - py1); y = maxY; }
+    else if (code & 4) { x = px1 + (px2 - px1) * (minY - py1) / (py2 - py1); y = minY; }
+    else if (code & 2) { y = py1 + (py2 - py1) * (maxX - px1) / (px2 - px1); x = maxX; }
+    else { y = py1 + (py2 - py1) * (minX - px1) / (px2 - px1); x = minX; }
+    if (code === a) { px1 = x; py1 = y; } else { px2 = x; py2 = y; }
+  }
+  return false;
+}
+
+async function checkLinzContoursForSlope(
+  lat: number,
+  lng: number,
+  parcelBbox: ParcelBbox,
+  srtmSlopeDeg: number,
+): Promise<{ upgradedSlope: number; contoursFound: number[] } | null> {
+  const LINZ_API_KEY = process.env["LINZ_API_KEY"];
+  if (!LINZ_API_KEY) return null;
+
+  // Expand bbox slightly to catch contours that start just outside
+  const PAD = 0.0002; // ~20m
+  const minLng = parcelBbox.minLng - PAD;
+  const maxLng = parcelBbox.maxLng + PAD;
+  const minLat = parcelBbox.minLat - PAD;
+  const maxLat = parcelBbox.maxLat + PAD;
+  // IMPORTANT: lng-first order + srsName=EPSG:4326 so returned coords are WGS84
+  const bboxStr = `${minLng},${minLat},${maxLng},${maxLat}`;
+
+  try {
+    const url =
+      `https://data.linz.govt.nz/services;key=${LINZ_API_KEY}/wfs` +
+      `?service=WFS&version=2.0.0&request=GetFeature` +
+      `&typeNames=layer-50768` +
+      `&bbox=${bboxStr},EPSG:4326` +
+      `&srsName=EPSG:4326` +
+      `&maxFeatures=30&outputFormat=application%2Fjson`;
+
+    const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    if (!resp.ok) return null;
+    const gj = (await resp.json()) as { features?: Array<{ properties?: { elevation?: number }; geometry?: { coordinates?: unknown } }> };
+    if (!gj.features || gj.features.length === 0) return null;
+
+    // For each contour, check if any LINE SEGMENT intersects the parcel bbox
+    // (vertex-only check misses contours that pass through without a vertex inside)
+    const throughContours: number[] = [];
+    for (const feature of gj.features) {
+      const elev = feature.properties?.elevation;
+      if (elev == null) continue;
+      const geom = feature.geometry;
+      if (!geom || geom.coordinates == null) continue;
+
+      const coords = geom.coordinates as [number, number][];
+      let found = false;
+
+      // First try: any vertex inside bbox (fast)
+      for (const [cLng, cLat] of coords) {
+        if (cLng >= parcelBbox.minLng && cLng <= parcelBbox.maxLng &&
+            cLat >= parcelBbox.minLat && cLat <= parcelBbox.maxLat) {
+          found = true;
+          break;
+        }
+      }
+      // Second try: segment intersection with bbox (catches long segments crossing through)
+      if (!found) {
+        for (let i = 0; i < coords.length - 1 && !found; i++) {
+          const [x1, y1] = coords[i], [x2, y2] = coords[i + 1];
+          if (segmentIntersectsBbox(x1, y1, x2, y2, parcelBbox.minLng, parcelBbox.maxLng, parcelBbox.minLat, parcelBbox.maxLat)) {
+            found = true;
+          }
+        }
+      }
+      if (found) throughContours.push(elev);
+    }
+
+    if (throughContours.length === 0) return null;
+
+    // Estimate minimum slope: vertical rise = (crossings × 20m interval) / 2
+    //   Use half because a single contour at mid-parcel means BOTH halves cross the interval
+    const crossings = throughContours.length;
+    const widthM  = (parcelBbox.maxLng - parcelBbox.minLng) * 111320 * Math.cos((lat * Math.PI) / 180);
+    const heightM = (parcelBbox.maxLat - parcelBbox.minLat) * 111320;
+    const diagonalM = Math.sqrt(widthM * widthM + heightM * heightM);
+
+    // Conservative: assume rise of 20m over the full diagonal of the parcel
+    const minSlopeDeg = Math.atan((crossings * 20) / diagonalM) * (180 / Math.PI);
+    const upgradedSlope = Math.max(srtmSlopeDeg, minSlopeDeg);
+
+    logger.info(
+      { crossings, elevations: throughContours, diagonalM: diagonalM.toFixed(0), minSlopeDeg: minSlopeDeg.toFixed(1), srtmSlopeDeg: srtmSlopeDeg.toFixed(1), upgradedSlope: upgradedSlope.toFixed(1) },
+      "LINZ contour cross-check complete",
+    );
+    return { upgradedSlope, contoursFound: throughContours };
+  } catch (err) {
+    logger.debug({ err: (err as Error).message }, "LINZ contour cross-check failed (non-critical)");
+    return null;
+  }
+}
+
+// Apply the LINZ 20m contour cross-check to optionally upgrade a slope result.
+// Never downgrades — only raises classification if topo contours confirm steeper terrain.
+async function applyContourUpgrade(result: ContourResult, lat: number, lng: number, parcelBbox: ParcelBbox): Promise<ContourResult> {
+  const srtmSlope = result.slope_degrees ?? 0;
+  const check = await checkLinzContoursForSlope(lat, lng, parcelBbox, srtmSlope).catch(() => null);
+  if (!check || check.upgradedSlope <= srtmSlope + 0.5) return result; // no meaningful upgrade
+
+  const upgraded = classifySlope(check.upgradedSlope, `${result.source} + LINZ topo contours`, result.elevation_center ?? undefined);
+  logger.info(
+    { original: srtmSlope.toFixed(1), upgraded: check.upgradedSlope.toFixed(1), contoursFound: check.contoursFound },
+    "Slope upgraded via LINZ contour cross-check",
+  );
+  return upgraded;
+}
+
 export async function fetchContour(lat: number, lng: number, parcelBbox?: ParcelBbox | null): Promise<ContourResult> {
+  // Helper: run contour upgrade if parcelBbox (with polygon) is available
+  const maybeUpgrade = async (r: ContourResult): Promise<ContourResult> =>
+    parcelBbox?.polygon ? applyContourUpgrade(r, lat, lng, parcelBbox) : r;
+
   // 1. LINZ LiDAR 1m DEM via WCS — the exact dataset used by Auckland Council GIS.
-  //    Requires WCS service to be enabled on the LINZ API key.
-  //    data.linz.govt.nz → My Account → API Keys → edit → enable WCS
+  //    Requires the LINZ account to have a data subscription for the LiDAR DEM layers
+  //    (data.linz.govt.nz → Browse Data → subscribe to Auckland LiDAR 1m DEM).
+  //    The WCS service scope must also be enabled on the API key.
   try {
     const result = await fetchElevationViaLinzLiDAR(lat, lng, parcelBbox);
-    if (result) return result;
+    if (result) return result; // LiDAR is already accurate — no contour upgrade needed
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "LINZ LiDAR WCS failed — trying Terrarium tiles");
   }
 
   // 2. AWS Terrarium terrain tiles — public, no key, ~3.8m resolution.
   //    Uses SRTM 30m data for NZ at zoom 15 (LiDAR tiles above z15 not available).
-  //    Underestimates slope on urban hillsides — fallback only.
+  //    LINZ topo contours are applied as a cross-check to detect underestimated slope.
   try {
     const result = await fetchElevationViaTerrarium(lat, lng, parcelBbox);
-    if (result) return result;
+    if (result) return maybeUpgrade(result);
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "Terrarium tiles failed — trying Google Elevation");
   }
@@ -866,7 +1016,7 @@ export async function fetchContour(lat: number, lng: number, parcelBbox?: Parcel
   if (process.env["GOOGLE_MAPS_API_KEY"]) {
     try {
       const result = await fetchElevationViaGoogle(lat, lng);
-      if (result) return result;
+      if (result) return maybeUpgrade(result);
     } catch (err) {
       logger.warn({ err: (err as Error).message }, "Google elevation query failed — trying OpenTopoData");
     }
@@ -875,7 +1025,7 @@ export async function fetchContour(lat: number, lng: number, parcelBbox?: Parcel
   // 4. Open-Topo-Data NZ 8m DEM — free, no key, NZ-specific
   try {
     const result = await fetchElevationViaOpenTopoData(lat, lng, parcelBbox);
-    if (result) return result;
+    if (result) return maybeUpgrade(result);
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "OpenTopoData query failed — trying Open-Elevation");
   }
@@ -883,7 +1033,7 @@ export async function fetchContour(lat: number, lng: number, parcelBbox?: Parcel
   // 5. Open-Elevation API — free backup
   try {
     const result = await fetchElevationViaOpenElevation(lat, lng);
-    if (result) return result;
+    if (result) return maybeUpgrade(result);
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "Open-Elevation query failed — trying LINZ DEM");
   }
@@ -891,7 +1041,7 @@ export async function fetchContour(lat: number, lng: number, parcelBbox?: Parcel
   // 6. LINZ DEM contour vector layer — requires LINZ_API_KEY
   try {
     const result = await fetchElevationViaLINZ(lat, lng);
-    if (result) return result;
+    if (result) return maybeUpgrade(result);
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "LINZ elevation query failed");
   }

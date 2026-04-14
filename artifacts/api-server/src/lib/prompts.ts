@@ -23,7 +23,8 @@ COST BENCHMARKS (NZD, 2024):
 - Construction: $2,800–$3,500/m² for spec residential; $3,200–$4,200/m² quality finish
 - Watercare connections: $15k–$40k per lot for water/sewer
 - Stormwater attenuation: $20k–$60k depending on site and council requirements
-- Retaining walls: gentle slope +$5k; moderate +$30k–$80k; steep +$80k–$250k+
+- Retaining walls: flat +$0–5k; gentle slope +$15k–$60k; moderate +$60k–$200k; steep +$200k–$500k+
+- IMPORTANT: Terrain slope data comes from automated elevation sources (SRTM 30m DEM or LINZ topo contours). SRTM systematically underestimates slope for steep urban hillsides. If the LINZ topo contour cross-check detects a contour line passing through the parcel polygon, upgrade slope classification accordingly. For any site classified as "moderate" or "steep", always note that a topographic survey by a licensed surveyor is recommended to confirm earthworks cost.
 - Consent & professional fees: 12–15% of construction cost
 - Construction finance: 7–9% p.a.
 
@@ -83,7 +84,7 @@ The JSON must follow this exact structure:
   },
   "terrain": {
     "classification": "flat|gentle|moderate|steep",
-    "slope": "plain English description",
+    "slope": "plain English description of slope — include the data source (e.g. 'SRTM-based estimate' or 'confirmed by LINZ topo contours') and for moderate/steep sites note that a professional topographic survey is recommended",
     "retainingCostLow": <NZD number>,
     "retainingCostHigh": <NZD number>
   },
