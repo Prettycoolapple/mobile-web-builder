@@ -97,9 +97,43 @@ export async function generateUnifiedResponse(
   const conversationHistory = messages.slice(0, -1);
   const mode = detectMode(lastMessage.content);
 
-  const systemWithContext = currentReport
-    ? `${SYSTEM_PROMPT}\n\nCURRENT PROPERTY CONTEXT (the user is discussing this report):\n${JSON.stringify(currentReport, null, 2)}`
-    : SYSTEM_PROMPT;
+  let systemWithContext = SYSTEM_PROMPT;
+  if (currentReport) {
+    const r = currentReport as Record<string, unknown>;
+    const planning = r["planning"] as Record<string, unknown> | undefined;
+    const overview = r["propertyOverview"] as Record<string, unknown> | undefined;
+    const asbestosInfo = r["asbestos"] as Record<string, unknown> | undefined;
+
+    const zoneLabel: string | null =
+      (r["zone_label"] as string | null) ??
+      (planning?.["zone"] as string | null) ??
+      (overview?.["zone"] as string | null) ??
+      null;
+    const zoneCode: string | null = (r["zone_code"] as string | null) ?? null;
+    const buildYear: string | null =
+      (overview?.["buildYear"] as string | null) ??
+      (asbestosInfo?.["buildYear"] as string | null) ??
+      null;
+    const landArea: string | null = (overview?.["landArea"] as string | null) ?? null;
+    const address: string | null =
+      (r["address"] as string | null) ??
+      (overview?.["address"] as string | null) ??
+      null;
+
+    const pinnedLines = [
+      address ? `Address: ${address}` : null,
+      zoneLabel ? `Zone: ${zoneLabel}${zoneCode ? ` (code: ${zoneCode})` : ""}` : null,
+      buildYear ? `Build year: ${buildYear}` : null,
+      landArea ? `Land area: ${landArea}` : null,
+    ].filter(Boolean);
+
+    const pinnedSection = pinnedLines.length > 0
+      ? `CRITICAL — CONFIRMED PROPERTY FACTS (these are verified data — you MUST NOT contradict or substitute any of these in your response):\n${pinnedLines.join("\n")}\n\n`
+      : "";
+
+    systemWithContext =
+      `${SYSTEM_PROMPT}\n\n${pinnedSection}CURRENT PROPERTY CONTEXT (full report the user is discussing):\n${JSON.stringify(currentReport, null, 2)}`;
+  }
 
   let userContent = lastMessage.content;
   if (mode === "analyse") {

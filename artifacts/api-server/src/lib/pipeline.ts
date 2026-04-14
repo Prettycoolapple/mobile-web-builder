@@ -206,13 +206,6 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     }
   }
 
-  const asbestos = checkAsbestosRisk(
-    propertyHistoryData?.build_year ?? null,
-  );
-
-  const buildYear = propertyHistoryData?.build_year ?? hougardenData?.build_year ?? oneRoofData?.build_year ?? null;
-  const asbestosDetail = classifyAsbestos(buildYear);
-
   const linzAreaSqm = linzParcelData?.area_sqm ?? null;
 
   // Priority: elevation API (actual measured degrees) always wins over scraped text labels.
@@ -237,6 +230,8 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     logger.info({ classification: scrapedContourText.classification, text: scrapedContourText.text }, "Contour: elevation API unavailable — using scraped text fallback");
   }
 
+  // Merge first with placeholder asbestos_risk — will be recomputed after merge using
+  // the canonical merged.build_year so asbestos classification is consistent with what the UI displays.
   const merged = mergePropertyData(
     linzParcelData,
     hougardenData,
@@ -248,7 +243,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       contour_slope_degrees: elevationMeasured ? (contourData?.slope_degrees ?? null) : null,
       contour_source: resolvedContour?.source ?? null,
       contour_text: resolvedContour?.text ?? null,
-      asbestos_risk: asbestosDetail.risk === "moderate" ? "high" : (asbestosDetail.risk ?? "unknown"),
+      asbestos_risk: "unknown", // placeholder — updated below after build_year is resolved
       infrastructure: infrastructureData,
       property_history: propertyHistoryData,
     },
@@ -261,6 +256,34 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     if (!merged.build_year && d.build_year) { merged.build_year = d.build_year; merged.data_sources["build_year"] = src; }
     if (!merged.floor_area_sqm && d.floor_area_sqm) { merged.floor_area_sqm = d.floor_area_sqm; merged.data_sources["floor_area_sqm"] = src; }
   }
+
+  // Cross-validate land area between LINZ and scrapers — log warning if they diverge >10%.
+  // LINZ is already the canonical source (first priority in mergePropertyData), but we surface
+  // discrepancies so engineers can investigate data quality issues.
+  const scraperLandArea = hougardenData?.land_area_sqm ?? oneRoofData?.land_area_sqm ?? homesData?.land_area_sqm ?? qvData?.land_area_sqm ?? null;
+  if (linzAreaSqm && scraperLandArea && linzAreaSqm > 0) {
+    const diffPct = Math.abs(linzAreaSqm - scraperLandArea) / linzAreaSqm;
+    if (diffPct > 0.1) {
+      logger.warn(
+        { linz_area_sqm: linzAreaSqm, scraper_area_sqm: scraperLandArea, diff_pct: `${(diffPct * 100).toFixed(1)}%`, canonical_used: merged.data_sources["land_area_sqm"] ?? "linz" },
+        `Land area discrepancy >10%: LINZ=${linzAreaSqm}m² vs scraper=${scraperLandArea}m². Using ${merged.data_sources["land_area_sqm"] ?? "linz"} as canonical.`,
+      );
+      merged.data_sources["land_area_discrepancy"] = `LINZ:${linzAreaSqm}m² vs scraper:${scraperLandArea}m² (${(diffPct * 100).toFixed(1)}% diff)`;
+    }
+  }
+
+  // Compute asbestos classification AFTER merge so both use the same canonical build_year
+  // that will be displayed in the UI. This prevents the asbestos risk label from contradicting
+  // the build year shown elsewhere in the report.
+  const canonicalBuildYear = merged.build_year;
+  const asbestos = checkAsbestosRisk(canonicalBuildYear);
+  const asbestosDetail = classifyAsbestos(canonicalBuildYear);
+  merged.asbestos_risk = asbestosDetail.risk === "moderate" ? "high" : asbestosDetail.risk;
+
+  logger.info(
+    { build_year: canonicalBuildYear, build_year_source: merged.data_sources["build_year"] ?? "unknown", asbestos_risk: merged.asbestos_risk },
+    "Asbestos classification (post-merge)",
+  );
 
   merged.missing_critical_fields = [
     ...(merged.cv_nzd === null ? ["cv_nzd"] : []),

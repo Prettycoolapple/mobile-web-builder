@@ -411,7 +411,15 @@ function EasementList({
 function AsbestosPanel({ asbestos, colors }: { asbestos: AsbestosInfo; colors: ReturnType<typeof useColors> }) {
   const risk = getAsbestosRisk(asbestos);
   const riskColor = risk === "high" ? colors.red : risk === "moderate" ? colors.amber : risk === "unknown" ? colors.amber : colors.success;
-  const riskLabel = risk === "high" ? "HIGH — Built 1940–1990 (likely contains ACM)" : risk === "low" ? "LOW — Post-1990 build" : "UNKNOWN — Survey required";
+  const buildYearNum = asbestos.buildYear ? parseInt(String(asbestos.buildYear), 10) : null;
+  const riskLabel =
+    risk === "high"
+      ? `HIGH — Built ${buildYearNum ?? "1940–1990"} (likely contains ACM)`
+      : risk === "low"
+        ? buildYearNum && buildYearNum <= 1940
+          ? "LOW — Pre-1940 build (minimal ACM risk)"
+          : "LOW — Post-1990 build (minimal ACM risk)"
+        : "UNKNOWN — Survey required";
 
   const demoCostLow = asbestos.demoCostLow ?? 0;
   const demoCostHigh = asbestos.demoCostHigh ?? 0;
