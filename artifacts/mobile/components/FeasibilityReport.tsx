@@ -417,7 +417,7 @@ function AsbestosPanel({ asbestos, colors }: { asbestos: AsbestosInfo; colors: R
       ? `HIGH — Built ${buildYearNum ?? "1940–1990"} (likely contains ACM)`
       : risk === "low"
         ? buildYearNum && buildYearNum <= 1940
-          ? "LOW — Pre-1940 build (minimal ACM risk)"
+          ? "LOW — Built 1940 or earlier (minimal ACM risk)"
           : "LOW — Post-1990 build (minimal ACM risk)"
         : "UNKNOWN — Survey required";
 
