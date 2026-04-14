@@ -15,6 +15,8 @@ export interface ParcelBbox {
   maxLat: number;
   minLng: number;
   maxLng: number;
+  /** Outer ring of the parcel polygon as [lng, lat] pairs (GeoJSON coordinate order). */
+  polygon?: [number, number][];
 }
 
 export interface LinzParcel {
@@ -33,7 +35,8 @@ function extractBbox(geometry: { type: string; coordinates: unknown } | null | u
   if (geometry.type === "Polygon") {
     coords = (geometry.coordinates as [number, number][][])[0] ?? [];
   } else if (geometry.type === "MultiPolygon") {
-    coords = (geometry.coordinates as [number, number][][][]).flatMap((poly) => poly[0] ?? []);
+    // Use the largest ring for MultiPolygon (first ring of first polygon by convention)
+    coords = (geometry.coordinates as [number, number][][][])[0]?.[0] ?? [];
   }
   if (coords.length === 0) return null;
   const lngs = coords.map((c) => c[0]);
@@ -43,6 +46,7 @@ function extractBbox(geometry: { type: string; coordinates: unknown } | null | u
     maxLat: Math.max(...lats),
     minLng: Math.min(...lngs),
     maxLng: Math.max(...lngs),
+    polygon: coords, // outer ring [lng, lat] pairs for point-in-polygon testing
   };
 }
 

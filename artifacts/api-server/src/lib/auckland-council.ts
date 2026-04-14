@@ -311,8 +311,23 @@ function decodeTerrariumPng(buf: Buffer): {
   return { getPixel, terrarium, width, height };
 }
 
+// ---------------------------------------------------------------------------
+// Point-in-polygon test (ray casting) — polygon is [lng, lat] pairs (GeoJSON)
+// ---------------------------------------------------------------------------
+function pointInPolygon(lng: number, lat: number, ring: [number, number][]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0], yi = ring[i][1];
+    const xj = ring[j][0], yj = ring[j][1];
+    if ((yi > lat) !== (yj > lat) && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
 async function fetchElevationViaTerrarium(lat: number, lng: number, parcelBbox?: ParcelBbox | null): Promise<ContourResult | null> {
-  const ZOOM = 15; // ~3.8m per pixel for Auckland — uses Mapzen 1m NZ LiDAR where available
+  const ZOOM = 15; // ~3.8m per pixel for Auckland — backed by Mapzen/LINZ 1m NZ LiDAR
   const { tileX, tileY, px, py, pixelSizeM } = terrariumTileCoords(lat, lng, ZOOM);
   const url = `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${ZOOM}/${tileX}/${tileY}.png`;
 
@@ -323,56 +338,117 @@ async function fetchElevationViaTerrarium(lat: number, lng: number, parcelBbox?:
   const buf = Buffer.from(await resp.arrayBuffer());
   const png = decodeTerrariumPng(buf);
 
-  // Sample a 7×7 grid at 3-pixel spacing (~11m) around the geocoded point.
-  // If a parcel bbox is available, compute its pixel extent and sample across that instead.
-  const GRID = 7;
-  let stepPx: number;
-  let startPx: number, startPy: number;
+  // Helper: pixel offset within this tile → geographic coordinates
+  function pixelToLatLng(tPx: number, tPy: number): { lat: number; lng: number } {
+    const n = Math.pow(2, ZOOM);
+    const lngOut = ((tileX + tPx / 256) / n) * 360 - 180;
+    const latRad = Math.atan(Math.sinh(Math.PI * (1 - (2 * (tileY + tPy / 256)) / n)));
+    return { lat: latRad * (180 / Math.PI), lng: lngOut };
+  }
 
-  if (parcelBbox) {
-    // Convert bbox corners to tile-relative pixel positions
+  let elevSamples: { elev: number; tPx: number; tPy: number }[] = [];
+  let samplingMode: string;
+
+  if (parcelBbox && parcelBbox.polygon && parcelBbox.polygon.length >= 3) {
+    // -----------------------------------------------------------------------
+    // Polygon mode: sample EVERY pixel within the parcel bbox, keep only those
+    // that fall inside the actual polygon.  This mirrors what GIS software does
+    // when it finds the highest and lowest contour crossing a parcel.
+    // -----------------------------------------------------------------------
+    const sw = terrariumTileCoords(parcelBbox.minLat, parcelBbox.minLng, ZOOM);
+    const ne = terrariumTileCoords(parcelBbox.maxLat, parcelBbox.maxLng, ZOOM);
+    const x0 = Math.min(sw.px, ne.px), x1 = Math.max(sw.px, ne.px);
+    const y0 = Math.min(sw.py, ne.py), y1 = Math.max(sw.py, ne.py);
+
+    for (let tPy = y0; tPy <= y1; tPy++) {
+      for (let tPx = x0; tPx <= x1; tPx++) {
+        const geo = pixelToLatLng(tPx, tPy);
+        if (pointInPolygon(geo.lng, geo.lat, parcelBbox.polygon)) {
+          const clampX = Math.min(Math.max(tPx, 0), png.width - 1);
+          const clampY = Math.min(Math.max(tPy, 0), png.height - 1);
+          elevSamples.push({ elev: png.terrarium(png.getPixel(clampX, clampY)), tPx, tPy });
+        }
+      }
+    }
+    samplingMode = `polygon pixel-scan (${elevSamples.length} pixels inside ${parcelBbox.polygon.length}-vertex ring)`;
+  } else if (parcelBbox) {
+    // -----------------------------------------------------------------------
+    // Bbox mode: bbox available but no polygon — sample 7×7 grid across it.
+    // -----------------------------------------------------------------------
+    const GRID = 7;
     const sw = terrariumTileCoords(parcelBbox.minLat, parcelBbox.minLng, ZOOM);
     const ne = terrariumTileCoords(parcelBbox.maxLat, parcelBbox.maxLng, ZOOM);
     const bboxWidthPx  = Math.abs(ne.px - sw.px) || 4;
     const bboxHeightPx = Math.abs(ne.py - sw.py) || 4;
-    stepPx = Math.max(1, Math.round(Math.max(bboxWidthPx, bboxHeightPx) / (GRID - 1)));
-    startPx = Math.min(sw.px, ne.px);
-    startPy = Math.min(sw.py, ne.py);
+    const stepPx = Math.max(1, Math.round(Math.max(bboxWidthPx, bboxHeightPx) / (GRID - 1)));
+    const startPx = Math.min(sw.px, ne.px), startPy = Math.min(sw.py, ne.py);
+    for (let r = 0; r < GRID; r++) {
+      for (let c = 0; c < GRID; c++) {
+        const tPx = Math.min(Math.max(startPx + c * stepPx, 0), png.width - 1);
+        const tPy = Math.min(Math.max(startPy + r * stepPx, 0), png.height - 1);
+        elevSamples.push({ elev: png.terrarium(png.getPixel(tPx, tPy)), tPx, tPy });
+      }
+    }
+    samplingMode = "bbox 7×7 grid";
   } else {
-    stepPx = 3; // ~11m per step at zoom 15
-    startPx = px - Math.floor(GRID / 2) * stepPx;
-    startPy = py - Math.floor(GRID / 2) * stepPx;
-  }
-
-  const elevs: number[] = [];
-  for (let r = 0; r < GRID; r++) {
-    for (let c = 0; c < GRID; c++) {
-      const tx = Math.min(Math.max(startPx + c * stepPx, 0), png.width - 1);
-      const ty = Math.min(Math.max(startPy + r * stepPx, 0), png.height - 1);
-      elevs.push(png.terrarium(png.getPixel(tx, ty)));
+    // -----------------------------------------------------------------------
+    // Fallback: no parcel data — 7×7 grid at 3-pixel spacing around geocoded point
+    // -----------------------------------------------------------------------
+    const GRID = 7, STEP = 3;
+    const startPx = px - Math.floor(GRID / 2) * STEP;
+    const startPy = py - Math.floor(GRID / 2) * STEP;
+    for (let r = 0; r < GRID; r++) {
+      for (let c = 0; c < GRID; c++) {
+        const tPx = Math.min(Math.max(startPx + c * STEP, 0), png.width - 1);
+        const tPy = Math.min(Math.max(startPy + r * STEP, 0), png.height - 1);
+        elevSamples.push({ elev: png.terrarium(png.getPixel(tPx, tPy)), tPx, tPy });
+      }
     }
+    samplingMode = "geocode 7×7 grid (~11m step)";
   }
 
-  const elevMin = Math.min(...elevs);
-  const elevMax = Math.max(...elevs);
-  const centerElev = elevs[Math.floor(elevs.length / 2)];
-  const stepM = stepPx * pixelSizeM;
-
-  let maxGrad = 0;
-  for (let r = 0; r < GRID; r++) {
-    for (let c = 0; c < GRID; c++) {
-      const idx = r * GRID + c;
-      if (c + 1 < GRID) maxGrad = Math.max(maxGrad, Math.abs(elevs[idx] - elevs[idx + 1]) / stepM);
-      if (r + 1 < GRID) maxGrad = Math.max(maxGrad, Math.abs(elevs[idx] - elevs[idx + GRID]) / stepM);
-    }
+  if (elevSamples.length === 0) {
+    logger.warn({ lat, lng }, "Terrarium tiles: no samples collected — falling back");
+    return null;
   }
-  const slopeDeg = Math.atan(maxGrad) * (180 / Math.PI);
+
+  // True min and max elevation across all sampled points
+  let minSample = elevSamples[0], maxSample = elevSamples[0];
+  for (const s of elevSamples) {
+    if (s.elev < minSample.elev) minSample = s;
+    if (s.elev > maxSample.elev) maxSample = s;
+  }
+  const elevMin = minSample.elev;
+  const elevMax = maxSample.elev;
+  const elevRange = elevMax - elevMin;
+
+  // Horizontal distance between min and max points (in metres)
+  const dxPx = maxSample.tPx - minSample.tPx;
+  const dyPx = maxSample.tPy - minSample.tPy;
+  const horizDistM = Math.sqrt(dxPx * dxPx + dyPx * dyPx) * pixelSizeM;
+
+  // Slope = arctan(elevation_change / horizontal_distance)
+  // Guard against identical pixels (flat parcel) — use 1m minimum distance
+  const slopeDeg = horizDistM > 1
+    ? Math.atan(elevRange / horizDistM) * (180 / Math.PI)
+    : 0;
+
+  const centerElev = png.terrarium(png.getPixel(
+    Math.min(Math.max(px, 0), png.width - 1),
+    Math.min(Math.max(py, 0), png.height - 1),
+  ));
 
   logger.info(
-    { lat, lng, elevMin: elevMin.toFixed(1), elevMax: elevMax.toFixed(1), elevRange: (elevMax - elevMin).toFixed(1), slopeDeg: slopeDeg.toFixed(1), stepM: stepM.toFixed(1), pixelSizeM: pixelSizeM.toFixed(2) },
-    "Terrarium tiles: slope measurement complete"
+    {
+      lat, lng, samplingMode, pixelCount: elevSamples.length,
+      elevMin: elevMin.toFixed(1), elevMax: elevMax.toFixed(1),
+      elevRange: elevRange.toFixed(1), horizDistM: horizDistM.toFixed(1),
+      slopeDeg: slopeDeg.toFixed(1), pixelSizeM: pixelSizeM.toFixed(2),
+    },
+    "Terrarium tiles: slope measurement complete",
   );
-  return classifySlope(slopeDeg, "LINZ/Mapzen 1m NZ LiDAR (terrain tiles)", centerElev);
+
+  return classifySlope(slopeDeg, "LINZ parcel polygon + 1m NZ LiDAR terrain tiles", centerElev);
 }
 
 function slopeFromGrid9(elevations: number[], offsetDeg: number): { slopeDeg: number; centerElevation: number } {
