@@ -2,6 +2,7 @@ export interface LotResult {
   lots: number;
   min_lot_size: number;
   zone_label: string;
+  sqm_per_lot: number;
 }
 
 const ZONE_RULES: Record<string, { min_lot_sqm: number; label: string }> = {
@@ -40,6 +41,7 @@ export function calculatePotentialLots(
   const effectiveMin = min === 0 ? 60 : min;
   const raw = Math.floor(land_area_sqm / effectiveMin);
   const lots = Math.max(1, Math.min(20, raw));
+  const sqm_per_lot = Math.round(land_area_sqm / lots);
 
-  return { lots, min_lot_size: min, zone_label: zone.label };
+  return { lots, min_lot_size: min, zone_label: zone.label, sqm_per_lot };
 }

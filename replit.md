@@ -87,13 +87,14 @@ AI-powered NZ real estate development feasibility analysis mobile app built with
 
 **Phase 4 scoring engine** (deterministic, no AI, runs after merge):
 - `asbestos.ts` — `classifyAsbestos(build_year)`: returns `{ risk, notes, worksafe_required }` with full WorkSafe NZ legal context
-- `lot-calculator.ts` — `calculatePotentialLots(area, zone)`: AUP min lot sizes per zone, capped 1–20 lots
+- `lot-calculator.ts` — `calculatePotentialLots(area, zone)`: AUP min lot sizes per zone, capped 1–20 lots; returns `sqm_per_lot` (land_area ÷ lots)
 - `cost-estimator.ts` — `estimateCosts(merged, units)`: full breakdown — tracks `cv_unavailable` flag; if CV is null, land cost = 0 and `total_excludes_land: true`; demo + retaining + services + construction (2800–3500/m²) + consents (13–16%) + finance (7.5%pa) + contingency (8–12%)
-- `comparables.ts` — `getComparables(suburb, zone, lat, lng, existing?)`: uses live OneRoof comparables if ≥3, otherwise suburb lookup table (20 Auckland suburbs + default) with synthetic comparables
-- `roi-calculator.ts` — `calculateROIScenarios(costs, avgPrice, units)`: 3 scenarios (2/3/4 years), compound annualised ROI
+- `comparables.ts` — `getComparables(suburb, zone, lat, lng, existing?)`: uses live OneRoof comparables if ≥3, otherwise suburb lookup table (40+ Auckland suburbs + default). Returns both `avg_sale_price` and `avg_price_per_sqm`.
+- `roi-calculator.ts` — `calculateBearBaseBullScenarios(costs, avgPsm, avgSalePrice, lots, sqmPerLot, outlook)`: GDV = `avg_price_per_sqm × estimateNewBuildFloorSqm(sqm_per_lot) × lots`. Three price cases: Bear (−20%), Base (realistic), Bull (+20% if RBNZ OCR falling). Each scenario has `cases: ROICaseResult[]` + top-level base-case fields for backward compat. 3 time horizons (2/3/4 yr) with compound annualised ROI per case.
 - `scoring.ts` — `scoreProperty(merged, costs, scenarios, lots)`: ease (deductions from 5.0), cost (bracket), ROI (bracket); composite = ease×0.30 + cost×0.30 + roi×0.40
 - `utils.ts` — `formatNZD()`, `extractSuburb()`, `roundToHalf()`, `clamp()`
-- `pipeline.ts` — `runPropertyPipeline()`: orchestrates all; ~17s typical when QV succeeds; fallback chain: hougarden+oneroof (parallel) → if empty, QV (primary, ~8s) → if QV empty, homes.co.nz (ScrapingBee-only fallback). After QV/homes patch, `missing_critical_fields` is recomputed so it correctly reflects whether cv_nzd/land_area_sqm are available. Result includes `lots`, `costs`, `comparables`, `comparables_quality`, `scenarios`, `scores`, `asbestos_detail`, `suburb`, `qv`, `homes`
+- `claude.ts` — also exports `assessInterestRateOutlook()`: calls Gemini 2.5 Flash to semantically assess RBNZ OCR direction ("falling" | "stable" | "rising"). Used to gate the Bull case in ROI scenarios.
+- `pipeline.ts` — `runPropertyPipeline()`: orchestrates all; ~17s typical when QV succeeds; fallback chain: hougarden+oneroof (parallel) → if empty, QV (primary, ~8s) → if QV empty, homes.co.nz (ScrapingBee-only fallback). Calls `assessInterestRateOutlook()` before ROI calculation. Result includes `lots`, `costs`, `comparables`, `comparables_quality`, `scenarios` (with bear/base/bull cases), `scores`, `asbestos_detail`, `suburb`, `qv`, `homes`
 
 ### Database Schema (`lib/db/src/schema/`)
 

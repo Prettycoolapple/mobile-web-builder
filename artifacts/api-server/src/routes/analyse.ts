@@ -436,11 +436,15 @@ router.post("/chat", async (req, res) => {
             let enrichedContent: string;
 
             if (merged && lots && costs && scores && scenarios.length > 0) {
-              const scenarioLines = scenarios.map(
-                (s) =>
-                  `  ${s.years}-year: GDV $${formatNZD(s.gdv)}, Cost $${formatNZD(s.total_cost_mid)}, ` +
-                  `Profit $${formatNZD(s.gross_profit)}, ROI ${s.roi_percent.toFixed(1)}%`,
-              ).join("\n");
+              const interestOutlook = scenarios[0]?.interest_rate_outlook ?? "stable";
+              const scenarioLines = scenarios.map((s) => {
+                const caseLines = (s.cases ?? []).map((c) =>
+                  `    [${c.case.toUpperCase()}] GDV $${formatNZD(c.gdv)} (×${c.gdv_multiplier.toFixed(2)}), ` +
+                  `Profit $${formatNZD(c.gross_profit)}, ROI ${c.roi_percent.toFixed(1)}%, ` +
+                  `Ann. ${c.annualised_roi_percent.toFixed(1)}% p.a., Viable: ${c.viable}`
+                ).join("\n");
+                return `  ${s.years}-year (base GDV $${formatNZD(s.gdv)}, cost $${formatNZD(s.total_cost_mid)}):\n${caseLines}`;
+              }).join("\n");
 
               const cvNzd = costs.land_cv_nzd;
               const cvNote = cvNzd > 0
@@ -487,11 +491,14 @@ PRE-COMPUTED FINANCIALS — use verbatim:
     High: $${formatNZD(costs.total_high)}
   Cost per unit (avg): $${formatNZD(costs.cost_per_unit_avg)}
 
-  ROI Scenarios:
+  Lot breakdown: ${lots.lots} lots × ${scenarios[0]?.sqm_per_lot ?? "?"}m² each → estimated ~${scenarios[0]?.gdv_per_lot ? formatNZD(scenarios[0].gdv_per_lot) : "?"} per lot (based on ${comparables_quality} comparable data)
+  NZ interest rate outlook: ${interestOutlook.toUpperCase()} (RBNZ OCR trajectory)${interestOutlook === "falling" ? " — BULL case enabled (+20% upside)" : ""}
+
+  ROI Scenarios (Bear/Base/Bull cases per time horizon):
 ${scenarioLines}
 
   Comparables quality: ${comparables_quality}
-  Avg comparable sale: $${formatNZD(scenarios[0]?.gdv / Math.max(1, lots.lots))}
+  Avg comparable sale (per lot): $${formatNZD(scenarios[0]?.gdv_per_lot ?? scenarios[0]?.gdv / Math.max(1, lots.lots))}
 
 ASBESTOS: ${asbestos_detail.risk} risk — ${asbestos_detail.notes}
 
@@ -548,12 +555,18 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
   "totalCostLow": ${costs.total_low},
   "totalCostHigh": ${costs.total_high},
   "cost_per_unit_avg": ${costs.cost_per_unit_avg},
+  "interest_rate_outlook": "${interestOutlook}",
   "roiScenarios": [
-${scenarios.map((s) => `    { "years": ${s.years}, "gdv": ${s.gdv}, "total_cost_mid": ${s.total_cost_mid}, "gross_profit": ${s.gross_profit}, "roi_percent": ${s.roi_percent.toFixed(1)}, "annualised_roi_percent": ${s.annualised_roi_percent.toFixed(1)}, "viable": ${s.viable}, "cv_unavailable": ${costs.cv_unavailable} }`).join(",\n")}
+${scenarios.map((s) => {
+  const casesJson = (s.cases ?? []).map((c) =>
+    `      { "case": "${c.case}", "label": "${c.label}", "gdv": ${c.gdv}, "gdv_multiplier": ${c.gdv_multiplier.toFixed(2)}, "gross_profit": ${c.gross_profit}, "roi_percent": ${c.roi_percent.toFixed(1)}, "annualised_roi_percent": ${c.annualised_roi_percent.toFixed(1)}, "viable": ${c.viable} }`
+  ).join(",\n");
+  return `    { "years": ${s.years}, "gdv": ${s.gdv}, "gdv_per_lot": ${s.gdv_per_lot}, "sqm_per_lot": ${s.sqm_per_lot}, "lots": ${s.lots}, "total_cost_mid": ${s.total_cost_mid}, "gross_profit": ${s.gross_profit}, "roi_percent": ${s.roi_percent.toFixed(1)}, "annualised_roi_percent": ${s.annualised_roi_percent.toFixed(1)}, "viable": ${s.viable}, "cv_unavailable": ${costs.cv_unavailable}, "cases": [\n${casesJson}\n    ] }`;
+}).join(",\n")}
   ],
   "comparableSales": [<3 real recent comparable sales for this suburb: { "address": "...", "sale_date": "YYYY-MM-DD", "price_nzd": <NZD>, "land_sqm": <number>, "floor_sqm": <number>, "price_per_sqm": <NZD> }>],
   "comparables_quality": "${comparables_quality}",
-  "avg_sale_price": ${Math.round(scenarios[0]?.gdv / Math.max(1, lots.lots))},
+  "avg_sale_price": ${scenarios[0]?.gdv_per_lot ?? Math.round(scenarios[0]?.gdv / Math.max(1, lots.lots))},
   "avgPricePerSqm": <NZD/m² based on comparables>,
   "riskSummary": ["specific risk/opportunity 1 for this exact property", "risk/opportunity 2", "risk/opportunity 3", "risk/opportunity 4", "risk/opportunity 5"],
   "disclaimer": "These are indicative estimates only. Always engage a quantity surveyor, lawyer, and urban planner before making any development decisions. Figures in NZD."

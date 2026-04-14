@@ -269,6 +269,42 @@ Rules:
   }
 }
 
+export type InterestRateOutlook = "falling" | "stable" | "rising";
+
+export async function assessInterestRateOutlook(): Promise<InterestRateOutlook> {
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      config: {
+        systemInstruction:
+          "You are an NZ macroeconomic analyst. Answer concisely with exactly one word from the options given.",
+        maxOutputTokens: 10,
+        temperature: 0.1,
+      },
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              text:
+                "Based on RBNZ monetary policy direction and NZ economic conditions as of 2024–2025, " +
+                "is the Official Cash Rate (OCR) trend: falling (rate cuts expected), stable (on hold), " +
+                "or rising (hikes expected)? Reply with exactly one word: falling, stable, or rising.",
+            },
+          ],
+        },
+      ],
+    });
+
+    const raw = (response.text ?? "").trim().toLowerCase();
+    if (raw.includes("falling")) return "falling";
+    if (raw.includes("rising")) return "rising";
+    return "stable";
+  } catch {
+    return "stable";
+  }
+}
+
 export async function generateChatReply(
   message: string,
   conversationHistory: Message[] = [],

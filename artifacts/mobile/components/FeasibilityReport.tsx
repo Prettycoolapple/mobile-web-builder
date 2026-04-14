@@ -13,6 +13,7 @@ import { useColors } from "@/hooks/useColors";
 import {
   FeasibilityReport as Report,
   ROIScenario,
+  ROICaseResult,
   CostItem,
   InfrastructureService,
   ComparableSale,
@@ -560,26 +561,106 @@ function CostBreakdownChart({ costItems, totalCostLow, totalCostHigh, costPerUni
   );
 }
 
-function ROIScenarioCards({ scenarios, gdv, avgSalePrice, comparablesQuality, colors }: {
+const CASE_CONFIGS: Record<"bear" | "base" | "bull", {
+  label: string; emoji: string; color: string; bgKey: string; description: string;
+}> = {
+  bear: { label: "Bear", emoji: "🔻", color: "#EF4444", bgKey: "#EF444415", description: "−20% pricing" },
+  base: { label: "Base", emoji: "📊", color: "#F59E0B", bgKey: "#F59E0B12", description: "Realistic" },
+  bull: { label: "Bull", emoji: "📈", color: "#10B981", bgKey: "#10B98115", description: "+20% pricing" },
+};
+
+function InterestRateBanner({ outlook, colors }: {
+  outlook?: "falling" | "stable" | "rising";
+  colors: ReturnType<typeof useColors>;
+}) {
+  if (!outlook) return null;
+  const configs = {
+    falling: { text: "RBNZ OCR: FALLING 📉 — Bull case activated (rates cutting = property upside)", color: "#10B981", bg: "#10B98115" },
+    stable:  { text: "RBNZ OCR: STABLE — Bear & Base cases shown (no rate cuts imminent)", color: "#F59E0B", bg: "#F59E0B12" },
+    rising:  { text: "RBNZ OCR: RISING 📈 — Caution: rising rates compress margins", color: "#EF4444", bg: "#EF444415" },
+  };
+  const c = configs[outlook];
+  return (
+    <View style={{ backgroundColor: c.bg, borderRadius: 8, padding: 10, marginBottom: 8, borderWidth: 1, borderColor: c.color + "40" }}>
+      <Text style={{ color: c.color, fontFamily: "DM_Sans_600SemiBold", fontSize: 12 }}>{c.text}</Text>
+    </View>
+  );
+}
+
+function ROIScenarioCards({ scenarios, interestRateOutlook, comparablesQuality, colors }: {
   scenarios: ROIScenario[];
-  gdv?: number;
-  avgSalePrice?: number;
+  interestRateOutlook?: "falling" | "stable" | "rising";
   comparablesQuality?: string;
   colors: ReturnType<typeof useColors>;
 }) {
-  const best = getScenarioBest(scenarios);
+  const outlook = interestRateOutlook ?? scenarios[0]?.interest_rate_outlook ?? "stable";
+  const hasBull = outlook === "falling";
+
+  const availableCases = (["bear", "base", ...(hasBull ? ["bull"] : [])] as Array<"bear" | "base" | "bull">);
+  const [selectedCase, setSelectedCase] = useState<"bear" | "base" | "bull">("base");
+
+  const scenario2yr = scenarios.find((s) => s.years === 2) ?? scenarios[0];
+  const totalCostMid = safeNum(scenario2yr?.total_cost_mid ?? scenario2yr?.totalCost);
+
+  const gdvPerLot = safeNum(scenario2yr?.gdv_per_lot);
+  const sqmPerLot = safeNum(scenario2yr?.sqm_per_lot);
+  const lots = safeNum(scenario2yr?.lots ?? 1, 1);
 
   return (
     <View style={{ gap: 10 }}>
+      <InterestRateBanner outlook={outlook} colors={colors} />
+
+      {gdvPerLot > 0 && sqmPerLot > 0 && (
+        <View style={{ backgroundColor: colors.muted + "40", borderRadius: 8, padding: 10, gap: 4 }}>
+          <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
+            {lots} lot{lots > 1 ? "s" : ""} × {sqmPerLot}m² each · ~{formatNZD(gdvPerLot)} per lot (comparable-adjusted)
+          </Text>
+          <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
+            Total development cost: {formatNZD(totalCostMid)}
+          </Text>
+        </View>
+      )}
+
+      <View style={{ flexDirection: "row", gap: 6 }}>
+        {availableCases.map((c) => {
+          const cfg = CASE_CONFIGS[c];
+          const active = selectedCase === c;
+          return (
+            <TouchableOpacity
+              key={c}
+              onPress={() => setSelectedCase(c)}
+              style={{
+                flex: 1, paddingVertical: 8, paddingHorizontal: 4, borderRadius: 8,
+                backgroundColor: active ? cfg.color + "20" : colors.card,
+                borderWidth: active ? 2 : 1,
+                borderColor: active ? cfg.color : colors.border,
+                alignItems: "center", gap: 2,
+              }}
+            >
+              <Text style={{ fontSize: 16 }}>{cfg.emoji}</Text>
+              <Text style={{ color: active ? cfg.color : colors.mutedForeground, fontFamily: "DM_Sans_700Bold", fontSize: 12 }}>
+                {cfg.label}
+              </Text>
+              <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 10 }}>
+                {cfg.description}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
       <ScrollView horizontal showsHorizontalScrollIndicator={false}>
         <View style={{ flexDirection: "row", gap: 10, paddingBottom: 4 }}>
           {scenarios.map((s, i) => {
-            const isBest = s === best;
-            const roi = getScenarioRoi(s);
-            const annualised = getScenarioAnnualisedRoi(s);
-            const profit = getScenarioProfit(s);
+            const caseData: ROICaseResult | undefined = (s.cases ?? []).find((c) => c.case === selectedCase);
+            const cfg = CASE_CONFIGS[selectedCase];
+
+            const roi = caseData ? caseData.roi_percent : getScenarioRoi(s);
+            const annualised = caseData ? caseData.annualised_roi_percent : getScenarioAnnualisedRoi(s);
+            const profit = caseData ? caseData.gross_profit : getScenarioProfit(s);
+            const gdv = caseData ? caseData.gdv : s.gdv;
+            const viable = caseData ? caseData.viable : (s.viable !== false);
             const totalCost = getScenarioTotalCost(s);
-            const viable = s.viable !== false;
 
             return (
               <View
@@ -588,25 +669,20 @@ function ROIScenarioCards({ scenarios, gdv, avgSalePrice, comparablesQuality, co
                   styles.roiCard,
                   {
                     backgroundColor: colors.card,
-                    borderColor: isBest ? "#10B981" : viable ? colors.border : colors.red,
-                    borderWidth: isBest ? 2 : 1,
+                    borderColor: viable ? cfg.color + "60" : colors.red,
+                    borderWidth: 1.5,
                   },
                 ]}
               >
-                {isBest && (
-                  <View style={[styles.bestBadge, { backgroundColor: "#10B981" }]}>
-                    <Text style={{ color: "#fff", fontFamily: "DM_Sans_700Bold", fontSize: 9 }}>BEST</Text>
-                  </View>
-                )}
                 {!viable && (
                   <View style={[styles.bestBadge, { backgroundColor: colors.red }]}>
                     <Text style={{ color: "#fff", fontFamily: "DM_Sans_700Bold", fontSize: 9 }}>RISK</Text>
                   </View>
                 )}
                 <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
-                  {s.years}-Year scenario
+                  {s.years}-Year exit
                 </Text>
-                <Text style={{ color: isBest ? "#10B981" : scoreColor(roi / 20, colors), fontFamily: "DM_Sans_700Bold", fontSize: 24, letterSpacing: -0.5, marginTop: 4 }}>
+                <Text style={{ color: viable ? cfg.color : colors.red, fontFamily: "DM_Sans_700Bold", fontSize: 26, letterSpacing: -0.5, marginTop: 4 }}>
                   {isNaN(roi) ? "—" : roi.toFixed(1)}%
                 </Text>
                 <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, marginBottom: 8 }}>
@@ -616,10 +692,10 @@ function ROIScenarioCards({ scenarios, gdv, avgSalePrice, comparablesQuality, co
                 <View style={{ gap: 4, marginTop: 8 }}>
                   <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
                     <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>GDV</Text>
-                    <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", fontSize: 12 }}>{formatNZD(s.gdv)}</Text>
+                    <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", fontSize: 12 }}>{formatNZD(gdv)}</Text>
                   </View>
                   <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                    <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>Total cost</Text>
+                    <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>Cost</Text>
                     <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", fontSize: 12 }}>{formatNZD(totalCost)}</Text>
                   </View>
                   <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
@@ -634,9 +710,10 @@ function ROIScenarioCards({ scenarios, gdv, avgSalePrice, comparablesQuality, co
           })}
         </View>
       </ScrollView>
+
       {comparablesQuality === "estimated" && (
         <Text style={{ color: colors.amber, fontFamily: "DM_Sans_400Regular", fontSize: 12, fontStyle: "italic" }}>
-          Based on suburb average estimates — live comparable data will improve accuracy.
+          Comparable prices are suburb averages — live sale data will improve accuracy.
         </Text>
       )}
     </View>
@@ -963,8 +1040,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
           )}
           <ROIScenarioCards
             scenarios={report.roiScenarios}
-            gdv={report.roiScenarios[0]?.gdv}
-            avgSalePrice={report.avg_sale_price || report.avgPricePerSqm}
+            interestRateOutlook={report.interest_rate_outlook ?? report.roiScenarios[0]?.interest_rate_outlook}
             comparablesQuality={report.comparables_quality}
             colors={colors}
           />

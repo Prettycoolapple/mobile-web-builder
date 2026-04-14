@@ -92,9 +92,23 @@ export interface CostItem {
   high: number;
 }
 
+export interface ROICaseResult {
+  case: "bear" | "base" | "bull";
+  label: string;
+  gdv: number;
+  gdv_multiplier: number;
+  gross_profit: number;
+  roi_percent: number;
+  annualised_roi_percent: number;
+  viable: boolean;
+}
+
 export interface ROIScenario {
   years: number;
   gdv: number;
+  gdv_per_lot?: number;
+  sqm_per_lot?: number;
+  lots?: number;
   totalCost?: number;
   total_cost_mid?: number;
   grossProfit?: number;
@@ -105,6 +119,9 @@ export interface ROIScenario {
   annualised_roi_percent?: number;
   isBest?: boolean;
   viable?: boolean;
+  cases?: ROICaseResult[];
+  interest_rate_outlook?: "falling" | "stable" | "rising";
+  cv_unavailable?: boolean;
 }
 
 export interface ComparableSale {
@@ -137,6 +154,7 @@ export interface FeasibilityReport {
   cv_unavailable?: boolean;
   cost_per_unit_avg?: number;
   roiScenarios?: ROIScenario[];
+  interest_rate_outlook?: "falling" | "stable" | "rising";
   comparableSales?: ComparableSale[];
   comparables_quality?: "live" | "estimated";
   avgPricePerSqm?: number;

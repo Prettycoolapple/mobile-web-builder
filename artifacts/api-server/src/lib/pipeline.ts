@@ -14,7 +14,8 @@ import { classifyAsbestos, type AsbestosClassification } from "./asbestos";
 import { calculatePotentialLots, type LotResult } from "./lot-calculator";
 import { estimateCosts, type CostBreakdown } from "./cost-estimator";
 import { getComparables, type ComparableSale, type ComparablesResult } from "./comparables";
-import { calculateROIScenarios, type ROIScenario } from "./roi-calculator";
+import { calculateBearBaseBullScenarios, type ROIScenario } from "./roi-calculator";
+import { assessInterestRateOutlook } from "./claude";
 import { scoreProperty, type ScoringResult } from "./scoring";
 import { extractSuburb } from "./utils";
 
@@ -267,10 +268,15 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     merged.comparables.length > 0 ? merged.comparables : undefined,
   );
 
-  const scenarios = calculateROIScenarios(
+  const interestRateOutlook = await assessInterestRateOutlook();
+
+  const scenarios = calculateBearBaseBullScenarios(
     costs,
+    comparablesResult.avg_price_per_sqm,
     comparablesResult.avg_sale_price,
     lotResult.lots,
+    lotResult.sqm_per_lot,
+    interestRateOutlook,
   );
 
   const scores = scoreProperty(merged, costs, scenarios, lotResult.lots);
