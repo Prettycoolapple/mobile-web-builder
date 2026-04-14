@@ -205,23 +205,11 @@ function ScoreStarBlock({
 }) {
   const color = scoreColor(score, colors);
   return (
-    <View style={{ alignItems: "center", gap: 6 }}>
-      <StarRating score={score} maxStars={3} size={15} gap={3} color={color} emptyColor="rgba(250,250,249,0.2)" />
-      <Text style={{ color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
+    <View style={{ flex: 1, alignItems: "center", gap: 6 }}>
+      <StarRating score={score} maxStars={3} size={16} gap={4} color={color} emptyColor="rgba(250,250,249,0.18)" />
+      <Text style={{ color: "rgba(250,250,249,0.55)", fontFamily: "DM_Sans_400Regular", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.8 }}>
         {label}
       </Text>
-    </View>
-  );
-}
-
-function CompositeStars({ score, colors }: { score: number; colors: ReturnType<typeof useColors> }) {
-  const color = scoreColor(score, colors);
-  return (
-    <View style={{ alignItems: "center", gap: 6 }}>
-      <Text style={{ color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5 }}>
-        Overall
-      </Text>
-      <StarRating score={score} maxStars={3} size={20} gap={4} color={color} emptyColor="rgba(250,250,249,0.2)" />
     </View>
   );
 }
@@ -233,20 +221,32 @@ function ScoreSummaryRow({ report, colors }: { report: Report; colors: ReturnTyp
   const roi = safeNum(raw.roi);
   const composite = safeNum(raw.composite);
   const { ease_reasons, cost_reasons, roi_reasons } = raw;
+  const overallColor = scoreColor(composite, colors);
+  const overallDisplay = composite > 0 ? composite.toFixed(1) : "—";
 
   return (
     <View style={[styles.scoresSection, { backgroundColor: colors.headerBg }]}>
+      {/* Overall score badge — top right */}
+      <View style={styles.overallRow}>
+        <Text style={[styles.overallLabel, { color: "rgba(250,250,249,0.45)" }]}>OVERALL</Text>
+        <Text style={[styles.overallNumber, { color: overallColor }]}>{overallDisplay}</Text>
+      </View>
+
+      {/* Sub-scores: Ease · Cost · ROI */}
       <View style={[styles.scoresRow, { borderTopColor: "rgba(250,250,249,0.1)" }]}>
         <ScoreStarBlock score={ease} label="Ease" colors={colors} />
-        <CompositeStars score={composite} colors={colors} />
+        <View style={[styles.scoreDivider, { backgroundColor: "rgba(250,250,249,0.1)" }]} />
         <ScoreStarBlock score={cost} label="Cost" colors={colors} />
+        <View style={[styles.scoreDivider, { backgroundColor: "rgba(250,250,249,0.1)" }]} />
         <ScoreStarBlock score={roi} label="ROI" colors={colors} />
       </View>
+
+      {/* Reasons */}
       {(ease_reasons || cost_reasons || roi_reasons) && (
         <View style={[styles.reasonsRow, { borderTopColor: "rgba(250,250,249,0.1)" }]}>
           {ease_reasons && ease_reasons.length > 0 && (
             <View style={styles.reasonBlock}>
-              <Text style={[styles.reasonTitle, { color: "rgba(250,250,249,0.55)" }]}>Ease</Text>
+              <Text style={[styles.reasonTitle, { color: "rgba(250,250,249,0.45)" }]}>EASE</Text>
               {ease_reasons.slice(0, 2).map((r, i) => (
                 <Text key={i} style={[styles.reasonText, { color: "rgba(250,250,249,0.75)" }]}>· {r}</Text>
               ))}
@@ -254,7 +254,7 @@ function ScoreSummaryRow({ report, colors }: { report: Report; colors: ReturnTyp
           )}
           {roi_reasons && roi_reasons.length > 0 && (
             <View style={styles.reasonBlock}>
-              <Text style={[styles.reasonTitle, { color: "rgba(250,250,249,0.55)" }]}>ROI</Text>
+              <Text style={[styles.reasonTitle, { color: "rgba(250,250,249,0.45)" }]}>ROI</Text>
               {roi_reasons.slice(0, 2).map((r, i) => (
                 <Text key={i} style={[styles.reasonText, { color: "rgba(250,250,249,0.75)" }]}>· {r}</Text>
               ))}
@@ -1231,10 +1231,14 @@ const styles = StyleSheet.create({
   headerMeta: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 5, flexWrap: "wrap" },
   zoneBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 100 },
   scoresSection: { paddingBottom: 16 },
-  scoresRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-around", borderTopWidth: StyleSheet.hairlineWidth, paddingVertical: 16, paddingHorizontal: 8 },
+  overallRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", paddingHorizontal: 18, paddingTop: 14, paddingBottom: 10, gap: 8 },
+  overallLabel: { fontFamily: "DM_Sans_400Regular", fontSize: 10, textTransform: "uppercase", letterSpacing: 1.2 },
+  overallNumber: { fontFamily: "DM_Sans_700Bold", fontSize: 44, lineHeight: 48 },
+  scoresRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-around", borderTopWidth: StyleSheet.hairlineWidth, paddingVertical: 14, paddingHorizontal: 12 },
+  scoreDivider: { width: StyleSheet.hairlineWidth, height: 36 },
   reasonsRow: { flexDirection: "row", borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 12, paddingHorizontal: 16, gap: 16 },
   reasonBlock: { flex: 1, gap: 3 },
-  reasonTitle: { fontFamily: "DM_Sans_600SemiBold", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 },
+  reasonTitle: { fontFamily: "DM_Sans_600SemiBold", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.7 },
   reasonText: { fontFamily: "DM_Sans_400Regular", fontSize: 11, lineHeight: 16 },
   sectionCard: { borderRadius: 16, borderWidth: 1, overflow: "hidden", shadowColor: "rgba(28,25,23,0.04)", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 1, shadowRadius: 4, elevation: 1 },
   sectionHeader: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 13, gap: 7 },
