@@ -131,6 +131,13 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   const linzParcelData = linzParcelResult.value;
   if (linzParcelResult.failed) failedSources.push("linz_parcel");
 
+  // ─── WAVE 1: Run all data sources in parallel ─────────────────────────────
+  // All 4 scrapers (Hougarden, OneRoof, QV, Homes) run simultaneously from the
+  // start. Previously QV and Homes were only triggered as sequential fallbacks
+  // when BOTH CV and land area were missing — this caused them to be skipped
+  // whenever LINZ had land area, leaving CV/build year/floor area null.
+  // Browser slots (MAX_BROWSERS=3) queue the scrapers naturally so they don't
+  // overwhelm the container even when all 4 start at the same time.
   const [
     zoneResult,
     overlaysResult,
@@ -139,32 +146,46 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     infrastructureResult,
     hougardenResult,
     oneRoofResult,
+    qvResult,
+    homesResult,
   ] = await Promise.allSettled([
-    timed("zone",             () => fetchUnitaryPlanZone(lat, lng),                          timing),
-    timed("overlays",         () => fetchOverlays(lat, lng),                                 timing),
-    timed("contour",          () => fetchContour(lat, lng, linzParcelData?.bbox ?? null),    timing),
-    timed("property_history", () => fetchPropertyHistory(address, lat, lng),                 timing),
-    timed("infrastructure",   () => fetchInfrastructure(lat, lng),                           timing),
-    timed("hougarden",        () => withBrowserSlot(() => scrapeHougarden(lat, lng, address)), timing),
-    timed("oneroof",          () => withBrowserSlot(() => scrapeOneRoof(address)),            timing),
+    timed("zone",             () => fetchUnitaryPlanZone(lat, lng),                                               timing),
+    timed("overlays",         () => fetchOverlays(lat, lng),                                                      timing),
+    timed("contour",          () => fetchContour(lat, lng, linzParcelData?.bbox ?? null),                         timing),
+    timed("property_history", () => fetchPropertyHistory(address, lat, lng),                                      timing),
+    timed("infrastructure",   () => fetchInfrastructure(lat, lng),                                                timing),
+    timed("hougarden",        () => withBrowserSlot(() => scrapeHougarden(lat, lng, address)),                    timing),
+    timed("oneroof",          () => withBrowserSlot(() => scrapeOneRoof(address)),                                timing),
+    timed("qv",               () => withBrowserSlot(() => scrapeQV(address)),                                     timing),
+    timed("homes",            () => withBrowserSlot(() => scrapeHomes(address, suburb, geocode!.formatted ?? address)), timing),
   ]);
 
-  const zoneData          = zoneResult.status          === "fulfilled" ? zoneResult.value.value          : null;
-  const overlaysData      = overlaysResult.status      === "fulfilled" ? (overlaysResult.value.value ?? [])  : [];
-  const contourData       = contourResult.status       === "fulfilled" ? contourResult.value.value       : null;
-  const propertyHistoryData = propertyHistoryResult.status === "fulfilled" ? propertyHistoryResult.value.value : null;
+  const zoneData            = zoneResult.status            === "fulfilled" ? zoneResult.value.value            : null;
+  const overlaysData        = overlaysResult.status        === "fulfilled" ? (overlaysResult.value.value ?? []) : [];
+  const contourData         = contourResult.status         === "fulfilled" ? contourResult.value.value         : null;
+  const propertyHistoryData = propertyHistoryResult.status === "fulfilled" ? propertyHistoryResult.value.value  : null;
   const infrastructureData  = infrastructureResult.status  === "fulfilled" ? (infrastructureResult.value.value ?? []) : [];
-  const hougardenData     = hougardenResult.status     === "fulfilled" ? hougardenResult.value.value     : null;
-  const oneRoofData       = oneRoofResult.status       === "fulfilled" ? oneRoofResult.value.value       : null;
+  let hougardenData         = hougardenResult.status       === "fulfilled" ? hougardenResult.value.value        : null;
+  let oneRoofData           = oneRoofResult.status         === "fulfilled" ? oneRoofResult.value.value          : null;
+  let qvData                = qvResult.status              === "fulfilled" ? qvResult.value.value               : null;
+  let homesData             = homesResult.status           === "fulfilled" ? homesResult.value.value            : null;
 
-  if (zoneResult.status          === "rejected" || (zoneResult.status          === "fulfilled" && zoneResult.value.failed))          failedSources.push("zone");
-  if (overlaysResult.status      === "rejected" || (overlaysResult.status      === "fulfilled" && overlaysResult.value.failed))      failedSources.push("overlays");
-  if (contourResult.status       === "rejected" || (contourResult.status       === "fulfilled" && contourResult.value.failed))       failedSources.push("contour");
+  const wave1HougardenFailed = hougardenResult.status === "rejected" || (hougardenResult.status === "fulfilled" && hougardenResult.value.failed);
+  const wave1OneRoofFailed   = oneRoofResult.status   === "rejected" || (oneRoofResult.status   === "fulfilled" && oneRoofResult.value.failed);
+  const wave1QvFailed        = qvResult.status        === "rejected" || (qvResult.status        === "fulfilled" && qvResult.value.failed);
+  const wave1HomesFailed     = homesResult.status     === "rejected" || (homesResult.status     === "fulfilled" && homesResult.value.failed);
+
+  if (zoneResult.status            === "rejected" || (zoneResult.status            === "fulfilled" && zoneResult.value.failed))            failedSources.push("zone");
+  if (overlaysResult.status        === "rejected" || (overlaysResult.status        === "fulfilled" && overlaysResult.value.failed))        failedSources.push("overlays");
+  if (contourResult.status         === "rejected" || (contourResult.status         === "fulfilled" && contourResult.value.failed))         failedSources.push("contour");
   if (propertyHistoryResult.status === "rejected" || (propertyHistoryResult.status === "fulfilled" && propertyHistoryResult.value.failed)) failedSources.push("property_history");
   if (infrastructureResult.status  === "rejected" || (infrastructureResult.status  === "fulfilled" && infrastructureResult.value.failed))  failedSources.push("infrastructure");
-  if (hougardenResult.status     === "rejected" || (hougardenResult.status     === "fulfilled" && hougardenResult.value.failed))     failedSources.push("hougarden");
-  if (oneRoofResult.status       === "rejected" || (oneRoofResult.status       === "fulfilled" && oneRoofResult.value.failed))       failedSources.push("oneroof");
+  if (wave1HougardenFailed) failedSources.push("hougarden");
+  if (wave1OneRoofFailed)   failedSources.push("oneroof");
+  if (wave1QvFailed)        failedSources.push("qv");
+  if (wave1HomesFailed)     failedSources.push("homes");
 
+  // ─── LINZ title, memorials ────────────────────────────────────────────────
   let linzTitle: LinzTitle | null = null;
   let easementAnalysis: EasementAnalysis = NO_TITLE; // default: could not resolve title
   if (linzParcelData?.title_no) {
@@ -180,7 +201,6 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       // fetchLINZMemorials returns null on API error, [] on genuine "no memorials"
       const memorials = memorialsResult.value.value;
       if (memorials === null) {
-        // API call failed — cannot determine easement status
         easementAnalysis = API_ERROR;
         failedSources.push("linz_memorials");
         logger.warn({ title_no: linzParcelData.title_no }, "LINZ memorials API error — easement data unavailable");
@@ -195,25 +215,70 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     }
   }
 
-  let homesData: HomesData | null = null;
-  let qvData: QVData | null = null;
+  // ─── WAVE 2: Retry failed scrapers for critical missing data ──────────────
+  // If CV, build year, or floor area are still null after wave 1, retry any
+  // scraper that failed. We allow one retry per scraper to maximise the chance
+  // of complete data without infinite looping. The retry runs in parallel so it
+  // adds at most one extra scraper-duration to the total pipeline time.
+  const getCriticalCoverage = (
+    hg: HougardenData | null, or: OneRoofData | null,
+    qv: QVData | null, hm: HomesData | null, ph: typeof propertyHistoryData,
+  ) => ({
+    hasCV:        !!(hg?.cv_nzd    || or?.cv_nzd    || qv?.cv_nzd    || hm?.cv_nzd    || ph?.cv_nzd),
+    hasBuildYear: !!(hg?.build_year || or?.build_year || qv?.build_year || hm?.build_year || ph?.build_year),
+    hasFloorArea: !!(hg?.floor_area_sqm || or?.floor_area_sqm || qv?.floor_area_sqm || hm?.floor_area_sqm),
+  });
 
-  const cv_from_scrapers = hougardenData?.cv_nzd ?? oneRoofData?.cv_nzd ?? null;
-  const land_from_scrapers = hougardenData?.land_area_sqm ?? oneRoofData?.land_area_sqm ?? null;
-  const ac_cv = propertyHistoryData?.cv_nzd ?? null;
+  const wave1Coverage = getCriticalCoverage(hougardenData, oneRoofData, qvData, homesData, propertyHistoryData);
+  const criticalMissing = !wave1Coverage.hasCV || !wave1Coverage.hasBuildYear || !wave1Coverage.hasFloorArea;
 
-  if (!cv_from_scrapers && !ac_cv && !land_from_scrapers && !linzParcelData?.area_sqm) {
-    logger.info("Primary scrapers empty — trying QV.co.nz first");
-    const qvResult = await timed("qv", () => withBrowserSlot(() => scrapeQV(address)), timing);
-    qvData = qvResult.value;
-    if (qvResult.failed) failedSources.push("qv");
+  if (criticalMissing) {
+    logger.info({
+      missing_cv: !wave1Coverage.hasCV,
+      missing_build_year: !wave1Coverage.hasBuildYear,
+      missing_floor_area: !wave1Coverage.hasFloorArea,
+      retrying: { hougarden: wave1HougardenFailed, oneroof: wave1OneRoofFailed, qv: wave1QvFailed, homes: wave1HomesFailed },
+    }, "Wave 1 missing critical data — retrying failed scrapers");
 
-    const qvHasData = qvData?.cv_nzd && qvData?.land_area_sqm;
-    if (!qvHasData) {
-      logger.info("QV empty — trying homes.co.nz as fallback");
-      const homesResult = await timed("homes", () => withBrowserSlot(() => scrapeHomes(address, suburb, geocode!.formatted ?? address)), timing);
-      homesData = homesResult.value;
-      if (homesResult.failed) failedSources.push("homes");
+    const retryPromises: Promise<void>[] = [];
+
+    if (wave1HougardenFailed) {
+      retryPromises.push(
+        timed("hougarden_retry", () => withBrowserSlot(() => scrapeHougarden(lat, lng, address)), timing)
+          .then((r) => { if (!r.failed && r.value) hougardenData = r.value; })
+          .catch(() => {}),
+      );
+    }
+    if (wave1OneRoofFailed) {
+      retryPromises.push(
+        timed("oneroof_retry", () => withBrowserSlot(() => scrapeOneRoof(address)), timing)
+          .then((r) => { if (!r.failed && r.value) oneRoofData = r.value; })
+          .catch(() => {}),
+      );
+    }
+    if (wave1QvFailed) {
+      retryPromises.push(
+        timed("qv_retry", () => withBrowserSlot(() => scrapeQV(address)), timing)
+          .then((r) => { if (!r.failed && r.value) qvData = r.value; })
+          .catch(() => {}),
+      );
+    }
+    if (wave1HomesFailed) {
+      retryPromises.push(
+        timed("homes_retry", () => withBrowserSlot(() => scrapeHomes(address, suburb, geocode!.formatted ?? address)), timing)
+          .then((r) => { if (!r.failed && r.value) homesData = r.value; })
+          .catch(() => {}),
+      );
+    }
+
+    if (retryPromises.length > 0) {
+      await Promise.allSettled(retryPromises);
+      const wave2Coverage = getCriticalCoverage(hougardenData, oneRoofData, qvData, homesData, propertyHistoryData);
+      logger.info({
+        recovered_cv: !wave1Coverage.hasCV && wave2Coverage.hasCV,
+        recovered_build_year: !wave1Coverage.hasBuildYear && wave2Coverage.hasBuildYear,
+        recovered_floor_area: !wave1Coverage.hasFloorArea && wave2Coverage.hasFloorArea,
+      }, "Wave 2 retry complete");
     }
   }
 

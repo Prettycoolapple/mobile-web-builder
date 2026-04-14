@@ -97,7 +97,7 @@ export const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(r
 export const randomDelay = (min = 1000, max = 3000) =>
   delay(Math.floor(Math.random() * (max - min) + min));
 
-const MAX_BROWSERS = 2;
+const MAX_BROWSERS = 3;
 let activeBrowsers = 0;
 
 export async function withBrowserSlot<T>(fn: () => Promise<T>): Promise<T> {
