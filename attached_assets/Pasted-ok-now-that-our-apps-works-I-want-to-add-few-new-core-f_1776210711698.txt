@@ -1,0 +1,25 @@
+ok now, that our apps works, I want to add few new core features. Help me and suggest the features based on my requirement.
+
+
+
+New features:
+
+
+
+1. I want proper billion dollar company kind of signup portal and user can select they sign up either as (General user, Sales agent, Service providers).
+
+2. If user select signing up as General user then they are simply interested in the features of what we have already built (property search, anaylsis etc). Hence the signup information requirement can be more easy and simple (ie. First, last name, signup email, password, language that they speak (chinese, English, korean, japanese etc - make a dropdown of language list).
+
+3. If user sign up as Sales agent, then we need to ask more question. What question do you think is necessary so that in future, when these agents submit their listing via our 'sales portal' (which we haven't built, done in future) our AI conversation sometimes will recommend those listings? Basically my vision for the future is to create a market place recommended by AI, the real listings agent submit to our platform. Since we dont have the sales portal now (where agent upload property data) we need to capture relevant useful info for the agent themselves during signup (ie. first and last name, contact mobile (always default +64 as prefix). A dropdown list containing all NZ home agency (Barfoot, Raywhite etc...) to select which agency they from. The language they speak (again, dropdown list where they can select multiple), contact email address to login, password. Lastly, they should able to upload profile picture to build trust.
+
+4. Sign up as 'service provider (architect/designer/planner/etc). Again collect information that is necessary to build moat for our future value add (paving the way). First and last name, contact number, company name, NZ company register number, upload Certificate of incorporation, language they speak (same dropdown list to select multiple if needed) contact number with NZ prefix, select their discipline (architect/designer, planner, others). Also, we need the address of the company. Ask if they specialise in subdivision, new build, brown field, etc - they can select multiple or all. lastly, they should able to upload profile picture to build trust.
+
+
+
+
+
+1. If user sign up as general user, they will get directed to homepage/search page. (we already have) but keen to build an intermediate page for user signed up as 'sales agent' and 'service provider'. The two intermediate page for the two kind of signup should be different.  For now, (we can work in detail for this once the signup/login portal is done) just add two pricing: a) sales agent monthly subscription is $99 (feature include -unlimitted listings, buyer leads, built-in live translation, property search, property analysis report.) and for service agent ($249 per month)  feature include property search, property analysis report, developer/client leads, auto promotion by AI. For now make the subscribe button fake so they can click without real subscription and lead to the home/search page like others.
+
+
+
+we can start with these, make sure all input is linked to database, backend so it is actually working with frontend for these new signup/login pages and flows. Plan in stages and happy to execute tasks incrementally so not overwhelming the process.
