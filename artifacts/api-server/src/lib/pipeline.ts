@@ -18,7 +18,7 @@ import { calculateBearBaseBullScenarios, type ROIScenario } from "./roi-calculat
 import { assessInterestRateOutlook } from "./claude";
 import { scoreProperty, type ScoringResult } from "./scoring";
 import { extractSuburb } from "./utils";
-import { parseEasements, type EasementAnalysis } from "./easements";
+import { parseEasements, NO_TITLE, API_ERROR, type EasementAnalysis } from "./easements";
 
 export interface PipelineResult {
   address_input: string;
@@ -44,7 +44,7 @@ export interface PipelineResult {
   comparables_quality: "live" | "estimated";
   scenarios: ROIScenario[];
   scores: ScoringResult | null;
-  easements: EasementAnalysis | null;
+  easements: EasementAnalysis;
   failed_sources: string[];
   timing_ms: Record<string, number>;
   completed_at: string;
@@ -114,7 +114,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       comparables_quality: "estimated",
       scenarios: [],
       scores: null,
-      easements: null,
+      easements: NO_TITLE,
       failed_sources: failedSources,
       timing_ms: { ...timing, total: Date.now() - pipelineStart },
       completed_at: new Date().toISOString(),
@@ -166,7 +166,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   if (oneRoofResult.status       === "rejected" || (oneRoofResult.status       === "fulfilled" && oneRoofResult.value.failed))       failedSources.push("oneroof");
 
   let linzTitle: LinzTitle | null = null;
-  let easementAnalysis: EasementAnalysis | null = null;
+  let easementAnalysis: EasementAnalysis = NO_TITLE; // default: could not resolve title
   if (linzParcelData?.title_no) {
     const [titleResult, memorialsResult] = await Promise.allSettled([
       timed("linz_title", () => fetchLINZTitle(linzParcelData.title_no!), timing),
@@ -177,10 +177,21 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       if (titleResult.value.failed) failedSources.push("linz_title");
     }
     if (memorialsResult.status === "fulfilled" && !memorialsResult.value.failed) {
-      const memorials = memorialsResult.value.value ?? [];
-      const landArea = linzParcelData.area_sqm ?? 400;
-      easementAnalysis = parseEasements(memorials, landArea);
-      logger.info({ title_no: linzParcelData.title_no, memorial_count: memorials.length, easements: easementAnalysis.burdening.length }, "LINZ memorials processed");
+      // fetchLINZMemorials returns null on API error, [] on genuine "no memorials"
+      const memorials = memorialsResult.value.value;
+      if (memorials === null) {
+        // API call failed — cannot determine easement status
+        easementAnalysis = API_ERROR;
+        failedSources.push("linz_memorials");
+        logger.warn({ title_no: linzParcelData.title_no }, "LINZ memorials API error — easement data unavailable");
+      } else {
+        const landArea = linzParcelData.area_sqm ?? 400;
+        easementAnalysis = parseEasements(memorials, landArea);
+        logger.info({ title_no: linzParcelData.title_no, memorial_count: memorials.length, easements: easementAnalysis.burdening.length, retrieval_status: easementAnalysis.retrieval_status }, "LINZ memorials processed");
+      }
+    } else if (memorialsResult.status === "rejected") {
+      easementAnalysis = API_ERROR;
+      failedSources.push("linz_memorials");
     }
   }
 

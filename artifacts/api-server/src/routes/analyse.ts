@@ -503,7 +503,8 @@ ${scenarioLines}
 ASBESTOS: ${asbestos_detail.risk} risk — ${asbestos_detail.notes}
 
 EASEMENTS & RIGHTS OF WAY (from LINZ title memorials):
-${easements && easements.source === "linz_memorials"
+Retrieval status: ${easements.retrieval_status}
+${easements.retrieval_status === "retrieved"
   ? `Source: LINZ title memorials (layer 51553)
 Burdening encumbrances: ${easements.burdening.length}
 Appurtenant (benefit) easements: ${easements.appurtenant.length}
@@ -519,7 +520,11 @@ Burdening easements detail:
 ${easements.burdening.map((e, i) => `  ${i + 1}. [${e.type}] ${e.description} — est. ${e.estimated_area_sqm ?? "?"}m² — severity: ${e.severity}`).join("\n") || "  None"}
 Appurtenant easements detail:
 ${easements.appurtenant.map((e, i) => `  ${i + 1}. [${e.type}] ${e.description}`).join("\n") || "  None"}`
-  : "Not retrieved — LINZ memorials unavailable (no title_no or API key). Note in subdivisionSummary that easements should be checked manually before any subdivision or building consent."}
+  : easements.retrieval_status === "api_error"
+    ? "LINZ memorials API failed — easement data is UNAVAILABLE for this title. You MUST state in subdivisionSummary that a solicitor title search is required before any subdivision or building consent."
+    : easements.retrieval_status === "no_title"
+      ? "Could not resolve LINZ title for this property — no easement data available. State in subdivisionSummary that title search is required."
+      : "LINZ returned no recorded memorials for this title. This may mean no registered easements/ROW, OR the data is incomplete. State that a title search is recommended to confirm."}
 
 YOUR TASK:
 Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT schema:
@@ -547,7 +552,7 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
     "netAreaSqm": ${lots.net_area_sqm},
     "easementAreaSqm": ${lots.easement_area_sqm},
     "overlays": [{ "name": "...", "status": "clear|moderate|restricted", "detail": "..." }],
-    "easements": ${easements && easements.burdening.length > 0
+    "easements": ${easements.burdening.length > 0
       ? JSON.stringify(easements.burdening.map((e) => ({
           type: e.type,
           burden: e.burden,
@@ -557,11 +562,12 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
           severity: e.severity,
         })))
       : "[]"},
-    "appurtenant_easements": ${easements && easements.appurtenant.length > 0
+    "appurtenant_easements": ${easements.appurtenant.length > 0
       ? JSON.stringify(easements.appurtenant.map((e) => ({ type: e.type, description: e.description })))
       : "[]"},
-    "easement_summary": ${JSON.stringify(easements?.summary ?? "Easements not retrieved — check title manually.")},
-    "lot_impact_note": ${JSON.stringify(easements?.lot_impact_note ?? null)},
+    "easement_data_status": "${easements.retrieval_status}",
+    "easement_summary": ${JSON.stringify(easements.summary)},
+    "lot_impact_note": ${JSON.stringify(easements.lot_impact_note ?? null)},
     "subdivisionSummary": "..."
   },
   "potential_lots": ${lots.lots},

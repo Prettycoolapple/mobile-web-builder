@@ -302,7 +302,7 @@ function easementIcon(type: EasementEntry["type"]): string {
 }
 
 function EasementList({
-  easements, appurtenant, summary, lotImpact, grossArea, netArea, easementArea, colors,
+  easements, appurtenant, summary, lotImpact, grossArea, netArea, easementArea, dataStatus, colors,
 }: {
   easements?: EasementEntry[];
   appurtenant?: { type: string; description: string }[];
@@ -311,16 +311,36 @@ function EasementList({
   grossArea?: number;
   netArea?: number;
   easementArea?: number;
+  dataStatus?: "retrieved" | "no_memorials" | "api_error" | "no_title";
   colors: ReturnType<typeof useColors>;
 }) {
   const hasBurdening = easements && easements.length > 0;
   const hasAppurtenant = appurtenant && appurtenant.length > 0;
 
-  if (!hasBurdening && !hasAppurtenant && !summary) {
+  if (!hasBurdening && !hasAppurtenant) {
+    const isUnconfirmed = !dataStatus || dataStatus === "api_error" || dataStatus === "no_title";
     return (
-      <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 13 }}>
-        No easements found on LINZ title — verify with solicitor before subdivision.
-      </Text>
+      <View style={{ gap: 8 }}>
+        <View style={[{
+          flexDirection: "row", alignItems: "flex-start", gap: 8, padding: 10, borderRadius: 10, borderWidth: 1,
+          backgroundColor: isUnconfirmed ? colors.amber + "12" : colors.muted,
+          borderColor: isUnconfirmed ? colors.amber + "40" : colors.border,
+        }]}>
+          <Feather name={isUnconfirmed ? "alert-circle" : "check-circle"} size={14} color={isUnconfirmed ? colors.amber : colors.success} style={{ marginTop: 1 }} />
+          <Text style={{ color: isUnconfirmed ? colors.amber : colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 13, flex: 1, lineHeight: 18 }}>
+            {isUnconfirmed
+              ? "LINZ title data was inconclusive — a solicitor title search is required to confirm whether any easements or rights of way are registered on this title."
+              : dataStatus === "no_memorials"
+                ? "No recorded easements found in LINZ title memorials — title appears clean, but verify with a solicitor before subdivision."
+                : "No easements or rights of way detected on this title."}
+          </Text>
+        </View>
+        {summary && (
+          <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 17 }}>
+            {summary}
+          </Text>
+        )}
+      </View>
     );
   }
 
@@ -1140,7 +1160,9 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
           status={
             (report.planning.easements && report.planning.easements.length > 0)
               ? (report.planning.easements.some((e) => e.severity === "significant") ? "risk" : "warning")
-              : "neutral"
+              : (report.planning.easement_data_status === "api_error" || report.planning.easement_data_status === "no_title")
+                ? "warning"
+                : "neutral"
           }
           colors={colors}
         >
@@ -1152,6 +1174,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
             grossArea={report.planning.grossAreaSqm}
             netArea={report.planning.netAreaSqm}
             easementArea={report.planning.easementAreaSqm}
+            dataStatus={report.planning.easement_data_status}
             colors={colors}
           />
         </SectionCard>

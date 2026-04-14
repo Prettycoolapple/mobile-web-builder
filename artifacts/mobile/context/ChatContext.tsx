@@ -65,6 +65,7 @@ export interface PlanningInfo {
   easements?: EasementEntry[];
   appurtenant_easements?: { type: string; description: string }[];
   easement_summary?: string;
+  easement_data_status?: "retrieved" | "no_memorials" | "api_error" | "no_title";
   lot_impact_note?: string | null;
   subdivisionSummary?: string;
 }

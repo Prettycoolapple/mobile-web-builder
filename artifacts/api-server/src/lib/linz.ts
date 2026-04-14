@@ -119,6 +119,7 @@ async function queryLinzLayerWFS(
   cqlFilter: string,
   key: string,
   timeoutMs = 12000,
+  count = 1,
 ): Promise<Record<string, unknown>[] | null> {
   // Correct LINZ WFS URL format: /services;key={key}/wfs  (NOT /services/wfs/{key}/wfs)
   const url = new URL(`https://data.linz.govt.nz/services;key=${key}/wfs`);
@@ -128,7 +129,7 @@ async function queryLinzLayerWFS(
   url.searchParams.set("typeNames", `layer-${layerId}`);
   url.searchParams.set("CQL_FILTER", cqlFilter);
   url.searchParams.set("outputFormat", "application/json");
-  url.searchParams.set("count", "1");
+  url.searchParams.set("count", String(count));
 
   const resp = await fetch(url.toString(), {
     headers: { Accept: "application/json" },
@@ -230,20 +231,15 @@ export async function fetchLINZParcel(lat: number, lng: number): Promise<LinzPar
 // LINZ layer 51553: NZ Title Memorials (most recent outstanding)
 const LAYER_TITLE_MEMORIALS = 51553;
 
-export async function fetchLINZMemorials(title_no: string): Promise<LinzMemorial[]> {
+// Returns the parsed memorials array, or null when the API call itself failed.
+// Returning null lets callers distinguish "API error" from "API returned 0 memorials".
+export async function fetchLINZMemorials(title_no: string): Promise<LinzMemorial[] | null> {
   const key = getKey();
-  if (!key || !title_no) return [];
+  if (!key || !title_no) return null;
 
-  try {
-    const features = await queryLinzLayer(
-      LAYER_TITLE_MEMORIALS,
-      `title_no='${title_no}'`,
-      key,
-      10000,
-      30,
-    );
-    if (!features || features.length === 0) return [];
+  const cql = `title_no='${title_no}'`;
 
+  function parseFeatures(features: Record<string, unknown>[]): LinzMemorial[] {
     return features.map((props) => {
       const text = String(
         props["memorial_text"] ?? props["memorialtext"] ?? props["text"] ?? props["memorial"] ?? "",
@@ -255,10 +251,35 @@ export async function fetchLINZMemorials(title_no: string): Promise<LinzMemorial
         instrument_no: String(props["instrument_no"] ?? props["instrumentno"] ?? props["instrument_number"] ?? "").trim() || null,
       };
     }).filter((m) => m.memorial_text.length > 0);
-  } catch (err) {
-    logger.warn({ err: (err as Error).message, title_no }, "LINZ memorials fetch failed");
-    return [];
   }
+
+  // Try REST endpoint first
+  try {
+    const features = await queryLinzLayer(LAYER_TITLE_MEMORIALS, cql, key, 10000, 30);
+    if (features !== null) {
+      // REST succeeded (even if 0 results — that means genuinely no memorials)
+      logger.info({ title_no, count: features.length }, "LINZ memorials: REST returned");
+      return parseFeatures(features);
+    }
+    logger.info({ title_no }, "LINZ memorials: REST returned null — trying WFS fallback");
+  } catch (err) {
+    logger.warn({ err: (err as Error).message, title_no }, "LINZ memorials REST threw — trying WFS fallback");
+  }
+
+  // WFS fallback
+  try {
+    const features = await queryLinzLayerWFS(LAYER_TITLE_MEMORIALS, cql, key, 12000, 30);
+    if (features !== null) {
+      logger.info({ title_no, count: features.length }, "LINZ memorials: WFS fallback returned");
+      return parseFeatures(features);
+    }
+  } catch (err) {
+    logger.warn({ err: (err as Error).message, title_no }, "LINZ memorials WFS fallback threw");
+  }
+
+  // Both endpoints failed — signal caller that data is unavailable
+  logger.warn({ title_no }, "LINZ memorials: both REST and WFS failed — returning null (api_error)");
+  return null;
 }
 
 export async function fetchLINZTitle(title_no: string): Promise<LinzTitle | null> {

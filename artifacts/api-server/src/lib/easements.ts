@@ -24,6 +24,13 @@ export interface ParsedEasement {
 
 export interface EasementAnalysis {
   source: "linz_memorials" | "none";
+  /**
+   * "retrieved"    — LINZ API responded; memorials were parsed (may be 0 easements on a clean title)
+   * "no_memorials" — LINZ API responded with 0 memorials (title appears clean, but verify)
+   * "api_error"    — LINZ API call failed; easement data is unavailable
+   * "no_title"     — Could not resolve a title_no from coordinates (parcel lookup failed)
+   */
+  retrieval_status: "retrieved" | "no_memorials" | "api_error" | "no_title";
   has_burdening_encumbrances: boolean;
   burdening: ParsedEasement[];
   appurtenant: ParsedEasement[];
@@ -36,8 +43,39 @@ export interface EasementAnalysis {
   summary: string;
 }
 
+const NO_TITLE: EasementAnalysis = {
+  source: "none",
+  retrieval_status: "no_title",
+  has_burdening_encumbrances: false,
+  burdening: [],
+  appurtenant: [],
+  total_burdening_area_sqm: 0,
+  access_row_burdening: false,
+  drainage_burdening: false,
+  power_burdening: false,
+  building_covenant: false,
+  lot_impact_note: null,
+  summary: "Could not resolve LINZ title for this property — easements and ROW must be verified via a title search.",
+};
+
+const API_ERROR: EasementAnalysis = {
+  source: "none",
+  retrieval_status: "api_error",
+  has_burdening_encumbrances: false,
+  burdening: [],
+  appurtenant: [],
+  total_burdening_area_sqm: 0,
+  access_row_burdening: false,
+  drainage_burdening: false,
+  power_burdening: false,
+  building_covenant: false,
+  lot_impact_note: null,
+  summary: "LINZ title data could not be retrieved — easements and ROW must be verified via a title search.",
+};
+
 const EMPTY: EasementAnalysis = {
   source: "none",
+  retrieval_status: "no_memorials",
   has_burdening_encumbrances: false,
   burdening: [],
   appurtenant: [],
@@ -49,6 +87,8 @@ const EMPTY: EasementAnalysis = {
   lot_impact_note: null,
   summary: "No LINZ title memorials retrieved — check title manually for easements or ROW.",
 };
+
+export { NO_TITLE, API_ERROR };
 
 function detectType(text: string): EasementType {
   const t = text.toLowerCase();
@@ -192,6 +232,7 @@ export function parseEasements(
 
   return {
     source: "linz_memorials",
+    retrieval_status: "retrieved",
     has_burdening_encumbrances: burdening.length > 0,
     burdening,
     appurtenant,
