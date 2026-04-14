@@ -9,6 +9,191 @@ export interface Message {
 
 export type ChatMode = "analyse" | "discover" | "followup";
 
+// ─── LLM-powered intent extraction ───────────────────────────────────────────
+// Instead of hardcoded keyword lists and regex, we ask Gemini Flash to parse
+// the user's intent from the full conversation context. This handles arbitrary
+// phrasing, context references ("it", "this area", "currently"), and implicit
+// suburb resolution from the currently open report.
+export interface ChatIntent {
+  mode: ChatMode;
+  // Analyse
+  address: string | null;
+  // Discover
+  suburb: string | null;           // normalised suburb name; inferred from context if needed
+  minPrice: number | null;
+  maxPrice: number | null;
+  criteria: string | null;         // free-text description of what they want (subdividable, lifestyle, etc.)
+  isFollowUp: boolean;             // true when asking for more results from a prior search
+  includeNegotiation: boolean;     // true when user doesn't require a listed price (auction, tender, POA)
+  // Meta
+  reasoning: string;               // brief explanation for debugging / logging
+}
+
+const INTENT_SCHEMA = `{
+  "mode": "analyse" | "discover" | "followup",
+  "address": "<full NZ street address string> | null",
+  "suburb": "<suburb name, lowercase, normalised> | null",
+  "minPrice": <NZD number> | null,
+  "maxPrice": <NZD number> | null,
+  "criteria": "<free-text describing what the user wants> | null",
+  "isFollowUp": <true if asking for more results from an earlier search, false otherwise>,
+  "includeNegotiation": <true if user does not require a price (accepts auction/tender/POA), false otherwise>,
+  "reasoning": "<1 sentence explaining your classification>"
+}`;
+
+const INTENT_RULES = `CLASSIFICATION RULES:
+- mode="analyse": user wants a development feasibility analysis of a specific property. Detect specific street addresses (e.g. "8 Hampton Drive, St Heliers", "123 Queen St").
+- mode="discover": user wants to find/browse/search properties currently for sale. Detect phrases like "what's on the market", "show me properties", "find me something", "any listings", "for sale in X", "what's available", "currently for sale", "looking to buy", "any homes", "what about in X suburb" — even if no suburb is specified in the message.
+- mode="followup": anything else — questions about the current analysis, general advice, clarifications, "what does X mean", "tell me more about", etc.
+
+SUBURB RESOLUTION (for discover mode):
+- If the user mentions a suburb explicitly → use it.
+- If the user says "this area", "around here", "nearby", "this suburb", "currently" with no location specified → infer suburb from the CURRENT REPORT ADDRESS (if provided in context).
+- If no suburb can be determined at all → leave suburb as null.
+
+PRICE EXTRACTION:
+- "under $2m" / "below 2 million" / "up to 2M" → maxPrice: 2000000
+- "$1.5m to $2.5m" → minPrice: 1500000, maxPrice: 2500000
+- "around $1.8m" → minPrice: 1600000, maxPrice: 2000000
+- If no price mentioned → both null.
+
+FOLLOW-UP DETECT: isFollowUp=true for: "show more", "any others", "what else", "more like that", "find more", "keep looking", "any other options", "more properties".
+
+NORMALISE suburb names: "Saint Heliers" → "st heliers", "Mt Eden" → "mt eden", "Grey Lynn" → "grey lynn".`;
+
+export async function extractChatIntent(
+  messages: Message[],
+  reportContext?: {
+    address?: string | null;
+    suburb?: string | null;
+  } | null,
+  alreadyShownAddresses?: string[],
+): Promise<ChatIntent> {
+  if (messages.length === 0) {
+    return {
+      mode: "followup", address: null, suburb: null, minPrice: null, maxPrice: null,
+      criteria: null, isFollowUp: false, includeNegotiation: false, reasoning: "empty messages",
+    };
+  }
+
+  const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
+  if (!lastUserMessage) {
+    return {
+      mode: "followup", address: null, suburb: null, minPrice: null, maxPrice: null,
+      criteria: null, isFollowUp: false, includeNegotiation: false, reasoning: "no user message",
+    };
+  }
+
+  // Build compact conversation history (last 6 turns to keep context manageable)
+  const recentHistory = messages.slice(-6).filter((m) => m !== lastUserMessage);
+  const historyText = recentHistory.length > 0
+    ? recentHistory.map((m) => `[${m.role.toUpperCase()}]: ${m.content.slice(0, 300)}`).join("\n")
+    : "(no prior conversation)";
+
+  const contextLines: string[] = [];
+  if (reportContext?.address) contextLines.push(`Currently open property report: ${reportContext.address}`);
+  if (reportContext?.suburb) contextLines.push(`Report suburb: ${reportContext.suburb}`);
+  if (alreadyShownAddresses && alreadyShownAddresses.length > 0) {
+    contextLines.push(`Properties already shown to user: ${alreadyShownAddresses.slice(0, 5).join("; ")}`);
+  }
+  const contextText = contextLines.length > 0 ? contextLines.join("\n") : "(no open report)";
+
+  const prompt = `You are an intent parser for a NZ property development app called DevFeasible. Parse the user's latest message into structured intent JSON.
+
+CONTEXT:
+${contextText}
+
+RECENT CONVERSATION:
+${historyText}
+
+USER'S LATEST MESSAGE:
+"${lastUserMessage.content}"
+
+${INTENT_RULES}
+
+Return ONLY valid JSON matching this schema (no explanation, no markdown fences):
+${INTENT_SCHEMA}`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      config: {
+        maxOutputTokens: 512,
+        temperature: 0.1,
+      },
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+    });
+
+    const raw = (response.text ?? "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error("No JSON object in response");
+
+    const parsed = JSON.parse(match[0]) as ChatIntent;
+
+    // Sanitise fields
+    const intent: ChatIntent = {
+      mode: (["analyse", "discover", "followup"] as ChatMode[]).includes(parsed.mode) ? parsed.mode : "followup",
+      address: parsed.address ?? null,
+      suburb: parsed.suburb ? parsed.suburb.toLowerCase().trim() : null,
+      minPrice: typeof parsed.minPrice === "number" && parsed.minPrice > 0 ? parsed.minPrice : null,
+      maxPrice: typeof parsed.maxPrice === "number" && parsed.maxPrice > 0 ? parsed.maxPrice : null,
+      criteria: parsed.criteria ?? null,
+      isFollowUp: Boolean(parsed.isFollowUp),
+      includeNegotiation: Boolean(parsed.includeNegotiation),
+      reasoning: parsed.reasoning ?? "",
+    };
+
+    logger.info({ intent, userMessage: lastUserMessage.content.slice(0, 80) }, "LLM intent extraction");
+    return intent;
+  } catch (err) {
+    logger.warn({ err: (err as Error).message, userMessage: lastUserMessage.content.slice(0, 80) }, "LLM intent extraction failed — falling back to regex");
+    return fallbackDetectIntent(lastUserMessage.content, reportContext);
+  }
+}
+
+// Regex fallback (used when the LLM call fails or times out)
+function fallbackDetectIntent(
+  lastMessage: string,
+  reportContext?: { address?: string | null; suburb?: string | null } | null,
+): ChatIntent {
+  const mode = detectMode(lastMessage);
+  const lower = lastMessage.toLowerCase();
+
+  let suburb: string | null = null;
+  const SUBURBS = [
+    "remuera", "epsom", "mt eden", "grey lynn", "ponsonby", "parnell", "herne bay",
+    "westmere", "kingsland", "sandringham", "mt albert", "mt roskill", "onehunga",
+    "new lynn", "titirangi", "avondale", "st heliers", "kohimarama", "mission bay",
+    "glendowie", "meadowbank", "howick", "pakuranga", "botany", "east tamaki",
+    "henderson", "albany", "takapuna", "devonport", "northcote", "glenfield",
+    "milford", "browns bay", "glen innes", "penrose", "ellerslie", "mangere",
+    "birkenhead", "massey", "royal oak", "mt wellington", "manurewa", "papatoetoe",
+    "papakura", "glen eden", "st johns", "otahuhu", "panmure",
+  ];
+  for (const s of SUBURBS) {
+    if (lower.includes(s)) { suburb = s; break; }
+  }
+
+  // Fall back to report context suburb
+  if (!suburb && mode === "discover" && reportContext?.suburb) {
+    suburb = reportContext.suburb.toLowerCase().trim();
+  }
+
+  const isFollowUp = /any\s*(others?|more)|show\s*(me\s*)?more|more\s*(properties|options|results|sites)|what\s*else|other\s*properties|more\s*results|few\s*more|find\s*more/i.test(lastMessage);
+
+  return {
+    mode,
+    address: null,
+    suburb,
+    minPrice: null,
+    maxPrice: null,
+    criteria: lastMessage,
+    isFollowUp,
+    includeNegotiation: /negotiat|poa|by\s+applic|tender|auction/i.test(lower),
+    reasoning: "regex fallback",
+  };
+}
+
 export function detectMode(lastMessage: string): ChatMode {
   const lower = lastMessage.toLowerCase().trim();
 
@@ -88,6 +273,7 @@ function buildGeminiHistory(conversationHistory: Message[]) {
 export async function generateUnifiedResponse(
   messages: Message[],
   currentReport?: object,
+  overrideMode?: ChatMode,
 ): Promise<{ content: string; mode: ChatMode }> {
   if (messages.length === 0) {
     return { content: "How can I help you with NZ property development today?", mode: "followup" };
@@ -95,7 +281,8 @@ export async function generateUnifiedResponse(
 
   const lastMessage = messages[messages.length - 1];
   const conversationHistory = messages.slice(0, -1);
-  const mode = detectMode(lastMessage.content);
+  // Prefer the caller-supplied mode (from LLM intent extraction) over the internal regex detectMode
+  const mode = overrideMode ?? detectMode(lastMessage.content);
 
   let systemWithContext = SYSTEM_PROMPT;
   if (currentReport) {

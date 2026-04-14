@@ -8,6 +8,7 @@ import {
   generateUnifiedResponse,
   generateAnalysis,
   detectMode,
+  extractChatIntent,
   Message,
 } from "../lib/claude";
 import { verifyToken } from "../lib/auth";
@@ -275,36 +276,53 @@ router.post("/chat", async (req, res) => {
     try {
       const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
       const userText = lastUserMessage?.content ?? "";
-      const mode = detectMode(userText);
+
+      // ─── LLM intent extraction ─────────────────────────────────────────────
+      // Extract the address/suburb from the currently open report (if any) so
+      // the LLM can resolve context references like "this area", "currently", etc.
+      let reportCtx: { address?: string | null; suburb?: string | null } | null = null;
+      if (currentReport) {
+        const r = currentReport as Record<string, unknown>;
+        const overview = r["propertyOverview"] as Record<string, unknown> | undefined;
+        const addr = (r["address"] as string | null) ?? (overview?.["address"] as string | null) ?? null;
+        // Extract suburb from address or pipeline suburb field
+        const suburbFromReport = (r["suburb"] as string | null) ?? null;
+        reportCtx = { address: addr, suburb: suburbFromReport };
+      }
+
+      // Already-shown addresses from conversation history (for follow-up de-duplication)
+      const alreadyShownFromHistory: string[] = [];
+      for (const msg of [...messages].reverse()) {
+        if (msg.role === "assistant") {
+          const m = /\[Search results shown: ([^\]]+)\]/.exec(msg.content ?? "");
+          if (m) { alreadyShownFromHistory.push(...m[1].split(";").map((a) => a.trim()).filter(Boolean)); break; }
+        }
+      }
+
+      const intent = await extractChatIntent(messages, reportCtx, alreadyShownFromHistory);
+      const mode = intent.mode;
 
       if (mode === "discover") {
         try {
-          const { suburb: parsedSuburb, minPrice, maxPrice } = parseDiscoverParams(userText);
+          // ─── DISCOVER FLOW — using LLM-extracted intent ──────────────────
+          // All parameters come from the intent object. Suburb may have been
+          // inferred from the current report context when absent from the message.
+          let suburb = intent.suburb;
+          const isFollowUp = intent.isFollowUp;
+          const includeNegotiation = intent.includeNegotiation;
+          const userTextHasPrice = intent.minPrice !== null || intent.maxPrice !== null;
 
-          const isFollowUpKeyword = /any\s+(others?|more)|show\s+(me\s+)?more|more\s+(properties|options|results|sites)|what\s+else|other\s+properties|more\s+results|others?\s+like|more\s+like|anything\s+else|few\s+more|find\s+more|keep\s+looking|another\s+one|more\s+sites|other\s+options/i.test(userText);
-          // Also treat "what about [suburb]", "how about [suburb]", etc. as context-inheriting
-          const isLocationSwitch = !parsedSuburb && /^(ok|okay|and|what|how|try|check|how\s+about|what\s+about)\b/i.test(userText.trim());
-          const isFollowUp = !parsedSuburb && (isFollowUpKeyword || isLocationSwitch);
-          const userTextHasPrice = /\$|\bunder\b|\babove\b|\bbelow\b|\bbetween\b|\brange\b|\b\d+[mk]\b/i.test(userText);
-          const includeNegotiation = /negotiat|without\s+price|no\s+price|price\s+on\s+applic|poa|by\s+applic|tender|auction/i.test(userText);
+          // Default price range if LLM found no price constraint
+          const DEFAULT_MAX = 3_000_000;
+          let effectiveMinPrice = intent.minPrice ?? Math.max(0, (intent.maxPrice ?? DEFAULT_MAX) - 1_500_000);
+          let effectiveMaxPrice = intent.maxPrice ?? DEFAULT_MAX;
+          let alreadyShownAddresses: string[] = alreadyShownFromHistory;
 
-          let suburb = parsedSuburb;
-          let effectiveMinPrice = minPrice;
-          let effectiveMaxPrice = maxPrice;
-          let alreadyShownAddresses: string[] = [];
-
-          // When suburb isn't found from the current message, always look back in history
-          // (covers follow-ups, typos, and conversational switches like "what about in [suburb]")
-          if (!suburb) {
-            const history = [...messages].reverse();
-            for (const msg of history) {
-              if (msg.role === "assistant") {
-                const searchResultsMatch = /\[Search results shown: ([^\]]+)\]/.exec(msg.content ?? "");
-                if (searchResultsMatch && isFollowUp) {
-                  alreadyShownAddresses = searchResultsMatch[1].split(";").map((a) => a.trim()).filter(Boolean);
-                }
-              }
-              if (msg.role === "user" && !suburb) {
+          // If the LLM didn't find a suburb, scan history messages with fast regex
+          // (covers follow-ups like "show more" where no suburb is mentioned)
+          if (!suburb && isFollowUp) {
+            for (const msg of [...messages].reverse()) {
+              if (msg.role === "user" && msg.content !== userText) {
                 const { suburb: prevSuburb, minPrice: prevMin, maxPrice: prevMax } = parseDiscoverParams(msg.content ?? "");
                 if (prevSuburb) {
                   suburb = prevSuburb;
@@ -318,7 +336,7 @@ router.post("/chat", async (req, res) => {
             }
           }
 
-          req.log.info({ suburb, effectiveMinPrice, effectiveMaxPrice, isFollowUp, includeNegotiation }, "Discovery search started");
+          req.log.info({ suburb, effectiveMinPrice, effectiveMaxPrice, isFollowUp, includeNegotiation, intent_reasoning: intent.reasoning }, "Discovery search started");
 
           let candidates: import("../lib/pre-screen").PropertyCandidate[] = [];
           let isMockData = false;
@@ -396,10 +414,15 @@ router.post("/chat", async (req, res) => {
       }
 
       if (mode === "analyse") {
-        // Try to get the address from the current message; if not found, look back in history.
-        // This handles follow-ups like "just analyze the property" / "analyze it" where the
-        // address was mentioned in an earlier message.
-        let extractedAddress = await extractNZAddress(userText).catch(() => null);
+        // Address priority:
+        // 1. LLM extracted it directly from the current message
+        // 2. extractNZAddress regex on the current message
+        // 3. extractNZAddress on prior history messages
+        let extractedAddress: string | null = intent.address ?? null;
+
+        if (!extractedAddress) {
+          extractedAddress = await extractNZAddress(userText).catch(() => null);
+        }
 
         if (!extractedAddress) {
           for (const msg of [...messages].reverse()) {
@@ -693,7 +716,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
 
       }
 
-      const { content, mode: responseMode } = await generateUnifiedResponse(messages, currentReport);
+      const { content, mode: responseMode } = await generateUnifiedResponse(messages, currentReport, intent.mode);
 
       // Safety net A: if the AI said "I'm searching..." but the discover pipeline didn't run,
       // extract the suburb from the AI's text and actually run the search now.
