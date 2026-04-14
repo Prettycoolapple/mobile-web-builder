@@ -302,6 +302,23 @@ router.post("/chat", async (req, res) => {
       const intent = await extractChatIntent(messages, reportCtx, alreadyShownFromHistory);
       const mode = intent.mode;
 
+      // ─── CLARIFICATION LOOP ─────────────────────────────────────────────────
+      // When the LLM determines it can't proceed without more info (e.g. no suburb
+      // for a discover search), return the clarification question immediately.
+      // The next user reply will carry the answer in conversation history so the
+      // intent extractor can resolve the suburb/price/address and proceed normally.
+      if (intent.needsClarification && intent.clarificationQuestion) {
+        req.log.info(
+          { question: intent.clarificationQuestion, intent_reasoning: intent.reasoning },
+          "Returning clarification question to user",
+        );
+        return reply.send({
+          content: intent.clarificationQuestion,
+          mode: "clarification",
+          intent: { needsClarification: true },
+        });
+      }
+
       if (mode === "discover") {
         try {
           // ─── DISCOVER FLOW — using LLM-extracted intent ──────────────────

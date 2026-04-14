@@ -25,6 +25,9 @@ export interface ChatIntent {
   criteria: string | null;         // free-text description of what they want (subdividable, lifestyle, etc.)
   isFollowUp: boolean;             // true when asking for more results from a prior search
   includeNegotiation: boolean;     // true when user doesn't require a listed price (auction, tender, POA)
+  // Clarification loop
+  needsClarification: boolean;     // true when required info is missing and a question should be returned
+  clarificationQuestion: string | null; // the natural-language question to ask the user
   // Meta
   reasoning: string;               // brief explanation for debugging / logging
 }
@@ -36,8 +39,10 @@ const INTENT_SCHEMA = `{
   "minPrice": <NZD number> | null,
   "maxPrice": <NZD number> | null,
   "criteria": "<free-text describing what the user wants> | null",
-  "isFollowUp": <true if asking for more results from an earlier search, false otherwise>,
+  "isFollowUp": <true if asking for more results from an earlier search OR answering a clarification question, false otherwise>,
   "includeNegotiation": <true if user does not require a price (accepts auction/tender/POA), false otherwise>,
+  "needsClarification": <true ONLY when required info is missing AND you cannot infer it — see rules>,
+  "clarificationQuestion": "<short conversational question to ask the user> | null",
   "reasoning": "<1 sentence explaining your classification>"
 }`;
 
@@ -58,6 +63,18 @@ PRICE EXTRACTION:
 - If no price mentioned → both null.
 
 FOLLOW-UP DETECT: isFollowUp=true for: "show more", "any others", "what else", "more like that", "find more", "keep looking", "any other options", "more properties".
+ANSWERING A CLARIFICATION: If the immediately preceding ASSISTANT message was a clarifying question (ends with "?") and the user's reply directly answers it (e.g. "St heliers", "around $1.5M"), set isFollowUp=true, needsClarification=false, and extract suburb/price/address from the answer combined with the original intent from history.
+
+CLARIFICATION RULES (needsClarification):
+- Set needsClarification=true ONLY when ALL of these apply:
+  1. mode is "discover" AND suburb is null (cannot be inferred from context or history)
+  2. OR mode is "analyse" AND address is null
+  3. AND the previous message was NOT already a clarification question about the same thing
+- For discover with missing suburb: clarificationQuestion should be short and conversational, e.g. "Any particular suburb in mind?" or "Which area are you looking at?"
+- For discover with suburb but no price: do NOT ask for price — just search with defaults
+- For analyse with missing address: ask "Which property would you like me to analyse?"
+- Set needsClarification=false for mode="followup" (always)
+- If the user's message is clearly casual browsing ("show me what's out there", "anything good?") and no context exists, ask for suburb
 
 NORMALISE suburb names: "Saint Heliers" → "st heliers", "Mt Eden" → "mt eden", "Grey Lynn" → "grey lynn".`;
 
@@ -72,7 +89,8 @@ export async function extractChatIntent(
   if (messages.length === 0) {
     return {
       mode: "followup", address: null, suburb: null, minPrice: null, maxPrice: null,
-      criteria: null, isFollowUp: false, includeNegotiation: false, reasoning: "empty messages",
+      criteria: null, isFollowUp: false, includeNegotiation: false,
+      needsClarification: false, clarificationQuestion: null, reasoning: "empty messages",
     };
   }
 
@@ -80,7 +98,8 @@ export async function extractChatIntent(
   if (!lastUserMessage) {
     return {
       mode: "followup", address: null, suburb: null, minPrice: null, maxPrice: null,
-      criteria: null, isFollowUp: false, includeNegotiation: false, reasoning: "no user message",
+      criteria: null, isFollowUp: false, includeNegotiation: false,
+      needsClarification: false, clarificationQuestion: null, reasoning: "no user message",
     };
   }
 
@@ -140,8 +159,26 @@ ${INTENT_SCHEMA}`;
       criteria: parsed.criteria ?? null,
       isFollowUp: Boolean(parsed.isFollowUp),
       includeNegotiation: Boolean(parsed.includeNegotiation),
+      needsClarification: Boolean(parsed.needsClarification),
+      clarificationQuestion: parsed.clarificationQuestion ?? null,
       reasoning: parsed.reasoning ?? "",
     };
+
+    // Safety: if needsClarification=true but no question was generated, supply a fallback
+    if (intent.needsClarification && !intent.clarificationQuestion) {
+      if (intent.mode === "discover") {
+        intent.clarificationQuestion = "Any particular suburb in mind?";
+      } else if (intent.mode === "analyse") {
+        intent.clarificationQuestion = "Which property would you like me to analyse? Please share the address.";
+      } else {
+        intent.needsClarification = false;
+      }
+    }
+    // Safety: followup mode should never trigger a clarification
+    if (intent.mode === "followup") {
+      intent.needsClarification = false;
+      intent.clarificationQuestion = null;
+    }
 
     logger.info({ intent, userMessage: lastUserMessage.content.slice(0, 80) }, "LLM intent extraction");
     return intent;
@@ -181,6 +218,8 @@ function fallbackDetectIntent(
 
   const isFollowUp = /any\s*(others?|more)|show\s*(me\s*)?more|more\s*(properties|options|results|sites)|what\s*else|other\s*properties|more\s*results|few\s*more|find\s*more/i.test(lastMessage);
 
+  const needsClarification = mode === "discover" && !suburb;
+
   return {
     mode,
     address: null,
@@ -190,6 +229,8 @@ function fallbackDetectIntent(
     criteria: lastMessage,
     isFollowUp,
     includeNegotiation: /negotiat|poa|by\s+applic|tender|auction/i.test(lower),
+    needsClarification,
+    clarificationQuestion: needsClarification ? "Any particular suburb in mind?" : null,
     reasoning: "regex fallback",
   };
 }
