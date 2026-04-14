@@ -11,6 +11,7 @@ import {
   Keyboard,
   KeyboardAvoidingView,
 } from "react-native";
+import Svg, { Circle, Line, Path } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -26,10 +27,9 @@ if (process.env.EXPO_PUBLIC_DOMAIN) {
 }
 
 const SUGGESTION_QUERIES = [
+  "What's on the market in Grey Lynn?",
+  "Find development sites under $2M",
   "Analyse 42 Arney Road, Remuera",
-  "Find subdividable sections in Grey Lynn under $2M",
-  "Analyse 12 Jervois Road, Herne Bay",
-  "Find terrace housing sites in Sandringham",
 ];
 
 function extractJSON(text: string): unknown | null {
@@ -39,6 +39,49 @@ function extractJSON(text: string): unknown | null {
     if (match) return JSON.parse(match[0]);
   } catch {}
   return null;
+}
+
+function GlassesLogo({ size = 40, color = "#D97757" }: { size?: number; color?: string }) {
+  const w = size * 1.5;
+  const h = size * 0.65;
+  const r = size * 0.28;
+  const cx1 = size * 0.32;
+  const cx2 = size * 1.18;
+  const cy = h * 0.55;
+  const strokeW = size * 0.065;
+  return (
+    <Svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
+      <Circle cx={cx1} cy={cy} r={r} stroke={color} strokeWidth={strokeW} fill="none" />
+      <Circle cx={cx2} cy={cy} r={r} stroke={color} strokeWidth={strokeW} fill="none" />
+      <Line
+        x1={cx1 + r}
+        y1={cy}
+        x2={cx2 - r}
+        y2={cy}
+        stroke={color}
+        strokeWidth={strokeW * 0.8}
+        strokeLinecap="round"
+      />
+      <Line
+        x1={cx1 - r}
+        y1={cy - r * 0.3}
+        x2={cx1 - r - size * 0.2}
+        y2={cy - r * 0.65}
+        stroke={color}
+        strokeWidth={strokeW * 0.8}
+        strokeLinecap="round"
+      />
+      <Line
+        x1={cx2 + r}
+        y1={cy - r * 0.3}
+        x2={cx2 + r + size * 0.2}
+        y2={cy - r * 0.65}
+        stroke={color}
+        strokeWidth={strokeW * 0.8}
+        strokeLinecap="round"
+      />
+    </Svg>
+  );
 }
 
 export default function ChatScreen() {
@@ -84,7 +127,6 @@ export default function ChatScreen() {
     const text = (overrideText !== undefined ? overrideText : inputText).trim();
     if (!text || isLoading) return;
 
-    // Clear input IMMEDIATELY before any async work
     setInputText("");
     inputRef.current?.clear();
     Keyboard.dismiss();
@@ -99,9 +141,8 @@ export default function ChatScreen() {
       lowerText.match(/find\s+|search\s+|discover\s+|looking\s+for\s+|show\s+me\s+properties|subdividable|subdivision\s+opp|development\s+sites|lifestyle\s+prop|investment\s+prop/) ||
       lowerText.match(/any\s+(others?|more|properties|homes|houses|sections|land)|show\s+(me\s+)?more|more\s+(properties|options|results|sites)|what\s+else|anything\s+else|few\s+more|find\s+more|keep\s+looking|another\s+one|any\s+other|more\s+sites|other\s+options/) ||
       lowerText.match(/properties\s+(for\s+sale|on\s+sale|available|listed|in\s+)/i) ||
-      lowerText.match(/land\s+(bigger|larger|over|above|more\s+than|greater\s+than)/i) ||
       lowerText.match(/(for\s+sale|on\s+sale|on\s+the\s+market)\s+in/i) ||
-      lowerText.match(/\d+\s*(m2|sqm|m²)\s*(or\s+)?(bigger|larger|above|over)/i);
+      lowerText.match(/what.*market|on.*market|market.*in/i);
     const detectedMode =
       isDiscoverQuery
         ? "discover"
@@ -115,8 +156,9 @@ export default function ChatScreen() {
     const MAX_RETRIES = 2;
     const TIMEOUT_MS = 90_000;
 
+    const currentMessages = currentSession?.messages ?? [];
     const allMessages = [
-      ...messages
+      ...currentMessages
         .filter((m) => m.type === "text" || m.type === "report" || m.type === "search")
         .map((m) => ({
           role: m.role as "user" | "assistant",
@@ -152,7 +194,7 @@ export default function ChatScreen() {
           if (!resp.ok) {
             const err = (await resp.json()) as { error?: string; code?: string };
             if (resp.status === 402) {
-              updateLastMessage({ type: "text", content: "You've used all 3 free reports this month. Upgrade to Pro for unlimited analysis." }, sessionId);
+              updateLastMessage({ type: "text", content: "You've used all your reports for this month. Upgrade to Standard for more." }, sessionId);
               setShowPaywall(true);
             } else if (resp.status === 401) {
               updateLastMessage({ type: "text", content: "Session expired. Please sign in again." }, sessionId);
@@ -179,21 +221,17 @@ export default function ChatScreen() {
             if (parsed?.candidates && parsed.candidates.length > 0) {
               updateLastMessage({ type: "search", searchResults: parsed.candidates, content: "", aiIntro }, sessionId);
             } else {
-              // No listings found — show the AI's conversational response instead of empty cards
               const noResultMsg = aiIntro || "No matching listings found right now. Try a different suburb, adjust your budget, or ask again shortly — new listings appear daily.";
               updateLastMessage({ type: "text", content: noResultMsg }, sessionId);
             }
           } else {
-            // Safety net: if the AI leaked raw JSON into a text response, never show it
             const rawContent = data.content ?? "";
             const trimmed = rawContent.trim();
             if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-              // Try to parse as candidates (discover that slipped through)
               const maybeParsed = extractJSON(trimmed) as { candidates?: PropertyCandidate[] } | null;
               if (maybeParsed?.candidates && maybeParsed.candidates.length > 0) {
                 updateLastMessage({ type: "search", searchResults: maybeParsed.candidates, content: "" }, sessionId);
               } else {
-                // JSON but not candidates — show a friendly fallback instead of raw JSON
                 updateLastMessage({ type: "text", content: "I couldn't format that response properly. Please try rephrasing your question." }, sessionId);
               }
             } else {
@@ -208,7 +246,6 @@ export default function ChatScreen() {
         }
       }
 
-      // All retries exhausted
       const isTimeout = lastErr?.name === "AbortError";
       updateLastMessage({
         type: "text",
@@ -231,7 +268,6 @@ export default function ChatScreen() {
     updateLastMessage,
     setCurrentReport,
     setIsLoading,
-    messages,
     getApiBase,
     getApiHeaders,
     refreshProfile,
@@ -275,29 +311,25 @@ export default function ChatScreen() {
       behavior={Platform.OS === "ios" ? "padding" : undefined}
       keyboardVerticalOffset={0}
     >
-      <View style={[styles.topBar, { paddingTop: topInset, backgroundColor: colors.headerBg }]}>
+      {/* Header */}
+      <View style={[styles.topBar, {
+        paddingTop: topInset,
+        backgroundColor: colors.headerBg,
+        borderBottomColor: colors.accent + "22",
+      }]}>
         <View style={styles.topBarContent}>
           <View style={styles.brandRow}>
-            <View style={[styles.logoMark, { backgroundColor: colors.accent }]}>
-              <Text style={styles.logoLetter}>L</Text>
-            </View>
-            <View>
-              <Text style={[styles.appName, { fontFamily: "DM_Sans_700Bold" }]}>Lecorb</Text>
-              <Text style={[styles.appSubtitle, { color: colors.headerSubtext, fontFamily: "DM_Sans_400Regular" }]}>
-                NZ Property Analysis
-              </Text>
-            </View>
+            <GlassesLogo size={22} color={colors.accent} />
+            <Text style={[styles.appName, { fontFamily: "DM_Sans_700Bold" }]}>Lecorb</Text>
           </View>
           <View style={styles.headerActions}>
             {!isEmpty && (
               <TouchableOpacity
-                style={[styles.newChatBtn, { borderColor: "rgba(250,249,246,0.2)" }]}
-                onPress={() => {
-                  startNewChat();
-                }}
+                style={[styles.newChatBtn, { borderColor: "rgba(250,249,246,0.18)" }]}
+                onPress={startNewChat}
                 activeOpacity={0.7}
               >
-                <Feather name="plus" size={14} color="rgba(250,249,246,0.7)" />
+                <Feather name="plus" size={14} color="rgba(250,249,246,0.65)" />
                 <Text style={[styles.newChatText, { fontFamily: "DM_Sans_500Medium" }]}>New</Text>
               </TouchableOpacity>
             )}
@@ -305,12 +337,12 @@ export default function ChatScreen() {
         </View>
 
         {currentSession?.currentReport && (
-          <View style={[styles.contextBanner, { borderTopColor: "rgba(250,249,246,0.1)" }]}>
+          <View style={[styles.contextBanner, { borderTopColor: "rgba(250,249,246,0.08)" }]}>
             <Feather name="map-pin" size={12} color={colors.accent} />
             <Text style={[styles.contextAddress, { color: "rgba(250,249,246,0.75)", fontFamily: "DM_Sans_500Medium" }]} numberOfLines={1}>
               {currentSession.currentReport.address || currentSession.currentReport.propertyOverview?.address || "Property loaded"}
             </Text>
-            <View style={[styles.contextBadge, { backgroundColor: colors.accent + "25" }]}>
+            <View style={[styles.contextBadge, { backgroundColor: colors.accent + "22" }]}>
               <Text style={[styles.contextBadgeText, { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" }]}>
                 {currentSession.currentReport.scores?.ease}/5
               </Text>
@@ -319,37 +351,64 @@ export default function ChatScreen() {
         )}
       </View>
 
+      {/* Empty / Search state */}
       {isEmpty ? (
         <Pressable style={{ flex: 1 }} onPress={Keyboard.dismiss}>
-          <View style={styles.emptyContainer}>
-            <View style={styles.emptyHero}>
-              <Text style={[styles.emptyTitle, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>
-                What would you like to{"\n"}analyse today?
-              </Text>
-              <Text style={[styles.emptySubtitle, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                Ask about any NZ property address, or discover development opportunities by suburb and budget.
-              </Text>
-            </View>
+          <View style={[styles.landingContainer, { paddingBottom: tabBarOffset }]}>
+            <View style={styles.landingContent}>
+              {/* Glasses hero */}
+              <View style={styles.landingLogo}>
+                <GlassesLogo size={48} color={colors.accent} />
+              </View>
 
-            <View style={styles.suggestionsSection}>
-              <Text style={[styles.suggestionsLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>
-                Try a query
+              <Text style={[styles.landingTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
+                Going property shopping?
               </Text>
+              <Text style={[styles.landingSubtitle, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                Search an address, ask what's on the market,{"\n"}or find your next development opportunity.
+              </Text>
+
+              {/* Centered search input */}
+              <View style={[styles.landingInputWrapper, {
+                backgroundColor: colors.card,
+                borderColor: canSend ? colors.accent + "60" : colors.border,
+                shadowColor: colors.shadow,
+              }]}>
+                <TextInput
+                  ref={inputRef}
+                  style={[styles.landingInput, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+                  placeholder="Ask about an address or area..."
+                  placeholderTextColor={colors.mutedForeground}
+                  value={inputText}
+                  onChangeText={setInputText}
+                  multiline={false}
+                  maxLength={500}
+                  onSubmitEditing={() => handleSend()}
+                  returnKeyType="search"
+                />
+                <TouchableOpacity
+                  style={[styles.sendBtn, { backgroundColor: canSend ? colors.accent : colors.muted }]}
+                  onPress={() => handleSend()}
+                  disabled={!canSend}
+                  activeOpacity={0.8}
+                >
+                  <Feather name="arrow-up" size={17} color={canSend ? "#fff" : colors.mutedForeground} />
+                </TouchableOpacity>
+              </View>
+
+              {/* Suggestion chips */}
               <View style={styles.suggestions}>
                 {SUGGESTION_QUERIES.map((q) => (
                   <TouchableOpacity
                     key={q}
                     style={[styles.suggestionChip, { backgroundColor: colors.card, borderColor: colors.border }]}
-                    onPress={() => {
-                      setInputText(q);
-                      inputRef.current?.focus();
-                    }}
+                    onPress={() => handleSend(q)}
                     activeOpacity={0.7}
                   >
+                    <Feather name="search" size={13} color={colors.accent} style={{ marginTop: 1 }} />
                     <Text style={[styles.suggestionText, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}>
                       {q}
                     </Text>
-                    <Feather name="arrow-up-right" size={14} color={colors.accent} />
                   </TouchableOpacity>
                 ))}
               </View>
@@ -357,74 +416,68 @@ export default function ChatScreen() {
           </View>
         </Pressable>
       ) : (
-        <FlatList
-          ref={flatListRef}
-          data={[...messages].reverse()}
-          renderItem={renderItem}
-          keyExtractor={keyExtractor}
-          inverted
-          contentContainerStyle={[styles.messageList, { paddingBottom: 16 }]}
-          keyboardDismissMode="interactive"
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-          automaticallyAdjustKeyboardInsets
-          nestedScrollEnabled
-        />
+        <>
+          <FlatList
+            ref={flatListRef}
+            data={[...messages].reverse()}
+            renderItem={renderItem}
+            keyExtractor={keyExtractor}
+            inverted
+            contentContainerStyle={[styles.messageList, { paddingBottom: 16 }]}
+            keyboardDismissMode="interactive"
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            automaticallyAdjustKeyboardInsets
+            nestedScrollEnabled
+          />
+
+          <View style={[styles.inputBar, {
+            backgroundColor: colors.background,
+            borderTopColor: colors.border,
+            paddingBottom: keyboardVisible ? 12 : tabBarOffset + 8,
+          }]}>
+            <View style={[styles.inputWrapper, {
+              backgroundColor: colors.card,
+              borderColor: canSend ? colors.accent + "60" : colors.border,
+              shadowColor: colors.shadow,
+            }]}>
+              <TextInput
+                ref={inputRef}
+                style={[styles.input, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+                placeholder="Ask about an address or area..."
+                placeholderTextColor={colors.mutedForeground}
+                value={inputText}
+                onChangeText={setInputText}
+                multiline
+                maxLength={500}
+                onSubmitEditing={() => handleSend()}
+                returnKeyType="send"
+                blurOnSubmit={false}
+              />
+              <TouchableOpacity
+                style={[styles.sendBtn, { backgroundColor: canSend ? colors.accent : colors.muted }]}
+                onPress={() => handleSend()}
+                disabled={!canSend}
+                activeOpacity={0.8}
+              >
+                <Feather name="arrow-up" size={17} color={canSend ? "#fff" : colors.mutedForeground} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </>
       )}
 
-      <View style={[styles.inputBar, {
-        backgroundColor: colors.background,
-        borderTopColor: colors.border,
-        paddingBottom: keyboardVisible ? 12 : tabBarOffset + 8,
-      }]}>
-        <View style={[styles.inputWrapper, {
-          backgroundColor: colors.card,
-          borderColor: canSend ? colors.accent + "60" : colors.border,
-          shadowColor: colors.shadow,
-        }]}>
-          <TextInput
-            ref={inputRef}
-            style={[styles.input, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-            placeholder="Ask about an address or area..."
-            placeholderTextColor={colors.mutedForeground}
-            value={inputText}
-            onChangeText={setInputText}
-            multiline
-            maxLength={500}
-            onSubmitEditing={() => handleSend()}
-            returnKeyType="send"
-            blurOnSubmit={false}
-          />
-          <TouchableOpacity
-            style={[
-              styles.sendBtn,
-              {
-                backgroundColor: canSend ? colors.accent : colors.muted,
-              },
-            ]}
-            onPress={() => handleSend()}
-            disabled={!canSend}
-            activeOpacity={0.8}
-          >
-            <Feather name="arrow-up" size={17} color={canSend ? "#fff" : colors.mutedForeground} />
-          </TouchableOpacity>
-        </View>
-        <Text style={[styles.inputHint, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-          NZ property data · Gemini AI
-        </Text>
-      </View>
       <PaywallModal visible={showPaywall} onClose={() => setShowPaywall(false)} />
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
+  container: { flex: 1 },
   topBar: {
     paddingHorizontal: 20,
     paddingBottom: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
   topBarContent: {
     flexDirection: "row",
@@ -437,28 +490,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
-  logoMark: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  logoLetter: {
-    fontSize: 17,
-    color: "#fff",
-    fontFamily: "DM_Sans_700Bold",
-    lineHeight: 20,
-  },
   appName: {
     fontSize: 17,
     color: "#FAFAF9",
     letterSpacing: -0.3,
-  },
-  appSubtitle: {
-    fontSize: 11,
-    letterSpacing: 0.1,
-    marginTop: 1,
   },
   headerActions: {
     flexDirection: "row",
@@ -476,7 +511,7 @@ const styles = StyleSheet.create({
   },
   newChatText: {
     fontSize: 13,
-    color: "rgba(250,249,246,0.7)",
+    color: "rgba(250,249,246,0.65)",
   },
   contextBanner: {
     flexDirection: "row",
@@ -499,44 +534,70 @@ const styles = StyleSheet.create({
   contextBadgeText: {
     fontSize: 11,
   },
-  emptyContainer: {
+  // ── Landing / empty state ──────────────────────────────────────────
+  landingContainer: {
     flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
     paddingHorizontal: 24,
-    paddingTop: 48,
-    gap: 40,
   },
-  emptyHero: {
-    gap: 12,
+  landingContent: {
+    width: "100%",
+    maxWidth: 400,
+    alignItems: "center",
+    gap: 16,
   },
-  emptyTitle: {
-    fontSize: 24,
-    lineHeight: 32,
-    letterSpacing: -0.4,
+  landingLogo: {
+    marginBottom: 4,
   },
-  emptySubtitle: {
+  landingTitle: {
+    fontSize: 26,
+    lineHeight: 34,
+    letterSpacing: -0.5,
+    textAlign: "center",
+  },
+  landingSubtitle: {
+    fontSize: 14,
+    lineHeight: 22,
+    textAlign: "center",
+    marginTop: -4,
+  },
+  landingInputWrapper: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1.5,
+    borderRadius: 16,
+    paddingLeft: 16,
+    paddingRight: 7,
+    paddingVertical: 7,
+    gap: 8,
+    width: "100%",
+    marginTop: 4,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 1,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  landingInput: {
+    flex: 1,
     fontSize: 15,
-    lineHeight: 24,
-  },
-  suggestionsSection: {
-    gap: 12,
-  },
-  suggestionsLabel: {
-    fontSize: 11,
-    textTransform: "uppercase",
-    letterSpacing: 1,
+    lineHeight: 22,
+    paddingVertical: 3,
   },
   suggestions: {
+    width: "100%",
     gap: 8,
+    marginTop: 4,
   },
   suggestionChip: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    gap: 10,
     borderWidth: 1,
     borderRadius: 12,
     paddingHorizontal: 16,
     paddingVertical: 13,
-    shadowColor: "rgba(28,25,23,0.05)",
+    shadowColor: "rgba(28,25,23,0.04)",
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 1,
     shadowRadius: 3,
@@ -547,6 +608,7 @@ const styles = StyleSheet.create({
     flex: 1,
     lineHeight: 20,
   },
+  // ── Chat state ─────────────────────────────────────────────────────
   messageList: {
     gap: 4,
     paddingTop: 16,
@@ -555,7 +617,6 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: 16,
     paddingTop: 12,
-    gap: 8,
   },
   inputWrapper: {
     flexDirection: "row",
@@ -584,10 +645,5 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     justifyContent: "center",
     alignItems: "center",
-  },
-  inputHint: {
-    fontSize: 11,
-    textAlign: "center",
-    letterSpacing: 0.2,
   },
 });

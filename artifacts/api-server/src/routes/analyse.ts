@@ -27,7 +27,8 @@ import {
 
 const router = Router();
 
-const FREE_REPORT_LIMIT = 3;
+const FREE_REPORT_LIMIT = 2;
+const STANDARD_REPORT_LIMIT = 20;
 
 function extractJSON(text: string): unknown {
   const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -180,12 +181,16 @@ router.post("/analyse", async (req, res) => {
         await db.update(profiles).set({ reportsUsedThisMonth: 0, lastResetAt: now }).where(eq(profiles.id, userId));
       }
 
-      if (profile.subscriptionTier === "free" && usedCount >= FREE_REPORT_LIMIT) {
+      const isStandard = profile.subscriptionTier === "pro" || profile.subscriptionTier === "standard";
+      const limit = isStandard ? STANDARD_REPORT_LIMIT : FREE_REPORT_LIMIT;
+      if (usedCount >= limit) {
         res.status(402).json({
-          error: `You've used all ${FREE_REPORT_LIMIT} free reports this month. Upgrade to Pro for unlimited reports.`,
+          error: isStandard
+            ? `You've used all ${STANDARD_REPORT_LIMIT} reports this month. Your limit resets on the 1st.`
+            : `You've used all ${FREE_REPORT_LIMIT} free reports this month. Upgrade to Standard for more reports.`,
           code: "LIMIT_REACHED",
           reportsUsed: usedCount,
-          limit: FREE_REPORT_LIMIT,
+          limit,
         });
         return;
       }

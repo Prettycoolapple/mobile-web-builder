@@ -34,9 +34,10 @@ const colors = {
     success: "#2E9E72",
     successForeground: "#FFFFFF",
 
-    headerBg: "#1C1917",
+    headerBg: "#2C1F16",
     headerText: "#FAFAF9",
     headerSubtext: "rgba(250,250,249,0.5)",
+    scoreCardBg: "#1E3025",
 
     emerald: "#2E9E72",
     emeraldLight: "#52C99A",
@@ -80,9 +81,10 @@ const colors = {
     success: "#2E9E72",
     successForeground: "#FFFFFF",
 
-    headerBg: "#141210",
+    headerBg: "#1F1510",
     headerText: "#FAFAF9",
     headerSubtext: "rgba(250,250,249,0.45)",
+    scoreCardBg: "#162218",
 
     emerald: "#2E9E72",
     emeraldLight: "#52C99A",

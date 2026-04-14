@@ -28,8 +28,8 @@ interface Props {
 }
 
 const FEATURES = [
-  "Unlimited feasibility reports",
-  "Full data pipeline (LINZ, Hougarden, GIS)",
+  "20 feasibility reports per month",
+  "Complete property data pipeline",
   "AI risk assessments & ROI modelling",
   "Save and revisit past reports",
   "Export to PDF (coming soon)",
@@ -98,7 +98,7 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
         await syncToBackend("pro");
         onPurchaseSuccess?.();
         onClose();
-        Alert.alert("Welcome to Pro!", "You now have unlimited feasibility reports.");
+        Alert.alert("Welcome to Standard!", "You now have 20 reports per month.");
       }
     } catch (err: any) {
       Alert.alert("Purchase failed", err?.message ?? "Something went wrong. Please try again.");
@@ -115,9 +115,9 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
         await syncToBackend("pro");
         onPurchaseSuccess?.();
         onClose();
-        Alert.alert("Purchases restored", "Your Pro subscription is active.");
+        Alert.alert("Purchases restored", "Your Standard subscription is active.");
       } else {
-        Alert.alert("No purchases found", "No active Pro subscription was found for this account.");
+        Alert.alert("No purchases found", "No active Standard subscription was found for this account.");
       }
     } catch {
       Alert.alert("Restore failed", "Could not restore purchases. Please try again.");
@@ -142,10 +142,10 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
           </View>
 
           <Text style={[styles.title, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
-            Upgrade to Pro
+            Upgrade to Standard
           </Text>
           <Text style={[styles.subtitle, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-            Unlimited feasibility reports and full data access
+            20 reports per month with full AI-powered property analysis
           </Text>
 
           <View style={styles.features}>
@@ -216,7 +216,7 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
               ? <ActivityIndicator size="small" color="#fff" />
               : <>
                   <Text style={[styles.upgradeBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>
-                    Get Pro
+                    Get Standard
                   </Text>
                   <Feather name="arrow-right" size={16} color="#fff" />
                 </>

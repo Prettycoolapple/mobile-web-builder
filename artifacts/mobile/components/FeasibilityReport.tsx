@@ -225,11 +225,14 @@ function ScoreSummaryRow({ report, colors }: { report: Report; colors: ReturnTyp
   const overallDisplay = composite > 0 ? String(Math.round(composite)) : "—";
 
   return (
-    <View style={[styles.scoresSection, { backgroundColor: colors.headerBg }]}>
+    <View style={[styles.scoresSection, { backgroundColor: (colors as any).scoreCardBg }]}>
       {/* Overall score badge — top right */}
       <View style={styles.overallRow}>
         <Text style={[styles.overallLabel, { color: "rgba(250,250,249,0.45)" }]}>OVERALL</Text>
-        <Text style={[styles.overallNumber, { color: overallColor }]}>{overallDisplay}</Text>
+        <View style={[styles.overallBadge, { backgroundColor: overallColor + "25", borderColor: overallColor + "55" }]}>
+          <Text style={[styles.overallNumber, { color: overallColor }]}>{overallDisplay}</Text>
+          <Text style={[styles.overallSubLabel, { color: overallColor + "99" }]}>/ 5</Text>
+        </View>
       </View>
 
       {/* Sub-scores: Ease · Cost · ROI */}
@@ -329,9 +332,9 @@ function EasementList({
           <Feather name={isUnconfirmed ? "alert-circle" : "check-circle"} size={14} color={isUnconfirmed ? colors.amber : colors.success} style={{ marginTop: 1 }} />
           <Text style={{ color: isUnconfirmed ? colors.amber : colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 13, flex: 1, lineHeight: 18 }}>
             {isUnconfirmed
-              ? "LINZ title data was inconclusive — a solicitor title search is required to confirm whether any easements or rights of way are registered on this title."
+              ? "Title data was inconclusive — a solicitor title search is required to confirm whether any easements or rights of way are registered on this title."
               : dataStatus === "no_memorials"
-                ? "No recorded easements found in LINZ title memorials — title appears clean, but verify with a solicitor before subdivision."
+                ? "No recorded easements found in title records — title appears clean, but verify with a solicitor before subdivision."
                 : "No easements or rights of way detected on this title."}
           </Text>
         </View>
@@ -418,12 +421,7 @@ function EasementList({
         </View>
       )}
 
-      {/* Summary text */}
-      {summary && (
-        <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 17 }}>
-          Source: LINZ title memorials
-        </Text>
-      )}
+      {summary && null}
     </View>
   );
 }
@@ -537,11 +535,6 @@ function ContourCard({ terrain, colors }: { report: Report; terrain: NonNullable
           {terrain.slope && (
             <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 13, lineHeight: 18 }}>
               {terrain.slope}
-            </Text>
-          )}
-          {terrain.source && (
-            <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11 }}>
-              Source: {terrain.source}
             </Text>
           )}
         </View>
@@ -1071,7 +1064,6 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
                 <Feather name="layers" size={11} color="rgba(250,249,246,0.7)" />
                 <Text style={styles.overlayMapLabel}>Planning overlay map (via Hougarden)</Text>
               </View>
-              <Text style={styles.overlayMapSource}>Source: hougarden.com</Text>
             </View>
           </View>
         )}
@@ -1095,40 +1087,21 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
 
       {report.propertyOverview && (
         <SectionCard title="Property overview" icon="📍" defaultOpen={false} colors={colors}>
-          <View>
-            <InfoRow
-              label="Capital Value"
-              value={report.propertyOverview.cv || "Unavailable — check Auckland Council"}
-              valueColor={!report.propertyOverview.cv ? colors.amber : undefined}
-              colors={colors}
-            />
-            {report.data_sources?.cv_nzd && (
-              <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, marginTop: -4, marginBottom: 4, textAlign: "right" }}>
-                Source: {report.data_sources.cv_nzd}
-              </Text>
-            )}
-          </View>
-          <View>
-            <InfoRow
-              label="Land Area"
-              value={report.propertyOverview.landArea || "Unavailable — check LINZ"}
-              valueColor={!report.propertyOverview.landArea ? colors.amber : undefined}
-              colors={colors}
-            />
-            {report.data_sources?.land_area_sqm && (
-              <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, marginTop: -4, marginBottom: 4, textAlign: "right" }}>
-                Source: {report.data_sources.land_area_sqm}
-              </Text>
-            )}
-          </View>
+          <InfoRow
+            label="Capital Value"
+            value={report.propertyOverview.cv || "Unavailable"}
+            valueColor={!report.propertyOverview.cv ? colors.amber : undefined}
+            colors={colors}
+          />
+          <InfoRow
+            label="Land Area"
+            value={report.propertyOverview.landArea || "Unavailable"}
+            valueColor={!report.propertyOverview.landArea ? colors.amber : undefined}
+            colors={colors}
+          />
           {report.propertyOverview.floorArea && (
             <View>
               <InfoRow label="Floor Area" value={report.propertyOverview.floorArea} colors={colors} />
-              {report.data_sources?.floor_area_sqm && (
-                <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, marginTop: -4, marginBottom: 4, textAlign: "right" }}>
-                  Source: {report.data_sources.floor_area_sqm}
-                </Text>
-              )}
             </View>
           )}
           <InfoRow label="Build Year" value={report.propertyOverview.buildYear || "N/A"} colors={colors} />
@@ -1262,9 +1235,11 @@ const styles = StyleSheet.create({
   headerMeta: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 5, flexWrap: "wrap" },
   zoneBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 100 },
   scoresSection: { paddingBottom: 16 },
-  overallRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", paddingHorizontal: 18, paddingTop: 14, paddingBottom: 10, gap: 8 },
+  overallRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", paddingHorizontal: 18, paddingTop: 16, paddingBottom: 10, gap: 8 },
   overallLabel: { fontFamily: "DM_Sans_400Regular", fontSize: 10, textTransform: "uppercase", letterSpacing: 1.2 },
+  overallBadge: { flexDirection: "row", alignItems: "baseline", gap: 3, borderRadius: 16, borderWidth: 1.5, paddingHorizontal: 16, paddingVertical: 8 },
   overallNumber: { fontFamily: "DM_Sans_700Bold", fontSize: 44, lineHeight: 48 },
+  overallSubLabel: { fontFamily: "DM_Sans_500Medium", fontSize: 16, lineHeight: 22, marginBottom: 2 },
   scoresRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-around", borderTopWidth: StyleSheet.hairlineWidth, paddingVertical: 14, paddingHorizontal: 12 },
   scoreDivider: { width: StyleSheet.hairlineWidth, height: 36 },
   reasonsRow: { flexDirection: "row", borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 12, paddingHorizontal: 16, gap: 16 },

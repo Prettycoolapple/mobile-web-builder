@@ -145,6 +145,18 @@ router.get("/me", requireAuth, async (req, res) => {
   }
 });
 
+router.delete("/account", requireAuth, async (req, res) => {
+  const userId = (req as any).userId as string;
+  try {
+    // searches cascade-delete automatically via FK constraint
+    await db.delete(profiles).where(eq(profiles.id, userId));
+    res.json({ success: true });
+  } catch (error) {
+    req.log.error({ error }, "Failed to delete account");
+    res.status(500).json({ error: "Failed to delete account. Please try again.", code: "DELETE_FAILED" });
+  }
+});
+
 router.patch("/profile", requireAuth, async (req, res) => {
   const userId = (req as any).userId as string;
   const { fullName } = req.body as { fullName?: string };

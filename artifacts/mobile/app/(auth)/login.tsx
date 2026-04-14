@@ -10,11 +10,31 @@ import {
   ActivityIndicator,
   ScrollView,
 } from "react-native";
+import Svg, { Circle, Line } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
+
+function GlassesLogo({ size = 40, color = "#D97757" }: { size?: number; color?: string }) {
+  const w = size * 1.5;
+  const h = size * 0.65;
+  const r = size * 0.28;
+  const cx1 = size * 0.32;
+  const cx2 = size * 1.18;
+  const cy = h * 0.55;
+  const strokeW = size * 0.065;
+  return (
+    <Svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
+      <Circle cx={cx1} cy={cy} r={r} stroke={color} strokeWidth={strokeW} fill="none" />
+      <Circle cx={cx2} cy={cy} r={r} stroke={color} strokeWidth={strokeW} fill="none" />
+      <Line x1={cx1 + r} y1={cy} x2={cx2 - r} y2={cy} stroke={color} strokeWidth={strokeW * 0.8} strokeLinecap="round" />
+      <Line x1={cx1 - r} y1={cy - r * 0.3} x2={cx1 - r - size * 0.2} y2={cy - r * 0.65} stroke={color} strokeWidth={strokeW * 0.8} strokeLinecap="round" />
+      <Line x1={cx2 + r} y1={cy - r * 0.3} x2={cx2 + r + size * 0.2} y2={cy - r * 0.65} stroke={color} strokeWidth={strokeW * 0.8} strokeLinecap="round" />
+    </Svg>
+  );
+}
 
 export default function LoginScreen() {
   const colors = useColors();
@@ -56,9 +76,7 @@ export default function LoginScreen() {
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.logoRow}>
-            <View style={[styles.logoMark, { backgroundColor: colors.accent }]}>
-              <Text style={styles.logoMarkText}>L</Text>
-            </View>
+            <GlassesLogo size={32} color={colors.accent} />
             <View>
               <Text style={[styles.logoTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
                 Lecorb

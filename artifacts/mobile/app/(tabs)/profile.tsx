@@ -18,20 +18,17 @@ import { useAuth } from "@/context/AuthContext";
 import { useChat, FeasibilityReport } from "@/context/ChatContext";
 import { getSubscriptionStatus, restorePurchases, purchasePro } from "@/lib/revenuecat";
 
+const FREE_LIMIT = 2;
+const STANDARD_LIMIT = 20;
+
 const PLAN_FEATURES = {
   free: [
-    "3 feasibility reports/month",
-    "AI chat follow-ups",
-    "Basic property analysis",
-    "Discovery search",
+    "2 feasibility reports/month",
+    "AI chat & property discovery",
   ],
-  pro: [
-    "Unlimited feasibility reports",
-    "Full data pipeline — live property data",
-    "AI risk assessments & ROI modelling",
-    "Full comparable sales data",
-    "PDF export (coming soon)",
-    "Email report sharing",
+  standard: [
+    "20 feasibility reports/month",
+    "AI chat & property discovery",
   ],
 };
 
@@ -163,10 +160,12 @@ export default function ProfileScreen() {
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
 
-  const isPro = user?.subscriptionTier === "pro";
-  const freeLimit = 3;
+  const isStandard = user?.subscriptionTier === "pro" || user?.subscriptionTier === "standard";
+  const planLimit = isStandard ? STANDARD_LIMIT : FREE_LIMIT;
   const usage = user?.reportsUsedThisMonth ?? 0;
-  const usagePct = isPro ? 100 : Math.min((usage / freeLimit) * 100, 100);
+  const remaining = planLimit - usage;
+  const usagePct = Math.min((usage / planLimit) * 100, 100);
+  const showWarning = remaining <= 3 && remaining >= 0;
 
   const reportCount = sessions.filter((s) =>
     s.messages.some((m) => m.type === "report")
@@ -183,7 +182,6 @@ export default function ProfileScreen() {
         setHistorySearches(data.searches ?? []);
       }
     } catch {
-      // silent fail
     } finally {
       setHistoryLoading(false);
     }
@@ -221,7 +219,7 @@ export default function ProfileScreen() {
       const success = await purchasePro();
       if (success) {
         await syncToBackend("pro");
-        Alert.alert("Welcome to Pro!", "You now have unlimited feasibility reports.");
+        Alert.alert("Welcome to Standard!", `You now have ${STANDARD_LIMIT} reports per month.`);
       }
     } catch (err: any) {
       Alert.alert("Purchase failed", err?.message ?? "Something went wrong. Please try again.");
@@ -236,9 +234,9 @@ export default function ProfileScreen() {
       const success = await restorePurchases();
       if (success) {
         await syncToBackend("pro");
-        Alert.alert("Purchases restored", "Your Pro subscription is active.");
+        Alert.alert("Purchases restored", "Your Standard subscription is active.");
       } else {
-        Alert.alert("No purchases found", "No active Pro subscription was found.");
+        Alert.alert("No purchases found", "No active subscription was found.");
       }
     } catch {
       Alert.alert("Restore failed", "Could not restore purchases. Please try again.");
@@ -314,6 +312,49 @@ export default function ProfileScreen() {
     ]);
   };
 
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      "Delete account",
+      "This will permanently delete your account and all your reports. This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete my account",
+          style: "destructive",
+          onPress: () => {
+            Alert.alert(
+              "Are you sure?",
+              `All data for ${user?.email ?? "your account"} will be permanently removed.`,
+              [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Yes, delete",
+                  style: "destructive",
+                  onPress: async () => {
+                    try {
+                      const resp = await fetch(`${getApiBase()}/account`, {
+                        method: "DELETE",
+                        headers: getApiHeaders(),
+                      });
+                      if (resp.ok) {
+                        await signOut();
+                        router.replace("/(auth)/login");
+                      } else {
+                        Alert.alert("Error", "Could not delete your account. Please try again or contact support.");
+                      }
+                    } catch {
+                      Alert.alert("Error", "Could not delete your account. Please check your connection.");
+                    }
+                  },
+                },
+              ],
+            );
+          },
+        },
+      ],
+    );
+  };
+
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={[styles.header, { paddingTop: topInset, backgroundColor: colors.headerBg }]}>
@@ -330,9 +371,10 @@ export default function ProfileScreen() {
       </View>
 
       <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: bottomInset + 32 }]}
+        contentContainerStyle={[styles.content, { paddingBottom: bottomInset + 48 }]}
         showsVerticalScrollIndicator={false}
       >
+        {/* Plan card */}
         <View style={[styles.planCard, { backgroundColor: colors.headerBg }]}>
           <View style={styles.planTop}>
             <View>
@@ -340,18 +382,18 @@ export default function ProfileScreen() {
                 Current plan
               </Text>
               <Text style={[styles.planName, { color: colors.headerText, fontFamily: "DM_Sans_700Bold" }]}>
-                {isPro ? "Pro" : "Free"}
+                {isStandard ? "Standard" : "Free"}
               </Text>
             </View>
             <View style={[styles.planBadge, {
-              borderColor: isPro ? colors.accent + "80" : "rgba(250,250,249,0.2)",
-              backgroundColor: isPro ? colors.accent + "20" : "transparent",
+              borderColor: isStandard ? colors.accent + "80" : "rgba(250,250,249,0.2)",
+              backgroundColor: isStandard ? colors.accent + "20" : "transparent",
             }]}>
               <Text style={[styles.planBadgeText, {
-                color: isPro ? colors.accent : "rgba(250,250,249,0.6)",
+                color: isStandard ? colors.accent : "rgba(250,250,249,0.6)",
                 fontFamily: "DM_Sans_500Medium",
               }]}>
-                {isPro ? "Pro" : "Free tier"}
+                {isStandard ? "Standard" : "Free tier"}
               </Text>
             </View>
           </View>
@@ -359,32 +401,33 @@ export default function ProfileScreen() {
           <View style={styles.usageSection}>
             <View style={styles.usageRow}>
               <Text style={[styles.usageLabel, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
-                Monthly reports used
+                Reports used this month
               </Text>
               <Text style={[styles.usageCount, { color: colors.headerText, fontFamily: "DM_Sans_700Bold" }]}>
-                {isPro ? `${usage} / ∞` : `${usage}/${freeLimit}`}
+                {usage}/{planLimit}
               </Text>
             </View>
-            {!isPro && (
-              <>
-                <View style={[styles.usageTrack, { backgroundColor: "rgba(250,250,249,0.12)" }]}>
-                  <View
-                    style={[styles.usageFill, {
-                      width: `${usagePct}%`,
-                      backgroundColor: usage >= freeLimit ? colors.red : colors.accent,
-                    }]}
-                  />
-                </View>
-                {usage >= freeLimit && (
-                  <Text style={[styles.limitNote, { color: colors.amber, fontFamily: "DM_Sans_500Medium" }]}>
-                    Monthly limit reached — upgrade to continue
-                  </Text>
-                )}
-              </>
+            <View style={[styles.usageTrack, { backgroundColor: "rgba(250,250,249,0.12)" }]}>
+              <View
+                style={[styles.usageFill, {
+                  width: `${usagePct}%`,
+                  backgroundColor: usage >= planLimit ? colors.red : showWarning ? colors.amber : colors.accent,
+                }]}
+              />
+            </View>
+            {usage >= planLimit && (
+              <Text style={[styles.limitNote, { color: colors.red, fontFamily: "DM_Sans_500Medium" }]}>
+                Monthly limit reached — {isStandard ? "resets on the 1st" : "upgrade to continue"}
+              </Text>
+            )}
+            {showWarning && usage < planLimit && (
+              <Text style={[styles.limitNote, { color: colors.amber, fontFamily: "DM_Sans_500Medium" }]}>
+                {remaining} report{remaining !== 1 ? "s" : ""} remaining this month
+              </Text>
             )}
           </View>
 
-          {isPro && (
+          {isStandard && (
             <View style={styles.proActions}>
               <TouchableOpacity
                 style={[styles.actionBtn, { borderColor: "rgba(250,250,249,0.2)" }]}
@@ -414,30 +457,31 @@ export default function ProfileScreen() {
           )}
         </View>
 
-        {!isPro && (
+        {/* Upgrade card */}
+        {!isStandard && (
           <>
-            <SectionHeader title="Upgrade to Pro" />
+            <SectionHeader title="Upgrade to Standard" />
 
             <View style={[styles.proCard, { backgroundColor: colors.card, borderColor: colors.accent + "35" }]}>
               <View style={styles.proTop}>
                 <View>
                   <Text style={[styles.proTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
-                    Pro Plan
+                    Standard Plan
                   </Text>
                   <View style={styles.priceRow}>
-                    <Text style={[styles.price, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>$49</Text>
+                    <Text style={[styles.price, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>$29</Text>
                     <Text style={[styles.pricePer, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
                       /mo NZD
                     </Text>
                   </View>
                 </View>
                 <View style={[styles.proBadge, { backgroundColor: colors.accent }]}>
-                  <Text style={[styles.proBadgeText, { fontFamily: "DM_Sans_700Bold" }]}>PRO</Text>
+                  <Text style={[styles.proBadgeText, { fontFamily: "DM_Sans_700Bold" }]}>STD</Text>
                 </View>
               </View>
 
               <View style={styles.featuresList}>
-                {PLAN_FEATURES.pro.map((f) => (
+                {PLAN_FEATURES.standard.map((f) => (
                   <FeatureRow key={f} text={f} included />
                 ))}
               </View>
@@ -453,7 +497,7 @@ export default function ProfileScreen() {
                 ) : (
                   <>
                     <Text style={[styles.upgradeBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>
-                      Upgrade to Pro
+                      Upgrade to Standard
                     </Text>
                     <Feather name="arrow-right" size={16} color="#fff" />
                   </>
@@ -477,10 +521,10 @@ export default function ProfileScreen() {
           </>
         )}
 
-        <SectionHeader title={isPro ? "Pro plan includes" : "Free plan includes"} />
+        <SectionHeader title={isStandard ? "Standard plan includes" : "Free plan includes"} />
 
         <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          {(isPro ? PLAN_FEATURES.pro : PLAN_FEATURES.free).map((f) => (
+          {(isStandard ? PLAN_FEATURES.standard : PLAN_FEATURES.free).map((f) => (
             <FeatureRow key={f} text={f} included />
           ))}
         </View>
@@ -553,29 +597,32 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        <SectionHeader title="About" />
-
-        <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <Text style={[styles.aboutText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-            Lecorb is an AI-powered real estate development feasibility tool designed for the New Zealand property market. Powered by Gemini AI with deep NZ-specific knowledge.
-          </Text>
-          <View style={[styles.disclaimerBox, { backgroundColor: colors.muted, borderRadius: 8 }]}>
-            <Text style={[styles.disclaimerText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-              All cost estimates are indicative only. Always engage qualified professionals before making development decisions.
+        {/* Actions */}
+        <View style={[styles.actionsCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <TouchableOpacity
+            style={[styles.actionRow, { borderBottomColor: colors.border }]}
+            onPress={handleSignOut}
+            activeOpacity={0.7}
+          >
+            <Feather name="log-out" size={17} color={colors.danger} />
+            <Text style={[styles.actionRowText, { color: colors.danger, fontFamily: "DM_Sans_500Medium" }]}>
+              Sign out
             </Text>
-          </View>
-        </View>
+            <Feather name="chevron-right" size={16} color={colors.danger + "80"} />
+          </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[styles.signOutBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
-          onPress={handleSignOut}
-          activeOpacity={0.7}
-        >
-          <Feather name="log-out" size={18} color={colors.danger} />
-          <Text style={[styles.signOutText, { color: colors.danger, fontFamily: "DM_Sans_500Medium" }]}>
-            Sign out
-          </Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.actionRow}
+            onPress={handleDeleteAccount}
+            activeOpacity={0.7}
+          >
+            <Feather name="trash-2" size={17} color={colors.mutedForeground} />
+            <Text style={[styles.actionRowText, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>
+              Delete account
+            </Text>
+            <Feather name="chevron-right" size={16} color={colors.mutedForeground + "60"} />
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     </View>
   );
@@ -609,38 +656,28 @@ const styles = StyleSheet.create({
   usageTrack: { height: 5, borderRadius: 3, overflow: "hidden" },
   usageFill: { height: "100%", borderRadius: 3 },
   limitNote: { fontSize: 12, marginTop: 2 },
-  proActions: { gap: 8 },
+  proActions: { flexDirection: "row", gap: 8 },
   actionBtn: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 8,
     borderWidth: 1,
-    alignSelf: "flex-start",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
   },
-  actionBtnText: { fontSize: 13 },
-  proCard: {
-    borderRadius: 16,
-    borderWidth: 1.5,
-    padding: 18,
-    gap: 16,
-    shadowColor: "rgba(217,119,87,0.1)",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 1,
-    shadowRadius: 12,
-    elevation: 3,
-  },
+  actionBtnText: { fontSize: 12, flex: 1 },
+  proCard: { borderRadius: 16, padding: 18, gap: 14, borderWidth: 1.5 },
   proTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
-  proTitle: { fontSize: 20, letterSpacing: -0.3 },
-  priceRow: { flexDirection: "row", alignItems: "baseline", gap: 3, marginTop: 3 },
-  price: { fontSize: 30, letterSpacing: -1 },
-  pricePer: { fontSize: 13 },
-  proBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 100 },
+  proTitle: { fontSize: 18, letterSpacing: -0.3 },
+  priceRow: { flexDirection: "row", alignItems: "baseline", gap: 3, marginTop: 4 },
+  price: { fontSize: 28, letterSpacing: -0.5 },
+  pricePer: { fontSize: 14 },
+  proBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
   proBadgeText: { fontSize: 11, color: "#fff", letterSpacing: 0.5 },
-  featuresList: { gap: 10 },
-  featureRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  featuresList: { gap: 8 },
+  featureRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   featureText: { fontSize: 14 },
   upgradeBtn: {
     flexDirection: "row",
@@ -649,109 +686,48 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingVertical: 14,
     borderRadius: 12,
-    marginTop: 2,
     minHeight: 50,
   },
   upgradeBtnText: { fontSize: 15, color: "#fff" },
-  restoreLink: { alignItems: "center", paddingVertical: 6 },
+  restoreLink: { alignItems: "center", paddingVertical: 4 },
   restoreLinkText: { fontSize: 13 },
-  section: { borderRadius: 16, borderWidth: 1, padding: 16, gap: 12 },
-  historyCard: {
-    borderRadius: 16,
+  section: { borderRadius: 14, padding: 16, gap: 10, borderWidth: 1 },
+  historyCard: { borderRadius: 14, borderWidth: 1, overflow: "hidden" },
+  historyItem: { paddingVertical: 13, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", gap: 10 },
+  historyItemMain: { flex: 1, gap: 4 },
+  historyAddress: { fontSize: 14 },
+  historyMeta: { flexDirection: "row", alignItems: "center", gap: 5 },
+  historyMetaText: { fontSize: 12 },
+  historyMetaDot: { fontSize: 12 },
+  zoneChip: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6, borderWidth: StyleSheet.hairlineWidth },
+  zoneChipText: { fontSize: 11 },
+  historyItemRight: { flexDirection: "row", alignItems: "center", gap: 6 },
+  scoreDot: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 8, borderWidth: 1 },
+  scoreDotText: { fontSize: 12 },
+  historyEmpty: { padding: 28, alignItems: "center", gap: 10 },
+  historyEmptyText: { fontSize: 13, textAlign: "center", lineHeight: 20 },
+  historyHint: { fontSize: 11, textAlign: "center", paddingHorizontal: 4 },
+  statsCard: { borderRadius: 14, borderWidth: 1, flexDirection: "row", overflow: "hidden" },
+  statItem: { flex: 1, alignItems: "center", paddingVertical: 18, gap: 3 },
+  statNum: { fontSize: 24, letterSpacing: -0.5 },
+  statLabel: { fontSize: 12 },
+  statDivider: { width: StyleSheet.hairlineWidth },
+  actionsCard: {
+    borderRadius: 14,
     borderWidth: 1,
     overflow: "hidden",
+    marginTop: 4,
   },
-  historyEmpty: {
-    padding: 24,
-    alignItems: "center",
-    gap: 10,
-  },
-  historyEmptyText: {
-    fontSize: 13,
-    lineHeight: 20,
-    textAlign: "center",
-  },
-  historyItem: {
+  actionRow: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 13,
     gap: 12,
+    paddingVertical: 15,
+    paddingHorizontal: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  historyItemMain: {
+  actionRowText: {
     flex: 1,
-    gap: 4,
+    fontSize: 15,
   },
-  historyAddress: {
-    fontSize: 14,
-    lineHeight: 20,
-  },
-  historyMeta: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    flexWrap: "wrap",
-  },
-  historyMetaText: {
-    fontSize: 11,
-    lineHeight: 16,
-  },
-  historyMetaDot: {
-    fontSize: 11,
-  },
-  zoneChip: {
-    paddingHorizontal: 6,
-    paddingVertical: 1,
-    borderRadius: 4,
-    borderWidth: 1,
-  },
-  zoneChipText: {
-    fontSize: 10,
-  },
-  historyItemRight: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  scoreDot: {
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 8,
-    borderWidth: 1,
-  },
-  scoreDotText: {
-    fontSize: 12,
-  },
-  historyHint: {
-    fontSize: 11,
-    textAlign: "center",
-    marginTop: 2,
-    marginBottom: 4,
-  },
-  statsCard: {
-    borderRadius: 16,
-    borderWidth: 1,
-    padding: 20,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-around",
-  },
-  statItem: { alignItems: "center", flex: 1, gap: 4 },
-  statNum: { fontSize: 30, letterSpacing: -1 },
-  statLabel: { fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5 },
-  statDivider: { width: 1, height: 44 },
-  aboutText: { fontSize: 14, lineHeight: 22 },
-  disclaimerBox: { padding: 12, marginTop: 4 },
-  disclaimerText: { fontSize: 12, lineHeight: 18 },
-  signOutBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-    marginTop: 16,
-    padding: 14,
-    borderRadius: 12,
-    borderWidth: 1,
-  },
-  signOutText: { fontSize: 15 },
 });
