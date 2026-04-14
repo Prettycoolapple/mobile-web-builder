@@ -228,6 +228,152 @@ function buildElevationGrid(lat: number, lng: number, offset = 0.00025) {
 }
 
 // ---------------------------------------------------------------------------
+// LINZ LiDAR 1m DEM via WCS (Web Coverage Service)
+// ---------------------------------------------------------------------------
+// Requires the LINZ API key to have WCS service access enabled.
+// If enabled, this queries the actual Auckland 1m LiDAR DEM — the same
+// dataset the Auckland Council GIS viewer shows with 1m-interval contours.
+//
+// To enable: data.linz.govt.nz → My Account → API Keys → edit key → enable WCS
+//
+// Layer priority:
+//   106410  Auckland North LiDAR 1m DEM (2016-2018) — covers Meadowbank/Glendowie
+//   121990  Auckland Part 1 LiDAR 1m DEM (2024)     — newer survey where available
+//   121859  New Zealand LiDAR 1m DEM                — national composite fallback
+// ---------------------------------------------------------------------------
+
+function parseAscGrid(text: string): { values: number[]; ncols: number; nrows: number; xll: number; yll: number; cellsize: number } | null {
+  const lines = text.trim().split("\n");
+  const header: Record<string, number> = {};
+  let dataStart = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const parts = lines[i].trim().split(/\s+/);
+    if (isNaN(parseFloat(parts[0]))) {
+      header[parts[0].toLowerCase()] = parseFloat(parts[1]);
+      dataStart = i + 1;
+    } else break;
+  }
+  if (header["ncols"] === undefined) return null;
+  const nodata = header["nodata_value"] ?? -9999;
+  const rows: number[][] = [];
+  for (let i = dataStart; i < lines.length; i++) {
+    const vals = lines[i].trim().split(/\s+/).map(Number);
+    if (vals.length > 0) rows.push(vals);
+  }
+  const values = rows.flat().map((v) => (v === nodata || isNaN(v) ? NaN : v)).filter((v) => !isNaN(v));
+  return {
+    values,
+    ncols: header["ncols"],
+    nrows: header["nrows"],
+    xll: header["xllcorner"] ?? header["xllcenter"],
+    yll: header["yllcorner"] ?? header["yllcenter"],
+    cellsize: header["cellsize"],
+  };
+}
+
+async function fetchElevationViaLinzLiDAR(lat: number, lng: number, parcelBbox?: ParcelBbox | null): Promise<ContourResult | null> {
+  const LINZ_API_KEY = process.env["LINZ_API_KEY"];
+  if (!LINZ_API_KEY) return null;
+
+  // Use parcel bbox if available, otherwise fall back to a 100m box around the geocoded point
+  const FALLBACK_DEG = 0.0005; // ~55m
+  const minLng = parcelBbox ? parcelBbox.minLng - 0.00005 : lng - FALLBACK_DEG;
+  const maxLng = parcelBbox ? parcelBbox.maxLng + 0.00005 : lng + FALLBACK_DEG;
+  const minLat = parcelBbox ? parcelBbox.minLat - 0.00005 : lat - FALLBACK_DEG;
+  const maxLat = parcelBbox ? parcelBbox.maxLat + 0.00005 : lat + FALLBACK_DEG;
+
+  // Request ~1m resolution: compute pixel count from bbox dimensions
+  const widthM  = (maxLng - minLng) * 111320 * Math.cos((lat * Math.PI) / 180);
+  const heightM = (maxLat - minLat) * 111320;
+  const ncols = Math.min(Math.max(Math.ceil(widthM), 10), 300);   // cap at 300px
+  const nrows = Math.min(Math.max(Math.ceil(heightM), 10), 300);
+
+  // Try Auckland-specific layers first, then national composite
+  const LAYERS = [106410, 121990, 122580, 121859];
+
+  for (const layerId of LAYERS) {
+    try {
+      const url = new URL(`https://data.linz.govt.nz/services;key=${LINZ_API_KEY}/wcs`);
+      url.searchParams.set("service", "WCS");
+      url.searchParams.set("version", "1.0.0");
+      url.searchParams.set("request", "GetCoverage");
+      url.searchParams.set("coverage", `layer-${layerId}`);
+      url.searchParams.set("bbox", `${minLng},${minLat},${maxLng},${maxLat}`);
+      url.searchParams.set("crs", "EPSG:4326");
+      url.searchParams.set("width", String(ncols));
+      url.searchParams.set("height", String(nrows));
+      url.searchParams.set("format", "application/x-aaigrid");
+
+      const resp = await fetch(url.toString(), { signal: AbortSignal.timeout(12000) });
+      if (resp.status === 404 || resp.status === 401 || resp.status === 403) {
+        logger.debug({ layerId, status: resp.status }, "LINZ WCS: layer not accessible — trying next");
+        continue;
+      }
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => "");
+        if (body.includes("ExceptionReport") || body.includes("<!DOCTYPE")) {
+          logger.debug({ layerId, status: resp.status }, "LINZ WCS: error/HTML response — trying next");
+          continue;
+        }
+        throw new Error(`LINZ WCS HTTP ${resp.status}`);
+      }
+
+      const text = await resp.text();
+      if (text.includes("ExceptionReport") || text.includes("<!DOCTYPE")) {
+        logger.debug({ layerId }, "LINZ WCS: got exception/HTML instead of grid data");
+        continue;
+      }
+
+      const grid = parseAscGrid(text);
+      if (!grid || grid.values.length === 0) {
+        logger.debug({ layerId }, "LINZ WCS: empty or unparseable grid");
+        continue;
+      }
+
+      // Apply point-in-polygon filter if polygon is available
+      let values: number[];
+      if (parcelBbox?.polygon && parcelBbox.polygon.length >= 3) {
+        const filtered: number[] = [];
+        const polygon = parcelBbox.polygon;
+        for (let r = 0; r < grid.nrows; r++) {
+          for (let c = 0; c < grid.ncols; c++) {
+            const pxLng = grid.xll + (c + 0.5) * grid.cellsize;
+            const pxLat = grid.yll + (grid.nrows - r - 0.5) * grid.cellsize; // ASC rows top-to-bottom
+            if (pointInPolygon(pxLng, pxLat, polygon)) {
+              const v = grid.values[r * grid.ncols + c];
+              if (v !== undefined && !isNaN(v)) filtered.push(v);
+            }
+          }
+        }
+        values = filtered.length > 0 ? filtered : grid.values;
+      } else {
+        values = grid.values;
+      }
+
+      const elevMin = Math.min(...values);
+      const elevMax = Math.max(...values);
+      const elevRange = elevMax - elevMin;
+
+      // Slope: elevation range / longest axis of the parcel (conservative estimate)
+      const longestAxisM = Math.max(widthM, heightM);
+      const slopeDeg = longestAxisM > 1 ? Math.atan(elevRange / longestAxisM) * (180 / Math.PI) : 0;
+
+      const centerElev = values[Math.floor(values.length / 2)];
+      logger.info(
+        { layerId, ncols, nrows, pixels: values.length, elevMin: elevMin.toFixed(1), elevMax: elevMax.toFixed(1), elevRange: elevRange.toFixed(1), slopeDeg: slopeDeg.toFixed(1) },
+        "LINZ LiDAR WCS: elevation retrieved",
+      );
+      return classifySlope(slopeDeg, `LINZ LiDAR 1m DEM (layer ${layerId})`, centerElev);
+    } catch (err) {
+      logger.debug({ layerId, err: (err as Error).message }, "LINZ WCS layer attempt failed");
+    }
+  }
+
+  logger.info("LINZ LiDAR WCS: no accessible layer (WCS not enabled on API key)");
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Terrain tile elevation (Terrarium / AWS Elevation Tiles)
 // ---------------------------------------------------------------------------
 // Uses the public AWS Elevation Tiles (Terrarium RGB encoding).
@@ -696,9 +842,19 @@ async function fetchElevationViaLINZ(lat: number, lng: number): Promise<ContourR
 }
 
 export async function fetchContour(lat: number, lng: number, parcelBbox?: ParcelBbox | null): Promise<ContourResult> {
-  // 1. AWS Terrarium terrain tiles — public, no key, ~3.8m resolution backed by 1m NZ LiDAR
-  //    This is the most accurate freely available source for NZ.  SRTM-based sources (Google,
-  //    nzdem8m) are smoothed at 30m and systematically underestimate slope on urban hillsides.
+  // 1. LINZ LiDAR 1m DEM via WCS — the exact dataset used by Auckland Council GIS.
+  //    Requires WCS service to be enabled on the LINZ API key.
+  //    data.linz.govt.nz → My Account → API Keys → edit → enable WCS
+  try {
+    const result = await fetchElevationViaLinzLiDAR(lat, lng, parcelBbox);
+    if (result) return result;
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "LINZ LiDAR WCS failed — trying Terrarium tiles");
+  }
+
+  // 2. AWS Terrarium terrain tiles — public, no key, ~3.8m resolution.
+  //    Uses SRTM 30m data for NZ at zoom 15 (LiDAR tiles above z15 not available).
+  //    Underestimates slope on urban hillsides — fallback only.
   try {
     const result = await fetchElevationViaTerrarium(lat, lng, parcelBbox);
     if (result) return result;
@@ -706,7 +862,7 @@ export async function fetchContour(lat: number, lng: number, parcelBbox?: Parcel
     logger.warn({ err: (err as Error).message }, "Terrarium tiles failed — trying Google Elevation");
   }
 
-  // 2. Google Elevation — fallback when Terrarium unavailable
+  // 3. Google Elevation — fallback when Terrarium unavailable
   if (process.env["GOOGLE_MAPS_API_KEY"]) {
     try {
       const result = await fetchElevationViaGoogle(lat, lng);
@@ -716,7 +872,7 @@ export async function fetchContour(lat: number, lng: number, parcelBbox?: Parcel
     }
   }
 
-  // 3. Open-Topo-Data NZ 8m DEM — free, no key, NZ-specific
+  // 4. Open-Topo-Data NZ 8m DEM — free, no key, NZ-specific
   try {
     const result = await fetchElevationViaOpenTopoData(lat, lng, parcelBbox);
     if (result) return result;
@@ -724,7 +880,7 @@ export async function fetchContour(lat: number, lng: number, parcelBbox?: Parcel
     logger.warn({ err: (err as Error).message }, "OpenTopoData query failed — trying Open-Elevation");
   }
 
-  // 4. Open-Elevation API — free backup
+  // 5. Open-Elevation API — free backup
   try {
     const result = await fetchElevationViaOpenElevation(lat, lng);
     if (result) return result;
@@ -732,7 +888,7 @@ export async function fetchContour(lat: number, lng: number, parcelBbox?: Parcel
     logger.warn({ err: (err as Error).message }, "Open-Elevation query failed — trying LINZ DEM");
   }
 
-  // 4. LINZ DEM — requires LINZ_API_KEY
+  // 6. LINZ DEM contour vector layer — requires LINZ_API_KEY
   try {
     const result = await fetchElevationViaLINZ(lat, lng);
     if (result) return result;
