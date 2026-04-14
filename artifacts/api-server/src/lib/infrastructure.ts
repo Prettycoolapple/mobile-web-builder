@@ -10,28 +10,39 @@ export interface InfrastructureItem {
   note: string;
 }
 
-const GIS_BASE = "https://gis.aucklandcouncil.govt.nz/arcgis/rest/services";
+// ─── Auckland Council public GIS (accessible from cloud) ─────────────────────
+// NOTE: gis.aucklandcouncil.govt.nz is blocked from non-NZ / cloud IPs.
+//       mapspublic.aucklandcouncil.govt.nz is the publicly accessible endpoint.
+//       LiveMaps/UndergroundServices is a single MapServer that contains all
+//       wastewater, stormwater, and water pipe layers, so we can query it once
+//       per infrastructure type instead of trying multiple service URLs.
+const MAPS_BASE = "https://mapspublic.aucklandcouncil.govt.nz/arcgis/rest/services";
+const UNDERGROUND_SVC = `${MAPS_BASE}/LiveMaps/UndergroundServices/MapServer`;
 
-const INFRA_LAYERS = [
+const INFRA_LAYERS: Array<{
+  name: string;
+  layers: Array<{ id: number; label: string }>;
+}> = [
   {
-    name: "Stormwater",
-    services: [
-      { url: `${GIS_BASE}/Infrastructure/Stormwater/MapServer`, layer: 0 },
-      { url: `${GIS_BASE}/Infrastructure/Wastewater_Stormwater/MapServer`, layer: 1 },
+    name: "Wastewater",
+    layers: [
+      { id: 5,  label: "Wastewater Pipe (Local)" },
+      { id: 12, label: "Wastewater Pipe (Transmission)" },
     ],
   },
   {
-    name: "Wastewater",
-    services: [
-      { url: `${GIS_BASE}/Infrastructure/Wastewater/MapServer`, layer: 0 },
-      { url: `${GIS_BASE}/Infrastructure/Wastewater_Stormwater/MapServer`, layer: 0 },
+    name: "Stormwater",
+    layers: [
+      { id: 109, label: "Stormwater Pipe" },
+      { id: 32,  label: "Stormwater Watercourse" },
+      { id: 36,  label: "Stormwater Channel" },
     ],
   },
   {
     name: "Water Supply",
-    services: [
-      { url: `${GIS_BASE}/Infrastructure/Water_Supply/MapServer`, layer: 0 },
-      { url: `${GIS_BASE}/Infrastructure/Water/MapServer`, layer: 0 },
+    layers: [
+      { id: 52, label: "Water Pipe (Local)" },
+      { id: 61, label: "Water Pipe (Transmission)" },
     ],
   },
 ];
@@ -88,26 +99,39 @@ function classifyDistance(distanceM: number | null): {
   };
 }
 
+// Haversine distance in metres between two WGS84 points.
+// Both arguments must be in decimal degrees. The AC GIS service returns
+// geometry in EPSG:4326 when outSR=4326 is set, so this is always safe.
+function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6_371_000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+  return 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * R;
+}
+
 async function queryNearestFeature(
   lat: number,
   lng: number,
-  serviceUrl: string,
   layerId: number,
   searchDistanceM = 200,
 ): Promise<{ distance: number | null; found: boolean }> {
-  const url = new URL(`${serviceUrl}/${layerId}/query`);
+  const url = new URL(`${UNDERGROUND_SVC}/${layerId}/query`);
   url.searchParams.set("geometry", `${lng},${lat}`);
   url.searchParams.set("geometryType", "esriGeometryPoint");
   url.searchParams.set("inSR", "4326");
+  url.searchParams.set("outSR", "4326"); // force WGS84 output so Haversine is correct
   url.searchParams.set("spatialRel", "esriSpatialRelIntersects");
   url.searchParams.set("distance", String(searchDistanceM));
   url.searchParams.set("units", "esriSRUnit_Meter");
-  url.searchParams.set("outFields", "OBJECTID,Shape_Length");
+  url.searchParams.set("outFields", "OBJECTID");
   url.searchParams.set("returnGeometry", "true");
   url.searchParams.set("returnDistinctValues", "false");
   url.searchParams.set("f", "json");
 
-  const resp = await fetch(url.toString(), { signal: AbortSignal.timeout(10000) });
+  const resp = await fetch(url.toString(), { signal: AbortSignal.timeout(20_000) });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
   const data = (await resp.json()) as {
@@ -115,6 +139,7 @@ async function queryNearestFeature(
       attributes: Record<string, unknown>;
       geometry?: {
         paths?: number[][][];
+        rings?: number[][][];
         x?: number;
         y?: number;
       };
@@ -125,36 +150,36 @@ async function queryNearestFeature(
   if (data.error) throw new Error(data.error.message);
   if (!data.features || data.features.length === 0) return { distance: null, found: false };
 
-  const feature = data.features[0];
-  let closestDist = searchDistanceM;
+  // Walk all returned features and vertices to find the closest point on any pipe
+  let closestDist = Infinity;
 
-  if (feature.geometry?.paths && feature.geometry.paths.length > 0) {
-    const latRad = (lat * Math.PI) / 180;
-    const lngRad = (lng * Math.PI) / 180;
+  for (const feature of data.features) {
+    const geom = feature.geometry;
+    if (!geom) continue;
 
-    for (const path of feature.geometry.paths) {
-      for (const [x, y] of path) {
-        const yRad = (y * Math.PI) / 180;
-        const xRad = (x * Math.PI) / 180;
-        const dLat = yRad - latRad;
-        const dLng = xRad - lngRad;
-        const a = Math.sin(dLat / 2) ** 2 + Math.cos(latRad) * Math.cos(yRad) * Math.sin(dLng / 2) ** 2;
-        const dist = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 6371000;
-        closestDist = Math.min(closestDist, dist);
+    const coordinateSets: number[][][] = [
+      ...(geom.paths ?? []),
+      ...(geom.rings ?? []),
+    ];
+
+    for (const coords of coordinateSets) {
+      for (const [x, y] of coords) {
+        const dist = haversineM(lat, lng, y, x);
+        if (dist < closestDist) closestDist = dist;
       }
     }
-  } else if (feature.geometry?.x != null && feature.geometry?.y != null) {
-    const yRad = (feature.geometry.y * Math.PI) / 180;
-    const xRad = (feature.geometry.x * Math.PI) / 180;
-    const latRad2 = (lat * Math.PI) / 180;
-    const lngRad2 = (lng * Math.PI) / 180;
-    const dLat = yRad - latRad2;
-    const dLng = xRad - lngRad2;
-    const a = Math.sin(dLat / 2) ** 2 + Math.cos(latRad2) * Math.cos(yRad) * Math.sin(dLng / 2) ** 2;
-    closestDist = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 6371000;
+
+    // Point geometry
+    if (geom.x != null && geom.y != null && coordinateSets.length === 0) {
+      const dist = haversineM(lat, lng, geom.y, geom.x);
+      if (dist < closestDist) closestDist = dist;
+    }
   }
 
-  return { distance: closestDist, found: true };
+  return {
+    distance: isFinite(closestDist) ? closestDist : null,
+    found: true,
+  };
 }
 
 export async function fetchInfrastructure(lat: number, lng: number): Promise<InfrastructureItem[]> {
@@ -165,21 +190,22 @@ export async function fetchInfrastructure(lat: number, lng: number): Promise<Inf
       let found = false;
       let distance: number | null = null;
 
-      for (const { url, layer } of infraType.services) {
+      for (const { id, label } of infraType.layers) {
         try {
-          const result = await queryNearestFeature(lat, lng, url, layer);
+          const result = await queryNearestFeature(lat, lng, id);
           if (result.found) {
             found = true;
             distance = result.distance;
+            logger.debug({ infraType: infraType.name, layerId: id, label, distance }, "Infrastructure layer hit");
             break;
           }
         } catch (err) {
-          logger.debug({ err, url, infraType: infraType.name }, "Infrastructure layer query failed");
+          logger.debug({ err, layerId: id, label, infraType: infraType.name }, "Infrastructure layer query failed — trying next");
         }
       }
 
       if (!found) {
-        logger.debug({ infraType: infraType.name }, "No infrastructure feature found in any layer");
+        logger.warn({ infraType: infraType.name }, "No infrastructure feature found in any layer — returning unknown");
         results.push({
           name: infraType.name,
           location: "unknown",
