@@ -705,19 +705,38 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
 
             const rawContent = await generateAnalysis(enrichedContent);
 
-            // Inject photo URL from scrapers into the report JSON
+            // Inject scraped fields + override ROI cases with computed values
             const photoUrl = pipelineResult.oneroof?.main_photo_url ?? null;
+            const overlayMapB64 = pipelineResult.hougarden?.overlay_map_image_base64 ?? null;
+            const computedScenarios = pipelineResult.scenarios ?? [];
             let content = rawContent;
-            if (photoUrl) {
-              try {
-                const parsed = extractJSON(rawContent) as Record<string, unknown>;
-                if (parsed && typeof parsed === "object") {
-                  parsed.photoUrl = photoUrl;
-                  content = JSON.stringify(parsed);
+            try {
+              const parsed = extractJSON(rawContent) as Record<string, unknown>;
+              if (parsed && typeof parsed === "object") {
+                if (photoUrl) parsed.photoUrl = photoUrl;
+                if (overlayMapB64) parsed.overlay_map_image_base64 = overlayMapB64;
+
+                // Always override roiScenarios cases with computed values so
+                // Bear/Base/Bull are guaranteed distinct — the LLM sometimes
+                // collapses all three to the same number.
+                if (computedScenarios.length > 0) {
+                  const computedByYears = new Map(computedScenarios.map((s) => [s.years, s]));
+                  const roiArr = parsed.roiScenarios as any[] | undefined;
+                  if (Array.isArray(roiArr)) {
+                    parsed.roiScenarios = roiArr.map((s: any) => {
+                      const computed = computedByYears.get(s.years as 2 | 3 | 4);
+                      if (computed?.cases && computed.cases.length > 0) {
+                        return { ...s, cases: computed.cases };
+                      }
+                      return s;
+                    });
+                  }
                 }
-              } catch {
-                // silent — keep original content
+
+                content = JSON.stringify(parsed);
               }
+            } catch {
+              // silent — keep original content
             }
 
             // Persist to search history (non-blocking, silent fail)

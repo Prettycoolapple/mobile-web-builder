@@ -30,7 +30,7 @@ interface Props {
 const FEATURES = [
   "20 feasibility reports per month",
   "Complete property data pipeline",
-  "AI risk assessments & ROI modelling",
+  "Risk assessments & ROI modelling",
   "Save and revisit past reports",
   "Export to PDF (coming soon)",
 ];

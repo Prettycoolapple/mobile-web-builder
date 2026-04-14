@@ -792,11 +792,21 @@ function ROIScenarioCards({ scenarios, interestRateOutlook, comparablesQuality, 
             const caseData: ROICaseResult | undefined = (s.cases ?? []).find((c) => c.case === selectedCase);
             const cfg = CASE_CONFIGS[selectedCase];
 
-            const roi = caseData ? caseData.roi_percent : getScenarioRoi(s);
-            const annualised = caseData ? caseData.annualised_roi_percent : getScenarioAnnualisedRoi(s);
-            const profit = caseData ? caseData.gross_profit : getScenarioProfit(s);
-            const gdv = caseData ? caseData.gdv : s.gdv;
-            const viable = caseData ? caseData.viable : (s.viable !== false);
+            // If cases array is missing/incomplete, compute fallback using known multipliers
+            const multipliers: Record<"bear" | "base" | "bull", number> = { bear: 0.80, base: 1.00, bull: 1.20 };
+            const multiplier = multipliers[selectedCase];
+            const baseGdv = safeNum(s.gdv);
+            const fallbackGdv = Math.round(baseGdv * multiplier);
+            const fallbackTotalCost = getScenarioTotalCost(s);
+            const fallbackProfit = fallbackGdv - fallbackTotalCost;
+            const fallbackRoi = fallbackTotalCost > 0 ? parseFloat(((fallbackProfit / fallbackTotalCost) * 100).toFixed(1)) : 0;
+            const fallbackAnnualised = fallbackTotalCost > 0 ? parseFloat(((Math.pow(1 + fallbackRoi / 100, 1 / s.years) - 1) * 100).toFixed(1)) : 0;
+
+            const roi = caseData ? caseData.roi_percent : fallbackRoi;
+            const annualised = caseData ? caseData.annualised_roi_percent : fallbackAnnualised;
+            const profit = caseData ? caseData.gross_profit : fallbackProfit;
+            const gdv = caseData ? caseData.gdv : fallbackGdv;
+            const viable = caseData ? caseData.viable : (profit > 0);
             const totalCost = getScenarioTotalCost(s);
 
             return (
@@ -995,6 +1005,29 @@ function FollowUpChips({ report, onChipClick, colors }: {
   );
 }
 
+function OverlayMapSnippet({ base64, caption, colors }: {
+  base64: string | undefined | null;
+  caption?: string;
+  colors: ReturnType<typeof useColors>;
+}) {
+  if (!base64) return null;
+  return (
+    <View style={{ marginTop: 12, borderRadius: 10, overflow: "hidden", borderWidth: 1, borderColor: colors.border }}>
+      <Image
+        source={{ uri: `data:image/png;base64,${base64}` }}
+        style={{ width: "100%", height: 180 }}
+        resizeMode="cover"
+      />
+      <View style={{ backgroundColor: colors.muted + "CC", paddingHorizontal: 10, paddingVertical: 6, flexDirection: "row", alignItems: "center", gap: 6 }}>
+        <Feather name="layers" size={11} color={colors.mutedForeground} />
+        <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11 }}>
+          {caption ?? "Planning overlay map"}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
 export function FeasibilityReportCard({ report, onFollowUp }: Props) {
   const colors = useColors();
 
@@ -1123,6 +1156,11 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
             </Text>
           )}
           <OverlayChecklist overlays={report.planning.overlays} colors={colors} />
+          <OverlayMapSnippet
+            base64={report.overlay_map_image_base64}
+            caption="Zone & overlay map — zones, heritage, flood, viewshafts"
+            colors={colors}
+          />
         </SectionCard>
       )}
 
@@ -1162,6 +1200,11 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
       {report.terrain && (
         <SectionCard title="Terrain & contour" icon="⛰" status={contourStatus(report.terrain)} colors={colors}>
           <ContourCard report={report} terrain={report.terrain} colors={colors} />
+          <OverlayMapSnippet
+            base64={report.overlay_map_image_base64}
+            caption="Site context map — topographic reference"
+            colors={colors}
+          />
         </SectionCard>
       )}
 
@@ -1213,7 +1256,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
       )}
 
       {report.riskSummary && report.riskSummary.length > 0 && (
-        <SectionCard title="AI risk assessment" icon="🤖" status="neutral" colors={colors}>
+        <SectionCard title="Risk assessment" icon="🔍" status="neutral" colors={colors}>
           <RiskSummaryPanel riskSummary={report.riskSummary} colors={colors} />
         </SectionCard>
       )}

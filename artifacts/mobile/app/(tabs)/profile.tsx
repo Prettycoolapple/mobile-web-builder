@@ -469,7 +469,7 @@ export default function ProfileScreen() {
                     Standard Plan
                   </Text>
                   <View style={styles.priceRow}>
-                    <Text style={[styles.price, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>$29</Text>
+                    <Text style={[styles.price, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>$24.99</Text>
                     <Text style={[styles.pricePer, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
                       /mo NZD
                     </Text>
