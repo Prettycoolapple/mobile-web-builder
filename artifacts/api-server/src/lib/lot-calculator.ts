@@ -3,6 +3,9 @@ export interface LotResult {
   min_lot_size: number;
   zone_label: string;
   sqm_per_lot: number;
+  gross_area_sqm: number;
+  net_area_sqm: number;
+  easement_area_sqm: number;
 }
 
 const ZONE_RULES: Record<string, { min_lot_sqm: number; label: string }> = {
@@ -34,14 +37,26 @@ const DEFAULT_ZONE = { min_lot_sqm: 400, label: "Mixed Housing Suburban (default
 export function calculatePotentialLots(
   land_area_sqm: number,
   zone_code: string | null,
+  easement_area_sqm = 0,
 ): LotResult {
   const zone = zone_code ? (ZONE_RULES[zone_code] ?? DEFAULT_ZONE) : DEFAULT_ZONE;
   const min = zone.min_lot_sqm;
-
   const effectiveMin = min === 0 ? 60 : min;
-  const raw = Math.floor(land_area_sqm / effectiveMin);
-  const lots = Math.max(1, Math.min(20, raw));
-  const sqm_per_lot = Math.round(land_area_sqm / lots);
 
-  return { lots, min_lot_size: min, zone_label: zone.label, sqm_per_lot };
+  const grossArea = land_area_sqm;
+  const netArea = Math.max(0, land_area_sqm - easement_area_sqm);
+
+  const raw = Math.floor(netArea / effectiveMin);
+  const lots = Math.max(1, Math.min(20, raw));
+  const sqm_per_lot = Math.round(netArea / lots);
+
+  return {
+    lots,
+    min_lot_size: min,
+    zone_label: zone.label,
+    sqm_per_lot,
+    gross_area_sqm: grossArea,
+    net_area_sqm: netArea,
+    easement_area_sqm,
+  };
 }

@@ -45,11 +45,27 @@ export interface PlanningOverlay {
   detail: string;
 }
 
+export interface EasementEntry {
+  type: "right_of_way" | "drainage" | "power" | "services" | "covenant" | "encroachment" | "other";
+  burden: "burdening" | "appurtenant" | "unknown";
+  description: string;
+  estimated_width_m?: number | null;
+  estimated_area_sqm?: number | null;
+  severity?: "minor" | "moderate" | "significant";
+}
+
 export interface PlanningInfo {
   zone?: string;
   minLotSize?: string;
   potentialLots?: number;
+  grossAreaSqm?: number;
+  netAreaSqm?: number;
+  easementAreaSqm?: number;
   overlays?: PlanningOverlay[];
+  easements?: EasementEntry[];
+  appurtenant_easements?: { type: string; description: string }[];
+  easement_summary?: string;
+  lot_impact_note?: string | null;
   subdivisionSummary?: string;
 }
 

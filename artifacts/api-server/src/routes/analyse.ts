@@ -430,7 +430,7 @@ router.post("/chat", async (req, res) => {
             const {
               merged, geocode, linz_parcel, contour, property_history, asbestos,
               asbestos_detail, lots, costs, comparables, comparables_quality,
-              scenarios, scores, suburb,
+              scenarios, scores, suburb, easements,
             } = pipelineResult;
 
             let enrichedContent: string;
@@ -502,6 +502,25 @@ ${scenarioLines}
 
 ASBESTOS: ${asbestos_detail.risk} risk — ${asbestos_detail.notes}
 
+EASEMENTS & RIGHTS OF WAY (from LINZ title memorials):
+${easements && easements.source === "linz_memorials"
+  ? `Source: LINZ title memorials (layer 51553)
+Burdening encumbrances: ${easements.burdening.length}
+Appurtenant (benefit) easements: ${easements.appurtenant.length}
+Has burdening ROW: ${easements.access_row_burdening}
+Has burdening drainage easement: ${easements.drainage_burdening}
+Has burdening power easement: ${easements.power_burdening}
+Has building covenant: ${easements.building_covenant}
+Estimated burdening area: ${easements.total_burdening_area_sqm}m²
+Net subdividable area after easements: ${lots.net_area_sqm}m² (gross: ${lots.gross_area_sqm}m²)
+Lot impact: ${easements.lot_impact_note ?? "None identified"}
+Summary: ${easements.summary}
+Burdening easements detail:
+${easements.burdening.map((e, i) => `  ${i + 1}. [${e.type}] ${e.description} — est. ${e.estimated_area_sqm ?? "?"}m² — severity: ${e.severity}`).join("\n") || "  None"}
+Appurtenant easements detail:
+${easements.appurtenant.map((e, i) => `  ${i + 1}. [${e.type}] ${e.description}`).join("\n") || "  None"}`
+  : "Not retrieved — LINZ memorials unavailable (no title_no or API key). Note in subdivisionSummary that easements should be checked manually before any subdivision or building consent."}
+
 YOUR TASK:
 Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT schema:
 {
@@ -520,7 +539,31 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
     "buildYear": "${merged.build_year ?? "null"}",
     "zone": "...", "listingPrice": null, "isOnMarket": false
   },
-  "planning": { "zone": "...", "minLotSize": "Xm²", "potentialLots": ${lots.lots}, "overlays": [{ "name": "...", "status": "clear|moderate|restricted", "detail": "..." }], "subdivisionSummary": "..." },
+  "planning": {
+    "zone": "...",
+    "minLotSize": "Xm²",
+    "potentialLots": ${lots.lots},
+    "grossAreaSqm": ${lots.gross_area_sqm},
+    "netAreaSqm": ${lots.net_area_sqm},
+    "easementAreaSqm": ${lots.easement_area_sqm},
+    "overlays": [{ "name": "...", "status": "clear|moderate|restricted", "detail": "..." }],
+    "easements": ${easements && easements.burdening.length > 0
+      ? JSON.stringify(easements.burdening.map((e) => ({
+          type: e.type,
+          burden: e.burden,
+          description: e.description,
+          estimated_width_m: e.estimated_width_m,
+          estimated_area_sqm: e.estimated_area_sqm,
+          severity: e.severity,
+        })))
+      : "[]"},
+    "appurtenant_easements": ${easements && easements.appurtenant.length > 0
+      ? JSON.stringify(easements.appurtenant.map((e) => ({ type: e.type, description: e.description })))
+      : "[]"},
+    "easement_summary": ${JSON.stringify(easements?.summary ?? "Easements not retrieved — check title manually.")},
+    "lot_impact_note": ${JSON.stringify(easements?.lot_impact_note ?? null)},
+    "subdivisionSummary": "..."
+  },
   "potential_lots": ${lots.lots},
   "zone_label": "${lots.zone_label}",
   "cv_unavailable": ${costs.cv_unavailable},

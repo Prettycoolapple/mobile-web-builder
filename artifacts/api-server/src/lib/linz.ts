@@ -57,6 +57,13 @@ export interface LinzTitle {
   issue_date: string | null;
 }
 
+export interface LinzMemorial {
+  title_no: string;
+  memorial_text: string;
+  current_type: string | null;
+  instrument_no: string | null;
+}
+
 function getKey(): string | null {
   return process.env["LINZ_API_KEY"] ?? null;
 }
@@ -66,10 +73,11 @@ async function queryLinzLayer(
   cqlFilter: string,
   key: string,
   timeoutMs = 12000,
+  count = 1,
 ): Promise<Record<string, unknown>[] | null> {
   const url = new URL(`${LINZ_BASE}/layers/${layerId}/features/`);
   url.searchParams.set("q", cqlFilter);
-  url.searchParams.set("count", "1");
+  url.searchParams.set("count", String(count));
   url.searchParams.set("api_key", key);
 
   const resp = await fetch(url.toString(), {
@@ -217,6 +225,40 @@ export async function fetchLINZParcel(lat: number, lng: number): Promise<LinzPar
 
   logger.warn({ lat, lng }, "LINZ parcel: all CQL formats exhausted with no result");
   return null;
+}
+
+// LINZ layer 51553: NZ Title Memorials (most recent outstanding)
+const LAYER_TITLE_MEMORIALS = 51553;
+
+export async function fetchLINZMemorials(title_no: string): Promise<LinzMemorial[]> {
+  const key = getKey();
+  if (!key || !title_no) return [];
+
+  try {
+    const features = await queryLinzLayer(
+      LAYER_TITLE_MEMORIALS,
+      `title_no='${title_no}'`,
+      key,
+      10000,
+      30,
+    );
+    if (!features || features.length === 0) return [];
+
+    return features.map((props) => {
+      const text = String(
+        props["memorial_text"] ?? props["memorialtext"] ?? props["text"] ?? props["memorial"] ?? "",
+      ).trim();
+      return {
+        title_no,
+        memorial_text: text,
+        current_type: String(props["current_type"] ?? props["type"] ?? props["currenttype"] ?? "").trim() || null,
+        instrument_no: String(props["instrument_no"] ?? props["instrumentno"] ?? props["instrument_number"] ?? "").trim() || null,
+      };
+    }).filter((m) => m.memorial_text.length > 0);
+  } catch (err) {
+    logger.warn({ err: (err as Error).message, title_no }, "LINZ memorials fetch failed");
+    return [];
+  }
 }
 
 export async function fetchLINZTitle(title_no: string): Promise<LinzTitle | null> {

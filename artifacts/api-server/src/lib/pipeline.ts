@@ -1,6 +1,6 @@
 import { logger } from "./logger";
 import { geocodeAddress, type GeoResult } from "./geocode";
-import { fetchLINZParcel, fetchLINZTitle, type LinzParcel, type LinzTitle } from "./linz";
+import { fetchLINZParcel, fetchLINZTitle, fetchLINZMemorials, type LinzParcel, type LinzTitle } from "./linz";
 import { fetchUnitaryPlanZone, fetchOverlays, fetchContour, type ZoneResult, type Overlay, type ContourResult } from "./auckland-council";
 import { fetchPropertyHistory, checkAsbestosRisk, type PropertyHistory, type AsbestosRisk } from "./property-data";
 import { fetchInfrastructure, type InfrastructureItem } from "./infrastructure";
@@ -18,6 +18,7 @@ import { calculateBearBaseBullScenarios, type ROIScenario } from "./roi-calculat
 import { assessInterestRateOutlook } from "./claude";
 import { scoreProperty, type ScoringResult } from "./scoring";
 import { extractSuburb } from "./utils";
+import { parseEasements, type EasementAnalysis } from "./easements";
 
 export interface PipelineResult {
   address_input: string;
@@ -43,6 +44,7 @@ export interface PipelineResult {
   comparables_quality: "live" | "estimated";
   scenarios: ROIScenario[];
   scores: ScoringResult | null;
+  easements: EasementAnalysis | null;
   failed_sources: string[];
   timing_ms: Record<string, number>;
   completed_at: string;
@@ -112,6 +114,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       comparables_quality: "estimated",
       scenarios: [],
       scores: null,
+      easements: null,
       failed_sources: failedSources,
       timing_ms: { ...timing, total: Date.now() - pipelineStart },
       completed_at: new Date().toISOString(),
@@ -163,10 +166,22 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   if (oneRoofResult.status       === "rejected" || (oneRoofResult.status       === "fulfilled" && oneRoofResult.value.failed))       failedSources.push("oneroof");
 
   let linzTitle: LinzTitle | null = null;
+  let easementAnalysis: EasementAnalysis | null = null;
   if (linzParcelData?.title_no) {
-    const titleResult = await timed("linz_title", () => fetchLINZTitle(linzParcelData.title_no!), timing);
-    linzTitle = titleResult.value;
-    if (titleResult.failed) failedSources.push("linz_title");
+    const [titleResult, memorialsResult] = await Promise.allSettled([
+      timed("linz_title", () => fetchLINZTitle(linzParcelData.title_no!), timing),
+      timed("linz_memorials", () => fetchLINZMemorials(linzParcelData.title_no!), timing),
+    ]);
+    if (titleResult.status === "fulfilled") {
+      linzTitle = titleResult.value.value;
+      if (titleResult.value.failed) failedSources.push("linz_title");
+    }
+    if (memorialsResult.status === "fulfilled" && !memorialsResult.value.failed) {
+      const memorials = memorialsResult.value.value ?? [];
+      const landArea = linzParcelData.area_sqm ?? 400;
+      easementAnalysis = parseEasements(memorials, landArea);
+      logger.info({ title_no: linzParcelData.title_no, memorial_count: memorials.length, easements: easementAnalysis.burdening.length }, "LINZ memorials processed");
+    }
   }
 
   let homesData: HomesData | null = null;
@@ -253,9 +268,11 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     ...(merged.contour === null ? ["contour"] : []),
   ];
 
+  const easementAreaSqm = easementAnalysis?.total_burdening_area_sqm ?? 0;
   const lotResult = calculatePotentialLots(
     merged.land_area_sqm ?? 400,
     merged.zone_code,
+    easementAreaSqm,
   );
 
   const costs = estimateCosts(merged, lotResult.lots);
@@ -308,6 +325,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     comparables_quality: comparablesResult.data_quality,
     scenarios,
     scores,
+    easements: easementAnalysis,
     failed_sources: failedSources,
     timing_ms: timing,
     completed_at: new Date().toISOString(),

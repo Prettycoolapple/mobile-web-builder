@@ -20,6 +20,7 @@ import {
   ComparableSale,
   AsbestosInfo,
   PlanningOverlay,
+  EasementEntry,
 } from "@/context/ChatContext";
 
 interface Props {
@@ -284,6 +285,125 @@ function OverlayChecklist({ overlays, colors }: { overlays: PlanningOverlay[]; c
           </View>
         );
       })}
+    </View>
+  );
+}
+
+function easementIcon(type: EasementEntry["type"]): string {
+  switch (type) {
+    case "right_of_way": return "🚗";
+    case "drainage":     return "💧";
+    case "power":        return "⚡";
+    case "services":     return "🔧";
+    case "covenant":     return "📜";
+    case "encroachment": return "🏗";
+    default:             return "⚠️";
+  }
+}
+
+function EasementList({
+  easements, appurtenant, summary, lotImpact, grossArea, netArea, easementArea, colors,
+}: {
+  easements?: EasementEntry[];
+  appurtenant?: { type: string; description: string }[];
+  summary?: string;
+  lotImpact?: string | null;
+  grossArea?: number;
+  netArea?: number;
+  easementArea?: number;
+  colors: ReturnType<typeof useColors>;
+}) {
+  const hasBurdening = easements && easements.length > 0;
+  const hasAppurtenant = appurtenant && appurtenant.length > 0;
+
+  if (!hasBurdening && !hasAppurtenant && !summary) {
+    return (
+      <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 13 }}>
+        No easements found on LINZ title — verify with solicitor before subdivision.
+      </Text>
+    );
+  }
+
+  return (
+    <View style={{ gap: 10 }}>
+      {/* Area impact banner when easements reduce subdivisable area */}
+      {easementArea != null && easementArea > 0 && grossArea != null && netArea != null && (
+        <View style={[{ backgroundColor: colors.amber + "18", borderColor: colors.amber + "35", borderWidth: 1, borderRadius: 10, padding: 10, gap: 4 }]}>
+          <Text style={{ color: colors.amber, fontFamily: "DM_Sans_700Bold", fontSize: 12 }}>AREA REDUCTION DUE TO EASEMENTS</Text>
+          <View style={{ flexDirection: "row", gap: 12, marginTop: 2 }}>
+            <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
+              Gross: <Text style={{ fontFamily: "DM_Sans_600SemiBold" }}>{grossArea.toLocaleString()}m²</Text>
+            </Text>
+            <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
+              Easement: <Text style={{ fontFamily: "DM_Sans_600SemiBold", color: colors.red }}>−{easementArea.toLocaleString()}m²</Text>
+            </Text>
+            <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
+              Net: <Text style={{ fontFamily: "DM_Sans_600SemiBold", color: colors.success }}>{netArea.toLocaleString()}m²</Text>
+            </Text>
+          </View>
+        </View>
+      )}
+
+      {/* Lot impact note */}
+      {lotImpact && (
+        <View style={[{ backgroundColor: colors.red + "10", borderColor: colors.red + "30", borderWidth: 1, borderRadius: 10, padding: 10, flexDirection: "row", gap: 8, alignItems: "flex-start" }]}>
+          <Feather name="alert-triangle" size={13} color={colors.red} style={{ marginTop: 1 }} />
+          <Text style={{ color: colors.red, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1, lineHeight: 17 }}>{lotImpact}</Text>
+        </View>
+      )}
+
+      {/* Burdening easements */}
+      {hasBurdening && (
+        <View style={{ gap: 6 }}>
+          <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_600SemiBold", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
+            Burdening This Property
+          </Text>
+          {easements!.map((e, i) => {
+            const sevColor = e.severity === "significant" ? colors.red : e.severity === "moderate" ? colors.amber : colors.mutedForeground;
+            return (
+              <View key={i} style={[styles.overlayRow, { backgroundColor: colors.muted, borderRadius: 10 }]}>
+                <Text style={{ fontSize: 15 }}>{easementIcon(e.type)}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: sevColor, fontFamily: "DM_Sans_600SemiBold", fontSize: 13 }}>{e.description}</Text>
+                  {e.estimated_area_sqm != null && (
+                    <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, marginTop: 2 }}>
+                      Est. {e.estimated_area_sqm}m² affected
+                      {e.estimated_width_m != null ? ` (~${e.estimated_width_m}m wide)` : ""}
+                    </Text>
+                  )}
+                </View>
+                <View style={[{ paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, backgroundColor: sevColor + "20" }]}>
+                  <Text style={{ color: sevColor, fontFamily: "DM_Sans_600SemiBold", fontSize: 10, textTransform: "uppercase" }}>{e.severity ?? "?"}</Text>
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      )}
+
+      {/* Appurtenant easements */}
+      {hasAppurtenant && (
+        <View style={{ gap: 6 }}>
+          <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_600SemiBold", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
+            Benefiting This Property
+          </Text>
+          {appurtenant!.map((e, i) => (
+            <View key={i} style={[styles.overlayRow, { backgroundColor: colors.muted, borderRadius: 10 }]}>
+              <Text style={{ fontSize: 15 }}>✅</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: colors.success, fontFamily: "DM_Sans_600SemiBold", fontSize: 13 }}>{e.description}</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      )}
+
+      {/* Summary text */}
+      {summary && (
+        <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 17 }}>
+          Source: LINZ title memorials
+        </Text>
+      )}
     </View>
   );
 }
@@ -1002,6 +1122,30 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
             </Text>
           )}
           <OverlayChecklist overlays={report.planning.overlays} colors={colors} />
+        </SectionCard>
+      )}
+
+      {report.planning && (
+        <SectionCard
+          title="Easements & Rights of Way"
+          icon="⚖️"
+          status={
+            (report.planning.easements && report.planning.easements.length > 0)
+              ? (report.planning.easements.some((e) => e.severity === "significant") ? "risk" : "warning")
+              : "neutral"
+          }
+          colors={colors}
+        >
+          <EasementList
+            easements={report.planning.easements}
+            appurtenant={report.planning.appurtenant_easements}
+            summary={report.planning.easement_summary}
+            lotImpact={report.planning.lot_impact_note}
+            grossArea={report.planning.grossAreaSqm}
+            netArea={report.planning.netAreaSqm}
+            easementArea={report.planning.easementAreaSqm}
+            colors={colors}
+          />
         </SectionCard>
       )}
 
