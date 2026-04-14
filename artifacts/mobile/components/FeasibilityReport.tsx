@@ -222,7 +222,7 @@ function ScoreSummaryRow({ report, colors }: { report: Report; colors: ReturnTyp
   const composite = safeNum(raw.composite);
   const { ease_reasons, cost_reasons, roi_reasons } = raw;
   const overallColor = scoreColor(composite, colors);
-  const overallDisplay = composite > 0 ? composite.toFixed(1) : "—";
+  const overallDisplay = composite > 0 ? String(Math.round(composite)) : "—";
 
   return (
     <View style={[styles.scoresSection, { backgroundColor: colors.headerBg }]}>
