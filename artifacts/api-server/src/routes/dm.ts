@@ -67,6 +67,7 @@ router.get("/dm/contacts", requireAuth, async (req: Request, res: Response) => {
         role: a.role,
         subtitle: a.agencyName ?? null,
         bio: a.bio ?? null,
+        avatarUrl: null,
       })),
       ...providers.map((p) => ({
         id: p.id,
@@ -74,6 +75,7 @@ router.get("/dm/contacts", requireAuth, async (req: Request, res: Response) => {
         role: p.role,
         subtitle: p.companyName ?? p.discipline ?? null,
         bio: null,
+        avatarUrl: null,
       })),
     ];
 
@@ -275,7 +277,7 @@ router.post("/dm/threads/:threadId/messages", requireAuth, async (req: Request, 
 
     const socketsInRoom = io ? await io.in(roomKey).fetchSockets() : [];
     const recipientOnline = socketsInRoom.some(
-      (s) => (s as any).userId === recipientId,
+      (s) => s.data.userId === recipientId,
     );
 
     if (!recipientOnline) {

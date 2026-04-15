@@ -44,13 +44,13 @@ io.use((socket, next) => {
     return next(new Error("Invalid or expired token"));
   }
 
-  (socket as any).userId = payload.sub;
-  (socket as any).role = payload.role;
+  socket.data.userId = payload.sub;
+  socket.data.role = payload.role;
   next();
 });
 
 io.on("connection", (socket) => {
-  const userId: string = (socket as any).userId;
+  const userId: string = socket.data.userId as string;
   logger.info({ socketId: socket.id, userId }, "Socket connected");
 
   socket.on("join_thread", async (threadId: string, ack?: (err: string | null) => void) => {
