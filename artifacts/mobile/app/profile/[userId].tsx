@@ -259,7 +259,7 @@ export default function UserProfileScreen() {
                   {profile.fullName ?? "Anonymous"}
                 </Text>
                 {profile.isVerified && profile.role === "service_provider" && (
-                  <Feather name="check-circle" size={20} color="#2563EB" />
+                  <Feather name="check-circle" size={20} color={accentColor} />
                 )}
               </View>
 
@@ -275,9 +275,9 @@ export default function UserProfileScreen() {
                   </Text>
                 </View>
                 {profile.isVerified && profile.role === "service_provider" && (
-                  <View style={styles.verifiedBadge}>
-                    <Feather name="shield" size={11} color="#2563EB" />
-                    <Text style={styles.verifiedText}>Verified</Text>
+                  <View style={[styles.verifiedBadge, { backgroundColor: accentColor + "15", borderColor: accentColor + "40" }]}>
+                    <Feather name="shield" size={11} color={accentColor} />
+                    <Text style={[styles.verifiedText, { color: accentColor }]}>Verified</Text>
                   </View>
                 )}
               </View>
@@ -551,12 +551,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    backgroundColor: "#EFF6FF",
     borderRadius: 20,
     paddingHorizontal: 10,
     paddingVertical: 3,
     borderWidth: 1,
-    borderColor: "#BFDBFE",
   },
-  verifiedText: { fontSize: 11, fontFamily: "DM_Sans_600SemiBold", color: "#2563EB" },
+  verifiedText: { fontSize: 11, fontFamily: "DM_Sans_600SemiBold" },
 });
