@@ -1,5 +1,5 @@
-import { Router, type IRouter, type Request, type Response } from "express";
-import multer from "multer";
+import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
+import multer, { MulterError } from "multer";
 import { db, userUploads } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { ObjectStorageService } from "../lib/objectStorage";
@@ -81,5 +81,24 @@ router.post(
     }
   },
 );
+
+router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  if (err instanceof MulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      res.status(413).json({
+        error: `File too large. Maximum size is ${MAX_FILE_SIZE_BYTES / (1024 * 1024)}MB`,
+        code: "FILE_TOO_LARGE",
+      });
+      return;
+    }
+    res.status(400).json({ error: err.message, code: "UPLOAD_ERROR" });
+    return;
+  }
+  if (err instanceof Error && err.message === "Only PDF and image files are accepted") {
+    res.status(415).json({ error: err.message, code: "INVALID_FILE_TYPE" });
+    return;
+  }
+  res.status(500).json({ error: "Upload failed. Please try again.", code: "UPLOAD_FAILED" });
+});
 
 export default router;
