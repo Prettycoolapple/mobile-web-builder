@@ -91,7 +91,13 @@ function ThreadRow({ thread, myId }: { thread: DmThread; myId: string }) {
         { backgroundColor: pressed ? colors.muted : colors.card },
       ]}
     >
-      <Avatar name={name} />
+      <TouchableOpacity
+        onPress={() => other?.id && router.push(`/profile/${other.id}`)}
+        activeOpacity={0.75}
+        hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+      >
+        <Avatar name={name} />
+      </TouchableOpacity>
       <View style={styles.rowMid}>
         <View style={styles.rowTop}>
           <Text

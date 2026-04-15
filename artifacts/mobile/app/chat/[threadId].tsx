@@ -121,6 +121,7 @@ export default function ChatScreen() {
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [otherName, setOtherName] = useState<string | null>(null);
   const [otherRole, setOtherRole] = useState<string>("general");
+  const [otherUserId, setOtherUserId] = useState<string | null>(null);
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
@@ -136,6 +137,7 @@ export default function ChatScreen() {
     if (threadFromContext?.otherParticipant) {
       setOtherName(threadFromContext.otherParticipant.fullName ?? null);
       setOtherRole(threadFromContext.otherParticipant.role ?? "general");
+      setOtherUserId(threadFromContext.otherParticipant.id);
     }
   }, [threadFromContext]);
 
@@ -364,7 +366,12 @@ export default function ChatScreen() {
         <TouchableOpacity onPress={() => router.canGoBack() ? router.back() : router.push("/(tabs)/messages")} style={styles.backBtn}>
           <Feather name="arrow-left" size={22} color="rgba(250,249,246,0.85)" />
         </TouchableOpacity>
-        <View style={styles.headerCenter}>
+        <TouchableOpacity
+          style={styles.headerCenter}
+          onPress={() => otherUserId && router.push(`/profile/${otherUserId}`)}
+          disabled={!otherUserId}
+          activeOpacity={0.75}
+        >
           <Avatar name={otherName} size={34} />
           <View>
             <Text style={styles.headerName} numberOfLines={1}>{otherName ?? "…"}</Text>
@@ -376,7 +383,7 @@ export default function ChatScreen() {
                 : "User"}
             </Text>
           </View>
-        </View>
+        </TouchableOpacity>
         <View style={{ width: 44 }} />
       </View>
 

@@ -115,6 +115,7 @@ function RootLayoutNav() {
       <Stack.Screen name="my-listings" options={{ headerShown: false }} />
       <Stack.Screen name="chat/contacts" options={{ headerShown: false, presentation: "modal" }} />
       <Stack.Screen name="chat/[threadId]" options={{ headerShown: false }} />
+      <Stack.Screen name="profile/[userId]" options={{ headerShown: false }} />
     </Stack>
   );
 }

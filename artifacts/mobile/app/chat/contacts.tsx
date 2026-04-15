@@ -16,6 +16,7 @@ import { Feather } from "@expo/vector-icons";
 
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
+import { useLocalSearchParams } from "expo-router";
 
 function getApiBase(): string {
   if (process.env.EXPO_PUBLIC_DOMAIN) {
@@ -72,33 +73,13 @@ export default function ContactsScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { token } = useAuth();
+  const { preselect } = useLocalSearchParams<{ preselect?: string }>();
 
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [starting, setStarting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    async function load() {
-      try {
-        const resp = await fetch(`${getApiBase()}/dm/contacts`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (resp.ok) {
-          const data = await resp.json() as { contacts: Contact[] };
-          setContacts(data.contacts ?? []);
-        } else {
-          setError("Failed to load contacts");
-        }
-      } catch {
-        setError("Network error");
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, [token]);
 
   const startChat = useCallback(
     async (contactId: string) => {
@@ -124,6 +105,30 @@ export default function ContactsScreen() {
     },
     [token, starting, router]
   );
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const resp = await fetch(`${getApiBase()}/dm/contacts`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (resp.ok) {
+          const data = await resp.json() as { contacts: Contact[] };
+          setContacts(data.contacts ?? []);
+          if (preselect) {
+            startChat(preselect);
+          }
+        } else {
+          setError("Failed to load contacts");
+        }
+      } catch {
+        setError("Network error");
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, [token]);
 
   const filtered = contacts.filter((c) => {
     const q = search.toLowerCase();
@@ -185,7 +190,13 @@ export default function ContactsScreen() {
                   { backgroundColor: pressed ? colors.muted : colors.card },
                 ]}
               >
-                <Avatar name={item.fullName} />
+                <TouchableOpacity
+                  onPress={() => router.push(`/profile/${item.id}`)}
+                  activeOpacity={0.75}
+                  hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                >
+                  <Avatar name={item.fullName} />
+                </TouchableOpacity>
                 <View style={styles.contactMid}>
                   <Text style={[styles.contactName, { color: colors.foreground }]} numberOfLines={1}>
                     {item.fullName ?? "Unknown"}

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import {
+  Modal,
   View,
   Text,
   TouchableOpacity,
@@ -44,6 +45,7 @@ export default function ServiceProviderWelcomeScreen() {
   const router = useRouter();
   const { user, getApiHeaders } = useAuth();
   const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [showWelcomePopup, setShowWelcomePopup] = useState(true);
 
   const firstName = user?.fullName?.split(" ")[0] || "there";
   const hasSubscription = user?.subscriptionTier && user.subscriptionTier !== "free";
@@ -89,6 +91,33 @@ export default function ServiceProviderWelcomeScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
+      <Modal
+        visible={showWelcomePopup}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowWelcomePopup(false)}
+      >
+        <View style={styles.popupOverlay}>
+          <View style={styles.popupCard}>
+            <View style={styles.popupIconWrap}>
+              <Feather name="star" size={28} color={ACCENT2} />
+            </View>
+            <Text style={styles.popupTitle}>You're on Lecorb!</Text>
+            <Text style={styles.popupBody}>
+              Lecorb will start recommending you for suitable jobs as property developers and investors look for your expertise.
+              {"\n\n"}Build your recommendations to boost your visibility across the platform.
+            </Text>
+            <TouchableOpacity
+              style={styles.popupBtn}
+              onPress={() => setShowWelcomePopup(false)}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.popupBtnText}>Got it</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 40 }]}
         showsVerticalScrollIndicator={false}
@@ -378,6 +407,61 @@ const styles = StyleSheet.create({
   secondaryBtnText: {
     color: MUTED,
     fontFamily: "DM_Sans_400Regular",
+    fontSize: 15,
+  },
+  popupOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.65)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 28,
+  },
+  popupCard: {
+    backgroundColor: CARD_BG,
+    borderRadius: 22,
+    padding: 28,
+    width: "100%",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: ACCENT2 + "40",
+  },
+  popupIconWrap: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: ACCENT2 + "18",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 18,
+    borderWidth: 1,
+    borderColor: ACCENT2 + "30",
+  },
+  popupTitle: {
+    color: TEXT,
+    fontFamily: "DM_Sans_700Bold",
+    fontSize: 22,
+    textAlign: "center",
+    marginBottom: 12,
+  },
+  popupBody: {
+    color: MUTED,
+    fontFamily: "DM_Sans_400Regular",
+    fontSize: 14,
+    lineHeight: 21,
+    textAlign: "center",
+    marginBottom: 24,
+  },
+  popupBtn: {
+    backgroundColor: ACCENT,
+    borderRadius: 14,
+    height: 50,
+    alignItems: "center",
+    justifyContent: "center",
+    width: "100%",
+  },
+  popupBtnText: {
+    color: "#fff",
+    fontFamily: "DM_Sans_600SemiBold",
     fontSize: 15,
   },
 });

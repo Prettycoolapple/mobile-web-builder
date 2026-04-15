@@ -9,6 +9,7 @@ import storageRouter from "./storage";
 import uploadRouter from "./upload";
 import listingsRouter from "./listings";
 import dmRouter from "./dm";
+import usersRouter from "./users";
 
 const router: IRouter = Router();
 
@@ -22,5 +23,6 @@ router.use(storageRouter);
 router.use(uploadRouter);
 router.use(listingsRouter);
 router.use(dmRouter);
+router.use(usersRouter);
 
 export default router;
