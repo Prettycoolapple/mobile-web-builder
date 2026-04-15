@@ -13,6 +13,14 @@ export interface UserProfile {
   reportsUsedThisMonth: number;
 }
 
+export type ProviderDiscipline =
+  | "architect"
+  | "designer"
+  | "planner"
+  | "engineer"
+  | "quantity_surveyor"
+  | "other";
+
 export interface GeneralSignUpData {
   role: "general";
   firstName?: string;
@@ -50,7 +58,7 @@ export interface ProviderSignUpData {
   providerData: {
     companyName?: string;
     nzCompanyRegisterNumber?: string;
-    discipline?: "architect" | "designer" | "planner" | "other";
+    discipline?: ProviderDiscipline;
     addressStreet?: string;
     addressSuburb?: string;
     addressCity?: string;
@@ -62,16 +70,28 @@ export interface ProviderSignUpData {
 
 export type SignUpData = GeneralSignUpData | AgentSignUpData | ProviderSignUpData;
 
+interface ReactNativeFileBlob {
+  uri: string;
+  type: string;
+  name: string;
+}
+
 interface AuthContextValue {
   user: UserProfile | null;
   token: string | null;
   isLoading: boolean;
-  signUp: (data: SignUpData) => Promise<void>;
+  signUp: (data: SignUpData) => Promise<{ token: string }>;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   getApiHeaders: () => Record<string, string>;
-  uploadIncorporationCert: (fileUri: string, mimeType: string, fileName: string) => Promise<{ objectPath: string; fileUrl: string }>;
+  uploadIncorporationCert: (
+    fileUri: string,
+    mimeType: string,
+    fileName: string,
+    tokenOverride?: string,
+  ) => Promise<{ objectPath: string; fileUrl: string }>;
+  updateServiceProviderCert: (fileUrl: string, tokenOverride?: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -100,7 +120,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         ]);
         if (storedToken && storedUser) {
           setToken(storedToken);
-          setUser(JSON.parse(storedUser));
+          setUser(JSON.parse(storedUser) as UserProfile);
         }
       } catch {
       } finally {
@@ -118,20 +138,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     ]);
   }, []);
 
-  const signUp = useCallback(async (data: SignUpData) => {
+  const signUp = useCallback(async (data: SignUpData): Promise<{ token: string }> => {
     const resp = await fetch(`${getApiBase()}/auth/signup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    const json = await resp.json();
-    if (!resp.ok) throw new Error(json.error || "Signup failed");
+    const json = (await resp.json()) as { token: string; user: UserProfile & { role?: UserRole; languages?: string[] }; error?: string };
+    if (!resp.ok) throw new Error(json.error ?? "Signup failed");
     const profile: UserProfile = {
       ...json.user,
       role: json.user.role ?? "general",
       languages: json.user.languages ?? [],
     };
     await persistAuth(json.token, profile);
+    return { token: json.token };
   }, [persistAuth]);
 
   const signIn = useCallback(async (email: string, password: string) => {
@@ -140,8 +161,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
     });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.error || "Login failed");
+    const data = (await resp.json()) as { token: string; user: UserProfile & { role?: UserRole; languages?: string[] }; error?: string };
+    if (!resp.ok) throw new Error(data.error ?? "Login failed");
     const profile: UserProfile = {
       ...data.user,
       role: data.user.role ?? "general",
@@ -166,7 +187,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (resp.ok) {
-        const data = await resp.json();
+        const data = (await resp.json()) as { user: UserProfile & { role?: UserRole; languages?: string[] } };
         const profile: UserProfile = {
           ...data.user,
           role: data.user.role ?? "general",
@@ -191,18 +212,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     fileUri: string,
     mimeType: string,
     fileName: string,
+    tokenOverride?: string,
   ): Promise<{ objectPath: string; fileUrl: string }> => {
-    if (!token) throw new Error("Not authenticated");
+    const activeToken = tokenOverride ?? token;
+    if (!activeToken) throw new Error("Not authenticated");
     const formData = new FormData();
-    formData.append("file", { uri: fileUri, type: mimeType, name: fileName } as any);
+    const fileBlob: ReactNativeFileBlob = { uri: fileUri, type: mimeType, name: fileName };
+    formData.append("file", fileBlob as unknown as Blob);
     const resp = await fetch(`${getApiBase()}/upload/incorporation-cert`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${activeToken}` },
       body: formData,
     });
-    const json = await resp.json();
-    if (!resp.ok) throw new Error(json.error || "Upload failed");
+    const json = (await resp.json()) as { objectPath: string; fileUrl: string; error?: string };
+    if (!resp.ok) throw new Error(json.error ?? "Upload failed");
     return { objectPath: json.objectPath, fileUrl: json.fileUrl };
+  }, [token]);
+
+  const updateServiceProviderCert = useCallback(async (
+    fileUrl: string,
+    tokenOverride?: string,
+  ): Promise<void> => {
+    const activeToken = tokenOverride ?? token;
+    if (!activeToken) throw new Error("Not authenticated");
+    const resp = await fetch(`${getApiBase()}/auth/service-provider/cert`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${activeToken}`,
+      },
+      body: JSON.stringify({ incorporationCertUrl: fileUrl }),
+    });
+    if (!resp.ok) {
+      const json = (await resp.json()) as { error?: string };
+      throw new Error(json.error ?? "Failed to update certificate");
+    }
   }, [token]);
 
   return (
@@ -211,6 +255,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       signUp, signIn, signOut,
       refreshProfile, getApiHeaders,
       uploadIncorporationCert,
+      updateServiceProviderCert,
     }}>
       {children}
     </AuthContext.Provider>

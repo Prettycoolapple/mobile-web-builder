@@ -24,7 +24,9 @@ const salesAgentSchema = z.object({
 const serviceProviderSchema = z.object({
   companyName: z.string().optional(),
   nzCompanyRegisterNumber: z.string().optional(),
-  discipline: z.enum(["architect", "designer", "planner", "other"]).optional(),
+  discipline: z
+    .enum(["architect", "designer", "planner", "engineer", "quantity_surveyor", "other"])
+    .optional(),
   addressStreet: z.string().optional(),
   addressSuburb: z.string().optional(),
   addressCity: z.string().optional(),
@@ -302,6 +304,28 @@ router.patch("/profile", requireAuth, async (req, res) => {
   } catch (error) {
     req.log.error({ error }, "Failed to update profile");
     res.status(500).json({ error: "Failed to update profile", code: "UPDATE_FAILED" });
+  }
+});
+
+// PATCH /auth/service-provider/cert
+// Allows an authenticated service provider to update their incorporation cert URL after signup
+router.patch("/service-provider/cert", requireAuth, async (req, res) => {
+  const userId = (req as unknown as { userId: string }).userId;
+  const schema = z.object({ incorporationCertUrl: z.string().url() });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid request", code: "VALIDATION_ERROR", details: parsed.error.issues });
+    return;
+  }
+  try {
+    await db
+      .update(serviceProviderProfiles)
+      .set({ incorporationCertUrl: parsed.data.incorporationCertUrl })
+      .where(eq(serviceProviderProfiles.userId, userId));
+    res.json({ ok: true });
+  } catch (error) {
+    req.log.error({ error }, "Failed to update cert");
+    res.status(500).json({ error: "Failed to update cert", code: "UPDATE_FAILED" });
   }
 });
 

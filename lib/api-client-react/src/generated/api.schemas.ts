@@ -47,6 +47,8 @@ export const ServiceProviderSignUpDataDiscipline = {
   architect: "architect",
   designer: "designer",
   planner: "planner",
+  engineer: "engineer",
+  quantity_surveyor: "quantity_surveyor",
   other: "other",
 } as const;
 
@@ -379,4 +381,12 @@ export interface ErrorResponse {
 export type UploadIncorporationCertBody = {
   /** PDF or image file (max 10MB) */
   file: Blob;
+};
+
+export type UpdateServiceProviderCertBody = {
+  incorporationCertUrl: string;
+};
+
+export type UpdateServiceProviderCert200 = {
+  ok?: boolean;
 };

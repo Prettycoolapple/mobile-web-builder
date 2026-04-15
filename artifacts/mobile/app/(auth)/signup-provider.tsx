@@ -16,7 +16,7 @@ import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
 import { useColors } from "@/hooks/useColors";
-import { useAuth } from "@/context/AuthContext";
+import { useAuth, type ProviderDiscipline } from "@/context/AuthContext";
 import { MultiSelectChips } from "@/components/MultiSelectChips";
 
 const LANGUAGE_OPTIONS = [
@@ -32,27 +32,34 @@ const LANGUAGE_OPTIONS = [
   { label: "Other", value: "Other" },
 ];
 
-const DISCIPLINE_OPTIONS = [
+const DISCIPLINE_OPTIONS: { label: string; value: ProviderDiscipline }[] = [
   { label: "Architect", value: "architect" },
   { label: "Designer", value: "designer" },
   { label: "Planner", value: "planner" },
+  { label: "Engineer", value: "engineer" },
+  { label: "Quantity Surveyor", value: "quantity_surveyor" },
   { label: "Other", value: "other" },
 ];
 
-type Discipline = "architect" | "designer" | "planner" | "other";
-
-interface UploadedFile {
+interface PickedFile {
   name: string;
   uri: string;
   mimeType: string;
-  fileUrl?: string;
+}
+
+interface FieldErrors {
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+  password?: string;
+  confirmPassword?: string;
 }
 
 export default function SignupProviderScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { signUp, uploadIncorporationCert } = useAuth();
+  const { signUp, uploadIncorporationCert, updateServiceProviderCert } = useAuth();
 
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -62,17 +69,17 @@ export default function SignupProviderScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [companyName, setCompanyName] = useState("");
   const [regNumber, setRegNumber] = useState("");
-  const [discipline, setDiscipline] = useState<Discipline | null>(null);
+  const [discipline, setDiscipline] = useState<ProviderDiscipline | null>(null);
   const [addressStreet, setAddressStreet] = useState("");
   const [addressSuburb, setAddressSuburb] = useState("");
   const [addressCity, setAddressCity] = useState("");
   const [addressPostcode, setAddressPostcode] = useState("");
   const [contactNumber, setContactNumber] = useState("+64 ");
   const [languages, setLanguages] = useState<string[]>([]);
-  const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
+  const [pickedFile, setPickedFile] = useState<PickedFile | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
 
   const handlePickDocument = async () => {
     try {
@@ -82,55 +89,42 @@ export default function SignupProviderScreen() {
       });
       if (result.canceled || !result.assets?.length) return;
       const asset = result.assets[0];
-      setUploadedFile({ name: asset.name, uri: asset.uri, mimeType: asset.mimeType || "application/pdf" });
+      setPickedFile({ name: asset.name, uri: asset.uri, mimeType: asset.mimeType ?? "application/pdf" });
     } catch {
       Alert.alert("Error", "Could not pick a file. Please try again.");
     }
   };
 
-  const handleUploadCert = async (): Promise<string | undefined> => {
-    if (!uploadedFile) return undefined;
-    setIsUploading(true);
-    try {
-      const { fileUrl } = await uploadIncorporationCert(uploadedFile.uri, uploadedFile.mimeType, uploadedFile.name);
-      setUploadedFile((prev) => prev ? { ...prev, fileUrl } : prev);
-      return fileUrl;
-    } catch (e: any) {
-      Alert.alert("Upload failed", e.message || "Could not upload the certificate. Please try again.");
-      return undefined;
-    } finally {
-      setIsUploading(false);
+  const validate = (): boolean => {
+    const errors: FieldErrors = {};
+    if (!firstName.trim()) errors.firstName = "First name is required.";
+    if (!lastName.trim()) errors.lastName = "Last name is required.";
+    if (!email.trim()) {
+      errors.email = "Email is required.";
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      errors.email = "Enter a valid email address.";
     }
+    if (!password) {
+      errors.password = "Password is required.";
+    } else if (password.length < 8) {
+      errors.password = "Password must be at least 8 characters.";
+    }
+    if (!confirmPassword) {
+      errors.confirmPassword = "Please confirm your password.";
+    } else if (password !== confirmPassword) {
+      errors.confirmPassword = "Passwords do not match.";
+    }
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
   };
 
   const handleSignup = async () => {
-    if (!firstName.trim() || !lastName.trim()) {
-      setError("First and last name are required.");
-      return;
-    }
-    if (!email.trim() || !password) {
-      setError("Please enter your email and password.");
-      return;
-    }
-    if (password.length < 8) {
-      setError("Password must be at least 8 characters.");
-      return;
-    }
-    if (password !== confirmPassword) {
-      setError("Passwords do not match.");
-      return;
-    }
-    setError(null);
+    setSubmitError(null);
+    if (!validate()) return;
     setIsLoading(true);
     try {
-      let incorporationCertUrl: string | undefined;
-      if (uploadedFile && !uploadedFile.fileUrl) {
-        incorporationCertUrl = await handleUploadCert();
-      } else if (uploadedFile?.fileUrl) {
-        incorporationCertUrl = uploadedFile.fileUrl;
-      }
-
-      await signUp({
+      // Step 1: Create account (no cert URL yet — user is unauthenticated at this point)
+      const { token: newToken } = await signUp({
         role: "service_provider",
         firstName: firstName.trim(),
         lastName: lastName.trim(),
@@ -146,16 +140,42 @@ export default function SignupProviderScreen() {
           addressCity: addressCity.trim() || undefined,
           addressPostcode: addressPostcode.trim() || undefined,
           contactNumber: contactNumber.trim() !== "+64" ? contactNumber.trim() : undefined,
-          incorporationCertUrl,
         },
       });
+
+      // Step 2: If a file was selected, upload it now that we're authenticated
+      if (pickedFile) {
+        try {
+          const { fileUrl } = await uploadIncorporationCert(
+            pickedFile.uri,
+            pickedFile.mimeType,
+            pickedFile.name,
+            newToken,
+          );
+          // Step 3: Patch the service provider profile with the cert URL
+          await updateServiceProviderCert(fileUrl, newToken);
+        } catch {
+          // Non-blocking: cert upload failed but account is created. User can re-upload later.
+        }
+      }
+
       router.replace("/(auth)/welcome-provider");
-    } catch (e: any) {
-      setError(e.message || "Signup failed. Please try again.");
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : "Signup failed. Please try again.");
     } finally {
       setIsLoading(false);
     }
   };
+
+  const inputStyle = (field: keyof FieldErrors) => [
+    styles.input,
+    {
+      backgroundColor: colors.card,
+      borderColor: fieldErrors[field] ? colors.danger : colors.border,
+      color: colors.foreground,
+      fontFamily: "DM_Sans_400Regular",
+    },
+  ];
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -183,10 +203,10 @@ export default function SignupProviderScreen() {
             $149/month · 14-day free trial
           </Text>
 
-          {error && (
+          {submitError && (
             <View style={[styles.errorBanner, { backgroundColor: colors.danger + "18", borderColor: colors.danger + "40" }]}>
               <Feather name="alert-circle" size={15} color={colors.danger} />
-              <Text style={[styles.errorText, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>{error}</Text>
+              <Text style={[styles.errorText, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>{submitError}</Text>
             </View>
           )}
 
@@ -196,50 +216,62 @@ export default function SignupProviderScreen() {
               <View style={[styles.field, { flex: 1 }]}>
                 <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>First name *</Text>
                 <TextInput
-                  style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+                  style={inputStyle("firstName")}
                   placeholder="Jane"
                   placeholderTextColor={colors.mutedForeground}
                   value={firstName}
-                  onChangeText={setFirstName}
+                  onChangeText={(v) => { setFirstName(v); if (fieldErrors.firstName) setFieldErrors((p) => ({ ...p, firstName: undefined })); }}
                   autoCapitalize="words"
                 />
+                {fieldErrors.firstName && (
+                  <Text style={[styles.fieldError, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>{fieldErrors.firstName}</Text>
+                )}
               </View>
               <View style={[styles.field, { flex: 1 }]}>
                 <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>Last name *</Text>
                 <TextInput
-                  style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+                  style={inputStyle("lastName")}
                   placeholder="Smith"
                   placeholderTextColor={colors.mutedForeground}
                   value={lastName}
-                  onChangeText={setLastName}
+                  onChangeText={(v) => { setLastName(v); if (fieldErrors.lastName) setFieldErrors((p) => ({ ...p, lastName: undefined })); }}
                   autoCapitalize="words"
                 />
+                {fieldErrors.lastName && (
+                  <Text style={[styles.fieldError, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>{fieldErrors.lastName}</Text>
+                )}
               </View>
             </View>
 
             <View style={styles.field}>
               <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>Email *</Text>
               <TextInput
-                style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+                style={inputStyle("email")}
                 placeholder="you@example.com"
                 placeholderTextColor={colors.mutedForeground}
                 value={email}
-                onChangeText={setEmail}
+                onChangeText={(v) => { setEmail(v); if (fieldErrors.email) setFieldErrors((p) => ({ ...p, email: undefined })); }}
                 autoCapitalize="none"
                 keyboardType="email-address"
                 autoComplete="email"
               />
+              {fieldErrors.email && (
+                <Text style={[styles.fieldError, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>{fieldErrors.email}</Text>
+              )}
             </View>
 
             <View style={styles.field}>
               <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>Password *</Text>
-              <View style={[styles.passwordWrapper, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <View style={[
+                styles.passwordWrapper,
+                { backgroundColor: colors.card, borderColor: fieldErrors.password ? colors.danger : colors.border },
+              ]}>
                 <TextInput
                   style={[styles.passwordInput, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
                   placeholder="At least 8 characters"
                   placeholderTextColor={colors.mutedForeground}
                   value={password}
-                  onChangeText={setPassword}
+                  onChangeText={(v) => { setPassword(v); if (fieldErrors.password) setFieldErrors((p) => ({ ...p, password: undefined })); }}
                   secureTextEntry={!showPassword}
                   autoComplete="password-new"
                 />
@@ -247,19 +279,25 @@ export default function SignupProviderScreen() {
                   <Feather name={showPassword ? "eye-off" : "eye"} size={18} color={colors.mutedForeground} />
                 </TouchableOpacity>
               </View>
+              {fieldErrors.password && (
+                <Text style={[styles.fieldError, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>{fieldErrors.password}</Text>
+              )}
             </View>
 
             <View style={styles.field}>
               <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>Confirm password *</Text>
               <TextInput
-                style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+                style={inputStyle("confirmPassword")}
                 placeholder="Re-enter your password"
                 placeholderTextColor={colors.mutedForeground}
                 value={confirmPassword}
-                onChangeText={setConfirmPassword}
+                onChangeText={(v) => { setConfirmPassword(v); if (fieldErrors.confirmPassword) setFieldErrors((p) => ({ ...p, confirmPassword: undefined })); }}
                 secureTextEntry={!showPassword}
                 autoComplete="password-new"
               />
+              {fieldErrors.confirmPassword && (
+                <Text style={[styles.fieldError, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>{fieldErrors.confirmPassword}</Text>
+              )}
             </View>
           </View>
 
@@ -299,7 +337,7 @@ export default function SignupProviderScreen() {
               <MultiSelectChips
                 options={DISCIPLINE_OPTIONS}
                 selected={discipline ? [discipline] : []}
-                onChange={(vals) => setDiscipline((vals[0] as Discipline) ?? null)}
+                onChange={(vals) => setDiscipline((vals[0] as ProviderDiscipline) ?? null)}
                 singleSelect
               />
             </View>
@@ -313,21 +351,22 @@ export default function SignupProviderScreen() {
                 style={[
                   styles.uploadBtn,
                   {
-                    backgroundColor: uploadedFile ? colors.success + "10" : colors.card,
-                    borderColor: uploadedFile ? colors.success : colors.border,
+                    backgroundColor: pickedFile ? colors.success + "10" : colors.card,
+                    borderColor: pickedFile ? colors.success : colors.border,
                   },
                 ]}
                 activeOpacity={0.7}
               >
-                {isUploading ? (
-                  <ActivityIndicator size="small" color={colors.accent} />
-                ) : uploadedFile ? (
+                {pickedFile ? (
                   <>
                     <Feather name="check-circle" size={18} color={colors.success} />
-                    <Text style={[styles.uploadBtnText, { color: colors.success, fontFamily: "DM_Sans_500Medium" }]}>
-                      {uploadedFile.name}
+                    <Text
+                      style={[styles.uploadBtnText, { color: colors.success, fontFamily: "DM_Sans_500Medium" }]}
+                      numberOfLines={1}
+                    >
+                      {pickedFile.name}
                     </Text>
-                    <TouchableOpacity onPress={() => setUploadedFile(null)}>
+                    <TouchableOpacity onPress={(e) => { e.stopPropagation(); setPickedFile(null); }}>
                       <Feather name="x" size={16} color={colors.mutedForeground} />
                     </TouchableOpacity>
                   </>
@@ -341,7 +380,7 @@ export default function SignupProviderScreen() {
                 )}
               </TouchableOpacity>
               <Text style={[styles.uploadHint, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                PDF, JPEG, PNG or WEBP — max 10 MB
+                PDF, JPEG, PNG or WEBP — max 10 MB. Will be uploaded after account creation.
               </Text>
             </View>
           </View>
@@ -446,7 +485,7 @@ export default function SignupProviderScreen() {
   );
 }
 
-function SectionHeader({ label, colors }: { label: string; colors: any }) {
+function SectionHeader({ label, colors }: { label: string; colors: ReturnType<typeof useColors> }) {
   return (
     <View style={[sectionStyles.header, { borderBottomColor: colors.border }]}>
       <Text style={[sectionStyles.label, { color: colors.mutedForeground, fontFamily: "DM_Sans_600SemiBold" }]}>
@@ -473,8 +512,9 @@ const styles = StyleSheet.create({
   errorText: { flex: 1, fontSize: 14, lineHeight: 20 },
   form: { gap: 16 },
   row: { flexDirection: "row", gap: 12 },
-  field: { gap: 7 },
+  field: { gap: 5 },
   label: { fontSize: 14 },
+  fieldError: { fontSize: 12, lineHeight: 16 },
   input: { height: 48, borderRadius: 12, borderWidth: 1, paddingHorizontal: 16, fontSize: 15 },
   passwordWrapper: { height: 48, borderRadius: 12, borderWidth: 1, flexDirection: "row", alignItems: "center" },
   passwordInput: { flex: 1, height: "100%", paddingHorizontal: 16, fontSize: 15 },

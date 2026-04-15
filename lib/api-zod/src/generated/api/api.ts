@@ -296,7 +296,14 @@ export const SignUpBody = zod.union([
           companyName: zod.string().optional(),
           nzCompanyRegisterNumber: zod.string().optional(),
           discipline: zod
-            .enum(["architect", "designer", "planner", "other"])
+            .enum([
+              "architect",
+              "designer",
+              "planner",
+              "engineer",
+              "quantity_surveyor",
+              "other",
+            ])
             .optional(),
           addressStreet: zod.string().optional(),
           addressSuburb: zod.string().optional(),
@@ -351,6 +358,18 @@ export const GetMeResponse = zod.object({
  */
 export const UploadIncorporationCertBody = zod.object({
   file: zod.instanceof(File).describe("PDF or image file (max 10MB)"),
+});
+
+/**
+ * Updates the incorporation certificate URL for the authenticated service provider after signup
+ * @summary Update service provider incorporation certificate URL
+ */
+export const UpdateServiceProviderCertBody = zod.object({
+  incorporationCertUrl: zod.string(),
+});
+
+export const UpdateServiceProviderCertResponse = zod.object({
+  ok: zod.boolean().optional(),
 });
 
 /**

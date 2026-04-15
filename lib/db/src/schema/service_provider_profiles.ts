@@ -27,7 +27,7 @@ export const serviceProviderProfiles = pgTable(
   (t) => [
     check(
       "discipline_values",
-      sql`${t.discipline} IS NULL OR ${t.discipline} IN ('architect', 'designer', 'planner', 'other')`,
+      sql`${t.discipline} IS NULL OR ${t.discipline} IN ('architect', 'designer', 'planner', 'engineer', 'quantity_surveyor', 'other')`,
     ),
   ],
 );

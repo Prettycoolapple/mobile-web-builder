@@ -240,6 +240,52 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /auth/service-provider/cert:
+    patch:
+      operationId: updateServiceProviderCert
+      tags: [auth]
+      summary: Update service provider incorporation certificate URL
+      description: Updates the incorporation certificate URL for the authenticated service provider after signup
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [incorporationCertUrl]
+              properties:
+                incorporationCertUrl:
+                  type: string
+      responses:
+        "200":
+          description: Certificate URL updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /storage/uploads/request-url:
     post:
       operationId: requestUploadUrl
@@ -390,7 +436,7 @@ components:
           type: string
         discipline:
           type: string
-          enum: [architect, designer, planner, other]
+          enum: [architect, designer, planner, engineer, quantity_surveyor, other]
         addressStreet:
           type: string
         addressSuburb:

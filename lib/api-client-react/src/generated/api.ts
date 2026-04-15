@@ -31,6 +31,8 @@ import type {
   SearchRequest,
   SearchResponse,
   SignUpRequest,
+  UpdateServiceProviderCert200,
+  UpdateServiceProviderCertBody,
   UploadCertResponse,
   UploadIncorporationCertBody,
 } from "./api.schemas";
@@ -703,6 +705,97 @@ export const useUploadIncorporationCert = <
   TContext
 > => {
   return useMutation(getUploadIncorporationCertMutationOptions(options));
+};
+
+/**
+ * Updates the incorporation certificate URL for the authenticated service provider after signup
+ * @summary Update service provider incorporation certificate URL
+ */
+export const getUpdateServiceProviderCertUrl = () => {
+  return `/api/auth/service-provider/cert`;
+};
+
+export const updateServiceProviderCert = async (
+  updateServiceProviderCertBody: UpdateServiceProviderCertBody,
+  options?: RequestInit,
+): Promise<UpdateServiceProviderCert200> => {
+  return customFetch<UpdateServiceProviderCert200>(
+    getUpdateServiceProviderCertUrl(),
+    {
+      ...options,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(updateServiceProviderCertBody),
+    },
+  );
+};
+
+export const getUpdateServiceProviderCertMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateServiceProviderCert>>,
+    TError,
+    { data: BodyType<UpdateServiceProviderCertBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateServiceProviderCert>>,
+  TError,
+  { data: BodyType<UpdateServiceProviderCertBody> },
+  TContext
+> => {
+  const mutationKey = ["updateServiceProviderCert"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateServiceProviderCert>>,
+    { data: BodyType<UpdateServiceProviderCertBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return updateServiceProviderCert(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateServiceProviderCertMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateServiceProviderCert>>
+>;
+export type UpdateServiceProviderCertMutationBody =
+  BodyType<UpdateServiceProviderCertBody>;
+export type UpdateServiceProviderCertMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Update service provider incorporation certificate URL
+ */
+export const useUpdateServiceProviderCert = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateServiceProviderCert>>,
+    TError,
+    { data: BodyType<UpdateServiceProviderCertBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateServiceProviderCert>>,
+  TError,
+  { data: BodyType<UpdateServiceProviderCertBody> },
+  TContext
+> => {
+  return useMutation(getUpdateServiceProviderCertMutationOptions(options));
 };
 
 /**
