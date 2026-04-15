@@ -101,14 +101,13 @@ router.post("/dm/threads", requireAuth, async (req: Request, res: Response) => {
   }
 
   try {
+    const [canonA, canonB] = [userId, targetUserId].sort();
+
     const existing = await db
       .select()
       .from(dmThreads)
       .where(
-        or(
-          and(eq(dmThreads.participantA, userId), eq(dmThreads.participantB, targetUserId)),
-          and(eq(dmThreads.participantA, targetUserId), eq(dmThreads.participantB, userId)),
-        ),
+        and(eq(dmThreads.participantA, canonA), eq(dmThreads.participantB, canonB)),
       )
       .limit(1);
 
@@ -119,8 +118,21 @@ router.post("/dm/threads", requireAuth, async (req: Request, res: Response) => {
 
     const [thread] = await db
       .insert(dmThreads)
-      .values({ participantA: userId, participantB: targetUserId })
+      .values({ participantA: canonA, participantB: canonB })
+      .onConflictDoNothing()
       .returning();
+
+    if (!thread) {
+      const [found] = await db
+        .select()
+        .from(dmThreads)
+        .where(
+          and(eq(dmThreads.participantA, canonA), eq(dmThreads.participantB, canonB)),
+        )
+        .limit(1);
+      res.json({ thread: found });
+      return;
+    }
 
     res.status(201).json({ thread });
   } catch (err) {
@@ -208,7 +220,7 @@ router.get("/dm/threads/:threadId/messages", requireAuth, async (req: Request, r
       const [cursorRow] = await db
         .select({ createdAt: dmMessages.createdAt })
         .from(dmMessages)
-        .where(eq(dmMessages.id, cursor))
+        .where(and(eq(dmMessages.id, cursor), eq(dmMessages.threadId, threadId)))
         .limit(1);
       if (cursorRow) {
         conditions.push(lt(dmMessages.createdAt, cursorRow.createdAt));

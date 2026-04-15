@@ -15,6 +15,13 @@ const ALLOWED_MIME_TYPES = new Set([
   "image/webp",
 ]);
 
+const ALLOWED_IMAGE_MIME_TYPES = new Set([
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/webp",
+]);
+
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 
 const upload = multer({
@@ -25,6 +32,18 @@ const upload = multer({
       cb(null, true);
     } else {
       cb(new Error("Only PDF and image files are accepted"));
+    }
+  },
+});
+
+const uploadImageOnly = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_FILE_SIZE_BYTES },
+  fileFilter: (_req, file, cb) => {
+    if (ALLOWED_IMAGE_MIME_TYPES.has(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only image files are accepted"));
     }
   },
 });
@@ -123,7 +142,7 @@ router.post(
 router.post(
   "/upload/dm-image",
   requireAuth,
-  upload.single("file"),
+  uploadImageOnly.single("file"),
   async (req: Request, res: Response) => {
     if (!req.file) {
       res.status(400).json({ error: "No file provided", code: "MISSING_FILE" });
