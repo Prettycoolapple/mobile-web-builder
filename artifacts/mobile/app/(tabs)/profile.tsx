@@ -31,7 +31,24 @@ const PLAN_FEATURES = {
     "Chat & property discovery",
     "Access to architect/designer & other disciplines",
   ],
+  agent: [
+    "Unlimited property listings",
+    "Featured in property search",
+    "Client feasibility tools",
+    "Analytics & performance insights",
+    "Priority support",
+  ],
+  provider: [
+    "Profile visible to all developers",
+    "Recommended for matching jobs",
+    "Unlimited direct messages",
+    "Community recommendation system",
+    "Priority listing in search results",
+  ],
 };
+
+const AGENT_PLAN_PRICE = "$59.99";
+const PROVIDER_PLAN_PRICE = "$39.99";
 
 type SearchSummary = {
   id: string;
@@ -214,20 +231,28 @@ export default function ProfileScreen() {
     checkRevenueCat();
   }, []);
 
+  const role = user?.role ?? "general";
+
   const handleUpgrade = useCallback(async () => {
     setUpgradeLoading(true);
     try {
       const success = await purchasePro();
       if (success) {
         await syncToBackend("pro");
-        Alert.alert("Welcome to Standard!", `You now have ${STANDARD_LIMIT} reports per month.`);
+        if (role === "sales_agent") {
+          Alert.alert("Agent Pro activated!", "You now have full access to your Agent Pro plan.");
+        } else if (role === "service_provider") {
+          Alert.alert("Provider Pro activated!", "Your profile is now visible to developers.");
+        } else {
+          Alert.alert("Welcome to Standard!", `You now have ${STANDARD_LIMIT} reports per month.`);
+        }
       }
     } catch (err: any) {
       Alert.alert("Purchase failed", err?.message ?? "Something went wrong. Please try again.");
     } finally {
       setUpgradeLoading(false);
     }
-  }, [syncToBackend]);
+  }, [syncToBackend, role]);
 
   const handleRestore = useCallback(async () => {
     setRestoreLoading(true);
@@ -375,91 +400,203 @@ export default function ProfileScreen() {
         contentContainerStyle={[styles.content, { paddingBottom: bottomInset + 48 }]}
         showsVerticalScrollIndicator={false}
       >
-        {/* Plan card */}
-        <View style={[styles.planCard, { backgroundColor: colors.headerBg }]}>
-          <View style={styles.planTop}>
-            <View>
-              <Text style={[styles.planLabel, { color: "rgba(250,250,249,0.45)", fontFamily: "DM_Sans_400Regular" }]}>
-                Current plan
-              </Text>
-              <Text style={[styles.planName, { color: colors.headerText, fontFamily: "DM_Sans_700Bold" }]}>
-                {isStandard ? "Standard" : "Free"}
-              </Text>
-            </View>
-            <View style={[styles.planBadge, {
-              borderColor: isStandard ? colors.accent + "80" : "rgba(250,250,249,0.2)",
-              backgroundColor: isStandard ? colors.accent + "20" : "transparent",
-            }]}>
-              <Text style={[styles.planBadgeText, {
-                color: isStandard ? colors.accent : "rgba(250,250,249,0.6)",
-                fontFamily: "DM_Sans_500Medium",
+        {/* Plan card — general users */}
+        {role === "general" && (
+          <View style={[styles.planCard, { backgroundColor: colors.headerBg }]}>
+            <View style={styles.planTop}>
+              <View>
+                <Text style={[styles.planLabel, { color: "rgba(250,250,249,0.45)", fontFamily: "DM_Sans_400Regular" }]}>
+                  Current plan
+                </Text>
+                <Text style={[styles.planName, { color: colors.headerText, fontFamily: "DM_Sans_700Bold" }]}>
+                  {isStandard ? "Standard" : "Free"}
+                </Text>
+              </View>
+              <View style={[styles.planBadge, {
+                borderColor: isStandard ? colors.accent + "80" : "rgba(250,250,249,0.2)",
+                backgroundColor: isStandard ? colors.accent + "20" : "transparent",
               }]}>
-                {isStandard ? "Standard" : "Free tier"}
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.usageSection}>
-            <View style={styles.usageRow}>
-              <Text style={[styles.usageLabel, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
-                Reports used this month
-              </Text>
-              <Text style={[styles.usageCount, { color: colors.headerText, fontFamily: "DM_Sans_700Bold" }]}>
-                {usage}/{planLimit}
-              </Text>
-            </View>
-            <View style={[styles.usageTrack, { backgroundColor: "rgba(250,250,249,0.12)" }]}>
-              <View
-                style={[styles.usageFill, {
-                  width: `${usagePct}%`,
-                  backgroundColor: usage >= planLimit ? colors.red : showWarning ? colors.amber : colors.accent,
-                }]}
-              />
-            </View>
-            {usage >= planLimit && (
-              <Text style={[styles.limitNote, { color: colors.red, fontFamily: "DM_Sans_500Medium" }]}>
-                Monthly limit reached — {isStandard ? "resets on the 1st" : "upgrade to continue"}
-              </Text>
-            )}
-            {showWarning && usage < planLimit && (
-              <Text style={[styles.limitNote, { color: colors.amber, fontFamily: "DM_Sans_500Medium" }]}>
-                {remaining} report{remaining !== 1 ? "s" : ""} remaining this month
-              </Text>
-            )}
-          </View>
-
-          {isStandard && (
-            <View style={styles.proActions}>
-              <TouchableOpacity
-                style={[styles.actionBtn, { borderColor: "rgba(250,250,249,0.2)" }]}
-                onPress={handleManageSubscription}
-                activeOpacity={0.7}
-              >
-                <Feather name="credit-card" size={14} color="rgba(250,250,249,0.6)" />
-                <Text style={[styles.actionBtnText, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
-                  Manage subscription
+                <Text style={[styles.planBadgeText, {
+                  color: isStandard ? colors.accent : "rgba(250,250,249,0.6)",
+                  fontFamily: "DM_Sans_500Medium",
+                }]}>
+                  {isStandard ? "Standard" : "Free tier"}
                 </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.actionBtn, { borderColor: "rgba(250,250,249,0.2)" }]}
-                onPress={handleRestore}
-                activeOpacity={0.7}
-                disabled={restoreLoading}
-              >
-                {restoreLoading
-                  ? <ActivityIndicator size="small" color="rgba(250,250,249,0.6)" />
-                  : <Feather name="refresh-cw" size={14} color="rgba(250,250,249,0.6)" />
-                }
-                <Text style={[styles.actionBtnText, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
-                  Restore purchases
-                </Text>
-              </TouchableOpacity>
+              </View>
             </View>
-          )}
-        </View>
 
-        {/* Upgrade card */}
-        {!isStandard && (
+            <View style={styles.usageSection}>
+              <View style={styles.usageRow}>
+                <Text style={[styles.usageLabel, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
+                  Reports used this month
+                </Text>
+                <Text style={[styles.usageCount, { color: colors.headerText, fontFamily: "DM_Sans_700Bold" }]}>
+                  {usage}/{planLimit}
+                </Text>
+              </View>
+              <View style={[styles.usageTrack, { backgroundColor: "rgba(250,250,249,0.12)" }]}>
+                <View
+                  style={[styles.usageFill, {
+                    width: `${usagePct}%`,
+                    backgroundColor: usage >= planLimit ? colors.red : showWarning ? colors.amber : colors.accent,
+                  }]}
+                />
+              </View>
+              {usage >= planLimit && (
+                <Text style={[styles.limitNote, { color: colors.red, fontFamily: "DM_Sans_500Medium" }]}>
+                  Monthly limit reached — {isStandard ? "resets on the 1st" : "upgrade to continue"}
+                </Text>
+              )}
+              {showWarning && usage < planLimit && (
+                <Text style={[styles.limitNote, { color: colors.amber, fontFamily: "DM_Sans_500Medium" }]}>
+                  {remaining} report{remaining !== 1 ? "s" : ""} remaining this month
+                </Text>
+              )}
+            </View>
+
+            {isStandard && (
+              <View style={styles.proActions}>
+                <TouchableOpacity
+                  style={[styles.actionBtn, { borderColor: "rgba(250,250,249,0.2)" }]}
+                  onPress={handleManageSubscription}
+                  activeOpacity={0.7}
+                >
+                  <Feather name="credit-card" size={14} color="rgba(250,250,249,0.6)" />
+                  <Text style={[styles.actionBtnText, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
+                    Manage subscription
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.actionBtn, { borderColor: "rgba(250,250,249,0.2)" }]}
+                  onPress={handleRestore}
+                  activeOpacity={0.7}
+                  disabled={restoreLoading}
+                >
+                  {restoreLoading
+                    ? <ActivityIndicator size="small" color="rgba(250,250,249,0.6)" />
+                    : <Feather name="refresh-cw" size={14} color="rgba(250,250,249,0.6)" />
+                  }
+                  <Text style={[styles.actionBtnText, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
+                    Restore purchases
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* Plan card — sales agent */}
+        {role === "sales_agent" && (
+          <View style={[styles.planCard, { backgroundColor: colors.headerBg }]}>
+            <View style={styles.planTop}>
+              <View>
+                <Text style={[styles.planLabel, { color: "rgba(250,250,249,0.45)", fontFamily: "DM_Sans_400Regular" }]}>
+                  Current plan
+                </Text>
+                <Text style={[styles.planName, { color: colors.headerText, fontFamily: "DM_Sans_700Bold" }]}>
+                  {isStandard ? "Agent Pro" : "Not subscribed"}
+                </Text>
+              </View>
+              <View style={[styles.planBadge, {
+                borderColor: isStandard ? colors.accent + "80" : "rgba(250,250,249,0.2)",
+                backgroundColor: isStandard ? colors.accent + "20" : "transparent",
+              }]}>
+                <Text style={[styles.planBadgeText, {
+                  color: isStandard ? colors.accent : "rgba(250,250,249,0.6)",
+                  fontFamily: "DM_Sans_500Medium",
+                }]}>
+                  {isStandard ? "Active" : "Inactive"}
+                </Text>
+              </View>
+            </View>
+            {isStandard && (
+              <View style={styles.proActions}>
+                <TouchableOpacity
+                  style={[styles.actionBtn, { borderColor: "rgba(250,250,249,0.2)" }]}
+                  onPress={handleManageSubscription}
+                  activeOpacity={0.7}
+                >
+                  <Feather name="credit-card" size={14} color="rgba(250,250,249,0.6)" />
+                  <Text style={[styles.actionBtnText, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
+                    Manage subscription
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.actionBtn, { borderColor: "rgba(250,250,249,0.2)" }]}
+                  onPress={handleRestore}
+                  activeOpacity={0.7}
+                  disabled={restoreLoading}
+                >
+                  {restoreLoading
+                    ? <ActivityIndicator size="small" color="rgba(250,250,249,0.6)" />
+                    : <Feather name="refresh-cw" size={14} color="rgba(250,250,249,0.6)" />
+                  }
+                  <Text style={[styles.actionBtnText, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
+                    Restore purchases
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* Plan card — service provider */}
+        {role === "service_provider" && (
+          <View style={[styles.planCard, { backgroundColor: colors.headerBg }]}>
+            <View style={styles.planTop}>
+              <View>
+                <Text style={[styles.planLabel, { color: "rgba(250,250,249,0.45)", fontFamily: "DM_Sans_400Regular" }]}>
+                  Current plan
+                </Text>
+                <Text style={[styles.planName, { color: colors.headerText, fontFamily: "DM_Sans_700Bold" }]}>
+                  {isStandard ? "Provider Pro" : "Not subscribed"}
+                </Text>
+              </View>
+              <View style={[styles.planBadge, {
+                borderColor: isStandard ? colors.accent + "80" : "rgba(250,250,249,0.2)",
+                backgroundColor: isStandard ? colors.accent + "20" : "transparent",
+              }]}>
+                <Text style={[styles.planBadgeText, {
+                  color: isStandard ? colors.accent : "rgba(250,250,249,0.6)",
+                  fontFamily: "DM_Sans_500Medium",
+                }]}>
+                  {isStandard ? "Active" : "Inactive"}
+                </Text>
+              </View>
+            </View>
+            {isStandard && (
+              <View style={styles.proActions}>
+                <TouchableOpacity
+                  style={[styles.actionBtn, { borderColor: "rgba(250,250,249,0.2)" }]}
+                  onPress={handleManageSubscription}
+                  activeOpacity={0.7}
+                >
+                  <Feather name="credit-card" size={14} color="rgba(250,250,249,0.6)" />
+                  <Text style={[styles.actionBtnText, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
+                    Manage subscription
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.actionBtn, { borderColor: "rgba(250,250,249,0.2)" }]}
+                  onPress={handleRestore}
+                  activeOpacity={0.7}
+                  disabled={restoreLoading}
+                >
+                  {restoreLoading
+                    ? <ActivityIndicator size="small" color="rgba(250,250,249,0.6)" />
+                    : <Feather name="refresh-cw" size={14} color="rgba(250,250,249,0.6)" />
+                  }
+                  <Text style={[styles.actionBtnText, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
+                    Restore purchases
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* Upgrade card — general user only */}
+        {role === "general" && !isStandard && (
           <>
             <SectionHeader title="Upgrade to Standard" />
 
@@ -519,10 +656,144 @@ export default function ProfileScreen() {
           </>
         )}
 
-        <SectionHeader title={isStandard ? "Standard plan includes" : "Free plan includes"} />
+        {/* Activate plan card — sales agent */}
+        {role === "sales_agent" && !isStandard && (
+          <>
+            <SectionHeader title="Activate Agent Pro" />
+
+            <View style={[styles.proCard, { backgroundColor: colors.card, borderColor: colors.accent + "35" }]}>
+              <View style={styles.proTop}>
+                <View>
+                  <Text style={[styles.proTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
+                    Agent Pro Plan
+                  </Text>
+                  <View style={styles.priceRow}>
+                    <Text style={[styles.price, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>{AGENT_PLAN_PRICE}</Text>
+                    <Text style={[styles.pricePer, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                      /mo NZD
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              <View style={styles.featuresList}>
+                {PLAN_FEATURES.agent.map((f) => (
+                  <FeatureRow key={f} text={f} included />
+                ))}
+              </View>
+
+              <TouchableOpacity
+                style={[styles.upgradeBtn, { backgroundColor: upgradeLoading ? colors.accent + "80" : colors.accent }]}
+                activeOpacity={0.8}
+                onPress={handleUpgrade}
+                disabled={upgradeLoading || restoreLoading}
+              >
+                {upgradeLoading ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <Text style={[styles.upgradeBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>
+                      Activate Agent Pro
+                    </Text>
+                    <Feather name="arrow-right" size={16} color="#fff" />
+                  </>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={handleRestore}
+                activeOpacity={0.7}
+                disabled={upgradeLoading || restoreLoading}
+                style={styles.restoreLink}
+              >
+                {restoreLoading
+                  ? <ActivityIndicator size="small" color={colors.mutedForeground} />
+                  : <Text style={[styles.restoreLinkText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                      Restore purchases
+                    </Text>
+                }
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
+
+        {/* Activate plan card — service provider */}
+        {role === "service_provider" && !isStandard && (
+          <>
+            <SectionHeader title="Activate Provider Pro" />
+
+            <View style={[styles.proCard, { backgroundColor: colors.card, borderColor: colors.accent + "35" }]}>
+              <View style={styles.proTop}>
+                <View>
+                  <Text style={[styles.proTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
+                    Provider Pro Plan
+                  </Text>
+                  <View style={styles.priceRow}>
+                    <Text style={[styles.price, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>{PROVIDER_PLAN_PRICE}</Text>
+                    <Text style={[styles.pricePer, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                      /mo NZD
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              <View style={styles.featuresList}>
+                {PLAN_FEATURES.provider.map((f) => (
+                  <FeatureRow key={f} text={f} included />
+                ))}
+              </View>
+
+              <TouchableOpacity
+                style={[styles.upgradeBtn, { backgroundColor: upgradeLoading ? colors.accent + "80" : colors.accent }]}
+                activeOpacity={0.8}
+                onPress={handleUpgrade}
+                disabled={upgradeLoading || restoreLoading}
+              >
+                {upgradeLoading ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <Text style={[styles.upgradeBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>
+                      Activate Provider Pro
+                    </Text>
+                    <Feather name="arrow-right" size={16} color="#fff" />
+                  </>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={handleRestore}
+                activeOpacity={0.7}
+                disabled={upgradeLoading || restoreLoading}
+                style={styles.restoreLink}
+              >
+                {restoreLoading
+                  ? <ActivityIndicator size="small" color={colors.mutedForeground} />
+                  : <Text style={[styles.restoreLinkText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                      Restore purchases
+                    </Text>
+                }
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
+
+        {/* Plan features summary */}
+        <SectionHeader title={
+          role === "sales_agent"
+            ? (isStandard ? "Agent Pro includes" : "Agent Pro features")
+            : role === "service_provider"
+            ? (isStandard ? "Provider Pro includes" : "Provider Pro features")
+            : (isStandard ? "Standard plan includes" : "Free plan includes")
+        } />
 
         <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          {(isStandard ? PLAN_FEATURES.standard : PLAN_FEATURES.free).map((f) => (
+          {(role === "sales_agent"
+            ? PLAN_FEATURES.agent
+            : role === "service_provider"
+            ? PLAN_FEATURES.provider
+            : isStandard ? PLAN_FEATURES.standard : PLAN_FEATURES.free
+          ).map((f) => (
             <FeatureRow key={f} text={f} included />
           ))}
         </View>

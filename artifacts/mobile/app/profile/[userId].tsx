@@ -230,15 +230,29 @@ export default function UserProfileScreen() {
             </View>
 
             <View style={[styles.statRow, { borderTopColor: colors.border }]}>
-              <View style={styles.stat}>
-                <Feather name="thumbs-up" size={16} color={colors.accent} />
+              <TouchableOpacity
+                style={styles.stat}
+                onPress={!isSelf ? handleRecommend : undefined}
+                disabled={isSelf || recommending}
+                activeOpacity={isSelf ? 1 : 0.7}
+                hitSlop={{ top: 10, bottom: 10, left: 16, right: 16 }}
+              >
+                {recommending ? (
+                  <ActivityIndicator size="small" color={colors.accent} />
+                ) : (
+                  <Feather
+                    name="thumbs-up"
+                    size={18}
+                    color={profile.hasRecommended ? colors.accent : colors.mutedForeground}
+                  />
+                )}
                 <Text style={[styles.statNumber, { color: colors.foreground }]}>
                   {profile.recommendationCount}
                 </Text>
                 <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>
                   {profile.recommendationCount === 1 ? "Recommendation" : "Recommendations"}
                 </Text>
-              </View>
+              </TouchableOpacity>
               <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
               <View style={styles.stat}>
                 <Feather name="calendar" size={16} color={colors.mutedForeground} />
@@ -251,54 +265,19 @@ export default function UserProfileScreen() {
           </View>
 
           {!isSelf && (
-            <View style={styles.actionRow}>
-              <TouchableOpacity
-                style={[
-                  styles.recommendBtn,
-                  {
-                    backgroundColor: profile.hasRecommended ? colors.accent : "transparent",
-                    borderColor: colors.accent,
-                  },
-                ]}
-                onPress={handleRecommend}
-                disabled={recommending}
-                activeOpacity={0.8}
-              >
-                {recommending ? (
-                  <ActivityIndicator size="small" color={profile.hasRecommended ? "#fff" : colors.accent} />
-                ) : (
-                  <>
-                    <Feather
-                      name="thumbs-up"
-                      size={16}
-                      color={profile.hasRecommended ? "#fff" : colors.accent}
-                    />
-                    <Text
-                      style={[
-                        styles.recommendBtnText,
-                        { color: profile.hasRecommended ? "#fff" : colors.accent },
-                      ]}
-                    >
-                      {profile.hasRecommended ? "Recommended" : "Recommend"}
-                    </Text>
-                  </>
-                )}
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.messageBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
-                onPress={() =>
-                  router.push({
-                    pathname: "/chat/contacts",
-                    params: { preselect: profile.id },
-                  })
-                }
-                activeOpacity={0.8}
-              >
-                <Feather name="message-circle" size={16} color={colors.foreground} />
-                <Text style={[styles.messageBtnText, { color: colors.foreground }]}>Message</Text>
-              </TouchableOpacity>
-            </View>
+            <TouchableOpacity
+              style={[styles.messageBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+              onPress={() =>
+                router.push({
+                  pathname: "/chat/contacts",
+                  params: { preselect: profile.id },
+                })
+              }
+              activeOpacity={0.8}
+            >
+              <Feather name="message-circle" size={16} color={colors.foreground} />
+              <Text style={[styles.messageBtnText, { color: colors.foreground }]}>Message</Text>
+            </TouchableOpacity>
           )}
 
           {profile.role === "sales_agent" && profile.roleData && (
@@ -392,20 +371,7 @@ const styles = StyleSheet.create({
   statNumber: { fontSize: 20, fontFamily: "DM_Sans_700Bold" },
   statLabel: { fontSize: 11, fontFamily: "DM_Sans_400Regular" },
   statDivider: { width: 1, height: "100%" },
-  actionRow: { flexDirection: "row", gap: 10 },
-  recommendBtn: {
-    flex: 1,
-    height: 46,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 7,
-  },
-  recommendBtnText: { fontSize: 14, fontFamily: "DM_Sans_600SemiBold" },
   messageBtn: {
-    flex: 1,
     height: 46,
     borderRadius: 12,
     borderWidth: 1,
