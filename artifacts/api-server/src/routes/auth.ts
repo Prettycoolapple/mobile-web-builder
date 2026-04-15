@@ -310,8 +310,18 @@ router.patch("/profile", requireAuth, async (req, res) => {
 // PATCH /auth/service-provider/cert
 // Allows an authenticated service provider to update their incorporation cert URL after signup
 router.patch("/service-provider/cert", requireAuth, async (req, res) => {
-  const userId = (req as unknown as { userId: string }).userId;
-  const schema = z.object({ incorporationCertUrl: z.string().url() });
+  const authedReq = req as unknown as { userId: string; userRole?: string };
+  const userId = authedReq.userId;
+
+  // Enforce role — only service providers may update their cert
+  const profile = await db.query.profiles.findFirst({ where: eq(profiles.id, userId) });
+  if (!profile || profile.role !== "service_provider") {
+    res.status(403).json({ error: "Forbidden", code: "FORBIDDEN" });
+    return;
+  }
+
+  // Accept relative paths (e.g. /api/storage/...) or absolute URLs
+  const schema = z.object({ incorporationCertUrl: z.string().min(1) });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid request", code: "VALIDATION_ERROR", details: parsed.error.issues });

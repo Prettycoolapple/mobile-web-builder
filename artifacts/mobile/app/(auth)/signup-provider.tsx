@@ -47,6 +47,8 @@ interface PickedFile {
   mimeType: string;
 }
 
+type UploadStatus = "idle" | "uploading" | "done" | "error";
+
 interface FieldErrors {
   firstName?: string;
   lastName?: string;
@@ -77,8 +79,10 @@ export default function SignupProviderScreen() {
   const [contactNumber, setContactNumber] = useState("+64 ");
   const [languages, setLanguages] = useState<string[]>([]);
   const [pickedFile, setPickedFile] = useState<PickedFile | null>(null);
+  const [uploadStatus, setUploadStatus] = useState<UploadStatus>("idle");
   const [isLoading, setIsLoading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [certError, setCertError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
 
   const handlePickDocument = async () => {
@@ -120,6 +124,7 @@ export default function SignupProviderScreen() {
 
   const handleSignup = async () => {
     setSubmitError(null);
+    setCertError(null);
     if (!validate()) return;
     setIsLoading(true);
     try {
@@ -145,6 +150,7 @@ export default function SignupProviderScreen() {
 
       // Step 2: If a file was selected, upload it now that we're authenticated
       if (pickedFile) {
+        setUploadStatus("uploading");
         try {
           const { fileUrl } = await uploadIncorporationCert(
             pickedFile.uri,
@@ -154,13 +160,21 @@ export default function SignupProviderScreen() {
           );
           // Step 3: Patch the service provider profile with the cert URL
           await updateServiceProviderCert(fileUrl, newToken);
-        } catch {
-          // Non-blocking: cert upload failed but account is created. User can re-upload later.
+          setUploadStatus("done");
+        } catch (certErr) {
+          setUploadStatus("error");
+          setCertError(
+            certErr instanceof Error
+              ? certErr.message
+              : "Certificate upload failed — you can re-upload it from your profile.",
+          );
+          // Account is created; navigate anyway so the user isn't blocked
         }
       }
 
       router.replace("/(auth)/welcome-provider");
     } catch (err) {
+      setUploadStatus("idle");
       setSubmitError(err instanceof Error ? err.message : "Signup failed. Please try again.");
     } finally {
       setIsLoading(false);
@@ -207,6 +221,14 @@ export default function SignupProviderScreen() {
             <View style={[styles.errorBanner, { backgroundColor: colors.danger + "18", borderColor: colors.danger + "40" }]}>
               <Feather name="alert-circle" size={15} color={colors.danger} />
               <Text style={[styles.errorText, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>{submitError}</Text>
+            </View>
+          )}
+          {certError && (
+            <View style={[styles.errorBanner, { backgroundColor: "#F59E0B18", borderColor: "#F59E0B40" }]}>
+              <Feather name="alert-triangle" size={15} color="#F59E0B" />
+              <Text style={[styles.errorText, { color: "#92400E", fontFamily: "DM_Sans_400Regular" }]}>
+                Certificate not uploaded: {certError}
+              </Text>
             </View>
           )}
 
@@ -348,25 +370,61 @@ export default function SignupProviderScreen() {
               </Text>
               <TouchableOpacity
                 onPress={handlePickDocument}
+                disabled={uploadStatus === "uploading"}
                 style={[
                   styles.uploadBtn,
                   {
-                    backgroundColor: pickedFile ? colors.success + "10" : colors.card,
-                    borderColor: pickedFile ? colors.success : colors.border,
+                    backgroundColor:
+                      uploadStatus === "done"
+                        ? colors.success + "10"
+                        : uploadStatus === "error"
+                        ? colors.danger + "10"
+                        : pickedFile
+                        ? colors.accent + "10"
+                        : colors.card,
+                    borderColor:
+                      uploadStatus === "done"
+                        ? colors.success
+                        : uploadStatus === "error"
+                        ? colors.danger
+                        : pickedFile
+                        ? colors.accent
+                        : colors.border,
                   },
                 ]}
                 activeOpacity={0.7}
               >
-                {pickedFile ? (
+                {uploadStatus === "uploading" ? (
+                  <>
+                    <ActivityIndicator size="small" color={colors.accent} />
+                    <Text style={[styles.uploadBtnText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                      Uploading certificate…
+                    </Text>
+                  </>
+                ) : uploadStatus === "done" ? (
                   <>
                     <Feather name="check-circle" size={18} color={colors.success} />
-                    <Text
-                      style={[styles.uploadBtnText, { color: colors.success, fontFamily: "DM_Sans_500Medium" }]}
-                      numberOfLines={1}
-                    >
+                    <Text style={[styles.uploadBtnText, { color: colors.success, fontFamily: "DM_Sans_500Medium" }]} numberOfLines={1}>
+                      {pickedFile?.name ?? "Certificate uploaded"}
+                    </Text>
+                  </>
+                ) : uploadStatus === "error" ? (
+                  <>
+                    <Feather name="alert-circle" size={18} color={colors.danger} />
+                    <Text style={[styles.uploadBtnText, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]} numberOfLines={1}>
+                      Upload failed — tap to choose again
+                    </Text>
+                  </>
+                ) : pickedFile ? (
+                  <>
+                    <Feather name="file-text" size={18} color={colors.accent} />
+                    <Text style={[styles.uploadBtnText, { color: colors.accent, fontFamily: "DM_Sans_500Medium" }]} numberOfLines={1}>
                       {pickedFile.name}
                     </Text>
-                    <TouchableOpacity onPress={(e) => { e.stopPropagation(); setPickedFile(null); }}>
+                    <TouchableOpacity
+                      onPress={(e) => { e.stopPropagation(); setPickedFile(null); }}
+                      hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                    >
                       <Feather name="x" size={16} color={colors.mutedForeground} />
                     </TouchableOpacity>
                   </>
@@ -380,7 +438,7 @@ export default function SignupProviderScreen() {
                 )}
               </TouchableOpacity>
               <Text style={[styles.uploadHint, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                PDF, JPEG, PNG or WEBP — max 10 MB. Will be uploaded after account creation.
+                PDF, JPEG, PNG or WEBP — max 10 MB. Uploaded after account creation.
               </Text>
             </View>
           </View>
