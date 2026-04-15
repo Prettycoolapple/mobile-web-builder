@@ -18,7 +18,7 @@ import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
-import { useChat, ChatMessage, FeasibilityReport, PropertyCandidate } from "@/context/ChatContext";
+import { useChat, ChatMessage, FeasibilityReport, PropertyCandidate, ServiceProvider } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
 import { ChatBubble } from "@/components/ChatBubble";
 import { PaywallModal } from "@/components/PaywallModal";
@@ -108,6 +108,7 @@ export default function SearchScreen() {
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
+  const checkedReportIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
@@ -118,6 +119,81 @@ export default function SearchScreen() {
   }, []);
 
   const messages = currentSession?.messages || [];
+
+  useEffect(() => {
+    if (user?.role !== "general") return;
+    const msgs = currentSession?.messages ?? [];
+    const reportMessages = msgs.filter((m) => m.type === "report" && m.report);
+    if (reportMessages.length === 0) return;
+    const lastReport = reportMessages[reportMessages.length - 1];
+    if (checkedReportIds.current.has(lastReport.id)) return;
+    checkedReportIds.current.add(lastReport.id);
+
+    const alreadyHasRecommendation = msgs.some((m) => m.type === "provider_recommendation");
+    if (alreadyHasRecommendation) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        const apiBase = process.env.EXPO_PUBLIC_DOMAIN
+          ? `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`
+          : "/api";
+        const headers = getApiHeaders();
+        const conversationHistory = msgs
+          .filter((m) => m.type === "text" || m.type === "report")
+          .map((m) => ({ role: m.role, content: m.type === "text" ? m.content : `[Report for ${m.report?.address ?? "property"}]` }));
+
+        const resp = await fetch(`${apiBase}/recommendations/check`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ report: lastReport.report, conversationHistory }),
+        });
+        if (!resp.ok) return;
+        const data = await resp.json() as {
+          shouldRecommend: boolean;
+          provider: ServiceProvider | null;
+          intentType: string;
+        };
+        if (data.shouldRecommend && data.provider) {
+          addMessage({
+            role: "assistant",
+            content: "",
+            type: "provider_recommendation",
+            provider: data.provider,
+            intentType: data.intentType,
+            propertyAddress: lastReport.report?.address ?? "",
+          }, currentSessionId ?? undefined);
+        }
+      } catch (err) {
+        console.log("Recommendation check failed:", err);
+      }
+    }, 2000);
+
+    return () => clearTimeout(timer);
+  }, [currentSession?.messages, user?.role, getApiHeaders, addMessage, currentSessionId]);
+
+  const handleConnect = useCallback(async (providerId: string, propertyAddress: string) => {
+    try {
+      const apiBase = process.env.EXPO_PUBLIC_DOMAIN
+        ? `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`
+        : "/api";
+      const headers = getApiHeaders();
+      const resp = await fetch(`${apiBase}/recommendations/connect`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ providerId, propertyAddress }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json() as { error?: string };
+        throw new Error(err.error ?? "Connect failed");
+      }
+      router.push("/(tabs)/messages");
+    } catch (err) {
+      console.log("Connect failed:", err);
+      throw err;
+    }
+  }, [getApiHeaders, router]);
+
+  const handleDismiss = useCallback((_messageId: string) => {}, []);
 
   const getApiBase = useCallback(() => {
     if (process.env.EXPO_PUBLIC_DOMAIN) {
@@ -294,9 +370,16 @@ export default function SearchScreen() {
 
   const renderItem = useCallback(
     ({ item }: { item: ChatMessage }) => (
-      <ChatBubble message={item} onFollowUp={handleFollowUp} onAnalyse={handleAnalyse} onRetry={handleSend} />
+      <ChatBubble
+        message={item}
+        onFollowUp={handleFollowUp}
+        onAnalyse={handleAnalyse}
+        onRetry={handleSend}
+        onConnect={(providerId) => handleConnect(providerId, item.propertyAddress ?? "")}
+        onDismiss={handleDismiss}
+      />
     ),
-    [handleFollowUp, handleAnalyse, handleSend],
+    [handleFollowUp, handleAnalyse, handleSend, handleConnect, handleDismiss],
   );
 
   const keyExtractor = useCallback((item: ChatMessage) => item.id, []);

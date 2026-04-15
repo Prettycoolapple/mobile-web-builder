@@ -4,12 +4,22 @@ import { useAuth } from "@/context/AuthContext";
 
 export type MessageRole = "user" | "assistant";
 
+export interface ServiceProvider {
+  id: string;
+  fullName: string | null;
+  companyName: string | null;
+  discipline: string | null;
+  bio: string | null;
+  recommendationCount: number;
+  avatarUrl: string | null;
+}
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
   content: string;
   timestamp: number;
-  type: "text" | "report" | "search" | "loading";
+  type: "text" | "report" | "search" | "loading" | "provider_recommendation";
   loadingMode?: "analyse" | "discover" | "followup";
   retryLabel?: string;
   retryText?: string;
@@ -17,6 +27,9 @@ export interface ChatMessage {
   searchResults?: PropertyCandidate[];
   isMockData?: boolean;
   aiIntro?: string;
+  provider?: ServiceProvider;
+  intentType?: string;
+  propertyAddress?: string;
 }
 
 export interface Score {

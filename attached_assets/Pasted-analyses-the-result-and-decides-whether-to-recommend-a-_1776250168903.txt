@@ -1,0 +1,474 @@
+analyses the result and decides whether to recommend a 
+service provider. If yes, a recommendation message bubble 
+appears in the analysis chat with a connect button.
+
+════════════════════════════════
+CONTEXT & FLOW
+════════════════════════════════
+
+WHEN IT TRIGGERS:
+Only for General user accounts (subscription_tier check).
+Triggers automatically after a full feasibility report 
+is generated and rendered.
+
+WHAT TRIGGERS IT:
+The report data is analysed for these signals:
+- lots.lots >= 2 (subdividable land)
+- zone_code in ['THAB', 'MHU', 'MHS'] (development zones)
+- merged.land_area_sqm > 500 (substantial land)
+- vacant land (no existing dwelling detected)
+- scores.ease >= 2.5 (feasible to develop)
+- User's follow-up questions mention 
+  "builder", "architect", "engineer", "develop", 
+  "build", "construction", "subdivide"
+
+════════════════════════════════
+1. SERVICE PROVIDER RECOMMENDATION
+   LOGIC — /lib/recommendation-engine.ts
+════════════════════════════════
+
+Step 1 — Detect development intent from report:
+
+export async function detectDevelopmentIntent(
+  report: FeasibilityReport,
+  conversationHistory: Message[]
+): Promise<{
+  shouldRecommend: boolean,
+  intentType: 'subdivision' | 'newbuild' | 'renovation' | 'none',
+  confidence: number,
+  reason: string,
+}> {
+  
+  // Rule-based fast check first (no API call needed)
+  const signals = {
+    isSubdividable: (report.lots?.lots ?? 0) >= 2,
+    isDevelopmentZone: ['THAB','MHU','MHS','MIX'].includes(
+      report.merged?.zone_code ?? ''
+    ),
+    isLargeLand: (report.merged?.land_area_sqm ?? 0) > 500,
+    hasGoodEase: (report.scores?.ease ?? 0) >= 2.5,
+    hasPositiveROI: report.scenarios?.some(s => s.viable) ?? false,
+  };
+  
+  const signalCount = Object.values(signals).filter(Boolean).length;
+  
+  // Check conversation for explicit developer intent
+  const recentMessages = conversationHistory
+    .slice(-6)
+    .map(m => m.content)
+    .join(' ')
+    .toLowerCase();
+  
+  const developerKeywords = [
+    'build', 'develop', 'subdivide', 'architect', 
+    'builder', 'engineer', 'construction', 'consent',
+    'townhouse', 'units', 'new build',
+  ];
+  
+  const hasKeywordIntent = developerKeywords.some(
+    kw => recentMessages.includes(kw)
+  );
+  
+  // Strong signal: 3+ property signals OR keyword + 2 signals
+  if (signalCount >= 3 || (hasKeywordIntent && signalCount >= 2)) {
+    
+    // Confirm with Claude for nuance
+    const claudeCheck = await anthropic.messages.create({
+      model: 'claude-sonnet-4-5',
+      max_tokens: 150,
+      messages: [{
+        role: 'user',
+        content: `A user just analysed a NZ property with these details:
+        Zone: ${report.merged?.zone_code}
+        Potential lots: ${report.lots?.lots}
+        Land area: ${report.merged?.land_area_sqm}m²
+        Ease score: ${report.scores?.ease}/5
+        ROI viable: ${report.scenarios?.some(s => s.viable)}
+        
+        Recent conversation: "${recentMessages.slice(-200)}"
+        
+        Should we recommend a development service provider 
+        (builder, architect, or project manager)?
+        
+        Reply with ONLY valid JSON:
+        {"recommend": true/false, "type": "subdivision|newbuild|renovation|none", "reason": "one sentence"}`
+      }]
+    });
+    
+    try {
+      const result = JSON.parse(claudeCheck.content[0].text);
+      return {
+        shouldRecommend: result.recommend,
+        intentType: result.type,
+        confidence: signalCount / 5,
+        reason: result.reason,
+      };
+    } catch {
+      // Claude parse failed — use rule-based result
+      return {
+        shouldRecommend: true,
+        intentType: signals.isSubdividable ? 'subdivision' : 'newbuild',
+        confidence: signalCount / 5,
+        reason: 'Property shows strong development potential',
+      };
+    }
+  }
+  
+  return { shouldRecommend: false, intentType: 'none', 
+           confidence: 0, reason: '' };
+}
+
+════════════════════════════════
+2. SELECT SERVICE PROVIDER
+   /lib/provider-selector.ts
+════════════════════════════════
+
+export async function selectServiceProvider(
+  intentType: string
+): Promise<ServiceProvider | null> {
+  
+  // Fetch top 3 providers by recommendation count
+  // (recommendation_count column on profiles table)
+  const { data: providers } = await supabase
+    .from('profiles')
+    .select(
+      'id, full_name, business_name, specialties, ' +
+      'languages, recommendation_count, avatar_url, ' +
+      'contact_mobile, bio'
+    )
+    .eq('account_type', 'service_provider')
+    .eq('is_active', true)
+    .order('recommendation_count', { ascending: false })
+    .limit(3);
+  
+  if (!providers?.length) return null;
+  
+  // For now: randomly select from top 3
+  // Future: match by location, specialty, language
+  const selected = providers[
+    Math.floor(Math.random() * providers.length)
+  ];
+  
+  return selected as ServiceProvider;
+}
+
+// Add recommendation_count to profiles table:
+// ALTER TABLE public.profiles 
+// ADD COLUMN IF NOT EXISTS recommendation_count integer DEFAULT 0;
+// ADD COLUMN IF NOT EXISTS account_type text DEFAULT 'general';
+// ADD COLUMN IF NOT EXISTS is_active boolean DEFAULT true;
+// ADD COLUMN IF NOT EXISTS business_name text;
+// ADD COLUMN IF NOT EXISTS specialties text[];
+// ADD COLUMN IF NOT EXISTS bio text;
+
+════════════════════════════════
+3. RECOMMENDATION MESSAGE BUBBLE
+   /components/chat/ProviderRecommendationBubble.tsx
+════════════════════════════════
+
+This is a special AI message bubble that appears in the 
+analysis chat AFTER the feasibility report renders.
+
+Props: {
+  provider: ServiceProvider,
+  intentType: string,
+  propertyAddress: string,
+  onConnect: (providerId: string) => void,
+}
+
+Visual design:
+
+┌─────────────────────────────────────┐
+│  🤖 AI suggestion                   │
+│─────────────────────────────────────│
+│  Based on this property's           │
+│  subdivision potential, I'd like    │
+│  to connect you with a development  │
+│  specialist who can help move       │
+│  this forward.                      │
+│                                     │
+│  ┌─────────────────────────────┐   │
+│  │  [Avatar]  James Chen       │   │
+│  │            Development PM   │   │
+│  │            ★ 47 connections │   │
+│  │  "I specialise in Auckland  │   │
+│  │   subdivision consenting    │   │
+│  │   and project management"  │   │
+│  └─────────────────────────────┘   │
+│                                     │
+│  [  Connect & Message  →  ]         │
+│  [ Not interested          ]        │
+└─────────────────────────────────────┘
+
+Style:
+- Outer bubble: light purple tint (#F5F3FF), 
+  border 1px solid #DDD6FE, borderRadius 12
+- Header "AI suggestion": fontSize 11, color #7C3AED,
+  fontWeight '600', marginBottom 8
+- Body text: fontSize 14, color '#374151', lineHeight 22
+- Provider card: white bg, borderRadius 8, 
+  border 1px solid #E5E7EB, padding 12
+- Avatar: 40x40 circle, initials if no photo
+- Provider name: fontSize 15, fontWeight '600'
+- Specialty: fontSize 12, color '#6B7280'
+- Recommendation count: fontSize 12, color '#10B981'
+  "★ {count} connections"
+- Bio: fontSize 13, color '#4B5563', fontStyle 'italic',
+  marginTop 6, numberOfLines 2
+- Connect button: emerald background #10B981, 
+  white text, borderRadius 8, padding 12,
+  fontSize 15, fontWeight '600'
+- "Not interested": text-only button, 
+  color '#9CA3AF', fontSize 13, marginTop 8
+
+════════════════════════════════
+4. CONNECT FLOW
+   /lib/connection.ts
+════════════════════════════════
+
+When user taps "Connect & Message":
+
+export async function connectWithProvider(
+  generalUserId: string,
+  providerId: string,
+  propertyAddress: string,
+  analysisReportId: string,
+): Promise<{ conversationId: string }> {
+  
+  // 1. Check if conversation already exists
+  const { data: existing } = await supabase
+    .from('conversations')
+    .select('id')
+    .eq('general_user_id', generalUserId)
+    .eq('provider_id', providerId)
+    .eq('property_address', propertyAddress)
+    .single();
+  
+  if (existing) return { conversationId: existing.id };
+  
+  // 2. Create new conversation
+  const { data: conversation } = await supabase
+    .from('conversations')
+    .insert({
+      general_user_id: generalUserId,
+      provider_id: providerId,
+      property_address: propertyAddress,
+      analysis_report_id: analysisReportId,
+    })
+    .select('id')
+    .single();
+  
+  // 3. Send automated opening message from AI
+  const openingMessage = 
+    `Hi! I've been connected with you regarding ` +
+    `${propertyAddress}. The AI analysis shows this ` +
+    `property has development potential — ` +
+    `I'd love to discuss further.`;
+  
+  await supabase.from('messages').insert({
+    conversation_id: conversation.id,
+    sender_id: generalUserId,
+    content: openingMessage,
+    message_type: 'text',
+  });
+  
+  // 4. Increment provider recommendation count
+  await supabase.rpc('increment_recommendation_count', {
+    provider_id: providerId
+  });
+  
+  // 5. Send push notification to provider (if token exists)
+  await notifyProvider(providerId, generalUserId, propertyAddress);
+  
+  return { conversationId: conversation.id };
+}
+
+// Supabase function for atomic increment:
+// CREATE OR REPLACE FUNCTION increment_recommendation_count(provider_id uuid)
+// RETURNS void AS $$
+//   UPDATE public.profiles 
+//   SET recommendation_count = recommendation_count + 1
+//   WHERE id = provider_id;
+// $$ LANGUAGE sql SECURITY DEFINER;
+
+════════════════════════════════
+5. PUSH NOTIFICATIONS — basic setup
+   /lib/notifications.ts
+════════════════════════════════
+
+Use Expo Push Notifications to notify the provider.
+
+import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
+
+// On app start, register for push notifications
+export async function registerForPushNotifications(
+  userId: string
+): Promise<void> {
+  const { status } = await Notifications.requestPermissionsAsync();
+  if (status !== 'granted') return;
+  
+  const token = await Notifications.getExpoPushTokenAsync({
+    projectId: Constants.expoConfig?.extra?.eas?.projectId,
+  });
+  
+  // Save token to profiles table
+  await supabase
+    .from('profiles')
+    .update({ push_token: token.data })
+    .eq('id', userId);
+}
+
+// Add push_token column to profiles:
+// ALTER TABLE public.profiles 
+// ADD COLUMN IF NOT EXISTS push_token text;
+
+// Notify provider when user connects:
+async function notifyProvider(
+  providerId: string,
+  generalUserId: string,
+  propertyAddress: string,
+): Promise<void> {
+  
+  const { data: provider } = await supabase
+    .from('profiles')
+    .select('push_token, full_name')
+    .eq('id', providerId)
+    .single();
+  
+  if (!provider?.push_token) return;
+  
+  // Send via Expo Push API
+  await fetch('https://exp.host/--/api/v2/push/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      to: provider.push_token,
+      title: 'New connection request',
+      body: `A user wants to discuss ${propertyAddress}`,
+      data: { type: 'new_connection', address: propertyAddress },
+    }),
+  });
+}
+
+════════════════════════════════
+6. WIRE INTO ANALYSIS CHAT
+   Update chat.tsx
+════════════════════════════════
+
+After a feasibility report renders successfully:
+
+// In the useEffect that watches for new assistant messages:
+useEffect(() => {
+  const lastMessage = messages[messages.length - 1];
+  if (!lastMessage || lastMessage.role !== 'assistant') return;
+  if (lastMessage.mode !== 'analyse') return;
+  
+  // Only for general user accounts
+  if (userProfile?.account_type !== 'general') return;
+  
+  // Wait 2 seconds (let user read report first)
+  const timer = setTimeout(async () => {
+    try {
+      const report = JSON.parse(lastMessage.content);
+      const intent = await detectDevelopmentIntent(
+        report, messages
+      );
+      
+      if (intent.shouldRecommend) {
+        const provider = await selectServiceProvider(
+          intent.intentType
+        );
+        
+        if (provider) {
+          // Add recommendation bubble to chat
+          addMessage({
+            id: generateId(),
+            role: 'assistant',
+            type: 'provider_recommendation',
+            provider,
+            intentType: intent.intentType,
+            propertyAddress: report.address,
+            reportId: lastMessage.reportId,
+          });
+        }
+      }
+    } catch (err) {
+      // Silent fail — recommendation is nice-to-have
+      console.log('Recommendation check failed:', err);
+    }
+  }, 2000);
+  
+  return () => clearTimeout(timer);
+}, [messages]);
+
+// In message renderer — add new case:
+if (message.type === 'provider_recommendation') {
+  return (
+    <ProviderRecommendationBubble
+      provider={message.provider}
+      intentType={message.intentType}
+      propertyAddress={message.propertyAddress}
+      onConnect={async (providerId) => {
+        const { conversationId } = await connectWithProvider(
+          user.id,
+          providerId,
+          message.propertyAddress,
+          message.reportId,
+        );
+        // Navigate to Messages tab, open conversation
+        router.push(`/(tabs)/messages`);
+        // Pass conversationId to open directly
+      }}
+    />
+  );
+}
+
+════════════════════════════════
+7. SEED TEST DATA
+════════════════════════════════
+
+Insert a test service provider into Supabase so 
+the recommendation system has something to return:
+
+INSERT INTO public.profiles (
+  id, email, full_name, account_type, 
+  business_name, specialties, bio,
+  recommendation_count, is_active, subscription_tier
+) VALUES (
+  gen_random_uuid(),
+  'james.chen@devtest.nz',
+  'James Chen',
+  'service_provider',
+  'Chen Development Consulting',
+  ARRAY['subdivision', 'resource consent', 'project management'],
+  'Specialising in Auckland subdivision consenting and development project management. 15 years experience across MHS and MHU zones.',
+  12,
+  true,
+  'pro'
+);
+
+════════════════════════════════
+VERIFICATION
+════════════════════════════════
+
+Test flow:
+1. Log in as a general user
+2. Analyse "42 Arney Road, Remuera, Auckland" 
+   (MHS zone, subdividable)
+3. After report renders, wait 2–3 seconds
+
+[ ] ProviderRecommendationBubble appears in chat
+[ ] Provider card shows name, specialty, count
+[ ] "Connect & Message" button taps successfully
+[ ] Row created in conversations table (check Supabase)
+[ ] Opening message created in messages table
+[ ] Navigates to Messages tab after connecting
+[ ] Conversation thread visible in Messages list
+[ ] Tapping thread opens conversation with opening message
+[ ] Provider recommendation_count incremented by 1
+[ ] "Not interested" button dismisses the bubble cleanly
+[ ] Bubble does NOT appear for sales agent or 
+    service provider account types
+[ ] Bubble does NOT appear for non-development properties
+    (test with a SHZ zone, 1-lot property)

@@ -11,6 +11,7 @@ import listingsRouter from "./listings";
 import dmRouter from "./dm";
 import usersRouter from "./users";
 import notificationsRouter from "./notifications";
+import recommendationsRouter from "./recommendations";
 
 const router: IRouter = Router();
 
@@ -26,5 +27,6 @@ router.use(listingsRouter);
 router.use(dmRouter);
 router.use(usersRouter);
 router.use(notificationsRouter);
+router.use(recommendationsRouter);
 
 export default router;

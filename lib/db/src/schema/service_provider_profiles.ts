@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, check } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, check, integer } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { sql } from "drizzle-orm";
 import { z } from "zod/v4";
@@ -25,6 +25,8 @@ export const serviceProviderProfiles = pgTable(
     otherDiscipline: text("other_discipline"),
     primaryLanguage: text("primary_language"),
     secondaryLanguage: text("secondary_language"),
+    bio: text("bio"),
+    recommendationCount: integer("recommendation_count").default(0).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [

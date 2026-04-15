@@ -7,6 +7,7 @@ import { ChatMessage } from "@/context/ChatContext";
 import { FeasibilityReportCard } from "./FeasibilityReport";
 import { PropertyCard } from "./PropertyCard";
 import { AnalysisProgress } from "./AnalysisProgress";
+import { ProviderRecommendationBubble } from "./ProviderRecommendationBubble";
 
 class ReportErrorBoundary extends Component<
   { children: React.ReactNode },
@@ -60,6 +61,8 @@ interface Props {
   onFollowUp: (question: string) => void;
   onAnalyse: (address: string) => void;
   onRetry?: (text: string) => void;
+  onConnect?: (providerId: string) => Promise<void>;
+  onDismiss?: (messageId: string) => void;
 }
 
 function TypingDots() {
@@ -105,9 +108,21 @@ function TypingDots() {
   );
 }
 
-export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry }: Props) {
+export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect, onDismiss }: Props) {
   const colors = useColors();
   const isUser = message.role === "user";
+
+  if (message.type === "provider_recommendation" && message.provider) {
+    return (
+      <ProviderRecommendationBubble
+        provider={message.provider}
+        intentType={message.intentType ?? "subdivision"}
+        propertyAddress={message.propertyAddress ?? ""}
+        onConnect={onConnect ?? (() => Promise.resolve())}
+        onDismiss={() => onDismiss?.(message.id)}
+      />
+    );
+  }
 
   if (message.type === "loading") {
     const isAnalysing = message.loadingMode === "analyse";
