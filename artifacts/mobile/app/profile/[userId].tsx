@@ -262,29 +262,69 @@ export default function UserProfileScreen() {
             </View>
 
             <View style={[styles.statRow, { borderTopColor: colors.border }]}>
-              <TouchableOpacity
-                style={styles.stat}
-                onPress={!isSelf ? handleRecommend : undefined}
-                disabled={isSelf || recommending}
-                activeOpacity={isSelf ? 1 : 0.7}
-                hitSlop={{ top: 10, bottom: 10, left: 16, right: 16 }}
-              >
-                {recommending ? (
-                  <ActivityIndicator size="small" color={colors.accent} />
-                ) : (
-                  <Feather
-                    name="thumbs-up"
-                    size={18}
-                    color={profile.hasRecommended ? colors.accent : colors.mutedForeground}
-                  />
-                )}
-                <Text style={[styles.statNumber, { color: colors.foreground }]}>
-                  {profile.recommendationCount}
-                </Text>
-                <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>
-                  {profile.recommendationCount === 1 ? "Recommendation" : "Recommendations"}
-                </Text>
-              </TouchableOpacity>
+              {!isSelf ? (
+                <TouchableOpacity
+                  style={[
+                    styles.recommendBtn,
+                    {
+                      backgroundColor: profile.hasRecommended ? colors.accent : "transparent",
+                      borderColor: profile.hasRecommended ? colors.accent : colors.border,
+                    },
+                  ]}
+                  onPress={handleRecommend}
+                  disabled={recommending}
+                  activeOpacity={0.75}
+                >
+                  {recommending ? (
+                    <ActivityIndicator size="small" color={profile.hasRecommended ? "#fff" : colors.accent} />
+                  ) : (
+                    <Feather
+                      name="thumbs-up"
+                      size={15}
+                      color={profile.hasRecommended ? "#fff" : colors.accent}
+                    />
+                  )}
+                  <Text
+                    style={[
+                      styles.recommendBtnText,
+                      { color: profile.hasRecommended ? "#fff" : colors.accent },
+                    ]}
+                  >
+                    {profile.hasRecommended ? "Recommended" : "Recommend"}
+                  </Text>
+                  {profile.recommendationCount > 0 && (
+                    <View
+                      style={[
+                        styles.recommendCount,
+                        {
+                          backgroundColor: profile.hasRecommended
+                            ? "rgba(255,255,255,0.25)"
+                            : colors.accent + "18",
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.recommendCountText,
+                          { color: profile.hasRecommended ? "#fff" : colors.accent },
+                        ]}
+                      >
+                        {profile.recommendationCount}
+                      </Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+              ) : (
+                <View style={styles.stat}>
+                  <Feather name="thumbs-up" size={16} color={colors.mutedForeground} />
+                  <Text style={[styles.statNumber, { color: colors.foreground }]}>
+                    {profile.recommendationCount}
+                  </Text>
+                  <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>
+                    {profile.recommendationCount === 1 ? "Recommendation" : "Recommendations"}
+                  </Text>
+                </View>
+              )}
               <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
               <View style={styles.stat}>
                 <Feather name="calendar" size={16} color={colors.mutedForeground} />
@@ -320,7 +360,15 @@ export default function UserProfileScreen() {
               <InfoRow icon="clock" label="Experience" value={profile.roleData.yearsExperience ? `${profile.roleData.yearsExperience} years` : null} colors={colors} />
               <InfoRow icon="map-pin" label="Regions" value={(profile.roleData.regionsCovered as string[] | null)?.join(", ")} colors={colors} />
               <InfoRow icon="home" label="Property types" value={(profile.roleData.propertyTypes as string[] | null)?.join(", ")} colors={colors} />
+              <InfoRow
+                icon="map-pin"
+                label="Address"
+                value={[profile.roleData.addressSuburb, profile.roleData.addressCity].filter(Boolean).join(", ") || null}
+                colors={colors}
+              />
               <InfoRow icon="globe" label="Website" value={profile.roleData.websiteUrl as string} colors={colors} />
+              <InfoRow icon="message-circle" label="Primary language" value={profile.roleData.primaryLanguage as string} colors={colors} />
+              <InfoRow icon="message-circle" label="Secondary language" value={profile.roleData.secondaryLanguage as string} colors={colors} />
               {profile.roleData.bio ? (
                 <View style={styles.bioRow}>
                   <Text style={[styles.infoLabel, { color: colors.mutedForeground }]}>About</Text>
@@ -344,11 +392,22 @@ export default function UserProfileScreen() {
                 }
                 colors={colors}
               />
-              <InfoRow icon="map-pin" label="Location" value={[profile.roleData.addressSuburb, profile.roleData.addressCity].filter(Boolean).join(", ") || null} colors={colors} />
+              <InfoRow
+                icon="map-pin"
+                label="Address"
+                value={[profile.roleData.addressSuburb, profile.roleData.addressCity].filter(Boolean).join(", ") || null}
+                colors={colors}
+              />
               <InfoRow icon="hash" label="NZ Business Number" value={profile.roleData.nzCompanyRegisterNumber as string} colors={colors} />
               <InfoRow icon="phone" label="Contact" value={profile.roleData.contactNumber as string} colors={colors} />
-              <InfoRow icon="globe" label="Primary language" value={profile.roleData.primaryLanguage as string} colors={colors} />
-              <InfoRow icon="globe" label="Secondary language" value={profile.roleData.secondaryLanguage as string} colors={colors} />
+              <InfoRow icon="message-circle" label="Primary language" value={profile.roleData.primaryLanguage as string} colors={colors} />
+              <InfoRow icon="message-circle" label="Secondary language" value={profile.roleData.secondaryLanguage as string} colors={colors} />
+              {profile.roleData.bio ? (
+                <View style={styles.bioRow}>
+                  <Text style={[styles.infoLabel, { color: colors.mutedForeground }]}>About</Text>
+                  <Text style={[styles.bioText, { color: colors.foreground }]}>{profile.roleData.bio as string}</Text>
+                </View>
+              ) : null}
             </View>
           )}
 
@@ -408,12 +467,38 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     width: "100%",
     justifyContent: "center",
-    gap: 32,
+    alignItems: "center",
+    gap: 24,
   },
   stat: { alignItems: "center", gap: 4 },
   statNumber: { fontSize: 20, fontFamily: "DM_Sans_700Bold" },
   statLabel: { fontSize: 11, fontFamily: "DM_Sans_400Regular" },
-  statDivider: { width: 1, height: "100%" },
+  statDivider: { width: 1, alignSelf: "stretch" },
+  recommendBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 22,
+    borderWidth: 1.5,
+  },
+  recommendBtnText: {
+    fontSize: 14,
+    fontFamily: "DM_Sans_600SemiBold",
+  },
+  recommendCount: {
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 6,
+  },
+  recommendCountText: {
+    fontSize: 12,
+    fontFamily: "DM_Sans_700Bold",
+  },
   messageBtn: {
     height: 46,
     borderRadius: 12,

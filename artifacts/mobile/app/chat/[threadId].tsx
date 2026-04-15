@@ -9,6 +9,7 @@ import {
   FlatList,
   Image,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   StyleSheet,
@@ -122,6 +123,7 @@ export default function ChatScreen() {
   const [otherName, setOtherName] = useState<string | null>(null);
   const [otherRole, setOtherRole] = useState<string>("general");
   const [otherUserId, setOtherUserId] = useState<string | null>(null);
+  const [otherPhone, setOtherPhone] = useState<string | null>(null);
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
@@ -140,6 +142,19 @@ export default function ChatScreen() {
       setOtherUserId(threadFromContext.otherParticipant.id);
     }
   }, [threadFromContext]);
+
+  useEffect(() => {
+    if (!otherUserId || !token) return;
+    fetch(`${getApiBase()}/users/${otherUserId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => r.ok ? r.json() : null)
+      .then((data: { roleData?: { contactNumber?: string } } | null) => {
+        const phone = data?.roleData?.contactNumber ?? null;
+        setOtherPhone(phone);
+      })
+      .catch(() => {});
+  }, [otherUserId, token]);
 
   const fetchMessages = useCallback(async (fromCursor?: string | null) => {
     if (!threadId || !token) return;
@@ -384,7 +399,18 @@ export default function ChatScreen() {
             </Text>
           </View>
         </TouchableOpacity>
-        <View style={{ width: 44 }} />
+        {otherPhone ? (
+          <TouchableOpacity
+            style={styles.callBtn}
+            onPress={() => Linking.openURL(`tel:${otherPhone}`)}
+            activeOpacity={0.75}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Feather name="phone" size={18} color="#4ADE80" />
+          </TouchableOpacity>
+        ) : (
+          <View style={{ width: 44 }} />
+        )}
       </View>
 
       {loadingInitial ? (
@@ -614,5 +640,15 @@ const styles = StyleSheet.create({
     borderRadius: 17,
     alignItems: "center",
     justifyContent: "center",
+  },
+  callBtn: {
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 22,
+    backgroundColor: "rgba(74,222,128,0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(74,222,128,0.3)",
   },
 });
