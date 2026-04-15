@@ -120,6 +120,44 @@ router.post(
   },
 );
 
+router.post(
+  "/upload/dm-image",
+  requireAuth,
+  upload.single("file"),
+  async (req: Request, res: Response) => {
+    if (!req.file) {
+      res.status(400).json({ error: "No file provided", code: "MISSING_FILE" });
+      return;
+    }
+
+    try {
+      const { buffer, mimetype, size } = req.file;
+
+      const uploadURL = await objectStorageService.getObjectEntityUploadURL();
+      const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
+
+      const uploadRes = await fetch(uploadURL, {
+        method: "PUT",
+        headers: {
+          "Content-Type": mimetype,
+          "Content-Length": String(size),
+        },
+        body: buffer,
+      });
+
+      if (!uploadRes.ok) {
+        res.status(500).json({ error: "Failed to upload file to storage", code: "UPLOAD_FAILED" });
+        return;
+      }
+
+      const fileUrl = `/api/storage${objectPath}`;
+      res.status(201).json({ fileUrl, objectPath });
+    } catch (error) {
+      res.status(500).json({ error: "Upload failed. Please try again.", code: "UPLOAD_FAILED" });
+    }
+  },
+);
+
 router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof MulterError) {
     if (err.code === "LIMIT_FILE_SIZE") {

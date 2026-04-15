@@ -8,6 +8,7 @@ import searchesRouter from "./searches";
 import storageRouter from "./storage";
 import uploadRouter from "./upload";
 import listingsRouter from "./listings";
+import dmRouter from "./dm";
 
 const router: IRouter = Router();
 
@@ -20,5 +21,6 @@ router.use(searchesRouter);
 router.use(storageRouter);
 router.use(uploadRouter);
 router.use(listingsRouter);
+router.use(dmRouter);
 
 export default router;
