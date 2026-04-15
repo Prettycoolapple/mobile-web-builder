@@ -31,6 +31,8 @@ import type {
   SearchRequest,
   SearchResponse,
   SignUpRequest,
+  UploadCertResponse,
+  UploadIncorporationCertBody,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
@@ -612,6 +614,96 @@ export function useGetMe<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * Accepts a multipart PDF or image file. Stores it in object storage and returns the serving URL. Used during service provider signup.
+ * @summary Upload a Certificate of Incorporation
+ */
+export const getUploadIncorporationCertUrl = () => {
+  return `/api/upload/incorporation-cert`;
+};
+
+export const uploadIncorporationCert = async (
+  uploadIncorporationCertBody: UploadIncorporationCertBody,
+  options?: RequestInit,
+): Promise<UploadCertResponse> => {
+  const formData = new FormData();
+  formData.append(`file`, uploadIncorporationCertBody.file);
+
+  return customFetch<UploadCertResponse>(getUploadIncorporationCertUrl(), {
+    ...options,
+    method: "POST",
+    body: formData,
+  });
+};
+
+export const getUploadIncorporationCertMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof uploadIncorporationCert>>,
+    TError,
+    { data: BodyType<UploadIncorporationCertBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof uploadIncorporationCert>>,
+  TError,
+  { data: BodyType<UploadIncorporationCertBody> },
+  TContext
+> => {
+  const mutationKey = ["uploadIncorporationCert"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof uploadIncorporationCert>>,
+    { data: BodyType<UploadIncorporationCertBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return uploadIncorporationCert(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UploadIncorporationCertMutationResult = NonNullable<
+  Awaited<ReturnType<typeof uploadIncorporationCert>>
+>;
+export type UploadIncorporationCertMutationBody =
+  BodyType<UploadIncorporationCertBody>;
+export type UploadIncorporationCertMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Upload a Certificate of Incorporation
+ */
+export const useUploadIncorporationCert = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof uploadIncorporationCert>>,
+    TError,
+    { data: BodyType<UploadIncorporationCertBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof uploadIncorporationCert>>,
+  TError,
+  { data: BodyType<UploadIncorporationCertBody> },
+  TContext
+> => {
+  return useMutation(getUploadIncorporationCertMutationOptions(options));
+};
 
 /**
  * Returns a presigned GCS URL for direct file upload. The client uploads the file directly to GCS using the returned URL.

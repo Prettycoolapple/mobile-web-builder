@@ -26,6 +26,7 @@ export const serviceProviderProfiles = pgTable("service_provider_profiles", {
   addressCity: text("address_city"),
   addressPostcode: text("address_postcode"),
   contactNumber: text("contact_number"),
+  languages: text("languages").array().default(sql`'{}'`).notNull(),
   incorporationCertUrl: text("incorporation_cert_url"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });

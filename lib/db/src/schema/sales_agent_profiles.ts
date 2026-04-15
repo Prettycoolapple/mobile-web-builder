@@ -15,6 +15,7 @@ export const salesAgentProfiles = pgTable("sales_agent_profiles", {
   yearsExperience: integer("years_experience"),
   regionsCovered: text("regions_covered").array().default(sql`'{}'`).notNull(),
   propertyTypes: text("property_types").array().default(sql`'{}'`).notNull(),
+  languages: text("languages").array().default(sql`'{}'`).notNull(),
   websiteUrl: text("website_url"),
   bio: text("bio"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

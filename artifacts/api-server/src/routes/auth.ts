@@ -113,35 +113,37 @@ router.post("/signup", async (req, res) => {
         reportsUsedThisMonth: profiles.reportsUsedThisMonth,
       });
 
-    if (role === "sales_agent" && agentData) {
+    if (role === "sales_agent") {
       await db.insert(salesAgentProfiles).values({
         userId: profile.id,
-        agencyName: agentData.agencyName,
-        reaaLicenceNumber: agentData.reaaLicenceNumber,
-        yearsExperience: agentData.yearsExperience,
-        regionsCovered: agentData.regionsCovered,
-        propertyTypes: agentData.propertyTypes,
-        websiteUrl: agentData.websiteUrl,
-        bio: agentData.bio,
+        agencyName: agentData?.agencyName,
+        reaaLicenceNumber: agentData?.reaaLicenceNumber,
+        yearsExperience: agentData?.yearsExperience,
+        regionsCovered: agentData?.regionsCovered ?? [],
+        propertyTypes: agentData?.propertyTypes ?? [],
+        languages,
+        websiteUrl: agentData?.websiteUrl,
+        bio: agentData?.bio,
       });
     }
 
-    if (role === "service_provider" && providerData) {
+    if (role === "service_provider") {
       await db.insert(serviceProviderProfiles).values({
         userId: profile.id,
-        companyName: providerData.companyName,
-        nzCompanyRegisterNumber: providerData.nzCompanyRegisterNumber,
-        discipline: providerData.discipline,
-        addressStreet: providerData.addressStreet,
-        addressSuburb: providerData.addressSuburb,
-        addressCity: providerData.addressCity,
-        addressPostcode: providerData.addressPostcode,
-        contactNumber: providerData.contactNumber,
-        incorporationCertUrl: providerData.incorporationCertUrl,
+        companyName: providerData?.companyName,
+        nzCompanyRegisterNumber: providerData?.nzCompanyRegisterNumber,
+        discipline: providerData?.discipline,
+        addressStreet: providerData?.addressStreet,
+        addressSuburb: providerData?.addressSuburb,
+        addressCity: providerData?.addressCity,
+        addressPostcode: providerData?.addressPostcode,
+        contactNumber: providerData?.contactNumber,
+        languages,
+        incorporationCertUrl: providerData?.incorporationCertUrl,
       });
     }
 
-    const token = signToken(profile.id, profile.email);
+    const token = signToken(profile.id, profile.email, role);
     res.status(201).json({ token, user: profile });
   } catch (error) {
     req.log.error({ error }, "Signup failed");
@@ -190,7 +192,7 @@ router.post("/login", async (req, res) => {
       profile.reportsUsedThisMonth = 0;
     }
 
-    const token = signToken(profile.id, profile.email);
+    const token = signToken(profile.id, profile.email, profile.role);
     res.json({
       token,
       user: {

@@ -21,13 +21,13 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   return timingSafeEqual(buf, hashedBuf);
 }
 
-export function signToken(userId: string, email: string): string {
-  return jwt.sign({ sub: userId, email }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
+export function signToken(userId: string, email: string, role?: string): string {
+  return jwt.sign({ sub: userId, email, role: role ?? "general" }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
 }
 
-export function verifyToken(token: string): { sub: string; email: string } | null {
+export function verifyToken(token: string): { sub: string; email: string; role: string } | null {
   try {
-    return jwt.verify(token, JWT_SECRET) as { sub: string; email: string };
+    return jwt.verify(token, JWT_SECRET) as { sub: string; email: string; role: string };
   } catch {
     return null;
   }

@@ -194,6 +194,52 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /upload/incorporation-cert:
+    post:
+      operationId: uploadIncorporationCert
+      tags: [storage]
+      summary: Upload a Certificate of Incorporation
+      description: Accepts a multipart PDF or image file. Stores it in object storage and returns the serving URL. Used during service provider signup.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: PDF or image file (max 10MB)
+              required:
+                - file
+      responses:
+        "201":
+          description: File uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadCertResponse"
+        "400":
+          description: No file or invalid file type
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Upload failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /storage/uploads/request-url:
     post:
       operationId: requestUploadUrl
@@ -371,6 +417,27 @@ components:
           $ref: "#/components/schemas/UserProfile"
       required:
         - user
+    UploadCertResponse:
+      type: object
+      properties:
+        objectPath:
+          type: string
+          description: Normalized object path (e.g. /objects/uploads/uuid)
+        fileUrl:
+          type: string
+          description: Serving URL for the uploaded file (/api/storage/objects/...)
+        metadata:
+          type: object
+          properties:
+            name:
+              type: string
+            size:
+              type: integer
+            contentType:
+              type: string
+      required:
+        - objectPath
+        - fileUrl
     RequestUploadUrlBody:
       type: object
       properties:

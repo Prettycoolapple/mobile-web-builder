@@ -98,6 +98,20 @@ export interface MeResponse {
   user: UserProfile;
 }
 
+export type UploadCertResponseMetadata = {
+  name?: string;
+  size?: number;
+  contentType?: string;
+};
+
+export interface UploadCertResponse {
+  /** Normalized object path (e.g. /objects/uploads/uuid) */
+  objectPath: string;
+  /** Serving URL for the uploaded file (/api/storage/objects/...) */
+  fileUrl: string;
+  metadata?: UploadCertResponseMetadata;
+}
+
 export interface RequestUploadUrlBody {
   /** Original file name */
   name: string;
@@ -356,3 +370,8 @@ export interface ErrorResponse {
   error: string;
   code?: string;
 }
+
+export type UploadIncorporationCertBody = {
+  /** PDF or image file (max 10MB) */
+  file: Blob;
+};

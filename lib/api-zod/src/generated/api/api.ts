@@ -300,6 +300,14 @@ export const GetMeResponse = zod.object({
 });
 
 /**
+ * Accepts a multipart PDF or image file. Stores it in object storage and returns the serving URL. Used during service provider signup.
+ * @summary Upload a Certificate of Incorporation
+ */
+export const UploadIncorporationCertBody = zod.object({
+  file: zod.instanceof(File).describe("PDF or image file (max 10MB)"),
+});
+
+/**
  * Returns a presigned GCS URL for direct file upload. The client uploads the file directly to GCS using the returned URL.
  * @summary Request a presigned upload URL
  */
