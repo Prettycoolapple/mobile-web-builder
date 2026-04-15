@@ -65,6 +65,7 @@ interface FieldErrors {
   email?: string;
   password?: string;
   confirmPassword?: string;
+  agencyDetails?: string;
 }
 
 export default function SignupAgentScreen() {
@@ -108,6 +109,9 @@ export default function SignupAgentScreen() {
     } else if (password !== confirmPassword) {
       errors.confirmPassword = "Passwords do not match.";
     }
+    if (!agencyName.trim() && !reaaNumber.trim()) {
+      errors.agencyDetails = "Please provide at least your agency / company name or REAA licence number.";
+    }
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -138,10 +142,14 @@ export default function SignupAgentScreen() {
         const mapped: FieldErrors = {};
         for (const issue of err.details) {
           const key = issue.path[0];
+          const nested = issue.path[1];
           if (key === "firstName") mapped.firstName = issue.message;
           else if (key === "lastName") mapped.lastName = issue.message;
           else if (key === "email") mapped.email = issue.message;
           else if (key === "password") mapped.password = issue.message;
+          else if (key === "agentData" && (nested === "agencyName" || nested === "reaaLicenceNumber")) {
+            mapped.agencyDetails = issue.message;
+          }
         }
         if (Object.keys(mapped).length > 0) {
           setFieldErrors(mapped);
@@ -299,7 +307,10 @@ export default function SignupAgentScreen() {
                 placeholder="Harcourts, Ray White, etc."
                 placeholderTextColor={colors.mutedForeground}
                 value={agencyName}
-                onChangeText={setAgencyName}
+                onChangeText={(v) => {
+                  setAgencyName(v);
+                  if (fieldErrors.agencyDetails) setFieldErrors((p) => ({ ...p, agencyDetails: undefined }));
+                }}
               />
             </View>
 
@@ -308,13 +319,29 @@ export default function SignupAgentScreen() {
                 REAA licence number <Text style={{ color: colors.mutedForeground }}>(optional)</Text>
               </Text>
               <TextInput
-                style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+                style={[
+                  styles.input,
+                  {
+                    backgroundColor: colors.card,
+                    borderColor: fieldErrors.agencyDetails ? colors.danger : colors.border,
+                    color: colors.foreground,
+                    fontFamily: "DM_Sans_400Regular",
+                  },
+                ]}
                 placeholder="e.g. 12345678"
                 placeholderTextColor={colors.mutedForeground}
                 value={reaaNumber}
-                onChangeText={setReaaNumber}
+                onChangeText={(v) => {
+                  setReaaNumber(v);
+                  if (fieldErrors.agencyDetails) setFieldErrors((p) => ({ ...p, agencyDetails: undefined }));
+                }}
                 keyboardType="number-pad"
               />
+              {fieldErrors.agencyDetails && (
+                <Text style={[styles.fieldError, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>
+                  {fieldErrors.agencyDetails}
+                </Text>
+              )}
             </View>
 
             <View style={styles.field}>

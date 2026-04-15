@@ -183,6 +183,7 @@ export default function SignupProviderScreen() {
           else if (key === "lastName") mapped.lastName = issue.message;
           else if (key === "email") mapped.email = issue.message;
           else if (key === "password") mapped.password = issue.message;
+          // providerData nested errors fall through to submitError below
         }
         if (Object.keys(mapped).length > 0) {
           setFieldErrors(mapped);
