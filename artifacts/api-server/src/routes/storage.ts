@@ -1,5 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { Readable } from "stream";
+import { eq } from "drizzle-orm";
+import { db, userUploads } from "@workspace/db";
 import { RequestUploadUrlBody, RequestUploadUrlResponse } from "@workspace/api-zod";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage";
 import { requireAuth } from "../lib/auth";
@@ -59,10 +61,24 @@ router.get("/storage/public-objects/*filePath", async (req: Request, res: Respon
 });
 
 router.get("/storage/objects/*path", requireAuth, async (req: Request, res: Response) => {
+  const userId = (req as any).userId as string;
+
   try {
     const raw = req.params.path;
     const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
     const objectPath = `/objects/${wildcardPath}`;
+
+    const [ownerRecord] = await db
+      .select({ userId: userUploads.userId })
+      .from(userUploads)
+      .where(eq(userUploads.objectPath, objectPath))
+      .limit(1);
+
+    if (!ownerRecord || ownerRecord.userId !== userId) {
+      res.status(403).json({ error: "Access denied", code: "FORBIDDEN" });
+      return;
+    }
+
     const objectFile = await objectStorageService.getObjectEntityFile(objectPath);
     const response = await objectStorageService.downloadObject(objectFile);
 

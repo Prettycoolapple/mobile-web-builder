@@ -1,5 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import multer from "multer";
+import { eq } from "drizzle-orm";
+import { db, userUploads } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { ObjectStorageService } from "../lib/objectStorage";
 
@@ -33,6 +35,8 @@ router.post(
   requireAuth,
   upload.single("file"),
   async (req: Request, res: Response) => {
+    const userId = (req as any).userId as string;
+
     if (!req.file) {
       res.status(400).json({ error: "No file provided", code: "MISSING_FILE" });
       return;
@@ -58,6 +62,8 @@ router.post(
         res.status(500).json({ error: "Failed to upload file to storage", code: "UPLOAD_FAILED" });
         return;
       }
+
+      await db.insert(userUploads).values({ userId, objectPath });
 
       const fileUrl = `/api/storage${objectPath}`;
 

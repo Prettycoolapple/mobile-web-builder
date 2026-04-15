@@ -1,16 +1,8 @@
-import { pgTable, text, timestamp, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { sql } from "drizzle-orm";
 import { z } from "zod/v4";
 import { profiles } from "./profiles";
-
-export const disciplineEnum = pgEnum("service_discipline", [
-  "architect_designer",
-  "planner",
-  "engineer",
-  "quantity_surveyor",
-  "other",
-]);
 
 export const serviceProviderProfiles = pgTable("service_provider_profiles", {
   id: text("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -20,7 +12,7 @@ export const serviceProviderProfiles = pgTable("service_provider_profiles", {
     .references(() => profiles.id, { onDelete: "cascade" }),
   companyName: text("company_name"),
   nzCompanyRegisterNumber: text("nz_company_register_number"),
-  discipline: disciplineEnum("discipline"),
+  discipline: text("discipline"),
   addressStreet: text("address_street"),
   addressSuburb: text("address_suburb"),
   addressCity: text("address_city"),

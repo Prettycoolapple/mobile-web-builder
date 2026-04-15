@@ -360,7 +360,7 @@ components:
           type: string
         discipline:
           type: string
-          enum: [architect_designer, planner, engineer, quantity_surveyor, other]
+          enum: [architect_designer, planner, other]
         addressStreet:
           type: string
         addressSuburb:

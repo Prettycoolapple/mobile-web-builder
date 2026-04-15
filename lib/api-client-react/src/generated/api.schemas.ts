@@ -40,8 +40,6 @@ export type ServiceProviderSignUpDataDiscipline =
 export const ServiceProviderSignUpDataDiscipline = {
   architect_designer: "architect_designer",
   planner: "planner",
-  engineer: "engineer",
-  quantity_surveyor: "quantity_surveyor",
   other: "other",
 } as const;
 

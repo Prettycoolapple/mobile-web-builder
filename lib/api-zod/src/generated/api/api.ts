@@ -245,13 +245,7 @@ export const SignUpBody = zod.object({
       companyName: zod.string().optional(),
       nzCompanyRegisterNumber: zod.string().optional(),
       discipline: zod
-        .enum([
-          "architect_designer",
-          "planner",
-          "engineer",
-          "quantity_surveyor",
-          "other",
-        ])
+        .enum(["architect_designer", "planner", "other"])
         .optional(),
       addressStreet: zod.string().optional(),
       addressSuburb: zod.string().optional(),
