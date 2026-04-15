@@ -1,9 +1,11 @@
 import http from "http";
 import { Server } from "socket.io";
+import { eq, or, and } from "drizzle-orm";
 import app from "./app";
 import { logger } from "./lib/logger";
 import { setIo } from "./lib/socket";
 import { verifyToken } from "./lib/auth";
+import { db, dmThreads } from "@workspace/db";
 
 const rawPort = process.env["PORT"];
 
@@ -51,9 +53,32 @@ io.on("connection", (socket) => {
   const userId: string = (socket as any).userId;
   logger.info({ socketId: socket.id, userId }, "Socket connected");
 
-  socket.on("join_thread", (threadId: string) => {
-    socket.join(`thread:${threadId}`);
-    logger.info({ socketId: socket.id, threadId }, "Joined thread room");
+  socket.on("join_thread", async (threadId: string, ack?: (err: string | null) => void) => {
+    try {
+      const [thread] = await db
+        .select({ participantA: dmThreads.participantA, participantB: dmThreads.participantB })
+        .from(dmThreads)
+        .where(
+          and(
+            eq(dmThreads.id, threadId),
+            or(eq(dmThreads.participantA, userId), eq(dmThreads.participantB, userId)),
+          ),
+        )
+        .limit(1);
+
+      if (!thread) {
+        logger.warn({ socketId: socket.id, userId, threadId }, "Unauthorized join_thread attempt");
+        if (typeof ack === "function") ack("Access denied");
+        return;
+      }
+
+      socket.join(`thread:${threadId}`);
+      logger.info({ socketId: socket.id, threadId }, "Joined thread room");
+      if (typeof ack === "function") ack(null);
+    } catch (err) {
+      logger.error({ err, socketId: socket.id, threadId }, "join_thread DB error");
+      if (typeof ack === "function") ack("Server error");
+    }
   });
 
   socket.on("leave_thread", (threadId: string) => {
