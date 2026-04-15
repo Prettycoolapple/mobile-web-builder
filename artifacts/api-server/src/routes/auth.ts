@@ -11,19 +11,6 @@ import { hashPassword, verifyPassword, signToken, requireAuth } from "../lib/aut
 
 const router = Router();
 
-const languageList = [
-  "English",
-  "Chinese (Mandarin)",
-  "Chinese (Cantonese)",
-  "Korean",
-  "Japanese",
-  "Hindi",
-  "Tagalog",
-  "Samoan",
-  "Māori",
-  "Other",
-] as const;
-
 const salesAgentSchema = z.object({
   agencyName: z.string().optional(),
   reaaLicenceNumber: z.string().optional(),
@@ -37,9 +24,7 @@ const salesAgentSchema = z.object({
 const serviceProviderSchema = z.object({
   companyName: z.string().optional(),
   nzCompanyRegisterNumber: z.string().optional(),
-  discipline: z
-    .enum(["architect_designer", "planner", "other"])
-    .optional(),
+  discipline: z.enum(["architect", "designer", "planner", "other"]).optional(),
   addressStreet: z.string().optional(),
   addressSuburb: z.string().optional(),
   addressCity: z.string().optional(),
@@ -48,7 +33,7 @@ const serviceProviderSchema = z.object({
   incorporationCertUrl: z.string().optional(),
 });
 
-const signupSchema = z.object({
+const baseSignupSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
   firstName: z.string().min(1),
@@ -57,6 +42,23 @@ const signupSchema = z.object({
   languages: z.array(z.string()).default([]),
   agentData: salesAgentSchema.optional(),
   providerData: serviceProviderSchema.optional(),
+});
+
+const signupSchema = baseSignupSchema.superRefine((data, ctx) => {
+  if (data.role === "sales_agent" && !data.agentData) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "agentData is required for sales_agent role",
+      path: ["agentData"],
+    });
+  }
+  if (data.role === "service_provider" && !data.providerData) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "providerData is required for service_provider role",
+      path: ["providerData"],
+    });
+  }
 });
 
 router.post("/signup", async (req, res) => {
@@ -92,56 +94,61 @@ router.post("/signup", async (req, res) => {
     }
 
     const passwordHash = await hashPassword(password);
-    const [profile] = await db
-      .insert(profiles)
-      .values({
-        email: emailLower,
-        fullName,
-        passwordHash,
-        role,
-        languages,
-        subscriptionTier: "free",
-        reportsUsedThisMonth: 0,
-      })
-      .returning({
-        id: profiles.id,
-        email: profiles.email,
-        fullName: profiles.fullName,
-        role: profiles.role,
-        languages: profiles.languages,
-        subscriptionTier: profiles.subscriptionTier,
-        reportsUsedThisMonth: profiles.reportsUsedThisMonth,
-      });
 
-    if (role === "sales_agent") {
-      await db.insert(salesAgentProfiles).values({
-        userId: profile.id,
-        agencyName: agentData?.agencyName,
-        reaaLicenceNumber: agentData?.reaaLicenceNumber,
-        yearsExperience: agentData?.yearsExperience,
-        regionsCovered: agentData?.regionsCovered ?? [],
-        propertyTypes: agentData?.propertyTypes ?? [],
-        languages,
-        websiteUrl: agentData?.websiteUrl,
-        bio: agentData?.bio,
-      });
-    }
+    const profile = await db.transaction(async (tx) => {
+      const [newProfile] = await tx
+        .insert(profiles)
+        .values({
+          email: emailLower,
+          fullName,
+          passwordHash,
+          role,
+          languages,
+          subscriptionTier: "free",
+          reportsUsedThisMonth: 0,
+        })
+        .returning({
+          id: profiles.id,
+          email: profiles.email,
+          fullName: profiles.fullName,
+          role: profiles.role,
+          languages: profiles.languages,
+          subscriptionTier: profiles.subscriptionTier,
+          reportsUsedThisMonth: profiles.reportsUsedThisMonth,
+        });
 
-    if (role === "service_provider") {
-      await db.insert(serviceProviderProfiles).values({
-        userId: profile.id,
-        companyName: providerData?.companyName,
-        nzCompanyRegisterNumber: providerData?.nzCompanyRegisterNumber,
-        discipline: providerData?.discipline,
-        addressStreet: providerData?.addressStreet,
-        addressSuburb: providerData?.addressSuburb,
-        addressCity: providerData?.addressCity,
-        addressPostcode: providerData?.addressPostcode,
-        contactNumber: providerData?.contactNumber,
-        languages,
-        incorporationCertUrl: providerData?.incorporationCertUrl,
-      });
-    }
+      if (role === "sales_agent") {
+        await tx.insert(salesAgentProfiles).values({
+          userId: newProfile.id,
+          agencyName: agentData?.agencyName,
+          reaaLicenceNumber: agentData?.reaaLicenceNumber,
+          yearsExperience: agentData?.yearsExperience,
+          regionsCovered: agentData?.regionsCovered ?? [],
+          propertyTypes: agentData?.propertyTypes ?? [],
+          languages,
+          websiteUrl: agentData?.websiteUrl,
+          bio: agentData?.bio,
+        });
+      }
+
+      if (role === "service_provider") {
+        await tx.insert(serviceProviderProfiles).values({
+          userId: newProfile.id,
+          companyName: providerData?.companyName,
+          nzCompanyRegisterNumber: providerData?.nzCompanyRegisterNumber,
+          discipline: providerData?.discipline,
+          addressStreet: providerData?.addressStreet,
+          addressSuburb: providerData?.addressSuburb,
+          addressCity: providerData?.addressCity,
+          addressPostcode: providerData?.addressPostcode,
+          contactNumber: providerData?.contactNumber,
+          languages,
+          incorporationCertUrl: providerData?.incorporationCertUrl,
+        });
+      }
+
+      return newProfile;
+    });
 
     const token = signToken(profile.id, profile.email, role);
     res.status(201).json({ token, user: profile });

@@ -1,6 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import multer from "multer";
-import { eq } from "drizzle-orm";
 import { db, userUploads } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { ObjectStorageService } from "../lib/objectStorage";
