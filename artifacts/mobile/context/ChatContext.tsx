@@ -242,10 +242,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     const storageKey = getStorageKey(userId);
     setSessions([]);
     setCurrentSessionId(null);
     AsyncStorage.getItem(storageKey).then((raw) => {
+      if (cancelled) return;
       if (raw) {
         try {
           const parsed = JSON.parse(raw) as Session[];
@@ -260,6 +262,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         }
       }
     });
+    return () => { cancelled = true; };
   }, [userId]);
 
   const saveSessions = useCallback((newSessions: Session[]) => {

@@ -170,9 +170,8 @@ export default function ProfileScreen() {
   const router = useRouter();
   const { sessions, openHistoryReport } = useChat();
 
-  const { purchase, restore, isPurchasing, isRestoring, isSubscribed, getPackageForRole, getPriceForRole } = useSubscription();
+  const { purchase, isSubscribed, getPackageForRole, getPriceForRole } = useSubscription();
   const [upgradeLoading, setUpgradeLoading] = useState(false);
-  const [restoreLoading, setRestoreLoading] = useState(false);
   const [historySearches, setHistorySearches] = useState<SearchSummary[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [openingId, setOpeningId] = useState<string | null>(null);
@@ -258,24 +257,6 @@ export default function ProfileScreen() {
       setUpgradeLoading(false);
     }
   }, [syncToBackend, role, purchase, getPackageForRole]);
-
-  const handleRestore = useCallback(async () => {
-    setRestoreLoading(true);
-    try {
-      const info = await restore();
-      const isActive = info?.entitlements?.active?.["Pro"] !== undefined;
-      if (isActive) {
-        await syncToBackend("pro");
-        Alert.alert("Purchases restored", "Your subscription is now active.");
-      } else {
-        Alert.alert("No purchases found", "No active subscription was found.");
-      }
-    } catch {
-      Alert.alert("Restore failed", "Could not restore purchases. Please try again.");
-    } finally {
-      setRestoreLoading(false);
-    }
-  }, [syncToBackend, restore]);
 
   const handleManageSubscription = useCallback(() => {
     if (Platform.OS === "ios") {
@@ -602,7 +583,7 @@ export default function ProfileScreen() {
                 style={[styles.upgradeBtn, { backgroundColor: upgradeLoading ? colors.accent + "80" : colors.accent }]}
                 activeOpacity={0.8}
                 onPress={handleUpgrade}
-                disabled={upgradeLoading || restoreLoading}
+                disabled={upgradeLoading}
               >
                 {upgradeLoading ? (
                   <ActivityIndicator size="small" color="#fff" />
@@ -650,7 +631,7 @@ export default function ProfileScreen() {
                 style={[styles.upgradeBtn, { backgroundColor: upgradeLoading ? colors.accent + "80" : colors.accent }]}
                 activeOpacity={0.8}
                 onPress={handleUpgrade}
-                disabled={upgradeLoading || restoreLoading}
+                disabled={upgradeLoading}
               >
                 {upgradeLoading ? (
                   <ActivityIndicator size="small" color="#fff" />
@@ -698,7 +679,7 @@ export default function ProfileScreen() {
                 style={[styles.upgradeBtn, { backgroundColor: upgradeLoading ? colors.accent + "80" : colors.accent }]}
                 activeOpacity={0.8}
                 onPress={handleUpgrade}
-                disabled={upgradeLoading || restoreLoading}
+                disabled={upgradeLoading}
               >
                 {upgradeLoading ? (
                   <ActivityIndicator size="small" color="#fff" />
@@ -901,8 +882,6 @@ const styles = StyleSheet.create({
     minHeight: 50,
   },
   upgradeBtnText: { fontSize: 15, color: "#fff" },
-  restoreLink: { alignItems: "center", paddingVertical: 4 },
-  restoreLinkText: { fontSize: 13 },
   section: { borderRadius: 14, padding: 16, gap: 10, borderWidth: 1 },
   historyCard: { borderRadius: 14, borderWidth: 1, overflow: "hidden" },
   historyItem: { paddingVertical: 13, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", gap: 10 },
