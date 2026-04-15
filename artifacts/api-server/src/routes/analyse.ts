@@ -470,6 +470,46 @@ router.post("/chat", async (req, res) => {
                 prescreenedIntro = introFromPreScreen;
               }
             }
+
+            // ── NEARBY SUBURB FALLBACK ─────────────────────────────────────────
+            // If the primary suburb returned nothing (scraper issue, low stock, etc.)
+            // try the closest neighbouring suburbs one at a time until we get results.
+            if (candidates.length === 0 && suburb) {
+              const nearbyList = NEARBY_SUBURBS[suburb.toLowerCase()] ?? [];
+              for (const nearbySuburb of nearbyList) {
+                req.log.info({ suburb, nearbySuburb }, "Discovery: primary suburb empty, trying nearby suburb");
+                const fallbackResult = await searchRealEstateListings({
+                  suburb: nearbySuburb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
+                  skipUrls: [],
+                  includeNegotiation,
+                }).catch(() => null);
+
+                if (fallbackResult && fallbackResult.firstBatch.length > 0) {
+                  const inRangeFallback = (l: { price: number | null }) =>
+                    l.price == null || (l.price >= effectiveMinPrice && l.price <= effectiveMaxPrice * 1.1);
+                  const filtered = fallbackResult.firstBatch.filter(inRangeFallback);
+                  if (filtered.length > 0) {
+                    const fallbackCacheKey = makeCacheKey(nearbySuburb, effectiveMinPrice, effectiveMaxPrice);
+                    setListingCache(fallbackCacheKey, {
+                      remainingListings: fallbackResult.remainingListings.filter(inRangeFallback),
+                      shownUrls: filtered.map((l) => l.listingUrl),
+                      suburb: nearbySuburb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
+                    });
+                    const introPromptFallback = `The user asked about ${suburb} but no listings were found there right now. You found ${filtered.length} propert${filtered.length === 1 ? "y" : "ies"} in nearby ${nearbySuburb}. In 1 sentence acknowledge this naturally (e.g. "I couldn't find anything in ${suburb} right now, but here are some nearby options in ${nearbySuburb}:"). Be brief — no JSON.`;
+                    const [screenedFallback, introFallback] = await Promise.all([
+                      preScreenListingsFast(filtered, 5).catch(() => filtered.slice(0, 5) as typeof candidates),
+                      generateAnalysis(introPromptFallback).catch(() => ""),
+                    ]);
+                    if (screenedFallback.length > 0) {
+                      candidates = screenedFallback;
+                      prescreenedIntro = introFallback;
+                      req.log.info({ nearbySuburb, count: candidates.length }, "Discovery: nearby suburb fallback succeeded");
+                      break;
+                    }
+                  }
+                }
+              }
+            }
           }
 
           const noListings = candidates.length === 0;

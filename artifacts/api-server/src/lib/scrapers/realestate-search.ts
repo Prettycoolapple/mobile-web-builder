@@ -1,4 +1,5 @@
 import { logger } from "../logger";
+import { fetchWithScrapingBee } from "./scrapingbee";
 import type { ListingResult } from "./oneroof";
 
 const SUBURB_SLUG_MAP: Record<string, { slug: string; district: string }> = {
@@ -183,30 +184,13 @@ export interface RealestateSearchResult {
   source: "realestate.co.nz";
 }
 
-async function fetchListingUrlsFromPage(
-  searchUrl: string,
+function extractListingUrlsFromHtml(
+  html: string,
   suburbMeta: { slug: string; district: string } | undefined,
   skipUrls: string[],
   seen: Set<string>,
-): Promise<string[]> {
-  const resp = await fetch(searchUrl, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-      "Accept": "text/html",
-      "Accept-Language": "en-NZ,en;q=0.9",
-      "Referer": "https://www.realestate.co.nz/",
-    },
-    signal: AbortSignal.timeout(20000),
-  });
-
-  if (!resp.ok) {
-    logger.warn({ status: resp.status, searchUrl }, "realestate-search: search page returned non-200");
-    return [];
-  }
-
-  const html = await resp.text();
+): string[] {
   const urls: string[] = [];
-
   for (const m of html.matchAll(/href="(\/\d+\/residential\/sale\/[^"?#]+)"/g)) {
     const fullUrl = `https://www.realestate.co.nz${m[1]}`;
     if (!seen.has(fullUrl) && !skipUrls.includes(fullUrl) && (!suburbMeta || urlMatchesSuburb(m[1], suburbMeta.slug))) {
@@ -214,8 +198,64 @@ async function fetchListingUrlsFromPage(
       urls.push(fullUrl);
     }
   }
-
   return urls;
+}
+
+async function fetchListingUrlsFromPage(
+  searchUrl: string,
+  suburbMeta: { slug: string; district: string } | undefined,
+  skipUrls: string[],
+  seen: Set<string>,
+): Promise<string[]> {
+  // realestate.co.nz is a JavaScript-rendered Ember.js SPA.
+  // Plain HTML fetch returns only generic Auckland listings (no suburb filtering).
+  // Use ScrapingBee with JS rendering so the app executes and returns suburb-specific results.
+  const beeHtml = await fetchWithScrapingBee(searchUrl, { render_js: true, premium_proxy: false, wait: 4000 }).catch(() => null);
+
+  if (beeHtml) {
+    const urls = extractListingUrlsFromHtml(beeHtml, suburbMeta, skipUrls, seen);
+    logger.info({ searchUrl, count: urls.length }, "realestate-search: ScrapingBee extracted listing URLs");
+    if (urls.length > 0) return urls;
+    // If ScrapingBee returned HTML but 0 suburb-matched URLs, also try without the suburb filter
+    // (in case the rendered page uses different URL structure) — pick any listings from the page
+    const allUrls: string[] = [];
+    for (const m of beeHtml.matchAll(/href="(\/\d+\/residential\/sale\/[^"?#]+)"/g)) {
+      const fullUrl = `https://www.realestate.co.nz${m[1]}`;
+      if (!seen.has(fullUrl) && !skipUrls.includes(fullUrl)) {
+        seen.add(fullUrl);
+        allUrls.push(fullUrl);
+      }
+    }
+    if (allUrls.length > 0) {
+      logger.info({ searchUrl, count: allUrls.length }, "realestate-search: ScrapingBee extracted unfiltered listing URLs");
+      return allUrls;
+    }
+  }
+
+  // Fallback: plain fetch (may return generic listings, but still useful)
+  logger.info({ searchUrl }, "realestate-search: ScrapingBee unavailable, falling back to plain fetch");
+  try {
+    const resp = await fetch(searchUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html",
+        "Accept-Language": "en-NZ,en;q=0.9",
+        "Referer": "https://www.realestate.co.nz/",
+      },
+      signal: AbortSignal.timeout(20000),
+    });
+
+    if (!resp.ok) {
+      logger.warn({ status: resp.status, searchUrl }, "realestate-search: search page returned non-200");
+      return [];
+    }
+
+    const html = await resp.text();
+    return extractListingUrlsFromHtml(html, suburbMeta, skipUrls, seen);
+  } catch (err) {
+    logger.warn({ err: (err as Error).message, searchUrl }, "realestate-search: plain fetch also failed");
+    return [];
+  }
 }
 
 export async function searchRealEstateListings(params: {
