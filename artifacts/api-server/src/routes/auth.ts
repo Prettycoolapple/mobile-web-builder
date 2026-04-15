@@ -1,50 +1,145 @@
 import { Router } from "express";
-import { eq, sql } from "drizzle-orm";
-import { db, profiles } from "@workspace/db";
+import { eq } from "drizzle-orm";
+import { z } from "zod";
+import {
+  db,
+  profiles,
+  salesAgentProfiles,
+  serviceProviderProfiles,
+} from "@workspace/db";
 import { hashPassword, verifyPassword, signToken, requireAuth } from "../lib/auth";
 
 const router = Router();
 
+const languageList = [
+  "English",
+  "Chinese (Mandarin)",
+  "Chinese (Cantonese)",
+  "Korean",
+  "Japanese",
+  "Hindi",
+  "Tagalog",
+  "Samoan",
+  "Māori",
+  "Other",
+] as const;
+
+const salesAgentSchema = z.object({
+  agencyName: z.string().optional(),
+  reaaLicenceNumber: z.string().optional(),
+  yearsExperience: z.number().int().min(0).optional(),
+  regionsCovered: z.array(z.string()).default([]),
+  propertyTypes: z.array(z.string()).default([]),
+  websiteUrl: z.string().optional(),
+  bio: z.string().optional(),
+});
+
+const serviceProviderSchema = z.object({
+  companyName: z.string().optional(),
+  nzCompanyRegisterNumber: z.string().optional(),
+  discipline: z
+    .enum(["architect_designer", "planner", "engineer", "quantity_surveyor", "other"])
+    .optional(),
+  addressStreet: z.string().optional(),
+  addressSuburb: z.string().optional(),
+  addressCity: z.string().optional(),
+  addressPostcode: z.string().optional(),
+  contactNumber: z.string().optional(),
+  incorporationCertUrl: z.string().optional(),
+});
+
+const signupSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(8),
+  firstName: z.string().min(1),
+  lastName: z.string().min(1),
+  role: z.enum(["general", "sales_agent", "service_provider"]).default("general"),
+  languages: z.array(z.string()).default([]),
+  agentData: salesAgentSchema.optional(),
+  providerData: serviceProviderSchema.optional(),
+});
+
 router.post("/signup", async (req, res) => {
-  const { email, password, fullName } = req.body as {
-    email?: string;
-    password?: string;
-    fullName?: string;
-  };
-
-  if (!email || !password) {
-    res.status(400).json({ error: "Email and password are required", code: "MISSING_FIELDS" });
+  const parsed = signupSchema.safeParse(req.body);
+  if (!parsed.success) {
+    const firstError = parsed.error.issues[0];
+    res.status(400).json({
+      error: firstError?.message || "Invalid signup data",
+      code: "VALIDATION_ERROR",
+      details: parsed.error.issues,
+    });
     return;
   }
 
-  if (password.length < 8) {
-    res.status(400).json({ error: "Password must be at least 8 characters", code: "WEAK_PASSWORD" });
-    return;
-  }
-
+  const { email, password, firstName, lastName, role, languages, agentData, providerData } =
+    parsed.data;
   const emailLower = email.toLowerCase().trim();
+  const fullName = `${firstName.trim()} ${lastName.trim()}`;
 
   try {
-    const existing = await db.select({ id: profiles.id }).from(profiles).where(eq(profiles.email, emailLower)).limit(1);
+    const existing = await db
+      .select({ id: profiles.id })
+      .from(profiles)
+      .where(eq(profiles.email, emailLower))
+      .limit(1);
+
     if (existing.length > 0) {
-      res.status(409).json({ error: "An account with this email already exists", code: "EMAIL_TAKEN" });
+      res.status(409).json({
+        error: "An account with this email already exists",
+        code: "EMAIL_TAKEN",
+      });
       return;
     }
 
     const passwordHash = await hashPassword(password);
-    const [profile] = await db.insert(profiles).values({
-      email: emailLower,
-      fullName: fullName?.trim() || null,
-      passwordHash,
-      subscriptionTier: "free",
-      reportsUsedThisMonth: 0,
-    }).returning({
-      id: profiles.id,
-      email: profiles.email,
-      fullName: profiles.fullName,
-      subscriptionTier: profiles.subscriptionTier,
-      reportsUsedThisMonth: profiles.reportsUsedThisMonth,
-    });
+    const [profile] = await db
+      .insert(profiles)
+      .values({
+        email: emailLower,
+        fullName,
+        passwordHash,
+        role,
+        languages,
+        subscriptionTier: "free",
+        reportsUsedThisMonth: 0,
+      })
+      .returning({
+        id: profiles.id,
+        email: profiles.email,
+        fullName: profiles.fullName,
+        role: profiles.role,
+        languages: profiles.languages,
+        subscriptionTier: profiles.subscriptionTier,
+        reportsUsedThisMonth: profiles.reportsUsedThisMonth,
+      });
+
+    if (role === "sales_agent" && agentData) {
+      await db.insert(salesAgentProfiles).values({
+        userId: profile.id,
+        agencyName: agentData.agencyName,
+        reaaLicenceNumber: agentData.reaaLicenceNumber,
+        yearsExperience: agentData.yearsExperience,
+        regionsCovered: agentData.regionsCovered,
+        propertyTypes: agentData.propertyTypes,
+        websiteUrl: agentData.websiteUrl,
+        bio: agentData.bio,
+      });
+    }
+
+    if (role === "service_provider" && providerData) {
+      await db.insert(serviceProviderProfiles).values({
+        userId: profile.id,
+        companyName: providerData.companyName,
+        nzCompanyRegisterNumber: providerData.nzCompanyRegisterNumber,
+        discipline: providerData.discipline,
+        addressStreet: providerData.addressStreet,
+        addressSuburb: providerData.addressSuburb,
+        addressCity: providerData.addressCity,
+        addressPostcode: providerData.addressPostcode,
+        contactNumber: providerData.contactNumber,
+        incorporationCertUrl: providerData.incorporationCertUrl,
+      });
+    }
 
     const token = signToken(profile.id, profile.email);
     res.status(201).json({ token, user: profile });
@@ -65,7 +160,11 @@ router.post("/login", async (req, res) => {
   const emailLower = email.toLowerCase().trim();
 
   try {
-    const [profile] = await db.select().from(profiles).where(eq(profiles.email, emailLower)).limit(1);
+    const [profile] = await db
+      .select()
+      .from(profiles)
+      .where(eq(profiles.email, emailLower))
+      .limit(1);
 
     if (!profile) {
       res.status(401).json({ error: "Invalid email or password", code: "INVALID_CREDENTIALS" });
@@ -80,13 +179,14 @@ router.post("/login", async (req, res) => {
 
     const now = new Date();
     const lastReset = new Date(profile.lastResetAt);
-    const sameMonth = now.getFullYear() === lastReset.getFullYear() && now.getMonth() === lastReset.getMonth();
+    const sameMonth =
+      now.getFullYear() === lastReset.getFullYear() && now.getMonth() === lastReset.getMonth();
 
     if (!sameMonth) {
-      await db.update(profiles).set({
-        reportsUsedThisMonth: 0,
-        lastResetAt: now,
-      }).where(eq(profiles.id, profile.id));
+      await db
+        .update(profiles)
+        .set({ reportsUsedThisMonth: 0, lastResetAt: now })
+        .where(eq(profiles.id, profile.id));
       profile.reportsUsedThisMonth = 0;
     }
 
@@ -97,6 +197,8 @@ router.post("/login", async (req, res) => {
         id: profile.id,
         email: profile.email,
         fullName: profile.fullName,
+        role: profile.role,
+        languages: profile.languages,
         subscriptionTier: profile.subscriptionTier,
         reportsUsedThisMonth: profile.reportsUsedThisMonth,
       },
@@ -111,15 +213,21 @@ router.get("/me", requireAuth, async (req, res) => {
   const userId = (req as any).userId as string;
 
   try {
-    const [profile] = await db.select({
-      id: profiles.id,
-      email: profiles.email,
-      fullName: profiles.fullName,
-      subscriptionTier: profiles.subscriptionTier,
-      reportsUsedThisMonth: profiles.reportsUsedThisMonth,
-      lastResetAt: profiles.lastResetAt,
-      createdAt: profiles.createdAt,
-    }).from(profiles).where(eq(profiles.id, userId)).limit(1);
+    const [profile] = await db
+      .select({
+        id: profiles.id,
+        email: profiles.email,
+        fullName: profiles.fullName,
+        role: profiles.role,
+        languages: profiles.languages,
+        subscriptionTier: profiles.subscriptionTier,
+        reportsUsedThisMonth: profiles.reportsUsedThisMonth,
+        lastResetAt: profiles.lastResetAt,
+        createdAt: profiles.createdAt,
+      })
+      .from(profiles)
+      .where(eq(profiles.id, userId))
+      .limit(1);
 
     if (!profile) {
       res.status(404).json({ error: "Profile not found", code: "NOT_FOUND" });
@@ -128,13 +236,14 @@ router.get("/me", requireAuth, async (req, res) => {
 
     const now = new Date();
     const lastReset = new Date(profile.lastResetAt);
-    const sameMonth = now.getFullYear() === lastReset.getFullYear() && now.getMonth() === lastReset.getMonth();
+    const sameMonth =
+      now.getFullYear() === lastReset.getFullYear() && now.getMonth() === lastReset.getMonth();
 
     if (!sameMonth) {
-      await db.update(profiles).set({
-        reportsUsedThisMonth: 0,
-        lastResetAt: now,
-      }).where(eq(profiles.id, userId));
+      await db
+        .update(profiles)
+        .set({ reportsUsedThisMonth: 0, lastResetAt: now })
+        .where(eq(profiles.id, userId));
       profile.reportsUsedThisMonth = 0;
     }
 
@@ -148,12 +257,13 @@ router.get("/me", requireAuth, async (req, res) => {
 router.delete("/account", requireAuth, async (req, res) => {
   const userId = (req as any).userId as string;
   try {
-    // searches cascade-delete automatically via FK constraint
     await db.delete(profiles).where(eq(profiles.id, userId));
     res.json({ success: true });
   } catch (error) {
     req.log.error({ error }, "Failed to delete account");
-    res.status(500).json({ error: "Failed to delete account. Please try again.", code: "DELETE_FAILED" });
+    res
+      .status(500)
+      .json({ error: "Failed to delete account. Please try again.", code: "DELETE_FAILED" });
   }
 });
 
@@ -162,15 +272,19 @@ router.patch("/profile", requireAuth, async (req, res) => {
   const { fullName } = req.body as { fullName?: string };
 
   try {
-    const [updated] = await db.update(profiles).set({
-      fullName: fullName?.trim() || null,
-    }).where(eq(profiles.id, userId)).returning({
-      id: profiles.id,
-      email: profiles.email,
-      fullName: profiles.fullName,
-      subscriptionTier: profiles.subscriptionTier,
-      reportsUsedThisMonth: profiles.reportsUsedThisMonth,
-    });
+    const [updated] = await db
+      .update(profiles)
+      .set({ fullName: fullName?.trim() || null })
+      .where(eq(profiles.id, userId))
+      .returning({
+        id: profiles.id,
+        email: profiles.email,
+        fullName: profiles.fullName,
+        role: profiles.role,
+        languages: profiles.languages,
+        subscriptionTier: profiles.subscriptionTier,
+        reportsUsedThisMonth: profiles.reportsUsedThisMonth,
+      });
 
     res.json({ user: updated });
   } catch (error) {

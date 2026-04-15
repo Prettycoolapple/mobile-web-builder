@@ -204,3 +204,123 @@ export const SearchPropertiesResponse = zod.object({
   query: zod.string().optional(),
   type: zod.enum(["search"]),
 });
+
+/**
+ * Register as general user, sales agent, or service provider
+ * @summary Create a new account
+ */
+export const signUpBodyPasswordMin = 8;
+
+export const signUpBodyRoleDefault = `general`;
+export const signUpBodyAgentDataYearsExperienceMin = 0;
+
+export const SignUpBody = zod.object({
+  email: zod.string().email(),
+  password: zod.string().min(signUpBodyPasswordMin),
+  firstName: zod.string(),
+  lastName: zod.string(),
+  role: zod
+    .enum(["general", "sales_agent", "service_provider"])
+    .default(signUpBodyRoleDefault),
+  languages: zod
+    .array(zod.string())
+    .optional()
+    .describe("Languages the user speaks"),
+  agentData: zod
+    .object({
+      agencyName: zod.string().optional(),
+      reaaLicenceNumber: zod.string().optional(),
+      yearsExperience: zod
+        .number()
+        .min(signUpBodyAgentDataYearsExperienceMin)
+        .optional(),
+      regionsCovered: zod.array(zod.string()).optional(),
+      propertyTypes: zod.array(zod.string()).optional(),
+      websiteUrl: zod.string().optional(),
+      bio: zod.string().optional(),
+    })
+    .optional(),
+  providerData: zod
+    .object({
+      companyName: zod.string().optional(),
+      nzCompanyRegisterNumber: zod.string().optional(),
+      discipline: zod
+        .enum([
+          "architect_designer",
+          "planner",
+          "engineer",
+          "quantity_surveyor",
+          "other",
+        ])
+        .optional(),
+      addressStreet: zod.string().optional(),
+      addressSuburb: zod.string().optional(),
+      addressCity: zod.string().optional(),
+      addressPostcode: zod.string().optional(),
+      contactNumber: zod.string().optional(),
+      incorporationCertUrl: zod.string().optional(),
+    })
+    .optional(),
+});
+
+/**
+ * @summary Log in to an existing account
+ */
+export const LogInBody = zod.object({
+  email: zod.string().email(),
+  password: zod.string(),
+});
+
+export const LogInResponse = zod.object({
+  token: zod.string(),
+  user: zod.object({
+    id: zod.string(),
+    email: zod.string(),
+    fullName: zod.string().nullish(),
+    role: zod.enum(["general", "sales_agent", "service_provider"]),
+    languages: zod.array(zod.string()).optional(),
+    subscriptionTier: zod.string(),
+    reportsUsedThisMonth: zod.number(),
+  }),
+});
+
+/**
+ * @summary Get current user profile
+ */
+export const GetMeResponse = zod.object({
+  user: zod.object({
+    id: zod.string(),
+    email: zod.string(),
+    fullName: zod.string().nullish(),
+    role: zod.enum(["general", "sales_agent", "service_provider"]),
+    languages: zod.array(zod.string()).optional(),
+    subscriptionTier: zod.string(),
+    reportsUsedThisMonth: zod.number(),
+  }),
+});
+
+/**
+ * Returns a presigned GCS URL for direct file upload. The client uploads the file directly to GCS using the returned URL.
+ * @summary Request a presigned upload URL
+ */
+export const RequestUploadUrlBody = zod.object({
+  name: zod.string().describe("Original file name"),
+  size: zod.number().describe("File size in bytes"),
+  contentType: zod.string().describe("MIME type of the file"),
+});
+
+export const RequestUploadUrlResponse = zod.object({
+  uploadURL: zod.string().describe("Presigned GCS URL for direct upload"),
+  objectPath: zod
+    .string()
+    .describe(
+      "Normalized object path to store in DB (e.g. \/objects\/uploads\/uuid)",
+    ),
+  metadata: zod
+    .object({
+      name: zod.string().optional(),
+      size: zod.number().optional(),
+      contentType: zod.string().optional(),
+    })
+    .optional(),
+});

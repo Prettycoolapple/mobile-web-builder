@@ -9,6 +9,118 @@ export interface HealthStatus {
   status: string;
 }
 
+export interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+export type SignUpRequestRole =
+  (typeof SignUpRequestRole)[keyof typeof SignUpRequestRole];
+
+export const SignUpRequestRole = {
+  general: "general",
+  sales_agent: "sales_agent",
+  service_provider: "service_provider",
+} as const;
+
+export interface SalesAgentSignUpData {
+  agencyName?: string;
+  reaaLicenceNumber?: string;
+  /** @minimum 0 */
+  yearsExperience?: number;
+  regionsCovered?: string[];
+  propertyTypes?: string[];
+  websiteUrl?: string;
+  bio?: string;
+}
+
+export type ServiceProviderSignUpDataDiscipline =
+  (typeof ServiceProviderSignUpDataDiscipline)[keyof typeof ServiceProviderSignUpDataDiscipline];
+
+export const ServiceProviderSignUpDataDiscipline = {
+  architect_designer: "architect_designer",
+  planner: "planner",
+  engineer: "engineer",
+  quantity_surveyor: "quantity_surveyor",
+  other: "other",
+} as const;
+
+export interface ServiceProviderSignUpData {
+  companyName?: string;
+  nzCompanyRegisterNumber?: string;
+  discipline?: ServiceProviderSignUpDataDiscipline;
+  addressStreet?: string;
+  addressSuburb?: string;
+  addressCity?: string;
+  addressPostcode?: string;
+  contactNumber?: string;
+  incorporationCertUrl?: string;
+}
+
+export interface SignUpRequest {
+  email: string;
+  /** @minLength 8 */
+  password: string;
+  firstName: string;
+  lastName: string;
+  role?: SignUpRequestRole;
+  /** Languages the user speaks */
+  languages?: string[];
+  agentData?: SalesAgentSignUpData;
+  providerData?: ServiceProviderSignUpData;
+}
+
+export type UserProfileRole =
+  (typeof UserProfileRole)[keyof typeof UserProfileRole];
+
+export const UserProfileRole = {
+  general: "general",
+  sales_agent: "sales_agent",
+  service_provider: "service_provider",
+} as const;
+
+export interface UserProfile {
+  id: string;
+  email: string;
+  fullName?: string | null;
+  role: UserProfileRole;
+  languages?: string[];
+  subscriptionTier: string;
+  reportsUsedThisMonth: number;
+}
+
+export interface AuthResponse {
+  token: string;
+  user: UserProfile;
+}
+
+export interface MeResponse {
+  user: UserProfile;
+}
+
+export interface RequestUploadUrlBody {
+  /** Original file name */
+  name: string;
+  /** File size in bytes */
+  size: number;
+  /** MIME type of the file */
+  contentType: string;
+}
+
+export type RequestUploadUrlResponseMetadata = {
+  name?: string;
+  size?: number;
+  contentType?: string;
+};
+
+export interface RequestUploadUrlResponse {
+  /** Presigned GCS URL for direct upload */
+  uploadURL: string;
+  /** Normalized object path to store in DB (e.g. /objects/uploads/uuid) */
+  objectPath: string;
+  metadata?: RequestUploadUrlResponseMetadata;
+}
+
 export type MessageRole = (typeof MessageRole)[keyof typeof MessageRole];
 
 export const MessageRole = {
