@@ -33,7 +33,7 @@ const serviceProviderSchema = z.object({
   incorporationCertUrl: z.string().optional(),
 });
 
-const baseSignupSchema = z
+const signupSchema = z
   .object({
     email: z.string().email(),
     password: z.string().min(8),
@@ -46,15 +46,6 @@ const baseSignupSchema = z
     providerData: serviceProviderSchema.optional(),
   })
   .superRefine((data, ctx) => {
-    const hasNameParts = data.firstName && data.lastName;
-    const hasFullName = data.fullName;
-    if (!hasNameParts && !hasFullName) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Either fullName or both firstName and lastName are required",
-        path: ["firstName"],
-      });
-    }
     if (data.role === "sales_agent" && !data.agentData) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -70,8 +61,6 @@ const baseSignupSchema = z
       });
     }
   });
-
-const signupSchema = baseSignupSchema;
 
 router.post("/signup", async (req, res) => {
   const parsed = signupSchema.safeParse(req.body);
@@ -90,7 +79,7 @@ router.post("/signup", async (req, res) => {
   const emailLower = email.toLowerCase().trim();
   const fullName =
     parsed.data.fullName?.trim() ||
-    `${firstName!.trim()} ${lastName!.trim()}`;
+    (firstName && lastName ? `${firstName.trim()} ${lastName.trim()}` : null);
 
   try {
     const existing = await db
