@@ -32,7 +32,7 @@ export interface DmThread {
   participantB: string;
   lastMessageAt: string | null;
   createdAt: string;
-  otherParticipant: { id: string; fullName: string | null; role: string } | null;
+  otherParticipant: { id: string; fullName: string | null; role: string; recommendationCount?: number } | null;
   lastMessage: DmMessage | null;
   unreadCount: number;
 }

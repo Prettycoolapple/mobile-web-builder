@@ -84,6 +84,7 @@ router.get("/users/:userId", requireAuth, async (req: Request, res: Response) =>
           nzCompanyRegisterNumber: provider.nzCompanyRegisterNumber,
           discipline: provider.discipline,
           otherDiscipline: provider.otherDiscipline,
+          addressStreet: (provider as any).addressStreet ?? null,
           addressSuburb: provider.addressSuburb,
           addressCity: provider.addressCity,
           contactNumber: provider.contactNumber,

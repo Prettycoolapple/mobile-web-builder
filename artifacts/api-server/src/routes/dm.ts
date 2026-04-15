@@ -8,6 +8,7 @@ import {
   dmThreads,
   dmMessages,
   pushTokens,
+  recommendations,
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { getIo } from "../lib/socket";
@@ -163,6 +164,11 @@ router.get("/dm/threads", requireAuth, async (req: Request, res: Response) => {
           .where(eq(profiles.id, otherId))
           .limit(1);
 
+        const [recRow] = await db
+          .select({ count: sql<number>`count(*)::int` })
+          .from(recommendations)
+          .where(eq(recommendations.toUserId, otherId));
+
         const [lastMessage] = await db
           .select()
           .from(dmMessages)
@@ -183,7 +189,9 @@ router.get("/dm/threads", requireAuth, async (req: Request, res: Response) => {
 
         return {
           ...thread,
-          otherParticipant: other ?? null,
+          otherParticipant: other
+            ? { ...other, recommendationCount: recRow?.count ?? 0 }
+            : null,
           lastMessage: lastMessage ?? null,
           unreadCount: count,
         };

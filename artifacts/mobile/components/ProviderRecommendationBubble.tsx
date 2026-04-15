@@ -103,7 +103,7 @@ export function ProviderRecommendationBubble({
               </Text>
             )}
             <Text style={styles.connections}>
-              ★ {provider.recommendationCount} connections
+              ★ {provider.recommendationCount} {provider.recommendationCount === 1 ? "recommendation" : "recommendations"}
             </Text>
           </View>
         </View>

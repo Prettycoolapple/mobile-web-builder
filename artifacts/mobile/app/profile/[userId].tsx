@@ -288,8 +288,8 @@ export default function UserProfileScreen() {
                 style={[
                   styles.thumbBtn,
                   {
-                    backgroundColor: profile.hasRecommended ? "transparent" : accentColor,
-                    borderColor: accentColor,
+                    backgroundColor: profile.hasRecommended ? "transparent" : colors.accent,
+                    borderColor: colors.accent,
                     borderWidth: profile.hasRecommended ? 1.5 : 0,
                   },
                 ]}
@@ -300,25 +300,23 @@ export default function UserProfileScreen() {
                 {recommending ? (
                   <ActivityIndicator
                     size="small"
-                    color={profile.hasRecommended ? accentColor : "#fff"}
+                    color={profile.hasRecommended ? colors.accent : "#fff"}
                   />
                 ) : (
                   <Feather
                     name="thumbs-up"
                     size={17}
-                    color={profile.hasRecommended ? accentColor : "#fff"}
+                    color={profile.hasRecommended ? colors.accent : "#fff"}
                   />
                 )}
-                {profile.recommendationCount > 0 && (
-                  <Text
-                    style={[
-                      styles.thumbCount,
-                      { color: profile.hasRecommended ? accentColor : "#fff" },
-                    ]}
-                  >
-                    {profile.recommendationCount}
-                  </Text>
-                )}
+                <Text
+                  style={[
+                    styles.thumbCount,
+                    { color: profile.hasRecommended ? colors.accent : "#fff" },
+                  ]}
+                >
+                  {profile.recommendationCount}
+                </Text>
               </TouchableOpacity>
             )}
           </View>
@@ -407,7 +405,7 @@ export default function UserProfileScreen() {
                 icon="map-pin"
                 label="Address"
                 value={
-                  [profile.roleData.addressSuburb, profile.roleData.addressCity]
+                  [profile.roleData.addressStreet, profile.roleData.addressSuburb, profile.roleData.addressCity]
                     .filter(Boolean)
                     .join(", ") || null
                 }

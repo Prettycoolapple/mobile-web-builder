@@ -99,15 +99,25 @@ function ThreadRow({ thread, myId }: { thread: DmThread; myId: string }) {
       </TouchableOpacity>
       <View style={styles.rowMid}>
         <View style={styles.rowTop}>
-          <Text
-            style={[
-              styles.rowName,
-              { color: colors.foreground, fontFamily: isUnread ? "DM_Sans_600SemiBold" : "DM_Sans_500Medium" },
-            ]}
-            numberOfLines={1}
-          >
-            {name}
-          </Text>
+          <View style={{ flex: 1 }}>
+            <Text
+              style={[
+                styles.rowName,
+                { color: colors.foreground, fontFamily: isUnread ? "DM_Sans_600SemiBold" : "DM_Sans_500Medium" },
+              ]}
+              numberOfLines={1}
+            >
+              {name}
+            </Text>
+            {(other?.recommendationCount ?? 0) > 0 && (
+              <View style={styles.recRow}>
+                <Feather name="thumbs-up" size={10} color={colors.accent} />
+                <Text style={[styles.recText, { color: colors.accent }]}>
+                  {other?.recommendationCount} {other?.recommendationCount === 1 ? "recommendation" : "recommendations"}
+                </Text>
+              </View>
+            )}
+          </View>
           <Text style={[styles.rowTime, { color: colors.mutedForeground }]}>
             {timeAgo(thread.lastMessageAt)}
           </Text>
@@ -258,6 +268,8 @@ const styles = StyleSheet.create({
     fontFamily: "DM_Sans_500Medium",
     fontSize: 10,
   },
+  recRow: { flexDirection: "row", alignItems: "center", gap: 3, marginTop: 1 },
+  recText: { fontSize: 10, fontFamily: "DM_Sans_500Medium" },
   rowPreview: { fontSize: 13, lineHeight: 18 },
   unreadDot: {
     borderRadius: 10,
