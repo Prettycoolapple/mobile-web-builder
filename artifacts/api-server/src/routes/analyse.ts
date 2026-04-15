@@ -461,6 +461,34 @@ router.post("/chat", async (req, res) => {
           }
         }
 
+        // ── Safety-net guard: if the extracted address matches the already-analysed
+        // currentReport (i.e. this is a follow-up, not a new property), and the user
+        // has NOT explicitly asked to re-run the analysis, skip the pipeline entirely
+        // and fall through to generateUnifiedResponse which uses the confirmed report data.
+        // This prevents external API inconsistencies (e.g. different zone labels on repeat
+        // fetches) from overwriting the verified data shown to the user in the same session.
+        const RE_ANALYSE_TRIGGERS = /\b(re-?analy[sz]e|redo|run again|analy[sz]e again|new analysis|re-?run|fresh analysis)\b/i;
+        if (extractedAddress && currentReport && !RE_ANALYSE_TRIGGERS.test(userText)) {
+          const r = currentReport as Record<string, unknown>;
+          const reportAddr: string | null =
+            (r["address"] as string | null) ??
+            ((r["propertyOverview"] as Record<string, unknown> | undefined)?.["address"] as string | null) ??
+            null;
+          if (reportAddr) {
+            const normalise = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+            if (normalise(reportAddr) === normalise(extractedAddress)) {
+              req.log.info(
+                { address: extractedAddress },
+                "Follow-up about already-analysed property — skipping pipeline, using currentReport",
+              );
+              // Fall through to generateUnifiedResponse below (mode will be treated as followup)
+              const { content, mode: responseMode } = await generateUnifiedResponse(messages, currentReport, "followup");
+              res.json({ content, mode: responseMode });
+              return;
+            }
+          }
+        }
+
         const aiResponseEarly = null;
         void aiResponseEarly;
 

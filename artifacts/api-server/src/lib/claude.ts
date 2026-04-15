@@ -49,10 +49,21 @@ const INTENT_SCHEMA = `{
 const INTENT_RULES = `## MODE CLASSIFICATION
 
 mode="analyse"
-  Trigger: user mentions a specific NZ street address OR uses words like "analyse",
-  "feasibility", "assess", "evaluate" for a specific property.
+  Trigger: user mentions a DIFFERENT NZ street address from any open report, OR uses
+  explicit re-analysis words like "re-analyse", "redo", "run again", "analyse again",
+  "new analysis", "re-run" for a specific property.
   Examples: "8 Hampton Drive, St Heliers", "can you assess 12 Remuera Rd?",
   "run a feasibility on this one"
+
+  CRITICAL EXCEPTION — classify as "followup" instead when ALL of the following are true:
+    1. There is an open property report (shown in APP CONTEXT above)
+    2. The user's question is clearly about THAT same property (risks, zone, costs, summary,
+       what does X mean, explain Y, how does this compare, etc.)
+    3. The message does NOT contain an address different from the open report's address
+    4. The message does NOT contain explicit re-analysis triggers (re-analyse, redo, run again,
+       analyse again, new analysis, re-run, fresh analysis)
+  In that case the user is discussing the already-analysed property — use mode="followup"
+  so the confirmed data in the current report is used, not a fresh API fetch.
 
 mode="discover"
   Trigger: ANY expression of wanting to find, buy, browse, or invest in property —
