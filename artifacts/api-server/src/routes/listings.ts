@@ -133,4 +133,78 @@ router.get("/listings/:id", requireAuth, async (req, res) => {
   res.json({ listing });
 });
 
+const updateListingSchema = createListingSchema.extend({
+  status: z.enum(["draft", "active", "sold", "withdrawn"]).optional(),
+}).partial();
+
+router.patch("/listings/:id", requireAuth, async (req, res) => {
+  const userId = (req as any).userId as string;
+  const { id } = req.params;
+
+  const [existing] = await db.select().from(listings).where(eq(listings.id, id));
+  if (!existing) {
+    res.status(404).json({ error: "Listing not found", code: "NOT_FOUND" });
+    return;
+  }
+  if (existing.userId !== userId) {
+    res.status(403).json({ error: "You can only edit your own listings", code: "FORBIDDEN" });
+    return;
+  }
+
+  const parsed = updateListingSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid listing data", details: parsed.error.issues });
+    return;
+  }
+
+  const data = parsed.data;
+  const [updated] = await db
+    .update(listings)
+    .set({
+      ...(data.address !== undefined && { address: data.address }),
+      ...(data.addressStreet !== undefined && { addressStreet: data.addressStreet }),
+      ...(data.addressSuburb !== undefined && { addressSuburb: data.addressSuburb }),
+      ...(data.addressCity !== undefined && { addressCity: data.addressCity }),
+      ...(data.addressPostcode !== undefined && { addressPostcode: data.addressPostcode }),
+      ...(data.lat !== undefined && { lat: data.lat }),
+      ...(data.lng !== undefined && { lng: data.lng }),
+      ...(data.listingType !== undefined && { listingType: data.listingType }),
+      ...(data.propertyType !== undefined && { propertyType: data.propertyType }),
+      ...(data.bedrooms !== undefined && { bedrooms: data.bedrooms }),
+      ...(data.bathrooms !== undefined && { bathrooms: data.bathrooms }),
+      ...(data.garages !== undefined && { garages: data.garages }),
+      ...(data.landAreaSqm !== undefined && { landAreaSqm: data.landAreaSqm }),
+      ...(data.floorAreaSqm !== undefined && { floorAreaSqm: data.floorAreaSqm }),
+      ...(data.priceNzd !== undefined && { priceNzd: data.priceNzd }),
+      ...(data.priceDisplay !== undefined && { priceDisplay: data.priceDisplay }),
+      ...(data.description !== undefined && { description: data.description }),
+      ...(data.imageUrls !== undefined && { imageUrls: data.imageUrls }),
+      ...(data.features !== undefined && { features: data.features }),
+      ...(data.status !== undefined && { status: data.status }),
+      updatedAt: new Date(),
+    })
+    .where(eq(listings.id, id))
+    .returning();
+
+  res.json({ listing: updated });
+});
+
+router.delete("/listings/:id", requireAuth, async (req, res) => {
+  const userId = (req as any).userId as string;
+  const { id } = req.params;
+
+  const [existing] = await db.select().from(listings).where(eq(listings.id, id));
+  if (!existing) {
+    res.status(404).json({ error: "Listing not found", code: "NOT_FOUND" });
+    return;
+  }
+  if (existing.userId !== userId) {
+    res.status(403).json({ error: "You can only delete your own listings", code: "FORBIDDEN" });
+    return;
+  }
+
+  await db.delete(listings).where(eq(listings.id, id));
+  res.json({ success: true });
+});
+
 export default router;

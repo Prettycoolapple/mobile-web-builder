@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from "react";
+import React, { useState, useRef, useCallback, useEffect } from "react";
 import {
   View,
   Text,
@@ -16,7 +16,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as Haptics from "expo-haptics";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { useAuth } from "@/context/AuthContext";
 import { useColors } from "@/hooks/useColors";
 
@@ -58,7 +58,10 @@ export default function AddListingScreen() {
   const colors = useColors();
   const router = useRouter();
   const { getApiHeaders } = useAuth();
+  const { id: editId } = useLocalSearchParams<{ id?: string }>();
+  const isEditMode = !!editId;
 
+  const [loadingEdit, setLoadingEdit] = useState(isEditMode);
   const [address, setAddress] = useState("");
   const [addressMeta, setAddressMeta] = useState<{
     street?: string; suburb?: string; city?: string; postcode?: string; lat?: string; lng?: string;
@@ -80,6 +83,7 @@ export default function AddListingScreen() {
 
   const [description, setDescription] = useState("");
   const [images, setImages] = useState<PickedImage[]>([]);
+  const [existingImageUrls, setExistingImageUrls] = useState<string[]>([]);
   const [selectedAmenities, setSelectedAmenities] = useState<string[]>([]);
 
   const [submitting, setSubmitting] = useState(false);
@@ -93,6 +97,51 @@ export default function AddListingScreen() {
     }
     return "/api";
   }, []);
+
+  useEffect(() => {
+    if (!editId) return;
+    const load = async () => {
+      try {
+        const resp = await fetch(`${getApiBase()}/listings/${editId}`, {
+          headers: getApiHeaders(),
+        });
+        if (!resp.ok) return;
+        const { listing } = (await resp.json()) as { listing: any };
+        setAddress(listing.address ?? "");
+        setAddressMeta({
+          street: listing.addressStreet ?? "",
+          suburb: listing.addressSuburb ?? "",
+          city: listing.addressCity ?? "",
+          postcode: listing.addressPostcode ?? "",
+          lat: listing.lat ?? "",
+          lng: listing.lng ?? "",
+        });
+        setListingType(listing.listingType ?? "for_sale");
+        setPropertyType(listing.propertyType ?? "house");
+        setBedrooms(listing.bedrooms ?? 0);
+        setBathrooms(listing.bathrooms ?? 0);
+        setGarages(listing.garages ?? 0);
+        setLandArea(listing.landAreaSqm ? String(listing.landAreaSqm) : "");
+        setFloorArea(listing.floorAreaSqm ? String(listing.floorAreaSqm) : "");
+        if (listing.priceDisplay === "By Negotiation") {
+          setPriceMode("negotiation");
+        } else if (listing.priceDisplay === "Price on Application") {
+          setPriceMode("poa");
+        } else if (listing.priceNzd) {
+          setPriceMode("set");
+          setPriceInput(String(listing.priceNzd));
+        }
+        setDescription(listing.description ?? "");
+        setExistingImageUrls(listing.imageUrls ?? []);
+        setSelectedAmenities(listing.features ?? []);
+      } catch {
+        // silent
+      } finally {
+        setLoadingEdit(false);
+      }
+    };
+    load();
+  }, [editId, getApiBase, getApiHeaders]);
 
   const fetchPredictions = useCallback(
     async (q: string) => {
@@ -219,11 +268,12 @@ export default function AddListingScreen() {
     }
     setSubmitting(true);
     try {
-      const uploadedUrls: string[] = [];
+      const newlyUploadedUrls: string[] = [];
       for (const img of images) {
         const url = await uploadImage(img);
-        if (url) uploadedUrls.push(url);
+        if (url) newlyUploadedUrls.push(url);
       }
+      const allImageUrls = [...existingImageUrls, ...newlyUploadedUrls];
 
       let priceNzd: number | undefined;
       let priceDisplay: string | undefined;
@@ -255,12 +305,15 @@ export default function AddListingScreen() {
         priceNzd,
         priceDisplay,
         description: description.trim() || undefined,
-        imageUrls: uploadedUrls,
+        imageUrls: allImageUrls,
         features: selectedAmenities,
       };
 
-      const resp = await fetch(`${getApiBase()}/listings`, {
-        method: "POST",
+      const url = isEditMode ? `${getApiBase()}/listings/${editId}` : `${getApiBase()}/listings`;
+      const method = isEditMode ? "PATCH" : "POST";
+
+      const resp = await fetch(url, {
+        method,
         headers: { ...getApiHeaders(), "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
@@ -281,14 +334,31 @@ export default function AddListingScreen() {
   }, [
     address, addressMeta, listingType, propertyType,
     bedrooms, bathrooms, garages, landArea, floorArea,
-    priceMode, priceInput, description, images, selectedAmenities,
-    uploadImage, getApiBase, getApiHeaders,
+    priceMode, priceInput, description, images, existingImageUrls, selectedAmenities,
+    uploadImage, getApiBase, getApiHeaders, isEditMode, editId,
   ]);
 
   const handleSuccessDismiss = useCallback(() => {
     setSuccessVisible(false);
     router.back();
   }, [router]);
+
+  if (loadingEdit) {
+    return (
+      <View style={[styles.root, { backgroundColor: colors.background }]}>
+        <View style={[styles.header, { paddingTop: insets.top + 8, backgroundColor: colors.headerBg, borderBottomColor: colors.accent + "22" }]}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.headerBack} activeOpacity={0.7}>
+            <Feather name="x" size={22} color="rgba(250,249,246,0.8)" />
+          </TouchableOpacity>
+          <Text style={[styles.headerTitle, { fontFamily: "DM_Sans_700Bold", color: "#FAFAF9" }]}>Edit Listing</Text>
+          <View style={styles.headerSpacer} />
+        </View>
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+          <ActivityIndicator color={colors.accent} size="large" />
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
@@ -297,7 +367,9 @@ export default function AddListingScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.headerBack} activeOpacity={0.7}>
           <Feather name="x" size={22} color="rgba(250,249,246,0.8)" />
         </TouchableOpacity>
-        <Text style={[styles.headerTitle, { fontFamily: "DM_Sans_700Bold", color: "#FAFAF9" }]}>New Listing</Text>
+        <Text style={[styles.headerTitle, { fontFamily: "DM_Sans_700Bold", color: "#FAFAF9" }]}>
+          {isEditMode ? "Edit Listing" : "New Listing"}
+        </Text>
         <View style={styles.headerSpacer} />
       </View>
 
@@ -552,6 +624,23 @@ export default function AddListingScreen() {
               <Feather name="camera" size={22} color={colors.accent} />
               <Text style={[styles.addPhotoText, { color: colors.accent, fontFamily: "DM_Sans_500Medium" }]}>Add photos</Text>
             </TouchableOpacity>
+            {existingImageUrls.map((url, i) => (
+              <View key={`existing-${i}`} style={styles.photoThumbWrapper}>
+                <Image source={{ uri: url.startsWith("/api/") ? `${getApiBase().replace("/api", "")}${url}` : url }} style={styles.photoThumb} />
+                <TouchableOpacity
+                  style={[styles.removePhotoBtn, { backgroundColor: "rgba(0,0,0,0.55)" }]}
+                  onPress={() => setExistingImageUrls((prev) => prev.filter((_, idx) => idx !== i))}
+                  activeOpacity={0.8}
+                >
+                  <Feather name="x" size={12} color="#fff" />
+                </TouchableOpacity>
+                {i === 0 && existingImageUrls.length > 0 && (
+                  <View style={[styles.coverBadge, { backgroundColor: colors.accent }]}>
+                    <Text style={[styles.coverBadgeText, { fontFamily: "DM_Sans_600SemiBold" }]}>Cover</Text>
+                  </View>
+                )}
+              </View>
+            ))}
             {images.map((img, i) => (
               <View key={`${img.uri}-${i}`} style={styles.photoThumbWrapper}>
                 <Image source={{ uri: img.uri }} style={styles.photoThumb} />
@@ -562,7 +651,7 @@ export default function AddListingScreen() {
                 >
                   <Feather name="x" size={12} color="#fff" />
                 </TouchableOpacity>
-                {i === 0 && (
+                {i === 0 && existingImageUrls.length === 0 && (
                   <View style={[styles.coverBadge, { backgroundColor: colors.accent }]}>
                     <Text style={[styles.coverBadgeText, { fontFamily: "DM_Sans_600SemiBold" }]}>Cover</Text>
                   </View>
@@ -615,7 +704,9 @@ export default function AddListingScreen() {
           ) : (
             <>
               <Feather name="check-circle" size={18} color="#fff" />
-              <Text style={[styles.submitBtnText, { fontFamily: "DM_Sans_700Bold" }]}>Submit listing</Text>
+              <Text style={[styles.submitBtnText, { fontFamily: "DM_Sans_700Bold" }]}>
+                {isEditMode ? "Save changes" : "Submit listing"}
+              </Text>
             </>
           )}
         </TouchableOpacity>
@@ -629,10 +720,12 @@ export default function AddListingScreen() {
               <Feather name="check-circle" size={38} color={colors.accent} />
             </View>
             <Text style={[styles.successTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
-              Listing submitted!
+              {isEditMode ? "Listing updated!" : "Listing submitted!"}
             </Text>
             <Text style={[styles.successBody, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-              Lecorb will promote your listing to suitable buyers now.
+              {isEditMode
+                ? "Your listing has been updated successfully."
+                : "Lecorb will promote your listing to suitable buyers now."}
             </Text>
             <TouchableOpacity
               style={[styles.successBtn, { backgroundColor: colors.accent }]}

@@ -327,14 +327,24 @@ export default function ChatScreen() {
           </View>
           <View style={styles.headerActions}>
             {user?.role === "sales_agent" && (
-              <TouchableOpacity
-                style={[styles.addListingBtn, { backgroundColor: colors.accent }]}
-                onPress={() => router.push("/add-listing")}
-                activeOpacity={0.8}
-              >
-                <Feather name="plus" size={13} color="#fff" />
-                <Text style={[styles.addListingBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>Add listing</Text>
-              </TouchableOpacity>
+              <>
+                <TouchableOpacity
+                  style={[styles.myListingsBtn, { borderColor: "rgba(250,249,246,0.22)" }]}
+                  onPress={() => router.push("/my-listings")}
+                  activeOpacity={0.75}
+                >
+                  <Feather name="list" size={14} color="rgba(250,249,246,0.75)" />
+                  <Text style={[styles.myListingsBtnText, { fontFamily: "DM_Sans_500Medium" }]}>Listings</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.addListingBtn, { backgroundColor: colors.accent }]}
+                  onPress={() => router.push("/add-listing")}
+                  activeOpacity={0.8}
+                >
+                  <Feather name="plus" size={13} color="#fff" />
+                  <Text style={[styles.addListingBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>Add listing</Text>
+                </TouchableOpacity>
+              </>
             )}
             {!isEmpty && (
               <TouchableOpacity
@@ -517,6 +527,19 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
+  },
+  myListingsBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderWidth: 1,
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  myListingsBtnText: {
+    fontSize: 13,
+    color: "rgba(250,249,246,0.75)",
   },
   addListingBtn: {
     flexDirection: "row",
