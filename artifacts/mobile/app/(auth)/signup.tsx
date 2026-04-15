@@ -1,21 +1,16 @@
-import React, { useState } from "react";
+import React from "react";
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
-  KeyboardAvoidingView,
-  Platform,
-  ActivityIndicator,
   ScrollView,
 } from "react-native";
-import Svg, { Circle, Line } from "react-native-svg";
+import Svg, { Circle, Line, Path, Rect, Polyline } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
-import { useAuth } from "@/context/AuthContext";
 
 function GlassesLogo({ size = 40, color = "#D97757" }: { size?: number; color?: string }) {
   const w = size * 1.5;
@@ -36,205 +31,124 @@ function GlassesLogo({ size = 40, color = "#D97757" }: { size?: number; color?: 
   );
 }
 
-export default function SignupScreen() {
+const roles = [
+  {
+    key: "general" as const,
+    icon: "user" as const,
+    title: "General User",
+    subtitle: "Analyse NZ properties & run feasibility reports",
+    description: "Free — 2 reports/month",
+    badge: "Free",
+  },
+  {
+    key: "sales_agent" as const,
+    icon: "briefcase" as const,
+    title: "Sales Agent",
+    subtitle: "Advise clients with AI-powered development insights",
+    description: "$99/month after trial",
+    badge: "Pro",
+  },
+  {
+    key: "service_provider" as const,
+    icon: "tool" as const,
+    title: "Service Provider",
+    subtitle: "Grow your business with qualified developer leads",
+    description: "$149/month after trial",
+    badge: "Business",
+  },
+];
+
+export default function RoleSelectionScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { signUp } = useAuth();
-
-  const [fullName, setFullName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleSignup = async () => {
-    if (!email.trim() || !password) {
-      setError("Please fill in all required fields.");
-      return;
-    }
-    if (password.length < 8) {
-      setError("Password must be at least 8 characters.");
-      return;
-    }
-    if (password !== confirmPassword) {
-      setError("Passwords do not match.");
-      return;
-    }
-    setError(null);
-    setIsLoading(true);
-    try {
-      await signUp(email.trim(), password, fullName.trim() || undefined);
-      router.replace("/(tabs)");
-    } catch (e: any) {
-      setError(e.message || "Signup failed. Please try again.");
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+      <ScrollView
+        contentContainerStyle={[
+          styles.content,
+          { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 32 },
+        ]}
+        showsVerticalScrollIndicator={false}
       >
-        <ScrollView
-          contentContainerStyle={[styles.content, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 32 }]}
-          keyboardShouldPersistTaps="handled"
-        >
-          <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-            <Feather name="arrow-left" size={22} color={colors.foreground} />
-          </TouchableOpacity>
+        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+          <Feather name="arrow-left" size={22} color={colors.foreground} />
+        </TouchableOpacity>
 
-          <View style={styles.logoRow}>
-            <GlassesLogo size={32} color={colors.accent} />
-            <View>
-              <Text style={[styles.logoTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
-                Lecorb
-              </Text>
-              <Text style={[styles.logoTagline, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                Property development intelligence
-              </Text>
-            </View>
-          </View>
-
-          <Text style={[styles.heading, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
-            Create an account
-          </Text>
-          <Text style={[styles.subheading, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-            Get 2 free feasibility reports per month
-          </Text>
-
-          {error && (
-            <View style={[styles.errorBanner, { backgroundColor: colors.danger + "18", borderColor: colors.danger + "40" }]}>
-              <Feather name="alert-circle" size={15} color={colors.danger} />
-              <Text style={[styles.errorText, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>{error}</Text>
-            </View>
-          )}
-
-          <View style={styles.form}>
-            <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                Full name <Text style={{ color: colors.mutedForeground }}>(optional)</Text>
-              </Text>
-              <TextInput
-                style={[styles.input, {
-                  backgroundColor: colors.card,
-                  borderColor: colors.border,
-                  color: colors.foreground,
-                  fontFamily: "DM_Sans_400Regular",
-                }]}
-                placeholder="Jane Smith"
-                placeholderTextColor={colors.mutedForeground}
-                value={fullName}
-                onChangeText={setFullName}
-                autoCapitalize="words"
-                autoComplete="name"
-                returnKeyType="next"
-              />
-            </View>
-
-            <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                Email
-              </Text>
-              <TextInput
-                style={[styles.input, {
-                  backgroundColor: colors.card,
-                  borderColor: colors.border,
-                  color: colors.foreground,
-                  fontFamily: "DM_Sans_400Regular",
-                }]}
-                placeholder="you@example.com"
-                placeholderTextColor={colors.mutedForeground}
-                value={email}
-                onChangeText={setEmail}
-                autoCapitalize="none"
-                keyboardType="email-address"
-                autoComplete="email"
-                returnKeyType="next"
-              />
-            </View>
-
-            <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                Password
-              </Text>
-              <View style={[styles.passwordWrapper, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <TextInput
-                  style={[styles.passwordInput, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-                  placeholder="At least 8 characters"
-                  placeholderTextColor={colors.mutedForeground}
-                  value={password}
-                  onChangeText={setPassword}
-                  secureTextEntry={!showPassword}
-                  autoComplete="password-new"
-                  returnKeyType="next"
-                />
-                <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeBtn}>
-                  <Feather name={showPassword ? "eye-off" : "eye"} size={18} color={colors.mutedForeground} />
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                Confirm password
-              </Text>
-              <TextInput
-                style={[styles.input, {
-                  backgroundColor: colors.card,
-                  borderColor: colors.border,
-                  color: colors.foreground,
-                  fontFamily: "DM_Sans_400Regular",
-                }]}
-                placeholder="Re-enter your password"
-                placeholderTextColor={colors.mutedForeground}
-                value={confirmPassword}
-                onChangeText={setConfirmPassword}
-                secureTextEntry={!showPassword}
-                autoComplete="password-new"
-                returnKeyType="done"
-                onSubmitEditing={handleSignup}
-              />
-            </View>
-
-            <TouchableOpacity
-              style={[styles.primaryBtn, { backgroundColor: colors.accent, opacity: isLoading ? 0.7 : 1 }]}
-              onPress={handleSignup}
-              disabled={isLoading}
-              activeOpacity={0.8}
-            >
-              {isLoading ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Text style={[styles.primaryBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>Create account</Text>
-              )}
-            </TouchableOpacity>
-
-            <View style={[styles.termsNote, { borderColor: colors.border, backgroundColor: colors.muted }]}>
-              <Feather name="shield" size={14} color={colors.mutedForeground} />
-              <Text style={[styles.termsText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                Free tier includes 3 feasibility reports per month. No credit card required.
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.footer}>
-            <Text style={[styles.footerText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-              Already have an account?{" "}
+        <View style={styles.logoRow}>
+          <GlassesLogo size={32} color={colors.accent} />
+          <View>
+            <Text style={[styles.logoTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
+              Lecorb
             </Text>
-            <TouchableOpacity onPress={() => router.push("/(auth)/login")}>
-              <Text style={[styles.footerLink, { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" }]}>
-                Sign in
-              </Text>
-            </TouchableOpacity>
+            <Text style={[styles.logoTagline, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+              Property development intelligence
+            </Text>
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+        </View>
+
+        <Text style={[styles.heading, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
+          Who are you?
+        </Text>
+        <Text style={[styles.subheading, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+          Choose your role to get the right experience
+        </Text>
+
+        <View style={styles.cards}>
+          {roles.map((role) => (
+            <TouchableOpacity
+              key={role.key}
+              activeOpacity={0.85}
+              style={[
+                styles.card,
+                { backgroundColor: colors.card, borderColor: colors.border },
+              ]}
+              onPress={() => {
+                if (role.key === "general") router.push("/(auth)/signup-general");
+                else if (role.key === "sales_agent") router.push("/(auth)/signup-agent");
+                else router.push("/(auth)/signup-provider");
+              }}
+            >
+              <View style={styles.cardTop}>
+                <View style={[styles.iconCircle, { backgroundColor: colors.accent + "15" }]}>
+                  <Feather name={role.icon} size={22} color={colors.accent} />
+                </View>
+                <View style={[styles.badge, { backgroundColor: colors.muted }]}>
+                  <Text style={[styles.badgeText, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>
+                    {role.badge}
+                  </Text>
+                </View>
+              </View>
+
+              <Text style={[styles.cardTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
+                {role.title}
+              </Text>
+              <Text style={[styles.cardSubtitle, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                {role.subtitle}
+              </Text>
+
+              <View style={[styles.cardFooter, { borderTopColor: colors.border }]}>
+                <Text style={[styles.cardDescription, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                  {role.description}
+                </Text>
+                <Feather name="chevron-right" size={16} color={colors.accent} />
+              </View>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <View style={styles.footer}>
+          <Text style={[styles.footerText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+            Already have an account?{" "}
+          </Text>
+          <TouchableOpacity onPress={() => router.push("/(auth)/login")}>
+            <Text style={[styles.footerLink, { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" }]}>
+              Sign in
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
     </View>
   );
 }
@@ -242,45 +156,33 @@ export default function SignupScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   content: { paddingHorizontal: 24 },
-  backBtn: { marginBottom: 24, width: 36 },
-  logoRow: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 36 },
-  logoMark: {
-    width: 44, height: 44, borderRadius: 12,
-    alignItems: "center", justifyContent: "center",
-  },
-  logoMarkText: { color: "#fff", fontSize: 16, fontWeight: "700" },
+  backBtn: { marginBottom: 20, width: 36 },
+  logoRow: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 32 },
   logoTitle: { fontSize: 18 },
   logoTagline: { fontSize: 13, marginTop: 1 },
   heading: { fontSize: 28, marginBottom: 8 },
-  subheading: { fontSize: 15, marginBottom: 32, lineHeight: 22 },
-  errorBanner: {
-    flexDirection: "row", alignItems: "center", gap: 8,
-    padding: 12, borderRadius: 10, borderWidth: 1, marginBottom: 20,
+  subheading: { fontSize: 15, marginBottom: 28, lineHeight: 22 },
+  cards: { gap: 14 },
+  card: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 20,
+    gap: 10,
   },
-  errorText: { flex: 1, fontSize: 14, lineHeight: 20 },
-  form: { gap: 20 },
-  field: { gap: 8 },
-  label: { fontSize: 14 },
-  input: {
-    height: 48, borderRadius: 12, borderWidth: 1,
-    paddingHorizontal: 16, fontSize: 15,
+  cardTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  iconCircle: {
+    width: 44, height: 44, borderRadius: 22,
+    alignItems: "center", justifyContent: "center",
   },
-  passwordWrapper: {
-    height: 48, borderRadius: 12, borderWidth: 1,
-    flexDirection: "row", alignItems: "center",
+  badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 },
+  badgeText: { fontSize: 12 },
+  cardTitle: { fontSize: 18 },
+  cardSubtitle: { fontSize: 14, lineHeight: 20 },
+  cardFooter: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingTop: 12, marginTop: 4, borderTopWidth: 1,
   },
-  passwordInput: { flex: 1, height: "100%", paddingHorizontal: 16, fontSize: 15 },
-  eyeBtn: { paddingHorizontal: 14 },
-  primaryBtn: {
-    height: 50, borderRadius: 12, alignItems: "center", justifyContent: "center",
-    marginTop: 4,
-  },
-  primaryBtnText: { color: "#fff", fontSize: 16 },
-  termsNote: {
-    flexDirection: "row", alignItems: "flex-start", gap: 8,
-    padding: 12, borderRadius: 10, borderWidth: 1,
-  },
-  termsText: { flex: 1, fontSize: 13, lineHeight: 18 },
+  cardDescription: { fontSize: 13 },
   footer: { flexDirection: "row", justifyContent: "center", alignItems: "center", marginTop: 32 },
   footerText: { fontSize: 14 },
   footerLink: { fontSize: 14 },
