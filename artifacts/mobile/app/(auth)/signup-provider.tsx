@@ -54,6 +54,8 @@ interface FieldErrors {
   email?: string;
   password?: string;
   confirmPassword?: string;
+  companyName?: string;
+  discipline?: string;
 }
 
 export default function SignupProviderScreen() {
@@ -117,6 +119,8 @@ export default function SignupProviderScreen() {
     } else if (password !== confirmPassword) {
       errors.confirmPassword = "Passwords do not match.";
     }
+    if (!companyName.trim()) errors.companyName = "Company name is required.";
+    if (!discipline) errors.discipline = "Please select your discipline.";
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -178,11 +182,13 @@ export default function SignupProviderScreen() {
         const mapped: FieldErrors = {};
         for (const issue of err.details) {
           const key = issue.path[0];
+          const nested = issue.path[1];
           if (key === "firstName") mapped.firstName = issue.message;
           else if (key === "lastName") mapped.lastName = issue.message;
           else if (key === "email") mapped.email = issue.message;
           else if (key === "password") mapped.password = issue.message;
-          // providerData nested errors fall through to submitError below
+          else if (key === "providerData" && nested === "companyName") mapped.companyName = issue.message;
+          else if (key === "providerData" && nested === "discipline") mapped.discipline = issue.message;
         }
         if (Object.keys(mapped).length > 0) {
           setFieldErrors(mapped);
@@ -341,15 +347,31 @@ export default function SignupProviderScreen() {
           <View style={styles.form}>
             <View style={styles.field}>
               <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                Company name <Text style={{ color: colors.mutedForeground }}>(optional)</Text>
+                Company name *
               </Text>
               <TextInput
-                style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+                style={[
+                  styles.input,
+                  {
+                    backgroundColor: colors.card,
+                    borderColor: fieldErrors.companyName ? colors.danger : colors.border,
+                    color: colors.foreground,
+                    fontFamily: "DM_Sans_400Regular",
+                  },
+                ]}
                 placeholder="Acme Design Ltd"
                 placeholderTextColor={colors.mutedForeground}
                 value={companyName}
-                onChangeText={setCompanyName}
+                onChangeText={(v) => {
+                  setCompanyName(v);
+                  if (fieldErrors.companyName) setFieldErrors((p) => ({ ...p, companyName: undefined }));
+                }}
               />
+              {fieldErrors.companyName && (
+                <Text style={[styles.fieldError, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>
+                  {fieldErrors.companyName}
+                </Text>
+              )}
             </View>
 
             <View style={styles.field}>
@@ -368,14 +390,22 @@ export default function SignupProviderScreen() {
 
             <View style={styles.field}>
               <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                Discipline <Text style={{ color: colors.mutedForeground }}>(optional)</Text>
+                Discipline *
               </Text>
               <MultiSelectChips
                 options={DISCIPLINE_OPTIONS}
                 selected={discipline ? [discipline] : []}
-                onChange={(vals) => setDiscipline((vals[0] as ProviderDiscipline) ?? null)}
+                onChange={(vals) => {
+                  setDiscipline((vals[0] as ProviderDiscipline) ?? null);
+                  if (fieldErrors.discipline) setFieldErrors((p) => ({ ...p, discipline: undefined }));
+                }}
                 singleSelect
               />
+              {fieldErrors.discipline && (
+                <Text style={[styles.fieldError, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>
+                  {fieldErrors.discipline}
+                </Text>
+              )}
             </View>
 
             <View style={styles.field}>
