@@ -9,6 +9,7 @@ import {
   Alert,
   ActivityIndicator,
   Linking,
+  Image,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -389,14 +390,27 @@ export default function ProfileScreen() {
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={[styles.header, { paddingTop: topInset, backgroundColor: colors.headerBg }]}>
         <View style={styles.headerContent}>
-          <Text style={[styles.headerTitle, { color: colors.headerText, fontFamily: "DM_Sans_600SemiBold" }]}>
-            Account
-          </Text>
-          {user?.email && (
-            <Text style={[styles.headerEmail, { color: "rgba(250,249,246,0.5)", fontFamily: "DM_Sans_400Regular" }]}>
-              {user.fullName ? `${user.fullName} · ` : ""}{user.email}
-            </Text>
-          )}
+          <View style={styles.headerRow}>
+            {user?.avatarUrl ? (
+              <Image source={{ uri: user.avatarUrl }} style={styles.headerAvatar} />
+            ) : (
+              <View style={[styles.headerAvatarInitials, { backgroundColor: "rgba(250,249,246,0.15)" }]}>
+                <Text style={[styles.headerAvatarText, { color: colors.headerText, fontFamily: "DM_Sans_700Bold" }]}>
+                  {(user?.fullName ?? user?.email ?? "?").slice(0, 1).toUpperCase()}
+                </Text>
+              </View>
+            )}
+            <View style={styles.headerTextGroup}>
+              <Text style={[styles.headerTitle, { color: colors.headerText, fontFamily: "DM_Sans_600SemiBold" }]}>
+                {user?.fullName ?? "Account"}
+              </Text>
+              {user?.email && (
+                <Text style={[styles.headerEmail, { color: "rgba(250,249,246,0.5)", fontFamily: "DM_Sans_400Regular" }]} numberOfLines={1}>
+                  {user.email}
+                </Text>
+              )}
+            </View>
+          </View>
         </View>
       </View>
 
@@ -905,8 +919,13 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   header: { paddingHorizontal: 20, paddingBottom: 16 },
   headerContent: { paddingTop: 10 },
-  headerTitle: { fontSize: 20, letterSpacing: -0.3 },
-  headerEmail: { fontSize: 13, marginTop: 2 },
+  headerRow: { flexDirection: "row", alignItems: "center", gap: 14 },
+  headerAvatar: { width: 48, height: 48, borderRadius: 24 },
+  headerAvatarInitials: { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center" },
+  headerAvatarText: { fontSize: 20, letterSpacing: -0.5 },
+  headerTextGroup: { flex: 1 },
+  headerTitle: { fontSize: 18, letterSpacing: -0.3 },
+  headerEmail: { fontSize: 13, marginTop: 1 },
   content: { padding: 16, gap: 8 },
   sectionHeader: {
     fontSize: 11,

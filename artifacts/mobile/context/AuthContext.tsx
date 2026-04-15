@@ -11,6 +11,7 @@ export interface UserProfile {
   languages: string[];
   subscriptionTier: string;
   reportsUsedThisMonth: number;
+  avatarUrl?: string | null;
 }
 
 export type ProviderDiscipline =

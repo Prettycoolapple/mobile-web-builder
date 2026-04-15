@@ -248,6 +248,7 @@ router.get("/me", requireAuth, async (req, res) => {
         reportsUsedThisMonth: profiles.reportsUsedThisMonth,
         lastResetAt: profiles.lastResetAt,
         createdAt: profiles.createdAt,
+        avatarUrl: profiles.avatarUrl,
       })
       .from(profiles)
       .where(eq(profiles.id, userId))
