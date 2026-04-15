@@ -280,12 +280,14 @@ router.post("/dm/threads/:threadId/messages", requireAuth, async (req: Request, 
     const io = getIo();
     const roomKey = `thread:${threadId}`;
 
-    if (io) {
-      io.to(roomKey).emit("new_message", { threadId, message });
-    }
-
     const recipientId =
       thread.participantA === userId ? thread.participantB : thread.participantA;
+
+    if (io) {
+      io.to(roomKey).emit("new_message", { threadId, message });
+      io.to(`user:${recipientId}`).emit("new_message", { threadId, message });
+      io.to(`user:${userId}`).emit("new_message", { threadId, message });
+    }
 
     const socketsInRoom = io ? await io.in(roomKey).fetchSockets() : [];
     const recipientOnline = socketsInRoom.some(

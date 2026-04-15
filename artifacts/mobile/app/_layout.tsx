@@ -88,6 +88,14 @@ function NotificationSetup() {
       }
     });
 
+    Notifications.getLastNotificationResponseAsync().then((response) => {
+      if (!response) return;
+      const data = response.notification.request.content.data as { threadId?: string };
+      if (data?.threadId) {
+        router.push(`/chat/${data.threadId}`);
+      }
+    });
+
     return () => {
       notificationListener.current?.remove();
       responseListener.current?.remove();

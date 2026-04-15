@@ -54,6 +54,8 @@ io.on("connection", (socket) => {
   const userId: string = socket.data.userId as string;
   logger.info({ socketId: socket.id, userId }, "Socket connected");
 
+  socket.join(`user:${userId}`);
+
   socket.on("join_thread", async (threadId: string, ack?: (err: string | null) => void) => {
     try {
       const [thread] = await db

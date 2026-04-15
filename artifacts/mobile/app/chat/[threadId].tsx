@@ -176,7 +176,7 @@ export default function ChatScreen() {
       if (!err) joinedRef.current = true;
     });
 
-    socket.on("new_message", ({ threadId: tid, message }: { threadId: string; message: DmMessage }) => {
+    const onNewMessage = ({ threadId: tid, message }: { threadId: string; message: DmMessage }) => {
       if (tid !== threadId) return;
       setMessages((prev) => {
         if (prev.some((m) => m.id === message.id)) return prev;
@@ -189,11 +189,13 @@ export default function ChatScreen() {
           headers: { Authorization: `Bearer ${token}` },
         }).then(() => fetchThreads());
       }
-    });
+    };
+
+    socket.on("new_message", onNewMessage);
 
     return () => {
       socket.emit("leave_thread", threadId);
-      socket.off("new_message");
+      socket.off("new_message", onNewMessage);
       joinedRef.current = false;
     };
   }, [socket, threadId, token]);
@@ -247,7 +249,8 @@ export default function ChatScreen() {
         const blob = await resp.blob();
         form.append("image", blob, filename);
       } else {
-        form.append("image", { uri: asset.uri, name: filename, type: mimeType } as any);
+        const rnFile: { uri: string; name: string; type: string } = { uri: asset.uri, name: filename, type: mimeType };
+        (form as unknown as { append(k: string, v: { uri: string; name: string; type: string }): void }).append("image", rnFile);
       }
       const uploadResp = await fetch(`${getApiBase()}/upload/dm-image`, {
         method: "POST",
@@ -289,6 +292,9 @@ export default function ChatScreen() {
       <View style={[styles.msgRow, isMine ? styles.msgRowRight : styles.msgRowLeft]}>
         {!isMine && <Avatar name={otherName} size={28} />}
         <View style={{ maxWidth: "75%" }}>
+          {!isMine && otherName ? (
+            <Text style={[styles.senderName, { color: colors.mutedForeground }]}>{otherName}</Text>
+          ) : null}
           {msg.imageUrl ? (
             <View style={[styles.imgBubble, isMine ? styles.myBubble : styles.theirBubble, { backgroundColor: isMine ? colors.accent : colors.card, borderColor: isMine ? colors.accent : colors.border }]}>
               <Image source={{ uri: msg.imageUrl }} style={styles.msgImage} resizeMode="cover" />
@@ -490,6 +496,7 @@ const styles = StyleSheet.create({
   },
   dateLine: { flex: 1, height: StyleSheet.hairlineWidth },
   dateSepText: { fontFamily: "DM_Sans_400Regular", fontSize: 12 },
+  senderName: { fontFamily: "DM_Sans_500Medium", fontSize: 11, marginBottom: 2, marginLeft: 2 },
   msgRow: {
     flexDirection: "row",
     alignItems: "flex-end",
