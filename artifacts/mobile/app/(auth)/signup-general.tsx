@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import {
   View,
   Text,
@@ -9,6 +9,8 @@ import {
   Platform,
   ActivityIndicator,
   ScrollView,
+  Animated,
+  useWindowDimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -30,6 +32,8 @@ const LANGUAGE_OPTIONS = [
   { label: "Other", value: "Other" },
 ];
 
+const TOTAL_STEPS = 3;
+
 interface FieldErrors {
   firstName?: string;
   lastName?: string;
@@ -43,6 +47,7 @@ export default function SignupGeneralScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { signUp } = useAuth();
+  const { width: SCREEN_W } = useWindowDimensions();
 
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -55,42 +60,57 @@ export default function SignupGeneralScreen() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
 
-  const validate = (): boolean => {
+  const [step, setStep] = useState(0);
+  const slideAnim = useRef(new Animated.Value(0)).current;
+
+  const slide = (nextStep: number, direction: 1 | -1) => {
+    Animated.timing(slideAnim, {
+      toValue: -direction * SCREEN_W,
+      duration: 260,
+      useNativeDriver: true,
+    }).start(() => {
+      slideAnim.setValue(direction * SCREEN_W);
+      setStep(nextStep);
+      Animated.timing(slideAnim, {
+        toValue: 0,
+        duration: 260,
+        useNativeDriver: true,
+      }).start();
+    });
+  };
+
+  const validateStep = (): boolean => {
     const errors: FieldErrors = {};
-    if (!firstName.trim()) errors.firstName = "First name is required.";
-    if (!lastName.trim()) errors.lastName = "Last name is required.";
-    if (!email.trim()) {
-      errors.email = "Email is required.";
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      errors.email = "Enter a valid email address.";
-    }
-    if (!password) {
-      errors.password = "Password is required.";
-    } else if (password.length < 8) {
-      errors.password = "Password must be at least 8 characters.";
-    }
-    if (!confirmPassword) {
-      errors.confirmPassword = "Please confirm your password.";
-    } else if (password !== confirmPassword) {
-      errors.confirmPassword = "Passwords do not match.";
+    if (step === 0) {
+      if (!firstName.trim()) errors.firstName = "First name is required.";
+      if (!lastName.trim()) errors.lastName = "Last name is required.";
+    } else if (step === 1) {
+      if (!email.trim()) errors.email = "Email is required.";
+      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) errors.email = "Enter a valid email address.";
+      if (!password) errors.password = "Password is required.";
+      else if (password.length < 8) errors.password = "Password must be at least 8 characters.";
+      if (!confirmPassword) errors.confirmPassword = "Please confirm your password.";
+      else if (password !== confirmPassword) errors.confirmPassword = "Passwords do not match.";
     }
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
   };
 
+  const goNext = () => {
+    if (!validateStep()) return;
+    slide(step + 1, 1);
+  };
+
+  const goBack = () => {
+    if (step === 0) { router.back(); return; }
+    slide(step - 1, -1);
+  };
+
   const handleSignup = async () => {
     setSubmitError(null);
-    if (!validate()) return;
     setIsLoading(true);
     try {
-      await signUp({
-        role: "general",
-        firstName: firstName.trim(),
-        lastName: lastName.trim(),
-        email: email.trim(),
-        password,
-        languages,
-      });
+      await signUp({ role: "general", firstName: firstName.trim(), lastName: lastName.trim(), email: email.trim(), password, languages });
       router.replace("/(tabs)");
     } catch (err) {
       if (err instanceof ApiError && err.details?.length) {
@@ -104,6 +124,8 @@ export default function SignupGeneralScreen() {
         }
         if (Object.keys(mapped).length > 0) {
           setFieldErrors(mapped);
+          if (mapped.email || mapped.password || mapped.confirmPassword) setStep(1);
+          else if (mapped.firstName || mapped.lastName) setStep(0);
           return;
         }
       }
@@ -113,7 +135,7 @@ export default function SignupGeneralScreen() {
     }
   };
 
-  const inputStyle = (field: keyof FieldErrors) => [
+  const inputBase = (field: keyof FieldErrors) => [
     styles.input,
     {
       backgroundColor: colors.card,
@@ -123,85 +145,83 @@ export default function SignupGeneralScreen() {
     },
   ];
 
-  return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
-        <ScrollView
-          contentContainerStyle={[styles.content, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 32 }]}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-            <Feather name="arrow-left" size={22} color={colors.foreground} />
-          </TouchableOpacity>
+  const renderStep = () => {
+    if (step === 0) {
+      return (
+        <View style={styles.stepContent}>
+          <Text style={[styles.stepTag, { color: colors.accent }]}>General User · Free</Text>
+          <Text style={[styles.stepHeading, { color: colors.foreground }]}>
+            What should{"\n"}we call you?
+          </Text>
+          <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
+            We'll personalise your Lecorb experience.
+          </Text>
 
-          <View style={[styles.roleTag, { backgroundColor: colors.accent + "15" }]}>
-            <Feather name="user" size={14} color={colors.accent} />
-            <Text style={[styles.roleTagText, { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" }]}>
-              General User
-            </Text>
+          <View style={styles.fieldRow}>
+            <View style={[styles.field, { flex: 1 }]}>
+              <Text style={[styles.label, { color: colors.foreground }]}>First name</Text>
+              <TextInput
+                style={inputBase("firstName")}
+                placeholder="Jane"
+                placeholderTextColor={colors.mutedForeground}
+                value={firstName}
+                onChangeText={(v) => { setFirstName(v); if (fieldErrors.firstName) setFieldErrors((p) => ({ ...p, firstName: undefined })); }}
+                autoCapitalize="words"
+                returnKeyType="next"
+              />
+              {fieldErrors.firstName && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.firstName}</Text>}
+            </View>
+            <View style={[styles.field, { flex: 1 }]}>
+              <Text style={[styles.label, { color: colors.foreground }]}>Last name</Text>
+              <TextInput
+                style={inputBase("lastName")}
+                placeholder="Smith"
+                placeholderTextColor={colors.mutedForeground}
+                value={lastName}
+                onChangeText={(v) => { setLastName(v); if (fieldErrors.lastName) setFieldErrors((p) => ({ ...p, lastName: undefined })); }}
+                autoCapitalize="words"
+                returnKeyType="done"
+                onSubmitEditing={goNext}
+              />
+              {fieldErrors.lastName && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.lastName}</Text>}
+            </View>
           </View>
 
-          <Text style={[styles.heading, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
-            Create your account
+          <TouchableOpacity
+            style={[styles.primaryBtn, { backgroundColor: colors.accent }]}
+            onPress={goNext}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.primaryBtnText}>Continue</Text>
+            <Feather name="arrow-right" size={18} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    if (step === 1) {
+      return (
+        <View style={styles.stepContent}>
+          <Text style={[styles.stepTag, { color: colors.accent }]}>General User · Free</Text>
+          <Text style={[styles.stepHeading, { color: colors.foreground }]}>
+            Create your{"\n"}login
           </Text>
-          <Text style={[styles.subheading, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-            Free — 2 feasibility reports per month
+          <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
+            Your email and a secure password.
           </Text>
 
           {submitError && (
             <View style={[styles.errorBanner, { backgroundColor: colors.danger + "18", borderColor: colors.danger + "40" }]}>
               <Feather name="alert-circle" size={15} color={colors.danger} />
-              <Text style={[styles.errorText, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>{submitError}</Text>
+              <Text style={[styles.errorText, { color: colors.danger }]}>{submitError}</Text>
             </View>
           )}
 
-          <View style={styles.form}>
-            <View style={styles.row}>
-              <View style={[styles.field, { flex: 1 }]}>
-                <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                  First name *
-                </Text>
-                <TextInput
-                  style={inputStyle("firstName")}
-                  placeholder="Jane"
-                  placeholderTextColor={colors.mutedForeground}
-                  value={firstName}
-                  onChangeText={(v) => { setFirstName(v); if (fieldErrors.firstName) setFieldErrors((p) => ({ ...p, firstName: undefined })); }}
-                  autoCapitalize="words"
-                  returnKeyType="next"
-                />
-                {fieldErrors.firstName && (
-                  <Text style={[styles.fieldError, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>
-                    {fieldErrors.firstName}
-                  </Text>
-                )}
-              </View>
-              <View style={[styles.field, { flex: 1 }]}>
-                <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                  Last name *
-                </Text>
-                <TextInput
-                  style={inputStyle("lastName")}
-                  placeholder="Smith"
-                  placeholderTextColor={colors.mutedForeground}
-                  value={lastName}
-                  onChangeText={(v) => { setLastName(v); if (fieldErrors.lastName) setFieldErrors((p) => ({ ...p, lastName: undefined })); }}
-                  autoCapitalize="words"
-                  returnKeyType="next"
-                />
-                {fieldErrors.lastName && (
-                  <Text style={[styles.fieldError, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>
-                    {fieldErrors.lastName}
-                  </Text>
-                )}
-              </View>
-            </View>
-
+          <View style={styles.fields}>
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>Email *</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>Email address</Text>
               <TextInput
-                style={inputStyle("email")}
+                style={inputBase("email")}
                 placeholder="you@example.com"
                 placeholderTextColor={colors.mutedForeground}
                 value={email}
@@ -211,19 +231,12 @@ export default function SignupGeneralScreen() {
                 autoComplete="email"
                 returnKeyType="next"
               />
-              {fieldErrors.email && (
-                <Text style={[styles.fieldError, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>
-                  {fieldErrors.email}
-                </Text>
-              )}
+              {fieldErrors.email && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.email}</Text>}
             </View>
 
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>Password *</Text>
-              <View style={[
-                styles.passwordWrapper,
-                { backgroundColor: colors.card, borderColor: fieldErrors.password ? colors.danger : colors.border },
-              ]}>
+              <Text style={[styles.label, { color: colors.foreground }]}>Password</Text>
+              <View style={[styles.passwordWrapper, { backgroundColor: colors.card, borderColor: fieldErrors.password ? colors.danger : colors.border }]}>
                 <TextInput
                   style={[styles.passwordInput, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
                   placeholder="At least 8 characters"
@@ -238,17 +251,13 @@ export default function SignupGeneralScreen() {
                   <Feather name={showPassword ? "eye-off" : "eye"} size={18} color={colors.mutedForeground} />
                 </TouchableOpacity>
               </View>
-              {fieldErrors.password && (
-                <Text style={[styles.fieldError, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>
-                  {fieldErrors.password}
-                </Text>
-              )}
+              {fieldErrors.password && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.password}</Text>}
             </View>
 
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>Confirm password *</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>Confirm password</Text>
               <TextInput
-                style={inputStyle("confirmPassword")}
+                style={inputBase("confirmPassword")}
                 placeholder="Re-enter your password"
                 placeholderTextColor={colors.mutedForeground}
                 value={confirmPassword}
@@ -256,45 +265,105 @@ export default function SignupGeneralScreen() {
                 secureTextEntry={!showPassword}
                 autoComplete="password-new"
                 returnKeyType="done"
-                onSubmitEditing={handleSignup}
+                onSubmitEditing={goNext}
               />
-              {fieldErrors.confirmPassword && (
-                <Text style={[styles.fieldError, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>
-                  {fieldErrors.confirmPassword}
-                </Text>
-              )}
+              {fieldErrors.confirmPassword && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.confirmPassword}</Text>}
             </View>
+          </View>
 
-            <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                Languages spoken <Text style={{ color: colors.mutedForeground }}>(optional)</Text>
+          <TouchableOpacity
+            style={[styles.primaryBtn, { backgroundColor: colors.accent }]}
+            onPress={goNext}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.primaryBtnText}>Continue</Text>
+            <Feather name="arrow-right" size={18} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.stepContent}>
+        <Text style={[styles.stepTag, { color: colors.accent }]}>General User · Free</Text>
+        <Text style={[styles.stepHeading, { color: colors.foreground }]}>
+          Languages{"\n"}you speak
+        </Text>
+        <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
+          Helps us surface relevant NZ content for you. Optional — skip any time.
+        </Text>
+
+        {submitError && (
+          <View style={[styles.errorBanner, { backgroundColor: colors.danger + "18", borderColor: colors.danger + "40" }]}>
+            <Feather name="alert-circle" size={15} color={colors.danger} />
+            <Text style={[styles.errorText, { color: colors.danger }]}>{submitError}</Text>
+          </View>
+        )}
+
+        <MultiSelectChips options={LANGUAGE_OPTIONS} selected={languages} onChange={setLanguages} />
+
+        <TouchableOpacity
+          style={[styles.primaryBtn, { backgroundColor: colors.accent, opacity: isLoading ? 0.7 : 1 }]}
+          onPress={handleSignup}
+          disabled={isLoading}
+          activeOpacity={0.85}
+        >
+          {isLoading ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <>
+              <Text style={styles.primaryBtnText}>Create account</Text>
+              <Feather name="check" size={18} color="#fff" />
+            </>
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.skipBtn} onPress={handleSignup} disabled={isLoading}>
+          <Text style={[styles.skipText, { color: colors.mutedForeground }]}>Skip this step</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
+  return (
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <View style={[styles.progressTrack, { marginTop: insets.top, backgroundColor: colors.border }]}>
+        <View
+          style={[
+            styles.progressFill,
+            { width: `${Math.round(((step + 1) / TOTAL_STEPS) * 100)}%`, backgroundColor: colors.accent },
+          ]}
+        />
+      </View>
+
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+        <Animated.View style={[{ flex: 1 }, { transform: [{ translateX: slideAnim }] }]}>
+          <ScrollView
+            contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 32 }]}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={styles.topNav}>
+              <TouchableOpacity onPress={goBack} style={styles.backBtn}>
+                <Feather name="arrow-left" size={22} color={colors.foreground} />
+              </TouchableOpacity>
+              <Text style={[styles.stepCounter, { color: colors.mutedForeground }]}>
+                {step + 1} / {TOTAL_STEPS}
               </Text>
-              <MultiSelectChips options={LANGUAGE_OPTIONS} selected={languages} onChange={setLanguages} />
             </View>
 
-            <TouchableOpacity
-              style={[styles.primaryBtn, { backgroundColor: colors.accent, opacity: isLoading ? 0.7 : 1 }]}
-              onPress={handleSignup}
-              disabled={isLoading}
-              activeOpacity={0.8}
-            >
-              {isLoading ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Text style={[styles.primaryBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>Create account</Text>
-              )}
-            </TouchableOpacity>
-          </View>
+            {renderStep()}
 
-          <View style={styles.footer}>
-            <Text style={[styles.footerText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-              Already have an account?{" "}
-            </Text>
-            <TouchableOpacity onPress={() => router.push("/(auth)/login")}>
-              <Text style={[styles.footerLink, { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" }]}>Sign in</Text>
-            </TouchableOpacity>
-          </View>
-        </ScrollView>
+            <View style={styles.footer}>
+              <Text style={[styles.footerText, { color: colors.mutedForeground }]}>
+                Already have an account?{" "}
+              </Text>
+              <TouchableOpacity onPress={() => router.push("/(auth)/login")}>
+                <Text style={[styles.footerLink, { color: colors.accent }]}>Sign in</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </Animated.View>
       </KeyboardAvoidingView>
     </View>
   );
@@ -302,26 +371,35 @@ export default function SignupGeneralScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  content: { paddingHorizontal: 24 },
-  backBtn: { marginBottom: 20, width: 36 },
-  roleTag: { flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start", paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, marginBottom: 16 },
-  roleTagText: { fontSize: 13 },
-  heading: { fontSize: 26, marginBottom: 6 },
-  subheading: { fontSize: 14, marginBottom: 28, lineHeight: 20 },
-  errorBanner: { flexDirection: "row", alignItems: "center", gap: 8, padding: 12, borderRadius: 10, borderWidth: 1, marginBottom: 20 },
-  errorText: { flex: 1, fontSize: 14, lineHeight: 20 },
-  form: { gap: 18 },
-  row: { flexDirection: "row", gap: 12 },
-  field: { gap: 5 },
-  label: { fontSize: 14 },
-  fieldError: { fontSize: 12, lineHeight: 16 },
-  input: { height: 48, borderRadius: 12, borderWidth: 1, paddingHorizontal: 16, fontSize: 15 },
-  passwordWrapper: { height: 48, borderRadius: 12, borderWidth: 1, flexDirection: "row", alignItems: "center" },
+  progressTrack: { height: 3, width: "100%" },
+  progressFill: { height: "100%", borderRadius: 2 },
+  scroll: { paddingHorizontal: 24 },
+  topNav: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingTop: 16, marginBottom: 8 },
+  backBtn: { width: 36, height: 36, alignItems: "flex-start", justifyContent: "center" },
+  stepCounter: { fontSize: 13, fontFamily: "DM_Sans_400Regular" },
+  stepContent: { paddingTop: 16, gap: 20 },
+  stepTag: { fontSize: 12, fontFamily: "DM_Sans_600SemiBold", letterSpacing: 0.5, textTransform: "uppercase" },
+  stepHeading: { fontSize: 32, fontFamily: "DM_Sans_700Bold", lineHeight: 40, marginTop: -4 },
+  stepSubheading: { fontSize: 15, fontFamily: "DM_Sans_400Regular", lineHeight: 22, marginTop: -8 },
+  errorBanner: { flexDirection: "row", alignItems: "center", gap: 8, padding: 12, borderRadius: 10, borderWidth: 1 },
+  errorText: { flex: 1, fontSize: 14, fontFamily: "DM_Sans_400Regular", lineHeight: 20 },
+  fields: { gap: 16 },
+  fieldRow: { flexDirection: "row", gap: 12 },
+  field: { gap: 6 },
+  label: { fontSize: 14, fontFamily: "DM_Sans_500Medium" },
+  fieldError: { fontSize: 12, fontFamily: "DM_Sans_400Regular", lineHeight: 16 },
+  input: { height: 52, borderRadius: 12, borderWidth: 1, paddingHorizontal: 16, fontSize: 15 },
+  passwordWrapper: { height: 52, borderRadius: 12, borderWidth: 1, flexDirection: "row", alignItems: "center" },
   passwordInput: { flex: 1, height: "100%", paddingHorizontal: 16, fontSize: 15 },
   eyeBtn: { paddingHorizontal: 14 },
-  primaryBtn: { height: 50, borderRadius: 12, alignItems: "center", justifyContent: "center", marginTop: 4 },
-  primaryBtnText: { color: "#fff", fontSize: 16 },
+  primaryBtn: {
+    height: 54, borderRadius: 14, alignItems: "center", justifyContent: "center",
+    flexDirection: "row", gap: 8, marginTop: 4,
+  },
+  primaryBtnText: { color: "#fff", fontSize: 16, fontFamily: "DM_Sans_600SemiBold" },
+  skipBtn: { alignItems: "center", paddingVertical: 12 },
+  skipText: { fontSize: 14, fontFamily: "DM_Sans_400Regular" },
   footer: { flexDirection: "row", justifyContent: "center", alignItems: "center", marginTop: 28 },
-  footerText: { fontSize: 14 },
-  footerLink: { fontSize: 14 },
+  footerText: { fontSize: 14, fontFamily: "DM_Sans_400Regular" },
+  footerLink: { fontSize: 14, fontFamily: "DM_Sans_600SemiBold" },
 });

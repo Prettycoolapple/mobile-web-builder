@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import {
   View,
   Text,
@@ -9,6 +9,8 @@ import {
   Platform,
   ActivityIndicator,
   ScrollView,
+  Animated,
+  useWindowDimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -59,13 +61,14 @@ const YEARS_OPTIONS = [
   { label: "10+ years", value: 10 },
 ];
 
+const TOTAL_STEPS = 4;
+
 interface FieldErrors {
   firstName?: string;
   lastName?: string;
   email?: string;
   password?: string;
   confirmPassword?: string;
-  agencyDetails?: string;
 }
 
 export default function SignupAgentScreen() {
@@ -73,6 +76,7 @@ export default function SignupAgentScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { signUp } = useAuth();
+  const { width: SCREEN_W } = useWindowDimensions();
 
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -90,35 +94,54 @@ export default function SignupAgentScreen() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
 
-  const validate = (): boolean => {
+  const [step, setStep] = useState(0);
+  const slideAnim = useRef(new Animated.Value(0)).current;
+
+  const slide = (nextStep: number, direction: 1 | -1) => {
+    Animated.timing(slideAnim, {
+      toValue: -direction * SCREEN_W,
+      duration: 260,
+      useNativeDriver: true,
+    }).start(() => {
+      slideAnim.setValue(direction * SCREEN_W);
+      setStep(nextStep);
+      Animated.timing(slideAnim, {
+        toValue: 0,
+        duration: 260,
+        useNativeDriver: true,
+      }).start();
+    });
+  };
+
+  const validateStep = (): boolean => {
     const errors: FieldErrors = {};
-    if (!firstName.trim()) errors.firstName = "First name is required.";
-    if (!lastName.trim()) errors.lastName = "Last name is required.";
-    if (!email.trim()) {
-      errors.email = "Email is required.";
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      errors.email = "Enter a valid email address.";
-    }
-    if (!password) {
-      errors.password = "Password is required.";
-    } else if (password.length < 8) {
-      errors.password = "Password must be at least 8 characters.";
-    }
-    if (!confirmPassword) {
-      errors.confirmPassword = "Please confirm your password.";
-    } else if (password !== confirmPassword) {
-      errors.confirmPassword = "Passwords do not match.";
-    }
-    if (!agencyName.trim() && !reaaNumber.trim()) {
-      errors.agencyDetails = "Please provide at least your agency / company name or REAA licence number.";
+    if (step === 0) {
+      if (!firstName.trim()) errors.firstName = "First name is required.";
+      if (!lastName.trim()) errors.lastName = "Last name is required.";
+    } else if (step === 1) {
+      if (!email.trim()) errors.email = "Email is required.";
+      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) errors.email = "Enter a valid email address.";
+      if (!password) errors.password = "Password is required.";
+      else if (password.length < 8) errors.password = "Password must be at least 8 characters.";
+      if (!confirmPassword) errors.confirmPassword = "Please confirm your password.";
+      else if (password !== confirmPassword) errors.confirmPassword = "Passwords do not match.";
     }
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
   };
 
+  const goNext = () => {
+    if (!validateStep()) return;
+    slide(step + 1, 1);
+  };
+
+  const goBack = () => {
+    if (step === 0) { router.back(); return; }
+    slide(step - 1, -1);
+  };
+
   const handleSignup = async () => {
     setSubmitError(null);
-    if (!validate()) return;
     setIsLoading(true);
     try {
       await signUp({
@@ -142,17 +165,15 @@ export default function SignupAgentScreen() {
         const mapped: FieldErrors = {};
         for (const issue of err.details) {
           const key = issue.path[0];
-          const nested = issue.path[1];
           if (key === "firstName") mapped.firstName = issue.message;
           else if (key === "lastName") mapped.lastName = issue.message;
           else if (key === "email") mapped.email = issue.message;
           else if (key === "password") mapped.password = issue.message;
-          else if (key === "agentData" && (nested === "agencyName" || nested === "reaaLicenceNumber")) {
-            mapped.agencyDetails = issue.message;
-          }
         }
         if (Object.keys(mapped).length > 0) {
           setFieldErrors(mapped);
+          if (mapped.email || mapped.password) setStep(1);
+          else if (mapped.firstName || mapped.lastName) setStep(0);
           return;
         }
       }
@@ -162,7 +183,7 @@ export default function SignupAgentScreen() {
     }
   };
 
-  const inputStyle = (field: keyof FieldErrors) => [
+  const inputBase = (field: keyof FieldErrors) => [
     styles.input,
     {
       backgroundColor: colors.card,
@@ -172,76 +193,81 @@ export default function SignupAgentScreen() {
     },
   ];
 
-  return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
-        <ScrollView
-          contentContainerStyle={[styles.content, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 32 }]}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-            <Feather name="arrow-left" size={22} color={colors.foreground} />
-          </TouchableOpacity>
+  const ACCENT = "#D97757";
 
-          <View style={[styles.roleTag, { backgroundColor: colors.accent + "15" }]}>
-            <Feather name="briefcase" size={14} color={colors.accent} />
-            <Text style={[styles.roleTagText, { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" }]}>
-              Sales Agent
-            </Text>
+  const renderStep = () => {
+    if (step === 0) {
+      return (
+        <View style={styles.stepContent}>
+          <Text style={[styles.stepTag, { color: ACCENT }]}>Sales Agent · $99/mo</Text>
+          <Text style={[styles.stepHeading, { color: colors.foreground }]}>
+            What should{"\n"}we call you?
+          </Text>
+          <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
+            Welcome to Lecorb for sales agents.
+          </Text>
+
+          <View style={styles.fieldRow}>
+            <View style={[styles.field, { flex: 1 }]}>
+              <Text style={[styles.label, { color: colors.foreground }]}>First name</Text>
+              <TextInput
+                style={inputBase("firstName")}
+                placeholder="Jane"
+                placeholderTextColor={colors.mutedForeground}
+                value={firstName}
+                onChangeText={(v) => { setFirstName(v); if (fieldErrors.firstName) setFieldErrors((p) => ({ ...p, firstName: undefined })); }}
+                autoCapitalize="words"
+                returnKeyType="next"
+              />
+              {fieldErrors.firstName && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.firstName}</Text>}
+            </View>
+            <View style={[styles.field, { flex: 1 }]}>
+              <Text style={[styles.label, { color: colors.foreground }]}>Last name</Text>
+              <TextInput
+                style={inputBase("lastName")}
+                placeholder="Smith"
+                placeholderTextColor={colors.mutedForeground}
+                value={lastName}
+                onChangeText={(v) => { setLastName(v); if (fieldErrors.lastName) setFieldErrors((p) => ({ ...p, lastName: undefined })); }}
+                autoCapitalize="words"
+                returnKeyType="done"
+                onSubmitEditing={goNext}
+              />
+              {fieldErrors.lastName && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.lastName}</Text>}
+            </View>
           </View>
 
-          <Text style={[styles.heading, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
-            Agent registration
+          <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: ACCENT }]} onPress={goNext} activeOpacity={0.85}>
+            <Text style={styles.primaryBtnText}>Continue</Text>
+            <Feather name="arrow-right" size={18} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    if (step === 1) {
+      return (
+        <View style={styles.stepContent}>
+          <Text style={[styles.stepTag, { color: ACCENT }]}>Sales Agent · $99/mo</Text>
+          <Text style={[styles.stepHeading, { color: colors.foreground }]}>
+            Create your{"\n"}login
           </Text>
-          <Text style={[styles.subheading, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-            $99/month · 14-day free trial
+          <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
+            Your email and a secure password.
           </Text>
 
           {submitError && (
             <View style={[styles.errorBanner, { backgroundColor: colors.danger + "18", borderColor: colors.danger + "40" }]}>
               <Feather name="alert-circle" size={15} color={colors.danger} />
-              <Text style={[styles.errorText, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>{submitError}</Text>
+              <Text style={[styles.errorText, { color: colors.danger }]}>{submitError}</Text>
             </View>
           )}
 
-          <SectionHeader label="Personal details" colors={colors} />
-          <View style={styles.form}>
-            <View style={styles.row}>
-              <View style={[styles.field, { flex: 1 }]}>
-                <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>First name *</Text>
-                <TextInput
-                  style={inputStyle("firstName")}
-                  placeholder="Jane"
-                  placeholderTextColor={colors.mutedForeground}
-                  value={firstName}
-                  onChangeText={(v) => { setFirstName(v); if (fieldErrors.firstName) setFieldErrors((p) => ({ ...p, firstName: undefined })); }}
-                  autoCapitalize="words"
-                />
-                {fieldErrors.firstName && (
-                  <Text style={[styles.fieldError, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>{fieldErrors.firstName}</Text>
-                )}
-              </View>
-              <View style={[styles.field, { flex: 1 }]}>
-                <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>Last name *</Text>
-                <TextInput
-                  style={inputStyle("lastName")}
-                  placeholder="Smith"
-                  placeholderTextColor={colors.mutedForeground}
-                  value={lastName}
-                  onChangeText={(v) => { setLastName(v); if (fieldErrors.lastName) setFieldErrors((p) => ({ ...p, lastName: undefined })); }}
-                  autoCapitalize="words"
-                />
-                {fieldErrors.lastName && (
-                  <Text style={[styles.fieldError, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>{fieldErrors.lastName}</Text>
-                )}
-              </View>
-            </View>
-
+          <View style={styles.fields}>
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>Email *</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>Email address</Text>
               <TextInput
-                style={inputStyle("email")}
+                style={inputBase("email")}
                 placeholder="you@example.com"
                 placeholderTextColor={colors.mutedForeground}
                 value={email}
@@ -249,18 +275,14 @@ export default function SignupAgentScreen() {
                 autoCapitalize="none"
                 keyboardType="email-address"
                 autoComplete="email"
+                returnKeyType="next"
               />
-              {fieldErrors.email && (
-                <Text style={[styles.fieldError, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>{fieldErrors.email}</Text>
-              )}
+              {fieldErrors.email && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.email}</Text>}
             </View>
 
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>Password *</Text>
-              <View style={[
-                styles.passwordWrapper,
-                { backgroundColor: colors.card, borderColor: fieldErrors.password ? colors.danger : colors.border },
-              ]}>
+              <Text style={[styles.label, { color: colors.foreground }]}>Password</Text>
+              <View style={[styles.passwordWrapper, { backgroundColor: colors.card, borderColor: fieldErrors.password ? colors.danger : colors.border }]}>
                 <TextInput
                   style={[styles.passwordInput, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
                   placeholder="At least 8 characters"
@@ -269,95 +291,96 @@ export default function SignupAgentScreen() {
                   onChangeText={(v) => { setPassword(v); if (fieldErrors.password) setFieldErrors((p) => ({ ...p, password: undefined })); }}
                   secureTextEntry={!showPassword}
                   autoComplete="password-new"
+                  returnKeyType="next"
                 />
                 <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeBtn}>
                   <Feather name={showPassword ? "eye-off" : "eye"} size={18} color={colors.mutedForeground} />
                 </TouchableOpacity>
               </View>
-              {fieldErrors.password && (
-                <Text style={[styles.fieldError, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>{fieldErrors.password}</Text>
-              )}
+              {fieldErrors.password && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.password}</Text>}
             </View>
 
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>Confirm password *</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>Confirm password</Text>
               <TextInput
-                style={inputStyle("confirmPassword")}
+                style={inputBase("confirmPassword")}
                 placeholder="Re-enter your password"
                 placeholderTextColor={colors.mutedForeground}
                 value={confirmPassword}
                 onChangeText={(v) => { setConfirmPassword(v); if (fieldErrors.confirmPassword) setFieldErrors((p) => ({ ...p, confirmPassword: undefined })); }}
                 secureTextEntry={!showPassword}
                 autoComplete="password-new"
+                returnKeyType="done"
+                onSubmitEditing={goNext}
               />
-              {fieldErrors.confirmPassword && (
-                <Text style={[styles.fieldError, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>{fieldErrors.confirmPassword}</Text>
-              )}
+              {fieldErrors.confirmPassword && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.confirmPassword}</Text>}
             </View>
           </View>
 
-          <SectionHeader label="Agency details" colors={colors} />
-          <View style={styles.form}>
+          <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: ACCENT }]} onPress={goNext} activeOpacity={0.85}>
+            <Text style={styles.primaryBtnText}>Continue</Text>
+            <Feather name="arrow-right" size={18} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    if (step === 2) {
+      return (
+        <View style={styles.stepContent}>
+          <Text style={[styles.stepTag, { color: ACCENT }]}>Sales Agent · $99/mo</Text>
+          <Text style={[styles.stepHeading, { color: colors.foreground }]}>
+            Your agency
+          </Text>
+          <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
+            Tell us where you work. Helps clients find and trust you.
+          </Text>
+
+          <View style={styles.fields}>
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                Agency / company name <Text style={{ color: colors.mutedForeground }}>(optional)</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>
+                Agency / company name{" "}
+                <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }}>(optional)</Text>
               </Text>
               <TextInput
                 style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
                 placeholder="Harcourts, Ray White, etc."
                 placeholderTextColor={colors.mutedForeground}
                 value={agencyName}
-                onChangeText={(v) => {
-                  setAgencyName(v);
-                  if (fieldErrors.agencyDetails) setFieldErrors((p) => ({ ...p, agencyDetails: undefined }));
-                }}
+                onChangeText={setAgencyName}
               />
             </View>
 
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                REAA licence number <Text style={{ color: colors.mutedForeground }}>(optional)</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>
+                REAA licence number{" "}
+                <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }}>(optional)</Text>
               </Text>
               <TextInput
-                style={[
-                  styles.input,
-                  {
-                    backgroundColor: colors.card,
-                    borderColor: fieldErrors.agencyDetails ? colors.danger : colors.border,
-                    color: colors.foreground,
-                    fontFamily: "DM_Sans_400Regular",
-                  },
-                ]}
+                style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
                 placeholder="e.g. 12345678"
                 placeholderTextColor={colors.mutedForeground}
                 value={reaaNumber}
-                onChangeText={(v) => {
-                  setReaaNumber(v);
-                  if (fieldErrors.agencyDetails) setFieldErrors((p) => ({ ...p, agencyDetails: undefined }));
-                }}
+                onChangeText={setReaaNumber}
                 keyboardType="number-pad"
               />
-              {fieldErrors.agencyDetails && (
-                <Text style={[styles.fieldError, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>
-                  {fieldErrors.agencyDetails}
-                </Text>
-              )}
             </View>
 
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                Years of experience <Text style={{ color: colors.mutedForeground }}>(optional)</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>
+                Years of experience{" "}
+                <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }}>(optional)</Text>
               </Text>
               <View style={styles.optionRow}>
                 {YEARS_OPTIONS.map((opt) => (
                   <TouchableOpacity
                     key={opt.value}
-                    onPress={() => setYearsExp(opt.value)}
+                    onPress={() => setYearsExp(yearsExp === opt.value ? null : opt.value)}
                     style={[
                       styles.optionBtn,
                       {
-                        backgroundColor: yearsExp === opt.value ? colors.accent : colors.card,
-                        borderColor: yearsExp === opt.value ? colors.accent : colors.border,
+                        backgroundColor: yearsExp === opt.value ? ACCENT : colors.card,
+                        borderColor: yearsExp === opt.value ? ACCENT : colors.border,
                       },
                     ]}
                   >
@@ -371,96 +394,155 @@ export default function SignupAgentScreen() {
                 ))}
               </View>
             </View>
-
-            <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                Regions covered <Text style={{ color: colors.mutedForeground }}>(optional)</Text>
-              </Text>
-              <MultiSelectChips options={REGION_OPTIONS} selected={regions} onChange={setRegions} />
-            </View>
-
-            <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                Property types <Text style={{ color: colors.mutedForeground }}>(optional)</Text>
-              </Text>
-              <MultiSelectChips options={PROPERTY_TYPE_OPTIONS} selected={propertyTypes} onChange={setPropertyTypes} />
-            </View>
-
-            <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                Languages spoken <Text style={{ color: colors.mutedForeground }}>(optional)</Text>
-              </Text>
-              <MultiSelectChips options={LANGUAGE_OPTIONS} selected={languages} onChange={setLanguages} />
-            </View>
-
-            <TouchableOpacity
-              style={[styles.primaryBtn, { backgroundColor: colors.accent, opacity: isLoading ? 0.7 : 1 }]}
-              onPress={handleSignup}
-              disabled={isLoading}
-              activeOpacity={0.8}
-            >
-              {isLoading ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Text style={[styles.primaryBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>Create account</Text>
-              )}
-            </TouchableOpacity>
           </View>
 
-          <View style={styles.footer}>
-            <Text style={[styles.footerText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-              Already have an account?{" "}
-            </Text>
-            <TouchableOpacity onPress={() => router.push("/(auth)/login")}>
-              <Text style={[styles.footerLink, { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" }]}>Sign in</Text>
-            </TouchableOpacity>
+          <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: ACCENT }]} onPress={goNext} activeOpacity={0.85}>
+            <Text style={styles.primaryBtnText}>Continue</Text>
+            <Feather name="arrow-right" size={18} color="#fff" />
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.skipBtn} onPress={goNext}>
+            <Text style={[styles.skipText, { color: colors.mutedForeground }]}>Skip this step</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.stepContent}>
+        <Text style={[styles.stepTag, { color: ACCENT }]}>Sales Agent · $99/mo</Text>
+        <Text style={[styles.stepHeading, { color: colors.foreground }]}>
+          Where do{"\n"}you operate?
+        </Text>
+        <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
+          Help developers find you. All fields optional.
+        </Text>
+
+        {submitError && (
+          <View style={[styles.errorBanner, { backgroundColor: colors.danger + "18", borderColor: colors.danger + "40" }]}>
+            <Feather name="alert-circle" size={15} color={colors.danger} />
+            <Text style={[styles.errorText, { color: colors.danger }]}>{submitError}</Text>
           </View>
-        </ScrollView>
+        )}
+
+        <View style={styles.fields}>
+          <View style={styles.field}>
+            <Text style={[styles.label, { color: colors.foreground }]}>Regions covered</Text>
+            <MultiSelectChips options={REGION_OPTIONS} selected={regions} onChange={setRegions} />
+          </View>
+
+          <View style={styles.field}>
+            <Text style={[styles.label, { color: colors.foreground }]}>Property types</Text>
+            <MultiSelectChips options={PROPERTY_TYPE_OPTIONS} selected={propertyTypes} onChange={setPropertyTypes} />
+          </View>
+
+          <View style={styles.field}>
+            <Text style={[styles.label, { color: colors.foreground }]}>Languages spoken</Text>
+            <MultiSelectChips options={LANGUAGE_OPTIONS} selected={languages} onChange={setLanguages} />
+          </View>
+        </View>
+
+        <TouchableOpacity
+          style={[styles.primaryBtn, { backgroundColor: ACCENT, opacity: isLoading ? 0.7 : 1 }]}
+          onPress={handleSignup}
+          disabled={isLoading}
+          activeOpacity={0.85}
+        >
+          {isLoading ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <>
+              <Text style={styles.primaryBtnText}>Create account</Text>
+              <Feather name="check" size={18} color="#fff" />
+            </>
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.skipBtn} onPress={handleSignup} disabled={isLoading}>
+          <Text style={[styles.skipText, { color: colors.mutedForeground }]}>Skip this step</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
+  return (
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <View style={[styles.progressTrack, { marginTop: insets.top, backgroundColor: colors.border }]}>
+        <View
+          style={[
+            styles.progressFill,
+            { width: `${Math.round(((step + 1) / TOTAL_STEPS) * 100)}%`, backgroundColor: ACCENT },
+          ]}
+        />
+      </View>
+
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+        <Animated.View style={[{ flex: 1 }, { transform: [{ translateX: slideAnim }] }]}>
+          <ScrollView
+            contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 32 }]}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={styles.topNav}>
+              <TouchableOpacity onPress={goBack} style={styles.backBtn}>
+                <Feather name="arrow-left" size={22} color={colors.foreground} />
+              </TouchableOpacity>
+              <Text style={[styles.stepCounter, { color: colors.mutedForeground }]}>
+                {step + 1} / {TOTAL_STEPS}
+              </Text>
+            </View>
+
+            {renderStep()}
+
+            <View style={styles.footer}>
+              <Text style={[styles.footerText, { color: colors.mutedForeground }]}>
+                Already have an account?{" "}
+              </Text>
+              <TouchableOpacity onPress={() => router.push("/(auth)/login")}>
+                <Text style={[styles.footerLink, { color: ACCENT }]}>Sign in</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </Animated.View>
       </KeyboardAvoidingView>
     </View>
   );
 }
 
-function SectionHeader({ label, colors }: { label: string; colors: ReturnType<typeof useColors> }) {
-  return (
-    <View style={[sectionStyles.header, { borderBottomColor: colors.border }]}>
-      <Text style={[sectionStyles.label, { color: colors.mutedForeground, fontFamily: "DM_Sans_600SemiBold" }]}>
-        {label.toUpperCase()}
-      </Text>
-    </View>
-  );
-}
-
-const sectionStyles = StyleSheet.create({
-  header: { borderBottomWidth: 1, paddingBottom: 10, marginTop: 24, marginBottom: 16 },
-  label: { fontSize: 11, letterSpacing: 0.8 },
-});
-
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  content: { paddingHorizontal: 24 },
-  backBtn: { marginBottom: 20, width: 36 },
-  roleTag: { flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start", paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, marginBottom: 16 },
-  roleTagText: { fontSize: 13 },
-  heading: { fontSize: 26, marginBottom: 6 },
-  subheading: { fontSize: 14, marginBottom: 24, lineHeight: 20 },
-  errorBanner: { flexDirection: "row", alignItems: "center", gap: 8, padding: 12, borderRadius: 10, borderWidth: 1, marginBottom: 16 },
-  errorText: { flex: 1, fontSize: 14, lineHeight: 20 },
-  form: { gap: 16 },
-  row: { flexDirection: "row", gap: 12 },
-  field: { gap: 5 },
-  label: { fontSize: 14 },
-  fieldError: { fontSize: 12, lineHeight: 16 },
-  input: { height: 48, borderRadius: 12, borderWidth: 1, paddingHorizontal: 16, fontSize: 15 },
-  passwordWrapper: { height: 48, borderRadius: 12, borderWidth: 1, flexDirection: "row", alignItems: "center" },
+  progressTrack: { height: 3, width: "100%" },
+  progressFill: { height: "100%", borderRadius: 2 },
+  scroll: { paddingHorizontal: 24 },
+  topNav: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingTop: 16, marginBottom: 8 },
+  backBtn: { width: 36, height: 36, alignItems: "flex-start", justifyContent: "center" },
+  stepCounter: { fontSize: 13, fontFamily: "DM_Sans_400Regular" },
+  stepContent: { paddingTop: 16, gap: 20 },
+  stepTag: { fontSize: 12, fontFamily: "DM_Sans_600SemiBold", letterSpacing: 0.5, textTransform: "uppercase" },
+  stepHeading: { fontSize: 32, fontFamily: "DM_Sans_700Bold", lineHeight: 40, marginTop: -4 },
+  stepSubheading: { fontSize: 15, fontFamily: "DM_Sans_400Regular", lineHeight: 22, marginTop: -8 },
+  errorBanner: { flexDirection: "row", alignItems: "center", gap: 8, padding: 12, borderRadius: 10, borderWidth: 1 },
+  errorText: { flex: 1, fontSize: 14, fontFamily: "DM_Sans_400Regular", lineHeight: 20 },
+  fields: { gap: 16 },
+  fieldRow: { flexDirection: "row", gap: 12 },
+  field: { gap: 6 },
+  label: { fontSize: 14, fontFamily: "DM_Sans_500Medium" },
+  fieldError: { fontSize: 12, fontFamily: "DM_Sans_400Regular", lineHeight: 16 },
+  input: { height: 52, borderRadius: 12, borderWidth: 1, paddingHorizontal: 16, fontSize: 15 },
+  passwordWrapper: { height: 52, borderRadius: 12, borderWidth: 1, flexDirection: "row", alignItems: "center" },
   passwordInput: { flex: 1, height: "100%", paddingHorizontal: 16, fontSize: 15 },
   eyeBtn: { paddingHorizontal: 14 },
   optionRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  optionBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1 },
+  optionBtn: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 20, borderWidth: 1 },
   optionText: { fontSize: 13 },
-  primaryBtn: { height: 50, borderRadius: 12, alignItems: "center", justifyContent: "center", marginTop: 8 },
-  primaryBtnText: { color: "#fff", fontSize: 16 },
+  primaryBtn: {
+    height: 54, borderRadius: 14, alignItems: "center", justifyContent: "center",
+    flexDirection: "row", gap: 8, marginTop: 4,
+  },
+  primaryBtnText: { color: "#fff", fontSize: 16, fontFamily: "DM_Sans_600SemiBold" },
+  skipBtn: { alignItems: "center", paddingVertical: 12 },
+  skipText: { fontSize: 14, fontFamily: "DM_Sans_400Regular" },
   footer: { flexDirection: "row", justifyContent: "center", alignItems: "center", marginTop: 28 },
-  footerText: { fontSize: 14 },
-  footerLink: { fontSize: 14 },
+  footerText: { fontSize: 14, fontFamily: "DM_Sans_400Regular" },
+  footerLink: { fontSize: 14, fontFamily: "DM_Sans_600SemiBold" },
 });
