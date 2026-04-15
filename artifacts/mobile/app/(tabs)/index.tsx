@@ -86,7 +86,7 @@ function GlassesLogo({ size = 40, color = "#D97757" }: { size?: number; color?: 
   );
 }
 
-export default function ChatScreen() {
+export default function SearchScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
