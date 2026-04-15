@@ -591,11 +591,32 @@ router.post("/chat", async (req, res) => {
           // proxy doesn't close the connection during the long pipeline + LLM run.
           // The client uses resp.json() which buffers the full body; JSON.parse
           // ignores leading whitespace so the injected spaces are harmless.
+          //
+          // IMPORTANT: once res.write() is called the HTTP headers are committed.
+          // After that, res.json() will crash with ERR_HTTP_HEADERS_SENT because
+          // it tries to re-set Content-Type. We track whether the heartbeat fired
+          // and use write+end instead of json() in that case.
           res.setHeader("Content-Type", "application/json");
           res.setHeader("X-Accel-Buffering", "no");
+          let heartbeatFired = false;
           const _heartbeat = setInterval(() => {
-            try { if (!res.writableEnded) res.write(" "); } catch { /* ignore */ }
+            try {
+              if (!res.writableEnded) { res.write(" "); heartbeatFired = true; }
+            } catch { /* ignore */ }
           }, 8_000);
+
+          // Helper: send the final JSON response safely regardless of whether
+          // the heartbeat has already committed the response headers.
+          const sendAnalyseResponse = (data: object) => {
+            clearInterval(_heartbeat);
+            if (res.writableEnded) return;
+            if (heartbeatFired) {
+              // Headers already committed — write body directly
+              try { res.write(JSON.stringify(data)); res.end(); } catch { /* ignore */ }
+            } else {
+              res.json(data);
+            }
+          };
 
           const pipelineResult = await runPropertyPipeline(extractedAddress).catch((err) => {
             req.log.warn({ err }, "Pipeline failed — falling back to AI-only analysis");
@@ -886,12 +907,19 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
               }
             }
 
-            clearInterval(_heartbeat);
-            res.json({ content, mode: "analyse" });
+            sendAnalyseResponse({ content, mode: "analyse" });
             return;
           }
-          // pipelineResult was null — clear heartbeat and fall through to AI-only path
-          clearInterval(_heartbeat);
+          // pipelineResult was null — generate AI-only response inside the heartbeat
+          // context so we can use sendAnalyseResponse (avoids ERR_HTTP_HEADERS_SENT
+          // if the heartbeat already committed the response headers).
+          try {
+            const { content: aiContent, mode: aiMode } = await generateUnifiedResponse(messages, currentReport, intent.mode);
+            sendAnalyseResponse({ content: aiContent, mode: aiMode });
+          } catch {
+            sendAnalyseResponse({ error: "Failed to generate reply. Please try again.", code: "CHAT_FAILED" });
+          }
+          return;
         }
 
       }
