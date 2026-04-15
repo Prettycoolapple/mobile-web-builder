@@ -6,15 +6,14 @@ import {
   StyleSheet,
   ScrollView,
   Animated,
-  Linking,
   ActivityIndicator,
   Alert,
 } from "react-native";
-import { useState } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { useAuth } from "@/context/AuthContext";
+import { useSubscription } from "@/lib/revenuecat";
 
 const BG = "#1E1610";
 const CARD_BG = "#261B12";
@@ -31,21 +30,15 @@ const FEATURES: { icon: React.ComponentProps<typeof Feather>["name"]; label: str
   { icon: "star", label: "Priority placement in AI recommendations" },
 ];
 
-function getApiBase(): string {
-  if (process.env["EXPO_PUBLIC_DOMAIN"]) {
-    return `https://${process.env["EXPO_PUBLIC_DOMAIN"]}/api`;
-  }
-  return "/api";
-}
-
 export default function SalesAgentWelcomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { user, getApiHeaders } = useAuth();
-  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const { user } = useAuth();
+  const { purchase, isPurchasing, isSubscribed, getPriceForRole, getPackageForRole } = useSubscription();
 
   const firstName = user?.fullName?.split(" ")[0] || "there";
-  const hasSubscription = user?.subscriptionTier && user.subscriptionTier !== "free";
+  const hasSubscription = isSubscribed || (user?.subscriptionTier && user.subscriptionTier !== "free");
+  const priceString = getPriceForRole("sales_agent");
 
   const heroAnim = useRef(new Animated.Value(0)).current;
   const cardAnim = useRef(new Animated.Value(0)).current;
@@ -67,22 +60,20 @@ export default function SalesAgentWelcomeScreen() {
   }, []);
 
   const handleSubscribe = async () => {
-    setCheckoutLoading(true);
     try {
-      const resp = await fetch(`${getApiBase()}/stripe/checkout`, {
-        method: "POST",
-        headers: getApiHeaders(),
-        body: JSON.stringify({ plan: "sales_agent" }),
-      });
-      const data = (await resp.json()) as { url?: string; error?: string };
-      if (!resp.ok || !data.url) {
-        throw new Error(data.error ?? "Could not start checkout. Please try again.");
+      const pkg = getPackageForRole("sales_agent");
+      if (!pkg) {
+        Alert.alert("Unavailable", "Subscription packages are not available right now. Please try again later.");
+        return;
       }
-      await Linking.openURL(data.url);
-    } catch (err) {
-      Alert.alert("Checkout failed", err instanceof Error ? err.message : "Please try again.");
-    } finally {
-      setCheckoutLoading(false);
+      await purchase(pkg);
+      router.replace("/(tabs)");
+    } catch (err: unknown) {
+      const message = (err as { message?: string; userCancelled?: boolean })?.message;
+      const userCancelled = (err as { userCancelled?: boolean })?.userCancelled;
+      if (!userCancelled) {
+        Alert.alert("Purchase failed", message ?? "Please try again.");
+      }
     }
   };
 
@@ -108,7 +99,7 @@ export default function SalesAgentWelcomeScreen() {
             <View>
               <Text style={styles.pricingPlan}>Sales Agent Plan</Text>
               <View style={styles.priceRow}>
-                <Text style={styles.priceAmount}>$99</Text>
+                <Text style={styles.priceAmount}>{priceString}</Text>
                 <Text style={styles.pricePer}>/month NZD</Text>
               </View>
             </View>
@@ -151,12 +142,12 @@ export default function SalesAgentWelcomeScreen() {
             </TouchableOpacity>
           ) : (
             <TouchableOpacity
-              style={[styles.primaryBtn, checkoutLoading && styles.primaryBtnDisabled]}
+              style={[styles.primaryBtn, isPurchasing && styles.primaryBtnDisabled]}
               onPress={handleSubscribe}
               activeOpacity={0.85}
-              disabled={checkoutLoading}
+              disabled={isPurchasing}
             >
-              {checkoutLoading ? (
+              {isPurchasing ? (
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
                 <>

@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from "react";
+import React, { useRef, useEffect } from "react";
 import {
   View,
   Text,
@@ -13,13 +13,7 @@ import {
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
-import {
-  getOfferings,
-  purchasePlan,
-  restorePurchases,
-  type PlanInfo,
-  type PlanType,
-} from "@/lib/revenuecat";
+import { useSubscription } from "@/lib/revenuecat";
 
 interface Props {
   visible: boolean;
@@ -45,19 +39,12 @@ function getApiBase(): string {
 export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
   const colors = useColors();
   const { getApiHeaders, refreshProfile } = useAuth();
+  const { purchase, restore, isPurchasing, isRestoring, getPackageForRole, getPriceForRole } = useSubscription();
   const slideAnim = useRef(new Animated.Value(400)).current;
   const overlayAnim = useRef(new Animated.Value(0)).current;
 
-  const [loading, setLoading] = useState(false);
-  const [restoring, setRestoring] = useState(false);
-  const [selectedPlan, setSelectedPlan] = useState<PlanType>("monthly");
-  const [plans, setPlans] = useState<PlanInfo[]>([]);
-  const [loadingPlans, setLoadingPlans] = useState(false);
-
   useEffect(() => {
     if (visible) {
-      setLoadingPlans(true);
-      getOfferings().then((p) => { setPlans(p); setLoadingPlans(false); });
       Animated.parallel([
         Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, damping: 22, stiffness: 220 }),
         Animated.timing(overlayAnim, { toValue: 1, duration: 200, useNativeDriver: true }),
@@ -83,35 +70,34 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
   };
 
   const handleUpgrade = async () => {
-    const plan = plans.find((p) => p.type === selectedPlan);
-    if (!plan?.pkg) {
+    const pkg = getPackageForRole("general");
+    if (!pkg) {
       Alert.alert(
         "Not available",
         "In-app purchases require the full app build. If you have already purchased, tap Restore.",
       );
       return;
     }
-    setLoading(true);
     try {
-      const isPro = await purchasePlan(plan.pkg);
-      if (isPro) {
-        await syncToBackend("pro");
-        onPurchaseSuccess?.();
-        onClose();
-        Alert.alert("Welcome to Standard!", "You now have 20 reports per month.");
+      await purchase(pkg);
+      await syncToBackend("pro");
+      onPurchaseSuccess?.();
+      onClose();
+      Alert.alert("Welcome to Standard!", "You now have 20 reports per month.");
+    } catch (err: unknown) {
+      const userCancelled = (err as { userCancelled?: boolean })?.userCancelled;
+      if (!userCancelled) {
+        const message = (err as { message?: string })?.message;
+        Alert.alert("Purchase failed", message ?? "Something went wrong. Please try again.");
       }
-    } catch (err: any) {
-      Alert.alert("Purchase failed", err?.message ?? "Something went wrong. Please try again.");
-    } finally {
-      setLoading(false);
     }
   };
 
   const handleRestore = async () => {
-    setRestoring(true);
     try {
-      const isPro = await restorePurchases();
-      if (isPro) {
+      const info = await restore();
+      const isActive = info?.entitlements?.active?.["Pro"] !== undefined;
+      if (isActive) {
         await syncToBackend("pro");
         onPurchaseSuccess?.();
         onClose();
@@ -121,10 +107,10 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
       }
     } catch {
       Alert.alert("Restore failed", "Could not restore purchases. Please try again.");
-    } finally {
-      setRestoring(false);
     }
   };
+
+  const priceString = getPriceForRole("general");
 
   if (!visible) return null;
 
@@ -157,62 +143,25 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
             ))}
           </View>
 
-          {loadingPlans ? (
-            <ActivityIndicator size="small" color={colors.accent} style={{ marginVertical: 12 }} />
-          ) : (
-            <View style={styles.plansRow}>
-              {(plans.length > 0 ? plans : [
-                { type: "monthly" as PlanType, label: "Monthly", priceString: "—/mo", description: "Billed monthly", pkg: null },
-                { type: "yearly" as PlanType,  label: "Yearly",  priceString: "—/yr", description: "Save ~40%",       pkg: null },
-                { type: "lifetime" as PlanType,label: "Lifetime",priceString: "Once", description: "Forever",         pkg: null },
-              ]).map((plan) => {
-                const isSelected = selectedPlan === plan.type;
-                return (
-                  <TouchableOpacity
-                    key={plan.type}
-                    style={[
-                      styles.planCard,
-                      {
-                        borderColor: isSelected ? colors.accent : colors.border,
-                        backgroundColor: isSelected ? colors.accent + "10" : colors.background,
-                        borderWidth: isSelected ? 2 : 1,
-                      },
-                    ]}
-                    onPress={() => setSelectedPlan(plan.type)}
-                    activeOpacity={0.8}
-                  >
-                    {plan.type === "yearly" && (
-                      <View style={[styles.bestBadge, { backgroundColor: colors.accent }]}>
-                        <Text style={[styles.bestBadgeText, { fontFamily: "DM_Sans_700Bold" }]}>BEST</Text>
-                      </View>
-                    )}
-                    <Text style={[styles.planLabel, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>
-                      {plan.label}
-                    </Text>
-                    <Text style={[styles.planPrice, { color: isSelected ? colors.accent : colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
-                      {plan.priceString}
-                    </Text>
-                    <Text style={[styles.planDesc, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                      {plan.description}
-                    </Text>
-                    {isSelected && (
-                      <View style={[styles.checkMark, { backgroundColor: colors.accent }]}>
-                        <Feather name="check" size={10} color="#fff" />
-                      </View>
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          )}
+          <View style={[styles.planCard, { borderColor: colors.accent, backgroundColor: colors.accent + "10", borderWidth: 2, alignSelf: "stretch" }]}>
+            <Text style={[styles.planLabel, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>
+              Standard Monthly
+            </Text>
+            <Text style={[styles.planPrice, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
+              {priceString}
+            </Text>
+            <Text style={[styles.planDesc, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+              Billed monthly · Cancel anytime
+            </Text>
+          </View>
 
           <TouchableOpacity
-            style={[styles.upgradeBtn, { backgroundColor: loading ? colors.accent + "80" : colors.accent }]}
+            style={[styles.upgradeBtn, { backgroundColor: isPurchasing ? colors.accent + "80" : colors.accent }]}
             onPress={handleUpgrade}
             activeOpacity={0.85}
-            disabled={loading || restoring}
+            disabled={isPurchasing || isRestoring}
           >
-            {loading
+            {isPurchasing
               ? <ActivityIndicator size="small" color="#fff" />
               : <>
                   <Text style={[styles.upgradeBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>
@@ -227,10 +176,10 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
             onPress={handleRestore}
             style={styles.restoreBtn}
             activeOpacity={0.7}
-            disabled={loading || restoring}
+            disabled={isPurchasing || isRestoring}
           >
             <Text style={[styles.restoreText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-              {restoring ? "Restoring…" : "Restore purchases"}
+              {isRestoring ? "Restoring…" : "Restore purchases"}
             </Text>
           </TouchableOpacity>
 

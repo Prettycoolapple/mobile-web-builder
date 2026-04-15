@@ -16,7 +16,7 @@ import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { useChat, FeasibilityReport } from "@/context/ChatContext";
-import { getSubscriptionStatus, restorePurchases, purchasePro } from "@/lib/revenuecat";
+import { useSubscription } from "@/lib/revenuecat";
 
 const FREE_LIMIT = 2;
 const STANDARD_LIMIT = 20;
@@ -47,8 +47,8 @@ const PLAN_FEATURES = {
   ],
 };
 
-const AGENT_PLAN_PRICE = "$59.99";
-const PROVIDER_PLAN_PRICE = "$39.99";
+const AGENT_PLAN_PRICE = "$99.00";
+const PROVIDER_PLAN_PRICE = "$149.00";
 
 type SearchSummary = {
   id: string;
@@ -169,6 +169,7 @@ export default function ProfileScreen() {
   const router = useRouter();
   const { sessions, openHistoryReport } = useChat();
 
+  const { purchase, restore, isPurchasing, isRestoring, isSubscribed, getPackageForRole, getPriceForRole } = useSubscription();
   const [upgradeLoading, setUpgradeLoading] = useState(false);
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [historySearches, setHistorySearches] = useState<SearchSummary[]>([]);
@@ -222,45 +223,49 @@ export default function ProfileScreen() {
   }, [getApiHeaders, refreshProfile]);
 
   useEffect(() => {
-    async function checkRevenueCat() {
-      const isPro = await getSubscriptionStatus();
-      if (isPro) {
-        await syncToBackend("pro");
-      }
+    if (isSubscribed) {
+      syncToBackend("pro");
     }
-    checkRevenueCat();
-  }, []);
+  }, [isSubscribed]);
 
   const role = user?.role ?? "general";
 
   const handleUpgrade = useCallback(async () => {
     setUpgradeLoading(true);
     try {
-      const success = await purchasePro();
-      if (success) {
-        await syncToBackend("pro");
-        if (role === "sales_agent") {
-          Alert.alert("Agent Pro activated!", "You now have full access to your Agent Pro plan.");
-        } else if (role === "service_provider") {
-          Alert.alert("Provider Pro activated!", "Your profile is now visible to developers.");
-        } else {
-          Alert.alert("Welcome to Standard!", `You now have ${STANDARD_LIMIT} reports per month.`);
-        }
+      const pkg = getPackageForRole(role);
+      if (!pkg) {
+        Alert.alert("Unavailable", "Subscription packages are not available right now. Please try again later.");
+        return;
       }
-    } catch (err: any) {
-      Alert.alert("Purchase failed", err?.message ?? "Something went wrong. Please try again.");
+      await purchase(pkg);
+      await syncToBackend("pro");
+      if (role === "sales_agent") {
+        Alert.alert("Agent Pro activated!", "You now have full access to your Agent Pro plan.");
+      } else if (role === "service_provider") {
+        Alert.alert("Provider Pro activated!", "Your profile is now visible to developers.");
+      } else {
+        Alert.alert("Welcome to Standard!", `You now have ${STANDARD_LIMIT} reports per month.`);
+      }
+    } catch (err: unknown) {
+      const userCancelled = (err as { userCancelled?: boolean })?.userCancelled;
+      if (!userCancelled) {
+        const message = (err as { message?: string })?.message;
+        Alert.alert("Purchase failed", message ?? "Something went wrong. Please try again.");
+      }
     } finally {
       setUpgradeLoading(false);
     }
-  }, [syncToBackend, role]);
+  }, [syncToBackend, role, purchase, getPackageForRole]);
 
   const handleRestore = useCallback(async () => {
     setRestoreLoading(true);
     try {
-      const success = await restorePurchases();
-      if (success) {
+      const info = await restore();
+      const isActive = info?.entitlements?.active?.["Pro"] !== undefined;
+      if (isActive) {
         await syncToBackend("pro");
-        Alert.alert("Purchases restored", "Your Standard subscription is active.");
+        Alert.alert("Purchases restored", "Your subscription is now active.");
       } else {
         Alert.alert("No purchases found", "No active subscription was found.");
       }
@@ -269,7 +274,7 @@ export default function ProfileScreen() {
     } finally {
       setRestoreLoading(false);
     }
-  }, [syncToBackend]);
+  }, [syncToBackend, restore]);
 
   const handleManageSubscription = useCallback(() => {
     if (Platform.OS === "ios") {
@@ -668,7 +673,7 @@ export default function ProfileScreen() {
                     Agent Pro Plan
                   </Text>
                   <View style={styles.priceRow}>
-                    <Text style={[styles.price, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>{AGENT_PLAN_PRICE}</Text>
+                    <Text style={[styles.price, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>{getPriceForRole("sales_agent")}</Text>
                     <Text style={[styles.pricePer, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
                       /mo NZD
                     </Text>
@@ -729,7 +734,7 @@ export default function ProfileScreen() {
                     Provider Pro Plan
                   </Text>
                   <View style={styles.priceRow}>
-                    <Text style={[styles.price, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>{PROVIDER_PLAN_PRICE}</Text>
+                    <Text style={[styles.price, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>{getPriceForRole("service_provider")}</Text>
                     <Text style={[styles.pricePer, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
                       /mo NZD
                     </Text>

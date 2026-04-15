@@ -1,139 +1,112 @@
+import React, { createContext, useContext } from "react";
 import { Platform } from "react-native";
+import Purchases from "react-native-purchases";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import Constants from "expo-constants";
 
-const ENTITLEMENT_ID = "Pro";
+const REVENUECAT_TEST_API_KEY = process.env.EXPO_PUBLIC_REVENUECAT_TEST_API_KEY;
+const REVENUECAT_IOS_API_KEY = process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY;
+const REVENUECAT_ANDROID_API_KEY = process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY;
 
-let Purchases: any = null;
+export const REVENUECAT_ENTITLEMENT_ID = "Pro";
 
-function getPurchases(): any | null {
-  if (Purchases) return Purchases;
-  try {
-    Purchases = require("react-native-purchases").default;
-    return Purchases;
-  } catch {
-    return null;
-  }
-}
-
-export async function initRevenueCat(userId: string): Promise<void> {
-  const rc = getPurchases();
-  if (!rc) return;
-
-  const appleKey = process.env["EXPO_PUBLIC_REVENUECAT_APPLE_KEY"];
-  const googleKey = process.env["EXPO_PUBLIC_REVENUECAT_GOOGLE_KEY"];
-  const apiKey = Platform.OS === "ios" ? appleKey : googleKey;
-
-  if (!apiKey) return;
-
-  try {
-    await rc.configure({ apiKey, appUserID: userId });
-  } catch {
-  }
-}
-
-export type PlanType = "monthly" | "yearly" | "lifetime";
-
-export interface PlanInfo {
-  type: PlanType;
-  label: string;
-  priceString: string;
-  description: string;
-  pkg: any | null;
-}
-
-const PLAN_FALLBACKS: Record<PlanType, { label: string; priceString: string; description: string }> = {
-  monthly: { label: "Monthly", priceString: "—/mo", description: "Billed monthly" },
-  yearly:  { label: "Yearly",  priceString: "—/yr", description: "Best value · Save ~40%" },
-  lifetime:{ label: "Lifetime",priceString: "Once", description: "Pay once, access forever" },
+export const OFFERING_BY_ROLE: Record<string, string> = {
+  general: "default",
+  sales_agent: "agent",
+  service_provider: "provider",
 };
 
-export async function getOfferings(): Promise<PlanInfo[]> {
-  const rc = getPurchases();
+function getRevenueCatApiKey(): string {
+  if (!REVENUECAT_TEST_API_KEY || !REVENUECAT_IOS_API_KEY || !REVENUECAT_ANDROID_API_KEY) {
+    throw new Error("RevenueCat API keys not configured");
+  }
+  if (__DEV__ || Platform.OS === "web" || Constants.executionEnvironment === "storeClient") {
+    return REVENUECAT_TEST_API_KEY;
+  }
+  if (Platform.OS === "ios") return REVENUECAT_IOS_API_KEY;
+  if (Platform.OS === "android") return REVENUECAT_ANDROID_API_KEY;
+  return REVENUECAT_TEST_API_KEY;
+}
 
-  const buildFallbacks = (): PlanInfo[] =>
-    (["monthly", "yearly", "lifetime"] as PlanType[]).map((type) => ({
-      type,
-      ...PLAN_FALLBACKS[type],
-      pkg: null,
-    }));
-
-  if (!rc) return buildFallbacks();
-
+export function initializeRevenueCat(): void {
   try {
-    const offerings = await rc.getOfferings();
-    const current = offerings.current;
-    if (!current) return buildFallbacks();
-
-    const map: Record<PlanType, any> = {
-      monthly:  current.monthly  ?? null,
-      yearly:   current.annual   ?? null,
-      lifetime: current.lifetime ?? null,
-    };
-
-    return (["monthly", "yearly", "lifetime"] as PlanType[]).map((type) => {
-      const pkg = map[type];
-      const fb = PLAN_FALLBACKS[type];
-      return {
-        type,
-        label: fb.label,
-        priceString: pkg?.product?.localizedPrice ?? pkg?.product?.priceString ?? fb.priceString,
-        description: fb.description,
-        pkg,
-      };
-    });
+    const apiKey = getRevenueCatApiKey();
+    Purchases.setLogLevel(Purchases.LOG_LEVEL.ERROR);
+    Purchases.configure({ apiKey });
   } catch {
-    return buildFallbacks();
   }
 }
 
-export async function getSubscriptionStatus(): Promise<boolean> {
-  const rc = getPurchases();
-  if (!rc) return false;
-  try {
-    const info = await rc.getCustomerInfo();
-    return typeof info.entitlements.active[ENTITLEMENT_ID] !== "undefined";
-  } catch {
-    return false;
+function useSubscriptionContext() {
+  const customerInfoQuery = useQuery({
+    queryKey: ["revenuecat", "customer-info"],
+    queryFn: () => Purchases.getCustomerInfo(),
+    staleTime: 60_000,
+    retry: false,
+  });
+
+  const offeringsQuery = useQuery({
+    queryKey: ["revenuecat", "offerings"],
+    queryFn: () => Purchases.getOfferings(),
+    staleTime: 300_000,
+    retry: false,
+  });
+
+  const purchaseMutation = useMutation({
+    mutationFn: async (pkg: object) => {
+      const { customerInfo } = await Purchases.purchasePackage(pkg as never);
+      return customerInfo;
+    },
+    onSuccess: () => customerInfoQuery.refetch(),
+  });
+
+  const restoreMutation = useMutation({
+    mutationFn: () => Purchases.restorePurchases(),
+    onSuccess: () => customerInfoQuery.refetch(),
+  });
+
+  const isSubscribed =
+    customerInfoQuery.data?.entitlements.active?.[REVENUECAT_ENTITLEMENT_ID] !== undefined;
+
+  function getPackageForRole(role: string): object | null {
+    const offeringKey = OFFERING_BY_ROLE[role] ?? "default";
+    const offering =
+      offeringsQuery.data?.all?.[offeringKey] ?? offeringsQuery.data?.current ?? null;
+    return (offering?.monthly ?? offering?.availablePackages?.[0] ?? null) as object | null;
   }
+
+  function getPriceForRole(role: string): string {
+    const pkg = getPackageForRole(role) as { product?: { priceString?: string } } | null;
+    if (pkg?.product?.priceString) return pkg.product.priceString;
+    if (role === "sales_agent") return "$99.00";
+    if (role === "service_provider") return "$149.00";
+    return "$24.99";
+  }
+
+  return {
+    customerInfo: customerInfoQuery.data,
+    offerings: offeringsQuery.data,
+    isSubscribed,
+    isLoading: customerInfoQuery.isLoading || offeringsQuery.isLoading,
+    purchase: purchaseMutation.mutateAsync,
+    restore: restoreMutation.mutateAsync,
+    isPurchasing: purchaseMutation.isPending,
+    isRestoring: restoreMutation.isPending,
+    getPackageForRole,
+    getPriceForRole,
+  };
 }
 
-export async function purchasePlan(pkg: any): Promise<boolean> {
-  const rc = getPurchases();
-  if (!rc) {
-    throw new Error("In-app purchases are not available in this build. Please install the app from the App Store or Google Play.");
-  }
-  try {
-    const { customerInfo } = await rc.purchasePackage(pkg);
-    return typeof customerInfo.entitlements.active[ENTITLEMENT_ID] !== "undefined";
-  } catch (err: any) {
-    if (err.userCancelled) return false;
-    throw err;
-  }
+type SubscriptionContextValue = ReturnType<typeof useSubscriptionContext>;
+const Context = createContext<SubscriptionContextValue | null>(null);
+
+export function SubscriptionProvider({ children }: { children: React.ReactNode }) {
+  const value = useSubscriptionContext();
+  return React.createElement(Context.Provider, { value }, children);
 }
 
-export async function purchasePro(): Promise<boolean> {
-  const rc = getPurchases();
-  if (!rc) {
-    throw new Error("In-app purchases are not available in this build. Please install the app from the App Store or Google Play.");
-  }
-  try {
-    const offerings = await rc.getOfferings();
-    const pkg = offerings.current?.monthly;
-    if (!pkg) throw new Error("No subscription package found. Please try again later.");
-    const { customerInfo } = await rc.purchasePackage(pkg);
-    return typeof customerInfo.entitlements.active[ENTITLEMENT_ID] !== "undefined";
-  } catch (err: any) {
-    if (err.userCancelled) return false;
-    throw err;
-  }
-}
-
-export async function restorePurchases(): Promise<boolean> {
-  const rc = getPurchases();
-  if (!rc) return false;
-  try {
-    const info = await rc.restorePurchases();
-    return typeof info.entitlements.active[ENTITLEMENT_ID] !== "undefined";
-  } catch {
-    return false;
-  }
+export function useSubscription(): SubscriptionContextValue {
+  const ctx = useContext(Context);
+  if (!ctx) throw new Error("useSubscription must be used within a SubscriptionProvider");
+  return ctx;
 }

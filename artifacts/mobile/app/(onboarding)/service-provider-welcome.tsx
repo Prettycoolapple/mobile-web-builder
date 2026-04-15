@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Modal,
   View,
@@ -7,15 +7,14 @@ import {
   StyleSheet,
   ScrollView,
   Animated,
-  Linking,
   ActivityIndicator,
   Alert,
 } from "react-native";
-import { useState } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { useAuth } from "@/context/AuthContext";
+import { useSubscription } from "@/lib/revenuecat";
 
 const BG = "#131510";
 const CARD_BG = "#1A1E14";
@@ -33,22 +32,16 @@ const FEATURES: { icon: React.ComponentProps<typeof Feather>["name"]; label: str
   { icon: "message-circle", label: "Direct messaging from potential clients" },
 ];
 
-function getApiBase(): string {
-  if (process.env["EXPO_PUBLIC_DOMAIN"]) {
-    return `https://${process.env["EXPO_PUBLIC_DOMAIN"]}/api`;
-  }
-  return "/api";
-}
-
 export default function ServiceProviderWelcomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { user, getApiHeaders } = useAuth();
-  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const { user } = useAuth();
+  const { purchase, isPurchasing, isSubscribed, getPriceForRole, getPackageForRole } = useSubscription();
   const [showWelcomePopup, setShowWelcomePopup] = useState(true);
 
   const firstName = user?.fullName?.split(" ")[0] || "there";
-  const hasSubscription = user?.subscriptionTier && user.subscriptionTier !== "free";
+  const hasSubscription = isSubscribed || (user?.subscriptionTier && user.subscriptionTier !== "free");
+  const priceString = getPriceForRole("service_provider");
 
   const heroAnim = useRef(new Animated.Value(0)).current;
   const cardAnim = useRef(new Animated.Value(0)).current;
@@ -70,22 +63,20 @@ export default function ServiceProviderWelcomeScreen() {
   }, []);
 
   const handleSubscribe = async () => {
-    setCheckoutLoading(true);
     try {
-      const resp = await fetch(`${getApiBase()}/stripe/checkout`, {
-        method: "POST",
-        headers: getApiHeaders(),
-        body: JSON.stringify({ plan: "service_provider" }),
-      });
-      const data = (await resp.json()) as { url?: string; error?: string };
-      if (!resp.ok || !data.url) {
-        throw new Error(data.error ?? "Could not start checkout. Please try again.");
+      const pkg = getPackageForRole("service_provider");
+      if (!pkg) {
+        Alert.alert("Unavailable", "Subscription packages are not available right now. Please try again later.");
+        return;
       }
-      await Linking.openURL(data.url);
-    } catch (err) {
-      Alert.alert("Checkout failed", err instanceof Error ? err.message : "Please try again.");
-    } finally {
-      setCheckoutLoading(false);
+      await purchase(pkg);
+      router.replace("/(tabs)");
+    } catch (err: unknown) {
+      const message = (err as { message?: string; userCancelled?: boolean })?.message;
+      const userCancelled = (err as { userCancelled?: boolean })?.userCancelled;
+      if (!userCancelled) {
+        Alert.alert("Purchase failed", message ?? "Please try again.");
+      }
     }
   };
 
@@ -138,7 +129,7 @@ export default function ServiceProviderWelcomeScreen() {
             <View>
               <Text style={styles.pricingPlan}>Service Provider Plan</Text>
               <View style={styles.priceRow}>
-                <Text style={styles.priceAmount}>$149</Text>
+                <Text style={styles.priceAmount}>{priceString}</Text>
                 <Text style={styles.pricePer}>/month NZD</Text>
               </View>
             </View>
@@ -190,12 +181,12 @@ export default function ServiceProviderWelcomeScreen() {
             </TouchableOpacity>
           ) : (
             <TouchableOpacity
-              style={[styles.primaryBtn, checkoutLoading && styles.primaryBtnDisabled]}
+              style={[styles.primaryBtn, isPurchasing && styles.primaryBtnDisabled]}
               onPress={handleSubscribe}
               activeOpacity={0.85}
-              disabled={checkoutLoading}
+              disabled={isPurchasing}
             >
-              {checkoutLoading ? (
+              {isPurchasing ? (
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
                 <>
