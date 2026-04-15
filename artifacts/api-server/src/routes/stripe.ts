@@ -66,6 +66,15 @@ router.post("/stripe/checkout", async (req, res) => {
       return;
     }
 
+    if (planKey === "sales_agent" && profile.role !== "sales_agent") {
+      res.status(403).json({ error: "This plan is only available to Sales Agents." });
+      return;
+    }
+    if (planKey === "service_provider" && profile.role !== "service_provider") {
+      res.status(403).json({ error: "This plan is only available to Service Providers." });
+      return;
+    }
+
     const stripe = await getUncachableStripeClient();
 
     let customerId = profile.stripeCustomerId;
