@@ -495,6 +495,16 @@ router.post("/chat", async (req, res) => {
         if (extractedAddress) {
           req.log.info({ address: extractedAddress }, "Running property pipeline for analyse mode");
 
+          // Keep-alive heartbeat — sends a silent space every 8 s so the reverse
+          // proxy doesn't close the connection during the long pipeline + LLM run.
+          // The client uses resp.json() which buffers the full body; JSON.parse
+          // ignores leading whitespace so the injected spaces are harmless.
+          res.setHeader("Content-Type", "application/json");
+          res.setHeader("X-Accel-Buffering", "no");
+          const _heartbeat = setInterval(() => {
+            try { if (!res.writableEnded) res.write(" "); } catch { /* ignore */ }
+          }, 8_000);
+
           const pipelineResult = await runPropertyPipeline(extractedAddress).catch((err) => {
             req.log.warn({ err }, "Pipeline failed — falling back to AI-only analysis");
             return null;
@@ -784,9 +794,12 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
               }
             }
 
+            clearInterval(_heartbeat);
             res.json({ content, mode: "analyse" });
             return;
           }
+          // pipelineResult was null — clear heartbeat and fall through to AI-only path
+          clearInterval(_heartbeat);
         }
 
       }

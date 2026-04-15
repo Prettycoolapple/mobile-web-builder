@@ -156,8 +156,8 @@ export default function SearchScreen() {
 
     addMessage({ role: "assistant", content: "", type: "loading", loadingMode: detectedMode as any }, sessionId);
 
-    const MAX_RETRIES = 2;
-    const TIMEOUT_MS = 90_000;
+    const MAX_RETRIES = 1;
+    const TIMEOUT_MS = 200_000;
 
     const currentMessages = currentSession?.messages ?? [];
     const allMessages = [
@@ -253,7 +253,7 @@ export default function SearchScreen() {
       updateLastMessage({
         type: "text",
         content: isTimeout
-          ? "Analysis timed out after 2 attempts — NZ property data sources may be slow right now."
+          ? "Analysis timed out — NZ property data sources are slow right now. Please tap Try again."
           : "Couldn't connect to the analysis service. Check your connection.",
         retryText: text,
       }, sessionId);

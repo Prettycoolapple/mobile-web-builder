@@ -131,6 +131,11 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   const linzParcelData = linzParcelResult.value;
   if (linzParcelResult.failed) failedSources.push("linz_parcel");
 
+  // Start interest rate lookup in the background — it's an LLM call that takes
+  // 3–8 s and is independent of the scrapers. Kicking it off here means it runs
+  // concurrently with wave 1 rather than adding to the sequential tail.
+  const interestRatePromise = assessInterestRateOutlook().catch(() => "stable" as const);
+
   // ─── WAVE 1: Run all data sources in parallel ─────────────────────────────
   // All 4 scrapers (Hougarden, OneRoof, QV, Homes) run simultaneously from the
   // start. Previously QV and Homes were only triggered as sequential fallbacks
@@ -232,7 +237,14 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   const wave1Coverage = getCriticalCoverage(hougardenData, oneRoofData, qvData, homesData, propertyHistoryData);
   const criticalMissing = !wave1Coverage.hasCV || !wave1Coverage.hasBuildYear || !wave1Coverage.hasFloorArea;
 
-  if (criticalMissing) {
+  // ── Time-budget guard ────────────────────────────────────────────────────
+  // Wave 2 retries add 15–40 s. Skip them if we're already past the 70 s
+  // mark so the Gemini analysis call still fits inside the client's 200 s
+  // window. The report will use whatever data wave 1 collected.
+  const wave1ElapsedMs = Date.now() - pipelineStart;
+  const skipWave2 = wave1ElapsedMs > 70_000;
+
+  if (criticalMissing && !skipWave2) {
     logger.info({
       missing_cv: !wave1Coverage.hasCV,
       missing_build_year: !wave1Coverage.hasBuildYear,
@@ -280,6 +292,8 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
         recovered_floor_area: !wave1Coverage.hasFloorArea && wave2Coverage.hasFloorArea,
       }, "Wave 2 retry complete");
     }
+  } else if (criticalMissing && skipWave2) {
+    logger.warn({ wave1ElapsedMs, missing_cv: !wave1Coverage.hasCV, missing_build_year: !wave1Coverage.hasBuildYear, missing_floor_area: !wave1Coverage.hasFloorArea }, "Wave 2 skipped — time budget exceeded (>70 s elapsed). Proceeding with wave 1 data.");
   }
 
   const linzAreaSqm = linzParcelData?.area_sqm ?? null;
@@ -381,7 +395,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     merged.comparables.length > 0 ? merged.comparables : undefined,
   );
 
-  const interestRateOutlook = await assessInterestRateOutlook();
+  const interestRateOutlook = await interestRatePromise;
 
   const scenarios = calculateBearBaseBullScenarios(
     costs,
