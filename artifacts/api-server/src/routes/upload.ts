@@ -236,7 +236,10 @@ router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => 
     res.status(400).json({ error: err.message, code: "UPLOAD_ERROR" });
     return;
   }
-  if (err instanceof Error && err.message === "Only PDF and image files are accepted") {
+  if (
+    err instanceof Error &&
+    (err.message === "Only PDF and image files are accepted" || err.message === "Only image files are accepted")
+  ) {
     res.status(415).json({ error: err.message, code: "INVALID_FILE_TYPE" });
     return;
   }
