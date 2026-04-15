@@ -33,33 +33,45 @@ const serviceProviderSchema = z.object({
   incorporationCertUrl: z.string().optional(),
 });
 
-const baseSignupSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(8),
-  firstName: z.string().min(1),
-  lastName: z.string().min(1),
-  role: z.enum(["general", "sales_agent", "service_provider"]).default("general"),
-  languages: z.array(z.string()).default([]),
-  agentData: salesAgentSchema.optional(),
-  providerData: serviceProviderSchema.optional(),
-});
+const baseSignupSchema = z
+  .object({
+    email: z.string().email(),
+    password: z.string().min(8),
+    firstName: z.string().min(1).optional(),
+    lastName: z.string().min(1).optional(),
+    fullName: z.string().min(1).optional(),
+    role: z.enum(["general", "sales_agent", "service_provider"]).default("general"),
+    languages: z.array(z.string()).default([]),
+    agentData: salesAgentSchema.optional(),
+    providerData: serviceProviderSchema.optional(),
+  })
+  .superRefine((data, ctx) => {
+    const hasNameParts = data.firstName && data.lastName;
+    const hasFullName = data.fullName;
+    if (!hasNameParts && !hasFullName) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Either fullName or both firstName and lastName are required",
+        path: ["firstName"],
+      });
+    }
+    if (data.role === "sales_agent" && !data.agentData) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "agentData is required for sales_agent role",
+        path: ["agentData"],
+      });
+    }
+    if (data.role === "service_provider" && !data.providerData) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "providerData is required for service_provider role",
+        path: ["providerData"],
+      });
+    }
+  });
 
-const signupSchema = baseSignupSchema.superRefine((data, ctx) => {
-  if (data.role === "sales_agent" && !data.agentData) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "agentData is required for sales_agent role",
-      path: ["agentData"],
-    });
-  }
-  if (data.role === "service_provider" && !data.providerData) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "providerData is required for service_provider role",
-      path: ["providerData"],
-    });
-  }
-});
+const signupSchema = baseSignupSchema;
 
 router.post("/signup", async (req, res) => {
   const parsed = signupSchema.safeParse(req.body);
@@ -76,7 +88,9 @@ router.post("/signup", async (req, res) => {
   const { email, password, firstName, lastName, role, languages, agentData, providerData } =
     parsed.data;
   const emailLower = email.toLowerCase().trim();
-  const fullName = `${firstName.trim()} ${lastName.trim()}`;
+  const fullName =
+    parsed.data.fullName?.trim() ||
+    `${firstName!.trim()} ${lastName!.trim()}`;
 
   try {
     const existing = await db

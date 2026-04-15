@@ -14,12 +14,17 @@ export interface LoginRequest {
   password: string;
 }
 
+/**
+ * Provide either fullName or both firstName and lastName.
+ */
 export interface SignUpRequestBase {
   email: string;
   /** @minLength 8 */
   password: string;
-  firstName: string;
-  lastName: string;
+  firstName?: string;
+  lastName?: string;
+  /** Legacy field — alternative to firstName + lastName */
+  fullName?: string;
   /** Languages the user speaks */
   languages?: string[];
 }
@@ -107,7 +112,7 @@ export type UploadCertResponseMetadata = {
 export interface UploadCertResponse {
   /** Normalized object path (e.g. /objects/uploads/uuid) */
   objectPath: string;
-  /** Serving URL for the uploaded file (/api/storage/objects/...) */
+  /** Auth-gated serving URL for the uploaded file (/api/storage/objects/...). Requires a valid Authorization header. Not a public GCS URL. */
   fileUrl: string;
   metadata?: UploadCertResponseMetadata;
 }

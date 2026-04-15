@@ -300,6 +300,7 @@ components:
         - password
     SignUpRequestBase:
       type: object
+      description: Provide either fullName or both firstName and lastName.
       properties:
         email:
           type: string
@@ -311,6 +312,9 @@ components:
           type: string
         lastName:
           type: string
+        fullName:
+          type: string
+          description: Legacy field — alternative to firstName + lastName
         languages:
           type: array
           items:
@@ -319,8 +323,6 @@ components:
       required:
         - email
         - password
-        - firstName
-        - lastName
     SignUpRequest:
       oneOf:
         - allOf:
@@ -453,7 +455,7 @@ components:
           description: Normalized object path (e.g. /objects/uploads/uuid)
         fileUrl:
           type: string
-          description: Serving URL for the uploaded file (/api/storage/objects/...)
+          description: Auth-gated serving URL for the uploaded file (/api/storage/objects/...). Requires a valid Authorization header. Not a public GCS URL.
         metadata:
           type: object
           properties:

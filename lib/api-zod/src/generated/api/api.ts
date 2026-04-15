@@ -223,13 +223,18 @@ export const SignUpBody = zod.union([
     .object({
       email: zod.string().email(),
       password: zod.string().min(signUpBodyOneOnePasswordMin),
-      firstName: zod.string(),
-      lastName: zod.string(),
+      firstName: zod.string().optional(),
+      lastName: zod.string().optional(),
+      fullName: zod
+        .string()
+        .optional()
+        .describe("Legacy field — alternative to firstName + lastName"),
       languages: zod
         .array(zod.string())
         .optional()
         .describe("Languages the user speaks"),
     })
+    .describe("Provide either fullName or both firstName and lastName.")
     .and(
       zod.object({
         role: zod.enum(["general"]).default(signUpBodyOneTwoRoleDefault),
@@ -239,13 +244,18 @@ export const SignUpBody = zod.union([
     .object({
       email: zod.string().email(),
       password: zod.string().min(signUpBodyTwoOnePasswordMin),
-      firstName: zod.string(),
-      lastName: zod.string(),
+      firstName: zod.string().optional(),
+      lastName: zod.string().optional(),
+      fullName: zod
+        .string()
+        .optional()
+        .describe("Legacy field — alternative to firstName + lastName"),
       languages: zod
         .array(zod.string())
         .optional()
         .describe("Languages the user speaks"),
     })
+    .describe("Provide either fullName or both firstName and lastName.")
     .and(
       zod.object({
         role: zod.enum(["sales_agent"]),
@@ -267,13 +277,18 @@ export const SignUpBody = zod.union([
     .object({
       email: zod.string().email(),
       password: zod.string().min(signUpBodyThreeOnePasswordMin),
-      firstName: zod.string(),
-      lastName: zod.string(),
+      firstName: zod.string().optional(),
+      lastName: zod.string().optional(),
+      fullName: zod
+        .string()
+        .optional()
+        .describe("Legacy field — alternative to firstName + lastName"),
       languages: zod
         .array(zod.string())
         .optional()
         .describe("Languages the user speaks"),
     })
+    .describe("Provide either fullName or both firstName and lastName.")
     .and(
       zod.object({
         role: zod.enum(["service_provider"]),
