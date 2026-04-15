@@ -35,12 +35,6 @@ interface PublicProfile {
   roleData: Record<string, unknown> | null;
 }
 
-function roleLabel(role: UserRole): string {
-  if (role === "sales_agent") return "Sales Agent";
-  if (role === "service_provider") return "Service Provider";
-  return "Member";
-}
-
 function roleColor(role: UserRole, colors: ReturnType<typeof useColors>): string {
   if (role === "sales_agent") return colors.accent;
   if (role === "service_provider") return "#5B8EAD";
@@ -55,7 +49,18 @@ function disciplineLabel(value: string | null | undefined): string {
     quantity_surveyor: "Quantity Surveyor",
     other: "Other",
   };
-  return value ? (map[value] ?? value) : "";
+  return value ? (map[value] ?? value) : "Service Provider";
+}
+
+function profileSubtitle(profile: PublicProfile): string {
+  if (profile.role === "sales_agent") return "Sales Agent";
+  if (profile.role === "service_provider") {
+    const rd = profile.roleData;
+    if (!rd) return "Service Provider";
+    if (rd.discipline === "other" && rd.otherDiscipline) return rd.otherDiscipline as string;
+    return disciplineLabel(rd.discipline as string | null);
+  }
+  return "Member";
 }
 
 function Avatar({
@@ -107,13 +112,7 @@ function Avatar({
         justifyContent: "center",
       }}
     >
-      <Text
-        style={{
-          fontSize: size * 0.36,
-          color,
-          fontFamily: "DM_Sans_700Bold",
-        }}
-      >
+      <Text style={{ fontSize: size * 0.36, color, fontFamily: "DM_Sans_700Bold" }}>
         {initials}
       </Text>
     </View>
@@ -198,6 +197,7 @@ export default function UserProfileScreen() {
 
   const isSelf = user?.id === userId;
   const accentColor = profile ? roleColor(profile.role, colors) : colors.accent;
+  const memberYear = profile ? new Date(profile.createdAt).getFullYear() : null;
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -211,7 +211,11 @@ export default function UserProfileScreen() {
           },
         ]}
       >
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          style={styles.backBtn}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
           <Feather name="arrow-left" size={22} color={colors.foreground} />
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: colors.foreground }]}>Profile</Text>
@@ -228,7 +232,10 @@ export default function UserProfileScreen() {
           <Text style={[styles.errorText, { color: colors.mutedForeground }]}>
             {error ?? "Profile not found"}
           </Text>
-          <TouchableOpacity onPress={() => { setLoading(true); setError(null); fetchProfile(); }} style={[styles.retryBtn, { borderColor: colors.border }]}>
+          <TouchableOpacity
+            onPress={() => { setLoading(true); setError(null); fetchProfile(); }}
+            style={[styles.retryBtn, { borderColor: colors.border }]}
+          >
             <Text style={[styles.retryText, { color: colors.foreground }]}>Retry</Text>
           </TouchableOpacity>
         </View>
@@ -238,8 +245,15 @@ export default function UserProfileScreen() {
           showsVerticalScrollIndicator={false}
         >
           <View style={[styles.heroCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Avatar name={profile.fullName} role={profile.role} avatarUrl={profile.avatarUrl} size={72} colors={colors} />
-            <View style={{ marginTop: 14, alignItems: "center", gap: 8 }}>
+            <Avatar
+              name={profile.fullName}
+              role={profile.role}
+              avatarUrl={profile.avatarUrl}
+              size={72}
+              colors={colors}
+            />
+
+            <View style={{ marginTop: 14, alignItems: "center", gap: 6 }}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                 <Text style={[styles.name, { color: colors.foreground }]}>
                   {profile.fullName ?? "Anonymous"}
@@ -248,92 +262,65 @@ export default function UserProfileScreen() {
                   <Feather name="check-circle" size={20} color="#2563EB" />
                 )}
               </View>
-              {profile.isVerified && profile.role === "service_provider" && (
-                <View style={styles.verifiedBadge}>
-                  <Feather name="shield" size={11} color="#2563EB" />
-                  <Text style={styles.verifiedText}>Verified</Text>
+
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <View
+                  style={[
+                    styles.roleBadge,
+                    { backgroundColor: accentColor + "18", borderColor: accentColor + "44" },
+                  ]}
+                >
+                  <Text style={[styles.roleBadgeText, { color: accentColor }]}>
+                    {profileSubtitle(profile)}
+                  </Text>
                 </View>
-              )}
-              <View style={[styles.roleBadge, { backgroundColor: accentColor + "18", borderColor: accentColor + "44" }]}>
-                <Text style={[styles.roleBadgeText, { color: accentColor }]}>
-                  {roleLabel(profile.role)}
-                </Text>
+                {profile.isVerified && profile.role === "service_provider" && (
+                  <View style={styles.verifiedBadge}>
+                    <Feather name="shield" size={11} color="#2563EB" />
+                    <Text style={styles.verifiedText}>Verified</Text>
+                  </View>
+                )}
               </View>
             </View>
 
-            <View style={[styles.statRow, { borderTopColor: colors.border }]}>
-              {!isSelf ? (
-                <TouchableOpacity
-                  style={[
-                    styles.recommendBtn,
-                    {
-                      backgroundColor: profile.hasRecommended ? colors.accent : "transparent",
-                      borderColor: profile.hasRecommended ? colors.accent : colors.border,
-                    },
-                  ]}
-                  onPress={handleRecommend}
-                  disabled={recommending}
-                  activeOpacity={0.75}
-                >
-                  {recommending ? (
-                    <ActivityIndicator size="small" color={profile.hasRecommended ? "#fff" : colors.accent} />
-                  ) : (
-                    <Feather
-                      name="thumbs-up"
-                      size={15}
-                      color={profile.hasRecommended ? "#fff" : colors.accent}
-                    />
-                  )}
+            {!isSelf && (
+              <TouchableOpacity
+                style={[
+                  styles.thumbBtn,
+                  {
+                    backgroundColor: profile.hasRecommended ? "transparent" : accentColor,
+                    borderColor: accentColor,
+                    borderWidth: profile.hasRecommended ? 1.5 : 0,
+                  },
+                ]}
+                onPress={handleRecommend}
+                disabled={recommending}
+                activeOpacity={0.8}
+              >
+                {recommending ? (
+                  <ActivityIndicator
+                    size="small"
+                    color={profile.hasRecommended ? accentColor : "#fff"}
+                  />
+                ) : (
+                  <Feather
+                    name="thumbs-up"
+                    size={17}
+                    color={profile.hasRecommended ? accentColor : "#fff"}
+                  />
+                )}
+                {profile.recommendationCount > 0 && (
                   <Text
                     style={[
-                      styles.recommendBtnText,
-                      { color: profile.hasRecommended ? "#fff" : colors.accent },
+                      styles.thumbCount,
+                      { color: profile.hasRecommended ? accentColor : "#fff" },
                     ]}
                   >
-                    {profile.hasRecommended ? "Recommended" : "Recommend"}
-                  </Text>
-                  {profile.recommendationCount > 0 && (
-                    <View
-                      style={[
-                        styles.recommendCount,
-                        {
-                          backgroundColor: profile.hasRecommended
-                            ? "rgba(255,255,255,0.25)"
-                            : colors.accent + "18",
-                        },
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.recommendCountText,
-                          { color: profile.hasRecommended ? "#fff" : colors.accent },
-                        ]}
-                      >
-                        {profile.recommendationCount}
-                      </Text>
-                    </View>
-                  )}
-                </TouchableOpacity>
-              ) : (
-                <View style={styles.stat}>
-                  <Feather name="thumbs-up" size={16} color={colors.mutedForeground} />
-                  <Text style={[styles.statNumber, { color: colors.foreground }]}>
                     {profile.recommendationCount}
                   </Text>
-                  <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>
-                    {profile.recommendationCount === 1 ? "Recommendation" : "Recommendations"}
-                  </Text>
-                </View>
-              )}
-              <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
-              <View style={styles.stat}>
-                <Feather name="calendar" size={16} color={colors.mutedForeground} />
-                <Text style={[styles.statNumber, { color: colors.foreground }]}>
-                  {new Date(profile.createdAt).getFullYear()}
-                </Text>
-                <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>Member since</Text>
-              </View>
-            </View>
+                )}
+              </TouchableOpacity>
+            )}
           </View>
 
           {!isSelf && (
@@ -357,22 +344,46 @@ export default function UserProfileScreen() {
               <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Agent Details</Text>
               <InfoRow icon="briefcase" label="Agency" value={profile.roleData.agencyName as string} colors={colors} />
               <InfoRow icon="award" label="REAA Licence" value={profile.roleData.reaaLicenceNumber as string} colors={colors} />
-              <InfoRow icon="clock" label="Experience" value={profile.roleData.yearsExperience ? `${profile.roleData.yearsExperience} years` : null} colors={colors} />
-              <InfoRow icon="map-pin" label="Regions" value={(profile.roleData.regionsCovered as string[] | null)?.join(", ")} colors={colors} />
-              <InfoRow icon="home" label="Property types" value={(profile.roleData.propertyTypes as string[] | null)?.join(", ")} colors={colors} />
+              <InfoRow
+                icon="clock"
+                label="Experience"
+                value={profile.roleData.yearsExperience ? `${profile.roleData.yearsExperience} years` : null}
+                colors={colors}
+              />
+              <InfoRow
+                icon="map-pin"
+                label="Regions"
+                value={(profile.roleData.regionsCovered as string[] | null)?.join(", ")}
+                colors={colors}
+              />
+              <InfoRow
+                icon="home"
+                label="Property types"
+                value={(profile.roleData.propertyTypes as string[] | null)?.join(", ")}
+                colors={colors}
+              />
               <InfoRow
                 icon="map-pin"
                 label="Address"
-                value={[profile.roleData.addressSuburb, profile.roleData.addressCity].filter(Boolean).join(", ") || null}
+                value={
+                  [profile.roleData.addressSuburb, profile.roleData.addressCity]
+                    .filter(Boolean)
+                    .join(", ") || null
+                }
                 colors={colors}
               />
               <InfoRow icon="globe" label="Website" value={profile.roleData.websiteUrl as string} colors={colors} />
               <InfoRow icon="message-circle" label="Primary language" value={profile.roleData.primaryLanguage as string} colors={colors} />
               <InfoRow icon="message-circle" label="Secondary language" value={profile.roleData.secondaryLanguage as string} colors={colors} />
+              {memberYear && (
+                <InfoRow icon="calendar" label="Member since" value={`${memberYear}`} colors={colors} />
+              )}
               {profile.roleData.bio ? (
                 <View style={styles.bioRow}>
                   <Text style={[styles.infoLabel, { color: colors.mutedForeground }]}>About</Text>
-                  <Text style={[styles.bioText, { color: colors.foreground }]}>{profile.roleData.bio as string}</Text>
+                  <Text style={[styles.bioText, { color: colors.foreground }]}>
+                    {profile.roleData.bio as string}
+                  </Text>
                 </View>
               ) : null}
             </View>
@@ -395,28 +406,49 @@ export default function UserProfileScreen() {
               <InfoRow
                 icon="map-pin"
                 label="Address"
-                value={[profile.roleData.addressSuburb, profile.roleData.addressCity].filter(Boolean).join(", ") || null}
+                value={
+                  [profile.roleData.addressSuburb, profile.roleData.addressCity]
+                    .filter(Boolean)
+                    .join(", ") || null
+                }
                 colors={colors}
               />
               <InfoRow icon="hash" label="NZ Business Number" value={profile.roleData.nzCompanyRegisterNumber as string} colors={colors} />
               <InfoRow icon="phone" label="Contact" value={profile.roleData.contactNumber as string} colors={colors} />
               <InfoRow icon="message-circle" label="Primary language" value={profile.roleData.primaryLanguage as string} colors={colors} />
               <InfoRow icon="message-circle" label="Secondary language" value={profile.roleData.secondaryLanguage as string} colors={colors} />
+              {memberYear && (
+                <InfoRow icon="calendar" label="Member since" value={`${memberYear}`} colors={colors} />
+              )}
               {profile.roleData.bio ? (
                 <View style={styles.bioRow}>
                   <Text style={[styles.infoLabel, { color: colors.mutedForeground }]}>About</Text>
-                  <Text style={[styles.bioText, { color: colors.foreground }]}>{profile.roleData.bio as string}</Text>
+                  <Text style={[styles.bioText, { color: colors.foreground }]}>
+                    {profile.roleData.bio as string}
+                  </Text>
                 </View>
               ) : null}
             </View>
           )}
 
+          {profile.role === "general" && memberYear && (
+            <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Member Details</Text>
+              <InfoRow icon="calendar" label="Member since" value={`${memberYear}`} colors={colors} />
+            </View>
+          )}
+
           {profile.recommendationCount > 0 && (
-            <View style={[styles.trustBanner, { backgroundColor: colors.accent + "12", borderColor: colors.accent + "30" }]}>
-              <Feather name="shield" size={16} color={colors.accent} />
+            <View
+              style={[
+                styles.trustBanner,
+                { backgroundColor: accentColor + "12", borderColor: accentColor + "30" },
+              ]}
+            >
+              <Feather name="shield" size={16} color={accentColor} />
               <Text style={[styles.trustText, { color: colors.foreground }]}>
                 Trusted by{" "}
-                <Text style={{ fontFamily: "DM_Sans_700Bold", color: colors.accent }}>
+                <Text style={{ fontFamily: "DM_Sans_700Bold", color: accentColor }}>
                   {profile.recommendationCount}
                 </Text>{" "}
                 {profile.recommendationCount === 1 ? "person" : "people"} in the Lecorb community
@@ -451,8 +483,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     padding: 24,
     alignItems: "center",
+    gap: 0,
   },
-  name: { fontSize: 22, fontFamily: "DM_Sans_700Bold", marginBottom: 8 },
+  name: { fontSize: 22, fontFamily: "DM_Sans_700Bold" },
   roleBadge: {
     borderRadius: 20,
     borderWidth: 1,
@@ -460,43 +493,19 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   roleBadgeText: { fontSize: 12, fontFamily: "DM_Sans_600SemiBold" },
-  statRow: {
+  thumbBtn: {
     flexDirection: "row",
-    marginTop: 20,
-    paddingTop: 16,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    width: "100%",
+    alignItems: "center",
     justifyContent: "center",
-    alignItems: "center",
-    gap: 24,
-  },
-  stat: { alignItems: "center", gap: 4 },
-  statNumber: { fontSize: 20, fontFamily: "DM_Sans_700Bold" },
-  statLabel: { fontSize: 11, fontFamily: "DM_Sans_400Regular" },
-  statDivider: { width: 1, alignSelf: "stretch" },
-  recommendBtn: {
-    flexDirection: "row",
-    alignItems: "center",
     gap: 7,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 22,
-    borderWidth: 1.5,
+    marginTop: 18,
+    paddingHorizontal: 22,
+    paddingVertical: 11,
+    borderRadius: 24,
+    minWidth: 80,
   },
-  recommendBtnText: {
-    fontSize: 14,
-    fontFamily: "DM_Sans_600SemiBold",
-  },
-  recommendCount: {
-    minWidth: 22,
-    height: 22,
-    borderRadius: 11,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 6,
-  },
-  recommendCountText: {
-    fontSize: 12,
+  thumbCount: {
+    fontSize: 15,
     fontFamily: "DM_Sans_700Bold",
   },
   messageBtn: {
@@ -515,7 +524,14 @@ const styles = StyleSheet.create({
     padding: 18,
     gap: 4,
   },
-  sectionTitle: { fontSize: 13, fontFamily: "DM_Sans_600SemiBold", letterSpacing: 0.3, marginBottom: 10, textTransform: "uppercase", opacity: 0.6 },
+  sectionTitle: {
+    fontSize: 13,
+    fontFamily: "DM_Sans_600SemiBold",
+    letterSpacing: 0.3,
+    marginBottom: 10,
+    textTransform: "uppercase",
+    opacity: 0.6,
+  },
   infoRow: { flexDirection: "row", alignItems: "flex-start", paddingVertical: 8, gap: 12 },
   infoIcon: { marginTop: 2 },
   infoLabel: { fontSize: 11, fontFamily: "DM_Sans_400Regular", marginBottom: 1 },
