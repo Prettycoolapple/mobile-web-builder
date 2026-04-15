@@ -8,6 +8,7 @@ import { FeasibilityReportCard } from "./FeasibilityReport";
 import { PropertyCard } from "./PropertyCard";
 import { AnalysisProgress } from "./AnalysisProgress";
 import { ProviderRecommendationBubble } from "./ProviderRecommendationBubble";
+import { AgentCallBubble } from "./AgentCallBubble";
 
 class ReportErrorBoundary extends Component<
   { children: React.ReactNode },
@@ -63,6 +64,7 @@ interface Props {
   onRetry?: (text: string) => void;
   onConnect?: (providerId: string) => Promise<void>;
   onDismiss?: (messageId: string) => void;
+  onAgentDismiss?: (messageId: string) => void;
 }
 
 function TypingDots() {
@@ -108,9 +110,21 @@ function TypingDots() {
   );
 }
 
-export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect, onDismiss }: Props) {
+export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect, onDismiss, onAgentDismiss }: Props) {
   const colors = useColors();
   const isUser = message.role === "user";
+
+  if (message.type === "agent_contact" && message.agentPhone) {
+    return (
+      <AgentCallBubble
+        agentName={message.agentName ?? null}
+        agencyName={message.agencyName ?? null}
+        agentPhone={message.agentPhone}
+        propertyAddress={message.propertyAddress ?? ""}
+        onDismiss={() => onAgentDismiss?.(message.id)}
+      />
+    );
+  }
 
   if (message.type === "provider_recommendation" && message.provider) {
     return (

@@ -12,6 +12,7 @@ import dmRouter from "./dm";
 import usersRouter from "./users";
 import notificationsRouter from "./notifications";
 import recommendationsRouter from "./recommendations";
+import agentContactRouter from "./agent-contact";
 
 const router: IRouter = Router();
 
@@ -28,5 +29,6 @@ router.use(dmRouter);
 router.use(usersRouter);
 router.use(notificationsRouter);
 router.use(recommendationsRouter);
+router.use(agentContactRouter);
 
 export default router;

@@ -19,7 +19,7 @@ export interface ChatMessage {
   role: MessageRole;
   content: string;
   timestamp: number;
-  type: "text" | "report" | "search" | "loading" | "provider_recommendation";
+  type: "text" | "report" | "search" | "loading" | "provider_recommendation" | "agent_contact";
   loadingMode?: "analyse" | "discover" | "followup";
   retryLabel?: string;
   retryText?: string;
@@ -30,6 +30,9 @@ export interface ChatMessage {
   provider?: ServiceProvider;
   intentType?: string;
   propertyAddress?: string;
+  agentName?: string | null;
+  agentPhone?: string;
+  agencyName?: string | null;
 }
 
 export interface Score {

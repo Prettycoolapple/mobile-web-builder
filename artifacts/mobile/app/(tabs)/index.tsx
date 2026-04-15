@@ -109,6 +109,7 @@ export default function SearchScreen() {
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
   const checkedReportIds = useRef<Set<string>>(new Set());
+  const checkedFollowupIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
@@ -194,6 +195,84 @@ export default function SearchScreen() {
   }, [getApiHeaders, router]);
 
   const handleDismiss = useCallback((_messageId: string) => {}, []);
+
+  useEffect(() => {
+    if (user?.role !== "general") return;
+    const msgs = currentSession?.messages ?? [];
+    if (!currentSession?.currentReport) return;
+
+    const lastAssistantText = [...msgs].reverse().find(
+      (m) => m.role === "assistant" && m.type === "text",
+    );
+    if (!lastAssistantText) return;
+    if (checkedFollowupIds.current.has(lastAssistantText.id)) return;
+
+    const alreadyHasAgentBubble = msgs.some((m) => m.type === "agent_contact");
+    if (alreadyHasAgentBubble) return;
+
+    const lastUserMsg = [...msgs].reverse().find((m) => m.role === "user");
+    if (!lastUserMsg) return;
+
+    const userText = lastUserMsg.content.toLowerCase();
+    const agentKeywords = [
+      "call", "contact", "phone", "number", "agent", "reach", "speak",
+      "get in touch", "seller", "vendor", "ring", "talk to", "who is selling",
+      "who listed", "realtor", "salesperson",
+    ];
+    const hasKeyword = agentKeywords.some((kw) => userText.includes(kw));
+    if (!hasKeyword) return;
+
+    checkedFollowupIds.current.add(lastAssistantText.id);
+
+    const timer = setTimeout(async () => {
+      try {
+        const apiBase = process.env.EXPO_PUBLIC_DOMAIN
+          ? `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`
+          : "/api";
+        const headers = getApiHeaders();
+        const address = currentSession?.currentReport?.address ?? "";
+        const conversationHistory = msgs
+          .filter((m) => m.type === "text")
+          .slice(-6)
+          .map((m) => ({ role: m.role, content: m.content }));
+
+        const resp = await fetch(`${apiBase}/agent-contact/lookup`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ address, messages: conversationHistory }),
+        });
+        if (!resp.ok) return;
+
+        const data = await resp.json() as {
+          wantsAgentContact: boolean;
+          found?: boolean;
+          isListed?: boolean;
+          agentName?: string | null;
+          agentPhone?: string | null;
+          agencyName?: string | null;
+          propertyAddress?: string;
+        };
+
+        if (data.wantsAgentContact && data.found && data.isListed && data.agentPhone) {
+          addMessage({
+            role: "assistant",
+            content: "",
+            type: "agent_contact",
+            agentName: data.agentName ?? null,
+            agentPhone: data.agentPhone,
+            agencyName: data.agencyName ?? null,
+            propertyAddress: address,
+          }, currentSessionId ?? undefined);
+        }
+      } catch (err) {
+        console.log("Agent contact lookup failed:", err);
+      }
+    }, 800);
+
+    return () => clearTimeout(timer);
+  }, [currentSession?.messages, currentSession?.currentReport, user?.role, getApiHeaders, addMessage, currentSessionId]);
+
+  const handleAgentDismiss = useCallback((_messageId: string) => {}, []);
 
   const getApiBase = useCallback(() => {
     if (process.env.EXPO_PUBLIC_DOMAIN) {
@@ -377,9 +456,10 @@ export default function SearchScreen() {
         onRetry={handleSend}
         onConnect={(providerId) => handleConnect(providerId, item.propertyAddress ?? "")}
         onDismiss={handleDismiss}
+        onAgentDismiss={handleAgentDismiss}
       />
     ),
-    [handleFollowUp, handleAnalyse, handleSend, handleConnect, handleDismiss],
+    [handleFollowUp, handleAnalyse, handleSend, handleConnect, handleDismiss, handleAgentDismiss],
   );
 
   const keyExtractor = useCallback((item: ChatMessage) => item.id, []);
