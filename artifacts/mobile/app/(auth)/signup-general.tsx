@@ -11,28 +11,40 @@ import {
   ScrollView,
   Animated,
   useWindowDimensions,
+  Modal,
+  FlatList,
+  Image,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth, ApiError } from "@/context/AuthContext";
-import { MultiSelectChips } from "@/components/MultiSelectChips";
+import * as ImagePicker from "expo-image-picker";
 
-const LANGUAGE_OPTIONS = [
-  { label: "English", value: "English" },
-  { label: "Chinese (Mandarin)", value: "Chinese (Mandarin)" },
-  { label: "Chinese (Cantonese)", value: "Chinese (Cantonese)" },
-  { label: "Korean", value: "Korean" },
-  { label: "Japanese", value: "Japanese" },
-  { label: "Hindi", value: "Hindi" },
-  { label: "Tagalog", value: "Tagalog" },
-  { label: "Samoan", value: "Samoan" },
-  { label: "Māori", value: "Māori" },
-  { label: "Other", value: "Other" },
+const ALL_LANGUAGES = [
+  "Afrikaans", "Albanian", "Amharic", "Arabic", "Armenian", "Azerbaijani",
+  "Basque", "Belarusian", "Bengali", "Bosnian", "Bulgarian", "Catalan",
+  "Cebuano", "Chinese (Cantonese)", "Chinese (Mandarin)", "Croatian", "Czech",
+  "Danish", "Dutch", "English", "Esperanto", "Estonian", "Filipino",
+  "Finnish", "French", "Galician", "Georgian", "German", "Greek",
+  "Gujarati", "Haitian Creole", "Hausa", "Hawaiian", "Hebrew", "Hindi",
+  "Hmong", "Hungarian", "Icelandic", "Igbo", "Indonesian", "Irish",
+  "Italian", "Japanese", "Javanese", "Kannada", "Kazakh", "Khmer",
+  "Korean", "Kurdish", "Kyrgyz", "Lao", "Latin", "Latvian",
+  "Lithuanian", "Luxembourgish", "Macedonian", "Malagasy", "Malay",
+  "Malayalam", "Maltese", "Māori", "Marathi", "Mongolian", "Myanmar (Burmese)",
+  "Nepali", "Norwegian", "Nyanja", "Odia", "Pashto", "Persian",
+  "Polish", "Portuguese", "Punjabi", "Romanian", "Russian", "Samoan",
+  "Scottish Gaelic", "Serbian", "Sesotho", "Shona", "Sindhi", "Sinhala",
+  "Slovak", "Slovenian", "Somali", "Spanish", "Sundanese", "Swahili",
+  "Swedish", "Tajik", "Tamil", "Tatar", "Telugu", "Thai",
+  "Turkish", "Turkmen", "Ukrainian", "Urdu", "Uyghur", "Uzbek",
+  "Vietnamese", "Welsh", "Xhosa", "Yiddish", "Yoruba", "Zulu",
+  "Tagalog", "Other",
 ];
 
-const TOTAL_STEPS = 3;
+const TOTAL_STEPS = 4;
 
 interface FieldErrors {
   firstName?: string;
@@ -40,13 +52,14 @@ interface FieldErrors {
   email?: string;
   password?: string;
   confirmPassword?: string;
+  language?: string;
 }
 
 export default function SignupGeneralScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { signUp } = useAuth();
+  const { signUp, uploadProfilePicture } = useAuth();
   const { width: SCREEN_W } = useWindowDimensions();
 
   const [firstName, setFirstName] = useState("");
@@ -55,13 +68,21 @@ export default function SignupGeneralScreen() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [languages, setLanguages] = useState<string[]>([]);
+  const [language, setLanguage] = useState("");
+  const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
+  const [languageSearch, setLanguageSearch] = useState("");
+  const [avatarUri, setAvatarUri] = useState<string | null>(null);
+  const [avatarMimeType, setAvatarMimeType] = useState("image/jpeg");
   const [isLoading, setIsLoading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
 
   const [step, setStep] = useState(0);
   const slideAnim = useRef(new Animated.Value(0)).current;
+
+  const filteredLanguages = ALL_LANGUAGES.filter((l) =>
+    l.toLowerCase().includes(languageSearch.toLowerCase())
+  );
 
   const slide = (nextStep: number, direction: 1 | -1) => {
     Animated.timing(slideAnim, {
@@ -91,6 +112,8 @@ export default function SignupGeneralScreen() {
       else if (password.length < 8) errors.password = "Password must be at least 8 characters.";
       if (!confirmPassword) errors.confirmPassword = "Please confirm your password.";
       else if (password !== confirmPassword) errors.confirmPassword = "Passwords do not match.";
+    } else if (step === 2) {
+      if (!language) errors.language = "Please select a language.";
     }
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
@@ -106,11 +129,48 @@ export default function SignupGeneralScreen() {
     slide(step - 1, -1);
   };
 
+  const handlePickAvatar = async () => {
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+      if (result.canceled || !result.assets?.length) return;
+      const asset = result.assets[0];
+      setAvatarUri(asset.uri);
+      setAvatarMimeType(asset.mimeType ?? "image/jpeg");
+    } catch {
+    }
+  };
+
   const handleSignup = async () => {
+    if (!validateStep()) return;
     setSubmitError(null);
     setIsLoading(true);
     try {
-      await signUp({ role: "general", firstName: firstName.trim(), lastName: lastName.trim(), email: email.trim(), password, languages });
+      const { token: newToken } = await signUp({
+        role: "general",
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        email: email.trim(),
+        password,
+        languages: language ? [language] : [],
+      });
+
+      if (avatarUri) {
+        try {
+          const ext = avatarUri.split(".").pop() ?? "jpg";
+          await uploadProfilePicture(avatarUri, avatarMimeType, `avatar.${ext}`, newToken);
+        } catch {
+        }
+      }
+
       router.replace("/(tabs)");
     } catch (err) {
       if (err instanceof ApiError && err.details?.length) {
@@ -283,14 +343,131 @@ export default function SignupGeneralScreen() {
       );
     }
 
+    if (step === 2) {
+      return (
+        <View style={styles.stepContent}>
+          <Text style={[styles.stepTag, { color: colors.accent }]}>General User · Free</Text>
+          <Text style={[styles.stepHeading, { color: colors.foreground }]}>
+            Languages{"\n"}you speak
+          </Text>
+
+          {submitError && (
+            <View style={[styles.errorBanner, { backgroundColor: colors.danger + "18", borderColor: colors.danger + "40" }]}>
+              <Feather name="alert-circle" size={15} color={colors.danger} />
+              <Text style={[styles.errorText, { color: colors.danger }]}>{submitError}</Text>
+            </View>
+          )}
+
+          <View style={styles.field}>
+            <Text style={[styles.label, { color: colors.foreground }]}>Primary language</Text>
+            <TouchableOpacity
+              style={[
+                styles.dropdownBtn,
+                {
+                  backgroundColor: colors.card,
+                  borderColor: fieldErrors.language ? colors.danger : colors.border,
+                },
+              ]}
+              onPress={() => { setLanguageSearch(""); setLanguagePickerOpen(true); }}
+              activeOpacity={0.7}
+            >
+              <Text style={[
+                styles.dropdownBtnText,
+                { color: language ? colors.foreground : colors.mutedForeground, fontFamily: "DM_Sans_400Regular" },
+              ]}>
+                {language || "Select a language"}
+              </Text>
+              <Feather name="chevron-down" size={18} color={colors.mutedForeground} />
+            </TouchableOpacity>
+            {fieldErrors.language && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.language}</Text>}
+          </View>
+
+          <Modal
+            visible={languagePickerOpen}
+            animationType="slide"
+            transparent
+            onRequestClose={() => setLanguagePickerOpen(false)}
+          >
+            <View style={styles.modalOverlay}>
+              <View style={[styles.modalSheet, { backgroundColor: colors.background }]}>
+                <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
+                  <Text style={[styles.modalTitle, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>
+                    Select language
+                  </Text>
+                  <TouchableOpacity onPress={() => setLanguagePickerOpen(false)} style={styles.modalCloseBtn}>
+                    <Feather name="x" size={20} color={colors.foreground} />
+                  </TouchableOpacity>
+                </View>
+                <View style={[styles.searchRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <Feather name="search" size={16} color={colors.mutedForeground} />
+                  <TextInput
+                    style={[styles.searchInput, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+                    placeholder="Search languages..."
+                    placeholderTextColor={colors.mutedForeground}
+                    value={languageSearch}
+                    onChangeText={setLanguageSearch}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  {languageSearch.length > 0 && (
+                    <TouchableOpacity onPress={() => setLanguageSearch("")}>
+                      <Feather name="x-circle" size={16} color={colors.mutedForeground} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+                <FlatList
+                  data={filteredLanguages}
+                  keyExtractor={(item) => item}
+                  keyboardShouldPersistTaps="handled"
+                  renderItem={({ item }) => (
+                    <TouchableOpacity
+                      style={[
+                        styles.languageItem,
+                        { borderBottomColor: colors.border },
+                        item === language && { backgroundColor: colors.accent + "15" },
+                      ]}
+                      onPress={() => {
+                        setLanguage(item);
+                        if (fieldErrors.language) setFieldErrors((p) => ({ ...p, language: undefined }));
+                        setLanguagePickerOpen(false);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[
+                        styles.languageItemText,
+                        { color: item === language ? colors.accent : colors.foreground, fontFamily: "DM_Sans_400Regular" },
+                        item === language && { fontFamily: "DM_Sans_600SemiBold" },
+                      ]}>
+                        {item}
+                      </Text>
+                      {item === language && <Feather name="check" size={16} color={colors.accent} />}
+                    </TouchableOpacity>
+                  )}
+                />
+              </View>
+            </View>
+          </Modal>
+
+          <TouchableOpacity
+            style={[styles.primaryBtn, { backgroundColor: colors.accent }]}
+            onPress={goNext}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.primaryBtnText}>Continue</Text>
+            <Feather name="arrow-right" size={18} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
     return (
       <View style={styles.stepContent}>
         <Text style={[styles.stepTag, { color: colors.accent }]}>General User · Free</Text>
         <Text style={[styles.stepHeading, { color: colors.foreground }]}>
-          Languages{"\n"}you speak
+          Profile{"\n"}picture
         </Text>
         <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
-          Helps us surface relevant NZ content for you. Optional — skip any time.
+          Add a photo so others recognise you. This is optional.
         </Text>
 
         {submitError && (
@@ -300,7 +477,27 @@ export default function SignupGeneralScreen() {
           </View>
         )}
 
-        <MultiSelectChips options={LANGUAGE_OPTIONS} selected={languages} onChange={setLanguages} />
+        <TouchableOpacity style={styles.avatarPickerWrap} onPress={handlePickAvatar} activeOpacity={0.8}>
+          {avatarUri ? (
+            <Image source={{ uri: avatarUri }} style={styles.avatarPreview} />
+          ) : (
+            <View style={[styles.avatarPlaceholder, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Feather name="camera" size={32} color={colors.mutedForeground} />
+              <Text style={[styles.avatarPlaceholderText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                Tap to upload
+              </Text>
+            </View>
+          )}
+        </TouchableOpacity>
+
+        {avatarUri && (
+          <TouchableOpacity style={styles.changePhotoBtn} onPress={handlePickAvatar} activeOpacity={0.7}>
+            <Feather name="refresh-cw" size={14} color={colors.accent} />
+            <Text style={[styles.changePhotoText, { color: colors.accent, fontFamily: "DM_Sans_500Medium" }]}>
+              Change photo
+            </Text>
+          </TouchableOpacity>
+        )}
 
         <TouchableOpacity
           style={[styles.primaryBtn, { backgroundColor: colors.accent, opacity: isLoading ? 0.7 : 1 }]}
@@ -316,10 +513,6 @@ export default function SignupGeneralScreen() {
               <Feather name="check" size={18} color="#fff" />
             </>
           )}
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.skipBtn} onPress={handleSignup} disabled={isLoading}>
-          <Text style={[styles.skipText, { color: colors.mutedForeground }]}>Skip this step</Text>
         </TouchableOpacity>
       </View>
     );
@@ -397,9 +590,40 @@ const styles = StyleSheet.create({
     flexDirection: "row", gap: 8, marginTop: 4,
   },
   primaryBtnText: { color: "#fff", fontSize: 16, fontFamily: "DM_Sans_600SemiBold" },
-  skipBtn: { alignItems: "center", paddingVertical: 12 },
-  skipText: { fontSize: 14, fontFamily: "DM_Sans_400Regular" },
   footer: { flexDirection: "row", justifyContent: "center", alignItems: "center", marginTop: 28 },
   footerText: { fontSize: 14, fontFamily: "DM_Sans_400Regular" },
   footerLink: { fontSize: 14, fontFamily: "DM_Sans_600SemiBold" },
+  dropdownBtn: {
+    height: 52, borderRadius: 12, borderWidth: 1, paddingHorizontal: 16,
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+  },
+  dropdownBtnText: { fontSize: 15, flex: 1 },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
+  modalSheet: { borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: "80%", paddingBottom: 24 },
+  modalHeader: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1,
+  },
+  modalTitle: { fontSize: 17 },
+  modalCloseBtn: { padding: 4 },
+  searchRow: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    marginHorizontal: 16, marginVertical: 12,
+    borderRadius: 10, borderWidth: 1, paddingHorizontal: 12, height: 44,
+  },
+  searchInput: { flex: 1, fontSize: 15, height: "100%" },
+  languageItem: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  languageItemText: { fontSize: 15 },
+  avatarPickerWrap: { alignItems: "center", marginVertical: 8 },
+  avatarPreview: { width: 120, height: 120, borderRadius: 60 },
+  avatarPlaceholder: {
+    width: 120, height: 120, borderRadius: 60, borderWidth: 2, borderStyle: "dashed",
+    alignItems: "center", justifyContent: "center", gap: 8,
+  },
+  avatarPlaceholderText: { fontSize: 13 },
+  changePhotoBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
+  changePhotoText: { fontSize: 14 },
 });
