@@ -9,8 +9,6 @@ export default function AuthLayout() {
       <Stack.Screen name="signup-general" />
       <Stack.Screen name="signup-agent" />
       <Stack.Screen name="signup-provider" />
-      <Stack.Screen name="welcome-agent" />
-      <Stack.Screen name="welcome-provider" />
     </Stack>
   );
 }

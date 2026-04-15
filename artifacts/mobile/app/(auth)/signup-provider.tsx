@@ -175,7 +175,7 @@ export default function SignupProviderScreen() {
         }
       }
 
-      router.replace("/(auth)/welcome-provider");
+      router.replace("/(onboarding)/service-provider-welcome");
     } catch (err) {
       setUploadStatus("idle");
       if (err instanceof ApiError && err.details?.length) {

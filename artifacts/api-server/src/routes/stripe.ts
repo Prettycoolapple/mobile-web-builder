@@ -7,8 +7,31 @@ import { logger } from "../lib/logger";
 
 const router = Router();
 
-const PRO_PRICE_NZD_CENTS = 4900;
-const PRO_PRODUCT_NAME = "DevFeasible NZ Pro";
+const PLAN_CONFIG = {
+  pro: {
+    priceCents: 4900,
+    productName: "DevFeasible NZ Pro",
+    nickname: "Pro Monthly NZD",
+    description: "Unlimited AI property development feasibility reports for NZ",
+    tier: "pro",
+  },
+  sales_agent: {
+    priceCents: 9900,
+    productName: "Lecorb Sales Agent",
+    nickname: "Sales Agent Monthly NZD",
+    description: "Lecorb Sales Agent subscription — leads, listings & AI placement",
+    tier: "pro",
+  },
+  service_provider: {
+    priceCents: 14900,
+    productName: "Lecorb Service Provider",
+    nickname: "Service Provider Monthly NZD",
+    description: "Lecorb Service Provider subscription — leads, profile listing & AI placement",
+    tier: "pro",
+  },
+} as const;
+
+type PlanKey = keyof typeof PLAN_CONFIG;
 
 function getBaseUrl(): string {
   const domain = process.env["REPLIT_DOMAINS"]?.split(",")[0];
@@ -32,6 +55,10 @@ router.post("/stripe/checkout", async (req, res) => {
     return;
   }
 
+  const { plan } = req.body as { plan?: string };
+  const planKey: PlanKey = plan === "sales_agent" || plan === "service_provider" ? plan : "pro";
+  const planCfg = PLAN_CONFIG[planKey];
+
   try {
     const [profile] = await db.select().from(profiles).where(eq(profiles.id, userId)).limit(1);
     if (!profile) {
@@ -52,31 +79,37 @@ router.post("/stripe/checkout", async (req, res) => {
       await db.update(profiles).set({ stripeCustomerId: customerId }).where(eq(profiles.id, userId));
     }
 
-    const prices = await stripe.prices.list({ active: true, type: "recurring", limit: 20 });
+    const prices = await stripe.prices.list({ active: true, type: "recurring", limit: 100 });
     let priceId = prices.data.find(
-      (p) => p.unit_amount === PRO_PRICE_NZD_CENTS && p.currency === "nzd" && p.recurring?.interval === "month",
+      (p) =>
+        p.unit_amount === planCfg.priceCents &&
+        p.currency === "nzd" &&
+        p.recurring?.interval === "month" &&
+        p.nickname === planCfg.nickname,
     )?.id;
 
     if (!priceId) {
       let productId: string;
-      const existingProducts = await stripe.products.search({ query: `name:'${PRO_PRODUCT_NAME}'`, limit: 1 }).catch(() => ({ data: [] }));
+      const existingProducts = await stripe.products
+        .search({ query: `name:'${planCfg.productName}'`, limit: 1 })
+        .catch(() => ({ data: [] }));
       if (existingProducts.data.length > 0) {
         productId = existingProducts.data[0].id;
       } else {
         const product = await stripe.products.create({
-          name: PRO_PRODUCT_NAME,
-          description: "Unlimited AI property development feasibility reports for NZ",
-          metadata: { tier: "pro" },
+          name: planCfg.productName,
+          description: planCfg.description,
+          metadata: { tier: planCfg.tier, plan: planKey },
         });
         productId = product.id;
       }
 
       const price = await stripe.prices.create({
         product: productId,
-        unit_amount: PRO_PRICE_NZD_CENTS,
+        unit_amount: planCfg.priceCents,
         currency: "nzd",
         recurring: { interval: "month" },
-        nickname: "Pro Monthly NZD",
+        nickname: planCfg.nickname,
       });
       priceId = price.id;
     }
@@ -88,8 +121,8 @@ router.post("/stripe/checkout", async (req, res) => {
       line_items: [{ price: priceId, quantity: 1 }],
       success_url: `${base}/profile?upgraded=true`,
       cancel_url: `${base}/profile`,
-      metadata: { user_id: userId },
-      subscription_data: { metadata: { user_id: userId } },
+      metadata: { user_id: userId, plan: planKey },
+      subscription_data: { metadata: { user_id: userId, plan: planKey }, trial_period_days: 14 },
     });
 
     res.json({ url: session.url });

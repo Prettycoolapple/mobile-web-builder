@@ -56,8 +56,16 @@ export default function LoginScreen() {
     setError(null);
     setIsLoading(true);
     try {
-      await signIn(email.trim(), password);
-      router.replace("/(tabs)");
+      const result = await signIn(email.trim(), password);
+      const role = result?.role;
+      const tier = result?.subscriptionTier ?? "free";
+      if (role === "sales_agent" && tier === "free") {
+        router.replace("/(onboarding)/sales-agent-welcome");
+      } else if (role === "service_provider" && tier === "free") {
+        router.replace("/(onboarding)/service-provider-welcome");
+      } else {
+        router.replace("/(tabs)");
+      }
     } catch (e: any) {
       setError(e.message || "Login failed. Please try again.");
     } finally {

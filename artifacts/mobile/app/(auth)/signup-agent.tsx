@@ -136,7 +136,7 @@ export default function SignupAgentScreen() {
           propertyTypes,
         },
       });
-      router.replace("/(auth)/welcome-agent");
+      router.replace("/(onboarding)/sales-agent-welcome");
     } catch (err) {
       if (err instanceof ApiError && err.details?.length) {
         const mapped: FieldErrors = {};

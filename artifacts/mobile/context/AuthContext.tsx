@@ -96,7 +96,7 @@ interface AuthContextValue {
   token: string | null;
   isLoading: boolean;
   signUp: (data: SignUpData) => Promise<{ token: string }>;
-  signIn: (email: string, password: string) => Promise<void>;
+  signIn: (email: string, password: string) => Promise<UserProfile>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   getApiHeaders: () => Record<string, string>;
@@ -176,7 +176,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { token: json.token };
   }, [persistAuth]);
 
-  const signIn = useCallback(async (email: string, password: string) => {
+  const signIn = useCallback(async (email: string, password: string): Promise<UserProfile> => {
     const resp = await fetch(`${getApiBase()}/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -190,6 +190,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       languages: data.user.languages ?? [],
     };
     await persistAuth(data.token, profile);
+    return profile;
   }, [persistAuth]);
 
   const signOut = useCallback(async () => {
