@@ -49,5 +49,6 @@ export const requireAuth: RequestHandler = (req, res, next) => {
 
   (req as any).userId = payload.sub;
   (req as any).userEmail = payload.email;
+  (req as any).role = payload.role ?? "general";
   next();
 };

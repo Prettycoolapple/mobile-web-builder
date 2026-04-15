@@ -16,6 +16,7 @@ import Svg, { Circle, Line, Path } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useChat, ChatMessage, FeasibilityReport, PropertyCandidate } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
@@ -88,7 +89,8 @@ function GlassesLogo({ size = 40, color = "#D97757" }: { size?: number; color?: 
 export default function ChatScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { getApiHeaders, refreshProfile } = useAuth();
+  const router = useRouter();
+  const { getApiHeaders, refreshProfile, user } = useAuth();
   const {
     currentSession,
     currentSessionId,
@@ -324,6 +326,16 @@ export default function ChatScreen() {
             <Text style={[styles.appName, { fontFamily: "DM_Sans_700Bold" }]}>Lecorb</Text>
           </View>
           <View style={styles.headerActions}>
+            {user?.role === "sales_agent" && (
+              <TouchableOpacity
+                style={[styles.addListingBtn, { backgroundColor: colors.accent }]}
+                onPress={() => router.push("/add-listing")}
+                activeOpacity={0.8}
+              >
+                <Feather name="plus" size={13} color="#fff" />
+                <Text style={[styles.addListingBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>Add listing</Text>
+              </TouchableOpacity>
+            )}
             {!isEmpty && (
               <TouchableOpacity
                 style={[styles.newChatBtn, { borderColor: "rgba(250,249,246,0.18)" }]}
@@ -505,6 +517,18 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
+  },
+  addListingBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderRadius: 20,
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+  },
+  addListingBtnText: {
+    fontSize: 13,
+    color: "#fff",
   },
   newChatBtn: {
     flexDirection: "row",

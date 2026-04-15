@@ -7,6 +7,7 @@ import stripeRouter from "./stripe";
 import searchesRouter from "./searches";
 import storageRouter from "./storage";
 import uploadRouter from "./upload";
+import listingsRouter from "./listings";
 
 const router: IRouter = Router();
 
@@ -18,5 +19,6 @@ router.use(stripeRouter);
 router.use(searchesRouter);
 router.use(storageRouter);
 router.use(uploadRouter);
+router.use(listingsRouter);
 
 export default router;
