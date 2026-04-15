@@ -1,5 +1,6 @@
-import React, { createContext, useContext, useState, useCallback } from "react";
+import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useAuth } from "@/context/AuthContext";
 
 export type MessageRole = "user" | "assistant";
 
@@ -222,19 +223,29 @@ interface ChatContextValue {
 
 const ChatContext = createContext<ChatContextValue | null>(null);
 
-const STORAGE_KEY = "@devfeasible/sessions";
+const BASE_STORAGE_KEY = "@devfeasible/sessions";
+
+function getStorageKey(userId: string | null | undefined): string {
+  return userId ? `${BASE_STORAGE_KEY}/${userId}` : BASE_STORAGE_KEY;
+}
 
 function generateId(): string {
   return Date.now().toString() + Math.random().toString(36).substr(2, 9);
 }
 
 export function ChatProvider({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  const userId = user?.id ?? null;
+
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  React.useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY).then((raw) => {
+  useEffect(() => {
+    const storageKey = getStorageKey(userId);
+    setSessions([]);
+    setCurrentSessionId(null);
+    AsyncStorage.getItem(storageKey).then((raw) => {
       if (raw) {
         try {
           const parsed = JSON.parse(raw) as Session[];
@@ -249,14 +260,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         }
       }
     });
-  }, []);
+  }, [userId]);
 
   const saveSessions = useCallback((newSessions: Session[]) => {
+    const storageKey = getStorageKey(userId);
     const withMessages = newSessions.filter(
       (s) => s.messages.some((m) => m.type !== "loading" && m.content.length > 0),
     );
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(withMessages));
-  }, []);
+    AsyncStorage.setItem(storageKey, JSON.stringify(withMessages));
+  }, [userId]);
 
   const currentSession = sessions.find((s) => s.id === currentSessionId) || null;
 

@@ -92,7 +92,7 @@ export default function HistoryScreen() {
             activeOpacity={0.8}
           >
             <Feather name="plus" size={15} color="#fff" />
-            <Text style={[styles.newBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>New chat</Text>
+            <Text style={[styles.newBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>New Search</Text>
           </TouchableOpacity>
         </View>
       </View>

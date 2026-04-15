@@ -31,6 +31,7 @@ const PLAN_FEATURES = {
     "More feasibility reports/month",
     "Chat & property discovery",
     "Access to architect/designer & other disciplines",
+    "AI live translation messages & calls",
   ],
   agent: [
     "Unlimited property listings",
@@ -484,20 +485,6 @@ export default function ProfileScreen() {
                     Manage subscription
                   </Text>
                 </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.actionBtn, { borderColor: "rgba(250,250,249,0.2)" }]}
-                  onPress={handleRestore}
-                  activeOpacity={0.7}
-                  disabled={restoreLoading}
-                >
-                  {restoreLoading
-                    ? <ActivityIndicator size="small" color="rgba(250,250,249,0.6)" />
-                    : <Feather name="refresh-cw" size={14} color="rgba(250,250,249,0.6)" />
-                  }
-                  <Text style={[styles.actionBtnText, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
-                    Restore purchases
-                  </Text>
-                </TouchableOpacity>
               </View>
             )}
           </View>
@@ -539,20 +526,6 @@ export default function ProfileScreen() {
                     Manage subscription
                   </Text>
                 </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.actionBtn, { borderColor: "rgba(250,250,249,0.2)" }]}
-                  onPress={handleRestore}
-                  activeOpacity={0.7}
-                  disabled={restoreLoading}
-                >
-                  {restoreLoading
-                    ? <ActivityIndicator size="small" color="rgba(250,250,249,0.6)" />
-                    : <Feather name="refresh-cw" size={14} color="rgba(250,250,249,0.6)" />
-                  }
-                  <Text style={[styles.actionBtnText, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
-                    Restore purchases
-                  </Text>
-                </TouchableOpacity>
               </View>
             )}
           </View>
@@ -592,20 +565,6 @@ export default function ProfileScreen() {
                   <Feather name="credit-card" size={14} color="rgba(250,250,249,0.6)" />
                   <Text style={[styles.actionBtnText, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
                     Manage subscription
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.actionBtn, { borderColor: "rgba(250,250,249,0.2)" }]}
-                  onPress={handleRestore}
-                  activeOpacity={0.7}
-                  disabled={restoreLoading}
-                >
-                  {restoreLoading
-                    ? <ActivityIndicator size="small" color="rgba(250,250,249,0.6)" />
-                    : <Feather name="refresh-cw" size={14} color="rgba(250,250,249,0.6)" />
-                  }
-                  <Text style={[styles.actionBtnText, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
-                    Restore purchases
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -657,19 +616,6 @@ export default function ProfileScreen() {
                 )}
               </TouchableOpacity>
 
-              <TouchableOpacity
-                onPress={handleRestore}
-                activeOpacity={0.7}
-                disabled={upgradeLoading || restoreLoading}
-                style={styles.restoreLink}
-              >
-                {restoreLoading
-                  ? <ActivityIndicator size="small" color={colors.mutedForeground} />
-                  : <Text style={[styles.restoreLinkText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                      Restore purchases
-                    </Text>
-                }
-              </TouchableOpacity>
             </View>
           </>
         )}
@@ -718,19 +664,6 @@ export default function ProfileScreen() {
                 )}
               </TouchableOpacity>
 
-              <TouchableOpacity
-                onPress={handleRestore}
-                activeOpacity={0.7}
-                disabled={upgradeLoading || restoreLoading}
-                style={styles.restoreLink}
-              >
-                {restoreLoading
-                  ? <ActivityIndicator size="small" color={colors.mutedForeground} />
-                  : <Text style={[styles.restoreLinkText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                      Restore purchases
-                    </Text>
-                }
-              </TouchableOpacity>
             </View>
           </>
         )}
@@ -779,19 +712,6 @@ export default function ProfileScreen() {
                 )}
               </TouchableOpacity>
 
-              <TouchableOpacity
-                onPress={handleRestore}
-                activeOpacity={0.7}
-                disabled={upgradeLoading || restoreLoading}
-                style={styles.restoreLink}
-              >
-                {restoreLoading
-                  ? <ActivityIndicator size="small" color={colors.mutedForeground} />
-                  : <Text style={[styles.restoreLinkText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                      Restore purchases
-                    </Text>
-                }
-              </TouchableOpacity>
             </View>
           </>
         )}
