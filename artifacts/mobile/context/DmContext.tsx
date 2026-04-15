@@ -95,11 +95,13 @@ export function DmProvider({ children }: { children: React.ReactNode }) {
       fetchThreads();
     });
 
-    newSocket.on("new_message", ({ threadId }: { threadId: string; message: DmMessage }) => {
+    newSocket.on("new_message", ({ threadId, message }: { threadId: string; message: DmMessage }) => {
+      const isMine = message.senderId === user?.id;
       setThreads((prev) => {
         const updated = prev.map((t) => {
           if (t.id === threadId) {
-            return { ...t, unreadCount: t.unreadCount + 1, lastMessageAt: new Date().toISOString() };
+            const extra = isMine ? 0 : 1;
+            return { ...t, unreadCount: t.unreadCount + extra, lastMessageAt: new Date().toISOString() };
           }
           return t;
         });

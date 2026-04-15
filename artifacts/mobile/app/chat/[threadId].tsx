@@ -261,10 +261,10 @@ export default function ChatScreen() {
       if (Platform.OS === "web") {
         const resp = await fetch(asset.uri);
         const blob = await resp.blob();
-        form.append("image", blob, filename);
+        form.append("file", blob, filename);
       } else {
         const rnFile: { uri: string; name: string; type: string } = { uri: asset.uri, name: filename, type: mimeType };
-        (form as unknown as { append(k: string, v: { uri: string; name: string; type: string }): void }).append("image", rnFile);
+        (form as unknown as { append(k: string, v: { uri: string; name: string; type: string }): void }).append("file", rnFile);
       }
       const uploadResp = await fetch(`${getApiBase()}/upload/dm-image`, {
         method: "POST",
@@ -272,8 +272,8 @@ export default function ChatScreen() {
         body: form,
       });
       if (uploadResp.ok) {
-        const { url } = await uploadResp.json() as { url: string };
-        await sendMessage(undefined, url);
+        const { fileUrl } = await uploadResp.json() as { fileUrl: string };
+        await sendMessage(undefined, fileUrl);
       }
     } catch {
     } finally {
