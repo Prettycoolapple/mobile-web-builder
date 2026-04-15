@@ -1,6 +1,7 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import multer, { MulterError } from "multer";
-import { db, userUploads } from "@workspace/db";
+import { eq } from "drizzle-orm";
+import { db, userUploads, profiles } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { ObjectStorageService } from "../lib/objectStorage";
 
@@ -172,6 +173,52 @@ router.post(
       const fileUrl = `/api/storage${objectPath}`;
       res.status(201).json({ fileUrl, objectPath });
     } catch (error) {
+      res.status(500).json({ error: "Upload failed. Please try again.", code: "UPLOAD_FAILED" });
+    }
+  },
+);
+
+router.post(
+  "/upload/profile-picture",
+  requireAuth,
+  uploadImageOnly.single("file"),
+  async (req: Request, res: Response) => {
+    const userId = (req as any).userId as string;
+
+    if (!req.file) {
+      res.status(400).json({ error: "No file provided", code: "MISSING_FILE" });
+      return;
+    }
+
+    try {
+      const { buffer, mimetype, size } = req.file;
+
+      const uploadURL = await objectStorageService.getObjectEntityUploadURL();
+      const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
+
+      const uploadRes = await fetch(uploadURL, {
+        method: "PUT",
+        headers: {
+          "Content-Type": mimetype,
+          "Content-Length": String(size),
+        },
+        body: buffer,
+      });
+
+      if (!uploadRes.ok) {
+        res.status(500).json({ error: "Failed to upload file to storage", code: "UPLOAD_FAILED" });
+        return;
+      }
+
+      await Promise.all([
+        db.insert(userUploads).values({ userId, objectPath }),
+        db.update(profiles).set({ avatarUrl: `/api/storage${objectPath}` }).where(eq(profiles.id, userId)),
+      ]);
+
+      const fileUrl = `/api/storage${objectPath}`;
+      res.status(201).json({ fileUrl, objectPath });
+    } catch (error) {
+      req.log.error({ error }, "Profile picture upload failed");
       res.status(500).json({ error: "Upload failed. Please try again.", code: "UPLOAD_FAILED" });
     }
   },

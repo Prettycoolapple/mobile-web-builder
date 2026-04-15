@@ -27,12 +27,16 @@ const serviceProviderSchema = z.object({
   discipline: z
     .enum(["architect_designer", "planner", "engineer", "quantity_surveyor", "other"])
     .optional(),
+  otherDiscipline: z.string().optional(),
   addressStreet: z.string().optional(),
   addressSuburb: z.string().optional(),
   addressCity: z.string().optional(),
   addressPostcode: z.string().optional(),
   contactNumber: z.string().optional(),
   incorporationCertUrl: z.string().optional(),
+  primaryLanguage: z.string().optional(),
+  secondaryLanguage: z.string().optional(),
+  avatarUrl: z.string().optional(),
 });
 
 const signupSchema = z
@@ -137,11 +141,15 @@ router.post("/signup", async (req, res) => {
       }
 
       if (role === "service_provider") {
+        if (providerData?.avatarUrl) {
+          await tx.update(profiles).set({ avatarUrl: providerData.avatarUrl }).where(eq(profiles.id, newProfile.id));
+        }
         await tx.insert(serviceProviderProfiles).values({
           userId: newProfile.id,
           companyName: providerData?.companyName,
           nzCompanyRegisterNumber: providerData?.nzCompanyRegisterNumber,
           discipline: providerData?.discipline,
+          otherDiscipline: providerData?.otherDiscipline,
           addressStreet: providerData?.addressStreet,
           addressSuburb: providerData?.addressSuburb,
           addressCity: providerData?.addressCity,
@@ -149,6 +157,8 @@ router.post("/signup", async (req, res) => {
           contactNumber: providerData?.contactNumber,
           languages,
           incorporationCertUrl: providerData?.incorporationCertUrl,
+          primaryLanguage: providerData?.primaryLanguage,
+          secondaryLanguage: providerData?.secondaryLanguage,
         });
       }
 

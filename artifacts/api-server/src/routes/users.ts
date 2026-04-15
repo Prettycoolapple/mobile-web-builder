@@ -21,6 +21,8 @@ router.get("/users/:userId", requireAuth, async (req: Request, res: Response) =>
         id: profiles.id,
         fullName: profiles.fullName,
         role: profiles.role,
+        avatarUrl: profiles.avatarUrl,
+        isVerified: profiles.isVerified,
         createdAt: profiles.createdAt,
       })
       .from(profiles)
@@ -81,9 +83,12 @@ router.get("/users/:userId", requireAuth, async (req: Request, res: Response) =>
           companyName: provider.companyName,
           nzCompanyRegisterNumber: provider.nzCompanyRegisterNumber,
           discipline: provider.discipline,
+          otherDiscipline: provider.otherDiscipline,
           addressSuburb: provider.addressSuburb,
           addressCity: provider.addressCity,
           contactNumber: provider.contactNumber,
+          primaryLanguage: provider.primaryLanguage,
+          secondaryLanguage: provider.secondaryLanguage,
         };
       }
     }
@@ -92,6 +97,8 @@ router.get("/users/:userId", requireAuth, async (req: Request, res: Response) =>
       id: profile.id,
       fullName: profile.fullName,
       role: profile.role,
+      avatarUrl: profile.avatarUrl,
+      isVerified: profile.isVerified,
       createdAt: profile.createdAt,
       recommendationCount,
       hasRecommended,

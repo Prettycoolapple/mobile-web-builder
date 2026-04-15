@@ -1,4 +1,4 @@
-import { pgTable, text, integer, timestamp, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, text, integer, timestamp, pgEnum, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { sql } from "drizzle-orm";
 import { z } from "zod/v4";
@@ -16,6 +16,8 @@ export const profiles = pgTable("profiles", {
   reportsUsedThisMonth: integer("reports_used_this_month").default(0).notNull(),
   lastResetAt: timestamp("last_reset_at", { withTimezone: true }).defaultNow().notNull(),
   stripeCustomerId: text("stripe_customer_id"),
+  avatarUrl: text("avatar_url"),
+  isVerified: boolean("is_verified").default(false).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

@@ -10,6 +10,7 @@ import uploadRouter from "./upload";
 import listingsRouter from "./listings";
 import dmRouter from "./dm";
 import usersRouter from "./users";
+import notificationsRouter from "./notifications";
 
 const router: IRouter = Router();
 
@@ -24,5 +25,6 @@ router.use(uploadRouter);
 router.use(listingsRouter);
 router.use(dmRouter);
 router.use(usersRouter);
+router.use(notificationsRouter);
 
 export default router;

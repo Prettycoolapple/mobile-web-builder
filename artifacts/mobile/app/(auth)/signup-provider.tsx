@@ -12,26 +12,38 @@ import {
   Animated,
   useWindowDimensions,
   Alert,
+  Modal,
+  Image,
+  FlatList,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
+import * as ImagePicker from "expo-image-picker";
 import { useColors } from "@/hooks/useColors";
 import { useAuth, ApiError, type ProviderDiscipline } from "@/context/AuthContext";
 import { MultiSelectChips } from "@/components/MultiSelectChips";
 
-const LANGUAGE_OPTIONS = [
-  { label: "English", value: "English" },
-  { label: "Chinese (Mandarin)", value: "Chinese (Mandarin)" },
-  { label: "Chinese (Cantonese)", value: "Chinese (Cantonese)" },
-  { label: "Korean", value: "Korean" },
-  { label: "Japanese", value: "Japanese" },
-  { label: "Hindi", value: "Hindi" },
-  { label: "Tagalog", value: "Tagalog" },
-  { label: "Samoan", value: "Samoan" },
-  { label: "Māori", value: "Māori" },
-  { label: "Other", value: "Other" },
+const WORLD_LANGUAGES = [
+  "Afrikaans", "Albanian", "Amharic", "Arabic", "Armenian", "Azerbaijani",
+  "Basque", "Belarusian", "Bengali", "Bosnian", "Bulgarian", "Catalan",
+  "Cebuano", "Chinese (Cantonese)", "Chinese (Mandarin)", "Chinese (Traditional)",
+  "Croatian", "Czech", "Danish", "Dutch", "English", "Esperanto",
+  "Estonian", "Filipino / Tagalog", "Finnish", "French", "Galician",
+  "Georgian", "German", "Greek", "Gujarati", "Haitian Creole", "Hausa",
+  "Hebrew", "Hindi", "Hmong", "Hungarian", "Icelandic", "Igbo",
+  "Indonesian", "Irish", "Italian", "Japanese", "Javanese", "Kannada",
+  "Kazakh", "Khmer", "Korean", "Kurdish", "Kyrgyz", "Lao",
+  "Latin", "Latvian", "Lithuanian", "Luxembourgish", "Macedonian",
+  "Malagasy", "Malay", "Malayalam", "Maltese", "Māori", "Marathi",
+  "Mongolian", "Myanmar (Burmese)", "Nepali", "Norwegian", "Odia",
+  "Pashto", "Persian (Farsi)", "Polish", "Portuguese", "Punjabi",
+  "Romanian", "Russian", "Samoan", "Serbian", "Sindhi", "Sinhala",
+  "Slovak", "Slovenian", "Somali", "Spanish", "Sundanese", "Swahili",
+  "Swedish", "Tajik", "Tamil", "Tatar", "Telugu", "Thai", "Tongan",
+  "Turkish", "Turkmen", "Ukrainian", "Urdu", "Uyghur", "Uzbek",
+  "Vietnamese", "Welsh", "Xhosa", "Yiddish", "Yoruba", "Zulu",
 ];
 
 const DISCIPLINE_OPTIONS: { label: string; value: ProviderDiscipline }[] = [
@@ -50,7 +62,7 @@ interface PickedFile {
 
 type UploadStatus = "idle" | "uploading" | "done" | "error";
 
-const TOTAL_STEPS = 4;
+const TOTAL_STEPS = 5;
 
 interface FieldErrors {
   firstName?: string;
@@ -60,15 +72,131 @@ interface FieldErrors {
   confirmPassword?: string;
   companyName?: string;
   discipline?: string;
+  otherDiscipline?: string;
+  contactNumber?: string;
+  primaryLanguage?: string;
 }
 
 const ACCENT = "#52C99A";
+
+function LanguagePicker({
+  label,
+  value,
+  onSelect,
+  placeholder,
+  required,
+  error,
+  colors,
+}: {
+  label: string;
+  value: string;
+  onSelect: (val: string) => void;
+  placeholder: string;
+  required?: boolean;
+  error?: string;
+  colors: ReturnType<typeof useColors>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const filtered = WORLD_LANGUAGES.filter((l) =>
+    l.toLowerCase().includes(search.toLowerCase()),
+  );
+
+  const options = required
+    ? filtered
+    : ["None", ...filtered];
+
+  return (
+    <View style={{ gap: 6 }}>
+      <Text style={[styles.label, { color: colors.foreground }]}>
+        {label}
+        {!required && (
+          <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }}> (optional)</Text>
+        )}
+      </Text>
+      <TouchableOpacity
+        onPress={() => { setSearch(""); setOpen(true); }}
+        style={[
+          styles.pickerBtn,
+          {
+            backgroundColor: colors.card,
+            borderColor: error ? colors.danger : colors.border,
+          },
+        ]}
+        activeOpacity={0.7}
+      >
+        <Text
+          style={[
+            styles.pickerBtnText,
+            { color: value ? colors.foreground : colors.mutedForeground, fontFamily: "DM_Sans_400Regular" },
+          ]}
+        >
+          {value || placeholder}
+        </Text>
+        <Feather name="chevron-down" size={16} color={colors.mutedForeground} />
+      </TouchableOpacity>
+      {error && <Text style={[styles.fieldError, { color: colors.danger }]}>{error}</Text>}
+
+      <Modal visible={open} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setOpen(false)}>
+        <View style={[styles.modalContainer, { backgroundColor: colors.background }]}>
+          <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
+            <Text style={[styles.modalTitle, { color: colors.foreground }]}>{label}</Text>
+            <TouchableOpacity onPress={() => setOpen(false)} hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}>
+              <Feather name="x" size={22} color={colors.foreground} />
+            </TouchableOpacity>
+          </View>
+          <View style={[styles.modalSearch, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Feather name="search" size={16} color={colors.mutedForeground} />
+            <TextInput
+              style={[styles.modalSearchInput, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+              placeholder="Search languages…"
+              placeholderTextColor={colors.mutedForeground}
+              value={search}
+              onChangeText={setSearch}
+              autoFocus
+            />
+          </View>
+          <FlatList
+            data={options}
+            keyExtractor={(item) => item}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={[
+                  styles.modalOption,
+                  { borderBottomColor: colors.border },
+                  item === value && { backgroundColor: ACCENT + "18" },
+                ]}
+                onPress={() => {
+                  onSelect(item === "None" ? "" : item);
+                  setOpen(false);
+                }}
+                activeOpacity={0.7}
+              >
+                <Text
+                  style={[
+                    styles.modalOptionText,
+                    { color: item === value ? ACCENT : colors.foreground, fontFamily: item === value ? "DM_Sans_600SemiBold" : "DM_Sans_400Regular" },
+                  ]}
+                >
+                  {item}
+                </Text>
+                {item === value && <Feather name="check" size={16} color={ACCENT} />}
+              </TouchableOpacity>
+            )}
+            keyboardShouldPersistTaps="handled"
+          />
+        </View>
+      </Modal>
+    </View>
+  );
+}
 
 export default function SignupProviderScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { signUp, uploadIncorporationCert, updateServiceProviderCert } = useAuth();
+  const { signUp, uploadIncorporationCert, updateServiceProviderCert, uploadProfilePicture } = useAuth();
   const { width: SCREEN_W } = useWindowDimensions();
 
   const [firstName, setFirstName] = useState("");
@@ -80,12 +208,16 @@ export default function SignupProviderScreen() {
   const [companyName, setCompanyName] = useState("");
   const [regNumber, setRegNumber] = useState("");
   const [discipline, setDiscipline] = useState<ProviderDiscipline | null>(null);
+  const [otherDisciplineText, setOtherDisciplineText] = useState("");
   const [addressStreet, setAddressStreet] = useState("");
   const [addressSuburb, setAddressSuburb] = useState("");
   const [addressCity, setAddressCity] = useState("");
   const [addressPostcode, setAddressPostcode] = useState("");
   const [contactNumber, setContactNumber] = useState("+64 ");
-  const [languages, setLanguages] = useState<string[]>([]);
+  const [primaryLanguage, setPrimaryLanguage] = useState("");
+  const [secondaryLanguage, setSecondaryLanguage] = useState("");
+  const [avatarUri, setAvatarUri] = useState<string | null>(null);
+  const [avatarMimeType, setAvatarMimeType] = useState("image/jpeg");
   const [pickedFile, setPickedFile] = useState<PickedFile | null>(null);
   const [uploadStatus, setUploadStatus] = useState<UploadStatus>("idle");
   const [isLoading, setIsLoading] = useState(false);
@@ -126,6 +258,28 @@ export default function SignupProviderScreen() {
     }
   };
 
+  const handlePickAvatar = async () => {
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permission required", "Please allow access to your photo library to upload a logo.");
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+      if (result.canceled || !result.assets?.length) return;
+      const asset = result.assets[0];
+      setAvatarUri(asset.uri);
+      setAvatarMimeType(asset.mimeType ?? "image/jpeg");
+    } catch {
+      Alert.alert("Error", "Could not select image. Please try again.");
+    }
+  };
+
   const validateStep = (): boolean => {
     const errors: FieldErrors = {};
     if (step === 0) {
@@ -141,6 +295,11 @@ export default function SignupProviderScreen() {
     } else if (step === 2) {
       if (!companyName.trim()) errors.companyName = "Company name is required.";
       if (!discipline) errors.discipline = "Please select your discipline.";
+      else if (discipline === "other" && !otherDisciplineText.trim()) errors.otherDiscipline = "Please describe your discipline.";
+    } else if (step === 3) {
+      const phone = contactNumber.trim();
+      if (!phone || phone === "+64") errors.contactNumber = "Contact number is required.";
+      if (!primaryLanguage) errors.primaryLanguage = "Primary language is required.";
     }
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
@@ -167,18 +326,29 @@ export default function SignupProviderScreen() {
         lastName: lastName.trim(),
         email: email.trim(),
         password,
-        languages,
+        languages: primaryLanguage ? [primaryLanguage, ...(secondaryLanguage ? [secondaryLanguage] : [])] : [],
         providerData: {
           companyName: companyName.trim() || undefined,
           nzCompanyRegisterNumber: regNumber.trim() || undefined,
           discipline: discipline ?? undefined,
+          otherDiscipline: discipline === "other" ? otherDisciplineText.trim() || undefined : undefined,
           addressStreet: addressStreet.trim() || undefined,
           addressSuburb: addressSuburb.trim() || undefined,
           addressCity: addressCity.trim() || undefined,
           addressPostcode: addressPostcode.trim() || undefined,
           contactNumber: contactNumber.trim() !== "+64" ? contactNumber.trim() : undefined,
+          primaryLanguage: primaryLanguage || undefined,
+          secondaryLanguage: secondaryLanguage || undefined,
         },
       });
+
+      if (avatarUri) {
+        try {
+          const ext = avatarMimeType.split("/")[1] ?? "jpg";
+          await uploadProfilePicture(avatarUri, avatarMimeType, `avatar.${ext}`, newToken);
+        } catch {
+        }
+      }
 
       if (pickedFile) {
         setUploadStatus("uploading");
@@ -236,9 +406,7 @@ export default function SignupProviderScreen() {
       return (
         <View style={styles.stepContent}>
           <Text style={[styles.stepTag, { color: ACCENT }]}>Service Provider · $149/mo</Text>
-          <Text style={[styles.stepHeading, { color: colors.foreground }]}>
-            What should{"\n"}we call you?
-          </Text>
+          <Text style={[styles.stepHeading, { color: colors.foreground }]}>What should{"\n"}we call you?</Text>
           <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
             Let's get your provider profile set up.
           </Text>
@@ -285,12 +453,8 @@ export default function SignupProviderScreen() {
       return (
         <View style={styles.stepContent}>
           <Text style={[styles.stepTag, { color: ACCENT }]}>Service Provider · $149/mo</Text>
-          <Text style={[styles.stepHeading, { color: colors.foreground }]}>
-            Create your{"\n"}login
-          </Text>
-          <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
-            Your email and a secure password.
-          </Text>
+          <Text style={[styles.stepHeading, { color: colors.foreground }]}>Create your{"\n"}login</Text>
+          <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>Your email and a secure password.</Text>
 
           {submitError && (
             <View style={[styles.errorBanner, { backgroundColor: colors.danger + "18", borderColor: colors.danger + "40" }]}>
@@ -365,9 +529,7 @@ export default function SignupProviderScreen() {
       return (
         <View style={styles.stepContent}>
           <Text style={[styles.stepTag, { color: ACCENT }]}>Service Provider · $149/mo</Text>
-          <Text style={[styles.stepHeading, { color: colors.foreground }]}>
-            Your company
-          </Text>
+          <Text style={[styles.stepHeading, { color: colors.foreground }]}>Your company</Text>
           <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
             Your company details and professional discipline.
           </Text>
@@ -406,13 +568,38 @@ export default function SignupProviderScreen() {
                 options={DISCIPLINE_OPTIONS}
                 selected={discipline ? [discipline] : []}
                 onChange={(vals) => {
-                  setDiscipline((vals[0] as ProviderDiscipline) ?? null);
+                  const val = (vals[0] as ProviderDiscipline) ?? null;
+                  setDiscipline(val);
+                  if (val !== "other") setOtherDisciplineText("");
                   if (fieldErrors.discipline) setFieldErrors((p) => ({ ...p, discipline: undefined }));
                 }}
                 singleSelect
               />
               {fieldErrors.discipline && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.discipline}</Text>}
             </View>
+
+            {discipline === "other" && (
+              <View style={styles.field}>
+                <Text style={[styles.label, { color: colors.foreground }]}>Describe your discipline *</Text>
+                <TextInput
+                  style={[
+                    styles.input,
+                    {
+                      backgroundColor: colors.card,
+                      borderColor: fieldErrors.otherDiscipline ? colors.danger : colors.border,
+                      color: colors.foreground,
+                      fontFamily: "DM_Sans_400Regular",
+                    },
+                  ]}
+                  placeholder="e.g. Environmental consultant"
+                  placeholderTextColor={colors.mutedForeground}
+                  value={otherDisciplineText}
+                  onChangeText={(v) => { setOtherDisciplineText(v); if (fieldErrors.otherDiscipline) setFieldErrors((p) => ({ ...p, otherDiscipline: undefined })); }}
+                  autoCapitalize="words"
+                />
+                {fieldErrors.otherDiscipline && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.otherDiscipline}</Text>}
+              </View>
+            )}
 
             <View style={styles.field}>
               <Text style={[styles.label, { color: colors.foreground }]}>
@@ -431,22 +618,7 @@ export default function SignupProviderScreen() {
                 ]}
                 activeOpacity={0.7}
               >
-                {uploadStatus === "uploading" ? (
-                  <>
-                    <ActivityIndicator size="small" color={ACCENT} />
-                    <Text style={[styles.uploadBtnText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>Uploading…</Text>
-                  </>
-                ) : uploadStatus === "done" ? (
-                  <>
-                    <Feather name="check-circle" size={18} color={colors.success} />
-                    <Text style={[styles.uploadBtnText, { color: colors.success, fontFamily: "DM_Sans_500Medium" }]} numberOfLines={1}>{pickedFile?.name ?? "Uploaded"}</Text>
-                  </>
-                ) : uploadStatus === "error" ? (
-                  <>
-                    <Feather name="alert-circle" size={18} color={colors.danger} />
-                    <Text style={[styles.uploadBtnText, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>Upload failed — tap to retry</Text>
-                  </>
-                ) : pickedFile ? (
+                {pickedFile ? (
                   <>
                     <Feather name="file-text" size={18} color={ACCENT} />
                     <Text style={[styles.uploadBtnText, { color: ACCENT, fontFamily: "DM_Sans_500Medium" }]} numberOfLines={1}>{pickedFile.name}</Text>
@@ -473,14 +645,107 @@ export default function SignupProviderScreen() {
       );
     }
 
+    if (step === 3) {
+      return (
+        <View style={styles.stepContent}>
+          <Text style={[styles.stepTag, { color: ACCENT }]}>Service Provider · $149/mo</Text>
+          <Text style={[styles.stepHeading, { color: colors.foreground }]}>Your logo &{"\n"}contact</Text>
+          <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
+            How clients will find and reach you.
+          </Text>
+
+          <View style={styles.fields}>
+            <View style={styles.field}>
+              <Text style={[styles.label, { color: colors.foreground }]}>
+                Company logo{" "}
+                <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }}>(optional)</Text>
+              </Text>
+              <View style={styles.avatarSection}>
+                <TouchableOpacity onPress={handlePickAvatar} activeOpacity={0.8}>
+                  {avatarUri ? (
+                    <Image
+                      source={{ uri: avatarUri }}
+                      style={styles.avatarPreview}
+                    />
+                  ) : (
+                    <View style={[styles.avatarPlaceholder, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                      <Feather name="camera" size={28} color={colors.mutedForeground} />
+                    </View>
+                  )}
+                </TouchableOpacity>
+                <View style={{ flex: 1, gap: 6 }}>
+                  <Text style={[styles.avatarHint, { color: colors.foreground }]}>
+                    Providers with a company logo receive significantly higher engagement from potential clients.
+                  </Text>
+                  <TouchableOpacity onPress={handlePickAvatar} activeOpacity={0.7}>
+                    <Text style={[styles.avatarLink, { color: ACCENT }]}>
+                      {avatarUri ? "Change logo" : "Upload logo"}
+                    </Text>
+                  </TouchableOpacity>
+                  {avatarUri && (
+                    <TouchableOpacity onPress={() => setAvatarUri(null)} activeOpacity={0.7}>
+                      <Text style={[styles.avatarLink, { color: colors.mutedForeground }]}>Remove</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.field}>
+              <Text style={[styles.label, { color: colors.foreground }]}>Phone number *</Text>
+              <TextInput
+                style={[
+                  styles.input,
+                  {
+                    backgroundColor: colors.card,
+                    borderColor: fieldErrors.contactNumber ? colors.danger : colors.border,
+                    color: colors.foreground,
+                    fontFamily: "DM_Sans_400Regular",
+                  },
+                ]}
+                placeholder="+64 21 123 4567"
+                placeholderTextColor={colors.mutedForeground}
+                value={contactNumber}
+                onChangeText={(v) => { setContactNumber(v); if (fieldErrors.contactNumber) setFieldErrors((p) => ({ ...p, contactNumber: undefined })); }}
+                keyboardType="phone-pad"
+              />
+              {fieldErrors.contactNumber && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.contactNumber}</Text>}
+            </View>
+
+            <LanguagePicker
+              label="Primary language"
+              value={primaryLanguage}
+              onSelect={(v) => { setPrimaryLanguage(v); if (fieldErrors.primaryLanguage) setFieldErrors((p) => ({ ...p, primaryLanguage: undefined })); }}
+              placeholder="Select primary language"
+              required
+              error={fieldErrors.primaryLanguage}
+              colors={colors}
+            />
+
+            <LanguagePicker
+              label="Secondary language"
+              value={secondaryLanguage}
+              onSelect={setSecondaryLanguage}
+              placeholder="None"
+              colors={colors}
+            />
+          </View>
+
+          <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: ACCENT }]} onPress={goNext} activeOpacity={0.85}>
+            <Text style={styles.primaryBtnText}>Continue</Text>
+            <Feather name="arrow-right" size={18} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
     return (
       <View style={styles.stepContent}>
         <Text style={[styles.stepTag, { color: ACCENT }]}>Service Provider · $149/mo</Text>
-        <Text style={[styles.stepHeading, { color: colors.foreground }]}>
-          Where are{"\n"}you based?
-        </Text>
+        <Text style={[styles.stepHeading, { color: colors.foreground }]}>Where are{"\n"}you based?</Text>
         <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
-          Help property developers find nearby providers.
+          Help property developers find nearby providers.{" "}
+          <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }}>All fields optional.</Text>
         </Text>
 
         {(submitError || certError) && (
@@ -492,25 +757,7 @@ export default function SignupProviderScreen() {
 
         <View style={styles.fields}>
           <View style={styles.field}>
-            <Text style={[styles.label, { color: colors.foreground }]}>
-              Phone number{" "}
-              <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }}>(optional)</Text>
-            </Text>
-            <TextInput
-              style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-              placeholder="+64 21 123 4567"
-              placeholderTextColor={colors.mutedForeground}
-              value={contactNumber}
-              onChangeText={setContactNumber}
-              keyboardType="phone-pad"
-            />
-          </View>
-
-          <View style={styles.field}>
-            <Text style={[styles.label, { color: colors.foreground }]}>
-              Street address{" "}
-              <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }}>(optional)</Text>
-            </Text>
+            <Text style={[styles.label, { color: colors.foreground }]}>Street address</Text>
             <TextInput
               style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
               placeholder="123 Main Street"
@@ -526,14 +773,14 @@ export default function SignupProviderScreen() {
               <Text style={[styles.label, { color: colors.foreground }]}>Suburb</Text>
               <TextInput
                 style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-                placeholder="Grey Lynn"
+                placeholder="Ponsonby"
                 placeholderTextColor={colors.mutedForeground}
                 value={addressSuburb}
                 onChangeText={setAddressSuburb}
                 autoCapitalize="words"
               />
             </View>
-            <View style={[styles.field, { flex: 1 }]}>
+            <View style={[styles.field, { width: 90 }]}>
               <Text style={[styles.label, { color: colors.foreground }]}>Postcode</Text>
               <TextInput
                 style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
@@ -557,11 +804,6 @@ export default function SignupProviderScreen() {
               autoCapitalize="words"
             />
           </View>
-
-          <View style={styles.field}>
-            <Text style={[styles.label, { color: colors.foreground }]}>Languages spoken</Text>
-            <MultiSelectChips options={LANGUAGE_OPTIONS} selected={languages} onChange={setLanguages} />
-          </View>
         </View>
 
         <TouchableOpacity
@@ -578,10 +820,6 @@ export default function SignupProviderScreen() {
               <Feather name="check" size={18} color="#fff" />
             </>
           )}
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.skipBtn} onPress={handleSignup} disabled={isLoading}>
-          <Text style={[styles.skipText, { color: colors.mutedForeground }]}>Skip this step</Text>
         </TouchableOpacity>
       </View>
     );
@@ -660,14 +898,44 @@ const styles = StyleSheet.create({
   },
   uploadBtnText: { flex: 1, fontSize: 14 },
   uploadHint: { fontSize: 12, fontFamily: "DM_Sans_400Regular", marginTop: 4 },
+  pickerBtn: {
+    height: 52, borderRadius: 12, borderWidth: 1,
+    paddingHorizontal: 16, flexDirection: "row",
+    alignItems: "center", justifyContent: "space-between",
+  },
+  pickerBtnText: { fontSize: 15, flex: 1 },
+  avatarSection: { flexDirection: "row", alignItems: "flex-start", gap: 16 },
+  avatarPreview: { width: 72, height: 72, borderRadius: 36 },
+  avatarPlaceholder: {
+    width: 72, height: 72, borderRadius: 36,
+    borderWidth: 1, borderStyle: "dashed",
+    alignItems: "center", justifyContent: "center",
+  },
+  avatarHint: { fontSize: 13, fontFamily: "DM_Sans_400Regular", lineHeight: 19, flex: 1 },
+  avatarLink: { fontSize: 13, fontFamily: "DM_Sans_600SemiBold" },
   primaryBtn: {
     height: 54, borderRadius: 14, alignItems: "center", justifyContent: "center",
     flexDirection: "row", gap: 8, marginTop: 4,
   },
   primaryBtnText: { color: "#fff", fontSize: 16, fontFamily: "DM_Sans_600SemiBold" },
-  skipBtn: { alignItems: "center", paddingVertical: 12 },
-  skipText: { fontSize: 14, fontFamily: "DM_Sans_400Regular" },
   footer: { flexDirection: "row", justifyContent: "center", alignItems: "center", marginTop: 28 },
   footerText: { fontSize: 14, fontFamily: "DM_Sans_400Regular" },
   footerLink: { fontSize: 14, fontFamily: "DM_Sans_600SemiBold" },
+  modalContainer: { flex: 1 },
+  modalHeader: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  modalTitle: { fontSize: 17, fontFamily: "DM_Sans_600SemiBold" },
+  modalSearch: {
+    flexDirection: "row", alignItems: "center", gap: 10,
+    marginHorizontal: 16, marginVertical: 12,
+    borderRadius: 12, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 10,
+  },
+  modalSearchInput: { flex: 1, fontSize: 15 },
+  modalOption: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  modalOptionText: { fontSize: 15 },
 });

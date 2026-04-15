@@ -58,12 +58,16 @@ export interface ProviderSignUpData {
     companyName?: string;
     nzCompanyRegisterNumber?: string;
     discipline?: ProviderDiscipline;
+    otherDiscipline?: string;
     addressStreet?: string;
     addressSuburb?: string;
     addressCity?: string;
     addressPostcode?: string;
     contactNumber?: string;
     incorporationCertUrl?: string;
+    primaryLanguage?: string;
+    secondaryLanguage?: string;
+    avatarUrl?: string;
   };
 }
 
@@ -107,6 +111,12 @@ interface AuthContextValue {
     tokenOverride?: string,
   ) => Promise<{ objectPath: string; fileUrl: string }>;
   updateServiceProviderCert: (fileUrl: string, tokenOverride?: string) => Promise<void>;
+  uploadProfilePicture: (
+    fileUri: string,
+    mimeType: string,
+    fileName: string,
+    tokenOverride?: string,
+  ) => Promise<{ fileUrl: string }>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -271,6 +281,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [token]);
 
+  const uploadProfilePicture = useCallback(async (
+    fileUri: string,
+    mimeType: string,
+    fileName: string,
+    tokenOverride?: string,
+  ): Promise<{ fileUrl: string }> => {
+    const activeToken = tokenOverride ?? token;
+    if (!activeToken) throw new Error("Not authenticated");
+    const formData = new FormData();
+    const fileBlob: ReactNativeFileBlob = { uri: fileUri, type: mimeType, name: fileName };
+    formData.append("file", fileBlob as unknown as Blob);
+    const resp = await fetch(`${getApiBase()}/upload/profile-picture`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${activeToken}` },
+      body: formData,
+    });
+    const json = (await resp.json()) as { fileUrl: string; error?: string };
+    if (!resp.ok) throw new Error(json.error ?? "Upload failed");
+    return { fileUrl: json.fileUrl };
+  }, [token]);
+
   return (
     <AuthContext.Provider value={{
       user, token, isLoading,
@@ -278,6 +309,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       refreshProfile, getApiHeaders,
       uploadIncorporationCert,
       updateServiceProviderCert,
+      uploadProfilePicture,
     }}>
       {children}
     </AuthContext.Provider>

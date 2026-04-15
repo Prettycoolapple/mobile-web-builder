@@ -41,9 +41,13 @@ The application is built as a monorepo utilizing `pnpm workspaces`.
         - ROI scenarios (Bear, Base, Bull) across different time horizons (`roi-calculator.ts`), influenced by RBNZ OCR direction via Gemini Flash.
         - Overall property scoring (Ease, Cost, ROI) (`scoring.ts`).
     - **Orchestration:** `pipeline.ts` orchestrates the entire data collection, merging, and scoring process, including a sophisticated fallback chain for property data scrapers.
-- **Database:** PostgreSQL with Drizzle ORM. Schema includes `profiles` (users), `searches` (history), `conversations`, `messages`, `dm_threads`, `dm_messages`, `push_tokens`.
+- **Database:** PostgreSQL with Drizzle ORM. Schema includes `profiles` (users), `searches` (history), `conversations`, `messages`, `dm_threads`, `dm_messages`, `push_tokens`, `service_provider_profiles`, `sales_agent_profiles`, `recommendations`.
+  - `profiles` now has `avatar_url TEXT` and `is_verified BOOLEAN DEFAULT false`.
+  - `service_provider_profiles` now has `other_discipline TEXT`, `primary_language TEXT`, `secondary_language TEXT`.
 - **Direct Messaging:** Full DM REST API at `/api/dm/*` (contacts, threads, messages, read receipts, push tokens). Socket.io integrated with JWT auth at path `/api/socket.io` for real-time messaging. Expo push notification dispatch for offline users.
-- **File Uploads:** `POST /api/upload/dm-image` for image sharing in DM threads (stored in object storage).
+- **File Uploads:** `POST /api/upload/dm-image` for image sharing in DM threads (stored in object storage). `POST /api/upload/profile-picture` for provider avatar upload (stored in object storage, auto-updates `profiles.avatar_url`).
+- **Notifications:** `POST /api/notifications/provider-subscribed` sends a Gmail SMTP email to the owner when a service provider subscribes. Requires env vars `SMTP_USER`, `SMTP_PASS`, `SMTP_TO`. Silently skips if not configured.
+- **Verification:** `is_verified` column in `profiles` (default false). Set manually via SQL. Shown as blue verified badge on public profiles for service providers.
 
 **Real Listing Pipeline (Discovery Mode)**
 - **Primary Source:** realestate.co.nz (static HTML scraping).

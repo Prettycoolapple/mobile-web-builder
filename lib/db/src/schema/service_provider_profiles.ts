@@ -22,6 +22,9 @@ export const serviceProviderProfiles = pgTable(
     contactNumber: text("contact_number"),
     languages: text("languages").array().default(sql`'{}'`).notNull(),
     incorporationCertUrl: text("incorporation_cert_url"),
+    otherDiscipline: text("other_discipline"),
+    primaryLanguage: text("primary_language"),
+    secondaryLanguage: text("secondary_language"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [

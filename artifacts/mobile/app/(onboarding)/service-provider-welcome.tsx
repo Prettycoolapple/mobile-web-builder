@@ -34,7 +34,7 @@ const FEATURES: { icon: React.ComponentProps<typeof Feather>["name"]; label: str
 export default function ServiceProviderWelcomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const { purchase, isPurchasing, isSubscribed, getPriceForRole, getPackageForRole } = useSubscription();
   const [showWelcomePopup, setShowWelcomePopup] = useState(true);
 
@@ -61,6 +61,13 @@ export default function ServiceProviderWelcomeScreen() {
     ]).start();
   }, []);
 
+  const getApiBase = () => {
+    if (process.env.EXPO_PUBLIC_DOMAIN) {
+      return `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`;
+    }
+    return "/api";
+  };
+
   const handleSubscribe = async () => {
     try {
       const pkg = getPackageForRole("service_provider");
@@ -69,6 +76,12 @@ export default function ServiceProviderWelcomeScreen() {
         return;
       }
       await purchase(pkg);
+      if (token) {
+        fetch(`${getApiBase()}/notifications/provider-subscribed`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        }).catch(() => {});
+      }
       router.replace("/(tabs)");
     } catch (err: unknown) {
       const message = (err as { message?: string; userCancelled?: boolean })?.message;

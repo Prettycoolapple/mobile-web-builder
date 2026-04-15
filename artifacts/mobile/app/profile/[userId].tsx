@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Image,
   ScrollView,
   StyleSheet,
   Text,
@@ -26,6 +27,8 @@ interface PublicProfile {
   id: string;
   fullName: string | null;
   role: UserRole;
+  avatarUrl: string | null;
+  isVerified: boolean;
   createdAt: string;
   recommendationCount: number;
   hasRecommended: boolean;
@@ -58,11 +61,13 @@ function disciplineLabel(value: string | null | undefined): string {
 function Avatar({
   name,
   role,
+  avatarUrl,
   size = 72,
   colors,
 }: {
   name: string | null;
   role: UserRole;
+  avatarUrl?: string | null;
   size?: number;
   colors: ReturnType<typeof useColors>;
 }) {
@@ -73,6 +78,22 @@ function Avatar({
     .join("")
     .toUpperCase();
   const color = roleColor(role, colors);
+
+  if (avatarUrl) {
+    return (
+      <Image
+        source={{ uri: avatarUrl }}
+        style={{
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          borderWidth: 2,
+          borderColor: color + "55",
+        }}
+      />
+    );
+  }
+
   return (
     <View
       style={{
@@ -217,11 +238,22 @@ export default function UserProfileScreen() {
           showsVerticalScrollIndicator={false}
         >
           <View style={[styles.heroCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Avatar name={profile.fullName} role={profile.role} size={72} colors={colors} />
-            <View style={{ marginTop: 14, alignItems: "center" }}>
-              <Text style={[styles.name, { color: colors.foreground }]}>
-                {profile.fullName ?? "Anonymous"}
-              </Text>
+            <Avatar name={profile.fullName} role={profile.role} avatarUrl={profile.avatarUrl} size={72} colors={colors} />
+            <View style={{ marginTop: 14, alignItems: "center", gap: 8 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                <Text style={[styles.name, { color: colors.foreground }]}>
+                  {profile.fullName ?? "Anonymous"}
+                </Text>
+                {profile.isVerified && profile.role === "service_provider" && (
+                  <Feather name="check-circle" size={20} color="#2563EB" />
+                )}
+              </View>
+              {profile.isVerified && profile.role === "service_provider" && (
+                <View style={styles.verifiedBadge}>
+                  <Feather name="shield" size={11} color="#2563EB" />
+                  <Text style={styles.verifiedText}>Verified</Text>
+                </View>
+              )}
               <View style={[styles.roleBadge, { backgroundColor: accentColor + "18", borderColor: accentColor + "44" }]}>
                 <Text style={[styles.roleBadgeText, { color: accentColor }]}>
                   {roleLabel(profile.role)}
@@ -302,10 +334,21 @@ export default function UserProfileScreen() {
             <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Provider Details</Text>
               <InfoRow icon="briefcase" label="Company" value={profile.roleData.companyName as string} colors={colors} />
-              <InfoRow icon="tool" label="Discipline" value={disciplineLabel(profile.roleData.discipline as string)} colors={colors} />
-              <InfoRow icon="map-pin" label="Location" value={[profile.roleData.addressSuburb, profile.roleData.addressCity].filter(Boolean).join(", ")} colors={colors} />
+              <InfoRow
+                icon="tool"
+                label="Discipline"
+                value={
+                  profile.roleData.discipline === "other" && profile.roleData.otherDiscipline
+                    ? (profile.roleData.otherDiscipline as string)
+                    : disciplineLabel(profile.roleData.discipline as string)
+                }
+                colors={colors}
+              />
+              <InfoRow icon="map-pin" label="Location" value={[profile.roleData.addressSuburb, profile.roleData.addressCity].filter(Boolean).join(", ") || null} colors={colors} />
               <InfoRow icon="hash" label="NZ Business Number" value={profile.roleData.nzCompanyRegisterNumber as string} colors={colors} />
               <InfoRow icon="phone" label="Contact" value={profile.roleData.contactNumber as string} colors={colors} />
+              <InfoRow icon="globe" label="Primary language" value={profile.roleData.primaryLanguage as string} colors={colors} />
+              <InfoRow icon="globe" label="Secondary language" value={profile.roleData.secondaryLanguage as string} colors={colors} />
             </View>
           )}
 
@@ -403,4 +446,16 @@ const styles = StyleSheet.create({
     padding: 14,
   },
   trustText: { flex: 1, fontSize: 13, fontFamily: "DM_Sans_400Regular", lineHeight: 19 },
+  verifiedBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#EFF6FF",
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+  },
+  verifiedText: { fontSize: 11, fontFamily: "DM_Sans_600SemiBold", color: "#2563EB" },
 });
