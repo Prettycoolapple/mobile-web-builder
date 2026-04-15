@@ -2,191 +2,71 @@
 
 ## Overview
 
-AI-powered NZ real estate development feasibility analysis mobile app built with Expo (React Native) and an Express API server. Requires login to access chat and analysis features.
+Lecorb is an AI-powered mobile application designed to provide New Zealand real estate development feasibility analysis. Built with Expo (React Native) for the mobile front-end and an Express.js API server, it aims to assist users in making informed property development decisions. The application integrates advanced AI capabilities, real-time data scraping, and a robust data pipeline to generate comprehensive feasibility reports. Its core purpose is to simplify complex property analysis, offering features like address-specific reports, discovery searches for subdividable properties, and conversational AI for follow-up questions. The project seeks to address market needs for accessible and accurate real estate development insights in New Zealand.
 
-## Stack
+## User Preferences
 
-- **Monorepo tool**: pnpm workspaces
-- **Node.js version**: 24
-- **Package manager**: pnpm
-- **TypeScript version**: 5.9
-- **Mobile**: Expo (React Native), expo-router
-- **API framework**: Express 5
-- **AI**: Gemini 2.5 Pro via Replit AI Integrations (no API key needed)
-- **Database**: PostgreSQL + Drizzle ORM
-- **Auth**: JWT (jsonwebtoken) + scrypt password hashing (built-in Node.js crypto)
-- **Validation**: Zod (`zod/v4`), `drizzle-zod`
-- **API codegen**: Orval (from OpenAPI spec)
-- **Build**: esbuild (CJS bundle)
+I prefer iterative development, with a focus on clear communication and explanations at each step. Please ask before making major architectural changes or decisions that impact the user experience significantly. I value well-documented code and a logical, maintainable project structure.
 
-## Key Commands
+## System Architecture
 
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- `pnpm --filter @workspace/api-server run dev` — run API server locally
+The application is built as a monorepo utilizing `pnpm workspaces`.
 
-## App Structure
+**Mobile Application (Expo/React Native)**
+- **Navigation:** `expo-router` handles authentication flows and tab-based navigation. Tabs: Search, Messages, History, Account. Chat screens at `app/chat/contacts.tsx` and `app/chat/[threadId].tsx`.
+- **State Management:** `AuthContext` manages user authentication state and JWT persistence. `ChatContext` handles AI chat/session states. `DmContext` manages real-time DM Socket.io connection, thread list, and unread count badge.
+- **UI Components:** Key components include `FeasibilityReport` for rendering comprehensive analysis, `ScoreRing` for animated SVG progress, and `AccordionSection` for collapsible content. Design tokens are defined in `constants/colors.ts` with a warm cream palette and specific accent colors.
+- **Theming:** A `useColors()` hook manages light/dark mode based on `constants/colors.ts`.
+- **Subscription UI:** `PaywallModal` and `Profile` screens integrate with subscription management, displaying usage and upgrade options. `AnalysisProgress` provides animated step-by-step loading for analysis.
 
-### Mobile (Expo)
+**API Server (Express.js)**
+- **Authentication:** JWT-based authentication with `scrypt` for password hashing. `requireAuth` middleware protects routes.
+- **Core Endpoints:** Dedicated routes for user authentication (`/auth`), search history management (`/searches`), and the primary analysis/chat functionalities (`/analyse`, `/search`, `/chat`). A debug endpoint (`/pipeline-test`) exists for raw pipeline output.
+- **AI Integration:** Uses Gemini 2.5 Pro via Replit AI Integrations. A custom `claude.ts` wrapper provides `generateUnifiedResponse()` and `detectMode()`. Prompts are managed in `prompts.ts`.
+- **Data Pipeline (Phase 3 + 4):** A critical component for data collection and scoring.
+    - **Data Collection:** Parallelized fetching from multiple sources including:
+        - Address parsing (`address-parser.ts`)
+        - Geocoding (`geocode.ts` using Nominatim/Google Maps)
+        - LINZ API for parcel and title data (`linz.ts`)
+        - Auckland Council GIS for zoning, overlays, and contour data (`auckland-council.ts`)
+        - Property data from Auckland Council rating GIS and QV (`property-data.ts`)
+        - Infrastructure data (`infrastructure.ts`)
+        - Web scrapers (`scrapers/` directory) for Hougarden, OneRoof, Homes, and QV, employing Playwright with stealth evasion and ScrapingBee as fallback.
+    - **Data Merging:** `mergePropertyData()` consolidates information from various sources, tracking data sources and missing critical fields.
+    - **Scoring Engine (Phase 4):** Deterministically calculates:
+        - Asbestos risk (`asbestos.ts`)
+        - Potential lot subdivision (`lot-calculator.ts`)
+        - Detailed cost estimations (`cost-estimator.ts`)
+        - Comparable sales data (`comparables.ts`)
+        - ROI scenarios (Bear, Base, Bull) across different time horizons (`roi-calculator.ts`), influenced by RBNZ OCR direction via Gemini Flash.
+        - Overall property scoring (Ease, Cost, ROI) (`scoring.ts`).
+    - **Orchestration:** `pipeline.ts` orchestrates the entire data collection, merging, and scoring process, including a sophisticated fallback chain for property data scrapers.
+- **Database:** PostgreSQL with Drizzle ORM. Schema includes `profiles` (users), `searches` (history), `conversations`, `messages`, `dm_threads`, `dm_messages`, `push_tokens`.
+- **Direct Messaging:** Full DM REST API at `/api/dm/*` (contacts, threads, messages, read receipts, push tokens). Socket.io integrated with JWT auth at path `/api/socket.io` for real-time messaging. Expo push notification dispatch for offline users.
+- **File Uploads:** `POST /api/upload/dm-image` for image sharing in DM threads (stored in object storage).
 
-**Auth screens** (redirect to tabs after login):
-- `artifacts/mobile/app/(auth)/_layout.tsx` — Auth stack layout
-- `artifacts/mobile/app/(auth)/login.tsx` — Login screen
-- `artifacts/mobile/app/(auth)/signup.tsx` — Signup screen
+**Real Listing Pipeline (Discovery Mode)**
+- **Primary Source:** realestate.co.nz (static HTML scraping).
+- **Pre-screening:** Fast pre-screening using geocoding and Auckland Council GIS zone lookup.
+- **Caching:** In-memory caching for `ListingResult[]` with a 30-minute TTL to optimize follow-up searches.
+- **Filtering:** Excludes apartments and filters by price. Listing URLs are validated against suburb slugs.
+- **Fallback:** Mock data is used when no listings are found or the suburb is not mapped.
 
-**Tabs** (protected — requires auth):
-- `artifacts/mobile/app/(tabs)/index.tsx` — Main chat screen (Analyse/Search/Chat)
-- `artifacts/mobile/app/(tabs)/history.tsx` — Session history (only shows sessions with messages)
-- `artifacts/mobile/app/(tabs)/profile.tsx` — Profile, subscription, real usage counter, sign-out
+**Design System**
+- **Typography:** DM Sans font.
+- **Color Palette:** Warm cream background (`#FAF9F6`), dark charcoal header (`#1C1917`), Anthropic orange accent (`#D97757`), with distinct colors for success, amber, and danger states.
 
-**Context / State**:
-- `artifacts/mobile/context/AuthContext.tsx` — User auth state, JWT token, AsyncStorage persistence
-- `artifacts/mobile/context/ChatContext.tsx` — Global chat/session state with AsyncStorage persistence
+## External Dependencies
 
-**Components**:
-- `artifacts/mobile/components/FeasibilityReport.tsx` — Full Phase 5 report renderer: animated SVG score rings, planning/asbestos/terrain/infrastructure/cost/ROI/comparables/risk sections, dynamic follow-up chips
-- `artifacts/mobile/components/report/ScoreRing.tsx` — Animated SVG circular progress ring (react-native-svg)
-- `artifacts/mobile/components/report/AccordionSection.tsx` — Collapsible section with status dot
-- `artifacts/mobile/components/PropertyCard.tsx` — Discovery result card
-- `artifacts/mobile/components/ChatBubble.tsx` — Chat message bubble (text/report/search)
-- `artifacts/mobile/components/ScoreBadge.tsx` — Circular score badge (Ease/Cost/ROI)
-- `artifacts/mobile/components/OverlayChip.tsx` — Planning overlay status chip
-- `artifacts/mobile/constants/colors.ts` — Design tokens (warm cream palette + danger alias)
-
-### API Server (Express)
-
-- `artifacts/api-server/src/routes/auth.ts` — `/auth/signup`, `/auth/login`, `/auth/me`, `/auth/profile`
-- `artifacts/api-server/src/routes/searches.ts` — `GET /searches` (history summary), `GET /searches/:id` (full report), `DELETE /searches/:id` (delete)
-- `artifacts/api-server/src/routes/analyse.ts` — `/analyse`, `/search`, `/chat` (unified endpoint; analyse mode runs full pipeline before AI)
-- `artifacts/api-server/src/routes/pipeline-test.ts` — Debug endpoint: `GET /api/pipeline-test?address=...` returns raw pipeline JSON
-- `artifacts/api-server/src/lib/claude.ts` — Gemini AI wrapper with `generateUnifiedResponse()` + exported `detectMode()`
-- `artifacts/api-server/src/lib/prompts.ts` — SYSTEM_PROMPT + ANALYSE_AUGMENTATION + DISCOVER_AUGMENTATION
-- `artifacts/api-server/src/lib/auth.ts` — JWT signing/verification, requireAuth middleware, password hashing
-
-### Phase 3 + 4 Pipeline (`artifacts/api-server/src/lib/`)
-
-**Data collection** (run in parallel via `Promise.allSettled()`):
-- `address-parser.ts` — `extractNZAddress()`: regex first-pass + Gemini fallback to extract NZ street addresses from free text
-- `geocode.ts` — `geocodeAddress()`: Nominatim (OSM) primary, Google Maps fallback (needs `GOOGLE_MAPS_API_KEY`); `GeoResult` now includes `suburb: string | null` from Nominatim's `address.suburb` field
-- `linz.ts` — `fetchLINZParcel()` + `fetchLINZTitle()`: LINZ API layer 50804 (needs `LINZ_API_KEY`)
-- `auckland-council.ts` — `fetchUnitaryPlanZone()` + `fetchOverlays()` + `fetchContour()`: Auckland Council GIS at `mapspublic.aucklandcouncil.govt.nz/arcgis3`
-  - Zone service: `NonCouncil/UnitaryPlanZones/MapServer/1` (56-code numeric domain map)
-  - Overlays: layers 33 (heritage), 19 (notable trees, 30m buffer), 25/27 (viewshafts), 58 (coastal inundation), 24 (Waitakere), 29 (ridgeline)
-  - `fetchContour()`: **4-source waterfall** — **1. AWS Terrarium terrain tiles (primary, no key)** ~3.82m resolution backed by Mapzen/LINZ 1m NZ LiDAR; 7×7 grid at 3-pixel spacing (~11.5m step), slope from max adjacent-pair gradient → **2. Google Elevation** (if `GOOGLE_MAPS_API_KEY` set, SRTM 30m) → **3. Open-Topo-Data nzdem8m** (free, no key) → **4. Open-Elevation API** (fallback). Terrarium tiles give `11.2° MODERATE` for hillside properties that SRTM sources underestimate as 4-6°. Slope thresholds: flat <3°, gentle 3-10°, moderate 10-20°, steep >20°. Retaining cost estimates: $0-5k / $15-60k / $60-200k / $200-500k.
-- `property-data.ts` — `fetchPropertyHistory()` + `checkAsbestosRisk()`: Auckland Council rating GIS + QV fallback; asbestos risk by build year
-- `infrastructure.ts` — `fetchInfrastructure()`: stormwater/wastewater/water supply distance from parcel
-- `scrapers/browser.ts` — `launchBrowser()` + `newStealthPage()`: NixOS system Chromium with full stealth evasion; `withBrowserSlot()` (max 2 concurrent)
-- `scrapers/scrapingbee.ts` — `fetchWithScrapingBee()`: ScrapingBee API fallback; silently skips if `SCRAPINGBEE_API_KEY` not set
-- `scrapers/hougarden.ts` — `scrapeHougarden()`: 3-attempt chain: stealth Playwright → ScrapingBee+cheerio → empty
-- `scrapers/oneroof.ts` — `scrapeOneRoof()`: same 3-attempt chain
-- `scrapers/homes.ts` — `scrapeHomes()`: ScrapingBee direct URL (multiple suburb slugs) → Playwright disabled (blocked). Used only as fallback when QV fails.
-- `scrapers/qv.ts` — `scrapeQV()`: **PRIMARY fallback** — stealth Playwright; types search term via `page.keyboard.type()`, waits for autocomplete via `waitForFunction` TreeWalker, clicks suggestion via `page.evaluate` TreeWalker, extracts data from property detail page (~8s). Returns CV, land area, floor area, build year.
-- `scrapers/merge.ts` — `mergePropertyData()`: priority-merges all sources; tracks `data_sources` (per-field source labels), `missing_critical_fields` (list of unavailable key fields), and `cv_unavailable`; includes `contour_slope_degrees`, `contour_source`
-
-**Phase 4 scoring engine** (deterministic, no AI, runs after merge):
-- `asbestos.ts` — `classifyAsbestos(build_year)`: returns `{ risk, notes, worksafe_required }` with full WorkSafe NZ legal context
-- `lot-calculator.ts` — `calculatePotentialLots(area, zone)`: AUP min lot sizes per zone, capped 1–20 lots; returns `sqm_per_lot` (land_area ÷ lots)
-- `cost-estimator.ts` — `estimateCosts(merged, units)`: full breakdown — tracks `cv_unavailable` flag; if CV is null, land cost = 0 and `total_excludes_land: true`; demo + retaining + services + construction (2800–3500/m²) + consents (13–16%) + finance (7.5%pa) + contingency (8–12%)
-- `comparables.ts` — `getComparables(suburb, zone, lat, lng, existing?)`: uses live OneRoof comparables if ≥3, otherwise suburb lookup table (40+ Auckland suburbs + default). Returns both `avg_sale_price` and `avg_price_per_sqm`.
-- `roi-calculator.ts` — `calculateBearBaseBullScenarios(costs, avgPsm, avgSalePrice, lots, sqmPerLot, outlook)`: GDV = `avg_price_per_sqm × estimateNewBuildFloorSqm(sqm_per_lot) × lots`. Three price cases: Bear (−20%), Base (realistic), Bull (+20% if RBNZ OCR falling). Each scenario has `cases: ROICaseResult[]` + top-level base-case fields for backward compat. 3 time horizons (2/3/4 yr) with compound annualised ROI per case.
-- `scoring.ts` — `scoreProperty(merged, costs, scenarios, lots)`: ease (deductions from 5.0), cost (bracket), ROI (bracket); composite = ease×0.30 + cost×0.30 + roi×0.40
-- `utils.ts` — `formatNZD()`, `extractSuburb()`, `roundToHalf()`, `clamp()`
-- `claude.ts` — also exports `assessInterestRateOutlook()`: calls Gemini 2.5 Flash to semantically assess RBNZ OCR direction ("falling" | "stable" | "rising"). Used to gate the Bull case in ROI scenarios.
-- `pipeline.ts` — `runPropertyPipeline()`: orchestrates all; ~17s typical when QV succeeds; fallback chain: hougarden+oneroof (parallel) → if empty, QV (primary, ~8s) → if QV empty, homes.co.nz (ScrapingBee-only fallback). Calls `assessInterestRateOutlook()` before ROI calculation. Result includes `lots`, `costs`, `comparables`, `comparables_quality`, `scenarios` (with bear/base/bull cases), `scores`, `asbestos_detail`, `suburb`, `qv`, `homes`
-
-### Database Schema (`lib/db/src/schema/`)
-
-- `profiles.ts` — Users table (id, email, full_name, password_hash, subscription_tier, reports_used_this_month, last_reset_at, stripe_customer_id)
-- `searches.ts` — Search/analysis history (id, user_id FK, query, address, result_json, created_at)
-- `conversations.ts` — Conversation sessions
-- `messages.ts` — Chat messages
-
-## Auth Flow
-
-1. App loads → checks `AuthContext` (reads JWT from AsyncStorage)
-2. No token → redirected to `/(auth)/login`
-3. Login/signup → JWT stored in AsyncStorage → redirected to `/(tabs)`
-4. All API calls to `/api/analyse`, `/api/search` include `Authorization: Bearer <token>` header
-5. Free tier: 3 reports/month enforced server-side → returns 402 with `LIMIT_REACHED` code
-6. Monthly counter resets automatically when a new calendar month begins
-
-## Design System
-
-- **Font**: DM Sans (400/500/600/700)
-- **Background**: `#FAF9F6` (warm cream)
-- **Header**: `#1C1917` (dark charcoal)
-- **Accent**: `#D97757` (Anthropic orange) — buttons, tabs, logo mark, send arrow
-- **Success**: `#2E9E72`, **Amber**: `#E8A84B`, **Red/Danger**: `#D94F4F`
-- `useColors()` hook auto-switches light/dark from `constants/colors.ts`
-
-## Phase 7: Stripe Integration (Web) + RevenueCat (Native IAP)
-
-### Stripe (web fallback, still active)
-- **Stripe client**: `artifacts/api-server/src/lib/stripeClient.ts` — `getUncachableStripeClient()`, Replit connector credentials
-- **Stripe routes**: `artifacts/api-server/src/routes/stripe.ts`
-  - `POST /api/stripe/checkout` — Creates Stripe Checkout session ($49 NZD/month)
-  - `POST /api/stripe/portal` — Opens Stripe Customer Portal
-  - `POST /api/stripe/webhook` — Handles subscription lifecycle events
-  - `POST /api/subscription/sync` — Syncs RevenueCat IAP status to our DB (JWT-authenticated)
-- **Raw body for webhooks**: `app.ts` registers `/api/stripe/webhook` with `express.raw()` before `express.json()`
-
-### RevenueCat (Native IAP — required for App Store/Play Store)
-- **RevenueCat client**: `artifacts/mobile/lib/revenuecat.ts` — `initRevenueCat(userId)`, `getSubscriptionStatus()`, `purchasePro()`, `restorePurchases()`; gracefully degrades in Expo Go (no native modules available)
-- **Env vars needed**: `EXPO_PUBLIC_REVENUECAT_APPLE_KEY`, `EXPO_PUBLIC_REVENUECAT_GOOGLE_KEY`
-- **Entitlement ID**: `Pro` (must match RevenueCat dashboard)
-- **Package**: `react-native-purchases@8.x` installed; plugin registered in `app.json`
-
-### Subscription sync flow (native app)
-1. App launch: `getSubscriptionStatus()` → if pro, `POST /api/subscription/sync { tier: "pro" }`
-2. Upgrade: `purchasePro()` → native Apple/Google IAP → on success `POST /api/subscription/sync { tier: "pro" }`
-3. Restore: `restorePurchases()` → same sync flow
-
-### Native Build
-- **`app.json`**: Bundle ID `nz.devfeasible.app` (iOS + Android), slug `devfeasible-nz`, scheme `devfeasible`
-- **`eas.json`**: EAS Build config with development (simulator), preview (internal APK), production (IPA + AAB) profiles
-- **Build command**: `eas build --platform ios --profile production` / `eas build --platform android --profile production`
-- **RevenueCat cannot be tested in Expo Go** — use `eas build --profile development` for a dev client
-
-### PaywallModal & Profile
-- **PaywallModal**: Triggers native IAP via RevenueCat; "Restore purchases" button; App Store–required legal text; syncs to backend on success
-- **Profile**: Checks RevenueCat on mount and syncs; Pro users see "Manage subscription" (opens device Settings) + "Restore purchases"; free users see RevenueCat upgrade flow
-- **AnalysisProgress**: `artifacts/mobile/components/AnalysisProgress.tsx` — Animated step-by-step progress for analyse mode
-
-## Real Listing Pipeline (Discovery Mode)
-
-**Primary source**: realestate.co.nz (static HTML scraper)
-**Fast pre-screen**: geocode → Auckland Council GIS zone lookup → composite score (no Hougarden)
-**Caching**: full `ListingResult[]` stored in-memory (30-min TTL); follow-ups pop from cache (no re-fetch)
-**Filtering**: apartments excluded via regex (`/^[\dA-Za-z]+\/[\dA-Za-z]+/i` etc); prices filtered ±10% of max
-**Slug filter**: listing URLs checked against suburb slug to prevent out-of-area results from SPA side effects
-**Fallback**: mock data when suburb not in slug map or no listings found in static HTML
-
-**Key files**:
-- `artifacts/api-server/src/lib/scrapers/realestate-search.ts` — search page scraper + listing meta fetcher (HTML entity decode, slug filter, full batch fetch)
-- `artifacts/api-server/src/lib/listing-cache.ts` — in-memory `ListingResult[]` cache with `popNextListings()`
-- `artifacts/api-server/src/lib/pre-screen.ts` — `preScreenListingsFast()` — geocode + Auckland Council GIS zone/overlay + apartment filter
-
-**Suburb coverage** (48 suburbs): All major Auckland suburbs mapped to realestate.co.nz district/slug (see SUBURB_SLUG_MAP in realestate-search.ts). Suburbs not in map fall back to mock data.
-
-**Performance**: Initial search ~4-6s; follow-up ~0.7s (from cache)
-
-## Features
-
-1. **Address Analysis** — Analyse specific NZ property addresses with full feasibility reports
-2. **Discovery Search** — Find subdividable properties by suburb/price via live realestate.co.nz data; "show more" follow-ups served from pre-fetched cache
-3. **Feasibility Report** — Scores (Ease/Cost/ROI), planning overlays, terrain, infrastructure, cost breakdown, ROI scenarios, comparable sales, AI risk summary. Includes:
-   - Yellow missing-data warning banner when CV or land area is unavailable
-   - Per-field data source labels (e.g. "Source: OneRoof") under CV, land area, floor area
-   - ROI section warning when `cv_unavailable: true` — land cost excluded from totals
-   - CV shown as `null` in JSON (never AI-estimated); missing fields tracked in `missing_critical_fields[]`
-   - Terrain `classification` is `null` when elevation APIs fail (no fake 'gentle' fallback)
-4. **Session History** — AsyncStorage-persisted chat sessions (only non-empty sessions shown)
-5. **Profile & Subscription** — Free (3 reports/month) vs Pro ($49/month NZD), real usage counter from DB; Stripe checkout wired
-6. **Follow-up Chat** — Maintains conversation context per session
-7. **Auth** — Email/password auth with JWT, protected routes, sign-out
-8. **Paywall** — PaywallModal bottom sheet triggers on 402 (limit reached); upgrades via Stripe Checkout
-9. **Animated Loading** — AnalysisProgress component shows step-by-step progress for feasibility analysis requests
-
-See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
+- **AI:** Gemini 2.5 Pro (via Replit AI Integrations), Gemini 2.5 Flash.
+- **Database:** PostgreSQL.
+- **ORM:** Drizzle ORM.
+- **Authentication:** `jsonwebtoken` for JWTs, Node.js built-in crypto for `scrypt`.
+- **Validation:** Zod (`zod/v4`) and `drizzle-zod`.
+- **API Codegen:** Orval (from OpenAPI spec).
+- **Mapping/Geocoding:** Nominatim (OSM), Google Maps API.
+- **GIS Data:** LINZ API, Auckland Council GIS (`mapspublic.aucklandcouncil.govt.nz/arcgis3`).
+- **Elevation Data:** AWS Terrarium terrain tiles, Google Elevation, Open-Topo-Data (nzdem8m), Open-Elevation API.
+- **Web Scraping:** Playwright (with stealth evasion), ScrapingBee API, Cheerio.
+- **Payment Processing:** Stripe (for web checkout and webhooks), RevenueCat (for native in-app purchases on iOS/Android).
+- **Mobile Development:** Expo, `expo-router`, `react-native-svg`, `react-native-purchases`.

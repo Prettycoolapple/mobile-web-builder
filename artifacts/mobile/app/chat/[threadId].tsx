@@ -1,0 +1,566 @@
+import React, {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import {
+  ActivityIndicator,
+  FlatList,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { Feather } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
+
+import { useColors } from "@/hooks/useColors";
+import { useAuth } from "@/context/AuthContext";
+import { useDm, DmMessage, DmThread } from "@/context/DmContext";
+
+function getApiBase(): string {
+  if (process.env.EXPO_PUBLIC_DOMAIN) {
+    return `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`;
+  }
+  return "/api";
+}
+
+function formatTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit", hour12: true });
+}
+
+function formatDateSep(iso: string): string {
+  const d = new Date(iso);
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (d.toDateString() === today.toDateString()) return "Today";
+  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+  return d.toLocaleDateString("en-NZ", { weekday: "short", day: "numeric", month: "short" });
+}
+
+function isSameDay(a: string, b: string): boolean {
+  return new Date(a).toDateString() === new Date(b).toDateString();
+}
+
+interface MessageItem {
+  type: "message";
+  data: DmMessage;
+}
+interface DateSepItem {
+  type: "date";
+  label: string;
+}
+type ListItem = MessageItem | DateSepItem;
+
+function buildListItems(messages: DmMessage[]): ListItem[] {
+  const items: ListItem[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    const prev = messages[i - 1];
+    if (!prev || !isSameDay(prev.createdAt, msg.createdAt)) {
+      items.push({ type: "date", label: formatDateSep(msg.createdAt) });
+    }
+    items.push({ type: "message", data: msg });
+  }
+  return items;
+}
+
+function Avatar({ name, size = 32 }: { name: string | null; size?: number }) {
+  const colors = useColors();
+  const initials = (name ?? "?")
+    .split(" ")
+    .slice(0, 2)
+    .map((w) => w[0])
+    .join("")
+    .toUpperCase();
+  return (
+    <View
+      style={{
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        backgroundColor: colors.accent + "22",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <Text style={{ fontSize: size * 0.38, color: colors.accent, fontFamily: "DM_Sans_600SemiBold" }}>
+        {initials}
+      </Text>
+    </View>
+  );
+}
+
+export default function ChatScreen() {
+  const colors = useColors();
+  const insets = useSafeAreaInsets();
+  const router = useRouter();
+  const { threadId } = useLocalSearchParams<{ threadId: string }>();
+  const { user, token } = useAuth();
+  const { socket, fetchThreads, threads } = useDm();
+
+  const [messages, setMessages] = useState<DmMessage[]>([]);
+  const [loadingInitial, setLoadingInitial] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [otherName, setOtherName] = useState<string | null>(null);
+  const [otherRole, setOtherRole] = useState<string>("general");
+  const [body, setBody] = useState("");
+  const [sending, setSending] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
+
+  const flatListRef = useRef<FlatList>(null);
+  const joinedRef = useRef(false);
+
+  const threadFromContext = threads.find((t) => t.id === threadId);
+
+  useEffect(() => {
+    if (threadFromContext?.otherParticipant) {
+      setOtherName(threadFromContext.otherParticipant.fullName ?? null);
+      setOtherRole(threadFromContext.otherParticipant.role ?? "general");
+    }
+  }, [threadFromContext]);
+
+  const fetchMessages = useCallback(async (fromCursor?: string | null) => {
+    if (!threadId || !token) return;
+    const url = fromCursor
+      ? `${getApiBase()}/dm/threads/${threadId}/messages?cursor=${fromCursor}&limit=30`
+      : `${getApiBase()}/dm/threads/${threadId}/messages?limit=30`;
+    const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!resp.ok) return;
+    const data = await resp.json() as {
+      messages: DmMessage[];
+      nextCursor: string | null;
+    };
+    const msgs = [...(data.messages ?? [])].reverse();
+    if (!fromCursor) {
+      setMessages(msgs);
+    } else {
+      setMessages((prev) => {
+        const existingIds = new Set(prev.map((m) => m.id));
+        const newMsgs = msgs.filter((m) => !existingIds.has(m.id));
+        return [...newMsgs, ...prev];
+      });
+    }
+    setNextCursor(data.nextCursor ?? null);
+  }, [threadId, token]);
+
+  useEffect(() => {
+    async function init() {
+      setLoadingInitial(true);
+      await fetchMessages(null);
+      setLoadingInitial(false);
+      if (threadId && token) {
+        await fetch(`${getApiBase()}/dm/threads/${threadId}/read`, {
+          method: "PATCH",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        fetchThreads();
+      }
+    }
+    init();
+  }, [threadId]);
+
+  useEffect(() => {
+    if (!socket || !threadId || joinedRef.current) return;
+    socket.emit("join_thread", threadId, (err: string | null) => {
+      if (!err) joinedRef.current = true;
+    });
+
+    socket.on("new_message", ({ threadId: tid, message }: { threadId: string; message: DmMessage }) => {
+      if (tid !== threadId) return;
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === message.id)) return prev;
+        return [...prev, message];
+      });
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 80);
+      if (threadId && token) {
+        fetch(`${getApiBase()}/dm/threads/${threadId}/read`, {
+          method: "PATCH",
+          headers: { Authorization: `Bearer ${token}` },
+        }).then(() => fetchThreads());
+      }
+    });
+
+    return () => {
+      socket.emit("leave_thread", threadId);
+      socket.off("new_message");
+      joinedRef.current = false;
+    };
+  }, [socket, threadId, token]);
+
+  const sendMessage = useCallback(async (msgBody?: string, imageUrl?: string) => {
+    if (!threadId || !token) return;
+    if (!msgBody && !imageUrl) return;
+    setSending(true);
+    try {
+      await fetch(`${getApiBase()}/dm/threads/${threadId}/messages`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ body: msgBody ?? null, imageUrl: imageUrl ?? null }),
+      });
+      setBody("");
+      fetchThreads();
+    } catch {
+    } finally {
+      setSending(false);
+    }
+  }, [threadId, token, fetchThreads]);
+
+  const pickImage = useCallback(async (useCamera: boolean) => {
+    if (uploadingImage) return;
+    let result: ImagePicker.ImagePickerResult;
+    if (useCamera) {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) return;
+      result = await ImagePicker.launchCameraAsync({ quality: 0.75, allowsEditing: true });
+    } else {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) return;
+      result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: "images",
+        quality: 0.75,
+        allowsEditing: false,
+      });
+    }
+    if (result.canceled || !result.assets?.length) return;
+    const asset = result.assets[0];
+    setUploadingImage(true);
+    try {
+      const form = new FormData();
+      const filename = asset.fileName ?? `photo_${Date.now()}.jpg`;
+      const mimeType = asset.mimeType ?? "image/jpeg";
+      if (Platform.OS === "web") {
+        const resp = await fetch(asset.uri);
+        const blob = await resp.blob();
+        form.append("image", blob, filename);
+      } else {
+        form.append("image", { uri: asset.uri, name: filename, type: mimeType } as any);
+      }
+      const uploadResp = await fetch(`${getApiBase()}/upload/dm-image`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+      });
+      if (uploadResp.ok) {
+        const { url } = await uploadResp.json() as { url: string };
+        await sendMessage(undefined, url);
+      }
+    } catch {
+    } finally {
+      setUploadingImage(false);
+    }
+  }, [token, uploadingImage, sendMessage]);
+
+  const loadMore = useCallback(async () => {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    await fetchMessages(nextCursor);
+    setLoadingMore(false);
+  }, [nextCursor, loadingMore, fetchMessages]);
+
+  const items: ListItem[] = buildListItems(messages);
+
+  const renderItem = ({ item }: { item: ListItem }) => {
+    if (item.type === "date") {
+      return (
+        <View style={styles.dateSepRow}>
+          <View style={[styles.dateLine, { backgroundColor: colors.border }]} />
+          <Text style={[styles.dateSepText, { color: colors.mutedForeground }]}>{item.label}</Text>
+          <View style={[styles.dateLine, { backgroundColor: colors.border }]} />
+        </View>
+      );
+    }
+    const msg = item.data;
+    const isMine = msg.senderId === user?.id;
+    return (
+      <View style={[styles.msgRow, isMine ? styles.msgRowRight : styles.msgRowLeft]}>
+        {!isMine && <Avatar name={otherName} size={28} />}
+        <View style={{ maxWidth: "75%" }}>
+          {msg.imageUrl ? (
+            <View style={[styles.imgBubble, isMine ? styles.myBubble : styles.theirBubble, { backgroundColor: isMine ? colors.accent : colors.card, borderColor: isMine ? colors.accent : colors.border }]}>
+              <Image source={{ uri: msg.imageUrl }} style={styles.msgImage} resizeMode="cover" />
+            </View>
+          ) : (
+            <View
+              style={[
+                styles.bubble,
+                isMine
+                  ? [styles.myBubble, { backgroundColor: colors.accent }]
+                  : [styles.theirBubble, { backgroundColor: colors.card, borderColor: colors.border }],
+              ]}
+            >
+              <Text style={[styles.bubbleText, { color: isMine ? "#fff" : colors.foreground }]}>
+                {msg.body}
+              </Text>
+            </View>
+          )}
+          <Text
+            style={[
+              styles.msgTime,
+              { color: colors.mutedForeground, textAlign: isMine ? "right" : "left" },
+            ]}
+          >
+            {formatTime(msg.createdAt)}
+          </Text>
+        </View>
+      </View>
+    );
+  };
+
+  return (
+    <KeyboardAvoidingView
+      style={[styles.container, { backgroundColor: colors.background }]}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      keyboardVerticalOffset={0}
+    >
+      <View style={[styles.header, { paddingTop: insets.top + 8, backgroundColor: "#2C1F16" }]}>
+        <TouchableOpacity onPress={() => router.canGoBack() ? router.back() : router.push("/(tabs)/messages")} style={styles.backBtn}>
+          <Feather name="arrow-left" size={22} color="rgba(250,249,246,0.85)" />
+        </TouchableOpacity>
+        <View style={styles.headerCenter}>
+          <Avatar name={otherName} size={34} />
+          <View>
+            <Text style={styles.headerName} numberOfLines={1}>{otherName ?? "…"}</Text>
+            <Text style={styles.headerRole}>
+              {otherRole === "sales_agent"
+                ? "Sales Agent"
+                : otherRole === "service_provider"
+                ? "Service Provider"
+                : "User"}
+            </Text>
+          </View>
+        </View>
+        <View style={{ width: 44 }} />
+      </View>
+
+      {loadingInitial ? (
+        <View style={styles.center}>
+          <ActivityIndicator color={colors.accent} size="large" />
+        </View>
+      ) : (
+        <FlatList
+          ref={flatListRef}
+          data={items}
+          keyExtractor={(item, i) =>
+            item.type === "date" ? `date-${i}` : item.data.id
+          }
+          renderItem={renderItem}
+          contentContainerStyle={[styles.listContent, { paddingBottom: 16 }]}
+          onLayout={() => flatListRef.current?.scrollToEnd({ animated: false })}
+          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
+          onStartReachedThreshold={0.2}
+          onStartReached={loadMore}
+          ListHeaderComponent={
+            loadingMore ? (
+              <View style={{ paddingVertical: 12, alignItems: "center" }}>
+                <ActivityIndicator color={colors.accent} size="small" />
+              </View>
+            ) : null
+          }
+        />
+      )}
+
+      <View
+        style={[
+          styles.inputArea,
+          {
+            backgroundColor: colors.background,
+            borderTopColor: colors.border,
+            paddingBottom: insets.bottom + 8,
+          },
+        ]}
+      >
+        <TouchableOpacity
+          style={styles.mediaBtn}
+          onPress={() => pickImage(false)}
+          disabled={uploadingImage || sending}
+        >
+          {uploadingImage ? (
+            <ActivityIndicator color={colors.mutedForeground} size="small" />
+          ) : (
+            <Feather name="image" size={22} color={colors.mutedForeground} />
+          )}
+        </TouchableOpacity>
+        {Platform.OS !== "web" && (
+          <TouchableOpacity
+            style={styles.mediaBtn}
+            onPress={() => pickImage(true)}
+            disabled={uploadingImage || sending}
+          >
+            <Feather name="camera" size={22} color={colors.mutedForeground} />
+          </TouchableOpacity>
+        )}
+        <View
+          style={[
+            styles.inputWrapper,
+            {
+              backgroundColor: colors.card,
+              borderColor: colors.border,
+              shadowColor: colors.shadow,
+            },
+          ]}
+        >
+          <TextInput
+            style={[styles.input, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+            placeholder="Message…"
+            placeholderTextColor={colors.mutedForeground}
+            value={body}
+            onChangeText={setBody}
+            multiline
+            maxLength={2000}
+            returnKeyType="default"
+          />
+          <TouchableOpacity
+            style={[
+              styles.sendBtn,
+              { backgroundColor: body.trim() ? colors.accent : colors.muted },
+            ]}
+            onPress={() => {
+              const trimmed = body.trim();
+              if (!trimmed || sending) return;
+              sendMessage(trimmed);
+            }}
+            disabled={!body.trim() || sending}
+          >
+            {sending ? (
+              <ActivityIndicator color="#fff" size="small" />
+            ) : (
+              <Feather name="send" size={16} color={body.trim() ? "#fff" : colors.mutedForeground} />
+            )}
+          </TouchableOpacity>
+        </View>
+      </View>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1 },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(255,255,255,0.12)",
+  },
+  backBtn: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
+  headerCenter: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  headerName: {
+    fontFamily: "DM_Sans_600SemiBold",
+    fontSize: 16,
+    color: "#FAFAF9",
+    letterSpacing: -0.2,
+  },
+  headerRole: {
+    fontFamily: "DM_Sans_400Regular",
+    fontSize: 12,
+    color: "rgba(250,249,246,0.55)",
+    marginTop: 1,
+  },
+  center: { flex: 1, alignItems: "center", justifyContent: "center" },
+  listContent: {
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    gap: 2,
+  },
+  dateSepRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginVertical: 12,
+  },
+  dateLine: { flex: 1, height: StyleSheet.hairlineWidth },
+  dateSepText: { fontFamily: "DM_Sans_400Regular", fontSize: 12 },
+  msgRow: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 8,
+    marginVertical: 2,
+  },
+  msgRowRight: { justifyContent: "flex-end" },
+  msgRowLeft: { justifyContent: "flex-start" },
+  bubble: {
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  myBubble: { borderRadius: 18, borderBottomRightRadius: 4 },
+  theirBubble: { borderRadius: 18, borderBottomLeftRadius: 4, borderWidth: 1 },
+  bubbleText: { fontFamily: "DM_Sans_400Regular", fontSize: 15, lineHeight: 22 },
+  imgBubble: {
+    borderRadius: 16,
+    overflow: "hidden",
+    borderWidth: 1,
+  },
+  msgImage: { width: 220, height: 180 },
+  msgTime: {
+    fontFamily: "DM_Sans_400Regular",
+    fontSize: 10,
+    marginTop: 3,
+    marginHorizontal: 4,
+    color: "#999",
+  },
+  inputArea: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    gap: 8,
+  },
+  mediaBtn: {
+    width: 40,
+    height: 40,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 20,
+  },
+  inputWrapper: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "flex-end",
+    borderWidth: 1,
+    borderRadius: 22,
+    paddingLeft: 14,
+    paddingRight: 6,
+    paddingVertical: 6,
+    gap: 6,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  input: {
+    flex: 1,
+    fontSize: 15,
+    lineHeight: 22,
+    maxHeight: 120,
+    paddingVertical: 4,
+  },
+  sendBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+});

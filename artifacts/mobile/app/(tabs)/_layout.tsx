@@ -10,13 +10,18 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
+import { useDm } from "@/context/DmContext";
 
 function NativeTabLayout() {
   return (
     <NativeTabs>
       <NativeTabs.Trigger name="index">
-        <Icon sf={{ default: "message.circle", selected: "message.circle.fill" }} />
-        <Label>Chat</Label>
+        <Icon sf={{ default: "magnifyingglass.circle", selected: "magnifyingglass.circle.fill" }} />
+        <Label>Search</Label>
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="messages">
+        <Icon sf={{ default: "envelope", selected: "envelope.fill" }} />
+        <Label>Messages</Label>
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="history">
         <Icon sf={{ default: "clock", selected: "clock.fill" }} />
@@ -37,6 +42,7 @@ function ClassicTabLayout() {
   const isIOS = Platform.OS === "ios";
   const isWeb = Platform.OS === "web";
   const safeAreaInsets = useSafeAreaInsets();
+  const { unreadCount } = useDm();
 
   return (
     <Tabs
@@ -78,12 +84,26 @@ function ClassicTabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: "Chat",
+          title: "Search",
           tabBarIcon: ({ color }) =>
             isIOS ? (
-              <SymbolView name="message.circle" tintColor={color} size={24} />
+              <SymbolView name="magnifyingglass.circle" tintColor={color} size={24} />
             ) : (
-              <Feather name="message-circle" size={22} color={color} />
+              <Feather name="search" size={22} color={color} />
+            ),
+        }}
+      />
+      <Tabs.Screen
+        name="messages"
+        options={{
+          title: "Messages",
+          tabBarBadge: unreadCount > 0 ? (unreadCount > 99 ? "99+" : unreadCount) : undefined,
+          tabBarBadgeStyle: { backgroundColor: colors.accent, fontSize: 10, minWidth: 18 },
+          tabBarIcon: ({ color }) =>
+            isIOS ? (
+              <SymbolView name="envelope" tintColor={color} size={24} />
+            ) : (
+              <Feather name="mail" size={22} color={color} />
             ),
         }}
       />
