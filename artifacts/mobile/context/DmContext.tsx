@@ -98,6 +98,11 @@ export function DmProvider({ children }: { children: React.ReactNode }) {
     newSocket.on("new_message", ({ threadId, message }: { threadId: string; message: DmMessage }) => {
       const isMine = message.senderId === user?.id;
       setThreads((prev) => {
+        const threadExists = prev.some((t) => t.id === threadId);
+        if (!threadExists) {
+          fetchThreads();
+          return prev;
+        }
         const updated = prev.map((t) => {
           if (t.id === threadId) {
             const extra = isMine ? 0 : 1;

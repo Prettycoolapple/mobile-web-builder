@@ -33,8 +33,8 @@ function timeAgo(iso: string | null): string {
 }
 
 function roleBadge(role: string): string {
-  if (role === "sales_agent") return "Agent";
-  if (role === "service_provider") return "Provider";
+  if (role === "sales_agent") return "Sales Agent";
+  if (role === "service_provider") return "Service Provider";
   return "User";
 }
 

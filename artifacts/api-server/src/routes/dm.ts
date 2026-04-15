@@ -287,34 +287,27 @@ router.post("/dm/threads/:threadId/messages", requireAuth, async (req: Request, 
       io.to(`user:${userId}`).emit("new_message", { threadId, message });
     }
 
-    const recipientSockets = io ? await io.in(`user:${recipientId}`).fetchSockets() : [];
-    const recipientOnline = recipientSockets.length > 0;
+    const recipientTokens = await db
+      .select({ token: pushTokens.token })
+      .from(pushTokens)
+      .where(eq(pushTokens.userId, recipientId));
 
-    if (!recipientOnline) {
-      const recipientTokens = await db
-        .select({ token: pushTokens.token })
-        .from(pushTokens)
-        .where(eq(pushTokens.userId, recipientId));
+    if (recipientTokens.length > 0) {
+      const [sender] = await db
+        .select({ fullName: profiles.fullName })
+        .from(profiles)
+        .where(eq(profiles.id, userId))
+        .limit(1);
 
-      if (recipientTokens.length > 0) {
-        const [sender] = await db
-          .select({ fullName: profiles.fullName })
-          .from(profiles)
-          .where(eq(profiles.id, userId))
-          .limit(1);
+      const senderName = sender?.fullName ?? "Someone";
+      const preview = msgBody ? msgBody.slice(0, 80) : "📷 Photo";
 
-        const senderName = sender?.fullName ?? "Someone";
-        const preview = msgBody
-          ? msgBody.slice(0, 80)
-          : "📷 Photo";
-
-        await sendExpoPush(
-          recipientTokens.map((t) => t.token),
-          senderName,
-          preview,
-          { threadId },
-        );
-      }
+      await sendExpoPush(
+        recipientTokens.map((t) => t.token),
+        senderName,
+        preview,
+        { threadId },
+      );
     }
 
     res.status(201).json({ message });
