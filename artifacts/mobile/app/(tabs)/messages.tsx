@@ -1,7 +1,6 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   FlatList,
-  Platform,
   Pressable,
   RefreshControl,
   StyleSheet,
@@ -141,12 +140,26 @@ function ThreadRow({ thread, myId }: { thread: DmThread; myId: string }) {
   );
 }
 
+function EmptyInbox() {
+  return (
+    <View style={styles.empty}>
+      <Feather name="inbox" size={48} color="#D1D5DB" />
+      <Text style={styles.emptyTitle}>Empty inbox</Text>
+      <Text style={styles.emptyDescription}>
+        Chats will appear here once you are connected to an agent or a service provider.
+      </Text>
+      <Text style={styles.emptySubDescription}>
+        Connections are suggested by AI after your property analysis.
+      </Text>
+    </View>
+  );
+}
+
 export default function MessagesScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const router = useRouter();
   const { user } = useAuth();
-  const { threads, fetchThreads, socket, setUnreadCount, setThreads } = useDm();
+  const { threads, fetchThreads, socket } = useDm();
   const [refreshing, setRefreshing] = useState(false);
 
   const onRefresh = useCallback(async () => {
@@ -161,9 +174,7 @@ export default function MessagesScreen() {
 
   useEffect(() => {
     if (!socket) return;
-    const handler = () => {
-      fetchThreads();
-    };
+    const handler = () => { fetchThreads(); };
     socket.on("new_message", handler);
     return () => { socket.off("new_message", handler); };
   }, [socket, fetchThreads]);
@@ -178,13 +189,6 @@ export default function MessagesScreen() {
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={[styles.header, { paddingTop: insets.top + 8, backgroundColor: "#2C1F16" }]}>
         <Text style={styles.headerTitle}>Messages</Text>
-        <TouchableOpacity
-          style={[styles.composeBtn, { backgroundColor: colors.accent }]}
-          onPress={() => router.push("/chat/contacts")}
-          activeOpacity={0.8}
-        >
-          <Feather name="edit" size={16} color="#fff" />
-        </TouchableOpacity>
       </View>
 
       <FlatList
@@ -202,23 +206,7 @@ export default function MessagesScreen() {
         ItemSeparatorComponent={() => (
           <View style={[styles.separator, { backgroundColor: colors.border }]} />
         )}
-        ListEmptyComponent={() => (
-          <View style={styles.empty}>
-            <Feather name="message-square" size={48} color={colors.mutedForeground} />
-            <Text style={[styles.emptyTitle, { color: colors.foreground }]}>No messages yet</Text>
-            <Text style={[styles.emptySubtitle, { color: colors.mutedForeground }]}>
-              Connect with agents and service providers
-            </Text>
-            <TouchableOpacity
-              style={[styles.newMsgBtn, { backgroundColor: colors.accent }]}
-              onPress={() => router.push("/chat/contacts")}
-              activeOpacity={0.8}
-            >
-              <Feather name="edit" size={16} color="#fff" />
-              <Text style={styles.newMsgBtnText}>New Message</Text>
-            </TouchableOpacity>
-          </View>
-        )}
+        ListEmptyComponent={EmptyInbox}
       />
     </View>
   );
@@ -229,7 +217,6 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
     paddingHorizontal: 20,
     paddingBottom: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -240,13 +227,6 @@ const styles = StyleSheet.create({
     fontSize: 22,
     color: "#FAFAF9",
     letterSpacing: -0.4,
-  },
-  composeBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: "center",
-    justifyContent: "center",
   },
   row: {
     flexDirection: "row",
@@ -297,35 +277,30 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    gap: 12,
-    paddingHorizontal: 32,
+    paddingHorizontal: 40,
     paddingTop: 80,
+    gap: 0,
   },
   emptyTitle: {
     fontFamily: "DM_Sans_600SemiBold",
-    fontSize: 20,
-    letterSpacing: -0.3,
+    fontSize: 18,
+    color: "#1F2937",
+    marginTop: 16,
     textAlign: "center",
-    marginTop: 8,
   },
-  emptySubtitle: {
+  emptyDescription: {
     fontFamily: "DM_Sans_400Regular",
     fontSize: 14,
+    color: "#6B7280",
     lineHeight: 22,
     textAlign: "center",
-  },
-  newMsgBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    borderRadius: 14,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
     marginTop: 8,
   },
-  newMsgBtnText: {
-    fontFamily: "DM_Sans_600SemiBold",
-    fontSize: 15,
-    color: "#fff",
+  emptySubDescription: {
+    fontFamily: "DM_Sans_400Regular",
+    fontSize: 13,
+    color: "#9CA3AF",
+    textAlign: "center",
+    marginTop: 8,
   },
 });

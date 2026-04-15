@@ -1,0 +1,144 @@
+We are updating the Messages screen. This is a UI-only change.
+No backend work required in this stage.
+
+════════════════════════════════
+CONTEXT
+════════════════════════════════
+
+The Messages screen currently has a "New Message" button 
+in the header and a "New Message" prompt in the middle of 
+the screen when the inbox is empty.
+
+These must be removed. Users (General accounts only) do NOT 
+initiate conversations. Connections are initiated by the AI 
+after a property analysis — the user simply responds.
+
+════════════════════════════════
+CHANGES REQUIRED
+════════════════════════════════
+
+1. REMOVE from Messages screen header:
+   - The "New Message" button (top right)
+   - Any compose/pencil icon in the header
+   - Any "+" button related to messaging
+
+2. REPLACE the empty inbox state:
+   Remove: any "New Message" CTA in the centre of screen
+   
+   Replace with this empty state layout:
+   
+   ┌─────────────────────────────────┐
+   │                                 │
+   │         [inbox icon — 48px]     │
+   │                                 │
+   │      Empty inbox                │
+   │   (16px, semibold, dark)        │
+   │                                 │
+   │  Chats will appear here once    │
+   │  you are connected to an agent  │
+   │  or a service provider.         │
+   │  (14px, gray, centered)         │
+   │                                 │
+   │  Connections are suggested by   │
+   │  AI after your property         │
+   │  analysis.                      │
+   │  (13px, lighter gray, centered) │
+   │                                 │
+   └─────────────────────────────────┘
+   
+   Style:
+   - Icon: use inbox or chat-bubble-outline icon 
+     from @expo/vector-icons, size 48, color #D1D5DB
+   - "Empty inbox" text: fontSize 18, fontWeight '600', 
+     color '#1F2937'
+   - Description text: fontSize 14, color '#6B7280', 
+     lineHeight 22, textAlign 'center'
+   - Sub-description: fontSize 13, color '#9CA3AF',
+     marginTop 8, textAlign 'center'
+   - Container: flex 1, alignItems center, 
+     justifyContent center, paddingHorizontal 40
+
+3. CHAT THREAD STRUCTURE (set up for Stage 2):
+   When a conversation EXISTS (connected to a provider),
+   the Messages screen should show a list of conversation 
+   threads, each showing:
+   
+   [Avatar/initials] [Provider name]        [time]
+                     [Last message preview]
+                     [Unread badge if unread]
+   
+   Tapping a thread opens the full conversation.
+   
+   The full conversation screen:
+   - Header: provider name + back arrow
+   - Message bubbles (same style as analysis chat)
+   - Text input + send button at the bottom
+   - General users CAN send messages once connected
+   - This is a standard chat UI — build it clean
+
+4. DATABASE TABLE — add to Supabase migration:
+
+   CREATE TABLE public.conversations (
+     id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+     general_user_id uuid REFERENCES public.profiles(id),
+     provider_id uuid REFERENCES public.profiles(id),
+     property_address text,
+     analysis_report_id uuid REFERENCES public.searches(id),
+     initiated_at timestamptz DEFAULT now(),
+     last_message_at timestamptz DEFAULT now(),
+     status text DEFAULT 'active'
+   );
+   
+   CREATE TABLE public.messages (
+     id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+     conversation_id uuid REFERENCES public.conversations(id),
+     sender_id uuid REFERENCES public.profiles(id),
+     content text NOT NULL,
+     message_type text DEFAULT 'text',
+     read_at timestamptz,
+     created_at timestamptz DEFAULT now()
+   );
+   
+   ALTER TABLE public.conversations ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
+   
+   CREATE POLICY "Users see their own conversations"
+   ON public.conversations FOR SELECT
+   USING (
+     auth.uid() = general_user_id OR 
+     auth.uid() = provider_id
+   );
+   
+   CREATE POLICY "Users see messages in their conversations"
+   ON public.messages FOR SELECT
+   USING (
+     conversation_id IN (
+       SELECT id FROM public.conversations
+       WHERE general_user_id = auth.uid() 
+          OR provider_id = auth.uid()
+     )
+   );
+   
+   CREATE POLICY "Users send messages in their conversations"
+   ON public.messages FOR INSERT
+   WITH CHECK (
+     sender_id = auth.uid() AND
+     conversation_id IN (
+       SELECT id FROM public.conversations
+       WHERE general_user_id = auth.uid() 
+          OR provider_id = auth.uid()
+     )
+   );
+
+════════════════════════════════
+VERIFICATION
+════════════════════════════════
+
+[ ] Messages tab shows no "New Message" button anywhere
+[ ] Empty state shows inbox icon + correct text
+[ ] Empty state text matches exactly as specified above
+[ ] No broken layout or console errors
+[ ] Database tables created: conversations, messages
+[ ] If test conversation exists in DB: thread appears in list
+[ ] Tapping a thread opens conversation screen
+[ ] Conversation screen has input bar and send button
