@@ -76,6 +76,22 @@ interface ReactNativeFileBlob {
   name: string;
 }
 
+export interface ApiValidationIssue {
+  path: string[];
+  message: string;
+}
+
+export class ApiError extends Error {
+  code: string;
+  details?: ApiValidationIssue[];
+  constructor(message: string, code = "UNKNOWN", details?: ApiValidationIssue[]) {
+    super(message);
+    this.name = "ApiError";
+    this.code = code;
+    this.details = details;
+  }
+}
+
 interface AuthContextValue {
   user: UserProfile | null;
   token: string | null;
@@ -144,8 +160,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    const json = (await resp.json()) as { token: string; user: UserProfile & { role?: UserRole; languages?: string[] }; error?: string };
-    if (!resp.ok) throw new Error(json.error ?? "Signup failed");
+    const json = (await resp.json()) as {
+      token: string;
+      user: UserProfile & { role?: UserRole; languages?: string[] };
+      error?: string;
+      code?: string;
+      details?: ApiValidationIssue[];
+    };
+    if (!resp.ok) throw new ApiError(json.error ?? "Signup failed", json.code ?? "UNKNOWN", json.details);
     const profile: UserProfile = {
       ...json.user,
       role: json.user.role ?? "general",

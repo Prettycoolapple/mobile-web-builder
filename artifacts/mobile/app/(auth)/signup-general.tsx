@@ -14,7 +14,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
-import { useAuth } from "@/context/AuthContext";
+import { useAuth, ApiError } from "@/context/AuthContext";
 import { MultiSelectChips } from "@/components/MultiSelectChips";
 
 const LANGUAGE_OPTIONS = [
@@ -93,6 +93,20 @@ export default function SignupGeneralScreen() {
       });
       router.replace("/(tabs)");
     } catch (err) {
+      if (err instanceof ApiError && err.details?.length) {
+        const mapped: FieldErrors = {};
+        for (const issue of err.details) {
+          const key = issue.path[0];
+          if (key === "firstName") mapped.firstName = issue.message;
+          else if (key === "lastName") mapped.lastName = issue.message;
+          else if (key === "email") mapped.email = issue.message;
+          else if (key === "password") mapped.password = issue.message;
+        }
+        if (Object.keys(mapped).length > 0) {
+          setFieldErrors(mapped);
+          return;
+        }
+      }
       setSubmitError(err instanceof Error ? err.message : "Signup failed. Please try again.");
     } finally {
       setIsLoading(false);
