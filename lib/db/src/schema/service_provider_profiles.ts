@@ -1,27 +1,36 @@
-import { pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, check } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { sql } from "drizzle-orm";
 import { z } from "zod/v4";
 import { profiles } from "./profiles";
 
-export const serviceProviderProfiles = pgTable("service_provider_profiles", {
-  id: text("id").primaryKey().default(sql`gen_random_uuid()`),
-  userId: text("user_id")
-    .notNull()
-    .unique()
-    .references(() => profiles.id, { onDelete: "cascade" }),
-  companyName: text("company_name"),
-  nzCompanyRegisterNumber: text("nz_company_register_number"),
-  discipline: text("discipline"),
-  addressStreet: text("address_street"),
-  addressSuburb: text("address_suburb"),
-  addressCity: text("address_city"),
-  addressPostcode: text("address_postcode"),
-  contactNumber: text("contact_number"),
-  languages: text("languages").array().default(sql`'{}'`).notNull(),
-  incorporationCertUrl: text("incorporation_cert_url"),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
+export const serviceProviderProfiles = pgTable(
+  "service_provider_profiles",
+  {
+    id: text("id").primaryKey().default(sql`gen_random_uuid()`),
+    userId: text("user_id")
+      .notNull()
+      .unique()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    companyName: text("company_name"),
+    nzCompanyRegisterNumber: text("nz_company_register_number"),
+    discipline: text("discipline"),
+    addressStreet: text("address_street"),
+    addressSuburb: text("address_suburb"),
+    addressCity: text("address_city"),
+    addressPostcode: text("address_postcode"),
+    contactNumber: text("contact_number"),
+    languages: text("languages").array().default(sql`'{}'`).notNull(),
+    incorporationCertUrl: text("incorporation_cert_url"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    check(
+      "discipline_values",
+      sql`${t.discipline} IS NULL OR ${t.discipline} IN ('architect', 'designer', 'planner', 'other')`,
+    ),
+  ],
+);
 
 export const insertServiceProviderProfileSchema = createInsertSchema(serviceProviderProfiles).omit({
   id: true,

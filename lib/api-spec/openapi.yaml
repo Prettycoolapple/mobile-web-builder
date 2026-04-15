@@ -298,7 +298,7 @@ components:
       required:
         - email
         - password
-    SignUpRequest:
+    SignUpRequestBase:
       type: object
       properties:
         email:
@@ -311,24 +311,52 @@ components:
           type: string
         lastName:
           type: string
-        role:
-          type: string
-          enum: [general, sales_agent, service_provider]
-          default: general
         languages:
           type: array
           items:
             type: string
           description: Languages the user speaks
-        agentData:
-          $ref: "#/components/schemas/SalesAgentSignUpData"
-        providerData:
-          $ref: "#/components/schemas/ServiceProviderSignUpData"
       required:
         - email
         - password
         - firstName
         - lastName
+    SignUpRequest:
+      oneOf:
+        - allOf:
+            - $ref: "#/components/schemas/SignUpRequestBase"
+            - type: object
+              properties:
+                role:
+                  type: string
+                  enum: [general]
+                  default: general
+        - allOf:
+            - $ref: "#/components/schemas/SignUpRequestBase"
+            - type: object
+              properties:
+                role:
+                  type: string
+                  enum: [sales_agent]
+                agentData:
+                  $ref: "#/components/schemas/SalesAgentSignUpData"
+              required:
+                - role
+                - agentData
+        - allOf:
+            - $ref: "#/components/schemas/SignUpRequestBase"
+            - type: object
+              properties:
+                role:
+                  type: string
+                  enum: [service_provider]
+                providerData:
+                  $ref: "#/components/schemas/ServiceProviderSignUpData"
+              required:
+                - role
+                - providerData
+      discriminator:
+        propertyName: role
     SalesAgentSignUpData:
       type: object
       properties:

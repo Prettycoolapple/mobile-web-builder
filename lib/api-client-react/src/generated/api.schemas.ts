@@ -14,14 +14,15 @@ export interface LoginRequest {
   password: string;
 }
 
-export type SignUpRequestRole =
-  (typeof SignUpRequestRole)[keyof typeof SignUpRequestRole];
-
-export const SignUpRequestRole = {
-  general: "general",
-  sales_agent: "sales_agent",
-  service_provider: "service_provider",
-} as const;
+export interface SignUpRequestBase {
+  email: string;
+  /** @minLength 8 */
+  password: string;
+  firstName: string;
+  lastName: string;
+  /** Languages the user speaks */
+  languages?: string[];
+}
 
 export interface SalesAgentSignUpData {
   agencyName?: string;
@@ -56,18 +57,18 @@ export interface ServiceProviderSignUpData {
   incorporationCertUrl?: string;
 }
 
-export interface SignUpRequest {
-  email: string;
-  /** @minLength 8 */
-  password: string;
-  firstName: string;
-  lastName: string;
-  role?: SignUpRequestRole;
-  /** Languages the user speaks */
-  languages?: string[];
-  agentData?: SalesAgentSignUpData;
-  providerData?: ServiceProviderSignUpData;
-}
+export type SignUpRequest =
+  | (SignUpRequestBase & {
+      role?: "general";
+    })
+  | (SignUpRequestBase & {
+      role: "sales_agent";
+      agentData: SalesAgentSignUpData;
+    })
+  | (SignUpRequestBase & {
+      role: "service_provider";
+      providerData: ServiceProviderSignUpData;
+    });
 
 export type UserProfileRole =
   (typeof UserProfileRole)[keyof typeof UserProfileRole];

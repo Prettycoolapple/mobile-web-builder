@@ -209,53 +209,90 @@ export const SearchPropertiesResponse = zod.object({
  * Register as general user, sales agent, or service provider
  * @summary Create a new account
  */
-export const signUpBodyPasswordMin = 8;
+export const signUpBodyOneOnePasswordMin = 8;
 
-export const signUpBodyRoleDefault = `general`;
-export const signUpBodyAgentDataYearsExperienceMin = 0;
+export const signUpBodyOneTwoRoleDefault = `general`;
+export const signUpBodyTwoOnePasswordMin = 8;
 
-export const SignUpBody = zod.object({
-  email: zod.string().email(),
-  password: zod.string().min(signUpBodyPasswordMin),
-  firstName: zod.string(),
-  lastName: zod.string(),
-  role: zod
-    .enum(["general", "sales_agent", "service_provider"])
-    .default(signUpBodyRoleDefault),
-  languages: zod
-    .array(zod.string())
-    .optional()
-    .describe("Languages the user speaks"),
-  agentData: zod
+export const signUpBodyTwoTwoAgentDataYearsExperienceMin = 0;
+
+export const signUpBodyThreeOnePasswordMin = 8;
+
+export const SignUpBody = zod.union([
+  zod
     .object({
-      agencyName: zod.string().optional(),
-      reaaLicenceNumber: zod.string().optional(),
-      yearsExperience: zod
-        .number()
-        .min(signUpBodyAgentDataYearsExperienceMin)
-        .optional(),
-      regionsCovered: zod.array(zod.string()).optional(),
-      propertyTypes: zod.array(zod.string()).optional(),
-      websiteUrl: zod.string().optional(),
-      bio: zod.string().optional(),
+      email: zod.string().email(),
+      password: zod.string().min(signUpBodyOneOnePasswordMin),
+      firstName: zod.string(),
+      lastName: zod.string(),
+      languages: zod
+        .array(zod.string())
+        .optional()
+        .describe("Languages the user speaks"),
     })
-    .optional(),
-  providerData: zod
+    .and(
+      zod.object({
+        role: zod.enum(["general"]).default(signUpBodyOneTwoRoleDefault),
+      }),
+    ),
+  zod
     .object({
-      companyName: zod.string().optional(),
-      nzCompanyRegisterNumber: zod.string().optional(),
-      discipline: zod
-        .enum(["architect", "designer", "planner", "other"])
-        .optional(),
-      addressStreet: zod.string().optional(),
-      addressSuburb: zod.string().optional(),
-      addressCity: zod.string().optional(),
-      addressPostcode: zod.string().optional(),
-      contactNumber: zod.string().optional(),
-      incorporationCertUrl: zod.string().optional(),
+      email: zod.string().email(),
+      password: zod.string().min(signUpBodyTwoOnePasswordMin),
+      firstName: zod.string(),
+      lastName: zod.string(),
+      languages: zod
+        .array(zod.string())
+        .optional()
+        .describe("Languages the user speaks"),
     })
-    .optional(),
-});
+    .and(
+      zod.object({
+        role: zod.enum(["sales_agent"]),
+        agentData: zod.object({
+          agencyName: zod.string().optional(),
+          reaaLicenceNumber: zod.string().optional(),
+          yearsExperience: zod
+            .number()
+            .min(signUpBodyTwoTwoAgentDataYearsExperienceMin)
+            .optional(),
+          regionsCovered: zod.array(zod.string()).optional(),
+          propertyTypes: zod.array(zod.string()).optional(),
+          websiteUrl: zod.string().optional(),
+          bio: zod.string().optional(),
+        }),
+      }),
+    ),
+  zod
+    .object({
+      email: zod.string().email(),
+      password: zod.string().min(signUpBodyThreeOnePasswordMin),
+      firstName: zod.string(),
+      lastName: zod.string(),
+      languages: zod
+        .array(zod.string())
+        .optional()
+        .describe("Languages the user speaks"),
+    })
+    .and(
+      zod.object({
+        role: zod.enum(["service_provider"]),
+        providerData: zod.object({
+          companyName: zod.string().optional(),
+          nzCompanyRegisterNumber: zod.string().optional(),
+          discipline: zod
+            .enum(["architect", "designer", "planner", "other"])
+            .optional(),
+          addressStreet: zod.string().optional(),
+          addressSuburb: zod.string().optional(),
+          addressCity: zod.string().optional(),
+          addressPostcode: zod.string().optional(),
+          contactNumber: zod.string().optional(),
+          incorporationCertUrl: zod.string().optional(),
+        }),
+      }),
+    ),
+]);
 
 /**
  * @summary Log in to an existing account
