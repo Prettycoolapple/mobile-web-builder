@@ -297,8 +297,7 @@ export const SignUpBody = zod.union([
           nzCompanyRegisterNumber: zod.string().optional(),
           discipline: zod
             .enum([
-              "architect",
-              "designer",
+              "architect_designer",
               "planner",
               "engineer",
               "quantity_surveyor",

@@ -14,8 +14,7 @@ export interface UserProfile {
 }
 
 export type ProviderDiscipline =
-  | "architect"
-  | "designer"
+  | "architect_designer"
   | "planner"
   | "engineer"
   | "quantity_surveyor"

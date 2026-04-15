@@ -25,7 +25,7 @@ const serviceProviderSchema = z.object({
   companyName: z.string().optional(),
   nzCompanyRegisterNumber: z.string().optional(),
   discipline: z
-    .enum(["architect", "designer", "planner", "engineer", "quantity_surveyor", "other"])
+    .enum(["architect_designer", "planner", "engineer", "quantity_surveyor", "other"])
     .optional(),
   addressStreet: z.string().optional(),
   addressSuburb: z.string().optional(),

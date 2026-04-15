@@ -44,8 +44,7 @@ export type ServiceProviderSignUpDataDiscipline =
   (typeof ServiceProviderSignUpDataDiscipline)[keyof typeof ServiceProviderSignUpDataDiscipline];
 
 export const ServiceProviderSignUpDataDiscipline = {
-  architect: "architect",
-  designer: "designer",
+  architect_designer: "architect_designer",
   planner: "planner",
   engineer: "engineer",
   quantity_surveyor: "quantity_surveyor",

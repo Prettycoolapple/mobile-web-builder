@@ -33,8 +33,7 @@ const LANGUAGE_OPTIONS = [
 ];
 
 const DISCIPLINE_OPTIONS: { label: string; value: ProviderDiscipline }[] = [
-  { label: "Architect", value: "architect" },
-  { label: "Designer", value: "designer" },
+  { label: "Architect / Designer", value: "architect_designer" },
   { label: "Planner", value: "planner" },
   { label: "Engineer", value: "engineer" },
   { label: "Quantity Surveyor", value: "quantity_surveyor" },
@@ -445,9 +444,9 @@ export default function SignupProviderScreen() {
                   </>
                 ) : (
                   <>
-                    <Feather name="upload" size={18} color={colors.mutedForeground} />
+                    <Feather name="file" size={18} color={colors.mutedForeground} />
                     <Text style={[styles.uploadBtnText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                      Tap to select PDF or image
+                      Choose certificate file
                     </Text>
                   </>
                 )}
