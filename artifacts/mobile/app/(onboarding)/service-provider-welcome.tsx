@@ -25,11 +25,10 @@ const MUTED = "rgba(250,249,246,0.55)";
 const BORDER = "rgba(250,249,246,0.1)";
 
 const FEATURES: { icon: React.ComponentProps<typeof Feather>["name"]; label: string }[] = [
-  { icon: "map-pin", label: "Company profile listed in the platform" },
-  { icon: "trending-up", label: "Leads from property developers & investors" },
-  { icon: "cpu", label: "AI-recommended to users asking about design/planning" },
-  { icon: "star", label: "Priority visibility in AI recommendations" },
-  { icon: "message-circle", label: "Direct messaging from potential clients" },
+  { icon: "cpu", label: "Lecorb will recommend you to users when their need fits your expertise." },
+  { icon: "trending-up", label: "Get insights into your potential client" },
+  { icon: "globe", label: "AI powered live translation — help you get clients speaking different languages." },
+  { icon: "file-text", label: "Access to feasibility reports" },
 ];
 
 export default function ServiceProviderWelcomeScreen() {
@@ -134,10 +133,10 @@ export default function ServiceProviderWelcomeScreen() {
               </View>
             </View>
             <View style={styles.trialBadge}>
-              <Text style={styles.trialBadgeText}>14 days free</Text>
+              <Text style={styles.trialBadgeText}>7 days free</Text>
             </View>
           </View>
-          <Text style={styles.trialNote}>No credit card required to start · Cancel anytime</Text>
+          <Text style={styles.trialNote}>Card required · $0 charged now · Billed after 7-day trial · Cancel anytime</Text>
         </Animated.View>
 
         {!hasSubscription && (
@@ -190,7 +189,7 @@ export default function ServiceProviderWelcomeScreen() {
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
                 <>
-                  <Text style={styles.primaryBtnText}>Start Free Trial</Text>
+                  <Text style={styles.primaryBtnText}>Start 7-Day Free Trial</Text>
                   <Feather name="arrow-right" size={18} color="#fff" />
                 </>
               )}

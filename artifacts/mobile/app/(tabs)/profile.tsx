@@ -39,11 +39,10 @@ const PLAN_FEATURES = {
     "Priority support",
   ],
   provider: [
-    "Profile visible to all developers",
-    "Recommended for matching jobs",
-    "Unlimited direct messages",
-    "Community recommendation system",
-    "Priority listing in search results",
+    "Lecorb recommends you when a user's need fits your expertise",
+    "Get insights into your potential clients",
+    "AI powered live translation across languages",
+    "Access to feasibility reports",
   ],
 };
 
