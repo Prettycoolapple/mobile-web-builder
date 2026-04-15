@@ -54,6 +54,8 @@ function isSameDay(a: string, b: string): boolean {
 interface MessageItem {
   type: "message";
   data: DmMessage;
+  isFirstInGroup: boolean;
+  isLastInGroup: boolean;
 }
 interface DateSepItem {
   type: "date";
@@ -66,10 +68,15 @@ function buildListItems(messages: DmMessage[]): ListItem[] {
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     const prev = messages[i - 1];
+    const next = messages[i + 1];
     if (!prev || !isSameDay(prev.createdAt, msg.createdAt)) {
       items.push({ type: "date", label: formatDateSep(msg.createdAt) });
     }
-    items.push({ type: "message", data: msg });
+    const isFirstInGroup =
+      !prev || prev.senderId !== msg.senderId || !isSameDay(prev.createdAt, msg.createdAt);
+    const isLastInGroup =
+      !next || next.senderId !== msg.senderId || !isSameDay(msg.createdAt, next.createdAt);
+    items.push({ type: "message", data: msg, isFirstInGroup, isLastInGroup });
   }
   return items;
 }
@@ -120,6 +127,8 @@ export default function ChatScreen() {
 
   const flatListRef = useRef<FlatList>(null);
   const joinedRef = useRef(false);
+  const isAtBottomRef = useRef(true);
+  const initialScrollDoneRef = useRef(false);
 
   const threadFromContext = threads.find((t) => t.id === threadId);
 
@@ -156,6 +165,8 @@ export default function ChatScreen() {
 
   useEffect(() => {
     async function init() {
+      initialScrollDoneRef.current = false;
+      isAtBottomRef.current = true;
       setLoadingInitial(true);
       await fetchMessages(null);
       setLoadingInitial(false);
@@ -182,7 +193,9 @@ export default function ChatScreen() {
         if (prev.some((m) => m.id === message.id)) return prev;
         return [...prev, message];
       });
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 80);
+      if (isAtBottomRef.current) {
+        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 80);
+      }
       if (threadId && token) {
         fetch(`${getApiBase()}/dm/threads/${threadId}/read`, {
           method: "PATCH",
@@ -215,6 +228,7 @@ export default function ChatScreen() {
       });
       setBody("");
       fetchThreads();
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     } catch {
     } finally {
       setSending(false);
@@ -286,13 +300,25 @@ export default function ChatScreen() {
         </View>
       );
     }
-    const msg = item.data;
+    const { data: msg, isFirstInGroup, isLastInGroup } = item;
     const isMine = msg.senderId === user?.id;
+    const showAvatar = !isMine && isLastInGroup;
+    const showSenderName = !isMine && isFirstInGroup && !!otherName;
     return (
-      <View style={[styles.msgRow, isMine ? styles.msgRowRight : styles.msgRowLeft]}>
-        {!isMine && <Avatar name={otherName} size={28} />}
+      <View
+        style={[
+          styles.msgRow,
+          isMine ? styles.msgRowRight : styles.msgRowLeft,
+          { marginBottom: isLastInGroup ? 6 : 1 },
+        ]}
+      >
+        {!isMine && (
+          <View style={{ width: 28, alignSelf: "flex-end" }}>
+            {showAvatar ? <Avatar name={otherName} size={28} /> : null}
+          </View>
+        )}
         <View style={{ maxWidth: "75%" }}>
-          {!isMine && otherName ? (
+          {showSenderName ? (
             <Text style={[styles.senderName, { color: colors.mutedForeground }]}>{otherName}</Text>
           ) : null}
           {msg.imageUrl ? (
@@ -313,14 +339,16 @@ export default function ChatScreen() {
               </Text>
             </View>
           )}
-          <Text
-            style={[
-              styles.msgTime,
-              { color: colors.mutedForeground, textAlign: isMine ? "right" : "left" },
-            ]}
-          >
-            {formatTime(msg.createdAt)}
-          </Text>
+          {isLastInGroup ? (
+            <Text
+              style={[
+                styles.msgTime,
+                { color: colors.mutedForeground, textAlign: isMine ? "right" : "left" },
+              ]}
+            >
+              {formatTime(msg.createdAt)}
+            </Text>
+          ) : null}
         </View>
       </View>
     );
@@ -365,8 +393,18 @@ export default function ChatScreen() {
           }
           renderItem={renderItem}
           contentContainerStyle={[styles.listContent, { paddingBottom: 16 }]}
-          onLayout={() => flatListRef.current?.scrollToEnd({ animated: false })}
-          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
+          onContentSizeChange={() => {
+            if (!initialScrollDoneRef.current) {
+              flatListRef.current?.scrollToEnd({ animated: false });
+              initialScrollDoneRef.current = true;
+            }
+          }}
+          onScroll={(e) => {
+            const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent;
+            const distFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
+            isAtBottomRef.current = distFromBottom < 80;
+          }}
+          scrollEventThrottle={100}
           onStartReachedThreshold={0.2}
           onStartReached={loadMore}
           ListHeaderComponent={
