@@ -102,6 +102,17 @@ const NEARBY_SUBURBS: Record<string, string[]> = {
   "mangere":       ["otahuhu", "manurewa"],
 };
 
+// Randomly pick up to `n` items from an array (Fisher-Yates partial shuffle)
+function shufflePick<T>(arr: T[], n: number): T[] {
+  const copy = [...arr];
+  const end = Math.min(n, copy.length);
+  for (let i = 0; i < end; i++) {
+    const j = i + Math.floor(Math.random() * (copy.length - i));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy.slice(0, end);
+}
+
 function parseDiscoverParams(text: string): { suburb: string | null; minPrice: number; maxPrice: number } {
   const lower = text.toLowerCase();
 
@@ -369,11 +380,12 @@ router.post("/chat", async (req, res) => {
           { question: intent.clarificationQuestion, intent_reasoning: intent.reasoning },
           "Returning clarification question to user",
         );
-        return reply.send({
+        res.json({
           content: intent.clarificationQuestion,
           mode: "clarification",
           intent: { needsClarification: true },
         });
+        return;
       }
 
       if (mode === "discover") {
@@ -461,12 +473,14 @@ router.post("/chat", async (req, res) => {
                 });
                 req.log.info({ fetched: firstFiltered.length, cached: remainingFiltered.length }, "realestate.co.nz: prescreening listings");
                 // Run pre-screening and AI intro generation in parallel to save time
-                const introPromptPreScreen = `The user asked: "${userText}". You found ${firstFiltered.length} matching propert${firstFiltered.length === 1 ? "y" : "ies"} in ${suburb || "the area"} on realestate.co.nz. In 1 sentence, acknowledge this result conversationally (e.g. "I found a few options in St Heliers matching your criteria:"). Be natural and brief — no JSON.`;
+                const criteriaContext = intent.criteria ? ` matching criteria: ${intent.criteria}` : "";
+                const introPromptPreScreen = `The user asked: "${userText}". You found ${firstFiltered.length} matching propert${firstFiltered.length === 1 ? "y" : "ies"} in ${suburb || "the area"} on realestate.co.nz${criteriaContext}. In 1 sentence, acknowledge this result conversationally (e.g. "I found a few development sites in St Heliers under $2M:"). Be natural and brief — no JSON.`;
                 const [screened, introFromPreScreen] = await Promise.all([
                   preScreenListingsFast(firstFiltered, 5).catch(() => []),
                   generateAnalysis(introPromptPreScreen).catch(() => ""),
                 ]);
-                candidates = screened;
+                // Randomly pick from the top screened candidates to show variety
+                candidates = shufflePick(screened, 4);
                 prescreenedIntro = introFromPreScreen;
               }
             }
@@ -495,13 +509,14 @@ router.post("/chat", async (req, res) => {
                       shownUrls: filtered.map((l) => l.listingUrl),
                       suburb: nearbySuburb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
                     });
-                    const introPromptFallback = `The user asked about ${suburb} but no listings were found there right now. You found ${filtered.length} propert${filtered.length === 1 ? "y" : "ies"} in nearby ${nearbySuburb}. In 1 sentence acknowledge this naturally (e.g. "I couldn't find anything in ${suburb} right now, but here are some nearby options in ${nearbySuburb}:"). Be brief — no JSON.`;
+                    const criteriaContextFallback = intent.criteria ? ` (${intent.criteria})` : "";
+                    const introPromptFallback = `The user asked about ${suburb}${criteriaContextFallback} but no listings were found there right now. You found ${filtered.length} propert${filtered.length === 1 ? "y" : "ies"} in nearby ${nearbySuburb}. In 1 sentence acknowledge this naturally (e.g. "I couldn't find anything in ${suburb} right now, but here are some nearby options in ${nearbySuburb}:"). Be brief — no JSON.`;
                     const [screenedFallback, introFallback] = await Promise.all([
                       preScreenListingsFast(filtered, 5).catch(() => filtered.slice(0, 5) as typeof candidates),
                       generateAnalysis(introPromptFallback).catch(() => ""),
                     ]);
                     if (screenedFallback.length > 0) {
-                      candidates = screenedFallback;
+                      candidates = shufflePick(screenedFallback, 4);
                       prescreenedIntro = introFallback;
                       req.log.info({ nearbySuburb, count: candidates.length }, "Discovery: nearby suburb fallback succeeded");
                       break;
@@ -518,9 +533,10 @@ router.post("/chat", async (req, res) => {
           let aiIntro = (!noListings && prescreenedIntro) ? prescreenedIntro : "";
           if (!aiIntro) {
             try {
+              const criteriaContextGeneral = intent.criteria ? ` (${intent.criteria})` : "";
               const introPrompt = noListings
-                ? `The user asked: "${userText}". No matching listings were found on realestate.co.nz right now for ${suburb || "this area"}. In 1-2 sentences, acknowledge this warmly and suggest they try a different suburb, adjust their budget, or check back soon. Do NOT output any JSON.`
-                : `The user asked: "${userText}". You found ${candidates.length} matching propert${candidates.length === 1 ? "y" : "ies"} in ${suburb || "the area"} on realestate.co.nz. In 1 sentence, acknowledge the results conversationally. Be natural and brief — no JSON.`;
+                ? `The user asked: "${userText}". No matching listings were found on realestate.co.nz right now for ${suburb || "this area"}${criteriaContextGeneral}. In 1-2 sentences, acknowledge this warmly and suggest they try a different suburb, adjust their budget, or check back soon. Do NOT output any JSON.`
+                : `The user asked: "${userText}". You found ${candidates.length} matching propert${candidates.length === 1 ? "y" : "ies"} in ${suburb || "the area"} on realestate.co.nz${criteriaContextGeneral}. In 1 sentence, acknowledge the results conversationally. Be natural and brief — no JSON.`;
               aiIntro = await generateAnalysis(introPrompt).catch(() => "");
             } catch { /* silent */ }
           }
