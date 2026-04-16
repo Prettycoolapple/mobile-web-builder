@@ -928,7 +928,7 @@ export default function SearchScreen() {
             <View style={[styles.limitWarningBar, { backgroundColor: "#FFFBEB", borderTopColor: "#FDE68A" }]}>
               <Feather name="alert-triangle" size={13} color="#D97706" />
               <Text style={[styles.limitWarningText, { color: "#92400E", fontFamily: "DM_Sans_500Medium" }]}>
-                You're approaching your usage limit for this plan — messages refresh on the 1st.
+                You are approaching usage limit
               </Text>
             </View>
           ) : null}
