@@ -6,9 +6,18 @@ import {
   StyleSheet,
   ActivityIndicator,
   Linking,
+  Image,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { ServiceProvider } from "@/context/ChatContext";
+
+function resolveAvatarUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  if (url.startsWith("http")) return url;
+  const domain = process.env.EXPO_PUBLIC_DOMAIN;
+  if (domain) return `https://${domain}${url}`;
+  return url;
+}
 
 interface Props {
   provider: ServiceProvider;
@@ -19,12 +28,23 @@ interface Props {
 }
 
 function ProviderAvatar({ provider }: { provider: ServiceProvider }) {
+  const avatarUri = resolveAvatarUrl(provider.avatarUrl);
   const initials = (provider.fullName ?? "?")
     .split(" ")
     .slice(0, 2)
     .map((w) => w[0])
     .join("")
     .toUpperCase();
+
+  if (avatarUri) {
+    return (
+      <Image
+        source={{ uri: avatarUri }}
+        style={styles.avatarImage}
+        resizeMode="cover"
+      />
+    );
+  }
 
   return (
     <View style={styles.avatar}>
@@ -162,7 +182,7 @@ export function ProviderRecommendationBubble({
           {connecting ? (
             <ActivityIndicator size="small" color="#fff" />
           ) : (
-            <Text style={styles.connectBtnText}>Connect &amp; Message  →</Text>
+            <Text style={styles.connectBtnText}>Message  →</Text>
           )}
         </TouchableOpacity>
 
@@ -235,6 +255,12 @@ const styles = StyleSheet.create({
     backgroundColor: "#7C3AED",
     justifyContent: "center",
     alignItems: "center",
+    flexShrink: 0,
+  },
+  avatarImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     flexShrink: 0,
   },
   avatarInitials: {

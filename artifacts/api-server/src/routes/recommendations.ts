@@ -268,12 +268,43 @@ router.post("/recommendations/check", requireAuth, async (req: Request, res: Res
   }
 });
 
+function formatReportSummary(report: Record<string, unknown> | undefined): string | null {
+  if (!report) return null;
+
+  const address = (report.address as string) ?? null;
+  const overview = (report.propertyOverview as Record<string, unknown>) ?? {};
+  const planning = (report.planning as Record<string, unknown>) ?? {};
+  const scores = (report.scores as Record<string, unknown>) ?? {};
+
+  const lines: string[] = [];
+  if (address) lines.push(`📍 ${address}`);
+  lines.push("");
+
+  const details: string[] = [];
+  if (overview.zone || report.zone_label) details.push(`Zone: ${(report.zone_label ?? overview.zone) as string}`);
+  if (overview.landArea) details.push(`Land area: ${overview.landArea as string}`);
+  if (overview.cv) details.push(`Capital value: ${overview.cv as string}`);
+  if (planning.potentialLots ?? report.potential_lots) details.push(`Potential lots: ${(planning.potentialLots ?? report.potential_lots) as number}`);
+  if (details.length > 0) lines.push(...details, "");
+
+  if (scores.overall != null) lines.push(`Overall score: ${Number(scores.overall).toFixed(1)} / 5`);
+  if (scores.planning != null) lines.push(`  Planning & zoning: ${Number(scores.planning).toFixed(1)}`);
+  if (scores.cost != null) lines.push(`  Cost feasibility: ${Number(scores.cost).toFixed(1)}`);
+  if (scores.roi != null) lines.push(`  ROI potential: ${Number(scores.roi).toFixed(1)}`);
+
+  const briefSummary = report.brief_summary ?? report.briefSummary;
+  if (briefSummary) lines.push("", String(briefSummary));
+
+  return lines.join("\n").trim();
+}
+
 router.post("/recommendations/connect", requireAuth, async (req: Request, res: Response) => {
   const userId = (req as any).userId as string;
 
-  const { providerId, propertyAddress } = req.body as {
+  const { providerId, propertyAddress, report } = req.body as {
     providerId?: string;
     propertyAddress?: string;
+    report?: Record<string, unknown>;
   };
 
   if (!providerId || !propertyAddress) {
@@ -311,11 +342,6 @@ router.post("/recommendations/connect", requireAuth, async (req: Request, res: R
       }
     }
 
-    const openingMessage =
-      `Hi! I've been connected with you regarding ${propertyAddress}. ` +
-      `The AI analysis shows this property has development potential — ` +
-      `I'd love to discuss how you could help move this forward.`;
-
     const hasMessages = await db
       .select({ id: dmMessages.id })
       .from(dmMessages)
@@ -323,10 +349,20 @@ router.post("/recommendations/connect", requireAuth, async (req: Request, res: R
       .limit(1);
 
     if (hasMessages.length === 0) {
+      const reportSummary = formatReportSummary(report);
+      const firstBody = reportSummary ??
+        `Hi! I'd like to discuss ${propertyAddress} with you — the AI analysis shows development potential and I'd love your professional input.`;
+
       await db.insert(dmMessages).values({
         threadId: thread.id,
         senderId: userId,
-        body: openingMessage,
+        body: firstBody,
+      });
+
+      await db.insert(dmMessages).values({
+        threadId: thread.id,
+        senderId: userId,
+        body: "Can you please take a look at this for me?",
       });
 
       await db

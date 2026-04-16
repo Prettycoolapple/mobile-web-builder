@@ -150,7 +150,7 @@ export default function SearchScreen() {
   }, [currentSession?.messages]);
 
   useEffect(() => {
-    if (user?.role !== "general") return;
+    if (user?.role !== "general" || user?.subscriptionTier !== "standard") return;
     const msgs = currentSession?.messages ?? [];
 
     // Find the most recent report in this session
@@ -225,26 +225,30 @@ export default function SearchScreen() {
         ? `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`
         : "/api";
       const headers = getApiHeaders();
+      const msgs = currentSession?.messages ?? [];
+      const lastReportMsg = [...msgs].reverse().find((m) => m.type === "report" && m.report);
+      const report = lastReportMsg?.report ?? null;
       const resp = await fetch(`${apiBase}/recommendations/connect`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ providerId, propertyAddress }),
+        body: JSON.stringify({ providerId, propertyAddress, report }),
       });
       if (!resp.ok) {
         const err = await resp.json() as { error?: string };
         throw new Error(err.error ?? "Connect failed");
       }
-      router.push("/(tabs)/messages");
+      const { threadId } = await resp.json() as { threadId: string };
+      router.push(`/chat/${threadId}` as any);
     } catch (err) {
       console.log("Connect failed:", err);
       throw err;
     }
-  }, [getApiHeaders, router]);
+  }, [getApiHeaders, router, currentSession]);
 
   const handleDismiss = useCallback((_messageId: string) => {}, []);
 
   useEffect(() => {
-    if (user?.role !== "general") return;
+    if (user?.role !== "general" || user?.subscriptionTier !== "standard") return;
     const msgs = currentSession?.messages ?? [];
     if (!currentSession?.currentReport) return;
 
@@ -407,6 +411,7 @@ export default function SearchScreen() {
     // Detect if the user is explicitly asking for a service provider recommendation
     const isExplicitRecommendationRequest =
       user?.role === "general" &&
+      user?.subscriptionTier === "standard" &&
       RECOMMENDATION_KEYWORDS.some((kw) => lowerText.includes(kw));
 
     const isDiscoverQuery =
