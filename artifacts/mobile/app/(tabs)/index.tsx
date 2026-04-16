@@ -440,11 +440,85 @@ export default function SearchScreen() {
   );
 
   const handleAnalyse = useCallback(
-    (address: string) => {
+    async (address: string) => {
+      if (isLoading) return;
       setInputText("");
-      handleSend(`Analyse ${address}`);
+      Keyboard.dismiss();
+
+      const sessionId = currentSessionId ?? createSession();
+
+      addMessage({ role: "user", content: `Analyse ${address}`, type: "text" }, sessionId);
+      setIsLoading(true);
+      addMessage({ role: "assistant", content: "", type: "loading", loadingMode: "analyse" }, sessionId);
+
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 200_000);
+
+        const currentMessages = currentSession?.messages ?? [];
+        const conversationHistory = currentMessages
+          .filter((m) => m.type === "text" || m.type === "report")
+          .map((m) => ({
+            role: m.role as "user" | "assistant",
+            content: m.type === "text" ? m.content : `[Report for ${(m as any).report?.address ?? "property"}]`,
+          }));
+
+        const resp = await fetch(`${getApiBase()}/analyse`, {
+          method: "POST",
+          headers: getApiHeaders(),
+          body: JSON.stringify({ address, conversationHistory }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+
+        if (!resp.ok) {
+          const err = (await resp.json()) as { error?: string; code?: string };
+          if (resp.status === 402) {
+            updateLastMessage({ type: "text", content: "You've used all your reports for this month. Upgrade to Standard for more." }, sessionId);
+            setShowPaywall(true);
+          } else if (resp.status === 401) {
+            updateLastMessage({ type: "text", content: "Session expired. Please sign in again." }, sessionId);
+          } else {
+            updateLastMessage({ type: "text", content: err.error || "Something went wrong. Please try again." }, sessionId);
+          }
+          return;
+        }
+
+        const data = (await resp.json()) as { report: FeasibilityReport; type: string };
+        if (data.report && data.report.scores) {
+          setCurrentReport(data.report);
+          updateLastMessage({ type: "report", report: data.report, content: "" }, sessionId);
+          refreshProfile().catch(() => {});
+        } else {
+          updateLastMessage({ type: "text", content: "Could not generate a report for this property. Please try again." }, sessionId);
+        }
+      } catch (err: any) {
+        const isTimeout = err?.name === "AbortError";
+        updateLastMessage({
+          type: "text",
+          content: isTimeout
+            ? "Analysis timed out — NZ property data sources are slow right now. Please tap Try again."
+            : "Couldn't connect to the analysis service. Check your connection.",
+          retryText: `Analyse ${address}`,
+        }, sessionId);
+      } finally {
+        setIsLoading(false);
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      }
     },
-    [handleSend],
+    [
+      isLoading,
+      currentSessionId,
+      currentSession,
+      createSession,
+      addMessage,
+      updateLastMessage,
+      setCurrentReport,
+      setIsLoading,
+      getApiBase,
+      getApiHeaders,
+      refreshProfile,
+    ],
   );
 
   const renderItem = useCallback(
