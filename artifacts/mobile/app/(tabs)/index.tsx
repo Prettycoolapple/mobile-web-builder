@@ -350,7 +350,7 @@ export default function SearchScreen() {
 
     addMessage({ role: "assistant", content: "", type: "loading", loadingMode: detectedMode as any }, sessionId);
 
-    const MAX_RETRIES = 3;
+    const MAX_RETRIES = 5;
     const TIMEOUT_MS = 200_000;
 
     const currentMessages = currentSession?.messages ?? [];
@@ -392,17 +392,8 @@ export default function SearchScreen() {
 
           if (!resp.ok) {
             const err = (await resp.json()) as { error?: string; code?: string };
-            if (resp.status === 402) {
-              updateLastMessage({ type: "text", content: "You've used all your reports for this month. Upgrade to Standard for more." }, sessionId);
-              setShowPaywall(true);
-              return;
-            } else if (resp.status === 401) {
-              updateLastMessage({ type: "text", content: "Session expired. Please sign in again." }, sessionId);
-              return;
-            } else {
-              // Server error (5xx) — throw so the retry loop catches it and tries again
-              throw Object.assign(new Error(err.error || "Server error"), { isServerError: true });
-            }
+            // All non-ok responses are retried — auth/limit errors shouldn't occur in normal use
+            throw Object.assign(new Error(err.error || "Server error"), { isServerError: true, statusCode: resp.status });
           }
 
           // Always read as text first, then parse — avoids issues where resp.json()
@@ -469,13 +460,16 @@ export default function SearchScreen() {
       }
 
       const isTimeout = lastErr?.name === "AbortError";
-      updateLastMessage({
-        type: "text",
-        content: isTimeout
-          ? "NZ property data sources are slow right now. Please tap Try again."
-          : "Couldn't reach the service after a few attempts. Please check your connection and try again.",
-        retryText: text,
-      }, sessionId);
+      const statusCode = lastErr?.statusCode;
+      const finalContent = isTimeout
+        ? "NZ property data sources are slow right now. Please tap Try again."
+        : statusCode === 402
+          ? "You've used all your reports for this month. Upgrade to Standard for more."
+          : statusCode === 401
+            ? "Session expired. Please sign in again."
+            : "Couldn't reach the service after several attempts. Please check your connection and try again.";
+      if (statusCode === 402) setShowPaywall(true);
+      updateLastMessage({ type: "text", content: finalContent, retryText: text }, sessionId);
     } finally {
       setIsLoading(false);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
