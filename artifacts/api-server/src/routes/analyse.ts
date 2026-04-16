@@ -16,7 +16,7 @@ import { extractNZAddress } from "../lib/address-parser";
 import { runPropertyPipeline } from "../lib/pipeline";
 import { formatNZD } from "../lib/utils";
 import { searchRealEstateListings } from "../lib/scrapers/realestate-search";
-import { preScreenListingsFast } from "../lib/pre-screen";
+import { preScreenListingsFast, type PropertyCandidate } from "../lib/pre-screen";
 import {
   makeCacheKey,
   setListingCache,
@@ -101,6 +101,86 @@ const NEARBY_SUBURBS: Record<string, string[]> = {
   "otahuhu":       ["papatoetoe", "penrose", "mangere"],
   "mangere":       ["otahuhu", "manurewa"],
 };
+
+// ── Criteria-based re-ranking ──────────────────────────────────────────────────
+// Applies rule-based score boosts derived from the LLM-extracted criteria string
+// so that properties best matching the user's intent surface to the top before
+// the final random pick.
+function rankByCriteria(candidates: PropertyCandidate[], criteria: string | null): PropertyCandidate[] {
+  if (!criteria || candidates.length === 0) return candidates;
+  const c = criteria.toLowerCase();
+
+  // Parse intent signals from criteria text
+  const wantsDevelopment  = /develop|subdiv|subdividable|section|lots?|townhouse|unit|multi/i.test(c);
+  const wantsLargeLand    = /large|big|big\s+section|land\s+size|land\s+area|estate|wide|spacious/i.test(c);
+  const wantsInvestment   = /invest|roi|yield|return|rental|income/i.test(c);
+  const wantsLifestyle    = /lifestyle|rural|acreage|farm|rural/i.test(c);
+  const wantsAffordable   = /afford|cheap|budget|value|low[\s-]cost/i.test(c);
+  const wantsMinLand      = (() => {
+    // "land over 600m²", "at least 700sqm", "bigger than 500", etc.
+    const m = c.match(/(?:over|above|at\s+least|more\s+than|bigger\s+than|larger\s+than|minimum)\s+(\d+)\s*(?:m2|sqm|m²|square)/i)
+           ?? c.match(/(\d{3,5})\s*(?:m2|sqm|m²)\s+(?:or\s+)?(?:more|plus|above|over)/i);
+    return m ? parseInt(m[1], 10) : null;
+  })();
+  const wantsMaxLand      = (() => {
+    const m = c.match(/(?:under|below|less\s+than|smaller\s+than|up\s+to)\s+(\d+)\s*(?:m2|sqm|m²|square)/i);
+    return m ? parseInt(m[1], 10) : null;
+  })();
+
+  const DEVELOPMENT_ZONES = new Set(["THAB", "MHU", "MHU-H", "MHU-S", "MHS", "TBC", "TC", "LC"]);
+
+  const ranked = candidates.map((p) => {
+    let boost = 0;
+    const zone = (p.zone ?? "").toUpperCase().trim();
+    const land = p.landArea ?? 0;
+
+    if (wantsDevelopment) {
+      // Prefer zones that allow multi-lot development
+      if (DEVELOPMENT_ZONES.has(zone)) boost += 2;
+      // Prefer larger sites (more lot potential)
+      if (land >= 800) boost += 1.5;
+      else if (land >= 600) boost += 1;
+      else if (land >= 400) boost += 0.5;
+      // Prefer high ease score (few overlay restrictions)
+      boost += p.scores.ease * 0.4;
+    }
+
+    if (wantsLargeLand) {
+      // Scale boost with land area, capped at 3
+      boost += Math.min(3, land / 400);
+    }
+
+    if (wantsMinLand !== null) {
+      // Hard filter: strong negative if below minimum
+      if (land > 0 && land < wantsMinLand) boost -= 5;
+      else if (land >= wantsMinLand) boost += 1;
+    }
+
+    if (wantsMaxLand !== null && land > wantsMaxLand) {
+      boost -= 3; // penalise over-sized sites
+    }
+
+    if (wantsInvestment) {
+      boost += p.scores.roi * 0.5;
+    }
+
+    if (wantsLifestyle) {
+      // Prefer larger land and rural-leaning zones
+      boost += Math.min(2, land / 600);
+      if (zone === "RUR" || zone === "LLRZ") boost += 1;
+    }
+
+    if (wantsAffordable) {
+      boost += p.scores.cost * 0.4;
+    }
+
+    return { candidate: p, score: p.scores.composite + boost };
+  });
+
+  return ranked
+    .sort((a, b) => b.score - a.score)
+    .map((r) => r.candidate);
+}
 
 // Randomly pick up to `n` items from an array (Fisher-Yates partial shuffle)
 function shufflePick<T>(arr: T[], n: number): T[] {
@@ -444,7 +524,8 @@ router.post("/chat", async (req, res) => {
                 if (nextListings.length === 0) break;
                 req.log.info({ nextListings: nextListings.length, remaining, attempt: attempts + 1 }, "Follow-up: popping next listings from cache");
                 markShown(cacheKey, nextListings.map((l) => l.listingUrl));
-                candidates = await preScreenListingsFast(nextListings, 5).catch(() => []);
+                const screened = await preScreenListingsFast(nextListings, 5).catch(() => []);
+                candidates = shufflePick(rankByCriteria(screened, intent.criteria), 4);
                 attempts++;
               }
             }
@@ -479,8 +560,8 @@ router.post("/chat", async (req, res) => {
                   preScreenListingsFast(firstFiltered, 5).catch(() => []),
                   generateAnalysis(introPromptPreScreen).catch(() => ""),
                 ]);
-                // Randomly pick from the top screened candidates to show variety
-                candidates = shufflePick(screened, 4);
+                // Re-rank by user criteria then randomly pick to show variety
+                candidates = shufflePick(rankByCriteria(screened, intent.criteria), 4);
                 prescreenedIntro = introFromPreScreen;
               }
             }
@@ -516,7 +597,7 @@ router.post("/chat", async (req, res) => {
                       generateAnalysis(introPromptFallback).catch(() => ""),
                     ]);
                     if (screenedFallback.length > 0) {
-                      candidates = shufflePick(screenedFallback, 4);
+                      candidates = shufflePick(rankByCriteria(screenedFallback, intent.criteria), 4);
                       prescreenedIntro = introFallback;
                       req.log.info({ nearbySuburb, count: candidates.length }, "Discovery: nearby suburb fallback succeeded");
                       break;
