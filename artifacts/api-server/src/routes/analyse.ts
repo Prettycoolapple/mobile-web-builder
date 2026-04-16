@@ -414,7 +414,8 @@ router.post("/search", async (req, res) => {
 
 const CHAT_LIMITS: Record<string, { limit: number; warnAt: number }> = {
   service_provider: { limit: 300, warnAt: 280 },
-  general:          { limit: 50,  warnAt: 45  },
+  general_standard: { limit: 50,  warnAt: 45  },
+  general_free:     { limit: 10,  warnAt: 8   },
   default:          { limit: 50,  warnAt: 45  },
 };
 
@@ -422,20 +423,33 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
   allowed: boolean;
   messagesUsed: number;
   nearLimit: boolean;
+  isFreeLimit: boolean;
 }> {
   const [profile] = await db
     .select({
       messagesUsedThisMonth: profiles.messagesUsedThisMonth,
       lastResetAt: profiles.lastResetAt,
       role: profiles.role,
+      subscriptionTier: profiles.subscriptionTier,
     })
     .from(profiles)
     .where(eq(profiles.id, userId))
     .limit(1);
 
-  if (!profile) return { allowed: true, messagesUsed: 0, nearLimit: false };
+  if (!profile) return { allowed: true, messagesUsed: 0, nearLimit: false, isFreeLimit: false };
 
-  const { limit, warnAt } = CHAT_LIMITS[profile.role ?? "default"] ?? CHAT_LIMITS.default;
+  const tier = profile.subscriptionTier ?? "free";
+  const role = profile.role ?? "general";
+  let limitKey: string;
+  if (role === "service_provider") {
+    limitKey = "service_provider";
+  } else if (role === "general" && (tier === "standard" || tier === "pro")) {
+    limitKey = "general_standard";
+  } else {
+    limitKey = "general_free";
+  }
+  const { limit, warnAt } = CHAT_LIMITS[limitKey] ?? CHAT_LIMITS.default;
+  const isFreeLimit = limitKey === "general_free";
 
   const now = new Date();
   const lastReset = new Date(profile.lastResetAt);
@@ -453,7 +467,7 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
   }
 
   if (currentCount >= limit) {
-    return { allowed: false, messagesUsed: currentCount, nearLimit: true };
+    return { allowed: false, messagesUsed: currentCount, nearLimit: true, isFreeLimit };
   }
 
   await db
@@ -466,6 +480,7 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
     allowed: true,
     messagesUsed: newCount,
     nearLimit: newCount >= warnAt,
+    isFreeLimit,
   };
 }
 
@@ -482,13 +497,15 @@ router.post("/chat", async (req, res) => {
   const chatUserId = getUserIdFromHeader(req);
   if (chatUserId) {
     try {
-      const { allowed, messagesUsed, nearLimit } = await checkAndIncrementChatMessages(chatUserId);
+      const { allowed, messagesUsed, nearLimit, isFreeLimit } = await checkAndIncrementChatMessages(chatUserId);
       if (!allowed) {
         res.status(429).json({
           error: "monthly_limit_reached",
+          code: isFreeLimit ? "upgrade_required" : "monthly_limit_reached",
           messagesUsed,
-          limit: CHAT_MONTHLY_LIMIT,
-          message: "You've reached your monthly message limit. It resets at the start of next month.",
+          message: isFreeLimit
+            ? "You've used all your free messages this month. Upgrade to Standard for more."
+            : "You've reached your monthly message limit. It resets at the start of next month.",
         });
         return;
       }

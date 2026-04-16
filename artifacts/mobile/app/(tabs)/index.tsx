@@ -473,10 +473,14 @@ export default function SearchScreen() {
           if (!resp.ok) {
             const err = (await resp.json()) as { error?: string; code?: string; message?: string };
             if (resp.status === 429 && err.error === "monthly_limit_reached") {
+              const isUpgrade = err.code === "upgrade_required";
               updateLastMessage({
                 type: "text",
-                content: "You've reached your monthly message limit. It resets at the start of next month.",
+                content: isUpgrade
+                  ? "You've used all your free messages. Upgrade to Standard for more."
+                  : "You've reached your monthly message limit. It resets at the start of next month.",
               }, sessionId);
+              if (isUpgrade) setShowPaywall(true);
               setIsLoading(false);
               return;
             }
@@ -897,7 +901,11 @@ export default function SearchScreen() {
             nestedScrollEnabled
           />
 
-          {(user?.messagesUsedThisMonth ?? 0) >= (user?.role === "service_provider" ? 280 : 45) && (
+          {(user?.messagesUsedThisMonth ?? 0) >= (
+            user?.role === "service_provider" ? 280
+            : user?.subscriptionTier === "free" || !user?.subscriptionTier ? 8
+            : 45
+          ) && (
             <View style={[styles.limitWarningBar, { backgroundColor: "#FFFBEB", borderTopColor: "#FDE68A" }]}>
               <Feather name="alert-triangle" size={13} color="#D97706" />
               <Text style={[styles.limitWarningText, { color: "#92400E", fontFamily: "DM_Sans_500Medium" }]}>
