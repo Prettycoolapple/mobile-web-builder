@@ -13,7 +13,7 @@ import {
 } from "../lib/claude";
 import { verifyToken } from "../lib/auth";
 import { extractNZAddress } from "../lib/address-parser";
-import { findSuburbInText } from "../lib/nz-suburbs";
+import { findSuburbInText, extractLocationPhrase } from "../lib/nz-suburbs";
 import { runPropertyPipeline } from "../lib/pipeline";
 import { formatNZD } from "../lib/utils";
 import { searchRealEstateListings } from "../lib/scrapers/realestate-search";
@@ -196,8 +196,9 @@ function shufflePick<T>(arr: T[], n: number): T[] {
 }
 
 function parseDiscoverParams(text: string): { suburb: string | null; minPrice: number; maxPrice: number } {
-  // Use the shared NZ suburbs finder which covers all major NZ suburbs
-  const suburb = findSuburbInText(text);
+  // First try known NZ suburbs, then fall back to any location phrase after in/near/around
+  // so that unmapped suburbs still reach the scraper's dynamic keyword fallback.
+  const suburb = findSuburbInText(text) ?? extractLocationPhrase(text);
 
   const pricePatterns = [
     /under\s+\$?([0-9]+(?:\.[0-9]+)?)\s*([mk]?)/i,
@@ -1109,9 +1110,10 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
       // extract the suburb from the AI's text and actually run the search now.
       const isSearchingPhrase = /\b(searching|i'm searching|i am searching|let me search|looking for properties|i'll search|i will search)\b/i.test(content);
       if (isSearchingPhrase && responseMode !== "discover") {
-        // Try the user text first (most reliable), then scan the AI's response for a known suburb
+        // Try the user text first (most reliable), then scan the AI's response for a known suburb,
+        // then try a last-resort phrase extraction from user text for unmapped suburbs.
         const { suburb: userSuburb, minPrice, maxPrice } = parseDiscoverParams(userText);
-        const aiSuburb = userSuburb == null ? findSuburbInText(content) : null;
+        const aiSuburb = userSuburb == null ? (findSuburbInText(content) ?? extractLocationPhrase(content)) : null;
         const suburb = userSuburb ?? aiSuburb;
         const includeNegotiation = /negotiat|without\s+price|no\s+price|poa|tender|auction/i.test(userText);
 

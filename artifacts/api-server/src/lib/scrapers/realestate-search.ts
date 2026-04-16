@@ -402,12 +402,12 @@ function buildSearchUrl(
 
 /**
  * Build a NZ-wide keyword search URL for suburbs not in the map.
- * Uses realestate.co.nz's search with a suburb query string.
+ * Uses realestate.co.nz's search with a raw suburb query string (not slugified)
+ * to maximise matching — e.g. "half moon bay" rather than "half-moon-bay".
  */
 function buildFallbackSearchUrl(suburb: string, minPrice?: number, maxPrice?: number): string {
-  const suburbSlug = toSlug(suburb);
   const paramObj: Record<string, string> = {
-    q: suburbSlug,
+    q: suburb.toLowerCase().trim(),
     sort: "recent",
   };
   if (minPrice != null && minPrice > 0) paramObj["priceMin"] = String(minPrice);

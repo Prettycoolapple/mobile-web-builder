@@ -1,7 +1,7 @@
 import { ai } from "@workspace/integrations-gemini-ai";
 import { logger } from "./logger";
 import { SYSTEM_PROMPT, ANALYSE_AUGMENTATION, DISCOVER_AUGMENTATION } from "./prompts";
-import { findSuburbInText, looksLikeSuburbOnly } from "./nz-suburbs";
+import { findSuburbInText, looksLikeSuburbOnly, extractLocationPhrase } from "./nz-suburbs";
 
 export interface Message {
   role: "user" | "assistant";
@@ -276,6 +276,7 @@ function fallbackDetectIntent(
   const mode = isSuburbOnly ? "discover" : detectMode(lastMessage);
 
   const suburb = findSuburbInText(lastMessage)
+    ?? extractLocationPhrase(lastMessage)
     ?? (mode === "discover" && reportContext?.suburb ? reportContext.suburb.toLowerCase().trim() : null);
 
   const isFollowUp = /any\s*(others?|more)|show\s*(me\s*)?more|more\s*(properties|options|results|sites)|what\s*else|other\s*properties|more\s*results|few\s*more|find\s*more/i.test(lastMessage);

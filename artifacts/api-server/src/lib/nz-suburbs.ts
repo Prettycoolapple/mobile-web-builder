@@ -159,3 +159,26 @@ export function looksLikeSuburbOnly(text: string): boolean {
   if (/\b(is|are|was|were|what|where|how|find|show|search|properties|property|house|land|section)\b/i.test(trimmed)) return false;
   return findSuburbInText(trimmed) !== null;
 }
+
+/**
+ * Last-resort suburb extractor: pull the phrase following "in/near/around/at" from
+ * arbitrary text and return it as a raw suburb string, even if it doesn't appear in
+ * the NZ_SUBURBS list. This allows the scraper's dynamic fallback to attempt a
+ * keyword search for any NZ location, not just known entries.
+ *
+ * Returns null if no location phrase can be confidently extracted.
+ */
+export function extractLocationPhrase(text: string): string | null {
+  // Try location phrases after positional prepositions
+  const m = text.match(
+    /\b(?:in|near|around|at|for\s+properties\s+in|properties\s+in|homes?\s+in|listings?\s+in|market\s+in)\s+([A-Za-z][A-Za-z\s''-]{2,30})(?:\s+under|\s+below|\s+above|\s+around|\s+(?:for\s+)?(?:sale|rent)|\?|[.,!]|$)/i,
+  );
+  if (m) {
+    const phrase = m[1].trim().toLowerCase();
+    // Reject generic words that aren't suburbs
+    if (/^(the|a|an|my|your|our|any|all|some|new|more|properties|area|region|place|suburb|city|town|country)$/i.test(phrase)) return null;
+    if (phrase.split(/\s+/).length > 5) return null;
+    return phrase;
+  }
+  return null;
+}
