@@ -892,7 +892,7 @@ export default function SearchScreen() {
             nestedScrollEnabled
           />
 
-          {(user?.messagesUsedThisMonth ?? 0) >= 45 && (
+          {(user?.messagesUsedThisMonth ?? 0) >= (user?.role === "service_provider" ? 280 : 45) && (
             <View style={[styles.limitWarningBar, { backgroundColor: "#FFFBEB", borderTopColor: "#FDE68A" }]}>
               <Feather name="alert-triangle" size={13} color="#D97706" />
               <Text style={[styles.limitWarningText, { color: "#92400E", fontFamily: "DM_Sans_500Medium" }]}>

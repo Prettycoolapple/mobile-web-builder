@@ -412,8 +412,11 @@ router.post("/search", async (req, res) => {
   }
 });
 
-const CHAT_MONTHLY_LIMIT = 50;
-const CHAT_WARN_AT = 45;
+const CHAT_LIMITS: Record<string, { limit: number; warnAt: number }> = {
+  service_provider: { limit: 300, warnAt: 280 },
+  general:          { limit: 50,  warnAt: 45  },
+  default:          { limit: 50,  warnAt: 45  },
+};
 
 async function checkAndIncrementChatMessages(userId: string): Promise<{
   allowed: boolean;
@@ -424,12 +427,15 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
     .select({
       messagesUsedThisMonth: profiles.messagesUsedThisMonth,
       lastResetAt: profiles.lastResetAt,
+      role: profiles.role,
     })
     .from(profiles)
     .where(eq(profiles.id, userId))
     .limit(1);
 
   if (!profile) return { allowed: true, messagesUsed: 0, nearLimit: false };
+
+  const { limit, warnAt } = CHAT_LIMITS[profile.role ?? "default"] ?? CHAT_LIMITS.default;
 
   const now = new Date();
   const lastReset = new Date(profile.lastResetAt);
@@ -446,7 +452,7 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
     currentCount = 0;
   }
 
-  if (currentCount >= CHAT_MONTHLY_LIMIT) {
+  if (currentCount >= limit) {
     return { allowed: false, messagesUsed: currentCount, nearLimit: true };
   }
 
@@ -459,7 +465,7 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
   return {
     allowed: true,
     messagesUsed: newCount,
-    nearLimit: newCount >= CHAT_WARN_AT,
+    nearLimit: newCount >= warnAt,
   };
 }
 
