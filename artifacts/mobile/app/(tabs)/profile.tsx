@@ -38,8 +38,8 @@ const NZ_LANGUAGES = [
 
 const PLAN_FEATURES = {
   free: [
-    "2 feasibility reports/month",
-    "Chat & property discovery",
+    "2 Feasibility reports",
+    "Chat & property search",
   ],
   standard: [
     "20 Feasibility reports",
