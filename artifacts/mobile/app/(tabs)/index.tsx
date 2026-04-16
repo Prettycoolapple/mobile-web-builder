@@ -382,11 +382,26 @@ export default function SearchScreen() {
             return;
           }
 
-          const data = (await resp.json()) as { content: string; mode: string };
+          // Always read as text first, then parse — avoids issues where resp.json()
+          // fails on responses with leading whitespace (heartbeat spaces) and consumes
+          // the body stream before any fallback can read it.
+          const responseText = await resp.text();
+          let data: { content: string; mode: string };
+          try {
+            data = JSON.parse(responseText.trim()) as { content: string; mode: string };
+          } catch {
+            // Body may itself be a raw feasibility report or discover payload
+            const fallback = extractJSON(responseText) as { content?: string; mode?: string } | null;
+            data = { content: fallback?.content ?? responseText, mode: fallback?.mode ?? "" };
+          }
+
+          // Helper: check if a parsed object looks like a feasibility report
+          const isFeasibilityReport = (p: unknown): p is FeasibilityReport =>
+            !!p && typeof p === "object" && ("scores" in (p as object) || "address" in (p as object));
 
           if (data.mode === "analyse") {
             const parsed = extractJSON(data.content) as FeasibilityReport | null;
-            if (parsed && parsed.scores) {
+            if (parsed && isFeasibilityReport(parsed)) {
               setCurrentReport(parsed);
               updateLastMessage({ type: "report", report: parsed, content: "" }, sessionId);
               refreshProfile().catch(() => {});
@@ -407,7 +422,12 @@ export default function SearchScreen() {
             const trimmed = rawContent.trim();
             if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
               const maybeParsed = extractJSON(trimmed) as { candidates?: PropertyCandidate[] } | null;
-              if (maybeParsed?.candidates && maybeParsed.candidates.length > 0) {
+              // If it looks like a feasibility report, render it — even if the mode was wrong
+              if (isFeasibilityReport(maybeParsed)) {
+                setCurrentReport(maybeParsed as FeasibilityReport);
+                updateLastMessage({ type: "report", report: maybeParsed as FeasibilityReport, content: "" }, sessionId);
+                refreshProfile().catch(() => {});
+              } else if (maybeParsed?.candidates && maybeParsed.candidates.length > 0) {
                 updateLastMessage({ type: "search", searchResults: maybeParsed.candidates, content: "" }, sessionId);
               } else {
                 updateLastMessage({ type: "text", content: "I couldn't format that response properly. Please try rephrasing your question." }, sessionId);
