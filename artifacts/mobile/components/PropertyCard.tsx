@@ -31,8 +31,6 @@ function ScorePip({ score, label }: { score: number; label: string }) {
 
 export function PropertyCard({ candidate, onAnalyse }: Props) {
   const colors = useColors();
-  const composite = candidate.scores.composite;
-  const overallColor = scoreColor(composite, colors);
 
   return (
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -43,16 +41,10 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
             style={styles.photo}
             resizeMode="cover"
           />
-          <View style={[styles.overallBadge, { backgroundColor: colors.headerBg + "E8", borderColor: "rgba(255,255,255,0.12)" }]}>
-            <StarRating score={composite} maxStars={3} size={12} gap={2} color={overallColor} emptyColor="rgba(255,255,255,0.25)" />
-          </View>
         </View>
       ) : (
         <View style={[styles.photoPlaceholder, { backgroundColor: colors.muted }]}>
           <Feather name="home" size={28} color={colors.mutedForeground} style={{ opacity: 0.4 }} />
-          <View style={[styles.overallBadgePlain, { backgroundColor: overallColor + "15", borderColor: overallColor + "35" }]}>
-            <StarRating score={composite} maxStars={3} size={12} gap={2} color={overallColor} emptyColor={colors.border} />
-          </View>
         </View>
       )}
 
