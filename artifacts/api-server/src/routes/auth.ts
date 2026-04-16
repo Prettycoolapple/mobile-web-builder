@@ -274,8 +274,10 @@ router.get("/me", requireAuth, async (req, res) => {
         createdAt: profiles.createdAt,
         avatarUrl: profiles.avatarUrl,
         isVerified: profiles.isVerified,
+        discipline: serviceProviderProfiles.discipline,
       })
       .from(profiles)
+      .leftJoin(serviceProviderProfiles, eq(serviceProviderProfiles.userId, profiles.id))
       .where(eq(profiles.id, userId))
       .limit(1);
 

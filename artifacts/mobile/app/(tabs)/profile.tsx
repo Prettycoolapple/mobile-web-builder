@@ -54,12 +54,20 @@ const PLAN_FEATURES = {
     "Priority support",
   ],
   provider: [
-    "Lecorb recommends you when a user's need fits your expertise",
-    "Get insights into your potential clients",
-    "AI powered live translation across languages",
-    "Access to feasibility reports",
+    "Get referred in chats & search",
+    "Encrypted chats with client/investors",
+    "50 Feasibility reports",
+    "Chat & property search",
   ],
 };
+
+function resolveAvatarUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  if (url.startsWith("http")) return url;
+  const domain = process.env["EXPO_PUBLIC_DOMAIN"];
+  if (domain) return `https://${domain}${url}`;
+  return url;
+}
 
 function getApiBase(): string {
   if (process.env["EXPO_PUBLIC_DOMAIN"]) {
@@ -326,7 +334,7 @@ export default function ProfileScreen() {
     );
   };
 
-  const avatarUrl = user?.avatarUrl;
+  const avatarUrl = resolveAvatarUrl(user?.avatarUrl);
   const displayInitial = (user?.fullName ?? user?.email ?? "?").slice(0, 1).toUpperCase();
 
   return (
@@ -496,6 +504,19 @@ export default function ProfileScreen() {
                   {primaryLanguage ?? "—"}
                 </Text>
               </View>
+              {role === "service_provider" && user?.discipline && (
+                <View style={[styles.detailRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
+                  <Text style={[styles.detailLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>Discipline</Text>
+                  <Text style={[styles.detailValue, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
+                    {user.discipline === "architect_designer" ? "Architect / Designer"
+                      : user.discipline === "planner" ? "Planner"
+                      : user.discipline === "engineer" ? "Engineer"
+                      : user.discipline === "quantity_surveyor" ? "Quantity Surveyor"
+                      : user.discipline === "other" ? "Other"
+                      : user.discipline}
+                  </Text>
+                </View>
+              )}
               <TouchableOpacity
                 style={[styles.editBtn, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}
                 onPress={() => setIsEditing(true)}
@@ -644,21 +665,28 @@ export default function ProfileScreen() {
                 </Text>
               </View>
             </View>
-            <View style={styles.verificationRow}>
-              {user?.isVerified ? (
-                <>
-                  <Feather name="shield" size={13} color="#52C99A" />
-                  <Text style={[styles.verificationLabel, { color: "#52C99A", fontFamily: "DM_Sans_500Medium" }]}>
-                    Account verified
-                  </Text>
-                </>
-              ) : (
-                <>
-                  <Feather name="clock" size={13} color="rgba(250,249,246,0.4)" />
-                  <Text style={[styles.verificationLabel, { color: "rgba(250,249,246,0.5)", fontFamily: "DM_Sans_400Regular" }]}>
-                    Verification pending — we'll review your credentials shortly
-                  </Text>
-                </>
+            <View style={styles.verificationBlock}>
+              <View style={styles.verificationRow}>
+                {user?.isVerified ? (
+                  <>
+                    <Feather name="shield" size={13} color="#52C99A" />
+                    <Text style={[styles.verificationLabel, { color: "#52C99A", fontFamily: "DM_Sans_500Medium" }]}>
+                      Account verified
+                    </Text>
+                  </>
+                ) : (
+                  <>
+                    <Feather name="clock" size={13} color="rgba(250,249,246,0.4)" />
+                    <Text style={[styles.verificationLabel, { color: "rgba(250,249,246,0.5)", fontFamily: "DM_Sans_400Regular" }]}>
+                      Verification pending — we'll review your credentials shortly
+                    </Text>
+                  </>
+                )}
+              </View>
+              {!user?.isVerified && (
+                <Text style={[styles.verificationNote, { color: "rgba(250,249,246,0.35)", fontFamily: "DM_Sans_400Regular" }]}>
+                  You have full access to Provider Pro features. Your verified badge will display automatically once your account is reviewed.
+                </Text>
               )}
             </View>
             {isStandard && (
@@ -978,8 +1006,10 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   actionBtnText: { fontSize: 12, flex: 1 },
-  verificationRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4, flexWrap: "wrap" },
+  verificationBlock: { gap: 6, marginTop: 4 },
+  verificationRow: { flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" },
   verificationLabel: { fontSize: 13, flex: 1 },
+  verificationNote: { fontSize: 11, lineHeight: 15, paddingLeft: 19 },
   proCard: { borderRadius: 16, padding: 18, gap: 14, borderWidth: 1.5 },
   proTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
   proTitle: { fontSize: 18, letterSpacing: -0.3 },

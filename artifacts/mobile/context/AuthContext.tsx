@@ -15,6 +15,7 @@ export interface UserProfile {
   messagesUsedThisMonth?: number;
   avatarUrl?: string | null;
   isVerified?: boolean;
+  discipline?: string | null;
 }
 
 export type ProviderDiscipline =
