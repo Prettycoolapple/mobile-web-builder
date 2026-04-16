@@ -269,6 +269,7 @@ router.get("/me", requireAuth, async (req, res) => {
         languages: profiles.languages,
         subscriptionTier: profiles.subscriptionTier,
         reportsUsedThisMonth: profiles.reportsUsedThisMonth,
+        messagesUsedThisMonth: profiles.messagesUsedThisMonth,
         lastResetAt: profiles.lastResetAt,
         createdAt: profiles.createdAt,
         avatarUrl: profiles.avatarUrl,
@@ -291,9 +292,10 @@ router.get("/me", requireAuth, async (req, res) => {
     if (!sameMonth) {
       await db
         .update(profiles)
-        .set({ reportsUsedThisMonth: 0, lastResetAt: now })
+        .set({ reportsUsedThisMonth: 0, messagesUsedThisMonth: 0, lastResetAt: now })
         .where(eq(profiles.id, userId));
       profile.reportsUsedThisMonth = 0;
+      profile.messagesUsedThisMonth = 0;
     }
 
     res.json({ user: profile });
@@ -318,12 +320,25 @@ router.delete("/account", requireAuth, async (req, res) => {
 
 router.patch("/profile", requireAuth, async (req, res) => {
   const userId = (req as any).userId as string;
-  const { fullName } = req.body as { fullName?: string };
+  const { fullName, languages, avatarUrl } = req.body as {
+    fullName?: string;
+    languages?: string[];
+    avatarUrl?: string | null;
+  };
 
   try {
+    const updateFields: Partial<{
+      fullName: string | null;
+      languages: string[];
+      avatarUrl: string | null;
+    }> = {};
+    if (fullName !== undefined) updateFields.fullName = fullName?.trim() || null;
+    if (languages !== undefined) updateFields.languages = languages;
+    if (avatarUrl !== undefined) updateFields.avatarUrl = avatarUrl ?? null;
+
     const [updated] = await db
       .update(profiles)
-      .set({ fullName: fullName?.trim() || null })
+      .set(updateFields)
       .where(eq(profiles.id, userId))
       .returning({
         id: profiles.id,
@@ -333,6 +348,8 @@ router.patch("/profile", requireAuth, async (req, res) => {
         languages: profiles.languages,
         subscriptionTier: profiles.subscriptionTier,
         reportsUsedThisMonth: profiles.reportsUsedThisMonth,
+        messagesUsedThisMonth: profiles.messagesUsedThisMonth,
+        avatarUrl: profiles.avatarUrl,
       });
 
     res.json({ user: updated });

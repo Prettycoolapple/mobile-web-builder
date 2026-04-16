@@ -11,6 +11,7 @@ export interface UserProfile {
   languages: string[];
   subscriptionTier: string;
   reportsUsedThisMonth: number;
+  messagesUsedThisMonth?: number;
   avatarUrl?: string | null;
   isVerified?: boolean;
 }

@@ -14,6 +14,7 @@ export const profiles = pgTable("profiles", {
   languages: text("languages").array().default(sql`'{}'`).notNull(),
   subscriptionTier: text("subscription_tier").default("free").notNull(),
   reportsUsedThisMonth: integer("reports_used_this_month").default(0).notNull(),
+  messagesUsedThisMonth: integer("messages_used_this_month").default(0).notNull(),
   lastResetAt: timestamp("last_reset_at", { withTimezone: true }).defaultNow().notNull(),
   stripeCustomerId: text("stripe_customer_id"),
   avatarUrl: text("avatar_url"),

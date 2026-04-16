@@ -454,8 +454,15 @@ export default function SearchScreen() {
           clearTimeout(timeoutId);
 
           if (!resp.ok) {
-            const err = (await resp.json()) as { error?: string; code?: string };
-            // All non-ok responses are retried — auth/limit errors shouldn't occur in normal use
+            const err = (await resp.json()) as { error?: string; code?: string; message?: string };
+            if (resp.status === 429 && err.error === "monthly_limit_reached") {
+              updateLastMessage({
+                type: "text",
+                content: "You've reached your monthly message limit. It resets at the start of next month.",
+              }, sessionId);
+              setIsLoading(false);
+              return;
+            }
             throw Object.assign(new Error(err.error || "Server error"), { isServerError: true, statusCode: resp.status });
           }
 
@@ -538,6 +545,7 @@ export default function SearchScreen() {
     } finally {
       setIsLoading(false);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      refreshProfile().catch(() => {});
 
       // If the user explicitly asked for a recommendation, fire the explicit check
       // right now — bypassing probability gates. No report required.
@@ -873,6 +881,15 @@ export default function SearchScreen() {
             nestedScrollEnabled
           />
 
+          {(user?.messagesUsedThisMonth ?? 0) >= 45 && (
+            <View style={[styles.limitWarningBar, { backgroundColor: "#FFFBEB", borderTopColor: "#FDE68A" }]}>
+              <Feather name="alert-triangle" size={13} color="#D97706" />
+              <Text style={[styles.limitWarningText, { color: "#92400E", fontFamily: "DM_Sans_500Medium" }]}>
+                You're close to your monthly message limit — it resets at the start of next month.
+              </Text>
+            </View>
+          )}
+
           <View style={[styles.inputBar, {
             backgroundColor: colors.background,
             borderTopColor: colors.border,
@@ -1072,6 +1089,15 @@ const styles = StyleSheet.create({
     gap: 4,
     paddingTop: 16,
   },
+  limitWarningBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderTopWidth: 1,
+  },
+  limitWarningText: { fontSize: 12, flex: 1, lineHeight: 18 },
   inputBar: {
     borderTopWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: 16,

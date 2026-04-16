@@ -412,6 +412,57 @@ router.post("/search", async (req, res) => {
   }
 });
 
+const CHAT_MONTHLY_LIMIT = 50;
+const CHAT_WARN_AT = 45;
+
+async function checkAndIncrementChatMessages(userId: string): Promise<{
+  allowed: boolean;
+  messagesUsed: number;
+  nearLimit: boolean;
+}> {
+  const [profile] = await db
+    .select({
+      messagesUsedThisMonth: profiles.messagesUsedThisMonth,
+      lastResetAt: profiles.lastResetAt,
+    })
+    .from(profiles)
+    .where(eq(profiles.id, userId))
+    .limit(1);
+
+  if (!profile) return { allowed: true, messagesUsed: 0, nearLimit: false };
+
+  const now = new Date();
+  const lastReset = new Date(profile.lastResetAt);
+  const sameMonth =
+    now.getFullYear() === lastReset.getFullYear() && now.getMonth() === lastReset.getMonth();
+
+  let currentCount = sameMonth ? profile.messagesUsedThisMonth : 0;
+
+  if (!sameMonth) {
+    await db
+      .update(profiles)
+      .set({ messagesUsedThisMonth: 0, reportsUsedThisMonth: 0, lastResetAt: now })
+      .where(eq(profiles.id, userId));
+    currentCount = 0;
+  }
+
+  if (currentCount >= CHAT_MONTHLY_LIMIT) {
+    return { allowed: false, messagesUsed: currentCount, nearLimit: true };
+  }
+
+  await db
+    .update(profiles)
+    .set({ messagesUsedThisMonth: sql`${profiles.messagesUsedThisMonth} + 1` })
+    .where(eq(profiles.id, userId));
+
+  const newCount = currentCount + 1;
+  return {
+    allowed: true,
+    messagesUsed: newCount,
+    nearLimit: newCount >= CHAT_WARN_AT,
+  };
+}
+
 router.post("/chat", async (req, res) => {
   const { messages, currentReport, message, conversationHistory, reportContext } = req.body as {
     messages?: Message[];
@@ -420,6 +471,28 @@ router.post("/chat", async (req, res) => {
     conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
     reportContext?: string;
   };
+
+  // Rate limiting: 50 messages/month per authenticated general user
+  const chatUserId = getUserIdFromHeader(req);
+  if (chatUserId) {
+    try {
+      const { allowed, messagesUsed, nearLimit } = await checkAndIncrementChatMessages(chatUserId);
+      if (!allowed) {
+        res.status(429).json({
+          error: "monthly_limit_reached",
+          messagesUsed,
+          limit: CHAT_MONTHLY_LIMIT,
+          message: "You've reached your monthly message limit. It resets at the start of next month.",
+        });
+        return;
+      }
+      // Attach to res.locals so we can surface nearLimit in response if needed
+      res.locals.chatMessagesUsed = messagesUsed;
+      res.locals.chatNearLimit = nearLimit;
+    } catch {
+      // Non-fatal — proceed even if rate limit check fails
+    }
+  }
 
   if (messages && messages.length > 0) {
     try {

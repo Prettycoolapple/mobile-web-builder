@@ -10,17 +10,31 @@ import {
   ActivityIndicator,
   Linking,
   Image,
+  TextInput,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
-import { useChat, FeasibilityReport } from "@/context/ChatContext";
 import { useSubscription } from "@/lib/revenuecat";
 
 const FREE_LIMIT = 2;
 const STANDARD_LIMIT = 20;
+
+const NZ_LANGUAGES = [
+  "English",
+  "Te Reo Māori",
+  "Mandarin",
+  "Hindi",
+  "Samoan",
+  "Cantonese",
+  "Korean",
+  "Japanese",
+  "Filipino",
+  "Tongan",
+];
 
 const PLAN_FEATURES = {
   free: [
@@ -28,10 +42,9 @@ const PLAN_FEATURES = {
     "Chat & property discovery",
   ],
   standard: [
-    "More feasibility reports/month",
-    "Chat & property discovery",
-    "Access to architect/designer & other disciplines",
-    "AI live translation messages & calls",
+    "20 Feasibility reports",
+    "Chat & property search",
+    "In-app chat to planners & architects",
   ],
   agent: [
     "Unlimited property listings",
@@ -46,17 +59,6 @@ const PLAN_FEATURES = {
     "AI powered live translation across languages",
     "Access to feasibility reports",
   ],
-};
-
-const AGENT_PLAN_PRICE = "$99.00";
-const PROVIDER_PLAN_PRICE = "$149.00";
-
-type SearchSummary = {
-  id: string;
-  address: string;
-  created_at: string;
-  composite_score: number | null;
-  zone: string | null;
 };
 
 function getApiBase(): string {
@@ -94,87 +96,40 @@ function SectionHeader({ title }: { title: string }) {
   );
 }
 
-function formatDate(dateStr: string): string {
-  try {
-    const d = new Date(dateStr);
-    return d.toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" });
-  } catch {
-    return dateStr;
-  }
-}
-
-function ScoreDot({ score }: { score: number }) {
-  const colors = useColors();
-  const color = score >= 4 ? colors.success : score >= 3 ? colors.accent : colors.amber;
-  return (
-    <View style={[styles.scoreDot, { backgroundColor: color + "20", borderColor: color + "40" }]}>
-      <Text style={[styles.scoreDotText, { color, fontFamily: "DM_Sans_700Bold" }]}>
-        {score.toFixed(1)}
-      </Text>
-    </View>
-  );
-}
-
-interface HistoryItemProps {
-  item: SearchSummary;
-  onTap: (item: SearchSummary) => void;
-  onDelete: (item: SearchSummary) => void;
-  isLast: boolean;
-}
-
-function HistoryItem({ item, onTap, onDelete, isLast }: HistoryItemProps) {
-  const colors = useColors();
-  return (
-    <TouchableOpacity
-      onPress={() => onTap(item)}
-      onLongPress={() => onDelete(item)}
-      activeOpacity={0.7}
-      style={[
-        styles.historyItem,
-        { borderBottomColor: colors.border, borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth },
-      ]}
-    >
-      <View style={styles.historyItemMain}>
-        <Text style={[styles.historyAddress, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]} numberOfLines={1}>
-          {item.address}
-        </Text>
-        <View style={styles.historyMeta}>
-          <Feather name="calendar" size={11} color={colors.mutedForeground} />
-          <Text style={[styles.historyMetaText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-            {formatDate(item.created_at)}
-          </Text>
-          {item.zone && (
-            <>
-              <Text style={[styles.historyMetaDot, { color: colors.mutedForeground }]}>·</Text>
-              <View style={[styles.zoneChip, { backgroundColor: colors.muted, borderColor: colors.border }]}>
-                <Text style={[styles.zoneChipText, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>
-                  {item.zone}
-                </Text>
-              </View>
-            </>
-          )}
-        </View>
-      </View>
-      <View style={styles.historyItemRight}>
-        {item.composite_score != null && <ScoreDot score={item.composite_score} />}
-        <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
-      </View>
-    </TouchableOpacity>
-  );
-}
-
 export default function ProfileScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { user, signOut, getApiHeaders, refreshProfile } = useAuth();
   const router = useRouter();
-  const { sessions, openHistoryReport } = useChat();
 
   const { purchase, isSubscribed, getPackageForRole, getPriceForRole } = useSubscription();
   const [upgradeLoading, setUpgradeLoading] = useState(false);
-  const [historySearches, setHistorySearches] = useState<SearchSummary[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(true);
-  const [openingId, setOpeningId] = useState<string | null>(null);
+
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [avatarUploading, setAvatarUploading] = useState(false);
+
+  const splitName = (fullName: string | null | undefined) => {
+    if (!fullName) return { first: "", last: "" };
+    const parts = fullName.trim().split(/\s+/);
+    if (parts.length === 1) return { first: parts[0], last: "" };
+    return { first: parts.slice(0, -1).join(" "), last: parts[parts.length - 1] };
+  };
+
+  const { first: initFirst, last: initLast } = splitName(user?.fullName);
+  const [editFirst, setEditFirst] = useState(initFirst);
+  const [editLast, setEditLast] = useState(initLast);
+  const [editLanguage, setEditLanguage] = useState(user?.languages?.[0] ?? "English");
+  const [showLanguagePicker, setShowLanguagePicker] = useState(false);
+
+  useEffect(() => {
+    if (!isEditing) {
+      const { first, last } = splitName(user?.fullName);
+      setEditFirst(first);
+      setEditLast(last);
+      setEditLanguage(user?.languages?.[0] ?? "English");
+    }
+  }, [user, isEditing]);
 
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
@@ -186,29 +141,8 @@ export default function ProfileScreen() {
   const usagePct = Math.min((usage / planLimit) * 100, 100);
   const showWarning = remaining <= 3 && remaining >= 0;
 
-  const reportCount = sessions.filter((s) =>
-    s.messages.some((m) => m.type === "report")
-  ).length;
-
-  const loadHistory = useCallback(async () => {
-    setHistoryLoading(true);
-    try {
-      const resp = await fetch(`${getApiBase()}/searches`, {
-        headers: getApiHeaders(),
-      });
-      if (resp.ok) {
-        const data = await resp.json() as { searches: SearchSummary[] };
-        setHistorySearches(data.searches ?? []);
-      }
-    } catch {
-    } finally {
-      setHistoryLoading(false);
-    }
-  }, [getApiHeaders]);
-
-  useEffect(() => {
-    loadHistory();
-  }, [loadHistory]);
+  const role = user?.role ?? "general";
+  const primaryLanguage = user?.languages?.[0] ?? null;
 
   const syncToBackend = useCallback(async (tier: "pro" | "free") => {
     try {
@@ -227,8 +161,6 @@ export default function ProfileScreen() {
       syncToBackend("pro");
     }
   }, [isSubscribed]);
-
-  const role = user?.role ?? "general";
 
   const handleUpgrade = useCallback(async () => {
     setUpgradeLoading(true);
@@ -266,52 +198,69 @@ export default function ProfileScreen() {
     }
   }, []);
 
-  const handleHistoryTap = useCallback(async (item: SearchSummary) => {
-    setOpeningId(item.id);
+  const handleSaveProfile = useCallback(async () => {
+    setIsSaving(true);
     try {
-      const resp = await fetch(`${getApiBase()}/searches/${item.id}`, {
-        headers: getApiHeaders(),
+      const fullName = [editFirst.trim(), editLast.trim()].filter(Boolean).join(" ");
+      const languages = editLanguage ? [editLanguage] : [];
+      const resp = await fetch(`${getApiBase()}/auth/profile`, {
+        method: "PATCH",
+        headers: { ...getApiHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ fullName, languages }),
       });
-      if (!resp.ok) {
-        Alert.alert("Error", "Could not load this report. Please try again.");
-        return;
+      if (resp.ok) {
+        await refreshProfile().catch(() => {});
+        setIsEditing(false);
+      } else {
+        Alert.alert("Error", "Could not save your profile. Please try again.");
       }
-      const data = await resp.json() as { search: { result_json: FeasibilityReport; address: string } };
-      const report = data.search.result_json;
-      const address = data.search.address ?? item.address;
-      openHistoryReport(address, report);
-      router.push("/(tabs)/");
     } catch {
-      Alert.alert("Error", "Could not load this report. Please try again.");
+      Alert.alert("Error", "Could not save your profile. Check your connection.");
     } finally {
-      setOpeningId(null);
+      setIsSaving(false);
     }
-  }, [getApiHeaders, openHistoryReport, router]);
+  }, [editFirst, editLast, editLanguage, getApiHeaders, refreshProfile]);
 
-  const handleHistoryDelete = useCallback((item: SearchSummary) => {
-    Alert.alert(
-      "Delete report",
-      "Remove this analysis from your history?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await fetch(`${getApiBase()}/searches/${item.id}`, {
-                method: "DELETE",
-                headers: getApiHeaders(),
-              });
-              setHistorySearches((prev) => prev.filter((s) => s.id !== item.id));
-            } catch {
-              Alert.alert("Error", "Could not delete this report. Please try again.");
-            }
-          },
-        },
-      ],
-    );
-  }, [getApiHeaders]);
+  const handlePickAvatar = useCallback(async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert("Permission required", "Please allow photo library access to update your profile picture.");
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+
+    const asset = result.assets[0];
+    setAvatarUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", {
+        uri: asset.uri,
+        type: asset.mimeType ?? "image/jpeg",
+        name: "avatar.jpg",
+      } as any);
+
+      const resp = await fetch(`${getApiBase()}/upload/profile-picture`, {
+        method: "POST",
+        headers: { ...(getApiHeaders() as Record<string, string>) },
+        body: formData,
+      });
+      if (resp.ok) {
+        await refreshProfile().catch(() => {});
+      } else {
+        Alert.alert("Error", "Could not upload photo. Please try again.");
+      }
+    } catch {
+      Alert.alert("Error", "Could not upload photo. Check your connection.");
+    } finally {
+      setAvatarUploading(false);
+    }
+  }, [getApiHeaders, refreshProfile]);
 
   const handleSignOut = () => {
     Alert.alert("Sign out", "Are you sure you want to sign out?", [
@@ -345,7 +294,7 @@ export default function ProfileScreen() {
                   style: "destructive",
                   onPress: async () => {
                     try {
-                      const resp = await fetch(`${getApiBase()}/account`, {
+                      const resp = await fetch(`${getApiBase()}/auth/account`, {
                         method: "DELETE",
                         headers: getApiHeaders(),
                       });
@@ -368,17 +317,20 @@ export default function ProfileScreen() {
     );
   };
 
+  const avatarUrl = user?.avatarUrl;
+  const displayInitial = (user?.fullName ?? user?.email ?? "?").slice(0, 1).toUpperCase();
+
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={[styles.header, { paddingTop: topInset, backgroundColor: colors.headerBg }]}>
         <View style={styles.headerContent}>
           <View style={styles.headerRow}>
-            {user?.avatarUrl ? (
-              <Image source={{ uri: user.avatarUrl }} style={styles.headerAvatar} />
+            {avatarUrl ? (
+              <Image source={{ uri: avatarUrl }} style={styles.headerAvatar} />
             ) : (
               <View style={[styles.headerAvatarInitials, { backgroundColor: "rgba(250,249,246,0.15)" }]}>
                 <Text style={[styles.headerAvatarText, { color: colors.headerText, fontFamily: "DM_Sans_700Bold" }]}>
-                  {(user?.fullName ?? user?.email ?? "?").slice(0, 1).toUpperCase()}
+                  {displayInitial}
                 </Text>
               </View>
             )}
@@ -408,7 +360,146 @@ export default function ProfileScreen() {
         contentContainerStyle={[styles.content, { paddingBottom: bottomInset + 48 }]}
         showsVerticalScrollIndicator={false}
       >
-        {/* Plan card — general users */}
+        {/* ─── User Details ─── */}
+        <SectionHeader title="Your details" />
+
+        <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          {/* Avatar row */}
+          <TouchableOpacity onPress={handlePickAvatar} disabled={avatarUploading} style={styles.avatarRow} activeOpacity={0.8}>
+            <View style={styles.avatarWrap}>
+              {avatarUrl ? (
+                <Image source={{ uri: avatarUrl }} style={styles.avatar} />
+              ) : (
+                <View style={[styles.avatarPlaceholder, { backgroundColor: colors.accent + "30", borderColor: colors.accent + "50" }]}>
+                  <Text style={[styles.avatarInitial, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
+                    {displayInitial}
+                  </Text>
+                </View>
+              )}
+              <View style={[styles.cameraOverlay, { backgroundColor: colors.accent }]}>
+                {avatarUploading
+                  ? <ActivityIndicator size="small" color="#fff" />
+                  : <Feather name="camera" size={12} color="#fff" />
+                }
+              </View>
+            </View>
+            <Text style={[styles.avatarLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+              {avatarUploading ? "Uploading…" : "Change photo"}
+            </Text>
+          </TouchableOpacity>
+
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
+          {/* Name & language display / edit */}
+          {isEditing ? (
+            <View style={styles.editFields}>
+              <View style={styles.fieldRow}>
+                <Text style={[styles.fieldLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>First name</Text>
+                <TextInput
+                  value={editFirst}
+                  onChangeText={setEditFirst}
+                  style={[styles.fieldInput, { color: colors.foreground, borderColor: colors.accent, fontFamily: "DM_Sans_400Regular" }]}
+                  placeholder="First name"
+                  placeholderTextColor={colors.mutedForeground}
+                  autoCapitalize="words"
+                  autoCorrect={false}
+                />
+              </View>
+              <View style={styles.fieldRow}>
+                <Text style={[styles.fieldLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>Last name</Text>
+                <TextInput
+                  value={editLast}
+                  onChangeText={setEditLast}
+                  style={[styles.fieldInput, { color: colors.foreground, borderColor: colors.accent, fontFamily: "DM_Sans_400Regular" }]}
+                  placeholder="Last name"
+                  placeholderTextColor={colors.mutedForeground}
+                  autoCapitalize="words"
+                  autoCorrect={false}
+                />
+              </View>
+              <View style={styles.fieldRow}>
+                <Text style={[styles.fieldLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>Language</Text>
+                <TouchableOpacity
+                  style={[styles.fieldInput, styles.langBtn, { borderColor: colors.accent }]}
+                  onPress={() => setShowLanguagePicker((v) => !v)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 14 }]}>
+                    {editLanguage || "Select…"}
+                  </Text>
+                  <Feather name="chevron-down" size={14} color={colors.mutedForeground} />
+                </TouchableOpacity>
+              </View>
+
+              {showLanguagePicker && (
+                <View style={[styles.languageList, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  {NZ_LANGUAGES.map((lang) => (
+                    <TouchableOpacity
+                      key={lang}
+                      style={[styles.languageItem, { borderBottomColor: colors.border }]}
+                      onPress={() => { setEditLanguage(lang); setShowLanguagePicker(false); }}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.languageItemText, {
+                        color: lang === editLanguage ? colors.accent : colors.foreground,
+                        fontFamily: lang === editLanguage ? "DM_Sans_600SemiBold" : "DM_Sans_400Regular",
+                      }]}>
+                        {lang}
+                      </Text>
+                      {lang === editLanguage && <Feather name="check" size={14} color={colors.accent} />}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+
+              <View style={styles.editActions}>
+                <TouchableOpacity
+                  style={[styles.cancelBtn, { borderColor: colors.border }]}
+                  onPress={() => { setIsEditing(false); setShowLanguagePicker(false); }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[{ color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium", fontSize: 14 }]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.saveBtn, { backgroundColor: isSaving ? colors.accent + "80" : colors.accent }]}
+                  onPress={handleSaveProfile}
+                  disabled={isSaving}
+                  activeOpacity={0.8}
+                >
+                  {isSaving
+                    ? <ActivityIndicator size="small" color="#fff" />
+                    : <Text style={[{ color: "#fff", fontFamily: "DM_Sans_600SemiBold", fontSize: 14 }]}>Save</Text>
+                  }
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <View style={styles.detailsDisplay}>
+              <View style={styles.detailRow}>
+                <Text style={[styles.detailLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>Name</Text>
+                <Text style={[styles.detailValue, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
+                  {user?.fullName ?? "—"}
+                </Text>
+              </View>
+              <View style={[styles.detailRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
+                <Text style={[styles.detailLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>Language</Text>
+                <Text style={[styles.detailValue, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
+                  {primaryLanguage ?? "—"}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={[styles.editBtn, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}
+                onPress={() => setIsEditing(true)}
+                activeOpacity={0.7}
+              >
+                <Feather name="edit-2" size={14} color={colors.accent} />
+                <Text style={[{ color: colors.accent, fontFamily: "DM_Sans_500Medium", fontSize: 14 }]}>Edit details</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+
+        {/* ─── Plan card — general users ─── */}
         {role === "general" && (
           <View style={[styles.planCard, { backgroundColor: colors.headerBg }]}>
             <View style={styles.planTop}>
@@ -479,7 +570,7 @@ export default function ProfileScreen() {
           </View>
         )}
 
-        {/* Plan card — sales agent */}
+        {/* ─── Plan card — sales agent ─── */}
         {role === "sales_agent" && (
           <View style={[styles.planCard, { backgroundColor: colors.headerBg }]}>
             <View style={styles.planTop}>
@@ -520,7 +611,7 @@ export default function ProfileScreen() {
           </View>
         )}
 
-        {/* Plan card — service provider */}
+        {/* ─── Plan card — service provider ─── */}
         {role === "service_provider" && (
           <View style={[styles.planCard, { backgroundColor: colors.headerBg }]}>
             <View style={styles.planTop}>
@@ -551,9 +642,6 @@ export default function ProfileScreen() {
                   <Text style={[styles.verificationLabel, { color: "#52C99A", fontFamily: "DM_Sans_500Medium" }]}>
                     Account verified
                   </Text>
-                  <Text style={[styles.verificationSub, { color: "rgba(250,249,246,0.4)", fontFamily: "DM_Sans_400Regular" }]}>
-                    · verified
-                  </Text>
                 </>
               ) : (
                 <>
@@ -581,11 +669,10 @@ export default function ProfileScreen() {
           </View>
         )}
 
-        {/* Upgrade card — general user only */}
+        {/* ─── Upgrade card — general user ─── */}
         {role === "general" && !isStandard && (
           <>
             <SectionHeader title="Upgrade to Standard" />
-
             <View style={[styles.proCard, { backgroundColor: colors.card, borderColor: colors.accent + "35" }]}>
               <View style={styles.proTop}>
                 <View>
@@ -600,13 +687,11 @@ export default function ProfileScreen() {
                   </View>
                 </View>
               </View>
-
               <View style={styles.featuresList}>
                 {PLAN_FEATURES.standard.map((f) => (
                   <FeatureRow key={f} text={f} included />
                 ))}
               </View>
-
               <TouchableOpacity
                 style={[styles.upgradeBtn, { backgroundColor: upgradeLoading ? colors.accent + "80" : colors.accent }]}
                 activeOpacity={0.8}
@@ -624,16 +709,14 @@ export default function ProfileScreen() {
                   </>
                 )}
               </TouchableOpacity>
-
             </View>
           </>
         )}
 
-        {/* Activate plan card — sales agent */}
+        {/* ─── Upgrade card — sales agent ─── */}
         {role === "sales_agent" && !isStandard && (
           <>
             <SectionHeader title="Activate Agent Pro" />
-
             <View style={[styles.proCard, { backgroundColor: colors.card, borderColor: colors.accent + "35" }]}>
               <View style={styles.proTop}>
                 <View>
@@ -648,13 +731,11 @@ export default function ProfileScreen() {
                   </View>
                 </View>
               </View>
-
               <View style={styles.featuresList}>
                 {PLAN_FEATURES.agent.map((f) => (
                   <FeatureRow key={f} text={f} included />
                 ))}
               </View>
-
               <TouchableOpacity
                 style={[styles.upgradeBtn, { backgroundColor: upgradeLoading ? colors.accent + "80" : colors.accent }]}
                 activeOpacity={0.8}
@@ -665,23 +746,19 @@ export default function ProfileScreen() {
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
                   <>
-                    <Text style={[styles.upgradeBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>
-                      Activate Agent Pro
-                    </Text>
+                    <Text style={[styles.upgradeBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>Activate Agent Pro</Text>
                     <Feather name="arrow-right" size={16} color="#fff" />
                   </>
                 )}
               </TouchableOpacity>
-
             </View>
           </>
         )}
 
-        {/* Activate plan card — service provider */}
+        {/* ─── Upgrade card — service provider ─── */}
         {role === "service_provider" && !isStandard && (
           <>
             <SectionHeader title="Activate Provider Pro" />
-
             <View style={[styles.proCard, { backgroundColor: colors.card, borderColor: colors.accent + "35" }]}>
               <View style={styles.proTop}>
                 <View>
@@ -696,13 +773,11 @@ export default function ProfileScreen() {
                   </View>
                 </View>
               </View>
-
               <View style={styles.featuresList}>
                 {PLAN_FEATURES.provider.map((f) => (
                   <FeatureRow key={f} text={f} included />
                 ))}
               </View>
-
               <TouchableOpacity
                 style={[styles.upgradeBtn, { backgroundColor: upgradeLoading ? colors.accent + "80" : colors.accent }]}
                 activeOpacity={0.8}
@@ -713,19 +788,16 @@ export default function ProfileScreen() {
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
                   <>
-                    <Text style={[styles.upgradeBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>
-                      Activate Provider Pro
-                    </Text>
+                    <Text style={[styles.upgradeBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>Activate Provider Pro</Text>
                     <Feather name="arrow-right" size={16} color="#fff" />
                   </>
                 )}
               </TouchableOpacity>
-
             </View>
           </>
         )}
 
-        {/* Plan features summary */}
+        {/* ─── Plan features summary ─── */}
         <SectionHeader title={
           role === "sales_agent"
             ? (isStandard ? "Agent Pro includes" : "Agent Pro features")
@@ -745,75 +817,7 @@ export default function ProfileScreen() {
           ))}
         </View>
 
-        <SectionHeader title="Analysis history" />
-
-        <View style={[styles.historyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          {historyLoading ? (
-            <View style={styles.historyEmpty}>
-              <ActivityIndicator size="small" color={colors.mutedForeground} />
-              <Text style={[styles.historyEmptyText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                Loading history…
-              </Text>
-            </View>
-          ) : historySearches.length === 0 ? (
-            <View style={styles.historyEmpty}>
-              <Feather name="clock" size={20} color={colors.mutedForeground} />
-              <Text style={[styles.historyEmptyText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                No analysis history yet.{"\n"}Run a feasibility check to save your first report.
-              </Text>
-            </View>
-          ) : (
-            historySearches.map((item, i) => (
-              <View key={item.id} style={openingId === item.id ? { opacity: 0.5 } : undefined}>
-                <HistoryItem
-                  item={item}
-                  onTap={handleHistoryTap}
-                  onDelete={handleHistoryDelete}
-                  isLast={i === historySearches.length - 1}
-                />
-              </View>
-            ))
-          )}
-        </View>
-
-        {historySearches.length > 0 && (
-          <Text style={[styles.historyHint, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-            Tap to reopen · Long-press to delete
-          </Text>
-        )}
-
-        <SectionHeader title="Your stats" />
-
-        <View style={[styles.statsCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <View style={styles.statItem}>
-            <Text style={[styles.statNum, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
-              {sessions.length}
-            </Text>
-            <Text style={[styles.statLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-              Sessions
-            </Text>
-          </View>
-          <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
-          <View style={styles.statItem}>
-            <Text style={[styles.statNum, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
-              {historySearches.length > 0 ? historySearches.length : reportCount}
-            </Text>
-            <Text style={[styles.statLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-              Reports
-            </Text>
-          </View>
-          <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
-          <View style={styles.statItem}>
-            <Text style={[styles.statNum, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
-              {sessions.reduce((acc, s) => acc + s.messages.length, 0)}
-            </Text>
-            <Text style={[styles.statLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-              Messages
-            </Text>
-          </View>
-        </View>
-
-        {/* Actions */}
+        {/* ─── Actions ─── */}
         <View style={[styles.actionsCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <TouchableOpacity
             style={[styles.actionRow, { borderBottomColor: colors.border }]}
@@ -858,9 +862,6 @@ const styles = StyleSheet.create({
   headerVerifiedText: { fontSize: 11, color: "rgba(250,249,246,0.5)", fontFamily: "DM_Sans_400Regular" },
   headerTitle: { fontSize: 18, letterSpacing: -0.3 },
   headerEmail: { fontSize: 13, marginTop: 1 },
-  verificationRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 12, flexWrap: "wrap" },
-  verificationLabel: { fontSize: 13, flex: 1 },
-  verificationSub: { fontSize: 13 },
   content: { padding: 16, gap: 8 },
   sectionHeader: {
     fontSize: 11,
@@ -869,6 +870,79 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     marginTop: 12,
     marginBottom: 4,
+  },
+  section: { borderRadius: 14, padding: 16, gap: 10, borderWidth: 1 },
+  divider: { height: StyleSheet.hairlineWidth, marginVertical: 4 },
+  avatarRow: { flexDirection: "row", alignItems: "center", gap: 14 },
+  avatarWrap: { position: "relative" },
+  avatar: { width: 60, height: 60, borderRadius: 30 },
+  avatarPlaceholder: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    borderWidth: 1.5,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  avatarInitial: { fontSize: 24, letterSpacing: -0.5 },
+  cameraOverlay: {
+    position: "absolute",
+    bottom: 0,
+    right: 0,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  avatarLabel: { fontSize: 14 },
+  detailsDisplay: { gap: 0 },
+  detailRow: { flexDirection: "row", alignItems: "center", paddingVertical: 12, gap: 12 },
+  detailLabel: { fontSize: 13, width: 70, flexShrink: 0 },
+  detailValue: { flex: 1, fontSize: 14 },
+  editBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 12 },
+  editFields: { gap: 12 },
+  fieldRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+  fieldLabel: { fontSize: 13, width: 70, flexShrink: 0 },
+  fieldInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    fontSize: 14,
+  },
+  langBtn: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  languageList: {
+    borderWidth: 1,
+    borderRadius: 10,
+    overflow: "hidden",
+    marginTop: -4,
+  },
+  languageItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  languageItemText: { fontSize: 14 },
+  editActions: { flexDirection: "row", gap: 10, marginTop: 4 },
+  cancelBtn: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 11,
+    alignItems: "center",
+  },
+  saveBtn: {
+    flex: 1,
+    borderRadius: 8,
+    paddingVertical: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 42,
   },
   planCard: { borderRadius: 16, padding: 20, gap: 18, marginBottom: 4 },
   planTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
@@ -895,14 +969,14 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   actionBtnText: { fontSize: 12, flex: 1 },
+  verificationRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4, flexWrap: "wrap" },
+  verificationLabel: { fontSize: 13, flex: 1 },
   proCard: { borderRadius: 16, padding: 18, gap: 14, borderWidth: 1.5 },
   proTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
   proTitle: { fontSize: 18, letterSpacing: -0.3 },
   priceRow: { flexDirection: "row", alignItems: "baseline", gap: 3, marginTop: 4 },
   price: { fontSize: 28, letterSpacing: -0.5 },
   pricePer: { fontSize: 14 },
-  proBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
-  proBadgeText: { fontSize: 11, color: "#fff", letterSpacing: 0.5 },
   featuresList: { gap: 8 },
   featureRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   featureText: { fontSize: 14 },
@@ -916,32 +990,11 @@ const styles = StyleSheet.create({
     minHeight: 50,
   },
   upgradeBtnText: { fontSize: 15, color: "#fff" },
-  section: { borderRadius: 14, padding: 16, gap: 10, borderWidth: 1 },
-  historyCard: { borderRadius: 14, borderWidth: 1, overflow: "hidden" },
-  historyItem: { paddingVertical: 13, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", gap: 10 },
-  historyItemMain: { flex: 1, gap: 4 },
-  historyAddress: { fontSize: 14 },
-  historyMeta: { flexDirection: "row", alignItems: "center", gap: 5 },
-  historyMetaText: { fontSize: 12 },
-  historyMetaDot: { fontSize: 12 },
-  zoneChip: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6, borderWidth: StyleSheet.hairlineWidth },
-  zoneChipText: { fontSize: 11 },
-  historyItemRight: { flexDirection: "row", alignItems: "center", gap: 6 },
-  scoreDot: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 8, borderWidth: 1 },
-  scoreDotText: { fontSize: 12 },
-  historyEmpty: { padding: 28, alignItems: "center", gap: 10 },
-  historyEmptyText: { fontSize: 13, textAlign: "center", lineHeight: 20 },
-  historyHint: { fontSize: 11, textAlign: "center", paddingHorizontal: 4 },
-  statsCard: { borderRadius: 14, borderWidth: 1, flexDirection: "row", overflow: "hidden" },
-  statItem: { flex: 1, alignItems: "center", paddingVertical: 18, gap: 3 },
-  statNum: { fontSize: 24, letterSpacing: -0.5 },
-  statLabel: { fontSize: 12 },
-  statDivider: { width: StyleSheet.hairlineWidth },
   actionsCard: {
     borderRadius: 14,
     borderWidth: 1,
     overflow: "hidden",
-    marginTop: 4,
+    marginTop: 12,
   },
   actionRow: {
     flexDirection: "row",
