@@ -188,13 +188,22 @@ router.post("/recommendations/check", requireAuth, async (req: Request, res: Res
       return;
     }
 
-    const { report, conversationHistory } = req.body as {
+    const { report, conversationHistory, followUpCount = 0 } = req.body as {
       report: FeasibilityReport;
       conversationHistory: Message[];
+      followUpCount?: number;
     };
 
     if (!report) {
       res.status(400).json({ error: "report is required" });
+      return;
+    }
+
+    // Probability gate: 30% base + 10% per follow-up, capped at 70%
+    const probability = Math.min(0.70, 0.30 + followUpCount * 0.10);
+    if (Math.random() > probability) {
+      req.log.info({ followUpCount, probability }, "Recommendation skipped by probability gate");
+      res.json({ shouldRecommend: false, provider: null, intentType: "none" });
       return;
     }
 
@@ -205,6 +214,7 @@ router.post("/recommendations/check", requireAuth, async (req: Request, res: Res
       return;
     }
 
+    // Always prefer providers from the database; online search is a last-resort fallback (rarely used)
     const provider = await selectServiceProvider();
     res.json({ shouldRecommend: true, provider, intentType: intent.intentType, reason: intent.reason });
   } catch (err) {

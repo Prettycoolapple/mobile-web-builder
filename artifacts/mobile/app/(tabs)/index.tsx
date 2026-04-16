@@ -108,7 +108,8 @@ export default function SearchScreen() {
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
-  const checkedReportIds = useRef<Set<string>>(new Set());
+  const shownRecommendationReportIds = useRef<Set<string>>(new Set());
+  const lastCheckedFollowUpCount = useRef<Map<string, number>>(new Map());
   const checkedFollowupIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -124,15 +125,33 @@ export default function SearchScreen() {
   useEffect(() => {
     if (user?.role !== "general") return;
     const msgs = currentSession?.messages ?? [];
+
+    // Find the most recent report in this session
     const reportMessages = msgs.filter((m) => m.type === "report" && m.report);
     if (reportMessages.length === 0) return;
     const lastReport = reportMessages[reportMessages.length - 1];
-    if (checkedReportIds.current.has(lastReport.id)) return;
-    checkedReportIds.current.add(lastReport.id);
 
+    // Never show a second recommendation for the same report
+    if (shownRecommendationReportIds.current.has(lastReport.id)) return;
+
+    // Don't show if a recommendation is already visible in the chat
     const alreadyHasRecommendation = msgs.some((m) => m.type === "provider_recommendation");
     if (alreadyHasRecommendation) return;
 
+    // Count assistant text messages that appeared AFTER the last report (follow-ups)
+    const reportIdx = msgs.findIndex((m) => m.id === lastReport.id);
+    const msgsAfterReport = reportIdx >= 0 ? msgs.slice(reportIdx + 1) : [];
+    const followUpCount = msgsAfterReport.filter(
+      (m) => m.role === "assistant" && m.type === "text",
+    ).length;
+
+    // Only fire if followUpCount changed since the last check for this report,
+    // so we don't hammer the endpoint on every render
+    const lastCount = lastCheckedFollowUpCount.current.get(lastReport.id) ?? -1;
+    if (followUpCount <= lastCount) return;
+    lastCheckedFollowUpCount.current.set(lastReport.id, followUpCount);
+
+    // Delay slightly so the UI settles before the recommendation bubble appears
     const timer = setTimeout(async () => {
       try {
         const apiBase = process.env.EXPO_PUBLIC_DOMAIN
@@ -146,7 +165,7 @@ export default function SearchScreen() {
         const resp = await fetch(`${apiBase}/recommendations/check`, {
           method: "POST",
           headers,
-          body: JSON.stringify({ report: lastReport.report, conversationHistory }),
+          body: JSON.stringify({ report: lastReport.report, conversationHistory, followUpCount }),
         });
         if (!resp.ok) return;
         const data = await resp.json() as {
@@ -155,6 +174,7 @@ export default function SearchScreen() {
           intentType: string;
         };
         if (data.shouldRecommend && data.provider) {
+          shownRecommendationReportIds.current.add(lastReport.id);
           addMessage({
             role: "assistant",
             content: "",
@@ -167,7 +187,7 @@ export default function SearchScreen() {
       } catch (err) {
         console.log("Recommendation check failed:", err);
       }
-    }, 2000);
+    }, 2500);
 
     return () => clearTimeout(timer);
   }, [currentSession?.messages, user?.role, getApiHeaders, addMessage, currentSessionId]);
