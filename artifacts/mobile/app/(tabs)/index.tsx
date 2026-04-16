@@ -350,7 +350,7 @@ export default function SearchScreen() {
 
     addMessage({ role: "assistant", content: "", type: "loading", loadingMode: detectedMode as any }, sessionId);
 
-    const MAX_RETRIES = 1;
+    const MAX_RETRIES = 3;
     const TIMEOUT_MS = 200_000;
 
     const currentMessages = currentSession?.messages ?? [];
@@ -371,9 +371,11 @@ export default function SearchScreen() {
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         if (attempt > 1) {
           updateLastMessage({
-            retryLabel: `Data sources slow — retrying (${attempt} of ${MAX_RETRIES})…`,
+            type: "loading",
+            content: "",
+            retryLabel: attempt === MAX_RETRIES ? "Still fetching data, one moment…" : "Fetching data…",
           }, sessionId);
-          await new Promise<void>((r) => setTimeout(r, 1500));
+          await new Promise<void>((r) => setTimeout(r, 2000 * (attempt - 1)));
         }
 
         try {
@@ -393,12 +395,14 @@ export default function SearchScreen() {
             if (resp.status === 402) {
               updateLastMessage({ type: "text", content: "You've used all your reports for this month. Upgrade to Standard for more." }, sessionId);
               setShowPaywall(true);
+              return;
             } else if (resp.status === 401) {
               updateLastMessage({ type: "text", content: "Session expired. Please sign in again." }, sessionId);
+              return;
             } else {
-              updateLastMessage({ type: "text", content: err.error || "Something went wrong. Please try again." }, sessionId);
+              // Server error (5xx) — throw so the retry loop catches it and tries again
+              throw Object.assign(new Error(err.error || "Server error"), { isServerError: true });
             }
-            return;
           }
 
           // Always read as text first, then parse — avoids issues where resp.json()
@@ -458,8 +462,9 @@ export default function SearchScreen() {
           return;
         } catch (err: any) {
           lastErr = err;
-          const isAbort = err?.name === "AbortError";
-          if (!isAbort || attempt >= MAX_RETRIES) break;
+          // Retry on server errors and timeouts; bail immediately on anything else
+          const isRetryable = err?.name === "AbortError" || err?.isServerError;
+          if (!isRetryable || attempt >= MAX_RETRIES) break;
         }
       }
 
@@ -467,8 +472,8 @@ export default function SearchScreen() {
       updateLastMessage({
         type: "text",
         content: isTimeout
-          ? "Analysis timed out — NZ property data sources are slow right now. Please tap Try again."
-          : "Couldn't connect to the analysis service. Check your connection.",
+          ? "NZ property data sources are slow right now. Please tap Try again."
+          : "Couldn't reach the service after a few attempts. Please check your connection and try again.",
         retryText: text,
       }, sessionId);
     } finally {
