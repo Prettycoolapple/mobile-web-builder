@@ -1,6 +1,7 @@
 import { ai } from "@workspace/integrations-gemini-ai";
 import { logger } from "./logger";
 import { SYSTEM_PROMPT, ANALYSE_AUGMENTATION, DISCOVER_AUGMENTATION } from "./prompts";
+import { findSuburbInText, looksLikeSuburbOnly } from "./nz-suburbs";
 
 export interface Message {
   role: "user" | "assistant";
@@ -270,28 +271,12 @@ function fallbackDetectIntent(
   lastMessage: string,
   reportContext?: { address?: string | null; suburb?: string | null } | null,
 ): ChatIntent {
-  const mode = detectMode(lastMessage);
-  const lower = lastMessage.toLowerCase();
+  // If the entire message is just a suburb name, treat it as a discover intent
+  const isSuburbOnly = looksLikeSuburbOnly(lastMessage);
+  const mode = isSuburbOnly ? "discover" : detectMode(lastMessage);
 
-  let suburb: string | null = null;
-  const SUBURBS = [
-    "remuera", "epsom", "mt eden", "grey lynn", "ponsonby", "parnell", "herne bay",
-    "westmere", "kingsland", "sandringham", "mt albert", "mt roskill", "onehunga",
-    "new lynn", "titirangi", "avondale", "st heliers", "kohimarama", "mission bay",
-    "glendowie", "meadowbank", "howick", "pakuranga", "botany", "east tamaki",
-    "henderson", "albany", "takapuna", "devonport", "northcote", "glenfield",
-    "milford", "browns bay", "glen innes", "penrose", "ellerslie", "mangere",
-    "birkenhead", "massey", "royal oak", "mt wellington", "manurewa", "papatoetoe",
-    "papakura", "glen eden", "st johns", "otahuhu", "panmure",
-  ];
-  for (const s of SUBURBS) {
-    if (lower.includes(s)) { suburb = s; break; }
-  }
-
-  // Fall back to report context suburb
-  if (!suburb && mode === "discover" && reportContext?.suburb) {
-    suburb = reportContext.suburb.toLowerCase().trim();
-  }
+  const suburb = findSuburbInText(lastMessage)
+    ?? (mode === "discover" && reportContext?.suburb ? reportContext.suburb.toLowerCase().trim() : null);
 
   const isFollowUp = /any\s*(others?|more)|show\s*(me\s*)?more|more\s*(properties|options|results|sites)|what\s*else|other\s*properties|more\s*results|few\s*more|find\s*more/i.test(lastMessage);
 
@@ -305,7 +290,7 @@ function fallbackDetectIntent(
     maxPrice: null,
     criteria: lastMessage,
     isFollowUp,
-    includeNegotiation: /negotiat|poa|by\s+applic|tender|auction/i.test(lower),
+    includeNegotiation: /negotiat|poa|by\s+applic|tender|auction/i.test(lastMessage.toLowerCase()),
     needsClarification,
     clarificationQuestion: needsClarification ? "Any particular suburb in mind?" : null,
     reasoning: "regex fallback",

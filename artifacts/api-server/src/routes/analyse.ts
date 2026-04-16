@@ -13,6 +13,7 @@ import {
 } from "../lib/claude";
 import { verifyToken } from "../lib/auth";
 import { extractNZAddress } from "../lib/address-parser";
+import { findSuburbInText } from "../lib/nz-suburbs";
 import { runPropertyPipeline } from "../lib/pipeline";
 import { formatNZD } from "../lib/utils";
 import { searchRealEstateListings } from "../lib/scrapers/realestate-search";
@@ -195,53 +196,8 @@ function shufflePick<T>(arr: T[], n: number): T[] {
 }
 
 function parseDiscoverParams(text: string): { suburb: string | null; minPrice: number; maxPrice: number } {
-  const lower = text.toLowerCase();
-
-  const SUBURBS = [
-    "remuera", "epsom", "mt eden", "mt. eden", "grey lynn", "ponsonby", "parnell",
-    "sandringham", "onehunga", "new lynn", "titirangi", "herne bay", "westmere",
-    "kingsland", "mt albert", "mt roskill", "avondale", "henderson", "botany",
-    "howick", "pakuranga", "manukau", "papakura", "pukekohe", "albany",
-    "takapuna", "devonport", "northcote", "glenfield", "milford", "browns bay",
-    "east tamaki", "mangere", "otahuhu", "penrose", "ellerslie", "glen innes",
-    "st heliers", "saint heliers", "kohimarama", "mission bay", "st johns", "saint johns", "glendowie",
-    "meadowbank", "birkenhead", "massey", "royal oak", "mt wellington", "manurewa",
-    "papatoetoe", "glen eden", "panmure",
-  ];
-
-  let suburb: string | null = null;
-  for (const s of SUBURBS) {
-    if (lower.includes(s)) {
-      suburb = s.replace(/\./g, "").replace(/\s+/g, " ").replace("saint ", "st ").trim();
-      break;
-    }
-  }
-
-  // Fuzzy match: extract the location phrase after "in/around/near/at/about" and try each suburb
-  if (!suburb) {
-    const locationPhrase = lower.match(/\b(?:in|around|near|at|about\s+in|about)\s+([\w\s]+?)(?:\s+under|\s+below|\s+above|\s+around|\s+price|\s+budget|\?|$)/i)?.[1]?.trim();
-    if (locationPhrase && locationPhrase.length >= 3) {
-      // Exact substring match first
-      const exactMatch = SUBURBS.find((s) => locationPhrase.includes(s) || s.includes(locationPhrase));
-      if (exactMatch) {
-        suburb = exactMatch.replace(/\./g, "").replace(/\s+/g, " ").replace("saint ", "st ").trim();
-      } else {
-        // Fuzzy match: allow up to 2 character edits for multi-word suburbs
-        let bestMatch: string | null = null;
-        let bestDist = 3; // max allowed distance
-        for (const s of SUBURBS) {
-          const dist = editDistance(locationPhrase.replace(/\s+/g, ""), s.replace(/\s+/g, ""));
-          if (dist < bestDist) {
-            bestDist = dist;
-            bestMatch = s;
-          }
-        }
-        if (bestMatch) {
-          suburb = bestMatch.replace(/\./g, "").replace(/\s+/g, " ").replace("saint ", "st ").trim();
-        }
-      }
-    }
-  }
+  // Use the shared NZ suburbs finder which covers all major NZ suburbs
+  const suburb = findSuburbInText(text);
 
   const pricePatterns = [
     /under\s+\$?([0-9]+(?:\.[0-9]+)?)\s*([mk]?)/i,
@@ -1153,12 +1109,10 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
       // extract the suburb from the AI's text and actually run the search now.
       const isSearchingPhrase = /\b(searching|i'm searching|i am searching|let me search|looking for properties|i'll search|i will search)\b/i.test(content);
       if (isSearchingPhrase && responseMode !== "discover") {
-        // Try to extract suburb from the AI's response (it often names the suburb)
-        const aiSuburbMatch = content.match(/\b(?:in|for)\s+([\w\s]+?)(?:\s+matching|\s+that|\s+on|\s+currently|\s+now|[.,!?]|$)/i);
-        const aiSuburb = aiSuburbMatch?.[1]?.trim().toLowerCase();
-        // Also try the user text  
+        // Try the user text first (most reliable), then scan the AI's response for a known suburb
         const { suburb: userSuburb, minPrice, maxPrice } = parseDiscoverParams(userText);
-        const suburb = userSuburb || (aiSuburb && aiSuburb.length > 3 ? aiSuburb : null);
+        const aiSuburb = userSuburb == null ? findSuburbInText(content) : null;
+        const suburb = userSuburb ?? aiSuburb;
         const includeNegotiation = /negotiat|without\s+price|no\s+price|poa|tender|auction/i.test(userText);
 
         if (suburb) {
