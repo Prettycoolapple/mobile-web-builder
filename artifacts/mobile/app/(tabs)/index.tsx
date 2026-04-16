@@ -125,6 +125,7 @@ export default function SearchScreen() {
   const shownRecommendationReportIds = useRef<Set<string>>(new Set());
   const lastCheckedFollowUpCount = useRef<Map<string, number>>(new Map());
   const checkedFollowupIds = useRef<Set<string>>(new Set());
+  const lastReportIdRef = useRef<string | null>(null);
   const cardScorePollRef = useRef<{ addresses: string[]; sessionId: string; intervalId: ReturnType<typeof setInterval> | null }>({ addresses: [], sessionId: "", intervalId: null });
 
   useEffect(() => {
@@ -136,6 +137,17 @@ export default function SearchScreen() {
   }, []);
 
   const messages = currentSession?.messages || [];
+
+  useEffect(() => {
+    const msgs = currentSession?.messages ?? [];
+    const latestMsg = msgs[msgs.length - 1];
+    if (latestMsg?.type === "report" && latestMsg.id !== lastReportIdRef.current) {
+      lastReportIdRef.current = latestMsg.id;
+      setTimeout(() => {
+        flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+      }, 100);
+    }
+  }, [currentSession?.messages]);
 
   useEffect(() => {
     if (user?.role !== "general") return;

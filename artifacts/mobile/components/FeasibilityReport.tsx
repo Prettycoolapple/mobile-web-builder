@@ -152,7 +152,7 @@ function SectionCard({
   title,
   icon,
   status,
-  defaultOpen = true,
+  defaultOpen = false,
   children,
   colors,
 }: {
@@ -1158,33 +1158,6 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
           <OverlayMapSnippet
             base64={report.overlay_map_image_base64}
             caption="Zone & overlay map — zones, heritage, flood, viewshafts"
-            colors={colors}
-          />
-        </SectionCard>
-      )}
-
-      {report.planning && (
-        <SectionCard
-          title="Easements & Rights of Way"
-          icon="⚖️"
-          status={
-            (report.planning.easements && report.planning.easements.length > 0)
-              ? (report.planning.easements.some((e) => e.severity === "significant") ? "risk" : "warning")
-              : (report.planning.easement_data_status === "api_error" || report.planning.easement_data_status === "no_title")
-                ? "warning"
-                : "neutral"
-          }
-          colors={colors}
-        >
-          <EasementList
-            easements={report.planning.easements}
-            appurtenant={report.planning.appurtenant_easements}
-            summary={report.planning.easement_summary}
-            lotImpact={report.planning.lot_impact_note}
-            grossArea={report.planning.grossAreaSqm}
-            netArea={report.planning.netAreaSqm}
-            easementArea={report.planning.easementAreaSqm}
-            dataStatus={report.planning.easement_data_status}
             colors={colors}
           />
         </SectionCard>
