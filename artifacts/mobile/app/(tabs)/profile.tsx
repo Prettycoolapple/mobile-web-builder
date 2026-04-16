@@ -102,8 +102,14 @@ export default function ProfileScreen() {
   const { user, signOut, getApiHeaders, refreshProfile } = useAuth();
   const router = useRouter();
 
-  const { purchase, isSubscribed, getPackageForRole, getPriceForRole } = useSubscription();
+  const { purchase, isSubscribed, customerInfoLoaded, refetchCustomerInfo, getPackageForRole, getPriceForRole } = useSubscription();
   const [upgradeLoading, setUpgradeLoading] = useState(false);
+
+  // Refresh RevenueCat status each time the profile screen mounts so the correct
+  // per-user identity (set via Purchases.logIn) is always reflected
+  useEffect(() => {
+    refetchCustomerInfo();
+  }, []);
 
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -159,8 +165,11 @@ export default function ProfileScreen() {
   useEffect(() => {
     if (isSubscribed) {
       syncToBackend("pro");
+    } else if (customerInfoLoaded) {
+      // RC has definitively confirmed no active subscription — correct the DB tier if needed
+      syncToBackend("free");
     }
-  }, [isSubscribed]);
+  }, [isSubscribed, customerInfoLoaded]);
 
   const handleUpgrade = useCallback(async () => {
     setUpgradeLoading(true);

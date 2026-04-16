@@ -37,6 +37,20 @@ export function initializeRevenueCat(): void {
   }
 }
 
+export async function loginRevenueCat(userId: string): Promise<void> {
+  try {
+    await Purchases.logIn(userId);
+  } catch {
+  }
+}
+
+export async function logoutRevenueCat(): Promise<void> {
+  try {
+    await Purchases.logOut();
+  } catch {
+  }
+}
+
 function useSubscriptionContext() {
   const customerInfoQuery = useQuery({
     queryKey: ["revenuecat", "customer-info"],
@@ -87,11 +101,14 @@ function useSubscriptionContext() {
     customerInfo: customerInfoQuery.data,
     offerings: offeringsQuery.data,
     isSubscribed,
+    // True once RC has definitively loaded (not loading, not error) — use to safely downgrade
+    customerInfoLoaded: !customerInfoQuery.isLoading && !customerInfoQuery.isError && customerInfoQuery.data !== undefined,
     isLoading: customerInfoQuery.isLoading || offeringsQuery.isLoading,
     purchase: purchaseMutation.mutateAsync,
     restore: restoreMutation.mutateAsync,
     isPurchasing: purchaseMutation.isPending,
     isRestoring: restoreMutation.isPending,
+    refetchCustomerInfo: customerInfoQuery.refetch,
     getPackageForRole,
     getPriceForRole,
   };

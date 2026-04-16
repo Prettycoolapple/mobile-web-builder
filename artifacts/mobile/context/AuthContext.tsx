@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { loginRevenueCat, logoutRevenueCat } from "@/lib/revenuecat";
 
 export type UserRole = "general" | "sales_agent" | "service_provider";
 
@@ -147,8 +148,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           AsyncStorage.getItem(STORAGE_KEY_USER),
         ]);
         if (storedToken && storedUser) {
+          const profile = JSON.parse(storedUser) as UserProfile;
           setToken(storedToken);
-          setUser(JSON.parse(storedUser) as UserProfile);
+          setUser(profile);
+          // Restore RevenueCat identity so the device subscription is tied to this user
+          loginRevenueCat(profile.id).catch(() => {});
         }
       } catch {
       } finally {
@@ -186,6 +190,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       languages: json.user.languages ?? [],
     };
     await persistAuth(json.token, profile);
+    // Tie this user's RevenueCat identity to their account ID
+    loginRevenueCat(profile.id).catch(() => {});
     return { token: json.token };
   }, [persistAuth]);
 
@@ -203,6 +209,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       languages: data.user.languages ?? [],
     };
     await persistAuth(data.token, profile);
+    // Tie this user's RevenueCat identity to their account ID
+    loginRevenueCat(profile.id).catch(() => {});
     return profile;
   }, [persistAuth]);
 
@@ -213,6 +221,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       AsyncStorage.removeItem(STORAGE_KEY_TOKEN),
       AsyncStorage.removeItem(STORAGE_KEY_USER),
     ]);
+    // Release RevenueCat identity so the next user starts with a clean slate
+    logoutRevenueCat().catch(() => {});
   }, []);
 
   const refreshProfile = useCallback(async () => {
