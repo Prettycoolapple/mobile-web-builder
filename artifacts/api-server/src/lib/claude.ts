@@ -408,6 +408,8 @@ export async function generateUnifiedResponse(
     const planning = r["planning"] as Record<string, unknown> | undefined;
     const overview = r["propertyOverview"] as Record<string, unknown> | undefined;
     const asbestosInfo = r["asbestos"] as Record<string, unknown> | undefined;
+    const terrain = r["terrain"] as Record<string, unknown> | undefined;
+    const scores = r["scores"] as Record<string, unknown> | undefined;
 
     const zoneLabel: string | null =
       (r["zone_label"] as string | null) ??
@@ -425,15 +427,43 @@ export async function generateUnifiedResponse(
       (overview?.["address"] as string | null) ??
       null;
 
+    // Terrain — pin ALL measured values so the LLM cannot substitute general geographic
+    // knowledge (e.g. "Remuera is hilly") for the actual LiDAR/pipeline measurement.
+    const terrainClassification: string | null =
+      (terrain?.["classification"] as string | null) ?? null;
+    const terrainSlopeDeg: number | null =
+      (terrain?.["slope_degrees"] as number | null) ?? null;
+    const terrainSlope: string | null =
+      (terrain?.["slope"] as string | null) ?? null;
+    const terrainSource: string | null =
+      (terrain?.["source"] as string | null) ?? null;
+
+    const terrainLine = terrainClassification
+      ? `Terrain / contour: ${terrainClassification}` +
+        (terrainSlopeDeg != null ? ` (measured slope ${terrainSlopeDeg}°)` : "") +
+        (terrainSlope ? ` — "${terrainSlope}"` : "") +
+        (terrainSource ? ` [source: ${terrainSource}]` : "") +
+        " — DO NOT describe this property as moderate, steep, hilly, or sloped; the measured data shows it is " + terrainClassification
+      : null;
+
+    // Scores — pin the computed scores so the LLM cannot re-derive different numbers
+    const easeScore = scores?.["ease"] != null ? `Ease score: ${scores["ease"]}/5` : null;
+    const costScore = scores?.["cost"] != null ? `Cost score: ${scores["cost"]}/5` : null;
+    const roiScore = scores?.["roi"] != null ? `ROI score: ${scores["roi"]}/5` : null;
+
     const pinnedLines = [
       address ? `Address: ${address}` : null,
       zoneLabel ? `Zone: ${zoneLabel}${zoneCode ? ` (code: ${zoneCode})` : ""}` : null,
       buildYear ? `Build year: ${buildYear}` : null,
       landArea ? `Land area: ${landArea}` : null,
+      terrainLine,
+      easeScore,
+      costScore,
+      roiScore,
     ].filter(Boolean);
 
     const pinnedSection = pinnedLines.length > 0
-      ? `CRITICAL — CONFIRMED PROPERTY FACTS (these are verified data — you MUST NOT contradict or substitute any of these in your response):\n${pinnedLines.join("\n")}\n\n`
+      ? `CRITICAL — CONFIRMED PROPERTY FACTS (measured/verified data from LINZ, Auckland Council GIS, and LiDAR — you MUST NOT contradict, override, or substitute any of these with general knowledge or suburb assumptions):\n${pinnedLines.join("\n")}\n\n`
       : "";
 
     systemWithContext =
