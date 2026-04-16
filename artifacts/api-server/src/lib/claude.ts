@@ -405,69 +405,168 @@ export async function generateUnifiedResponse(
   let systemWithContext = SYSTEM_PROMPT;
   if (currentReport) {
     const r = currentReport as Record<string, unknown>;
-    const planning = r["planning"] as Record<string, unknown> | undefined;
-    const overview = r["propertyOverview"] as Record<string, unknown> | undefined;
-    const asbestosInfo = r["asbestos"] as Record<string, unknown> | undefined;
-    const terrain = r["terrain"] as Record<string, unknown> | undefined;
-    const scores = r["scores"] as Record<string, unknown> | undefined;
+    const planning   = r["planning"]         as Record<string, unknown> | undefined;
+    const overview   = r["propertyOverview"] as Record<string, unknown> | undefined;
+    const asbestosInfo = r["asbestos"]       as Record<string, unknown> | undefined;
+    const terrain    = r["terrain"]          as Record<string, unknown> | undefined;
+    const scores     = r["scores"]           as Record<string, unknown> | undefined;
+    const costItems  = r["costItems"]        as Array<Record<string, unknown>> | undefined;
+    const infraArr   = r["infrastructure"]   as Array<Record<string, unknown>> | undefined;
+    const riskArr    = r["riskSummary"]      as string[] | undefined;
+    const scenarios  = r["roiScenarios"]     as Array<Record<string, unknown>> | undefined;
 
-    const zoneLabel: string | null =
-      (r["zone_label"] as string | null) ??
-      (planning?.["zone"] as string | null) ??
-      (overview?.["zone"] as string | null) ??
-      null;
-    const zoneCode: string | null = (r["zone_code"] as string | null) ?? null;
-    const buildYear: string | null =
-      (overview?.["buildYear"] as string | null) ??
-      (asbestosInfo?.["buildYear"] as string | null) ??
-      null;
-    const landArea: string | null = (overview?.["landArea"] as string | null) ?? null;
-    const address: string | null =
-      (r["address"] as string | null) ??
-      (overview?.["address"] as string | null) ??
-      null;
+    // ── helpers ──────────────────────────────────────────────────────────────
+    const fmt = (v: unknown) => (v != null ? String(v) : null);
+    const nzd = (v: unknown) => (typeof v === "number" && v > 0 ? `$${v.toLocaleString("en-NZ")}` : null);
 
-    // Terrain — pin ALL measured values so the LLM cannot substitute general geographic
-    // knowledge (e.g. "Remuera is hilly") for the actual LiDAR/pipeline measurement.
-    const terrainClassification: string | null =
-      (terrain?.["classification"] as string | null) ?? null;
-    const terrainSlopeDeg: number | null =
-      (terrain?.["slope_degrees"] as number | null) ?? null;
-    const terrainSlope: string | null =
-      (terrain?.["slope"] as string | null) ?? null;
-    const terrainSource: string | null =
-      (terrain?.["source"] as string | null) ?? null;
+    // ── property overview ────────────────────────────────────────────────────
+    const address   = fmt(r["address"] ?? overview?.["address"]);
+    const cv        = fmt(overview?.["cv"]);
+    const landArea  = fmt(overview?.["landArea"]);
+    const floorArea = fmt(overview?.["floorArea"]);
+    const buildYear = fmt(overview?.["buildYear"] ?? asbestosInfo?.["buildYear"]);
+    const zoneLabel = fmt(r["zone_label"] ?? planning?.["zone"] ?? overview?.["zone"]);
+    const zoneCode  = fmt(r["zone_code"]);
+    const listingPrice = fmt(overview?.["listingPrice"]);
+    const isOnMarket   = overview?.["isOnMarket"];
 
-    const terrainLine = terrainClassification
-      ? `Terrain / contour: ${terrainClassification}` +
-        (terrainSlopeDeg != null ? ` (measured slope ${terrainSlopeDeg}°)` : "") +
-        (terrainSlope ? ` — "${terrainSlope}"` : "") +
-        (terrainSource ? ` [source: ${terrainSource}]` : "") +
-        " — DO NOT describe this property as moderate, steep, hilly, or sloped; the measured data shows it is " + terrainClassification
-      : null;
+    // ── planning ─────────────────────────────────────────────────────────────
+    const potentialLots = fmt(planning?.["potentialLots"] ?? r["potential_lots"]);
+    const minLotSize    = fmt(planning?.["minLotSize"]);
+    const grossArea     = fmt(planning?.["grossAreaSqm"]);
+    const netArea       = fmt(planning?.["netAreaSqm"]);
+    const subdivSummary = fmt(planning?.["subdivisionSummary"]);
+    const overlaysArr   = planning?.["overlays"] as Array<Record<string, unknown>> | undefined;
+    const overlayLines  = (overlaysArr ?? []).map((o) => `    • ${o["name"]}: ${o["status"]}${o["detail"] ? ` — ${o["detail"]}` : ""}`).join("\n");
+    const easementNote  = fmt(planning?.["easement_summary"] ?? planning?.["lot_impact_note"]);
 
-    // Scores — pin the computed scores so the LLM cannot re-derive different numbers
-    const easeScore = scores?.["ease"] != null ? `Ease score: ${scores["ease"]}/5` : null;
-    const costScore = scores?.["cost"] != null ? `Cost score: ${scores["cost"]}/5` : null;
-    const roiScore = scores?.["roi"] != null ? `ROI score: ${scores["roi"]}/5` : null;
+    // ── terrain ──────────────────────────────────────────────────────────────
+    const terrainClass = fmt(terrain?.["classification"]);
+    const terrainSlope = fmt(terrain?.["slope"]);
+    const terrainDeg   = terrain?.["slope_degrees"] != null ? String(terrain["slope_degrees"]) + "°" : null;
+    const terrainSrc   = fmt(terrain?.["source"]);
+    const retainLow    = nzd(terrain?.["retainingCostLow"]);
+    const retainHigh   = nzd(terrain?.["retainingCostHigh"]);
 
-    const pinnedLines = [
-      address ? `Address: ${address}` : null,
-      zoneLabel ? `Zone: ${zoneLabel}${zoneCode ? ` (code: ${zoneCode})` : ""}` : null,
-      buildYear ? `Build year: ${buildYear}` : null,
-      landArea ? `Land area: ${landArea}` : null,
-      terrainLine,
-      easeScore,
-      costScore,
-      roiScore,
-    ].filter(Boolean);
+    // ── asbestos ─────────────────────────────────────────────────────────────
+    const asbestosRisk = fmt(asbestosInfo?.["riskLevel"] ?? asbestosInfo?.["risk"]);
+    const asbestosNotes = fmt(asbestosInfo?.["notes"]);
+    const demoLow  = nzd(asbestosInfo?.["demoCostLow"]);
+    const demoHigh = nzd(asbestosInfo?.["demoCostHigh"]);
 
-    const pinnedSection = pinnedLines.length > 0
-      ? `CRITICAL — CONFIRMED PROPERTY FACTS (measured/verified data from LINZ, Auckland Council GIS, and LiDAR — you MUST NOT contradict, override, or substitute any of these with general knowledge or suburb assumptions):\n${pinnedLines.join("\n")}\n\n`
-      : "";
+    // ── scores ───────────────────────────────────────────────────────────────
+    const easeScore = scores?.["ease"] != null ? `${scores["ease"]}/5` : null;
+    const costScore = scores?.["cost"] != null ? `${scores["cost"]}/5` : null;
+    const roiScore  = scores?.["roi"]  != null ? `${scores["roi"]}/5`  : null;
+    const composite = scores?.["composite"] != null ? `${scores["composite"]}/5` : null;
+    const easeReasons = (scores?.["ease_reasons"] as string[] | undefined)?.join("; ") ?? null;
+    const costReasons = (scores?.["cost_reasons"] as string[] | undefined)?.join("; ") ?? null;
+    const roiReasons  = (scores?.["roi_reasons"]  as string[] | undefined)?.join("; ") ?? null;
+
+    // ── costs ─────────────────────────────────────────────────────────────────
+    const totalLow  = nzd(r["totalCostLow"]);
+    const totalHigh = nzd(r["totalCostHigh"]);
+    const costPerUnit = nzd(r["cost_per_unit_avg"]);
+    const costLines = (costItems ?? []).map((ci) => {
+      const lo = nzd(ci["low"]);
+      const hi = nzd(ci["high"]);
+      return lo || hi ? `    • ${ci["label"]}: ${lo ?? "—"} – ${hi ?? "—"}` : null;
+    }).filter(Boolean).join("\n");
+
+    // ── ROI scenarios ─────────────────────────────────────────────────────────
+    const scenarioLines = (scenarios ?? []).map((s) => {
+      const cases = (s["cases"] as Array<Record<string,unknown>> | undefined) ?? [];
+      const caseSummary = cases.map((c) =>
+        `${c["case"]} — GDV ${nzd(c["gdv"])}, profit ${nzd(c["gross_profit"])}, ROI ${c["roi_percent"]}%, viable: ${c["viable"]}`
+      ).join(" | ");
+      return `    • ${s["years"]}yr: ${caseSummary}`;
+    }).join("\n");
+
+    // ── infrastructure ────────────────────────────────────────────────────────
+    const infraLines = (infraArr ?? []).map((inf) => {
+      const lo = nzd(inf["estimatedCostLow"]);
+      const hi = nzd(inf["estimatedCostHigh"]);
+      return `    • ${inf["name"]}: ${inf["location"]}${inf["distance_metres"] != null ? ` (~${inf["distance_metres"]}m)` : ""}, risk: ${inf["risk"]}${lo ? `, cost ${lo}–${hi}` : ""} — ${inf["note"]}`;
+    }).join("\n");
+
+    // ── risk summary ──────────────────────────────────────────────────────────
+    const riskLines = (riskArr ?? []).map((r, i) => `    ${i + 1}. ${r}`).join("\n");
+
+    // ── build the pinned block ────────────────────────────────────────────────
+    const sections: string[] = [];
+
+    sections.push("PROPERTY OVERVIEW");
+    if (address)      sections.push(`  Address: ${address}`);
+    if (zoneLabel)    sections.push(`  Zone: ${zoneLabel}${zoneCode ? ` (${zoneCode})` : ""}`);
+    if (cv)           sections.push(`  Capital Value (CV): ${cv}`);
+    if (landArea)     sections.push(`  Land area: ${landArea}`);
+    if (floorArea)    sections.push(`  Floor area: ${floorArea}`);
+    if (buildYear)    sections.push(`  Build year: ${buildYear}`);
+    if (listingPrice) sections.push(`  Listing price: ${listingPrice}`);
+    if (isOnMarket != null) sections.push(`  Currently listed for sale: ${isOnMarket}`);
+
+    sections.push("\nPLANNING");
+    if (potentialLots) sections.push(`  Potential lots: ${potentialLots}`);
+    if (minLotSize)    sections.push(`  Min lot size: ${minLotSize}`);
+    if (grossArea)     sections.push(`  Gross area: ${grossArea}m²`);
+    if (netArea)       sections.push(`  Net subdividable area: ${netArea}m²`);
+    if (overlayLines)  sections.push(`  Overlays:\n${overlayLines}`);
+    if (easementNote)  sections.push(`  Easements: ${easementNote}`);
+    if (subdivSummary) sections.push(`  Subdivision summary: ${subdivSummary}`);
+
+    sections.push("\nTERRAIN (measured — DO NOT override with suburb assumptions)");
+    if (terrainClass) sections.push(`  Classification: ${terrainClass}${terrainDeg ? ` (${terrainDeg} slope)` : ""}`);
+    if (terrainSlope) sections.push(`  Description: ${terrainSlope}`);
+    if (terrainSrc)   sections.push(`  Source: ${terrainSrc}`);
+    if (retainLow)    sections.push(`  Retaining cost estimate: ${retainLow} – ${retainHigh ?? "—"}`);
+
+    sections.push("\nASBESTOS");
+    if (asbestosRisk)  sections.push(`  Risk level: ${asbestosRisk}`);
+    if (asbestosNotes) sections.push(`  Notes: ${asbestosNotes}`);
+    if (demoLow)       sections.push(`  Demolition cost: ${demoLow} – ${demoHigh ?? "—"}`);
+
+    sections.push("\nSCORES (computed — do NOT recalculate or contradict)");
+    if (easeScore) sections.push(`  Ease: ${easeScore}${easeReasons ? ` — ${easeReasons}` : ""}`);
+    if (costScore) sections.push(`  Cost: ${costScore}${costReasons ? ` — ${costReasons}` : ""}`);
+    if (roiScore)  sections.push(`  ROI: ${roiScore}${roiReasons  ? ` — ${roiReasons}`  : ""}`);
+    if (composite) sections.push(`  Composite: ${composite}`);
+
+    sections.push("\nCOST BREAKDOWN (computed — do NOT recalculate or contradict)");
+    if (costLines)    sections.push(costLines);
+    if (totalLow)     sections.push(`  TOTAL: ${totalLow} – ${totalHigh ?? "—"}`);
+    if (costPerUnit)  sections.push(`  Cost per unit (avg): ${costPerUnit}`);
+
+    if (scenarioLines) {
+      sections.push("\nROI SCENARIOS (computed — use these numbers verbatim)");
+      sections.push(scenarioLines);
+    }
+
+    if (infraLines) {
+      sections.push("\nINFRASTRUCTURE (from GIS — do NOT guess locations or costs)");
+      sections.push(infraLines);
+    }
+
+    if (riskLines) {
+      sections.push("\nRISK SUMMARY (from report — reference these when asked about risks)");
+      sections.push(riskLines);
+    }
+
+    const pinnedBlock = sections.join("\n");
+
+    const pinnedSection =
+      `CRITICAL INSTRUCTION — FOLLOW-UP RESPONSE RULES:\n` +
+      `You are answering a follow-up question about the property analysed in this session.\n` +
+      `ALL figures, classifications, scores, and facts below come from verified pipeline data (LINZ, LiDAR, Auckland Council GIS, QV).\n` +
+      `You MUST base your answer ONLY on this data. You MUST NOT:\n` +
+      `  • contradict any figure, score, or classification listed here\n` +
+      `  • substitute general suburb knowledge (e.g. "Remuera is hilly") for measured data\n` +
+      `  • recalculate scores, costs, or ROI — quote the numbers below verbatim\n` +
+      `  • invent overlays, easements, or infrastructure details not listed here\n` +
+      `If you are uncertain about something not listed, say so — do not fill gaps with assumptions.\n\n` +
+      `${pinnedBlock}\n\n`;
 
     systemWithContext =
-      `${SYSTEM_PROMPT}\n\n${pinnedSection}CURRENT PROPERTY CONTEXT (full report the user is discussing):\n${JSON.stringify(currentReport, null, 2)}`;
+      `${SYSTEM_PROMPT}\n\n${pinnedSection}FULL REPORT JSON (reference for any detail not covered above):\n${JSON.stringify(currentReport, null, 2)}`;
   }
 
   let userContent = lastMessage.content;
