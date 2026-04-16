@@ -979,7 +979,6 @@ function FollowUpChips({ report, onChipClick, colors }: {
   if (lots >= 3) {
     chips.push(`What are the consent steps for ${lots} lots?`);
   }
-  chips.push("Find similar properties nearby with better scores");
   chips.push(`Explain the ${zone} rules in plain English`);
 
   return (
