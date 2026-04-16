@@ -120,6 +120,7 @@ export default function SearchScreen() {
   const [inputText, setInputText] = useState("");
   const [showPaywall, setShowPaywall] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [messageLimitReached, setMessageLimitReached] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
   const shownRecommendationReportIds = useRef<Set<string>>(new Set());
@@ -135,6 +136,16 @@ export default function SearchScreen() {
     const hideSub = Keyboard.addListener(hideEvent, () => setKeyboardVisible(false));
     return () => { showSub.remove(); hideSub.remove(); };
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    const used = user.messagesUsedThisMonth ?? 0;
+    const limit =
+      user.role === "service_provider" ? 300
+      : user.subscriptionTier === "standard" || user.subscriptionTier === "pro" ? 50
+      : 10;
+    setMessageLimitReached(used >= limit);
+  }, [user]);
 
   const messages = currentSession?.messages || [];
 
@@ -474,11 +485,12 @@ export default function SearchScreen() {
             const err = (await resp.json()) as { error?: string; code?: string; message?: string };
             if (resp.status === 429 && err.error === "monthly_limit_reached") {
               const isUpgrade = err.code === "upgrade_required";
+              setMessageLimitReached(true);
               updateLastMessage({
                 type: "text",
                 content: isUpgrade
-                  ? "You've used all your free messages. Upgrade to Standard for more."
-                  : "You've reached your monthly message limit. It resets at the start of next month.",
+                  ? "You've reached your usage limit for this month. Upgrade to Standard to continue, or wait until your plan refreshes on the 1st."
+                  : "You've reached your usage limit for this month. Your messages will refresh on the 1st.",
               }, sessionId);
               if (isUpgrade) setShowPaywall(true);
               setIsLoading(false);
@@ -748,7 +760,7 @@ export default function SearchScreen() {
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const TAB_BAR_HEIGHT = Platform.OS === "web" ? 84 : 49;
   const tabBarOffset = Platform.OS === "web" ? TAB_BAR_HEIGHT : TAB_BAR_HEIGHT + insets.bottom;
-  const canSend = inputText.trim().length > 0 && !isLoading;
+  const canSend = inputText.trim().length > 0 && !isLoading && !messageLimitReached;
 
   return (
     <KeyboardAvoidingView
@@ -901,18 +913,25 @@ export default function SearchScreen() {
             nestedScrollEnabled
           />
 
-          {(user?.messagesUsedThisMonth ?? 0) >= (
+          {messageLimitReached ? (
+            <View style={[styles.limitWarningBar, { backgroundColor: "#FEF2F2", borderTopColor: "#FECACA" }]}>
+              <Feather name="slash" size={13} color="#DC2626" />
+              <Text style={[styles.limitWarningText, { color: "#991B1B", fontFamily: "DM_Sans_500Medium" }]}>
+                Usage limit reached — messages refresh on the 1st of next month.
+              </Text>
+            </View>
+          ) : (user?.messagesUsedThisMonth ?? 0) >= (
             user?.role === "service_provider" ? 280
             : user?.subscriptionTier === "free" || !user?.subscriptionTier ? 8
             : 45
-          ) && (
+          ) ? (
             <View style={[styles.limitWarningBar, { backgroundColor: "#FFFBEB", borderTopColor: "#FDE68A" }]}>
               <Feather name="alert-triangle" size={13} color="#D97706" />
               <Text style={[styles.limitWarningText, { color: "#92400E", fontFamily: "DM_Sans_500Medium" }]}>
-                You're close to your monthly message limit — it resets at the start of next month.
+                You're approaching your usage limit for this plan — messages refresh on the 1st.
               </Text>
             </View>
-          )}
+          ) : null}
 
           <View style={[styles.inputBar, {
             backgroundColor: colors.background,
@@ -926,11 +945,12 @@ export default function SearchScreen() {
             }]}>
               <TextInput
                 ref={inputRef}
-                style={[styles.input, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-                placeholder="Ask about an address or area..."
+                style={[styles.input, { color: messageLimitReached ? colors.mutedForeground : colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+                placeholder={messageLimitReached ? "Usage limit reached for this month" : "Ask about an address or area..."}
                 placeholderTextColor={colors.mutedForeground}
-                value={inputText}
-                onChangeText={setInputText}
+                value={messageLimitReached ? "" : inputText}
+                onChangeText={messageLimitReached ? undefined : setInputText}
+                editable={!messageLimitReached}
                 multiline
                 maxLength={500}
                 onSubmitEditing={() => handleSend()}
