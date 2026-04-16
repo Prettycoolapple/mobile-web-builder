@@ -432,12 +432,12 @@ function AsbestosPanel({ asbestos, colors }: { asbestos: AsbestosInfo; colors: R
   const buildYearNum = asbestos.buildYear ? parseInt(String(asbestos.buildYear), 10) : null;
   const riskLabel =
     risk === "high"
-      ? `HIGH — Built ${buildYearNum ?? "1940–1990"} (likely contains ACM)`
+      ? `HIGH — Peak asbestos era (1940–1990 build)`
       : risk === "low"
         ? buildYearNum && buildYearNum <= 1940
-          ? "LOW — Built 1940 or earlier (minimal ACM risk)"
-          : "LOW — Post-1990 build (minimal ACM risk)"
-        : "UNKNOWN — Survey required";
+          ? `LOW — Pre-1940 construction (asbestos not in widespread use)`
+          : "LOW — Post-1990 build (asbestos phased out by this era)"
+        : "UNKNOWN — Pre-demolition survey required";
 
   const demoCostLow = asbestos.demoCostLow ?? 0;
   const demoCostHigh = asbestos.demoCostHigh ?? 0;

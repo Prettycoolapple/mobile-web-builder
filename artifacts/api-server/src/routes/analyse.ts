@@ -976,6 +976,24 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                 if (photoUrl) parsed.photoUrl = photoUrl;
                 if (overlayMapB64) parsed.overlay_map_image_base64 = overlayMapB64;
 
+                // Always override asbestos with pre-computed deterministic values.
+                // Claude ignores the schema hints and applies its own (incorrect) heuristics,
+                // e.g. flagging pre-1940 buildings as "high" risk when they predate widespread
+                // asbestos use in NZ. The classifyAsbestos() function uses the correct thresholds
+                // so we always inject its output here.
+                if (asbestos_detail) {
+                  parsed.asbestos = {
+                    buildYear: merged?.build_year ?? null,
+                    riskLevel: asbestos_detail.risk,
+                    risk: asbestos_detail.risk,
+                    flagged: asbestos_detail.risk === "high",
+                    notes: asbestos_detail.notes,
+                    worksafe_required: asbestos_detail.worksafe_required,
+                    demoCostLow: costs.demo_low,
+                    demoCostHigh: costs.demo_high,
+                  };
+                }
+
                 // Always override roiScenarios cases with computed values so
                 // Bear/Base/Bull are guaranteed distinct — the LLM sometimes
                 // collapses all three to the same number.
