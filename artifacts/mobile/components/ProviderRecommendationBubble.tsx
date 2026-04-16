@@ -5,6 +5,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
+  Linking,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { ServiceProvider } from "@/context/ChatContext";
@@ -32,7 +33,8 @@ function ProviderAvatar({ provider }: { provider: ServiceProvider }) {
   );
 }
 
-function intentLabel(intentType: string): string {
+function intentLabel(intentType: string, hasAddress: boolean): string {
+  if (intentType === "referral" || !hasAddress) return "development projects";
   switch (intentType) {
     case "subdivision": return "subdivision potential";
     case "newbuild": return "new build potential";
@@ -64,6 +66,12 @@ export function ProviderRecommendationBubble({
 
   if (dismissed) return null;
 
+  const hasAddress = !!propertyAddress;
+  const label = intentLabel(intentType, hasAddress);
+
+  const locationParts = [provider.addressSuburb, provider.addressCity].filter(Boolean);
+  const locationString = locationParts.length > 0 ? locationParts.join(", ") : null;
+
   const handleConnect = async () => {
     setConnecting(true);
     try {
@@ -78,14 +86,21 @@ export function ProviderRecommendationBubble({
     onDismiss();
   };
 
+  const handleCall = () => {
+    if (provider.contactNumber) {
+      Linking.openURL(`tel:${provider.contactNumber}`);
+    }
+  };
+
+  const bodyText = hasAddress
+    ? `Based on this property's ${label}, I'd like to connect you with a specialist who can help move this forward.`
+    : `Here's a ${disciplineLabel(provider.discipline)} who can help with your ${label}.`;
+
   return (
     <View style={styles.container}>
-      <Text style={styles.header}>🤖 AI suggestion</Text>
+      <Text style={styles.header}>AI suggestion</Text>
 
-      <Text style={styles.body}>
-        Based on this property's {intentLabel(intentType)}, I'd like to connect
-        you with a development specialist who can help move this forward.
-      </Text>
+      <Text style={styles.body}>{bodyText}</Text>
 
       <View style={styles.card}>
         <View style={styles.cardTop}>
@@ -102,20 +117,34 @@ export function ProviderRecommendationBubble({
                 </View>
               )}
             </View>
-            {provider.companyName ? (
-              <Text style={styles.specialty} numberOfLines={1}>
-                {provider.companyName}
-              </Text>
-            ) : (
-              <Text style={styles.specialty}>
-                {disciplineLabel(provider.discipline)}
-              </Text>
-            )}
+
+            <Text style={styles.specialty} numberOfLines={1}>
+              {provider.companyName
+                ? `${provider.companyName} · ${disciplineLabel(provider.discipline)}`
+                : disciplineLabel(provider.discipline)}
+            </Text>
+
+            {locationString ? (
+              <View style={styles.metaRow}>
+                <Feather name="map-pin" size={11} color="#9CA3AF" />
+                <Text style={styles.metaText}>{locationString}</Text>
+              </View>
+            ) : null}
+
+            {provider.primaryLanguage && provider.primaryLanguage !== "English" ? (
+              <View style={styles.metaRow}>
+                <Feather name="globe" size={11} color="#9CA3AF" />
+                <Text style={styles.metaText}>{provider.primaryLanguage}</Text>
+              </View>
+            ) : null}
+
             <Text style={styles.connections}>
-              ★ {provider.recommendationCount} {provider.recommendationCount === 1 ? "recommendation" : "recommendations"}
+              ★ {provider.recommendationCount}{" "}
+              {provider.recommendationCount === 1 ? "recommendation" : "recommendations"}
             </Text>
           </View>
         </View>
+
         {provider.bio ? (
           <Text style={styles.bio} numberOfLines={2}>
             "{provider.bio}"
@@ -123,18 +152,31 @@ export function ProviderRecommendationBubble({
         ) : null}
       </View>
 
-      <TouchableOpacity
-        style={[styles.connectBtn, connecting && styles.connectBtnDisabled]}
-        onPress={handleConnect}
-        disabled={connecting}
-        activeOpacity={0.8}
-      >
-        {connecting ? (
-          <ActivityIndicator size="small" color="#fff" />
-        ) : (
-          <Text style={styles.connectBtnText}>Connect &amp; Message  →</Text>
-        )}
-      </TouchableOpacity>
+      <View style={styles.actions}>
+        <TouchableOpacity
+          style={[styles.connectBtn, connecting && styles.connectBtnDisabled]}
+          onPress={handleConnect}
+          disabled={connecting}
+          activeOpacity={0.8}
+        >
+          {connecting ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Text style={styles.connectBtnText}>Connect &amp; Message  →</Text>
+          )}
+        </TouchableOpacity>
+
+        {provider.contactNumber ? (
+          <TouchableOpacity
+            style={styles.callBtn}
+            onPress={handleCall}
+            activeOpacity={0.8}
+          >
+            <Feather name="phone" size={16} color="#7C3AED" />
+            <Text style={styles.callBtnText}>{provider.contactNumber}</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
 
       <TouchableOpacity
         style={styles.dismissBtn}
@@ -162,7 +204,8 @@ const styles = StyleSheet.create({
     color: "#7C3AED",
     fontFamily: "DM_Sans_600SemiBold",
     marginBottom: 8,
-    letterSpacing: 0.2,
+    letterSpacing: 0.3,
+    textTransform: "uppercase",
   },
   body: {
     fontSize: 14,
@@ -201,7 +244,7 @@ const styles = StyleSheet.create({
   },
   cardInfo: {
     flex: 1,
-    gap: 2,
+    gap: 3,
   },
   nameRow: {
     flexDirection: "row",
@@ -229,10 +272,21 @@ const styles = StyleSheet.create({
     color: "#6B7280",
     fontFamily: "DM_Sans_400Regular",
   },
+  metaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  metaText: {
+    fontSize: 12,
+    color: "#9CA3AF",
+    fontFamily: "DM_Sans_400Regular",
+  },
   connections: {
     fontSize: 12,
     color: "#10B981",
     fontFamily: "DM_Sans_500Medium",
+    marginTop: 1,
   },
   bio: {
     fontSize: 13,
@@ -240,6 +294,10 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
     fontFamily: "DM_Sans_400Regular",
     lineHeight: 19,
+  },
+  actions: {
+    gap: 8,
+    marginBottom: 4,
   },
   connectBtn: {
     backgroundColor: "#10B981",
@@ -256,6 +314,23 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 15,
     fontFamily: "DM_Sans_600SemiBold",
+  },
+  callBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    borderWidth: 1,
+    borderColor: "#DDD6FE",
+    borderRadius: 8,
+    paddingVertical: 11,
+    paddingHorizontal: 16,
+    backgroundColor: "#fff",
+  },
+  callBtnText: {
+    color: "#7C3AED",
+    fontSize: 14,
+    fontFamily: "DM_Sans_500Medium",
   },
   dismissBtn: {
     alignItems: "center",

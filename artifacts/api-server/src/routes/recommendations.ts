@@ -22,6 +22,10 @@ export interface ServiceProvider {
   recommendationCount: number;
   avatarUrl: string | null;
   isVerified: boolean;
+  contactNumber: string | null;
+  addressSuburb: string | null;
+  addressCity: string | null;
+  primaryLanguage: string | null;
 }
 
 interface FeasibilityReport {
@@ -127,8 +131,8 @@ type must be one of: subdivision, newbuild, renovation, none`;
   return { shouldRecommend: false, intentType: "none", confidence: 0, reason: "" };
 }
 
-async function selectServiceProvider(): Promise<ServiceProvider | null> {
-  const rows = await db
+async function selectServiceProvider(preferredDiscipline?: string | null): Promise<ServiceProvider | null> {
+  const baseQuery = db
     .select({
       id: profiles.id,
       fullName: profiles.fullName,
@@ -138,16 +142,28 @@ async function selectServiceProvider(): Promise<ServiceProvider | null> {
       discipline: serviceProviderProfiles.discipline,
       bio: serviceProviderProfiles.bio,
       recommendationCount: serviceProviderProfiles.recommendationCount,
+      contactNumber: serviceProviderProfiles.contactNumber,
+      addressSuburb: serviceProviderProfiles.addressSuburb,
+      addressCity: serviceProviderProfiles.addressCity,
+      primaryLanguage: serviceProviderProfiles.primaryLanguage,
     })
     .from(profiles)
     .innerJoin(serviceProviderProfiles, eq(serviceProviderProfiles.userId, profiles.id))
     .where(eq(profiles.role, "service_provider"))
     .orderBy(desc(serviceProviderProfiles.recommendationCount))
-    .limit(3);
+    .limit(6);
 
+  const rows = await baseQuery;
   if (rows.length === 0) return null;
 
-  const selected = rows[Math.floor(Math.random() * rows.length)];
+  // Prefer matching discipline if specified, otherwise pick from all
+  let candidates = rows;
+  if (preferredDiscipline) {
+    const matched = rows.filter((r) => r.discipline === preferredDiscipline);
+    if (matched.length > 0) candidates = matched;
+  }
+
+  const selected = candidates[Math.floor(Math.random() * candidates.length)];
   return {
     id: selected.id,
     fullName: selected.fullName,
@@ -157,6 +173,10 @@ async function selectServiceProvider(): Promise<ServiceProvider | null> {
     discipline: selected.discipline ?? null,
     bio: selected.bio ?? null,
     recommendationCount: selected.recommendationCount,
+    contactNumber: selected.contactNumber ?? null,
+    addressSuburb: selected.addressSuburb ?? null,
+    addressCity: selected.addressCity ?? null,
+    primaryLanguage: selected.primaryLanguage ?? null,
   };
 }
 
@@ -191,29 +211,36 @@ router.post("/recommendations/check", requireAuth, async (req: Request, res: Res
       return;
     }
 
-    const { report, conversationHistory, followUpCount = 0, explicitRequest = false } = req.body as {
-      report: FeasibilityReport;
-      conversationHistory: Message[];
+    const {
+      report,
+      conversationHistory,
+      followUpCount = 0,
+      explicitRequest = false,
+      preferredDiscipline,
+    } = req.body as {
+      report?: FeasibilityReport;
+      conversationHistory?: Message[];
       followUpCount?: number;
       explicitRequest?: boolean;
+      preferredDiscipline?: string;
     };
 
-    if (!report) {
-      res.status(400).json({ error: "report is required" });
-      return;
-    }
-
     // Explicit referral request (user said "recommend someone", "any providers", etc.)
-    // — skip all gates and go straight to the database.
+    // — skip all gates and go straight to the database. No report required.
     if (explicitRequest) {
-      req.log.info("Explicit recommendation request — bypassing probability and intent gates");
-      const provider = await selectServiceProvider();
+      req.log.info({ preferredDiscipline }, "Explicit recommendation request — bypassing probability and intent gates");
+      const provider = await selectServiceProvider(preferredDiscipline ?? null);
       res.json({
         shouldRecommend: provider !== null,
         provider,
         intentType: "referral",
         reason: "User explicitly asked for a service provider recommendation",
       });
+      return;
+    }
+
+    if (!report) {
+      res.status(400).json({ error: "report is required for non-explicit checks" });
       return;
     }
 

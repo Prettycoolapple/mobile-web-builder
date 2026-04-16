@@ -13,6 +13,10 @@ export interface ServiceProvider {
   recommendationCount: number;
   avatarUrl: string | null;
   isVerified?: boolean;
+  contactNumber?: string | null;
+  addressSuburb?: string | null;
+  addressCity?: string | null;
+  primaryLanguage?: string | null;
 }
 
 export interface ChatMessage {

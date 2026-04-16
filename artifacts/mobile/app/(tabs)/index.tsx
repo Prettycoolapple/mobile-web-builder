@@ -539,12 +539,26 @@ export default function SearchScreen() {
       setIsLoading(false);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
-      // If the user explicitly asked for a recommendation and we have a report,
-      // fire the explicit check right now — bypassing probability gates.
-      if (isExplicitRecommendationRequest && currentReport) {
+      // If the user explicitly asked for a recommendation, fire the explicit check
+      // right now — bypassing probability gates. No report required.
+      if (isExplicitRecommendationRequest) {
         const reportSnapshot = currentReport;
         const capturedSessionId = sessionId;
         const capturedHeaders = headers;
+        const capturedText = lowerText;
+
+        // Detect the discipline the user is asking about
+        const disciplineMap: [string, string][] = [
+          ["architect", "architect_designer"],
+          ["designer", "architect_designer"],
+          ["planner", "planner"],
+          ["engineer", "engineer"],
+          ["quantity surveyor", "quantity_surveyor"],
+          ["qs", "quantity_surveyor"],
+        ];
+        const preferredDiscipline =
+          disciplineMap.find(([kw]) => capturedText.includes(kw))?.[1] ?? null;
+
         setTimeout(async () => {
           try {
             const apiBase = getApiBase();
@@ -552,9 +566,10 @@ export default function SearchScreen() {
               method: "POST",
               headers: capturedHeaders,
               body: JSON.stringify({
-                report: reportSnapshot,
+                report: reportSnapshot ?? {},
                 conversationHistory: [],
                 explicitRequest: true,
+                preferredDiscipline,
               }),
             });
             if (!resp.ok) return;
@@ -570,7 +585,7 @@ export default function SearchScreen() {
                 type: "provider_recommendation",
                 provider: data.provider,
                 intentType: data.intentType,
-                propertyAddress: (reportSnapshot as any).address ?? "",
+                propertyAddress: (reportSnapshot as any)?.address ?? "",
               }, capturedSessionId);
             }
           } catch {}
