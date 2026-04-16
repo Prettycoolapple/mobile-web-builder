@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import {
   View,
   Text,
@@ -6,52 +6,113 @@ import {
   FlatList,
   TouchableOpacity,
   Platform,
+  Alert,
+  ActivityIndicator,
+  RefreshControl,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useColors } from "@/hooks/useColors";
-import { useChat, Session } from "@/context/ChatContext";
+import { useChat, FeasibilityReport } from "@/context/ChatContext";
+import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "expo-router";
 
-function SessionItem({ session, onPress, onDelete }: { session: Session; onPress: () => void; onDelete: () => void }) {
-  const colors = useColors();
-  const date = new Date(session.updatedAt);
-  const dateStr = date.toLocaleDateString("en-NZ", { day: "numeric", month: "short" });
-  const timeStr = date.toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit" });
-  const hasReport = session.messages.some((m) => m.type === "report");
+type SearchSummary = {
+  id: string;
+  address: string;
+  created_at: string;
+  composite_score: number | null;
+  zone: string | null;
+};
 
+function getApiBase(): string {
+  if (process.env["EXPO_PUBLIC_DOMAIN"]) {
+    return `https://${process.env["EXPO_PUBLIC_DOMAIN"]}/api`;
+  }
+  return "/api";
+}
+
+function formatDate(dateStr: string): string {
+  try {
+    const d = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now.getTime() - d.getTime();
+    const diffDays = Math.floor(diffMs / 86400000);
+    if (diffDays === 0) return "Today";
+    if (diffDays === 1) return "Yesterday";
+    if (diffDays < 7) return `${diffDays} days ago`;
+    return d.toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" });
+  } catch {
+    return dateStr;
+  }
+}
+
+function ScoreDot({ score }: { score: number }) {
+  const colors = useColors();
+  const color = score >= 4 ? colors.success : score >= 3 ? colors.accent : colors.amber;
+  return (
+    <View style={[styles.scoreDot, { backgroundColor: color + "20", borderColor: color + "40" }]}>
+      <Text style={[styles.scoreDotText, { color, fontFamily: "DM_Sans_700Bold" }]}>
+        {score.toFixed(1)}
+      </Text>
+    </View>
+  );
+}
+
+interface HistoryItemProps {
+  item: SearchSummary;
+  onTap: () => void;
+  onDelete: () => void;
+  isOpening: boolean;
+}
+
+function HistoryItem({ item, onTap, onDelete, isOpening }: HistoryItemProps) {
+  const colors = useColors();
   return (
     <TouchableOpacity
-      style={[styles.sessionItem, { backgroundColor: colors.card, borderColor: colors.border }]}
-      onPress={onPress}
+      onPress={onTap}
+      onLongPress={onDelete}
       activeOpacity={0.7}
+      style={[styles.item, { backgroundColor: colors.card, borderColor: colors.border }]}
+      disabled={isOpening}
     >
-      <View style={[styles.sessionIconWrapper, {
-        backgroundColor: hasReport ? colors.accent + "15" : colors.muted,
-      }]}>
-        <Feather
-          name={hasReport ? "file-text" : "message-circle"}
-          size={17}
-          color={hasReport ? colors.accent : colors.mutedForeground}
-        />
+      <View style={[styles.itemIcon, { backgroundColor: colors.accent + "15" }]}>
+        <Feather name="file-text" size={17} color={colors.accent} />
       </View>
 
-      <View style={styles.sessionContent}>
-        <Text style={[styles.sessionTitle, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]} numberOfLines={1}>
-          {session.title}
+      <View style={styles.itemContent}>
+        <Text
+          style={[styles.itemAddress, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}
+          numberOfLines={1}
+        >
+          {item.address}
         </Text>
-        <Text style={[styles.sessionMeta, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-          {session.messages.length} messages · {dateStr}, {timeStr}
-        </Text>
+        <View style={styles.itemMeta}>
+          <Feather name="calendar" size={11} color={colors.mutedForeground} />
+          <Text style={[styles.itemMetaText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+            {formatDate(item.created_at)}
+          </Text>
+          {item.zone ? (
+            <>
+              <Text style={[styles.metaDot, { color: colors.mutedForeground }]}>·</Text>
+              <View style={[styles.zoneChip, { backgroundColor: colors.muted, borderColor: colors.border }]}>
+                <Text style={[styles.zoneText, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>
+                  {item.zone}
+                </Text>
+              </View>
+            </>
+          ) : null}
+        </View>
       </View>
 
-      <TouchableOpacity
-        onPress={onDelete}
-        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-        style={[styles.deleteBtn, { backgroundColor: colors.muted }]}
-      >
-        <Feather name="trash-2" size={14} color={colors.mutedForeground} />
-      </TouchableOpacity>
+      <View style={styles.itemRight}>
+        {item.composite_score != null && <ScoreDot score={item.composite_score} />}
+        {isOpening ? (
+          <ActivityIndicator size="small" color={colors.accent} style={{ marginLeft: 4 }} />
+        ) : (
+          <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
+        )}
+      </View>
     </TouchableOpacity>
   );
 }
@@ -59,24 +120,92 @@ function SessionItem({ session, onPress, onDelete }: { session: Session; onPress
 export default function HistoryScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { sessions, switchSession, deleteSession, startNewChat } = useChat();
+  const { openHistoryReport, startNewChat } = useChat();
+  const { getApiHeaders } = useAuth();
   const router = useRouter();
 
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
 
-  const realSessions = sessions.filter(
-    (s) => s.messages.some((m) => m.type !== "loading" && m.content.length > 0),
-  );
+  const [searches, setSearches] = useState<SearchSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [openingId, setOpeningId] = useState<string | null>(null);
 
-  const handleSelect = (id: string) => {
-    switchSession(id);
-    router.push("/(tabs)");
-  };
+  const load = useCallback(async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
+    try {
+      const resp = await fetch(`${getApiBase()}/searches`, {
+        headers: getApiHeaders(),
+      });
+      if (resp.ok) {
+        const data = await resp.json() as { searches: SearchSummary[] };
+        setSearches(data.searches ?? []);
+      }
+    } catch {
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [getApiHeaders]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const handleTap = useCallback(async (item: SearchSummary) => {
+    setOpeningId(item.id);
+    try {
+      const resp = await fetch(`${getApiBase()}/searches/${item.id}`, {
+        headers: getApiHeaders(),
+      });
+      if (!resp.ok) {
+        Alert.alert("Error", "Could not load this report. Please try again.");
+        return;
+      }
+      const data = await resp.json() as {
+        search: { result_json: FeasibilityReport; address: string };
+      };
+      const report = data.search.result_json;
+      const address = data.search.address ?? item.address;
+      openHistoryReport(address, report);
+      router.push("/(tabs)/");
+    } catch {
+      Alert.alert("Error", "Could not load this report. Please try again.");
+    } finally {
+      setOpeningId(null);
+    }
+  }, [getApiHeaders, openHistoryReport, router]);
+
+  const handleDelete = useCallback((item: SearchSummary) => {
+    Alert.alert(
+      "Delete report",
+      "Remove this analysis from your history?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await fetch(`${getApiBase()}/searches/${item.id}`, {
+                method: "DELETE",
+                headers: getApiHeaders(),
+              });
+              setSearches((prev) => prev.filter((s) => s.id !== item.id));
+            } catch {
+              Alert.alert("Error", "Could not delete this report. Please try again.");
+            }
+          },
+        },
+      ],
+    );
+  }, [getApiHeaders]);
 
   const handleNew = () => {
     startNewChat();
-    router.push("/(tabs)");
+    router.push("/(tabs)/");
   };
 
   return (
@@ -97,16 +226,20 @@ export default function HistoryScreen() {
         </View>
       </View>
 
-      {realSessions.length === 0 ? (
+      {loading ? (
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color={colors.accent} />
+        </View>
+      ) : searches.length === 0 ? (
         <View style={styles.empty}>
           <View style={[styles.emptyIcon, { backgroundColor: colors.muted }]}>
             <Feather name="clock" size={28} color={colors.mutedForeground} />
           </View>
           <Text style={[styles.emptyTitle, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>
-            No conversations yet
+            No analyses yet
           </Text>
           <Text style={[styles.emptyText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-            Your property analyses and chat sessions will appear here.
+            Your property analyses will appear here. Tap any to reopen and continue the conversation.
           </Text>
           <TouchableOpacity
             style={[styles.emptyBtn, { backgroundColor: colors.accent }]}
@@ -118,18 +251,31 @@ export default function HistoryScreen() {
         </View>
       ) : (
         <FlatList
-          data={realSessions}
+          data={searches}
           keyExtractor={(s) => s.id}
           renderItem={({ item }) => (
-            <SessionItem
-              session={item}
-              onPress={() => handleSelect(item.id)}
-              onDelete={() => deleteSession(item.id)}
+            <HistoryItem
+              item={item}
+              onTap={() => handleTap(item)}
+              onDelete={() => handleDelete(item)}
+              isOpening={openingId === item.id}
             />
           )}
           contentContainerStyle={[styles.list, { paddingBottom: bottomInset + 24 }]}
           showsVerticalScrollIndicator={false}
           ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => load(true)}
+              tintColor={colors.accent}
+            />
+          }
+          ListHeaderComponent={
+            <Text style={[styles.hint, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+              Tap to reopen · Long-press to delete
+            </Text>
+          }
         />
       )}
     </View>
@@ -137,9 +283,7 @@ export default function HistoryScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
+  container: { flex: 1 },
   header: {
     paddingHorizontal: 20,
     paddingBottom: 16,
@@ -166,10 +310,22 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#fff",
   },
+  centered: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
   list: {
     padding: 16,
+    gap: 0,
   },
-  sessionItem: {
+  hint: {
+    fontSize: 12,
+    textAlign: "center",
+    marginBottom: 12,
+    marginTop: 4,
+  },
+  item: {
     flexDirection: "row",
     alignItems: "center",
     borderRadius: 14,
@@ -182,7 +338,7 @@ const styles = StyleSheet.create({
     shadowRadius: 3,
     elevation: 1,
   },
-  sessionIconWrapper: {
+  itemIcon: {
     width: 38,
     height: 38,
     borderRadius: 10,
@@ -190,23 +346,49 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flexShrink: 0,
   },
-  sessionContent: {
+  itemContent: {
     flex: 1,
-    gap: 3,
+    gap: 4,
   },
-  sessionTitle: {
+  itemAddress: {
     fontSize: 14,
     lineHeight: 20,
   },
-  sessionMeta: {
+  itemMeta: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    flexWrap: "wrap",
+  },
+  itemMetaText: {
     fontSize: 12,
   },
-  deleteBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    justifyContent: "center",
+  metaDot: {
+    fontSize: 12,
+  },
+  zoneChip: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  zoneText: {
+    fontSize: 11,
+  },
+  itemRight: {
+    flexDirection: "row",
     alignItems: "center",
+    gap: 6,
+    flexShrink: 0,
+  },
+  scoreDot: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  scoreDotText: {
+    fontSize: 12,
   },
   empty: {
     flex: 1,
@@ -232,7 +414,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: "center",
     lineHeight: 22,
-    maxWidth: 260,
+    maxWidth: 280,
   },
   emptyBtn: {
     paddingHorizontal: 24,
