@@ -12,6 +12,7 @@ export interface ServiceProvider {
   bio: string | null;
   recommendationCount: number;
   avatarUrl: string | null;
+  isVerified?: boolean;
 }
 
 export interface ChatMessage {

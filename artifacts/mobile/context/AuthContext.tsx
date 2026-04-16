@@ -12,6 +12,7 @@ export interface UserProfile {
   subscriptionTier: string;
   reportsUsedThisMonth: number;
   avatarUrl?: string | null;
+  isVerified?: boolean;
 }
 
 export type ProviderDiscipline =

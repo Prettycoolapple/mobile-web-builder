@@ -383,9 +383,17 @@ export default function ProfileScreen() {
               </View>
             )}
             <View style={styles.headerTextGroup}>
-              <Text style={[styles.headerTitle, { color: colors.headerText, fontFamily: "DM_Sans_600SemiBold" }]}>
-                {user?.fullName ?? "Account"}
-              </Text>
+              <View style={styles.headerNameRow}>
+                <Text style={[styles.headerTitle, { color: colors.headerText, fontFamily: "DM_Sans_600SemiBold" }]}>
+                  {user?.fullName ?? "Account"}
+                </Text>
+                {user?.isVerified && user.role === "service_provider" && (
+                  <View style={styles.headerVerifiedBadge}>
+                    <Feather name="shield" size={11} color="#52C99A" />
+                    <Text style={styles.headerVerifiedText}>verified</Text>
+                  </View>
+                )}
+              </View>
               {user?.email && (
                 <Text style={[styles.headerEmail, { color: "rgba(250,249,246,0.5)", fontFamily: "DM_Sans_400Regular" }]} numberOfLines={1}>
                   {user.email}
@@ -535,6 +543,26 @@ export default function ProfileScreen() {
                   {isStandard ? "Active" : "Inactive"}
                 </Text>
               </View>
+            </View>
+            <View style={styles.verificationRow}>
+              {user?.isVerified ? (
+                <>
+                  <Feather name="shield" size={13} color="#52C99A" />
+                  <Text style={[styles.verificationLabel, { color: "#52C99A", fontFamily: "DM_Sans_500Medium" }]}>
+                    Account verified
+                  </Text>
+                  <Text style={[styles.verificationSub, { color: "rgba(250,249,246,0.4)", fontFamily: "DM_Sans_400Regular" }]}>
+                    · verified
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <Feather name="clock" size={13} color="rgba(250,249,246,0.4)" />
+                  <Text style={[styles.verificationLabel, { color: "rgba(250,249,246,0.5)", fontFamily: "DM_Sans_400Regular" }]}>
+                    Verification pending — we'll review your credentials shortly
+                  </Text>
+                </>
+              )}
             </View>
             {isStandard && (
               <View style={styles.proActions}>
@@ -825,8 +853,14 @@ const styles = StyleSheet.create({
   headerAvatarInitials: { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center" },
   headerAvatarText: { fontSize: 20, letterSpacing: -0.5 },
   headerTextGroup: { flex: 1 },
+  headerNameRow: { flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" },
+  headerVerifiedBadge: { flexDirection: "row", alignItems: "center", gap: 3 },
+  headerVerifiedText: { fontSize: 11, color: "rgba(250,249,246,0.5)", fontFamily: "DM_Sans_400Regular" },
   headerTitle: { fontSize: 18, letterSpacing: -0.3 },
   headerEmail: { fontSize: 13, marginTop: 1 },
+  verificationRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 12, flexWrap: "wrap" },
+  verificationLabel: { fontSize: 13, flex: 1 },
+  verificationSub: { fontSize: 13 },
   content: { padding: 16, gap: 8 },
   sectionHeader: {
     fontSize: 11,

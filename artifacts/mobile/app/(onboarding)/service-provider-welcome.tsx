@@ -132,7 +132,7 @@ export default function ServiceProviderWelcomeScreen() {
           <Text style={styles.roleTag}>Service Provider</Text>
           <Text style={styles.heading}>You're in,{"\n"}{firstName}!</Text>
           <Text style={styles.subheading}>
-            Your verified provider profile is ready. Reach property developers and investors actively looking for your services.
+            Your account is set up. Your submitted credentials are being reviewed — once verified, you'll be recommended to property developers and investors looking for your services.
           </Text>
         </Animated.View>
 

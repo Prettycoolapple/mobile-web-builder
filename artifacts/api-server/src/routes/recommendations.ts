@@ -21,6 +21,7 @@ export interface ServiceProvider {
   bio: string | null;
   recommendationCount: number;
   avatarUrl: string | null;
+  isVerified: boolean;
 }
 
 interface FeasibilityReport {
@@ -132,6 +133,7 @@ async function selectServiceProvider(): Promise<ServiceProvider | null> {
       id: profiles.id,
       fullName: profiles.fullName,
       avatarUrl: profiles.avatarUrl,
+      isVerified: profiles.isVerified,
       companyName: serviceProviderProfiles.companyName,
       discipline: serviceProviderProfiles.discipline,
       bio: serviceProviderProfiles.bio,
@@ -150,6 +152,7 @@ async function selectServiceProvider(): Promise<ServiceProvider | null> {
     id: selected.id,
     fullName: selected.fullName,
     avatarUrl: selected.avatarUrl ?? null,
+    isVerified: selected.isVerified,
     companyName: selected.companyName ?? null,
     discipline: selected.discipline ?? null,
     bio: selected.bio ?? null,

@@ -62,7 +62,7 @@ interface PickedFile {
 
 type UploadStatus = "idle" | "uploading" | "done" | "error";
 
-const TOTAL_STEPS = 5;
+const TOTAL_STEPS = 6;
 
 interface FieldErrors {
   firstName?: string;
@@ -649,48 +649,12 @@ export default function SignupProviderScreen() {
       return (
         <View style={styles.stepContent}>
           <Text style={[styles.stepTag, { color: ACCENT }]}>Service Provider · $149/mo</Text>
-          <Text style={[styles.stepHeading, { color: colors.foreground }]}>Your logo &{"\n"}contact</Text>
+          <Text style={[styles.stepHeading, { color: colors.foreground }]}>Contact{"\n"}details</Text>
           <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
-            How clients will find and reach you.
+            How clients will reach you.
           </Text>
 
           <View style={styles.fields}>
-            <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground }]}>
-                Company logo{" "}
-                <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }}>(optional)</Text>
-              </Text>
-              <View style={styles.avatarSection}>
-                <TouchableOpacity onPress={handlePickAvatar} activeOpacity={0.8}>
-                  {avatarUri ? (
-                    <Image
-                      source={{ uri: avatarUri }}
-                      style={styles.avatarPreview}
-                    />
-                  ) : (
-                    <View style={[styles.avatarPlaceholder, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                      <Feather name="camera" size={28} color={colors.mutedForeground} />
-                    </View>
-                  )}
-                </TouchableOpacity>
-                <View style={{ flex: 1, gap: 6 }}>
-                  <Text style={[styles.avatarHint, { color: colors.foreground }]}>
-                    Providers with a company logo receive significantly higher engagement from potential clients.
-                  </Text>
-                  <TouchableOpacity onPress={handlePickAvatar} activeOpacity={0.7}>
-                    <Text style={[styles.avatarLink, { color: ACCENT }]}>
-                      {avatarUri ? "Change logo" : "Upload logo"}
-                    </Text>
-                  </TouchableOpacity>
-                  {avatarUri && (
-                    <TouchableOpacity onPress={() => setAvatarUri(null)} activeOpacity={0.7}>
-                      <Text style={[styles.avatarLink, { color: colors.mutedForeground }]}>Remove</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              </View>
-            </View>
-
             <View style={styles.field}>
               <Text style={[styles.label, { color: colors.foreground }]}>Phone number *</Text>
               <TextInput
@@ -739,13 +703,86 @@ export default function SignupProviderScreen() {
       );
     }
 
+    if (step === 4) {
+      return (
+        <View style={styles.stepContent}>
+          <Text style={[styles.stepTag, { color: ACCENT }]}>Service Provider · $149/mo</Text>
+          <Text style={[styles.stepHeading, { color: colors.foreground }]}>Where are{"\n"}you based?</Text>
+          <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
+            Help property developers find nearby providers.{" "}
+            <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }}>All fields optional.</Text>
+          </Text>
+
+          <View style={styles.fields}>
+            <View style={styles.field}>
+              <Text style={[styles.label, { color: colors.foreground }]}>Street address</Text>
+              <TextInput
+                style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+                placeholder="123 Main Street"
+                placeholderTextColor={colors.mutedForeground}
+                value={addressStreet}
+                onChangeText={setAddressStreet}
+                autoCapitalize="words"
+              />
+            </View>
+
+            <View style={styles.fieldRow}>
+              <View style={[styles.field, { flex: 1 }]}>
+                <Text style={[styles.label, { color: colors.foreground }]}>Suburb</Text>
+                <TextInput
+                  style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+                  placeholder="Ponsonby"
+                  placeholderTextColor={colors.mutedForeground}
+                  value={addressSuburb}
+                  onChangeText={setAddressSuburb}
+                  autoCapitalize="words"
+                />
+              </View>
+              <View style={[styles.field, { width: 90 }]}>
+                <Text style={[styles.label, { color: colors.foreground }]}>Postcode</Text>
+                <TextInput
+                  style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+                  placeholder="1010"
+                  placeholderTextColor={colors.mutedForeground}
+                  value={addressPostcode}
+                  onChangeText={setAddressPostcode}
+                  keyboardType="number-pad"
+                />
+              </View>
+            </View>
+
+            <View style={styles.field}>
+              <Text style={[styles.label, { color: colors.foreground }]}>City</Text>
+              <TextInput
+                style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+                placeholder="Auckland"
+                placeholderTextColor={colors.mutedForeground}
+                value={addressCity}
+                onChangeText={setAddressCity}
+                autoCapitalize="words"
+              />
+            </View>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.primaryBtn, { backgroundColor: ACCENT }]}
+            onPress={goNext}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.primaryBtnText}>Continue</Text>
+            <Feather name="arrow-right" size={18} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
     return (
       <View style={styles.stepContent}>
         <Text style={[styles.stepTag, { color: ACCENT }]}>Service Provider · $149/mo</Text>
-        <Text style={[styles.stepHeading, { color: colors.foreground }]}>Where are{"\n"}you based?</Text>
+        <Text style={[styles.stepHeading, { color: colors.foreground }]}>Profile{"\n"}picture</Text>
         <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
-          Help property developers find nearby providers.{" "}
-          <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }}>All fields optional.</Text>
+          Add a photo so clients can put a face to the name.{" "}
+          <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }}>Optional.</Text>
         </Text>
 
         {(submitError || certError) && (
@@ -755,55 +792,30 @@ export default function SignupProviderScreen() {
           </View>
         )}
 
-        <View style={styles.fields}>
-          <View style={styles.field}>
-            <Text style={[styles.label, { color: colors.foreground }]}>Street address</Text>
-            <TextInput
-              style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-              placeholder="123 Main Street"
-              placeholderTextColor={colors.mutedForeground}
-              value={addressStreet}
-              onChangeText={setAddressStreet}
-              autoCapitalize="words"
-            />
-          </View>
-
-          <View style={styles.fieldRow}>
-            <View style={[styles.field, { flex: 1 }]}>
-              <Text style={[styles.label, { color: colors.foreground }]}>Suburb</Text>
-              <TextInput
-                style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-                placeholder="Ponsonby"
-                placeholderTextColor={colors.mutedForeground}
-                value={addressSuburb}
-                onChangeText={setAddressSuburb}
-                autoCapitalize="words"
-              />
+        <View style={styles.avatarStepSection}>
+          <TouchableOpacity onPress={handlePickAvatar} activeOpacity={0.8} style={styles.avatarStepBtn}>
+            {avatarUri ? (
+              <Image source={{ uri: avatarUri }} style={styles.avatarStepPreview} />
+            ) : (
+              <View style={[styles.avatarStepPlaceholder, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <Feather name="camera" size={36} color={colors.mutedForeground} />
+                <Text style={[styles.avatarStepPlaceholderText, { color: colors.mutedForeground }]}>Tap to upload</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+          {avatarUri && (
+            <View style={styles.avatarStepActions}>
+              <TouchableOpacity onPress={handlePickAvatar} activeOpacity={0.7}>
+                <Text style={[styles.avatarLink, { color: ACCENT }]}>Change photo</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setAvatarUri(null)} activeOpacity={0.7}>
+                <Text style={[styles.avatarLink, { color: colors.mutedForeground }]}>Remove</Text>
+              </TouchableOpacity>
             </View>
-            <View style={[styles.field, { width: 90 }]}>
-              <Text style={[styles.label, { color: colors.foreground }]}>Postcode</Text>
-              <TextInput
-                style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-                placeholder="1010"
-                placeholderTextColor={colors.mutedForeground}
-                value={addressPostcode}
-                onChangeText={setAddressPostcode}
-                keyboardType="number-pad"
-              />
-            </View>
-          </View>
-
-          <View style={styles.field}>
-            <Text style={[styles.label, { color: colors.foreground }]}>City</Text>
-            <TextInput
-              style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-              placeholder="Auckland"
-              placeholderTextColor={colors.mutedForeground}
-              value={addressCity}
-              onChangeText={setAddressCity}
-              autoCapitalize="words"
-            />
-          </View>
+          )}
+          <Text style={[styles.avatarStepHint, { color: colors.mutedForeground }]}>
+            Providers with a photo receive significantly more engagement from potential clients. You can also add this later from your account settings.
+          </Text>
         </View>
 
         <TouchableOpacity
@@ -820,6 +832,15 @@ export default function SignupProviderScreen() {
               <Feather name="check" size={18} color="#fff" />
             </>
           )}
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          onPress={handleSignup}
+          disabled={isLoading}
+          activeOpacity={0.7}
+          style={styles.skipBtn}
+        >
+          <Text style={[styles.skipBtnText, { color: colors.mutedForeground }]}>Skip for now</Text>
         </TouchableOpacity>
       </View>
     );
@@ -913,6 +934,19 @@ const styles = StyleSheet.create({
   },
   avatarHint: { fontSize: 13, fontFamily: "DM_Sans_400Regular", lineHeight: 19, flex: 1 },
   avatarLink: { fontSize: 13, fontFamily: "DM_Sans_600SemiBold" },
+  avatarStepSection: { alignItems: "center", gap: 16 },
+  avatarStepBtn: { alignSelf: "center" },
+  avatarStepPreview: { width: 120, height: 120, borderRadius: 60 },
+  avatarStepPlaceholder: {
+    width: 120, height: 120, borderRadius: 60,
+    borderWidth: 2, borderStyle: "dashed",
+    alignItems: "center", justifyContent: "center", gap: 8,
+  },
+  avatarStepPlaceholderText: { fontSize: 13, fontFamily: "DM_Sans_400Regular" },
+  avatarStepActions: { flexDirection: "row", gap: 20 },
+  avatarStepHint: { fontSize: 13, fontFamily: "DM_Sans_400Regular", lineHeight: 20, textAlign: "center", paddingHorizontal: 8 },
+  skipBtn: { height: 44, alignItems: "center", justifyContent: "center" },
+  skipBtnText: { fontSize: 14, fontFamily: "DM_Sans_400Regular" },
   primaryBtn: {
     height: 54, borderRadius: 14, alignItems: "center", justifyContent: "center",
     flexDirection: "row", gap: 8, marginTop: 4,

@@ -6,6 +6,7 @@ import {
   StyleSheet,
   ActivityIndicator,
 } from "react-native";
+import { Feather } from "@expo/vector-icons";
 import { ServiceProvider } from "@/context/ChatContext";
 
 interface Props {
@@ -90,9 +91,17 @@ export function ProviderRecommendationBubble({
         <View style={styles.cardTop}>
           <ProviderAvatar provider={provider} />
           <View style={styles.cardInfo}>
-            <Text style={styles.providerName} numberOfLines={1}>
-              {provider.fullName ?? "Development Specialist"}
-            </Text>
+            <View style={styles.nameRow}>
+              <Text style={styles.providerName} numberOfLines={1}>
+                {provider.fullName ?? "Development Specialist"}
+              </Text>
+              {provider.isVerified && (
+                <View style={styles.verifiedBadge}>
+                  <Feather name="shield" size={10} color="#10B981" />
+                  <Text style={styles.verifiedText}>verified</Text>
+                </View>
+              )}
+            </View>
             {provider.companyName ? (
               <Text style={styles.specialty} numberOfLines={1}>
                 {provider.companyName}
@@ -193,6 +202,22 @@ const styles = StyleSheet.create({
   cardInfo: {
     flex: 1,
     gap: 2,
+  },
+  nameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flexWrap: "wrap",
+  },
+  verifiedBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+  },
+  verifiedText: {
+    fontSize: 11,
+    color: "#9CA3AF",
+    fontFamily: "DM_Sans_400Regular",
   },
   providerName: {
     fontSize: 15,

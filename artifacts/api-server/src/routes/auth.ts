@@ -8,6 +8,7 @@ import {
   serviceProviderProfiles,
 } from "@workspace/db";
 import { hashPassword, verifyPassword, signToken, requireAuth } from "../lib/auth";
+import { sendOwnerNotification } from "../lib/mailer";
 
 const router = Router();
 
@@ -166,7 +167,27 @@ router.post("/signup", async (req, res) => {
     });
 
     const token = signToken(profile.id, profile.email, role);
-    res.status(201).json({ token, user: profile });
+    res.status(201).json({ token, user: { ...profile, isVerified: false } });
+
+    if (role === "service_provider") {
+      const subject = `New service provider registration: ${profile.fullName ?? profile.email}`;
+      const body = [
+        `A new service provider has registered on Lecorb.`,
+        ``,
+        `Name: ${profile.fullName ?? "Unknown"}`,
+        `Email: ${profile.email}`,
+        `Company: ${providerData?.companyName ?? "Not provided"}`,
+        `Discipline: ${providerData?.discipline ?? "Not provided"}${providerData?.otherDiscipline ? ` (${providerData.otherDiscipline})` : ""}`,
+        `Contact: ${providerData?.contactNumber ?? "Not provided"}`,
+        `Primary Language: ${providerData?.primaryLanguage ?? "Not provided"}`,
+        `City: ${providerData?.addressCity ?? "Not provided"}`,
+        `NZ Reg Number: ${providerData?.nzCompanyRegisterNumber ?? "Not provided"}`,
+        ``,
+        `Please review their Certificate of Incorporation and verify them:`,
+        `UPDATE profiles SET is_verified = true WHERE id = '${profile.id}';`,
+      ].join("\n");
+      sendOwnerNotification(subject, body).catch(() => {});
+    }
   } catch (error) {
     req.log.error({ error }, "Signup failed");
     res.status(500).json({ error: "Signup failed. Please try again.", code: "SIGNUP_FAILED" });
@@ -225,6 +246,8 @@ router.post("/login", async (req, res) => {
         languages: profile.languages,
         subscriptionTier: profile.subscriptionTier,
         reportsUsedThisMonth: profile.reportsUsedThisMonth,
+        avatarUrl: profile.avatarUrl,
+        isVerified: profile.isVerified,
       },
     });
   } catch (error) {
@@ -249,6 +272,7 @@ router.get("/me", requireAuth, async (req, res) => {
         lastResetAt: profiles.lastResetAt,
         createdAt: profiles.createdAt,
         avatarUrl: profiles.avatarUrl,
+        isVerified: profiles.isVerified,
       })
       .from(profiles)
       .where(eq(profiles.id, userId))
