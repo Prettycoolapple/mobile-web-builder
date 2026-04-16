@@ -1,5 +1,6 @@
 import { geocodeAddress } from "./geocode";
 import { fetchUnitaryPlanZone, fetchOverlays, type Overlay } from "./auckland-council";
+import { fetchLINZParcel } from "./linz";
 import { calculatePotentialLots } from "./lot-calculator";
 import { estimateCosts } from "./cost-estimator";
 import { calculateBearBaseBullScenarios } from "./roi-calculator";
@@ -13,31 +14,41 @@ export interface LightScoreInput {
   zone?: string;
 }
 
+export interface LightScoreResult {
+  scores: ScoringResult;
+  landArea: number;
+  zone: string | null;
+}
+
 /**
  * Runs a lightweight but accurate score using the same scoring functions as the full
- * analysis pipeline. Avoids expensive web scraping — uses geocode + zone + overlays
+ * analysis pipeline. Avoids expensive web scraping — uses geocode + LINZ + zone + overlays
  * (all fast public API calls) combined with Auckland-average comparable estimates.
  *
- * Ease score: identical to full analysis (same zone/overlay deductions)
- * Cost score: uses listing price as land value + estimated construction costs
- * ROI score:  uses Auckland median new-build prices as GDV proxy
+ * Ease score:  identical to full analysis (same zone/overlay deductions)
+ * Cost score:  uses listing price as land value + estimated construction costs
+ * ROI score:   uses Auckland median new-build prices as GDV proxy
+ * Land area:   sourced from LINZ (the same authoritative source as the full report)
  */
-export async function computeLightScore(input: LightScoreInput): Promise<ScoringResult> {
-  const { address, price, landArea, zone: hintZone } = input;
+export async function computeLightScore(input: LightScoreInput): Promise<LightScoreResult> {
+  const { address, price, landArea: listingLandArea, zone: hintZone } = input;
 
   const geo = await geocodeAddress(address);
 
-  const [zoneResult, overlayResult] = await Promise.allSettled([
+  const [linzResult, zoneResult, overlayResult] = await Promise.allSettled([
+    fetchLINZParcel(geo.lat, geo.lng),
     fetchUnitaryPlanZone(geo.lat, geo.lng),
     fetchOverlays(geo.lat, geo.lng),
   ]);
+
+  const linzParcel = linzResult.status === "fulfilled" ? linzResult.value : null;
 
   const zoneCode: string | null =
     zoneResult.status === "fulfilled" ? (zoneResult.value?.zone_code ?? hintZone ?? null) : (hintZone ?? null);
   const overlays: Overlay[] =
     overlayResult.status === "fulfilled" ? overlayResult.value : [];
 
-  const land = landArea ?? 400;
+  const land = linzParcel?.area_sqm ?? listingLandArea ?? 400;
 
   const lotResult = calculatePotentialLots(land, zoneCode, 0);
   const lots = lotResult.lots;
@@ -61,7 +72,7 @@ export async function computeLightScore(input: LightScoreInput): Promise<Scoring
     main_photo_url: null,
     overlay_map_image_base64: null,
     comparables: [],
-    data_sources: { light_score: "pre-screen" },
+    data_sources: { light_score: linzParcel ? "linz" : "listing" },
     contour: null,
     contour_slope_degrees: null,
     contour_source: null,
@@ -85,5 +96,9 @@ export async function computeLightScore(input: LightScoreInput): Promise<Scoring
     "stable",
   );
 
-  return scoreProperty(minimalMerged, costs, scenarios, lots);
+  return {
+    scores: scoreProperty(minimalMerged, costs, scenarios, lots),
+    landArea: land,
+    zone: zoneCode,
+  };
 }

@@ -233,7 +233,7 @@ interface ChatContextValue {
   addMessage: (msg: Omit<ChatMessage, "id" | "timestamp">, sessionId?: string) => void;
   updateLastMessage: (updates: Partial<ChatMessage>, sessionId?: string) => void;
   updateCandidateScores: (
-    scoreMap: Record<string, { ease: number; cost: number; roi: number; composite: number }>,
+    scoreMap: Record<string, { ease: number; cost: number; roi: number; composite: number; landArea?: number; zone?: string | null }>,
     sessionId?: string,
   ) => void;
   setCurrentReport: (report: FeasibilityReport) => void;
@@ -370,12 +370,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const updateCandidateScores = useCallback(
     (
-      scoreMap: Record<string, { ease: number; cost: number; roi: number; composite: number }>,
+      scoreMap: Record<string, { ease: number; cost: number; roi: number; composite: number; landArea?: number; zone?: string | null }>,
       sessionId?: string,
     ) => {
-      const normMap: Record<string, { ease: number; cost: number; roi: number; composite: number }> = {};
-      for (const [addr, scores] of Object.entries(scoreMap)) {
-        normMap[addr.toLowerCase().replace(/[^a-z0-9]/g, "")] = scores;
+      const normMap: Record<string, { ease: number; cost: number; roi: number; composite: number; landArea?: number; zone?: string | null }> = {};
+      for (const [addr, data] of Object.entries(scoreMap)) {
+        normMap[addr.toLowerCase().replace(/[^a-z0-9]/g, "")] = data;
       }
       setSessions((prev) => {
         const targetId = sessionId ?? currentSessionId;
@@ -385,9 +385,16 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             if (m.type !== "search" || !m.searchResults) return m;
             const updatedResults = m.searchResults.map((c) => {
               const normAddr = c.address.toLowerCase().replace(/[^a-z0-9]/g, "");
-              const newScores = normMap[normAddr];
-              if (!newScores) return c;
-              return { ...c, scores: { ...c.scores, ...newScores }, scoresLoading: false };
+              const update = normMap[normAddr];
+              if (!update) return c;
+              const { landArea, zone, ...scoreFields } = update;
+              return {
+                ...c,
+                scores: { ...c.scores, ...scoreFields },
+                scoresLoading: false,
+                ...(landArea != null ? { landArea } : {}),
+                ...(zone != null ? { zone } : {}),
+              };
             });
             return { ...m, searchResults: updatedResults };
           });

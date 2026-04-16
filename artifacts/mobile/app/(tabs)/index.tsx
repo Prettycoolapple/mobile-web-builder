@@ -343,13 +343,21 @@ export default function SearchScreen() {
             address: string;
             status: string;
             scores?: { ease: number; cost: number; roi: number; composite: number };
+            landArea?: number;
+            zone?: string | null;
           }>;
 
-          const readyScores: Record<string, { ease: number; cost: number; roi: number; composite: number }> = {};
+          const readyScores: Record<string, { ease: number; cost: number; roi: number; composite: number; landArea?: number; zone?: string | null }> = {};
           let allDone = true;
           for (const r of results) {
             if (r.status === "pending") { allDone = false; continue; }
-            if (r.status === "ready" && r.scores) readyScores[r.address] = r.scores;
+            if (r.status === "ready" && r.scores) {
+              readyScores[r.address] = {
+                ...r.scores,
+                ...(r.landArea != null ? { landArea: r.landArea } : {}),
+                ...(r.zone !== undefined ? { zone: r.zone } : {}),
+              };
+            }
           }
 
           if (Object.keys(readyScores).length > 0) {
