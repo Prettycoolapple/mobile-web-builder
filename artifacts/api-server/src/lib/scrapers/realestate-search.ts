@@ -2,68 +2,136 @@ import { logger } from "../logger";
 import { fetchWithScrapingBee } from "./scrapingbee";
 import type { ListingResult } from "./oneroof";
 
-const SUBURB_SLUG_MAP: Record<string, { slug: string; district: string }> = {
-  "remuera": { slug: "remuera", district: "auckland-city" },
-  "epsom": { slug: "epsom", district: "auckland-city" },
-  "mt eden": { slug: "mount-eden", district: "auckland-city" },
-  "grey lynn": { slug: "grey-lynn", district: "auckland-city" },
-  "ponsonby": { slug: "ponsonby", district: "auckland-city" },
-  "parnell": { slug: "parnell", district: "auckland-city" },
-  "herne bay": { slug: "herne-bay", district: "auckland-city" },
-  "westmere": { slug: "westmere", district: "auckland-city" },
-  "kingsland": { slug: "kingsland", district: "auckland-city" },
-  "sandringham": { slug: "sandringham", district: "auckland-city" },
-  "mt albert": { slug: "mount-albert", district: "albert-eden" },
-  "mt roskill": { slug: "mount-roskill", district: "albert-eden" },
-  "onehunga": { slug: "onehunga", district: "maungakiekie-tamaki" },
-  "new lynn": { slug: "new-lynn", district: "henderson-massey" },
-  "titirangi": { slug: "titirangi", district: "henderson-massey" },
-  "avondale": { slug: "avondale", district: "albert-eden" },
-  "st heliers": { slug: "st-heliers", district: "orakei" },
-  "kohimarama": { slug: "kohimarama", district: "orakei" },
-  "mission bay": { slug: "mission-bay", district: "orakei" },
-  "glendowie": { slug: "glendowie", district: "orakei" },
-  "meadowbank": { slug: "meadowbank", district: "orakei" },
-  "howick": { slug: "howick", district: "howick" },
-  "pakuranga": { slug: "pakuranga", district: "howick" },
-  "botany": { slug: "botany-downs", district: "howick" },
-  "east tamaki": { slug: "east-tamaki", district: "howick" },
-  "henderson": { slug: "henderson", district: "henderson-massey" },
-  "albany": { slug: "albany", district: "upper-harbour" },
-  "takapuna": { slug: "takapuna", district: "devonport-takapuna" },
-  "devonport": { slug: "devonport", district: "devonport-takapuna" },
-  "northcote": { slug: "northcote", district: "kaipatiki" },
-  "glenfield": { slug: "glenfield", district: "kaipatiki" },
-  "milford": { slug: "milford", district: "devonport-takapuna" },
-  "browns bay": { slug: "browns-bay", district: "hibiscus-and-bays" },
-  "glen innes": { slug: "glen-innes", district: "orakei" },
-  "penrose": { slug: "penrose", district: "maungakiekie-tamaki" },
-  "ellerslie": { slug: "ellerslie", district: "orakei" },
-  "mangere": { slug: "mangere", district: "manurewa-papakura" },
-  "birkenhead": { slug: "birkenhead", district: "kaipatiki" },
-  "massey": { slug: "massey", district: "henderson-massey" },
-  "royal oak": { slug: "royal-oak", district: "maungakiekie-tamaki" },
-  "mt wellington": { slug: "mount-wellington", district: "maungakiekie-tamaki" },
-  "manurewa": { slug: "manurewa", district: "manurewa-papakura" },
-  "papatoetoe": { slug: "papatoetoe", district: "manurewa-papakura" },
-  "papakura": { slug: "papakura", district: "manurewa-papakura" },
-  "glen eden": { slug: "glen-eden", district: "henderson-massey" },
-  "st johns": { slug: "saint-johns", district: "orakei" },
-  "otahuhu": { slug: "otahuhu", district: "maungakiekie-tamaki" },
-  "panmure": { slug: "panmure", district: "maungakiekie-tamaki" },
+/**
+ * Maps suburb name → { slug, district } for realestate.co.nz URL construction.
+ * District verified against actual realestate.co.nz URL patterns.
+ *
+ * realestate.co.nz URL format:
+ *   /residential/sale/auckland/{district}/{suburb-slug}
+ *
+ * Each entry may include `altDistricts` — alternative district slugs to try if the
+ * primary URL returns no listings. This handles cases where realestate.co.nz
+ * reorganises their suburb-to-district mapping.
+ */
+const SUBURB_SLUG_MAP: Record<string, { slug: string; district: string; altDistricts?: string[] }> = {
+  "remuera":       { slug: "remuera",        district: "auckland-city" },
+  "epsom":         { slug: "epsom",           district: "auckland-city" },
+  "mt eden":       { slug: "mount-eden",      district: "auckland-city" },
+  "grey lynn":     { slug: "grey-lynn",       district: "auckland-city" },
+  "ponsonby":      { slug: "ponsonby",        district: "auckland-city" },
+  "parnell":       { slug: "parnell",         district: "auckland-city" },
+  "herne bay":     { slug: "herne-bay",       district: "auckland-city" },
+  "westmere":      { slug: "westmere",        district: "auckland-city" },
+  "kingsland":     { slug: "kingsland",       district: "auckland-city" },
+  "sandringham":   { slug: "sandringham",     district: "auckland-city" },
+  "eden terrace":  { slug: "eden-terrace",    district: "auckland-city" },
+  "grafton":       { slug: "grafton",         district: "auckland-city" },
+  "newmarket":     { slug: "newmarket",       district: "auckland-city" },
+  "pt chevalier":  { slug: "point-chevalier", district: "auckland-city" },
+  "point chevalier": { slug: "point-chevalier", district: "auckland-city" },
+  "waterview":     { slug: "waterview",       district: "auckland-city" },
+  "blockhouse bay": { slug: "blockhouse-bay", district: "auckland-city" },
+
+  // Albert-Eden
+  "mt albert":     { slug: "mount-albert",    district: "albert-eden",       altDistricts: ["auckland-city"] },
+  "mt roskill":    { slug: "mount-roskill",   district: "albert-eden",       altDistricts: ["auckland-city"] },
+  "avondale":      { slug: "avondale",        district: "albert-eden",       altDistricts: ["auckland-city"] },
+  "three kings":   { slug: "three-kings",     district: "albert-eden" },
+  "owairaka":      { slug: "owairaka",        district: "albert-eden" },
+
+  // Orakei local board
+  "st heliers":    { slug: "st-heliers",      district: "orakei" },
+  "kohimarama":    { slug: "kohimarama",      district: "orakei" },
+  "mission bay":   { slug: "mission-bay",     district: "orakei" },
+  "glendowie":     { slug: "glendowie",       district: "orakei" },
+  "meadowbank":    { slug: "meadowbank",      district: "orakei" },
+  "st johns":      { slug: "saint-johns",     district: "orakei" },
+  "ellerslie":     { slug: "ellerslie",       district: "orakei",            altDistricts: ["auckland-city"] },
+  "remuera east":  { slug: "remuera",         district: "orakei" },
+
+  // Tāmaki / Eastern Auckland — these sit under auckland-city on realestate.co.nz
+  // (NOT orakei, despite some older references)
+  "glen innes":    { slug: "glen-innes",      district: "auckland-city",     altDistricts: ["orakei", "tamaki"] },
+  "panmure":       { slug: "panmure",         district: "auckland-city",     altDistricts: ["maungakiekie-tamaki"] },
+  "tamaki":        { slug: "tamaki",          district: "auckland-city" },
+  "pt england":    { slug: "point-england",   district: "auckland-city" },
+  "point england": { slug: "point-england",   district: "auckland-city" },
+
+  // Maungakiekie-Tāmaki
+  "onehunga":      { slug: "onehunga",        district: "maungakiekie-tamaki", altDistricts: ["auckland-city"] },
+  "penrose":       { slug: "penrose",         district: "maungakiekie-tamaki", altDistricts: ["auckland-city"] },
+  "royal oak":     { slug: "royal-oak",       district: "maungakiekie-tamaki" },
+  "mt wellington": { slug: "mount-wellington", district: "maungakiekie-tamaki", altDistricts: ["auckland-city"] },
+  "otahuhu":       { slug: "otahuhu",         district: "maungakiekie-tamaki" },
+
+  // Henderson-Massey
+  "new lynn":      { slug: "new-lynn",        district: "henderson-massey" },
+  "titirangi":     { slug: "titirangi",       district: "henderson-massey" },
+  "henderson":     { slug: "henderson",       district: "henderson-massey" },
+  "glen eden":     { slug: "glen-eden",       district: "henderson-massey" },
+  "massey":        { slug: "massey",          district: "henderson-massey" },
+  "ranui":         { slug: "ranui",           district: "henderson-massey" },
+  "swanson":       { slug: "swanson",         district: "henderson-massey" },
+  "westgate":      { slug: "westgate",        district: "henderson-massey" },
+
+  // Howick
+  "howick":        { slug: "howick",          district: "howick" },
+  "pakuranga":     { slug: "pakuranga",       district: "howick" },
+  "botany":        { slug: "botany-downs",    district: "howick" },
+  "east tamaki":   { slug: "east-tamaki",     district: "howick" },
+  "flat bush":     { slug: "flat-bush",       district: "howick" },
+  "dannemora":     { slug: "dannemora",       district: "howick" },
+  "bucklands beach": { slug: "bucklands-beach", district: "howick" },
+  "beachlands":    { slug: "beachlands",      district: "howick" },
+  "half moon bay": { slug: "half-moon-bay",   district: "howick" },
+
+  // Upper Harbour / North Shore
+  "albany":        { slug: "albany",          district: "upper-harbour" },
+  "hobsonville":   { slug: "hobsonville",     district: "upper-harbour" },
+  "whenuapai":     { slug: "whenuapai",       district: "upper-harbour" },
+  "takapuna":      { slug: "takapuna",        district: "devonport-takapuna" },
+  "devonport":     { slug: "devonport",       district: "devonport-takapuna" },
+  "northcote":     { slug: "northcote",       district: "kaipatiki" },
+  "glenfield":     { slug: "glenfield",       district: "kaipatiki" },
+  "milford":       { slug: "milford",         district: "devonport-takapuna" },
+  "browns bay":    { slug: "browns-bay",      district: "hibiscus-and-bays" },
+  "birkenhead":    { slug: "birkenhead",      district: "kaipatiki" },
+  "hillcrest":     { slug: "hillcrest",       district: "kaipatiki" },
+  "beach haven":   { slug: "beach-haven",     district: "kaipatiki" },
+  "birkdale":      { slug: "birkdale",        district: "kaipatiki" },
+  "forrest hill":  { slug: "forrest-hill",    district: "devonport-takapuna" },
+  "rothesay bay":  { slug: "rothesay-bay",    district: "hibiscus-and-bays" },
+  "torbay":        { slug: "torbay",          district: "hibiscus-and-bays" },
+  "mairangi bay":  { slug: "mairangi-bay",    district: "hibiscus-and-bays" },
+  "long bay":      { slug: "long-bay",        district: "hibiscus-and-bays" },
+
+  // Manurewa-Papakura / South Auckland
+  "mangere":       { slug: "mangere",         district: "manurewa-papakura",  altDistricts: ["mangere-otahuhu"] },
+  "manurewa":      { slug: "manurewa",        district: "manurewa-papakura" },
+  "papatoetoe":    { slug: "papatoetoe",      district: "manurewa-papakura" },
+  "papakura":      { slug: "papakura",        district: "manurewa-papakura" },
+  "clendon park":  { slug: "clendon-park",    district: "manurewa-papakura" },
+  "weymouth":      { slug: "weymouth",        district: "manurewa-papakura" },
+  "takanini":      { slug: "takanini",        district: "manurewa-papakura" },
 };
 
-function suburbToUrl(suburb: string, minPrice?: number, maxPrice?: number): string | null {
+function suburbToUrl(
+  suburb: string,
+  minPrice?: number,
+  maxPrice?: number,
+  overrideDistrict?: string,
+): string | null {
   const key = suburb.toLowerCase().trim();
   const mapped = SUBURB_SLUG_MAP[key];
   if (!mapped) return null;
 
+  const district = overrideDistrict ?? mapped.district;
   const paramObj: Record<string, string> = { sort: "recent" };
   if (minPrice != null && minPrice > 0) paramObj["priceMin"] = String(minPrice);
   if (maxPrice != null && maxPrice > 0) paramObj["priceMax"] = String(maxPrice);
 
   const params = new URLSearchParams(paramObj);
-  return `https://www.realestate.co.nz/residential/sale/auckland/${mapped.district}/${mapped.slug}?${params}`;
+  return `https://www.realestate.co.nz/residential/sale/auckland/${district}/${mapped.slug}?${params}`;
 }
 
 function parseAddressFromOgTitle(title: string): string | null {
@@ -157,18 +225,21 @@ export async function fetchListingBatch(
 
 // Common suburb name aliases (short form ↔ full form)
 const SUBURB_SLUG_ALIASES: Record<string, string[]> = {
-  "st-heliers": ["saint-heliers", "st-heliers"],
+  "st-heliers":    ["saint-heliers", "st-heliers"],
   "saint-heliers": ["saint-heliers", "st-heliers"],
-  "st-johns": ["saint-johns", "st-johns"],
-  "saint-johns": ["saint-johns", "st-johns"],
-  "mt-eden": ["mount-eden", "mt-eden"],
-  "mount-eden": ["mount-eden", "mt-eden"],
-  "mt-albert": ["mount-albert", "mt-albert"],
-  "mount-albert": ["mount-albert", "mt-albert"],
-  "mt-roskill": ["mount-roskill", "mt-roskill"],
+  "st-johns":      ["saint-johns",   "st-johns"],
+  "saint-johns":   ["saint-johns",   "st-johns"],
+  "mt-eden":       ["mount-eden",    "mt-eden"],
+  "mount-eden":    ["mount-eden",    "mt-eden"],
+  "mt-albert":     ["mount-albert",  "mt-albert"],
+  "mount-albert":  ["mount-albert",  "mt-albert"],
+  "mt-roskill":    ["mount-roskill", "mt-roskill"],
   "mount-roskill": ["mount-roskill", "mt-roskill"],
   "mt-wellington": ["mount-wellington", "mt-wellington"],
   "mount-wellington": ["mount-wellington", "mt-wellington"],
+  "glen-innes":    ["glen-innes"],
+  "point-england": ["pt-england",    "point-england"],
+  "botany-downs":  ["botany-downs",  "botany"],
 };
 
 function urlMatchesSuburb(urlPath: string, suburbSlug: string): boolean {
@@ -186,7 +257,7 @@ export interface RealestateSearchResult {
 
 function extractListingUrlsFromHtml(
   html: string,
-  suburbMeta: { slug: string; district: string } | undefined,
+  suburbMeta: { slug: string; district: string; altDistricts?: string[] } | undefined,
   skipUrls: string[],
   seen: Set<string>,
 ): string[] {
@@ -203,7 +274,7 @@ function extractListingUrlsFromHtml(
 
 async function fetchListingUrlsFromPage(
   searchUrl: string,
-  suburbMeta: { slug: string; district: string } | undefined,
+  suburbMeta: { slug: string; district: string; altDistricts?: string[] } | undefined,
   skipUrls: string[],
   seen: Set<string>,
 ): Promise<string[]> {
@@ -271,22 +342,37 @@ export async function searchRealEstateListings(params: {
   const suburbKey = suburb.toLowerCase().trim();
   const suburbMeta = SUBURB_SLUG_MAP[suburbKey];
 
-  const searchUrl = suburbToUrl(suburb, minPrice, maxPrice);
-  if (!searchUrl) {
+  const primaryUrl = suburbToUrl(suburb, minPrice, maxPrice);
+  if (!primaryUrl) {
     logger.debug({ suburb }, "realestate-search: suburb not in slug map");
     return { firstBatch: [], remainingListings: [], totalFound: 0, source: "realestate.co.nz" };
   }
 
-  logger.info({ suburb, searchUrl, includeNegotiation }, "realestate-search: fetching search results page");
+  logger.info({ suburb, searchUrl: primaryUrl, includeNegotiation }, "realestate-search: fetching search results page");
 
   const seen = new Set<string>();
   let allListingUrls: string[] = [];
 
   try {
-    // Primary search: with price filters
-    const primaryUrls = await fetchListingUrlsFromPage(searchUrl, suburbMeta, skipUrls, seen);
+    // Primary search: configured district + price filters
+    const primaryUrls = await fetchListingUrlsFromPage(primaryUrl, suburbMeta, skipUrls, seen);
     allListingUrls.push(...primaryUrls);
-    logger.info({ suburb, count: primaryUrls.length }, "realestate-search: extracted listing URLs (price-filtered)");
+    logger.info({ suburb, count: primaryUrls.length, district: suburbMeta?.district }, "realestate-search: primary search results");
+
+    // Fallback: try alternative districts when primary returned nothing.
+    // realestate.co.nz periodically reorganises suburb-to-district assignments,
+    // so we probe the known alternates before giving up.
+    if (allListingUrls.length === 0 && suburbMeta?.altDistricts?.length) {
+      for (const altDistrict of suburbMeta.altDistricts) {
+        const altUrl = suburbToUrl(suburb, minPrice, maxPrice, altDistrict);
+        if (!altUrl) continue;
+        logger.info({ suburb, altUrl, altDistrict }, "realestate-search: trying alternative district");
+        const altUrls = await fetchListingUrlsFromPage(altUrl, suburbMeta, skipUrls, seen).catch(() => []);
+        allListingUrls.push(...altUrls);
+        logger.info({ suburb, count: altUrls.length, altDistrict }, "realestate-search: alt district results");
+        if (allListingUrls.length > 0) break;
+      }
+    }
 
     // Secondary search: no price filters, to catch negotiation/POA listings
     if (includeNegotiation) {
