@@ -348,7 +348,7 @@ export default function SearchScreen() {
           }>;
 
           const readyScores: Record<string, { ease: number; cost: number; roi: number; composite: number; landArea?: number; zone?: string | null }> = {};
-          let allDone = true;
+          let allDone = results.length > 0;
           for (const r of results) {
             if (r.status === "pending") { allDone = false; continue; }
             if (r.status === "ready" && r.scores) {
@@ -496,8 +496,7 @@ export default function SearchScreen() {
             const parsed = extractJSON(data.content) as { candidates?: PropertyCandidate[]; isMockData?: boolean; noListings?: boolean; aiIntro?: string } | null;
             const aiIntro = parsed?.aiIntro ?? "";
             if (parsed?.candidates && parsed.candidates.length > 0) {
-              const candidatesWithLoading = parsed.candidates.map((c) => ({ ...c, scoresLoading: true }));
-              updateLastMessage({ type: "search", searchResults: candidatesWithLoading, content: "", aiIntro }, sessionId);
+              updateLastMessage({ type: "search", searchResults: parsed.candidates, content: "", aiIntro }, sessionId);
               startCardScorePoll(parsed.candidates.map((c) => c.address), sessionId);
             } else {
               const noResultMsg = aiIntro || "No matching listings found right now. Try a different suburb, adjust your budget, or ask again shortly — new listings appear daily.";
