@@ -34,6 +34,19 @@ const SUGGESTION_QUERIES = [
   "Analyse 42 Arney Road, Remuera",
 ];
 
+// Keywords that indicate the user explicitly wants a service provider referral/recommendation.
+// Checked against the lowercased user message before sending to /api/chat.
+const RECOMMENDATION_KEYWORDS = [
+  "recommend", "referral", "refer", "refer me", "anyone you know",
+  "know anyone", "suggest", "who can help", "who should i", "who do i",
+  "find someone", "find a builder", "find an architect", "find a planner",
+  "find an engineer", "service provider", "provider", "specialist",
+  "professional", "consultant", "expert", "connect me", "get someone",
+  "hire someone", "need a builder", "need an architect", "need a planner",
+  "need an engineer", "do you have anyone", "have anyone",
+  "anyone to recommend", "anyone good",
+];
+
 function extractJSON(text: string): unknown | null {
   try {
     const stripped = text.replace(/```(?:json)?\s*/gi, "").replace(/```\s*/g, "").trim();
@@ -315,6 +328,12 @@ export default function SearchScreen() {
     setIsLoading(true);
 
     const lowerText = text.toLowerCase();
+
+    // Detect if the user is explicitly asking for a service provider recommendation
+    const isExplicitRecommendationRequest =
+      user?.role === "general" &&
+      RECOMMENDATION_KEYWORDS.some((kw) => lowerText.includes(kw));
+
     const isDiscoverQuery =
       lowerText.match(/find\s+|search\s+|discover\s+|looking\s+for\s+|show\s+me\s+properties|subdividable|subdivision\s+opp|development\s+sites|lifestyle\s+prop|investment\s+prop/) ||
       lowerText.match(/any\s+(others?|more|properties|homes|houses|sections|land)|show\s+(me\s+)?more|more\s+(properties|options|results|sites)|what\s+else|anything\s+else|few\s+more|find\s+more|keep\s+looking|another\s+one|any\s+other|more\s+sites|other\s+options/) ||
@@ -455,6 +474,44 @@ export default function SearchScreen() {
     } finally {
       setIsLoading(false);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+      // If the user explicitly asked for a recommendation and we have a report,
+      // fire the explicit check right now — bypassing probability gates.
+      if (isExplicitRecommendationRequest && currentReport) {
+        const reportSnapshot = currentReport;
+        const capturedSessionId = sessionId;
+        const capturedHeaders = headers;
+        setTimeout(async () => {
+          try {
+            const apiBase = getApiBase();
+            const resp = await fetch(`${apiBase}/recommendations/check`, {
+              method: "POST",
+              headers: capturedHeaders,
+              body: JSON.stringify({
+                report: reportSnapshot,
+                conversationHistory: [],
+                explicitRequest: true,
+              }),
+            });
+            if (!resp.ok) return;
+            const data = await resp.json() as {
+              shouldRecommend: boolean;
+              provider: ServiceProvider | null;
+              intentType: string;
+            };
+            if (data.shouldRecommend && data.provider) {
+              addMessage({
+                role: "assistant",
+                content: "",
+                type: "provider_recommendation",
+                provider: data.provider,
+                intentType: data.intentType,
+                propertyAddress: (reportSnapshot as any).address ?? "",
+              }, capturedSessionId);
+            }
+          } catch {}
+        }, 1200);
+      }
     }
   }, [
     inputText,
@@ -469,6 +526,7 @@ export default function SearchScreen() {
     getApiBase,
     getApiHeaders,
     refreshProfile,
+    user?.role,
   ]);
 
   const handleFollowUp = useCallback(

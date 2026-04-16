@@ -188,14 +188,29 @@ router.post("/recommendations/check", requireAuth, async (req: Request, res: Res
       return;
     }
 
-    const { report, conversationHistory, followUpCount = 0 } = req.body as {
+    const { report, conversationHistory, followUpCount = 0, explicitRequest = false } = req.body as {
       report: FeasibilityReport;
       conversationHistory: Message[];
       followUpCount?: number;
+      explicitRequest?: boolean;
     };
 
     if (!report) {
       res.status(400).json({ error: "report is required" });
+      return;
+    }
+
+    // Explicit referral request (user said "recommend someone", "any providers", etc.)
+    // — skip all gates and go straight to the database.
+    if (explicitRequest) {
+      req.log.info("Explicit recommendation request — bypassing probability and intent gates");
+      const provider = await selectServiceProvider();
+      res.json({
+        shouldRecommend: provider !== null,
+        provider,
+        intentType: "referral",
+        reason: "User explicitly asked for a service provider recommendation",
+      });
       return;
     }
 
