@@ -111,6 +111,7 @@ export default function SearchScreen() {
     startNewChat,
     addMessage,
     updateLastMessage,
+    updateCandidateScores,
     setCurrentReport,
     isLoading,
     setIsLoading,
@@ -124,6 +125,7 @@ export default function SearchScreen() {
   const shownRecommendationReportIds = useRef<Set<string>>(new Set());
   const lastCheckedFollowUpCount = useRef<Map<string, number>>(new Map());
   const checkedFollowupIds = useRef<Set<string>>(new Set());
+  const cardScorePollRef = useRef<{ addresses: string[]; sessionId: string; intervalId: ReturnType<typeof setInterval> | null }>({ addresses: [], sessionId: "", intervalId: null });
 
   useEffect(() => {
     const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
@@ -314,6 +316,59 @@ export default function SearchScreen() {
     return "/api";
   }, []);
 
+  const startCardScorePoll = useCallback(
+    (addresses: string[], sessionId: string) => {
+      if (cardScorePollRef.current.intervalId) {
+        clearInterval(cardScorePollRef.current.intervalId);
+      }
+      cardScorePollRef.current = { addresses, sessionId, intervalId: null };
+
+      let attempts = 0;
+      const MAX_ATTEMPTS = 20;
+
+      const poll = async () => {
+        attempts++;
+        if (attempts > MAX_ATTEMPTS) {
+          clearInterval(cardScorePollRef.current.intervalId!);
+          return;
+        }
+        try {
+          const apiBase = getApiBase();
+          const params = addresses.map((a) => `addresses[]=${encodeURIComponent(a)}`).join("&");
+          const resp = await fetch(`${apiBase}/analyse/card-scores?${params}`, {
+            headers: getApiHeaders(),
+          });
+          if (!resp.ok) return;
+          const results = await resp.json() as Array<{
+            address: string;
+            status: string;
+            scores?: { ease: number; cost: number; roi: number; composite: number };
+          }>;
+
+          const readyScores: Record<string, { ease: number; cost: number; roi: number; composite: number }> = {};
+          let allDone = true;
+          for (const r of results) {
+            if (r.status === "pending") { allDone = false; continue; }
+            if (r.status === "ready" && r.scores) readyScores[r.address] = r.scores;
+          }
+
+          if (Object.keys(readyScores).length > 0) {
+            updateCandidateScores(readyScores, sessionId);
+          }
+
+          if (allDone) {
+            clearInterval(cardScorePollRef.current.intervalId!);
+          }
+        } catch {}
+      };
+
+      const id = setInterval(poll, 4000);
+      cardScorePollRef.current.intervalId = id;
+      poll();
+    },
+    [getApiBase, getApiHeaders, updateCandidateScores],
+  );
+
   const handleSend = useCallback(async (overrideText?: string) => {
     const text = (overrideText !== undefined ? overrideText : inputText).trim();
     if (!text || isLoading) return;
@@ -426,7 +481,9 @@ export default function SearchScreen() {
             const parsed = extractJSON(data.content) as { candidates?: PropertyCandidate[]; isMockData?: boolean; noListings?: boolean; aiIntro?: string } | null;
             const aiIntro = parsed?.aiIntro ?? "";
             if (parsed?.candidates && parsed.candidates.length > 0) {
-              updateLastMessage({ type: "search", searchResults: parsed.candidates, content: "", aiIntro }, sessionId);
+              const candidatesWithLoading = parsed.candidates.map((c) => ({ ...c, scoresLoading: true }));
+              updateLastMessage({ type: "search", searchResults: candidatesWithLoading, content: "", aiIntro }, sessionId);
+              startCardScorePoll(parsed.candidates.map((c) => c.address), sessionId);
             } else {
               const noResultMsg = aiIntro || "No matching listings found right now. Try a different suburb, adjust your budget, or ask again shortly — new listings appear daily.";
               updateLastMessage({ type: "text", content: noResultMsg }, sessionId);

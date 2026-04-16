@@ -149,7 +149,7 @@ export async function preScreenListingsFast(
 
   return results
     .sort((a, b) => b.scores.composite - a.scores.composite)
-    .slice(0, 6);
+    .slice(0, 3);
 }
 
 async function screenOne(listing: ListingResult): Promise<PropertyCandidate | null> {

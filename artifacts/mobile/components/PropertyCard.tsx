@@ -1,5 +1,5 @@
-import React from "react";
-import { View, Text, StyleSheet, TouchableOpacity, Image } from "react-native";
+import React, { useEffect, useRef } from "react";
+import { View, Text, StyleSheet, TouchableOpacity, Image, Animated } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { PropertyCandidate } from "@/context/ChatContext";
@@ -16,16 +16,33 @@ function scoreColor(score: number, colors: ReturnType<typeof useColors>): string
   return colors.red;
 }
 
-function ScorePip({ score, label }: { score: number; label: string }) {
+function ScorePip({ score, label, loading }: { score: number; label: string; loading?: boolean }) {
   const colors = useColors();
   const color = scoreColor(score, colors);
+  const opacity = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (!loading) {
+      opacity.setValue(1);
+      return;
+    }
+    const anim = Animated.loop(
+      Animated.sequence([
+        Animated.timing(opacity, { toValue: 0.35, duration: 700, useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 1, duration: 700, useNativeDriver: true }),
+      ]),
+    );
+    anim.start();
+    return () => anim.stop();
+  }, [loading]);
+
   return (
-    <View style={styles.pip}>
-      <StarRating score={score} maxStars={3} size={13} gap={2} color={color} emptyColor={colors.border} />
+    <Animated.View style={[styles.pip, { opacity }]}>
+      <StarRating score={score} maxStars={3} size={13} gap={2} color={loading ? colors.border : color} emptyColor={colors.border} />
       <Text style={[styles.pipLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
         {label}
       </Text>
-    </View>
+    </Animated.View>
   );
 }
 
@@ -90,11 +107,11 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
         )}
 
         <View style={[styles.scoresRow, { borderTopColor: colors.border }]}>
-          <ScorePip score={candidate.scores.ease} label="Ease" />
+          <ScorePip score={candidate.scores.ease} label="Ease" loading={candidate.scoresLoading} />
           <View style={[styles.scoreDivider, { backgroundColor: colors.border }]} />
-          <ScorePip score={candidate.scores.cost} label="Cost" />
+          <ScorePip score={candidate.scores.cost} label="Cost" loading={candidate.scoresLoading} />
           <View style={[styles.scoreDivider, { backgroundColor: colors.border }]} />
-          <ScorePip score={candidate.scores.roi} label="ROI" />
+          <ScorePip score={candidate.scores.roi} label="ROI" loading={candidate.scoresLoading} />
         </View>
       </View>
 

@@ -208,6 +208,7 @@ export interface PropertyCandidate {
   landArea?: number;
   zone?: string;
   scores: Score;
+  scoresLoading?: boolean;
   briefSummary?: string;
   photoUrl?: string;
   listingUrl?: string;
@@ -231,6 +232,10 @@ interface ChatContextValue {
   switchSession: (id: string) => void;
   addMessage: (msg: Omit<ChatMessage, "id" | "timestamp">, sessionId?: string) => void;
   updateLastMessage: (updates: Partial<ChatMessage>, sessionId?: string) => void;
+  updateCandidateScores: (
+    scoreMap: Record<string, { ease: number; cost: number; roi: number; composite: number }>,
+    sessionId?: string,
+  ) => void;
   setCurrentReport: (report: FeasibilityReport) => void;
   deleteSession: (id: string) => void;
   openHistoryReport: (address: string, report: FeasibilityReport) => string;
@@ -363,6 +368,38 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     [currentSessionId, saveSessions],
   );
 
+  const updateCandidateScores = useCallback(
+    (
+      scoreMap: Record<string, { ease: number; cost: number; roi: number; composite: number }>,
+      sessionId?: string,
+    ) => {
+      const normMap: Record<string, { ease: number; cost: number; roi: number; composite: number }> = {};
+      for (const [addr, scores] of Object.entries(scoreMap)) {
+        normMap[addr.toLowerCase().replace(/[^a-z0-9]/g, "")] = scores;
+      }
+      setSessions((prev) => {
+        const targetId = sessionId ?? currentSessionId;
+        const updated = prev.map((s) => {
+          if (s.id !== targetId) return s;
+          const messages = s.messages.map((m) => {
+            if (m.type !== "search" || !m.searchResults) return m;
+            const updatedResults = m.searchResults.map((c) => {
+              const normAddr = c.address.toLowerCase().replace(/[^a-z0-9]/g, "");
+              const newScores = normMap[normAddr];
+              if (!newScores) return c;
+              return { ...c, scores: { ...c.scores, ...newScores }, scoresLoading: false };
+            });
+            return { ...m, searchResults: updatedResults };
+          });
+          return { ...s, messages, updatedAt: Date.now() };
+        });
+        saveSessions(updated);
+        return updated;
+      });
+    },
+    [currentSessionId, saveSessions],
+  );
+
   const setCurrentReport = useCallback(
     (report: FeasibilityReport) => {
       setSessions((prev) => {
@@ -445,6 +482,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         switchSession,
         addMessage,
         updateLastMessage,
+        updateCandidateScores,
         setCurrentReport,
         deleteSession,
         openHistoryReport,

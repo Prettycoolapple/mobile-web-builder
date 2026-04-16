@@ -24,6 +24,7 @@ import {
   markShown,
   getShownUrls,
 } from "../lib/listing-cache";
+import { queueBackgroundScores, getCardScores } from "../lib/analysis-cache";
 
 const router = Router();
 
@@ -525,7 +526,7 @@ router.post("/chat", async (req, res) => {
                 req.log.info({ nextListings: nextListings.length, remaining, attempt: attempts + 1 }, "Follow-up: popping next listings from cache");
                 markShown(cacheKey, nextListings.map((l) => l.listingUrl));
                 const screened = await preScreenListingsFast(nextListings, 5).catch(() => []);
-                candidates = shufflePick(rankByCriteria(screened, intent.criteria), 4);
+                candidates = shufflePick(rankByCriteria(screened, intent.criteria), 3);
                 attempts++;
               }
             }
@@ -561,7 +562,7 @@ router.post("/chat", async (req, res) => {
                   generateAnalysis(introPromptPreScreen).catch(() => ""),
                 ]);
                 // Re-rank by user criteria then randomly pick to show variety
-                candidates = shufflePick(rankByCriteria(screened, intent.criteria), 4);
+                candidates = shufflePick(rankByCriteria(screened, intent.criteria), 3);
                 prescreenedIntro = introFromPreScreen;
               }
             }
@@ -597,7 +598,7 @@ router.post("/chat", async (req, res) => {
                       generateAnalysis(introPromptFallback).catch(() => ""),
                     ]);
                     if (screenedFallback.length > 0) {
-                      candidates = shufflePick(rankByCriteria(screenedFallback, intent.criteria), 4);
+                      candidates = shufflePick(rankByCriteria(screenedFallback, intent.criteria), 3);
                       prescreenedIntro = introFallback;
                       req.log.info({ nearbySuburb, count: candidates.length }, "Discovery: nearby suburb fallback succeeded");
                       break;
@@ -620,6 +621,17 @@ router.post("/chat", async (req, res) => {
                 : `The user asked: "${userText}". You found ${candidates.length} matching propert${candidates.length === 1 ? "y" : "ies"} in ${suburb || "the area"} on realestate.co.nz${criteriaContextGeneral}. In 1 sentence, acknowledge the results conversationally. Be natural and brief — no JSON.`;
               aiIntro = await generateAnalysis(introPrompt).catch(() => "");
             } catch { /* silent */ }
+          }
+
+          if (candidates.length > 0) {
+            queueBackgroundScores(
+              candidates.map((c) => ({
+                address: c.address,
+                price: c.price,
+                landArea: c.landArea,
+                zone: c.zone,
+              })),
+            );
           }
 
           const responsePayload = JSON.stringify({ candidates, isMockData, suburb, dataSource, noListings, aiIntro });
@@ -1056,6 +1068,9 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
               });
               const candidates = await preScreenListingsFast(firstFiltered, 5).catch(() => []);
               if (candidates.length > 0) {
+                queueBackgroundScores(
+                  candidates.map((c) => ({ address: c.address, price: c.price, landArea: c.landArea, zone: c.zone })),
+                );
                 const aiIntro = content; // Use what the AI already said as the intro
                 const payload = JSON.stringify({ candidates, isMockData: false, suburb, dataSource: "realestate.co.nz", noListings: false, aiIntro });
                 res.json({ content: payload, mode: "discover" });
@@ -1192,6 +1207,23 @@ router.get("/pipeline-test", async (req, res) => {
     req.log.error({ err }, "Pipeline test failed");
     res.status(500).json({ error: String(err) });
   }
+});
+
+router.get("/analyse/card-scores", async (req, res) => {
+  const raw = req.query.addresses;
+  const addresses: string[] = Array.isArray(raw)
+    ? (raw as string[])
+    : typeof raw === "string"
+      ? [raw]
+      : [];
+
+  if (addresses.length === 0) {
+    res.json([]);
+    return;
+  }
+
+  const results = getCardScores(addresses);
+  res.json(results);
 });
 
 export default router;
