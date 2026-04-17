@@ -39,11 +39,11 @@ const NZ_LANGUAGES = [
 
 const PLAN_FEATURES = {
   free: [
-    "2 Feasibility reports",
+    "Feasibility reports",
     "Chat & property search",
   ],
   standard: [
-    "20 Feasibility reports",
+    "Feasibility reports",
     "Chat & property search",
     "In-app chat to planners & architects",
   ],
@@ -57,7 +57,7 @@ const PLAN_FEATURES = {
   provider: [
     "Get referred in chats & search",
     "Encrypted chats with client/investors",
-    "50 Feasibility reports",
+    "Feasibility reports",
     "Chat & property search",
   ],
 };
