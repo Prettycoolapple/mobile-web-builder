@@ -67,11 +67,11 @@ export default function LoginScreen() {
           <View style={styles.logoRow}>
             <GroundupLogo size={40} color={colors.accent} />
             <View>
-              <Text style={[styles.logoTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
+              <Text style={[styles.logoTitle, { color: colors.accent, fontFamily: "SpaceGrotesk_700Bold" }]}>
                 Groundup
               </Text>
               <Text style={[styles.logoTagline, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                Property development intelligence
+                Residential property development intelligence
               </Text>
             </View>
           </View>
@@ -174,7 +174,7 @@ const styles = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   logoMarkText: { color: "#fff", fontSize: 16, fontWeight: "700" },
-  logoTitle: { fontSize: 18 },
+  logoTitle: { fontSize: 20, letterSpacing: -0.5 },
   logoTagline: { fontSize: 13, marginTop: 1 },
   heading: { fontSize: 28, marginBottom: 8 },
   subheading: { fontSize: 15, marginBottom: 32, lineHeight: 22 },

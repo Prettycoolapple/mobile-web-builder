@@ -174,8 +174,8 @@ export default function WelcomeScreen() {
                 style={[
                   styles.brandLetter,
                   {
-                    color: colors.foreground,
-                    fontFamily: "DM_Sans_700Bold",
+                    color: colors.accent,
+                    fontFamily: "SpaceGrotesk_700Bold",
                     opacity: l.opacity,
                     transform: [{ translateY: l.translateY }],
                   },
@@ -197,7 +197,7 @@ export default function WelcomeScreen() {
               },
             ]}
           >
-            Property development intelligence,{"\n"}built from the ground up.
+            Residential property development intelligence.
           </Animated.Text>
         </View>
 
@@ -257,9 +257,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   brandLetter: {
-    fontSize: 44,
-    letterSpacing: -1,
-    lineHeight: 52,
+    fontSize: 46,
+    letterSpacing: -1.5,
+    lineHeight: 54,
   },
   tagline: {
     fontSize: 15,
