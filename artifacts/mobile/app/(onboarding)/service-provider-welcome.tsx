@@ -229,10 +229,6 @@ export default function ServiceProviderWelcomeScreen() {
               )}
             </TouchableOpacity>
           )}
-
-          <TouchableOpacity style={styles.secondaryBtn} onPress={() => router.replace("/(tabs)")} activeOpacity={0.7}>
-            <Text style={styles.secondaryBtnText}>Maybe later</Text>
-          </TouchableOpacity>
         </Animated.View>
       </ScrollView>
     </View>

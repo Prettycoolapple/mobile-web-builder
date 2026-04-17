@@ -71,8 +71,10 @@ interface FieldErrors {
   password?: string;
   confirmPassword?: string;
   companyName?: string;
+  regNumber?: string;
   discipline?: string;
   otherDiscipline?: string;
+  cert?: string;
   contactNumber?: string;
   primaryLanguage?: string;
 }
@@ -294,8 +296,10 @@ export default function SignupProviderScreen() {
       else if (password !== confirmPassword) errors.confirmPassword = "Passwords do not match.";
     } else if (step === 2) {
       if (!companyName.trim()) errors.companyName = "Company name is required.";
+      if (!regNumber.trim()) errors.regNumber = "NZ Companies Register number is required.";
       if (!discipline) errors.discipline = "Please select your discipline.";
       else if (discipline === "other" && !otherDisciplineText.trim()) errors.otherDiscipline = "Please describe your discipline.";
+      if (!pickedFile) errors.cert = "Certificate of Incorporation is required.";
     } else if (step === 3) {
       const phone = contactNumber.trim();
       if (!phone || phone === "+64") errors.contactNumber = "Contact number is required.";
@@ -329,7 +333,7 @@ export default function SignupProviderScreen() {
         languages: primaryLanguage ? [primaryLanguage, ...(secondaryLanguage ? [secondaryLanguage] : [])] : [],
         providerData: {
           companyName: companyName.trim() || undefined,
-          nzCompanyRegisterNumber: regNumber.trim() || undefined,
+          nzCompanyRegisterNumber: regNumber.trim(),
           discipline: discipline ?? undefined,
           otherDiscipline: discipline === "other" ? otherDisciplineText.trim() || undefined : undefined,
           addressStreet: addressStreet.trim() || undefined,
@@ -548,18 +552,16 @@ export default function SignupProviderScreen() {
             </View>
 
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground }]}>
-                NZ Companies Register number{" "}
-                <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }}>(optional)</Text>
-              </Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>NZ Companies Register number *</Text>
               <TextInput
-                style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+                style={inputBase("regNumber")}
                 placeholder="e.g. 1234567"
                 placeholderTextColor={colors.mutedForeground}
                 value={regNumber}
-                onChangeText={setRegNumber}
+                onChangeText={(v) => { setRegNumber(v); if (fieldErrors.regNumber) setFieldErrors((p) => ({ ...p, regNumber: undefined })); }}
                 keyboardType="number-pad"
               />
+              {fieldErrors.regNumber && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.regNumber}</Text>}
             </View>
 
             <View style={styles.field}>
@@ -602,18 +604,15 @@ export default function SignupProviderScreen() {
             )}
 
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground }]}>
-                Certificate of Incorporation{" "}
-                <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }}>(optional)</Text>
-              </Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>Certificate of Incorporation *</Text>
               <TouchableOpacity
-                onPress={handlePickDocument}
+                onPress={() => { handlePickDocument(); if (fieldErrors.cert) setFieldErrors((p) => ({ ...p, cert: undefined })); }}
                 disabled={uploadStatus === "uploading"}
                 style={[
                   styles.uploadBtn,
                   {
-                    backgroundColor: uploadStatus === "done" ? colors.success + "10" : uploadStatus === "error" ? colors.danger + "10" : pickedFile ? ACCENT + "10" : colors.card,
-                    borderColor: uploadStatus === "done" ? colors.success : uploadStatus === "error" ? colors.danger : pickedFile ? ACCENT : colors.border,
+                    backgroundColor: uploadStatus === "done" ? colors.success + "10" : uploadStatus === "error" || fieldErrors.cert ? colors.danger + "10" : pickedFile ? ACCENT + "10" : colors.card,
+                    borderColor: uploadStatus === "done" ? colors.success : uploadStatus === "error" || fieldErrors.cert ? colors.danger : pickedFile ? ACCENT : colors.border,
                   },
                 ]}
                 activeOpacity={0.7}
@@ -634,6 +633,7 @@ export default function SignupProviderScreen() {
                 )}
               </TouchableOpacity>
               <Text style={[styles.uploadHint, { color: colors.mutedForeground }]}>PDF, JPEG, PNG or WEBP — max 10 MB</Text>
+              {fieldErrors.cert && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.cert}</Text>}
             </View>
           </View>
 
