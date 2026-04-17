@@ -33,8 +33,30 @@ const FEATURES: { icon: React.ComponentProps<typeof Feather>["name"]; label: str
 export default function SalesAgentWelcomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, token, getApiHeaders, refreshProfile } = useAuth();
   const { purchase, isPurchasing, isSubscribed, getPriceForRole, getPackageForRole } = useSubscription();
+
+  const getApiBase = () => {
+    if (process.env.EXPO_PUBLIC_DOMAIN) {
+      return `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`;
+    }
+    return "/api";
+  };
+
+  const syncToBackend = async (tier: "pro" | "free"): Promise<boolean> => {
+    if (!token) return false;
+    try {
+      const resp = await fetch(`${getApiBase()}/subscription/sync`, {
+        method: "POST",
+        headers: getApiHeaders(),
+        body: JSON.stringify({ tier }),
+      });
+      await refreshProfile().catch(() => {});
+      return resp.ok;
+    } catch {
+      return false;
+    }
+  };
 
   const firstName = user?.fullName?.split(" ")[0] || "there";
   const hasSubscription = isSubscribed || (user?.subscriptionTier && user.subscriptionTier !== "free");
@@ -67,6 +89,14 @@ export default function SalesAgentWelcomeScreen() {
         return;
       }
       await purchase(pkg);
+      const synced = await syncToBackend("pro");
+      if (!synced) {
+        Alert.alert(
+          "Almost there",
+          "Your trial started but we couldn't activate your account. Please try again in a moment, or contact support if it persists.",
+        );
+        return;
+      }
       router.replace("/(tabs)");
     } catch (err: unknown) {
       const message = (err as { message?: string; userCancelled?: boolean })?.message;

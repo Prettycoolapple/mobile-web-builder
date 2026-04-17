@@ -57,15 +57,17 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
     }
   }, [visible]);
 
-  const syncToBackend = async (tier: "pro" | "free") => {
+  const syncToBackend = async (tier: "pro" | "free"): Promise<boolean> => {
     try {
-      await fetch(`${getApiBase()}/subscription/sync`, {
+      const resp = await fetch(`${getApiBase()}/subscription/sync`, {
         method: "POST",
         headers: getApiHeaders(),
         body: JSON.stringify({ tier }),
       });
       await refreshProfile().catch(() => {});
+      return resp.ok;
     } catch {
+      return false;
     }
   };
 
@@ -80,7 +82,14 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
     }
     try {
       await purchase(pkg);
-      await syncToBackend("pro");
+      const synced = await syncToBackend("pro");
+      if (!synced) {
+        Alert.alert(
+          "Almost there",
+          "Your payment went through but we couldn't activate your account. Please try again in a moment, or contact support if it persists.",
+        );
+        return;
+      }
       onPurchaseSuccess?.();
       onClose();
       Alert.alert("Welcome to Standard!", "You now have 20 reports per month.");

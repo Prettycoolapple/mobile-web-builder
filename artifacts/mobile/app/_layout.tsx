@@ -43,6 +43,15 @@ function getApiBase(): string {
 
 const queryClient = new QueryClient();
 
+function SubscriptionGate({ children }: { children: React.ReactNode }) {
+  const { isSubscriptionIdentityReady } = useAuth();
+  return (
+    <SubscriptionProvider identityReady={isSubscriptionIdentityReady}>
+      {children}
+    </SubscriptionProvider>
+  );
+}
+
 function NotificationSetup() {
   const { token, user } = useAuth();
   const router = useRouter();
@@ -144,7 +153,7 @@ export default function RootLayout() {
       <ErrorBoundary>
         <QueryClientProvider client={queryClient}>
           <AuthProvider>
-            <SubscriptionProvider>
+            <SubscriptionGate>
               <DmProvider>
                 <ChatProvider>
                   <GestureHandlerRootView style={{ flex: 1 }}>
@@ -155,7 +164,7 @@ export default function RootLayout() {
                   </GestureHandlerRootView>
                 </ChatProvider>
               </DmProvider>
-            </SubscriptionProvider>
+            </SubscriptionGate>
           </AuthProvider>
         </QueryClientProvider>
       </ErrorBoundary>

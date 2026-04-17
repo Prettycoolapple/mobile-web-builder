@@ -34,7 +34,7 @@ const FEATURES: { icon: React.ComponentProps<typeof Feather>["name"]; label: str
 export default function ServiceProviderWelcomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { user, token } = useAuth();
+  const { user, token, getApiHeaders, refreshProfile } = useAuth();
   const { purchase, isPurchasing, isSubscribed, getPriceForRole, getPackageForRole } = useSubscription();
   const [showWelcomePopup, setShowWelcomePopup] = useState(true);
 
@@ -76,11 +76,32 @@ export default function ServiceProviderWelcomeScreen() {
         return;
       }
       await purchase(pkg);
+      let synced = false;
       if (token) {
-        fetch(`${getApiBase()}/notifications/provider-subscribed`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${token}` },
-        }).catch(() => {});
+        try {
+          const resp = await fetch(`${getApiBase()}/subscription/sync`, {
+            method: "POST",
+            headers: getApiHeaders(),
+            body: JSON.stringify({ tier: "pro" }),
+          });
+          synced = resp.ok;
+        } catch {
+          synced = false;
+        }
+        await refreshProfile().catch(() => {});
+        if (synced) {
+          fetch(`${getApiBase()}/notifications/provider-subscribed`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}` },
+          }).catch(() => {});
+        }
+      }
+      if (!synced) {
+        Alert.alert(
+          "Almost there",
+          "Your trial started but we couldn't activate your account. Please try again in a moment, or contact support if it persists.",
+        );
+        return;
       }
       router.replace("/(tabs)");
     } catch (err: unknown) {

@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useQueryClient } from "@tanstack/react-query";
 import { loginRevenueCat, logoutRevenueCat } from "@/lib/revenuecat";
 
 export type UserRole = "general" | "sales_agent" | "service_provider";
@@ -104,6 +105,10 @@ interface AuthContextValue {
   user: UserProfile | null;
   token: string | null;
   isLoading: boolean;
+  // True only when the RevenueCat identity has finished switching to the
+  // currently-signed-in user (or there is no user). Use this to gate any
+  // subscription read/write so we never act on a stale previous identity.
+  isSubscriptionIdentityReady: boolean;
   signUp: (data: SignUpData) => Promise<{ token: string }>;
   signIn: (email: string, password: string) => Promise<UserProfile>;
   signOut: () => Promise<void>;
@@ -137,9 +142,34 @@ function getApiBase(): string {
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const queryClient = useQueryClient();
   const [user, setUser] = useState<UserProfile | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSubscriptionIdentityReady, setIsSubscriptionIdentityReady] = useState(false);
+
+  // Wipe RevenueCat customer-info / offerings cache so the next user never
+  // sees the previous user's subscription state.
+  const resetSubscriptionCache = useCallback(() => {
+    queryClient.removeQueries({ queryKey: ["revenuecat"] });
+  }, [queryClient]);
+
+  // Fully switch the RC identity to `userId` and only then mark the identity
+  // as ready. Anything subscription-related must be gated on this flag so a
+  // stale previous identity can never be read or written.
+  const switchRevenueCatIdentity = useCallback(async (userId: string | null) => {
+    setIsSubscriptionIdentityReady(false);
+    resetSubscriptionCache();
+    try {
+      if (userId) {
+        await loginRevenueCat(userId);
+      } else {
+        await logoutRevenueCat();
+      }
+    } finally {
+      setIsSubscriptionIdentityReady(true);
+    }
+  }, [resetSubscriptionCache]);
 
   useEffect(() => {
     (async () => {
@@ -152,15 +182,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const profile = JSON.parse(storedUser) as UserProfile;
           setToken(storedToken);
           setUser(profile);
-          // Restore RevenueCat identity so the device subscription is tied to this user
-          loginRevenueCat(profile.id).catch(() => {});
+          // Restore RevenueCat identity so the device subscription is tied to
+          // this user — must complete before any subscription read.
+          await switchRevenueCatIdentity(profile.id);
+        } else {
+          await switchRevenueCatIdentity(null);
         }
       } catch {
+        await switchRevenueCatIdentity(null);
       } finally {
         setIsLoading(false);
       }
     })();
-  }, []);
+  }, [switchRevenueCatIdentity]);
 
   const persistAuth = useCallback(async (newToken: string, newUser: UserProfile) => {
     setToken(newToken);
@@ -191,10 +225,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       languages: json.user.languages ?? [],
     };
     await persistAuth(json.token, profile);
-    // Tie this user's RevenueCat identity to their account ID
-    loginRevenueCat(profile.id).catch(() => {});
+    // Drop any cached subscription data from a previous user and wait for the
+    // RevenueCat identity switch to fully complete before returning.
+    await switchRevenueCatIdentity(profile.id);
     return { token: json.token };
-  }, [persistAuth]);
+  }, [persistAuth, switchRevenueCatIdentity]);
 
   const signIn = useCallback(async (email: string, password: string): Promise<UserProfile> => {
     const resp = await fetch(`${getApiBase()}/auth/login`, {
@@ -210,10 +245,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       languages: data.user.languages ?? [],
     };
     await persistAuth(data.token, profile);
-    // Tie this user's RevenueCat identity to their account ID
-    loginRevenueCat(profile.id).catch(() => {});
+    // Drop any cached subscription data from a previous user and wait for the
+    // RevenueCat identity switch to fully complete before returning.
+    await switchRevenueCatIdentity(profile.id);
     return profile;
-  }, [persistAuth]);
+  }, [persistAuth, switchRevenueCatIdentity]);
 
   const signOut = useCallback(async () => {
     setToken(null);
@@ -222,9 +258,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       AsyncStorage.removeItem(STORAGE_KEY_TOKEN),
       AsyncStorage.removeItem(STORAGE_KEY_USER),
     ]);
-    // Release RevenueCat identity so the next user starts with a clean slate
-    logoutRevenueCat().catch(() => {});
-  }, []);
+    // Wipe cached subscription state and release the RevenueCat identity so
+    // the next user starts with a completely clean slate.
+    await switchRevenueCatIdentity(null);
+  }, [switchRevenueCatIdentity]);
 
   const refreshProfile = useCallback(async () => {
     if (!token) return;
@@ -319,6 +356,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   return (
     <AuthContext.Provider value={{
       user, token, isLoading,
+      isSubscriptionIdentityReady,
       signUp, signIn, signOut,
       refreshProfile, getApiHeaders,
       uploadIncorporationCert,

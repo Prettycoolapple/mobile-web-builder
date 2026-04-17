@@ -107,17 +107,20 @@ function SectionHeader({ title }: { title: string }) {
 export default function ProfileScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { user, signOut, getApiHeaders, refreshProfile } = useAuth();
+  const { user, signOut, getApiHeaders, refreshProfile, isSubscriptionIdentityReady } = useAuth();
   const router = useRouter();
 
-  const { purchase, isSubscribed, customerInfoLoaded, refetchCustomerInfo, getPackageForRole, getPriceForRole } = useSubscription();
+  const { purchase, isSubscribed, customerInfoLoaded, isTestPaymentMode, refetchCustomerInfo, getPackageForRole, getPriceForRole } = useSubscription();
   const [upgradeLoading, setUpgradeLoading] = useState(false);
 
   // Refresh RevenueCat status each time the profile screen mounts so the correct
-  // per-user identity (set via Purchases.logIn) is always reflected
+  // per-user identity is reflected. Skipped in test payment mode where there is
+  // no real native RC connection available.
   useEffect(() => {
+    if (isTestPaymentMode) return;
+    if (!isSubscriptionIdentityReady) return;
     refetchCustomerInfo();
-  }, []);
+  }, [isTestPaymentMode, isSubscriptionIdentityReady]);
 
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -158,26 +161,36 @@ export default function ProfileScreen() {
   const role = user?.role ?? "general";
   const primaryLanguage = user?.languages?.[0] ?? null;
 
-  const syncToBackend = useCallback(async (tier: "pro" | "free") => {
+  // Returns true on a confirmed 2xx response so callers can surface failures.
+  const syncToBackend = useCallback(async (tier: "pro" | "free"): Promise<boolean> => {
     try {
-      await fetch(`${getApiBase()}/subscription/sync`, {
+      const resp = await fetch(`${getApiBase()}/subscription/sync`, {
         method: "POST",
         headers: getApiHeaders(),
         body: JSON.stringify({ tier }),
       });
       await refreshProfile().catch(() => {});
+      return resp.ok;
     } catch {
+      return false;
     }
   }, [getApiHeaders, refreshProfile]);
 
   useEffect(() => {
+    // In test payment mode there is no real RC subscription to read from, so
+    // we trust the DB tier and never try to overwrite it from RC.
+    if (isTestPaymentMode) return;
+    // Never act on stale RC data from a previous identity.
+    if (!isSubscriptionIdentityReady) return;
+    if (!user?.id) return;
     if (isSubscribed) {
       syncToBackend("pro");
     } else if (customerInfoLoaded) {
-      // RC has definitively confirmed no active subscription — correct the DB tier if needed
+      // RC has definitively confirmed no active subscription for THIS user —
+      // correct the DB tier if needed.
       syncToBackend("free");
     }
-  }, [isSubscribed, customerInfoLoaded]);
+  }, [isSubscribed, customerInfoLoaded, isTestPaymentMode, isSubscriptionIdentityReady, user?.id]);
 
   const handleUpgrade = useCallback(async () => {
     setUpgradeLoading(true);
@@ -188,7 +201,14 @@ export default function ProfileScreen() {
         return;
       }
       await purchase(pkg);
-      await syncToBackend("pro");
+      const synced = await syncToBackend("pro");
+      if (!synced) {
+        Alert.alert(
+          "Almost there",
+          "Your payment went through but we couldn't update your account. Please pull to refresh in a moment, or contact support if it persists.",
+        );
+        return;
+      }
       if (role === "sales_agent") {
         Alert.alert("Agent Pro activated!", "You now have full access to your Agent Pro plan.");
       } else if (role === "service_provider") {
