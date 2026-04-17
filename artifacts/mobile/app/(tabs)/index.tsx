@@ -56,6 +56,22 @@ function extractJSON(text: string): unknown | null {
   return null;
 }
 
+// Removes any JSON-looking blocks from a text string so raw JSON is never
+// shown to the user in the chat. If the string is *only* JSON, returns a
+// friendly fallback message instead.
+function sanitizeForDisplay(text: string): string {
+  if (!text) return "";
+  const stripped = text
+    .replace(/```(?:json)?[\s\S]*?```/gi, "")
+    .replace(/\{[\s\S]*\}/g, "")
+    .replace(/\[[\s\S]*\]/g, "")
+    .trim();
+  if (!stripped || stripped.length < 4) {
+    return "I had trouble formatting that response. Could you try rephrasing your question?";
+  }
+  return stripped;
+}
+
 export default function SearchScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -508,40 +524,48 @@ export default function SearchScreen() {
           const isFeasibilityReport = (p: unknown): p is FeasibilityReport =>
             !!p && typeof p === "object" && ("scores" in (p as object) || "address" in (p as object));
 
+          // Universal JSON-content guard — regardless of `mode`, if the content
+          // contains a JSON object/array, try to interpret it as a structured
+          // result. This prevents raw JSON from ever leaking into the chat as
+          // visible text.
+          const rawContent = data.content ?? "";
+          const trimmed = rawContent.trim();
+          const hasJsonShape = /\{[\s\S]*\}|\[[\s\S]*\]/.test(trimmed);
+          const maybeParsed = hasJsonShape
+            ? (extractJSON(trimmed) as
+                | { candidates?: PropertyCandidate[]; isMockData?: boolean; noListings?: boolean; aiIntro?: string }
+                | null)
+            : null;
+
           if (data.mode === "analyse") {
-            const parsed = extractJSON(data.content) as FeasibilityReport | null;
-            if (parsed && isFeasibilityReport(parsed)) {
-              setCurrentReport(parsed);
-              updateLastMessage({ type: "report", report: parsed, content: "" }, sessionId);
+            if (maybeParsed && isFeasibilityReport(maybeParsed)) {
+              setCurrentReport(maybeParsed as unknown as FeasibilityReport);
+              updateLastMessage({ type: "report", report: maybeParsed as unknown as FeasibilityReport, content: "" }, sessionId);
               refreshProfile().catch(() => {});
             } else {
-              updateLastMessage({ type: "text", content: data.content }, sessionId);
+              updateLastMessage({ type: "text", content: sanitizeForDisplay(rawContent) }, sessionId);
             }
           } else if (data.mode === "discover") {
-            const parsed = extractJSON(data.content) as { candidates?: PropertyCandidate[]; isMockData?: boolean; noListings?: boolean; aiIntro?: string } | null;
-            const aiIntro = parsed?.aiIntro ?? "";
-            if (parsed?.candidates && parsed.candidates.length > 0) {
-              updateLastMessage({ type: "search", searchResults: parsed.candidates, content: "", aiIntro }, sessionId);
-              startCardScorePoll(parsed.candidates.map((c) => c.address), sessionId);
+            const aiIntro = maybeParsed?.aiIntro ?? "";
+            if (maybeParsed?.candidates && maybeParsed.candidates.length > 0) {
+              updateLastMessage({ type: "search", searchResults: maybeParsed.candidates, content: "", aiIntro }, sessionId);
+              startCardScorePoll(maybeParsed.candidates.map((c) => c.address), sessionId);
             } else {
               const noResultMsg = aiIntro || "No matching listings found right now. Try a different suburb, adjust your budget, or ask again shortly — new listings appear daily.";
               updateLastMessage({ type: "text", content: noResultMsg }, sessionId);
             }
           } else {
-            const rawContent = data.content ?? "";
-            const trimmed = rawContent.trim();
-            if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-              const maybeParsed = extractJSON(trimmed) as { candidates?: PropertyCandidate[] } | null;
-              // If it looks like a feasibility report, render it — even if the mode was wrong
-              if (isFeasibilityReport(maybeParsed)) {
-                setCurrentReport(maybeParsed as FeasibilityReport);
-                updateLastMessage({ type: "report", report: maybeParsed as FeasibilityReport, content: "" }, sessionId);
-                refreshProfile().catch(() => {});
-              } else if (maybeParsed?.candidates && maybeParsed.candidates.length > 0) {
-                updateLastMessage({ type: "search", searchResults: maybeParsed.candidates, content: "" }, sessionId);
-              } else {
-                updateLastMessage({ type: "text", content: "I couldn't format that response properly. Please try rephrasing your question." }, sessionId);
-              }
+            // Mode is unknown / followup / text. If the payload looks like a
+            // structured result, render it as such — otherwise treat as text
+            // but always strip any JSON before displaying.
+            if (isFeasibilityReport(maybeParsed)) {
+              setCurrentReport(maybeParsed as unknown as FeasibilityReport);
+              updateLastMessage({ type: "report", report: maybeParsed as unknown as FeasibilityReport, content: "" }, sessionId);
+              refreshProfile().catch(() => {});
+            } else if (maybeParsed?.candidates && maybeParsed.candidates.length > 0) {
+              updateLastMessage({ type: "search", searchResults: maybeParsed.candidates, content: "" }, sessionId);
+            } else if (hasJsonShape) {
+              updateLastMessage({ type: "text", content: sanitizeForDisplay(rawContent) }, sessionId);
             } else {
               updateLastMessage({ type: "text", content: rawContent }, sessionId);
             }

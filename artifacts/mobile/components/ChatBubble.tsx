@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, Component } from "react";
+import React, { useEffect, useRef, useState, Component } from "react";
 import { View, Text, StyleSheet, Animated, Easing, TouchableOpacity, TouchableWithoutFeedback, Clipboard, Alert } from "react-native";
 import Markdown from "react-native-markdown-display";
 import { Feather } from "@expo/vector-icons";
@@ -67,11 +67,21 @@ interface Props {
   onAgentDismiss?: (messageId: string) => void;
 }
 
+const THINKING_MESSAGES = [
+  "Thinking…",
+  "Looking that up…",
+  "Checking property records…",
+  "This can take a moment…",
+  "Still working on it…",
+  "Almost there, hang tight…",
+];
+
 function TypingDots() {
   const colors = useColors();
   const dot1 = useRef(new Animated.Value(0)).current;
   const dot2 = useRef(new Animated.Value(0)).current;
   const dot3 = useRef(new Animated.Value(0)).current;
+  const [messageIndex, setMessageIndex] = useState(0);
 
   useEffect(() => {
     const makePulse = (dot: Animated.Value, delay: number) =>
@@ -93,19 +103,31 @@ function TypingDots() {
     return () => anim.stop();
   }, [dot1, dot2, dot3]);
 
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setMessageIndex((i) => Math.min(i + 1, THINKING_MESSAGES.length - 1));
+    }, 4000);
+    return () => clearInterval(interval);
+  }, []);
+
   const dotStyle = (dot: Animated.Value) => ({
     opacity: dot.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] }),
     transform: [{ translateY: dot.interpolate({ inputRange: [0, 1], outputRange: [0, -4] }) }],
   });
 
   return (
-    <View style={styles.dotsRow}>
-      {[dot1, dot2, dot3].map((dot, i) => (
-        <Animated.View
-          key={i}
-          style={[styles.dot, { backgroundColor: colors.accent }, dotStyle(dot)]}
-        />
-      ))}
+    <View style={styles.thinkingRow}>
+      <View style={styles.dotsRow}>
+        {[dot1, dot2, dot3].map((dot, i) => (
+          <Animated.View
+            key={i}
+            style={[styles.dot, { backgroundColor: colors.accent }, dotStyle(dot)]}
+          />
+        ))}
+      </View>
+      <Text style={[styles.thinkingText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+        {THINKING_MESSAGES[messageIndex]}
+      </Text>
     </View>
   );
 }
@@ -367,6 +389,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     paddingHorizontal: 16,
     paddingVertical: 16,
+  },
+  thinkingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  thinkingText: {
+    fontSize: 13,
+    lineHeight: 19,
   },
   dotsRow: {
     flexDirection: "row",
