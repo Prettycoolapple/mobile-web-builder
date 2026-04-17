@@ -2,6 +2,7 @@ import { logger } from "../logger";
 import { fetchWithScrapingBee } from "./scrapingbee";
 import { launchBrowser, newStealthPage, withBrowserSlot } from "./browser";
 import type { ListingResult } from "./oneroof";
+import { searchListingsByName } from "./realestate-api";
 
 /**
  * Maps suburb name → { slug, district, region } for realestate.co.nz URL construction.
@@ -694,6 +695,43 @@ export async function searchRealEstateListings(params: {
   const { suburb, minPrice, maxPrice, skipUrls = [], firstBatchSize = 6, includeNegotiation = false } = params;
   const priceMidpoint = Math.round((minPrice + maxPrice) / 2);
 
+  // ── PRIMARY: Official JSON API ───────────────────────────────────────────
+  // Talk to platform.realestate.co.nz/search/v1 — same API the SPA uses.
+  // Authoritative suburb resolution, structured data, no JS rendering required.
+  try {
+    const apiResult = await searchListingsByName({
+      suburbName: suburb,
+      minPrice,
+      maxPrice,
+      firstBatchSize,
+      includeNegotiation: true, // include negotiation/POA so they're available; analyse.ts can choose
+      skipUrls,
+    });
+    if (apiResult.suburbResolved && (apiResult.firstBatch.length + apiResult.remainingListings.length) > 0) {
+      logger.info(
+        { suburb, resolvedTo: apiResult.suburbResolved.title, firstBatch: apiResult.firstBatch.length, remaining: apiResult.remainingListings.length, total: apiResult.totalFound },
+        "realestate-search: served from JSON API",
+      );
+      return {
+        firstBatch: apiResult.firstBatch,
+        remainingListings: apiResult.remainingListings,
+        totalFound: apiResult.totalFound,
+        source: apiResult.source,
+      };
+    }
+    // Empty API result with resolved suburb → genuinely no listings; return early
+    // rather than hammering the HTML scraper for the same answer.
+    if (apiResult.suburbResolved) {
+      logger.info({ suburb, resolvedTo: apiResult.suburbResolved.title }, "realestate-search: API returned no listings for resolved suburb");
+      return { firstBatch: [], remainingListings: [], totalFound: 0, source: apiResult.source };
+    }
+    // Suburb couldn't be resolved → fall through to legacy scraper as a long-shot.
+    logger.info({ suburb }, "realestate-search: API could not resolve suburb, falling back to scraper");
+  } catch (err) {
+    logger.warn({ err: (err as Error).message, suburb }, "realestate-search: API path failed, falling back to scraper");
+  }
+
+  // ── FALLBACK: Legacy HTML scraping path ──────────────────────────────────
   const { primary: primaryUrl, altUrls, suburbMeta, isFallback } = suburbToUrls(suburb, minPrice, maxPrice);
 
   logger.info({ suburb, searchUrl: primaryUrl, isFallback }, "realestate-search: fetching search results page");

@@ -50,7 +50,10 @@ The application is built as a monorepo utilizing `pnpm workspaces`.
 - **Verification:** `is_verified` column in `profiles` (default false). Set manually via SQL. Shown as blue verified badge on public profiles for service providers.
 
 **Real Listing Pipeline (Discovery Mode)**
-- **Primary Source:** realestate.co.nz (static HTML scraping).
+- **Primary Source:** realestate.co.nz official JSON API at `platform.realestate.co.nz/search/v1` (suburb directory cached 1h with 1899 NZ suburbs; listings endpoint with `filter[suburb][]=<id>`). Falls back to HTML scraping only if the API path fails.
+- **Suburb resolution:** Fuzzy match (≤2 edits, handles "saint↔st", "buckland↔bucklands", "mt↔mount"). Auckland uses pre-amalgamation council slugs (manukau-city, north-shore-city, waitakere-city), not modern Auckland Council wards.
+- **Listing ordering:** firstBatch surfaces priced listings before negotiation/auction listings so the score-based pre-screener (which requires a numeric price) always has candidates to work with.
+- **Intent extraction:** Gemini 2.5 Flash with thinking disabled (`thinkingBudget: 0`) and 1024 maxOutputTokens — required so token budget isn't consumed by reasoning on terse follow-ups like "show me more". Regex fallback also scans message history for prior suburbs to preserve conversation memory if the LLM call fails.
 - **Pre-screening:** Fast pre-screening using geocoding and Auckland Council GIS zone lookup.
 - **Caching:** In-memory caching for `ListingResult[]` with a 30-minute TTL to optimize follow-up searches.
 - **Filtering:** Excludes apartments and filters by price. Listing URLs are validated against suburb slugs.

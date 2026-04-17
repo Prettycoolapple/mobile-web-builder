@@ -215,8 +215,13 @@ ${INTENT_SCHEMA}`;
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
       config: {
-        maxOutputTokens: 512,
+        // Gemini 2.5 spends "thinking" tokens out of this budget before any
+        // visible output. 512 was being fully consumed by thinking on
+        // ambiguous follow-ups (e.g. "show me more"), leaving no room for the
+        // JSON answer. Disable thinking and give plenty of room for output.
+        maxOutputTokens: 1024,
         temperature: 0.1,
+        thinkingConfig: { thinkingBudget: 0 },
       },
       contents: [{ role: "user", parts: [{ text: prompt }] }],
     });
@@ -262,7 +267,7 @@ ${INTENT_SCHEMA}`;
     return intent;
   } catch (err) {
     logger.warn({ err: (err as Error).message, userMessage: lastUserMessage.content.slice(0, 80) }, "LLM intent extraction failed — falling back to regex");
-    return fallbackDetectIntent(lastUserMessage.content, reportContext);
+    return fallbackDetectIntent(lastUserMessage.content, reportContext, messages);
   }
 }
 
@@ -270,13 +275,26 @@ ${INTENT_SCHEMA}`;
 function fallbackDetectIntent(
   lastMessage: string,
   reportContext?: { address?: string | null; suburb?: string | null } | null,
+  history?: Message[],
 ): ChatIntent {
   // If the entire message is just a suburb name, treat it as a discover intent
   const isSuburbOnly = looksLikeSuburbOnly(lastMessage);
   const mode = isSuburbOnly ? "discover" : detectMode(lastMessage);
 
+  // Scan recent user turns for a previously mentioned suburb so follow-ups
+  // ("show me more", "any others") preserve the search context.
+  let priorSuburb: string | null = null;
+  if (history && history.length > 0) {
+    for (let i = history.length - 1; i >= 0 && !priorSuburb; i--) {
+      const m = history[i];
+      if (m.role !== "user" || m.content === lastMessage) continue;
+      priorSuburb = findSuburbInText(m.content) ?? extractLocationPhrase(m.content);
+    }
+  }
+
   const suburb = findSuburbInText(lastMessage)
     ?? extractLocationPhrase(lastMessage)
+    ?? priorSuburb
     ?? (mode === "discover" && reportContext?.suburb ? reportContext.suburb.toLowerCase().trim() : null);
 
   const isFollowUp = /any\s*(others?|more)|show\s*(me\s*)?more|more\s*(properties|options|results|sites)|what\s*else|other\s*properties|more\s*results|few\s*more|find\s*more/i.test(lastMessage);
