@@ -350,6 +350,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
     const json = (await resp.json()) as { fileUrl: string; error?: string };
     if (!resp.ok) throw new Error(json.error ?? "Upload failed");
+    setUser((prev) => (prev ? { ...prev, avatarUrl: json.fileUrl } : prev));
     return { fileUrl: json.fileUrl };
   }, [token]);
 

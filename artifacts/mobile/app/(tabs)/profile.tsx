@@ -45,7 +45,7 @@ const PLAN_FEATURES = {
   standard: [
     "Feasibility reports",
     "Chat & property search",
-    "In-app chat to planners & architects",
+    "In-app chat with planners & architects",
   ],
   agent: [
     "Unlimited property listings",
@@ -56,11 +56,17 @@ const PLAN_FEATURES = {
   ],
   provider: [
     "Get referred in chats & search",
-    "Encrypted chats with client/investors",
+    "Encrypted chats with clients & investors",
     "Feasibility reports",
     "Chat & property search",
   ],
 };
+
+const STANDARD_UPGRADE_FEATURES = [
+  "More feasibility reports",
+  "More chat & property search",
+  "In-app chat with planners & architects",
+];
 
 function getApiBase(): string {
   if (process.env["EXPO_PUBLIC_DOMAIN"]) {
@@ -738,7 +744,7 @@ export default function ProfileScreen() {
                 </View>
               </View>
               <View style={styles.featuresList}>
-                {PLAN_FEATURES.standard.map((f) => (
+                {STANDARD_UPGRADE_FEATURES.map((f) => (
                   <FeatureRow key={f} text={f} included />
                 ))}
               </View>

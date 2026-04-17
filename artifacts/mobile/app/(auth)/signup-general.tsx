@@ -59,7 +59,7 @@ export default function SignupGeneralScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { signUp, uploadProfilePicture } = useAuth();
+  const { signUp, uploadProfilePicture, refreshProfile } = useAuth();
   const { width: SCREEN_W } = useWindowDimensions();
 
   const [firstName, setFirstName] = useState("");
@@ -167,6 +167,7 @@ export default function SignupGeneralScreen() {
         try {
           const ext = avatarUri.split(".").pop() ?? "jpg";
           await uploadProfilePicture(avatarUri, avatarMimeType, `avatar.${ext}`, newToken);
+          await refreshProfile().catch(() => {});
         } catch {
         }
       }

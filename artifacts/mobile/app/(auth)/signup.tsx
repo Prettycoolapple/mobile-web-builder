@@ -58,7 +58,7 @@ const ROLES = [
     ctaLabel: "Get started",
     features: [
       "Get referred in chats & search",
-      "Encrypted chats with client/investors",
+      "Encrypted chats with clients & investors",
       "Feasibility reports",
       "Chat & property search",
     ],
