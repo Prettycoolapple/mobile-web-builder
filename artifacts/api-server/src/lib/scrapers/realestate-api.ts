@@ -206,6 +206,61 @@ export async function findSuburbId(name: string): Promise<SuburbRecord | null> {
   return best;
 }
 
+/**
+ * Scan free-form text and return the longest suburb name from the live
+ * directory that appears as a substring. Replaces the static NZ_SUBURBS
+ * regex match so coverage automatically tracks the live data source
+ * (1899 suburbs vs the previous ~110 hand-curated entries).
+ */
+export async function findSuburbInTextViaIndex(text: string): Promise<SuburbRecord | null> {
+  if (!text || !text.trim()) return null;
+  let index: SuburbIndex;
+  try {
+    index = await loadSuburbIndex();
+  } catch {
+    return null;
+  }
+  const normalised = text.toLowerCase().trim().replace(/\s+/g, " ");
+  // Try aliases longest-first so "bucklands beach" wins over "beach".
+  const aliases = [...index.byNormalisedName.keys()].sort((a, b) => b.length - a.length);
+  for (const alias of aliases) {
+    if (alias.length < 3) continue;
+    // Word-boundary match to avoid e.g. "epsom" inside "epsomdowns"
+    const re = new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+    if (re.test(normalised)) return index.byNormalisedName.get(alias) ?? null;
+  }
+  return null;
+}
+
+/**
+ * Return suburbs in the same realestate.co.nz district as the given suburb,
+ * excluding the suburb itself. Districts roughly correspond to council/board
+ * areas (e.g. "auckland-city", "manukau-city") so sister suburbs are usually
+ * geographically adjacent — a reasonable hand-mapping-free starting point
+ * for a "nearby suburbs" fallback.
+ */
+export async function getDistrictSiblings(suburbId: string, max = 8): Promise<SuburbRecord[]> {
+  let index: SuburbIndex;
+  try {
+    index = await loadSuburbIndex();
+  } catch {
+    return [];
+  }
+  const target = index.byId.get(suburbId);
+  if (!target) return [];
+  const siblings: SuburbRecord[] = [];
+  const seen = new Set<string>();
+  for (const rec of index.byId.values()) {
+    if (rec.id === target.id) continue;
+    if (rec.districtId !== target.districtId) continue;
+    if (seen.has(rec.id)) continue;
+    seen.add(rec.id);
+    siblings.push(rec);
+    if (siblings.length >= max) break;
+  }
+  return siblings;
+}
+
 function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
   const m = a.length, n = b.length;

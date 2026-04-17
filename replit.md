@@ -51,7 +51,9 @@ The application is built as a monorepo utilizing `pnpm workspaces`.
 
 **Real Listing Pipeline (Discovery Mode)**
 - **Primary Source:** realestate.co.nz official JSON API at `platform.realestate.co.nz/search/v1` (suburb directory cached 1h with 1899 NZ suburbs; listings endpoint with `filter[suburb][]=<id>`). Falls back to HTML scraping only if the API path fails.
-- **Suburb resolution:** Fuzzy match (≤2 edits, handles "saint↔st", "buckland↔bucklands", "mt↔mount"). Auckland uses pre-amalgamation council slugs (manukau-city, north-shore-city, waitakere-city), not modern Auckland Council wards.
+- **Suburb resolution:** Fuzzy match (≤2 edits, handles "saint↔st", "buckland↔bucklands", "mt↔mount") against the live 1899-suburb directory. Auckland uses pre-amalgamation council slugs (manukau-city, north-shore-city, waitakere-city), not modern Auckland Council wards.
+- **No hand-curated suburb data:** Free-text suburb detection (`findSuburbInTextViaIndex`) and the regex intent fallback both query the live directory — so any real NZ suburb (Karori, Beachlands, Greenhithe, etc.) is recognised automatically, not just a hand-coded shortlist.
+- **Nearby-suburb fallback:** When the primary suburb has no listings, `resolveNearbySuburbs` asks Gemini for the geographically-closest NZ suburbs (cached per process) and tops up with district siblings from the live directory. Replaces the previous hand-mapped `NEARBY_SUBURBS` adjacency table.
 - **Listing ordering:** firstBatch surfaces priced listings before negotiation/auction listings so the score-based pre-screener (which requires a numeric price) always has candidates to work with.
 - **Intent extraction:** Gemini 2.5 Flash with thinking disabled (`thinkingBudget: 0`) and 1024 maxOutputTokens — required so token budget isn't consumed by reasoning on terse follow-ups like "show me more". Regex fallback also scans message history for prior suburbs to preserve conversation memory if the LLM call fails.
 - **Pre-screening:** Fast pre-screening using geocoding and Auckland Council GIS zone lookup.

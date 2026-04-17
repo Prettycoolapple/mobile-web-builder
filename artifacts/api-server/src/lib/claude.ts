@@ -1,7 +1,7 @@
 import { ai } from "@workspace/integrations-gemini-ai";
 import { logger } from "./logger";
 import { SYSTEM_PROMPT, ANALYSE_AUGMENTATION, DISCOVER_AUGMENTATION } from "./prompts";
-import { findSuburbInText, looksLikeSuburbOnly, extractLocationPhrase } from "./nz-suburbs";
+import { findSuburbInTextViaIndex } from "./scrapers/realestate-api";
 
 export interface Message {
   role: "user" | "assistant";
@@ -267,18 +267,24 @@ ${INTENT_SCHEMA}`;
     return intent;
   } catch (err) {
     logger.warn({ err: (err as Error).message, userMessage: lastUserMessage.content.slice(0, 80) }, "LLM intent extraction failed — falling back to regex");
-    return fallbackDetectIntent(lastUserMessage.content, reportContext, messages);
+    return await fallbackDetectIntent(lastUserMessage.content, reportContext, messages);
   }
 }
 
-// Regex fallback (used when the LLM call fails or times out)
-function fallbackDetectIntent(
+// Regex fallback (used when the LLM call fails or times out). All suburb
+// detection here defers to the live realestate.co.nz directory (1899 suburbs)
+// rather than any hand-curated list, so coverage tracks the data source.
+async function fallbackDetectIntent(
   lastMessage: string,
   reportContext?: { address?: string | null; suburb?: string | null } | null,
   history?: Message[],
-): ChatIntent {
-  // If the entire message is just a suburb name, treat it as a discover intent
-  const isSuburbOnly = looksLikeSuburbOnly(lastMessage);
+): Promise<ChatIntent> {
+  const directHit = await findSuburbInTextViaIndex(lastMessage);
+  // If the message is short and IS a known suburb, treat it as discover
+  const trimmed = lastMessage.trim();
+  const isSuburbOnly = directHit !== null
+    && trimmed.split(/\s+/).length <= 5
+    && !/\b(is|are|was|were|what|where|how|find|show|search|properties|property|house|land|section)\b/i.test(trimmed);
   const mode = isSuburbOnly ? "discover" : detectMode(lastMessage);
 
   // Scan recent user turns for a previously mentioned suburb so follow-ups
@@ -288,12 +294,12 @@ function fallbackDetectIntent(
     for (let i = history.length - 1; i >= 0 && !priorSuburb; i--) {
       const m = history[i];
       if (m.role !== "user" || m.content === lastMessage) continue;
-      priorSuburb = findSuburbInText(m.content) ?? extractLocationPhrase(m.content);
+      const hit = await findSuburbInTextViaIndex(m.content);
+      if (hit) priorSuburb = hit.title.toLowerCase();
     }
   }
 
-  const suburb = findSuburbInText(lastMessage)
-    ?? extractLocationPhrase(lastMessage)
+  const suburb = (directHit?.title.toLowerCase() ?? null)
     ?? priorSuburb
     ?? (mode === "discover" && reportContext?.suburb ? reportContext.suburb.toLowerCase().trim() : null);
 
@@ -358,21 +364,8 @@ export function detectMode(lastMessage: string): ChatMode {
   ];
   if (searchPatterns.some((p) => p.test(lower))) return "discover";
 
-  // Short message with only a suburb name → discover follow-up
-  const KNOWN_SUBURBS = [
-    "remuera", "epsom", "mt eden", "grey lynn", "ponsonby", "parnell", "herne bay",
-    "westmere", "kingsland", "sandringham", "mt albert", "mt roskill", "onehunga",
-    "new lynn", "titirangi", "avondale", "st heliers", "kohimarama", "mission bay",
-    "glendowie", "meadowbank", "howick", "pakuranga", "botany", "east tamaki",
-    "henderson", "albany", "takapuna", "devonport", "northcote", "glenfield",
-    "milford", "browns bay", "glen innes", "penrose", "ellerslie", "mangere",
-    "birkenhead", "massey", "royal oak", "mt wellington", "manurewa", "papatoetoe",
-    "papakura", "glen eden", "st johns", "otahuhu", "panmure",
-    "saint heliers", "saint johns", "mount eden", "mount albert", "mount roskill", "mount wellington",
-  ];
-  const hasKnownSuburb = KNOWN_SUBURBS.some((s) => lower.includes(s));
-  const isVagueShort = lower.length < 50 || /^(ok|okay|yes|sure|and|what|how|try)\b/i.test(lower);
-  if (hasKnownSuburb && isVagueShort) return "discover";
+  // (Suburb-only short messages are handled by the async `fallbackDetectIntent`
+  // wrapper using the live suburb directory — no hand-curated list needed here.)
 
   const followUpDiscoverKeywords = [
     "any others", "any more", "show more", "more properties", "more options",
@@ -383,6 +376,64 @@ export function detectMode(lastMessage: string): ChatMode {
   if (followUpDiscoverKeywords.some((k) => lower.includes(k))) return "discover";
 
   return "followup";
+}
+
+// ─── LLM-driven nearby suburb suggestions ────────────────────────────────────
+// Replaces a hand-curated NEARBY_SUBURBS adjacency map with a tiny Gemini call
+// that uses the model's geographic knowledge of NZ. Results are cached for the
+// lifetime of the process so we only pay the LLM cost once per suburb.
+const nearbySuburbCache = new Map<string, { value: string[]; expiresAt: number }>();
+const NEARBY_OK_TTL_MS = 60 * 60 * 1000;       // 1h for successful results
+const NEARBY_NEG_TTL_MS = 60 * 1000;           // 60s for failures (avoid hammering LLM during outage)
+const NEARBY_TIMEOUT_MS = 3000;                // hard timeout so we never stall the discover pipeline
+
+export async function suggestNearbySuburbs(suburb: string, max = 5): Promise<string[]> {
+  if (!suburb) return [];
+  const key = suburb.toLowerCase().trim();
+  const now = Date.now();
+  const cached = nearbySuburbCache.get(key);
+  if (cached && cached.expiresAt > now) return cached.value.slice(0, max);
+
+  const prompt = `List the ${max} suburbs geographically closest to "${suburb}", New Zealand.
+Use real NZ suburb names that would appear on realestate.co.nz.
+Return ONLY a JSON array of lowercase suburb name strings, no prose, no markdown.
+Example: ["kohimarama","mission bay","glendowie","meadowbank","saint johns"]`;
+
+  try {
+    const llmCall = ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      config: {
+        maxOutputTokens: 256,
+        temperature: 0.2,
+        thinkingConfig: { thinkingBudget: 0 },
+      },
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+    });
+    const response = await Promise.race([
+      llmCall,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("LLM nearby-suburb timeout")), NEARBY_TIMEOUT_MS),
+      ),
+    ]);
+    const raw = (response.text ?? "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
+    const match = raw.match(/\[[\s\S]*\]/);
+    if (!match) throw new Error("no JSON array");
+    const parsed = JSON.parse(match[0]) as unknown;
+    if (!Array.isArray(parsed)) throw new Error("not an array");
+    const cleaned = parsed
+      .filter((x): x is string => typeof x === "string")
+      .map((s) => s.toLowerCase().trim())
+      .filter((s) => s.length > 1 && s.toLowerCase() !== key)
+      .slice(0, max);
+    nearbySuburbCache.set(key, { value: cleaned, expiresAt: now + NEARBY_OK_TTL_MS });
+    logger.info({ suburb, nearby: cleaned }, "LLM nearby suburbs");
+    return cleaned;
+  } catch (err) {
+    // Negative-cache briefly so we don't hammer Gemini during an outage
+    nearbySuburbCache.set(key, { value: [], expiresAt: now + NEARBY_NEG_TTL_MS });
+    logger.warn({ err: (err as Error).message, suburb }, "LLM nearby-suburb suggestion failed");
+    return [];
+  }
 }
 
 function buildGeminiHistory(conversationHistory: Message[]) {

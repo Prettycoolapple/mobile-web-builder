@@ -13,7 +13,12 @@ import {
 } from "../lib/claude";
 import { verifyToken } from "../lib/auth";
 import { extractNZAddress } from "../lib/address-parser";
-import { findSuburbInText, extractLocationPhrase } from "../lib/nz-suburbs";
+import {
+  findSuburbInTextViaIndex,
+  getDistrictSiblings,
+  findSuburbId,
+} from "../lib/scrapers/realestate-api";
+import { suggestNearbySuburbs } from "../lib/claude";
 import { runPropertyPipeline } from "../lib/pipeline";
 import { formatNZD } from "../lib/utils";
 import { searchRealEstateListings } from "../lib/scrapers/realestate-search";
@@ -52,57 +57,37 @@ function editDistance(a: string, b: string): number {
   return dp[a.length][b.length];
 }
 
-const NEARBY_SUBURBS: Record<string, string[]> = {
-  "st heliers":    ["kohimarama", "mission bay", "glendowie", "meadowbank", "st johns"],
-  "kohimarama":    ["st heliers", "mission bay", "meadowbank", "remuera"],
-  "mission bay":   ["kohimarama", "st heliers", "parnell", "meadowbank"],
-  "glendowie":     ["st heliers", "kohimarama", "howick"],
-  "meadowbank":    ["st heliers", "kohimarama", "remuera", "st johns"],
-  "st johns":      ["meadowbank", "st heliers", "glen innes", "ellerslie"],
-  "remuera":       ["epsom", "parnell", "kohimarama", "meadowbank", "ellerslie"],
-  "epsom":         ["remuera", "mt eden", "royal oak", "onehunga"],
-  "mt eden":       ["epsom", "kingsland", "grey lynn", "sandringham", "mt albert"],
-  "grey lynn":     ["ponsonby", "kingsland", "mt eden", "westmere"],
-  "ponsonby":      ["herne bay", "grey lynn", "kingsland"],
-  "parnell":       ["remuera", "mission bay", "newmarket"],
-  "herne bay":     ["ponsonby", "westmere"],
-  "westmere":      ["herne bay", "grey lynn"],
-  "kingsland":     ["mt eden", "grey lynn", "sandringham"],
-  "sandringham":   ["mt eden", "kingsland", "mt albert"],
-  "mt albert":     ["sandringham", "mt eden", "avondale", "mt roskill"],
-  "mt roskill":    ["mt albert", "royal oak", "onehunga"],
-  "onehunga":      ["mt roskill", "royal oak", "penrose"],
-  "royal oak":     ["onehunga", "mt roskill", "epsom"],
-  "penrose":       ["onehunga", "ellerslie", "mt wellington"],
-  "ellerslie":     ["penrose", "mt wellington", "remuera", "st johns"],
-  "mt wellington": ["ellerslie", "penrose", "panmure"],
-  "panmure":       ["mt wellington", "glen innes", "pakuranga"],
-  "glen innes":    ["panmure", "st johns", "ellerslie"],
-  "avondale":      ["mt albert", "new lynn", "henderson"],
-  "new lynn":      ["avondale", "glen eden", "henderson"],
-  "glen eden":     ["new lynn", "henderson", "titirangi"],
-  "henderson":     ["new lynn", "avondale", "massey"],
-  "titirangi":     ["glen eden", "new lynn"],
-  "massey":        ["henderson", "new lynn"],
-  "takapuna":      ["milford", "devonport", "northcote"],
-  "devonport":     ["takapuna", "northcote"],
-  "milford":       ["takapuna", "browns bay"],
-  "northcote":     ["takapuna", "devonport", "birkenhead", "glenfield"],
-  "birkenhead":    ["northcote", "glenfield"],
-  "glenfield":     ["northcote", "birkenhead", "albany"],
-  "albany":        ["glenfield", "browns bay"],
-  "browns bay":    ["milford", "albany"],
-  "howick":        ["pakuranga", "botany", "east tamaki", "glendowie"],
-  "pakuranga":     ["howick", "botany", "panmure"],
-  "botany":        ["howick", "east tamaki", "pakuranga"],
-  "east tamaki":   ["howick", "botany", "manukau"],
-  "manukau":       ["east tamaki", "papakura", "manurewa"],
-  "manurewa":      ["manukau", "papatoetoe", "papakura"],
-  "papatoetoe":    ["manurewa", "otahuhu", "manukau"],
-  "papakura":      ["manurewa", "pukekohe"],
-  "otahuhu":       ["papatoetoe", "penrose", "mangere"],
-  "mangere":       ["otahuhu", "manurewa"],
-};
+/**
+ * Find suburbs to fall back to when the primary suburb has no listings.
+ * Strategy: prefer LLM suggestions (Gemini knows real NZ geography), then
+ * top up with sister suburbs from the same realestate.co.nz district. Both
+ * sources are de-duplicated and capped. No hand-curated map.
+ */
+async function resolveNearbySuburbs(suburb: string, max = 5): Promise<string[]> {
+  const llm = await suggestNearbySuburbs(suburb, max).catch(() => [] as string[]);
+
+  // Pull a few district siblings as a safety net for any suburbs the LLM
+  // may not know about (smaller / less famous places).
+  let siblings: string[] = [];
+  try {
+    const rec = await findSuburbId(suburb);
+    if (rec) {
+      const siblingRecs = await getDistrictSiblings(rec.id, 8);
+      siblings = siblingRecs.map((r) => r.title.toLowerCase());
+    }
+  } catch { /* ignore */ }
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const candidate of [...llm, ...siblings]) {
+    const key = candidate.toLowerCase().trim();
+    if (!key || key === suburb.toLowerCase() || seen.has(key)) continue;
+    seen.add(key);
+    out.push(candidate);
+    if (out.length >= max) break;
+  }
+  return out;
+}
 
 // ── Criteria-based re-ranking ──────────────────────────────────────────────────
 // Applies rule-based score boosts derived from the LLM-extracted criteria string
@@ -195,10 +180,11 @@ function shufflePick<T>(arr: T[], n: number): T[] {
   return copy.slice(0, end);
 }
 
-function parseDiscoverParams(text: string): { suburb: string | null; minPrice: number; maxPrice: number } {
-  // First try known NZ suburbs, then fall back to any location phrase after in/near/around
-  // so that unmapped suburbs still reach the scraper's dynamic keyword fallback.
-  const suburb = findSuburbInText(text) ?? extractLocationPhrase(text);
+async function parseDiscoverParams(text: string): Promise<{ suburb: string | null; minPrice: number; maxPrice: number }> {
+  // Resolve suburb against the live realestate.co.nz directory (1899 suburbs)
+  // — no hand-curated list. Coverage tracks the data source automatically.
+  const hit = await findSuburbInTextViaIndex(text);
+  const suburb = hit ? hit.title.toLowerCase() : null;
 
   const pricePatterns = [
     /under\s+\$?([0-9]+(?:\.[0-9]+)?)\s*([mk]?)/i,
@@ -543,7 +529,7 @@ router.post("/chat", async (req, res) => {
           if (!suburb && isFollowUp) {
             for (const msg of [...messages].reverse()) {
               if (msg.role === "user" && msg.content !== userText) {
-                const { suburb: prevSuburb, minPrice: prevMin, maxPrice: prevMax } = parseDiscoverParams(msg.content ?? "");
+                const { suburb: prevSuburb, minPrice: prevMin, maxPrice: prevMax } = await parseDiscoverParams(msg.content ?? "");
                 if (prevSuburb) {
                   suburb = prevSuburb;
                   if (!userTextHasPrice) {
@@ -624,7 +610,7 @@ router.post("/chat", async (req, res) => {
             // If the primary suburb returned nothing (scraper issue, low stock, etc.)
             // try the closest neighbouring suburbs one at a time until we get results.
             if (candidates.length === 0 && suburb) {
-              const nearbyList = NEARBY_SUBURBS[suburb.toLowerCase()] ?? [];
+              const nearbyList = await resolveNearbySuburbs(suburb, 5);
               // Run nearby-suburb scrapes concurrently and return as soon as the first
               // one yields any listings — keeps tail latency bounded when the slow
               // Playwright fallback is in play.
@@ -1140,9 +1126,9 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
       if (isSearchingPhrase && responseMode !== "discover") {
         // Try the user text first (most reliable), then scan the AI's response for a known suburb,
         // then try a last-resort phrase extraction from user text for unmapped suburbs.
-        const { suburb: userSuburb, minPrice, maxPrice } = parseDiscoverParams(userText);
-        const aiSuburb = userSuburb == null ? (findSuburbInText(content) ?? extractLocationPhrase(content)) : null;
-        const suburb = userSuburb ?? aiSuburb;
+        const { suburb: userSuburb, minPrice, maxPrice } = await parseDiscoverParams(userText);
+        const aiHit = userSuburb == null ? await findSuburbInTextViaIndex(content) : null;
+        const suburb = userSuburb ?? (aiHit ? aiHit.title.toLowerCase() : null);
         const includeNegotiation = /negotiat|without\s+price|no\s+price|poa|tender|auction/i.test(userText);
 
         if (suburb) {
