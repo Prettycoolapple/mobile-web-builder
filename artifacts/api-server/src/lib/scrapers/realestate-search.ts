@@ -1,5 +1,6 @@
 import { logger } from "../logger";
 import { fetchWithScrapingBee } from "./scrapingbee";
+import { launchBrowser, newStealthPage, withBrowserSlot } from "./browser";
 import type { ListingResult } from "./oneroof";
 
 /**
@@ -584,23 +585,49 @@ function extractListingUrlsFromHtml(
   return urls;
 }
 
+async function fetchSearchPageWithPlaywright(searchUrl: string): Promise<string | null> {
+  return withBrowserSlot(async () => {
+    let browser;
+    try {
+      browser = await launchBrowser();
+      const { context, page } = await newStealthPage(browser);
+      const resp = await page.goto(searchUrl, { timeout: 25000, waitUntil: "domcontentloaded" }).catch(() => null);
+      // Wait for the SPA to render listing cards (Ember hydrates async).
+      await page.waitForSelector('a[href*="/residential/sale/"]', { timeout: 8000 }).catch(() => {});
+      // Small extra settle to let lazy lists fill in
+      await page.waitForTimeout(1500);
+      const html = await page.content().catch(() => "");
+      await context.close().catch(() => {});
+      logger.info({ searchUrl, status: resp?.status(), len: html.length }, "realestate-search: Playwright fetched search page");
+      return html || null;
+    } catch (err) {
+      logger.warn({ err: (err as Error).message, searchUrl }, "realestate-search: Playwright fetch failed");
+      return null;
+    } finally {
+      await browser?.close().catch(() => {});
+    }
+  });
+}
+
 async function fetchListingUrlsFromPage(
   searchUrl: string,
   suburbMeta: { slug: string; district: string; region: string; altDistricts?: string[] } | undefined,
   skipUrls: string[],
   seen: Set<string>,
 ): Promise<string[]> {
-  // realestate.co.nz is a JavaScript-rendered Ember.js SPA.
-  // Use ScrapingBee with JS rendering so the app executes and returns suburb-specific results.
-  const beeHtml = await fetchWithScrapingBee(searchUrl, { render_js: true, premium_proxy: false, wait: 4000 }).catch(() => null);
-
-  if (beeHtml) {
-    const urls = extractListingUrlsFromHtml(beeHtml, suburbMeta, skipUrls, seen);
-    logger.info({ searchUrl, count: urls.length }, "realestate-search: ScrapingBee extracted listing URLs");
+  const tryHtml = (html: string, label: string): string[] => {
+    const urls = extractListingUrlsFromHtml(html, suburbMeta, skipUrls, seen);
+    logger.info({ searchUrl, count: urls.length, source: label }, "realestate-search: extracted listing URLs");
     if (urls.length > 0) return urls;
-    // If ScrapingBee returned HTML but 0 suburb-matched URLs, pick any listings from the page
+
+    // Only do an unfiltered scan when we have no suburb meta to enforce relevance.
+    // (When suburbMeta is set, picking up arbitrary "featured" carousel listings from
+    // unrelated suburbs would mislead the user — better to show nothing and let the
+    // route fall through to the nearby-suburb fallback.)
+    if (suburbMeta) return [];
+
     const allUrls: string[] = [];
-    for (const m of beeHtml.matchAll(/href="(\/\d+\/residential\/sale\/[^"?#]+)"/g)) {
+    for (const m of html.matchAll(/href="(\/\d+\/residential\/sale\/[^"?#]+)"/g)) {
       const fullUrl = `https://www.realestate.co.nz${m[1]}`;
       if (!seen.has(fullUrl) && !skipUrls.includes(fullUrl)) {
         seen.add(fullUrl);
@@ -608,13 +635,30 @@ async function fetchListingUrlsFromPage(
       }
     }
     if (allUrls.length > 0) {
-      logger.info({ searchUrl, count: allUrls.length }, "realestate-search: ScrapingBee extracted unfiltered listing URLs");
-      return allUrls;
+      logger.info({ searchUrl, count: allUrls.length, source: label }, "realestate-search: extracted unfiltered listing URLs (no suburb meta)");
     }
+    return allUrls;
+  };
+
+  // realestate.co.nz is a JavaScript-rendered Ember.js SPA.
+  // 1) Try ScrapingBee with JS rendering (fastest, no local browser cost).
+  const beeHtml = await fetchWithScrapingBee(searchUrl, { render_js: true, premium_proxy: false, wait: 4000 }).catch(() => null);
+  if (beeHtml) {
+    const urls = tryHtml(beeHtml, "scrapingbee");
+    if (urls.length > 0) return urls;
   }
 
-  // Fallback: plain fetch
-  logger.info({ searchUrl }, "realestate-search: ScrapingBee unavailable, falling back to plain fetch");
+  // 2) ScrapingBee unavailable (e.g. monthly limit reached) or returned no listings —
+  //    fall back to local headless Playwright which can also execute the SPA.
+  logger.info({ searchUrl }, "realestate-search: trying Playwright fallback");
+  const pwHtml = await fetchSearchPageWithPlaywright(searchUrl).catch(() => null);
+  if (pwHtml) {
+    const urls = tryHtml(pwHtml, "playwright");
+    if (urls.length > 0) return urls;
+  }
+
+  // 3) Last-ditch plain fetch (won't render JS but cheap; harmless if it returns nothing).
+  logger.info({ searchUrl }, "realestate-search: Playwright unavailable, falling back to plain fetch");
   try {
     const resp = await fetch(searchUrl, {
       headers: {

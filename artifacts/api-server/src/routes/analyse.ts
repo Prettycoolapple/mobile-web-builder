@@ -625,14 +625,42 @@ router.post("/chat", async (req, res) => {
             // try the closest neighbouring suburbs one at a time until we get results.
             if (candidates.length === 0 && suburb) {
               const nearbyList = NEARBY_SUBURBS[suburb.toLowerCase()] ?? [];
-              for (const nearbySuburb of nearbyList) {
-                req.log.info({ suburb, nearbySuburb }, "Discovery: primary suburb empty, trying nearby suburb");
-                const fallbackResult = await searchRealEstateListings({
-                  suburb: nearbySuburb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
-                  skipUrls: [],
-                  includeNegotiation,
-                }).catch(() => null);
+              // Run nearby-suburb scrapes concurrently and return as soon as the first
+              // one yields any listings — keeps tail latency bounded when the slow
+              // Playwright fallback is in play.
+              req.log.info({ suburb, nearbyList }, "Discovery: primary suburb empty, racing nearby suburb searches");
+              type FallbackHit = { nearbySuburb: string; fallbackResult: Awaited<ReturnType<typeof searchRealEstateListings>> };
+              const racers = nearbyList.map(
+                (nb): Promise<FallbackHit> =>
+                  searchRealEstateListings({
+                    suburb: nb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
+                    skipUrls: [],
+                    includeNegotiation,
+                  }).then((res) => {
+                    if (!res || res.firstBatch.length === 0) {
+                      // Reject so Promise.any moves on; if all reject we fall through to no-listings
+                      return Promise.reject(new Error(`empty:${nb}`));
+                    }
+                    return { nearbySuburb: nb, fallbackResult: res };
+                  }),
+              );
 
+              // Bound total wait time so when ScrapingBee is down and all Playwright
+              // fetches are slow, we don't keep the user waiting for the laggard.
+              const FALLBACK_DEADLINE_MS = 25_000;
+              const deadline = new Promise<null>((resolve) =>
+                setTimeout(() => resolve(null), FALLBACK_DEADLINE_MS),
+              );
+              const winner: FallbackHit | null = racers.length === 0
+                ? null
+                : await Promise.race([
+                    Promise.any(racers).catch(() => null),
+                    deadline,
+                  ]);
+
+              const orderedResults: FallbackHit[] = winner ? [winner] : [];
+
+              for (const { nearbySuburb, fallbackResult } of orderedResults) {
                 if (fallbackResult && fallbackResult.firstBatch.length > 0) {
                   const inRangeFallback = (l: { price: number | null }) =>
                     l.price == null || (l.price >= effectiveMinPrice && l.price <= effectiveMaxPrice * 1.1);
