@@ -478,13 +478,26 @@ router.post("/chat", async (req, res) => {
         reportCtx = { address: addr, suburb: suburbFromReport };
       }
 
-      // Already-shown addresses from conversation history (for follow-up de-duplication)
+      // Already-shown addresses + URLs from conversation history (for follow-up de-duplication).
+      // Discover responses are sent to the client as `content: JSON.stringify({candidates, ...})`,
+      // so we parse those JSON payloads to recover everything previously shown across the whole
+      // chat. This survives server restarts (in-memory listing cache lost) and prevents the
+      // "show me others" bug where the same listings re-appear.
       const alreadyShownFromHistory: string[] = [];
-      for (const msg of [...messages].reverse()) {
-        if (msg.role === "assistant") {
-          const m = /\[Search results shown: ([^\]]+)\]/.exec(msg.content ?? "");
-          if (m) { alreadyShownFromHistory.push(...m[1].split(";").map((a) => a.trim()).filter(Boolean)); break; }
-        }
+      const alreadyShownUrlsFromHistory: string[] = [];
+      for (const msg of messages) {
+        if (msg.role !== "assistant" || !msg.content) continue;
+        const trimmed = msg.content.trim();
+        if (!trimmed.startsWith("{")) continue;
+        try {
+          const parsed = JSON.parse(trimmed) as { candidates?: Array<{ address?: unknown; listingUrl?: unknown }> };
+          if (Array.isArray(parsed.candidates)) {
+            for (const c of parsed.candidates) {
+              if (typeof c.address === "string" && c.address) alreadyShownFromHistory.push(c.address);
+              if (typeof c.listingUrl === "string" && c.listingUrl) alreadyShownUrlsFromHistory.push(c.listingUrl);
+            }
+          }
+        } catch { /* not JSON, skip */ }
       }
 
       const intent = await extractChatIntent(messages, reportCtx, alreadyShownFromHistory);
@@ -570,9 +583,18 @@ router.post("/chat", async (req, res) => {
               }
             }
 
-            // Fresh search when: first search, clarification answer, or cache exhausted
+            // Fresh search when: first search, clarification answer, or cache exhausted.
+            // Combine in-memory shown URLs with history-derived URLs so we still skip
+            // previously-shown listings even after a server restart.
             if (candidates.length === 0) {
-              const shownUrls = getShownUrls(cacheKey);
+              const shownUrls = Array.from(new Set([
+                ...getShownUrls(cacheKey),
+                ...alreadyShownUrlsFromHistory,
+              ]));
+              req.log.info(
+                { fromCache: getShownUrls(cacheKey).length, fromHistory: alreadyShownUrlsFromHistory.length, total: shownUrls.length },
+                "Discovery: dedupe skipUrls assembled",
+              );
               const searchResult = await searchRealEstateListings({
                 suburb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
                 skipUrls: shownUrls,
