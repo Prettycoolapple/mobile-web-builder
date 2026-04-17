@@ -19,6 +19,7 @@ import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { useSubscription } from "@/lib/revenuecat";
+import { avatarImageSource } from "@/lib/avatar";
 
 const FREE_LIMIT = 2;
 const STANDARD_LIMIT = 20;
@@ -60,14 +61,6 @@ const PLAN_FEATURES = {
     "Chat & property search",
   ],
 };
-
-function resolveAvatarUrl(url: string | null | undefined): string | null {
-  if (!url) return null;
-  if (url.startsWith("http")) return url;
-  const domain = process.env["EXPO_PUBLIC_DOMAIN"];
-  if (domain) return `https://${domain}${url}`;
-  return url;
-}
 
 function getApiBase(): string {
   if (process.env["EXPO_PUBLIC_DOMAIN"]) {
@@ -354,7 +347,7 @@ export default function ProfileScreen() {
     );
   };
 
-  const avatarUrl = resolveAvatarUrl(user?.avatarUrl);
+  const avatarSource = avatarImageSource(user?.avatarUrl, getApiHeaders());
   const displayInitial = (user?.fullName ?? user?.email ?? "?").slice(0, 1).toUpperCase();
 
   return (
@@ -362,8 +355,8 @@ export default function ProfileScreen() {
       <View style={[styles.header, { paddingTop: topInset, backgroundColor: colors.headerBg }]}>
         <View style={styles.headerContent}>
           <View style={styles.headerRow}>
-            {avatarUrl ? (
-              <Image source={{ uri: avatarUrl }} style={styles.headerAvatar} />
+            {avatarSource ? (
+              <Image source={avatarSource} style={styles.headerAvatar} />
             ) : (
               <View style={[styles.headerAvatarInitials, { backgroundColor: "rgba(250,249,246,0.15)" }]}>
                 <Text style={[styles.headerAvatarText, { color: colors.headerText, fontFamily: "DM_Sans_700Bold" }]}>
@@ -404,8 +397,8 @@ export default function ProfileScreen() {
           {/* Avatar row */}
           <TouchableOpacity onPress={handlePickAvatar} disabled={avatarUploading} style={styles.avatarRow} activeOpacity={0.8}>
             <View style={styles.avatarWrap}>
-              {avatarUrl ? (
-                <Image source={{ uri: avatarUrl }} style={styles.avatar} />
+              {avatarSource ? (
+                <Image source={avatarSource} style={styles.avatar} />
               ) : (
                 <View style={[styles.avatarPlaceholder, { backgroundColor: colors.accent + "30", borderColor: colors.accent + "50" }]}>
                   <Text style={[styles.avatarInitial, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>

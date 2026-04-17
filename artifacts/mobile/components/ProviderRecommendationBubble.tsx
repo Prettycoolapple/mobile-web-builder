@@ -10,14 +10,8 @@ import {
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { ServiceProvider } from "@/context/ChatContext";
-
-function resolveAvatarUrl(url: string | null | undefined): string | null {
-  if (!url) return null;
-  if (url.startsWith("http")) return url;
-  const domain = process.env.EXPO_PUBLIC_DOMAIN;
-  if (domain) return `https://${domain}${url}`;
-  return url;
-}
+import { useAuth } from "@/context/AuthContext";
+import { avatarImageSource } from "@/lib/avatar";
 
 interface Props {
   provider: ServiceProvider;
@@ -28,7 +22,8 @@ interface Props {
 }
 
 function ProviderAvatar({ provider }: { provider: ServiceProvider }) {
-  const avatarUri = resolveAvatarUrl(provider.avatarUrl);
+  const { getApiHeaders } = useAuth();
+  const source = avatarImageSource(provider.avatarUrl, getApiHeaders());
   const initials = (provider.fullName ?? "?")
     .split(" ")
     .slice(0, 2)
@@ -36,10 +31,10 @@ function ProviderAvatar({ provider }: { provider: ServiceProvider }) {
     .join("")
     .toUpperCase();
 
-  if (avatarUri) {
+  if (source) {
     return (
       <Image
-        source={{ uri: avatarUri }}
+        source={source}
         style={styles.avatarImage}
         resizeMode="cover"
       />

@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { Readable } from "stream";
 import { eq } from "drizzle-orm";
-import { db, userUploads } from "@workspace/db";
+import { db, userUploads, profiles } from "@workspace/db";
 import { RequestUploadUrlBody, RequestUploadUrlResponse } from "@workspace/api-zod";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage";
 import { requireAuth } from "../lib/auth";
@@ -75,8 +75,19 @@ router.get("/storage/objects/*path", requireAuth, async (req: Request, res: Resp
       .limit(1);
 
     if (!ownerRecord || ownerRecord.userId !== userId) {
-      res.status(403).json({ error: "Access denied", code: "FORBIDDEN" });
-      return;
+      // Avatars are visible to any authenticated user — check whether this
+      // object is currently set as someone's profile avatar.
+      const avatarUrl = `/api/storage${objectPath}`;
+      const [avatarMatch] = await db
+        .select({ id: profiles.id })
+        .from(profiles)
+        .where(eq(profiles.avatarUrl, avatarUrl))
+        .limit(1);
+
+      if (!avatarMatch) {
+        res.status(403).json({ error: "Access denied", code: "FORBIDDEN" });
+        return;
+      }
     }
 
     const objectFile = await objectStorageService.getObjectEntityFile(objectPath);

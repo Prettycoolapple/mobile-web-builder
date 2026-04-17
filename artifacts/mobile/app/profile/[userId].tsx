@@ -13,6 +13,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
+import { avatarImageSource } from "@/lib/avatar";
 
 function getApiBase(): string {
   if (process.env.EXPO_PUBLIC_DOMAIN) {
@@ -76,6 +77,7 @@ function Avatar({
   size?: number;
   colors: ReturnType<typeof useColors>;
 }) {
+  const { getApiHeaders } = useAuth();
   const initials = (name ?? "?")
     .split(" ")
     .slice(0, 2)
@@ -83,11 +85,12 @@ function Avatar({
     .join("")
     .toUpperCase();
   const color = roleColor(role, colors);
+  const source = avatarImageSource(avatarUrl, getApiHeaders());
 
-  if (avatarUrl) {
+  if (source) {
     return (
       <Image
-        source={{ uri: avatarUrl }}
+        source={source}
         style={{
           width: size,
           height: size,
