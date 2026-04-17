@@ -25,7 +25,7 @@ const MUTED = "rgba(250,249,246,0.55)";
 const BORDER = "rgba(250,249,246,0.1)";
 
 const FEATURES: { icon: React.ComponentProps<typeof Feather>["name"]; label: string }[] = [
-  { icon: "cpu", label: "Lecorb will recommend you to users when their need fits your expertise." },
+  { icon: "cpu", label: "Groundup will recommend you to users when their need fits your expertise." },
   { icon: "trending-up", label: "Get insights into your potential client" },
   { icon: "globe", label: "AI powered live translation — help you get clients speaking different languages." },
   { icon: "file-text", label: "Access to feasibility reports" },
@@ -126,9 +126,9 @@ export default function ServiceProviderWelcomeScreen() {
             <View style={styles.popupIconWrap}>
               <Feather name="star" size={28} color={ACCENT2} />
             </View>
-            <Text style={styles.popupTitle}>You're on Lecorb!</Text>
+            <Text style={styles.popupTitle}>You're on Groundup!</Text>
             <Text style={styles.popupBody}>
-              Lecorb will start recommending you for suitable jobs as property developers and investors look for your expertise.
+              Groundup will start recommending you for suitable jobs as property developers and investors look for your expertise.
               {"\n\n"}Build your recommendations to boost your visibility across the platform.
             </Text>
             <TouchableOpacity

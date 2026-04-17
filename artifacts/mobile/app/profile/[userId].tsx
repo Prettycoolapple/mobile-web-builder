@@ -449,7 +449,7 @@ export default function UserProfileScreen() {
                 <Text style={{ fontFamily: "DM_Sans_700Bold", color: accentColor }}>
                   {profile.recommendationCount}
                 </Text>{" "}
-                {profile.recommendationCount === 1 ? "person" : "people"} in the Lecorb community
+                {profile.recommendationCount === 1 ? "person" : "people"} in the Groundup community
               </Text>
             </View>
           )}

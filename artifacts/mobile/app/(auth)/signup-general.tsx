@@ -214,7 +214,7 @@ export default function SignupGeneralScreen() {
             What should{"\n"}we call you?
           </Text>
           <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
-            We'll personalise your Lecorb experience.
+            We'll personalise your Groundup experience.
           </Text>
 
           <View style={styles.fieldRow}>

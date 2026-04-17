@@ -12,12 +12,12 @@ import {
   Keyboard,
   KeyboardAvoidingView,
 } from "react-native";
-import Svg, { Circle, Line, Path } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
+import { GroundupLogo } from "@/components/GroundupLogo";
 import { useChat, ChatMessage, FeasibilityReport, PropertyCandidate, ServiceProvider } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
 import { ChatBubble } from "@/components/ChatBubble";
@@ -54,49 +54,6 @@ function extractJSON(text: string): unknown | null {
     if (match) return JSON.parse(match[0]);
   } catch {}
   return null;
-}
-
-function GlassesLogo({ size = 40, color = "#D97757" }: { size?: number; color?: string }) {
-  const w = size * 1.5;
-  const h = size * 0.65;
-  const r = size * 0.28;
-  const cx1 = size * 0.32;
-  const cx2 = size * 1.18;
-  const cy = h * 0.55;
-  const strokeW = size * 0.065;
-  return (
-    <Svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
-      <Circle cx={cx1} cy={cy} r={r} stroke={color} strokeWidth={strokeW} fill="none" />
-      <Circle cx={cx2} cy={cy} r={r} stroke={color} strokeWidth={strokeW} fill="none" />
-      <Line
-        x1={cx1 + r}
-        y1={cy}
-        x2={cx2 - r}
-        y2={cy}
-        stroke={color}
-        strokeWidth={strokeW * 0.8}
-        strokeLinecap="round"
-      />
-      <Line
-        x1={cx1 - r}
-        y1={cy - r * 0.3}
-        x2={cx1 - r - size * 0.2}
-        y2={cy - r * 0.65}
-        stroke={color}
-        strokeWidth={strokeW * 0.8}
-        strokeLinecap="round"
-      />
-      <Line
-        x1={cx2 + r}
-        y1={cy - r * 0.3}
-        x2={cx2 + r + size * 0.2}
-        y2={cy - r * 0.65}
-        stroke={color}
-        strokeWidth={strokeW * 0.8}
-        strokeLinecap="round"
-      />
-    </Svg>
-  );
 }
 
 export default function SearchScreen() {
@@ -776,8 +733,8 @@ export default function SearchScreen() {
       }]}>
         <View style={styles.topBarContent}>
           <View style={styles.brandRow}>
-            <GlassesLogo size={22} color={colors.accent} />
-            <Text style={[styles.appName, { fontFamily: "DM_Sans_700Bold" }]}>Lecorb</Text>
+            <GroundupLogo size={28} color={colors.accent} />
+            <Text style={[styles.appName, { fontFamily: "DM_Sans_700Bold" }]}>Groundup</Text>
           </View>
           <View style={styles.headerActions}>
             {user?.role === "sales_agent" && (
@@ -835,7 +792,7 @@ export default function SearchScreen() {
             <View style={styles.landingContent}>
               {/* Glasses hero */}
               <View style={styles.landingLogo}>
-                <GlassesLogo size={48} color={colors.accent} />
+                <GroundupLogo size={64} color={colors.accent} />
               </View>
 
               <Text style={[styles.landingTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>

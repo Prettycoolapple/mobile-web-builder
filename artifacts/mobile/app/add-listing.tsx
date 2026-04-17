@@ -725,7 +725,7 @@ export default function AddListingScreen() {
             <Text style={[styles.successBody, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
               {isEditMode
                 ? "Your listing has been updated successfully."
-                : "Lecorb will promote your listing to suitable buyers now."}
+                : "Groundup will promote your listing to suitable buyers now."}
             </Text>
             <TouchableOpacity
               style={[styles.successBtn, { backgroundColor: colors.accent }]}
