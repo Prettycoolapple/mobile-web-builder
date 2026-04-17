@@ -20,7 +20,7 @@ const ROLES = [
     tagline: "Explore NZ property intelligence",
     accent: "#D97757",
     badgeLabel: "Free",
-    priceNote: "Free forever · No credit card",
+    priceNote: "",
     ctaLabel: "Get started",
     features: [
       "Analyse NZ properties & run feasibility reports",
@@ -37,7 +37,7 @@ const ROLES = [
   //   tagline: "Power your real estate career with AI",
   //   accent: "#D97757",
   //   badgeLabel: "$99 / mo",
-  //   priceNote: "14-day free trial · No credit card",
+  //   priceNote: "",
   //   ctaLabel: "Start free trial",
   //   features: [
   //     "Analyse NZ properties & run feasibility reports",
@@ -54,9 +54,9 @@ const ROLES = [
     title: "Service Provider",
     tagline: "Connect with developers who need you",
     accent: "#52C99A",
-    badgeLabel: "$149 / mo",
-    priceNote: "14-day free trial · No credit card",
-    ctaLabel: "Start free trial",
+    badgeLabel: "",
+    priceNote: "",
+    ctaLabel: "Get started",
     features: [
       "Analyse NZ properties & run feasibility reports",
       "Client leads",
@@ -124,9 +124,11 @@ export default function RoleSelectionScreen() {
                     {role.tagline}
                   </Text>
                 </View>
-                <View style={[styles.badge, { backgroundColor: role.accent + "18" }]}>
-                  <Text style={[styles.badgeText, { color: role.accent }]}>{role.badgeLabel}</Text>
-                </View>
+                {role.badgeLabel ? (
+                  <View style={[styles.badge, { backgroundColor: role.accent + "18" }]}>
+                    <Text style={[styles.badgeText, { color: role.accent }]}>{role.badgeLabel}</Text>
+                  </View>
+                ) : null}
               </View>
 
               <View style={[styles.divider, { backgroundColor: colors.border }]} />
@@ -143,9 +145,11 @@ export default function RoleSelectionScreen() {
               </View>
 
               <View style={[styles.cardFooter, { borderTopColor: colors.border }]}>
-                <Text style={[styles.priceNote, { color: colors.mutedForeground }]}>
-                  {role.priceNote}
-                </Text>
+                {role.priceNote ? (
+                  <Text style={[styles.priceNote, { color: colors.mutedForeground }]}>
+                    {role.priceNote}
+                  </Text>
+                ) : <View />}
                 <View style={styles.ctaRow}>
                   <Text style={[styles.ctaText, { color: role.accent }]}>{role.ctaLabel}</Text>
                   <Feather name="arrow-right" size={13} color={role.accent} />
