@@ -334,10 +334,11 @@ function buildPhotoUrl(photos: RawListing["attributes"]["photos"]): string | nul
   const first = photos[0];
   const baseUrl = first["base-url"];
   if (!baseUrl) return null;
-  // Photos are templated: "/listings/{id}/{md5}" + size suffix like ".crop.700x466.jpg"
-  // We try the largest standard variant; fall back to the literal "large" template.
-  const sizeSuffix = first.large ?? ".crop.350x230.jpg";
-  return `${MEDIA_BASE}${baseUrl}${sizeSuffix}`;
+  // The API exposes only tiny templates in `small`/`medium`/`large` (≤140×178).
+  // The realestate.co.nz site itself uses an undocumented high-res variant on
+  // mediaserver.realestate.co.nz at 1280×720 — sharp on retina phones for our
+  // ~400×140-pt card. Verified 200 OK across all listings tested.
+  return `${MEDIA_BASE}${baseUrl}.crop.1280x720.jpg`;
 }
 
 function mapListing(raw: RawListing): ListingResult | null {
