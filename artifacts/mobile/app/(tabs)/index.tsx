@@ -414,16 +414,51 @@ export default function SearchScreen() {
     const currentReport = currentSession?.currentReport ?? undefined;
     const headers = getApiHeaders();
 
+    // Warms the backend in case it's cold-starting. Pings /healthz repeatedly
+    // (short timeout per ping) until it responds OK or we give up. Returns true
+    // if the service responded, false otherwise.
+    const warmUpService = async (maxWaitMs: number = 45_000): Promise<boolean> => {
+      const start = Date.now();
+      let pingAttempt = 0;
+      while (Date.now() - start < maxWaitMs) {
+        pingAttempt++;
+        try {
+          const c = new AbortController();
+          const t = setTimeout(() => c.abort(), 5_000);
+          const r = await fetch(`${getApiBase()}/healthz`, { method: "GET", signal: c.signal });
+          clearTimeout(t);
+          if (r.ok) return true;
+        } catch {
+          // ignore and retry
+        }
+        await new Promise<void>((res) => setTimeout(res, Math.min(3000, 1000 + pingAttempt * 500)));
+      }
+      return false;
+    };
+
     try {
       let lastErr: any = null;
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         if (attempt > 1) {
+          const isRetryableLast = lastErr?.name === "AbortError" || lastErr?.isServerError || lastErr?.isNetworkError;
+          if (isRetryableLast) {
+            updateLastMessage({
+              type: "loading",
+              content: "",
+              retryLabel: "Waking up the service…",
+            }, sessionId);
+            const woke = await warmUpService();
+            if (!woke) {
+              // Service still not responding — don't burn more attempts blindly.
+              break;
+            }
+          }
           updateLastMessage({
             type: "loading",
             content: "",
             retryLabel: attempt === MAX_RETRIES ? "Still fetching data, one moment…" : "Fetching data…",
           }, sessionId);
-          await new Promise<void>((r) => setTimeout(r, 2000 * (attempt - 1)));
+          await new Promise<void>((r) => setTimeout(r, 1500));
         }
 
         try {
@@ -513,9 +548,15 @@ export default function SearchScreen() {
           }
           return;
         } catch (err: any) {
+          // Plain network failures (e.g. cold-start, DNS, dropped connection)
+          // surface as TypeError. Tag them so the warm-up path triggers next loop.
+          if (err && err.name === "TypeError" && !err.statusCode) {
+            err.isNetworkError = true;
+          }
           lastErr = err;
-          // Retry on server errors and timeouts; bail immediately on anything else
-          const isRetryable = err?.name === "AbortError" || err?.isServerError;
+          // Retry on server errors, network errors, and timeouts; bail otherwise
+          const isRetryable =
+            err?.name === "AbortError" || err?.isServerError || err?.isNetworkError;
           if (!isRetryable || attempt >= MAX_RETRIES) break;
         }
       }
