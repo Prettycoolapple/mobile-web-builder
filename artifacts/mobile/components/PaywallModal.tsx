@@ -14,20 +14,13 @@ import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { useSubscription } from "@/lib/revenuecat";
+import { useT } from "@/lib/i18n";
 
 interface Props {
   visible: boolean;
   onClose: () => void;
   onPurchaseSuccess?: () => void;
 }
-
-const FEATURES = [
-  "20 feasibility reports per month",
-  "Complete property data pipeline",
-  "Risk assessments & ROI modelling",
-  "Save and revisit past reports",
-  "Export to PDF (coming soon)",
-];
 
 function getApiBase(): string {
   if (process.env["EXPO_PUBLIC_DOMAIN"]) {
@@ -40,6 +33,14 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
   const colors = useColors();
   const { getApiHeaders, refreshProfile } = useAuth();
   const { purchase, restore, isPurchasing, isRestoring, getPackageForRole, getPriceForRole } = useSubscription();
+  const { t } = useT();
+  const FEATURES = [
+    t("paywall.f1"),
+    t("paywall.f2"),
+    t("paywall.f3"),
+    t("paywall.f4"),
+    t("paywall.f5"),
+  ];
   const slideAnim = useRef(new Animated.Value(400)).current;
   const overlayAnim = useRef(new Animated.Value(0)).current;
 
@@ -74,30 +75,24 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
   const handleUpgrade = async () => {
     const pkg = getPackageForRole("general");
     if (!pkg) {
-      Alert.alert(
-        "Not available",
-        "In-app purchases require the full app build. If you have already purchased, tap Restore.",
-      );
+      Alert.alert(t("paywall.not_available"), t("paywall.iap_required"));
       return;
     }
     try {
       await purchase(pkg);
       const synced = await syncToBackend("pro");
       if (!synced) {
-        Alert.alert(
-          "Almost there",
-          "Your payment went through but we couldn't activate your account. Please try again in a moment, or contact support if it persists.",
-        );
+        Alert.alert(t("paywall.almost_there"), t("paywall.no_account_activate"));
         return;
       }
       onPurchaseSuccess?.();
       onClose();
-      Alert.alert("Welcome to Standard!", "You now have 20 reports per month.");
+      Alert.alert(t("paywall.welcome_title"), t("paywall.welcome_msg"));
     } catch (err: unknown) {
       const userCancelled = (err as { userCancelled?: boolean })?.userCancelled;
       if (!userCancelled) {
         const message = (err as { message?: string })?.message;
-        Alert.alert("Purchase failed", message ?? "Something went wrong. Please try again.");
+        Alert.alert(t("paywall.purchase_failed"), message ?? t("paywall.purchase_failed_msg"));
       }
     }
   };
@@ -110,12 +105,12 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
         await syncToBackend("pro");
         onPurchaseSuccess?.();
         onClose();
-        Alert.alert("Purchases restored", "Your Standard subscription is active.");
+        Alert.alert(t("paywall.restored_title"), t("paywall.restored_msg"));
       } else {
-        Alert.alert("No purchases found", "No active Standard subscription was found for this account.");
+        Alert.alert(t("paywall.no_purchases"), t("paywall.no_purchases_msg"));
       }
     } catch {
-      Alert.alert("Restore failed", "Could not restore purchases. Please try again.");
+      Alert.alert(t("paywall.restore_failed"), t("paywall.restore_failed_msg"));
     }
   };
 
@@ -137,10 +132,10 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
           </View>
 
           <Text style={[styles.title, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
-            Upgrade to Standard
+            {t("paywall.title")}
           </Text>
           <Text style={[styles.subtitle, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-            20 reports per month with full AI-powered property analysis
+            {t("paywall.subtitle")}
           </Text>
 
           <View style={styles.features}>
@@ -154,13 +149,13 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
 
           <View style={[styles.planCard, { borderColor: colors.accent, backgroundColor: colors.accent + "10", borderWidth: 2, alignSelf: "stretch" }]}>
             <Text style={[styles.planLabel, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>
-              Standard Monthly
+              {t("paywall.standard_monthly")}
             </Text>
             <Text style={[styles.planPrice, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
               {priceString}
             </Text>
             <Text style={[styles.planDesc, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-              Billed monthly · Cancel anytime
+              {t("paywall.billed_cancel")}
             </Text>
           </View>
 
@@ -174,7 +169,7 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
               ? <ActivityIndicator size="small" color="#fff" />
               : <>
                   <Text style={[styles.upgradeBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>
-                    Get Standard
+                    {t("paywall.get_standard")}
                   </Text>
                   <Feather name="arrow-right" size={16} color="#fff" />
                 </>
@@ -188,20 +183,18 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
             disabled={isPurchasing || isRestoring}
           >
             <Text style={[styles.restoreText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-              {isRestoring ? "Restoring…" : "Restore purchases"}
+              {isRestoring ? t("paywall.restoring") : t("paywall.restore")}
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity onPress={onClose} style={styles.dismissBtn} activeOpacity={0.7}>
             <Text style={[styles.dismissText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-              Maybe later
+              {t("paywall.maybe_later")}
             </Text>
           </TouchableOpacity>
 
           <Text style={[styles.legalText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-            Payment will be charged to your {Platform.OS === "ios" ? "Apple ID" : "Google Play"} account at confirmation.
-            Subscriptions automatically renew unless cancelled at least 24 hours before the end of the current period.
-            Manage in your device Settings.
+            {t("paywall.legal", { store: Platform.OS === "ios" ? "Apple ID" : "Google Play" })}
           </Text>
         </Animated.View>
       </Animated.View>

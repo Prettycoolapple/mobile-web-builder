@@ -16,6 +16,7 @@ import { useColors } from "@/hooks/useColors";
 import { useChat, FeasibilityReport } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "expo-router";
+import { useT } from "@/lib/i18n";
 
 type SearchSummary = {
   id: string;
@@ -32,19 +33,22 @@ function getApiBase(): string {
   return "/api";
 }
 
-function formatDate(dateStr: string): string {
-  try {
-    const d = new Date(dateStr);
-    const now = new Date();
-    const diffMs = now.getTime() - d.getTime();
-    const diffDays = Math.floor(diffMs / 86400000);
-    if (diffDays === 0) return "Today";
-    if (diffDays === 1) return "Yesterday";
-    if (diffDays < 7) return `${diffDays} days ago`;
-    return d.toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" });
-  } catch {
-    return dateStr;
-  }
+function useFormatDate() {
+  const { t, locale } = useT();
+  return (dateStr: string): string => {
+    try {
+      const d = new Date(dateStr);
+      const now = new Date();
+      const diffMs = now.getTime() - d.getTime();
+      const diffDays = Math.floor(diffMs / 86400000);
+      if (diffDays === 0) return t("history.today");
+      if (diffDays === 1) return t("history.yesterday");
+      if (diffDays < 7) return t("history.days_ago", { n: diffDays });
+      return d.toLocaleDateString(locale === "zh" ? "zh-CN" : "en-NZ", { day: "numeric", month: "short", year: "numeric" });
+    } catch {
+      return dateStr;
+    }
+  };
 }
 
 function ScoreDot({ score }: { score: number }) {
@@ -68,6 +72,7 @@ interface HistoryItemProps {
 
 function HistoryItem({ item, onTap, onDelete, isOpening }: HistoryItemProps) {
   const colors = useColors();
+  const formatDate = useFormatDate();
   return (
     <TouchableOpacity
       onPress={onTap}
@@ -123,6 +128,7 @@ export default function HistoryScreen() {
   const { openHistoryReport, startNewChat } = useChat();
   const { getApiHeaders } = useAuth();
   const router = useRouter();
+  const { t } = useT();
 
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
@@ -161,7 +167,7 @@ export default function HistoryScreen() {
         headers: getApiHeaders(),
       });
       if (!resp.ok) {
-        Alert.alert("Error", "Could not load this report. Please try again.");
+        Alert.alert(t("common.error"), t("history.error_load"));
         return;
       }
       const data = await resp.json() as {
@@ -172,7 +178,7 @@ export default function HistoryScreen() {
       openHistoryReport(address, report);
       router.push("/(tabs)/");
     } catch {
-      Alert.alert("Error", "Could not load this report. Please try again.");
+      Alert.alert(t("common.error"), t("history.error_load"));
     } finally {
       setOpeningId(null);
     }
@@ -180,12 +186,12 @@ export default function HistoryScreen() {
 
   const handleDelete = useCallback((item: SearchSummary) => {
     Alert.alert(
-      "Delete report",
-      "Remove this analysis from your history?",
+      t("history.delete_title"),
+      t("history.delete_msg"),
       [
-        { text: "Cancel", style: "cancel" },
+        { text: t("history.cancel"), style: "cancel" },
         {
-          text: "Delete",
+          text: t("history.delete"),
           style: "destructive",
           onPress: async () => {
             try {
@@ -195,7 +201,7 @@ export default function HistoryScreen() {
               });
               setSearches((prev) => prev.filter((s) => s.id !== item.id));
             } catch {
-              Alert.alert("Error", "Could not delete this report. Please try again.");
+              Alert.alert(t("common.error"), t("history.error_delete"));
             }
           },
         },
@@ -213,7 +219,7 @@ export default function HistoryScreen() {
       <View style={[styles.header, { paddingTop: topInset, backgroundColor: colors.headerBg }]}>
         <View style={styles.headerContent}>
           <Text style={[styles.headerTitle, { color: colors.headerText, fontFamily: "DM_Sans_600SemiBold" }]}>
-            History
+            {t("history.title")}
           </Text>
           <TouchableOpacity
             style={[styles.newBtn, { backgroundColor: colors.accent }]}
@@ -221,7 +227,7 @@ export default function HistoryScreen() {
             activeOpacity={0.8}
           >
             <Feather name="plus" size={15} color="#fff" />
-            <Text style={[styles.newBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>New Search</Text>
+            <Text style={[styles.newBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>{t("history.new")}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -236,17 +242,17 @@ export default function HistoryScreen() {
             <Feather name="clock" size={28} color={colors.mutedForeground} />
           </View>
           <Text style={[styles.emptyTitle, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>
-            No analyses yet
+            {t("history.empty_title")}
           </Text>
           <Text style={[styles.emptyText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-            Your property analyses will appear here. Tap any to reopen and continue the conversation.
+            {t("history.empty_text")}
           </Text>
           <TouchableOpacity
             style={[styles.emptyBtn, { backgroundColor: colors.accent }]}
             onPress={handleNew}
             activeOpacity={0.8}
           >
-            <Text style={[styles.emptyBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>Start analysing</Text>
+            <Text style={[styles.emptyBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>{t("history.empty_btn")}</Text>
           </TouchableOpacity>
         </View>
       ) : (
@@ -273,7 +279,7 @@ export default function HistoryScreen() {
           }
           ListHeaderComponent={
             <Text style={[styles.hint, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-              Tap to reopen · Long-press to delete
+              {t("history.hint")}
             </Text>
           }
         />

@@ -32,6 +32,11 @@ import {
   getShownUrls,
 } from "../lib/listing-cache";
 import { queueBackgroundScores, getCardScores } from "../lib/analysis-cache";
+import { normaliseLocale } from "../lib/prompts";
+
+function localeFromReq(req: { headers: Record<string, string | string[] | undefined> }) {
+  return normaliseLocale(req.headers["x-locale"] ?? req.headers["accept-language"]);
+}
 
 const router = Router();
 
@@ -362,8 +367,9 @@ router.post("/analyse", async (req, res) => {
     // Run the deterministic pipeline in parallel with the LLM report so the
     // response includes verified merge data (CV, land/floor area, listing
     // reconciliation) and a pinned property_overview_snapshot for follow-ups.
+    const locale = localeFromReq(req as any);
     const [raw, pipelineResult] = await Promise.all([
-      generateFeasibilityReport(address, conversationHistory || []),
+      generateFeasibilityReport(address, conversationHistory || [], locale),
       runPropertyPipeline(address).catch((err) => {
         req.log.warn({ err }, "Pipeline failed during /analyse — falling back to LLM-only report");
         return null;
@@ -430,7 +436,7 @@ router.post("/search", async (req, res) => {
   const userId = getUserIdFromHeader(req);
 
   try {
-    const raw = await generateSearchResults(query, suburb, minPrice, maxPrice);
+    const raw = await generateSearchResults(query, suburb, minPrice, maxPrice, localeFromReq(req as any));
     const result = extractJSON(raw) as { suburb: string; candidates: unknown[] };
 
     if (userId) {
@@ -530,6 +536,7 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
 }
 
 router.post("/chat", async (req, res) => {
+  const chatLocale = localeFromReq(req as any);
   const { messages, currentReport, message, conversationHistory, reportContext } = req.body as {
     messages?: Message[];
     currentReport?: object;
@@ -722,7 +729,7 @@ router.post("/chat", async (req, res) => {
                 const introPromptPreScreen = `The user asked: "${userText}". You found some matching properties in ${suburb || "the area"} on realestate.co.nz${criteriaContext}. In 1 sentence, acknowledge this result conversationally (e.g. "I found a few development sites in St Heliers under $2M:"). Do NOT mention a specific number — say "a few", "some", or "a handful". Be natural and brief — no JSON.`;
                 const [screened, introFromPreScreen] = await Promise.all([
                   preScreenListingsFast(firstFiltered, 5).catch(() => []),
-                  generateAnalysis(introPromptPreScreen).catch(() => ""),
+                  generateAnalysis(introPromptPreScreen, chatLocale).catch(() => ""),
                 ]);
                 // Re-rank by user criteria then randomly pick to show variety
                 candidates = shufflePick(rankByCriteria(screened, intent.criteria), 3);
@@ -786,7 +793,7 @@ router.post("/chat", async (req, res) => {
                     const introPromptFallback = `The user asked about ${suburb}${criteriaContextFallback} but no listings were found there right now. You found some properties in nearby ${nearbySuburb}. In 1 sentence acknowledge this naturally (e.g. "I couldn't find anything in ${suburb} right now, but here are some nearby options in ${nearbySuburb}:"). Do NOT mention a specific number — say "a few", "some", or "a handful". Be brief — no JSON.`;
                     const [screenedFallback, introFallback] = await Promise.all([
                       preScreenListingsFast(filtered, 5).catch(() => [] as PropertyCandidate[]),
-                      generateAnalysis(introPromptFallback).catch(() => ""),
+                      generateAnalysis(introPromptFallback, chatLocale).catch(() => ""),
                     ]);
                     if (screenedFallback.length > 0) {
                       candidates = shufflePick(rankByCriteria(screenedFallback, intent.criteria), 3);
@@ -810,7 +817,7 @@ router.post("/chat", async (req, res) => {
               const introPrompt = noListings
                 ? `The user asked: "${userText}". No matching listings were found on realestate.co.nz right now for ${suburb || "this area"}${criteriaContextGeneral}. In 1-2 sentences, acknowledge this warmly and suggest they try a different suburb, adjust their budget, or check back soon. Do NOT output any JSON.`
                 : `The user asked: "${userText}". You found some matching properties in ${suburb || "the area"} on realestate.co.nz${criteriaContextGeneral}. In 1 sentence, acknowledge the results conversationally. Do NOT mention a specific number — say "a few", "some", or "a handful". Be natural and brief — no JSON.`;
-              aiIntro = await generateAnalysis(introPrompt).catch(() => "");
+              aiIntro = await generateAnalysis(introPrompt, chatLocale).catch(() => "");
             } catch { /* silent */ }
           }
 
@@ -874,7 +881,7 @@ router.post("/chat", async (req, res) => {
                 "Follow-up about already-analysed property — skipping pipeline, using currentReport",
               );
               // Fall through to generateUnifiedResponse below (mode will be treated as followup)
-              const { content, mode: responseMode } = await generateUnifiedResponse(messages, currentReport, "followup");
+              const { content, mode: responseMode } = await generateUnifiedResponse(messages, currentReport, "followup", chatLocale);
               res.json({ content, mode: responseMode });
               return;
             }
@@ -1170,7 +1177,7 @@ CRITICAL: Land (CV) cost MUST be a realistic NZD estimate based on the suburb, z
 Generate a complete FeasibilityReport JSON following your system instructions exactly. Use the fetched data as your primary source — prefer confirmed data over estimates. Where data is missing or a source failed, make reasonable NZ-market estimates and flag in riskSummary. Return ONLY valid JSON — no markdown code fences, no other text.`;
             }
 
-            const rawContent = await generateAnalysis(enrichedContent);
+            const rawContent = await generateAnalysis(enrichedContent, chatLocale);
 
             // Inject scraped fields + override ROI cases with computed values
             const photoUrl = pipelineResult.oneroof?.main_photo_url ?? null;
@@ -1257,7 +1264,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
           // context so we can use sendAnalyseResponse (avoids ERR_HTTP_HEADERS_SENT
           // if the heartbeat already committed the response headers).
           try {
-            const { content: aiContent, mode: aiMode } = await generateUnifiedResponse(messages, currentReport, intent.mode);
+            const { content: aiContent, mode: aiMode } = await generateUnifiedResponse(messages, currentReport, intent.mode, chatLocale);
             sendAnalyseResponse({ content: aiContent, mode: aiMode });
           } catch {
             sendAnalyseResponse({ error: "Failed to generate reply. Please try again.", code: "CHAT_FAILED" });
@@ -1267,7 +1274,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
 
       }
 
-      const { content, mode: responseMode } = await generateUnifiedResponse(messages, currentReport, intent.mode);
+      const { content, mode: responseMode } = await generateUnifiedResponse(messages, currentReport, intent.mode, chatLocale);
 
       // Safety net A: if the AI said "I'm searching..." but the discover pipeline didn't run,
       // extract the suburb from the AI's text and actually run the search now.
@@ -1367,6 +1374,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
       message,
       conversationHistory || [],
       reportContext,
+      chatLocale,
     );
     res.json({ message: reply, type: "chat" });
   } catch (error) {

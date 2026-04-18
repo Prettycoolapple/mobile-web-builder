@@ -159,3 +159,24 @@ export const DISCOVER_AUGMENTATION = `Generate realistic NZ property development
   ]
 }
 Return ONLY the JSON, no other text.`;
+
+export type Locale = "en" | "zh";
+
+export function normaliseLocale(raw: string | string[] | undefined | null): Locale {
+  if (!raw) return "en";
+  const v = (Array.isArray(raw) ? raw[0] : raw).toLowerCase();
+  if (v.startsWith("zh")) return "zh";
+  return "en";
+}
+
+export function languageInstruction(locale: Locale): string {
+  if (locale === "zh") {
+    return `\n\nLANGUAGE INSTRUCTION (CRITICAL):
+- Write ALL natural-language prose, narrative explanations, summaries, reasons, notes, and conversational replies in Simplified Chinese (简体中文).
+- This includes: ease_reasons, cost_reasons, roi_reasons, overlay detail strings, subdivisionSummary, asbestos.notes, asbestos.worksafeNote, terrain.slope, infrastructure[].note, riskSummary items, disclaimer, brief_summary, and any markdown chat replies.
+- Keep the following in English / original form (do NOT translate): JSON field/key names, enum values (e.g. "low", "high", "moderate", "clear", "restricted", "flat", "gentle", "steep", "on-parcel", "boundary", "live", "estimated"), zone codes (SHZ, MHS, MHU, THAB), currency symbols and number formats (NZD, "$1,200,000"), units (m², %), dates (YYYY-MM-DD), URLs, and addresses.
+- For zone full names and overlay names: keep the English term, then add a Simplified Chinese translation in parentheses on first mention, e.g. "Mixed Housing Suburban (混合住房郊区区)".
+- For property search "I'm searching for properties..." style replies, write the message in Simplified Chinese.`;
+  }
+  return "";
+}

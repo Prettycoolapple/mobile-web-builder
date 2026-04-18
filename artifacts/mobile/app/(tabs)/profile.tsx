@@ -21,40 +21,34 @@ import { useAuth } from "@/context/AuthContext";
 import { useSubscription } from "@/lib/revenuecat";
 import { avatarImageSource } from "@/lib/avatar";
 import { WORLD_LANGUAGES } from "@/lib/languages";
+import { useT, type Locale } from "@/lib/i18n";
 
 const FREE_LIMIT = 2;
 const STANDARD_LIMIT = 20;
 
-const PLAN_FEATURES = {
-  free: [
-    "Feasibility reports",
-    "Chat & property search",
-  ],
-  standard: [
-    "Feasibility reports",
-    "Chat & property search",
-    "In-app chat with planners & architects",
-  ],
-  agent: [
-    "Unlimited property listings",
-    "Featured in property search",
-    "Client feasibility tools",
-    "Analytics & performance insights",
-    "Priority support",
-  ],
-  provider: [
-    "Get referred in chats & search",
-    "Encrypted chats with clients & investors",
-    "Feasibility reports",
-    "Chat & property search",
-  ],
-};
-
-const STANDARD_UPGRADE_FEATURES = [
-  "More feasibility reports",
-  "More chat & property search",
-  "In-app chat with planners & architects",
-];
+function buildPlanFeatures(t: (k: string) => string) {
+  return {
+    free: [t("feature.feasibility_reports"), t("feature.chat_search")],
+    standard: [
+      t("feature.feasibility_reports"),
+      t("feature.chat_search"),
+      t("feature.chat_planners"),
+    ],
+    agent: [
+      t("feature.unlimited_listings"),
+      t("feature.featured_search"),
+      t("feature.client_tools"),
+      t("feature.analytics"),
+      t("feature.priority_support"),
+    ],
+    provider: [
+      t("feature.referred"),
+      t("feature.encrypted_chats"),
+      t("feature.feasibility_reports"),
+      t("feature.chat_search"),
+    ],
+  };
+}
 
 function getApiBase(): string {
   if (process.env["EXPO_PUBLIC_DOMAIN"]) {
@@ -96,6 +90,8 @@ export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const { user, signOut, getApiHeaders, refreshProfile, isSubscriptionIdentityReady } = useAuth();
   const router = useRouter();
+  const { t, locale, setLocale } = useT();
+  const PLAN_FEATURES = buildPlanFeatures(t);
 
   const { purchase, isSubscribed, customerInfoLoaded, isTestPaymentMode, refetchCustomerInfo, getPackageForRole, getPriceForRole } = useSubscription();
   const [upgradeLoading, setUpgradeLoading] = useState(false);
@@ -123,7 +119,7 @@ export default function ProfileScreen() {
   const { first: initFirst, last: initLast } = splitName(user?.fullName);
   const [editFirst, setEditFirst] = useState(initFirst);
   const [editLast, setEditLast] = useState(initLast);
-  const [editLanguage, setEditLanguage] = useState(user?.languages?.[0] ?? "English");
+  const [editLanguage, setEditLanguage] = useState(user?.languages?.[0] ?? "");
   const [showLanguagePicker, setShowLanguagePicker] = useState(false);
 
   useEffect(() => {
@@ -131,7 +127,7 @@ export default function ProfileScreen() {
       const { first, last } = splitName(user?.fullName);
       setEditFirst(first);
       setEditLast(last);
-      setEditLanguage(user?.languages?.[0] ?? "English");
+      setEditLanguage(user?.languages?.[0] ?? "");
     }
   }, [user, isEditing]);
 
@@ -184,30 +180,27 @@ export default function ProfileScreen() {
     try {
       const pkg = getPackageForRole(role);
       if (!pkg) {
-        Alert.alert("Unavailable", "Subscription packages are not available right now. Please try again later.");
+        Alert.alert(t("profile.unavailable"), t("profile.sub_unavailable"));
         return;
       }
       await purchase(pkg);
       const synced = await syncToBackend("pro");
       if (!synced) {
-        Alert.alert(
-          "Almost there",
-          "Your payment went through but we couldn't update your account. Please pull to refresh in a moment, or contact support if it persists.",
-        );
+        Alert.alert(t("profile.almost_there"), t("profile.payment_no_account"));
         return;
       }
       if (role === "sales_agent") {
-        Alert.alert("Agent Pro activated!", "You now have full access to your Agent Pro plan.");
+        Alert.alert(t("profile.agent_activated_title"), t("profile.agent_activated_msg"));
       } else if (role === "service_provider") {
-        Alert.alert("Provider Pro activated!", "Your profile is now visible to developers.");
+        Alert.alert(t("profile.provider_activated_title"), t("profile.provider_activated_msg"));
       } else {
-        Alert.alert("Welcome to Standard!", `You now have ${STANDARD_LIMIT} reports per month.`);
+        Alert.alert(t("profile.welcome_standard"), t("profile.welcome_standard_msg", { n: STANDARD_LIMIT }));
       }
     } catch (err: unknown) {
       const userCancelled = (err as { userCancelled?: boolean })?.userCancelled;
       if (!userCancelled) {
         const message = (err as { message?: string })?.message;
-        Alert.alert("Purchase failed", message ?? "Something went wrong. Please try again.");
+        Alert.alert(t("profile.purchase_failed"), message ?? t("profile.purchase_failed_msg"));
       }
     } finally {
       setUpgradeLoading(false);
@@ -236,10 +229,10 @@ export default function ProfileScreen() {
         await refreshProfile().catch(() => {});
         setIsEditing(false);
       } else {
-        Alert.alert("Error", "Could not save your profile. Please try again.");
+        Alert.alert(t("profile.error"), t("profile.error_save"));
       }
     } catch {
-      Alert.alert("Error", "Could not save your profile. Check your connection.");
+      Alert.alert(t("profile.error"), t("profile.error_save_conn"));
     } finally {
       setIsSaving(false);
     }
@@ -248,7 +241,7 @@ export default function ProfileScreen() {
   const handlePickAvatar = useCallback(async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
-      Alert.alert("Permission required", "Please allow photo library access to update your profile picture.");
+      Alert.alert(t("profile.permission_required"), t("profile.photo_permission"));
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -279,20 +272,20 @@ export default function ProfileScreen() {
       if (resp.ok) {
         await refreshProfile().catch(() => {});
       } else {
-        Alert.alert("Error", "Could not upload photo. Please try again.");
+        Alert.alert(t("profile.error"), t("profile.error_upload"));
       }
     } catch {
-      Alert.alert("Error", "Could not upload photo. Check your connection.");
+      Alert.alert(t("profile.error"), t("profile.error_upload_conn"));
     } finally {
       setAvatarUploading(false);
     }
   }, [getApiHeaders, refreshProfile]);
 
   const handleSignOut = () => {
-    Alert.alert("Sign out", "Are you sure you want to sign out?", [
-      { text: "Cancel", style: "cancel" },
+    Alert.alert(t("profile.sign_out"), t("profile.sign_out_q"), [
+      { text: t("profile.cancel"), style: "cancel" },
       {
-        text: "Sign out", style: "destructive", onPress: async () => {
+        text: t("profile.sign_out"), style: "destructive", onPress: async () => {
           await signOut();
           router.replace("/(auth)/login");
         },
@@ -302,21 +295,21 @@ export default function ProfileScreen() {
 
   const handleDeleteAccount = () => {
     Alert.alert(
-      "Delete account",
-      "This will permanently delete your account and all your reports. This cannot be undone.",
+      t("profile.delete_account"),
+      t("profile.delete_q"),
       [
-        { text: "Cancel", style: "cancel" },
+        { text: t("profile.cancel"), style: "cancel" },
         {
-          text: "Delete my account",
+          text: t("profile.delete_account_btn"),
           style: "destructive",
           onPress: () => {
             Alert.alert(
-              "Are you sure?",
-              `All data for ${user?.email ?? "your account"} will be permanently removed.`,
+              t("profile.delete_account"),
+              t("profile.delete_warn", { target: user?.email ?? "" }),
               [
-                { text: "Cancel", style: "cancel" },
+                { text: t("profile.cancel"), style: "cancel" },
                 {
-                  text: "Yes, delete",
+                  text: t("profile.delete_confirm"),
                   style: "destructive",
                   onPress: async () => {
                     try {
@@ -328,10 +321,10 @@ export default function ProfileScreen() {
                         await signOut();
                         router.replace("/(auth)/login");
                       } else {
-                        Alert.alert("Error", "Could not delete your account. Please try again or contact support.");
+                        Alert.alert(t("profile.error"), t("profile.error_delete"));
                       }
                     } catch {
-                      Alert.alert("Error", "Could not delete your account. Please check your connection.");
+                      Alert.alert(t("profile.error"), t("profile.error_delete_conn"));
                     }
                   },
                 },
@@ -363,12 +356,12 @@ export default function ProfileScreen() {
             <View style={styles.headerTextGroup}>
               <View style={styles.headerNameRow}>
                 <Text style={[styles.headerTitle, { color: colors.headerText, fontFamily: "DM_Sans_600SemiBold" }]}>
-                  {user?.fullName ?? "Account"}
+                  {user?.fullName ?? t("profile.account")}
                 </Text>
                 {user?.isVerified && user.role === "service_provider" && (
                   <View style={styles.headerVerifiedBadge}>
                     <Feather name="shield" size={11} color="#52C99A" />
-                    <Text style={styles.headerVerifiedText}>verified</Text>
+                    <Text style={styles.headerVerifiedText}>{t("profile.verified")}</Text>
                   </View>
                 )}
               </View>
@@ -387,7 +380,7 @@ export default function ProfileScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* ─── User Details ─── */}
-        <SectionHeader title="Your details" />
+        <SectionHeader title={t("profile.your_details")} />
 
         <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
           {/* Avatar row */}
@@ -410,7 +403,7 @@ export default function ProfileScreen() {
               </View>
             </View>
             <Text style={[styles.avatarLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-              {avatarUploading ? "Uploading…" : "Change photo"}
+              {avatarUploading ? t("profile.uploading") : t("profile.change_photo")}
             </Text>
           </TouchableOpacity>
 
@@ -420,31 +413,31 @@ export default function ProfileScreen() {
           {isEditing ? (
             <View style={styles.editFields}>
               <View style={styles.fieldRow}>
-                <Text style={[styles.fieldLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>First name</Text>
+                <Text style={[styles.fieldLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{t("profile.first_name")}</Text>
                 <TextInput
                   value={editFirst}
                   onChangeText={setEditFirst}
                   style={[styles.fieldInput, { color: colors.foreground, borderColor: colors.accent, fontFamily: "DM_Sans_400Regular" }]}
-                  placeholder="First name"
+                  placeholder={t("profile.first_name")}
                   placeholderTextColor={colors.mutedForeground}
                   autoCapitalize="words"
                   autoCorrect={false}
                 />
               </View>
               <View style={styles.fieldRow}>
-                <Text style={[styles.fieldLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>Last name</Text>
+                <Text style={[styles.fieldLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{t("profile.last_name")}</Text>
                 <TextInput
                   value={editLast}
                   onChangeText={setEditLast}
                   style={[styles.fieldInput, { color: colors.foreground, borderColor: colors.accent, fontFamily: "DM_Sans_400Regular" }]}
-                  placeholder="Last name"
+                  placeholder={t("profile.last_name")}
                   placeholderTextColor={colors.mutedForeground}
                   autoCapitalize="words"
                   autoCorrect={false}
                 />
               </View>
               <View style={styles.fieldRow}>
-                <Text style={[styles.fieldLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>Language</Text>
+                <Text style={[styles.fieldLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{t("profile.language")}</Text>
                 <TouchableOpacity
                   style={[styles.fieldInput, styles.langBtn, { borderColor: colors.accent }]}
                   onPress={() => setShowLanguagePicker((v) => !v)}
@@ -484,7 +477,7 @@ export default function ProfileScreen() {
                   onPress={() => { setIsEditing(false); setShowLanguagePicker(false); }}
                   activeOpacity={0.7}
                 >
-                  <Text style={[{ color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium", fontSize: 14 }]}>Cancel</Text>
+                  <Text style={[{ color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium", fontSize: 14 }]}>{t("profile.cancel")}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.saveBtn, { backgroundColor: isSaving ? colors.accent + "80" : colors.accent }]}
@@ -494,7 +487,7 @@ export default function ProfileScreen() {
                 >
                   {isSaving
                     ? <ActivityIndicator size="small" color="#fff" />
-                    : <Text style={[{ color: "#fff", fontFamily: "DM_Sans_600SemiBold", fontSize: 14 }]}>Save</Text>
+                    : <Text style={[{ color: "#fff", fontFamily: "DM_Sans_600SemiBold", fontSize: 14 }]}>{t("profile.save")}</Text>
                   }
                 </TouchableOpacity>
               </View>
@@ -502,20 +495,20 @@ export default function ProfileScreen() {
           ) : (
             <View style={styles.detailsDisplay}>
               <View style={styles.detailRow}>
-                <Text style={[styles.detailLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>Name</Text>
+                <Text style={[styles.detailLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{t("profile.name")}</Text>
                 <Text style={[styles.detailValue, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
                   {user?.fullName ?? "—"}
                 </Text>
               </View>
               <View style={[styles.detailRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
-                <Text style={[styles.detailLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>Language</Text>
+                <Text style={[styles.detailLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{t("profile.language")}</Text>
                 <Text style={[styles.detailValue, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
                   {primaryLanguage ?? "—"}
                 </Text>
               </View>
               {role === "service_provider" && user?.discipline && (
                 <View style={[styles.detailRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
-                  <Text style={[styles.detailLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>Discipline</Text>
+                  <Text style={[styles.detailLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{t("profile.discipline")}</Text>
                   <Text style={[styles.detailValue, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
                     {user.discipline === "architect_designer" ? "Architect / Designer"
                       : user.discipline === "planner" ? "Planner"
@@ -532,10 +525,58 @@ export default function ProfileScreen() {
                 activeOpacity={0.7}
               >
                 <Feather name="edit-2" size={14} color={colors.accent} />
-                <Text style={[{ color: colors.accent, fontFamily: "DM_Sans_500Medium", fontSize: 14 }]}>Edit details</Text>
+                <Text style={[{ color: colors.accent, fontFamily: "DM_Sans_500Medium", fontSize: 14 }]}>{t("profile.edit_details")}</Text>
               </TouchableOpacity>
             </View>
           )}
+        </View>
+
+        {/* ─── App Language Toggle ─── */}
+        <SectionHeader title={t("profile.app_language")} />
+        <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border, padding: 0 }]}>
+          {(["en", "zh"] as Locale[]).map((code, idx) => {
+            const label = code === "en" ? "English" : "中文(简体)";
+            const selected = locale === code;
+            return (
+              <TouchableOpacity
+                key={code}
+                onPress={() => setLocale(code)}
+                activeOpacity={0.7}
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  paddingHorizontal: 16,
+                  paddingVertical: 14,
+                  borderTopWidth: idx === 0 ? 0 : StyleSheet.hairlineWidth,
+                  borderTopColor: colors.border,
+                }}
+              >
+                <Text
+                  style={{
+                    color: selected ? colors.accent : colors.foreground,
+                    fontFamily: selected ? "DM_Sans_600SemiBold" : "DM_Sans_400Regular",
+                    fontSize: 15,
+                  }}
+                >
+                  {label}
+                </Text>
+                {selected && <Feather name="check" size={16} color={colors.accent} />}
+              </TouchableOpacity>
+            );
+          })}
+          <Text
+            style={{
+              color: colors.mutedForeground,
+              fontFamily: "DM_Sans_400Regular",
+              fontSize: 12,
+              padding: 14,
+              paddingTop: 6,
+              lineHeight: 17,
+            }}
+          >
+            {t("profile.app_language_hint")}
+          </Text>
         </View>
 
         {/* ─── Plan card — general users ─── */}
@@ -544,10 +585,10 @@ export default function ProfileScreen() {
             <View style={styles.planTop}>
               <View>
                 <Text style={[styles.planLabel, { color: "rgba(250,250,249,0.45)", fontFamily: "DM_Sans_400Regular" }]}>
-                  Current plan
+                  {t("profile.current_plan")}
                 </Text>
                 <Text style={[styles.planName, { color: colors.headerText, fontFamily: "DM_Sans_700Bold" }]}>
-                  {isStandard ? "Standard" : "Free"}
+                  {isStandard ? t("profile.standard") : t("profile.free")}
                 </Text>
               </View>
               <View style={[styles.planBadge, {
@@ -558,7 +599,7 @@ export default function ProfileScreen() {
                   color: isStandard ? colors.accent : "rgba(250,250,249,0.6)",
                   fontFamily: "DM_Sans_500Medium",
                 }]}>
-                  {isStandard ? "Standard" : "Free tier"}
+                  {isStandard ? t("profile.standard") : t("profile.free_tier")}
                 </Text>
               </View>
             </View>
@@ -566,7 +607,7 @@ export default function ProfileScreen() {
             <View style={styles.usageSection}>
               <View style={styles.usageRow}>
                 <Text style={[styles.usageLabel, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
-                  Reports used this month
+                  {t("profile.reports_used")}
                 </Text>
                 <Text style={[styles.usageCount, { color: colors.headerText, fontFamily: "DM_Sans_700Bold" }]}>
                   {usage}/{planLimit}
@@ -582,12 +623,12 @@ export default function ProfileScreen() {
               </View>
               {usage >= planLimit && (
                 <Text style={[styles.limitNote, { color: colors.red, fontFamily: "DM_Sans_500Medium" }]}>
-                  Monthly limit reached — {isStandard ? "resets on the 1st" : "upgrade to continue"}
+                  {isStandard ? t("profile.limit_reached_standard") : t("profile.limit_reached_free")}
                 </Text>
               )}
               {showWarning && usage < planLimit && (
                 <Text style={[styles.limitNote, { color: colors.amber, fontFamily: "DM_Sans_500Medium" }]}>
-                  {remaining} report{remaining !== 1 ? "s" : ""} remaining this month
+                  {remaining === 1 ? t("profile.remaining_one", { n: remaining }) : t("profile.remaining_other", { n: remaining })}
                 </Text>
               )}
             </View>
@@ -601,7 +642,7 @@ export default function ProfileScreen() {
                 >
                   <Feather name="credit-card" size={14} color="rgba(250,250,249,0.6)" />
                   <Text style={[styles.actionBtnText, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
-                    Manage subscription
+                    {t("profile.manage_sub")}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -642,7 +683,7 @@ export default function ProfileScreen() {
                 >
                   <Feather name="credit-card" size={14} color="rgba(250,250,249,0.6)" />
                   <Text style={[styles.actionBtnText, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
-                    Manage subscription
+                    {t("profile.manage_sub")}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -718,7 +759,7 @@ export default function ProfileScreen() {
         {/* ─── Upgrade card — general user ─── */}
         {role === "general" && !isStandard && (
           <>
-            <SectionHeader title="Upgrade to Standard" />
+            <SectionHeader title={t("profile.upgrade_to_standard")} />
             <View style={[styles.proCard, { backgroundColor: colors.card, borderColor: colors.accent + "35" }]}>
               <View style={styles.proTop}>
                 <View>
@@ -734,7 +775,11 @@ export default function ProfileScreen() {
                 </View>
               </View>
               <View style={styles.featuresList}>
-                {STANDARD_UPGRADE_FEATURES.map((f) => (
+                {[
+                  t("feature.more_reports"),
+                  t("feature.more_chat_search"),
+                  t("feature.chat_planners"),
+                ].map((f) => (
                   <FeatureRow key={f} text={f} included />
                 ))}
               </View>
@@ -749,7 +794,7 @@ export default function ProfileScreen() {
                 ) : (
                   <>
                     <Text style={[styles.upgradeBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>
-                      Upgrade to Standard
+                      {t("profile.upgrade_btn")}
                     </Text>
                     <Feather name="arrow-right" size={16} color="#fff" />
                   </>
@@ -834,7 +879,7 @@ export default function ProfileScreen() {
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
                   <>
-                    <Text style={[styles.upgradeBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>Activate Provider Pro</Text>
+                    <Text style={[styles.upgradeBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>{t("profile.activate_provider_pro")}</Text>
                     <Feather name="arrow-right" size={16} color="#fff" />
                   </>
                 )}
@@ -846,10 +891,10 @@ export default function ProfileScreen() {
         {/* ─── Plan features summary ─── */}
         <SectionHeader title={
           role === "sales_agent"
-            ? (isStandard ? "Agent Pro includes" : "Agent Pro features")
+            ? (isStandard ? t("profile.agent_pro_includes") : t("profile.agent_pro_features"))
             : role === "service_provider"
-            ? (isStandard ? "Provider Pro includes" : "Provider Pro features")
-            : (isStandard ? "Standard plan includes" : "Free plan includes")
+            ? (isStandard ? t("profile.provider_pro_includes") : t("profile.provider_pro_features"))
+            : (isStandard ? t("profile.standard_includes") : t("profile.free_includes"))
         } />
 
         <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -872,7 +917,7 @@ export default function ProfileScreen() {
           >
             <Feather name="log-out" size={17} color={colors.danger} />
             <Text style={[styles.actionRowText, { color: colors.danger, fontFamily: "DM_Sans_500Medium" }]}>
-              Sign out
+              {t("profile.sign_out")}
             </Text>
             <Feather name="chevron-right" size={16} color={colors.danger + "80"} />
           </TouchableOpacity>
@@ -884,7 +929,7 @@ export default function ProfileScreen() {
           >
             <Feather name="trash-2" size={17} color={colors.mutedForeground} />
             <Text style={[styles.actionRowText, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>
-              Delete account
+              {t("profile.delete_account")}
             </Text>
             <Feather name="chevron-right" size={16} color={colors.mutedForeground + "60"} />
           </TouchableOpacity>

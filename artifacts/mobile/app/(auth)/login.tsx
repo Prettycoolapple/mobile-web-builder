@@ -15,12 +15,14 @@ import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
+import { useT } from "@/lib/i18n";
 
 export default function LoginScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { signIn } = useAuth();
+  const { t } = useT();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -30,7 +32,7 @@ export default function LoginScreen() {
 
   const handleLogin = async () => {
     if (!email.trim() || !password) {
-      setError("Please enter your email and password.");
+      setError(t("login.error_required"));
       return;
     }
     setError(null);
@@ -47,7 +49,7 @@ export default function LoginScreen() {
         router.replace("/(tabs)");
       }
     } catch (e: any) {
-      setError(e.message || "Login failed. Please try again.");
+      setError(e.message || t("login.error_failed"));
     } finally {
       setIsLoading(false);
     }
@@ -69,16 +71,16 @@ export default function LoginScreen() {
                 Project Alpha
               </Text>
               <Text style={[styles.logoTagline, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                Residential property development intelligence
+                {t("login.tagline")}
               </Text>
             </View>
           </View>
 
           <Text style={[styles.heading, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
-            Welcome back
+            {t("login.heading")}
           </Text>
           <Text style={[styles.subheading, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-            Sign in to your account to continue
+            {t("login.subheading")}
           </Text>
 
           {error && (
@@ -91,7 +93,7 @@ export default function LoginScreen() {
           <View style={styles.form}>
             <View style={styles.field}>
               <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                Email
+                {t("login.email")}
               </Text>
               <TextInput
                 style={[styles.input, {
@@ -100,7 +102,7 @@ export default function LoginScreen() {
                   color: colors.foreground,
                   fontFamily: "DM_Sans_400Regular",
                 }]}
-                placeholder="you@example.com"
+                placeholder={t("login.email_ph")}
                 placeholderTextColor={colors.mutedForeground}
                 value={email}
                 onChangeText={setEmail}
@@ -113,12 +115,12 @@ export default function LoginScreen() {
 
             <View style={styles.field}>
               <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                Password
+                {t("login.password")}
               </Text>
               <View style={[styles.passwordWrapper, { backgroundColor: colors.card, borderColor: colors.border }]}>
                 <TextInput
                   style={[styles.passwordInput, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-                  placeholder="Enter your password"
+                  placeholder={t("login.password_ph")}
                   placeholderTextColor={colors.mutedForeground}
                   value={password}
                   onChangeText={setPassword}
@@ -142,18 +144,18 @@ export default function LoginScreen() {
               {isLoading ? (
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
-                <Text style={[styles.primaryBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>Sign in</Text>
+                <Text style={[styles.primaryBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>{t("login.submit")}</Text>
               )}
             </TouchableOpacity>
           </View>
 
           <View style={styles.footer}>
             <Text style={[styles.footerText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-              Don't have an account?{" "}
+              {t("login.no_account")}{" "}
             </Text>
             <TouchableOpacity onPress={() => router.push("/(auth)/signup")}>
               <Text style={[styles.footerLink, { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" }]}>
-                Sign up
+                {t("login.sign_up")}
               </Text>
             </TouchableOpacity>
           </View>

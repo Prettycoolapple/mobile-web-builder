@@ -22,16 +22,12 @@ import { useAuth } from "@/context/AuthContext";
 import { ChatBubble } from "@/components/ChatBubble";
 import { PaywallModal } from "@/components/PaywallModal";
 import { setBaseUrl } from "@workspace/api-client-react";
+import { useT } from "@/lib/i18n";
 
 if (process.env.EXPO_PUBLIC_DOMAIN) {
   setBaseUrl(`https://${process.env.EXPO_PUBLIC_DOMAIN}`);
 }
 
-const SUGGESTION_QUERIES = [
-  "What's on the market in Grey Lynn?",
-  "Find development sites under $2M",
-  "Analyse 42 Arney Road, Remuera",
-];
 
 // Keywords that indicate the user explicitly wants a service provider referral/recommendation.
 // Checked against the lowercased user message before sending to /api/chat.
@@ -72,6 +68,12 @@ function sanitizeForDisplay(text: string): string {
 }
 
 export default function SearchScreen() {
+  const { t } = useT();
+  const SUGGESTION_QUERIES = [
+    t("search.suggestion_1"),
+    t("search.suggestion_2"),
+    t("search.suggestion_3"),
+  ];
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -938,10 +940,10 @@ export default function SearchScreen() {
           <View style={[styles.landingContainer, { paddingBottom: tabBarOffset }]}>
             <View style={styles.landingContent}>
               <Text style={[styles.landingTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
-                Going property shopping?
+                {t("search.welcome_title")}
               </Text>
               <Text style={[styles.landingSubtitle, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                Search an address, ask what's on the market,{"\n"}or find your next development opportunity.
+                {t("search.welcome_subtitle")}
               </Text>
 
               {/* Centered search input */}
@@ -953,7 +955,7 @@ export default function SearchScreen() {
                 <TextInput
                   ref={inputRef}
                   style={[styles.landingInput, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-                  placeholder="Ask about an address or area..."
+                  placeholder={t("search.placeholder")}
                   placeholderTextColor={colors.mutedForeground}
                   value={inputText}
                   onChangeText={setInputText}
@@ -1045,7 +1047,7 @@ export default function SearchScreen() {
               <TextInput
                 ref={inputRef}
                 style={[styles.input, { color: messageLimitReached ? colors.mutedForeground : colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-                placeholder={messageLimitReached ? "Usage limit reached for this month" : "Ask about an address or area..."}
+                placeholder={messageLimitReached ? t("profile.limit_reached_standard") : t("search.placeholder")}
                 placeholderTextColor={colors.mutedForeground}
                 value={messageLimitReached ? "" : inputText}
                 onChangeText={messageLimitReached ? undefined : setInputText}

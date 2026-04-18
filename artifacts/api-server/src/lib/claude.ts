@@ -1,6 +1,6 @@
 import { ai } from "@workspace/integrations-gemini-ai";
 import { logger } from "./logger";
-import { SYSTEM_PROMPT, ANALYSE_AUGMENTATION, DISCOVER_AUGMENTATION } from "./prompts";
+import { SYSTEM_PROMPT, ANALYSE_AUGMENTATION, DISCOVER_AUGMENTATION, languageInstruction, type Locale } from "./prompts";
 import { findSuburbInTextViaIndex } from "./scrapers/realestate-api";
 
 export interface Message {
@@ -447,9 +447,16 @@ export async function generateUnifiedResponse(
   messages: Message[],
   currentReport?: object,
   overrideMode?: ChatMode,
+  locale: Locale = "en",
 ): Promise<{ content: string; mode: ChatMode }> {
+  const langSuffix = languageInstruction(locale);
   if (messages.length === 0) {
-    return { content: "How can I help you with NZ property development today?", mode: "followup" };
+    return {
+      content: locale === "zh"
+        ? "今天我能为您的新西兰物业开发提供什么帮助？"
+        : "How can I help you with NZ property development today?",
+      mode: "followup",
+    };
   }
 
   const lastMessage = messages[messages.length - 1];
@@ -457,7 +464,7 @@ export async function generateUnifiedResponse(
   // Prefer the caller-supplied mode (from LLM intent extraction) over the internal regex detectMode
   const mode = overrideMode ?? detectMode(lastMessage.content);
 
-  let systemWithContext = SYSTEM_PROMPT;
+  let systemWithContext = SYSTEM_PROMPT + langSuffix;
   if (currentReport) {
     const r = currentReport as Record<string, unknown>;
     const planning   = r["planning"]         as Record<string, unknown> | undefined;
@@ -636,7 +643,7 @@ export async function generateUnifiedResponse(
       `${pinnedBlock}\n\n`;
 
     systemWithContext =
-      `${SYSTEM_PROMPT}\n\n${pinnedSection}FULL REPORT JSON (reference for any detail not covered above):\n${JSON.stringify(currentReport, null, 2)}`;
+      `${SYSTEM_PROMPT}${langSuffix}\n\n${pinnedSection}FULL REPORT JSON (reference for any detail not covered above):\n${JSON.stringify(currentReport, null, 2)}`;
   }
 
   let userContent = lastMessage.content;
@@ -670,12 +677,13 @@ export async function generateUnifiedResponse(
 
 export async function generateAnalysis(
   enrichedContent: string,
+  locale: Locale = "en",
 ): Promise<string> {
   try {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-pro",
       config: {
-        systemInstruction: SYSTEM_PROMPT,
+        systemInstruction: SYSTEM_PROMPT + languageInstruction(locale),
         maxOutputTokens: 8192,
       },
       contents: [{ role: "user", parts: [{ text: enrichedContent }] }],
@@ -690,6 +698,7 @@ export async function generateAnalysis(
 export async function generateFeasibilityReport(
   address: string,
   conversationHistory: Message[] = [],
+  locale: Locale = "en",
 ): Promise<string> {
   const prompt = `Analyse this NZ property for development feasibility: ${address}\n\n${ANALYSE_AUGMENTATION}`;
   const history = buildGeminiHistory(conversationHistory);
@@ -698,7 +707,7 @@ export async function generateFeasibilityReport(
     const response = await ai.models.generateContent({
       model: "gemini-2.5-pro",
       config: {
-        systemInstruction: SYSTEM_PROMPT,
+        systemInstruction: SYSTEM_PROMPT + languageInstruction(locale),
         maxOutputTokens: 8192,
       },
       contents: [
@@ -718,6 +727,7 @@ export async function generateSearchResults(
   suburb?: string,
   minPrice?: number,
   maxPrice?: number,
+  locale: Locale = "en",
 ): Promise<string> {
   const prompt = `Search query: "${query}"
 ${suburb ? `Target suburb: ${suburb}` : ""}
@@ -730,7 +740,7 @@ ${DISCOVER_AUGMENTATION}`;
     const response = await ai.models.generateContent({
       model: "gemini-2.5-pro",
       config: {
-        systemInstruction: SYSTEM_PROMPT,
+        systemInstruction: SYSTEM_PROMPT + languageInstruction(locale),
         maxOutputTokens: 8192,
       },
       contents: [{ role: "user", parts: [{ text: prompt }] }],
@@ -847,10 +857,12 @@ export async function generateChatReply(
   message: string,
   conversationHistory: Message[] = [],
   reportContext?: string,
+  locale: Locale = "en",
 ): Promise<string> {
+  const langSuffix = languageInstruction(locale);
   const systemWithContext = reportContext
-    ? `${SYSTEM_PROMPT}\n\nCURRENT PROPERTY CONTEXT:\n${reportContext}`
-    : SYSTEM_PROMPT;
+    ? `${SYSTEM_PROMPT}${langSuffix}\n\nCURRENT PROPERTY CONTEXT:\n${reportContext}`
+    : SYSTEM_PROMPT + langSuffix;
 
   const history = buildGeminiHistory(conversationHistory);
 

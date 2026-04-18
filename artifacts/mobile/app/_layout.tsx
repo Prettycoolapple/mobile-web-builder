@@ -30,6 +30,7 @@ import { ChatProvider } from "@/context/ChatContext";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { DmProvider } from "@/context/DmContext";
 import { initializeRevenueCat, SubscriptionProvider } from "@/lib/revenuecat";
+import { LocaleProvider, LocaleSync } from "@/lib/i18n";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -168,6 +169,8 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <ErrorBoundary>
         <QueryClientProvider client={queryClient}>
+          <LocaleProvider>
+          <LocaleSync />
           <AuthProvider>
             <SubscriptionGate>
               <DmProvider>
@@ -182,6 +185,7 @@ export default function RootLayout() {
               </DmProvider>
             </SubscriptionGate>
           </AuthProvider>
+          </LocaleProvider>
         </QueryClientProvider>
       </ErrorBoundary>
     </SafeAreaProvider>

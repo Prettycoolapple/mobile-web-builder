@@ -18,6 +18,7 @@ import { useVideoPlayer, VideoView } from "expo-video";
 import { Asset } from "expo-asset";
 import { StatusBar } from "expo-status-bar";
 import { AlphaTail } from "@/components/GroundupLogo";
+import { useT } from "@/lib/i18n";
 
 const HERO_VIDEO = require("../../assets/videos/welcome-hero.mp4");
 const HERO_POSTER = require("../../assets/videos/welcome-hero-poster.jpg");
@@ -27,6 +28,7 @@ const HERO_POSTER_URI = Asset.fromModule(HERO_POSTER).uri;
 export default function WelcomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { t } = useT();
   const { height: screenHeight, width: screenWidth } = useWindowDimensions();
 
   const [videoReady, setVideoReady] = useState(false);
@@ -188,7 +190,7 @@ export default function WelcomeScreen() {
 
         <View style={styles.eyebrowRow}>
           <View style={styles.eyebrowDot} />
-          <Text style={styles.eyebrow}>NEW ZEALAND · RESIDENTIAL</Text>
+          <Text style={styles.eyebrow}>{t("welcome.eyebrow")}</Text>
           <View style={styles.eyebrowDot} />
         </View>
       </Animated.View>
@@ -206,12 +208,12 @@ export default function WelcomeScreen() {
         ]}
       >
         <Text style={styles.headline}>
-          Smarter property{" "}
-          <Text style={styles.headlineEm}>decisions.</Text>
+          {t("welcome.headline_a")}{" "}
+          <Text style={styles.headlineEm}>{t("welcome.headline_b")}</Text>
         </Text>
         <View style={styles.headlineRule} />
         <Text style={styles.subhead}>
-          Residential property development intelligence.
+          {t("welcome.subhead")}
         </Text>
       </Animated.View>
 
@@ -227,7 +229,7 @@ export default function WelcomeScreen() {
           onPress={() => router.push("/(auth)/signup")}
           activeOpacity={0.88}
         >
-          <Text style={styles.primaryBtnText}>Get started</Text>
+          <Text style={styles.primaryBtnText}>{t("welcome.cta_primary")}</Text>
           <Text style={styles.primaryBtnArrow}>→</Text>
         </TouchableOpacity>
 
@@ -239,7 +241,7 @@ export default function WelcomeScreen() {
             { opacity: pressed ? 0.55 : 1 },
           ]}
         >
-          <Text style={styles.secondaryBtnText}>I already have an account</Text>
+          <Text style={styles.secondaryBtnText}>{t("welcome.cta_secondary")}</Text>
         </Pressable>
       </Animated.View>
     </View>

@@ -9,9 +9,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { useDm } from "@/context/DmContext";
+import { useT } from "@/lib/i18n";
 
 function ClassicTabLayout() {
   const colors = useColors();
+  const { t } = useT();
   const colorScheme = useColorScheme();
   const isDark = colorScheme === "dark";
   const isIOS = Platform.OS === "ios";
@@ -59,7 +61,7 @@ function ClassicTabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: "Search",
+          title: t("tab.search"),
           tabBarIcon: ({ color }) =>
             isIOS ? (
               <SymbolView name="magnifyingglass.circle" tintColor={color} size={24} />
@@ -71,7 +73,7 @@ function ClassicTabLayout() {
       <Tabs.Screen
         name="messages"
         options={{
-          title: "Messages",
+          title: t("tab.messages"),
           tabBarBadge: unreadCount > 0 ? (unreadCount > 99 ? "99+" : unreadCount) : undefined,
           tabBarBadgeStyle: { backgroundColor: colors.accent, fontSize: 10, minWidth: 18 },
           tabBarIcon: ({ color }) =>
@@ -85,7 +87,7 @@ function ClassicTabLayout() {
       <Tabs.Screen
         name="history"
         options={{
-          title: "History",
+          title: t("tab.history"),
           tabBarIcon: ({ color }) =>
             isIOS ? (
               <SymbolView name="clock" tintColor={color} size={24} />
@@ -97,7 +99,7 @@ function ClassicTabLayout() {
       <Tabs.Screen
         name="profile"
         options={{
-          title: "Account",
+          title: t("tab.account"),
           tabBarIcon: ({ color }) =>
             isIOS ? (
               <SymbolView name="person.circle" tintColor={color} size={24} />

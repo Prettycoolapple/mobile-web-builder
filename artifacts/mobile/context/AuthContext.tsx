@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useCallback, useEffect } fr
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useQueryClient } from "@tanstack/react-query";
 import { loginRevenueCat, logoutRevenueCat } from "@/lib/revenuecat";
+import { getCurrentLocale } from "@/lib/i18n";
 
 export type UserRole = "general" | "sales_agent" | "service_provider";
 
@@ -299,6 +300,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
     }
+    const locale = getCurrentLocale();
+    headers["Accept-Language"] = locale === "zh" ? "zh-CN" : "en-NZ";
+    headers["X-Locale"] = locale;
     return headers;
   }, [token]);
 
