@@ -32,6 +32,7 @@ import {
   getShownUrls,
 } from "../lib/listing-cache";
 import { queueBackgroundScores, getCardScores } from "../lib/analysis-cache";
+import { isStreetViewAvailable } from "./streetview";
 
 const router = Router();
 
@@ -377,7 +378,14 @@ router.post("/analyse", async (req, res) => {
     if (pipelineResult && report && typeof report === "object") {
       const photoUrl = pipelineResult.oneroof?.main_photo_url ?? null;
       const overlayMapB64 = pipelineResult.hougarden?.overlay_map_image_base64 ?? null;
-      if (photoUrl) report.photoUrl = photoUrl;
+      if (photoUrl) {
+        report.photoUrl = photoUrl;
+      } else if (await isStreetViewAvailable()) {
+        const host = req.get("host");
+        const proto = (req.headers["x-forwarded-proto"] as string) || req.protocol || "https";
+        const base = host ? `${proto}://${host}` : "";
+        report.photoUrl = `${base}/api/streetview?address=${encodeURIComponent(address)}&size=800x500`;
+      }
       if (overlayMapB64) report.overlay_map_image_base64 = overlayMapB64;
       applyOverviewSnapshot(
         report,
@@ -1176,7 +1184,14 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             try {
               const parsed = extractJSON(rawContent) as Record<string, unknown>;
               if (parsed && typeof parsed === "object") {
-                if (photoUrl) parsed.photoUrl = photoUrl;
+                if (photoUrl) {
+                  parsed.photoUrl = photoUrl;
+                } else if (await isStreetViewAvailable()) {
+                  const host = req.get("host");
+                  const proto = (req.headers["x-forwarded-proto"] as string) || req.protocol || "https";
+                  const base = host ? `${proto}://${host}` : "";
+                  parsed.photoUrl = `${base}/api/streetview?address=${encodeURIComponent(extractedAddress)}&size=800x500`;
+                }
                 if (overlayMapB64) parsed.overlay_map_image_base64 = overlayMapB64;
 
                 // Deterministic Property Overview snapshot — single source of

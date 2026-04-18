@@ -8,6 +8,7 @@ import {
   Image,
 } from "react-native";
 import Svg, { Polygon } from "react-native-svg";
+import { LinearGradient } from "expo-linear-gradient";
 import { Feather } from "@expo/vector-icons";
 import { StarRating } from "@/components/StarRating";
 import { useColors } from "@/hooks/useColors";
@@ -1051,7 +1052,11 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
                 style={styles.reportPhoto}
                 resizeMode="cover"
               />
-              <View style={styles.reportPhotoOverlay} />
+              <LinearGradient
+                colors={["rgba(0,0,0,0.55)", "rgba(0,0,0,0)"]}
+                style={styles.reportPhotoScrim}
+                pointerEvents="none"
+              />
               {/* OVERALL badge overlaid top-right (mirrors PropertyCard) */}
               <View style={styles.heroOverallBadge}>
                 <Text style={[styles.heroOverallLabel, { color: "rgba(255,255,255,0.85)" }]}>OVERALL</Text>
@@ -1260,6 +1265,7 @@ const styles = StyleSheet.create({
   reportPhotoWrapper: { width: "100%", height: 180, position: "relative" },
   reportPhoto: { width: "100%", height: 180 },
   reportPhotoOverlay: { position: "absolute", bottom: 0, left: 0, right: 0, height: 80, backgroundColor: "transparent" },
+  reportPhotoScrim: { position: "absolute", top: 0, left: 0, right: 0, height: 90 },
   heroOverallBadge: { position: "absolute", top: 12, right: 12, alignItems: "flex-end", gap: 4 },
   heroOverallLabel: { fontFamily: "DM_Sans_600SemiBold", fontSize: 9, textTransform: "uppercase", letterSpacing: 1.2, textShadowColor: "rgba(0,0,0,0.5)", textShadowRadius: 3 },
   heroOverallPill: { flexDirection: "row", alignItems: "baseline", gap: 3, borderRadius: 14, borderWidth: 1.5, paddingHorizontal: 12, paddingVertical: 5 },
