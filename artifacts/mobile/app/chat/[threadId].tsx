@@ -35,6 +35,18 @@ function getApiBase(): string {
   return "/api";
 }
 
+function formatDiscipline(discipline: string | null, otherDiscipline: string | null): string {
+  if (discipline === "other" && otherDiscipline) return otherDiscipline;
+  const map: Record<string, string> = {
+    architect_designer: "Architect / Designer",
+    planner: "Planner",
+    engineer: "Engineer",
+    quantity_surveyor: "Quantity Surveyor",
+    other: "Other",
+  };
+  return discipline ? (map[discipline] ?? discipline) : "Service Provider";
+}
+
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit", hour12: true });
 }
@@ -125,6 +137,8 @@ export default function ChatScreen() {
   const [otherRole, setOtherRole] = useState<string>("general");
   const [otherUserId, setOtherUserId] = useState<string | null>(null);
   const [otherPhone, setOtherPhone] = useState<string | null>(null);
+  const [otherDiscipline, setOtherDiscipline] = useState<string | null>(null);
+  const [otherOtherDiscipline, setOtherOtherDiscipline] = useState<string | null>(null);
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
@@ -151,9 +165,10 @@ export default function ChatScreen() {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((r) => r.ok ? r.json() : null)
-      .then((data: { roleData?: { contactNumber?: string } } | null) => {
-        const phone = data?.roleData?.contactNumber ?? null;
-        setOtherPhone(phone);
+      .then((data: { roleData?: { contactNumber?: string; discipline?: string | null; otherDiscipline?: string | null } } | null) => {
+        setOtherPhone(data?.roleData?.contactNumber ?? null);
+        setOtherDiscipline(data?.roleData?.discipline ?? null);
+        setOtherOtherDiscipline(data?.roleData?.otherDiscipline ?? null);
       })
       .catch(() => {});
   }, [otherUserId, token]);
@@ -421,7 +436,7 @@ export default function ChatScreen() {
               {otherRole === "sales_agent"
                 ? "Sales Agent"
                 : otherRole === "service_provider"
-                ? "Service Provider"
+                ? formatDiscipline(otherDiscipline, otherOtherDiscipline)
                 : "User"}
             </Text>
           </View>
