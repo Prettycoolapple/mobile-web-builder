@@ -723,7 +723,7 @@ router.post("/chat", async (req, res) => {
                 req.log.info({ fetched: firstFiltered.length, cached: remainingFiltered.length }, "realestate.co.nz: prescreening listings");
                 // Run pre-screening and AI intro generation in parallel to save time
                 const criteriaContext = intent.criteria ? ` matching criteria: ${intent.criteria}` : "";
-                const introPromptPreScreen = `The user asked: "${userText}". You found ${firstFiltered.length} matching propert${firstFiltered.length === 1 ? "y" : "ies"} in ${suburb || "the area"} on realestate.co.nz${criteriaContext}. In 1 sentence, acknowledge this result conversationally (e.g. "I found a few development sites in St Heliers under $2M:"). Be natural and brief — no JSON.`;
+                const introPromptPreScreen = `The user asked: "${userText}". You found some matching properties in ${suburb || "the area"} on realestate.co.nz${criteriaContext}. In 1 sentence, acknowledge this result conversationally (e.g. "I found a few development sites in St Heliers under $2M:"). Do NOT mention a specific number — say "a few", "some", or "a handful". Be natural and brief — no JSON.`;
                 const [screened, introFromPreScreen] = await Promise.all([
                   preScreenListingsFast(firstFiltered, 5).catch(() => []),
                   generateAnalysis(introPromptPreScreen).catch(() => ""),
@@ -787,7 +787,7 @@ router.post("/chat", async (req, res) => {
                       suburb: nearbySuburb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
                     });
                     const criteriaContextFallback = intent.criteria ? ` (${intent.criteria})` : "";
-                    const introPromptFallback = `The user asked about ${suburb}${criteriaContextFallback} but no listings were found there right now. You found ${filtered.length} propert${filtered.length === 1 ? "y" : "ies"} in nearby ${nearbySuburb}. In 1 sentence acknowledge this naturally (e.g. "I couldn't find anything in ${suburb} right now, but here are some nearby options in ${nearbySuburb}:"). Be brief — no JSON.`;
+                    const introPromptFallback = `The user asked about ${suburb}${criteriaContextFallback} but no listings were found there right now. You found some properties in nearby ${nearbySuburb}. In 1 sentence acknowledge this naturally (e.g. "I couldn't find anything in ${suburb} right now, but here are some nearby options in ${nearbySuburb}:"). Do NOT mention a specific number — say "a few", "some", or "a handful". Be brief — no JSON.`;
                     const [screenedFallback, introFallback] = await Promise.all([
                       preScreenListingsFast(filtered, 5).catch(() => [] as PropertyCandidate[]),
                       generateAnalysis(introPromptFallback).catch(() => ""),
@@ -813,7 +813,7 @@ router.post("/chat", async (req, res) => {
               const criteriaContextGeneral = intent.criteria ? ` (${intent.criteria})` : "";
               const introPrompt = noListings
                 ? `The user asked: "${userText}". No matching listings were found on realestate.co.nz right now for ${suburb || "this area"}${criteriaContextGeneral}. In 1-2 sentences, acknowledge this warmly and suggest they try a different suburb, adjust their budget, or check back soon. Do NOT output any JSON.`
-                : `The user asked: "${userText}". You found ${candidates.length} matching propert${candidates.length === 1 ? "y" : "ies"} in ${suburb || "the area"} on realestate.co.nz${criteriaContextGeneral}. In 1 sentence, acknowledge the results conversationally. Be natural and brief — no JSON.`;
+                : `The user asked: "${userText}". You found some matching properties in ${suburb || "the area"} on realestate.co.nz${criteriaContextGeneral}. In 1 sentence, acknowledge the results conversationally. Do NOT mention a specific number — say "a few", "some", or "a handful". Be natural and brief — no JSON.`;
               aiIntro = await generateAnalysis(introPrompt).catch(() => "");
             } catch { /* silent */ }
           }
