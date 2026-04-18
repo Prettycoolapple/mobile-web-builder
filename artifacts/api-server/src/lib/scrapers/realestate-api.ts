@@ -395,15 +395,91 @@ async function fetchListingsForSuburbId(suburbId: string, limit = 100): Promise<
 }
 
 /**
- * Cross-check the structured API's bedroom/bathroom counts against the
- * og:description on the listing's social-share card. Both numbers come from
- * the same upstream listing record but they're populated by different
- * pipelines on realestate.co.nz, and they occasionally disagree (e.g. the
- * API reports 4 baths but the og:description text says "3 bath"). When that
- * happens we mark the value as approximate so the UI can flag it rather than
- * silently picking whichever source happened to win.
+ * Pull a land-area sqm number out of free-form listing text.
+ * realestate.co.nz og:description tends to say things like
+ * "503 m² section" or "503sqm", occasionally "0.05 ha". Floor area phrasing
+ * ("180 m² floor") is intentionally excluded so we don't confuse the two.
  */
-async function fetchOgBedsBaths(url: string): Promise<{ bedrooms: number | null; bathrooms: number | null } | null> {
+function extractLandAreaSqm(text: string): number | null {
+  if (!text) return null;
+  // Hectares first ("0.12 ha" → 1200 m²).
+  const haMatch = text.match(/(\d+(?:\.\d+)?)\s*ha\b/i);
+  if (haMatch) {
+    const ha = parseFloat(haMatch[1]);
+    if (Number.isFinite(ha) && ha > 0 && ha < 1000) return Math.round(ha * 10_000);
+  }
+  // Prefer numbers explicitly described as land/section/site to avoid floor area.
+  const labelled = text.match(/(\d[\d,]*)\s*(?:m[²2]|sqm|sq\s*m)\s*(?:section|site|land|of land)/i)
+    ?? text.match(/(?:section|site|land)[^\d]{0,12}(\d[\d,]*)\s*(?:m[²2]|sqm|sq\s*m)/i);
+  // Generic fallback: a bare "503 m²" with no label. Reject when the surrounding
+  // ±20 chars contain a floor-area label, otherwise we'd misread "180 m² floor"
+  // as land area and falsely flag it as disagreeing with the API.
+  const genericRe = /(\d[\d,]*)\s*(?:m[²2]|sqm|sq\s*m)\b/i;
+  const genericMatch = text.match(genericRe);
+  let generic: RegExpMatchArray | null = null;
+  if (genericMatch && genericMatch.index != null) {
+    const start = Math.max(0, genericMatch.index - 20);
+    const end = Math.min(text.length, genericMatch.index + genericMatch[0].length + 20);
+    const window = text.slice(start, end);
+    if (!/\b(?:floor|house|home|dwelling)\b/i.test(window)) generic = genericMatch;
+  }
+  const raw = labelled?.[1] ?? generic?.[1];
+  if (!raw) return null;
+  const n = parseInt(raw.replace(/,/g, ""), 10);
+  // Plausible residential range — guards against e.g. "180 m² floor" leaking through
+  // when there's no explicit land label and the number is implausibly small.
+  if (!Number.isFinite(n) || n < 50 || n > 1_000_000) return null;
+  return n;
+}
+
+/**
+ * Pull a floor (dwelling) area in m² out of free-form listing text.
+ * Looks for explicit floor/house/home/dwelling labels so we don't confuse
+ * floor area with land area (which uses section/site/land phrasing).
+ */
+function extractFloorAreaSqm(text: string): number | null {
+  if (!text) return null;
+  const labelled = text.match(/(\d[\d,]*)\s*(?:m[²2]|sqm|sq\s*m)\s*(?:floor|house|home|dwelling)/i)
+    ?? text.match(/(?:floor(?:\s*area)?|house|home|dwelling)[^\d]{0,12}(\d[\d,]*)\s*(?:m[²2]|sqm|sq\s*m)/i);
+  if (!labelled) return null;
+  const n = parseInt(labelled[1].replace(/,/g, ""), 10);
+  // Plausible residential range — typical NZ houses 40-1000 m².
+  if (!Number.isFinite(n) || n < 20 || n > 5_000) return null;
+  return n;
+}
+
+/**
+ * Look for a JSON-LD "floorSize" field anywhere in the fetched HTML.
+ * Realestate.co.nz embeds a Residence/SingleFamilyResidence record in many
+ * listing pages; when present, floorSize is a server-side authoritative
+ * second source we can cross-check the og:description value against.
+ */
+function extractFloorSizeFromJsonLd(html: string): number | null {
+  if (!html) return null;
+  const blocks = [...html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
+  for (const m of blocks) {
+    const body = m[1];
+    const fsMatch = body.match(/"floorSize"\s*:\s*(?:"(\d[\d,.]*)"|\{[^}]*?"value"\s*:\s*"?(\d[\d,.]*)"?[^}]*\})/i);
+    const raw = fsMatch?.[1] ?? fsMatch?.[2];
+    if (raw) {
+      const n = parseInt(raw.replace(/[,.]/g, ""), 10);
+      if (Number.isFinite(n) && n >= 20 && n <= 5_000) return n;
+    }
+  }
+  return null;
+}
+
+interface OgMeta {
+  bedrooms: number | null;
+  bathrooms: number | null;
+  landAreaSqm: number | null;
+  floorAreaSqm: number | null;
+  /** Second-source floor area from page JSON-LD; used to cross-check against the og:description value. */
+  floorAreaSqmJsonLd: number | null;
+  price: number | null;
+}
+
+async function fetchOgMeta(url: string): Promise<OgMeta | null> {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 8_000);
@@ -425,32 +501,97 @@ async function fetchOgBedsBaths(url: string): Promise<{ bedrooms: number | null;
     const ogTitle = html.match(/<meta property="og:title" content="([^"]+)"/)?.[1] ?? "";
     const ogDesc = html.match(/<meta property="og:description" content="([^"]+)"/)?.[1] ?? "";
     if (!ogTitle && !ogDesc) return null;
-    return extractBedsBaths(`${ogTitle} ${ogDesc}`);
+    const combined = `${ogTitle} ${ogDesc}`;
+    const beds = extractBedsBaths(combined);
+    return {
+      bedrooms: beds.bedrooms,
+      bathrooms: beds.bathrooms,
+      landAreaSqm: extractLandAreaSqm(combined),
+      floorAreaSqm: extractFloorAreaSqm(combined),
+      floorAreaSqmJsonLd: extractFloorSizeFromJsonLd(html),
+      price: parsePriceDisplay(combined),
+    };
   } catch {
     return null;
   }
 }
 
-async function annotateApproxBedsBaths(listings: ListingResult[]): Promise<ListingResult[]> {
+/**
+ * Cross-check the structured API's bedroom/bathroom/land-area/price against the
+ * og:description on the listing's social-share card. Both numbers come from
+ * the same upstream listing record but they're populated by different
+ * pipelines on realestate.co.nz, and they occasionally disagree. When they do,
+ * we mark the value as approximate so the UI can flag it rather than silently
+ * picking whichever source happened to win.
+ *
+ * Thresholds are chosen to avoid false positives from rounding/tile-display
+ * differences:
+ *   - bed/bath: any numeric disagreement (counts are integers)
+ *   - land area: differ by both >5% AND >10 m² (small surveys round freely)
+ *   - price: differ by >5% (tolerates "$1.20M" vs "$1,250,000" rounding)
+ */
+async function annotateApproxFields(listings: ListingResult[]): Promise<ListingResult[]> {
   if (listings.length === 0) return listings;
   const checks = await Promise.all(
     listings.map(async (l) => {
-      // Only worth cross-checking when the API actually gave us a number to
-      // verify against — otherwise there's nothing to disagree with.
-      if (l.bedrooms == null && l.bathrooms == null) return l;
-      const og = await fetchOgBedsBaths(l.listingUrl);
+      // Always fetch — even when the API gave us no numbers to verify, the og
+      // payload is our only source of floor area, which is worth surfacing on
+      // the card. (The first-batch annotation budget already accounted for
+      // one fetch per listing.)
+      const og = await fetchOgMeta(l.listingUrl);
       if (!og) return l;
+
       const bedroomsApprox =
         l.bedrooms != null && og.bedrooms != null && og.bedrooms !== l.bedrooms;
       const bathroomsApprox =
         l.bathrooms != null && og.bathrooms != null && og.bathrooms !== l.bathrooms;
-      if (bedroomsApprox || bathroomsApprox) {
+
+      let landAreaApprox = false;
+      if (l.landArea != null && og.landAreaSqm != null) {
+        const diff = Math.abs(l.landArea - og.landAreaSqm);
+        const pct = diff / Math.max(l.landArea, og.landAreaSqm);
+        landAreaApprox = diff > 10 && pct > 0.05;
+      }
+
+      let priceApprox = false;
+      if (l.price != null && og.price != null) {
+        const pct = Math.abs(l.price - og.price) / Math.max(l.price, og.price);
+        priceApprox = pct > 0.05;
+      }
+
+      // Floor area: the structured listings API doesn't expose it, so the two
+      // sources we cross-check are the og:description text and any JSON-LD
+      // `floorSize` block embedded in the page. We surface whichever value we
+      // see first; if both are present and differ by more than 5 m² AND >5%,
+      // we flag it as approximate.
+      const floorArea = og.floorAreaSqm ?? og.floorAreaSqmJsonLd ?? null;
+      let floorAreaApprox = false;
+      if (og.floorAreaSqm != null && og.floorAreaSqmJsonLd != null) {
+        const diff = Math.abs(og.floorAreaSqm - og.floorAreaSqmJsonLd);
+        const pct = diff / Math.max(og.floorAreaSqm, og.floorAreaSqmJsonLd);
+        floorAreaApprox = diff > 5 && pct > 0.05;
+      }
+
+      if (bedroomsApprox || bathroomsApprox || landAreaApprox || priceApprox || floorAreaApprox) {
         logger.info(
-          { url: l.listingUrl, api: { bedrooms: l.bedrooms, bathrooms: l.bathrooms }, og },
-          "realestate-api: bed/bath disagreement between API and og:description — flagging approximate",
+          {
+            url: l.listingUrl,
+            api: { bedrooms: l.bedrooms, bathrooms: l.bathrooms, landArea: l.landArea, price: l.price },
+            og,
+            flags: { bedroomsApprox, bathroomsApprox, landAreaApprox, priceApprox, floorAreaApprox },
+          },
+          "realestate-api: API/og:description disagreement — flagging approximate",
         );
       }
-      return { ...l, bedroomsApprox, bathroomsApprox };
+      return {
+        ...l,
+        floorArea,
+        bedroomsApprox,
+        bathroomsApprox,
+        landAreaApprox,
+        priceApprox,
+        floorAreaApprox,
+      };
     }),
   );
   return checks;
@@ -536,7 +677,7 @@ export async function searchListingsByName(opts: {
   // surfaced as cards immediately; the remainder is paginated lazily and
   // not worth the extra request burst per search.
   const firstBatchRaw = ordered.slice(0, firstBatchSize);
-  const firstBatch = await annotateApproxBedsBaths(firstBatchRaw).catch(() => firstBatchRaw);
+  const firstBatch = await annotateApproxFields(firstBatchRaw).catch(() => firstBatchRaw);
 
   return {
     firstBatch,

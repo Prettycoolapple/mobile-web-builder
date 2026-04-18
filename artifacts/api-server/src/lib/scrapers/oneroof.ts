@@ -7,6 +7,8 @@ export interface ListingResult {
   price: number | null;
   priceText: string;
   landArea: number | null;
+  /** Floor (dwelling) area in m². Sourced opportunistically from og:description; null when not advertised. */
+  floorArea?: number | null;
   photoUrl: string | null;
   listingUrl: string;
   zone: string | null;
@@ -20,6 +22,14 @@ export interface ListingResult {
    */
   bedroomsApprox?: boolean;
   bathroomsApprox?: boolean;
+  /**
+   * True when listing sources disagree on land area (>5% AND >10 m² apart)
+   * or numeric price (>5% apart). Same intent as bedroomsApprox: lets the
+   * UI render "~503 m²" / "~$1.25M" instead of silently picking one source.
+   */
+  landAreaApprox?: boolean;
+  priceApprox?: boolean;
+  floorAreaApprox?: boolean;
 }
 
 // Implementation lives in the dependency-free `bed-bath-extractor` module so

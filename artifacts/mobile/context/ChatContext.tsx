@@ -225,6 +225,12 @@ export interface PropertyCandidate {
   /** True when listing sources disagreed on the count — render as "~3 bd". */
   bedroomsApprox?: boolean;
   bathroomsApprox?: boolean;
+  /** True when listing sources disagreed on land area / price — render as "~503 m²" / "~$1.25M". */
+  landAreaApprox?: boolean;
+  priceApprox?: boolean;
+  /** Floor (dwelling) area in m². */
+  floorArea?: number;
+  floorAreaApprox?: boolean;
 }
 
 export interface Session {

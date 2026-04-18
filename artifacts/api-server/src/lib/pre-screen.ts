@@ -18,6 +18,13 @@ export interface PropertyCandidate {
   /** True when listing sources disagreed on the count — UI can render "~3 bd". */
   bedroomsApprox?: boolean;
   bathroomsApprox?: boolean;
+  /** True when listing sources disagree on land area / price — UI renders "~503 m²" / "~$1.25M". */
+  landAreaApprox?: boolean;
+  priceApprox?: boolean;
+  /** Floor (dwelling) area in m², extracted from listing og:description / JSON-LD. */
+  floorArea?: number;
+  /** True when og:description and page JSON-LD disagree on floor area. */
+  floorAreaApprox?: boolean;
 }
 
 const ZONE_EASE_SCORE: Record<string, number> = {
@@ -133,6 +140,10 @@ async function screenOneFast(listing: ListingResult): Promise<PropertyCandidate 
       bathrooms: listing.bathrooms ?? undefined,
       bedroomsApprox: listing.bedroomsApprox || undefined,
       bathroomsApprox: listing.bathroomsApprox || undefined,
+      landAreaApprox: listing.landAreaApprox || undefined,
+      priceApprox: listing.priceApprox || undefined,
+      floorArea: listing.floorArea ?? undefined,
+      floorAreaApprox: listing.floorAreaApprox || undefined,
     };
   } catch (err) {
     logger.warn({ err, address: listing.address }, "Pre-screen fast: failed for listing");
@@ -189,6 +200,10 @@ async function screenOne(listing: ListingResult): Promise<PropertyCandidate | nu
       bathrooms: listing.bathrooms ?? undefined,
       bedroomsApprox: listing.bedroomsApprox || undefined,
       bathroomsApprox: listing.bathroomsApprox || undefined,
+      landAreaApprox: listing.landAreaApprox || undefined,
+      priceApprox: listing.priceApprox || undefined,
+      floorArea: listing.floorArea ?? undefined,
+      floorAreaApprox: listing.floorAreaApprox || undefined,
     };
   } catch (err) {
     logger.warn({ err, address: listing.address }, "Pre-screen: failed for listing");

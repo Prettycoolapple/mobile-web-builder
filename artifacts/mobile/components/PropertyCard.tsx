@@ -77,14 +77,21 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
           {candidate.price > 0 && (
             <View style={[styles.tag, { backgroundColor: colors.muted }]}>
               <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                ${(candidate.price / 1_000_000).toFixed(2)}M
+                {candidate.priceApprox ? "~" : ""}${(candidate.price / 1_000_000).toFixed(2)}M
               </Text>
             </View>
           )}
           {candidate.landArea && (
             <View style={[styles.tag, { backgroundColor: colors.muted }]}>
               <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                {candidate.landArea}m²
+                {candidate.landAreaApprox ? "~" : ""}{candidate.landArea}m²
+              </Text>
+            </View>
+          )}
+          {typeof candidate.floorArea === "number" && candidate.floorArea > 0 && (
+            <View style={[styles.tag, { backgroundColor: colors.muted }]}>
+              <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
+                {candidate.floorAreaApprox ? "~" : ""}{candidate.floorArea}m² floor
               </Text>
             </View>
           )}
@@ -104,7 +111,7 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
               </Text>
             </View>
           )}
-          {(candidate.bedroomsApprox || candidate.bathroomsApprox) && (
+          {(candidate.bedroomsApprox || candidate.bathroomsApprox || candidate.landAreaApprox || candidate.priceApprox || candidate.floorAreaApprox) && (
             <View style={[styles.tag, { backgroundColor: "transparent", paddingHorizontal: 0 }]}>
               <Text
                 style={[styles.tagText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontStyle: "italic" }]}
