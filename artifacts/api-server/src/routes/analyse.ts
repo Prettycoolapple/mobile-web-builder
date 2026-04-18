@@ -46,6 +46,54 @@ function extractJSON(text: string): unknown {
   throw new Error("No JSON found in response");
 }
 
+/**
+ * Build the deterministic Property Overview snapshot from the merged pipeline
+ * output and mirror it into the report's `propertyOverview` block. The
+ * snapshot is the single source of truth for follow-up chat answers and
+ * guarantees that beds/baths/land/floor/CV stay consistent with the live
+ * listing reconciliation done in `mergePropertyData`.
+ */
+export function applyOverviewSnapshot(
+  parsed: Record<string, unknown>,
+  merged: import("../lib/scrapers/merge").MergedPropertyData | null | undefined,
+  resolvedAddress: string,
+): void {
+  if (!merged) return;
+  const fmt = (n: number) => `$${n.toLocaleString("en-NZ")}`;
+  const snapshot: Record<string, unknown> = {
+    address: resolvedAddress,
+    cv: merged.cv_nzd != null && merged.cv_nzd > 0 ? fmt(merged.cv_nzd) : null,
+    cv_nzd: merged.cv_nzd ?? null,
+    cv_year: merged.cv_year ?? null,
+    landArea: merged.land_area_sqm != null ? `${merged.land_area_sqm}m²` : null,
+    land_area_sqm: merged.land_area_sqm ?? null,
+    floorArea: merged.floor_area_sqm != null ? `${merged.floor_area_sqm}m²` : null,
+    floor_area_sqm: merged.floor_area_sqm ?? null,
+    buildYear: merged.build_year != null ? String(merged.build_year) : null,
+    build_year: merged.build_year ?? null,
+    bedrooms: merged.bedrooms ?? null,
+    zone: merged.zone_description ?? merged.zone_code ?? null,
+    zone_code: merged.zone_code ?? null,
+    listingPrice: merged.listing_price != null ? fmt(merged.listing_price) : null,
+    isOnMarket: merged.listing_active === true,
+    data_sources: merged.data_sources ?? {},
+  };
+  parsed.property_overview_snapshot = snapshot;
+
+  const existingOverview = (parsed.propertyOverview as Record<string, unknown> | undefined) ?? {};
+  parsed.propertyOverview = {
+    ...existingOverview,
+    address: snapshot.address,
+    cv: snapshot.cv,
+    landArea: snapshot.landArea,
+    floorArea: snapshot.floorArea,
+    buildYear: snapshot.buildYear,
+    zone: snapshot.zone ?? existingOverview.zone,
+    listingPrice: snapshot.listingPrice,
+    isOnMarket: snapshot.isOnMarket,
+  };
+}
+
 // Simple edit-distance (Levenshtein) for fuzzy suburb matching
 function editDistance(a: string, b: string): number {
   const dp: number[][] = Array.from({ length: a.length + 1 }, (_, i) => [i, ...new Array(b.length).fill(0)]);
@@ -301,8 +349,32 @@ router.post("/analyse", async (req, res) => {
       return;
     }
 
-    const raw = await generateFeasibilityReport(address, conversationHistory || []);
-    const report = extractJSON(raw);
+    // Run the deterministic pipeline in parallel with the LLM report so the
+    // response includes verified merge data (CV, land/floor area, listing
+    // reconciliation) and a pinned property_overview_snapshot for follow-ups.
+    const [raw, pipelineResult] = await Promise.all([
+      generateFeasibilityReport(address, conversationHistory || []),
+      runPropertyPipeline(address).catch((err) => {
+        req.log.warn({ err }, "Pipeline failed during /analyse — falling back to LLM-only report");
+        return null;
+      }),
+    ]);
+
+    let report = extractJSON(raw) as Record<string, unknown>;
+
+    // Inject deterministic overrides (photo, overlay map, snapshot) when the
+    // pipeline succeeded.
+    if (pipelineResult && report && typeof report === "object") {
+      const photoUrl = pipelineResult.oneroof?.main_photo_url ?? null;
+      const overlayMapB64 = pipelineResult.hougarden?.overlay_map_image_base64 ?? null;
+      if (photoUrl) report.photoUrl = photoUrl;
+      if (overlayMapB64) report.overlay_map_image_base64 = overlayMapB64;
+      applyOverviewSnapshot(
+        report,
+        pipelineResult.merged ?? null,
+        pipelineResult.geocode?.formatted ?? address,
+      );
+    }
 
     if (userId) {
       await db.update(profiles).set({
@@ -1097,49 +1169,10 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                 if (photoUrl) parsed.photoUrl = photoUrl;
                 if (overlayMapB64) parsed.overlay_map_image_base64 = overlayMapB64;
 
-                // Deterministic Property Overview snapshot.
-                // Override the LLM-produced propertyOverview block with the canonical
-                // values from the merge step (which already prefers active OneRoof
-                // listings over stale council/QV records). Save the snapshot in a
-                // dedicated field so follow-up chat answers can read it directly
-                // without re-deriving values from the LLM's narrative.
-                if (merged) {
-                  const formatNZDLocal = (n: number) => `$${n.toLocaleString("en-NZ")}`;
-                  const snapshot: Record<string, unknown> = {
-                    address: geocode?.formatted ?? extractedAddress,
-                    cv: merged.cv_nzd != null && merged.cv_nzd > 0 ? formatNZDLocal(merged.cv_nzd) : null,
-                    cv_nzd: merged.cv_nzd ?? null,
-                    cv_year: merged.cv_year ?? null,
-                    landArea: merged.land_area_sqm != null ? `${merged.land_area_sqm}m²` : null,
-                    land_area_sqm: merged.land_area_sqm ?? null,
-                    floorArea: merged.floor_area_sqm != null ? `${merged.floor_area_sqm}m²` : null,
-                    floor_area_sqm: merged.floor_area_sqm ?? null,
-                    buildYear: merged.build_year != null ? String(merged.build_year) : null,
-                    build_year: merged.build_year ?? null,
-                    bedrooms: merged.bedrooms ?? null,
-                    zone: merged.zone_description ?? merged.zone_code ?? null,
-                    zone_code: merged.zone_code ?? null,
-                    listingPrice: merged.listing_price != null ? formatNZDLocal(merged.listing_price) : null,
-                    isOnMarket: merged.listing_active === true,
-                    data_sources: merged.data_sources ?? {},
-                  };
-                  parsed.property_overview_snapshot = snapshot;
-
-                  // Mirror snapshot into the displayed propertyOverview block so the
-                  // UI and follow-up answers always agree on the same numbers.
-                  const existingOverview = (parsed.propertyOverview as Record<string, unknown> | undefined) ?? {};
-                  parsed.propertyOverview = {
-                    ...existingOverview,
-                    address: snapshot.address,
-                    cv: snapshot.cv,
-                    landArea: snapshot.landArea,
-                    floorArea: snapshot.floorArea,
-                    buildYear: snapshot.buildYear,
-                    zone: snapshot.zone ?? existingOverview.zone,
-                    listingPrice: snapshot.listingPrice,
-                    isOnMarket: snapshot.isOnMarket,
-                  };
-                }
+                // Deterministic Property Overview snapshot — single source of
+                // truth shared with POST /analyse so follow-up chat answers stay
+                // consistent regardless of which entry path produced the report.
+                applyOverviewSnapshot(parsed, merged, geocode?.formatted ?? extractedAddress);
 
                 // Always override asbestos with pre-computed deterministic values.
                 // Claude ignores the schema hints and applies its own (incorrect) heuristics,
