@@ -14,6 +14,7 @@ import notificationsRouter from "./notifications";
 import recommendationsRouter from "./recommendations";
 import agentContactRouter from "./agent-contact";
 import streetviewRouter from "./streetview";
+import otpRouter from "./otp";
 
 const router: IRouter = Router();
 
@@ -32,5 +33,6 @@ router.use(notificationsRouter);
 router.use(recommendationsRouter);
 router.use(agentContactRouter);
 router.use(streetviewRouter);
+router.use(otpRouter);
 
 export default router;

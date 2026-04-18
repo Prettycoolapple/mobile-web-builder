@@ -33,6 +33,8 @@ export interface GeneralSignUpData {
   email: string;
   password: string;
   languages?: string[];
+  phoneNumber: string;
+  phoneVerificationToken: string;
 }
 
 export interface AgentSignUpData {
@@ -42,6 +44,8 @@ export interface AgentSignUpData {
   email: string;
   password: string;
   languages?: string[];
+  phoneNumber: string;
+  phoneVerificationToken: string;
   agentData: {
     agencyName?: string;
     reaaLicenceNumber?: string;
@@ -60,6 +64,8 @@ export interface ProviderSignUpData {
   email: string;
   password: string;
   languages?: string[];
+  phoneNumber: string;
+  phoneVerificationToken: string;
   providerData: {
     companyName?: string;
     nzCompanyRegisterNumber?: string;

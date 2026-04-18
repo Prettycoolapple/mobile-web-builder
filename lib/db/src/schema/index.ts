@@ -10,3 +10,4 @@ export * from "./dm_threads";
 export * from "./dm_messages";
 export * from "./push_tokens";
 export * from "./recommendations";
+export * from "./phone_verifications";

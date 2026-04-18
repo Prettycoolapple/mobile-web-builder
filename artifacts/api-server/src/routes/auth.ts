@@ -10,6 +10,7 @@ import {
 } from "@workspace/db";
 import { hashPassword, verifyPassword, signToken, requireAuth } from "../lib/auth";
 import { sendOwnerNotification } from "../lib/mailer";
+import { verifyPhoneVerificationToken, consumePhoneVerification } from "./otp";
 
 const router = Router();
 
@@ -50,6 +51,8 @@ const signupSchema = z
     fullName: z.string().min(1).optional(),
     role: z.enum(["general", "sales_agent", "service_provider"]).default("general"),
     languages: z.array(z.string()).default([]),
+    phoneNumber: z.string().min(1),
+    phoneVerificationToken: z.string().min(1),
     agentData: salesAgentSchema.optional(),
     providerData: serviceProviderSchema.optional(),
   })
@@ -111,9 +114,38 @@ router.post("/signup", async (req, res) => {
     return;
   }
 
-  const { email, password, firstName, lastName, role, languages, agentData, providerData } =
-    parsed.data;
+  const {
+    email,
+    password,
+    firstName,
+    lastName,
+    role,
+    languages,
+    phoneNumber,
+    phoneVerificationToken,
+    agentData,
+    providerData,
+  } = parsed.data;
   const emailLower = email.toLowerCase().trim();
+  const phoneTrimmed = phoneNumber.replace(/[\s\-()]/g, "").trim();
+  const verifiedPhone = verifyPhoneVerificationToken(phoneVerificationToken, phoneTrimmed);
+  if (!verifiedPhone) {
+    res.status(400).json({
+      error: "Phone verification token is invalid or expired. Please re-verify your number.",
+      code: "PHONE_NOT_VERIFIED",
+    });
+    return;
+  }
+  // Atomically consume the verification row so this token cannot be replayed
+  // to create more than one account during its TTL window.
+  const consumed = await consumePhoneVerification(verifiedPhone.vid, phoneTrimmed);
+  if (!consumed) {
+    res.status(400).json({
+      error: "Phone verification has already been used. Please re-verify your number.",
+      code: "PHONE_VERIFICATION_CONSUMED",
+    });
+    return;
+  }
   const fullName =
     parsed.data.fullName?.trim() ||
     (firstName && lastName ? `${firstName.trim()} ${lastName.trim()}` : null);
@@ -146,6 +178,8 @@ router.post("/signup", async (req, res) => {
           languages,
           subscriptionTier: "free",
           reportsUsedThisMonth: 0,
+          phoneNumber: phoneTrimmed,
+          phoneVerifiedAt: new Date(),
         })
         .returning({
           id: profiles.id,
@@ -172,6 +206,9 @@ router.post("/signup", async (req, res) => {
       }
 
       if (role === "service_provider") {
+        // Override any user-supplied contactNumber with the verified phone — the
+        // provider profile shares the same number that was OTP-verified.
+        if (providerData) providerData.contactNumber = phoneTrimmed;
         if (providerData?.avatarUrl) {
           await tx.update(profiles).set({ avatarUrl: providerData.avatarUrl }).where(eq(profiles.id, newProfile.id));
         }

@@ -19,6 +19,8 @@ export const profiles = pgTable("profiles", {
   stripeCustomerId: text("stripe_customer_id"),
   avatarUrl: text("avatar_url"),
   isVerified: boolean("is_verified").default(false).notNull(),
+  phoneNumber: text("phone_number"),
+  phoneVerifiedAt: timestamp("phone_verified_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

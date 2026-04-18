@@ -21,6 +21,7 @@ import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth, ApiError } from "@/context/AuthContext";
 import * as ImagePicker from "expo-image-picker";
+import { PhoneOtpStep } from "@/components/PhoneOtpStep";
 
 const ALL_LANGUAGES = [
   "Afrikaans", "Albanian", "Amharic", "Arabic", "Armenian", "Azerbaijani",
@@ -44,7 +45,7 @@ const ALL_LANGUAGES = [
   "Tagalog", "Other",
 ];
 
-const TOTAL_STEPS = 4;
+const TOTAL_STEPS = 5;
 
 interface FieldErrors {
   firstName?: string;
@@ -53,6 +54,7 @@ interface FieldErrors {
   password?: string;
   confirmPassword?: string;
   language?: string;
+  phone?: string;
 }
 
 export default function SignupGeneralScreen() {
@@ -73,6 +75,9 @@ export default function SignupGeneralScreen() {
   const [languageSearch, setLanguageSearch] = useState("");
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
   const [avatarMimeType, setAvatarMimeType] = useState("image/jpeg");
+  const [phoneNumber, setPhoneNumber] = useState("+64 ");
+  const [phoneVerificationToken, setPhoneVerificationToken] = useState<string | null>(null);
+  const [verifiedPhone, setVerifiedPhone] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
@@ -113,6 +118,10 @@ export default function SignupGeneralScreen() {
       if (!confirmPassword) errors.confirmPassword = "Please confirm your password.";
       else if (password !== confirmPassword) errors.confirmPassword = "Passwords do not match.";
     } else if (step === 2) {
+      if (!phoneVerificationToken || !verifiedPhone) {
+        errors.phone = "Please verify your phone number before continuing.";
+      }
+    } else if (step === 3) {
       if (!language) errors.language = "Please select a language.";
     }
     setFieldErrors(errors);
@@ -154,6 +163,11 @@ export default function SignupGeneralScreen() {
     setSubmitError(null);
     setIsLoading(true);
     try {
+      if (!phoneVerificationToken || !verifiedPhone) {
+        setFieldErrors({ phone: "Please verify your phone number before continuing." });
+        setStep(2);
+        return;
+      }
       const { token: newToken } = await signUp({
         role: "general",
         firstName: firstName.trim(),
@@ -161,6 +175,8 @@ export default function SignupGeneralScreen() {
         email: email.trim(),
         password,
         languages: language ? [language] : [],
+        phoneNumber: verifiedPhone,
+        phoneVerificationToken,
       });
 
       if (avatarUri) {
@@ -349,6 +365,56 @@ export default function SignupGeneralScreen() {
         <View style={styles.stepContent}>
           <Text style={[styles.stepTag, { color: colors.accent }]}>General User · Free</Text>
           <Text style={[styles.stepHeading, { color: colors.foreground }]}>
+            Verify your{"\n"}phone number
+          </Text>
+          <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
+            We'll text you a 6-digit code to confirm it's really you. Standard carrier rates may apply.
+          </Text>
+
+          {fieldErrors.phone && !verifiedPhone && (
+            <View style={[styles.errorBanner, { backgroundColor: colors.danger + "18", borderColor: colors.danger + "40" }]}>
+              <Feather name="alert-circle" size={15} color={colors.danger} />
+              <Text style={[styles.errorText, { color: colors.danger }]}>{fieldErrors.phone}</Text>
+            </View>
+          )}
+
+          <PhoneOtpStep
+            accent={colors.accent}
+            phone={phoneNumber}
+            onPhoneChange={setPhoneNumber}
+            verified={!!phoneVerificationToken && !!verifiedPhone}
+            onVerified={(token, phone) => {
+              setPhoneVerificationToken(token);
+              setVerifiedPhone(phone);
+              setFieldErrors((p) => ({ ...p, phone: undefined }));
+            }}
+            onUnverified={() => {
+              setPhoneVerificationToken(null);
+              setVerifiedPhone(null);
+            }}
+          />
+
+          <TouchableOpacity
+            style={[
+              styles.primaryBtn,
+              { backgroundColor: colors.accent, opacity: phoneVerificationToken ? 1 : 0.5 },
+            ]}
+            onPress={goNext}
+            activeOpacity={0.85}
+            disabled={!phoneVerificationToken}
+          >
+            <Text style={styles.primaryBtnText}>Continue</Text>
+            <Feather name="arrow-right" size={18} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    if (step === 3) {
+      return (
+        <View style={styles.stepContent}>
+          <Text style={[styles.stepTag, { color: colors.accent }]}>General User · Free</Text>
+          <Text style={[styles.stepHeading, { color: colors.foreground }]}>
             Languages{"\n"}you speak
           </Text>
 
@@ -389,7 +455,10 @@ export default function SignupGeneralScreen() {
             transparent
             onRequestClose={() => setLanguagePickerOpen(false)}
           >
-            <View style={styles.modalOverlay}>
+            <KeyboardAvoidingView
+              style={styles.modalOverlay}
+              behavior={Platform.OS === "ios" ? "padding" : undefined}
+            >
               <View style={[styles.modalSheet, { backgroundColor: colors.background }]}>
                 <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
                   <Text style={[styles.modalTitle, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>
@@ -446,7 +515,7 @@ export default function SignupGeneralScreen() {
                   )}
                 />
               </View>
-            </View>
+            </KeyboardAvoidingView>
           </Modal>
 
           <TouchableOpacity

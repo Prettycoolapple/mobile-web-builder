@@ -18,6 +18,7 @@ import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth, ApiError } from "@/context/AuthContext";
 import { MultiSelectChips } from "@/components/MultiSelectChips";
+import { PhoneOtpStep } from "@/components/PhoneOtpStep";
 
 const LANGUAGE_OPTIONS = [
   { label: "English", value: "English" },
@@ -66,6 +67,7 @@ const TOTAL_STEPS = 4;
 interface FieldErrors {
   firstName?: string;
   lastName?: string;
+  phone?: string;
   email?: string;
   password?: string;
   confirmPassword?: string;
@@ -90,6 +92,9 @@ export default function SignupAgentScreen() {
   const [regions, setRegions] = useState<string[]>([]);
   const [propertyTypes, setPropertyTypes] = useState<string[]>([]);
   const [languages, setLanguages] = useState<string[]>([]);
+  const [phoneNumber, setPhoneNumber] = useState("+64 ");
+  const [phoneVerificationToken, setPhoneVerificationToken] = useState<string | null>(null);
+  const [verifiedPhone, setVerifiedPhone] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
@@ -144,6 +149,12 @@ export default function SignupAgentScreen() {
     setSubmitError(null);
     setIsLoading(true);
     try {
+      if (!phoneVerificationToken || !verifiedPhone) {
+        setFieldErrors({ phone: "Please verify your phone number before continuing." });
+        setStep(2);
+        setIsLoading(false);
+        return;
+      }
       await signUp({
         role: "sales_agent",
         firstName: firstName.trim(),
@@ -151,6 +162,8 @@ export default function SignupAgentScreen() {
         email: email.trim(),
         password,
         languages,
+        phoneNumber: verifiedPhone,
+        phoneVerificationToken,
         agentData: {
           agencyName: agencyName.trim() || undefined,
           reaaLicenceNumber: reaaNumber.trim() || undefined,

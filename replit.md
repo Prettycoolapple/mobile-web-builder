@@ -20,7 +20,7 @@ The application is built as a monorepo utilizing `pnpm workspaces`.
 - **Subscription UI:** `PaywallModal` and `Profile` screens integrate with subscription management, displaying usage and upgrade options. `AnalysisProgress` provides animated step-by-step loading for analysis.
 
 **API Server (Express.js)**
-- **Authentication:** JWT-based authentication with `scrypt` for password hashing. `requireAuth` middleware protects routes.
+- **Authentication:** JWT-based authentication with `scrypt` for password hashing. `requireAuth` middleware protects routes. Signup requires a verified phone number — clients first call `/auth/send-otp` (Twilio SMS, HMAC-hashed code with 10-min TTL and 5-attempt cap) and `/auth/verify-otp` to obtain a short-lived `phoneVerificationToken` (JWT) which must be passed to `/auth/signup` along with the matching phone number. The verified phone is persisted on `profiles.phone_number`/`phone_verified_at`.
 - **Core Endpoints:** Dedicated routes for user authentication (`/auth`), search history management (`/searches`), and the primary analysis/chat functionalities (`/analyse`, `/search`, `/chat`). A debug endpoint (`/pipeline-test`) exists for raw pipeline output.
 - **AI Integration:** Uses Gemini 2.5 Pro via Replit AI Integrations. A custom `claude.ts` wrapper provides `generateUnifiedResponse()` and `detectMode()`. Prompts are managed in `prompts.ts`.
 - **Data Pipeline (Phase 3 + 4):** A critical component for data collection and scoring.

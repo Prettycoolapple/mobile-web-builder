@@ -24,6 +24,7 @@ import * as ImagePicker from "expo-image-picker";
 import { useColors } from "@/hooks/useColors";
 import { useAuth, ApiError, type ProviderDiscipline } from "@/context/AuthContext";
 import { MultiSelectChips } from "@/components/MultiSelectChips";
+import { PhoneOtpStep } from "@/components/PhoneOtpStep";
 
 import { WORLD_LANGUAGES } from "@/lib/languages";
 
@@ -122,7 +123,10 @@ function LanguagePicker({
       {error && <Text style={[styles.fieldError, { color: colors.danger }]}>{error}</Text>}
 
       <Modal visible={open} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setOpen(false)}>
-        <View style={[styles.modalContainer, { backgroundColor: colors.background }]}>
+        <KeyboardAvoidingView
+          style={[styles.modalContainer, { backgroundColor: colors.background }]}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+        >
           <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
             <Text style={[styles.modalTitle, { color: colors.foreground }]}>{label}</Text>
             <TouchableOpacity onPress={() => setOpen(false)} hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}>
@@ -169,7 +173,7 @@ function LanguagePicker({
             )}
             keyboardShouldPersistTaps="handled"
           />
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -197,6 +201,8 @@ export default function SignupProviderScreen() {
   const [addressCity, setAddressCity] = useState("");
   const [addressPostcode, setAddressPostcode] = useState("");
   const [contactNumber, setContactNumber] = useState("+64 ");
+  const [phoneVerificationToken, setPhoneVerificationToken] = useState<string | null>(null);
+  const [verifiedPhone, setVerifiedPhone] = useState<string | null>(null);
   const [primaryLanguage, setPrimaryLanguage] = useState("");
   const [secondaryLanguage, setSecondaryLanguage] = useState("");
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
@@ -282,8 +288,9 @@ export default function SignupProviderScreen() {
       else if (discipline === "other" && !otherDisciplineText.trim()) errors.otherDiscipline = "Please describe your discipline.";
       if (!pickedFile) errors.cert = "Certificate of Incorporation is required.";
     } else if (step === 3) {
-      const phone = contactNumber.trim();
-      if (!phone || phone === "+64") errors.contactNumber = "Contact number is required.";
+      if (!phoneVerificationToken || !verifiedPhone) {
+        errors.contactNumber = "Please verify your phone number before continuing.";
+      }
       if (!primaryLanguage) errors.primaryLanguage = "Primary language is required.";
     }
     setFieldErrors(errors);
@@ -334,6 +341,13 @@ export default function SignupProviderScreen() {
         return;
       }
 
+      if (!phoneVerificationToken || !verifiedPhone) {
+        setFieldErrors({ contactNumber: "Please verify your phone number before continuing." });
+        setStep(3);
+        setIsLoading(false);
+        return;
+      }
+
       const { token: newToken } = await signUp({
         role: "service_provider",
         firstName: firstName.trim(),
@@ -341,6 +355,8 @@ export default function SignupProviderScreen() {
         email: email.trim(),
         password,
         languages: primaryLanguage ? [primaryLanguage, ...(secondaryLanguage ? [secondaryLanguage] : [])] : [],
+        phoneNumber: verifiedPhone,
+        phoneVerificationToken,
         providerData: {
           companyName: companyName.trim() || undefined,
           nzCompanyRegisterNumber: regNumber.trim(),
@@ -350,7 +366,7 @@ export default function SignupProviderScreen() {
           addressSuburb: addressSuburb.trim() || undefined,
           addressCity: addressCity.trim() || undefined,
           addressPostcode: addressPostcode.trim() || undefined,
-          contactNumber: contactNumber.trim() !== "+64" ? contactNumber.trim() : undefined,
+          contactNumber: verifiedPhone,
           primaryLanguage: primaryLanguage || undefined,
           secondaryLanguage: secondaryLanguage || undefined,
           incorporationCertUrl: certFileUrl,
@@ -654,26 +670,25 @@ export default function SignupProviderScreen() {
           </Text>
 
           <View style={styles.fields}>
-            <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground }]}>Phone number *</Text>
-              <TextInput
-                style={[
-                  styles.input,
-                  {
-                    backgroundColor: colors.card,
-                    borderColor: fieldErrors.contactNumber ? colors.danger : colors.border,
-                    color: colors.foreground,
-                    fontFamily: "DM_Sans_400Regular",
-                  },
-                ]}
-                placeholder="+64 21 123 4567"
-                placeholderTextColor={colors.mutedForeground}
-                value={contactNumber}
-                onChangeText={(v) => { setContactNumber(v); if (fieldErrors.contactNumber) setFieldErrors((p) => ({ ...p, contactNumber: undefined })); }}
-                keyboardType="phone-pad"
-              />
-              {fieldErrors.contactNumber && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.contactNumber}</Text>}
-            </View>
+            <PhoneOtpStep
+              accent={ACCENT}
+              phone={contactNumber}
+              onPhoneChange={setContactNumber}
+              verified={!!phoneVerificationToken && !!verifiedPhone}
+              onVerified={(token, phone) => {
+                setPhoneVerificationToken(token);
+                setVerifiedPhone(phone);
+                setContactNumber(phone);
+                setFieldErrors((p) => ({ ...p, contactNumber: undefined }));
+              }}
+              onUnverified={() => {
+                setPhoneVerificationToken(null);
+                setVerifiedPhone(null);
+              }}
+            />
+            {fieldErrors.contactNumber && !verifiedPhone && (
+              <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.contactNumber}</Text>
+            )}
 
             <LanguagePicker
               label="Primary language"
@@ -694,7 +709,15 @@ export default function SignupProviderScreen() {
             />
           </View>
 
-          <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: ACCENT }]} onPress={goNext} activeOpacity={0.85}>
+          <TouchableOpacity
+            style={[
+              styles.primaryBtn,
+              { backgroundColor: ACCENT, opacity: phoneVerificationToken ? 1 : 0.5 },
+            ]}
+            onPress={goNext}
+            activeOpacity={0.85}
+            disabled={!phoneVerificationToken}
+          >
             <Text style={styles.primaryBtnText}>Continue</Text>
             <Feather name="arrow-right" size={18} color="#fff" />
           </TouchableOpacity>
