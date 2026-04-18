@@ -40,6 +40,11 @@ export interface ListingResult {
 import { extractBedsBaths } from "./bed-bath-extractor";
 export { extractBedsBaths };
 
+// parseNZDollar / parseArea / parseYear live in the dependency-free
+// `scraper-parsers` module so they can be unit-tested without pulling in
+// Playwright/cheerio. See `__tests__/scraper-parsers.test.ts` for fixtures.
+import { parseNZDollar, parseArea, parseYear } from "./scraper-parsers";
+
 async function searchOneRoofPlaywright(params: {
   suburb: string;
   price_min: number;
@@ -208,32 +213,6 @@ export function emptyOneRoofData(): OneRoofData {
     build_year: null, bedrooms: null, bathrooms: null, main_photo_url: null, comparables: [],
     data_source: "oneroof", scraped_at: new Date().toISOString(),
   };
-}
-
-function parseNZDollar(text: string): number | null {
-  const clean = text.replace(/[,$\s]/g, "");
-  const m = clean.match(/([\d.]+)([mk]?)/i);
-  if (!m) return null;
-  let v = parseFloat(m[1]);
-  if (isNaN(v) || v <= 0) return null;
-  const suffix = m[2].toLowerCase();
-  if (suffix === "m") v *= 1_000_000;
-  if (suffix === "k") v *= 1_000;
-  return Math.round(v);
-}
-
-function parseArea(text: string): number | null {
-  const m = text.replace(/,/g, "").match(/([\d.]+)\s*m/i);
-  if (!m) return null;
-  const v = parseFloat(m[1]);
-  return isNaN(v) || v <= 0 ? null : Math.round(v);
-}
-
-function parseYear(text: string): number | null {
-  const m = text.match(/\b(19|20)\d{2}\b/);
-  if (!m) return null;
-  const y = parseInt(m[0]);
-  return y >= 1800 && y <= new Date().getFullYear() + 1 ? y : null;
 }
 
 function extractDataFromText(pageText: string): Partial<OneRoofData> {
