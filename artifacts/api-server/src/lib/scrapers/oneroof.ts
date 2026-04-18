@@ -14,26 +14,12 @@ export interface ListingResult {
   bathrooms: number | null;
 }
 
-/**
- * Pull bed/bath counts from a listing card's flat text. Cards on
- * realestate.co.nz / OneRoof / Homes commonly render these as "3 Beds",
- * "2 Bath", "3 br", or as the single-letter glyph "3" next to a bed icon
- * (when the icon's alt-text is exposed in innerText we get "bed").
- */
-export function extractBedsBaths(text: string): { bedrooms: number | null; bathrooms: number | null } {
-  const bedM =
-    text.match(/(\d+)\s*(?:bed(?:room)?s?|br|bd)\b/i) ??
-    text.match(/\bbed(?:room)?s?\s*(\d+)/i);
-  const bathM =
-    text.match(/(\d+)\s*(?:bath(?:room)?s?|ba)\b/i) ??
-    text.match(/\bbath(?:room)?s?\s*(\d+)/i);
-  const beds = bedM ? parseInt(bedM[1], 10) : null;
-  const baths = bathM ? parseInt(bathM[1], 10) : null;
-  return {
-    bedrooms: beds && beds > 0 && beds < 20 ? beds : null,
-    bathrooms: baths && baths > 0 && baths < 20 ? baths : null,
-  };
-}
+// Implementation lives in the dependency-free `bed-bath-extractor` module so
+// the standalone verification suite can import it without pulling in
+// Playwright/cheerio. Imported locally and re-exported for callers
+// (realestate-search.ts, this file's own scraping helpers below).
+import { extractBedsBaths } from "./bed-bath-extractor";
+export { extractBedsBaths };
 
 async function searchOneRoofPlaywright(params: {
   suburb: string;
