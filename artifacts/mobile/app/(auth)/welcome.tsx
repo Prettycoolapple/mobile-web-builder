@@ -6,221 +6,178 @@ import {
   TouchableOpacity,
   Animated,
   Easing,
-  Dimensions,
+  ScrollView,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
-import Svg, { Defs, RadialGradient, Stop, Circle } from "react-native-svg";
 import { useColors } from "@/hooks/useColors";
 import { GroundupLogo } from "@/components/GroundupLogo";
 
-const BRAND = "Groundup";
-const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get("window");
+type FeatureItem = {
+  icon: keyof typeof Feather.glyphMap;
+  title: string;
+  body: string;
+};
 
-function GlowBackdrop({ color }: { color: string }) {
-  return (
-    <Svg
-      width={SCREEN_W}
-      height={SCREEN_H}
-      style={StyleSheet.absoluteFill}
-      pointerEvents="none"
-    >
-      <Defs>
-        <RadialGradient id="glow1" cx="50%" cy="35%" r="60%">
-          <Stop offset="0" stopColor={color} stopOpacity="0.35" />
-          <Stop offset="1" stopColor={color} stopOpacity="0" />
-        </RadialGradient>
-        <RadialGradient id="glow2" cx="80%" cy="80%" r="55%">
-          <Stop offset="0" stopColor={color} stopOpacity="0.18" />
-          <Stop offset="1" stopColor={color} stopOpacity="0" />
-        </RadialGradient>
-      </Defs>
-      <Circle cx={SCREEN_W / 2} cy={SCREEN_H * 0.35} r={SCREEN_W * 0.7} fill="url(#glow1)" />
-      <Circle cx={SCREEN_W * 0.8} cy={SCREEN_H * 0.8} r={SCREEN_W * 0.6} fill="url(#glow2)" />
-    </Svg>
-  );
-}
+const FEATURES: FeatureItem[] = [
+  {
+    icon: "map-pin",
+    title: "Address-level feasibility",
+    body: "Zoning, overlays, slope, and infrastructure costs for any NZ property in seconds.",
+  },
+  {
+    icon: "trending-up",
+    title: "Development ROI modelling",
+    body: "Indicative GDV, build cost ranges, and 2–4 year return scenarios in NZD.",
+  },
+  {
+    icon: "users",
+    title: "Verified NZ professionals",
+    body: "Get matched with planners, architects, and engineers who know your council.",
+  },
+];
 
 export default function WelcomeScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
 
-  const logoScale = useRef(new Animated.Value(0.6)).current;
-  const logoOpacity = useRef(new Animated.Value(0)).current;
-  const logoTranslateY = useRef(new Animated.Value(20)).current;
-  const taglineOpacity = useRef(new Animated.Value(0)).current;
-  const taglineTranslateY = useRef(new Animated.Value(12)).current;
-  const ctaOpacity = useRef(new Animated.Value(0)).current;
-  const ctaTranslateY = useRef(new Animated.Value(24)).current;
-
-  const letters = useRef(
-    BRAND.split("").map(() => ({
-      opacity: new Animated.Value(0),
-      translateY: new Animated.Value(18),
-    })),
-  ).current;
+  const fade = useRef(new Animated.Value(0)).current;
+  const lift = useRef(new Animated.Value(16)).current;
 
   useEffect(() => {
-    const intro = Animated.parallel([
-      Animated.timing(logoOpacity, {
+    Animated.parallel([
+      Animated.timing(fade, {
         toValue: 1,
-        duration: 600,
+        duration: 520,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }),
-      Animated.spring(logoScale, {
-        toValue: 1,
-        friction: 6,
-        tension: 80,
-        useNativeDriver: true,
-      }),
-      Animated.timing(logoTranslateY, {
+      Animated.timing(lift, {
         toValue: 0,
-        duration: 700,
+        duration: 520,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }),
-    ]);
-    intro.start();
-
-    const letterAnims = letters.map((l, i) =>
-      Animated.parallel([
-        Animated.timing(l.opacity, {
-          toValue: 1,
-          duration: 420,
-          delay: 350 + i * 70,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-        Animated.timing(l.translateY, {
-          toValue: 0,
-          duration: 520,
-          delay: 350 + i * 70,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-
-    const letterStagger = Animated.stagger(0, letterAnims);
-    letterStagger.start();
-
-    const tagline = Animated.parallel([
-      Animated.timing(taglineOpacity, {
-        toValue: 1,
-        duration: 500,
-        delay: 350 + letters.length * 70 + 120,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-      Animated.timing(taglineTranslateY, {
-        toValue: 0,
-        duration: 500,
-        delay: 350 + letters.length * 70 + 120,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-    ]);
-    tagline.start();
-
-    const cta = Animated.parallel([
-      Animated.timing(ctaOpacity, {
-        toValue: 1,
-        duration: 500,
-        delay: 350 + letters.length * 70 + 320,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-      Animated.timing(ctaTranslateY, {
-        toValue: 0,
-        duration: 500,
-        delay: 350 + letters.length * 70 + 320,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-    ]);
-    cta.start();
-
-    return () => {
-      intro.stop();
-      letterStagger.stop();
-      tagline.stop();
-      cta.stop();
-    };
+    ]).start();
   }, []);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <GlowBackdrop color={colors.accent} />
-
-      <View style={[styles.content, { paddingTop: insets.top + 80, paddingBottom: insets.bottom + 32 }]}>
-        <View style={styles.heroBlock}>
-          <Animated.View
-            style={{
-              opacity: logoOpacity,
-              transform: [{ scale: logoScale }, { translateY: logoTranslateY }],
-              marginBottom: 28,
-            }}
-          >
-            <GroundupLogo size={108} color={colors.accent} accentColor={colors.accent} />
-          </Animated.View>
-
-          <View style={styles.brandRow}>
-            {letters.map((l, i) => (
-              <Animated.Text
-                key={i}
-                style={[
-                  styles.brandLetter,
-                  {
-                    color: colors.accent,
-                    fontFamily: "SpaceGrotesk_700Bold",
-                    opacity: l.opacity,
-                    transform: [{ translateY: l.translateY }],
-                  },
-                ]}
-              >
-                {BRAND[i]}
-              </Animated.Text>
-            ))}
-          </View>
-
-          <Animated.Text
-            style={[
-              styles.tagline,
-              {
-                color: colors.mutedForeground,
-                fontFamily: "DM_Sans_400Regular",
-                opacity: taglineOpacity,
-                transform: [{ translateY: taglineTranslateY }],
-              },
-            ]}
-          >
-            Residential property development intelligence.
-          </Animated.Text>
-        </View>
-
+      <ScrollView
+        contentContainerStyle={[
+          styles.scrollContent,
+          {
+            paddingTop: insets.top + 56,
+            paddingBottom: insets.bottom + 28,
+          },
+        ]}
+        showsVerticalScrollIndicator={false}
+        bounces={false}
+      >
         <Animated.View
           style={{
-            opacity: ctaOpacity,
-            transform: [{ translateY: ctaTranslateY }],
-            gap: 12,
+            opacity: fade,
+            transform: [{ translateY: lift }],
           }}
         >
+          <View style={styles.brandRow}>
+            <GroundupLogo size={36} color={colors.accent} accentColor={colors.accent} />
+            <Text
+              style={[
+                styles.brandWord,
+                { color: colors.foreground, fontFamily: "SpaceGrotesk_700Bold" },
+              ]}
+            >
+              Groundup
+            </Text>
+          </View>
+
+          <Text
+            style={[
+              styles.eyebrow,
+              { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" },
+            ]}
+          >
+            NEW ZEALAND PROPERTY DEVELOPMENT
+          </Text>
+
+          <Text
+            style={[
+              styles.headline,
+              { color: colors.foreground, fontFamily: "SpaceGrotesk_700Bold" },
+            ]}
+          >
+            Know if a site stacks up{"\n"}before you offer.
+          </Text>
+
+          <Text
+            style={[
+              styles.subhead,
+              { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" },
+            ]}
+          >
+            Instant feasibility analysis on any NZ address — zoning, costs, ROI,
+            and risks, modelled by AI trained on local market data.
+          </Text>
+
+          <View style={styles.features}>
+            {FEATURES.map((f) => (
+              <View key={f.title} style={styles.featureRow}>
+                <View
+                  style={[
+                    styles.featureIcon,
+                    {
+                      backgroundColor: colors.muted,
+                      borderColor: colors.border,
+                    },
+                  ]}
+                >
+                  <Feather name={f.icon} size={18} color={colors.accent} />
+                </View>
+                <View style={styles.featureCopy}>
+                  <Text
+                    style={[
+                      styles.featureTitle,
+                      { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" },
+                    ]}
+                  >
+                    {f.title}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.featureBody,
+                      { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" },
+                    ]}
+                  >
+                    {f.body}
+                  </Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        </Animated.View>
+
+        <Animated.View style={[styles.ctaBlock, { opacity: fade }]}>
           <TouchableOpacity
             style={[styles.primaryBtn, { backgroundColor: colors.accent }]}
             onPress={() => router.push("/(auth)/signup")}
-            activeOpacity={0.85}
+            activeOpacity={0.9}
           >
-            <Text style={[styles.primaryBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>
-              Get started
+            <Text
+              style={[
+                styles.primaryBtnText,
+                { color: colors.accentForeground, fontFamily: "DM_Sans_600SemiBold" },
+              ]}
+            >
+              Create free account
             </Text>
-            <Feather name="arrow-right" size={18} color="#fff" />
+            <Feather name="arrow-right" size={18} color={colors.accentForeground} />
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.secondaryBtn, { borderColor: colors.border }]}
+            style={styles.secondaryBtn}
             onPress={() => router.push("/(auth)/login")}
             activeOpacity={0.7}
           >
@@ -230,43 +187,92 @@ export default function WelcomeScreen() {
                 { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" },
               ]}
             >
-              I already have an account
+              Sign in
             </Text>
           </TouchableOpacity>
+
+          <Text
+            style={[
+              styles.fineprint,
+              { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" },
+            ]}
+          >
+            Indicative estimates only. Always engage qualified professionals
+            before development decisions.
+          </Text>
         </Animated.View>
-      </View>
+      </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  content: {
-    flex: 1,
+  scrollContent: {
+    flexGrow: 1,
     paddingHorizontal: 28,
     justifyContent: "space-between",
-  },
-  heroBlock: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
   },
   brandRow: {
     flexDirection: "row",
     alignItems: "center",
+    gap: 10,
+    marginBottom: 48,
+  },
+  brandWord: {
+    fontSize: 20,
+    letterSpacing: -0.4,
+  },
+  eyebrow: {
+    fontSize: 11,
+    letterSpacing: 1.6,
+    marginBottom: 14,
+  },
+  headline: {
+    fontSize: 34,
+    lineHeight: 40,
+    letterSpacing: -1.2,
+    marginBottom: 16,
+  },
+  subhead: {
+    fontSize: 16,
+    lineHeight: 24,
+    marginBottom: 36,
+    maxWidth: 420,
+  },
+  features: {
+    gap: 20,
+    marginBottom: 32,
+  },
+  featureRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 14,
+  },
+  featureIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    alignItems: "center",
     justifyContent: "center",
+    borderWidth: StyleSheet.hairlineWidth,
   },
-  brandLetter: {
-    fontSize: 46,
-    letterSpacing: -1.5,
-    lineHeight: 54,
+  featureCopy: {
+    flex: 1,
+    paddingTop: 1,
   },
-  tagline: {
+  featureTitle: {
     fontSize: 15,
-    lineHeight: 22,
-    textAlign: "center",
-    marginTop: 16,
-    maxWidth: 320,
+    lineHeight: 20,
+    marginBottom: 3,
+  },
+  featureBody: {
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  ctaBlock: {
+    marginTop: 32,
+    gap: 12,
   },
   primaryBtn: {
     height: 54,
@@ -276,13 +282,22 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 10,
   },
-  primaryBtnText: { color: "#fff", fontSize: 16 },
+  primaryBtnText: {
+    fontSize: 16,
+  },
   secondaryBtn: {
-    height: 54,
-    borderRadius: 14,
+    height: 48,
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 1,
   },
-  secondaryBtnText: { fontSize: 15 },
+  secondaryBtnText: {
+    fontSize: 15,
+  },
+  fineprint: {
+    fontSize: 11,
+    lineHeight: 16,
+    textAlign: "center",
+    marginTop: 8,
+    paddingHorizontal: 12,
+  },
 });

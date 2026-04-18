@@ -1,8 +1,8 @@
-# Lecorb
+# Groundup
 
 ## Overview
 
-Lecorb is an AI-powered mobile application designed to provide New Zealand real estate development feasibility analysis. Built with Expo (React Native) for the mobile front-end and an Express.js API server, it aims to assist users in making informed property development decisions. The application integrates advanced AI capabilities, real-time data scraping, and a robust data pipeline to generate comprehensive feasibility reports. Its core purpose is to simplify complex property analysis, offering features like address-specific reports, discovery searches for subdividable properties, and conversational AI for follow-up questions. The project seeks to address market needs for accessible and accurate real estate development insights in New Zealand.
+Groundup is an AI-powered mobile application designed to provide New Zealand real estate development feasibility analysis. Built with Expo (React Native) for the mobile front-end and an Express.js API server, it aims to assist users in making informed property development decisions. The application integrates advanced AI capabilities, real-time data scraping, and a robust data pipeline to generate comprehensive feasibility reports. Its core purpose is to simplify complex property analysis, offering features like address-specific reports, discovery searches for subdividable properties, and conversational AI for follow-up questions. The project seeks to address market needs for accessible and accurate real estate development insights in New Zealand.
 
 ## User Preferences
 

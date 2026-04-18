@@ -192,7 +192,7 @@ export async function extractChatIntent(
   }
   const contextText = contextLines.length > 0 ? contextLines.join("\n") : "(no open report)";
 
-  const prompt = `You are an intent parser for a NZ property development app called Lecorb.
+  const prompt = `You are an intent parser for a NZ property development app called Groundup.
 Your job: read the FULL CONVERSATION HISTORY and the user's latest message, accumulate all
 information given across all turns (suburb, price, address, criteria), then classify intent
 and decide whether you have enough to act or need to ask one more question.

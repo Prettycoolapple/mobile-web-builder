@@ -17,16 +17,16 @@ const PLAN_CONFIG = {
   },
   sales_agent: {
     priceCents: 9900,
-    productName: "Lecorb Sales Agent",
+    productName: "Groundup Sales Agent",
     nickname: "Sales Agent Monthly NZD",
-    description: "Lecorb Sales Agent subscription — leads, listings & AI placement",
+    description: "Groundup Sales Agent subscription — leads, listings & AI placement",
     tier: "pro",
   },
   service_provider: {
     priceCents: 14900,
-    productName: "Lecorb Service Provider",
+    productName: "Groundup Service Provider",
     nickname: "Service Provider Monthly NZD",
-    description: "Lecorb Service Provider subscription — leads, profile listing & AI placement",
+    description: "Groundup Service Provider subscription — leads, profile listing & AI placement",
     tier: "pro",
   },
 } as const;

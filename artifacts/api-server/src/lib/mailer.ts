@@ -30,7 +30,7 @@ export async function sendOwnerNotification(subject: string, body: string): Prom
   try {
     const transporter = getTransporter();
     await transporter.sendMail({
-      from: `"Lecorb Notifications" <${SMTP_USER}>`,
+      from: `"Groundup Notifications" <${SMTP_USER}>`,
       to: SMTP_TO,
       subject,
       text: body,

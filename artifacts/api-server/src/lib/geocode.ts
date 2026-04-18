@@ -13,7 +13,7 @@ async function nominatimGeocode(address: string): Promise<GeoResult | null> {
 
   const resp = await fetch(url, {
     headers: {
-      "User-Agent": "LecorbNZ/1.0 (property development analysis app)",
+      "User-Agent": "GroundupNZ/1.0 (property development analysis app)",
       "Accept-Language": "en",
     },
     signal: AbortSignal.timeout(10000),
