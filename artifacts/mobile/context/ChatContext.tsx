@@ -24,7 +24,7 @@ export interface ChatMessage {
   role: MessageRole;
   content: string;
   timestamp: number;
-  type: "text" | "report" | "search" | "loading" | "provider_recommendation" | "agent_contact" | "subdivision_clarification";
+  type: "text" | "report" | "search" | "loading" | "provider_recommendation" | "provider_upgrade_gate" | "agent_contact" | "subdivision_clarification";
   clarification?: {
     question: string;
     options: string[];

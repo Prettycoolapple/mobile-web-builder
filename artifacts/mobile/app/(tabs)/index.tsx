@@ -224,6 +224,14 @@ export default function SearchScreen() {
         body: JSON.stringify({ providerId, propertyAddress, report }),
       });
       if (resp.status === 402) {
+        const last = msgs[msgs.length - 1];
+        if (last?.type !== "provider_upgrade_gate") {
+          addMessage({
+            role: "assistant",
+            content: "",
+            type: "provider_upgrade_gate",
+          }, currentSessionId ?? undefined);
+        }
         setShowPaywall(true);
         return;
       }
@@ -664,8 +672,8 @@ export default function SearchScreen() {
             if (resp.status === 402) {
               addMessage({
                 role: "assistant",
-                content: "Connecting with a service provider is a Standard feature. Upgrade to message specialists directly.",
-                type: "text",
+                content: "",
+                type: "provider_upgrade_gate",
               }, capturedSessionId);
               setShowPaywall(true);
               return;
@@ -680,8 +688,8 @@ export default function SearchScreen() {
             if (data.upgradeRequired) {
               addMessage({
                 role: "assistant",
-                content: "Connecting with a service provider is a Standard feature. Upgrade to message specialists directly.",
-                type: "text",
+                content: "",
+                type: "provider_upgrade_gate",
               }, capturedSessionId);
               setShowPaywall(true);
               return;
@@ -828,6 +836,7 @@ export default function SearchScreen() {
         onConnect={(providerId) => handleConnect(providerId, item.propertyAddress ?? "")}
         onDismiss={handleDismiss}
         onAgentDismiss={handleAgentDismiss}
+        onUpgrade={() => setShowPaywall(true)}
       />
     ),
     [handleFollowUp, handleAnalyse, handleSend, handleConnect, handleDismiss, handleAgentDismiss],

@@ -8,6 +8,7 @@ import { FeasibilityReportCard } from "./FeasibilityReport";
 import { PropertyCard } from "./PropertyCard";
 import { AnalysisProgress } from "./AnalysisProgress";
 import { ProviderRecommendationBubble } from "./ProviderRecommendationBubble";
+import { ProviderUpgradeGateBubble } from "./ProviderUpgradeGateBubble";
 import { AgentCallBubble } from "./AgentCallBubble";
 
 class ReportErrorBoundary extends Component<
@@ -65,6 +66,7 @@ interface Props {
   onConnect?: (providerId: string) => Promise<void>;
   onDismiss?: (messageId: string) => void;
   onAgentDismiss?: (messageId: string) => void;
+  onUpgrade?: () => void;
 }
 
 const THINKING_MESSAGES = [
@@ -132,7 +134,7 @@ function TypingDots() {
   );
 }
 
-export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect, onDismiss, onAgentDismiss }: Props) {
+export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect, onDismiss, onAgentDismiss, onUpgrade }: Props) {
   const colors = useColors();
   const isUser = message.role === "user";
 
@@ -187,6 +189,10 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
         </View>
       </View>
     );
+  }
+
+  if (message.type === "provider_upgrade_gate") {
+    return <ProviderUpgradeGateBubble onUpgrade={() => onUpgrade?.()} />;
   }
 
   if (message.type === "provider_recommendation" && message.provider) {
