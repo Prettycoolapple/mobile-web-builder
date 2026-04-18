@@ -120,6 +120,11 @@ interface AuthContextValue {
     fileName: string,
     tokenOverride?: string,
   ) => Promise<{ objectPath: string; fileUrl: string }>;
+  uploadIncorporationCertPreSignup: (
+    fileUri: string,
+    mimeType: string,
+    fileName: string,
+  ) => Promise<{ objectPath: string; fileUrl: string }>;
   updateServiceProviderCert: (fileUrl: string, tokenOverride?: string) => Promise<void>;
   uploadProfilePicture: (
     fileUri: string,
@@ -312,6 +317,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { objectPath: json.objectPath, fileUrl: json.fileUrl };
   }, [token]);
 
+  const uploadIncorporationCertPreSignup = useCallback(async (
+    fileUri: string,
+    mimeType: string,
+    fileName: string,
+  ): Promise<{ objectPath: string; fileUrl: string }> => {
+    const formData = new FormData();
+    const fileBlob: ReactNativeFileBlob = { uri: fileUri, type: mimeType, name: fileName };
+    formData.append("file", fileBlob as unknown as Blob);
+    const resp = await fetch(`${getApiBase()}/upload/incorporation-cert-pre-signup`, {
+      method: "POST",
+      body: formData,
+    });
+    const json = (await resp.json()) as { objectPath: string; fileUrl: string; error?: string };
+    if (!resp.ok) throw new Error(json.error ?? "Upload failed");
+    return { objectPath: json.objectPath, fileUrl: json.fileUrl };
+  }, []);
+
   const updateServiceProviderCert = useCallback(async (
     fileUrl: string,
     tokenOverride?: string,
@@ -361,6 +383,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       signUp, signIn, signOut,
       refreshProfile, getApiHeaders,
       uploadIncorporationCert,
+      uploadIncorporationCertPreSignup,
       updateServiceProviderCert,
       uploadProfilePicture,
     }}>

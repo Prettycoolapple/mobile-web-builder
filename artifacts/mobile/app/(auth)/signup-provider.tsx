@@ -179,7 +179,7 @@ export default function SignupProviderScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { signUp, uploadIncorporationCert, updateServiceProviderCert, uploadProfilePicture } = useAuth();
+  const { signUp, uploadIncorporationCertPreSignup, uploadProfilePicture } = useAuth();
   const { width: SCREEN_W } = useWindowDimensions();
 
   const [firstName, setFirstName] = useState("");
@@ -305,6 +305,35 @@ export default function SignupProviderScreen() {
     setCertError(null);
     setIsLoading(true);
     try {
+      // Atomic provider signup: upload the Certificate of Incorporation FIRST
+      // and only attempt to create the account once we have a URL. The server
+      // requires providerData.incorporationCertUrl, so a failed upload aborts
+      // signup before any half-formed profile is written.
+      if (!pickedFile) {
+        setFieldErrors((e) => ({ ...e, cert: "Certificate of Incorporation is required." }));
+        setUploadStatus("error");
+        setStep(5);
+        setIsLoading(false);
+        return;
+      }
+
+      setUploadStatus("uploading");
+      let certFileUrl: string;
+      try {
+        const { fileUrl } = await uploadIncorporationCertPreSignup(
+          pickedFile.uri,
+          pickedFile.mimeType,
+          pickedFile.name,
+        );
+        certFileUrl = fileUrl;
+        setUploadStatus("done");
+      } catch (certErr) {
+        setUploadStatus("error");
+        setCertError(certErr instanceof Error ? certErr.message : "Certificate upload failed. Please try again.");
+        setIsLoading(false);
+        return;
+      }
+
       const { token: newToken } = await signUp({
         role: "service_provider",
         firstName: firstName.trim(),
@@ -324,6 +353,7 @@ export default function SignupProviderScreen() {
           contactNumber: contactNumber.trim() !== "+64" ? contactNumber.trim() : undefined,
           primaryLanguage: primaryLanguage || undefined,
           secondaryLanguage: secondaryLanguage || undefined,
+          incorporationCertUrl: certFileUrl,
         },
       });
 
@@ -332,18 +362,6 @@ export default function SignupProviderScreen() {
           const ext = avatarMimeType.split("/")[1] ?? "jpg";
           await uploadProfilePicture(avatarUri, avatarMimeType, `avatar.${ext}`, newToken);
         } catch {
-        }
-      }
-
-      if (pickedFile) {
-        setUploadStatus("uploading");
-        try {
-          const { fileUrl } = await uploadIncorporationCert(pickedFile.uri, pickedFile.mimeType, pickedFile.name, newToken);
-          await updateServiceProviderCert(fileUrl, newToken);
-          setUploadStatus("done");
-        } catch (certErr) {
-          setUploadStatus("error");
-          setCertError(certErr instanceof Error ? certErr.message : "Certificate upload failed — you can re-upload it from your profile.");
         }
       }
 

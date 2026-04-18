@@ -49,6 +49,47 @@ const uploadImageOnly = multer({
   },
 });
 
+// Pre-signup variant — uploads the certificate to object storage and returns
+// the URL without requiring auth. Used so provider signup can be ATOMIC: the
+// mobile client uploads the cert first, then submits signup with the URL in
+// the payload, and the server refuses to create a half-formed provider profile
+// without it. No DB row is inserted here; the URL is bound to the profile in
+// the signup transaction.
+router.post(
+  "/upload/incorporation-cert-pre-signup",
+  upload.single("file"),
+  async (req: Request, res: Response) => {
+    if (!req.file) {
+      res.status(400).json({ error: "No file provided", code: "MISSING_FILE" });
+      return;
+    }
+    try {
+      const { buffer, mimetype, originalname, size } = req.file;
+      const uploadURL = await objectStorageService.getObjectEntityUploadURL();
+      const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
+      const uploadRes = await fetch(uploadURL, {
+        method: "PUT",
+        headers: { "Content-Type": mimetype, "Content-Length": String(size) },
+        body: buffer,
+      });
+      if (!uploadRes.ok) {
+        req.log.error({ status: uploadRes.status }, "GCS upload failed (pre-signup)");
+        res.status(500).json({ error: "Failed to upload file to storage", code: "UPLOAD_FAILED" });
+        return;
+      }
+      const fileUrl = `/api/storage${objectPath}`;
+      res.status(201).json({
+        objectPath,
+        fileUrl,
+        metadata: { name: originalname, size, contentType: mimetype },
+      });
+    } catch (error) {
+      req.log.error({ error }, "Pre-signup incorporation cert upload failed");
+      res.status(500).json({ error: "Upload failed. Please try again.", code: "UPLOAD_FAILED" });
+    }
+  },
+);
+
 router.post(
   "/upload/incorporation-cert",
   requireAuth,

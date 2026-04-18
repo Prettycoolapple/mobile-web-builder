@@ -13,9 +13,18 @@ interface ExpoResponse {
   errors?: unknown;
 }
 
-const INVALID_TOKEN_ERRORS = new Set([
-  "DeviceNotRegistered",
+// Only DeviceNotRegistered indicates a per-device token that should be pruned
+// (the user uninstalled the app, revoked notif permission, or the install was
+// reset). Other errors like InvalidCredentials, MessageTooBig,
+// MessageRateExceeded or MismatchSenderId are operational/config issues — they
+// affect the *whole project*, not a single device, so deleting tokens on those
+// errors would silently nuke the entire push fleet.
+const INVALID_TOKEN_ERRORS = new Set(["DeviceNotRegistered"]);
+const OPERATIONAL_ERRORS = new Set([
   "InvalidCredentials",
+  "MismatchSenderId",
+  "MessageTooBig",
+  "MessageRateExceeded",
 ]);
 
 /**
@@ -55,13 +64,18 @@ export async function sendExpoPush(
   const tickets = parsed?.data ?? [];
   const invalidTokens: string[] = [];
   tickets.forEach((ticket, idx) => {
-    if (
-      ticket?.status === "error" &&
-      ticket.details?.error &&
-      INVALID_TOKEN_ERRORS.has(ticket.details.error)
-    ) {
+    if (ticket?.status !== "error") return;
+    const code = ticket.details?.error;
+    if (!code) return;
+    if (INVALID_TOKEN_ERRORS.has(code)) {
       const tok = tokens[idx];
       if (tok) invalidTokens.push(tok);
+    } else if (OPERATIONAL_ERRORS.has(code)) {
+      // Surface but never prune — this is a project-level / config issue.
+      logger.error(
+        { code, message: ticket.message },
+        "Expo push: operational error (NOT pruning tokens)",
+      );
     }
   });
 

@@ -76,6 +76,7 @@ const signupSchema = z
         { key: "discipline", label: "Discipline is required." },
         { key: "contactNumber", label: "Contact number is required." },
         { key: "primaryLanguage", label: "Primary language is required." },
+        { key: "incorporationCertUrl", label: "Certificate of Incorporation is required." },
       ];
       for (const r of required) {
         const v = p[r.key];
