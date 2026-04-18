@@ -7,7 +7,6 @@ import React, {
 import {
   ActivityIndicator,
   FlatList,
-  Image,
   KeyboardAvoidingView,
   Linking,
   Platform,
@@ -18,6 +17,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { Image } from "expo-image";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
@@ -26,6 +26,7 @@ import * as ImagePicker from "expo-image-picker";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { useDm, DmMessage, DmThread } from "@/context/DmContext";
+import { ImageViewerModal } from "@/components/ImageViewerModal";
 
 function getApiBase(): string {
   if (process.env.EXPO_PUBLIC_DOMAIN) {
@@ -127,6 +128,7 @@ export default function ChatScreen() {
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [viewerUri, setViewerUri] = useState<string | null>(null);
 
   const flatListRef = useRef<FlatList>(null);
   const joinedRef = useRef(false);
@@ -339,9 +341,34 @@ export default function ChatScreen() {
             <Text style={[styles.senderName, { color: colors.mutedForeground }]}>{otherName}</Text>
           ) : null}
           {msg.imageUrl ? (
-            <View style={[styles.imgBubble, isMine ? styles.myBubble : styles.theirBubble, { backgroundColor: isMine ? colors.accent : colors.card, borderColor: isMine ? colors.accent : colors.border }]}>
-              <Image source={{ uri: msg.imageUrl }} style={styles.msgImage} resizeMode="cover" />
-            </View>
+            <Pressable
+              onPress={() => {
+                const u = msg.imageUrl;
+                if (!u) return;
+                const full = u.startsWith("http") ? u : `${getApiBase().replace(/\/api$/, "")}${u}`;
+                setViewerUri(full);
+              }}
+              style={[
+                styles.imgBubble,
+                isMine ? styles.myBubble : styles.theirBubble,
+                {
+                  backgroundColor: isMine ? colors.accent : colors.card,
+                  borderColor: isMine ? colors.accent : colors.border,
+                },
+              ]}
+            >
+              <Image
+                source={{
+                  uri: msg.imageUrl.startsWith("http")
+                    ? msg.imageUrl
+                    : `${getApiBase().replace(/\/api$/, "")}${msg.imageUrl}`,
+                  headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+                }}
+                style={styles.msgImage}
+                contentFit="cover"
+                transition={120}
+              />
+            </Pressable>
           ) : (
             <View
               style={[
@@ -520,6 +547,13 @@ export default function ChatScreen() {
           </TouchableOpacity>
         </View>
       </View>
+
+      <ImageViewerModal
+        visible={!!viewerUri}
+        uri={viewerUri}
+        authToken={token}
+        onClose={() => setViewerUri(null)}
+      />
     </KeyboardAvoidingView>
   );
 }
