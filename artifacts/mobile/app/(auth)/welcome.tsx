@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -6,298 +6,265 @@ import {
   TouchableOpacity,
   Animated,
   Easing,
-  ScrollView,
+  Image,
+  Pressable,
+  Platform,
+  useWindowDimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { Feather } from "@expo/vector-icons";
-import { useColors } from "@/hooks/useColors";
+import { LinearGradient } from "expo-linear-gradient";
+import { useVideoPlayer, VideoView } from "expo-video";
+import { Asset } from "expo-asset";
 import { GroundupLogo } from "@/components/GroundupLogo";
 
-type FeatureItem = {
-  icon: keyof typeof Feather.glyphMap;
-  title: string;
-  body: string;
-};
+const HERO_VIDEO = require("../../assets/videos/welcome-hero.mp4");
+const HERO_POSTER = require("../../assets/videos/welcome-hero-poster.jpg");
+const HERO_VIDEO_URI = Asset.fromModule(HERO_VIDEO).uri;
+const HERO_POSTER_URI = Asset.fromModule(HERO_POSTER).uri;
 
-const FEATURES: FeatureItem[] = [
-  {
-    icon: "map-pin",
-    title: "Address-level feasibility",
-    body: "Zoning, overlays, slope, and infrastructure costs for any NZ property in seconds.",
-  },
-  {
-    icon: "trending-up",
-    title: "Development ROI modelling",
-    body: "Indicative GDV, build cost ranges, and 2–4 year return scenarios in NZD.",
-  },
-  {
-    icon: "users",
-    title: "Verified NZ professionals",
-    body: "Get matched with planners, architects, and engineers who know your council.",
-  },
-];
+const PHI = 1.6180339887;
 
 export default function WelcomeScreen() {
-  const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { height: screenHeight } = useWindowDimensions();
+
+  const [videoReady, setVideoReady] = useState(false);
+
+  const player = useVideoPlayer(HERO_VIDEO, (p) => {
+    p.loop = true;
+    p.muted = true;
+    p.play();
+  });
+
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+    const sub = player.addListener("statusChange", ({ status }) => {
+      if (status === "readyToPlay") setVideoReady(true);
+    });
+    return () => sub.remove();
+  }, [player]);
 
   const fade = useRef(new Animated.Value(0)).current;
-  const lift = useRef(new Animated.Value(16)).current;
+  const lift = useRef(new Animated.Value(12)).current;
 
   useEffect(() => {
     Animated.parallel([
       Animated.timing(fade, {
         toValue: 1,
-        duration: 520,
+        duration: 900,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }),
       Animated.timing(lift, {
         toValue: 0,
-        duration: 520,
+        duration: 900,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }),
     ]).start();
   }, []);
 
+  // Golden ratio: place slogan baseline at 1/phi from the top (≈ 61.8% down).
+  const goldenY = screenHeight / PHI;
+
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <ScrollView
-        contentContainerStyle={[
-          styles.scrollContent,
-          {
-            paddingTop: insets.top + 56,
-            paddingBottom: insets.bottom + 28,
+    <View style={styles.container}>
+      {Platform.OS === "web" ? (
+        React.createElement("video", {
+          src: HERO_VIDEO_URI,
+          poster: HERO_POSTER_URI,
+          autoPlay: true,
+          muted: true,
+          loop: true,
+          playsInline: true,
+          preload: "auto",
+          style: {
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
           },
+        })
+      ) : (
+        <>
+          <Image
+            source={HERO_POSTER}
+            style={StyleSheet.absoluteFill}
+            resizeMode="cover"
+          />
+          <VideoView
+            style={[
+              StyleSheet.absoluteFill,
+              { opacity: videoReady ? 1 : 0 },
+            ]}
+            player={player}
+            contentFit="cover"
+            nativeControls={false}
+            allowsFullscreen={false}
+            allowsPictureInPicture={false}
+          />
+        </>
+      )}
+
+      {/* Cinematic dark gradient for legibility */}
+      <LinearGradient
+        colors={[
+          "rgba(0,0,0,0.55)",
+          "rgba(0,0,0,0.15)",
+          "rgba(0,0,0,0.35)",
+          "rgba(0,0,0,0.85)",
         ]}
-        showsVerticalScrollIndicator={false}
-        bounces={false}
-      >
-        <Animated.View
-          style={{
+        locations={[0, 0.35, 0.65, 1]}
+        style={StyleSheet.absoluteFill}
+      />
+
+      {/* Logo + wordmark — top, anchored just below safe area */}
+      <Animated.View
+        style={[
+          styles.brandBlock,
+          {
+            top: insets.top + 28,
             opacity: fade,
             transform: [{ translateY: lift }],
-          }}
+          },
+        ]}
+      >
+        <GroundupLogo size={56} color="#F5E9D7" accentColor="#E0B973" />
+        <Text style={styles.wordmark}>
+          ground<Text style={styles.wordmarkUp}>UP</Text>
+        </Text>
+      </Animated.View>
+
+      {/* Slogan at the golden ratio line */}
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.slogan,
+          {
+            top: goldenY,
+            opacity: fade,
+            transform: [{ translateY: lift }],
+          },
+        ]}
+      >
+        <View style={styles.sloganRule} />
+        <Text style={styles.sloganText}>Residential property development</Text>
+      </Animated.View>
+
+      {/* Minimal CTAs at bottom */}
+      <Animated.View
+        style={[
+          styles.ctaBlock,
+          { paddingBottom: insets.bottom + 24, opacity: fade },
+        ]}
+      >
+        <TouchableOpacity
+          style={styles.primaryBtn}
+          onPress={() => router.push("/(auth)/signup")}
+          activeOpacity={0.85}
         >
-          <View style={styles.brandRow}>
-            <GroundupLogo size={36} color={colors.accent} accentColor={colors.accent} />
-            <Text
-              style={[
-                styles.brandWord,
-                { color: colors.foreground, fontFamily: "SpaceGrotesk_700Bold" },
-              ]}
-            >
-              Groundup
-            </Text>
-          </View>
+          <Text style={styles.primaryBtnText}>Get started</Text>
+        </TouchableOpacity>
 
-          <Text
-            style={[
-              styles.eyebrow,
-              { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" },
-            ]}
-          >
-            NEW ZEALAND PROPERTY DEVELOPMENT
-          </Text>
-
-          <Text
-            style={[
-              styles.headline,
-              { color: colors.foreground, fontFamily: "SpaceGrotesk_700Bold" },
-            ]}
-          >
-            Know if a site stacks up{"\n"}before you offer.
-          </Text>
-
-          <Text
-            style={[
-              styles.subhead,
-              { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" },
-            ]}
-          >
-            Instant feasibility analysis on any NZ address — zoning, costs, ROI,
-            and risks, modelled by AI trained on local market data.
-          </Text>
-
-          <View style={styles.features}>
-            {FEATURES.map((f) => (
-              <View key={f.title} style={styles.featureRow}>
-                <View
-                  style={[
-                    styles.featureIcon,
-                    {
-                      backgroundColor: colors.muted,
-                      borderColor: colors.border,
-                    },
-                  ]}
-                >
-                  <Feather name={f.icon} size={18} color={colors.accent} />
-                </View>
-                <View style={styles.featureCopy}>
-                  <Text
-                    style={[
-                      styles.featureTitle,
-                      { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" },
-                    ]}
-                  >
-                    {f.title}
-                  </Text>
-                  <Text
-                    style={[
-                      styles.featureBody,
-                      { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" },
-                    ]}
-                  >
-                    {f.body}
-                  </Text>
-                </View>
-              </View>
-            ))}
-          </View>
-        </Animated.View>
-
-        <Animated.View style={[styles.ctaBlock, { opacity: fade }]}>
-          <TouchableOpacity
-            style={[styles.primaryBtn, { backgroundColor: colors.accent }]}
-            onPress={() => router.push("/(auth)/signup")}
-            activeOpacity={0.9}
-          >
-            <Text
-              style={[
-                styles.primaryBtnText,
-                { color: colors.accentForeground, fontFamily: "DM_Sans_600SemiBold" },
-              ]}
-            >
-              Create free account
-            </Text>
-            <Feather name="arrow-right" size={18} color={colors.accentForeground} />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.secondaryBtn}
-            onPress={() => router.push("/(auth)/login")}
-            activeOpacity={0.7}
-          >
-            <Text
-              style={[
-                styles.secondaryBtnText,
-                { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" },
-              ]}
-            >
-              Sign in
-            </Text>
-          </TouchableOpacity>
-
-          <Text
-            style={[
-              styles.fineprint,
-              { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" },
-            ]}
-          >
-            Indicative estimates only. Always engage qualified professionals
-            before development decisions.
-          </Text>
-        </Animated.View>
-      </ScrollView>
+        <Pressable
+          onPress={() => router.push("/(auth)/login")}
+          hitSlop={12}
+          style={({ pressed }) => [
+            styles.signinWrap,
+            { opacity: pressed ? 0.6 : 1 },
+          ]}
+        >
+          <Text style={styles.signinText}>Sign in</Text>
+        </Pressable>
+      </Animated.View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  scrollContent: {
-    flexGrow: 1,
-    paddingHorizontal: 28,
-    justifyContent: "space-between",
+  container: {
+    flex: 1,
+    backgroundColor: "#000",
   },
-  brandRow: {
-    flexDirection: "row",
+  brandBlock: {
+    position: "absolute",
+    left: 0,
+    right: 0,
     alignItems: "center",
-    gap: 10,
-    marginBottom: 48,
-  },
-  brandWord: {
-    fontSize: 20,
-    letterSpacing: -0.4,
-  },
-  eyebrow: {
-    fontSize: 11,
-    letterSpacing: 1.6,
-    marginBottom: 14,
-  },
-  headline: {
-    fontSize: 34,
-    lineHeight: 40,
-    letterSpacing: -1.2,
-    marginBottom: 16,
-  },
-  subhead: {
-    fontSize: 16,
-    lineHeight: 24,
-    marginBottom: 36,
-    maxWidth: 420,
-  },
-  features: {
-    gap: 20,
-    marginBottom: 32,
-  },
-  featureRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
     gap: 14,
   },
-  featureIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
+  wordmark: {
+    fontFamily: "Fraunces_500Medium",
+    fontSize: 36,
+    letterSpacing: -1.2,
+    color: "#FBF6EC",
+    textShadowColor: "rgba(0,0,0,0.45)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 6,
+  },
+  wordmarkUp: {
+    fontFamily: "Fraunces_700Bold",
+    color: "#E8C887",
+    letterSpacing: -0.6,
+  },
+  slogan: {
+    position: "absolute",
+    left: 0,
+    right: 0,
     alignItems: "center",
-    justifyContent: "center",
-    borderWidth: StyleSheet.hairlineWidth,
+    gap: 14,
   },
-  featureCopy: {
-    flex: 1,
-    paddingTop: 1,
+  sloganRule: {
+    width: 36,
+    height: 1,
+    backgroundColor: "rgba(232,200,135,0.85)",
   },
-  featureTitle: {
-    fontSize: 15,
-    lineHeight: 20,
-    marginBottom: 3,
-  },
-  featureBody: {
-    fontSize: 14,
-    lineHeight: 20,
+  sloganText: {
+    fontFamily: "Fraunces_400Regular",
+    fontSize: 18,
+    letterSpacing: 0.4,
+    color: "#FBF6EC",
+    textAlign: "center",
+    paddingHorizontal: 32,
+    textShadowColor: "rgba(0,0,0,0.55)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 8,
   },
   ctaBlock: {
-    marginTop: 32,
-    gap: 12,
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: 28,
+    gap: 14,
+    alignItems: "center",
   },
   primaryBtn: {
+    width: "100%",
     height: 54,
-    borderRadius: 14,
+    borderRadius: 999,
     alignItems: "center",
     justifyContent: "center",
-    flexDirection: "row",
-    gap: 10,
+    backgroundColor: "rgba(251,246,236,0.96)",
   },
   primaryBtnText: {
+    fontFamily: "DM_Sans_600SemiBold",
     fontSize: 16,
+    color: "#1C1917",
+    letterSpacing: 0.2,
   },
-  secondaryBtn: {
-    height: 48,
-    alignItems: "center",
-    justifyContent: "center",
+  signinWrap: {
+    paddingVertical: 8,
   },
-  secondaryBtnText: {
-    fontSize: 15,
-  },
-  fineprint: {
-    fontSize: 11,
-    lineHeight: 16,
-    textAlign: "center",
-    marginTop: 8,
-    paddingHorizontal: 12,
+  signinText: {
+    fontFamily: "DM_Sans_500Medium",
+    fontSize: 14,
+    color: "#FBF6EC",
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
   },
 });

@@ -9,6 +9,12 @@ import {
   SpaceGrotesk_500Medium,
   SpaceGrotesk_700Bold,
 } from "@expo-google-fonts/space-grotesk";
+import {
+  Fraunces_400Regular,
+  Fraunces_500Medium,
+  Fraunces_600SemiBold,
+  Fraunces_700Bold,
+} from "@expo-google-fonts/fraunces";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack, useRouter } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
@@ -144,6 +150,10 @@ export default function RootLayout() {
     DM_Sans_700Bold,
     SpaceGrotesk_500Medium,
     SpaceGrotesk_700Bold,
+    Fraunces_400Regular,
+    Fraunces_500Medium,
+    Fraunces_600SemiBold,
+    Fraunces_700Bold,
   });
 
   useEffect(() => {
