@@ -251,6 +251,7 @@ interface ChatContextValue {
   switchSession: (id: string) => void;
   addMessage: (msg: Omit<ChatMessage, "id" | "timestamp">, sessionId?: string) => void;
   updateLastMessage: (updates: Partial<ChatMessage>, sessionId?: string) => void;
+  removeMessage: (messageId: string, sessionId?: string) => void;
   updateCandidateScores: (
     scoreMap: Record<string, { ease: number; cost: number; roi: number; composite: number; landArea?: number; zone?: string | null }>,
     sessionId?: string,
@@ -387,6 +388,23 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     [currentSessionId, saveSessions],
   );
 
+  const removeMessage = useCallback(
+    (messageId: string, sessionId?: string) => {
+      setSessions((prev) => {
+        const targetId = sessionId ?? currentSessionId;
+        const updated = prev.map((s) => {
+          if (s.id !== targetId) return s;
+          const messages = s.messages.filter((m) => m.id !== messageId);
+          if (messages.length === s.messages.length) return s;
+          return { ...s, messages, updatedAt: Date.now() };
+        });
+        saveSessions(updated);
+        return updated;
+      });
+    },
+    [currentSessionId, saveSessions],
+  );
+
   const updateCandidateScores = useCallback(
     (
       scoreMap: Record<string, { ease: number; cost: number; roi: number; composite: number; landArea?: number; zone?: string | null }>,
@@ -508,6 +526,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         switchSession,
         addMessage,
         updateLastMessage,
+        removeMessage,
         updateCandidateScores,
         setCurrentReport,
         deleteSession,

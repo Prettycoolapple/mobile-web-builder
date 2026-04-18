@@ -84,6 +84,7 @@ export default function SearchScreen() {
     startNewChat,
     addMessage,
     updateLastMessage,
+    removeMessage,
     updateCandidateScores,
     setCurrentReport,
     isLoading,
@@ -246,7 +247,9 @@ export default function SearchScreen() {
     }
   }, [getApiHeaders, router, currentSession]);
 
-  const handleDismiss = useCallback((_messageId: string) => {}, []);
+  const handleDismiss = useCallback((messageId: string) => {
+    removeMessage(messageId);
+  }, [removeMessage]);
 
   useEffect(() => {
     if (user?.role !== "general" || (user?.subscriptionTier !== "standard" && user?.subscriptionTier !== "pro")) return;

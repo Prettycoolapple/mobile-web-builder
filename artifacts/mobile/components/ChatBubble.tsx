@@ -192,7 +192,12 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
   }
 
   if (message.type === "provider_upgrade_gate") {
-    return <ProviderUpgradeGateBubble onUpgrade={() => onUpgrade?.()} />;
+    return (
+      <ProviderUpgradeGateBubble
+        onUpgrade={() => onUpgrade?.()}
+        onDismiss={() => onDismiss?.(message.id)}
+      />
+    );
   }
 
   if (message.type === "provider_recommendation" && message.provider) {

@@ -1,10 +1,11 @@
-import React from "react";
+import React, { useState } from "react";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useSubscription } from "@/lib/revenuecat";
 
 interface Props {
   onUpgrade: () => void;
+  onDismiss?: () => void;
 }
 
 const FEATURES = [
@@ -13,9 +14,17 @@ const FEATURES = [
   "Save and revisit past reports",
 ];
 
-export function ProviderUpgradeGateBubble({ onUpgrade }: Props) {
+export function ProviderUpgradeGateBubble({ onUpgrade, onDismiss }: Props) {
   const { getPriceForRole } = useSubscription();
   const price = getPriceForRole("general");
+  const [dismissed, setDismissed] = useState(false);
+
+  if (dismissed) return null;
+
+  const handleDismiss = () => {
+    setDismissed(true);
+    onDismiss?.();
+  };
 
   return (
     <View style={styles.container}>
@@ -53,6 +62,14 @@ export function ProviderUpgradeGateBubble({ onUpgrade }: Props) {
       >
         <Text style={styles.upgradeBtnText}>Get Standard</Text>
         <Feather name="arrow-right" size={15} color="#fff" />
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.dismissBtn}
+        onPress={handleDismiss}
+        activeOpacity={0.7}
+      >
+        <Text style={styles.dismissText}>Not now</Text>
       </TouchableOpacity>
     </View>
   );
@@ -149,5 +166,15 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 15,
     fontFamily: "DM_Sans_600SemiBold",
+  },
+  dismissBtn: {
+    alignItems: "center",
+    paddingVertical: 10,
+    marginTop: 2,
+  },
+  dismissText: {
+    color: "#9CA3AF",
+    fontSize: 13,
+    fontFamily: "DM_Sans_400Regular",
   },
 });
