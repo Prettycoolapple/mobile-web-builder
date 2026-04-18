@@ -17,7 +17,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { Asset } from "expo-asset";
 import { StatusBar } from "expo-status-bar";
-import { GroundupLogo } from "@/components/GroundupLogo";
+import { SmileSwoosh } from "@/components/GroundupLogo";
 
 const HERO_VIDEO = require("../../assets/videos/welcome-hero.mp4");
 const HERO_POSTER = require("../../assets/videos/welcome-hero-poster.jpg");
@@ -177,18 +177,18 @@ export default function WelcomeScreen() {
         style={bleed}
       />
 
-      {/* ── Brand block: logo + ambient glow + wordmark ── */}
+      {/* ── Brand block: Amazon-style wordmark with smile swoosh ── */}
       <Animated.View
         style={[
           styles.brandBlock,
           {
-            top: insets.top + 56,
+            top: insets.top + 72,
             opacity: fadeBrand,
             transform: [{ translateY: lift }],
           },
         ]}
       >
-        <View style={styles.logoWrap}>
+        <View style={styles.wordmarkWrap}>
           <Animated.View
             pointerEvents="none"
             style={[
@@ -196,12 +196,13 @@ export default function WelcomeScreen() {
               { opacity: glowOpacity, transform: [{ scale: glowScale }] },
             ]}
           />
-          <GroundupLogo size={68} color="#D97757" accentColor="#E8C887" />
+          <Text style={styles.wordmark}>
+            project<Text style={styles.wordmarkAlpha}> alpha</Text>
+          </Text>
+          <View style={styles.swooshWrap}>
+            <SmileSwoosh width={232} color="#D97757" accentColor="#E8C887" />
+          </View>
         </View>
-
-        <Text style={styles.wordmark}>
-          ground<Text style={styles.wordmarkUp}>UP</Text>
-        </Text>
 
         <View style={styles.eyebrowRow}>
           <View style={styles.eyebrowDot} />
@@ -223,12 +224,12 @@ export default function WelcomeScreen() {
         ]}
       >
         <Text style={styles.headline}>
-          Land. Numbers.{"\n"}
-          <Text style={styles.headlineEm}>Built from the ground up.</Text>
+          Build it,{" "}
+          <Text style={styles.headlineEm}>ground up.</Text>
         </Text>
         <View style={styles.headlineRule} />
         <Text style={styles.subhead}>
-          Instant feasibility, planning overlays and ROI for any NZ site.
+          Instant feasibility for any New Zealand site.
         </Text>
       </Animated.View>
 
@@ -275,40 +276,42 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     alignItems: "center",
-    gap: 18,
+    gap: 22,
   },
-  logoWrap: {
-    width: 96,
-    height: 96,
+  wordmarkWrap: {
     alignItems: "center",
     justifyContent: "center",
+    paddingHorizontal: 8,
   },
   logoGlow: {
     position: "absolute",
-    width: 140,
-    height: 140,
-    borderRadius: 70,
+    width: 260,
+    height: 160,
+    borderRadius: 130,
     backgroundColor: "#D97757",
-    // soft halo via shadow on iOS, plain bg blur on web
     shadowColor: "#D97757",
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.9,
-    shadowRadius: 40,
+    shadowRadius: 50,
   },
   wordmark: {
-    fontFamily: "Fraunces_500Medium",
-    fontSize: 40,
-    lineHeight: 44,
-    letterSpacing: -1.4,
+    fontFamily: "DM_Sans_700Bold",
+    fontSize: 44,
+    lineHeight: 48,
+    letterSpacing: -1.6,
     color: "#FBF6EC",
-    textShadowColor: "rgba(0,0,0,0.5)",
+    textShadowColor: "rgba(0,0,0,0.55)",
     textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 8,
+    textShadowRadius: 10,
   },
-  wordmarkUp: {
-    fontFamily: "Fraunces_700Bold",
-    color: "#E8C887",
-    letterSpacing: -0.6,
+  wordmarkAlpha: {
+    fontFamily: "DM_Sans_700Bold",
+    color: "#FBF6EC",
+    letterSpacing: -1.6,
+  },
+  swooshWrap: {
+    marginTop: 6,
+    alignItems: "center",
   },
   eyebrowRow: {
     flexDirection: "row",
