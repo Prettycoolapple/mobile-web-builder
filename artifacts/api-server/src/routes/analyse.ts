@@ -1097,6 +1097,50 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                 if (photoUrl) parsed.photoUrl = photoUrl;
                 if (overlayMapB64) parsed.overlay_map_image_base64 = overlayMapB64;
 
+                // Deterministic Property Overview snapshot.
+                // Override the LLM-produced propertyOverview block with the canonical
+                // values from the merge step (which already prefers active OneRoof
+                // listings over stale council/QV records). Save the snapshot in a
+                // dedicated field so follow-up chat answers can read it directly
+                // without re-deriving values from the LLM's narrative.
+                if (merged) {
+                  const formatNZDLocal = (n: number) => `$${n.toLocaleString("en-NZ")}`;
+                  const snapshot: Record<string, unknown> = {
+                    address: geocode?.formatted ?? extractedAddress,
+                    cv: merged.cv_nzd != null && merged.cv_nzd > 0 ? formatNZDLocal(merged.cv_nzd) : null,
+                    cv_nzd: merged.cv_nzd ?? null,
+                    cv_year: merged.cv_year ?? null,
+                    landArea: merged.land_area_sqm != null ? `${merged.land_area_sqm}m²` : null,
+                    land_area_sqm: merged.land_area_sqm ?? null,
+                    floorArea: merged.floor_area_sqm != null ? `${merged.floor_area_sqm}m²` : null,
+                    floor_area_sqm: merged.floor_area_sqm ?? null,
+                    buildYear: merged.build_year != null ? String(merged.build_year) : null,
+                    build_year: merged.build_year ?? null,
+                    bedrooms: merged.bedrooms ?? null,
+                    zone: merged.zone_description ?? merged.zone_code ?? null,
+                    zone_code: merged.zone_code ?? null,
+                    listingPrice: merged.listing_price != null ? formatNZDLocal(merged.listing_price) : null,
+                    isOnMarket: merged.listing_active === true,
+                    data_sources: merged.data_sources ?? {},
+                  };
+                  parsed.property_overview_snapshot = snapshot;
+
+                  // Mirror snapshot into the displayed propertyOverview block so the
+                  // UI and follow-up answers always agree on the same numbers.
+                  const existingOverview = (parsed.propertyOverview as Record<string, unknown> | undefined) ?? {};
+                  parsed.propertyOverview = {
+                    ...existingOverview,
+                    address: snapshot.address,
+                    cv: snapshot.cv,
+                    landArea: snapshot.landArea,
+                    floorArea: snapshot.floorArea,
+                    buildYear: snapshot.buildYear,
+                    zone: snapshot.zone ?? existingOverview.zone,
+                    listingPrice: snapshot.listingPrice,
+                    isOnMarket: snapshot.isOnMarket,
+                  };
+                }
+
                 // Always override asbestos with pre-computed deterministic values.
                 // Claude ignores the schema hints and applies its own (incorrect) heuristics,
                 // e.g. flagging pre-1940 buildings as "high" risk when they predate widespread

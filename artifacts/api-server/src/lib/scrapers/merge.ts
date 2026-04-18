@@ -219,7 +219,7 @@ export function mergePropertyData(
   ]);
 
   // Floor area: median of credible values.
-  const floor_area_sqm = medianFloorArea(sources, [
+  let floor_area_sqm = medianFloorArea(sources, [
     { src: "oneroof",            floor_area_sqm: oneroof?.floor_area_sqm },
     { src: "hougarden",          floor_area_sqm: hougarden?.floor_area_sqm },
     { src: "auckland_council_gis", floor_area_sqm: ph?.floor_area_sqm },
@@ -227,9 +227,40 @@ export function mergePropertyData(
     { src: "homes",              floor_area_sqm: homes?.floor_area_sqm },
   ]);
 
-  const bedrooms = first("bedrooms", sources,
+  let bedrooms = first("bedrooms", sources,
     ["oneroof", oneroof?.bedrooms],
   );
+
+  // Live-listing reconciliation:
+  // When OneRoof shows the property is *currently listed for sale*, the listing
+  // data is being actively maintained by the agent and reflects the property
+  // *as it is today* (post-renovation, post-subdivision, post-extension).
+  // Council/QV records can lag by years. If the active-listing values
+  // materially disagree with the consensus, prefer the listing.
+  if (oneroof?.listing_active) {
+    if (oneroof.floor_area_sqm != null && floor_area_sqm != null) {
+      const delta = Math.abs(oneroof.floor_area_sqm - floor_area_sqm) / floor_area_sqm;
+      if (delta > 0.15) {
+        logger.info(
+          { previous: floor_area_sqm, listing: oneroof.floor_area_sqm, delta },
+          "Merge: live OneRoof listing overrides floor area (>15% disagreement)",
+        );
+        floor_area_sqm = oneroof.floor_area_sqm;
+        sources["floor_area_sqm"] = "oneroof (live listing)";
+      }
+    } else if (oneroof.floor_area_sqm != null && floor_area_sqm == null) {
+      floor_area_sqm = oneroof.floor_area_sqm;
+      sources["floor_area_sqm"] = "oneroof (live listing)";
+    }
+    if (oneroof.bedrooms != null && bedrooms != null && oneroof.bedrooms !== bedrooms) {
+      logger.info(
+        { previous: bedrooms, listing: oneroof.bedrooms },
+        "Merge: live OneRoof listing overrides bedroom count",
+      );
+      bedrooms = oneroof.bedrooms;
+      sources["bedrooms"] = "oneroof (live listing)";
+    }
+  }
 
   let overlays: Overlay[] = [];
   if (hougarden && hougarden.overlays.length > 0) {

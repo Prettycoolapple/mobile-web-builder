@@ -461,7 +461,12 @@ export async function generateUnifiedResponse(
   if (currentReport) {
     const r = currentReport as Record<string, unknown>;
     const planning   = r["planning"]         as Record<string, unknown> | undefined;
-    const overview   = r["propertyOverview"] as Record<string, unknown> | undefined;
+    // Prefer the deterministic snapshot pinned at /analyse time over any
+    // narrative-derived propertyOverview block. The snapshot mirrors the merged
+    // pipeline output (which itself prefers the live OneRoof listing when active),
+    // so follow-up answers stay consistent with the figures shown on the report.
+    const snapshot   = r["property_overview_snapshot"] as Record<string, unknown> | undefined;
+    const overview   = snapshot ?? (r["propertyOverview"] as Record<string, unknown> | undefined);
     const asbestosInfo = r["asbestos"]       as Record<string, unknown> | undefined;
     const terrain    = r["terrain"]          as Record<string, unknown> | undefined;
     const scores     = r["scores"]           as Record<string, unknown> | undefined;
