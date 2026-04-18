@@ -98,14 +98,12 @@ export function GroundupLogo({
 }
 
 /**
- * SmileSwoosh — the swoosh-only mark stretched horizontally.
- *
- * Used underneath the "project alpha" wordmark on the welcome screen so the
- * arrow visually spans from "p" to the trailing "a", in the spirit of
- * Amazon's a-to-z smile.
+ * AlphaTail — a calligraphic flourish that visually extends the tail of the
+ * final "a" in the "alpha" wordmark. Designed to be positioned absolutely so
+ * it flows out of the bottom-right of the wordmark.
  */
-export function SmileSwoosh({
-  width = 240,
+export function AlphaTail({
+  width = 180,
   color = "#D97757",
   accentColor,
 }: {
@@ -113,32 +111,34 @@ export function SmileSwoosh({
   color?: string;
   accentColor?: string;
 }) {
-  const accent = accentColor ?? "#E8A84B";
+  const accent = accentColor ?? "#E8C887";
   const reactId = useId();
   const safeId = reactId.replace(/[^a-zA-Z0-9-_]/g, "");
-  const gradId = `pa-swoosh-${safeId}`;
+  const gradId = `pa-tail-${safeId}`;
 
-  // Horizontal swoosh on a 200×40 viewBox.
-  // Smile dips in the middle and lifts into an arrowhead at the right.
+  // 200×60 viewBox. Tail starts thick at the upper-left (joining the "a"),
+  // sweeps down and out to the right with a graceful taper.
+  // Drawn as a filled shape with two cubic curves so it tapers naturally.
   const path = [
-    "M 6 10",
-    "C 40 36, 130 38, 168 16",
-    "L 158 8",
-    "L 196 4",
-    "L 178 36",
-    "L 168 28",
-    "C 130 48, 36 46, 4 18",
+    // Top edge (where the tail leaves the letter)
+    "M 4 10",
+    // Sweep down then up to the right, ending at a fine tip
+    "C 40 26, 110 44, 196 14",
+    // Tip (very thin)
+    "L 196 18",
+    // Bottom edge sweeping back
+    "C 110 50, 40 34, 4 18",
     "Z",
   ].join(" ");
 
-  const height = (width * 40) / 200;
+  const height = (width * 60) / 200;
 
   return (
-    <Svg width={width} height={height} viewBox="0 0 200 40">
+    <Svg width={width} height={height} viewBox="0 0 200 60">
       <Defs>
         <LinearGradient id={gradId} x1="0" y1="0.5" x2="1" y2="0.5">
           <Stop offset="0" stopColor={color} stopOpacity="1" />
-          <Stop offset="1" stopColor={accent} stopOpacity="1" />
+          <Stop offset="1" stopColor={accent} stopOpacity="0.95" />
         </LinearGradient>
       </Defs>
       <Path d={path} fill={`url(#${gradId})`} />

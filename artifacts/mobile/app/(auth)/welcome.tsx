@@ -17,7 +17,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { Asset } from "expo-asset";
 import { StatusBar } from "expo-status-bar";
-import { SmileSwoosh } from "@/components/GroundupLogo";
+import { AlphaTail } from "@/components/GroundupLogo";
 
 const HERO_VIDEO = require("../../assets/videos/welcome-hero.mp4");
 const HERO_POSTER = require("../../assets/videos/welcome-hero-poster.jpg");
@@ -27,7 +27,7 @@ const HERO_POSTER_URI = Asset.fromModule(HERO_POSTER).uri;
 export default function WelcomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { height: screenHeight } = useWindowDimensions();
+  const { height: screenHeight, width: screenWidth } = useWindowDimensions();
 
   const [videoReady, setVideoReady] = useState(false);
 
@@ -50,7 +50,6 @@ export default function WelcomeScreen() {
   const fadeHead = useRef(new Animated.Value(0)).current;
   const fadeCta = useRef(new Animated.Value(0)).current;
   const lift = useRef(new Animated.Value(16)).current;
-  const glow = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     Animated.parallel([
@@ -81,42 +80,30 @@ export default function WelcomeScreen() {
         useNativeDriver: true,
       }),
     ]).start();
-
-    // Subtle ambient glow loop behind the logo
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(glow, {
-          toValue: 1,
-          duration: 3200,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-        Animated.timing(glow, {
-          toValue: 0,
-          duration: 3200,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-      ]),
-    ).start();
   }, []);
 
-  const glowScale = glow.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.92, 1.06],
-  });
-  const glowOpacity = glow.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.18, 0.34],
-  });
-
-  // Bleed beyond safe-area so the visuals fill edge-to-edge.
+  // Full-bleed scrim covers the entire screen including safe-area regions.
   const bleed = {
     position: "absolute" as const,
     top: -insets.top,
     bottom: -insets.bottom,
     left: -insets.left,
     right: -insets.right,
+  };
+
+  // Hero video is rendered 30% larger than the visible viewport and centered,
+  // guaranteeing full-bleed coverage on every phone size and aspect ratio.
+  const totalH = screenHeight + insets.top + insets.bottom;
+  const totalW = screenWidth + insets.left + insets.right;
+  const heroScale = 1.3;
+  const heroW = totalW * heroScale;
+  const heroH = totalH * heroScale;
+  const heroBleed = {
+    position: "absolute" as const,
+    width: heroW,
+    height: heroH,
+    top: -insets.top - (heroH - totalH) / 2,
+    left: -insets.left - (heroW - totalW) / 2,
   };
 
   // Headline anchored ~52% down — gives the logo room to breathe.
@@ -137,18 +124,18 @@ export default function WelcomeScreen() {
           preload: "auto",
           style: {
             position: "absolute",
-            top: 0,
-            left: 0,
-            width: "100%",
-            height: "100%",
+            top: heroBleed.top,
+            left: heroBleed.left,
+            width: heroBleed.width,
+            height: heroBleed.height,
             objectFit: "cover",
           },
         })
       ) : (
         <>
-          <Image source={HERO_POSTER} style={bleed} resizeMode="cover" />
+          <Image source={HERO_POSTER} style={heroBleed} resizeMode="cover" />
           <VideoView
-            style={[bleed, { opacity: videoReady ? 1 : 0 }]}
+            style={[heroBleed, { opacity: videoReady ? 1 : 0 }]}
             player={player}
             contentFit="cover"
             nativeControls={false}
@@ -177,7 +164,7 @@ export default function WelcomeScreen() {
         style={bleed}
       />
 
-      {/* ── Brand block: Amazon-style wordmark with smile swoosh ── */}
+      {/* ── Brand block: wordmark with calligraphic "a" tail ── */}
       <Animated.View
         style={[
           styles.brandBlock,
@@ -189,18 +176,12 @@ export default function WelcomeScreen() {
         ]}
       >
         <View style={styles.wordmarkWrap}>
-          <Animated.View
-            pointerEvents="none"
-            style={[
-              styles.logoGlow,
-              { opacity: glowOpacity, transform: [{ scale: glowScale }] },
-            ]}
-          />
           <Text style={styles.wordmark}>
             project<Text style={styles.wordmarkAlpha}> alpha</Text>
           </Text>
-          <View style={styles.swooshWrap}>
-            <SmileSwoosh width={232} color="#D97757" accentColor="#E8C887" />
+          {/* Calligraphic flourish extending from the final "a" */}
+          <View pointerEvents="none" style={styles.tailWrap}>
+            <AlphaTail width={150} color="#D97757" accentColor="#F1D9A8" />
           </View>
         </View>
 
@@ -224,12 +205,12 @@ export default function WelcomeScreen() {
         ]}
       >
         <Text style={styles.headline}>
-          Build it,{" "}
-          <Text style={styles.headlineEm}>ground up.</Text>
+          Smarter property{" "}
+          <Text style={styles.headlineEm}>decisions.</Text>
         </Text>
         <View style={styles.headlineRule} />
         <Text style={styles.subhead}>
-          Instant feasibility for any New Zealand site.
+          The numbers behind every site, before you commit a cent.
         </Text>
       </Animated.View>
 
@@ -282,36 +263,31 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 8,
-  },
-  logoGlow: {
-    position: "absolute",
-    width: 260,
-    height: 160,
-    borderRadius: 130,
-    backgroundColor: "#D97757",
-    shadowColor: "#D97757",
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.9,
-    shadowRadius: 50,
+    paddingBottom: 18,
   },
   wordmark: {
-    fontFamily: "DM_Sans_700Bold",
-    fontSize: 44,
-    lineHeight: 48,
-    letterSpacing: -1.6,
+    fontFamily: "Fraunces_500Medium",
+    fontSize: 46,
+    lineHeight: 52,
+    letterSpacing: -1.4,
     color: "#FBF6EC",
     textShadowColor: "rgba(0,0,0,0.55)",
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 10,
   },
   wordmarkAlpha: {
-    fontFamily: "DM_Sans_700Bold",
-    color: "#FBF6EC",
-    letterSpacing: -1.6,
+    fontFamily: "Fraunces_600SemiBold",
+    color: "#F1D9A8",
+    letterSpacing: -0.8,
   },
-  swooshWrap: {
-    marginTop: 6,
-    alignItems: "center",
+  /**
+   * Tail sits just below the wordmark, offset to the right so it visually
+   * leaves the bottom-right of the final "a".
+   */
+  tailWrap: {
+    position: "absolute",
+    bottom: -4,
+    right: -28,
   },
   eyebrowRow: {
     flexDirection: "row",
