@@ -15,6 +15,7 @@ export interface MergedPropertyData {
   floor_area_sqm: number | null;
   build_year: number | null;
   bedrooms: number | null;
+  bathrooms: number | null;
   zone_code: string | null;
   zone_description: string | null;
   min_lot_size_sqm: number | null;
@@ -28,6 +29,13 @@ export interface MergedPropertyData {
   overlay_map_image_base64: string | null;
   comparables: ComparableSale[];
   data_sources: Record<string, string>;
+  /**
+   * Human-readable notes describing each material disagreement that the merge
+   * had to resolve (e.g. live OneRoof listing overriding council floor area).
+   * Surfaced into the property_overview_snapshot so the report UI and the
+   * follow-up chat can stay consistent about *why* a value was chosen.
+   */
+  discrepancies: string[];
   contour: "flat" | "gentle" | "moderate" | "steep" | null;
   contour_slope_degrees: number | null;
   contour_source: string | null;
@@ -229,7 +237,18 @@ export function mergePropertyData(
 
   let bedrooms = first("bedrooms", sources,
     ["oneroof", oneroof?.bedrooms],
+    ["homes",   homes?.bedrooms],
   );
+  let bathrooms = first("bathrooms", sources,
+    ["oneroof", oneroof?.bathrooms],
+    ["homes",   homes?.bathrooms],
+  );
+
+  // Track human-readable discrepancy notes for everything the live-listing
+  // reconciliation rewrites. Surfaced via MergedPropertyData.discrepancies so
+  // the report UI and the follow-up chat can stay aligned on *why* a value
+  // was chosen.
+  const discrepancies: string[] = [];
 
   // Live-listing reconciliation:
   // When OneRoof shows the property is *currently listed for sale*, the listing
@@ -237,6 +256,8 @@ export function mergePropertyData(
   // *as it is today* (post-renovation, post-subdivision, post-extension).
   // Council/QV records can lag by years. If the active-listing values
   // materially disagree with the consensus, prefer the listing.
+  let live_land_area_sqm: number | null = null;
+  let live_build_year: number | null = null;
   if (oneroof?.listing_active) {
     if (oneroof.floor_area_sqm != null && floor_area_sqm != null) {
       const delta = Math.abs(oneroof.floor_area_sqm - floor_area_sqm) / floor_area_sqm;
@@ -244,6 +265,9 @@ export function mergePropertyData(
         logger.info(
           { previous: floor_area_sqm, listing: oneroof.floor_area_sqm, delta },
           "Merge: live OneRoof listing overrides floor area (>15% disagreement)",
+        );
+        discrepancies.push(
+          `Floor area: live OneRoof listing reports ${oneroof.floor_area_sqm}m² vs council/QV consensus ${floor_area_sqm}m² (${(delta * 100).toFixed(0)}% difference). Using the live listing as the most current measurement.`,
         );
         floor_area_sqm = oneroof.floor_area_sqm;
         sources["floor_area_sqm"] = "oneroof (live listing)";
@@ -257,10 +281,66 @@ export function mergePropertyData(
         { previous: bedrooms, listing: oneroof.bedrooms },
         "Merge: live OneRoof listing overrides bedroom count",
       );
+      discrepancies.push(
+        `Bedrooms: live OneRoof listing reports ${oneroof.bedrooms} vs council/QV record ${bedrooms}. Using the live listing.`,
+      );
+      bedrooms = oneroof.bedrooms;
+      sources["bedrooms"] = "oneroof (live listing)";
+    } else if (oneroof.bedrooms != null && bedrooms == null) {
       bedrooms = oneroof.bedrooms;
       sources["bedrooms"] = "oneroof (live listing)";
     }
+    if (oneroof.bathrooms != null && bathrooms != null && oneroof.bathrooms !== bathrooms) {
+      logger.info(
+        { previous: bathrooms, listing: oneroof.bathrooms },
+        "Merge: live OneRoof listing overrides bathroom count",
+      );
+      discrepancies.push(
+        `Bathrooms: live OneRoof listing reports ${oneroof.bathrooms} vs council/QV record ${bathrooms}. Using the live listing.`,
+      );
+      bathrooms = oneroof.bathrooms;
+      sources["bathrooms"] = "oneroof (live listing)";
+    } else if (oneroof.bathrooms != null && bathrooms == null) {
+      bathrooms = oneroof.bathrooms;
+      sources["bathrooms"] = "oneroof (live listing)";
+    }
+    // Land area: LINZ is cadastral truth, but if the live listing materially
+    // disagrees (>10%) it usually means the parcel was subdivided after the
+    // last LINZ refresh and the listing reflects the new title size.
+    if (oneroof.land_area_sqm != null && land_area_sqm != null) {
+      const delta = Math.abs(oneroof.land_area_sqm - land_area_sqm) / land_area_sqm;
+      if (delta > 0.1) {
+        logger.info(
+          { previous: land_area_sqm, listing: oneroof.land_area_sqm, delta },
+          "Merge: live OneRoof listing overrides land area (>10% disagreement — likely post-subdivision)",
+        );
+        discrepancies.push(
+          `Land area: live OneRoof listing reports ${oneroof.land_area_sqm}m² vs LINZ cadastre ${land_area_sqm}m² (${(delta * 100).toFixed(0)}% difference — usually a recent subdivision). Using the live listing.`,
+        );
+        live_land_area_sqm = oneroof.land_area_sqm;
+        sources["land_area_sqm"] = "oneroof (live listing)";
+      }
+    }
+    // Build year: a brand-new build on market is often missing from council
+    // records for 6–18 months. Trust the live listing's build year when it is
+    // newer (renovation/replacement dwelling).
+    if (oneroof.build_year != null && build_year != null && oneroof.build_year > build_year + 3) {
+      logger.info(
+        { previous: build_year, listing: oneroof.build_year },
+        "Merge: live OneRoof listing overrides build year (newer build)",
+      );
+      discrepancies.push(
+        `Build year: live OneRoof listing reports ${oneroof.build_year} vs council/QV consensus ${build_year}. Using the live listing (likely a newer build or replacement dwelling).`,
+      );
+      live_build_year = oneroof.build_year;
+      sources["build_year"] = "oneroof (live listing)";
+    } else if (oneroof.build_year != null && build_year == null) {
+      live_build_year = oneroof.build_year;
+      sources["build_year"] = "oneroof (live listing)";
+    }
   }
+  const final_land_area_sqm = live_land_area_sqm ?? land_area_sqm;
+  const final_build_year = live_build_year ?? build_year;
 
   let overlays: Overlay[] = [];
   if (hougarden && hougarden.overlays.length > 0) {
@@ -295,7 +375,11 @@ export function mergePropertyData(
 
   const last_sale_price = first("last_sale_price", sources, ["oneroof", oneroof?.last_sale_price]);
   const last_sale_date  = first("last_sale_date",  sources, ["oneroof", oneroof?.last_sale_date]);
-  const listing_price   = first("listing_price",   sources, ["oneroof", oneroof?.listing_price]);
+  // Listing price: when OneRoof confirms the property is currently on market,
+  // its asking price is the freshest figure; prefer it unconditionally.
+  const listing_price = oneroof?.listing_active && oneroof.listing_price != null
+    ? (sources["listing_price"] = "oneroof (live listing)", oneroof.listing_price)
+    : first("listing_price", sources, ["oneroof", oneroof?.listing_price]);
 
   const school_zones          = hougarden?.school_zones ?? { primary: null, intermediate: null, secondary: null };
   const main_photo_url        = oneroof?.main_photo_url ?? null;
@@ -306,18 +390,19 @@ export function mergePropertyData(
 
   const missing_critical_fields: string[] = [];
   if (cv_nzd === null)                                                          missing_critical_fields.push("cv_nzd");
-  if (land_area_sqm === null)                                                   missing_critical_fields.push("land_area_sqm");
+  if (final_land_area_sqm === null)                                             missing_critical_fields.push("land_area_sqm");
   if (extra?.contour === null || extra?.contour === undefined)                  missing_critical_fields.push("contour");
 
-  logger.info({ sources, missing_critical_fields, cv_nzd, cv_year, land_area_sqm, build_year, floor_area_sqm }, "Merge: data sources selected");
+  logger.info({ sources, missing_critical_fields, cv_nzd, cv_year, land_area_sqm: final_land_area_sqm, build_year: final_build_year, floor_area_sqm, discrepancies }, "Merge: data sources selected");
 
   return {
     cv_nzd,
     cv_year,
-    land_area_sqm,
+    land_area_sqm: final_land_area_sqm,
     floor_area_sqm,
-    build_year,
+    build_year: final_build_year,
     bedrooms,
+    bathrooms,
     zone_code,
     zone_description,
     min_lot_size_sqm,
@@ -331,6 +416,7 @@ export function mergePropertyData(
     overlay_map_image_base64,
     comparables,
     data_sources: sources,
+    discrepancies,
     contour: extra?.contour ?? null,
     contour_slope_degrees: extra?.contour_slope_degrees ?? null,
     contour_source: extra?.contour_source ?? null,

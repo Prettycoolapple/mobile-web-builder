@@ -482,13 +482,17 @@ export async function generateUnifiedResponse(
     // ── property overview ────────────────────────────────────────────────────
     const address   = fmt(r["address"] ?? overview?.["address"]);
     const cv        = fmt(overview?.["cv"]);
+    const cvYear    = fmt(overview?.["cv_year"]);
     const landArea  = fmt(overview?.["landArea"]);
     const floorArea = fmt(overview?.["floorArea"]);
     const buildYear = fmt(overview?.["buildYear"] ?? asbestosInfo?.["buildYear"]);
+    const bedrooms  = fmt(overview?.["bedrooms"]);
+    const bathrooms = fmt(overview?.["bathrooms"]);
     const zoneLabel = fmt(r["zone_label"] ?? planning?.["zone"] ?? overview?.["zone"]);
     const zoneCode  = fmt(r["zone_code"]);
     const listingPrice = fmt(overview?.["listingPrice"]);
     const isOnMarket   = overview?.["isOnMarket"];
+    const discrepancies = (overview?.["discrepancies"] as string[] | undefined) ?? [];
 
     // ── planning ─────────────────────────────────────────────────────────────
     const potentialLots = fmt(planning?.["potentialLots"] ?? r["potential_lots"]);
@@ -558,12 +562,18 @@ export async function generateUnifiedResponse(
     sections.push("PROPERTY OVERVIEW");
     if (address)      sections.push(`  Address: ${address}`);
     if (zoneLabel)    sections.push(`  Zone: ${zoneLabel}${zoneCode ? ` (${zoneCode})` : ""}`);
-    if (cv)           sections.push(`  Capital Value (CV): ${cv}`);
+    if (cv)           sections.push(`  Capital Value (CV): ${cv}${cvYear ? ` (${cvYear})` : ""}`);
     if (landArea)     sections.push(`  Land area: ${landArea}`);
     if (floorArea)    sections.push(`  Floor area: ${floorArea}`);
     if (buildYear)    sections.push(`  Build year: ${buildYear}`);
+    if (bedrooms)     sections.push(`  Bedrooms: ${bedrooms}`);
+    if (bathrooms)    sections.push(`  Bathrooms: ${bathrooms}`);
     if (listingPrice) sections.push(`  Listing price: ${listingPrice}`);
     if (isOnMarket != null) sections.push(`  Currently listed for sale: ${isOnMarket}`);
+    if (discrepancies.length > 0) {
+      sections.push(`  Source reconciliation notes (live listing overrode council/QV — quote these if asked why a value differs from public records):`);
+      for (const note of discrepancies) sections.push(`    • ${note}`);
+    }
 
     sections.push("\nPLANNING");
     if (potentialLots) sections.push(`  Potential lots: ${potentialLots}`);

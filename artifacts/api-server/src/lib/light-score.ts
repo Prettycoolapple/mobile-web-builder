@@ -80,6 +80,8 @@ export async function computeLightScore(input: LightScoreInput): Promise<LightSc
     asbestos_risk: "unknown",
     infrastructure: [],
     missing_critical_fields: [],
+    discrepancies: [],
+    bathrooms: null,
   };
 
   const costs = estimateCosts(minimalMerged, lots);

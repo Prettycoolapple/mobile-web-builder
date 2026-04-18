@@ -72,11 +72,17 @@ export function applyOverviewSnapshot(
     buildYear: merged.build_year != null ? String(merged.build_year) : null,
     build_year: merged.build_year ?? null,
     bedrooms: merged.bedrooms ?? null,
+    bathrooms: merged.bathrooms ?? null,
     zone: merged.zone_description ?? merged.zone_code ?? null,
     zone_code: merged.zone_code ?? null,
     listingPrice: merged.listing_price != null ? fmt(merged.listing_price) : null,
+    listing_price_nzd: merged.listing_price ?? null,
     isOnMarket: merged.listing_active === true,
     data_sources: merged.data_sources ?? {},
+    // Surfaces every value the live-listing reconciliation rewrote so the
+    // report and follow-up chat can explain *why* the displayed figure
+    // differs from council/QV records.
+    discrepancies: merged.discrepancies ?? [],
   };
   parsed.property_overview_snapshot = snapshot;
 
@@ -85,12 +91,16 @@ export function applyOverviewSnapshot(
     ...existingOverview,
     address: snapshot.address,
     cv: snapshot.cv,
+    cv_year: snapshot.cv_year,
     landArea: snapshot.landArea,
     floorArea: snapshot.floorArea,
     buildYear: snapshot.buildYear,
+    bedrooms: snapshot.bedrooms ?? null,
+    bathrooms: snapshot.bathrooms ?? null,
     zone: snapshot.zone ?? existingOverview.zone,
     listingPrice: snapshot.listingPrice,
     isOnMarket: snapshot.isOnMarket,
+    discrepancies: snapshot.discrepancies,
   };
 }
 

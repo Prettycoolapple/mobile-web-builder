@@ -10,6 +10,7 @@ export interface HomesData {
   floor_area_sqm: number | null;
   build_year: number | null;
   bedrooms: number | null;
+  bathrooms: number | null;
   last_sale_price: number | null;
   last_sale_date: string | null;
   address_confirmed: string | null;
@@ -51,6 +52,11 @@ function extractFromText(allText: string): Partial<HomesData> {
   if (buildMatch) data.build_year = parseYear(buildMatch[0]);
   const bedsMatch = allText.match(/(\d)\s*bed(?:room)?s?\b/i);
   if (bedsMatch) data.bedrooms = parseInt(bedsMatch[1], 10);
+  const bathsMatch = allText.match(/(\d(?:\.\d)?)\s*bath(?:room)?s?\b/i);
+  if (bathsMatch) {
+    const v = parseFloat(bathsMatch[1]);
+    if (!isNaN(v) && v > 0 && v < 20) data.bathrooms = v;
+  }
   const saleMatch = allText.match(/(?:last\s+sale|sold)\s*(?:for)?\s*\$?([\d,]+)/i);
   if (saleMatch) data.last_sale_price = parseNZD(saleMatch[1]);
   return data;
@@ -132,6 +138,7 @@ async function tryScrapingBee(address: string, suburb: string, formattedAddress:
         floor_area_sqm: data.floor_area_sqm ?? null,
         build_year: data.build_year ?? null,
         bedrooms: data.bedrooms ?? null,
+        bathrooms: data.bathrooms ?? null,
         last_sale_price: data.last_sale_price ?? null,
         last_sale_date: null,
         address_confirmed: url,
@@ -235,6 +242,7 @@ async function tryPlaywrightSearch(address: string, formattedAddress: string): P
       floor_area_sqm: data.floor_area_sqm ?? null,
       build_year: data.build_year ?? null,
       bedrooms: data.bedrooms ?? null,
+      bathrooms: data.bathrooms ?? null,
       last_sale_price: data.last_sale_price ?? null,
       last_sale_date: null,
       address_confirmed: finalUrl,

@@ -164,6 +164,7 @@ export interface OneRoofData {
   land_area_sqm: number | null;
   build_year: number | null;
   bedrooms: number | null;
+  bathrooms: number | null;
   main_photo_url: string | null;
   comparables: ComparableSale[];
   data_source: "oneroof";
@@ -174,7 +175,7 @@ export function emptyOneRoofData(): OneRoofData {
   return {
     found: false, cv_nzd: null, cv_year: null, last_sale_price: null, last_sale_date: null,
     listing_price: null, listing_active: false, floor_area_sqm: null, land_area_sqm: null,
-    build_year: null, bedrooms: null, main_photo_url: null, comparables: [],
+    build_year: null, bedrooms: null, bathrooms: null, main_photo_url: null, comparables: [],
     data_source: "oneroof", scraped_at: new Date().toISOString(),
   };
 }
@@ -255,6 +256,12 @@ function extractDataFromText(pageText: string): Partial<OneRoofData> {
 
   const bedM = /(\d+)\s+[Bb]ed/.exec(pageText);
   if (bedM) result.bedrooms = parseInt(bedM[1]);
+
+  const bathM = /(\d+(?:\.\d)?)\s+[Bb]ath/.exec(pageText);
+  if (bathM) {
+    const v = parseFloat(bathM[1]);
+    if (!isNaN(v) && v > 0 && v < 20) result.bathrooms = v;
+  }
 
   const comparablesSection = pageText.split(/[Nn]earby [Ss]ales|[Rr]ecently [Ss]old|[Cc]omparable/i)[1];
   if (comparablesSection) {
