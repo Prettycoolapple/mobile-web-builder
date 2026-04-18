@@ -16,6 +16,7 @@ import { useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { Asset } from "expo-asset";
+import { StatusBar } from "expo-status-bar";
 import { GroundupLogo } from "@/components/GroundupLogo";
 
 const HERO_VIDEO = require("../../assets/videos/welcome-hero.mp4");
@@ -71,6 +72,7 @@ export default function WelcomeScreen() {
 
   return (
     <View style={styles.container}>
+      <StatusBar style="light" translucent backgroundColor="transparent" />
       {Platform.OS === "web" ? (
         React.createElement("video", {
           src: HERO_VIDEO_URI,
