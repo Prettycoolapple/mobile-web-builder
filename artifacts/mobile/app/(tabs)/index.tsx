@@ -745,68 +745,84 @@ export default function SearchScreen() {
       setIsLoading(true);
       addMessage({ role: "assistant", content: "", type: "loading", loadingMode: "analyse" }, sessionId);
 
+      const currentMessages = currentSession?.messages ?? [];
+      const conversationHistory = currentMessages
+        .filter((m) => m.type === "text" || m.type === "report")
+        .map((m) => ({
+          role: m.role as "user" | "assistant",
+          content: m.type === "text" ? m.content : `[Report for ${(m as any).report?.address ?? "property"}]`,
+        }));
+
+      // Resilient analyse loop — silently retries forever (with exponential
+      // backoff, capped at 30s) until we either get a usable response or the
+      // server tells us it's a terminal user-facing error (402 / 401).
+      let attempt = 0;
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 200_000);
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          attempt++;
+          try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 200_000);
 
-        const currentMessages = currentSession?.messages ?? [];
-        const conversationHistory = currentMessages
-          .filter((m) => m.type === "text" || m.type === "report")
-          .map((m) => ({
-            role: m.role as "user" | "assistant",
-            content: m.type === "text" ? m.content : `[Report for ${(m as any).report?.address ?? "property"}]`,
-          }));
+            const resp = await fetch(`${getApiBase()}/analyse`, {
+              method: "POST",
+              headers: getApiHeaders(),
+              body: JSON.stringify({ address, conversationHistory }),
+              signal: controller.signal,
+            });
+            clearTimeout(timeoutId);
 
-        const resp = await fetch(`${getApiBase()}/analyse`, {
-          method: "POST",
-          headers: getApiHeaders(),
-          body: JSON.stringify({ address, conversationHistory }),
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
+            if (resp.status === 402) {
+              const err = await resp.json().catch(() => ({} as { error?: string }));
+              updateLastMessage({ type: "text", content: (err as any)?.error || "You've used all your reports for this month. Upgrade to Standard for more." }, sessionId);
+              setShowPaywall(true);
+              return;
+            }
+            if (resp.status === 401) {
+              updateLastMessage({ type: "text", content: "Session expired. Please sign in again." }, sessionId);
+              return;
+            }
 
-        if (!resp.ok) {
-          const err = (await resp.json()) as { error?: string; code?: string };
-          if (resp.status === 402) {
-            updateLastMessage({ type: "text", content: "You've used all your reports for this month. Upgrade to Standard for more." }, sessionId);
-            setShowPaywall(true);
-          } else if (resp.status === 401) {
-            updateLastMessage({ type: "text", content: "Session expired. Please sign in again." }, sessionId);
-          } else {
-            updateLastMessage({ type: "text", content: err.error || "Something went wrong. Please try again." }, sessionId);
+            if (!resp.ok) {
+              // Server error — fall through to the retry path
+              throw new Error(`HTTP ${resp.status}`);
+            }
+
+            const data = (await resp.json()) as {
+              report?: FeasibilityReport;
+              type: string;
+              clarificationType?: string;
+              question?: string;
+              options?: string[];
+            };
+
+            if (data.type === "clarification" && data.clarificationType === "subdivision" && Array.isArray(data.options) && data.options.length > 0) {
+              updateLastMessage({
+                type: "subdivision_clarification",
+                content: "",
+                clarification: { question: data.question || "Which lot would you like analysed?", options: data.options },
+              }, sessionId);
+              return;
+            }
+
+            if (data.report && data.report.scores) {
+              setCurrentReport(data.report);
+              updateLastMessage({ type: "report", report: data.report, content: "" }, sessionId);
+              refreshProfile().catch(() => {});
+              return;
+            }
+
+            // Got a 200 but no report — treat as a transient generation miss
+            // and keep trying so the user never sees a "failed" message.
+            throw new Error("empty_report");
+          } catch {
+            // Keep loading indicator up; back off and retry.
+            const backoffMs = Math.min(30_000, 1000 * Math.pow(2, Math.min(attempt - 1, 5)));
+            await new Promise((r) => setTimeout(r, backoffMs));
+            // Continue the loop
           }
-          return;
         }
-
-        const data = (await resp.json()) as {
-          report?: FeasibilityReport;
-          type: string;
-          clarificationType?: string;
-          question?: string;
-          options?: string[];
-        };
-        if (data.type === "clarification" && data.clarificationType === "subdivision" && Array.isArray(data.options) && data.options.length > 0) {
-          updateLastMessage({
-            type: "subdivision_clarification",
-            content: "",
-            clarification: { question: data.question || "Which lot would you like analysed?", options: data.options },
-          }, sessionId);
-        } else if (data.report && data.report.scores) {
-          setCurrentReport(data.report);
-          updateLastMessage({ type: "report", report: data.report, content: "" }, sessionId);
-          refreshProfile().catch(() => {});
-        } else {
-          updateLastMessage({ type: "text", content: "Could not generate a report for this property. Please try again." }, sessionId);
-        }
-      } catch (err: any) {
-        const isTimeout = err?.name === "AbortError";
-        updateLastMessage({
-          type: "text",
-          content: isTimeout
-            ? "Analysis timed out — NZ property data sources are slow right now. Please tap Try again."
-            : "Couldn't connect to the analysis service. Check your connection.",
-          retryText: `Analyse ${address}`,
-        }, sessionId);
       } finally {
         setIsLoading(false);
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
