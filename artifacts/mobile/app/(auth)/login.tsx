@@ -68,7 +68,7 @@ export default function LoginScreen() {
             <GroundupLogo size={40} color={colors.accent} />
             <View>
               <Text style={[styles.logoTitle, { color: colors.accent, fontFamily: "SpaceGrotesk_700Bold" }]}>
-                Groundup
+                Project Alpha
               </Text>
               <Text style={[styles.logoTagline, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
                 Residential property development intelligence

@@ -252,7 +252,7 @@ router.post("/signup", async (req, res) => {
     if (role === "service_provider") {
       const subject = `New service provider registration: ${profile.fullName ?? profile.email}`;
       const body = [
-        `A new service provider has registered on Groundup.`,
+        `A new service provider has registered on Project Alpha.`,
         ``,
         `Name: ${profile.fullName ?? "Unknown"}`,
         `Email: ${profile.email}`,

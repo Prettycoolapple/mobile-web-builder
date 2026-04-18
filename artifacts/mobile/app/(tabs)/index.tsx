@@ -883,7 +883,7 @@ export default function SearchScreen() {
         <View style={styles.topBarContent}>
           <View style={styles.brandRow}>
             <GroundupLogo size={28} color={colors.accent} />
-            <Text style={[styles.appName, { fontFamily: "SpaceGrotesk_700Bold", letterSpacing: -0.4 }]}>Groundup</Text>
+            <Text style={[styles.appName, { fontFamily: "SpaceGrotesk_700Bold", letterSpacing: -0.4 }]}>Project Alpha</Text>
           </View>
           <View style={styles.headerActions}>
             {user?.role === "sales_agent" && (

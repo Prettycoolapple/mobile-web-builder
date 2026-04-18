@@ -26,11 +26,11 @@ import {
   type CreateProductData,
 } from "@replit/revenuecat-sdk";
 
-const PROJECT_NAME = "Groundup";
+const PROJECT_NAME = "Project Alpha";
 
-const APP_STORE_APP_NAME = "Groundup iOS";
+const APP_STORE_APP_NAME = "Project Alpha iOS";
 const APP_STORE_BUNDLE_ID = "nz.devfeasible.app";
-const PLAY_STORE_APP_NAME = "Groundup Android";
+const PLAY_STORE_APP_NAME = "Project Alpha Android";
 const PLAY_STORE_PACKAGE_NAME = "nz.devfeasible.app";
 
 const ENTITLEMENT_IDENTIFIER = "Pro";

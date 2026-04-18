@@ -69,7 +69,7 @@ async function fetchJsonWithTimeout<T>(url: string): Promise<T> {
       signal: ctrl.signal,
       headers: {
         "accept": "application/vnd.api+json,application/json",
-        "user-agent": "DevFeasible/1.0 (+https://devfeasible.co.nz)",
+        "user-agent": "ProjectAlpha/1.0",
       },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);

@@ -217,7 +217,7 @@ export default function SignupAgentScreen() {
             What should{"\n"}we call you?
           </Text>
           <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
-            Welcome to Groundup for sales agents.
+            Welcome to Project Alpha for sales agents.
           </Text>
 
           <View style={styles.fieldRow}>

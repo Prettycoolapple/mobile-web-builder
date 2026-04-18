@@ -231,7 +231,7 @@ export default function SignupGeneralScreen() {
             What should{"\n"}we call you?
           </Text>
           <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
-            We'll personalise your Groundup experience.
+            We'll personalise your Project Alpha experience.
           </Text>
 
           <View style={styles.fieldRow}>

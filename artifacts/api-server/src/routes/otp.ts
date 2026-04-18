@@ -196,7 +196,7 @@ router.post("/auth/send-otp", async (req: Request, res: Response) => {
     try {
       await sendSms(
         normalized,
-        `Your DevFeasible verification code is ${row.code}. It expires in ${OTP_TTL_MINUTES} minutes.`,
+        `Your Project Alpha verification code is ${row.code}. It expires in ${OTP_TTL_MINUTES} minutes.`,
       );
     } catch (smsErr) {
       req.log.error({ smsErr, phone: normalized }, "Failed to send OTP via SMS");

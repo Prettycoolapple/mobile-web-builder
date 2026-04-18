@@ -10,23 +10,23 @@ const router = Router();
 const PLAN_CONFIG = {
   pro: {
     priceCents: 4900,
-    productName: "DevFeasible NZ Pro",
+    productName: "Project Alpha Pro",
     nickname: "Pro Monthly NZD",
     description: "Unlimited AI property development feasibility reports for NZ",
     tier: "pro",
   },
   sales_agent: {
     priceCents: 9900,
-    productName: "Groundup Sales Agent",
+    productName: "Project Alpha Sales Agent",
     nickname: "Sales Agent Monthly NZD",
-    description: "Groundup Sales Agent subscription — leads, listings & AI placement",
+    description: "Project Alpha Sales Agent subscription — leads, listings & AI placement",
     tier: "pro",
   },
   service_provider: {
     priceCents: 14900,
-    productName: "Groundup Service Provider",
+    productName: "Project Alpha Service Provider",
     nickname: "Service Provider Monthly NZD",
-    description: "Groundup Service Provider subscription — leads, profile listing & AI placement",
+    description: "Project Alpha Service Provider subscription — leads, profile listing & AI placement",
     tier: "pro",
   },
 } as const;

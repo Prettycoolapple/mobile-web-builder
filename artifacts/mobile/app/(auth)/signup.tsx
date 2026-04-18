@@ -87,14 +87,14 @@ export default function RoleSelectionScreen() {
         <View style={styles.header}>
           <GroundupLogo size={36} color={colors.accent} />
           <View>
-            <Text style={[styles.brandName, { color: colors.accent, fontFamily: "SpaceGrotesk_700Bold" }]}>Groundup</Text>
+            <Text style={[styles.brandName, { color: colors.accent, fontFamily: "SpaceGrotesk_700Bold" }]}>Project Alpha</Text>
             <Text style={[styles.brandTagline, { color: colors.mutedForeground }]}>
               Residential property development intelligence
             </Text>
           </View>
         </View>
 
-        <Text style={[styles.heading, { color: colors.foreground }]}>Join Groundup</Text>
+        <Text style={[styles.heading, { color: colors.foreground }]}>Join Project Alpha</Text>
         <Text style={[styles.subheading, { color: colors.mutedForeground }]}>
           Choose the plan that fits your goals
         </Text>

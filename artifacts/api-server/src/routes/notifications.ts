@@ -29,7 +29,7 @@ router.post("/notifications/provider-subscribed", requireAuth, async (req: Reque
 
     const subject = `New service provider subscription: ${profile.fullName ?? profile.email}`;
     const body = [
-      `A new service provider has subscribed on Groundup.`,
+      `A new service provider has subscribed on Project Alpha.`,
       ``,
       `Name: ${profile.fullName ?? "Unknown"}`,
       `Email: ${profile.email}`,
