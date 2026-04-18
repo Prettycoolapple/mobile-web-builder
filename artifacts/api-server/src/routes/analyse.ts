@@ -34,7 +34,8 @@ import {
 import { queueBackgroundScores, getCardScores } from "../lib/analysis-cache";
 import { normaliseLocale } from "../lib/prompts";
 
-function localeFromReq(req: { headers: Record<string, string | string[] | undefined> }) {
+type ReqLike = { headers: Record<string, string | string[] | undefined> };
+function localeFromReq(req: ReqLike) {
   return normaliseLocale(req.headers["x-locale"] ?? req.headers["accept-language"]);
 }
 
@@ -367,7 +368,7 @@ router.post("/analyse", async (req, res) => {
     // Run the deterministic pipeline in parallel with the LLM report so the
     // response includes verified merge data (CV, land/floor area, listing
     // reconciliation) and a pinned property_overview_snapshot for follow-ups.
-    const locale = localeFromReq(req as any);
+    const locale = localeFromReq({ headers: req.headers as Record<string, string | string[] | undefined> });
     const [raw, pipelineResult] = await Promise.all([
       generateFeasibilityReport(address, conversationHistory || [], locale),
       runPropertyPipeline(address).catch((err) => {
@@ -436,7 +437,7 @@ router.post("/search", async (req, res) => {
   const userId = getUserIdFromHeader(req);
 
   try {
-    const raw = await generateSearchResults(query, suburb, minPrice, maxPrice, localeFromReq(req as any));
+    const raw = await generateSearchResults(query, suburb, minPrice, maxPrice, localeFromReq({ headers: req.headers as Record<string, string | string[] | undefined> }));
     const result = extractJSON(raw) as { suburb: string; candidates: unknown[] };
 
     if (userId) {
@@ -536,7 +537,7 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
 }
 
 router.post("/chat", async (req, res) => {
-  const chatLocale = localeFromReq(req as any);
+  const chatLocale = localeFromReq({ headers: req.headers as Record<string, string | string[] | undefined> });
   const { messages, currentReport, message, conversationHistory, reportContext } = req.body as {
     messages?: Message[];
     currentReport?: object;

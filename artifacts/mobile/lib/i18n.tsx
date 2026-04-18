@@ -192,6 +192,62 @@ const en: Catalog = {
   "common.ok": "OK",
   "common.loading": "Loading…",
 
+  // Messages tab
+  "messages.title": "Messages",
+  "messages.empty_title": "Empty inbox",
+  "messages.empty_desc": "Chats will appear here once you are connected to an agent or a service provider.",
+  "messages.empty_sub": "Connections are suggested by AI after your property analysis.",
+  "messages.role_sales_agent": "Sales Agent",
+  "messages.role_service_provider": "Service Provider",
+  "messages.role_user": "User",
+  "messages.unknown": "Unknown",
+  "messages.photo": "📷 Photo",
+  "messages.no_messages_yet": "No messages yet",
+  "messages.you_prefix": "You: {preview}",
+  "messages.now": "now",
+  "messages.recommendation_one": "{n} recommendation",
+  "messages.recommendation_other": "{n} recommendations",
+
+  // Signup role-selection
+  "signup.brand_tagline": "Residential property development intelligence",
+  "signup.heading": "Join Project Alpha",
+  "signup.subheading": "Choose the plan that fits your goals",
+  "signup.have_account": "Already have an account? ",
+  "signup.sign_in": "Sign in",
+  "signup.role.general.title": "General User",
+  "signup.role.general.tagline": "Explore NZ property intelligence",
+  "signup.role.general.badge": "Free",
+  "signup.role.general.cta": "Get started",
+  "signup.role.general.f1": "Feasibility reports",
+  "signup.role.general.f2": "Chat & property search",
+  "signup.role.provider.title": "Service Provider",
+  "signup.role.provider.tagline": "Connect with developers who need you",
+  "signup.role.provider.badge": "14-day free trial",
+  "signup.role.provider.cta": "Get started",
+  "signup.role.provider.f1": "Get referred in chats & search",
+  "signup.role.provider.f2": "Encrypted chats with clients & investors",
+  "signup.role.provider.f3": "Feasibility reports",
+  "signup.role.provider.f4": "Chat & property search",
+
+  // Search tab extras
+  "search.listings": "Listings",
+  "search.add_listing": "Add listing",
+  "search.new": "New",
+  "search.property_loaded": "Property loaded",
+  "search.usage_limit_bar": "Usage limit reached — messages refresh on the 1st of next month.",
+  "search.no_listings_msg": "No matching listings found right now. Try a different suburb, adjust your budget, or ask again shortly — new listings appear daily.",
+  "search.could_clarify": "Could you clarify?",
+  "search.which_lot": "Which lot would you like analysed?",
+  "search.session_expired": "Session expired. Please sign in again.",
+  "search.usage_used_upgrade": "You've used all your reports for this month. Upgrade to Standard for more.",
+  "search.usage_limit_short": "You've reached your usage limit for this month. Upgrade to Standard to continue, or wait until your plan refreshes on the 1st.",
+  "search.usage_limit_short_free": "You've reached your usage limit for this month. Your messages will refresh on the 1st.",
+  "search.slow_data": "NZ property data sources are slow right now. Please tap Try again.",
+  "search.cant_reach": "Couldn't reach the service after several attempts. Please check your connection and try again.",
+  "search.waking": "Waking up the service…",
+  "search.still_fetching": "Still fetching data, one moment…",
+  "search.fetching": "Fetching data…",
+
   // Report sections (most prominent labels)
   "report.overview": "Property Overview",
   "report.scores": "Scores",
@@ -396,6 +452,62 @@ const zh: Catalog = {
   "common.ok": "确定",
   "common.loading": "加载中…",
 
+  // Messages tab
+  "messages.title": "消息",
+  "messages.empty_title": "收件箱为空",
+  "messages.empty_desc": "当您与中介或服务提供者建立联系后,聊天将显示在这里。",
+  "messages.empty_sub": "AI 会在您完成物业分析后为您推荐联系人。",
+  "messages.role_sales_agent": "房产中介",
+  "messages.role_service_provider": "服务提供者",
+  "messages.role_user": "用户",
+  "messages.unknown": "未知",
+  "messages.photo": "📷 图片",
+  "messages.no_messages_yet": "暂无消息",
+  "messages.you_prefix": "您:{preview}",
+  "messages.now": "刚刚",
+  "messages.recommendation_one": "{n} 条推荐",
+  "messages.recommendation_other": "{n} 条推荐",
+
+  // Signup role-selection
+  "signup.brand_tagline": "住宅物业开发智能分析",
+  "signup.heading": "加入 Project Alpha",
+  "signup.subheading": "选择适合您目标的方案",
+  "signup.have_account": "已有账户?",
+  "signup.sign_in": "登录",
+  "signup.role.general.title": "普通用户",
+  "signup.role.general.tagline": "探索新西兰物业智能分析",
+  "signup.role.general.badge": "免费",
+  "signup.role.general.cta": "开始使用",
+  "signup.role.general.f1": "可行性分析报告",
+  "signup.role.general.f2": "聊天与物业搜索",
+  "signup.role.provider.title": "服务提供者",
+  "signup.role.provider.tagline": "与有需要的开发商建立联系",
+  "signup.role.provider.badge": "14 天免费试用",
+  "signup.role.provider.cta": "开始使用",
+  "signup.role.provider.f1": "在聊天与搜索中获得推荐",
+  "signup.role.provider.f2": "与客户和投资者的加密聊天",
+  "signup.role.provider.f3": "可行性分析报告",
+  "signup.role.provider.f4": "聊天与物业搜索",
+
+  // Search tab extras
+  "search.listings": "刊登",
+  "search.add_listing": "发布刊登",
+  "search.new": "新建",
+  "search.property_loaded": "物业已加载",
+  "search.usage_limit_bar": "已达使用上限 — 消息将于下月 1 日重置。",
+  "search.no_listings_msg": "暂时没有匹配的房源。请尝试其他郊区、调整预算,或稍后再问 — 每天都有新房源上线。",
+  "search.could_clarify": "您能补充说明一下吗?",
+  "search.which_lot": "您想分析哪个地块?",
+  "search.session_expired": "登录已过期,请重新登录。",
+  "search.usage_used_upgrade": "您本月的报告额度已用完。升级到标准版以获取更多。",
+  "search.usage_limit_short": "您本月已达使用上限。升级到标准版以继续使用,或等待每月 1 日刷新。",
+  "search.usage_limit_short_free": "您本月已达使用上限。消息将于下月 1 日刷新。",
+  "search.slow_data": "新西兰物业数据源目前响应较慢,请点击「重试」。",
+  "search.cant_reach": "多次尝试后仍无法连接到服务。请检查网络后重试。",
+  "search.waking": "正在唤醒服务…",
+  "search.still_fetching": "仍在获取数据,请稍候…",
+  "search.fetching": "正在获取数据…",
+
   // Report
   "report.overview": "物业概览",
   "report.scores": "评分",
@@ -442,7 +554,11 @@ function interpolate(template: string, vars?: Record<string, string | number>): 
 }
 
 export function LocaleProvider({ children }: { children: React.ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>(() => detectDeviceLocale());
+  const [locale, setLocaleState] = useState<Locale>(() => {
+    const detected = detectDeviceLocale();
+    _setCurrentLocale(detected);
+    return detected;
+  });
 
   useEffect(() => {
     (async () => {
@@ -450,6 +566,7 @@ export function LocaleProvider({ children }: { children: React.ReactNode }) {
         const stored = await AsyncStorage.getItem(STORAGE_KEY);
         if (stored === "en" || stored === "zh") {
           setLocaleState(stored);
+          _setCurrentLocale(stored);
         }
       } catch {}
     })();
@@ -457,6 +574,7 @@ export function LocaleProvider({ children }: { children: React.ReactNode }) {
 
   const setLocale = useCallback(async (l: Locale) => {
     setLocaleState(l);
+    _setCurrentLocale(l);
     try {
       await AsyncStorage.setItem(STORAGE_KEY, l);
     } catch {}
