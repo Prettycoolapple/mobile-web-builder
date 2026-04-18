@@ -15,6 +15,9 @@ export interface PropertyCandidate {
   photoUrl?: string;
   bedrooms?: number;
   bathrooms?: number;
+  /** True when listing sources disagreed on the count — UI can render "~3 bd". */
+  bedroomsApprox?: boolean;
+  bathroomsApprox?: boolean;
 }
 
 const ZONE_EASE_SCORE: Record<string, number> = {
@@ -128,6 +131,8 @@ async function screenOneFast(listing: ListingResult): Promise<PropertyCandidate 
       photoUrl: listing.photoUrl ?? undefined,
       bedrooms: listing.bedrooms ?? undefined,
       bathrooms: listing.bathrooms ?? undefined,
+      bedroomsApprox: listing.bedroomsApprox || undefined,
+      bathroomsApprox: listing.bathroomsApprox || undefined,
     };
   } catch (err) {
     logger.warn({ err, address: listing.address }, "Pre-screen fast: failed for listing");
@@ -182,6 +187,8 @@ async function screenOne(listing: ListingResult): Promise<PropertyCandidate | nu
       photoUrl: listing.photoUrl ?? undefined,
       bedrooms: listing.bedrooms ?? undefined,
       bathrooms: listing.bathrooms ?? undefined,
+      bedroomsApprox: listing.bedroomsApprox || undefined,
+      bathroomsApprox: listing.bathroomsApprox || undefined,
     };
   } catch (err) {
     logger.warn({ err, address: listing.address }, "Pre-screen: failed for listing");

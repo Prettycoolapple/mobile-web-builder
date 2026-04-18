@@ -92,7 +92,7 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
             <View style={[styles.tag, { backgroundColor: colors.muted, flexDirection: "row", alignItems: "center", gap: 3 }]}>
               <Feather name="moon" size={10} color={colors.foreground} />
               <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                {candidate.bedrooms} bd
+                {candidate.bedroomsApprox ? "~" : ""}{candidate.bedrooms} bd
               </Text>
             </View>
           )}
@@ -100,7 +100,16 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
             <View style={[styles.tag, { backgroundColor: colors.muted, flexDirection: "row", alignItems: "center", gap: 3 }]}>
               <Feather name="droplet" size={10} color={colors.foreground} />
               <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                {candidate.bathrooms} ba
+                {candidate.bathroomsApprox ? "~" : ""}{candidate.bathrooms} ba
+              </Text>
+            </View>
+          )}
+          {(candidate.bedroomsApprox || candidate.bathroomsApprox) && (
+            <View style={[styles.tag, { backgroundColor: "transparent", paddingHorizontal: 0 }]}>
+              <Text
+                style={[styles.tagText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontStyle: "italic" }]}
+              >
+                Listing sources disagree — figure may be approximate
               </Text>
             </View>
           )}

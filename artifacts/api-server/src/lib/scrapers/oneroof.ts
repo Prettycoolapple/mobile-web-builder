@@ -12,6 +12,14 @@ export interface ListingResult {
   zone: string | null;
   bedrooms: number | null;
   bathrooms: number | null;
+  /**
+   * True when two listing-source readings of bedroom count for the same
+   * listing disagreed (e.g. realestate.co.nz structured API says 4 but the
+   * og:description says 3). Surfaced to the UI so we can flag the value as
+   * approximate ("~3 bd") instead of silently picking one.
+   */
+  bedroomsApprox?: boolean;
+  bathroomsApprox?: boolean;
 }
 
 // Implementation lives in the dependency-free `bed-bath-extractor` module so

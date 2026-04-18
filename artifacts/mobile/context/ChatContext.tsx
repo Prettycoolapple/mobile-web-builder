@@ -222,6 +222,9 @@ export interface PropertyCandidate {
   listingUrl?: string;
   bedrooms?: number;
   bathrooms?: number;
+  /** True when listing sources disagreed on the count — render as "~3 bd". */
+  bedroomsApprox?: boolean;
+  bathroomsApprox?: boolean;
 }
 
 export interface Session {

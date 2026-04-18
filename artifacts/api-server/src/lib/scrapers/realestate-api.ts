@@ -17,6 +17,7 @@
 
 import { logger } from "../logger";
 import type { ListingResult } from "./oneroof";
+import { extractBedsBaths } from "./bed-bath-extractor";
 
 const PLATFORM_BASE = "https://platform.realestate.co.nz/search/v1";
 const MEDIA_BASE = "https://mediaserver.realestate.co.nz";
@@ -393,6 +394,68 @@ async function fetchListingsForSuburbId(suburbId: string, limit = 100): Promise<
   return mapped;
 }
 
+/**
+ * Cross-check the structured API's bedroom/bathroom counts against the
+ * og:description on the listing's social-share card. Both numbers come from
+ * the same upstream listing record but they're populated by different
+ * pipelines on realestate.co.nz, and they occasionally disagree (e.g. the
+ * API reports 4 baths but the og:description text says "3 bath"). When that
+ * happens we mark the value as approximate so the UI can flag it rather than
+ * silently picking whichever source happened to win.
+ */
+async function fetchOgBedsBaths(url: string): Promise<{ bedrooms: number | null; bathrooms: number | null } | null> {
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8_000);
+    let html = "";
+    try {
+      const resp = await fetch(url, {
+        signal: ctrl.signal,
+        headers: {
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+          "accept": "text/html",
+          "accept-language": "en-NZ,en;q=0.9",
+        },
+      });
+      if (!resp.ok) return null;
+      html = await resp.text();
+    } finally {
+      clearTimeout(t);
+    }
+    const ogTitle = html.match(/<meta property="og:title" content="([^"]+)"/)?.[1] ?? "";
+    const ogDesc = html.match(/<meta property="og:description" content="([^"]+)"/)?.[1] ?? "";
+    if (!ogTitle && !ogDesc) return null;
+    return extractBedsBaths(`${ogTitle} ${ogDesc}`);
+  } catch {
+    return null;
+  }
+}
+
+async function annotateApproxBedsBaths(listings: ListingResult[]): Promise<ListingResult[]> {
+  if (listings.length === 0) return listings;
+  const checks = await Promise.all(
+    listings.map(async (l) => {
+      // Only worth cross-checking when the API actually gave us a number to
+      // verify against — otherwise there's nothing to disagree with.
+      if (l.bedrooms == null && l.bathrooms == null) return l;
+      const og = await fetchOgBedsBaths(l.listingUrl);
+      if (!og) return l;
+      const bedroomsApprox =
+        l.bedrooms != null && og.bedrooms != null && og.bedrooms !== l.bedrooms;
+      const bathroomsApprox =
+        l.bathrooms != null && og.bathrooms != null && og.bathrooms !== l.bathrooms;
+      if (bedroomsApprox || bathroomsApprox) {
+        logger.info(
+          { url: l.listingUrl, api: { bedrooms: l.bedrooms, bathrooms: l.bathrooms }, og },
+          "realestate-api: bed/bath disagreement between API and og:description — flagging approximate",
+        );
+      }
+      return { ...l, bedroomsApprox, bathroomsApprox };
+    }),
+  );
+  return checks;
+}
+
 export interface ApiSearchResult {
   firstBatch: ListingResult[];
   remainingListings: ListingResult[];
@@ -467,8 +530,16 @@ export async function searchListingsByName(opts: {
   const negotiation = filtered.filter((l) => l.price == null);
   const ordered = [...priced, ...negotiation];
 
+  // Cross-check the user-facing first batch against the listing's
+  // og:description so we can flag any bed/bath disagreement as approximate.
+  // We only annotate the first batch — those are the listings that get
+  // surfaced as cards immediately; the remainder is paginated lazily and
+  // not worth the extra request burst per search.
+  const firstBatchRaw = ordered.slice(0, firstBatchSize);
+  const firstBatch = await annotateApproxBedsBaths(firstBatchRaw).catch(() => firstBatchRaw);
+
   return {
-    firstBatch: ordered.slice(0, firstBatchSize),
+    firstBatch,
     remainingListings: ordered.slice(firstBatchSize),
     totalFound: ordered.length,
     source: "realestate.co.nz/api",
