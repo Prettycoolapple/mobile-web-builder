@@ -146,12 +146,17 @@ export function ProviderRecommendationBubble({
               </View>
             ) : null}
 
-            {provider.primaryLanguage && provider.primaryLanguage !== "English" ? (
-              <View style={styles.metaRow}>
-                <Feather name="globe" size={11} color="#9CA3AF" />
-                <Text style={styles.metaText}>{provider.primaryLanguage}</Text>
-              </View>
-            ) : null}
+            {(() => {
+              const langs = [provider.primaryLanguage, provider.secondaryLanguage]
+                .filter((l): l is string => !!l && l.trim().length > 0);
+              if (langs.length === 0) return null;
+              return (
+                <View style={styles.metaRow}>
+                  <Feather name="globe" size={11} color="#9CA3AF" />
+                  <Text style={styles.metaText}>{langs.join(" · ")}</Text>
+                </View>
+              );
+            })()}
 
             <Text style={styles.connections}>
               ★ {provider.recommendationCount}{" "}

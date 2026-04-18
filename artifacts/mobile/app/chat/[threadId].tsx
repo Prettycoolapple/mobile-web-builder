@@ -139,6 +139,8 @@ export default function ChatScreen() {
   const [otherPhone, setOtherPhone] = useState<string | null>(null);
   const [otherDiscipline, setOtherDiscipline] = useState<string | null>(null);
   const [otherOtherDiscipline, setOtherOtherDiscipline] = useState<string | null>(null);
+  const [otherPrimaryLanguage, setOtherPrimaryLanguage] = useState<string | null>(null);
+  const [otherSecondaryLanguage, setOtherSecondaryLanguage] = useState<string | null>(null);
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
@@ -165,10 +167,12 @@ export default function ChatScreen() {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((r) => r.ok ? r.json() : null)
-      .then((data: { roleData?: { contactNumber?: string; discipline?: string | null; otherDiscipline?: string | null } } | null) => {
+      .then((data: { roleData?: { contactNumber?: string; discipline?: string | null; otherDiscipline?: string | null; primaryLanguage?: string | null; secondaryLanguage?: string | null } } | null) => {
         setOtherPhone(data?.roleData?.contactNumber ?? null);
         setOtherDiscipline(data?.roleData?.discipline ?? null);
         setOtherOtherDiscipline(data?.roleData?.otherDiscipline ?? null);
+        setOtherPrimaryLanguage(data?.roleData?.primaryLanguage ?? null);
+        setOtherSecondaryLanguage(data?.roleData?.secondaryLanguage ?? null);
       })
       .catch(() => {});
   }, [otherUserId, token]);
@@ -439,6 +443,16 @@ export default function ChatScreen() {
                 ? formatDiscipline(otherDiscipline, otherOtherDiscipline)
                 : "User"}
             </Text>
+            {otherRole === "service_provider" && (() => {
+              const langs = [otherPrimaryLanguage, otherSecondaryLanguage]
+                .filter((l): l is string => !!l && l.trim().length > 0);
+              if (langs.length === 0) return null;
+              return (
+                <Text style={styles.headerLanguages} numberOfLines={1}>
+                  {langs.join(" · ")}
+                </Text>
+              );
+            })()}
           </View>
         </TouchableOpacity>
         {otherPhone ? (
@@ -600,6 +614,12 @@ const styles = StyleSheet.create({
     fontFamily: "DM_Sans_400Regular",
     fontSize: 12,
     color: "rgba(250,249,246,0.55)",
+    marginTop: 1,
+  },
+  headerLanguages: {
+    fontFamily: "DM_Sans_400Regular",
+    fontSize: 11,
+    color: "rgba(250,249,246,0.45)",
     marginTop: 1,
   },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },

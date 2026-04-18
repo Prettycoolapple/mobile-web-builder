@@ -17,6 +17,7 @@ export interface ServiceProvider {
   addressSuburb?: string | null;
   addressCity?: string | null;
   primaryLanguage?: string | null;
+  secondaryLanguage?: string | null;
 }
 
 export interface ChatMessage {

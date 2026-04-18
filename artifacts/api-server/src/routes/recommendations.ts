@@ -27,6 +27,7 @@ export interface ServiceProvider {
   addressSuburb: string | null;
   addressCity: string | null;
   primaryLanguage: string | null;
+  secondaryLanguage: string | null;
 }
 
 interface FeasibilityReport {
@@ -147,6 +148,7 @@ async function selectServiceProvider(preferredDiscipline?: string | null): Promi
       addressSuburb: serviceProviderProfiles.addressSuburb,
       addressCity: serviceProviderProfiles.addressCity,
       primaryLanguage: serviceProviderProfiles.primaryLanguage,
+      secondaryLanguage: serviceProviderProfiles.secondaryLanguage,
     })
     .from(profiles)
     .innerJoin(serviceProviderProfiles, eq(serviceProviderProfiles.userId, profiles.id))
@@ -178,6 +180,7 @@ async function selectServiceProvider(preferredDiscipline?: string | null): Promi
     addressSuburb: selected.addressSuburb ?? null,
     addressCity: selected.addressCity ?? null,
     primaryLanguage: selected.primaryLanguage ?? null,
+    secondaryLanguage: selected.secondaryLanguage ?? null,
   };
 }
 
