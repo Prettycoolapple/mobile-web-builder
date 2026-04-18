@@ -10,8 +10,8 @@
  * "Bedroom 2-Bathroom" doesn't pull the "2" from the bathroom token into the
  * bedroom count.
  *
- * Lives in its own module so it can be imported by the standalone verification
- * suite at `__tests__/extractBedsBaths.test.ts` without dragging in the
+ * Lives in its own module so it can be imported by the vitest suite at
+ * `__tests__/bed-bath-extractor.test.ts` without dragging in the
  * Playwright/cheerio dependency chain that the rest of `oneroof.ts` carries.
  */
 export function extractBedsBaths(text: string): { bedrooms: number | null; bathrooms: number | null } {
