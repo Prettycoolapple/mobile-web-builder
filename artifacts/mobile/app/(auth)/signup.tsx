@@ -10,7 +10,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
-import { GroundupLogo } from "@/components/GroundupLogo";
 
 const ROLES = [
   {
@@ -85,7 +84,6 @@ export default function RoleSelectionScreen() {
         </TouchableOpacity>
 
         <View style={styles.header}>
-          <GroundupLogo size={36} color={colors.accent} />
           <View>
             <Text style={[styles.brandName, { color: colors.accent, fontFamily: "SpaceGrotesk_700Bold" }]}>Project Alpha</Text>
             <Text style={[styles.brandTagline, { color: colors.mutedForeground }]}>

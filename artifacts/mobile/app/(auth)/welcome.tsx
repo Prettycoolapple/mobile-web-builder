@@ -176,13 +176,14 @@ export default function WelcomeScreen() {
         ]}
       >
         <View style={styles.wordmarkWrap}>
-          <Text style={styles.wordmark}>
-            project<Text style={styles.wordmarkAlpha}> alpha</Text>
-          </Text>
-          {/* Calligraphic flourish extending from the final "a" */}
+          {/* Tail flourish sits BEHIND the text */}
           <View pointerEvents="none" style={styles.tailWrap}>
-            <AlphaTail width={150} color="#D97757" accentColor="#F1D9A8" />
+            <AlphaTail width={300} color="#D97757" accentColor="#F1D9A8" />
           </View>
+          <Text style={styles.wordmark}>
+            <Text style={styles.wordmarkProject}>project</Text>
+            <Text style={styles.wordmarkAlpha}> alpha</Text>
+          </Text>
         </View>
 
         <View style={styles.eyebrowRow}>
@@ -210,7 +211,7 @@ export default function WelcomeScreen() {
         </Text>
         <View style={styles.headlineRule} />
         <Text style={styles.subhead}>
-          The numbers behind every site, before you commit a cent.
+          Residential property development intelligence.
         </Text>
       </Animated.View>
 
@@ -262,11 +263,11 @@ const styles = StyleSheet.create({
   wordmarkWrap: {
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 8,
-    paddingBottom: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    minHeight: 80,
   },
   wordmark: {
-    fontFamily: "Fraunces_500Medium",
     fontSize: 46,
     lineHeight: 52,
     letterSpacing: -1.4,
@@ -275,19 +276,33 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 10,
   },
+  /**
+   * "project" — clean sans-serif so the j renders cleanly without an unusual
+   * curl/descender from the serif font.
+   */
+  wordmarkProject: {
+    fontFamily: "DM_Sans_700Bold",
+    color: "#FBF6EC",
+    letterSpacing: -1.6,
+  },
+  /**
+   * "alpha" — serif accent in cream, paired with the flourish behind it.
+   */
   wordmarkAlpha: {
     fontFamily: "Fraunces_600SemiBold",
     color: "#F1D9A8",
     letterSpacing: -0.8,
   },
   /**
-   * Tail sits just below the wordmark, offset to the right so it visually
-   * leaves the bottom-right of the final "a".
+   * Tail flourish positioned absolutely behind the wordmark, centered.
+   * Slightly nudged down so the curve passes under the baseline of the text.
    */
   tailWrap: {
     position: "absolute",
-    bottom: -4,
-    right: -28,
+    top: 26,
+    alignItems: "center",
+    justifyContent: "center",
+    opacity: 0.9,
   },
   eyebrowRow: {
     flexDirection: "row",

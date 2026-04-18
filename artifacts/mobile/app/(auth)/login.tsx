@@ -15,7 +15,6 @@ import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
-import { GroundupLogo } from "@/components/GroundupLogo";
 
 export default function LoginScreen() {
   const colors = useColors();
@@ -65,7 +64,6 @@ export default function LoginScreen() {
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.logoRow}>
-            <GroundupLogo size={40} color={colors.accent} />
             <View>
               <Text style={[styles.logoTitle, { color: colors.accent, fontFamily: "SpaceGrotesk_700Bold" }]}>
                 Project Alpha

@@ -17,7 +17,6 @@ import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
-import { GroundupLogo } from "@/components/GroundupLogo";
 import { useChat, ChatMessage, FeasibilityReport, PropertyCandidate, ServiceProvider } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
 import { ChatBubble } from "@/components/ChatBubble";
@@ -882,7 +881,6 @@ export default function SearchScreen() {
       }]}>
         <View style={styles.topBarContent}>
           <View style={styles.brandRow}>
-            <GroundupLogo size={28} color={colors.accent} />
             <Text style={[styles.appName, { fontFamily: "SpaceGrotesk_700Bold", letterSpacing: -0.4 }]}>Project Alpha</Text>
           </View>
           <View style={styles.headerActions}>
@@ -939,11 +937,6 @@ export default function SearchScreen() {
         <Pressable style={{ flex: 1 }} onPress={Keyboard.dismiss}>
           <View style={[styles.landingContainer, { paddingBottom: tabBarOffset }]}>
             <View style={styles.landingContent}>
-              {/* Glasses hero */}
-              <View style={styles.landingLogo}>
-                <GroundupLogo size={64} color={colors.accent} />
-              </View>
-
               <Text style={[styles.landingTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
                 Going property shopping?
               </Text>
