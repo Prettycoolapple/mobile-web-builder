@@ -17,6 +17,7 @@ import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { useLocalSearchParams } from "expo-router";
+import { PaywallModal } from "@/components/PaywallModal";
 
 function getApiBase(): string {
   if (process.env.EXPO_PUBLIC_DOMAIN) {
@@ -80,6 +81,7 @@ export default function ContactsScreen() {
   const [search, setSearch] = useState("");
   const [starting, setStarting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showPaywall, setShowPaywall] = useState(false);
 
   const startChat = useCallback(
     async (contactId: string) => {
@@ -94,6 +96,10 @@ export default function ContactsScreen() {
           },
           body: JSON.stringify({ targetUserId: contactId }),
         });
+        if (resp.status === 402) {
+          setShowPaywall(true);
+          return;
+        }
         if (resp.ok) {
           const data = await resp.json() as { thread: { id: string } };
           router.replace(`/chat/${data.thread.id}`);
@@ -233,6 +239,7 @@ export default function ContactsScreen() {
           keyboardShouldPersistTaps="handled"
         />
       )}
+      <PaywallModal visible={showPaywall} onClose={() => setShowPaywall(false)} />
     </View>
   );
 }

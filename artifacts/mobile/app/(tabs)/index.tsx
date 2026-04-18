@@ -178,12 +178,18 @@ export default function SearchScreen() {
           headers,
           body: JSON.stringify({ report: lastReport.report, conversationHistory, followUpCount }),
         });
+        // Free users hitting the provider-DM gate. The auto check is silent
+        // by design (the user didn't ask), so we don't open the paywall here
+        // — that's reserved for explicit user actions handled below.
+        if (resp.status === 402) return;
         if (!resp.ok) return;
         const data = await resp.json() as {
           shouldRecommend: boolean;
           provider: ServiceProvider | null;
           intentType: string;
+          upgradeRequired?: boolean;
         };
+        if (data.upgradeRequired) return;
         if (data.shouldRecommend && data.provider) {
           shownRecommendationReportIds.current.add(lastReport.id);
           addMessage({
@@ -217,6 +223,10 @@ export default function SearchScreen() {
         headers,
         body: JSON.stringify({ providerId, propertyAddress, report }),
       });
+      if (resp.status === 402) {
+        setShowPaywall(true);
+        return;
+      }
       if (!resp.ok) {
         const err = await resp.json() as { error?: string };
         throw new Error(err.error ?? "Connect failed");
@@ -651,12 +661,31 @@ export default function SearchScreen() {
                 preferredDiscipline,
               }),
             });
+            if (resp.status === 402) {
+              addMessage({
+                role: "assistant",
+                content: "Connecting with a service provider is a Standard feature. Upgrade to message specialists directly.",
+                type: "text",
+              }, capturedSessionId);
+              setShowPaywall(true);
+              return;
+            }
             if (!resp.ok) return;
             const data = await resp.json() as {
               shouldRecommend: boolean;
               provider: ServiceProvider | null;
               intentType: string;
+              upgradeRequired?: boolean;
             };
+            if (data.upgradeRequired) {
+              addMessage({
+                role: "assistant",
+                content: "Connecting with a service provider is a Standard feature. Upgrade to message specialists directly.",
+                type: "text",
+              }, capturedSessionId);
+              setShowPaywall(true);
+              return;
+            }
             if (data.shouldRecommend && data.provider) {
               addMessage({
                 role: "assistant",
