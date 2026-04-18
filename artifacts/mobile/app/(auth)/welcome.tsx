@@ -24,8 +24,6 @@ const HERO_POSTER = require("../../assets/videos/welcome-hero-poster.jpg");
 const HERO_VIDEO_URI = Asset.fromModule(HERO_VIDEO).uri;
 const HERO_POSTER_URI = Asset.fromModule(HERO_POSTER).uri;
 
-const PHI = 1.6180339887;
-
 export default function WelcomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -47,32 +45,72 @@ export default function WelcomeScreen() {
     return () => sub.remove();
   }, [player]);
 
-  const fade = useRef(new Animated.Value(0)).current;
-  const lift = useRef(new Animated.Value(12)).current;
+  // Staggered entrance animations
+  const fadeBrand = useRef(new Animated.Value(0)).current;
+  const fadeHead = useRef(new Animated.Value(0)).current;
+  const fadeCta = useRef(new Animated.Value(0)).current;
+  const lift = useRef(new Animated.Value(16)).current;
+  const glow = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     Animated.parallel([
-      Animated.timing(fade, {
-        toValue: 1,
-        duration: 900,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
       Animated.timing(lift, {
         toValue: 0,
         duration: 900,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }),
+      Animated.timing(fadeBrand, {
+        toValue: 1,
+        duration: 650,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(fadeHead, {
+        toValue: 1,
+        duration: 700,
+        delay: 220,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(fadeCta, {
+        toValue: 1,
+        duration: 700,
+        delay: 420,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
     ]).start();
+
+    // Subtle ambient glow loop behind the logo
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(glow, {
+          toValue: 1,
+          duration: 3200,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(glow, {
+          toValue: 0,
+          duration: 3200,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ]),
+    ).start();
   }, []);
 
-  // Golden ratio: place slogan baseline at 1/phi from the top (≈ 61.8% down).
-  const goldenY = screenHeight / PHI;
+  const glowScale = glow.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.92, 1.06],
+  });
+  const glowOpacity = glow.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.18, 0.34],
+  });
 
-  // Extend the video & gradient beyond any safe-area inset applied by the
-  // native stack so the visuals truly fill the entire screen, including the
-  // status bar and home-indicator regions.
+  // Bleed beyond safe-area so the visuals fill edge-to-edge.
   const bleed = {
     position: "absolute" as const,
     top: -insets.top,
@@ -81,9 +119,13 @@ export default function WelcomeScreen() {
     right: -insets.right,
   };
 
+  // Headline anchored ~52% down — gives the logo room to breathe.
+  const headlineTop = screenHeight * 0.5;
+
   return (
     <View style={styles.container}>
       <StatusBar style="light" translucent backgroundColor="transparent" />
+
       {Platform.OS === "web" ? (
         React.createElement("video", {
           src: HERO_VIDEO_URI,
@@ -104,11 +146,7 @@ export default function WelcomeScreen() {
         })
       ) : (
         <>
-          <Image
-            source={HERO_POSTER}
-            style={bleed}
-            resizeMode="cover"
-          />
+          <Image source={HERO_POSTER} style={bleed} resizeMode="cover" />
           <VideoView
             style={[bleed, { opacity: videoReady ? 1 : 0 }]}
             player={player}
@@ -120,75 +158,105 @@ export default function WelcomeScreen() {
         </>
       )}
 
-      {/* Cinematic dark gradient for legibility */}
+      {/* Cinematic legibility scrim — darker top & bottom, softer middle */}
       <LinearGradient
         colors={[
-          "rgba(0,0,0,0.55)",
-          "rgba(0,0,0,0.15)",
-          "rgba(0,0,0,0.35)",
-          "rgba(0,0,0,0.85)",
+          "rgba(15,10,7,0.78)",
+          "rgba(15,10,7,0.18)",
+          "rgba(15,10,7,0.45)",
+          "rgba(15,10,7,0.92)",
         ]}
-        locations={[0, 0.35, 0.65, 1]}
+        locations={[0, 0.32, 0.62, 1]}
         style={bleed}
       />
 
-      {/* Logo + wordmark — top, anchored just below safe area */}
+      {/* Subtle warm vignette tint */}
+      <LinearGradient
+        colors={["rgba(217,119,87,0.10)", "rgba(0,0,0,0)", "rgba(217,119,87,0.08)"]}
+        locations={[0, 0.5, 1]}
+        style={bleed}
+      />
+
+      {/* ── Brand block: logo + ambient glow + wordmark ── */}
       <Animated.View
         style={[
           styles.brandBlock,
           {
-            top: insets.top + 28,
-            opacity: fade,
+            top: insets.top + 56,
+            opacity: fadeBrand,
             transform: [{ translateY: lift }],
           },
         ]}
       >
-        <GroundupLogo size={56} color="#F5E9D7" accentColor="#E0B973" />
+        <View style={styles.logoWrap}>
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.logoGlow,
+              { opacity: glowOpacity, transform: [{ scale: glowScale }] },
+            ]}
+          />
+          <GroundupLogo size={68} color="#D97757" accentColor="#E8C887" />
+        </View>
+
         <Text style={styles.wordmark}>
           ground<Text style={styles.wordmarkUp}>UP</Text>
         </Text>
+
+        <View style={styles.eyebrowRow}>
+          <View style={styles.eyebrowDot} />
+          <Text style={styles.eyebrow}>NEW ZEALAND · RESIDENTIAL</Text>
+          <View style={styles.eyebrowDot} />
+        </View>
       </Animated.View>
 
-      {/* Slogan at the golden ratio line */}
+      {/* ── Headline block ── */}
       <Animated.View
         pointerEvents="none"
         style={[
-          styles.slogan,
+          styles.headlineBlock,
           {
-            top: goldenY,
-            opacity: fade,
+            top: headlineTop,
+            opacity: fadeHead,
             transform: [{ translateY: lift }],
           },
         ]}
       >
-        <View style={styles.sloganRule} />
-        <Text style={styles.sloganText}>Residential property development</Text>
+        <Text style={styles.headline}>
+          Land. Numbers.{"\n"}
+          <Text style={styles.headlineEm}>Built from the ground up.</Text>
+        </Text>
+        <View style={styles.headlineRule} />
+        <Text style={styles.subhead}>
+          Instant feasibility, planning overlays and ROI for any NZ site.
+        </Text>
       </Animated.View>
 
-      {/* Minimal CTAs at bottom */}
+      {/* ── CTAs ── */}
       <Animated.View
         style={[
           styles.ctaBlock,
-          { paddingBottom: insets.bottom + 24, opacity: fade },
+          { paddingBottom: insets.bottom + 28, opacity: fadeCta },
         ]}
       >
         <TouchableOpacity
           style={styles.primaryBtn}
           onPress={() => router.push("/(auth)/signup")}
-          activeOpacity={0.85}
+          activeOpacity={0.88}
         >
           <Text style={styles.primaryBtnText}>Get started</Text>
+          <Text style={styles.primaryBtnArrow}>→</Text>
         </TouchableOpacity>
 
         <Pressable
           onPress={() => router.push("/(auth)/login")}
           hitSlop={12}
           style={({ pressed }) => [
-            styles.signinWrap,
-            { opacity: pressed ? 0.6 : 1 },
+            styles.secondaryBtn,
+            { opacity: pressed ? 0.55 : 1 },
           ]}
         >
-          <Text style={styles.signinText}>Sign in</Text>
+          <Text style={styles.secondaryBtnText}>I already have an account</Text>
         </Pressable>
       </Animated.View>
     </View>
@@ -198,68 +266,136 @@ export default function WelcomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#000",
+    backgroundColor: "#0F0A07",
   },
+
+  // Brand
   brandBlock: {
     position: "absolute",
     left: 0,
     right: 0,
     alignItems: "center",
-    gap: 14,
+    gap: 18,
+  },
+  logoWrap: {
+    width: 96,
+    height: 96,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  logoGlow: {
+    position: "absolute",
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: "#D97757",
+    // soft halo via shadow on iOS, plain bg blur on web
+    shadowColor: "#D97757",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 40,
   },
   wordmark: {
     fontFamily: "Fraunces_500Medium",
-    fontSize: 36,
-    letterSpacing: -1.2,
+    fontSize: 40,
+    lineHeight: 44,
+    letterSpacing: -1.4,
     color: "#FBF6EC",
-    textShadowColor: "rgba(0,0,0,0.45)",
+    textShadowColor: "rgba(0,0,0,0.5)",
     textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 6,
+    textShadowRadius: 8,
   },
   wordmarkUp: {
     fontFamily: "Fraunces_700Bold",
     color: "#E8C887",
     letterSpacing: -0.6,
   },
-  slogan: {
+  eyebrowRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 2,
+  },
+  eyebrowDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "rgba(232,200,135,0.85)",
+  },
+  eyebrow: {
+    fontFamily: "DM_Sans_500Medium",
+    fontSize: 11,
+    letterSpacing: 2.4,
+    color: "rgba(251,246,236,0.78)",
+  },
+
+  // Headline
+  headlineBlock: {
     position: "absolute",
     left: 0,
     right: 0,
     alignItems: "center",
-    gap: 14,
+    paddingHorizontal: 28,
+    gap: 18,
   },
-  sloganRule: {
-    width: 36,
-    height: 1,
-    backgroundColor: "rgba(232,200,135,0.85)",
-  },
-  sloganText: {
+  headline: {
     fontFamily: "Fraunces_400Regular",
-    fontSize: 18,
-    letterSpacing: 0.4,
+    fontSize: 26,
+    lineHeight: 32,
+    letterSpacing: -0.4,
     color: "#FBF6EC",
     textAlign: "center",
-    paddingHorizontal: 32,
     textShadowColor: "rgba(0,0,0,0.55)",
     textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 8,
+    textShadowRadius: 10,
   },
+  headlineEm: {
+    fontFamily: "Fraunces_600SemiBold",
+    fontStyle: "italic",
+    color: "#F1D9A8",
+  },
+  headlineRule: {
+    width: 28,
+    height: 1,
+    backgroundColor: "rgba(232,200,135,0.7)",
+  },
+  subhead: {
+    fontFamily: "DM_Sans_400Regular",
+    fontSize: 14,
+    lineHeight: 20,
+    letterSpacing: 0.2,
+    color: "rgba(251,246,236,0.82)",
+    textAlign: "center",
+    paddingHorizontal: 16,
+    textShadowColor: "rgba(0,0,0,0.5)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 6,
+  },
+
+  // CTAs
   ctaBlock: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: 0,
-    paddingHorizontal: 28,
-    gap: 14,
+    paddingHorizontal: 24,
+    gap: 6,
     alignItems: "center",
   },
   primaryBtn: {
     width: "100%",
-    height: 54,
+    height: 56,
     borderRadius: 999,
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(251,246,236,0.96)",
+    gap: 10,
+    backgroundColor: "#FBF6EC",
+    shadowColor: "#000",
+    shadowOpacity: 0.35,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 6,
   },
   primaryBtnText: {
     fontFamily: "DM_Sans_600SemiBold",
@@ -267,14 +403,24 @@ const styles = StyleSheet.create({
     color: "#1C1917",
     letterSpacing: 0.2,
   },
-  signinWrap: {
-    paddingVertical: 8,
-  },
-  signinText: {
+  primaryBtnArrow: {
     fontFamily: "DM_Sans_500Medium",
-    fontSize: 14,
-    color: "#FBF6EC",
-    letterSpacing: 0.6,
-    textTransform: "uppercase",
+    fontSize: 18,
+    color: "#1C1917",
+    marginTop: -2,
+  },
+  secondaryBtn: {
+    height: 48,
+    paddingHorizontal: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  secondaryBtnText: {
+    fontFamily: "DM_Sans_500Medium",
+    fontSize: 13.5,
+    color: "rgba(251,246,236,0.92)",
+    letterSpacing: 0.4,
+    textDecorationLine: "underline",
+    textDecorationColor: "rgba(232,200,135,0.5)",
   },
 });
