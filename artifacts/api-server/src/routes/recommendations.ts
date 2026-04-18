@@ -196,19 +196,10 @@ router.post("/recommendations/check", requireAuth, async (req: Request, res: Res
       return;
     }
 
-    // Provider recommendations & in-app DM are a Standard-tier feature for
-    // general users. Free users still see the chat suggestion but can't
-    // initiate a connection.
+    // Provider recommendations are visible to free users as an upsell;
+    // initiating an in-app DM is gated on Standard/Pro by /recommendations/connect.
     const tier = currentUser.subscriptionTier ?? "free";
-    if (tier !== "standard" && tier !== "pro") {
-      res.json({
-        shouldRecommend: false,
-        provider: null,
-        intentType: "none",
-        upgradeRequired: true,
-      });
-      return;
-    }
+    const upgradeRequired = tier !== "standard" && tier !== "pro";
 
     const {
       report,
@@ -234,6 +225,7 @@ router.post("/recommendations/check", requireAuth, async (req: Request, res: Res
         provider,
         intentType: "referral",
         reason: "User explicitly asked for a service provider recommendation",
+        upgradeRequired,
       });
       return;
     }
@@ -247,20 +239,20 @@ router.post("/recommendations/check", requireAuth, async (req: Request, res: Res
     const probability = Math.min(0.70, 0.30 + followUpCount * 0.10);
     if (Math.random() > probability) {
       req.log.info({ followUpCount, probability }, "Recommendation skipped by probability gate");
-      res.json({ shouldRecommend: false, provider: null, intentType: "none" });
+      res.json({ shouldRecommend: false, provider: null, intentType: "none", upgradeRequired });
       return;
     }
 
     const intent = await detectDevelopmentIntent(report, conversationHistory ?? []);
 
     if (!intent.shouldRecommend) {
-      res.json({ shouldRecommend: false, provider: null, intentType: intent.intentType });
+      res.json({ shouldRecommend: false, provider: null, intentType: intent.intentType, upgradeRequired });
       return;
     }
 
     // Always prefer providers from the database; online search is a last-resort fallback (rarely used)
     const provider = await selectServiceProvider();
-    res.json({ shouldRecommend: true, provider, intentType: intent.intentType, reason: intent.reason });
+    res.json({ shouldRecommend: true, provider, intentType: intent.intentType, reason: intent.reason, upgradeRequired });
   } catch (err) {
     req.log.error({ err }, "POST /recommendations/check failed");
     res.status(500).json({ error: "Recommendation check failed" });

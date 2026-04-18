@@ -134,7 +134,7 @@ export default function SearchScreen() {
   }, [currentSession?.messages]);
 
   useEffect(() => {
-    if (user?.role !== "general" || (user?.subscriptionTier !== "standard" && user?.subscriptionTier !== "pro")) return;
+    if (user?.role !== "general") return;
     const msgs = currentSession?.messages ?? [];
 
     // Find the most recent report in this session
@@ -189,7 +189,6 @@ export default function SearchScreen() {
           intentType: string;
           upgradeRequired?: boolean;
         };
-        if (data.upgradeRequired) return;
         if (data.shouldRecommend && data.provider) {
           shownRecommendationReportIds.current.add(lastReport.id);
           addMessage({
@@ -413,7 +412,6 @@ export default function SearchScreen() {
     // Detect if the user is explicitly asking for a service provider recommendation
     const isExplicitRecommendationRequest =
       user?.role === "general" &&
-      (user?.subscriptionTier === "standard" || user?.subscriptionTier === "pro") &&
       RECOMMENDATION_KEYWORDS.some((kw) => lowerText.includes(kw));
 
     const isDiscoverQuery =
