@@ -148,6 +148,47 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
     );
   }
 
+  if (message.type === "subdivision_clarification" && message.clarification) {
+    const { question, options } = message.clarification;
+    return (
+      <View style={styles.aiRow}>
+        <View style={[styles.aiAvatar, { backgroundColor: colors.accent }]}>
+          <Text style={styles.aiAvatarText}>D</Text>
+        </View>
+        <View style={[styles.aiBubble, { backgroundColor: colors.card, borderColor: colors.border, flex: 1, gap: 10 }]}>
+          <Text style={[styles.thinkingText, { color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 14, lineHeight: 20 }]}>
+            {question}
+          </Text>
+          <View style={{ gap: 8, marginTop: 4 }}>
+            {options.map((opt, i) => (
+              <TouchableOpacity
+                key={i}
+                onPress={() => onAnalyse(opt)}
+                style={{
+                  backgroundColor: colors.accent + "12",
+                  borderColor: colors.accent + "55",
+                  borderWidth: 1,
+                  borderRadius: 10,
+                  paddingHorizontal: 12,
+                  paddingVertical: 10,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <Feather name="map-pin" size={13} color={colors.accent} />
+                <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_500Medium", fontSize: 13, flex: 1 }} numberOfLines={2}>
+                  {opt}
+                </Text>
+                <Feather name="chevron-right" size={14} color={colors.mutedForeground} />
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      </View>
+    );
+  }
+
   if (message.type === "provider_recommendation" && message.provider) {
     return (
       <ProviderRecommendationBubble

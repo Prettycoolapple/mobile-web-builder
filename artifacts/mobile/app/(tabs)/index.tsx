@@ -537,6 +537,23 @@ export default function SearchScreen() {
                 | null)
             : null;
 
+          if (data.mode === "clarification") {
+            try {
+              const parsed = JSON.parse(data.content) as { clarificationType?: string; question: string; options: string[] };
+              if (parsed.clarificationType === "subdivision" && Array.isArray(parsed.options) && parsed.options.length > 0) {
+                updateLastMessage({
+                  type: "subdivision_clarification",
+                  content: "",
+                  clarification: { question: parsed.question, options: parsed.options },
+                }, sessionId);
+                return;
+              }
+              updateLastMessage({ type: "text", content: parsed.question || "Could you clarify?" }, sessionId);
+            } catch {
+              updateLastMessage({ type: "text", content: data.content || "Could you clarify?" }, sessionId);
+            }
+            return;
+          }
           if (data.mode === "analyse") {
             if (maybeParsed && isFeasibilityReport(maybeParsed)) {
               setCurrentReport(maybeParsed as unknown as FeasibilityReport);
@@ -723,8 +740,20 @@ export default function SearchScreen() {
           return;
         }
 
-        const data = (await resp.json()) as { report: FeasibilityReport; type: string };
-        if (data.report && data.report.scores) {
+        const data = (await resp.json()) as {
+          report?: FeasibilityReport;
+          type: string;
+          clarificationType?: string;
+          question?: string;
+          options?: string[];
+        };
+        if (data.type === "clarification" && data.clarificationType === "subdivision" && Array.isArray(data.options) && data.options.length > 0) {
+          updateLastMessage({
+            type: "subdivision_clarification",
+            content: "",
+            clarification: { question: data.question || "Which lot would you like analysed?", options: data.options },
+          }, sessionId);
+        } else if (data.report && data.report.scores) {
           setCurrentReport(data.report);
           updateLastMessage({ type: "report", report: data.report, content: "" }, sessionId);
           refreshProfile().catch(() => {});

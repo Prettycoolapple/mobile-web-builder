@@ -24,7 +24,11 @@ export interface ChatMessage {
   role: MessageRole;
   content: string;
   timestamp: number;
-  type: "text" | "report" | "search" | "loading" | "provider_recommendation" | "agent_contact";
+  type: "text" | "report" | "search" | "loading" | "provider_recommendation" | "agent_contact" | "subdivision_clarification";
+  clarification?: {
+    question: string;
+    options: string[];
+  };
   loadingMode?: "analyse" | "discover" | "followup";
   retryLabel?: string;
   retryText?: string;

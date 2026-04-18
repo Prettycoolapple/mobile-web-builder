@@ -214,7 +214,7 @@ function ScoreStarBlock({
   );
 }
 
-function ScoreSummaryRow({ report, colors }: { report: Report; colors: ReturnType<typeof useColors> }) {
+function ScoreSummaryRow({ report, colors, hideOverall }: { report: Report; colors: ReturnType<typeof useColors>; hideOverall?: boolean }) {
   const raw = report.scores ?? {};
   const ease = safeNum(raw.ease);
   const cost = safeNum(raw.cost);
@@ -226,14 +226,16 @@ function ScoreSummaryRow({ report, colors }: { report: Report; colors: ReturnTyp
 
   return (
     <View style={[styles.scoresSection, { backgroundColor: (colors as any).scoreCardBg }]}>
-      {/* Overall score badge — top right */}
-      <View style={styles.overallRow}>
-        <Text style={[styles.overallLabel, { color: "rgba(250,250,249,0.45)" }]}>OVERALL</Text>
-        <View style={[styles.overallBadge, { backgroundColor: overallColor + "25", borderColor: overallColor + "55" }]}>
-          <Text style={[styles.overallNumber, { color: overallColor }]}>{overallDisplay}</Text>
-          <Text style={[styles.overallSubLabel, { color: overallColor + "99" }]}>/ 5</Text>
+      {/* Overall score badge — top right (skipped when overlaid on hero photo) */}
+      {!hideOverall && (
+        <View style={styles.overallRow}>
+          <Text style={[styles.overallLabel, { color: "rgba(250,250,249,0.45)" }]}>OVERALL</Text>
+          <View style={[styles.overallBadge, { backgroundColor: overallColor + "25", borderColor: overallColor + "55" }]}>
+            <Text style={[styles.overallNumber, { color: overallColor }]}>{overallDisplay}</Text>
+            <Text style={[styles.overallSubLabel, { color: overallColor + "99" }]}>/ 5</Text>
+          </View>
         </View>
-      </View>
+      )}
 
       {/* Sub-scores: Ease · Cost · ROI */}
       <View style={[styles.scoresRow, { borderTopColor: "rgba(250,250,249,0.1)" }]}>
@@ -1038,16 +1040,29 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
   return (
     <View style={styles.container}>
       <View style={[styles.reportHeader, { backgroundColor: colors.headerBg }]}>
-        {report.photoUrl && (
-          <View style={styles.reportPhotoWrapper}>
-            <Image
-              source={{ uri: report.photoUrl }}
-              style={styles.reportPhoto}
-              resizeMode="cover"
-            />
-            <View style={styles.reportPhotoOverlay} />
-          </View>
-        )}
+        {report.photoUrl && (() => {
+          const composite = safeNum(report.scores?.composite);
+          const overallColor = scoreColor(composite, colors);
+          const overallDisplay = composite > 0 ? String(Math.round(composite)) : "—";
+          return (
+            <View style={styles.reportPhotoWrapper}>
+              <Image
+                source={{ uri: report.photoUrl }}
+                style={styles.reportPhoto}
+                resizeMode="cover"
+              />
+              <View style={styles.reportPhotoOverlay} />
+              {/* OVERALL badge overlaid top-right (mirrors PropertyCard) */}
+              <View style={styles.heroOverallBadge}>
+                <Text style={[styles.heroOverallLabel, { color: "rgba(255,255,255,0.85)" }]}>OVERALL</Text>
+                <View style={[styles.heroOverallPill, { backgroundColor: overallColor + "EE", borderColor: "rgba(255,255,255,0.35)" }]}>
+                  <Text style={styles.heroOverallNumber}>{overallDisplay}</Text>
+                  <Text style={styles.heroOverallSub}>/ 5</Text>
+                </View>
+              </View>
+            </View>
+          );
+        })()}
 
         <View style={[styles.reportHeaderTop, report.photoUrl ? { paddingTop: 12 } : undefined]}>
           <View style={[styles.reportIcon, { backgroundColor: colors.accent }]}>
@@ -1100,7 +1115,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
           </View>
         )}
 
-        <ScoreSummaryRow report={report} colors={colors} />
+        <ScoreSummaryRow report={report} colors={colors} hideOverall={!!report.photoUrl} />
       </View>
 
       {(report.cv_unavailable || (report.missing_critical_fields && report.missing_critical_fields.length > 0)) && (
@@ -1245,6 +1260,11 @@ const styles = StyleSheet.create({
   reportPhotoWrapper: { width: "100%", height: 180, position: "relative" },
   reportPhoto: { width: "100%", height: 180 },
   reportPhotoOverlay: { position: "absolute", bottom: 0, left: 0, right: 0, height: 80, backgroundColor: "transparent" },
+  heroOverallBadge: { position: "absolute", top: 12, right: 12, alignItems: "flex-end", gap: 4 },
+  heroOverallLabel: { fontFamily: "DM_Sans_600SemiBold", fontSize: 9, textTransform: "uppercase", letterSpacing: 1.2, textShadowColor: "rgba(0,0,0,0.5)", textShadowRadius: 3 },
+  heroOverallPill: { flexDirection: "row", alignItems: "baseline", gap: 3, borderRadius: 14, borderWidth: 1.5, paddingHorizontal: 12, paddingVertical: 5 },
+  heroOverallNumber: { fontFamily: "DM_Sans_700Bold", fontSize: 28, lineHeight: 32, color: "#FFFFFF" },
+  heroOverallSub: { fontFamily: "DM_Sans_500Medium", fontSize: 12, lineHeight: 16, color: "rgba(255,255,255,0.85)" },
   reportIcon: { width: 32, height: 32, borderRadius: 8, justifyContent: "center", alignItems: "center", flexShrink: 0, marginTop: 2 },
   address: { fontSize: 16, lineHeight: 22, letterSpacing: -0.2 },
   headerMeta: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 5, flexWrap: "wrap" },

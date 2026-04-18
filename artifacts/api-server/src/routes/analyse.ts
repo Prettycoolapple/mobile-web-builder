@@ -20,6 +20,7 @@ import {
 } from "../lib/scrapers/realestate-api";
 import { suggestNearbySuburbs } from "../lib/claude";
 import { runPropertyPipeline } from "../lib/pipeline";
+import { detectSubdivision } from "../lib/subdivision";
 import { formatNZD } from "../lib/utils";
 import { searchRealEstateListings } from "../lib/scrapers/realestate-search";
 import { preScreenListingsFast, type PropertyCandidate } from "../lib/pre-screen";
@@ -285,6 +286,21 @@ router.post("/analyse", async (req, res) => {
   }
 
   try {
+    // ── Subdivision pre-check ───────────────────────────────────────────────
+    // If the user typed a parent street number that has been subdivided into
+    // sub-lots (e.g. "66 Marine Parade" → 66A/66B/66C), don't run the pipeline
+    // against stale parent data — ask which sub-lot they meant.
+    const subdivision = await detectSubdivision(address).catch(() => null);
+    if (subdivision?.isSubdivided) {
+      res.json({
+        type: "clarification",
+        clarificationType: "subdivision",
+        question: `"${address}" looks like it has been subdivided into separate lots. Which one would you like me to analyse?`,
+        options: subdivision.subLots,
+      });
+      return;
+    }
+
     const raw = await generateFeasibilityReport(address, conversationHistory || []);
     const report = extractJSON(raw);
 
@@ -783,6 +799,22 @@ router.post("/chat", async (req, res) => {
         void aiResponseEarly;
 
         if (extractedAddress) {
+          // ── Subdivision pre-check ─────────────────────────────────────────
+          // Same logic as the direct /analyse route — bail before the heavy
+          // pipeline if the parent number was actually subdivided.
+          const subdivision = await detectSubdivision(extractedAddress).catch(() => null);
+          if (subdivision?.isSubdivided) {
+            res.json({
+              content: JSON.stringify({
+                clarificationType: "subdivision",
+                question: `"${extractedAddress}" looks like it has been subdivided into separate lots. Which one would you like me to analyse?`,
+                options: subdivision.subLots,
+              }),
+              mode: "clarification",
+            });
+            return;
+          }
+
           req.log.info({ address: extractedAddress }, "Running property pipeline for analyse mode");
 
           // Keep-alive heartbeat — sends a silent space every 8 s so the reverse
