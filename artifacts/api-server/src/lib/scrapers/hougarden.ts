@@ -1,3 +1,4 @@
+/// <reference lib="dom" />
 import { logger } from "../logger";
 import { launchBrowser, newStealthPage, randomDelay, logScrapeAttempt } from "./browser";
 import { fetchWithScrapingBee } from "./scrapingbee";

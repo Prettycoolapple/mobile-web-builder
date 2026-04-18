@@ -719,14 +719,14 @@ export async function searchRealEstateListings(params: {
         firstBatch: apiResult.firstBatch,
         remainingListings: apiResult.remainingListings,
         totalFound: apiResult.totalFound,
-        source: apiResult.source,
+        source: "realestate.co.nz",
       };
     }
     // Empty API result with resolved suburb → genuinely no listings; return early
     // rather than hammering the HTML scraper for the same answer.
     if (apiResult.suburbResolved) {
       logger.info({ suburb, resolvedTo: apiResult.suburbResolved.title }, "realestate-search: API returned no listings for resolved suburb");
-      return { firstBatch: [], remainingListings: [], totalFound: 0, source: apiResult.source };
+      return { firstBatch: [], remainingListings: [], totalFound: 0, source: "realestate.co.nz" };
     }
     // Suburb couldn't be resolved → fall through to legacy scraper as a long-shot.
     logger.info({ suburb }, "realestate-search: API could not resolve suburb, falling back to scraper");

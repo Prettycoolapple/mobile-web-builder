@@ -1,3 +1,4 @@
+/// <reference lib="dom" />
 import { logger } from "../logger";
 import { launchBrowser, newStealthPage, randomDelay } from "./browser";
 import type { Browser } from "playwright";
@@ -132,7 +133,7 @@ export async function scrapeQV(address: string): Promise<QVData | null> {
     const urlAfterNav = page.url();
     if (urlAfterNav.includes("property-search")) {
       const firstLink = await page.evaluate(() => {
-        const links = [...document.querySelectorAll("a[href*='/property/']")];
+        const links = Array.from(document.querySelectorAll("a[href*='/property/']"));
         if (links.length > 0) {
           (links[0] as HTMLElement).click();
           return (links[0] as HTMLAnchorElement).href;
@@ -203,8 +204,9 @@ export async function scrapeQV(address: string): Promise<QVData | null> {
     let contourText: string | null = null;
     let contourClass: "flat" | "gentle" | "moderate" | "steep" | null = null;
     if (contourMatch) {
-      contourText = contourMatch[1].trim().replace(/\s+/g, " ");
-      contourClass = mapNZContour(contourText);
+      const trimmed = contourMatch[1].trim().replace(/\s+/g, " ");
+      contourText = trimmed;
+      contourClass = mapNZContour(trimmed);
     }
 
     logger.info({ cv_nzd: data.cv_nzd, lv: data.lv_nzd, land: data.land_area_sqm, contour: contourText }, "QV.co.nz extraction result");

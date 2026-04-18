@@ -10,7 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "ci": "pnpm run test"
+    "ci": "pnpm run typecheck && pnpm run test"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.19.0",

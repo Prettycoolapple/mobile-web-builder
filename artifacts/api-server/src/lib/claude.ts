@@ -791,7 +791,7 @@ Rules:
       model: "gemini-2.5-flash",
       config: { maxOutputTokens: 2048 },
       contents: [{ role: "user", parts: [{ text: prompt }] }],
-    }).then((response) => {
+    }).then((response: { text?: string }) => {
       const text = (response.text ?? "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
       const match = text.match(/\[[\s\S]*\]/);
       if (!match) throw new Error("No JSON array in response");

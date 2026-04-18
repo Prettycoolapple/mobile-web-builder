@@ -107,7 +107,7 @@ router.post(
       const uploadRes = await fetch(uploadURL, {
         method: "PUT",
         headers: { "Content-Type": mimetype, "Content-Length": String(size) },
-        body: buffer,
+        body: new Uint8Array(buffer),
       });
       if (!uploadRes.ok) {
         req.log.error({ status: uploadRes.status }, "GCS upload failed (pre-signup)");
@@ -151,7 +151,7 @@ router.post(
           "Content-Type": mimetype,
           "Content-Length": String(size),
         },
-        body: buffer,
+        body: new Uint8Array(buffer),
       });
 
       if (!uploadRes.ok) {
@@ -202,7 +202,7 @@ router.post(
           "Content-Type": mimetype,
           "Content-Length": String(size),
         },
-        body: buffer,
+        body: new Uint8Array(buffer),
       });
 
       if (!uploadRes.ok) {
@@ -240,7 +240,7 @@ router.post(
           "Content-Type": mimetype,
           "Content-Length": String(size),
         },
-        body: buffer,
+        body: new Uint8Array(buffer),
       });
 
       if (!uploadRes.ok) {
@@ -280,7 +280,7 @@ router.post(
           "Content-Type": mimetype,
           "Content-Length": String(size),
         },
-        body: buffer,
+        body: new Uint8Array(buffer),
       });
 
       if (!uploadRes.ok) {

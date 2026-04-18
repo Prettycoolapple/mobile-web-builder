@@ -781,7 +781,7 @@ router.post("/chat", async (req, res) => {
                     const criteriaContextFallback = intent.criteria ? ` (${intent.criteria})` : "";
                     const introPromptFallback = `The user asked about ${suburb}${criteriaContextFallback} but no listings were found there right now. You found ${filtered.length} propert${filtered.length === 1 ? "y" : "ies"} in nearby ${nearbySuburb}. In 1 sentence acknowledge this naturally (e.g. "I couldn't find anything in ${suburb} right now, but here are some nearby options in ${nearbySuburb}:"). Be brief — no JSON.`;
                     const [screenedFallback, introFallback] = await Promise.all([
-                      preScreenListingsFast(filtered, 5).catch(() => filtered.slice(0, 5) as typeof candidates),
+                      preScreenListingsFast(filtered, 5).catch(() => [] as PropertyCandidate[]),
                       generateAnalysis(introPromptFallback).catch(() => ""),
                     ]);
                     if (screenedFallback.length > 0) {
@@ -960,7 +960,7 @@ router.post("/chat", async (req, res) => {
                 return `  ${s.years}-year (base GDV $${formatNZD(s.gdv)}, cost $${formatNZD(s.total_cost_mid)}):\n${caseLines}`;
               }).join("\n");
 
-              const cvNzd = costs.land_cv_nzd;
+              const cvNzd = costs.land_cv_nzd ?? 0;
               const cvNote = cvNzd > 0
                 ? `$${formatNZD(cvNzd)} (confirmed from ${(merged as any).data_sources?.cv_nzd || "Hougarden/OneRoof"})`
                 : `NOT AVAILABLE from any data source — cv_unavailable is TRUE. Set propertyOverview.cv to null in the JSON output. ROI calculations exclude land cost.`;
@@ -1189,7 +1189,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                 // e.g. flagging pre-1940 buildings as "high" risk when they predate widespread
                 // asbestos use in NZ. The classifyAsbestos() function uses the correct thresholds
                 // so we always inject its output here.
-                if (asbestos_detail) {
+                if (asbestos_detail && costs) {
                   parsed.asbestos = {
                     buildYear: merged?.build_year ?? null,
                     riskLevel: asbestos_detail.risk,

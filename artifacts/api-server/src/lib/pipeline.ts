@@ -365,7 +365,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   const canonicalBuildYear = merged.build_year;
   const asbestos = checkAsbestosRisk(canonicalBuildYear);
   const asbestosDetail = classifyAsbestos(canonicalBuildYear);
-  merged.asbestos_risk = asbestosDetail.risk === "moderate" ? "high" : asbestosDetail.risk;
+  merged.asbestos_risk = asbestosDetail.risk;
 
   logger.info(
     { build_year: canonicalBuildYear, build_year_source: merged.data_sources["build_year"] ?? "unknown", asbestos_risk: merged.asbestos_risk },

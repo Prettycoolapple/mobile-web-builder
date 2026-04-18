@@ -1,5 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { Readable } from "stream";
+import type { ReadableStream as NodeReadableStream } from "stream/web";
 import { eq } from "drizzle-orm";
 import { db, userUploads, profiles } from "@workspace/db";
 import { RequestUploadUrlBody, RequestUploadUrlResponse } from "@workspace/api-zod";
@@ -49,7 +50,7 @@ router.get("/storage/public-objects/*filePath", async (req: Request, res: Respon
     response.headers.forEach((value, key) => res.setHeader(key, value));
 
     if (response.body) {
-      const nodeStream = Readable.fromWeb(response.body as ReadableStream<Uint8Array>);
+      const nodeStream = Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>);
       nodeStream.pipe(res);
     } else {
       res.end();
@@ -97,7 +98,7 @@ router.get("/storage/objects/*path", requireAuth, async (req: Request, res: Resp
     response.headers.forEach((value, key) => res.setHeader(key, value));
 
     if (response.body) {
-      const nodeStream = Readable.fromWeb(response.body as ReadableStream<Uint8Array>);
+      const nodeStream = Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>);
       nodeStream.pipe(res);
     } else {
       res.end();

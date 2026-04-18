@@ -1,3 +1,4 @@
+/// <reference lib="dom" />
 import { execSync } from "child_process";
 import { logger } from "../logger";
 import { chromium, type Browser, type Page, type BrowserContext } from "playwright";
