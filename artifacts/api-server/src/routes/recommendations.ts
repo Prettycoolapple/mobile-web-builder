@@ -338,7 +338,7 @@ router.post("/recommendations/connect", requireAuth, async (req: Request, res: R
       await db.insert(dmMessages).values({
         threadId: thread.id,
         senderId: userId,
-        body: "Can you please take a look at this for me? Thank you!",
+        body: "Could you please take a look at this for me and let me know if there are any development opportunities — either a subdivision or a demo for a new build?",
       });
 
       await db
