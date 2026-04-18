@@ -53,10 +53,47 @@ const uploadImageOnly = multer({
 // the URL without requiring auth. Used so provider signup can be ATOMIC: the
 // mobile client uploads the cert first, then submits signup with the URL in
 // the payload, and the server refuses to create a half-formed provider profile
-// without it. No DB row is inserted here; the URL is bound to the profile in
-// the signup transaction.
+// without it. No DB row is inserted here; the URL is bound to userUploads in
+// the signup transaction once the account is created.
+//
+// Because this endpoint is unauthenticated, it is rate-limited per source IP
+// to prevent storage spam / DoS abuse. The window + cap are deliberately tight
+// since a real provider signup only needs ONE successful upload.
+const PRE_SIGNUP_RATE_WINDOW_MS = 10 * 60 * 1000;
+const PRE_SIGNUP_RATE_MAX = 5;
+const preSignupHits = new Map<string, number[]>();
+
+function preSignupRateLimit(req: Request, res: Response, next: NextFunction) {
+  const ip =
+    (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ||
+    req.ip ||
+    "unknown";
+  const now = Date.now();
+  const cutoff = now - PRE_SIGNUP_RATE_WINDOW_MS;
+  const hits = (preSignupHits.get(ip) ?? []).filter((t) => t > cutoff);
+  if (hits.length >= PRE_SIGNUP_RATE_MAX) {
+    res.status(429).json({
+      error: "Too many uploads. Please try again later.",
+      code: "RATE_LIMITED",
+    });
+    return;
+  }
+  hits.push(now);
+  preSignupHits.set(ip, hits);
+  // Opportunistic cleanup so the map doesn't grow unbounded.
+  if (preSignupHits.size > 10_000) {
+    for (const [k, v] of preSignupHits) {
+      const fresh = v.filter((t) => t > cutoff);
+      if (fresh.length === 0) preSignupHits.delete(k);
+      else preSignupHits.set(k, fresh);
+    }
+  }
+  next();
+}
+
 router.post(
   "/upload/incorporation-cert-pre-signup",
+  preSignupRateLimit,
   upload.single("file"),
   async (req: Request, res: Response) => {
     if (!req.file) {

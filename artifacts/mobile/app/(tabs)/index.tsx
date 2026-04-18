@@ -134,7 +134,7 @@ export default function SearchScreen() {
   }, [currentSession?.messages]);
 
   useEffect(() => {
-    if (user?.role !== "general" || user?.subscriptionTier !== "standard") return;
+    if (user?.role !== "general" || (user?.subscriptionTier !== "standard" && user?.subscriptionTier !== "pro")) return;
     const msgs = currentSession?.messages ?? [];
 
     // Find the most recent report in this session
@@ -232,7 +232,7 @@ export default function SearchScreen() {
   const handleDismiss = useCallback((_messageId: string) => {}, []);
 
   useEffect(() => {
-    if (user?.role !== "general" || user?.subscriptionTier !== "standard") return;
+    if (user?.role !== "general" || (user?.subscriptionTier !== "standard" && user?.subscriptionTier !== "pro")) return;
     const msgs = currentSession?.messages ?? [];
     if (!currentSession?.currentReport) return;
 

@@ -6,6 +6,7 @@ import {
   profiles,
   salesAgentProfiles,
   serviceProviderProfiles,
+  userUploads,
 } from "@workspace/db";
 import { hashPassword, verifyPassword, signToken, requireAuth } from "../lib/auth";
 import { sendOwnerNotification } from "../lib/mailer";
@@ -173,6 +174,19 @@ router.post("/signup", async (req, res) => {
       if (role === "service_provider") {
         if (providerData?.avatarUrl) {
           await tx.update(profiles).set({ avatarUrl: providerData.avatarUrl }).where(eq(profiles.id, newProfile.id));
+        }
+        // Bind the pre-signup-uploaded Certificate of Incorporation to this
+        // newly created user so /api/storage/objects/* ownership checks pass
+        // and the file is no longer "orphaned" if signup is later rolled back
+        // or audited. The URL shape is `/api/storage/objects/<id>`.
+        if (providerData?.incorporationCertUrl) {
+          const m = providerData.incorporationCertUrl.match(/\/api\/storage(\/objects\/[^?#]+)/);
+          if (m) {
+            await tx
+              .insert(userUploads)
+              .values({ userId: newProfile.id, objectPath: m[1] })
+              .onConflictDoNothing();
+          }
         }
         await tx.insert(serviceProviderProfiles).values({
           userId: newProfile.id,
