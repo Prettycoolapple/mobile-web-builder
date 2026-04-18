@@ -70,6 +70,17 @@ export default function WelcomeScreen() {
   // Golden ratio: place slogan baseline at 1/phi from the top (≈ 61.8% down).
   const goldenY = screenHeight / PHI;
 
+  // Extend the video & gradient beyond any safe-area inset applied by the
+  // native stack so the visuals truly fill the entire screen, including the
+  // status bar and home-indicator regions.
+  const bleed = {
+    position: "absolute" as const,
+    top: -insets.top,
+    bottom: -insets.bottom,
+    left: -insets.left,
+    right: -insets.right,
+  };
+
   return (
     <View style={styles.container}>
       <StatusBar style="light" translucent backgroundColor="transparent" />
@@ -95,14 +106,11 @@ export default function WelcomeScreen() {
         <>
           <Image
             source={HERO_POSTER}
-            style={StyleSheet.absoluteFill}
+            style={bleed}
             resizeMode="cover"
           />
           <VideoView
-            style={[
-              StyleSheet.absoluteFill,
-              { opacity: videoReady ? 1 : 0 },
-            ]}
+            style={[bleed, { opacity: videoReady ? 1 : 0 }]}
             player={player}
             contentFit="cover"
             nativeControls={false}
@@ -121,7 +129,7 @@ export default function WelcomeScreen() {
           "rgba(0,0,0,0.85)",
         ]}
         locations={[0, 0.35, 0.65, 1]}
-        style={StyleSheet.absoluteFill}
+        style={bleed}
       />
 
       {/* Logo + wordmark — top, anchored just below safe area */}
