@@ -12,27 +12,9 @@ import {
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { getIo } from "../lib/socket";
+import { sendExpoPush } from "../lib/expo-push";
 
 const router: IRouter = Router();
-
-async function sendExpoPush(
-  tokens: string[],
-  title: string,
-  body: string,
-  data?: Record<string, string>,
-): Promise<void> {
-  if (tokens.length === 0) return;
-  try {
-    await fetch("https://exp.host/--/api/v2/push/send", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(
-        tokens.map((to) => ({ to, title, body, data, sound: "default" })),
-      ),
-    });
-  } catch {
-  }
-}
 
 router.get("/dm/contacts", requireAuth, async (req: Request, res: Response) => {
   const userId = (req as any).userId as string;
@@ -102,6 +84,29 @@ router.post("/dm/threads", requireAuth, async (req: Request, res: Response) => {
   }
 
   try {
+    // Enforce paid-tier rule: a general user can only initiate a thread with a
+    // service provider if they're on standard or pro. Sales agents and
+    // providers can always initiate, and any user can DM another general user.
+    const [me, target] = await Promise.all([
+      db.select({ role: profiles.role, subscriptionTier: profiles.subscriptionTier })
+        .from(profiles).where(eq(profiles.id, userId)).limit(1),
+      db.select({ role: profiles.role })
+        .from(profiles).where(eq(profiles.id, targetUserId)).limit(1),
+    ]);
+    const meRow = me[0];
+    const targetRow = target[0];
+    if (!meRow || !targetRow) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+    if (meRow.role === "general" && targetRow.role === "service_provider") {
+      const tier = meRow.subscriptionTier ?? "free";
+      if (tier !== "standard" && tier !== "pro") {
+        res.status(402).json({ error: "Upgrade required", upgradeRequired: true });
+        return;
+      }
+    }
+
     const [canonA, canonB] = [userId, targetUserId].sort();
 
     const existing = await db

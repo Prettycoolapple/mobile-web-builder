@@ -10,6 +10,7 @@ import {
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { ai } from "@workspace/integrations-gemini-ai";
+import { sendExpoPush } from "../lib/expo-push";
 
 const router: IRouter = Router();
 
@@ -180,34 +181,32 @@ async function selectServiceProvider(preferredDiscipline?: string | null): Promi
   };
 }
 
-async function sendExpoPush(
-  tokens: string[],
-  title: string,
-  body: string,
-  data?: Record<string, string>,
-): Promise<void> {
-  if (tokens.length === 0) return;
-  try {
-    await fetch("https://exp.host/--/api/v2/push/send", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(tokens.map((to) => ({ to, title, body, data, sound: "default" }))),
-    });
-  } catch {}
-}
-
 router.post("/recommendations/check", requireAuth, async (req: Request, res: Response) => {
   const userId = (req as any).userId as string;
 
   try {
     const [currentUser] = await db
-      .select({ role: profiles.role })
+      .select({ role: profiles.role, subscriptionTier: profiles.subscriptionTier })
       .from(profiles)
       .where(eq(profiles.id, userId))
       .limit(1);
 
     if (!currentUser || currentUser.role !== "general") {
       res.json({ shouldRecommend: false, provider: null });
+      return;
+    }
+
+    // Provider recommendations & in-app DM are a Standard-tier feature for
+    // general users. Free users still see the chat suggestion but can't
+    // initiate a connection.
+    const tier = currentUser.subscriptionTier ?? "free";
+    if (tier !== "standard" && tier !== "pro") {
+      res.json({
+        shouldRecommend: false,
+        provider: null,
+        intentType: "none",
+        upgradeRequired: true,
+      });
       return;
     }
 
@@ -313,6 +312,25 @@ router.post("/recommendations/connect", requireAuth, async (req: Request, res: R
   }
 
   try {
+    const [me] = await db
+      .select({ role: profiles.role, subscriptionTier: profiles.subscriptionTier })
+      .from(profiles)
+      .where(eq(profiles.id, userId))
+      .limit(1);
+    if (!me) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+    // Only general users with a paid tier can initiate provider DMs.
+    // Sales agents and providers can always reply via the DM routes themselves.
+    if (me.role === "general") {
+      const tier = me.subscriptionTier ?? "free";
+      if (tier !== "standard" && tier !== "pro") {
+        res.status(402).json({ error: "Upgrade required", upgradeRequired: true });
+        return;
+      }
+    }
+
     const [canonA, canonB] = [userId, providerId].sort();
 
     const existing = await db

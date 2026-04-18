@@ -1,7 +1,7 @@
 import { logger } from "../logger";
 import { fetchWithScrapingBee } from "./scrapingbee";
 import { launchBrowser, newStealthPage, withBrowserSlot } from "./browser";
-import type { ListingResult } from "./oneroof";
+import { extractBedsBaths, type ListingResult } from "./oneroof";
 import { searchListingsByName } from "./realestate-api";
 
 /**
@@ -502,6 +502,7 @@ async function fetchListingMeta(url: string, fallbackAddress: string, priceMidpo
     const landArea = parseLandAreaFromOgDesc(ogDesc);
     const explicitPrice = parsePriceFromOgDesc(ogDesc);
     const price = explicitPrice ?? priceMidpoint;
+    const { bedrooms, bathrooms } = extractBedsBaths(`${ogTitle} ${ogDesc}`);
 
     if (!address || address.length < 5) return null;
 
@@ -513,6 +514,8 @@ async function fetchListingMeta(url: string, fallbackAddress: string, priceMidpo
       photoUrl: ogImage,
       listingUrl: url,
       zone: null,
+      bedrooms,
+      bathrooms,
     };
   } catch (err) {
     logger.debug({ url, err: (err as Error).message }, "realestate-search: failed to fetch listing meta");

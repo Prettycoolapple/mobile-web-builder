@@ -20,22 +20,10 @@ import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { useSubscription } from "@/lib/revenuecat";
 import { avatarImageSource } from "@/lib/avatar";
+import { WORLD_LANGUAGES } from "@/lib/languages";
 
 const FREE_LIMIT = 2;
 const STANDARD_LIMIT = 20;
-
-const NZ_LANGUAGES = [
-  "English",
-  "Te Reo Māori",
-  "Mandarin",
-  "Hindi",
-  "Samoan",
-  "Cantonese",
-  "Korean",
-  "Japanese",
-  "Filipino",
-  "Tongan",
-];
 
 const PLAN_FEATURES = {
   free: [
@@ -274,11 +262,13 @@ export default function ProfileScreen() {
     const asset = result.assets[0];
     setAvatarUploading(true);
     try {
+      const mime = asset.mimeType ?? "image/jpeg";
+      const ext = mime.split("/")[1]?.split(";")[0] || "jpg";
       const formData = new FormData();
       formData.append("file", {
         uri: asset.uri,
-        type: asset.mimeType ?? "image/jpeg",
-        name: "avatar.jpg",
+        type: mime,
+        name: `avatar.${ext}`,
       } as any);
 
       const resp = await fetch(`${getApiBase()}/upload/profile-picture`, {
@@ -469,7 +459,7 @@ export default function ProfileScreen() {
 
               {showLanguagePicker && (
                 <View style={[styles.languageList, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  {NZ_LANGUAGES.map((lang) => (
+                  {WORLD_LANGUAGES.map((lang) => (
                     <TouchableOpacity
                       key={lang}
                       style={[styles.languageItem, { borderBottomColor: colors.border }]}

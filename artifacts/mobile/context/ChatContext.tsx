@@ -220,6 +220,8 @@ export interface PropertyCandidate {
   briefSummary?: string;
   photoUrl?: string;
   listingUrl?: string;
+  bedrooms?: number;
+  bathrooms?: number;
 }
 
 export interface Session {

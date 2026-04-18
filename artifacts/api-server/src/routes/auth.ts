@@ -60,12 +60,40 @@ const signupSchema = z
         path: ["agentData"],
       });
     }
-    if (data.role === "service_provider" && !data.providerData) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "providerData is required for service_provider role",
-        path: ["providerData"],
-      });
+    if (data.role === "service_provider") {
+      if (!data.providerData) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "providerData is required for service_provider role",
+          path: ["providerData"],
+        });
+        return;
+      }
+      const p = data.providerData;
+      const required: Array<{ key: keyof typeof p; label: string }> = [
+        { key: "companyName", label: "Company name is required." },
+        { key: "nzCompanyRegisterNumber", label: "NZ Companies Register number is required." },
+        { key: "discipline", label: "Discipline is required." },
+        { key: "contactNumber", label: "Contact number is required." },
+        { key: "primaryLanguage", label: "Primary language is required." },
+      ];
+      for (const r of required) {
+        const v = p[r.key];
+        if (!v || (typeof v === "string" && v.trim().length === 0)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: r.label,
+            path: ["providerData", r.key],
+          });
+        }
+      }
+      if (p.discipline === "other" && !p.otherDiscipline?.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Please describe your discipline.",
+          path: ["providerData", "otherDiscipline"],
+        });
+      }
     }
   });
 

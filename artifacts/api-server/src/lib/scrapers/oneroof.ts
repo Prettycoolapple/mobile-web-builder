@@ -10,6 +10,29 @@ export interface ListingResult {
   photoUrl: string | null;
   listingUrl: string;
   zone: string | null;
+  bedrooms: number | null;
+  bathrooms: number | null;
+}
+
+/**
+ * Pull bed/bath counts from a listing card's flat text. Cards on
+ * realestate.co.nz / OneRoof / Homes commonly render these as "3 Beds",
+ * "2 Bath", "3 br", or as the single-letter glyph "3" next to a bed icon
+ * (when the icon's alt-text is exposed in innerText we get "bed").
+ */
+export function extractBedsBaths(text: string): { bedrooms: number | null; bathrooms: number | null } {
+  const bedM =
+    text.match(/(\d+)\s*(?:bed(?:room)?s?|br|bd)\b/i) ??
+    text.match(/\bbed(?:room)?s?\s*(\d+)/i);
+  const bathM =
+    text.match(/(\d+)\s*(?:bath(?:room)?s?|ba)\b/i) ??
+    text.match(/\bbath(?:room)?s?\s*(\d+)/i);
+  const beds = bedM ? parseInt(bedM[1], 10) : null;
+  const baths = bathM ? parseInt(bathM[1], 10) : null;
+  return {
+    bedrooms: beds && beds > 0 && beds < 20 ? beds : null,
+    bathrooms: baths && baths > 0 && baths < 20 ? baths : null,
+  };
 }
 
 async function searchOneRoofPlaywright(params: {
@@ -61,9 +84,10 @@ async function searchOneRoofPlaywright(params: {
 
         const addressM = text.match(/\d+\s+[A-Z][a-zA-Z\s]+(?:Road|Street|Ave|Avenue|Crescent|Place|Drive|Way|Lane|Terrace|Close|Grove)[,\s]+[A-Za-z\s]+/i);
         const address = addressM ? addressM[0].trim() : text.split("\n")[0]?.trim().slice(0, 80) || "Unknown address";
+        const { bedrooms, bathrooms } = extractBedsBaths(text);
 
         if (address && href) {
-          results.push({ address, price, priceText, landArea, photoUrl: imgSrc, listingUrl, zone: null });
+          results.push({ address, price, priceText, landArea, photoUrl: imgSrc, listingUrl, zone: null, bedrooms, bathrooms });
         }
       } catch { /* skip card */ }
     }
@@ -107,9 +131,10 @@ async function searchOneRoofViaBee(params: {
     const landArea = landM ? Math.round(parseFloat(landM[1].replace(/,/g, ""))) : null;
     const addressM = text.match(/\d+\s+[A-Z][a-zA-Z\s]+(?:Road|Street|Ave|Avenue|Crescent|Place|Drive|Way|Lane|Terrace|Close|Grove)[,\s]+[A-Za-z\s]+/i);
     const address = addressM ? addressM[0].trim() : text.split("\n")[0]?.trim().slice(0, 80) || "";
+    const { bedrooms, bathrooms } = extractBedsBaths(text);
 
     if (address) {
-      results.push({ address, price, priceText, landArea, photoUrl: imgSrc, listingUrl, zone: null });
+      results.push({ address, price, priceText, landArea, photoUrl: imgSrc, listingUrl, zone: null, bedrooms, bathrooms });
     }
   });
 

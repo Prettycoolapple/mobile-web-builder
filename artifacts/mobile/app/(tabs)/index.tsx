@@ -395,7 +395,7 @@ export default function SearchScreen() {
     // Detect if the user is explicitly asking for a service provider recommendation
     const isExplicitRecommendationRequest =
       user?.role === "general" &&
-      user?.subscriptionTier === "standard" &&
+      (user?.subscriptionTier === "standard" || user?.subscriptionTier === "pro") &&
       RECOMMENDATION_KEYWORDS.some((kw) => lowerText.includes(kw));
 
     const isDiscoverQuery =

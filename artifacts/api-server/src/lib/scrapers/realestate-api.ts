@@ -359,6 +359,8 @@ function mapListing(raw: RawListing): ListingResult | null {
     photoUrl: buildPhotoUrl(a.photos),
     listingUrl: url,
     zone: null,
+    bedrooms: typeof a["bedroom-count"] === "number" ? a["bedroom-count"] : null,
+    bathrooms: typeof a["bathrooms-total-count"] === "number" ? a["bathrooms-total-count"] : null,
   };
 }
 

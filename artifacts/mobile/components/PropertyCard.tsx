@@ -88,6 +88,22 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
               </Text>
             </View>
           )}
+          {typeof candidate.bedrooms === "number" && candidate.bedrooms > 0 && (
+            <View style={[styles.tag, { backgroundColor: colors.muted, flexDirection: "row", alignItems: "center", gap: 3 }]}>
+              <Feather name="moon" size={10} color={colors.foreground} />
+              <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
+                {candidate.bedrooms} bd
+              </Text>
+            </View>
+          )}
+          {typeof candidate.bathrooms === "number" && candidate.bathrooms > 0 && (
+            <View style={[styles.tag, { backgroundColor: colors.muted, flexDirection: "row", alignItems: "center", gap: 3 }]}>
+              <Feather name="droplet" size={10} color={colors.foreground} />
+              <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
+                {candidate.bathrooms} ba
+              </Text>
+            </View>
+          )}
           {candidate.zone && (
             <View style={[styles.tag, { backgroundColor: colors.muted }]}>
               <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>

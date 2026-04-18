@@ -25,26 +25,7 @@ import { useColors } from "@/hooks/useColors";
 import { useAuth, ApiError, type ProviderDiscipline } from "@/context/AuthContext";
 import { MultiSelectChips } from "@/components/MultiSelectChips";
 
-const WORLD_LANGUAGES = [
-  "Afrikaans", "Albanian", "Amharic", "Arabic", "Armenian", "Azerbaijani",
-  "Basque", "Belarusian", "Bengali", "Bosnian", "Bulgarian", "Catalan",
-  "Cebuano", "Chinese (Cantonese)", "Chinese (Mandarin)", "Chinese (Traditional)",
-  "Croatian", "Czech", "Danish", "Dutch", "English", "Esperanto",
-  "Estonian", "Filipino / Tagalog", "Finnish", "French", "Galician",
-  "Georgian", "German", "Greek", "Gujarati", "Haitian Creole", "Hausa",
-  "Hebrew", "Hindi", "Hmong", "Hungarian", "Icelandic", "Igbo",
-  "Indonesian", "Irish", "Italian", "Japanese", "Javanese", "Kannada",
-  "Kazakh", "Khmer", "Korean", "Kurdish", "Kyrgyz", "Lao",
-  "Latin", "Latvian", "Lithuanian", "Luxembourgish", "Macedonian",
-  "Malagasy", "Malay", "Malayalam", "Maltese", "Māori", "Marathi",
-  "Mongolian", "Myanmar (Burmese)", "Nepali", "Norwegian", "Odia",
-  "Pashto", "Persian (Farsi)", "Polish", "Portuguese", "Punjabi",
-  "Romanian", "Russian", "Samoan", "Serbian", "Sindhi", "Sinhala",
-  "Slovak", "Slovenian", "Somali", "Spanish", "Sundanese", "Swahili",
-  "Swedish", "Tajik", "Tamil", "Tatar", "Telugu", "Thai", "Tongan",
-  "Turkish", "Turkmen", "Ukrainian", "Urdu", "Uyghur", "Uzbek",
-  "Vietnamese", "Welsh", "Xhosa", "Yiddish", "Yoruba", "Zulu",
-];
+import { WORLD_LANGUAGES } from "@/lib/languages";
 
 const DISCIPLINE_OPTIONS: { label: string; value: ProviderDiscipline }[] = [
   { label: "Architect / Designer", value: "architect_designer" },
