@@ -1,8 +1,9 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useQueryClient } from "@tanstack/react-query";
-import { loginRevenueCat, logoutRevenueCat } from "@/lib/revenuecat";
-import { getCurrentLocale } from "@/lib/i18n";
+import { loginRevenueCat, logoutRevenueCat, getSubscriptionSyncBody, IS_TEST_PAYMENT_MODE } from "@/lib/revenuecat";
+import { getApiBase } from "@/lib/api";
+import { getCurrentLocale, isOSChineseLocale } from "@/lib/i18n";
 
 export type UserRole = "general" | "sales_agent" | "service_provider";
 
@@ -13,6 +14,8 @@ export interface UserProfile {
   role: UserRole;
   languages: string[];
   subscriptionTier: string;
+  /** ISO date from API; when set for paid tiers, usage period aligns with store renewal. */
+  subscriptionPeriodEndAt?: string | null;
   reportsUsedThisMonth: number;
   messagesUsedThisMonth?: number;
   avatarUrl?: string | null;
@@ -92,6 +95,15 @@ interface ReactNativeFileBlob {
   name: string;
 }
 
+interface ProfilePictureSignedUrlResponse {
+  uploadURL: string;
+  objectPath: string;
+  fileUrl: string;
+  requiredHeaders?: {
+    "Content-Type"?: string;
+  };
+}
+
 export interface ApiValidationIssue {
   path: string[];
   message: string;
@@ -118,6 +130,8 @@ interface AuthContextValue {
   isSubscriptionIdentityReady: boolean;
   signUp: (data: SignUpData) => Promise<{ token: string }>;
   signIn: (email: string, password: string) => Promise<UserProfile>;
+  requestPasswordReset: (email: string) => Promise<void>;
+  resetPassword: (email: string, code: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   getApiHeaders: () => Record<string, string>;
@@ -146,19 +160,14 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 const STORAGE_KEY_TOKEN = "@devfeasible/auth_token";
 const STORAGE_KEY_USER = "@devfeasible/auth_user";
 
-function getApiBase(): string {
-  if (process.env.EXPO_PUBLIC_DOMAIN) {
-    return `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`;
-  }
-  return "/api";
-}
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient();
   const [user, setUser] = useState<UserProfile | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubscriptionIdentityReady, setIsSubscriptionIdentityReady] = useState(false);
+  /** Throttle repair sync when paid tier is missing `subscriptionPeriodEndAt` (e.g. legacy row or failed sync). */
+  const lastSubscriptionPeriodRepairAtRef = useRef<{ userId: string; at: number } | null>(null);
 
   // Wipe RevenueCat customer-info / offerings cache so the next user never
   // sees the previous user's subscription state.
@@ -207,6 +216,53 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     })();
   }, [switchRevenueCatIdentity]);
+
+  const refreshProfile = useCallback(async () => {
+    if (!token) return;
+    try {
+      const resp = await fetch(`${getApiBase()}/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (resp.ok) {
+        const data = (await resp.json()) as { user: UserProfile & { role?: UserRole; languages?: string[] } };
+        const profile: UserProfile = {
+          ...data.user,
+          role: data.user.role ?? "general",
+          languages: data.user.languages ?? [],
+        };
+        setUser(profile);
+        await AsyncStorage.setItem(STORAGE_KEY_USER, JSON.stringify(profile));
+      }
+    } catch {
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (!token || !user?.id || !isSubscriptionIdentityReady || IS_TEST_PAYMENT_MODE) return;
+    const paid = user.subscriptionTier === "pro" || user.subscriptionTier === "standard";
+    if (!paid || user.subscriptionPeriodEndAt) return;
+
+    const now = Date.now();
+    const last = lastSubscriptionPeriodRepairAtRef.current;
+    if (last?.userId === user.id && now - last.at < 60_000) return;
+    lastSubscriptionPeriodRepairAtRef.current = { userId: user.id, at: now };
+
+    void (async () => {
+      try {
+        const body = await getSubscriptionSyncBody("pro");
+        const resp = await fetch(`${getApiBase()}/subscription/sync`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(body),
+        });
+        if (resp.ok) await refreshProfile();
+      } catch {
+      }
+    })();
+  }, [token, user?.id, user?.subscriptionTier, user?.subscriptionPeriodEndAt, isSubscriptionIdentityReady, refreshProfile]);
 
   const persistAuth = useCallback(async (newToken: string, newUser: UserProfile) => {
     setToken(newToken);
@@ -263,7 +319,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return profile;
   }, [persistAuth, switchRevenueCatIdentity]);
 
+  const requestPasswordReset = useCallback(async (email: string): Promise<void> => {
+    const resp = await fetch(`${getApiBase()}/auth/password-reset/request`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+    const data = (await resp.json().catch(() => ({}))) as { error?: string };
+    if (!resp.ok) throw new Error(data.error ?? "Could not send reset code");
+  }, []);
+
+  const resetPassword = useCallback(async (
+    email: string,
+    code: string,
+    password: string,
+  ): Promise<void> => {
+    const resp = await fetch(`${getApiBase()}/auth/password-reset/confirm`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, code, password }),
+    });
+    const data = (await resp.json().catch(() => ({}))) as { error?: string };
+    if (!resp.ok) throw new Error(data.error ?? "Could not reset password");
+  }, []);
+
   const signOut = useCallback(async () => {
+    lastSubscriptionPeriodRepairAtRef.current = null;
     setToken(null);
     setUser(null);
     await Promise.all([
@@ -275,26 +356,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await switchRevenueCatIdentity(null);
   }, [switchRevenueCatIdentity]);
 
-  const refreshProfile = useCallback(async () => {
-    if (!token) return;
-    try {
-      const resp = await fetch(`${getApiBase()}/auth/me`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (resp.ok) {
-        const data = (await resp.json()) as { user: UserProfile & { role?: UserRole; languages?: string[] } };
-        const profile: UserProfile = {
-          ...data.user,
-          role: data.user.role ?? "general",
-          languages: data.user.languages ?? [],
-        };
-        setUser(profile);
-        await AsyncStorage.setItem(STORAGE_KEY_USER, JSON.stringify(profile));
-      }
-    } catch {
-    }
-  }, [token]);
-
   const getApiHeaders = useCallback((): Record<string, string> => {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) {
@@ -303,6 +364,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const locale = getCurrentLocale();
     headers["Accept-Language"] = locale === "zh" ? "zh-CN" : "en-NZ";
     headers["X-Locale"] = locale;
+    headers["X-OS-Chinese"] = isOSChineseLocale() ? "1" : "0";
     return headers;
   }, [token]);
 
@@ -372,25 +434,85 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   ): Promise<{ fileUrl: string }> => {
     const activeToken = tokenOverride ?? token;
     if (!activeToken) throw new Error("Not authenticated");
-    const formData = new FormData();
-    const fileBlob: ReactNativeFileBlob = { uri: fileUri, type: mimeType, name: fileName };
-    formData.append("file", fileBlob as unknown as Blob);
-    const resp = await fetch(`${getApiBase()}/upload/profile-picture`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${activeToken}` },
-      body: formData,
-    });
-    const json = (await resp.json()) as { fileUrl: string; error?: string };
-    if (!resp.ok) throw new Error(json.error ?? "Upload failed");
-    setUser((prev) => (prev ? { ...prev, avatarUrl: json.fileUrl } : prev));
-    return { fileUrl: json.fileUrl };
+    const legacyUpload = async (): Promise<{ fileUrl: string }> => {
+      const formData = new FormData();
+      const fileBlob: ReactNativeFileBlob = { uri: fileUri, type: mimeType, name: fileName };
+      formData.append("file", fileBlob as unknown as Blob);
+      const resp = await fetch(`${getApiBase()}/upload/profile-picture`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${activeToken}` },
+        body: formData,
+      });
+      const json = (await resp.json()) as { fileUrl: string; error?: string };
+      if (!resp.ok) throw new Error(json.error ?? "Upload failed");
+      return { fileUrl: json.fileUrl };
+    };
+
+    try {
+      // Read the local file as a Blob so we can send exact bytes via PUT.
+      const localFileResponse = await fetch(fileUri);
+      if (!localFileResponse.ok) {
+        throw new Error("Could not read local image file");
+      }
+      const localBlob = await localFileResponse.blob();
+
+      const signResp = await fetch(`${getApiBase()}/upload/profile-picture/request-url`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${activeToken}`,
+        },
+        body: JSON.stringify({
+          name: fileName,
+          size: localBlob.size,
+          contentType: mimeType,
+        }),
+      });
+      const signJson = (await signResp.json()) as ProfilePictureSignedUrlResponse & { error?: string };
+      if (!signResp.ok) {
+        throw new Error(signJson.error ?? "Failed to request upload URL");
+      }
+
+      const signedContentType = signJson.requiredHeaders?.["Content-Type"] ?? mimeType;
+      const putResp = await fetch(signJson.uploadURL, {
+        method: "PUT",
+        headers: {
+          "Content-Type": signedContentType,
+        },
+        body: localBlob,
+      });
+      if (!putResp.ok) {
+        throw new Error("Failed to upload image to storage");
+      }
+
+      const completeResp = await fetch(`${getApiBase()}/upload/profile-picture/complete`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${activeToken}`,
+        },
+        body: JSON.stringify({ objectPath: signJson.objectPath }),
+      });
+      const completeJson = (await completeResp.json()) as { fileUrl: string; error?: string };
+      if (!completeResp.ok) {
+        throw new Error(completeJson.error ?? "Failed to finalize upload");
+      }
+
+      setUser((prev) => (prev ? { ...prev, avatarUrl: completeJson.fileUrl } : prev));
+      return { fileUrl: completeJson.fileUrl };
+    } catch {
+      // Keep signup/profile edits working if signed URL flow is unavailable.
+      const fallback = await legacyUpload();
+      setUser((prev) => (prev ? { ...prev, avatarUrl: fallback.fileUrl } : prev));
+      return fallback;
+    }
   }, [token]);
 
   return (
     <AuthContext.Provider value={{
       user, token, isLoading,
       isSubscriptionIdentityReady,
-      signUp, signIn, signOut,
+      signUp, signIn, requestPasswordReset, resetPassword, signOut,
       refreshProfile, getApiHeaders,
       uploadIncorporationCert,
       uploadIncorporationCertPreSignup,

@@ -104,6 +104,7 @@ const SUBURB_SLUG_MAP: Record<string, { slug: string; district: string; region: 
   "beachlands":        { slug: "beachlands",        district: "howick",                 region: "auckland" },
   "half moon bay":     { slug: "half-moon-bay",     district: "howick",                 region: "auckland" },
   "cockle bay":        { slug: "cockle-bay",        district: "howick",                 region: "auckland" },
+  "mellons bay":       { slug: "mellons-bay",       district: "howick",                 region: "auckland" },
   "highland park":     { slug: "highland-park",     district: "howick",                 region: "auckland" },
   "shelly park":       { slug: "shelly-park",       district: "howick",                 region: "auckland" },
   "sunnyhills":        { slug: "sunnyhills",        district: "howick",                 region: "auckland" },

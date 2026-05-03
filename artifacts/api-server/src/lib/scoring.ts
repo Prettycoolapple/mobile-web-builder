@@ -119,6 +119,16 @@ export function scoreProperty(
   const cost = costBracket.score;
   const cost_reasons = [costBracket.reason, `Cost per unit: $${formatNZD(costPerUnit)}`];
 
+  if (scenarios.length === 0) {
+    const roi = 0.5;
+    const roi_reasons = [
+      "ROI unavailable — no real fetched comparable sales were available",
+      "Sale price assumptions were not estimated from synthetic comparables",
+    ];
+    const composite = parseFloat(((ease * 0.3) + (cost * 0.3) + (roi * 0.4)).toFixed(1));
+    return { ease, cost, roi, composite, ease_reasons, cost_reasons, roi_reasons };
+  }
+
   const bestScenario = scenarios.reduce((best, s) =>
     s.roi_percent > best.roi_percent ? s : best,
   );
@@ -133,11 +143,22 @@ export function scoreProperty(
   ];
 
   const roiBracket = roiBrackets.find((b) => bestScenario.roi_percent >= b.min) ?? roiBrackets[roiBrackets.length - 1];
-  const roi = roiBracket.score;
+  let roi = roiBracket.score;
   const roi_reasons = [
     roiBracket.reason,
     `Best case: ${bestScenario.roi_percent.toFixed(1)}% ROI over ${bestScenario.years} years`,
   ];
+  if (lots >= 5) {
+    roi = Math.max(0.5, roi - 0.5);
+    roi_reasons.push(
+      "High lot count — long construction and phased sales typically stretch capital recovery; headline ROI is a full-project figure, not short-cycle annualised performance.",
+    );
+  } else if (lots >= 4) {
+    roi = Math.max(0.5, roi - 0.35);
+    roi_reasons.push(
+      "Several potential lots increase programme length and absorption exposure versus a single-dwelling flip.",
+    );
+  }
 
   const composite = parseFloat(((ease * 0.3) + (cost * 0.3) + (roi * 0.4)).toFixed(1));
 

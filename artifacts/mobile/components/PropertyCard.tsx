@@ -4,10 +4,12 @@ import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { PropertyCandidate } from "@/context/ChatContext";
 import { StarRating } from "@/components/StarRating";
+import { useT, translateForOS } from "@/lib/i18n";
+import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
 
 interface Props {
   candidate: PropertyCandidate;
-  onAnalyse: (address: string) => void;
+  onAnalyse: (address: string, photoUrl?: string | null) => void;
 }
 
 function scoreColor(score: number, colors: ReturnType<typeof useColors>): string {
@@ -46,8 +48,37 @@ function ScorePip({ score, label, loading }: { score: number; label: string; loa
   );
 }
 
+function OverallCompositeBadge({
+  composite,
+  plain,
+}: {
+  composite: number;
+  plain: boolean;
+}) {
+  const colors = useColors();
+  const c = scoreColor(composite, colors);
+  return (
+    <View
+      style={[
+        plain ? styles.overallBadgePlain : styles.overallBadge,
+        { borderColor: c + "55", backgroundColor: c + "22" },
+      ]}
+    >
+      <Text style={[styles.overallBadgeNumber, { color: c, fontFamily: "DM_Sans_700Bold" }]}>
+        {formatCompositeScoreForDisplay(composite)}
+      </Text>
+      <Text style={[styles.overallBadgeOutOf, { color: c + "CC", fontFamily: "DM_Sans_500Medium" }]}>/5</Text>
+    </View>
+  );
+}
+
 export function PropertyCard({ candidate, onAnalyse }: Props) {
   const colors = useColors();
+  const { t } = useT();
+  const compositeRaw = candidate.scores.composite;
+  const showOverall =
+    !candidate.scoresLoading && typeof compositeRaw === "number" && compositeRaw > 0;
+  const composite = showOverall ? compositeRaw : 0;
 
   return (
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -58,10 +89,12 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
             style={styles.photo}
             resizeMode="cover"
           />
+          {showOverall ? <OverallCompositeBadge composite={composite} plain={false} /> : null}
         </View>
       ) : (
         <View style={[styles.photoPlaceholder, { backgroundColor: colors.muted }]}>
           <Feather name="home" size={28} color={colors.mutedForeground} style={{ opacity: 0.4 }} />
+          {showOverall ? <OverallCompositeBadge composite={composite} plain /> : null}
         </View>
       )}
 
@@ -81,7 +114,7 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
               </Text>
             </View>
           )}
-          {candidate.landArea && (
+          {candidate.landArea != null && candidate.landArea > 0 && (
             <View style={[styles.tag, { backgroundColor: colors.muted }]}>
               <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
                 {candidate.landAreaApprox ? "~" : ""}{candidate.landArea}m²
@@ -120,7 +153,7 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
               </Text>
             </View>
           )}
-          {candidate.zone && (
+          {!!candidate.zone?.trim() && (
             <View style={[styles.tag, { backgroundColor: colors.muted }]}>
               <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
                 {candidate.zone}
@@ -129,7 +162,7 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
           )}
         </View>
 
-        {candidate.briefSummary && (
+        {!!candidate.briefSummary?.trim() && (
           <Text
             style={[styles.summary, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}
             numberOfLines={2}
@@ -139,21 +172,21 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
         )}
 
         <View style={[styles.scoresRow, { borderTopColor: colors.border }]}>
-          <ScorePip score={candidate.scores.ease} label="Ease" loading={candidate.scoresLoading} />
+          <ScorePip score={candidate.scores.ease} label={translateForOS("report.ease")} loading={candidate.scoresLoading} />
           <View style={[styles.scoreDivider, { backgroundColor: colors.border }]} />
-          <ScorePip score={candidate.scores.cost} label="Cost" loading={candidate.scoresLoading} />
+          <ScorePip score={candidate.scores.cost} label={translateForOS("report.cost")} loading={candidate.scoresLoading} />
           <View style={[styles.scoreDivider, { backgroundColor: colors.border }]} />
-          <ScorePip score={candidate.scores.roi} label="ROI" loading={candidate.scoresLoading} />
+          <ScorePip score={candidate.scores.roi} label={translateForOS("report.roi")} loading={candidate.scoresLoading} />
         </View>
       </View>
 
       <TouchableOpacity
         style={[styles.analyseBtn, { backgroundColor: colors.accent }]}
-        onPress={() => onAnalyse(candidate.address)}
+        onPress={() => onAnalyse(candidate.address, candidate.photoUrl ?? null)}
         activeOpacity={0.8}
       >
         <Text style={[styles.analyseBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>
-          Full Analysis
+          {t("search.full_analysis")}
         </Text>
         <Feather name="arrow-right" size={14} color="#fff" />
       </TouchableOpacity>
@@ -189,7 +222,8 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderWidth: 1,
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "baseline",
+    gap: 2,
   },
   photoPlaceholder: {
     height: 100,
@@ -206,7 +240,16 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderWidth: 1,
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "baseline",
+    gap: 2,
+  },
+  overallBadgeNumber: {
+    fontSize: 15,
+    lineHeight: 18,
+  },
+  overallBadgeOutOf: {
+    fontSize: 11,
+    lineHeight: 14,
   },
   body: {
     padding: 14,

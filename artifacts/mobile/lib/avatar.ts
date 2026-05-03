@@ -1,13 +1,12 @@
+import { getApiOrigin, resolveAppUrl } from "@/lib/api";
+
 /**
  * Resolves a relative or absolute avatar URL to a full HTTPS URL.
  * Returns null when no URL is provided.
  */
 export function resolveAvatarUrl(url: string | null | undefined): string | null {
   if (!url) return null;
-  if (url.startsWith("http")) return url;
-  const domain = process.env["EXPO_PUBLIC_DOMAIN"];
-  if (domain) return `https://${domain}${url}`;
-  return url;
+  return resolveAppUrl(url);
 }
 
 /**
@@ -23,9 +22,9 @@ export function avatarImageSource(
 ): { uri: string; headers?: Record<string, string> } | null {
   const resolved = resolveAvatarUrl(url);
   if (!resolved) return null;
-  const domain = process.env["EXPO_PUBLIC_DOMAIN"];
+  const origin = getApiOrigin();
   // Only attach auth headers for our own API host.
-  if (domain && resolved.startsWith(`https://${domain}`)) {
+  if (origin && resolved.startsWith(origin)) {
     return { uri: resolved, headers: authHeaders };
   }
   return { uri: resolved };

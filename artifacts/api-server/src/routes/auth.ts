@@ -1,15 +1,18 @@
 import { Router } from "express";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
+import crypto from "node:crypto";
 import {
   db,
+  passwordResetTokens,
   profiles,
   salesAgentProfiles,
   serviceProviderProfiles,
   userUploads,
 } from "@workspace/db";
 import { hashPassword, verifyPassword, signToken, requireAuth } from "../lib/auth";
-import { sendOwnerNotification } from "../lib/mailer";
+import { sendNewUserSignupNotification, sendPasswordResetCodeEmail } from "../lib/mailer";
+import { usagePeriodExpired } from "../lib/billingPeriod";
 import { verifyPhoneVerificationToken, consumePhoneVerification } from "./otp";
 
 const router = Router();
@@ -101,6 +104,71 @@ const signupSchema = z
       }
     }
   });
+
+const PASSWORD_RESET_TTL_MINUTES = 15;
+const PASSWORD_RESET_MAX_ATTEMPTS = 5;
+
+const requestPasswordResetSchema = z.object({
+  email: z.string().email(),
+});
+
+const resetPasswordSchema = z.object({
+  email: z.string().email(),
+  code: z.string().min(4).max(12),
+  password: z.string().min(8),
+});
+
+function resolvePasswordResetSecret(): string {
+  const secret = process.env.PASSWORD_RESET_SECRET || process.env.SESSION_SECRET;
+  if (!secret) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("PASSWORD_RESET_SECRET (or SESSION_SECRET) must be set in production");
+    }
+    const dev = crypto.randomBytes(32).toString("hex");
+    process.env.PASSWORD_RESET_SECRET = dev;
+    return dev;
+  }
+  return secret;
+}
+
+const PASSWORD_RESET_SECRET = resolvePasswordResetSecret();
+
+const passwordResetRateBuckets = new Map<string, number[]>();
+function rateLimitPasswordReset(key: string, limit: number, windowMs: number): boolean {
+  const now = Date.now();
+  const cutoff = now - windowMs;
+  const arr = (passwordResetRateBuckets.get(key) ?? []).filter((t) => t > cutoff);
+  if (arr.length >= limit) {
+    passwordResetRateBuckets.set(key, arr);
+    return false;
+  }
+  arr.push(now);
+  passwordResetRateBuckets.set(key, arr);
+  return true;
+}
+
+function clientIp(req: { ip?: string }): string {
+  return req.ip || "unknown";
+}
+
+function normalizeEmail(raw: string): string {
+  return raw.toLowerCase().trim();
+}
+
+function generateResetCode(): string {
+  return crypto.randomInt(0, 1_000_000).toString().padStart(6, "0");
+}
+
+function hashResetCode(code: string, email: string): string {
+  return crypto
+    .createHmac("sha256", PASSWORD_RESET_SECRET)
+    .update(`${email}:${code.trim()}`)
+    .digest("hex");
+}
+
+function genericResetResponse() {
+  return { ok: true, expiresInSeconds: PASSWORD_RESET_TTL_MINUTES * 60 };
+}
 
 router.post("/signup", async (req, res) => {
   const parsed = signupSchema.safeParse(req.body);
@@ -249,28 +317,190 @@ router.post("/signup", async (req, res) => {
     const token = signToken(profile.id, profile.email, role);
     res.status(201).json({ token, user: { ...profile, isVerified: false } });
 
-    if (role === "service_provider") {
-      const subject = `New service provider registration: ${profile.fullName ?? profile.email}`;
-      const body = [
-        `A new service provider has registered on Project Alpha.`,
-        ``,
-        `Name: ${profile.fullName ?? "Unknown"}`,
-        `Email: ${profile.email}`,
-        `Company: ${providerData?.companyName ?? "Not provided"}`,
-        `Discipline: ${providerData?.discipline ?? "Not provided"}${providerData?.otherDiscipline ? ` (${providerData.otherDiscipline})` : ""}`,
-        `Contact: ${providerData?.contactNumber ?? "Not provided"}`,
-        `Primary Language: ${providerData?.primaryLanguage ?? "Not provided"}`,
-        `City: ${providerData?.addressCity ?? "Not provided"}`,
-        `NZ Reg Number: ${providerData?.nzCompanyRegisterNumber ?? "Not provided"}`,
-        ``,
-        `Please review their Certificate of Incorporation and verify them:`,
-        `UPDATE profiles SET is_verified = true WHERE id = '${profile.id}';`,
-      ].join("\n");
-      sendOwnerNotification(subject, body).catch(() => {});
-    }
+    sendNewUserSignupNotification({
+      role,
+      profileId: profile.id,
+      email: profile.email,
+      fullName: profile.fullName,
+      phone: phoneTrimmed,
+      languages,
+      agentData: agentData ?? undefined,
+      providerData: providerData ?? undefined,
+    });
   } catch (error) {
     req.log.error({ error }, "Signup failed");
     res.status(500).json({ error: "Signup failed. Please try again.", code: "SIGNUP_FAILED" });
+  }
+});
+
+router.post("/password-reset/request", async (req, res) => {
+  const parsed = requestPasswordResetSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({
+      error: "Enter a valid email address",
+      code: "VALIDATION_ERROR",
+      details: parsed.error.issues,
+    });
+    return;
+  }
+
+  const emailLower = normalizeEmail(parsed.data.email);
+  if (!rateLimitPasswordReset(`pwd-reset:email:${emailLower}`, 3, 60 * 60 * 1000)) {
+    res.status(429).json({
+      error: "Too many reset codes requested for this email. Please try again later.",
+      code: "RATE_LIMITED",
+    });
+    return;
+  }
+  if (!rateLimitPasswordReset(`pwd-reset:ip:${clientIp(req)}`, 15, 60 * 60 * 1000)) {
+    res.status(429).json({
+      error: "Too many requests. Please try again later.",
+      code: "RATE_LIMITED",
+    });
+    return;
+  }
+
+  try {
+    const [profile] = await db
+      .select({ id: profiles.id, email: profiles.email })
+      .from(profiles)
+      .where(eq(profiles.email, emailLower))
+      .limit(1);
+
+    // Avoid account enumeration: unknown emails get the same successful shape.
+    if (!profile) {
+      res.json(genericResetResponse());
+      return;
+    }
+
+    const row = await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${emailLower}, 1))`);
+      await tx
+        .update(passwordResetTokens)
+        .set({ expiresAt: new Date() })
+        .where(
+          and(
+            eq(passwordResetTokens.email, emailLower),
+            isNull(passwordResetTokens.usedAt),
+          ),
+        );
+
+      const code = generateResetCode();
+      const codeHash = hashResetCode(code, emailLower);
+      const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MINUTES * 60 * 1000);
+      await tx.insert(passwordResetTokens).values({
+        userId: profile.id,
+        email: emailLower,
+        codeHash,
+        expiresAt,
+      });
+      return { code };
+    });
+
+    const sent = await sendPasswordResetCodeEmail({
+      to: profile.email,
+      code: row.code,
+      expiresInMinutes: PASSWORD_RESET_TTL_MINUTES,
+    });
+    if (!sent) {
+      req.log.error({ email: emailLower }, "Password reset email could not be sent");
+    }
+
+    res.json(genericResetResponse());
+  } catch (error) {
+    req.log.error({ error }, "Password reset request failed");
+    res.status(500).json({ error: "Could not request password reset", code: "RESET_REQUEST_FAILED" });
+  }
+});
+
+router.post("/password-reset/confirm", async (req, res) => {
+  const parsed = resetPasswordSchema.safeParse(req.body);
+  if (!parsed.success) {
+    const firstError = parsed.error.issues[0];
+    res.status(400).json({
+      error: firstError?.message || "Invalid reset data",
+      code: "VALIDATION_ERROR",
+      details: parsed.error.issues,
+    });
+    return;
+  }
+
+  const emailLower = normalizeEmail(parsed.data.email);
+  const expectedHash = hashResetCode(parsed.data.code, emailLower);
+
+  try {
+    const resetResult = await db.transaction(async (tx) => {
+      const [profile] = await tx
+        .select({ id: profiles.id })
+        .from(profiles)
+        .where(eq(profiles.email, emailLower))
+        .limit(1);
+
+      if (!profile) return { status: "invalid" as const };
+
+      const [usedToken] = await tx
+        .update(passwordResetTokens)
+        .set({ usedAt: new Date() })
+        .where(
+          and(
+            eq(passwordResetTokens.userId, profile.id),
+            eq(passwordResetTokens.email, emailLower),
+            eq(passwordResetTokens.codeHash, expectedHash),
+            isNull(passwordResetTokens.usedAt),
+            sql`${passwordResetTokens.expiresAt} >= now()`,
+            sql`${passwordResetTokens.attempts} < ${PASSWORD_RESET_MAX_ATTEMPTS}`,
+          ),
+        )
+        .returning({ id: passwordResetTokens.id });
+
+      if (usedToken) {
+        const passwordHash = await hashPassword(parsed.data.password);
+        await tx
+          .update(profiles)
+          .set({ passwordHash })
+          .where(eq(profiles.id, profile.id));
+        await tx
+          .update(passwordResetTokens)
+          .set({ usedAt: new Date() })
+          .where(
+            and(
+              eq(passwordResetTokens.userId, profile.id),
+              isNull(passwordResetTokens.usedAt),
+            ),
+          );
+        return { status: "ok" as const };
+      }
+
+      const [bumped] = await tx
+        .update(passwordResetTokens)
+        .set({ attempts: sql`${passwordResetTokens.attempts} + 1` })
+        .where(
+          and(
+            eq(passwordResetTokens.userId, profile.id),
+            eq(passwordResetTokens.email, emailLower),
+            isNull(passwordResetTokens.usedAt),
+            sql`${passwordResetTokens.expiresAt} >= now()`,
+            sql`${passwordResetTokens.attempts} < ${PASSWORD_RESET_MAX_ATTEMPTS}`,
+          ),
+        )
+        .returning({ attempts: passwordResetTokens.attempts });
+
+      if (bumped?.attempts >= PASSWORD_RESET_MAX_ATTEMPTS) return { status: "locked" as const };
+      return { status: "invalid" as const };
+    });
+
+    if (resetResult.status === "ok") {
+      res.json({ ok: true });
+      return;
+    }
+    if (resetResult.status === "locked") {
+      res.status(429).json({ error: "Too many attempts. Request a new code.", code: "RESET_LOCKED" });
+      return;
+    }
+    res.status(400).json({ error: "Code is invalid or expired.", code: "RESET_INVALID" });
+  } catch (error) {
+    req.log.error({ error }, "Password reset confirmation failed");
+    res.status(500).json({ error: "Could not reset password", code: "RESET_CONFIRM_FAILED" });
   }
 });
 
@@ -304,15 +534,19 @@ router.post("/login", async (req, res) => {
 
     const now = new Date();
     const lastReset = new Date(profile.lastResetAt);
-    const sameMonth =
-      now.getFullYear() === lastReset.getFullYear() && now.getMonth() === lastReset.getMonth();
-
-    if (!sameMonth) {
+    const periodEnd = profile.subscriptionPeriodEndAt ? new Date(profile.subscriptionPeriodEndAt) : null;
+    if (usagePeriodExpired(now, lastReset, profile.subscriptionTier, periodEnd)) {
       await db
         .update(profiles)
-        .set({ reportsUsedThisMonth: 0, lastResetAt: now })
+        .set({
+          reportsUsedThisMonth: 0,
+          messagesUsedThisMonth: 0,
+          lastResetAt: now,
+          subscriptionPeriodEndAt: null,
+        })
         .where(eq(profiles.id, profile.id));
       profile.reportsUsedThisMonth = 0;
+      profile.messagesUsedThisMonth = 0;
     }
 
     const token = signToken(profile.id, profile.email, profile.role);
@@ -325,7 +559,9 @@ router.post("/login", async (req, res) => {
         role: profile.role,
         languages: profile.languages,
         subscriptionTier: profile.subscriptionTier,
+        subscriptionPeriodEndAt: profile.subscriptionPeriodEndAt,
         reportsUsedThisMonth: profile.reportsUsedThisMonth,
+        messagesUsedThisMonth: profile.messagesUsedThisMonth,
         avatarUrl: profile.avatarUrl,
         isVerified: profile.isVerified,
       },
@@ -351,6 +587,7 @@ router.get("/me", requireAuth, async (req, res) => {
         reportsUsedThisMonth: profiles.reportsUsedThisMonth,
         messagesUsedThisMonth: profiles.messagesUsedThisMonth,
         lastResetAt: profiles.lastResetAt,
+        subscriptionPeriodEndAt: profiles.subscriptionPeriodEndAt,
         createdAt: profiles.createdAt,
         avatarUrl: profiles.avatarUrl,
         isVerified: profiles.isVerified,
@@ -368,13 +605,16 @@ router.get("/me", requireAuth, async (req, res) => {
 
     const now = new Date();
     const lastReset = new Date(profile.lastResetAt);
-    const sameMonth =
-      now.getFullYear() === lastReset.getFullYear() && now.getMonth() === lastReset.getMonth();
-
-    if (!sameMonth) {
+    const periodEnd = profile.subscriptionPeriodEndAt ? new Date(profile.subscriptionPeriodEndAt) : null;
+    if (usagePeriodExpired(now, lastReset, profile.subscriptionTier, periodEnd)) {
       await db
         .update(profiles)
-        .set({ reportsUsedThisMonth: 0, messagesUsedThisMonth: 0, lastResetAt: now })
+        .set({
+          reportsUsedThisMonth: 0,
+          messagesUsedThisMonth: 0,
+          lastResetAt: now,
+          subscriptionPeriodEndAt: null,
+        })
         .where(eq(profiles.id, userId));
       profile.reportsUsedThisMonth = 0;
       profile.messagesUsedThisMonth = 0;

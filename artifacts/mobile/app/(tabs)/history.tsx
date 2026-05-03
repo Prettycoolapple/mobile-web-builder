@@ -12,11 +12,14 @@ import {
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
 import { useColors } from "@/hooks/useColors";
 import { useChat, FeasibilityReport } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "expo-router";
-import { useT } from "@/lib/i18n";
+import { getApiBase } from "@/lib/api";
+import { useT, getCurrentLocale } from "@/lib/i18n";
+import { translateReportViaApi } from "@/lib/translateReport";
 
 type SearchSummary = {
   id: string;
@@ -25,13 +28,6 @@ type SearchSummary = {
   composite_score: number | null;
   zone: string | null;
 };
-
-function getApiBase(): string {
-  if (process.env["EXPO_PUBLIC_DOMAIN"]) {
-    return `https://${process.env["EXPO_PUBLIC_DOMAIN"]}/api`;
-  }
-  return "/api";
-}
 
 function useFormatDate() {
   const { t, locale } = useT();
@@ -57,7 +53,7 @@ function ScoreDot({ score }: { score: number }) {
   return (
     <View style={[styles.scoreDot, { backgroundColor: color + "20", borderColor: color + "40" }]}>
       <Text style={[styles.scoreDotText, { color, fontFamily: "DM_Sans_700Bold" }]}>
-        {score.toFixed(1)}
+        {formatCompositeScoreForDisplay(score)}
       </Text>
     </View>
   );
@@ -173,16 +169,20 @@ export default function HistoryScreen() {
       const data = await resp.json() as {
         search: { result_json: FeasibilityReport; address: string };
       };
-      const report = data.search.result_json;
+      let report = data.search.result_json;
       const address = data.search.address ?? item.address;
+      if (getCurrentLocale() === "zh") {
+        const zhReport = await translateReportViaApi(report, getApiHeaders());
+        if (zhReport) report = zhReport;
+      }
       openHistoryReport(address, report);
-      router.push("/(tabs)/");
+      router.push("/");
     } catch {
       Alert.alert(t("common.error"), t("history.error_load"));
     } finally {
       setOpeningId(null);
     }
-  }, [getApiHeaders, openHistoryReport, router]);
+  }, [getApiHeaders, openHistoryReport, router, t]);
 
   const handleDelete = useCallback((item: SearchSummary) => {
     Alert.alert(
@@ -211,7 +211,7 @@ export default function HistoryScreen() {
 
   const handleNew = () => {
     startNewChat();
-    router.push("/(tabs)/");
+    router.push("/");
   };
 
   return (

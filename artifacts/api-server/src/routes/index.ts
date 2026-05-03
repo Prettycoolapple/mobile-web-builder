@@ -14,7 +14,11 @@ import notificationsRouter from "./notifications";
 import recommendationsRouter from "./recommendations";
 import agentContactRouter from "./agent-contact";
 import streetviewRouter from "./streetview";
+import staticmapRouter from "./staticmap";
+import imageProxyRouter from "./image-proxy";
 import otpRouter from "./otp";
+import supportRouter from "./support";
+import feedbackRouter from "./feedback";
 
 const router: IRouter = Router();
 
@@ -33,6 +37,10 @@ router.use(notificationsRouter);
 router.use(recommendationsRouter);
 router.use(agentContactRouter);
 router.use(streetviewRouter);
+router.use(staticmapRouter);
+router.use(imageProxyRouter);
 router.use(otpRouter);
+router.use(supportRouter);
+router.use(feedbackRouter);
 
 export default router;

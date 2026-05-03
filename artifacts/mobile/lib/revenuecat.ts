@@ -10,6 +10,37 @@ const REVENUECAT_ANDROID_API_KEY = process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_AP
 
 export const REVENUECAT_ENTITLEMENT_ID = "Pro";
 
+/** ISO 8601 end of the current App Store / Play subscription period (RevenueCat). */
+export function getActiveEntitlementExpirationIso(customerInfo: object | null | undefined): string | undefined {
+  if (!customerInfo || typeof customerInfo !== "object") return undefined;
+  const info = customerInfo as {
+    entitlements?: { active?: Record<string, { expirationDate?: string | null }> };
+  };
+  const exp = info.entitlements?.active?.[REVENUECAT_ENTITLEMENT_ID]?.expirationDate;
+  return typeof exp === "string" && exp.length > 0 ? exp : undefined;
+}
+
+export function buildSubscriptionSyncBody(
+  tier: "pro" | "free",
+  customerInfo: object | null | undefined,
+): { tier: "pro" | "free"; subscriptionPeriodEndISO?: string } {
+  if (tier === "free") return { tier };
+  const iso = getActiveEntitlementExpirationIso(customerInfo);
+  return iso ? { tier, subscriptionPeriodEndISO: iso } : { tier };
+}
+
+/** Fresh CustomerInfo for /subscription/sync so quotas align with IAP renewal dates. */
+export async function getSubscriptionSyncBody(tier: "pro" | "free"): Promise<{ tier: "pro" | "free"; subscriptionPeriodEndISO?: string }> {
+  if (tier === "free") return { tier };
+  if (IS_TEST_PAYMENT_MODE) return { tier };
+  try {
+    const info = await Purchases.getCustomerInfo();
+    return buildSubscriptionSyncBody(tier, info);
+  } catch {
+    return { tier };
+  }
+}
+
 export const OFFERING_BY_ROLE: Record<string, string> = {
   general: "default",
   sales_agent: "agent",

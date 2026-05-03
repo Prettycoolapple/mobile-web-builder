@@ -18,10 +18,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
-import { useSubscription } from "@/lib/revenuecat";
+import { useSubscription, getSubscriptionSyncBody } from "@/lib/revenuecat";
 import { avatarImageSource } from "@/lib/avatar";
+import { getApiBase } from "@/lib/api";
 import { WORLD_LANGUAGES } from "@/lib/languages";
-import { useT, type Locale } from "@/lib/i18n";
+import { useT, type Locale, isOSChineseLocale } from "@/lib/i18n";
 
 const FREE_LIMIT = 2;
 const STANDARD_LIMIT = 20;
@@ -48,13 +49,6 @@ function buildPlanFeatures(t: (k: string) => string) {
       t("feature.chat_search"),
     ],
   };
-}
-
-function getApiBase(): string {
-  if (process.env["EXPO_PUBLIC_DOMAIN"]) {
-    return `https://${process.env["EXPO_PUBLIC_DOMAIN"]}/api`;
-  }
-  return "/api";
 }
 
 function FeatureRow({ text, included }: { text: string; included: boolean }) {
@@ -147,10 +141,11 @@ export default function ProfileScreen() {
   // Returns true on a confirmed 2xx response so callers can surface failures.
   const syncToBackend = useCallback(async (tier: "pro" | "free"): Promise<boolean> => {
     try {
+      const body = await getSubscriptionSyncBody(tier);
       const resp = await fetch(`${getApiBase()}/subscription/sync`, {
         method: "POST",
         headers: getApiHeaders(),
-        body: JSON.stringify({ tier }),
+        body: JSON.stringify(body),
       });
       await refreshProfile().catch(() => {});
       return resp.ok;
@@ -184,6 +179,7 @@ export default function ProfileScreen() {
         return;
       }
       await purchase(pkg);
+      await refetchCustomerInfo();
       const synced = await syncToBackend("pro");
       if (!synced) {
         Alert.alert(t("profile.almost_there"), t("profile.payment_no_account"));
@@ -205,7 +201,7 @@ export default function ProfileScreen() {
     } finally {
       setUpgradeLoading(false);
     }
-  }, [syncToBackend, role, purchase, getPackageForRole]);
+  }, [syncToBackend, role, purchase, getPackageForRole, refetchCustomerInfo]);
 
   const handleManageSubscription = useCallback(() => {
     if (Platform.OS === "ios") {
@@ -264,9 +260,10 @@ export default function ProfileScreen() {
         name: `avatar.${ext}`,
       } as any);
 
+      const { "Content-Type": _ct, ...headersWithoutCT } = getApiHeaders() as Record<string, string>;
       const resp = await fetch(`${getApiBase()}/upload/profile-picture`, {
         method: "POST",
-        headers: { ...(getApiHeaders() as Record<string, string>) },
+        headers: headersWithoutCT,
         body: formData,
       });
       if (resp.ok) {
@@ -531,53 +528,61 @@ export default function ProfileScreen() {
           )}
         </View>
 
-        {/* ─── App Language Toggle ─── */}
-        <SectionHeader title={t("profile.app_language")} />
-        <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border, padding: 0 }]}>
-          {(["en", "zh"] as Locale[]).map((code, idx) => {
-            const label = code === "en" ? "English" : "中文(简体)";
-            const selected = locale === code;
-            return (
-              <TouchableOpacity
-                key={code}
-                onPress={() => setLocale(code)}
-                activeOpacity={0.7}
+        {/* ─── App Language Toggle ───
+            Hidden for Chinese-OS users: their device locale forces the whole
+            app to Chinese (see isOSChineseLocale / LocaleProvider), so showing
+            an "English / 中文" picker here would be misleading — it cannot be
+            changed at runtime. Non-Chinese-OS users still see the toggle. */}
+        {!isOSChineseLocale() && (
+          <>
+            <SectionHeader title={t("profile.app_language")} />
+            <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border, padding: 0 }]}>
+              {(["en", "zh"] as Locale[]).map((code, idx) => {
+                const label = code === "en" ? "English" : "中文(简体)";
+                const selected = locale === code;
+                return (
+                  <TouchableOpacity
+                    key={code}
+                    onPress={() => setLocale(code)}
+                    activeOpacity={0.7}
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      paddingHorizontal: 16,
+                      paddingVertical: 14,
+                      borderTopWidth: idx === 0 ? 0 : StyleSheet.hairlineWidth,
+                      borderTopColor: colors.border,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: selected ? colors.accent : colors.foreground,
+                        fontFamily: selected ? "DM_Sans_600SemiBold" : "DM_Sans_400Regular",
+                        fontSize: 15,
+                      }}
+                    >
+                      {label}
+                    </Text>
+                    {selected && <Feather name="check" size={16} color={colors.accent} />}
+                  </TouchableOpacity>
+                );
+              })}
+              <Text
                 style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  paddingHorizontal: 16,
-                  paddingVertical: 14,
-                  borderTopWidth: idx === 0 ? 0 : StyleSheet.hairlineWidth,
-                  borderTopColor: colors.border,
+                  color: colors.mutedForeground,
+                  fontFamily: "DM_Sans_400Regular",
+                  fontSize: 12,
+                  padding: 14,
+                  paddingTop: 6,
+                  lineHeight: 17,
                 }}
               >
-                <Text
-                  style={{
-                    color: selected ? colors.accent : colors.foreground,
-                    fontFamily: selected ? "DM_Sans_600SemiBold" : "DM_Sans_400Regular",
-                    fontSize: 15,
-                  }}
-                >
-                  {label}
-                </Text>
-                {selected && <Feather name="check" size={16} color={colors.accent} />}
-              </TouchableOpacity>
-            );
-          })}
-          <Text
-            style={{
-              color: colors.mutedForeground,
-              fontFamily: "DM_Sans_400Regular",
-              fontSize: 12,
-              padding: 14,
-              paddingTop: 6,
-              lineHeight: 17,
-            }}
-          >
-            {t("profile.app_language_hint")}
-          </Text>
-        </View>
+                {t("profile.app_language_hint")}
+              </Text>
+            </View>
+          </>
+        )}
 
         {/* ─── Plan card — general users ─── */}
         {role === "general" && (
@@ -807,17 +812,17 @@ export default function ProfileScreen() {
         {/* ─── Upgrade card — sales agent ─── */}
         {role === "sales_agent" && !isStandard && (
           <>
-            <SectionHeader title="Activate Agent Pro" />
+            <SectionHeader title={t("profile.activate_agent_pro")} />
             <View style={[styles.proCard, { backgroundColor: colors.card, borderColor: colors.accent + "35" }]}>
               <View style={styles.proTop}>
                 <View>
                   <Text style={[styles.proTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
-                    Agent Pro Plan
+                    {t("profile.agent_pro_features")}
                   </Text>
                   <View style={styles.priceRow}>
                     <Text style={[styles.price, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>{getPriceForRole("sales_agent")}</Text>
                     <Text style={[styles.pricePer, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                      /mo NZD
+                      {t("profile.per_month_nzd")}
                     </Text>
                   </View>
                 </View>
@@ -837,7 +842,7 @@ export default function ProfileScreen() {
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
                   <>
-                    <Text style={[styles.upgradeBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>Activate Agent Pro</Text>
+                    <Text style={[styles.upgradeBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>{t("profile.activate_agent_pro")}</Text>
                     <Feather name="arrow-right" size={16} color="#fff" />
                   </>
                 )}
@@ -910,6 +915,18 @@ export default function ProfileScreen() {
 
         {/* ─── Actions ─── */}
         <View style={[styles.actionsCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <TouchableOpacity
+            style={[styles.actionRow, { borderBottomColor: colors.border }]}
+            onPress={() => router.push("/support" as any)}
+            activeOpacity={0.7}
+          >
+            <Feather name="message-circle" size={17} color={colors.foreground} />
+            <Text style={[styles.actionRowText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
+              {t("profile.contact_support")}
+            </Text>
+            <Feather name="chevron-right" size={16} color={colors.mutedForeground + "60"} />
+          </TouchableOpacity>
+
           <TouchableOpacity
             style={[styles.actionRow, { borderBottomColor: colors.border }]}
             onPress={handleSignOut}

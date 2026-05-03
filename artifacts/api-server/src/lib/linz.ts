@@ -114,8 +114,12 @@ async function queryLinzLayer(
   return data.features.map((f) => ({ ...f.properties, _id: f.id, _geometry: f.geometry ?? null }));
 }
 
-async function queryLinzLayerWFS(
-  layerId: number,
+/**
+ * LINZ GeoServer expects `layer-{id}` for spatial layers or `table-{id}` for
+ * attribute-only tables — see LINZ “WFS filtering by attribute” guide.
+ */
+async function queryLinzWFS(
+  typeNames: string,
   cqlFilter: string,
   key: string,
   timeoutMs = 12000,
@@ -126,8 +130,9 @@ async function queryLinzLayerWFS(
   url.searchParams.set("service", "WFS");
   url.searchParams.set("version", "2.0.0");
   url.searchParams.set("request", "GetFeature");
-  url.searchParams.set("typeNames", `layer-${layerId}`);
-  url.searchParams.set("CQL_FILTER", cqlFilter);
+  url.searchParams.set("typeNames", typeNames);
+  // LINZ examples use lowercase `cql_filter`; GeoServer accepts both aliases.
+  url.searchParams.set("cql_filter", cqlFilter);
   url.searchParams.set("outputFormat", "application/json");
   url.searchParams.set("count", String(count));
 
@@ -139,7 +144,7 @@ async function queryLinzLayerWFS(
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
     logger.warn(
-      { status: resp.status, body: body.slice(0, 300), cqlFilter, layerId },
+      { status: resp.status, body: body.slice(0, 300), cqlFilter, typeNames },
       "LINZ WFS query failed",
     );
     return null;
@@ -163,7 +168,7 @@ async function queryLinzLayerWFS(
       type?: string;
     };
     if (!data.features) {
-      logger.warn({ layerId }, "LINZ WFS response missing features array");
+      logger.warn({ typeNames }, "LINZ WFS response missing features array");
       return null;
     }
     return data.features.map((f) => ({ ...f.properties, _id: f.id, _geometry: f.geometry ?? null }));
@@ -171,6 +176,69 @@ async function queryLinzLayerWFS(
     logger.warn({ err: (e as Error).message, preview: text.slice(0, 200) }, "LINZ WFS: JSON parse failed");
     return null;
   }
+}
+
+async function queryLinzLayerWFS(
+  layerId: number,
+  cqlFilter: string,
+  key: string,
+  timeoutMs = 12000,
+  count = 1,
+): Promise<Record<string, unknown>[] | null> {
+  return queryLinzWFS(`layer-${layerId}`, cqlFilter, key, timeoutMs, count);
+}
+
+/** REST `/tables/{id}` for attribute-only catalogue entries (distinct from `/layers`). */
+async function queryLinzTableRest(
+  tableId: number,
+  cqlFilter: string,
+  key: string,
+  timeoutMs = 12000,
+  count = 1,
+): Promise<Record<string, unknown>[] | null> {
+  const url = new URL(`${LINZ_BASE}/tables/${tableId}/features/`);
+  url.searchParams.set("q", cqlFilter);
+  url.searchParams.set("count", String(count));
+  url.searchParams.set("api_key", key);
+
+  const resp = await fetch(url.toString(), {
+    headers: {
+      ...LINZ_HEADERS,
+      Authorization: `key ${key}`,
+    },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+
+  if (resp.status === 429) {
+    logger.warn("LINZ API rate limited");
+    return null;
+  }
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    logger.warn(
+      { status: resp.status, body: body.slice(0, 200), cqlFilter, tableId },
+      "LINZ table (REST) query failed",
+    );
+    return null;
+  }
+
+  const data = (await resp.json()) as {
+    features?: Array<{ id: string | number; properties: Record<string, unknown>; geometry?: { type: string; coordinates: unknown } }>;
+    type?: string;
+  };
+
+  if (!data.features) {
+    logger.warn({ tableId, cqlFilter }, "LINZ table REST response missing features array");
+    return null;
+  }
+
+  return data.features.map((f) => ({ ...f.properties, _id: f.id, _geometry: f.geometry ?? null }));
+}
+
+function ecqlTitleNoEquals(title_no: string): string {
+  // ECQL strings: escape single quotes by doubling
+  const t = title_no.replace(/'/g, "''").trim();
+  return `title_no='${t}'`;
 }
 
 export async function fetchLINZParcel(lat: number, lng: number): Promise<LinzParcel | null> {
@@ -228,8 +296,8 @@ export async function fetchLINZParcel(lat: number, lng: number): Promise<LinzPar
   return null;
 }
 
-// LINZ layer 51553: NZ Title Memorials (most recent outstanding)
-const LAYER_TITLE_MEMORIALS = 51553;
+// NZ Title Memorials List — tabular catalogue (WFS uses typeNames=table-51695, not layer-*).
+const TABLE_NZ_TITLE_MEMORIALS_LIST = 51695;
 
 // Returns the parsed memorials array, or null when the API call itself failed.
 // Returning null lets callers distinguish "API error" from "API returned 0 memorials".
@@ -237,7 +305,7 @@ export async function fetchLINZMemorials(title_no: string): Promise<LinzMemorial
   const key = getKey();
   if (!key || !title_no) return null;
 
-  const cql = `title_no='${title_no}'`;
+  const cql = ecqlTitleNoEquals(title_no);
 
   function parseFeatures(features: Record<string, unknown>[]): LinzMemorial[] {
     return features.map((props) => {
@@ -253,22 +321,20 @@ export async function fetchLINZMemorials(title_no: string): Promise<LinzMemorial
     }).filter((m) => m.memorial_text.length > 0);
   }
 
-  // Try REST endpoint first
+  // LINZ publishes memorials as a table; prefer `/tables/` REST then WFS `table-{id}`.
   try {
-    const features = await queryLinzLayer(LAYER_TITLE_MEMORIALS, cql, key, 10000, 30);
+    const features = await queryLinzTableRest(TABLE_NZ_TITLE_MEMORIALS_LIST, cql, key, 12000, 30);
     if (features !== null) {
-      // REST succeeded (even if 0 results — that means genuinely no memorials)
-      logger.info({ title_no, count: features.length }, "LINZ memorials: REST returned");
+      logger.info({ title_no, count: features.length }, "LINZ memorials: table REST returned");
       return parseFeatures(features);
     }
-    logger.info({ title_no }, "LINZ memorials: REST returned null — trying WFS fallback");
+    logger.info({ title_no }, "LINZ memorials: table REST null — trying WFS");
   } catch (err) {
-    logger.warn({ err: (err as Error).message, title_no }, "LINZ memorials REST threw — trying WFS fallback");
+    logger.warn({ err: (err as Error).message, title_no }, "LINZ memorials REST threw — trying WFS");
   }
 
-  // WFS fallback
   try {
-    const features = await queryLinzLayerWFS(LAYER_TITLE_MEMORIALS, cql, key, 12000, 30);
+    const features = await queryLinzWFS(`table-${TABLE_NZ_TITLE_MEMORIALS_LIST}`, cql, key, 12000, 30);
     if (features !== null) {
       logger.info({ title_no, count: features.length }, "LINZ memorials: WFS fallback returned");
       return parseFeatures(features);
@@ -289,7 +355,7 @@ export async function fetchLINZTitle(title_no: string): Promise<LinzTitle | null
   try {
     const features = await queryLinzLayer(
       LAYER_NZ_TITLES,
-      `title_no='${title_no}'`,
+      ecqlTitleNoEquals(title_no),
       key,
       10000,
     );
@@ -301,7 +367,7 @@ export async function fetchLINZTitle(title_no: string): Promise<LinzTitle | null
     try {
       const ownersResult = await queryLinzLayer(
         LAYER_TITLE_OWNERS,
-        `title_no='${title_no}'`,
+        ecqlTitleNoEquals(title_no),
         key,
         8000,
       );

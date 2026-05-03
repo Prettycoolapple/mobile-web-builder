@@ -31,12 +31,8 @@
       "favicon": "./assets/images/icon.png"
     },
     "plugins": [
-      [
-        "expo-router",
-        {
-          "origin": "https://replit.com/"
-        }
-      ],
+      "expo-router",
+      "expo-dev-client",
       "expo-font",
       "expo-web-browser",
       [
@@ -48,7 +44,8 @@
           "sounds": []
         }
       ],
-      "expo-video"
+      "expo-video",
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,

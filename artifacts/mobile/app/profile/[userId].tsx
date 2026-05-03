@@ -14,13 +14,8 @@ import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { avatarImageSource } from "@/lib/avatar";
-
-function getApiBase(): string {
-  if (process.env.EXPO_PUBLIC_DOMAIN) {
-    return `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`;
-  }
-  return "/api";
-}
+import { getApiBase } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 type UserRole = "general" | "sales_agent" | "service_provider";
 
@@ -42,26 +37,26 @@ function roleColor(role: UserRole, colors: ReturnType<typeof useColors>): string
   return colors.mutedForeground;
 }
 
-function disciplineLabel(value: string | null | undefined): string {
+function disciplineLabel(value: string | null | undefined, t: (key: string) => string): string {
   const map: Record<string, string> = {
-    architect_designer: "Architect / Designer",
-    planner: "Planner",
-    engineer: "Engineer",
-    quantity_surveyor: "Quantity Surveyor",
-    other: "Other",
+    architect_designer: t("dm.discipline.architect_designer"),
+    planner: t("dm.discipline.planner"),
+    engineer: t("dm.discipline.engineer"),
+    quantity_surveyor: t("dm.discipline.quantity_surveyor"),
+    other: t("dm.discipline.other"),
   };
-  return value ? (map[value] ?? value) : "Service Provider";
+  return value ? (map[value] ?? value) : t("dm.header.service_provider");
 }
 
-function profileSubtitle(profile: PublicProfile): string {
-  if (profile.role === "sales_agent") return "Sales Agent";
+function profileSubtitle(profile: PublicProfile, t: (key: string) => string): string {
+  if (profile.role === "sales_agent") return t("dm.header.sales_agent");
   if (profile.role === "service_provider") {
     const rd = profile.roleData;
-    if (!rd) return "Service Provider";
+    if (!rd) return t("dm.header.service_provider");
     if (rd.discipline === "other" && rd.otherDiscipline) return rd.otherDiscipline as string;
-    return disciplineLabel(rd.discipline as string | null);
+    return disciplineLabel(rd.discipline as string | null, t);
   }
-  return "Member";
+  return t("public_profile.member");
 }
 
 function Avatar({
@@ -151,6 +146,7 @@ export default function UserProfileScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
   const { token, user } = useAuth();
+  const { t } = useT();
 
   const [profile, setProfile] = useState<PublicProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -163,15 +159,15 @@ export default function UserProfileScreen() {
       const resp = await fetch(`${getApiBase()}/users/${userId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!resp.ok) throw new Error("Profile not found");
+      if (!resp.ok) throw new Error(t("public_profile.not_found"));
       const data = (await resp.json()) as PublicProfile;
       setProfile(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load profile");
+      setError(err instanceof Error ? err.message : t("public_profile.error_load"));
     } finally {
       setLoading(false);
     }
-  }, [token, userId]);
+  }, [token, userId, t]);
 
   useEffect(() => {
     fetchProfile();
@@ -221,7 +217,7 @@ export default function UserProfileScreen() {
         >
           <Feather name="arrow-left" size={22} color={colors.foreground} />
         </TouchableOpacity>
-        <Text style={[styles.headerTitle, { color: colors.foreground }]}>Profile</Text>
+        <Text style={[styles.headerTitle, { color: colors.foreground }]}>{t("public_profile.title")}</Text>
         <View style={{ width: 38 }} />
       </View>
 
@@ -233,13 +229,13 @@ export default function UserProfileScreen() {
         <View style={styles.center}>
           <Feather name="user-x" size={40} color={colors.mutedForeground} />
           <Text style={[styles.errorText, { color: colors.mutedForeground }]}>
-            {error ?? "Profile not found"}
+            {error ?? t("public_profile.not_found")}
           </Text>
           <TouchableOpacity
             onPress={() => { setLoading(true); setError(null); fetchProfile(); }}
             style={[styles.retryBtn, { borderColor: colors.border }]}
           >
-            <Text style={[styles.retryText, { color: colors.foreground }]}>Retry</Text>
+            <Text style={[styles.retryText, { color: colors.foreground }]}>{t("public_profile.retry")}</Text>
           </TouchableOpacity>
         </View>
       ) : (
@@ -259,7 +255,7 @@ export default function UserProfileScreen() {
             <View style={{ marginTop: 14, alignItems: "center", gap: 6 }}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                 <Text style={[styles.name, { color: colors.foreground }]}>
-                  {profile.fullName ?? "Anonymous"}
+                  {profile.fullName ?? t("common.anonymous")}
                 </Text>
                 {profile.isVerified && profile.role === "service_provider" && (
                   <Feather name="check-circle" size={20} color={accentColor} />
@@ -274,13 +270,13 @@ export default function UserProfileScreen() {
                   ]}
                 >
                   <Text style={[styles.roleBadgeText, { color: accentColor }]}>
-                    {profileSubtitle(profile)}
+                    {profileSubtitle(profile, t)}
                   </Text>
                 </View>
                 {profile.isVerified && profile.role === "service_provider" && (
                   <View style={[styles.verifiedBadge, { backgroundColor: accentColor + "15", borderColor: accentColor + "40" }]}>
                     <Feather name="shield" size={11} color={accentColor} />
-                    <Text style={[styles.verifiedText, { color: accentColor }]}>Verified</Text>
+                    <Text style={[styles.verifiedText, { color: accentColor }]}>{t("public_profile.verified")}</Text>
                   </View>
                 )}
               </View>
@@ -336,36 +332,36 @@ export default function UserProfileScreen() {
               activeOpacity={0.8}
             >
               <Feather name="message-circle" size={16} color={colors.foreground} />
-              <Text style={[styles.messageBtnText, { color: colors.foreground }]}>Message</Text>
+              <Text style={[styles.messageBtnText, { color: colors.foreground }]}>{t("public_profile.message_cta")}</Text>
             </TouchableOpacity>
           )}
 
           {profile.role === "sales_agent" && profile.roleData && (
             <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Agent Details</Text>
-              <InfoRow icon="briefcase" label="Agency" value={profile.roleData.agencyName as string} colors={colors} />
-              <InfoRow icon="award" label="REAA Licence" value={profile.roleData.reaaLicenceNumber as string} colors={colors} />
+              <Text style={[styles.sectionTitle, { color: colors.foreground }]}>{t("public_profile.agent_details")}</Text>
+              <InfoRow icon="briefcase" label={t("public_profile.info.agency")} value={profile.roleData.agencyName as string} colors={colors} />
+              <InfoRow icon="award" label={t("public_profile.info.reaa")} value={profile.roleData.reaaLicenceNumber as string} colors={colors} />
               <InfoRow
                 icon="clock"
-                label="Experience"
-                value={profile.roleData.yearsExperience ? `${profile.roleData.yearsExperience} years` : null}
+                label={t("public_profile.info.experience")}
+                value={profile.roleData.yearsExperience ? t("public_profile.info.experience_years", { n: profile.roleData.yearsExperience as number }) : null}
                 colors={colors}
               />
               <InfoRow
                 icon="map-pin"
-                label="Regions"
+                label={t("public_profile.info.regions")}
                 value={(profile.roleData.regionsCovered as string[] | null)?.join(", ")}
                 colors={colors}
               />
               <InfoRow
                 icon="home"
-                label="Property types"
+                label={t("public_profile.info.property_types")}
                 value={(profile.roleData.propertyTypes as string[] | null)?.join(", ")}
                 colors={colors}
               />
               <InfoRow
                 icon="map-pin"
-                label="Address"
+                label={t("public_profile.info.address")}
                 value={
                   [profile.roleData.addressSuburb, profile.roleData.addressCity]
                     .filter(Boolean)
@@ -373,15 +369,15 @@ export default function UserProfileScreen() {
                 }
                 colors={colors}
               />
-              <InfoRow icon="globe" label="Website" value={profile.roleData.websiteUrl as string} colors={colors} />
-              <InfoRow icon="message-circle" label="Primary language" value={profile.roleData.primaryLanguage as string} colors={colors} />
-              <InfoRow icon="message-circle" label="Secondary language" value={profile.roleData.secondaryLanguage as string} colors={colors} />
+              <InfoRow icon="globe" label={t("public_profile.info.website")} value={profile.roleData.websiteUrl as string} colors={colors} />
+              <InfoRow icon="message-circle" label={t("public_profile.info.primary_language")} value={profile.roleData.primaryLanguage as string} colors={colors} />
+              <InfoRow icon="message-circle" label={t("public_profile.info.secondary_language")} value={profile.roleData.secondaryLanguage as string} colors={colors} />
               {memberYear && (
-                <InfoRow icon="calendar" label="Member since" value={`${memberYear}`} colors={colors} />
+                <InfoRow icon="calendar" label={t("public_profile.info.member_since")} value={`${memberYear}`} colors={colors} />
               )}
               {profile.roleData.bio ? (
                 <View style={styles.bioRow}>
-                  <Text style={[styles.infoLabel, { color: colors.mutedForeground }]}>About</Text>
+                  <Text style={[styles.infoLabel, { color: colors.mutedForeground }]}>{t("public_profile.info.about")}</Text>
                   <Text style={[styles.bioText, { color: colors.foreground }]}>
                     {profile.roleData.bio as string}
                   </Text>
@@ -392,21 +388,21 @@ export default function UserProfileScreen() {
 
           {profile.role === "service_provider" && profile.roleData && (
             <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Provider Details</Text>
-              <InfoRow icon="briefcase" label="Company" value={profile.roleData.companyName as string} colors={colors} />
+              <Text style={[styles.sectionTitle, { color: colors.foreground }]}>{t("public_profile.provider_details")}</Text>
+              <InfoRow icon="briefcase" label={t("public_profile.info.company")} value={profile.roleData.companyName as string} colors={colors} />
               <InfoRow
                 icon="tool"
-                label="Discipline"
+                label={t("public_profile.info.discipline")}
                 value={
                   profile.roleData.discipline === "other" && profile.roleData.otherDiscipline
                     ? (profile.roleData.otherDiscipline as string)
-                    : disciplineLabel(profile.roleData.discipline as string)
+                    : disciplineLabel(profile.roleData.discipline as string, t)
                 }
                 colors={colors}
               />
               <InfoRow
                 icon="map-pin"
-                label="Address"
+                label={t("public_profile.info.address")}
                 value={
                   [profile.roleData.addressStreet, profile.roleData.addressSuburb, profile.roleData.addressCity]
                     .filter(Boolean)
@@ -414,16 +410,16 @@ export default function UserProfileScreen() {
                 }
                 colors={colors}
               />
-              <InfoRow icon="hash" label="NZ Business Number" value={profile.roleData.nzCompanyRegisterNumber as string} colors={colors} />
-              <InfoRow icon="phone" label="Contact" value={profile.roleData.contactNumber as string} colors={colors} />
-              <InfoRow icon="message-circle" label="Primary language" value={profile.roleData.primaryLanguage as string} colors={colors} />
-              <InfoRow icon="message-circle" label="Secondary language" value={profile.roleData.secondaryLanguage as string} colors={colors} />
+              <InfoRow icon="hash" label={t("public_profile.info.business_number")} value={profile.roleData.nzCompanyRegisterNumber as string} colors={colors} />
+              <InfoRow icon="phone" label={t("public_profile.info.contact")} value={profile.roleData.contactNumber as string} colors={colors} />
+              <InfoRow icon="message-circle" label={t("public_profile.info.primary_language")} value={profile.roleData.primaryLanguage as string} colors={colors} />
+              <InfoRow icon="message-circle" label={t("public_profile.info.secondary_language")} value={profile.roleData.secondaryLanguage as string} colors={colors} />
               {memberYear && (
-                <InfoRow icon="calendar" label="Member since" value={`${memberYear}`} colors={colors} />
+                <InfoRow icon="calendar" label={t("public_profile.info.member_since")} value={`${memberYear}`} colors={colors} />
               )}
               {profile.roleData.bio ? (
                 <View style={styles.bioRow}>
-                  <Text style={[styles.infoLabel, { color: colors.mutedForeground }]}>About</Text>
+                  <Text style={[styles.infoLabel, { color: colors.mutedForeground }]}>{t("public_profile.info.about")}</Text>
                   <Text style={[styles.bioText, { color: colors.foreground }]}>
                     {profile.roleData.bio as string}
                   </Text>
@@ -434,8 +430,8 @@ export default function UserProfileScreen() {
 
           {profile.role === "general" && memberYear && (
             <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Member Details</Text>
-              <InfoRow icon="calendar" label="Member since" value={`${memberYear}`} colors={colors} />
+              <Text style={[styles.sectionTitle, { color: colors.foreground }]}>{t("public_profile.member_details")}</Text>
+              <InfoRow icon="calendar" label={t("public_profile.info.member_since")} value={`${memberYear}`} colors={colors} />
             </View>
           )}
 
@@ -448,11 +444,9 @@ export default function UserProfileScreen() {
             >
               <Feather name="shield" size={16} color={accentColor} />
               <Text style={[styles.trustText, { color: colors.foreground }]}>
-                Trusted by{" "}
-                <Text style={{ fontFamily: "DM_Sans_700Bold", color: accentColor }}>
-                  {profile.recommendationCount}
-                </Text>{" "}
-                {profile.recommendationCount === 1 ? "person" : "people"} in the Project Alpha community
+                {profile.recommendationCount === 1
+                  ? t("public_profile.trust_one")
+                  : t("public_profile.trust_other", { n: profile.recommendationCount })}
               </Text>
             </View>
           )}

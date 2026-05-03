@@ -17,7 +17,9 @@ import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
 import { useAuth } from "@/context/AuthContext";
+import { getApiBase as resolveApiBase } from "@/lib/api";
 import { useColors } from "@/hooks/useColors";
+import { useT } from "@/lib/i18n";
 
 type Listing = {
   id: string;
@@ -40,24 +42,25 @@ type Listing = {
   createdAt: string;
 };
 
-const STATUS_LABELS: Record<string, string> = {
-  active: "Active",
-  sold: "Sold",
-  withdrawn: "Withdrawn",
-  draft: "Draft",
-};
-
-const STATUS_OPTIONS: { key: Listing["status"]; label: string }[] = [
-  { key: "active", label: "Active" },
-  { key: "sold", label: "Sold" },
-  { key: "withdrawn", label: "Withdrawn" },
-];
-
 export default function MyListingsScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
   const router = useRouter();
   const { getApiHeaders } = useAuth();
+  const { t } = useT();
+
+  const STATUS_LABELS: Record<string, string> = {
+    active: t("listing.status.active"),
+    sold: t("listing.status.sold"),
+    withdrawn: t("listing.status.withdrawn"),
+    draft: t("listing.status.draft"),
+  };
+
+  const STATUS_OPTIONS: { key: Listing["status"]; label: string }[] = [
+    { key: "active", label: t("listing.status.active") },
+    { key: "sold", label: t("listing.status.sold") },
+    { key: "withdrawn", label: t("listing.status.withdrawn") },
+  ];
 
   const [listings, setListings] = useState<Listing[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,12 +68,7 @@ export default function MyListingsScreen() {
   const [statusModalId, setStatusModalId] = useState<string | null>(null);
   const [updatingStatus, setUpdatingStatus] = useState(false);
 
-  const getApiBase = useCallback(() => {
-    if (process.env.EXPO_PUBLIC_DOMAIN) {
-      return `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`;
-    }
-    return "/api";
-  }, []);
+  const getApiBase = useCallback(() => resolveApiBase(), []);
 
   const fetchListings = useCallback(async () => {
     try {
@@ -100,12 +98,12 @@ export default function MyListingsScreen() {
   const handleDelete = useCallback(
     (id: string, address: string) => {
       Alert.alert(
-        "Delete listing",
-        `Remove "${address}"? This cannot be undone.`,
+        t("listing.delete_title"),
+        t("listing.delete_msg", { address }),
         [
-          { text: "Cancel", style: "cancel" },
+          { text: t("common.cancel"), style: "cancel" },
           {
-            text: "Delete",
+            text: t("common.delete"),
             style: "destructive",
             onPress: async () => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -117,17 +115,17 @@ export default function MyListingsScreen() {
                 if (resp.ok) {
                   setListings((prev) => prev.filter((l) => l.id !== id));
                 } else {
-                  Alert.alert("Error", "Failed to delete listing. Please try again.");
+                  Alert.alert(t("common.error"), t("listing.delete_error"));
                 }
               } catch {
-                Alert.alert("Error", "Something went wrong.");
+                Alert.alert(t("common.error"), t("common.try_again_later"));
               }
             },
           },
         ]
       );
     },
-    [getApiBase, getApiHeaders]
+    [getApiBase, getApiHeaders, t]
   );
 
   const handleStatusChange = useCallback(
@@ -146,13 +144,13 @@ export default function MyListingsScreen() {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         }
       } catch {
-        Alert.alert("Error", "Failed to update status.");
+        Alert.alert(t("common.error"), t("listing.update_status_error"));
       } finally {
         setUpdatingStatus(false);
         setStatusModalId(null);
       }
     },
-    [getApiBase, getApiHeaders]
+    [getApiBase, getApiHeaders, t]
   );
 
   const getStatusColor = (status: string) => {
@@ -177,7 +175,7 @@ export default function MyListingsScreen() {
           ) : (
             <View style={[styles.coverPlaceholder, { backgroundColor: colors.muted }]}>
               <Feather name="home" size={32} color={colors.mutedForeground} />
-              <Text style={[styles.coverPlaceholderText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>No photos</Text>
+              <Text style={[styles.coverPlaceholderText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{t("listing.no_photos")}</Text>
             </View>
           )}
 
@@ -202,7 +200,7 @@ export default function MyListingsScreen() {
 
             {/* Listing type + property type */}
             <Text style={[styles.cardSubtitle, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-              {item.listingType === "for_sale" ? "For Sale" : "For Rent"} · {item.propertyType.charAt(0).toUpperCase() + item.propertyType.slice(1)}
+              {item.listingType === "for_sale" ? t("listing.for_sale") : t("listing.for_rent")} · {item.propertyType.charAt(0).toUpperCase() + item.propertyType.slice(1)}
             </Text>
 
             {/* Price */}
@@ -217,19 +215,19 @@ export default function MyListingsScreen() {
               {(item.bedrooms ?? 0) > 0 && (
                 <View style={styles.statItem}>
                   <Feather name="home" size={13} color={colors.mutedForeground} />
-                  <Text style={[styles.statText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{item.bedrooms} bd</Text>
+                  <Text style={[styles.statText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{t("listing.stat_bd", { n: item.bedrooms ?? 0 })}</Text>
                 </View>
               )}
               {(item.bathrooms ?? 0) > 0 && (
                 <View style={styles.statItem}>
                   <Feather name="droplet" size={13} color={colors.mutedForeground} />
-                  <Text style={[styles.statText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{item.bathrooms} ba</Text>
+                  <Text style={[styles.statText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{t("listing.stat_ba", { n: item.bathrooms ?? 0 })}</Text>
                 </View>
               )}
               {(item.garages ?? 0) > 0 && (
                 <View style={styles.statItem}>
                   <Feather name="truck" size={13} color={colors.mutedForeground} />
-                  <Text style={[styles.statText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{item.garages} gar</Text>
+                  <Text style={[styles.statText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{t("listing.stat_gar", { n: item.garages ?? 0 })}</Text>
                 </View>
               )}
               {item.landAreaSqm && (
@@ -248,7 +246,7 @@ export default function MyListingsScreen() {
                 activeOpacity={0.8}
               >
                 <Feather name="edit-2" size={14} color={colors.accent} />
-                <Text style={[styles.actionBtnText, { color: colors.accent, fontFamily: "DM_Sans_500Medium" }]}>Edit</Text>
+                <Text style={[styles.actionBtnText, { color: colors.accent, fontFamily: "DM_Sans_500Medium" }]}>{t("listing.edit")}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.actionBtn, { backgroundColor: colors.destructive + "12" }]}
@@ -256,14 +254,15 @@ export default function MyListingsScreen() {
                 activeOpacity={0.8}
               >
                 <Feather name="trash-2" size={14} color={colors.destructive} />
-                <Text style={[styles.actionBtnText, { color: colors.destructive, fontFamily: "DM_Sans_500Medium" }]}>Delete</Text>
+                <Text style={[styles.actionBtnText, { color: colors.destructive, fontFamily: "DM_Sans_500Medium" }]}>{t("listing.delete")}</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       );
     },
-    [colors, router, handleDelete, getApiBase]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [colors, router, handleDelete, getApiBase, t]
   );
 
   const keyExtractor = useCallback((item: Listing) => item.id, []);
@@ -277,7 +276,7 @@ export default function MyListingsScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.headerBack} activeOpacity={0.7}>
           <Feather name="arrow-left" size={22} color="rgba(250,249,246,0.8)" />
         </TouchableOpacity>
-        <Text style={[styles.headerTitle, { fontFamily: "DM_Sans_700Bold", color: "#FAFAF9" }]}>My Listings</Text>
+        <Text style={[styles.headerTitle, { fontFamily: "DM_Sans_700Bold", color: "#FAFAF9" }]}>{t("listing.my_title")}</Text>
         <TouchableOpacity
           style={[styles.headerAddBtn, { backgroundColor: colors.accent }]}
           onPress={() => router.push("/add-listing")}
@@ -296,9 +295,9 @@ export default function MyListingsScreen() {
           <View style={[styles.emptyIconCircle, { backgroundColor: colors.accent + "18" }]}>
             <Feather name="home" size={36} color={colors.accent} />
           </View>
-          <Text style={[styles.emptyTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>No listings yet</Text>
+          <Text style={[styles.emptyTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>{t("listing.empty_title")}</Text>
           <Text style={[styles.emptySubtitle, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-            Your property listings will appear here once you add them.
+            {t("listing.empty_subtitle")}
           </Text>
           <TouchableOpacity
             style={[styles.emptyBtn, { backgroundColor: colors.accent }]}
@@ -306,7 +305,7 @@ export default function MyListingsScreen() {
             activeOpacity={0.85}
           >
             <Feather name="plus" size={16} color="#fff" />
-            <Text style={[styles.emptyBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>Add your first listing</Text>
+            <Text style={[styles.emptyBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>{t("listing.empty_cta")}</Text>
           </TouchableOpacity>
         </View>
       ) : (
@@ -321,7 +320,9 @@ export default function MyListingsScreen() {
           }
           ListHeaderComponent={
             <Text style={[styles.listCount, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-              {listings.length} {listings.length === 1 ? "listing" : "listings"}
+              {listings.length === 1
+                ? t("listing.count_one", { n: listings.length })
+                : t("listing.count_other", { n: listings.length })}
             </Text>
           }
         />
@@ -338,7 +339,7 @@ export default function MyListingsScreen() {
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setStatusModalId(null)}>
           <View style={[styles.statusSheet, { backgroundColor: colors.card, shadowColor: colors.shadow }]}>
             <Text style={[styles.statusSheetTitle, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>
-              Update listing status
+              {t("listing.update_status_title")}
             </Text>
             <Text style={[styles.statusSheetSubtitle, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]} numberOfLines={1}>
               {activeStatusListing?.address}
@@ -369,7 +370,7 @@ export default function MyListingsScreen() {
               );
             })}
             <TouchableOpacity style={[styles.statusCancelBtn, { borderColor: colors.border }]} onPress={() => setStatusModalId(null)}>
-              <Text style={[styles.statusCancelText, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>Cancel</Text>
+              <Text style={[styles.statusCancelText, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>{t("common.cancel")}</Text>
             </TouchableOpacity>
           </View>
         </TouchableOpacity>

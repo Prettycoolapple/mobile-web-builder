@@ -11,6 +11,9 @@ export interface QVData {
   land_area_sqm: number | null;
   floor_area_sqm: number | null;
   build_year: number | null;
+  build_year_range: string | null;
+  bedrooms: number | null;
+  bathrooms: number | null;
   address_confirmed: string | null;
   contour_text: string | null;
   contour_classification: "flat" | "gentle" | "moderate" | "steep" | null;
@@ -198,7 +201,34 @@ export async function scrapeQV(address: string): Promise<QVData | null> {
 
     const buildMatch = allText.match(/\bbuilt\s*\n?\s*(\d{4})/i)
       ?? allText.match(/(?:year\s*built|construction\s*year)\s*\n?\s*(\d{4})/i);
-    if (buildMatch) data.build_year = parseYear(buildMatch[1]);
+    const buildRangeMatch = allText.match(/\bbuilt\s*\n?\s*((?:19|20)\d0)[–\-](\d{2})\b/i);
+    if (buildRangeMatch) {
+      const start = parseInt(buildRangeMatch[1], 10);
+      const suffix = parseInt(buildRangeMatch[2], 10);
+      const end = Math.floor(start / 100) * 100 + suffix;
+      data.build_year_range = `${start}-${end}`;
+      // The end year of the council decade range IS the actual build year in NZ records
+      // (e.g. "Built 2010-19" on QV → council-registered 2019, confirmed by CoreLogic/PropertyValue data).
+      const endYear = parseYear(String(end));
+      if (endYear) data.build_year = endYear;
+    }
+    if (!data.build_year && buildMatch) {
+      data.build_year = parseYear(buildMatch[1]);
+    }
+
+    const bedroomsMatch = allText.match(/\bbedrooms\s*\n?\s*(\d{1,2})\b/i)
+      ?? allText.match(/\b(\d{1,2})\s+bed(?:room)?s?\b/i);
+    if (bedroomsMatch) {
+      const n = parseInt(bedroomsMatch[1], 10);
+      if (!isNaN(n) && n > 0 && n < 20) data.bedrooms = n;
+    }
+
+    const bathroomsMatch = allText.match(/\bbathrooms\s*\n?\s*(\d+(?:\.\d+)?)\*?\b/i)
+      ?? allText.match(/\b(\d+(?:\.\d+)?)\s+bath(?:room)?s?\b/i);
+    if (bathroomsMatch) {
+      const n = parseFloat(bathroomsMatch[1]);
+      if (!isNaN(n) && n > 0 && n < 20) data.bathrooms = n;
+    }
 
     const contourMatch = allText.match(/\bcontour[:\s\n]+([A-Za-z][A-Za-z /]{1,30}?)(?:\n|\r|$)/im);
     let contourText: string | null = null;
@@ -209,7 +239,7 @@ export async function scrapeQV(address: string): Promise<QVData | null> {
       contourClass = mapNZContour(trimmed);
     }
 
-    logger.info({ cv_nzd: data.cv_nzd, lv: data.lv_nzd, land: data.land_area_sqm, contour: contourText }, "QV.co.nz extraction result");
+    logger.info({ cv_nzd: data.cv_nzd, lv: data.lv_nzd, land: data.land_area_sqm, build_year: data.build_year, build_year_range: data.build_year_range, bedrooms: data.bedrooms, bathrooms: data.bathrooms, contour: contourText }, "QV.co.nz extraction result");
 
     if (!data.cv_nzd && !data.land_area_sqm && !data.lv_nzd) {
       logger.warn({ url: currentUrl }, "QV.co.nz: no usable data extracted");
@@ -224,6 +254,9 @@ export async function scrapeQV(address: string): Promise<QVData | null> {
       land_area_sqm: data.land_area_sqm ?? null,
       floor_area_sqm: data.floor_area_sqm ?? null,
       build_year: data.build_year ?? null,
+      build_year_range: data.build_year_range ?? null,
+      bedrooms: data.bedrooms ?? null,
+      bathrooms: data.bathrooms ?? null,
       address_confirmed: currentUrl,
       contour_text: contourText,
       contour_classification: contourClass,

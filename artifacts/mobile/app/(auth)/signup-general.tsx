@@ -22,6 +22,8 @@ import { useColors } from "@/hooks/useColors";
 import { useAuth, ApiError } from "@/context/AuthContext";
 import * as ImagePicker from "expo-image-picker";
 import { PhoneOtpStep } from "@/components/PhoneOtpStep";
+import { useT, isOSChineseLocale } from "@/lib/i18n";
+import { languageDisplayName } from "@/lib/languages";
 
 const ALL_LANGUAGES = [
   "Afrikaans", "Albanian", "Amharic", "Arabic", "Armenian", "Azerbaijani",
@@ -63,6 +65,7 @@ export default function SignupGeneralScreen() {
   const router = useRouter();
   const { signUp, uploadProfilePicture, refreshProfile } = useAuth();
   const { width: SCREEN_W } = useWindowDimensions();
+  const { t } = useT();
 
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -85,9 +88,12 @@ export default function SignupGeneralScreen() {
   const [step, setStep] = useState(0);
   const slideAnim = useRef(new Animated.Value(0)).current;
 
-  const filteredLanguages = ALL_LANGUAGES.filter((l) =>
-    l.toLowerCase().includes(languageSearch.toLowerCase())
-  );
+  const osChinese = isOSChineseLocale();
+  const searchQ = languageSearch.toLowerCase();
+  const filteredLanguages = ALL_LANGUAGES.filter((l) => {
+    const display = languageDisplayName(l, osChinese);
+    return l.toLowerCase().includes(searchQ) || display.toLowerCase().includes(searchQ);
+  });
 
   const slide = (nextStep: number, direction: 1 | -1) => {
     Animated.timing(slideAnim, {
@@ -108,21 +114,21 @@ export default function SignupGeneralScreen() {
   const validateStep = (): boolean => {
     const errors: FieldErrors = {};
     if (step === 0) {
-      if (!firstName.trim()) errors.firstName = "First name is required.";
-      if (!lastName.trim()) errors.lastName = "Last name is required.";
+      if (!firstName.trim()) errors.firstName = t("signup.error.first_name");
+      if (!lastName.trim()) errors.lastName = t("signup.error.last_name");
     } else if (step === 1) {
-      if (!email.trim()) errors.email = "Email is required.";
-      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) errors.email = "Enter a valid email address.";
-      if (!password) errors.password = "Password is required.";
-      else if (password.length < 8) errors.password = "Password must be at least 8 characters.";
-      if (!confirmPassword) errors.confirmPassword = "Please confirm your password.";
-      else if (password !== confirmPassword) errors.confirmPassword = "Passwords do not match.";
+      if (!email.trim()) errors.email = t("signup.error.email");
+      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) errors.email = t("signup.error.email_invalid");
+      if (!password) errors.password = t("signup.error.password");
+      else if (password.length < 8) errors.password = t("signup.error.password_short");
+      if (!confirmPassword) errors.confirmPassword = t("signup.error.confirm_password");
+      else if (password !== confirmPassword) errors.confirmPassword = t("signup.error.password_mismatch");
     } else if (step === 2) {
       if (!phoneVerificationToken || !verifiedPhone) {
-        errors.phone = "Please verify your phone number before continuing.";
+        errors.phone = t("signup.error.phone_verify");
       }
     } else if (step === 3) {
-      if (!language) errors.language = "Please select a language.";
+      if (!language) errors.language = t("signup.error.language");
     }
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
@@ -164,7 +170,7 @@ export default function SignupGeneralScreen() {
     setIsLoading(true);
     try {
       if (!phoneVerificationToken || !verifiedPhone) {
-        setFieldErrors({ phone: "Please verify your phone number before continuing." });
+        setFieldErrors({ phone: t("signup.error.phone_verify") });
         setStep(2);
         return;
       }
@@ -206,7 +212,7 @@ export default function SignupGeneralScreen() {
           return;
         }
       }
-      setSubmitError(err instanceof Error ? err.message : "Signup failed. Please try again.");
+      setSubmitError(err instanceof Error ? err.message : t("signup.submit_failed"));
     } finally {
       setIsLoading(false);
     }
@@ -226,20 +232,20 @@ export default function SignupGeneralScreen() {
     if (step === 0) {
       return (
         <View style={styles.stepContent}>
-          <Text style={[styles.stepTag, { color: colors.accent }]}>General User · Free</Text>
+          <Text style={[styles.stepTag, { color: colors.accent }]}>{t("signup.general.tag")}</Text>
           <Text style={[styles.stepHeading, { color: colors.foreground }]}>
-            What should{"\n"}we call you?
+            {t("signup.name.heading")}
           </Text>
           <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
-            We'll personalise your Project Alpha experience.
+            {t("signup.name.subheading_general")}
           </Text>
 
           <View style={styles.fieldRow}>
             <View style={[styles.field, { flex: 1 }]}>
-              <Text style={[styles.label, { color: colors.foreground }]}>First name</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>{t("signup.first_name")}</Text>
               <TextInput
                 style={inputBase("firstName")}
-                placeholder="Jane"
+                placeholder={t("signup.first_name_ph")}
                 placeholderTextColor={colors.mutedForeground}
                 value={firstName}
                 onChangeText={(v) => { setFirstName(v); if (fieldErrors.firstName) setFieldErrors((p) => ({ ...p, firstName: undefined })); }}
@@ -249,10 +255,10 @@ export default function SignupGeneralScreen() {
               {fieldErrors.firstName && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.firstName}</Text>}
             </View>
             <View style={[styles.field, { flex: 1 }]}>
-              <Text style={[styles.label, { color: colors.foreground }]}>Last name</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>{t("signup.last_name")}</Text>
               <TextInput
                 style={inputBase("lastName")}
-                placeholder="Smith"
+                placeholder={t("signup.last_name_ph")}
                 placeholderTextColor={colors.mutedForeground}
                 value={lastName}
                 onChangeText={(v) => { setLastName(v); if (fieldErrors.lastName) setFieldErrors((p) => ({ ...p, lastName: undefined })); }}
@@ -269,7 +275,7 @@ export default function SignupGeneralScreen() {
             onPress={goNext}
             activeOpacity={0.85}
           >
-            <Text style={styles.primaryBtnText}>Continue</Text>
+            <Text style={styles.primaryBtnText}>{t("signup.continue")}</Text>
             <Feather name="arrow-right" size={18} color="#fff" />
           </TouchableOpacity>
         </View>
@@ -279,12 +285,12 @@ export default function SignupGeneralScreen() {
     if (step === 1) {
       return (
         <View style={styles.stepContent}>
-          <Text style={[styles.stepTag, { color: colors.accent }]}>General User · Free</Text>
+          <Text style={[styles.stepTag, { color: colors.accent }]}>{t("signup.general.tag")}</Text>
           <Text style={[styles.stepHeading, { color: colors.foreground }]}>
-            Create your{"\n"}login
+            {t("signup.login.heading")}
           </Text>
           <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
-            Your email and a secure password.
+            {t("signup.login.subheading")}
           </Text>
 
           {submitError && (
@@ -296,10 +302,10 @@ export default function SignupGeneralScreen() {
 
           <View style={styles.fields}>
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground }]}>Email address</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>{t("signup.email_label")}</Text>
               <TextInput
                 style={inputBase("email")}
-                placeholder="you@example.com"
+                placeholder={t("signup.email_ph")}
                 placeholderTextColor={colors.mutedForeground}
                 value={email}
                 onChangeText={(v) => { setEmail(v); if (fieldErrors.email) setFieldErrors((p) => ({ ...p, email: undefined })); }}
@@ -312,11 +318,11 @@ export default function SignupGeneralScreen() {
             </View>
 
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground }]}>Password</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>{t("signup.password_label")}</Text>
               <View style={[styles.passwordWrapper, { backgroundColor: colors.card, borderColor: fieldErrors.password ? colors.danger : colors.border }]}>
                 <TextInput
                   style={[styles.passwordInput, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-                  placeholder="At least 8 characters"
+                  placeholder={t("signup.password_ph")}
                   placeholderTextColor={colors.mutedForeground}
                   value={password}
                   onChangeText={(v) => { setPassword(v); if (fieldErrors.password) setFieldErrors((p) => ({ ...p, password: undefined })); }}
@@ -332,10 +338,10 @@ export default function SignupGeneralScreen() {
             </View>
 
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground }]}>Confirm password</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>{t("signup.confirm_password_label")}</Text>
               <TextInput
                 style={inputBase("confirmPassword")}
-                placeholder="Re-enter your password"
+                placeholder={t("signup.confirm_password_ph")}
                 placeholderTextColor={colors.mutedForeground}
                 value={confirmPassword}
                 onChangeText={(v) => { setConfirmPassword(v); if (fieldErrors.confirmPassword) setFieldErrors((p) => ({ ...p, confirmPassword: undefined })); }}
@@ -353,7 +359,7 @@ export default function SignupGeneralScreen() {
             onPress={goNext}
             activeOpacity={0.85}
           >
-            <Text style={styles.primaryBtnText}>Continue</Text>
+            <Text style={styles.primaryBtnText}>{t("signup.continue")}</Text>
             <Feather name="arrow-right" size={18} color="#fff" />
           </TouchableOpacity>
         </View>
@@ -363,12 +369,12 @@ export default function SignupGeneralScreen() {
     if (step === 2) {
       return (
         <View style={styles.stepContent}>
-          <Text style={[styles.stepTag, { color: colors.accent }]}>General User · Free</Text>
+          <Text style={[styles.stepTag, { color: colors.accent }]}>{t("signup.general.tag")}</Text>
           <Text style={[styles.stepHeading, { color: colors.foreground }]}>
-            Verify your{"\n"}phone number
+            {t("signup.phone.heading_general")}
           </Text>
           <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
-            We'll text you a 6-digit code to confirm it's really you. Standard carrier rates may apply.
+            {t("signup.phone.subheading_general")}
           </Text>
 
           {fieldErrors.phone && !verifiedPhone && (
@@ -403,7 +409,7 @@ export default function SignupGeneralScreen() {
             activeOpacity={0.85}
             disabled={!phoneVerificationToken}
           >
-            <Text style={styles.primaryBtnText}>Continue</Text>
+            <Text style={styles.primaryBtnText}>{t("signup.continue")}</Text>
             <Feather name="arrow-right" size={18} color="#fff" />
           </TouchableOpacity>
         </View>
@@ -413,9 +419,9 @@ export default function SignupGeneralScreen() {
     if (step === 3) {
       return (
         <View style={styles.stepContent}>
-          <Text style={[styles.stepTag, { color: colors.accent }]}>General User · Free</Text>
+          <Text style={[styles.stepTag, { color: colors.accent }]}>{t("signup.general.tag")}</Text>
           <Text style={[styles.stepHeading, { color: colors.foreground }]}>
-            Languages{"\n"}you speak
+            {t("signup.lang.heading_general")}
           </Text>
 
           {submitError && (
@@ -426,7 +432,7 @@ export default function SignupGeneralScreen() {
           )}
 
           <View style={styles.field}>
-            <Text style={[styles.label, { color: colors.foreground }]}>Primary language</Text>
+            <Text style={[styles.label, { color: colors.foreground }]}>{t("signup.lang.primary")}</Text>
             <TouchableOpacity
               style={[
                 styles.dropdownBtn,
@@ -442,7 +448,7 @@ export default function SignupGeneralScreen() {
                 styles.dropdownBtnText,
                 { color: language ? colors.foreground : colors.mutedForeground, fontFamily: "DM_Sans_400Regular" },
               ]}>
-                {language || "Select a language"}
+                {language ? languageDisplayName(language, osChinese) : t("signup.lang.select_placeholder")}
               </Text>
               <Feather name="chevron-down" size={18} color={colors.mutedForeground} />
             </TouchableOpacity>
@@ -462,7 +468,7 @@ export default function SignupGeneralScreen() {
               <View style={[styles.modalSheet, { backgroundColor: colors.background }]}>
                 <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
                   <Text style={[styles.modalTitle, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>
-                    Select language
+                    {t("signup.lang.modal_title")}
                   </Text>
                   <TouchableOpacity onPress={() => setLanguagePickerOpen(false)} style={styles.modalCloseBtn}>
                     <Feather name="x" size={20} color={colors.foreground} />
@@ -472,7 +478,7 @@ export default function SignupGeneralScreen() {
                   <Feather name="search" size={16} color={colors.mutedForeground} />
                   <TextInput
                     style={[styles.searchInput, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-                    placeholder="Search languages..."
+                    placeholder={t("signup.lang.modal_search")}
                     placeholderTextColor={colors.mutedForeground}
                     value={languageSearch}
                     onChangeText={setLanguageSearch}
@@ -508,7 +514,7 @@ export default function SignupGeneralScreen() {
                         { color: item === language ? colors.accent : colors.foreground, fontFamily: "DM_Sans_400Regular" },
                         item === language && { fontFamily: "DM_Sans_600SemiBold" },
                       ]}>
-                        {item}
+                        {languageDisplayName(item, osChinese)}
                       </Text>
                       {item === language && <Feather name="check" size={16} color={colors.accent} />}
                     </TouchableOpacity>
@@ -523,7 +529,7 @@ export default function SignupGeneralScreen() {
             onPress={goNext}
             activeOpacity={0.85}
           >
-            <Text style={styles.primaryBtnText}>Continue</Text>
+            <Text style={styles.primaryBtnText}>{t("signup.continue")}</Text>
             <Feather name="arrow-right" size={18} color="#fff" />
           </TouchableOpacity>
         </View>
@@ -532,12 +538,12 @@ export default function SignupGeneralScreen() {
 
     return (
       <View style={styles.stepContent}>
-        <Text style={[styles.stepTag, { color: colors.accent }]}>General User · Free</Text>
+        <Text style={[styles.stepTag, { color: colors.accent }]}>{t("signup.general.tag")}</Text>
         <Text style={[styles.stepHeading, { color: colors.foreground }]}>
-          Profile{"\n"}picture
+          {t("signup.photo.heading")}
         </Text>
         <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
-          Add a photo so others recognise you. This is optional.
+          {t("signup.photo.subheading_general")}
         </Text>
 
         {submitError && (
@@ -554,7 +560,7 @@ export default function SignupGeneralScreen() {
             <View style={[styles.avatarPlaceholder, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <Feather name="camera" size={32} color={colors.mutedForeground} />
               <Text style={[styles.avatarPlaceholderText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                Tap to upload
+                {t("signup.photo.tap_to_upload")}
               </Text>
             </View>
           )}
@@ -564,7 +570,7 @@ export default function SignupGeneralScreen() {
           <TouchableOpacity style={styles.changePhotoBtn} onPress={handlePickAvatar} activeOpacity={0.7}>
             <Feather name="refresh-cw" size={14} color={colors.accent} />
             <Text style={[styles.changePhotoText, { color: colors.accent, fontFamily: "DM_Sans_500Medium" }]}>
-              Change photo
+              {t("signup.photo.change")}
             </Text>
           </TouchableOpacity>
         )}
@@ -579,7 +585,7 @@ export default function SignupGeneralScreen() {
             <ActivityIndicator size="small" color="#fff" />
           ) : (
             <>
-              <Text style={styles.primaryBtnText}>Create account</Text>
+              <Text style={styles.primaryBtnText}>{t("signup.create_account")}</Text>
               <Feather name="check" size={18} color="#fff" />
             </>
           )}
@@ -611,7 +617,7 @@ export default function SignupGeneralScreen() {
                 <Feather name="arrow-left" size={22} color={colors.foreground} />
               </TouchableOpacity>
               <Text style={[styles.stepCounter, { color: colors.mutedForeground }]}>
-                {step + 1} / {TOTAL_STEPS}
+                {t("signup.step_counter", { current: step + 1, total: TOTAL_STEPS })}
               </Text>
             </View>
 
@@ -619,10 +625,10 @@ export default function SignupGeneralScreen() {
 
             <View style={styles.footer}>
               <Text style={[styles.footerText, { color: colors.mutedForeground }]}>
-                Already have an account?{" "}
+                {t("signup.have_account")}
               </Text>
               <TouchableOpacity onPress={() => router.push("/(auth)/login")}>
-                <Text style={[styles.footerLink, { color: colors.accent }]}>Sign in</Text>
+                <Text style={[styles.footerLink, { color: colors.accent }]}>{t("signup.sign_in")}</Text>
               </TouchableOpacity>
             </View>
           </ScrollView>

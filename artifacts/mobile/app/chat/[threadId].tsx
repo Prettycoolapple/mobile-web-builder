@@ -10,7 +10,6 @@ import {
   KeyboardAvoidingView,
   Linking,
   Platform,
-  Pressable,
   StyleSheet,
   Text,
   TextInput,
@@ -27,42 +26,54 @@ import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { useDm, DmMessage, DmThread } from "@/context/DmContext";
 import { ImageViewerModal } from "@/components/ImageViewerModal";
+import { getApiBase } from "@/lib/api";
+import { useT, type Locale } from "@/lib/i18n";
 
-function getApiBase(): string {
-  if (process.env.EXPO_PUBLIC_DOMAIN) {
-    return `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`;
-  }
-  return "/api";
-}
-
-function formatDiscipline(discipline: string | null, otherDiscipline: string | null): string {
+function formatDiscipline(
+  discipline: string | null,
+  otherDiscipline: string | null,
+  t: (key: string) => string,
+): string {
   if (discipline === "other" && otherDiscipline) return otherDiscipline;
   const map: Record<string, string> = {
-    architect_designer: "Architect / Designer",
-    planner: "Planner",
-    engineer: "Engineer",
-    quantity_surveyor: "Quantity Surveyor",
-    other: "Other",
+    architect_designer: t("dm.discipline.architect_designer"),
+    planner: t("dm.discipline.planner"),
+    engineer: t("dm.discipline.engineer"),
+    quantity_surveyor: t("dm.discipline.quantity_surveyor"),
+    other: t("dm.discipline.other"),
   };
-  return discipline ? (map[discipline] ?? discipline) : "Service Provider";
+  return discipline ? (map[discipline] ?? discipline) : t("dm.header.service_provider");
 }
 
-function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit", hour12: true });
+function formatTime(iso: string, locale: Locale): string {
+  return new Date(iso).toLocaleTimeString(locale === "zh" ? "zh-CN" : "en-NZ", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: locale !== "zh",
+  });
 }
 
-function formatDateSep(iso: string): string {
+function formatDateSep(iso: string, locale: Locale, t: (key: string) => string): string {
   const d = new Date(iso);
   const today = new Date();
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
-  if (d.toDateString() === today.toDateString()) return "Today";
-  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
-  return d.toLocaleDateString("en-NZ", { weekday: "short", day: "numeric", month: "short" });
+  if (d.toDateString() === today.toDateString()) return t("dm.date.today");
+  if (d.toDateString() === yesterday.toDateString()) return t("dm.date.yesterday");
+  return d.toLocaleDateString(locale === "zh" ? "zh-CN" : "en-NZ", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  });
 }
 
 function isSameDay(a: string, b: string): boolean {
   return new Date(a).toDateString() === new Date(b).toDateString();
+}
+
+/** Absolute URL for API storage images (authenticated); pass through http(s) unchanged. */
+function resolveDmStoredImageUri(imageUrl: string): string {
+  return imageUrl.startsWith("http") ? imageUrl : `${getApiBase().replace(/\/api$/, "")}${imageUrl}`;
 }
 
 interface MessageItem {
@@ -77,14 +88,18 @@ interface DateSepItem {
 }
 type ListItem = MessageItem | DateSepItem;
 
-function buildListItems(messages: DmMessage[]): ListItem[] {
+function buildListItems(
+  messages: DmMessage[],
+  locale: Locale,
+  t: (key: string) => string,
+): ListItem[] {
   const items: ListItem[] = [];
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     const prev = messages[i - 1];
     const next = messages[i + 1];
     if (!prev || !isSameDay(prev.createdAt, msg.createdAt)) {
-      items.push({ type: "date", label: formatDateSep(msg.createdAt) });
+      items.push({ type: "date", label: formatDateSep(msg.createdAt, locale, t) });
     }
     const isFirstInGroup =
       !prev || prev.senderId !== msg.senderId || !isSameDay(prev.createdAt, msg.createdAt);
@@ -128,6 +143,7 @@ export default function ChatScreen() {
   const { threadId } = useLocalSearchParams<{ threadId: string }>();
   const { user, token } = useAuth();
   const { socket, fetchThreads, threads } = useDm();
+  const { t, locale } = useT();
 
   const [messages, setMessages] = useState<DmMessage[]>([]);
   const [loadingInitial, setLoadingInitial] = useState(true);
@@ -326,7 +342,7 @@ export default function ChatScreen() {
     setLoadingMore(false);
   }, [nextCursor, loadingMore, fetchMessages]);
 
-  const items: ListItem[] = buildListItems(messages);
+  const items: ListItem[] = buildListItems(messages, locale, t);
 
   const renderItem = ({ item }: { item: ListItem }) => {
     if (item.type === "date") {
@@ -360,34 +376,36 @@ export default function ChatScreen() {
             <Text style={[styles.senderName, { color: colors.mutedForeground }]}>{otherName}</Text>
           ) : null}
           {msg.imageUrl ? (
-            <Pressable
+            <TouchableOpacity
+              activeOpacity={0.92}
+              accessibilityRole="imagebutton"
+              accessibilityLabel={t("dm.image.open_full_screen")}
               onPress={() => {
                 const u = msg.imageUrl;
                 if (!u) return;
-                const full = u.startsWith("http") ? u : `${getApiBase().replace(/\/api$/, "")}${u}`;
-                setViewerUri(full);
+                setViewerUri(resolveDmStoredImageUri(u));
               }}
               style={[
                 styles.imgBubble,
                 isMine ? styles.myBubble : styles.theirBubble,
                 {
-                  backgroundColor: isMine ? colors.accent : colors.card,
+                  backgroundColor: isMine ? colors.accent + "33" : colors.card,
                   borderColor: isMine ? colors.accent : colors.border,
                 },
               ]}
             >
               <Image
+                pointerEvents="none"
+                recyclingKey={msg.id}
                 source={{
-                  uri: msg.imageUrl.startsWith("http")
-                    ? msg.imageUrl
-                    : `${getApiBase().replace(/\/api$/, "")}${msg.imageUrl}`,
+                  uri: resolveDmStoredImageUri(msg.imageUrl),
                   headers: token ? { Authorization: `Bearer ${token}` } : undefined,
                 }}
                 style={styles.msgImage}
                 contentFit="cover"
                 transition={120}
               />
-            </Pressable>
+            </TouchableOpacity>
           ) : (
             <View
               style={[
@@ -409,7 +427,7 @@ export default function ChatScreen() {
                 { color: colors.mutedForeground, textAlign: isMine ? "right" : "left" },
               ]}
             >
-              {formatTime(msg.createdAt)}
+              {formatTime(msg.createdAt, locale)}
             </Text>
           ) : null}
         </View>
@@ -438,10 +456,10 @@ export default function ChatScreen() {
             <Text style={styles.headerName} numberOfLines={1}>{otherName ?? "…"}</Text>
             <Text style={styles.headerRole}>
               {otherRole === "sales_agent"
-                ? "Sales Agent"
+                ? t("dm.header.sales_agent")
                 : otherRole === "service_provider"
-                ? formatDiscipline(otherDiscipline, otherOtherDiscipline)
-                : "User"}
+                ? formatDiscipline(otherDiscipline, otherOtherDiscipline, t)
+                : t("dm.header.user")}
             </Text>
             {otherRole === "service_provider" && (() => {
               const langs = [otherPrimaryLanguage, otherSecondaryLanguage]
@@ -548,7 +566,7 @@ export default function ChatScreen() {
         >
           <TextInput
             style={[styles.input, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-            placeholder="Message…"
+            placeholder={t("dm.placeholder.message")}
             placeholderTextColor={colors.mutedForeground}
             value={body}
             onChangeText={setBody}

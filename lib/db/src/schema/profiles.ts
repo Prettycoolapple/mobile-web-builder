@@ -16,6 +16,12 @@ export const profiles = pgTable("profiles", {
   reportsUsedThisMonth: integer("reports_used_this_month").default(0).notNull(),
   messagesUsedThisMonth: integer("messages_used_this_month").default(0).notNull(),
   lastResetAt: timestamp("last_reset_at", { withTimezone: true }).defaultNow().notNull(),
+  /**
+   * End of the current App Store / Play Billing period for the active subscription,
+   * copied from RevenueCat (entitlement expiration). Usage quotas for paid tiers use
+   * this (not calendar month) so renewal aligns with IAP. Null for free / unknown.
+   */
+  subscriptionPeriodEndAt: timestamp("subscription_period_end_at", { withTimezone: true }),
   stripeCustomerId: text("stripe_customer_id"),
   avatarUrl: text("avatar_url"),
   isVerified: boolean("is_verified").default(false).notNull(),

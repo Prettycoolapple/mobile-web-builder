@@ -13,7 +13,8 @@ import {
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
-import { useSubscription } from "@/lib/revenuecat";
+import { getApiBase } from "@/lib/api";
+import { useSubscription, getSubscriptionSyncBody } from "@/lib/revenuecat";
 import { useT } from "@/lib/i18n";
 
 interface Props {
@@ -22,17 +23,11 @@ interface Props {
   onPurchaseSuccess?: () => void;
 }
 
-function getApiBase(): string {
-  if (process.env["EXPO_PUBLIC_DOMAIN"]) {
-    return `https://${process.env["EXPO_PUBLIC_DOMAIN"]}/api`;
-  }
-  return "/api";
-}
-
 export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
   const colors = useColors();
   const { getApiHeaders, refreshProfile } = useAuth();
-  const { purchase, restore, isPurchasing, isRestoring, getPackageForRole, getPriceForRole } = useSubscription();
+  const { purchase, restore, isPurchasing, isRestoring, getPackageForRole, getPriceForRole, refetchCustomerInfo } =
+    useSubscription();
   const { t } = useT();
   const FEATURES = [
     t("paywall.f1"),
@@ -60,10 +55,11 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
 
   const syncToBackend = async (tier: "pro" | "free"): Promise<boolean> => {
     try {
+      const body = await getSubscriptionSyncBody(tier);
       const resp = await fetch(`${getApiBase()}/subscription/sync`, {
         method: "POST",
         headers: getApiHeaders(),
-        body: JSON.stringify({ tier }),
+        body: JSON.stringify(body),
       });
       await refreshProfile().catch(() => {});
       return resp.ok;
@@ -80,6 +76,7 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
     }
     try {
       await purchase(pkg);
+      await refetchCustomerInfo();
       const synced = await syncToBackend("pro");
       if (!synced) {
         Alert.alert(t("paywall.almost_there"), t("paywall.no_account_activate"));
@@ -102,6 +99,7 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
       const info = await restore();
       const isActive = info?.entitlements?.active?.["Pro"] !== undefined;
       if (isActive) {
+        await refetchCustomerInfo();
         await syncToBackend("pro");
         onPurchaseSuccess?.();
         onClose();

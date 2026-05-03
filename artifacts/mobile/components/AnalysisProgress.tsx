@@ -1,16 +1,19 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, StyleSheet, Animated, Easing } from "react-native";
 import { useColors } from "@/hooks/useColors";
+import { useT } from "@/lib/i18n";
 
-const STEPS = [
-  "Fetching property details from LINZ...",
-  "Checking Auckland Council planning overlays...",
-  "Analysing contour and infrastructure...",
-  "Calculating development costs and ROI...",
-  "Generating your feasibility report...",
-];
+const STEP_KEYS = [
+  "search.step_linz",
+  "search.step_planning",
+  "search.step_terrain",
+  "search.step_costs",
+  "search.step_report",
+] as const;
 
-const STEP_DURATION_MS = 4000;
+/** Wall-clock estimate for feasibility analysis; bar and step labels stay aligned to this. */
+const ESTIMATED_MAX_MS = 5 * 60 * 1000;
+const BAR_MAX_FRACTION = 0.92;
 
 interface Props {
   retryLabel?: string;
@@ -18,26 +21,33 @@ interface Props {
 
 export function AnalysisProgress({ retryLabel }: Props) {
   const colors = useColors();
+  const { t } = useT();
+  const steps = useMemo(() => STEP_KEYS.map((k) => t(k)), [t]);
   const [stepIndex, setStepIndex] = useState(0);
   const dotAnim = useRef(new Animated.Value(0)).current;
   const barWidth = useRef(new Animated.Value(0)).current;
 
-  useEffect(() => {
-    const totalDuration = STEPS.length * STEP_DURATION_MS;
-    Animated.timing(barWidth, {
-      toValue: 1,
-      duration: totalDuration,
-      easing: Easing.linear,
-      useNativeDriver: false,
-    }).start();
-  }, []);
+  const stepDurationMs = Math.max(8000, Math.floor(ESTIMATED_MAX_MS / steps.length));
 
   useEffect(() => {
+    barWidth.setValue(0);
+    const anim = Animated.timing(barWidth, {
+      toValue: BAR_MAX_FRACTION,
+      duration: ESTIMATED_MAX_MS,
+      easing: Easing.linear,
+      useNativeDriver: false,
+    });
+    anim.start();
+    return () => anim.stop();
+  }, [barWidth, steps.length]);
+
+  useEffect(() => {
+    setStepIndex(0);
     const interval = setInterval(() => {
-      setStepIndex((prev) => Math.min(prev + 1, STEPS.length - 1));
-    }, STEP_DURATION_MS);
+      setStepIndex((prev) => Math.min(prev + 1, steps.length - 1));
+    }, stepDurationMs);
     return () => clearInterval(interval);
-  }, []);
+  }, [steps.length, stepDurationMs]);
 
   useEffect(() => {
     const pulse = Animated.loop(
@@ -57,7 +67,7 @@ export function AnalysisProgress({ retryLabel }: Props) {
       <View style={styles.header}>
         <Animated.View style={[styles.dot, { backgroundColor: colors.accent, opacity: dotOpacity }]} />
         <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-          {retryLabel ? "Retrying analysis" : "Analysing property"}
+          {retryLabel ? t("search.retrying_analysis") : t("search.analysing_property")}
         </Text>
       </View>
 
@@ -67,22 +77,29 @@ export function AnalysisProgress({ retryLabel }: Props) {
             styles.fill,
             {
               backgroundColor: colors.accent,
-              width: barWidth.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] }),
+              width: barWidth.interpolate({
+                inputRange: [0, BAR_MAX_FRACTION],
+                outputRange: ["0%", `${BAR_MAX_FRACTION * 100}%`],
+              }),
             },
           ]}
         />
       </View>
 
+      <Text style={[styles.hint, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+        {t("search.analysis_up_to_five_min")}
+      </Text>
+
       <Text
         key={retryLabel ?? stepIndex}
         style={[styles.step, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}
       >
-        {retryLabel ?? STEPS[stepIndex]}
+        {retryLabel ?? steps[stepIndex]}
       </Text>
 
       {!retryLabel && (
         <View style={styles.stepDots}>
-          {STEPS.map((_, i) => (
+          {steps.map((_, i) => (
             <View
               key={i}
               style={[
@@ -118,6 +135,10 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 14,
+  },
+  hint: {
+    fontSize: 12,
+    lineHeight: 17,
   },
   track: {
     height: 4,

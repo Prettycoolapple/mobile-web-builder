@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback, useEffect } from "react";
+import React, { useRef, useState, useCallback, useEffect, useLayoutEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -20,12 +20,23 @@ import { useColors } from "@/hooks/useColors";
 import { useChat, ChatMessage, FeasibilityReport, PropertyCandidate, ServiceProvider } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
 import { ChatBubble } from "@/components/ChatBubble";
+import { ResponseRatingBar } from "@/components/ResponseRatingBar";
 import { PaywallModal } from "@/components/PaywallModal";
 import { setBaseUrl } from "@workspace/api-client-react";
-import { useT } from "@/lib/i18n";
+import { getApiBase as resolveApiBase, getApiOrigin } from "@/lib/api";
+import { useT, isOSChineseLocale } from "@/lib/i18n";
+import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
+import { resolveChatQuota } from "@/lib/quotas";
 
-if (process.env.EXPO_PUBLIC_DOMAIN) {
-  setBaseUrl(`https://${process.env.EXPO_PUBLIC_DOMAIN}`);
+setBaseUrl(getApiOrigin() || null);
+
+/** Prefer top-level report address, then property overview (some API payloads only set the latter). */
+function resolveReportAddress(report: FeasibilityReport | null | undefined): string {
+  if (!report) return "";
+  const top = typeof report.address === "string" ? report.address.trim() : "";
+  if (top) return top;
+  const ov = report.propertyOverview?.address;
+  return typeof ov === "string" ? ov.trim() : "";
 }
 
 
@@ -42,6 +53,13 @@ const RECOMMENDATION_KEYWORDS = [
   "anyone to recommend", "anyone good",
 ];
 
+function asksForOthers(textLower: string): boolean {
+  return [
+    "other", "another", "someone else", "else", "different", "different provider",
+    "还有", "另外", "别的", "其他", "再推荐", "换一个", "換一個",
+  ].some((kw) => textLower.includes(kw));
+}
+
 function extractJSON(text: string): unknown | null {
   try {
     const stripped = text.replace(/```(?:json)?\s*/gi, "").replace(/```\s*/g, "").trim();
@@ -53,8 +71,9 @@ function extractJSON(text: string): unknown | null {
 
 // Removes any JSON-looking blocks from a text string so raw JSON is never
 // shown to the user in the chat. If the string is *only* JSON, returns a
-// friendly fallback message instead.
-function sanitizeForDisplay(text: string): string {
+// friendly fallback message instead. The fallback is picked based on the
+// caller's active locale so Chinese-OS users get a Chinese message.
+function sanitizeForDisplay(text: string, formatErrorFallback: string): string {
   if (!text) return "";
   const stripped = text
     .replace(/```(?:json)?[\s\S]*?```/gi, "")
@@ -62,9 +81,41 @@ function sanitizeForDisplay(text: string): string {
     .replace(/\[[\s\S]*\]/g, "")
     .trim();
   if (!stripped || stripped.length < 4) {
-    return "I had trouble formatting that response. Could you try rephrasing your question?";
+    return formatErrorFallback;
   }
   return stripped;
+}
+
+/** Brief confirmation after address suggestion bubble — maps to top geocoded suggestion. */
+function isBareAffirmativeReply(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0 || trimmed.length > 48) return false;
+  const lower = trimmed.toLowerCase();
+
+  const neg =
+    /\b(no|nah|nope|not\s+really|incorrect|wrong|different|actually\b|instead|cancel|rather not)\b/i.test(lower) ||
+    /^[\u4e0d\u662f]/.test(trimmed) ||
+    /[\u932f\u4e86]|不是|不太对|不對/i.test(trimmed);
+  if (neg) return false;
+
+  if (/^(yes|yep|yeah|sure|ok|okay|please|correct|right|exactly)$/i.test(lower)) return true;
+  if (
+    /^(that's right|that's the one|that's it|go ahead|go for it|sounds good|looks good)$/i.test(lower)
+  ) {
+    return true;
+  }
+  const zhBare =
+    /^(是的|對對|對的|對|好|好啊|没问题|沒問題|可以|行行|確認|就这|就這樣|就这样)$/u.test(trimmed);
+  return zhBare;
+}
+
+function getFirstTurnResponseMode(messages: ChatMessage[]): string | null {
+  const assistant = messages.filter((m) => m.role === "assistant" && m.type !== "loading");
+  if (assistant.length !== 1) return null;
+  const a = assistant[0];
+  if (a.type === "report") return "analyse";
+  if (a.type === "search") return "discover";
+  return "text";
 }
 
 export default function SearchScreen() {
@@ -90,6 +141,7 @@ export default function SearchScreen() {
     setCurrentReport,
     isLoading,
     setIsLoading,
+    setFirstLlmResponseRating,
   } = useChat();
 
   const [inputText, setInputText] = useState("");
@@ -103,6 +155,7 @@ export default function SearchScreen() {
   const checkedFollowupIds = useRef<Set<string>>(new Set());
   const lastReportIdRef = useRef<string | null>(null);
   const cardScorePollRef = useRef<{ addresses: string[]; sessionId: string; intervalId: ReturnType<typeof setInterval> | null }>({ addresses: [], sessionId: "", intervalId: null });
+  const handleAnalyseRef = useRef<((address: string, selectedPhotoUrl?: string | null) => Promise<void>) | null>(null);
 
   useEffect(() => {
     const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
@@ -112,17 +165,43 @@ export default function SearchScreen() {
     return () => { showSub.remove(); hideSub.remove(); };
   }, []);
 
+  const chatQuota = user ? resolveChatQuota(user.role, user.subscriptionTier) : null;
+
   useEffect(() => {
-    if (!user) return;
+    if (!user || !chatQuota) return;
     const used = user.messagesUsedThisMonth ?? 0;
-    const limit =
-      user.role === "service_provider" ? 300
-      : user.subscriptionTier === "standard" || user.subscriptionTier === "pro" ? 50
-      : 10;
-    setMessageLimitReached(used >= limit);
-  }, [user]);
+    setMessageLimitReached(used >= chatQuota.limit);
+  }, [user, chatQuota]);
 
   const messages = currentSession?.messages || [];
+
+  const showRatingStrip = useMemo(() => {
+    if (!currentSession?.id || currentSession.skipFirstTurnRating) return false;
+    const assistantDone = currentSession.messages.filter(
+      (m) => m.role === "assistant" && m.type !== "loading",
+    );
+    const userDone = currentSession.messages.filter((m) => m.role === "user");
+    return assistantDone.length === 1 && userDone.length >= 1;
+  }, [currentSession]);
+
+  const submitFirstTurnRating = useCallback(
+    (rating: "up" | "down") => {
+      const sid = currentSessionId;
+      if (!sid || !currentSession) return;
+      setFirstLlmResponseRating(sid, rating);
+      const responseMode = getFirstTurnResponseMode(currentSession.messages);
+      void fetch(`${resolveApiBase()}/feedback/llm`, {
+        method: "POST",
+        headers: { ...getApiHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientSessionId: sid,
+          rating,
+          responseMode,
+        }),
+      }).catch(() => {});
+    },
+    [currentSessionId, currentSession, getApiHeaders, setFirstLlmResponseRating],
+  );
 
   useEffect(() => {
     const msgs = currentSession?.messages ?? [];
@@ -167,9 +246,7 @@ export default function SearchScreen() {
     // Delay slightly so the UI settles before the recommendation bubble appears
     const timer = setTimeout(async () => {
       try {
-        const apiBase = process.env.EXPO_PUBLIC_DOMAIN
-          ? `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`
-          : "/api";
+        const apiBase = resolveApiBase();
         const headers = getApiHeaders();
         const conversationHistory = msgs
           .filter((m) => m.type === "text" || m.type === "report")
@@ -178,7 +255,14 @@ export default function SearchScreen() {
         const resp = await fetch(`${apiBase}/recommendations/check`, {
           method: "POST",
           headers,
-          body: JSON.stringify({ report: lastReport.report, conversationHistory, followUpCount }),
+          body: JSON.stringify({
+            report: lastReport.report,
+            conversationHistory,
+            followUpCount,
+            excludeProviderIds: msgs
+              .filter((m) => m.type === "provider_recommendation" && m.provider?.id)
+              .map((m) => m.provider!.id),
+          }),
         });
         // Free users hitting the provider-DM gate. The auto check is silent
         // by design (the user didn't ask), so we don't open the paywall here
@@ -199,7 +283,7 @@ export default function SearchScreen() {
             type: "provider_recommendation",
             provider: data.provider,
             intentType: data.intentType,
-            propertyAddress: lastReport.report?.address ?? "",
+            propertyAddress: resolveReportAddress(lastReport.report),
           }, currentSessionId ?? undefined);
         }
       } catch (err) {
@@ -212,17 +296,27 @@ export default function SearchScreen() {
 
   const handleConnect = useCallback(async (providerId: string, propertyAddress: string) => {
     try {
-      const apiBase = process.env.EXPO_PUBLIC_DOMAIN
-        ? `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`
-        : "/api";
+      const apiBase = resolveApiBase();
       const headers = getApiHeaders();
       const msgs = currentSession?.messages ?? [];
       const lastReportMsg = [...msgs].reverse().find((m) => m.type === "report" && m.report);
       const report = lastReportMsg?.report ?? null;
+      const resolvedProviderId = String(providerId ?? "").trim();
+      const resolvedPropertyAddress =
+        String(propertyAddress ?? "").trim() ||
+        resolveReportAddress(report) ||
+        resolveReportAddress(currentSession?.currentReport ?? undefined);
+      if (!resolvedProviderId || !resolvedPropertyAddress) {
+        throw new Error(t("bubble.recommend.connect_missing_context"));
+      }
       const resp = await fetch(`${apiBase}/recommendations/connect`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ providerId, propertyAddress, report }),
+        body: JSON.stringify({
+          providerId: resolvedProviderId,
+          propertyAddress: resolvedPropertyAddress,
+          report,
+        }),
       });
       if (resp.status === 402) {
         const last = msgs[msgs.length - 1];
@@ -246,7 +340,7 @@ export default function SearchScreen() {
       console.log("Connect failed:", err);
       throw err;
     }
-  }, [getApiHeaders, router, currentSession]);
+  }, [getApiHeaders, router, currentSession, t]);
 
   const handleDismiss = useCallback((messageId: string) => {
     removeMessage(messageId);
@@ -282,9 +376,7 @@ export default function SearchScreen() {
 
     const timer = setTimeout(async () => {
       try {
-        const apiBase = process.env.EXPO_PUBLIC_DOMAIN
-          ? `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`
-          : "/api";
+        const apiBase = resolveApiBase();
         const headers = getApiHeaders();
         const address = currentSession?.currentReport?.address ?? "";
         const conversationHistory = msgs
@@ -330,12 +422,7 @@ export default function SearchScreen() {
 
   const handleAgentDismiss = useCallback((_messageId: string) => {}, []);
 
-  const getApiBase = useCallback(() => {
-    if (process.env.EXPO_PUBLIC_DOMAIN) {
-      return `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`;
-    }
-    return "/api";
-  }, []);
+  const getApiBase = useCallback(() => resolveApiBase(), []);
 
   const startCardScorePoll = useCallback(
     (addresses: string[], sessionId: string) => {
@@ -402,21 +489,37 @@ export default function SearchScreen() {
     const text = (overrideText !== undefined ? overrideText : inputText).trim();
     if (!text || isLoading) return;
 
+    const sessionIdEarly = currentSessionId ?? createSession();
+    const pendingAddressPick = [...(currentSession?.messages ?? [])]
+      .reverse()
+      .find((m) => m.type === "address_clarification" && (m.clarification?.options?.length ?? 0) > 0);
+    if (pendingAddressPick?.clarification?.options?.[0] && isBareAffirmativeReply(text)) {
+      await handleAnalyseRef.current?.(pendingAddressPick.clarification.options[0]);
+      return;
+    }
+
     setInputText("");
     inputRef.current?.clear();
     Keyboard.dismiss();
 
-    const sessionId = currentSessionId ?? createSession();
-
+    const sessionId = sessionIdEarly;
     addMessage({ role: "user", content: text, type: "text" }, sessionId);
     setIsLoading(true);
 
     const lowerText = text.toLowerCase();
 
-    // Detect if the user is explicitly asking for a service provider recommendation
+    // Client-side keyword gate: catches unambiguous English phrases before the
+    // LLM response arrives. The LLM-derived signal (wantsProviderRecommendation)
+    // covers nuanced and Chinese messages and will supplement this in the finally block.
     const isExplicitRecommendationRequest =
       user?.role === "general" &&
       RECOMMENDATION_KEYWORDS.some((kw) => lowerText.includes(kw));
+
+    // Captures the LLM-derived recommendation signal from the /chat response so
+    // the finally block can trigger /recommendations/check even when the keyword
+    // list above doesn't match (e.g. Chinese, nuanced phrasing).
+    let llmWantsRecommendation = false;
+    let llmSuggestedDiscipline: string | null = null;
 
     const isDiscoverQuery =
       lowerText.match(/find\s+|search\s+|discover\s+|looking\s+for\s+|show\s+me\s+properties|subdividable|subdivision\s+opp|development\s+sites|lifestyle\s+prop|investment\s+prop/) ||
@@ -443,7 +546,7 @@ export default function SearchScreen() {
         .filter((m) => m.type === "text" || m.type === "report" || m.type === "search")
         .map((m) => ({
           role: m.role as "user" | "assistant",
-          content: m.type === "text" ? m.content : m.type === "report" ? `[Feasibility report for ${m.report?.address || "property"}]` : `[Search results shown: ${(m.searchResults ?? []).map((r) => r.address).join("; ")}]`,
+          content: m.type === "text" ? m.content : m.type === "report" ? `[Feasibility report for ${m.report?.address || "property"}]` : `[Search results shown: ${(m.searchResults ?? []).map((r) => `${r.address}||${r.listingUrl ?? ""}`).join("; ")}]`,
         })),
       { role: "user" as const, content: text },
     ];
@@ -478,11 +581,11 @@ export default function SearchScreen() {
         if (attempt > 1) {
           const isRetryableLast = lastErr?.name === "AbortError" || lastErr?.isServerError || lastErr?.isNetworkError;
           if (isRetryableLast) {
-            updateLastMessage({
-              type: "loading",
-              content: "",
-              retryLabel: "Waking up the service…",
-            }, sessionId);
+          updateLastMessage({
+            type: "loading",
+            content: "",
+            retryLabel: t("search.waking"),
+          }, sessionId);
             const woke = await warmUpService();
             if (!woke) {
               // Service still not responding — don't burn more attempts blindly.
@@ -492,7 +595,7 @@ export default function SearchScreen() {
           updateLastMessage({
             type: "loading",
             content: "",
-            retryLabel: attempt === MAX_RETRIES ? "Still fetching data, one moment…" : "Fetching data…",
+            retryLabel: attempt === MAX_RETRIES ? t("search.still_fetching") : t("search.fetching"),
           }, sessionId);
           await new Promise<void>((r) => setTimeout(r, 1500));
         }
@@ -517,8 +620,8 @@ export default function SearchScreen() {
               updateLastMessage({
                 type: "text",
                 content: isUpgrade
-                  ? "You've reached your usage limit for this month. Upgrade to Standard to continue, or wait until your plan refreshes on the 1st."
-                  : "You've reached your usage limit for this month. Your messages will refresh on the 1st.",
+                  ? t("search.usage_limit_short")
+                  : t("search.usage_limit_short_free"),
               }, sessionId);
               if (isUpgrade) setShowPaywall(true);
               setIsLoading(false);
@@ -531,13 +634,24 @@ export default function SearchScreen() {
           // fails on responses with leading whitespace (heartbeat spaces) and consumes
           // the body stream before any fallback can read it.
           const responseText = await resp.text();
-          let data: { content: string; mode: string };
+          let data: {
+            content: string;
+            mode: string;
+            wantsProviderRecommendation?: boolean;
+            suggestedDiscipline?: string | null;
+          };
           try {
-            data = JSON.parse(responseText.trim()) as { content: string; mode: string };
+            data = JSON.parse(responseText.trim()) as typeof data;
           } catch {
             // Body may itself be a raw feasibility report or discover payload
             const fallback = extractJSON(responseText) as { content?: string; mode?: string } | null;
             data = { content: fallback?.content ?? responseText, mode: fallback?.mode ?? "" };
+          }
+
+          // Capture LLM-derived provider recommendation signal for use in finally.
+          if (data.wantsProviderRecommendation && user?.role === "general") {
+            llmWantsRecommendation = true;
+            llmSuggestedDiscipline = data.suggestedDiscipline ?? null;
           }
 
           // Helper: check if a parsed object looks like a feasibility report
@@ -568,19 +682,34 @@ export default function SearchScreen() {
                 }, sessionId);
                 return;
               }
-              updateLastMessage({ type: "text", content: parsed.question || "Could you clarify?" }, sessionId);
+              if (parsed.clarificationType === "address" && Array.isArray(parsed.options) && parsed.options.length > 0) {
+                updateLastMessage({
+                  type: "address_clarification",
+                  content: "",
+                  clarification: {
+                    question: parsed.question || t("search.confirm_address_intro"),
+                    options: parsed.options,
+                  },
+                }, sessionId);
+                return;
+              }
+              updateLastMessage({ type: "text", content: parsed.question || t("search.could_clarify") }, sessionId);
             } catch {
-              updateLastMessage({ type: "text", content: data.content || "Could you clarify?" }, sessionId);
+              updateLastMessage({ type: "text", content: data.content || t("search.could_clarify") }, sessionId);
             }
             return;
           }
           if (data.mode === "analyse") {
             if (maybeParsed && isFeasibilityReport(maybeParsed)) {
-              setCurrentReport(maybeParsed as unknown as FeasibilityReport);
-              updateLastMessage({ type: "report", report: maybeParsed as unknown as FeasibilityReport, content: "" }, sessionId);
+              const reportObj = maybeParsed as unknown as FeasibilityReport;
+              setCurrentReport(reportObj);
+              updateLastMessage({ type: "report", report: reportObj, content: "" }, sessionId);
+              if (reportObj.scores && reportObj.address) {
+                updateCandidateScores({ [reportObj.address]: reportObj.scores }, sessionId);
+              }
               refreshProfile().catch(() => {});
             } else {
-              updateLastMessage({ type: "text", content: sanitizeForDisplay(rawContent) }, sessionId);
+              updateLastMessage({ type: "text", content: sanitizeForDisplay(rawContent, t("search.format_error")) }, sessionId);
             }
           } else if (data.mode === "discover") {
             const aiIntro = maybeParsed?.aiIntro ?? "";
@@ -588,7 +717,7 @@ export default function SearchScreen() {
               updateLastMessage({ type: "search", searchResults: maybeParsed.candidates, content: "", aiIntro }, sessionId);
               startCardScorePoll(maybeParsed.candidates.map((c) => c.address), sessionId);
             } else {
-              const noResultMsg = aiIntro || "No matching listings found right now. Try a different suburb, adjust your budget, or ask again shortly — new listings appear daily.";
+              const noResultMsg = aiIntro || t("search.no_listings_msg");
               updateLastMessage({ type: "text", content: noResultMsg }, sessionId);
             }
           } else {
@@ -596,13 +725,17 @@ export default function SearchScreen() {
             // structured result, render it as such — otherwise treat as text
             // but always strip any JSON before displaying.
             if (isFeasibilityReport(maybeParsed)) {
-              setCurrentReport(maybeParsed as unknown as FeasibilityReport);
-              updateLastMessage({ type: "report", report: maybeParsed as unknown as FeasibilityReport, content: "" }, sessionId);
+              const reportObj = maybeParsed as unknown as FeasibilityReport;
+              setCurrentReport(reportObj);
+              updateLastMessage({ type: "report", report: reportObj, content: "" }, sessionId);
+              if (reportObj.scores && reportObj.address) {
+                updateCandidateScores({ [reportObj.address]: reportObj.scores }, sessionId);
+              }
               refreshProfile().catch(() => {});
             } else if (maybeParsed?.candidates && maybeParsed.candidates.length > 0) {
               updateLastMessage({ type: "search", searchResults: maybeParsed.candidates, content: "" }, sessionId);
             } else if (hasJsonShape) {
-              updateLastMessage({ type: "text", content: sanitizeForDisplay(rawContent) }, sessionId);
+              updateLastMessage({ type: "text", content: sanitizeForDisplay(rawContent, t("search.format_error")) }, sessionId);
             } else {
               updateLastMessage({ type: "text", content: rawContent }, sessionId);
             }
@@ -625,12 +758,12 @@ export default function SearchScreen() {
       const isTimeout = lastErr?.name === "AbortError";
       const statusCode = lastErr?.statusCode;
       const finalContent = isTimeout
-        ? "NZ property data sources are slow right now. Please tap Try again."
+        ? t("search.slow_data")
         : statusCode === 402
-          ? "You've used all your reports for this month. Upgrade to Standard for more."
+          ? t("search.usage_used_upgrade")
           : statusCode === 401
-            ? "Session expired. Please sign in again."
-            : "Couldn't reach the service after several attempts. Please check your connection and try again.";
+            ? t("search.session_expired")
+            : t("search.cant_reach");
       if (statusCode === 402) setShowPaywall(true);
       updateLastMessage({ type: "text", content: finalContent, retryText: text }, sessionId);
     } finally {
@@ -638,15 +771,18 @@ export default function SearchScreen() {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       refreshProfile().catch(() => {});
 
-      // If the user explicitly asked for a recommendation, fire the explicit check
-      // right now — bypassing probability gates. No report required.
-      if (isExplicitRecommendationRequest) {
+      // Fire the explicit /recommendations/check when:
+      //   (a) keyword detection matched (fast, client-side), OR
+      //   (b) the LLM detected provider recommendation intent in the chat response.
+      // This covers English keywords, Chinese expressions, and nuanced phrasing alike.
+      if (isExplicitRecommendationRequest || llmWantsRecommendation) {
         const reportSnapshot = currentReport;
         const capturedSessionId = sessionId;
         const capturedHeaders = headers;
         const capturedText = lowerText;
 
-        // Detect the discipline the user is asking about
+        // Discipline: prefer the LLM-derived discipline (semantically richer),
+        // fall back to client-side keyword mapping for common English terms.
         const disciplineMap: [string, string][] = [
           ["architect", "architect_designer"],
           ["designer", "architect_designer"],
@@ -655,8 +791,9 @@ export default function SearchScreen() {
           ["quantity surveyor", "quantity_surveyor"],
           ["qs", "quantity_surveyor"],
         ];
-        const preferredDiscipline =
+        const keywordDiscipline =
           disciplineMap.find(([kw]) => capturedText.includes(kw))?.[1] ?? null;
+        const preferredDiscipline = llmSuggestedDiscipline ?? keywordDiscipline;
 
         setTimeout(async () => {
           try {
@@ -668,7 +805,11 @@ export default function SearchScreen() {
                 report: reportSnapshot ?? {},
                 conversationHistory: [],
                 explicitRequest: true,
+                askForOthers: asksForOthers(capturedText),
                 preferredDiscipline,
+                excludeProviderIds: (currentSession?.messages ?? [])
+                  .filter((m) => m.type === "provider_recommendation" && m.provider?.id)
+                  .map((m) => m.provider!.id),
               }),
             });
             if (resp.status === 402) {
@@ -703,7 +844,7 @@ export default function SearchScreen() {
                 type: "provider_recommendation",
                 provider: data.provider,
                 intentType: data.intentType,
-                propertyAddress: (reportSnapshot as any)?.address ?? "",
+                propertyAddress: resolveReportAddress(reportSnapshot as FeasibilityReport | undefined),
               }, capturedSessionId);
             }
           } catch {}
@@ -724,6 +865,7 @@ export default function SearchScreen() {
     getApiHeaders,
     refreshProfile,
     user?.role,
+    t,
   ]);
 
   const handleFollowUp = useCallback(
@@ -735,14 +877,14 @@ export default function SearchScreen() {
   );
 
   const handleAnalyse = useCallback(
-    async (address: string) => {
+    async (address: string, selectedPhotoUrl?: string | null) => {
       if (isLoading) return;
       setInputText("");
       Keyboard.dismiss();
 
       const sessionId = currentSessionId ?? createSession();
 
-      addMessage({ role: "user", content: `Analyse ${address}`, type: "text" }, sessionId);
+      addMessage({ role: "user", content: t("search.analyse_prefix", { address }), type: "text" }, sessionId);
       setIsLoading(true);
       addMessage({ role: "assistant", content: "", type: "loading", loadingMode: "analyse" }, sessionId);
 
@@ -776,12 +918,12 @@ export default function SearchScreen() {
 
             if (resp.status === 402) {
               const err = await resp.json().catch(() => ({} as { error?: string }));
-              updateLastMessage({ type: "text", content: (err as any)?.error || "You've used all your reports for this month. Upgrade to Standard for more." }, sessionId);
+              updateLastMessage({ type: "text", content: (err as any)?.error || t("search.usage_used_upgrade") }, sessionId);
               setShowPaywall(true);
               return;
             }
             if (resp.status === 401) {
-              updateLastMessage({ type: "text", content: "Session expired. Please sign in again." }, sessionId);
+              updateLastMessage({ type: "text", content: t("search.session_expired") }, sessionId);
               return;
             }
 
@@ -802,14 +944,29 @@ export default function SearchScreen() {
               updateLastMessage({
                 type: "subdivision_clarification",
                 content: "",
-                clarification: { question: data.question || "Which lot would you like analysed?", options: data.options },
+                clarification: { question: data.question || t("search.which_lot"), options: data.options },
+              }, sessionId);
+              return;
+            }
+
+            if (data.type === "clarification" && data.clarificationType === "address" && Array.isArray(data.options) && data.options.length > 0) {
+              updateLastMessage({
+                type: "address_clarification",
+                content: "",
+                clarification: { question: data.question || t("search.confirm_address_intro"), options: data.options },
               }, sessionId);
               return;
             }
 
             if (data.report && data.report.scores) {
-              setCurrentReport(data.report);
-              updateLastMessage({ type: "report", report: data.report, content: "" }, sessionId);
+              const patchedReport: FeasibilityReport = (
+                !data.report.photoUrl && selectedPhotoUrl
+              ) ? { ...data.report, photoUrl: selectedPhotoUrl } : data.report;
+              setCurrentReport(patchedReport);
+              updateLastMessage({ type: "report", report: patchedReport, content: "" }, sessionId);
+              if (patchedReport.scores && patchedReport.address) {
+                updateCandidateScores({ [patchedReport.address]: patchedReport.scores }, sessionId);
+              }
               refreshProfile().catch(() => {});
               return;
             }
@@ -841,8 +998,13 @@ export default function SearchScreen() {
       getApiBase,
       getApiHeaders,
       refreshProfile,
+      t,
     ],
   );
+
+  useLayoutEffect(() => {
+    handleAnalyseRef.current = handleAnalyse;
+  }, [handleAnalyse]);
 
   const renderItem = useCallback(
     ({ item }: { item: ChatMessage }) => (
@@ -883,7 +1045,9 @@ export default function SearchScreen() {
       }]}>
         <View style={styles.topBarContent}>
           <View style={styles.brandRow}>
-            <Text style={[styles.appName, { fontFamily: "SpaceGrotesk_700Bold", letterSpacing: -0.4 }]}>Project Alpha</Text>
+            <Text style={[styles.appName, { fontFamily: "SpaceGrotesk_700Bold", letterSpacing: -0.4 }]}>
+              {isOSChineseLocale() ? "阿尔房" : "Project Alpha"}
+            </Text>
           </View>
           <View style={styles.headerActions}>
             {user?.role === "sales_agent" && (
@@ -894,7 +1058,7 @@ export default function SearchScreen() {
                   activeOpacity={0.75}
                 >
                   <Feather name="list" size={14} color="rgba(250,249,246,0.75)" />
-                  <Text style={[styles.myListingsBtnText, { fontFamily: "DM_Sans_500Medium" }]}>Listings</Text>
+                  <Text style={[styles.myListingsBtnText, { fontFamily: "DM_Sans_500Medium" }]}>{t("search.listings")}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.addListingBtn, { backgroundColor: colors.accent }]}
@@ -902,7 +1066,7 @@ export default function SearchScreen() {
                   activeOpacity={0.8}
                 >
                   <Feather name="plus" size={13} color="#fff" />
-                  <Text style={[styles.addListingBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>Add listing</Text>
+                  <Text style={[styles.addListingBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>{t("search.add_listing")}</Text>
                 </TouchableOpacity>
               </>
             )}
@@ -913,7 +1077,7 @@ export default function SearchScreen() {
                 activeOpacity={0.7}
               >
                 <Feather name="plus" size={14} color="rgba(250,249,246,0.65)" />
-                <Text style={[styles.newChatText, { fontFamily: "DM_Sans_500Medium" }]}>New</Text>
+                <Text style={[styles.newChatText, { fontFamily: "DM_Sans_500Medium" }]}>{t("search.new")}</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -923,11 +1087,11 @@ export default function SearchScreen() {
           <View style={[styles.contextBanner, { borderTopColor: "rgba(250,249,246,0.08)" }]}>
             <Feather name="map-pin" size={12} color={colors.accent} />
             <Text style={[styles.contextAddress, { color: "rgba(250,249,246,0.75)", fontFamily: "DM_Sans_500Medium" }]} numberOfLines={1}>
-              {currentSession.currentReport.address || currentSession.currentReport.propertyOverview?.address || "Property loaded"}
+              {currentSession.currentReport.address || currentSession.currentReport.propertyOverview?.address || t("search.property_loaded")}
             </Text>
             <View style={[styles.contextBadge, { backgroundColor: colors.accent + "22" }]}>
               <Text style={[styles.contextBadgeText, { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" }]}>
-                {currentSession.currentReport.scores?.ease}/5
+                {formatCompositeScoreForDisplay(Number(currentSession.currentReport.scores?.composite ?? 0))}/5
               </Text>
             </View>
           </View>
@@ -1006,6 +1170,14 @@ export default function SearchScreen() {
             renderItem={renderItem}
             keyExtractor={keyExtractor}
             inverted
+            ListHeaderComponent={
+              showRatingStrip ? (
+                <ResponseRatingBar
+                  sessionRating={currentSession?.firstLlmResponseRating}
+                  onRate={submitFirstTurnRating}
+                />
+              ) : null
+            }
             contentContainerStyle={[styles.messageList, { paddingBottom: 16 }]}
             keyboardDismissMode="interactive"
             keyboardShouldPersistTaps="handled"
@@ -1018,18 +1190,14 @@ export default function SearchScreen() {
             <View style={[styles.limitWarningBar, { backgroundColor: "#FEF2F2", borderTopColor: "#FECACA" }]}>
               <Feather name="slash" size={13} color="#DC2626" />
               <Text style={[styles.limitWarningText, { color: "#991B1B", fontFamily: "DM_Sans_500Medium" }]}>
-                Usage limit reached — messages refresh on the 1st of next month.
+                {t("search.usage_limit_bar")}
               </Text>
             </View>
-          ) : (user?.messagesUsedThisMonth ?? 0) >= (
-            user?.role === "service_provider" ? 280
-            : user?.subscriptionTier === "free" || !user?.subscriptionTier ? 8
-            : 45
-          ) ? (
+          ) : chatQuota && (user?.messagesUsedThisMonth ?? 0) >= chatQuota.warnAt ? (
             <View style={[styles.limitWarningBar, { backgroundColor: "#FFFBEB", borderTopColor: "#FDE68A" }]}>
               <Feather name="alert-triangle" size={13} color="#D97706" />
               <Text style={[styles.limitWarningText, { color: "#92400E", fontFamily: "DM_Sans_500Medium" }]}>
-                You are approaching usage limit
+                {t("search.usage_limit_approaching")}
               </Text>
             </View>
           ) : null}
@@ -1047,7 +1215,13 @@ export default function SearchScreen() {
               <TextInput
                 ref={inputRef}
                 style={[styles.input, { color: messageLimitReached ? colors.mutedForeground : colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-                placeholder={messageLimitReached ? t("profile.limit_reached_standard") : t("search.placeholder")}
+                placeholder={
+                  messageLimitReached
+                    ? chatQuota?.isFree
+                      ? t("profile.limit_reached_free")
+                      : t("profile.limit_reached_standard")
+                    : t("search.placeholder")
+                }
                 placeholderTextColor={colors.mutedForeground}
                 value={messageLimitReached ? "" : inputText}
                 onChangeText={messageLimitReached ? undefined : setInputText}

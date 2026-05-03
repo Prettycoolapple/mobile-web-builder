@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseNZDollar, parseArea, parseYear } from "../scraper-parsers";
+import { parseNZDollar, parseArea, parseYear, extractBuildYearFromListingText } from "../scraper-parsers";
 
 /**
  * Fixtures for the numeric field parsers used by the OneRoof scraper.
@@ -130,4 +130,14 @@ describe("parseYear", () => {
       expect(parseYear(c.text)).toBe(c.expected);
     });
   }
+});
+
+describe("extractBuildYearFromListingText", () => {
+  it("prefers Year built over noisy other years in blob", () => {
+    const blob = `Some text 2019 auction. Year built: 2016\nFloor 120m`;
+    expect(extractBuildYearFromListingText(blob)).toBe(2016);
+  });
+  it("matches Built in YYYY", () => {
+    expect(extractBuildYearFromListingText("Quality home. Built in 2014 near schools.")).toBe(2014);
+  });
 });

@@ -16,7 +16,7 @@
  */
 
 import { logger } from "../logger";
-import type { ListingResult } from "./oneroof";
+import type { ComparableSale, ListingResult } from "./oneroof";
 import { extractBedsBaths } from "./bed-bath-extractor";
 
 const PLATFORM_BASE = "https://platform.realestate.co.nz/search/v1";
@@ -335,11 +335,25 @@ function buildPhotoUrl(photos: RawListing["attributes"]["photos"]): string | nul
   const first = photos[0];
   const baseUrl = first["base-url"];
   if (!baseUrl) return null;
-  // The API exposes only tiny templates in `small`/`medium`/`large` (≤140×178).
-  // The realestate.co.nz site itself uses an undocumented high-res variant on
-  // mediaserver.realestate.co.nz at 1280×720 — sharp on retina phones for our
-  // ~400×140-pt card. Verified 200 OK across all listings tested.
   return `${MEDIA_BASE}${baseUrl}.crop.1280x720.jpg`;
+}
+
+/**
+ * Return up to `limit` high-res photo URLs from a listing's photo array.
+ * Each photo uses the same 1280×720 crop path as the hero image.
+ */
+export function buildPhotoUrls(
+  photos: RawListing["attributes"]["photos"],
+  limit = 4,
+): string[] {
+  if (!photos || photos.length === 0) return [];
+  return photos
+    .slice(0, limit)
+    .map((p) => {
+      const baseUrl = p["base-url"];
+      return baseUrl ? `${MEDIA_BASE}${baseUrl}.crop.1280x720.jpg` : null;
+    })
+    .filter((u): u is string => u !== null);
 }
 
 function mapListing(raw: RawListing): ListingResult | null {
@@ -352,12 +366,14 @@ function mapListing(raw: RawListing): ListingResult | null {
   const price = parsePriceDisplay(priceText);
   const landArea = typeof a["land-area"] === "number" ? a["land-area"] : null;
 
+  const photoUrls = buildPhotoUrls(a.photos, 4);
   return {
     address,
     price,
     priceText,
     landArea,
-    photoUrl: buildPhotoUrl(a.photos),
+    photoUrl: photoUrls[0] ?? null,
+    photoUrls,
     listingUrl: url,
     zone: null,
     bedrooms: typeof a["bedroom-count"] === "number" ? a["bedroom-count"] : null,
@@ -392,6 +408,168 @@ async function fetchListingsForSuburbId(suburbId: string, limit = 100): Promise<
 
   logger.info({ suburbId, total: json.meta?.totalResults, mapped: mapped.length }, "realestate-api: listings fetched");
   return mapped;
+}
+
+function firstAddressLine(s: string): string {
+  return s
+    .split(",")[0]
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function streetNumberToken(line: string): string {
+  const t = line.split(" ")[0] ?? "";
+  return t.replace(/[^a-z0-9]/gi, "").toLowerCase();
+}
+
+/** True when `candidate` looks like the same street address as `target` (first line). */
+function addressesLikelyMatch(target: string, candidate: string): boolean {
+  const fa = firstAddressLine(target);
+  const fb = firstAddressLine(candidate);
+  if (fa.length < 4 || fb.length < 4) return false;
+  if (fa === fb) return true;
+  const na = streetNumberToken(fa);
+  const nb = streetNumberToken(fb);
+  if (!na || !nb || na !== nb) return false;
+  if (fa.includes(fb) || fb.includes(fa)) return true;
+  const n = Math.min(24, fa.length, fb.length);
+  if (n >= 10 && fa.slice(0, n) === fb.slice(0, n)) return true;
+  const wordsA = fa.split(" ").filter((w) => w.length > 2);
+  const wordsB = new Set(fb.split(" ").filter((w) => w.length > 2));
+  let overlap = 0;
+  for (const w of wordsA) {
+    if (wordsB.has(w)) overlap++;
+  }
+  return overlap >= 2;
+}
+
+/**
+ * When OneRoof has no listing photos, match the property against active
+ * realestate.co.nz listings in the same suburb and return image URL(s) from
+ * the platform JSON API.
+ */
+export async function fetchRealestatePhotosForAddress(
+  freeformAddress: string,
+  suburbName: string,
+): Promise<string[]> {
+  const trimmed = freeformAddress.trim();
+  if (!trimmed || !suburbName.trim()) return [];
+
+  const suburb = await findSuburbId(suburbName);
+  if (!suburb) {
+    logger.info({ suburbName }, "realestate-api: photo fallback — suburb not in directory");
+    return [];
+  }
+
+  let listings: ListingResult[];
+  try {
+    listings = await fetchListingsForSuburbId(suburb.id, 100);
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "realestate-api: photo fallback — listings fetch failed");
+    return [];
+  }
+
+  const out: string[] = [];
+  for (const l of listings) {
+    if (!addressesLikelyMatch(trimmed, l.address)) continue;
+    // Add all photos from the matched listing (up to 4 high-res images)
+    const urls = l.photoUrls?.length ? l.photoUrls : (l.photoUrl ? [l.photoUrl] : []);
+    for (const url of urls) {
+      if (!out.includes(url)) out.push(url);
+    }
+    // We found our address match — no need to keep scanning other listings
+    break;
+  }
+
+  if (out.length > 0) {
+    logger.info(
+      { suburb: suburb.title, count: out.length, address: trimmed.slice(0, 64) },
+      "realestate-api: photo fallback matched active listing(s)",
+    );
+  }
+  return out;
+}
+
+function addressKey(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 48);
+}
+
+/**
+ * Fetches 3–5 **active** realestate.co.nz residential listings in the same
+ * suburb to use as price comparables when OneRoof does not return enough
+ * nearby *sold* records. Asking prices are real sourced data. Intended to run
+ * **once, sequentially** in the property pipeline (no parallel duplicate calls).
+ */
+export async function fetchSupplementListingComparables(opts: {
+  suburbName: string;
+  excludeAddress?: string;
+  priceHintNzd?: number | null;
+  landHintSqm?: number | null;
+  minTarget: number;
+  maxResults: number;
+}): Promise<ComparableSale[]> {
+  const { suburbName, excludeAddress, priceHintNzd, landHintSqm, minTarget, maxResults } = opts;
+  if (!suburbName.trim()) return [];
+
+  const suburb = await findSuburbId(suburbName);
+  if (!suburb) {
+    logger.info({ suburbName }, "realestate-api: comparables supplement — suburb not in directory");
+    return [];
+  }
+
+  let listings: ListingResult[];
+  try {
+    listings = await fetchListingsForSuburbId(suburb.id, 100);
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "realestate-api: comparables supplement — fetch failed");
+    return [];
+  }
+
+  const exKey = excludeAddress ? addressKey(excludeAddress) : "";
+  let pool = listings.filter(
+    (l) => l.price != null && l.price > 100_000 && l.address && l.address.length > 8,
+  );
+  if (exKey) {
+    pool = pool.filter((l) => {
+      const k = addressKey(l.address);
+      return k !== exKey && !k.startsWith(exKey.slice(0, 10));
+    });
+  }
+  if (priceHintNzd && priceHintNzd > 200_000) {
+    const lo = priceHintNzd * 0.2;
+    const hi = priceHintNzd * 5;
+    const banded = pool.filter((l) => l.price! >= lo && l.price! <= hi);
+    if (banded.length >= minTarget) pool = banded;
+  }
+  if (landHintSqm && landHintSqm > 50) {
+    pool = [...pool].sort((a, b) => {
+      const da = Math.abs((a.landArea ?? 0) - landHintSqm);
+      const db = Math.abs((b.landArea ?? 0) - landHintSqm);
+      return da - db;
+    });
+  }
+  const out: ComparableSale[] = [];
+  for (const l of pool) {
+    if (out.length >= maxResults) break;
+    out.push({
+      address: l.address.trim(),
+      sale_date: null,
+      price_nzd: l.price!,
+      bedrooms: l.bedrooms,
+      land_area_sqm: l.landArea,
+      floor_sqm: l.floorArea ?? null,
+    });
+  }
+
+  if (out.length > 0) {
+    logger.info(
+      { suburb: suburb.title, count: out.length, source: "realestate.co.nz (active listings)" },
+      "realestate-api: comparables supplement",
+    );
+  }
+  return out;
 }
 
 /**

@@ -13,7 +13,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { useAuth } from "@/context/AuthContext";
-import { useSubscription } from "@/lib/revenuecat";
+import { getApiBase } from "@/lib/api";
+import { useSubscription, getSubscriptionSyncBody } from "@/lib/revenuecat";
 
 const BG = "#1E1610";
 const CARD_BG = "#261B12";
@@ -34,22 +35,17 @@ export default function SalesAgentWelcomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user, token, getApiHeaders, refreshProfile } = useAuth();
-  const { purchase, isPurchasing, isSubscribed, getPriceForRole, getPackageForRole } = useSubscription();
-
-  const getApiBase = () => {
-    if (process.env.EXPO_PUBLIC_DOMAIN) {
-      return `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`;
-    }
-    return "/api";
-  };
+  const { purchase, isPurchasing, isSubscribed, getPriceForRole, getPackageForRole, refetchCustomerInfo } =
+    useSubscription();
 
   const syncToBackend = async (tier: "pro" | "free"): Promise<boolean> => {
     if (!token) return false;
     try {
+      const body = await getSubscriptionSyncBody(tier);
       const resp = await fetch(`${getApiBase()}/subscription/sync`, {
         method: "POST",
         headers: getApiHeaders(),
-        body: JSON.stringify({ tier }),
+        body: JSON.stringify(body),
       });
       await refreshProfile().catch(() => {});
       return resp.ok;
@@ -89,6 +85,7 @@ export default function SalesAgentWelcomeScreen() {
         return;
       }
       await purchase(pkg);
+      await refetchCustomerInfo();
       const synced = await syncToBackend("pro");
       if (!synced) {
         Alert.alert(

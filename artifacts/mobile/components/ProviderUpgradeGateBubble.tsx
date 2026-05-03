@@ -1,23 +1,28 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useSubscription } from "@/lib/revenuecat";
+import { useT } from "@/lib/i18n";
 
 interface Props {
   onUpgrade: () => void;
   onDismiss?: () => void;
 }
 
-const FEATURES = [
-  "Message verified specialists directly",
-  "20 feasibility reports per month",
-  "Save and revisit past reports",
-];
-
 export function ProviderUpgradeGateBubble({ onUpgrade, onDismiss }: Props) {
   const { getPriceForRole } = useSubscription();
   const price = getPriceForRole("general");
   const [dismissed, setDismissed] = useState(false);
+  const { t } = useT();
+
+  const features = useMemo(
+    () => [
+      t("bubble.upgrade.feature_message"),
+      t("bubble.upgrade.feature_reports"),
+      t("bubble.upgrade.feature_history"),
+    ],
+    [t],
+  );
 
   if (dismissed) return null;
 
@@ -32,21 +37,18 @@ export function ProviderUpgradeGateBubble({ onUpgrade, onDismiss }: Props) {
         <View style={styles.iconWrap}>
           <Feather name="zap" size={14} color="#7C3AED" />
         </View>
-        <Text style={styles.header}>Standard feature</Text>
+        <Text style={styles.header}>{t("bubble.upgrade.badge")}</Text>
       </View>
 
-      <Text style={styles.body}>
-        Connecting with a service provider is a Standard feature. Upgrade to
-        message specialists directly from chat.
-      </Text>
+      <Text style={styles.body}>{t("bubble.upgrade.body")}</Text>
 
       <View style={styles.card}>
         <View style={styles.planRow}>
-          <Text style={styles.planLabel}>Standard Monthly</Text>
+          <Text style={styles.planLabel}>{t("bubble.upgrade.plan_label")}</Text>
           <Text style={styles.planPrice}>{price}</Text>
         </View>
         <View style={styles.features}>
-          {FEATURES.map((f) => (
+          {features.map((f) => (
             <View key={f} style={styles.featureRow}>
               <Feather name="check-circle" size={12} color="#10B981" />
               <Text style={styles.featureText}>{f}</Text>
@@ -60,7 +62,7 @@ export function ProviderUpgradeGateBubble({ onUpgrade, onDismiss }: Props) {
         onPress={onUpgrade}
         activeOpacity={0.85}
       >
-        <Text style={styles.upgradeBtnText}>Get Standard</Text>
+        <Text style={styles.upgradeBtnText}>{t("bubble.upgrade.cta")}</Text>
         <Feather name="arrow-right" size={15} color="#fff" />
       </TouchableOpacity>
 
@@ -69,7 +71,7 @@ export function ProviderUpgradeGateBubble({ onUpgrade, onDismiss }: Props) {
         onPress={handleDismiss}
         activeOpacity={0.7}
       >
-        <Text style={styles.dismissText}>Not now</Text>
+        <Text style={styles.dismissText}>{t("bubble.upgrade.dismiss")}</Text>
       </TouchableOpacity>
     </View>
   );

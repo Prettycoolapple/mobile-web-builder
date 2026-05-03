@@ -3,10 +3,36 @@ import multer, { MulterError } from "multer";
 import { eq } from "drizzle-orm";
 import { db, userUploads, profiles } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
-import { ObjectStorageService } from "../lib/objectStorage";
+import { ObjectNotFoundError, ObjectStorageService } from "../lib/objectStorage";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
+
+async function uploadToStorage(
+  service: ObjectStorageService,
+  buffer: Buffer | Uint8Array,
+  mimetype: string,
+  size: number,
+  namespace?: string,
+): Promise<{ objectPath: string }> {
+  if (service.isLocal) {
+    return service.saveLocal(Buffer.from(buffer), mimetype, namespace);
+  }
+  const uploadURL = await service.getObjectEntityUploadURL({
+    contentType: mimetype,
+    ...(namespace ? { namespace } : {}),
+  });
+  const objectPath = service.normalizeObjectEntityPath(uploadURL);
+  const uploadRes = await fetch(uploadURL, {
+    method: "PUT",
+    headers: { "Content-Type": mimetype, "Content-Length": String(size) },
+    body: new Uint8Array(buffer),
+  });
+  if (!uploadRes.ok) {
+    throw new Error(`Storage upload failed with status ${uploadRes.status}`);
+  }
+  return { objectPath };
+}
 
 const ALLOWED_MIME_TYPES = new Set([
   "application/pdf",
@@ -92,6 +118,109 @@ function preSignupRateLimit(req: Request, res: Response, next: NextFunction) {
 }
 
 router.post(
+  "/upload/profile-picture/request-url",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    const { name, size, contentType } = (req.body ?? {}) as {
+      name?: string;
+      size?: number;
+      contentType?: string;
+    };
+    const fileSize = typeof size === "number" ? size : Number.NaN;
+
+    if (!name || typeof name !== "string") {
+      res.status(400).json({ error: "Missing or invalid file name", code: "INVALID_NAME" });
+      return;
+    }
+    if (!Number.isFinite(fileSize) || fileSize <= 0 || fileSize > MAX_FILE_SIZE_BYTES) {
+      res.status(400).json({
+        error: `Invalid file size. Maximum size is ${MAX_FILE_SIZE_BYTES / (1024 * 1024)}MB`,
+        code: "INVALID_SIZE",
+      });
+      return;
+    }
+    if (!contentType || typeof contentType !== "string" || !ALLOWED_IMAGE_MIME_TYPES.has(contentType)) {
+      res.status(415).json({ error: "Only image files are accepted", code: "INVALID_FILE_TYPE" });
+      return;
+    }
+
+    try {
+      if (objectStorageService.isLocal) {
+        res.status(501).json({
+          error: "Signed URL upload not available in local storage mode. Use the multipart upload endpoint instead.",
+          code: "LOCAL_MODE",
+        });
+        return;
+      }
+      const uploadURL = await objectStorageService.getObjectEntityUploadURL({
+        contentType,
+        namespace: "avatars",
+      });
+      const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
+      const fileUrl = `/api/storage${objectPath}`;
+
+      res.json({
+        uploadURL,
+        objectPath,
+        fileUrl,
+        expiresInSec: 900,
+        requiredHeaders: {
+          "Content-Type": contentType,
+        },
+        metadata: {
+          name,
+          size: fileSize,
+          contentType,
+        },
+      });
+    } catch (error) {
+      req.log.error({ err: error }, "Profile picture signed URL generation failed");
+      res.status(500).json({ error: "Failed to generate upload URL", code: "SIGN_URL_FAILED" });
+    }
+  },
+);
+
+router.post(
+  "/upload/profile-picture/complete",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    const userId = (req as any).userId as string;
+    const { objectPath } = (req.body ?? {}) as { objectPath?: string };
+
+    if (!objectPath || typeof objectPath !== "string" || !objectPath.startsWith("/objects/")) {
+      res.status(400).json({ error: "Missing or invalid objectPath", code: "INVALID_OBJECT_PATH" });
+      return;
+    }
+
+    try {
+      if (objectStorageService.isLocal) {
+        if (!objectStorageService.localFileExists(objectPath)) {
+          res.status(404).json({ error: "Uploaded object not found", code: "OBJECT_NOT_FOUND" });
+          return;
+        }
+      } else {
+        await objectStorageService.getObjectEntityFile(objectPath);
+      }
+
+      const fileUrl = `/api/storage${objectPath}`;
+      await Promise.all([
+        db.insert(userUploads).values({ userId, objectPath }).onConflictDoNothing(),
+        db.update(profiles).set({ avatarUrl: fileUrl }).where(eq(profiles.id, userId)),
+      ]);
+
+      res.json({ fileUrl, objectPath });
+    } catch (error) {
+      if (error instanceof ObjectNotFoundError) {
+        res.status(404).json({ error: "Uploaded object not found", code: "OBJECT_NOT_FOUND" });
+        return;
+      }
+      req.log.error({ err: error }, "Profile picture completion failed");
+      res.status(500).json({ error: "Failed to finalize profile picture upload", code: "FINALIZE_FAILED" });
+    }
+  },
+);
+
+router.post(
   "/upload/incorporation-cert-pre-signup",
   preSignupRateLimit,
   upload.single("file"),
@@ -102,18 +231,7 @@ router.post(
     }
     try {
       const { buffer, mimetype, originalname, size } = req.file;
-      const uploadURL = await objectStorageService.getObjectEntityUploadURL();
-      const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
-      const uploadRes = await fetch(uploadURL, {
-        method: "PUT",
-        headers: { "Content-Type": mimetype, "Content-Length": String(size) },
-        body: new Uint8Array(buffer),
-      });
-      if (!uploadRes.ok) {
-        req.log.error({ status: uploadRes.status }, "GCS upload failed (pre-signup)");
-        res.status(500).json({ error: "Failed to upload file to storage", code: "UPLOAD_FAILED" });
-        return;
-      }
+      const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size);
       const fileUrl = `/api/storage${objectPath}`;
       res.status(201).json({
         objectPath,
@@ -121,7 +239,7 @@ router.post(
         metadata: { name: originalname, size, contentType: mimetype },
       });
     } catch (error) {
-      req.log.error({ error }, "Pre-signup incorporation cert upload failed");
+      req.log.error({ err: error }, "Pre-signup incorporation cert upload failed");
       res.status(500).json({ error: "Upload failed. Please try again.", code: "UPLOAD_FAILED" });
     }
   },
@@ -141,40 +259,16 @@ router.post(
 
     try {
       const { buffer, mimetype, originalname, size } = req.file;
-
-      const uploadURL = await objectStorageService.getObjectEntityUploadURL();
-      const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
-
-      const uploadRes = await fetch(uploadURL, {
-        method: "PUT",
-        headers: {
-          "Content-Type": mimetype,
-          "Content-Length": String(size),
-        },
-        body: new Uint8Array(buffer),
-      });
-
-      if (!uploadRes.ok) {
-        req.log.error({ status: uploadRes.status }, "GCS upload failed");
-        res.status(500).json({ error: "Failed to upload file to storage", code: "UPLOAD_FAILED" });
-        return;
-      }
-
+      const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size);
       await db.insert(userUploads).values({ userId, objectPath });
-
       const fileUrl = `/api/storage${objectPath}`;
-
       res.status(201).json({
         objectPath,
         fileUrl,
-        metadata: {
-          name: originalname,
-          size,
-          contentType: mimetype,
-        },
+        metadata: { name: originalname, size, contentType: mimetype },
       });
     } catch (error) {
-      req.log.error({ error }, "Incorporation cert upload failed");
+      req.log.error({ err: error }, "Incorporation cert upload failed");
       res.status(500).json({ error: "Upload failed. Please try again.", code: "UPLOAD_FAILED" });
     }
   },
@@ -191,25 +285,8 @@ router.post(
     }
 
     try {
-      const { buffer, mimetype, originalname, size } = req.file;
-
-      const uploadURL = await objectStorageService.getObjectEntityUploadURL();
-      const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
-
-      const uploadRes = await fetch(uploadURL, {
-        method: "PUT",
-        headers: {
-          "Content-Type": mimetype,
-          "Content-Length": String(size),
-        },
-        body: new Uint8Array(buffer),
-      });
-
-      if (!uploadRes.ok) {
-        res.status(500).json({ error: "Failed to upload file to storage", code: "UPLOAD_FAILED" });
-        return;
-      }
-
+      const { buffer, mimetype, size } = req.file;
+      const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size);
       const fileUrl = `/api/storage${objectPath}`;
       res.status(201).json({ fileUrl, objectPath });
     } catch (error) {
@@ -230,24 +307,7 @@ router.post(
 
     try {
       const { buffer, mimetype, size } = req.file;
-
-      const uploadURL = await objectStorageService.getObjectEntityUploadURL();
-      const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
-
-      const uploadRes = await fetch(uploadURL, {
-        method: "PUT",
-        headers: {
-          "Content-Type": mimetype,
-          "Content-Length": String(size),
-        },
-        body: new Uint8Array(buffer),
-      });
-
-      if (!uploadRes.ok) {
-        res.status(500).json({ error: "Failed to upload file to storage", code: "UPLOAD_FAILED" });
-        return;
-      }
-
+      const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size);
       const fileUrl = `/api/storage${objectPath}`;
       res.status(201).json({ fileUrl, objectPath });
     } catch (error) {
@@ -270,33 +330,17 @@ router.post(
 
     try {
       const { buffer, mimetype, size } = req.file;
-
-      const uploadURL = await objectStorageService.getObjectEntityUploadURL();
-      const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
-
-      const uploadRes = await fetch(uploadURL, {
-        method: "PUT",
-        headers: {
-          "Content-Type": mimetype,
-          "Content-Length": String(size),
-        },
-        body: new Uint8Array(buffer),
-      });
-
-      if (!uploadRes.ok) {
-        res.status(500).json({ error: "Failed to upload file to storage", code: "UPLOAD_FAILED" });
-        return;
-      }
-
-      await Promise.all([
-        db.insert(userUploads).values({ userId, objectPath }),
-        db.update(profiles).set({ avatarUrl: `/api/storage${objectPath}` }).where(eq(profiles.id, userId)),
-      ]);
+      const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size, "avatars");
 
       const fileUrl = `/api/storage${objectPath}`;
+      await Promise.all([
+        db.insert(userUploads).values({ userId, objectPath }),
+        db.update(profiles).set({ avatarUrl: fileUrl }).where(eq(profiles.id, userId)),
+      ]);
+
       res.status(201).json({ fileUrl, objectPath });
     } catch (error) {
-      req.log.error({ error }, "Profile picture upload failed");
+      req.log.error({ err: error }, "Profile picture upload failed");
       res.status(500).json({ error: "Upload failed. Please try again.", code: "UPLOAD_FAILED" });
     }
   },

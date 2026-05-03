@@ -15,26 +15,42 @@ import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useDm, DmThread } from "@/context/DmContext";
 import { useAuth } from "@/context/AuthContext";
+import { useT } from "@/lib/i18n";
 
-function timeAgo(iso: string | null): string {
-  if (!iso) return "";
-  const now = Date.now();
-  const then = new Date(iso).getTime();
-  const diff = now - then;
-  const m = Math.floor(diff / 60000);
-  if (m < 1) return "now";
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  const d = Math.floor(h / 24);
-  if (d < 7) return `${d}d`;
-  return new Date(iso).toLocaleDateString("en-NZ", { day: "numeric", month: "short" });
+function useTimeAgo() {
+  const { t, locale } = useT();
+  return useCallback(
+    (iso: string | null): string => {
+      if (!iso) return "";
+      const now = Date.now();
+      const then = new Date(iso).getTime();
+      const diff = now - then;
+      const m = Math.floor(diff / 60000);
+      if (m < 1) return t("messages.now");
+      if (m < 60) return `${m}m`;
+      const h = Math.floor(m / 60);
+      if (h < 24) return `${h}h`;
+      const d = Math.floor(h / 24);
+      if (d < 7) return `${d}d`;
+      return new Date(iso).toLocaleDateString(locale === "zh" ? "zh-CN" : "en-NZ", {
+        day: "numeric",
+        month: "short",
+      });
+    },
+    [t, locale],
+  );
 }
 
-function roleBadge(role: string): string {
-  if (role === "sales_agent") return "Sales Agent";
-  if (role === "service_provider") return "Service Provider";
-  return "User";
+function useRoleBadge() {
+  const { t } = useT();
+  return useCallback(
+    (role: string): string => {
+      if (role === "sales_agent") return t("messages.role_sales_agent");
+      if (role === "service_provider") return t("messages.role_service_provider");
+      return t("messages.role_user");
+    },
+    [t],
+  );
 }
 
 function Avatar({ name, size = 44 }: { name: string | null; size?: number }) {
@@ -68,19 +84,28 @@ function Avatar({ name, size = 44 }: { name: string | null; size?: number }) {
 function ThreadRow({ thread, myId }: { thread: DmThread; myId: string }) {
   const colors = useColors();
   const router = useRouter();
+  const { t } = useT();
+  const timeAgo = useTimeAgo();
+  const roleBadge = useRoleBadge();
   const other = thread.otherParticipant;
-  const name = other?.fullName ?? "Unknown";
+  const name = other?.fullName ?? t("messages.unknown");
   const role = other?.role ?? "general";
   const lastMsg = thread.lastMessage;
   const preview = lastMsg?.imageUrl
-    ? "📷 Photo"
+    ? t("messages.photo")
     : lastMsg?.body
     ? lastMsg.body.length > 60
       ? lastMsg.body.slice(0, 60) + "…"
       : lastMsg.body
-    : "No messages yet";
+    : t("messages.no_messages_yet");
   const isUnread = (thread.unreadCount || 0) > 0;
   const isMyMsg = lastMsg?.senderId === myId;
+
+  const recCount = other?.recommendationCount ?? 0;
+  const recLabel =
+    recCount === 1
+      ? t("messages.recommendation_one", { n: recCount })
+      : t("messages.recommendation_other", { n: recCount });
 
   return (
     <Pressable
@@ -109,12 +134,10 @@ function ThreadRow({ thread, myId }: { thread: DmThread; myId: string }) {
             >
               {name}
             </Text>
-            {(other?.recommendationCount ?? 0) > 0 && (
+            {recCount > 0 && (
               <View style={styles.recRow}>
                 <Feather name="thumbs-up" size={10} color={colors.accent} />
-                <Text style={[styles.recText, { color: colors.accent }]}>
-                  {other?.recommendationCount} {other?.recommendationCount === 1 ? "recommendation" : "recommendations"}
-                </Text>
+                <Text style={[styles.recText, { color: colors.accent }]}>{recLabel}</Text>
               </View>
             )}
           </View>
@@ -137,7 +160,7 @@ function ThreadRow({ thread, myId }: { thread: DmThread; myId: string }) {
             ]}
             numberOfLines={1}
           >
-            {isMyMsg && !lastMsg?.imageUrl ? `You: ${preview}` : preview}
+            {isMyMsg && !lastMsg?.imageUrl ? t("messages.you_prefix", { preview }) : preview}
           </Text>
           {isUnread && (
             <View style={[styles.unreadDot, { backgroundColor: colors.accent }]}>
@@ -151,16 +174,13 @@ function ThreadRow({ thread, myId }: { thread: DmThread; myId: string }) {
 }
 
 function EmptyInbox() {
+  const { t } = useT();
   return (
     <View style={styles.empty}>
       <Feather name="inbox" size={48} color="#D1D5DB" />
-      <Text style={styles.emptyTitle}>Empty inbox</Text>
-      <Text style={styles.emptyDescription}>
-        Chats will appear here once you are connected to an agent or a service provider.
-      </Text>
-      <Text style={styles.emptySubDescription}>
-        Connections are suggested by AI after your property analysis.
-      </Text>
+      <Text style={styles.emptyTitle}>{t("messages.empty_title")}</Text>
+      <Text style={styles.emptyDescription}>{t("messages.empty_desc")}</Text>
+      <Text style={styles.emptySubDescription}>{t("messages.empty_sub")}</Text>
     </View>
   );
 }
@@ -170,6 +190,7 @@ export default function MessagesScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const { threads, fetchThreads, socket } = useDm();
+  const { t } = useT();
   const [refreshing, setRefreshing] = useState(false);
 
   const onRefresh = useCallback(async () => {
@@ -198,7 +219,7 @@ export default function MessagesScreen() {
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={[styles.header, { paddingTop: insets.top + 8, backgroundColor: "#2C1F16" }]}>
-        <Text style={styles.headerTitle}>Messages</Text>
+        <Text style={styles.headerTitle}>{t("messages.title")}</Text>
       </View>
 
       <FlatList

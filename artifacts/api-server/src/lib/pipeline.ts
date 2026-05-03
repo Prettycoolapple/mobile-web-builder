@@ -1,7 +1,8 @@
 import { logger } from "./logger";
+import { ai } from "@workspace/integrations-gemini-ai";
 import { geocodeAddress, type GeoResult } from "./geocode";
 import { fetchLINZParcel, fetchLINZTitle, fetchLINZMemorials, type LinzParcel, type LinzTitle } from "./linz";
-import { fetchUnitaryPlanZone, fetchOverlays, fetchContour, type ZoneResult, type Overlay, type ContourResult } from "./auckland-council";
+import { fetchUnitaryPlanZone, fetchOverlaysWithConsensus, fetchContour, type ZoneResult, type Overlay, type ContourResult } from "./auckland-council";
 import { fetchPropertyHistory, checkAsbestosRisk, type PropertyHistory, type AsbestosRisk } from "./property-data";
 import { fetchInfrastructure, type InfrastructureItem } from "./infrastructure";
 import { scrapeHougarden, type HougardenData } from "./scrapers/hougarden";
@@ -11,14 +12,208 @@ import { scrapeQV, type QVData } from "./scrapers/qv";
 import { mergePropertyData, type MergedPropertyData } from "./scrapers/merge";
 import { withBrowserSlot } from "./scrapers/browser";
 import { classifyAsbestos, type AsbestosClassification } from "./asbestos";
-import { calculatePotentialLots, type LotResult } from "./lot-calculator";
+import { calculatePotentialLots, buildSubdivisionPathwayNote, type LotResult, type SubdivisionPathwayNote } from "./lot-calculator";
 import { estimateCosts, type CostBreakdown } from "./cost-estimator";
 import { getComparables, type ComparableSale, type ComparablesResult } from "./comparables";
-import { calculateBearBaseBullScenarios, type ROIScenario } from "./roi-calculator";
-import { assessInterestRateOutlook } from "./claude";
+import { calculateBearBaseBullScenarios, exitGdvTypologyDiscountFactor, type ROIScenario } from "./roi-calculator";
+import { assessDevelopmentStrategy, assessInterestRateOutlook } from "./claude";
 import { scoreProperty, type ScoringResult } from "./scoring";
 import { extractSuburb } from "./utils";
 import { parseEasements, NO_TITLE, API_ERROR, type EasementAnalysis } from "./easements";
+import {
+  buildFallbackDevelopmentStrategyAssessment,
+  calculateDevelopmentStrategies,
+  type DevelopmentStrategyScenario,
+} from "./development-strategies";
+import { fetchRealestatePhotosForAddress, fetchSupplementListingComparables } from "./scrapers/realestate-api";
+import { enrichSchoolZonesDetail, type SchoolZoneDetail } from "./school-directory";
+import { inferSchoolZonesFromLocation } from "./school-zones-llm";
+
+const AC_PROP_MAPSERVER = "https://mapspublic.aucklandcouncil.govt.nz/arcgis3/rest/services/NonCouncil/PropertyValueInfo/MapServer";
+
+/**
+ * Parse a build decade string or year from AC GIS.
+ * AC GIS returns "DECADEBUILT" as values like 2010, 1990, "2010s", "1990s".
+ * Returns null if unparseable.
+ */
+function parseACBuildDecade(raw: unknown): number | null {
+  if (raw == null) return null;
+  const s = String(raw).replace(/s$/i, "").trim();
+  const n = parseInt(s, 10);
+  if (!isNaN(n) && n >= 1800 && n <= new Date().getFullYear()) return n;
+  return null;
+}
+
+/**
+ * Sequentially enriches comparables with CV, build year, and floor area from
+ * Auckland Council GIS. Uses `for...of` — fully sequential, one property at a
+ * time — to avoid GIS rate-limit hammering and any interleaved-response races.
+ */
+async function enrichComparables(
+  comparables: ComparableSale[],
+  maxToEnrich = 5,
+): Promise<ComparableSale[]> {
+  const enriched: ComparableSale[] = [];
+
+  for (let i = 0; i < comparables.length; i++) {
+    const comp = comparables[i];
+
+    if (i >= maxToEnrich) {
+      enriched.push(comp);
+      continue;
+    }
+
+    try {
+      const geo = await geocodeAddress(comp.address);
+      if (!geo?.lat || !geo?.lng) {
+        enriched.push(comp);
+        continue;
+      }
+
+      // Rate-assessment layer (3): CV + build decade + floor area
+      const url = new URL(`${AC_PROP_MAPSERVER}/3/query`);
+      url.searchParams.set("geometry", `${geo.lng},${geo.lat}`);
+      url.searchParams.set("geometryType", "esriGeometryPoint");
+      url.searchParams.set("inSR", "4326");
+      url.searchParams.set("spatialRel", "esriSpatialRelIntersects");
+      // Request all fields that might carry CV, build year, and floor area
+      url.searchParams.set("outFields", "LCV,CV,DECADEBUILT,DECADE_BUILT,YEAR_BUILT,YEARBUILT,FLOORAREA,FLOOR_AREA,BUILDINGFLOORAREA");
+      url.searchParams.set("returnGeometry", "false");
+      url.searchParams.set("f", "json");
+
+      const resp = await fetch(url.toString(), { signal: AbortSignal.timeout(7000) });
+      if (resp.ok) {
+        const data = (await resp.json()) as { features?: Array<{ attributes: Record<string, unknown> }> };
+        const attrs = data.features?.[0]?.attributes;
+        if (attrs) {
+          const lcv = Number(attrs["LCV"] ?? NaN);
+          const cv  = Number(attrs["CV"]  ?? NaN);
+          const cvFinal = !isNaN(lcv) && lcv > 0 ? lcv : (!isNaN(cv) && cv > 0 ? cv : null);
+
+          const buildYear = parseACBuildDecade(
+            attrs["DECADEBUILT"] ?? attrs["DECADE_BUILT"] ?? attrs["YEARBUILT"] ?? attrs["YEAR_BUILT"],
+          );
+
+          const floorRaw = Number(
+            attrs["FLOORAREA"] ?? attrs["FLOOR_AREA"] ?? attrs["BUILDINGFLOORAREA"] ?? NaN,
+          );
+          const floorEnriched = !isNaN(floorRaw) && floorRaw > 10 ? Math.round(floorRaw) : null;
+
+          enriched.push({
+            ...comp,
+            cv_nzd: cvFinal,
+            build_year: comp.build_year ?? buildYear,
+            // Prefer scraped floor area; fall back to GIS if missing
+            floor_sqm: comp.floor_sqm > 0 ? comp.floor_sqm : (floorEnriched ?? comp.floor_sqm),
+          });
+          logger.debug({ address: comp.address, cv_nzd: cvFinal, build_year: buildYear, floor_sqm: floorEnriched }, "Comparable enriched");
+          continue;
+        }
+      }
+    } catch (err) {
+      logger.debug({ address: comp.address, err: (err as Error).message }, "Comparable enrichment failed — skipping");
+    }
+
+    enriched.push(comp);
+  }
+
+  return enriched;
+}
+
+/**
+ * Uses an LLM to rank a pool of candidate comparables and return the 3 most
+ * relevant ones for the subject property. Considers land size, floor area,
+ * build era, and location — importantly, old houses are not comparable with
+ * new houses.
+ *
+ * Falls back to the original pool order if the LLM call fails or returns
+ * invalid output.
+ */
+async function selectComparablesByLLM(
+  pool: ComparableSale[],
+  subject: {
+    address: string;
+    suburb: string;
+    land_area_sqm: number | null;
+    floor_area_sqm: number | null;
+    build_year: number | null;
+    zone_code: string | null;
+  },
+  maxSelect = 3,
+): Promise<ComparableSale[]> {
+  if (pool.length <= maxSelect) return pool;
+
+  const candidateList = pool
+    .slice(0, 12) // cap the pool to keep the prompt small
+    .map((c, i) => {
+      const parts: string[] = [`${i}. ${c.address}`];
+      if (c.land_sqm > 0) parts.push(`land ${c.land_sqm}m²`);
+      if (c.floor_sqm > 0) parts.push(`floor ${c.floor_sqm}m²`);
+      if (c.build_year) parts.push(`built ${c.build_year}`);
+      if (c.price_nzd > 0) parts.push(`price ${Math.round(c.price_nzd / 1000)}k`);
+      return parts.join(", ");
+    })
+    .join("\n");
+
+  const subjectDesc = [
+    `Address: ${subject.address}`,
+    subject.land_area_sqm ? `Land: ${subject.land_area_sqm}m²` : null,
+    subject.floor_area_sqm ? `Floor: ${subject.floor_area_sqm}m²` : null,
+    subject.build_year ? `Built: ${subject.build_year}` : "Build year: unknown",
+    subject.zone_code ? `Zone: ${subject.zone_code}` : null,
+    `Suburb: ${subject.suburb}`,
+  ].filter(Boolean).join("\n");
+
+  const prompt = `You are a New Zealand property analyst selecting comparable properties for a development feasibility study.
+
+SUBJECT PROPERTY:
+${subjectDesc}
+
+CANDIDATE COMPARABLES (index: details):
+${candidateList}
+
+Select exactly ${maxSelect} candidates that are the best comparables for the subject property.
+Key rules:
+- Land area should be similar (within ~50% if possible)
+- Build era must be compatible — do not mix pre-1980 with post-2000 builds
+- Prefer same suburb/street over distant ones
+- If build year is unknown for subject, prefer recent builds (post-2000)
+
+Return ONLY a JSON array of ${maxSelect} zero-based indices, e.g. [0, 3, 5]. No other text.`;
+
+  try {
+    const resp = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      config: { maxOutputTokens: 64 },
+      contents: [{
+        role: "user",
+        parts: [{ text: prompt }],
+      }],
+    });
+    const text = (resp.text ?? "").trim();
+
+    // Extract JSON array from response
+    const match = text.match(/\[[\d,\s]+\]/);
+    if (match) {
+      const indices: unknown[] = JSON.parse(match[0]);
+      const selected: ComparableSale[] = [];
+      for (const idx of indices) {
+        if (typeof idx === "number" && idx >= 0 && idx < pool.length) {
+          selected.push(pool[idx]);
+          if (selected.length >= maxSelect) break;
+        }
+      }
+      if (selected.length > 0) {
+        logger.info({ selected: selected.map((s) => s.address) }, "Comparables selected by LLM");
+        return selected;
+      }
+    }
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "LLM comparable selection failed — using pool order");
+  }
+
+  return pool.slice(0, maxSelect);
+}
 
 export interface PipelineResult {
   address_input: string;
@@ -39,11 +234,15 @@ export interface PipelineResult {
   qv: QVData | null;
   merged: MergedPropertyData | null;
   lots: LotResult | null;
+  subdivision_pathway: SubdivisionPathwayNote | null;
   costs: CostBreakdown | null;
   comparables: ComparableSale[];
-  comparables_quality: "live" | "estimated";
+  comparables_quality: "live" | "estimated" | "unavailable";
   scenarios: ROIScenario[];
+  developmentStrategies: DevelopmentStrategyScenario[];
   scores: ScoringResult | null;
+  /** MoE directory enrichment for school_zones (Hougarden). */
+  school_zones_detail: SchoolZoneDetail[];
   easements: EasementAnalysis;
   failed_sources: string[];
   timing_ms: Record<string, number>;
@@ -54,7 +253,7 @@ async function timed<T>(
   label: string,
   fn: () => Promise<T>,
   timing: Record<string, number>,
-): Promise<{ value: T | null; failed: boolean }> {
+): Promise<{ value: T | null; failed: boolean; errorMessage?: string }> {
   const start = Date.now();
   try {
     const value = await fn();
@@ -62,8 +261,12 @@ async function timed<T>(
     return { value, failed: false };
   } catch (err) {
     timing[label] = Date.now() - start;
-    logger.warn({ err, label }, `Pipeline source failed: ${label}`);
-    return { value: null, failed: true };
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    const isBrowserError = /chromium|browser|launch|executable/i.test(errorMessage);
+    const isTimeout = /timeout|timed out|abort/i.test(errorMessage);
+    const category = isBrowserError ? "BROWSER_NOT_FOUND" : isTimeout ? "TIMEOUT" : "ERROR";
+    logger.warn({ err, label, category, elapsed_ms: timing[label] }, `Pipeline source failed: ${label} [${category}]`);
+    return { value: null, failed: true, errorMessage };
   }
 }
 
@@ -80,7 +283,10 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
 
   if (geoResult.failed || !geocode) {
     failedSources.push("geocode");
-    logger.warn({ address }, "Geocoding failed — pipeline cannot continue with location-based sources");
+    logger.warn(
+      { address, marker: "PIPELINE_GEOCODE_FAILED" },
+      "Geocoding failed — pipeline cannot continue with location-based sources",
+    );
 
     const propHistoryOnly = await timed("property_history", () => fetchPropertyHistory(address), timing);
     if (propHistoryOnly.failed) failedSources.push("property_history");
@@ -109,11 +315,14 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       qv: null,
       merged: null,
       lots: null,
+      subdivision_pathway: null,
       costs: null,
       comparables: [],
-      comparables_quality: "estimated",
+      comparables_quality: "unavailable",
       scenarios: [],
+      developmentStrategies: [],
       scores: null,
+      school_zones_detail: [],
       easements: NO_TITLE,
       failed_sources: failedSources,
       timing_ms: { ...timing, total: Date.now() - pipelineStart },
@@ -155,7 +364,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     homesResult,
   ] = await Promise.allSettled([
     timed("zone",             () => fetchUnitaryPlanZone(lat, lng),                                               timing),
-    timed("overlays",         () => fetchOverlays(lat, lng),                                                      timing),
+    timed("overlays",         () => fetchOverlaysWithConsensus(lat, lng),                                          timing),
     timed("contour",          () => fetchContour(lat, lng, linzParcelData?.bbox ?? null),                         timing),
     timed("property_history", () => fetchPropertyHistory(address, lat, lng),                                      timing),
     timed("infrastructure",   () => fetchInfrastructure(lat, lng),                                                timing),
@@ -234,7 +443,60 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     hasFloorArea: !!(hg?.floor_area_sqm || or?.floor_area_sqm || qv?.floor_area_sqm || hm?.floor_area_sqm),
   });
 
+  const getCriticalSourceMap = (
+    hg: HougardenData | null, or: OneRoofData | null,
+    qv: QVData | null, hm: HomesData | null, ph: typeof propertyHistoryData,
+  ) => ({
+    cv: {
+      property_history: !!ph?.cv_nzd,
+      hougarden: !!hg?.cv_nzd,
+      oneroof: !!or?.cv_nzd,
+      qv: !!qv?.cv_nzd,
+      homes: !!hm?.cv_nzd,
+    },
+    build_year: {
+      property_history: !!ph?.build_year,
+      hougarden: !!hg?.build_year,
+      oneroof: !!or?.build_year,
+      qv: !!qv?.build_year,
+      homes: !!hm?.build_year,
+    },
+    floor_area: {
+      property_history: !!ph?.floor_area_sqm,
+      hougarden: !!hg?.floor_area_sqm,
+      oneroof: !!or?.floor_area_sqm,
+      qv: !!qv?.floor_area_sqm,
+      homes: !!hm?.floor_area_sqm,
+    },
+  });
+
   const wave1Coverage = getCriticalCoverage(hougardenData, oneRoofData, qvData, homesData, propertyHistoryData);
+  const wave1SourceMap = getCriticalSourceMap(hougardenData, oneRoofData, qvData, homesData, propertyHistoryData);
+  logger.info({ wave: 1, coverage: wave1Coverage, source_map: wave1SourceMap }, "Critical field coverage snapshot");
+
+  // ─── Detailed scraper diagnostics ───────────────────────────────────────
+  // Log exactly what each scraper returned (or why it failed) so missing
+  // CV/build-year can be diagnosed without guesswork.
+  logger.info({
+    marker: "SCRAPER_DIAGNOSTICS",
+    property_history: propertyHistoryData
+      ? { cv_nzd: propertyHistoryData.cv_nzd, build_year: propertyHistoryData.build_year, floor_area_sqm: propertyHistoryData.floor_area_sqm, confirmed: propertyHistoryData.sources_confirmed, estimated: propertyHistoryData.sources_estimated }
+      : "FAILED",
+    hougarden: hougardenData
+      ? { cv_nzd: hougardenData.cv_nzd, build_year: hougardenData.build_year, floor_area_sqm: hougardenData.floor_area_sqm, land_area_sqm: hougardenData.land_area_sqm, zone_code: hougardenData.zone_code }
+      : (wave1HougardenFailed ? "FAILED" : "NULL"),
+    oneroof: oneRoofData
+      ? { cv_nzd: oneRoofData.cv_nzd, build_year: oneRoofData.build_year, floor_area_sqm: oneRoofData.floor_area_sqm, land_area_sqm: oneRoofData.land_area_sqm, listing_active: oneRoofData.listing_active }
+      : (wave1OneRoofFailed ? "FAILED" : "NULL"),
+    qv: qvData
+      ? { cv_nzd: qvData.cv_nzd, build_year: qvData.build_year, build_year_range: qvData.build_year_range, bedrooms: qvData.bedrooms, bathrooms: qvData.bathrooms, floor_area_sqm: qvData.floor_area_sqm, land_area_sqm: qvData.land_area_sqm }
+      : (wave1QvFailed ? "FAILED" : "NULL"),
+    homes: homesData
+      ? { cv_nzd: homesData.cv_nzd, build_year: homesData.build_year, floor_area_sqm: homesData.floor_area_sqm, land_area_sqm: homesData.land_area_sqm }
+      : (wave1HomesFailed ? "FAILED" : "NULL"),
+    all_scrapers_failed: wave1HougardenFailed && wave1OneRoofFailed && wave1QvFailed && wave1HomesFailed,
+  }, "Wave 1 scraper diagnostics — check for FAILED sources if CV/build-year missing");
+
   const criticalMissing = !wave1Coverage.hasCV || !wave1Coverage.hasBuildYear || !wave1Coverage.hasFloorArea;
 
   // ── Time-budget guard ────────────────────────────────────────────────────
@@ -286,14 +548,32 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     if (retryPromises.length > 0) {
       await Promise.allSettled(retryPromises);
       const wave2Coverage = getCriticalCoverage(hougardenData, oneRoofData, qvData, homesData, propertyHistoryData);
+      const wave2SourceMap = getCriticalSourceMap(hougardenData, oneRoofData, qvData, homesData, propertyHistoryData);
       logger.info({
         recovered_cv: !wave1Coverage.hasCV && wave2Coverage.hasCV,
         recovered_build_year: !wave1Coverage.hasBuildYear && wave2Coverage.hasBuildYear,
         recovered_floor_area: !wave1Coverage.hasFloorArea && wave2Coverage.hasFloorArea,
+        source_map: wave2SourceMap,
       }, "Wave 2 retry complete");
     }
   } else if (criticalMissing && skipWave2) {
     logger.warn({ wave1ElapsedMs, missing_cv: !wave1Coverage.hasCV, missing_build_year: !wave1Coverage.hasBuildYear, missing_floor_area: !wave1Coverage.hasFloorArea }, "Wave 2 skipped — time budget exceeded (>70 s elapsed). Proceeding with wave 1 data.");
+  }
+
+  const finalCoverage = getCriticalCoverage(hougardenData, oneRoofData, qvData, homesData, propertyHistoryData);
+  const finalSourceMap = getCriticalSourceMap(hougardenData, oneRoofData, qvData, homesData, propertyHistoryData);
+  if (!finalCoverage.hasCV || !finalCoverage.hasBuildYear) {
+    logger.warn(
+      {
+        marker: "PIPELINE_CRITICAL_DATA_MISSING",
+        coverage: finalCoverage,
+        source_map: finalSourceMap,
+        failed_sources: failedSources,
+      },
+      "Critical source data still missing after scraper waves",
+    );
+  } else {
+    logger.info({ coverage: finalCoverage, source_map: finalSourceMap }, "Critical source data coverage complete");
   }
 
   const linzAreaSqm = linzParcelData?.area_sqm ?? null;
@@ -320,6 +600,22 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     logger.info({ classification: scrapedContourText.classification, text: scrapedContourText.text }, "Contour: elevation API unavailable — using scraped text fallback");
   }
 
+  // If OneRoof returned no listing photos, try matching the address to an
+  // active realestate.co.nz listing in the same suburb (JSON API + address match).
+  let realestatePhotoUrls: string[] = [];
+  const oneroofHasListingPhotos =
+    (oneRoofData?.photo_urls?.length ?? 0) > 0 || !!oneRoofData?.main_photo_url;
+  if (!oneroofHasListingPhotos) {
+    const photoFb = await timed(
+      "realestate_photos",
+      () => fetchRealestatePhotosForAddress(geocode.formatted ?? address, suburb),
+      timing,
+    );
+    if (!photoFb.failed && photoFb.value) {
+      realestatePhotoUrls = photoFb.value;
+    }
+  }
+
   // Merge all data sources together. QV and Homes are now passed directly into
   // mergePropertyData (not patched in afterwards) so the smart merge rules
   // (best CV year, consensus build year, median floor area) apply across all
@@ -341,8 +637,13 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       property_history: propertyHistoryData,
       qv: qvData,
       homes: homesData,
+      realestate_photo_urls: realestatePhotoUrls,
     },
   );
+
+  const estateFromTitle = linzTitle?.estate_type?.trim() ?? null;
+  merged.estate_type = estateFromTitle;
+  if (estateFromTitle) merged.data_sources["estate_type"] = "linz_title";
 
   // Cross-validate land area between LINZ and scrapers — log warning if they diverge >10%.
   // LINZ is already the canonical source (first priority in mergePropertyData), but we surface
@@ -384,29 +685,157 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     merged.zone_code,
     easementAreaSqm,
   );
+  const subdivisionPathway = buildSubdivisionPathwayNote(
+    lotResult.net_area_sqm,
+    merged.zone_code,
+    lotResult.lots,
+    lotResult.min_lot_size,
+    lotResult.zone_label,
+  );
 
-  const costs = estimateCosts(merged, lotResult.lots);
-
-  const comparablesResult = getComparables(
+  let comparablesResult = getComparables(
     suburb,
     merged.zone_code,
     lat,
     lng,
     merged.comparables.length > 0 ? merged.comparables : undefined,
   );
+  if (comparablesResult.comparables.length < 3) {
+    const sup = await timed(
+      "realestate_comparables",
+      () =>
+        fetchSupplementListingComparables({
+          suburbName: suburb,
+          excludeAddress: geocode.formatted ?? address,
+          priceHintNzd: merged.listing_price ?? merged.cv_nzd,
+          landHintSqm: merged.land_area_sqm,
+          minTarget: 3,
+          maxResults: 5,
+        }),
+      timing,
+    );
+    if (!sup.failed && sup.value && sup.value.length > 0) {
+      comparablesResult = getComparables(
+        suburb,
+        merged.zone_code,
+        lat,
+        lng,
+        merged.comparables.length > 0 ? merged.comparables : undefined,
+        sup.value,
+      );
+    }
+  }
 
-  const interestRateOutlook = await interestRatePromise;
+  // Step 1 — LLM picks the best 3 comparables from the pool based on semantic
+  // similarity (land size, floor area, build era, location). Old houses must not
+  // be compared with new ones. Falls back to pool order if LLM unavailable.
+  if (comparablesResult.comparables.length > 3) {
+    const selected = await selectComparablesByLLM(comparablesResult.comparables, {
+      address: geocode.formatted ?? address,
+      suburb,
+      land_area_sqm: merged.land_area_sqm,
+      floor_area_sqm: merged.floor_area_sqm,
+      build_year: merged.build_year,
+      zone_code: merged.zone_code,
+    }, 3);
+    comparablesResult = { ...comparablesResult, comparables: selected };
+  }
 
-  const scenarios = calculateBearBaseBullScenarios(
-    costs,
-    comparablesResult.avg_price_per_sqm,
-    comparablesResult.avg_sale_price,
-    lotResult.lots,
-    lotResult.sqm_per_lot,
+  // Step 2 — Sequentially enrich each selected comparable with CV, build year,
+  // and floor area from AC GIS. Each property is fully resolved before the next.
+  if (comparablesResult.comparables.length > 0) {
+    const enriched = await enrichComparables(comparablesResult.comparables, 3);
+    comparablesResult = { ...comparablesResult, comparables: enriched };
+  }
+
+  const marketPsm = comparablesResult.avg_price_per_sqm > 0 ? comparablesResult.avg_price_per_sqm : null;
+  const costs = estimateCosts(merged, lotResult.lots, {
+    market_floor_price_per_sqm: marketPsm,
+    sqm_per_lot: lotResult.sqm_per_lot,
+  });
+
+  const strategyAssessmentPromise = assessDevelopmentStrategy({
+    address: geocode.formatted ?? address,
+    build_year: merged.build_year,
+    build_year_range: merged.build_year_range,
+    floor_area_sqm: merged.floor_area_sqm,
+    land_area_sqm: merged.land_area_sqm,
+    bedrooms: merged.bedrooms,
+    bathrooms: merged.bathrooms,
+    zone_code: merged.zone_code,
+    zone_description: merged.zone_description,
+    potential_lots: lotResult.lots,
+    contour: merged.contour,
+    asbestos_risk: merged.asbestos_risk,
+    cv_nzd: merged.cv_nzd,
+    listing_active: merged.listing_active,
+    listing_price: merged.listing_price,
+    comparable_sales_count: comparablesResult.comparables.length,
+  }).catch((err) => {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "Development strategy LLM assessment failed — using deterministic fallback");
+    return buildFallbackDevelopmentStrategyAssessment(merged, lotResult);
+  });
+
+  const [interestRateOutlook, strategyAssessment] = await Promise.all([
+    interestRatePromise,
+    strategyAssessmentPromise,
+  ]);
+
+  const hasRealComparablePricing = comparablesResult.avg_sale_price > 0 || comparablesResult.avg_price_per_sqm > 0;
+  const gdvTypologyMultiplier = exitGdvTypologyDiscountFactor(merged.zone_code, lotResult.lots, lotResult.sqm_per_lot);
+  const scenarios = hasRealComparablePricing
+    ? calculateBearBaseBullScenarios(
+        costs,
+        comparablesResult.avg_price_per_sqm,
+        comparablesResult.avg_sale_price,
+        lotResult.lots,
+        lotResult.sqm_per_lot,
+        interestRateOutlook,
+        gdvTypologyMultiplier,
+      )
+    : [];
+
+  const developmentStrategies = calculateDevelopmentStrategies({
+    data: merged,
+    baseCosts: costs,
+    lotResult,
+    avgSalePrice: comparablesResult.avg_sale_price,
+    avgPricePerSqm: comparablesResult.avg_price_per_sqm,
     interestRateOutlook,
-  );
+    assessment: strategyAssessment,
+    comparablesQuality: comparablesResult.data_quality,
+  });
 
   const scores = scoreProperty(merged, costs, scenarios, lotResult.lots);
+
+  let schoolZonesForEnrichment = merged.school_zones;
+  const missingAllSchoolZones =
+    !schoolZonesForEnrichment.primary?.trim() &&
+    !schoolZonesForEnrichment.intermediate?.trim() &&
+    !schoolZonesForEnrichment.secondary?.trim();
+
+  if (missingAllSchoolZones) {
+    const llmZonesResult = await timed(
+      "school_zones_llm",
+      () => inferSchoolZonesFromLocation(geocode.formatted ?? address, suburb),
+      timing,
+    );
+    const inferred = llmZonesResult.failed ? null : llmZonesResult.value;
+    if (
+      inferred &&
+      (inferred.primary?.trim() || inferred.intermediate?.trim() || inferred.secondary?.trim())
+    ) {
+      schoolZonesForEnrichment = {
+        primary: inferred.primary?.trim() || null,
+        intermediate: inferred.intermediate?.trim() || null,
+        secondary: inferred.secondary?.trim() || null,
+      };
+      merged.school_zones = schoolZonesForEnrichment;
+      merged.data_sources["school_zones"] = "llm_inferred";
+    }
+  }
+
+  const school_zones_detail = await enrichSchoolZonesDetail(schoolZonesForEnrichment, timing);
 
   timing["total"] = Date.now() - pipelineStart;
   logger.info({ timing, failedSources, cv_nzd: merged.cv_nzd, land_area_sqm: merged.land_area_sqm }, "Pipeline complete");
@@ -430,11 +859,14 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     qv: qvData,
     merged,
     lots: lotResult,
+    subdivision_pathway: subdivisionPathway,
     costs,
     comparables: comparablesResult.comparables,
     comparables_quality: comparablesResult.data_quality,
     scenarios,
+    developmentStrategies,
     scores,
+    school_zones_detail,
     easements: easementAnalysis,
     failed_sources: failedSources,
     timing_ms: timing,

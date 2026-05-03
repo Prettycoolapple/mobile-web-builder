@@ -1,25 +1,101 @@
 /// <reference lib="dom" />
+import fs from "node:fs";
 import { execSync } from "child_process";
 import { logger } from "../logger";
 import { chromium, type Browser, type Page, type BrowserContext } from "playwright";
 
 let _chromiumPath: string | null = null;
 
-export function getChromiumPath(): string {
-  if (_chromiumPath) return _chromiumPath;
+function firstPathFromCommandOutput(output: string): string | null {
+  const candidates = output
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/^"|"$/g, ""))
+    .filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return candidates[0] ?? null;
+}
+
+function tryCommand(command: string): string | null {
   try {
-    const path = execSync("which chromium 2>/dev/null || which chromium-browser 2>/dev/null", {
+    const output = execSync(command, {
       encoding: "utf8",
       timeout: 5000,
+      stdio: ["ignore", "pipe", "ignore"],
     }).trim();
-    if (path) {
-      _chromiumPath = path;
-      return path;
-    }
+    return output ? firstPathFromCommandOutput(output) : null;
   } catch {
-    /* fall through */
+    return null;
   }
-  throw new Error("No system Chromium found. Install via nixpkgs.chromium");
+}
+
+function getPathFromEnv(): string | null {
+  const explicit =
+    process.env["PLAYWRIGHT_CHROMIUM_PATH"] ??
+    process.env["CHROMIUM_PATH"] ??
+    null;
+  if (!explicit) return null;
+
+  const normalized = explicit.trim().replace(/^"|"$/g, "");
+  if (!normalized) return null;
+  if (!fs.existsSync(normalized)) {
+    logger.warn({ configuredPath: normalized }, "Configured Chromium path does not exist");
+    return null;
+  }
+  return normalized;
+}
+
+function getBundledPlaywrightPath(): string | null {
+  try {
+    const bundled = chromium.executablePath();
+    if (bundled && fs.existsSync(bundled)) return bundled;
+  } catch {
+    // Playwright browser bundle may not be installed on this host.
+  }
+  return null;
+}
+
+function getSystemChromiumPath(): string | null {
+  const commands = process.platform === "win32"
+    ? ["where chromium", "where chromium-browser", "where chrome", "where msedge"]
+    : ["which chromium", "which chromium-browser", "which google-chrome", "which google-chrome-stable"];
+
+  for (const command of commands) {
+    const resolved = tryCommand(command);
+    if (resolved) return resolved;
+  }
+  return null;
+}
+
+export function getChromiumPath(): string {
+  if (_chromiumPath) return _chromiumPath;
+
+  const envPath = getPathFromEnv();
+  if (envPath) {
+    _chromiumPath = envPath;
+    logger.info({ chromiumPath: _chromiumPath, source: "env" }, "Resolved Chromium executable");
+    return _chromiumPath;
+  }
+
+  const bundledPath = getBundledPlaywrightPath();
+  if (bundledPath) {
+    _chromiumPath = bundledPath;
+    logger.info({ chromiumPath: _chromiumPath, source: "playwright" }, "Resolved Chromium executable");
+    return _chromiumPath;
+  }
+
+  const systemPath = getSystemChromiumPath();
+  if (systemPath) {
+    _chromiumPath = systemPath;
+    logger.info({ chromiumPath: _chromiumPath, source: "system" }, "Resolved Chromium executable");
+    return _chromiumPath;
+  }
+
+  throw new Error(
+    "Unable to resolve Chromium executable. Install Playwright browsers (npx playwright install chromium), install a system Chrome/Chromium, or set PLAYWRIGHT_CHROMIUM_PATH.",
+  );
 }
 
 export const BROWSER_ARGS = [
@@ -33,9 +109,36 @@ export const BROWSER_ARGS = [
 
 const STEALTH_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
+// ─── Startup diagnostic ─────────────────────────────────────────────────────
+// Eagerly resolve Chromium at import time so operators see immediately whether
+// browser-based scrapers will work. If it fails, all 4 scrapers (Hougarden,
+// OneRoof, QV, Homes) will return null data — this is the #1 cause of missing
+// CV/build-year after a migration.
+let _startupChromiumOk = false;
+try {
+  const p = getChromiumPath();
+  _startupChromiumOk = true;
+  logger.info({ chromiumPath: p }, "Browser startup check: Chromium resolved OK — scrapers will use this executable");
+} catch (err) {
+  logger.error(
+    { err: (err as Error).message },
+    "Browser startup check: Chromium NOT found — ALL browser-based scrapers (Hougarden, OneRoof, QV, Homes) will FAIL. " +
+      "Run `npx playwright install chromium` or set PLAYWRIGHT_CHROMIUM_PATH in .env",
+  );
+}
+export { _startupChromiumOk as chromiumAvailable };
+
 export async function launchBrowser(): Promise<Browser> {
   const executablePath = getChromiumPath();
-  return chromium.launch({ executablePath, headless: true, args: BROWSER_ARGS });
+  try {
+    return await chromium.launch({ executablePath, headless: true, args: BROWSER_ARGS });
+  } catch (err) {
+    logger.error(
+      { err: (err as Error).message, executablePath },
+      "Failed to launch Chromium browser — scraper will return null data",
+    );
+    throw err;
+  }
 }
 
 export async function newStealthPage(browser: Browser): Promise<{ context: BrowserContext; page: Page }> {

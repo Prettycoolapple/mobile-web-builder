@@ -1,6 +1,13 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "@/context/AuthContext";
+import {
+  cacheReportPhotos,
+  deleteReportPhotos,
+  reportPhotoSignature,
+} from "@/lib/reportPhotoCache";
+import { getCurrentLocale } from "@/lib/i18n";
+import { translateReportViaApi } from "@/lib/translateReport";
 
 export type MessageRole = "user" | "assistant";
 
@@ -25,7 +32,7 @@ export interface ChatMessage {
   role: MessageRole;
   content: string;
   timestamp: number;
-  type: "text" | "report" | "search" | "loading" | "provider_recommendation" | "provider_upgrade_gate" | "agent_contact" | "subdivision_clarification";
+  type: "text" | "report" | "search" | "loading" | "provider_recommendation" | "provider_upgrade_gate" | "agent_contact" | "subdivision_clarification" | "address_clarification";
   clarification?: {
     question: string;
     options: string[];
@@ -61,7 +68,11 @@ export interface PropertyOverview {
   landArea?: string;
   floorArea?: string;
   buildYear?: string;
+  bedrooms?: number | null;
+  bathrooms?: number | null;
   zone?: string;
+  /** LINZ estate description / tenure (e.g. Fee Simple, Cross lease). */
+  titleType?: string | null;
   listingPrice?: string;
   isOnMarket?: boolean;
 }
@@ -95,6 +106,7 @@ export interface PlanningInfo {
   easement_data_status?: "retrieved" | "no_memorials" | "api_error" | "no_title";
   lot_impact_note?: string | null;
   subdivisionSummary?: string;
+  subdivisionPathwayNote?: string | null;
 }
 
 export interface AsbestosInfo {
@@ -168,10 +180,36 @@ export interface ROIScenario {
   cv_unavailable?: boolean;
 }
 
+export type DevelopmentStrategyId = "hold_existing" | "refurbish" | "demolish_rebuild";
+export type DevelopmentStrategyRecommendation = "recommended" | "viable" | "not_recommended";
+export type RefurbishmentScope = "none" | "light" | "moderate" | "heavy";
+
+export interface DevelopmentStrategyCostItem {
+  label: string;
+  low: number;
+  high: number;
+}
+
+export interface DevelopmentStrategyScenario {
+  id: DevelopmentStrategyId;
+  title: string;
+  recommendation: DevelopmentStrategyRecommendation;
+  confidence: number;
+  rationale: string;
+  rationale_zh?: string;
+  assumptions: string[];
+  refurbishScope?: RefurbishmentScope;
+  totalCostLow: number;
+  totalCostHigh: number;
+  costPerUnitAvg: number;
+  costItems?: DevelopmentStrategyCostItem[];
+  roiScenarios: ROIScenario[];
+}
+
 export interface ComparableSale {
   address: string;
   saleDate?: string;
-  sale_date?: string;
+  sale_date?: string | null;
   price?: number;
   price_nzd?: number;
   size?: number;
@@ -179,6 +217,22 @@ export interface ComparableSale {
   floor_sqm?: number;
   pricePerSqm?: number;
   price_per_sqm?: number;
+  cv_nzd?: number | null;
+  build_year?: number | null;
+}
+
+/** MoE Schools Directory enrichment for home-zone listing text (Hougarden). */
+export interface SchoolZoneDetail {
+  level: "primary" | "intermediate" | "secondary";
+  sourceLabel: string;
+  orgName: string | null;
+  orgType: string | null;
+  authority: string | null;
+  authorityCategory: "public" | "state_integrated" | "private" | "unknown";
+  equityIndex: string | null;
+  enrolmentScheme: string | null;
+  roll: number | null;
+  matched: boolean;
 }
 
 export interface FeasibilityReport {
@@ -198,17 +252,29 @@ export interface FeasibilityReport {
   cv_unavailable?: boolean;
   cost_per_unit_avg?: number;
   roiScenarios?: ROIScenario[];
+  developmentStrategies?: DevelopmentStrategyScenario[];
+  recommendedDevelopmentStrategy?: DevelopmentStrategyId | null;
   interest_rate_outlook?: "falling" | "stable" | "rising";
   comparableSales?: ComparableSale[];
-  comparables_quality?: "live" | "estimated";
-  avgPricePerSqm?: number;
-  avg_sale_price?: number;
+  comparables_quality?: "live" | "estimated" | "unavailable";
+  avgPricePerSqm?: number | null;
+  avg_sale_price?: number | null;
+  /** Enriched state/intermediate/secondary zone schools (MoE directory). */
+  schoolZones?: SchoolZoneDetail[];
   riskSummary?: string[];
   disclaimer?: string;
   overlay_map_image_base64?: string;
   data_sources?: Record<string, string>;
   missing_critical_fields?: string[];
   photoUrl?: string;
+  photoUrls?: string[];
+  /**
+   * On-device file URIs of property photos already downloaded for this report.
+   * Populated lazily by `lib/reportPhotoCache.ts` so the report still shows
+   * the correct photograph after the original CDN URL has rotated. Persisted
+   * with the session and cleared when the user deletes the report.
+   */
+  cachedPhotoUris?: string[];
 }
 
 export interface PropertyCandidate {
@@ -241,6 +307,10 @@ export interface Session {
   createdAt: number;
   updatedAt: number;
   currentReport?: FeasibilityReport;
+  /** User rated the first LLM reply (thumbs up/down). */
+  firstLlmResponseRating?: "up" | "down";
+  /** Opened from History — skip first-turn rating prompt. */
+  skipFirstTurnRating?: boolean;
 }
 
 interface ChatContextValue {
@@ -262,6 +332,7 @@ interface ChatContextValue {
   openHistoryReport: (address: string, report: FeasibilityReport) => string;
   isLoading: boolean;
   setIsLoading: (v: boolean) => void;
+  setFirstLlmResponseRating: (sessionId: string, rating: "up" | "down") => void;
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null);
@@ -274,6 +345,55 @@ function getStorageKey(userId: string | null | undefined): string {
 
 function generateId(): string {
   return Date.now().toString() + Math.random().toString(36).substr(2, 9);
+}
+
+/** True if the string contains no CJK characters — used to detect untranslated English fields. */
+function isEnglishText(s: unknown): boolean {
+  if (typeof s !== "string" || !s.trim()) return false;
+  return !/[\u3400-\u9FFF\uF900-\uFAFF]/.test(s);
+}
+
+/** True when a report has at least one LLM-narrative field still in English (ASCII-only prose). */
+function reportHasEnglishNarrative(report: FeasibilityReport): boolean {
+  const scores = report.scores;
+  if (scores) {
+    for (const key of ["ease_reasons", "cost_reasons", "roi_reasons"] as const) {
+      const arr = scores[key];
+      if (Array.isArray(arr) && arr.some((x) => isEnglishText(x))) return true;
+    }
+  }
+  const planning = report.planning;
+  if (planning) {
+    if (isEnglishText(planning.subdivisionPathwayNote)) return true;
+    if (isEnglishText(planning.subdivisionSummary)) return true;
+    if (isEnglishText(planning.easement_summary)) return true;
+    if (Array.isArray(planning.overlays)) {
+      for (const o of planning.overlays) {
+        if (isEnglishText(o.detail)) return true;
+      }
+    }
+  }
+  if (report.riskSummary?.some((r) => isEnglishText(r))) return true;
+  if (isEnglishText(report.disclaimer)) return true;
+  if (isEnglishText(report.asbestos?.notes)) return true;
+  if (isEnglishText(report.propertyOverview?.titleType)) return true;
+  if (isEnglishText(report.terrain?.slope)) return true;
+
+  if (report.costItems?.some((ci) => isEnglishText(ci.label))) return true;
+
+  const strategies = report.developmentStrategies;
+  if (strategies?.length) {
+    for (const s of strategies) {
+      const zhRationale =
+        typeof s.rationale_zh === "string" && s.rationale_zh.trim().length > 0 && !isEnglishText(s.rationale_zh);
+      if (!zhRationale && isEnglishText(s.rationale)) return true;
+      if (typeof s.rationale_zh === "string" && s.rationale_zh.trim() && isEnglishText(s.rationale_zh)) return true;
+      if (s.assumptions?.some((a) => isEnglishText(a))) return true;
+      if (s.costItems?.some((ci) => isEnglishText(ci.label))) return true;
+    }
+  }
+
+  return false;
 }
 
 export function ChatProvider({ children }: { children: React.ReactNode }) {
@@ -289,6 +409,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const storageKey = getStorageKey(userId);
     setSessions([]);
     setCurrentSessionId(null);
+    // Different user → re-evaluate every report's photo cache once.
+    photoCacheAttemptsRef.current = new Set();
     AsyncStorage.getItem(storageKey).then((raw) => {
       if (cancelled) return;
       if (raw) {
@@ -459,6 +581,19 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     [currentSessionId, saveSessions],
   );
 
+  const setFirstLlmResponseRating = useCallback(
+    (sessionId: string, rating: "up" | "down") => {
+      setSessions((prev) => {
+        const updated = prev.map((s) =>
+          s.id === sessionId ? { ...s, firstLlmResponseRating: rating, updatedAt: Date.now() } : s,
+        );
+        saveSessions(updated);
+        return updated;
+      });
+    },
+    [saveSessions],
+  );
+
   const deleteSession = useCallback(
     (id: string) => {
       setSessions((prev) => {
@@ -473,9 +608,150 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           return prev;
         });
       }
+      // Drop on-device property photos owned by this session so they don't
+      // linger after the user deletes the report.
+      deleteReportPhotos(id).catch(() => {});
     },
     [currentSessionId, saveSessions],
   );
+
+  // Tracks reports we've already attempted to cache photos for, keyed by
+  // `${sessionId}::${messageId|"current"}::${photoSignature}`. Lets the effect
+  // below run safely on every session mutation without re-downloading or
+  // hammering Street View when an attempt yielded zero usable photos.
+  const photoCacheAttemptsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    let cancelled = false;
+
+    type Pending = {
+      sessionId: string;
+      messageId: string | null;
+      report: FeasibilityReport;
+      attemptKey: string;
+    };
+
+    const pending: Pending[] = [];
+    for (const session of sessions) {
+      const collect = (report: FeasibilityReport, messageId: string | null) => {
+        if ((report.cachedPhotoUris?.length ?? 0) > 0) return;
+        const sig = reportPhotoSignature(report);
+        const attemptKey = `${session.id}::${messageId ?? "current"}::${sig}`;
+        if (photoCacheAttemptsRef.current.has(attemptKey)) return;
+        pending.push({ sessionId: session.id, messageId, report, attemptKey });
+      };
+      if (session.currentReport) collect(session.currentReport, null);
+      for (const msg of session.messages) {
+        if (msg.type === "report" && msg.report) collect(msg.report, msg.id);
+      }
+    }
+
+    if (pending.length === 0) return;
+
+    for (const item of pending) {
+      photoCacheAttemptsRef.current.add(item.attemptKey);
+    }
+
+    void (async () => {
+      for (const item of pending) {
+        if (cancelled) return;
+        const uris = await cacheReportPhotos(item.sessionId, item.report);
+        if (cancelled || uris.length === 0) continue;
+
+        setSessions((prev) => {
+          let mutated = false;
+          const next = prev.map((s) => {
+            if (s.id !== item.sessionId) return s;
+
+            let updatedSession = s;
+            const patch = (target: FeasibilityReport): FeasibilityReport => ({
+              ...target,
+              cachedPhotoUris: uris,
+            });
+
+            if (
+              item.messageId === null &&
+              s.currentReport &&
+              reportPhotoSignature(s.currentReport) === reportPhotoSignature(item.report) &&
+              (s.currentReport.cachedPhotoUris?.length ?? 0) === 0
+            ) {
+              updatedSession = { ...updatedSession, currentReport: patch(s.currentReport) };
+              mutated = true;
+            }
+
+            if (item.messageId !== null) {
+              const newMessages = s.messages.map((m) => {
+                if (m.id !== item.messageId || !m.report) return m;
+                if ((m.report.cachedPhotoUris?.length ?? 0) > 0) return m;
+                return { ...m, report: patch(m.report) };
+              });
+              if (newMessages !== s.messages) {
+                updatedSession = { ...updatedSession, messages: newMessages };
+                mutated = true;
+              }
+            }
+
+            return updatedSession;
+          });
+
+          if (!mutated) return prev;
+          saveSessions(next);
+          return next;
+        });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessions, saveSessions]);
+
+  // When the device locale is zh, back-translate any cached report messages
+  // whose narrative fields are still in English (generated before translation
+  // was active). Runs once per session change; skips reports already translated.
+  const { getApiHeaders } = useAuth();
+  const translatedReportIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (getCurrentLocale() !== "zh") return;
+    let cancelled = false;
+    (async () => {
+      const headers = getApiHeaders();
+      for (const session of sessions) {
+        for (const msg of session.messages) {
+          if (msg.type !== "report" || !msg.report) continue;
+          const key = `${session.id}::${msg.id}`;
+          if (translatedReportIdsRef.current.has(key)) continue;
+          if (!reportHasEnglishNarrative(msg.report)) {
+            translatedReportIdsRef.current.add(key);
+            continue;
+          }
+          const translated = await translateReportViaApi(msg.report, headers);
+          if (cancelled) return;
+          if (!translated) {
+            translatedReportIdsRef.current.add(key);
+            continue;
+          }
+          translatedReportIdsRef.current.add(key);
+          setSessions((prev) => {
+            const next = prev.map((s) => {
+              if (s.id !== session.id) return s;
+              const newMessages = s.messages.map((m) =>
+                m.id === msg.id ? { ...m, report: translated } : m,
+              );
+              const newCurrentReport =
+                s.currentReport && reportHasEnglishNarrative(s.currentReport)
+                  ? translated
+                  : s.currentReport;
+              return { ...s, messages: newMessages, currentReport: newCurrentReport };
+            });
+            saveSessions(next);
+            return next;
+          });
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [sessions, getApiHeaders, saveSessions]);
 
   const openHistoryReport = useCallback(
     (address: string, report: FeasibilityReport): string => {
@@ -504,6 +780,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         createdAt: now,
         updatedAt: now,
         currentReport: report,
+        skipFirstTurnRating: true,
       };
       setSessions((prev) => {
         const updated = [newSession, ...prev];
@@ -534,6 +811,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         openHistoryReport,
         isLoading,
         setIsLoading,
+        setFirstLlmResponseRating,
       }}
     >
       {children}

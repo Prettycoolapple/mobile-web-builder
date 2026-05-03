@@ -1,6 +1,7 @@
 import { logger } from "../logger";
 
 const SCRAPINGBEE_URL = "https://app.scrapingbee.com/api/v1/";
+let warnedMissingApiKey = false;
 
 export async function fetchWithScrapingBee(
   targetUrl: string,
@@ -8,7 +9,10 @@ export async function fetchWithScrapingBee(
 ): Promise<string | null> {
   const apiKey = process.env["SCRAPINGBEE_API_KEY"];
   if (!apiKey) {
-    logger.debug("ScrapingBee: SCRAPINGBEE_API_KEY not set — skipping");
+    if (!warnedMissingApiKey) {
+      warnedMissingApiKey = true;
+      logger.warn("ScrapingBee: SCRAPINGBEE_API_KEY not set — ScrapingBee fallback is disabled");
+    }
     return null;
   }
 

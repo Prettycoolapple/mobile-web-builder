@@ -194,6 +194,8 @@ export interface PropertyOverview {
   floorArea?: string;
   buildYear?: string;
   zone?: string;
+  /** LINZ estate / tenure label when available */
+  titleType?: string | null;
   listingPrice?: string;
   isOnMarket?: boolean;
 }
@@ -307,6 +309,19 @@ export interface ComparableSale {
   pricePerSqm: number;
 }
 
+export interface SchoolZoneDetail {
+  level: "primary" | "intermediate" | "secondary";
+  sourceLabel: string;
+  orgName?: string | null;
+  orgType?: string | null;
+  authority?: string | null;
+  authorityCategory: "public" | "state_integrated" | "private" | "unknown";
+  equityIndex?: string | null;
+  enrolmentScheme?: string | null;
+  roll?: number | null;
+  matched: boolean;
+}
+
 export interface FeasibilityReport {
   address: string;
   scores: Score;
@@ -321,6 +336,7 @@ export interface FeasibilityReport {
   roiScenarios?: ROIScenario[];
   comparableSales?: ComparableSale[];
   avgPricePerSqm?: number;
+  schoolZones?: SchoolZoneDetail[];
   riskSummary?: string[];
   disclaimer?: string;
 }

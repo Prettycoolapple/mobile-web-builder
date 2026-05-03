@@ -1,8 +1,8 @@
 import {
-  DM_Sans_400Regular,
-  DM_Sans_500Medium,
-  DM_Sans_600SemiBold,
-  DM_Sans_700Bold,
+  DMSans_400Regular,
+  DMSans_500Medium,
+  DMSans_600SemiBold,
+  DMSans_700Bold,
   useFonts,
 } from "@expo-google-fonts/dm-sans";
 import {
@@ -29,6 +29,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ChatProvider } from "@/context/ChatContext";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { DmProvider } from "@/context/DmContext";
+import { getApiBase } from "@/lib/api";
 import { initializeRevenueCat, SubscriptionProvider } from "@/lib/revenuecat";
 import { LocaleProvider, LocaleSync } from "@/lib/i18n";
 
@@ -44,13 +45,6 @@ Notifications.setNotificationHandler({
     shouldSetBadge: true,
   }),
 });
-
-function getApiBase(): string {
-  if (process.env.EXPO_PUBLIC_DOMAIN) {
-    return `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`;
-  }
-  return "/api";
-}
 
 const queryClient = new QueryClient();
 
@@ -101,29 +95,36 @@ function NotificationSetup() {
 
     registerPushToken();
 
+    const openFromNotificationData = (data: Record<string, unknown> | undefined) => {
+      if (!data || typeof data !== "object") return;
+      const type = typeof data.type === "string" ? data.type : undefined;
+      const threadId = typeof data.threadId === "string" ? data.threadId : undefined;
+      if (type === "report_ready") {
+        router.push("/(tabs)/history" as never);
+        return;
+      }
+      if (threadId) {
+        router.push(`/chat/${threadId}` as never);
+      }
+    };
+
     notificationListener.current = Notifications.addNotificationReceivedListener(() => {
     });
 
     responseListener.current = Notifications.addNotificationResponseReceivedListener((response) => {
-      const data = response.notification.request.content.data as { threadId?: string };
-      if (data?.threadId) {
-        router.push(`/chat/${data.threadId}`);
-      }
+      openFromNotificationData(response.notification.request.content.data as Record<string, unknown>);
     });
 
     Notifications.getLastNotificationResponseAsync().then((response) => {
       if (!response) return;
-      const data = response.notification.request.content.data as { threadId?: string };
-      if (data?.threadId) {
-        router.push(`/chat/${data.threadId}`);
-      }
+      openFromNotificationData(response.notification.request.content.data as Record<string, unknown>);
     });
 
     return () => {
       notificationListener.current?.remove();
       responseListener.current?.remove();
     };
-  }, [user, token]);
+  }, [user, token, router]);
 
   return null;
 }
@@ -135,6 +136,7 @@ function RootLayoutNav() {
       <Stack.Screen name="(auth)" options={{ headerShown: false }} />
       <Stack.Screen name="(onboarding)" options={{ headerShown: false }} />
       <Stack.Screen name="add-listing" options={{ headerShown: false, presentation: "modal" }} />
+      <Stack.Screen name="support" options={{ headerShown: false }} />
       <Stack.Screen name="my-listings" options={{ headerShown: false }} />
       <Stack.Screen name="chat/contacts" options={{ headerShown: false, presentation: "modal" }} />
       <Stack.Screen name="chat/[threadId]" options={{ headerShown: false }} />
@@ -145,10 +147,10 @@ function RootLayoutNav() {
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
-    DM_Sans_400Regular,
-    DM_Sans_500Medium,
-    DM_Sans_600SemiBold,
-    DM_Sans_700Bold,
+    DMSans_400Regular,
+    DMSans_500Medium,
+    DMSans_600SemiBold,
+    DMSans_700Bold,
     SpaceGrotesk_500Medium,
     SpaceGrotesk_700Bold,
     Fraunces_400Regular,
@@ -167,27 +169,30 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
-      <ErrorBoundary>
-        <QueryClientProvider client={queryClient}>
-          <LocaleProvider>
-          <LocaleSync />
-          <AuthProvider>
-            <SubscriptionGate>
-              <DmProvider>
-                <ChatProvider>
-                  <GestureHandlerRootView style={{ flex: 1 }}>
-                    <KeyboardProvider>
-                      <NotificationSetup />
-                      <RootLayoutNav />
-                    </KeyboardProvider>
-                  </GestureHandlerRootView>
-                </ChatProvider>
-              </DmProvider>
-            </SubscriptionGate>
-          </AuthProvider>
-          </LocaleProvider>
-        </QueryClientProvider>
-      </ErrorBoundary>
+      {/* LocaleProvider sits ABOVE ErrorBoundary so the error fallback can
+          still resolve localized copy (Chinese-OS users) if anything deeper
+          in the tree crashes. */}
+      <LocaleProvider>
+        <LocaleSync />
+        <ErrorBoundary>
+          <QueryClientProvider client={queryClient}>
+            <AuthProvider>
+              <SubscriptionGate>
+                <DmProvider>
+                  <ChatProvider>
+                    <GestureHandlerRootView style={{ flex: 1 }}>
+                      <KeyboardProvider>
+                        <NotificationSetup />
+                        <RootLayoutNav />
+                      </KeyboardProvider>
+                    </GestureHandlerRootView>
+                  </ChatProvider>
+                </DmProvider>
+              </SubscriptionGate>
+            </AuthProvider>
+          </QueryClientProvider>
+        </ErrorBoundary>
+      </LocaleProvider>
     </SafeAreaProvider>
   );
 }

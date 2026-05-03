@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { eq, and, desc } from "drizzle-orm";
-import { db, searches } from "@workspace/db";
+import { db, searches, withDbRetry } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 
 const router = Router();
@@ -9,29 +9,37 @@ router.get("/searches", requireAuth, async (req, res) => {
   const userId = (req as any).userId as string;
 
   try {
-    const rows = await db
-      .select({
-        id: searches.id,
-        address: searches.address,
-        query: searches.query,
-        resultJson: searches.resultJson,
-        createdAt: searches.createdAt,
-      })
-      .from(searches)
-      .where(eq(searches.userId, userId))
-      .orderBy(desc(searches.createdAt))
-      .limit(50);
+    const rows = await withDbRetry(() =>
+      db
+        .select({
+          id: searches.id,
+          address: searches.address,
+          query: searches.query,
+          resultJson: searches.resultJson,
+          createdAt: searches.createdAt,
+        })
+        .from(searches)
+        .where(eq(searches.userId, userId))
+        .orderBy(desc(searches.createdAt))
+        .limit(50),
+    );
 
     const summary = rows
       .map((s) => {
         const rj = s.resultJson as any;
-        const hasScores = rj && typeof rj === "object" && rj.scores && typeof rj.scores.composite === "number";
-        if (!hasScores) return null;
+        if (!rj || typeof rj !== "object") return null;
+        const compositeRaw = rj.scores?.composite;
+        const composite =
+          typeof compositeRaw === "number"
+            ? compositeRaw
+            : typeof compositeRaw === "string" && compositeRaw.trim() !== "" && !Number.isNaN(Number(compositeRaw))
+              ? Number(compositeRaw)
+              : null;
         return {
           id: s.id,
           address: s.address ?? s.query,
           created_at: s.createdAt,
-          composite_score: rj.scores.composite as number,
+          composite_score: composite,
           zone: (rj.propertyOverview?.zone ?? rj.planning?.zone ?? null) as string | null,
         };
       })
@@ -39,7 +47,7 @@ router.get("/searches", requireAuth, async (req, res) => {
 
     res.json({ searches: summary });
   } catch (error) {
-    req.log.error({ error }, "Failed to get searches");
+    req.log.error({ err: error }, "Failed to get searches");
     res.status(500).json({ error: "Failed to get search history", code: "SEARCHES_FAILED" });
   }
 });
@@ -49,20 +57,31 @@ router.get("/searches/:id", requireAuth, async (req, res) => {
   const { id } = req.params;
 
   try {
-    const [row] = await db
-      .select()
-      .from(searches)
-      .where(and(eq(searches.id, id), eq(searches.userId, userId)))
-      .limit(1);
+    const [row] = await withDbRetry(() =>
+      db
+        .select()
+        .from(searches)
+        .where(and(eq(searches.id, id), eq(searches.userId, userId)))
+        .limit(1),
+    );
 
     if (!row) {
       res.status(404).json({ error: "Search not found", code: "NOT_FOUND" });
       return;
     }
 
-    res.json({ search: row });
+    res.json({
+      search: {
+        id: row.id,
+        user_id: row.userId,
+        query: row.query,
+        address: row.address,
+        result_json: row.resultJson,
+        created_at: row.createdAt,
+      },
+    });
   } catch (error) {
-    req.log.error({ error }, "Failed to get search");
+    req.log.error({ err: error }, "Failed to get search");
     res.status(500).json({ error: "Failed to get search", code: "GET_SEARCH_FAILED" });
   }
 });
@@ -72,10 +91,12 @@ router.delete("/searches/:id", requireAuth, async (req, res) => {
   const { id } = req.params;
 
   try {
-    const deleted = await db
-      .delete(searches)
-      .where(and(eq(searches.id, id), eq(searches.userId, userId)))
-      .returning({ id: searches.id });
+    const deleted = await withDbRetry(() =>
+      db
+        .delete(searches)
+        .where(and(eq(searches.id, id), eq(searches.userId, userId)))
+        .returning({ id: searches.id }),
+    );
 
     if (deleted.length === 0) {
       res.status(404).json({ error: "Search not found", code: "NOT_FOUND" });
@@ -84,7 +105,7 @@ router.delete("/searches/:id", requireAuth, async (req, res) => {
 
     res.json({ success: true });
   } catch (error) {
-    req.log.error({ error }, "Failed to delete search");
+    req.log.error({ err: error }, "Failed to delete search");
     res.status(500).json({ error: "Failed to delete search", code: "DELETE_FAILED" });
   }
 });

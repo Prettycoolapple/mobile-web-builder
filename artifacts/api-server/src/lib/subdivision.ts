@@ -11,10 +11,11 @@ import { geocodeAddress } from "./geocode";
  * match what is actually on the ground today.
  *
  * This helper probes the geocoder for letter-suffixed variants of the input
- * address. If two or more variants resolve to distinct addresses where the
- * formatted result actually contains the expected letter, we treat the parent
- * as subdivided and return the discovered sub-lots so the caller can ask the
- * user which one they meant.
+ * address. With 2+ distinct sub-lot hits we treat the site as subdivided. With
+ * exactly one hit we only subdivide when that formatted address differs from
+ * geocoding the parent (real 66A vs stale parent 66). Options always include
+ * the parent plus each distinct sub-lot (deduped) so the user can pick the
+ * correct title.
  *
  * The detection runs in parallel and is bounded by the geocoder's own timeout
  * (~10 s per probe) — total worst case ~10 s for 4 concurrent probes.
@@ -116,18 +117,44 @@ export async function detectSubdivision(address: string): Promise<SubdivisionRes
     a.letter.localeCompare(b.letter),
   );
 
-  if (finalHits.length < 2) {
+  if (finalHits.length < 1) {
     return { isSubdivided: false, parentAddress: address, subLots: [] };
   }
 
+  // Single-letter hit: only treat as subdivision when the sub-lot geocodes to a
+  // *different* formatted address than the parent — avoids false triggers when
+  // only one suffix probe sticks (e.g. 66 vs 66A Marine Parade).
+  if (finalHits.length === 1) {
+    try {
+      const parentGeo = await geocodeAddress(address);
+      const sub = finalHits[0]!;
+      if (normaliseFormatted(parentGeo.formatted) === normaliseFormatted(sub.formatted)) {
+        return { isSubdivided: false, parentAddress: address, subLots: [] };
+      }
+    } catch {
+      return { isSubdivided: false, parentAddress: address, subLots: [] };
+    }
+  }
+
+  const subLotAddresses = finalHits.map((h) => h.formatted);
+  const withParent = [address, ...subLotAddresses];
+  const seenNorm = new Set<string>();
+  const deduped: string[] = [];
+  for (const a of withParent) {
+    const k = normaliseFormatted(a);
+    if (seenNorm.has(k)) continue;
+    seenNorm.add(k);
+    deduped.push(a);
+  }
+
   logger.info(
-    { parent: address, subLots: finalHits.map((h) => `${number}${h.letter}`) },
+    { parent: address, subLots: deduped },
     "Subdivision detected",
   );
 
   return {
     isSubdivided: true,
     parentAddress: address,
-    subLots: finalHits.map((h) => h.formatted),
+    subLots: deduped,
   };
 }

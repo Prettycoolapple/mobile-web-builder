@@ -14,7 +14,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { useAuth } from "@/context/AuthContext";
-import { useSubscription } from "@/lib/revenuecat";
+import { getApiBase } from "@/lib/api";
+import { useSubscription, getSubscriptionSyncBody } from "@/lib/revenuecat";
+import { useT } from "@/lib/i18n";
 
 const BG = "#131510";
 const CARD_BG = "#1A1E14";
@@ -24,27 +26,29 @@ const TEXT = "#FAFAF9";
 const MUTED = "rgba(250,249,246,0.55)";
 const BORDER = "rgba(250,249,246,0.1)";
 
-const FEATURES: { icon: React.ComponentProps<typeof Feather>["name"]; label: string }[] = [
-  { icon: "cpu", label: "Project Alpha will recommend you to users when their need fits your expertise." },
-  { icon: "trending-up", label: "Get insights into your potential client" },
-  { icon: "globe", label: "AI powered live translation — help you get clients speaking different languages." },
-  { icon: "file-text", label: "Access to feasibility reports" },
+const FEATURES: { icon: React.ComponentProps<typeof Feather>["name"]; labelKey: string }[] = [
+  { icon: "users", labelKey: "provider_welcome.feature_investors" },
+  { icon: "search", labelKey: "provider_welcome.feature_search_reports" },
+  { icon: "lock", labelKey: "provider_welcome.feature_encrypted_chat" },
 ];
 
 export default function ServiceProviderWelcomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user, token, getApiHeaders, refreshProfile } = useAuth();
-  const { purchase, isPurchasing, isSubscribed, getPriceForRole, getPackageForRole } = useSubscription();
+  const { purchase, isPurchasing, isSubscribed, getPriceForRole, getPackageForRole, refetchCustomerInfo } =
+    useSubscription();
+  const { t } = useT();
   const [showWelcomePopup, setShowWelcomePopup] = useState(true);
 
-  const firstName = user?.fullName?.split(" ")[0] || "there";
+  const firstName = user?.fullName?.split(" ")[0] || t("provider_welcome.fallback_name");
   const hasSubscription = isSubscribed || (user?.subscriptionTier && user.subscriptionTier !== "free");
   const priceString = getPriceForRole("service_provider");
 
   const heroAnim = useRef(new Animated.Value(0)).current;
   const cardAnim = useRef(new Animated.Value(0)).current;
   const featureAnims = useRef(FEATURES.map(() => new Animated.Value(0))).current;
+  const comingSoonAnim = useRef(new Animated.Value(0)).current;
   const btnAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -57,32 +61,28 @@ export default function ServiceProviderWelcomeScreen() {
           Animated.timing(a, { toValue: 1, duration: 280, useNativeDriver: true }),
         ),
       ),
+      Animated.timing(comingSoonAnim, { toValue: 1, duration: 280, useNativeDriver: true }),
       Animated.timing(btnAnim, { toValue: 1, duration: 280, useNativeDriver: true }),
     ]).start();
   }, []);
-
-  const getApiBase = () => {
-    if (process.env.EXPO_PUBLIC_DOMAIN) {
-      return `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`;
-    }
-    return "/api";
-  };
 
   const handleSubscribe = async () => {
     try {
       const pkg = getPackageForRole("service_provider");
       if (!pkg) {
-        Alert.alert("Unavailable", "Subscription packages are not available right now. Please try again later.");
+        Alert.alert(t("provider_welcome.unavailable"), t("provider_welcome.sub_unavailable"));
         return;
       }
       await purchase(pkg);
+      await refetchCustomerInfo();
       let synced = false;
       if (token) {
         try {
+          const body = await getSubscriptionSyncBody("pro");
           const resp = await fetch(`${getApiBase()}/subscription/sync`, {
             method: "POST",
             headers: getApiHeaders(),
-            body: JSON.stringify({ tier: "pro" }),
+            body: JSON.stringify(body),
           });
           synced = resp.ok;
         } catch {
@@ -98,8 +98,8 @@ export default function ServiceProviderWelcomeScreen() {
       }
       if (!synced) {
         Alert.alert(
-          "Almost there",
-          "Your trial started but we couldn't activate your account. Please try again in a moment, or contact support if it persists.",
+          t("provider_welcome.almost_there"),
+          t("provider_welcome.trial_no_activate"),
         );
         return;
       }
@@ -108,7 +108,7 @@ export default function ServiceProviderWelcomeScreen() {
       const message = (err as { message?: string; userCancelled?: boolean })?.message;
       const userCancelled = (err as { userCancelled?: boolean })?.userCancelled;
       if (!userCancelled) {
-        Alert.alert("Purchase failed", message ?? "Please try again.");
+        Alert.alert(t("provider_welcome.purchase_failed"), message ?? t("provider_welcome.try_again"));
       }
     }
   };
@@ -126,17 +126,16 @@ export default function ServiceProviderWelcomeScreen() {
             <View style={styles.popupIconWrap}>
               <Feather name="star" size={28} color={ACCENT2} />
             </View>
-            <Text style={styles.popupTitle}>You're on Project Alpha!</Text>
+            <Text style={styles.popupTitle}>{t("provider_welcome.popup_title")}</Text>
             <Text style={styles.popupBody}>
-              Project Alpha will start recommending you for suitable jobs as property developers and investors look for your expertise.
-              {"\n\n"}Build your recommendations to boost your visibility across the platform.
+              {t("provider_welcome.popup_body")}
             </Text>
             <TouchableOpacity
               style={styles.popupBtn}
               onPress={() => setShowWelcomePopup(false)}
               activeOpacity={0.85}
             >
-              <Text style={styles.popupBtnText}>Got it</Text>
+              <Text style={styles.popupBtnText}>{t("provider_welcome.popup_cta")}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -150,43 +149,43 @@ export default function ServiceProviderWelcomeScreen() {
           <View style={styles.iconWrap}>
             <Feather name="tool" size={32} color={ACCENT2} />
           </View>
-          <Text style={styles.roleTag}>Service Provider</Text>
-          <Text style={styles.heading}>You're in,{"\n"}{firstName}!</Text>
+          <Text style={styles.roleTag}>{t("provider_welcome.role_tag")}</Text>
+          <Text style={styles.heading}>{t("provider_welcome.heading", { name: firstName })}</Text>
           <Text style={styles.subheading}>
-            Your account is set up. Your submitted credentials are being reviewed — once verified, you'll be recommended to property developers and investors looking for your services.
+            {t("provider_welcome.subheading")}
           </Text>
         </Animated.View>
 
         <Animated.View style={[styles.pricingCard, { opacity: cardAnim, transform: [{ scale: cardAnim.interpolate({ inputRange: [0, 1], outputRange: [0.94, 1] }) }] }]}>
           <View style={styles.pricingTop}>
             <View>
-              <Text style={styles.pricingPlan}>Service Provider Plan</Text>
+              <Text style={styles.pricingPlan}>{t("provider_welcome.plan_name")}</Text>
               <View style={styles.priceRow}>
                 <Text style={styles.priceAmount}>{priceString}</Text>
-                <Text style={styles.pricePer}>/month NZD</Text>
+                <Text style={styles.pricePer}>{t("provider_welcome.per_month")}</Text>
               </View>
             </View>
             <View style={styles.trialBadge}>
-              <Text style={styles.trialBadgeText}>7 days free</Text>
+              <Text style={styles.trialBadgeText}>{t("provider_welcome.trial_badge")}</Text>
             </View>
           </View>
-          <Text style={styles.trialNote}>Card required · $0 charged now · Billed after 7-day trial · Cancel anytime</Text>
+          <Text style={styles.trialNote}>{t("provider_welcome.trial_note")}</Text>
         </Animated.View>
 
         {!hasSubscription && (
           <View style={styles.verificationBanner}>
             <Feather name="shield" size={15} color={ACCENT2} />
             <Text style={styles.verificationText}>
-              Your Certificate of Incorporation is under review — verified within 1–2 business days.
+              {t("provider_welcome.verification")}
             </Text>
           </View>
         )}
 
         <View style={styles.featuresSection}>
-          <Text style={styles.featuresLabel}>What's included</Text>
+          <Text style={styles.featuresLabel}>{t("provider_welcome.whats_included")}</Text>
           {FEATURES.map((f, i) => (
             <Animated.View
-              key={f.label}
+              key={f.labelKey}
               style={[
                 styles.featureRow,
                 {
@@ -200,16 +199,32 @@ export default function ServiceProviderWelcomeScreen() {
               </View>
               <View style={styles.featureContent}>
                 <Feather name={f.icon} size={16} color={MUTED} style={styles.featureIcon} />
-                <Text style={styles.featureLabel}>{f.label}</Text>
+                <Text style={styles.featureLabel}>{t(f.labelKey)}</Text>
               </View>
             </Animated.View>
           ))}
+
+          <Animated.View
+            style={[
+              styles.comingSoonBlock,
+              {
+                opacity: comingSoonAnim,
+                transform: [{ translateY: comingSoonAnim.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }) }],
+              },
+            ]}
+          >
+            <Text style={styles.comingSoonHeading}>{t("provider_welcome.coming_soon_heading")}</Text>
+            <View style={styles.comingSoonRow}>
+              <Feather name="clock" size={14} color={MUTED} style={styles.comingSoonBulletIcon} />
+              <Text style={styles.comingSoonText}>{t("provider_welcome.coming_soon_item")}</Text>
+            </View>
+          </Animated.View>
         </View>
 
         <Animated.View style={[styles.btnSection, { opacity: btnAnim, transform: [{ translateY: btnAnim.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }) }] }]}>
           {hasSubscription ? (
             <TouchableOpacity style={styles.primaryBtn} onPress={() => router.replace("/(tabs)")} activeOpacity={0.85}>
-              <Text style={styles.primaryBtnText}>Go to dashboard</Text>
+              <Text style={styles.primaryBtnText}>{t("provider_welcome.go_dashboard")}</Text>
               <Feather name="arrow-right" size={18} color="#fff" />
             </TouchableOpacity>
           ) : (
@@ -223,7 +238,7 @@ export default function ServiceProviderWelcomeScreen() {
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
                 <>
-                  <Text style={styles.primaryBtnText}>Start 7-Day Free Trial</Text>
+                  <Text style={styles.primaryBtnText}>{t("provider_welcome.start_trial")}</Text>
                   <Feather name="arrow-right" size={18} color="#fff" />
                 </>
               )}
@@ -397,6 +412,36 @@ const styles = StyleSheet.create({
     color: TEXT,
     fontFamily: "DM_Sans_400Regular",
     fontSize: 15,
+    flex: 1,
+  },
+  comingSoonBlock: {
+    marginTop: 20,
+    paddingTop: 18,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: BORDER,
+  },
+  comingSoonHeading: {
+    color: MUTED,
+    fontFamily: "DM_Sans_500Medium",
+    fontSize: 11,
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    marginBottom: 12,
+  },
+  comingSoonRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+  comingSoonBulletIcon: {
+    marginTop: 2,
+    opacity: 0.85,
+  },
+  comingSoonText: {
+    color: MUTED,
+    fontFamily: "DM_Sans_400Regular",
+    fontSize: 14,
+    lineHeight: 21,
     flex: 1,
   },
   btnSection: {

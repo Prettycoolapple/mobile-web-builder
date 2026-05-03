@@ -50,6 +50,7 @@ export const AnalysePropertyResponse = zod.object({
         floorArea: zod.string().optional(),
         buildYear: zod.string().optional(),
         zone: zod.string().optional(),
+        titleType: zod.string().optional().nullable(),
         listingPrice: zod.string().optional(),
         isOnMarket: zod.boolean().optional(),
       })
@@ -139,6 +140,22 @@ export const AnalysePropertyResponse = zod.object({
       )
       .optional(),
     avgPricePerSqm: zod.number().optional(),
+    schoolZones: zod
+      .array(
+        zod.object({
+          level: zod.enum(["primary", "intermediate", "secondary"]),
+          sourceLabel: zod.string(),
+          orgName: zod.string().nullable().optional(),
+          orgType: zod.string().nullable().optional(),
+          authority: zod.string().nullable().optional(),
+          authorityCategory: zod.enum(["public", "state_integrated", "private", "unknown"]),
+          equityIndex: zod.string().nullable().optional(),
+          enrolmentScheme: zod.string().nullable().optional(),
+          roll: zod.number().nullable().optional(),
+          matched: zod.boolean(),
+        }),
+      )
+      .optional(),
     riskSummary: zod.array(zod.string()).optional(),
     disclaimer: zod.string().optional(),
   }),

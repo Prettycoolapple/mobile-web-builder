@@ -1,8 +1,10 @@
 import { Router } from "express";
 import { eq } from "drizzle-orm";
 import { db, profiles } from "@workspace/db";
-import { getUncachableStripeClient, getStripeSync } from "../lib/stripeClient";
+import type Stripe from "stripe";
+import { getConfiguredStripeWebhookSecret, getUncachableStripeClient } from "../lib/stripeClient";
 import { verifyToken } from "../lib/auth";
+import { getPublicAppUrl } from "../lib/env";
 import { logger } from "../lib/logger";
 
 const router = Router();
@@ -34,11 +36,7 @@ const PLAN_CONFIG = {
 type PlanKey = keyof typeof PLAN_CONFIG;
 
 function getBaseUrl(): string {
-  const domain = process.env["REPLIT_DOMAINS"]?.split(",")[0];
-  if (domain) return `https://${domain}`;
-  const devDomain = process.env["REPLIT_DEV_DOMAIN"];
-  if (devDomain) return `https://${devDomain}`;
-  return "http://localhost:8080";
+  return getPublicAppUrl();
 }
 
 function getUserIdFromHeader(req: any): string | null {
@@ -172,32 +170,52 @@ router.post("/stripe/portal", async (req, res) => {
 
 router.post("/stripe/webhook", async (req, res) => {
   try {
-    const stripeSync = await getStripeSync();
     const signature = req.headers["stripe-signature"];
     if (!signature) {
       res.status(400).json({ error: "Missing Stripe signature" });
       return;
     }
+
     const sig = Array.isArray(signature) ? signature[0] : signature;
-    await stripeSync.processWebhook(req.body as Buffer, sig);
+    const stripe = getUncachableStripeClient();
+    const event = stripe.webhooks.constructEvent(
+      req.body as Buffer,
+      sig,
+      getConfiguredStripeWebhookSecret(),
+    );
 
-    const body = (() => {
-      try { return JSON.parse(req.body.toString()); } catch { return {}; }
-    })();
-
-    const eventType: string = body?.type ?? "";
-    const data = body?.data?.object ?? {};
+    const eventType = event.type;
+    const data = event.data.object as Stripe.Subscription | Stripe.Checkout.Session;
 
     if (eventType === "customer.subscription.created" || eventType === "customer.subscription.updated") {
-      const userId: string | undefined = data?.metadata?.user_id;
-      if (userId && data.status === "active") {
-        await db.update(profiles).set({ subscriptionTier: "pro", reportsUsedThisMonth: 0 }).where(eq(profiles.id, userId)).catch(() => {});
+      const subscription = data as Stripe.Subscription;
+      const userId = subscription.metadata?.user_id;
+      if (userId && subscription.status === "active") {
+        const periodEndSec = subscription.current_period_end;
+        const periodEnd =
+          typeof periodEndSec === "number" ? new Date(periodEndSec * 1000) : null;
+        await db
+          .update(profiles)
+          .set({
+            subscriptionTier: "pro",
+            reportsUsedThisMonth: 0,
+            messagesUsedThisMonth: 0,
+            lastResetAt: new Date(),
+            subscriptionPeriodEndAt: periodEnd && !Number.isNaN(periodEnd.getTime()) ? periodEnd : null,
+          })
+          .where(eq(profiles.id, userId))
+          .catch(() => {});
         logger.info({ userId }, "Subscription activated — set tier to pro");
       }
     } else if (eventType === "customer.subscription.deleted") {
-      const userId: string | undefined = data?.metadata?.user_id;
+      const subscription = data as Stripe.Subscription;
+      const userId = subscription.metadata?.user_id;
       if (userId) {
-        await db.update(profiles).set({ subscriptionTier: "free" }).where(eq(profiles.id, userId)).catch(() => {});
+        await db
+          .update(profiles)
+          .set({ subscriptionTier: "free", subscriptionPeriodEndAt: null })
+          .where(eq(profiles.id, userId))
+          .catch(() => {});
         logger.info({ userId }, "Subscription cancelled — set tier to free");
       }
     }
@@ -224,14 +242,82 @@ router.post("/subscription/sync", async (req, res) => {
     return;
   }
 
-  const { tier } = req.body as { tier?: string };
+  const { tier, subscriptionPeriodEndISO } = req.body as {
+    tier?: string;
+    subscriptionPeriodEndISO?: string;
+  };
   if (tier !== "pro" && tier !== "free") {
     res.status(400).json({ error: "Invalid tier" });
     return;
   }
 
+  function parsePeriodEnd(iso: string | undefined): Date | null {
+    if (!iso || typeof iso !== "string") return null;
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  const incomingEnd = parsePeriodEnd(subscriptionPeriodEndISO);
+
   try {
-    await db.update(profiles).set({ subscriptionTier: tier }).where(eq(profiles.id, payload.sub));
+    const [row] = await db
+      .select({
+        subscriptionTier: profiles.subscriptionTier,
+        subscriptionPeriodEndAt: profiles.subscriptionPeriodEndAt,
+      })
+      .from(profiles)
+      .where(eq(profiles.id, payload.sub))
+      .limit(1);
+
+    if (!row) {
+      res.status(404).json({ error: "Profile not found" });
+      return;
+    }
+
+    const wasPaid = row.subscriptionTier === "pro" || row.subscriptionTier === "standard";
+
+    if (tier === "free") {
+      await db
+        .update(profiles)
+        .set({ subscriptionTier: "free", subscriptionPeriodEndAt: null })
+        .where(eq(profiles.id, payload.sub));
+      res.json({ success: true, tier });
+      return;
+    }
+
+    const storedEnd = row.subscriptionPeriodEndAt ? new Date(row.subscriptionPeriodEndAt) : null;
+    const hasValidStoredEnd = storedEnd !== null && !Number.isNaN(storedEnd.getTime());
+    let resetUsage = false;
+
+    if (!wasPaid) {
+      resetUsage = true;
+    } else if (incomingEnd && hasValidStoredEnd && incomingEnd.getTime() > storedEnd!.getTime()) {
+      // App Store / Play renewed — entitlement expiration moved forward; start a new usage window.
+      resetUsage = true;
+    }
+
+    if (resetUsage) {
+      await db
+        .update(profiles)
+        .set({
+          subscriptionTier: tier,
+          reportsUsedThisMonth: 0,
+          messagesUsedThisMonth: 0,
+          lastResetAt: new Date(),
+          subscriptionPeriodEndAt: incomingEnd,
+        })
+        .where(eq(profiles.id, payload.sub));
+    } else {
+      const patch: {
+        subscriptionTier: string;
+        subscriptionPeriodEndAt?: Date | null;
+      } = { subscriptionTier: tier };
+      if (incomingEnd) {
+        patch.subscriptionPeriodEndAt = incomingEnd;
+      }
+      await db.update(profiles).set(patch).where(eq(profiles.id, payload.sub));
+    }
+
     res.json({ success: true, tier });
   } catch (err) {
     logger.error({ err }, "Failed to sync subscription");

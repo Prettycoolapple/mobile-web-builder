@@ -50,3 +50,25 @@ export function parseYear(text: string): number | null {
   const y = parseInt(m[0]);
   return y >= 1800 && y <= new Date().getFullYear() + 1 ? y : null;
 }
+
+/**
+ * OneRoof / listing pages vary copy ("Year built", "Built in", etc.). Try
+ * several patterns and return the first plausible 19xx/20xx year.
+ */
+export function extractBuildYearFromListingText(text: string): number | null {
+  const patterns: RegExp[] = [
+    /\bYear\s+built[:\s]+(\d{4})\b/i,
+    /\bBuilt\s+in\s+(\d{4})\b/i,
+    /\bConstruction\s+(?:year|date)?[:\s]+(\d{4})\b/i,
+    /\b(\d{4})\s*[-–]\s*(?:year\s+)?built\b/i,
+    /\b[Bb]uilt[:\s]+(\d{4})\b/,
+  ];
+  for (const p of patterns) {
+    const m = p.exec(text);
+    if (m) {
+      const y = parseYear(m[1]);
+      if (y) return y;
+    }
+  }
+  return null;
+}

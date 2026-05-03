@@ -2,6 +2,14 @@ import { ai } from "@workspace/integrations-gemini-ai";
 import { logger } from "./logger";
 import { SYSTEM_PROMPT, ANALYSE_AUGMENTATION, DISCOVER_AUGMENTATION, languageInstruction, type Locale } from "./prompts";
 import { findSuburbInTextViaIndex } from "./scrapers/realestate-api";
+import type { DevelopmentStrategyAssessment, DevelopmentStrategyId, RefurbishmentScope } from "./development-strategies";
+
+function analysisMaxOutputTokens(): number {
+  const raw = process.env["AI_ANALYSIS_MAX_OUTPUT_TOKENS"]?.trim();
+  const n = raw ? Number(raw) : 8192;
+  if (!Number.isFinite(n) || n < 512) return 8192;
+  return Math.floor(Math.min(Math.max(n, 512), 65536));
+}
 
 export interface Message {
   role: "user" | "assistant";
@@ -9,6 +17,40 @@ export interface Message {
 }
 
 export type ChatMode = "analyse" | "discover" | "followup";
+
+/** True when the text names a numbered street lot (e.g. "66 Marine Parade"). */
+export function hasNumberedStreetAddress(message: string): boolean {
+  return /\d+\s+\w[\w''-]*(?:\s+\w[\w''-]*)?\s+(?:road|street|avenue|crescent|place|drive|way|lane|terrace|parade|close|grove|rise|view|heights|ridge|court|hill|boulevard|esplanade|quay|highway|motorway|mall|row|walk|path|track|rd|st|ave|cres|pl|dr|ln|tce|pde|blvd|hwy)\b/i.test(
+    message,
+  );
+}
+
+/** User is browsing listings / market availability (not asking for a single-title feasibility report). */
+export function isListingBrowseIntent(message: string): boolean {
+  if (
+    /有什么在卖|在售|房源|挂牌|看看.*卖|哪些.*卖|什么.*在售|想买|看房|市场上有|在售房源|有卖|出售.*吗|在售的|买房|找房/i.test(message)
+  ) {
+    return true;
+  }
+  const lower = message.toLowerCase();
+  if (
+    /what(?:'s| is| are)\s+(?:for\s+)?sale|on\s+the\s+market|anything\s+for\s+sale|any\s+listings?|properties\s+for\s+sale|homes\s+for\s+sale|houses\s+for\s+sale|land\s+for\s+sale|what(?:'s| is)\s+available/i.test(
+      lower,
+    )
+  ) {
+    return true;
+  }
+  if (/(?:looking|search|searching)\s+for\s+.+\s+in\s+/i.test(lower)) return true;
+  return false;
+}
+
+/** Street type present but no leading street number — describes a road/area, not one postal address. */
+export function hasUnnumberedStreetLine(message: string): boolean {
+  if (hasNumberedStreetAddress(message)) return false;
+  return /\b(?:road|street|avenue|crescent|place|drive|way|lane|terrace|parade|close|grove|rise|view|heights|ridge|court|hill|mews|quay|boulevard|esplanade|mall|row|walk|path|track|rd|st|ave|cres|pl|dr|ln|tce|pde|blvd|hwy)\b/i.test(
+    message,
+  );
+}
 
 // ─── LLM-powered intent extraction ───────────────────────────────────────────
 // Instead of hardcoded keyword lists and regex, we ask Gemini Flash to parse
@@ -29,6 +71,9 @@ export interface ChatIntent {
   // Clarification loop
   needsClarification: boolean;     // true when required info is missing and a question should be returned
   clarificationQuestion: string | null; // the natural-language question to ask the user
+  // Service provider recommendation
+  wantsProviderRecommendation: boolean; // true when user (in any language) asks to be connected with a professional
+  suggestedDiscipline: string | null;   // architect_designer | planner | engineer | quantity_surveyor | other
   // Meta
   reasoning: string;               // brief explanation for debugging / logging
 }
@@ -44,15 +89,26 @@ const INTENT_SCHEMA = `{
   "includeNegotiation": <true if user does not require a price (accepts auction/tender/POA), false otherwise>,
   "needsClarification": <true ONLY when required info is missing AND you cannot infer it — see rules>,
   "clarificationQuestion": "<short conversational question to ask the user> | null",
+  "wantsProviderRecommendation": <true when user asks to be connected with / referred to a professional service provider>,
+  "suggestedDiscipline": "architect_designer" | "planner" | "engineer" | "quantity_surveyor" | "other" | null,
   "reasoning": "<1 sentence explaining your classification>"
 }`;
 
 const INTENT_RULES = `## MODE CLASSIFICATION
 
 mode="analyse"
-  Trigger: user mentions a DIFFERENT NZ street address from any open report, OR uses
-  explicit re-analysis words like "re-analyse", "redo", "run again", "analyse again",
-  "new analysis", "re-run" for a specific property.
+  Trigger: user wants a feasibility report for ONE specific titled property, identified by
+  a NUMBERED street address (e.g. "66 Marine Parade", "12 Remuera Road").
+  OR uses explicit re-analysis words like "re-analyse", "redo", "run again", "analyse again",
+  "new analysis", "re-run" for a specific property that already has a number in the message or history.
+
+  NOT analyse — use mode="discover" instead when:
+  • The user is browsing what is for sale / available / listings in an area (English OR Chinese:
+    "what's for sale", "anything on the market", "有什么在卖的", "在售", "房源", etc.) even if they name a road or suburb without a street number.
+  • The user only gives a road name + suburb without a number (e.g. "Marine Parade, Mellons Bay",
+    "分析 Marine Parade, Howick") — they want listings or area exploration, not a single-parcel report.
+  • Exception: numbered address + feasibility request → analyse.
+
   Examples: "8 Hampton Drive, St Heliers", "can you assess 12 Remuera Rd?",
   "run a feasibility on this one"
 
@@ -69,6 +125,8 @@ mode="analyse"
 mode="discover"
   Trigger: ANY expression of wanting to find, buy, browse, or invest in property —
   even vague ones with no suburb or price. Cast a wide net here. Include:
+  • market browsing in Chinese: "有什么在卖的", "在售", "房源", "看看这一带有什么",
+    "哪些房子在卖" — always discover, not analyse, unless the user also gives a numbered street address for one lot.
   • explicit search: "find me", "show me", "what's on the market", "any listings",
     "anything for sale", "what's available", "search for", "look for", "browse"
   • buying intent: "I want to buy", "I'm looking to buy", "I'm in the market",
@@ -149,9 +207,45 @@ Question style: short, conversational, friendly. Examples:
 Never ask for price if suburb is provided. Never ask multiple questions at once.
 Set needsClarification=false for mode="followup" always.
 
+## ADDRESS EXTRACTION (CRITICAL — DO NOT HALLUCINATE)
+
+- Extract the address EXACTLY as the user typed it. Do NOT correct, normalise, or
+  "improve" suburb names, street names, or any part of the address.
+- If the user writes "melons bay", put "melons bay" in the address field — do NOT
+  change it to "Mission Bay" or any other suburb.
+- If the user writes "66 marine parade melons bay", extract "66 Marine Parade, Melons Bay"
+  — preserve every word the user actually typed, only fix capitalisation and add a comma.
+- If the address looks misspelled or ambiguous, still extract it literally. The
+  geocoder downstream will resolve or reject it — your job is faithful extraction, not correction.
+- Only add suburb/city suffixes if the user explicitly mentioned them.
+- NEVER substitute a similar-sounding suburb name (e.g. do NOT turn "Melons Bay" into
+  "Mission Bay", do NOT turn "Remura" into "Remuera").
+- When the user's message is in Chinese or another language, extract the English address
+  tokens verbatim from the message without translating or re-interpreting them.
+
 ## SUBURB NORMALISATION
 "Saint Heliers" → "st heliers", "Mt Eden" → "mt eden", "Grey Lynn" → "grey lynn",
-"Remuera" → "remuera", "Mission Bay" → "mission bay", etc.`;
+"Remuera" → "remuera", "Mission Bay" → "mission bay", etc.
+
+## PROFESSIONAL SERVICE PROVIDER RECOMMENDATION
+
+Set wantsProviderRecommendation=true when the user (in English OR Chinese) is:
+- Asking to be connected with or referred to a professional (builder, architect, designer, planner,
+  engineer, quantity surveyor, project manager, etc.)
+- Asking if the app knows anyone, can recommend someone, or can make an introduction
+- Saying things like: "who can help", "do you have anyone", "can you recommend", "is there someone",
+  "need a builder", "need an architect", "find me a planner", "connect me with", "any specialists"
+- Chinese equivalents: 有没有...推荐, 介绍一个, 找设计师, 需要建筑师, 推荐专业人士, 有专家吗, etc.
+
+Set suggestedDiscipline to the most relevant type based on context:
+  "architect_designer" — design, architecture, drawings, plans, concept
+  "planner"            — resource consent, zoning, planning rules, council
+  "engineer"           — structural, geotech, civil, drainage, foundation
+  "quantity_surveyor"  — cost estimate, budget, QS, quantity surveyor
+  "other"              — builder, project manager, or any other professional
+  null                 — when the discipline is unclear
+
+Set wantsProviderRecommendation=false for all messages that are not about finding a professional.`;
 
 export async function extractChatIntent(
   messages: Message[],
@@ -160,12 +254,15 @@ export async function extractChatIntent(
     suburb?: string | null;
   } | null,
   alreadyShownAddresses?: string[],
+  locale: Locale = "en",
 ): Promise<ChatIntent> {
   if (messages.length === 0) {
     return {
       mode: "followup", address: null, suburb: null, minPrice: null, maxPrice: null,
       criteria: null, isFollowUp: false, includeNegotiation: false,
-      needsClarification: false, clarificationQuestion: null, reasoning: "empty messages",
+      needsClarification: false, clarificationQuestion: null,
+      wantsProviderRecommendation: false, suggestedDiscipline: null,
+      reasoning: "empty messages",
     };
   }
 
@@ -174,7 +271,9 @@ export async function extractChatIntent(
     return {
       mode: "followup", address: null, suburb: null, minPrice: null, maxPrice: null,
       criteria: null, isFollowUp: false, includeNegotiation: false,
-      needsClarification: false, clarificationQuestion: null, reasoning: "no user message",
+      needsClarification: false, clarificationQuestion: null,
+      wantsProviderRecommendation: false, suggestedDiscipline: null,
+      reasoning: "no user message",
     };
   }
 
@@ -192,6 +291,13 @@ export async function extractChatIntent(
   }
   const contextText = contextLines.length > 0 ? contextLines.join("\n") : "(no open report)";
 
+  const localeInstruction = locale === "zh"
+    ? `\n\nLANGUAGE NOTE:
+- The user may write in English OR Simplified Chinese — understand BOTH equally.
+- When needsClarification=true, write clarificationQuestion in Simplified Chinese (简体中文).
+- Keep NZ addresses, suburb names, zone codes, and numbers in their original form inside the JSON fields. Only the clarificationQuestion should be in Chinese.`
+    : "";
+
   const prompt = `You are an intent parser for a NZ property development app called Project Alpha.
 Your job: read the FULL CONVERSATION HISTORY and the user's latest message, accumulate all
 information given across all turns (suburb, price, address, criteria), then classify intent
@@ -206,7 +312,7 @@ ${historyText}
 USER'S LATEST MESSAGE:
 "${lastUserMessage.content}"
 
-${INTENT_RULES}
+${INTENT_RULES}${localeInstruction}
 
 Return ONLY valid JSON matching this schema (no explanation, no markdown fences):
 ${INTENT_SCHEMA}`;
@@ -232,8 +338,10 @@ ${INTENT_SCHEMA}`;
 
     const parsed = JSON.parse(match[0]) as ChatIntent;
 
+    const VALID_DISCIPLINES = ["architect_designer", "planner", "engineer", "quantity_surveyor", "other"];
+
     // Sanitise fields
-    const intent: ChatIntent = {
+    let intent: ChatIntent = {
       mode: (["analyse", "discover", "followup"] as ChatMode[]).includes(parsed.mode) ? parsed.mode : "followup",
       address: parsed.address ?? null,
       suburb: parsed.suburb ? parsed.suburb.toLowerCase().trim() : null,
@@ -244,15 +352,46 @@ ${INTENT_SCHEMA}`;
       includeNegotiation: Boolean(parsed.includeNegotiation),
       needsClarification: Boolean(parsed.needsClarification),
       clarificationQuestion: parsed.clarificationQuestion ?? null,
+      wantsProviderRecommendation: Boolean(parsed.wantsProviderRecommendation),
+      suggestedDiscipline: parsed.suggestedDiscipline && VALID_DISCIPLINES.includes(parsed.suggestedDiscipline as string) ? parsed.suggestedDiscipline : null,
       reasoning: parsed.reasoning ?? "",
     };
+
+    // If the model chose analyse for a road/area listing query, route to discover instead.
+    const reAnalyseTrigger = /\b(re-?analy[sz]e|redo|run again|analy[sz]e again|new analysis|re-?run|fresh analysis)\b/i;
+    const userMsg = lastUserMessage.content;
+    if (
+      intent.mode === "analyse"
+      && !hasNumberedStreetAddress(userMsg)
+      && (isListingBrowseIntent(userMsg) || (hasUnnumberedStreetLine(userMsg) && !reAnalyseTrigger.test(userMsg)))
+    ) {
+      let suburb = intent.suburb;
+      if (!suburb) {
+        const hit = await findSuburbInTextViaIndex(userMsg);
+        if (hit) suburb = hit.title.toLowerCase();
+      }
+      intent = {
+        ...intent,
+        mode: "discover",
+        address: null,
+        suburb,
+        needsClarification: !suburb,
+        clarificationQuestion: !suburb
+          ? (locale === "zh" ? "您想搜索哪个区域或郊区？" : "Which suburb or area should I search?")
+          : null,
+      };
+    }
 
     // Safety: if needsClarification=true but no question was generated, supply a fallback
     if (intent.needsClarification && !intent.clarificationQuestion) {
       if (intent.mode === "discover") {
-        intent.clarificationQuestion = "Any particular suburb in mind?";
+        intent.clarificationQuestion = locale === "zh"
+          ? "您有特别想看的郊区吗?"
+          : "Any particular suburb in mind?";
       } else if (intent.mode === "analyse") {
-        intent.clarificationQuestion = "Which property would you like me to analyse? Please share the address.";
+        intent.clarificationQuestion = locale === "zh"
+          ? "您希望我分析哪个物业?请提供地址。"
+          : "Which property would you like me to analyse? Please share the address.";
       } else {
         intent.needsClarification = false;
       }
@@ -267,7 +406,7 @@ ${INTENT_SCHEMA}`;
     return intent;
   } catch (err) {
     logger.warn({ err: (err as Error).message, userMessage: lastUserMessage.content.slice(0, 80) }, "LLM intent extraction failed — falling back to regex");
-    return await fallbackDetectIntent(lastUserMessage.content, reportContext, messages);
+    return await fallbackDetectIntent(lastUserMessage.content, reportContext, messages, locale);
   }
 }
 
@@ -278,6 +417,7 @@ async function fallbackDetectIntent(
   lastMessage: string,
   reportContext?: { address?: string | null; suburb?: string | null } | null,
   history?: Message[],
+  locale: Locale = "en",
 ): Promise<ChatIntent> {
   const directHit = await findSuburbInTextViaIndex(lastMessage);
   // If the message is short and IS a known suburb, treat it as discover
@@ -307,6 +447,14 @@ async function fallbackDetectIntent(
 
   const needsClarification = mode === "discover" && !suburb;
 
+  const lowerFallback = lastMessage.toLowerCase();
+  const providerKeywordsFallback = [
+    "recommend", "referral", "architect", "builder", "planner", "engineer",
+    "quantity surveyor", "specialist", "professional", "who can help",
+    "设计师", "建筑师", "工程师", "推荐", "介绍",
+  ];
+  const wantsProviderRecommendation = providerKeywordsFallback.some((kw) => lowerFallback.includes(kw));
+
   return {
     mode,
     address: null,
@@ -315,24 +463,40 @@ async function fallbackDetectIntent(
     maxPrice: null,
     criteria: lastMessage,
     isFollowUp,
-    includeNegotiation: /negotiat|poa|by\s+applic|tender|auction/i.test(lastMessage.toLowerCase()),
+    includeNegotiation: /negotiat|poa|by\s+applic|tender|auction/i.test(lowerFallback),
     needsClarification,
-    clarificationQuestion: needsClarification ? "Any particular suburb in mind?" : null,
+    clarificationQuestion: needsClarification
+      ? (locale === "zh" ? "您有特别想看的郊区吗?" : "Any particular suburb in mind?")
+      : null,
+    wantsProviderRecommendation,
+    suggestedDiscipline: null,
     reasoning: "regex fallback",
   };
 }
 
 export function detectMode(lastMessage: string): ChatMode {
   const lower = lastMessage.toLowerCase().trim();
-
-  // ─── ANALYSE: highest priority — check before any discover logic ───────────
-  // A specific street address always means analyse, regardless of suburb mentions.
-  const hasStreetAddress = /\d+\s+\w[\w''-]*(\s+\w[\w''-]*)?\s+(road|street|avenue|crescent|place|drive|way|lane|terrace|parade|close|grove|rise|view|heights|ridge|court|hill|boulevard|esplanade|quay)\b/i.test(lastMessage);
+  const numbered = hasNumberedStreetAddress(lastMessage);
+  const browse = isListingBrowseIntent(lastMessage);
+  const hasAnalyseVerbEn = /\b(analyse|analyze|analysis|feasibility|assess|evaluate)\b/i.test(lower);
+  const hasAnalyseVerbZh = /(?:^|[\s，。!?])(?:分析|可行性分析|跑一下分析)/.test(lastMessage);
   const hasAddressCity = /,\s*(auckland|wellington|christchurch|hamilton|tauranga|dunedin|napier|hastings|palmerston|rotorua|new zealand|nz)\b/i.test(lastMessage);
-  // Explicit analyse intent — even without an address in the current message (e.g. "just analyze the property")
-  const hasAnalyseVerb = /\b(analyse|analyze|analysis|feasibility|assess|evaluate)\b/i.test(lower);
 
-  if (hasStreetAddress || hasAddressCity || hasAnalyseVerb) return "analyse";
+  // Market / listing browse without a numbered lot → always discover (road + suburb is a filter, not one title).
+  if (browse && !numbered) return "discover";
+
+  // "Analyse …" on a road name only (no number) → discover so we show listing cards, not a fake whole-street report.
+  if ((hasAnalyseVerbEn || hasAnalyseVerbZh) && !numbered && hasUnnumberedStreetLine(lastMessage)) {
+    return "discover";
+  }
+
+  // Comma + city + street name but no lot number → area / corridor, not one titled parcel
+  if (!numbered && hasUnnumberedStreetLine(lastMessage) && hasAddressCity) return "discover";
+
+  // ─── ANALYSE: only with a numbered street address ─────────────────────────
+  if (numbered) return "analyse";
+
+  if (hasAnalyseVerbEn || hasAnalyseVerbZh) return "followup";
 
   // ─── DISCOVER: property search intent ─────────────────────────────────────
   const searchKeywords = [
@@ -684,7 +848,7 @@ export async function generateAnalysis(
       model: "gemini-2.5-pro",
       config: {
         systemInstruction: SYSTEM_PROMPT + languageInstruction(locale),
-        maxOutputTokens: 8192,
+        maxOutputTokens: analysisMaxOutputTokens(),
       },
       contents: [{ role: "user", parts: [{ text: enrichedContent }] }],
     });
@@ -818,6 +982,121 @@ Rules:
 }
 
 export type InterestRateOutlook = "falling" | "stable" | "rising";
+
+export interface DevelopmentStrategyAssessmentFacts {
+  address: string;
+  build_year: number | null;
+  build_year_range: string | null;
+  floor_area_sqm: number | null;
+  land_area_sqm: number | null;
+  bedrooms: number | null;
+  bathrooms: number | null;
+  zone_code: string | null;
+  zone_description: string | null;
+  potential_lots: number;
+  contour: string | null;
+  asbestos_risk: string | null;
+  cv_nzd: number | null;
+  listing_active: boolean;
+  listing_price: number | null;
+  comparable_sales_count: number;
+}
+
+function cleanStrategyId(value: unknown): DevelopmentStrategyId | null {
+  if (value === "hold_existing" || value === "refurbish" || value === "demolish_rebuild") return value;
+  return null;
+}
+
+function cleanRefurbishmentScope(value: unknown): RefurbishmentScope {
+  if (value === "none" || value === "light" || value === "moderate" || value === "heavy") return value;
+  return "moderate";
+}
+
+function cleanConfidence(value: unknown): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0.55;
+  return Math.max(0.1, Math.min(0.95, n));
+}
+
+export async function assessDevelopmentStrategy(
+  facts: DevelopmentStrategyAssessmentFacts,
+): Promise<DevelopmentStrategyAssessment> {
+  const schema = `{
+  "recommended_strategy": "hold_existing" | "refurbish" | "demolish_rebuild",
+  "confidence": <number between 0 and 1>,
+  "rationale": "<one concise sentence>",
+  "refurbish_scope": "none" | "light" | "moderate" | "heavy",
+  "strategy_rationales": {
+    "hold_existing": "<one concise sentence>",
+    "refurbish": "<one concise sentence>",
+    "demolish_rebuild": "<one concise sentence>"
+  },
+  "key_factors": ["<short factual factor>", "..."]
+}`;
+
+  const prompt = `You are a senior NZ property development advisor.
+
+Choose the most sensible development strategy for this property using ONLY the factual JSON below.
+
+Strategies:
+- hold_existing: keep the current dwelling/do nothing major. Use when the dwelling is modern, demolition would destroy value, or development upside is weak.
+- refurbish: keep the structure and improve it. Use when the dwelling is dated but reusable, and a lower-capex improvement path is commercially sensible.
+- demolish_rebuild: remove the existing dwelling and rebuild/develop. Use when the dwelling is old/poor fit, asbestos/demolition risk is acceptable relative to upside, and planning/land area support redevelopment.
+
+Rules:
+- Return ONLY valid JSON matching this schema:
+${schema}
+- Do NOT output costs, prices, ROI, comparables, or any invented property facts.
+- If the property is post-2010 and no strong redevelopment signal exists, prefer hold_existing.
+- If facts are incomplete, make the most conservative recommendation and mention uncertainty in key_factors.
+
+INTENSIVE MULTI-LOT REDEVELOPMENT (potential_lots >= 4, especially THAB/MHU/MHS with many small lots):
+- A high lot count means very high upfront capital, long consent + construction programmes, and usually phased sales — money is returned over many years, so headline project ROI is a poor proxy for annualised return or cash flow; annualised returns are typically much lower than for a 1–2 lot scheme.
+- Execution and absorption risk rise sharply; use a materially LOWER confidence (often ~0.35–0.55 unless the case is exceptional). Mention staging, construction duration, and capital stacking in key_factors.
+- Weigh hold_existing and refurbish more seriously when the existing dwelling is relatively new or cash-flow preservation matters; demolish_rebuild may still be strategic but is not "easy upside".
+- Do NOT cite lack of comparable sales, market data gaps, or exit-price predictability — those bullets are forbidden. Focus on site delivery, programme, and capital intensity instead.
+
+FACTS:
+${JSON.stringify(facts, null, 2)}`;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    config: {
+      maxOutputTokens: 1024,
+      temperature: 0.1,
+    },
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+  });
+
+  const raw = (response.text ?? "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error("No strategy JSON object in response");
+
+  const parsed = JSON.parse(match[0]) as Partial<DevelopmentStrategyAssessment>;
+  const recommended = cleanStrategyId(parsed.recommended_strategy);
+  if (!recommended) throw new Error("Invalid recommended strategy");
+
+  const strategyRationales = parsed.strategy_rationales && typeof parsed.strategy_rationales === "object"
+    ? parsed.strategy_rationales as Partial<Record<DevelopmentStrategyId, string>>
+    : {};
+
+  return {
+    recommended_strategy: recommended,
+    confidence: cleanConfidence(parsed.confidence),
+    rationale: typeof parsed.rationale === "string" && parsed.rationale.trim()
+      ? parsed.rationale.trim()
+      : "Strategy recommendation is based on the fetched property facts.",
+    refurbish_scope: cleanRefurbishmentScope(parsed.refurbish_scope),
+    strategy_rationales: {
+      hold_existing: typeof strategyRationales.hold_existing === "string" ? strategyRationales.hold_existing : "Holding avoids major capital works.",
+      refurbish: typeof strategyRationales.refurbish === "string" ? strategyRationales.refurbish : "Refurbishment may improve value with lower capex than rebuilding.",
+      demolish_rebuild: typeof strategyRationales.demolish_rebuild === "string" ? strategyRationales.demolish_rebuild : "Rebuild may unlock value where planning and comparables support it.",
+    },
+    key_factors: Array.isArray(parsed.key_factors)
+      ? parsed.key_factors.filter((factor): factor is string => typeof factor === "string").slice(0, 5)
+      : [],
+  };
+}
 
 export async function assessInterestRateOutlook(): Promise<InterestRateOutlook> {
   try {

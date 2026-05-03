@@ -28,12 +28,99 @@ export interface CostBreakdown {
   has_existing_dwelling: boolean;
 }
 
-export function estimateCosts(data: MergedPropertyData, units: number): CostBreakdown {
+/** Optional inputs — market $/m² comes from the same comparables pool as GDV so build cost tracks the micro-market. */
+export interface EstimateCostsOptions {
+  /** Median comparable finished-house $/m² (internal floor) when available */
+  market_floor_price_per_sqm?: number | null;
+  /**
+   * Net lot size (m²) per new-build unit after subdivision.
+   * When provided the construction floor area is derived from lot size, matching
+   * the GDV estimate in roi-calculator (estimateGdvPerLot → estimateNewBuildFloorSqm).
+   * Without this the calculator falls back to the existing building's floor area,
+   * which overstates construction cost on multi-lot rebuild scenarios.
+   */
+  sqm_per_lot?: number | null;
+}
+
+/**
+ * Floor area estimate for a single new-build unit based on lot size.
+ * Mirrors estimateNewBuildFloorSqm in roi-calculator.ts (kept local to avoid
+ * a circular import: roi-calculator imports CostBreakdown from this module).
+ * NZ townhouses/houses typically cover 30–45% of lot area, 80–260 m² range.
+ */
+function newBuildFloorSqmFromLotSize(sqmPerLot: number): number {
+  const raw = sqmPerLot * 0.38;
+  return Math.round(Math.min(260, Math.max(80, raw)));
+}
+
+function effectiveNewBuildFloorSqm(floorFromProperty: number | null | undefined): number {
+  const fallback = 120;
+  if (floorFromProperty == null || !Number.isFinite(floorFromProperty) || floorFromProperty < 40) {
+    return fallback;
+  }
+  return Math.min(800, Math.max(50, Math.round(floorFromProperty)));
+}
+
+/**
+ * NZ residential build $/m² (incl. margin) is typically a fraction of finished
+ * house $/m² in the same suburb. Anchor to comparables when present; otherwise
+ * use national mid-range construction bands (contour still applies).
+ */
+function constructionRatesPerSqm(
+  contour: MergedPropertyData["contour"],
+  marketFloorPsm: number | null | undefined,
+): { low: number; high: number } {
+  const m = marketFloorPsm != null && Number.isFinite(marketFloorPsm) && marketFloorPsm > 500
+    ? marketFloorPsm
+    : null;
+
+  let rateLow = 2650;
+  let rateHigh = 3450;
+
+  if (m != null) {
+    const anchor = Math.min(5200, Math.max(2100, m * 0.34));
+    rateLow = anchor * 0.9;
+    rateHigh = anchor * 1.1;
+  }
+
+  if (contour === "steep") {
+    rateLow *= 1.18;
+    rateHigh *= 1.18;
+  } else if (contour === "moderate") {
+    rateLow *= 1.08;
+    rateHigh *= 1.08;
+  }
+
+  return { low: rateLow, high: rateHigh };
+}
+
+/**
+ * Whether to budget for clearing an existing structure before new build.
+ * Build year alone is often missing (scrape gaps) even when a house is present—use
+ * floor area, room counts, and sale/listing context so we do not show "vacant land"
+ * incorrectly when `build_year` is null.
+ */
+function inferHasExistingDwellingForDemolition(data: MergedPropertyData): boolean {
+  if (data.build_year != null) return true;
+  const floor = data.floor_area_sqm;
+  if (floor != null && Number.isFinite(floor) && floor >= 30) return true;
+  if (data.bedrooms != null && data.bedrooms > 0) return true;
+  if (data.bathrooms != null && data.bathrooms > 0) return true;
+  if (data.last_sale_price != null && data.last_sale_price >= 100_000) return true;
+  if (data.listing_price != null && data.listing_price >= 100_000) return true;
+  return false;
+}
+
+export function estimateCosts(
+  data: MergedPropertyData,
+  units: number,
+  options?: EstimateCostsOptions,
+): CostBreakdown {
   const cv = data.cv_nzd ?? null;
   const cvUnavailable = cv === null;
   const contour = data.contour ?? null;
   const asbestos = data.asbestos_risk ?? "unknown";
-  const hasDwelling = data.build_year != null;
+  const hasDwelling = inferHasExistingDwellingForDemolition(data);
 
   const safeUnits = Math.max(1, units);
 
@@ -65,19 +152,17 @@ export function estimateCosts(data: MergedPropertyData, units: number): CostBrea
   const services_low  = infra.reduce((sum, i) => sum + (i.estimated_cost_low ?? 0),  0);
   const services_high = infra.reduce((sum, i) => sum + (i.estimated_cost_high ?? 0), 0);
 
-  const FLOOR_AREA = 120;
-  let rate_low  = 2800;
-  let rate_high = 3500;
-  if (contour === "steep") {
-    rate_low  *= 1.18;
-    rate_high *= 1.18;
-  } else if (contour === "moderate") {
-    rate_low  *= 1.08;
-    rate_high *= 1.08;
-  }
+  // Prefer lot-size-derived floor area so construction cost aligns with the GDV
+  // estimate (estimateGdvPerLot also uses ~38% of lot area for new-build floor).
+  // Fall back to the existing dwelling's floor area only when sqm_per_lot is absent.
+  const sqmPerLotOpt = options?.sqm_per_lot;
+  const floorSqm = sqmPerLotOpt != null && Number.isFinite(sqmPerLotOpt) && sqmPerLotOpt > 0
+    ? newBuildFloorSqmFromLotSize(sqmPerLotOpt)
+    : effectiveNewBuildFloorSqm(data.floor_area_sqm);
+  const { low: rate_low, high: rate_high } = constructionRatesPerSqm(contour, options?.market_floor_price_per_sqm);
 
-  const construction_low  = rate_low  * FLOOR_AREA * safeUnits;
-  const construction_high = rate_high * FLOOR_AREA * safeUnits;
+  const construction_low  = rate_low  * floorSqm * safeUnits;
+  const construction_high = rate_high * floorSqm * safeUnits;
 
   const consents_low  = construction_low  * 0.13;
   const consents_high = construction_high * 0.16;

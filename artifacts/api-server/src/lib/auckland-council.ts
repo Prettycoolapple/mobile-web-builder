@@ -167,6 +167,36 @@ export async function fetchOverlays(lat: number, lng: number): Promise<Overlay[]
         "Coastal Inundation Area (1% AEP + 1m sea level rise) — floor level controls apply. Check NES-F compliance requirements.",
     },
     {
+      // Auckland Unitary Plan Chapter 9: Coastal Environment — Coastal Erosion Hazard Area.
+      // Covers frontline coastal sites at risk of wave erosion, landslip, and shoreline retreat.
+      // Mellons Bay had a seawall built in 2016 specifically for coastal erosion protection.
+      name: "Coastal Erosion Hazard",
+      layerId: 57,
+      mapStatus: () => "restricted",
+      mapDetail: () =>
+        "Coastal Erosion Hazard Area (Auckland Unitary Plan Chapter 9) — the site may be subject to coastal erosion, wave run-up, and shoreline retreat. Development near the coastal edge typically requires a Coastal Hazard Assessment, minimum floor levels above the coastal erosion setback, and may be subject to land-use restrictions. Engage a coastal engineer before design.",
+    },
+    {
+      // Flood Sensitive Area — the primary Auckland flood overlay. Captures 1% AEP floodplains.
+      // Separate from the flood sensitivity overlay that Hougarden text-scrapes; this queries
+      // the authoritative GIS layer directly.
+      name: "Flood Sensitive Area",
+      layerId: 5,
+      mapStatus: () => "restricted",
+      mapDetail: (attrs) => {
+        const desc = attrs["DESCRIPTION"] ?? attrs["FLOOD_TYPE"] ?? "";
+        const extra = typeof desc === "string" && desc.length > 2 ? ` (${desc})` : "";
+        return `Flood Sensitive Area${extra} — NES-F compliance required. An Engineering Flood Assessment may be needed before resource consent. Check minimum floor level and freeboard requirements.`;
+      },
+    },
+    {
+      name: "Overland Flow Path",
+      layerId: 6,
+      mapStatus: () => "moderate",
+      mapDetail: () =>
+        "Overland Flow Path — stormwater concentration route crosses or is adjacent to this site. Engineering controls required; contact Auckland Council stormwater team before any earthworks.",
+    },
+    {
       name: "Waitakere Ranges Heritage",
       layerId: 24,
       mapStatus: () => "restricted",
@@ -211,6 +241,125 @@ export async function fetchOverlays(lat: number, lng: number): Promise<Overlay[]
   );
 
   return overlays;
+}
+
+// ─── Overlay consensus wrapper ────────────────────────────────────────────────
+// Runs fetchOverlays 3 times in parallel per round (matching the contour
+// triple-check pattern). An overlay is included in the final result ONLY if it
+// appears in a majority of valid samples — this filters both intermittent ArcGIS
+// false-positives and false-negatives caused by API flakiness.
+//
+// "Unanimous" means every sample in the round returned exactly the same set of
+// overlay names. If the round is unanimous we return immediately. Otherwise a
+// new round is started (up to MAX_ROUNDS total). After all rounds, each overlay
+// is included only when its occurrence count reaches the majority threshold
+// (> half of all valid samples), giving the most stable result we can produce.
+export async function fetchOverlaysWithConsensus(lat: number, lng: number): Promise<Overlay[]> {
+  const MAX_ROUNDS = 3;
+  const SAMPLES_PER_ROUND = 3;
+  const TOTAL_BUDGET_MS = 35_000;
+  const SAMPLE_TIMEOUT_MS = 11_000;
+  const startedAt = Date.now();
+
+  // Running totals across all rounds (only populated when rounds are not unanimous).
+  const nameCount = new Map<string, number>();
+  // Keep the first-seen representative for detail/status text.
+  const representativeOverlay = new Map<string, Overlay>();
+  let totalValidSamples = 0;
+
+  const runSampleWithTimeout = async (round: number, idx: number, timeoutMs: number): Promise<Overlay[] | null> => {
+    const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs));
+    const task = fetchOverlays(lat, lng).catch((err) => {
+      logger.warn({ err: (err as Error).message, round, idx }, "fetchOverlays threw during consensus sample");
+      return null;
+    });
+    const result = await Promise.race([task, timeout]);
+    if (result === null) logger.warn({ round, idx, timeoutMs }, "Overlay consensus sample timed out or failed");
+    return result;
+  };
+
+  for (let round = 1; round <= MAX_ROUNDS; round++) {
+    const elapsed = Date.now() - startedAt;
+    const remainingBudget = TOTAL_BUDGET_MS - elapsed;
+    if (remainingBudget <= 0) {
+      logger.warn({ elapsed, totalBudgetMs: TOTAL_BUDGET_MS }, "Overlay consensus budget exhausted before next round");
+      break;
+    }
+
+    const sampleTimeout = Math.min(SAMPLE_TIMEOUT_MS, remainingBudget);
+
+    const roundResults = await Promise.all(
+      Array.from({ length: SAMPLES_PER_ROUND }, (_, i) =>
+        runSampleWithTimeout(round, i + 1, sampleTimeout),
+      ),
+    );
+
+    const valid = roundResults.filter((r): r is Overlay[] => r !== null);
+    if (valid.length === 0) {
+      logger.warn({ round }, "Overlay consensus: all samples failed this round — retrying");
+      continue;
+    }
+
+    // Check unanimity: every sample returns the same set of overlay names.
+    const nameSets = valid.map((s) => new Set(s.map((o) => o.name)));
+    const firstSet = nameSets[0]!;
+    const unanimous = nameSets.every(
+      (s) => s.size === firstSet.size && [...firstSet].every((n) => s.has(n)),
+    );
+
+    if (unanimous) {
+      logger.info(
+        { round, overlays: [...firstSet], samples: valid.length },
+        "Overlay consensus: unanimous agreement reached",
+      );
+      return valid[0]!;
+    }
+
+    // Accumulate counts for the majority-vote fallback used after all rounds.
+    totalValidSamples += valid.length;
+    for (const sample of valid) {
+      for (const overlay of sample) {
+        nameCount.set(overlay.name, (nameCount.get(overlay.name) ?? 0) + 1);
+        if (!representativeOverlay.has(overlay.name)) {
+          representativeOverlay.set(overlay.name, overlay);
+        }
+      }
+    }
+
+    const overlayCounts: Record<string, number> = {};
+    for (const [name, count] of nameCount) overlayCounts[name] = count;
+    logger.info(
+      { round, overlayCounts, validSamples: valid.length },
+      "Overlay consensus: no agreement this round — retrying",
+    );
+  }
+
+  // No unanimous round found — apply majority vote across all accumulated samples.
+  // An overlay must appear in MORE than half of all valid runs to be included.
+  // This excludes one-off false-positives (e.g. a spurious "Special Character Area"
+  // that ArcGIS returned in only 1 of N requests).
+  if (totalValidSamples === 0) {
+    logger.warn({ lat, lng }, "Overlay consensus: no valid sample in any round — returning empty");
+    return [];
+  }
+
+  const threshold = Math.ceil(totalValidSamples / 2);
+  const finalOverlays: Overlay[] = [];
+  for (const [name, count] of nameCount) {
+    const rep = representativeOverlay.get(name)!;
+    if (count >= threshold) {
+      finalOverlays.push(rep);
+      logger.info({ name, count, totalValidSamples, threshold }, "Overlay consensus: included by majority vote");
+    } else {
+      logger.info({ name, count, totalValidSamples, threshold }, "Overlay consensus: excluded — below majority threshold (likely false-positive)");
+    }
+  }
+
+  logger.info(
+    { totalValidSamples, finalOverlays: finalOverlays.map((o) => o.name) },
+    "Overlay consensus: majority-vote result after exhausting rounds",
+  );
+  return finalOverlays;
 }
 
 function buildElevationGrid(lat: number, lng: number, offset = 0.00025) {
@@ -986,15 +1135,12 @@ async function applyContourUpgrade(result: ContourResult, lat: number, lng: numb
   return upgraded;
 }
 
-export async function fetchContour(lat: number, lng: number, parcelBbox?: ParcelBbox | null): Promise<ContourResult> {
+async function fetchContourOnce(lat: number, lng: number, parcelBbox?: ParcelBbox | null): Promise<ContourResult> {
   // Helper: run contour upgrade if parcelBbox (with polygon) is available
   const maybeUpgrade = async (r: ContourResult): Promise<ContourResult> =>
     parcelBbox?.polygon ? applyContourUpgrade(r, lat, lng, parcelBbox) : r;
 
   // 1. LINZ LiDAR 1m DEM via WCS — the exact dataset used by Auckland Council GIS.
-  //    Requires the LINZ account to have a data subscription for the LiDAR DEM layers
-  //    (data.linz.govt.nz → Browse Data → subscribe to Auckland LiDAR 1m DEM).
-  //    The WCS service scope must also be enabled on the API key.
   try {
     const result = await fetchElevationViaLinzLiDAR(lat, lng, parcelBbox);
     if (result) return result; // LiDAR is already accurate — no contour upgrade needed
@@ -1003,8 +1149,6 @@ export async function fetchContour(lat: number, lng: number, parcelBbox?: Parcel
   }
 
   // 2. AWS Terrarium terrain tiles — public, no key, ~3.8m resolution.
-  //    Uses SRTM 30m data for NZ at zoom 15 (LiDAR tiles above z15 not available).
-  //    LINZ topo contours are applied as a cross-check to detect underestimated slope.
   try {
     const result = await fetchElevationViaTerrarium(lat, lng, parcelBbox);
     if (result) return maybeUpgrade(result);
@@ -1054,6 +1198,112 @@ export async function fetchContour(lat: number, lng: number, parcelBbox?: Parcel
     retaining_cost_high: 0,
     source: "unavailable",
   };
+}
+
+// ─── Consensus wrapper ───────────────────────────────────────────────────────
+// Runs fetchContourOnce 3 times in parallel per round. When all three agree on
+// the classification, that result is returned immediately (using the median
+// slope value for the most stable numeric output). If the round is not
+// unanimous, a fresh round is started — up to MAX_ROUNDS total. After the final
+// round, the classification that appeared most often across all runs is used.
+// Running in parallel keeps the added latency to ≈1× rather than 3× per round.
+export async function fetchContour(lat: number, lng: number, parcelBbox?: ParcelBbox | null): Promise<ContourResult> {
+  const MAX_ROUNDS = 3;
+  const SAMPLES_PER_ROUND = 3;
+  const TOTAL_BUDGET_MS = 25_000;
+  const SAMPLE_TIMEOUT_MS = 9_000;
+  const startedAt = Date.now();
+
+  const allResults: ContourResult[] = [];
+
+  const runSampleWithTimeout = async (round: number, sampleIdx: number, timeoutMs: number): Promise<ContourResult | null> => {
+    const timed = new Promise<ContourResult | null>((resolve) => {
+      setTimeout(() => resolve(null), timeoutMs);
+    });
+    const task = fetchContourOnce(lat, lng, parcelBbox)
+      .then((result) => result)
+      .catch((err) => {
+        logger.warn({ err: (err as Error).message, round, sampleIdx }, "fetchContourOnce threw during consensus sample");
+        return null;
+      });
+    const result = await Promise.race([task, timed]);
+    if (result === null) {
+      logger.warn({ round, sampleIdx, timeoutMs }, "Contour consensus sample timed out");
+    }
+    return result;
+  };
+
+  for (let round = 1; round <= MAX_ROUNDS; round++) {
+    const elapsed = Date.now() - startedAt;
+    const remainingBudget = TOTAL_BUDGET_MS - elapsed;
+    if (remainingBudget <= 0) {
+      logger.warn({ elapsed, totalBudgetMs: TOTAL_BUDGET_MS }, "Contour consensus budget exhausted before next round");
+      break;
+    }
+
+    const sampleTimeout = Math.min(SAMPLE_TIMEOUT_MS, remainingBudget);
+
+    // Fire SAMPLES_PER_ROUND calls in parallel for this round.
+    const roundResults = await Promise.all(
+      Array.from({ length: SAMPLES_PER_ROUND }, (_, i) =>
+        runSampleWithTimeout(round, i + 1, sampleTimeout),
+      ),
+    );
+
+    const valid = roundResults.filter((r): r is ContourResult => r !== null && r.classification !== null);
+    allResults.push(...valid);
+
+    if (valid.length === 0) {
+      logger.warn({ round }, "Contour consensus: all samples failed this round — retrying");
+      continue;
+    }
+
+    const classifications = valid.map((r) => r.classification);
+    const unanimous = classifications.every((c) => c === classifications[0]);
+
+    if (unanimous) {
+      // All samples agree — pick the result whose slope_degrees is closest to the
+      // median of the round so outlier tile reads don't dominate.
+      const slopes = valid.map((r) => r.slope_degrees ?? 0).sort((a, b) => a - b);
+      const medianSlope = slopes[Math.floor(slopes.length / 2)]!;
+      const best = valid.reduce((prev, cur) =>
+        Math.abs((cur.slope_degrees ?? 0) - medianSlope) < Math.abs((prev.slope_degrees ?? 0) - medianSlope) ? cur : prev,
+      );
+      logger.info(
+        { round, classification: best.classification, slope_degrees: best.slope_degrees, samples: valid.length },
+        "Contour consensus: unanimous agreement reached",
+      );
+      return best;
+    }
+
+    logger.info(
+      { round, classifications, slopes: valid.map((r) => r.slope_degrees) },
+      "Contour consensus: no agreement this round — retrying",
+    );
+  }
+
+  // No unanimous round — return the result closest to the median of all valid slope readings
+  // across every round (this is the most stable single estimate we can produce).
+  const validAll = allResults.filter((r) => r.classification !== null && r.slope_degrees != null);
+  if (validAll.length === 0) {
+    logger.warn({ lat, lng }, "Contour consensus: no valid reading in any round");
+    return { slope_degrees: null, classification: null, retaining_cost_low: 0, retaining_cost_high: 0, source: "unavailable" };
+  }
+
+  const sortedSlopes = validAll.map((r) => r.slope_degrees!).sort((a, b) => a - b);
+  const globalMedianSlope = sortedSlopes[Math.floor(sortedSlopes.length / 2)]!;
+  const best = validAll.reduce((prev, cur) =>
+    Math.abs(cur.slope_degrees! - globalMedianSlope) < Math.abs(prev.slope_degrees! - globalMedianSlope) ? cur : prev,
+  );
+
+  // Re-classify directly from the median slope so the final classification is
+  // consistent with the numeric value shown to the user.
+  const finalResult = classifySlope(globalMedianSlope, best.source, best.elevation_center ?? undefined);
+  logger.info(
+    { globalMedianSlope, classification: finalResult.classification, totalSamples: validAll.length },
+    "Contour consensus: using median slope after exhausting rounds",
+  );
+  return finalResult;
 }
 
 function classifySlope(slopeDeg: number, source: string, elevationCenter?: number): ContourResult {

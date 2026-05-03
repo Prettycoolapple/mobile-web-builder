@@ -8,6 +8,7 @@ import {
   Alert,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
+import { useT } from "@/lib/i18n";
 
 interface Props {
   agentName: string | null;
@@ -25,6 +26,7 @@ export function AgentCallBubble({
   onDismiss,
 }: Props) {
   const [dismissed, setDismissed] = useState(false);
+  const { t } = useT();
 
   if (dismissed) return null;
 
@@ -35,8 +37,8 @@ export function AgentCallBubble({
       await Linking.openURL(telUrl);
     } else {
       Alert.alert(
-        "Cannot make call",
-        "Your device doesn't support direct calls from this app. Please call the agent manually.",
+        t("bubble.agent.cant_call_title"),
+        t("bubble.agent.cant_call_body"),
       );
     }
   };
@@ -46,17 +48,15 @@ export function AgentCallBubble({
     onDismiss();
   };
 
-  const displayName = agentName ?? "Listing Agent";
-  const displayAgency = agencyName ?? "Real Estate Agency";
+  const displayName = agentName ?? t("bubble.agent.default_name");
+  const displayAgency = agencyName ?? t("bubble.agent.default_agency");
   const addressShort = propertyAddress.split(",")[0] ?? propertyAddress;
 
   return (
     <View style={styles.container}>
-      <Text style={styles.header}>🏠 Listing agent found</Text>
+      <Text style={styles.header}>{t("bubble.agent.header")}</Text>
 
-      <Text style={styles.body}>
-        I found the agent handling {addressShort}. Tap below to call them directly.
-      </Text>
+      <Text style={styles.body}>{t("bubble.agent.body", { address: addressShort })}</Text>
 
       <View style={styles.card}>
         <View style={styles.avatarWrap}>
@@ -74,7 +74,7 @@ export function AgentCallBubble({
         </View>
         <View style={styles.privateNote}>
           <Feather name="lock" size={11} color="#6B7280" />
-          <Text style={styles.privateText}>Contact number is private — tap Call to connect</Text>
+          <Text style={styles.privateText}>{t("bubble.agent.private_note")}</Text>
         </View>
       </View>
 
@@ -84,7 +84,7 @@ export function AgentCallBubble({
         activeOpacity={0.8}
       >
         <Feather name="phone" size={16} color="#fff" />
-        <Text style={styles.callBtnText}>Call Now  →</Text>
+        <Text style={styles.callBtnText}>{t("bubble.agent.call_cta")}</Text>
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -92,7 +92,7 @@ export function AgentCallBubble({
         onPress={handleDismiss}
         activeOpacity={0.7}
       >
-        <Text style={styles.dismissText}>Not now</Text>
+        <Text style={styles.dismissText}>{t("bubble.agent.dismiss")}</Text>
       </TouchableOpacity>
     </View>
   );

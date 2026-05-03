@@ -15,13 +15,13 @@ import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
-import { useT } from "@/lib/i18n";
+import { useT, isOSChineseLocale } from "@/lib/i18n";
 
 export default function LoginScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { signIn } = useAuth();
+  const { signIn, requestPasswordReset, resetPassword } = useAuth();
   const { t } = useT();
 
   const [email, setEmail] = useState("");
@@ -29,6 +29,13 @@ export default function LoginScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resetMode, setResetMode] = useState<"idle" | "request" | "confirm" | "done">("idle");
+  const [resetCode, setResetCode] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetMessage, setResetMessage] = useState<string | null>(null);
+  const [resetError, setResetError] = useState<string | null>(null);
 
   const handleLogin = async () => {
     if (!email.trim() || !password) {
@@ -55,6 +62,67 @@ export default function LoginScreen() {
     }
   };
 
+  const openReset = () => {
+    setError(null);
+    setResetError(null);
+    setResetMessage(null);
+    setResetMode("request");
+  };
+
+  const closeReset = () => {
+    setResetMode("idle");
+    setResetCode("");
+    setNewPassword("");
+    setResetError(null);
+    setResetMessage(null);
+  };
+
+  const handleRequestReset = async () => {
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) {
+      setResetError(t("login.reset_error_email"));
+      return;
+    }
+    setResetLoading(true);
+    setResetError(null);
+    setResetMessage(null);
+    try {
+      await requestPasswordReset(trimmedEmail);
+      setResetMode("confirm");
+      setResetMessage(t("login.reset_code_sent"));
+    } catch (e: any) {
+      setResetError(e.message || t("login.reset_error_send"));
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
+  const handleConfirmReset = async () => {
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail || !resetCode.trim() || !newPassword) {
+      setResetError(t("login.reset_error_required"));
+      return;
+    }
+    if (newPassword.length < 8) {
+      setResetError(t("login.reset_error_password_short"));
+      return;
+    }
+    setResetLoading(true);
+    setResetError(null);
+    try {
+      await resetPassword(trimmedEmail, resetCode.trim(), newPassword);
+      setPassword(newPassword);
+      setResetCode("");
+      setNewPassword("");
+      setResetMode("done");
+      setResetMessage(t("login.reset_success"));
+    } catch (e: any) {
+      setResetError(e.message || t("login.reset_error_confirm"));
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <KeyboardAvoidingView
@@ -68,7 +136,7 @@ export default function LoginScreen() {
           <View style={styles.logoRow}>
             <View>
               <Text style={[styles.logoTitle, { color: colors.accent, fontFamily: "SpaceGrotesk_700Bold" }]}>
-                Project Alpha
+                {isOSChineseLocale() ? "阿尔房" : "Project Alpha"}
               </Text>
               <Text style={[styles.logoTagline, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
                 {t("login.tagline")}
@@ -114,9 +182,16 @@ export default function LoginScreen() {
             </View>
 
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                {t("login.password")}
-              </Text>
+              <View style={styles.labelRow}>
+                <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
+                  {t("login.password")}
+                </Text>
+                <TouchableOpacity onPress={openReset} disabled={resetLoading} activeOpacity={0.7}>
+                  <Text style={[styles.forgotLink, { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" }]}>
+                    {t("login.forgot_password")}
+                  </Text>
+                </TouchableOpacity>
+              </View>
               <View style={[styles.passwordWrapper, { backgroundColor: colors.card, borderColor: colors.border }]}>
                 <TextInput
                   style={[styles.passwordInput, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
@@ -134,6 +209,111 @@ export default function LoginScreen() {
                 </TouchableOpacity>
               </View>
             </View>
+
+            {resetMode !== "idle" && (
+              <View style={[styles.resetPanel, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <View style={styles.resetHeader}>
+                  <View style={[styles.resetIcon, { backgroundColor: colors.accent + "18" }]}>
+                    <Feather name="key" size={15} color={colors.accent} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.resetTitle, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>
+                      {t("login.reset_title")}
+                    </Text>
+                    <Text style={[styles.resetHelp, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                      {resetMode === "request" ? t("login.reset_help_request") : t("login.reset_help_confirm")}
+                    </Text>
+                  </View>
+                  <TouchableOpacity onPress={closeReset} style={styles.resetCloseBtn} disabled={resetLoading}>
+                    <Feather name="x" size={16} color={colors.mutedForeground} />
+                  </TouchableOpacity>
+                </View>
+
+                {resetError && (
+                  <Text style={[styles.resetStatus, { color: colors.danger, fontFamily: "DM_Sans_400Regular" }]}>{resetError}</Text>
+                )}
+                {resetMessage && (
+                  <Text style={[styles.resetStatus, { color: colors.success, fontFamily: "DM_Sans_400Regular" }]}>{resetMessage}</Text>
+                )}
+
+                {resetMode === "request" && (
+                  <TouchableOpacity
+                    style={[styles.secondaryBtn, { borderColor: colors.accent, opacity: resetLoading ? 0.7 : 1 }]}
+                    onPress={handleRequestReset}
+                    disabled={resetLoading}
+                    activeOpacity={0.8}
+                  >
+                    {resetLoading ? (
+                      <ActivityIndicator size="small" color={colors.accent} />
+                    ) : (
+                      <Text style={[styles.secondaryBtnText, { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" }]}>
+                        {t("login.reset_send")}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                )}
+
+                {resetMode === "confirm" && (
+                  <View style={styles.resetFields}>
+                    <TextInput
+                      style={[styles.input, {
+                        backgroundColor: colors.background,
+                        borderColor: colors.border,
+                        color: colors.foreground,
+                        fontFamily: "DM_Sans_400Regular",
+                      }]}
+                      placeholder={t("login.reset_code_ph")}
+                      placeholderTextColor={colors.mutedForeground}
+                      value={resetCode}
+                      onChangeText={setResetCode}
+                      keyboardType="number-pad"
+                      autoComplete="one-time-code"
+                    />
+                    <View style={[styles.passwordWrapper, { backgroundColor: colors.background, borderColor: colors.border }]}>
+                      <TextInput
+                        style={[styles.passwordInput, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+                        placeholder={t("login.reset_new_password_ph")}
+                        placeholderTextColor={colors.mutedForeground}
+                        value={newPassword}
+                        onChangeText={setNewPassword}
+                        secureTextEntry={!showNewPassword}
+                        autoComplete="password-new"
+                        onSubmitEditing={handleConfirmReset}
+                      />
+                      <TouchableOpacity onPress={() => setShowNewPassword(!showNewPassword)} style={styles.eyeBtn}>
+                        <Feather name={showNewPassword ? "eye-off" : "eye"} size={18} color={colors.mutedForeground} />
+                      </TouchableOpacity>
+                    </View>
+                    <TouchableOpacity
+                      style={[styles.secondaryBtnFilled, { backgroundColor: colors.accent, opacity: resetLoading ? 0.7 : 1 }]}
+                      onPress={handleConfirmReset}
+                      disabled={resetLoading}
+                      activeOpacity={0.8}
+                    >
+                      {resetLoading ? (
+                        <ActivityIndicator size="small" color="#fff" />
+                      ) : (
+                        <Text style={[styles.secondaryBtnFilledText, { fontFamily: "DM_Sans_600SemiBold" }]}>
+                          {t("login.reset_confirm")}
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {resetMode === "done" && (
+                  <TouchableOpacity
+                    style={[styles.secondaryBtnFilled, { backgroundColor: colors.accent }]}
+                    onPress={closeReset}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.secondaryBtnFilledText, { fontFamily: "DM_Sans_600SemiBold" }]}>
+                      {t("login.reset_back_to_login")}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
 
             <TouchableOpacity
               style={[styles.primaryBtn, { backgroundColor: colors.accent, opacity: isLoading ? 0.7 : 1 }]}
@@ -185,7 +365,9 @@ const styles = StyleSheet.create({
   errorText: { flex: 1, fontSize: 14, lineHeight: 20 },
   form: { gap: 20 },
   field: { gap: 8 },
+  labelRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 },
   label: { fontSize: 14 },
+  forgotLink: { fontSize: 13 },
   input: {
     height: 48, borderRadius: 12, borderWidth: 1,
     paddingHorizontal: 16, fontSize: 15,
@@ -196,6 +378,40 @@ const styles = StyleSheet.create({
   },
   passwordInput: { flex: 1, height: "100%", paddingHorizontal: 16, fontSize: 15 },
   eyeBtn: { paddingHorizontal: 14 },
+  resetPanel: {
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 14,
+    gap: 12,
+  },
+  resetHeader: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
+  resetIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  resetCloseBtn: { padding: 3 },
+  resetTitle: { fontSize: 15, marginBottom: 3 },
+  resetHelp: { fontSize: 12, lineHeight: 18 },
+  resetStatus: { fontSize: 12, lineHeight: 18 },
+  resetFields: { gap: 10 },
+  secondaryBtn: {
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  secondaryBtnText: { fontSize: 14 },
+  secondaryBtnFilled: {
+    height: 44,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  secondaryBtnFilledText: { color: "#fff", fontSize: 14 },
   primaryBtn: {
     height: 50, borderRadius: 12, alignItems: "center", justifyContent: "center",
     marginTop: 8,

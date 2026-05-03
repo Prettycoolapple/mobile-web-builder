@@ -2,6 +2,8 @@ import type { CostBreakdown } from "./cost-estimator";
 import { roundToNearest } from "./utils";
 
 export type PriceCase = "bear" | "base" | "bull";
+export type DevelopmentStrategyId = "hold_existing" | "refurbish" | "demolish_rebuild";
+export type RefurbishmentScope = "none" | "light" | "moderate" | "heavy";
 
 export interface ROICaseResult {
   case: PriceCase;
@@ -15,7 +17,7 @@ export interface ROICaseResult {
 }
 
 export interface ROIScenario {
-  years: 2 | 3 | 4;
+  years: number;
   gdv: number;
   total_cost_mid: number;
   gross_profit: number;
@@ -31,6 +33,54 @@ export interface ROIScenario {
 }
 
 export type InterestRateOutlook = "falling" | "stable" | "rising";
+
+/**
+ * Suburb comparables are usually standalone dwellings on larger sites. Modelled GDV for
+ * many small lots in dense zones (THAB / MHU) is terrace or townhouse product — typically
+ * lower $/dwelling than those villa-style comparables. Apply this multiplier (0–1] to GDV.
+ */
+export function exitGdvTypologyDiscountFactor(zoneCode: string | null, lots: number, sqmPerLot: number): number {
+  if (lots < 2) return 1;
+  const z = (zoneCode ?? "").toUpperCase().trim();
+
+  let factor = 1;
+
+  if (z === "THAB") {
+    if (lots >= 7) factor = 0.68;
+    else if (lots >= 6) factor = 0.71;
+    else if (lots >= 5) factor = 0.74;
+    else if (lots >= 4) factor = 0.78;
+    else factor = 0.85;
+  } else if (z === "MHU" || z === "MHU-H" || z === "MHU-S") {
+    if (lots >= 7) factor = 0.76;
+    else if (lots >= 5) factor = 0.8;
+    else if (lots >= 4) factor = 0.84;
+    else if (lots >= 3) factor = 0.9;
+  } else if (z === "MHS") {
+    if (lots >= 6) factor = 0.88;
+    else if (lots >= 4) factor = 0.92;
+    else if (lots >= 3) factor = 0.95;
+  }
+
+  if (sqmPerLot > 0 && sqmPerLot < 90 && lots >= 3) {
+    factor *= 0.94;
+  }
+
+  return Math.min(1, Math.max(0.5, parseFloat(factor.toFixed(4))));
+}
+
+/**
+ * Exit horizons for ROI cards: multi-unit schemes rarely realise full GDV in 2–3 years;
+ * longer horizons better reflect phased construction, consent, and staged sales (lower annualised %).
+ */
+export function exitHorizonYearsForUnitCount(units: number): number[] {
+  const n = Math.max(1, Math.floor(units));
+  if (n <= 2) return [2, 3, 4];
+  if (n === 3) return [2, 4, 5];
+  if (n === 4) return [3, 4, 6];
+  if (n <= 6) return [4, 5, 6];
+  return [5, 6, 8];
+}
 
 /**
  * Estimate the floor area a new-build house would occupy on a lot of the given size.
@@ -102,18 +152,44 @@ export function calculateBearBaseBullScenarios(
   lots: number,
   sqm_per_lot: number,
   interest_rate_outlook: InterestRateOutlook,
+  /** Applied to modelled GDV when exit product (e.g. terraces) differs from comparable typology */
+  gdv_typology_multiplier: number = 1,
 ): ROIScenario[] {
   const safeUnits = Math.max(1, lots);
+  const mult = Number.isFinite(gdv_typology_multiplier) ? Math.min(1, Math.max(0.5, gdv_typology_multiplier)) : 1;
 
-  const gdv_per_lot = estimateGdvPerLot(avg_price_per_sqm, avg_sale_price, sqm_per_lot);
+  const gdv_per_lot_base = estimateGdvPerLot(avg_price_per_sqm, avg_sale_price, sqm_per_lot);
+  const gdv_per_lot = roundToNearest(gdv_per_lot_base * mult, 1000);
   const base_gdv = roundToNearest(gdv_per_lot * safeUnits, 1000);
+
+  return calculateScenariosFromGdv(
+    costs,
+    base_gdv,
+    safeUnits,
+    sqm_per_lot,
+    gdv_per_lot,
+    interest_rate_outlook,
+  );
+}
+
+export function calculateScenariosFromGdv(
+  costs: CostBreakdown,
+  base_gdv: number,
+  lots: number,
+  sqm_per_lot: number,
+  gdv_per_lot: number,
+  interest_rate_outlook: InterestRateOutlook,
+): ROIScenario[] {
+  const safeUnits = Math.max(1, lots);
   const bear_gdv = roundToNearest(base_gdv * 0.80, 1000);
   const bull_gdv = roundToNearest(base_gdv * 1.20, 1000);
 
   const total_cost_mid = roundToNearest((costs.total_low + costs.total_high) / 2, 1000);
   const cvUnavailable = costs.cv_unavailable === true;
 
-  return ([2, 3, 4] as const).map((years) => {
+  const horizonYears = exitHorizonYearsForUnitCount(safeUnits);
+
+  return horizonYears.map((years) => {
     const bearCase = buildCase("bear", bear_gdv, total_cost_mid, years);
     const baseCase = buildCase("base", base_gdv, total_cost_mid, years);
     const bullCase = buildCase("bull", bull_gdv, total_cost_mid, years);

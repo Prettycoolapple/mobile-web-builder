@@ -25,16 +25,21 @@ import { useColors } from "@/hooks/useColors";
 import { useAuth, ApiError, type ProviderDiscipline } from "@/context/AuthContext";
 import { MultiSelectChips } from "@/components/MultiSelectChips";
 import { PhoneOtpStep } from "@/components/PhoneOtpStep";
+import { useT, isOSChineseLocale } from "@/lib/i18n";
 
-import { WORLD_LANGUAGES } from "@/lib/languages";
+import { WORLD_LANGUAGES, languageDisplayName } from "@/lib/languages";
 
-const DISCIPLINE_OPTIONS: { label: string; value: ProviderDiscipline }[] = [
-  { label: "Architect / Designer", value: "architect_designer" },
-  { label: "Planner", value: "planner" },
-  { label: "Engineer", value: "engineer" },
-  { label: "Quantity Surveyor", value: "quantity_surveyor" },
-  { label: "Other", value: "other" },
-];
+type DisciplineOption = { label: string; value: ProviderDiscipline };
+
+function buildDisciplineOptions(t: (k: string) => string): DisciplineOption[] {
+  return [
+    { label: t("dm.discipline.architect_designer"), value: "architect_designer" },
+    { label: t("dm.discipline.planner"), value: "planner" },
+    { label: t("dm.discipline.engineer"), value: "engineer" },
+    { label: t("dm.discipline.quantity_surveyor"), value: "quantity_surveyor" },
+    { label: t("dm.discipline.other"), value: "other" },
+  ];
+}
 
 interface PickedFile {
   name: string;
@@ -71,6 +76,7 @@ function LanguagePicker({
   required,
   error,
   colors,
+  t,
 }: {
   label: string;
   value: string;
@@ -79,24 +85,30 @@ function LanguagePicker({
   required?: boolean;
   error?: string;
   colors: ReturnType<typeof useColors>;
+  t: (k: string) => string;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
 
-  const filtered = WORLD_LANGUAGES.filter((l) =>
-    l.toLowerCase().includes(search.toLowerCase()),
-  );
+  const osChinese = isOSChineseLocale();
+  const q = search.toLowerCase();
+  const filtered = WORLD_LANGUAGES.filter((l) => {
+    const display = languageDisplayName(l, osChinese);
+    return l.toLowerCase().includes(q) || display.toLowerCase().includes(q);
+  });
 
-  const options = required
-    ? filtered
-    : ["None", ...filtered];
+  // Sentinel value for the "no selection" row. We use a locale-free token so
+  // the actual displayed label can be localized while keeping equality checks
+  // stable across renders.
+  const NONE_VALUE = "__NONE__";
+  const options = required ? filtered : [NONE_VALUE, ...filtered];
 
   return (
     <View style={{ gap: 6 }}>
       <Text style={[styles.label, { color: colors.foreground }]}>
         {label}
         {!required && (
-          <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }}> (optional)</Text>
+          <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }}>{t("signup.lang.optional_suffix")}</Text>
         )}
       </Text>
       <TouchableOpacity
@@ -116,7 +128,7 @@ function LanguagePicker({
             { color: value ? colors.foreground : colors.mutedForeground, fontFamily: "DM_Sans_400Regular" },
           ]}
         >
-          {value || placeholder}
+          {value ? languageDisplayName(value, osChinese) : placeholder}
         </Text>
         <Feather name="chevron-down" size={16} color={colors.mutedForeground} />
       </TouchableOpacity>
@@ -137,7 +149,7 @@ function LanguagePicker({
             <Feather name="search" size={16} color={colors.mutedForeground} />
             <TextInput
               style={[styles.modalSearchInput, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-              placeholder="Search languages…"
+              placeholder={t("signup.lang.modal_search")}
               placeholderTextColor={colors.mutedForeground}
               value={search}
               onChangeText={setSearch}
@@ -147,30 +159,34 @@ function LanguagePicker({
           <FlatList
             data={options}
             keyExtractor={(item) => item}
-            renderItem={({ item }) => (
-              <TouchableOpacity
-                style={[
-                  styles.modalOption,
-                  { borderBottomColor: colors.border },
-                  item === value && { backgroundColor: ACCENT + "18" },
-                ]}
-                onPress={() => {
-                  onSelect(item === "None" ? "" : item);
-                  setOpen(false);
-                }}
-                activeOpacity={0.7}
-              >
-                <Text
+            renderItem={({ item }) => {
+              const displayText =
+                item === NONE_VALUE ? t("signup.lang.none") : languageDisplayName(item, osChinese);
+              return (
+                <TouchableOpacity
                   style={[
-                    styles.modalOptionText,
-                    { color: item === value ? ACCENT : colors.foreground, fontFamily: item === value ? "DM_Sans_600SemiBold" : "DM_Sans_400Regular" },
+                    styles.modalOption,
+                    { borderBottomColor: colors.border },
+                    item === value && { backgroundColor: ACCENT + "18" },
                   ]}
+                  onPress={() => {
+                    onSelect(item === NONE_VALUE ? "" : item);
+                    setOpen(false);
+                  }}
+                  activeOpacity={0.7}
                 >
-                  {item}
-                </Text>
-                {item === value && <Feather name="check" size={16} color={ACCENT} />}
-              </TouchableOpacity>
-            )}
+                  <Text
+                    style={[
+                      styles.modalOptionText,
+                      { color: item === value ? ACCENT : colors.foreground, fontFamily: item === value ? "DM_Sans_600SemiBold" : "DM_Sans_400Regular" },
+                    ]}
+                  >
+                    {displayText}
+                  </Text>
+                  {item === value && <Feather name="check" size={16} color={ACCENT} />}
+                </TouchableOpacity>
+              );
+            }}
             keyboardShouldPersistTaps="handled"
           />
         </KeyboardAvoidingView>
@@ -185,6 +201,8 @@ export default function SignupProviderScreen() {
   const router = useRouter();
   const { signUp, uploadIncorporationCertPreSignup, uploadProfilePicture } = useAuth();
   const { width: SCREEN_W } = useWindowDimensions();
+  const { t } = useT();
+  const DISCIPLINE_OPTIONS = React.useMemo(() => buildDisciplineOptions(t), [t]);
 
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -243,7 +261,7 @@ export default function SignupProviderScreen() {
       const asset = result.assets[0];
       setPickedFile({ name: asset.name, uri: asset.uri, mimeType: asset.mimeType ?? "application/pdf" });
     } catch {
-      Alert.alert("Error", "Could not pick a file. Please try again.");
+      Alert.alert(t("common.error"), t("signup.cert.pick_error"));
     }
   };
 
@@ -251,7 +269,7 @@ export default function SignupProviderScreen() {
     try {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== "granted") {
-        Alert.alert("Permission required", "Please allow access to your photo library to upload a logo.");
+        Alert.alert(t("signup.photo.permission_title"), t("signup.photo.permission_body"));
         return;
       }
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -265,33 +283,33 @@ export default function SignupProviderScreen() {
       setAvatarUri(asset.uri);
       setAvatarMimeType(asset.mimeType ?? "image/jpeg");
     } catch {
-      Alert.alert("Error", "Could not select image. Please try again.");
+      Alert.alert(t("common.error"), t("signup.photo.select_error"));
     }
   };
 
   const validateStep = (): boolean => {
     const errors: FieldErrors = {};
     if (step === 0) {
-      if (!firstName.trim()) errors.firstName = "First name is required.";
-      if (!lastName.trim()) errors.lastName = "Last name is required.";
+      if (!firstName.trim()) errors.firstName = t("signup.error.first_name");
+      if (!lastName.trim()) errors.lastName = t("signup.error.last_name");
     } else if (step === 1) {
-      if (!email.trim()) errors.email = "Email is required.";
-      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) errors.email = "Enter a valid email address.";
-      if (!password) errors.password = "Password is required.";
-      else if (password.length < 8) errors.password = "Password must be at least 8 characters.";
-      if (!confirmPassword) errors.confirmPassword = "Please confirm your password.";
-      else if (password !== confirmPassword) errors.confirmPassword = "Passwords do not match.";
+      if (!email.trim()) errors.email = t("signup.error.email");
+      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) errors.email = t("signup.error.email_invalid");
+      if (!password) errors.password = t("signup.error.password");
+      else if (password.length < 8) errors.password = t("signup.error.password_short");
+      if (!confirmPassword) errors.confirmPassword = t("signup.error.confirm_password");
+      else if (password !== confirmPassword) errors.confirmPassword = t("signup.error.password_mismatch");
     } else if (step === 2) {
-      if (!companyName.trim()) errors.companyName = "Company name is required.";
-      if (!regNumber.trim()) errors.regNumber = "NZ Companies Register number is required.";
-      if (!discipline) errors.discipline = "Please select your discipline.";
-      else if (discipline === "other" && !otherDisciplineText.trim()) errors.otherDiscipline = "Please describe your discipline.";
-      if (!pickedFile) errors.cert = "Certificate of Incorporation is required.";
+      if (!companyName.trim()) errors.companyName = t("signup.error.company");
+      if (!regNumber.trim()) errors.regNumber = t("signup.error.reg_number");
+      if (!discipline) errors.discipline = t("signup.error.discipline");
+      else if (discipline === "other" && !otherDisciplineText.trim()) errors.otherDiscipline = t("signup.error.discipline_other");
+      if (!pickedFile) errors.cert = t("signup.error.cert");
     } else if (step === 3) {
       if (!phoneVerificationToken || !verifiedPhone) {
-        errors.contactNumber = "Please verify your phone number before continuing.";
+        errors.contactNumber = t("signup.error.phone_verify");
       }
-      if (!primaryLanguage) errors.primaryLanguage = "Primary language is required.";
+      if (!primaryLanguage) errors.primaryLanguage = t("signup.error.primary_language");
     }
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
@@ -317,7 +335,7 @@ export default function SignupProviderScreen() {
       // requires providerData.incorporationCertUrl, so a failed upload aborts
       // signup before any half-formed profile is written.
       if (!pickedFile) {
-        setFieldErrors((e) => ({ ...e, cert: "Certificate of Incorporation is required." }));
+        setFieldErrors((e) => ({ ...e, cert: t("signup.error.cert") }));
         setUploadStatus("error");
         setStep(5);
         setIsLoading(false);
@@ -336,13 +354,13 @@ export default function SignupProviderScreen() {
         setUploadStatus("done");
       } catch (certErr) {
         setUploadStatus("error");
-        setCertError(certErr instanceof Error ? certErr.message : "Certificate upload failed. Please try again.");
+        setCertError(certErr instanceof Error ? certErr.message : t("signup.cert.upload_failed"));
         setIsLoading(false);
         return;
       }
 
       if (!phoneVerificationToken || !verifiedPhone) {
-        setFieldErrors({ contactNumber: "Please verify your phone number before continuing." });
+        setFieldErrors({ contactNumber: t("signup.error.phone_verify") });
         setStep(3);
         setIsLoading(false);
         return;
@@ -404,7 +422,7 @@ export default function SignupProviderScreen() {
           return;
         }
       }
-      setSubmitError(err instanceof Error ? err.message : "Signup failed. Please try again.");
+      setSubmitError(err instanceof Error ? err.message : t("signup.submit_failed"));
     } finally {
       setIsLoading(false);
     }
@@ -424,18 +442,18 @@ export default function SignupProviderScreen() {
     if (step === 0) {
       return (
         <View style={styles.stepContent}>
-          <Text style={[styles.stepTag, { color: ACCENT }]}>Service Provider · $149/mo</Text>
-          <Text style={[styles.stepHeading, { color: colors.foreground }]}>What should{"\n"}we call you?</Text>
+          <Text style={[styles.stepTag, { color: ACCENT }]}>{t("signup.provider.tag")}</Text>
+          <Text style={[styles.stepHeading, { color: colors.foreground }]}>{t("signup.name.heading")}</Text>
           <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
-            Let's get your provider profile set up.
+            {t("signup.name.subheading_provider")}
           </Text>
 
           <View style={styles.fieldRow}>
             <View style={[styles.field, { flex: 1 }]}>
-              <Text style={[styles.label, { color: colors.foreground }]}>First name</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>{t("signup.first_name")}</Text>
               <TextInput
                 style={inputBase("firstName")}
-                placeholder="Jane"
+                placeholder={t("signup.first_name_ph")}
                 placeholderTextColor={colors.mutedForeground}
                 value={firstName}
                 onChangeText={(v) => { setFirstName(v); if (fieldErrors.firstName) setFieldErrors((p) => ({ ...p, firstName: undefined })); }}
@@ -445,10 +463,10 @@ export default function SignupProviderScreen() {
               {fieldErrors.firstName && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.firstName}</Text>}
             </View>
             <View style={[styles.field, { flex: 1 }]}>
-              <Text style={[styles.label, { color: colors.foreground }]}>Last name</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>{t("signup.last_name")}</Text>
               <TextInput
                 style={inputBase("lastName")}
-                placeholder="Smith"
+                placeholder={t("signup.last_name_ph")}
                 placeholderTextColor={colors.mutedForeground}
                 value={lastName}
                 onChangeText={(v) => { setLastName(v); if (fieldErrors.lastName) setFieldErrors((p) => ({ ...p, lastName: undefined })); }}
@@ -461,7 +479,7 @@ export default function SignupProviderScreen() {
           </View>
 
           <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: ACCENT }]} onPress={goNext} activeOpacity={0.85}>
-            <Text style={styles.primaryBtnText}>Continue</Text>
+            <Text style={styles.primaryBtnText}>{t("signup.continue")}</Text>
             <Feather name="arrow-right" size={18} color="#fff" />
           </TouchableOpacity>
         </View>
@@ -471,9 +489,9 @@ export default function SignupProviderScreen() {
     if (step === 1) {
       return (
         <View style={styles.stepContent}>
-          <Text style={[styles.stepTag, { color: ACCENT }]}>Service Provider · $149/mo</Text>
-          <Text style={[styles.stepHeading, { color: colors.foreground }]}>Create your{"\n"}login</Text>
-          <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>Your email and a secure password.</Text>
+          <Text style={[styles.stepTag, { color: ACCENT }]}>{t("signup.provider.tag")}</Text>
+          <Text style={[styles.stepHeading, { color: colors.foreground }]}>{t("signup.login.heading")}</Text>
+          <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>{t("signup.login.subheading")}</Text>
 
           {submitError && (
             <View style={[styles.errorBanner, { backgroundColor: colors.danger + "18", borderColor: colors.danger + "40" }]}>
@@ -484,10 +502,10 @@ export default function SignupProviderScreen() {
 
           <View style={styles.fields}>
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground }]}>Email address</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>{t("signup.email_label")}</Text>
               <TextInput
                 style={inputBase("email")}
-                placeholder="you@example.com"
+                placeholder={t("signup.email_ph")}
                 placeholderTextColor={colors.mutedForeground}
                 value={email}
                 onChangeText={(v) => { setEmail(v); if (fieldErrors.email) setFieldErrors((p) => ({ ...p, email: undefined })); }}
@@ -500,11 +518,11 @@ export default function SignupProviderScreen() {
             </View>
 
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground }]}>Password</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>{t("signup.password_label")}</Text>
               <View style={[styles.passwordWrapper, { backgroundColor: colors.card, borderColor: fieldErrors.password ? colors.danger : colors.border }]}>
                 <TextInput
                   style={[styles.passwordInput, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-                  placeholder="At least 8 characters"
+                  placeholder={t("signup.password_ph")}
                   placeholderTextColor={colors.mutedForeground}
                   value={password}
                   onChangeText={(v) => { setPassword(v); if (fieldErrors.password) setFieldErrors((p) => ({ ...p, password: undefined })); }}
@@ -520,10 +538,10 @@ export default function SignupProviderScreen() {
             </View>
 
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground }]}>Confirm password</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>{t("signup.confirm_password_label")}</Text>
               <TextInput
                 style={inputBase("confirmPassword")}
-                placeholder="Re-enter your password"
+                placeholder={t("signup.confirm_password_ph")}
                 placeholderTextColor={colors.mutedForeground}
                 value={confirmPassword}
                 onChangeText={(v) => { setConfirmPassword(v); if (fieldErrors.confirmPassword) setFieldErrors((p) => ({ ...p, confirmPassword: undefined })); }}
@@ -537,7 +555,7 @@ export default function SignupProviderScreen() {
           </View>
 
           <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: ACCENT }]} onPress={goNext} activeOpacity={0.85}>
-            <Text style={styles.primaryBtnText}>Continue</Text>
+            <Text style={styles.primaryBtnText}>{t("signup.continue")}</Text>
             <Feather name="arrow-right" size={18} color="#fff" />
           </TouchableOpacity>
         </View>
@@ -547,18 +565,18 @@ export default function SignupProviderScreen() {
     if (step === 2) {
       return (
         <View style={styles.stepContent}>
-          <Text style={[styles.stepTag, { color: ACCENT }]}>Service Provider · $149/mo</Text>
-          <Text style={[styles.stepHeading, { color: colors.foreground }]}>Your company</Text>
+          <Text style={[styles.stepTag, { color: ACCENT }]}>{t("signup.provider.tag")}</Text>
+          <Text style={[styles.stepHeading, { color: colors.foreground }]}>{t("signup.company.heading")}</Text>
           <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
-            Your company details and professional discipline.
+            {t("signup.company.subheading")}
           </Text>
 
           <View style={styles.fields}>
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground }]}>Company name *</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>{t("signup.company.name")}</Text>
               <TextInput
                 style={inputBase("companyName")}
-                placeholder="Acme Design Ltd"
+                placeholder={t("signup.company.name_ph")}
                 placeholderTextColor={colors.mutedForeground}
                 value={companyName}
                 onChangeText={(v) => { setCompanyName(v); if (fieldErrors.companyName) setFieldErrors((p) => ({ ...p, companyName: undefined })); }}
@@ -567,10 +585,10 @@ export default function SignupProviderScreen() {
             </View>
 
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground }]}>NZ Companies Register number *</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>{t("signup.company.reg_number")}</Text>
               <TextInput
                 style={inputBase("regNumber")}
-                placeholder="e.g. 1234567"
+                placeholder={t("signup.company.reg_number_ph")}
                 placeholderTextColor={colors.mutedForeground}
                 value={regNumber}
                 onChangeText={(v) => { setRegNumber(v); if (fieldErrors.regNumber) setFieldErrors((p) => ({ ...p, regNumber: undefined })); }}
@@ -580,7 +598,7 @@ export default function SignupProviderScreen() {
             </View>
 
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground }]}>Discipline *</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>{t("signup.company.discipline")}</Text>
               <MultiSelectChips
                 options={DISCIPLINE_OPTIONS}
                 selected={discipline ? [discipline] : []}
@@ -597,7 +615,7 @@ export default function SignupProviderScreen() {
 
             {discipline === "other" && (
               <View style={styles.field}>
-                <Text style={[styles.label, { color: colors.foreground }]}>Describe your discipline *</Text>
+                <Text style={[styles.label, { color: colors.foreground }]}>{t("signup.company.discipline_other")}</Text>
                 <TextInput
                   style={[
                     styles.input,
@@ -608,7 +626,7 @@ export default function SignupProviderScreen() {
                       fontFamily: "DM_Sans_400Regular",
                     },
                   ]}
-                  placeholder="e.g. Environmental consultant"
+                  placeholder={t("signup.company.discipline_other_ph")}
                   placeholderTextColor={colors.mutedForeground}
                   value={otherDisciplineText}
                   onChangeText={(v) => { setOtherDisciplineText(v); if (fieldErrors.otherDiscipline) setFieldErrors((p) => ({ ...p, otherDiscipline: undefined })); }}
@@ -619,7 +637,7 @@ export default function SignupProviderScreen() {
             )}
 
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground }]}>Certificate of Incorporation *</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>{t("signup.company.cert")}</Text>
               <TouchableOpacity
                 onPress={() => { handlePickDocument(); if (fieldErrors.cert) setFieldErrors((p) => ({ ...p, cert: undefined })); }}
                 disabled={uploadStatus === "uploading"}
@@ -643,17 +661,17 @@ export default function SignupProviderScreen() {
                 ) : (
                   <>
                     <Feather name="file" size={18} color={colors.mutedForeground} />
-                    <Text style={[styles.uploadBtnText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>Choose certificate file</Text>
+                    <Text style={[styles.uploadBtnText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{t("signup.company.cert_choose")}</Text>
                   </>
                 )}
               </TouchableOpacity>
-              <Text style={[styles.uploadHint, { color: colors.mutedForeground }]}>PDF, JPEG, PNG or WEBP — max 10 MB</Text>
+              <Text style={[styles.uploadHint, { color: colors.mutedForeground }]}>{t("signup.company.cert_hint")}</Text>
               {fieldErrors.cert && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.cert}</Text>}
             </View>
           </View>
 
           <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: ACCENT }]} onPress={goNext} activeOpacity={0.85}>
-            <Text style={styles.primaryBtnText}>Continue</Text>
+            <Text style={styles.primaryBtnText}>{t("signup.continue")}</Text>
             <Feather name="arrow-right" size={18} color="#fff" />
           </TouchableOpacity>
         </View>
@@ -663,10 +681,10 @@ export default function SignupProviderScreen() {
     if (step === 3) {
       return (
         <View style={styles.stepContent}>
-          <Text style={[styles.stepTag, { color: ACCENT }]}>Service Provider · $149/mo</Text>
-          <Text style={[styles.stepHeading, { color: colors.foreground }]}>Contact{"\n"}details</Text>
+          <Text style={[styles.stepTag, { color: ACCENT }]}>{t("signup.provider.tag")}</Text>
+          <Text style={[styles.stepHeading, { color: colors.foreground }]}>{t("signup.phone.heading_provider")}</Text>
           <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
-            How clients will reach you.
+            {t("signup.phone.subheading_provider")}
           </Text>
 
           <View style={styles.fields}>
@@ -691,21 +709,23 @@ export default function SignupProviderScreen() {
             )}
 
             <LanguagePicker
-              label="Primary language"
+              label={t("signup.lang.primary")}
               value={primaryLanguage}
               onSelect={(v) => { setPrimaryLanguage(v); if (fieldErrors.primaryLanguage) setFieldErrors((p) => ({ ...p, primaryLanguage: undefined })); }}
-              placeholder="Select primary language"
+              placeholder={t("signup.lang.primary_placeholder_provider")}
               required
               error={fieldErrors.primaryLanguage}
               colors={colors}
+              t={t}
             />
 
             <LanguagePicker
-              label="Secondary language"
+              label={t("signup.lang.secondary")}
               value={secondaryLanguage}
               onSelect={setSecondaryLanguage}
-              placeholder="None"
+              placeholder={t("signup.lang.none")}
               colors={colors}
+              t={t}
             />
           </View>
 
@@ -718,7 +738,7 @@ export default function SignupProviderScreen() {
             activeOpacity={0.85}
             disabled={!phoneVerificationToken}
           >
-            <Text style={styles.primaryBtnText}>Continue</Text>
+            <Text style={styles.primaryBtnText}>{t("signup.continue")}</Text>
             <Feather name="arrow-right" size={18} color="#fff" />
           </TouchableOpacity>
         </View>
@@ -728,19 +748,19 @@ export default function SignupProviderScreen() {
     if (step === 4) {
       return (
         <View style={styles.stepContent}>
-          <Text style={[styles.stepTag, { color: ACCENT }]}>Service Provider · $149/mo</Text>
-          <Text style={[styles.stepHeading, { color: colors.foreground }]}>Where are{"\n"}you based?</Text>
+          <Text style={[styles.stepTag, { color: ACCENT }]}>{t("signup.provider.tag")}</Text>
+          <Text style={[styles.stepHeading, { color: colors.foreground }]}>{t("signup.address.heading")}</Text>
           <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
-            Help property developers find nearby providers.{" "}
-            <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }}>All fields optional.</Text>
+            {t("signup.address.subheading")}{" "}
+            <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }}>{t("signup.address.optional")}</Text>
           </Text>
 
           <View style={styles.fields}>
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground }]}>Street address</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>{t("signup.address.street")}</Text>
               <TextInput
                 style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-                placeholder="123 Main Street"
+                placeholder={t("signup.address.street_ph")}
                 placeholderTextColor={colors.mutedForeground}
                 value={addressStreet}
                 onChangeText={setAddressStreet}
@@ -750,10 +770,10 @@ export default function SignupProviderScreen() {
 
             <View style={styles.fieldRow}>
               <View style={[styles.field, { flex: 1 }]}>
-                <Text style={[styles.label, { color: colors.foreground }]}>Suburb</Text>
+                <Text style={[styles.label, { color: colors.foreground }]}>{t("signup.address.suburb")}</Text>
                 <TextInput
                   style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-                  placeholder="Ponsonby"
+                  placeholder={t("signup.address.suburb_ph")}
                   placeholderTextColor={colors.mutedForeground}
                   value={addressSuburb}
                   onChangeText={setAddressSuburb}
@@ -761,10 +781,10 @@ export default function SignupProviderScreen() {
                 />
               </View>
               <View style={[styles.field, { width: 90 }]}>
-                <Text style={[styles.label, { color: colors.foreground }]}>Postcode</Text>
+                <Text style={[styles.label, { color: colors.foreground }]}>{t("signup.address.postcode")}</Text>
                 <TextInput
                   style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-                  placeholder="1010"
+                  placeholder={t("signup.address.postcode_ph")}
                   placeholderTextColor={colors.mutedForeground}
                   value={addressPostcode}
                   onChangeText={setAddressPostcode}
@@ -774,10 +794,10 @@ export default function SignupProviderScreen() {
             </View>
 
             <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground }]}>City</Text>
+              <Text style={[styles.label, { color: colors.foreground }]}>{t("signup.address.city")}</Text>
               <TextInput
                 style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-                placeholder="Auckland"
+                placeholder={t("signup.address.city_ph")}
                 placeholderTextColor={colors.mutedForeground}
                 value={addressCity}
                 onChangeText={setAddressCity}
@@ -791,7 +811,7 @@ export default function SignupProviderScreen() {
             onPress={goNext}
             activeOpacity={0.85}
           >
-            <Text style={styles.primaryBtnText}>Continue</Text>
+            <Text style={styles.primaryBtnText}>{t("signup.continue")}</Text>
             <Feather name="arrow-right" size={18} color="#fff" />
           </TouchableOpacity>
         </View>
@@ -800,11 +820,11 @@ export default function SignupProviderScreen() {
 
     return (
       <View style={styles.stepContent}>
-        <Text style={[styles.stepTag, { color: ACCENT }]}>Service Provider · $149/mo</Text>
-        <Text style={[styles.stepHeading, { color: colors.foreground }]}>Profile{"\n"}picture</Text>
+        <Text style={[styles.stepTag, { color: ACCENT }]}>{t("signup.provider.tag")}</Text>
+        <Text style={[styles.stepHeading, { color: colors.foreground }]}>{t("signup.photo.heading")}</Text>
         <Text style={[styles.stepSubheading, { color: colors.mutedForeground }]}>
-          Add a photo so clients can put a face to the name.{" "}
-          <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }}>Optional.</Text>
+          {t("signup.photo.subheading_provider")}{" "}
+          <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }}>{t("signup.photo.optional")}</Text>
         </Text>
 
         {(submitError || certError) && (
@@ -821,22 +841,22 @@ export default function SignupProviderScreen() {
             ) : (
               <View style={[styles.avatarStepPlaceholder, { backgroundColor: colors.card, borderColor: colors.border }]}>
                 <Feather name="camera" size={36} color={colors.mutedForeground} />
-                <Text style={[styles.avatarStepPlaceholderText, { color: colors.mutedForeground }]}>Tap to upload</Text>
+                <Text style={[styles.avatarStepPlaceholderText, { color: colors.mutedForeground }]}>{t("signup.photo.tap_to_upload")}</Text>
               </View>
             )}
           </TouchableOpacity>
           {avatarUri && (
             <View style={styles.avatarStepActions}>
               <TouchableOpacity onPress={handlePickAvatar} activeOpacity={0.7}>
-                <Text style={[styles.avatarLink, { color: ACCENT }]}>Change photo</Text>
+                <Text style={[styles.avatarLink, { color: ACCENT }]}>{t("signup.photo.change")}</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={() => setAvatarUri(null)} activeOpacity={0.7}>
-                <Text style={[styles.avatarLink, { color: colors.mutedForeground }]}>Remove</Text>
+                <Text style={[styles.avatarLink, { color: colors.mutedForeground }]}>{t("signup.photo.remove")}</Text>
               </TouchableOpacity>
             </View>
           )}
           <Text style={[styles.avatarStepHint, { color: colors.mutedForeground }]}>
-            Providers with a photo receive significantly more engagement from potential clients. You can also add this later from your account settings.
+            {t("signup.photo.provider_hint")}
           </Text>
         </View>
 
@@ -850,7 +870,7 @@ export default function SignupProviderScreen() {
             <ActivityIndicator size="small" color="#fff" />
           ) : (
             <>
-              <Text style={styles.primaryBtnText}>Create account</Text>
+              <Text style={styles.primaryBtnText}>{t("signup.create_account")}</Text>
               <Feather name="check" size={18} color="#fff" />
             </>
           )}
@@ -862,7 +882,7 @@ export default function SignupProviderScreen() {
           activeOpacity={0.7}
           style={styles.skipBtn}
         >
-          <Text style={[styles.skipBtnText, { color: colors.mutedForeground }]}>Skip for now</Text>
+          <Text style={[styles.skipBtnText, { color: colors.mutedForeground }]}>{t("signup.photo.skip")}</Text>
         </TouchableOpacity>
       </View>
     );
@@ -891,7 +911,7 @@ export default function SignupProviderScreen() {
                 <Feather name="arrow-left" size={22} color={colors.foreground} />
               </TouchableOpacity>
               <Text style={[styles.stepCounter, { color: colors.mutedForeground }]}>
-                {step + 1} / {TOTAL_STEPS}
+                {t("signup.step_counter", { current: step + 1, total: TOTAL_STEPS })}
               </Text>
             </View>
 
@@ -899,10 +919,10 @@ export default function SignupProviderScreen() {
 
             <View style={styles.footer}>
               <Text style={[styles.footerText, { color: colors.mutedForeground }]}>
-                Already have an account?{" "}
+                {t("signup.have_account")}
               </Text>
               <TouchableOpacity onPress={() => router.push("/(auth)/login")}>
-                <Text style={[styles.footerLink, { color: ACCENT }]}>Sign in</Text>
+                <Text style={[styles.footerLink, { color: ACCENT }]}>{t("signup.sign_in")}</Text>
               </TouchableOpacity>
             </View>
           </ScrollView>

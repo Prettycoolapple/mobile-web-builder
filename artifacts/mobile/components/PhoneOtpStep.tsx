@@ -9,13 +9,8 @@ import {
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
-
-function getApiBase(): string {
-  if (process.env.EXPO_PUBLIC_DOMAIN) {
-    return `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`;
-  }
-  return "/api";
-}
+import { getApiBase } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 function normalizePhone(raw: string): string {
   return raw.replace(/[\s\-()]/g, "").trim();
@@ -44,6 +39,7 @@ export function PhoneOtpStep({
   onUnverified,
 }: PhoneOtpStepProps) {
   const colors = useColors();
+  const { t } = useT();
   const [verificationId, setVerificationId] = useState<string | null>(null);
   const [code, setCode] = useState("");
   const [sending, setSending] = useState(false);
@@ -78,7 +74,7 @@ export function PhoneOtpStep({
     setInfo(null);
     const normalized = normalizePhone(phone);
     if (!isValidE164(normalized)) {
-      setError("Enter a valid number in international format (e.g. +6421...)");
+      setError(t("otp.error.invalid_number"));
       return;
     }
     setSending(true);
@@ -94,16 +90,16 @@ export function PhoneOtpStep({
         expiresInSeconds?: number;
       };
       if (!resp.ok || !json.verificationId) {
-        setError(json.error ?? "Failed to send code");
+        setError(json.error ?? t("otp.error.send_failed"));
         return;
       }
       setVerificationId(json.verificationId);
-      setInfo(`Code sent to ${normalized}. Check your messages.`);
+      setInfo(t("otp.info.code_sent", { phone: normalized }));
       setCode("");
       onUnverified();
       startResendCountdown(30);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to send code");
+      setError(e instanceof Error ? e.message : t("otp.error.send_failed"));
     } finally {
       setSending(false);
     }
@@ -113,11 +109,11 @@ export function PhoneOtpStep({
     setError(null);
     setInfo(null);
     if (!verificationId) {
-      setError("Please request a code first.");
+      setError(t("otp.error.no_code"));
       return;
     }
     if (!/^\d{6}$/.test(code.trim())) {
-      setError("Enter the 6-digit code from your SMS.");
+      setError(t("otp.error.invalid_code"));
       return;
     }
     setVerifying(true);
@@ -130,13 +126,13 @@ export function PhoneOtpStep({
       });
       const json = (await resp.json()) as { token?: string; phone?: string; error?: string };
       if (!resp.ok || !json.token) {
-        setError(json.error ?? "Could not verify code");
+        setError(json.error ?? t("otp.error.verify_failed"));
         return;
       }
       onVerified(json.token, json.phone ?? normalized);
-      setInfo("Phone number verified.");
+      setInfo(t("otp.info.verified"));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not verify code");
+      setError(e instanceof Error ? e.message : t("otp.error.verify_failed"));
     } finally {
       setVerifying(false);
     }
@@ -148,7 +144,7 @@ export function PhoneOtpStep({
   return (
     <View style={{ gap: 14 }}>
       <View style={{ gap: 6 }}>
-        <Text style={[styles.label, { color: colors.foreground }]}>Phone number *</Text>
+        <Text style={[styles.label, { color: colors.foreground }]}>{t("otp.phone_label")}</Text>
         <View style={{ flexDirection: "row", gap: 8 }}>
           <TextInput
             style={[
@@ -171,7 +167,7 @@ export function PhoneOtpStep({
               }
               if (error) setError(null);
             }}
-            placeholder="+64 21 123 4567"
+            placeholder={t("otp.phone_placeholder")}
             placeholderTextColor={colors.mutedForeground}
             keyboardType="phone-pad"
             autoComplete="tel"
@@ -200,20 +196,20 @@ export function PhoneOtpStep({
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
                 <Text style={styles.sendBtnText}>
-                  {verificationId ? "Resend" : "Send code"}
+                  {verificationId ? t("otp.resend") : t("otp.send_code")}
                 </Text>
               )}
             </TouchableOpacity>
           )}
         </View>
         <Text style={[styles.hint, { color: colors.mutedForeground }]}>
-          Include your country code (e.g. +64 for New Zealand).
+          {t("otp.phone_hint")}
         </Text>
       </View>
 
       {canVerify && (
         <View style={{ gap: 6 }}>
-          <Text style={[styles.label, { color: colors.foreground }]}>Verification code</Text>
+          <Text style={[styles.label, { color: colors.foreground }]}>{t("otp.code_label")}</Text>
           <View style={{ flexDirection: "row", gap: 8 }}>
             <TextInput
               style={[
@@ -233,7 +229,7 @@ export function PhoneOtpStep({
                 setCode(v.replace(/\D/g, "").slice(0, 6));
                 if (error) setError(null);
               }}
-              placeholder="• • • • • •"
+              placeholder={t("otp.code_placeholder")}
               placeholderTextColor={colors.mutedForeground}
               keyboardType="number-pad"
               maxLength={6}
@@ -255,17 +251,17 @@ export function PhoneOtpStep({
               {verifying ? (
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
-                <Text style={styles.sendBtnText}>Verify</Text>
+                <Text style={styles.sendBtnText}>{t("otp.verify")}</Text>
               )}
             </TouchableOpacity>
           </View>
           {resendIn > 0 ? (
             <Text style={[styles.hint, { color: colors.mutedForeground }]}>
-              You can request a new code in {resendIn}s.
+              {t("otp.resend_countdown", { n: resendIn })}
             </Text>
           ) : (
             <TouchableOpacity onPress={sendCode} disabled={sending}>
-              <Text style={[styles.hint, { color: accent }]}>Didn't get it? Send again</Text>
+              <Text style={[styles.hint, { color: accent }]}>{t("otp.resend_link")}</Text>
             </TouchableOpacity>
           )}
         </View>

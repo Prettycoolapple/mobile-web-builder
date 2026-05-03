@@ -4,6 +4,18 @@ import { launchBrowser, newStealthPage, randomDelay } from "./browser";
 import { fetchWithScrapingBee } from "./scrapingbee";
 import type { Browser } from "playwright";
 
+/** Paths we must never mint as suburb slugs (`/address/auckland/{slug}/`). */
+const HOMES_SUBURB_DENYLIST = new Set([
+  "new-zealand",
+  "aotearoa",
+  "north-island",
+  "south-island",
+  "nz",
+]);
+
+/** ScrapingBee is slow (~10s/page); cap blind URL guesses per address. */
+const HOMES_SCRAPING_MAX_URL_VARIANTS = 6;
+
 export interface HomesData {
   cv_nzd: number | null;
   cv_year: number | null;
@@ -49,7 +61,10 @@ function extractFromText(allText: string): Partial<HomesData> {
   const floorMatch = allText.match(/floor\s*(?:area|size)[^0-9\n]*([\d,]+(?:\.\d+)?)\s*m/i)
     ?? allText.match(/house\s*(?:size|area)[^0-9\n]*([\d,]+(?:\.\d+)?)\s*m/i);
   if (floorMatch) data.floor_area_sqm = parseSqm(floorMatch[1]);
-  const buildMatch = allText.match(/(?:built|year\s*built|decade\s*built)[^0-9\n]*(\d{4})/i);
+  const buildMatch = allText.match(/[Yy]ear\s+[Bb]uilt[^0-9\n]*(\d{4})/)
+    ?? allText.match(/[Bb]uilt\s+in\s+(\d{4})/i)
+    ?? allText.match(/[Cc]onstruction\s+[Yy]ear[^0-9\n]*(\d{4})/i)
+    ?? allText.match(/(?:built|year\s*built|decade\s*built)[^0-9\n]*(\d{4})/i);
   if (buildMatch) data.build_year = parseYear(buildMatch[0]);
   const bedsMatch = allText.match(/(\d)\s*bed(?:room)?s?\b/i);
   if (bedsMatch) data.bedrooms = parseInt(bedsMatch[1], 10);
@@ -68,33 +83,50 @@ function hasUsableData(d: Partial<HomesData>): boolean {
 }
 
 function buildPropertyUrls(address: string, suburb: string, formattedAddress: string): string[] {
-  const slugify = (s: string) => s.toLowerCase().trim().replace(/[^\w\s-]/g, "").replace(/\s+/g, "-");
+  const slugify = (s: string) =>
+    s
+      .toLowerCase()
+      .trim()
+      .replace(/[^\w\s-]/g, "")
+      .replace(/\s+/g, "-");
 
-  const suburbSlug = slugify(suburb ?? "");
+  /** Slugs homes.co.nz will never expose as the locale segment (`/address/auckland/{here}/`). */
+  const unusableLocaleSlug = (slug: string) => {
+    if (!slug || slug.length < 3) return true;
+    if (HOMES_SUBURB_DENYLIST.has(slug)) return true;
+    // Mashups like "auckland-1071", unit numbers, postcode fragments — not valid localities here.
+    if (/\d/.test(slug)) return true;
+    return false;
+  };
+
+  /** Saint Heliers ⇄ st-heliers-style alternates LINZ/maps sometimes omit. */
+  const localityVariants = (raw: string): string[] => {
+    const s = slugify(raw ?? "");
+    if (!s || unusableLocaleSlug(s)) return [];
+    const v = [
+      s,
+      s.replace(/^saint-/, "st-"),
+      s.replace(/^st-/, "saint-"),
+      s.replace(/^mount-/, "mt-"),
+      s.replace(/^mt-/, "mount-"),
+    ];
+    return [...new Set(v)].filter((x) => !unusableLocaleSlug(x));
+  };
+
   const parts = address.trim().split(/\s+/);
-  const numberPart = parts[0].replace(/[^\w]/g, "");
-  const streetNameParts = parts.slice(1, 3);
-  const streetSlug = slugify(streetNameParts.join(" "));
+  const numberPart = parts[0].replace(/[^\w]/g, "").toLowerCase();
+  const streetSlug = slugify(parts.slice(1, 3).join(" "));
   const addressSlug = `${numberPart}-${streetSlug}`;
-
-  const formattedPart2 = slugify(formattedAddress.split(",")[2] ?? "");
-  const formattedPart3 = slugify(formattedAddress.split(",")[3] ?? "");
-
-  const formattedPart3Clean = formattedPart3.length >= 5 ? formattedPart3 : "";
+  const segSuburbSlug = localityVariants(formattedAddress.split(",")[1]?.trim() ?? "");
 
   const altSuburbs = [
-    suburbSlug,
-    formattedPart2.length >= 3 ? formattedPart2 : "",
-    suburbSlug.replace("saint-", "st-"),
-    suburbSlug.replace("st-", "saint-"),
-    suburbSlug.replace("mount-", "mt-"),
-    suburbSlug.replace("mt-", "mount-"),
-    formattedPart3Clean,
-    "kohimarama",
-  ].filter(Boolean);
+    ...localityVariants(suburb ?? ""),
+    ...segSuburbSlug,
+  ];
 
+  const dedup = [...new Set(altSuburbs)].filter(Boolean);
   const urls: string[] = [];
-  for (const sub of [...new Set(altSuburbs)]) {
+  for (const sub of dedup.slice(0, HOMES_SCRAPING_MAX_URL_VARIANTS)) {
     urls.push(`https://homes.co.nz/address/auckland/${sub}/${addressSlug}`);
   }
   return urls;
@@ -108,7 +140,7 @@ async function tryScrapingBee(address: string, suburb: string, formattedAddress:
     const html = await fetchWithScrapingBee(url, {
       render_js: true,
       premium_proxy: true,
-      wait: 10000,
+      wait: 6500,
     });
     if (!html) continue;
 

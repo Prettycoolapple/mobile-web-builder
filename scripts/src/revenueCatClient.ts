@@ -1,56 +1,92 @@
-import { createClient } from "@replit/revenuecat-sdk/client";
+import "./loadEnv";
 
-let connectionSettings: { settings: { expires_at?: string; access_token?: string; oauth?: { credentials?: { access_token?: string } } } } | null = null;
+const REVENUECAT_API_BASE = "https://api.revenuecat.com/v2";
 
-async function getApiKey(): Promise<string> {
-  if (
-    connectionSettings &&
-    connectionSettings.settings.expires_at &&
-    new Date(connectionSettings.settings.expires_at).getTime() > Date.now()
-  ) {
-    const token =
-      connectionSettings.settings.access_token ??
-      connectionSettings.settings.oauth?.credentials?.access_token;
-    if (token) return token;
+function readRequiredEnv(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    throw new Error(`${name} environment variable is required`);
   }
-
-  const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
-  const xReplitToken = process.env.REPL_IDENTITY
-    ? "repl " + process.env.REPL_IDENTITY
-    : process.env.WEB_REPL_RENEWAL
-    ? "depl " + process.env.WEB_REPL_RENEWAL
-    : null;
-
-  if (!xReplitToken) {
-    throw new Error("X-Replit-Token not found for repl/depl");
-  }
-
-  const res = await fetch(
-    `https://${hostname}/api/v2/connection?include_secrets=true&connector_names=revenuecat`,
-    {
-      headers: {
-        Accept: "application/json",
-        "X-Replit-Token": xReplitToken,
-      },
-    },
-  );
-  const json = (await res.json()) as { items?: typeof connectionSettings[] };
-  connectionSettings = json.items?.[0] ?? null;
-
-  const accessToken =
-    connectionSettings?.settings?.access_token ??
-    connectionSettings?.settings?.oauth?.credentials?.access_token;
-
-  if (!connectionSettings || !accessToken) {
-    throw new Error("RevenueCat not connected");
-  }
-  return accessToken;
+  return value;
 }
 
-export async function getUncachableRevenueCatClient() {
-  const apiKey = await getApiKey();
-  return createClient({
-    baseUrl: "https://api.revenuecat.com/v2",
-    headers: { Authorization: "Bearer " + apiKey },
+export function getRevenueCatProjectId(): string {
+  return readRequiredEnv("REVENUECAT_PROJECT_ID");
+}
+
+export function getRevenueCatSecretApiKey(): string {
+  return readRequiredEnv("REVENUECAT_SECRET_API_KEY");
+}
+
+export interface RevenueCatListResponse<T> {
+  object: "list";
+  items: T[];
+  next_page?: string;
+  url?: string;
+}
+
+export interface RevenueCatApp {
+  id: string;
+  name: string;
+  type: string;
+  project_id: string;
+  app_store?: { bundle_id?: string };
+  play_store?: { package_name?: string };
+}
+
+export interface RevenueCatEntitlement {
+  id: string;
+  lookup_key: string;
+  display_name: string;
+}
+
+export interface RevenueCatProduct {
+  id: string;
+  app_id: string;
+  store_identifier: string;
+  display_name?: string;
+}
+
+export interface RevenueCatOffering {
+  id: string;
+  lookup_key: string;
+  display_name: string;
+  is_current?: boolean;
+}
+
+export interface RevenueCatPackage {
+  id: string;
+  lookup_key: string;
+  display_name: string;
+}
+
+export interface RevenueCatPublicApiKey {
+  id: string;
+  key: string;
+  environment: string;
+}
+
+export async function revenueCatRequest<T>(
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const headers = new Headers(init.headers);
+  headers.set("Authorization", `Bearer ${getRevenueCatSecretApiKey()}`);
+  headers.set("Accept", "application/json");
+
+  if (init.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  const response = await fetch(`${REVENUECAT_API_BASE}${path}`, {
+    ...init,
+    headers,
   });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`RevenueCat ${init.method ?? "GET"} ${path} failed (${response.status}): ${body}`);
+  }
+
+  return response.json() as Promise<T>;
 }

@@ -18,7 +18,7 @@ import { useVideoPlayer, VideoView } from "expo-video";
 import { Asset } from "expo-asset";
 import { StatusBar } from "expo-status-bar";
 import { AlphaTail } from "@/components/GroundupLogo";
-import { useT } from "@/lib/i18n";
+import { useT, isOSChineseLocale } from "@/lib/i18n";
 
 const HERO_VIDEO = require("../../assets/videos/welcome-hero.mp4");
 const HERO_POSTER = require("../../assets/videos/welcome-hero-poster.jpg");
@@ -30,6 +30,7 @@ export default function WelcomeScreen() {
   const router = useRouter();
   const { t } = useT();
   const { height: screenHeight, width: screenWidth } = useWindowDimensions();
+  const brandZh = isOSChineseLocale();
 
   const [videoReady, setVideoReady] = useState(false);
 
@@ -178,14 +179,20 @@ export default function WelcomeScreen() {
         ]}
       >
         <View style={styles.wordmarkWrap}>
-          {/* Tail flourish sits BEHIND the text */}
-          <View pointerEvents="none" style={styles.tailWrap}>
-            <AlphaTail width={300} color="#D97757" accentColor="#F1D9A8" />
-          </View>
-          <Text style={styles.wordmark}>
-            <Text style={styles.wordmarkProject}>project</Text>
-            <Text style={styles.wordmarkAlpha}> alpha</Text>
-          </Text>
+          {/* Tail flourish sits BEHIND the text — English wordmark only */}
+          {!brandZh && (
+            <View pointerEvents="none" style={styles.tailWrap}>
+              <AlphaTail width={300} color="#D97757" accentColor="#F1D9A8" />
+            </View>
+          )}
+          {brandZh ? (
+            <Text style={styles.wordmarkZh}>阿尔房</Text>
+          ) : (
+            <Text style={styles.wordmark}>
+              <Text style={styles.wordmarkProject}>project</Text>
+              <Text style={styles.wordmarkAlpha}> alpha</Text>
+            </Text>
+          )}
         </View>
 
         <View style={styles.eyebrowRow}>
@@ -274,6 +281,16 @@ const styles = StyleSheet.create({
     lineHeight: 52,
     letterSpacing: -1.4,
     color: "#FBF6EC",
+    textShadowColor: "rgba(0,0,0,0.55)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 10,
+  },
+  wordmarkZh: {
+    fontSize: 46,
+    lineHeight: 52,
+    letterSpacing: 2,
+    color: "#F1D9A8",
+    fontFamily: "DM_Sans_700Bold",
     textShadowColor: "rgba(0,0,0,0.55)",
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 10,

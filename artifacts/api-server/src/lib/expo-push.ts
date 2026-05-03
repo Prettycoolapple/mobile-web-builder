@@ -1,5 +1,5 @@
 import { db, pushTokens } from "@workspace/db";
-import { inArray } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { logger } from "./logger";
 
 interface ExpoTicket {
@@ -87,4 +87,20 @@ export async function sendExpoPush(
       logger.warn({ err }, "Expo push: failed to prune invalid tokens");
     }
   }
+}
+
+/** Load every Expo push token for a user and send (best-effort). */
+export async function sendPushToUser(
+  userId: string,
+  title: string,
+  body: string,
+  data?: Record<string, string>,
+): Promise<void> {
+  const rows = await db.select({ token: pushTokens.token }).from(pushTokens).where(eq(pushTokens.userId, userId));
+  await sendExpoPush(
+    rows.map((r) => r.token),
+    title,
+    body,
+    data,
+  );
 }

@@ -1,9 +1,10 @@
-import React, { useEffect, useRef, useState, Component } from "react";
+import React, { useEffect, useMemo, useRef, useState, Component } from "react";
 import { View, Text, StyleSheet, Animated, Easing, TouchableOpacity, TouchableWithoutFeedback, Clipboard, Alert } from "react-native";
 import Markdown from "react-native-markdown-display";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { ChatMessage } from "@/context/ChatContext";
+import { useT } from "@/lib/i18n";
 import { FeasibilityReportCard } from "./FeasibilityReport";
 import { PropertyCard } from "./PropertyCard";
 import { AnalysisProgress } from "./AnalysisProgress";
@@ -11,8 +12,21 @@ import { ProviderRecommendationBubble } from "./ProviderRecommendationBubble";
 import { ProviderUpgradeGateBubble } from "./ProviderUpgradeGateBubble";
 import { AgentCallBubble } from "./AgentCallBubble";
 
-class ReportErrorBoundary extends Component<
-  { children: React.ReactNode },
+function ReportErrorBoundaryInner({ children }: { children: React.ReactNode }) {
+  const { t } = useT();
+  return (
+    <ReportErrorBoundaryClass
+      titleText={t("search.report_issue_title")}
+      defaultErrorText={t("search.report_issue_default")}
+      hintText={t("search.report_issue_hint")}
+    >
+      {children}
+    </ReportErrorBoundaryClass>
+  );
+}
+
+class ReportErrorBoundaryClass extends Component<
+  { children: React.ReactNode; titleText: string; defaultErrorText: string; hintText: string },
   { hasError: boolean; error?: string }
 > {
   state = { hasError: false, error: undefined as string | undefined };
@@ -23,13 +37,31 @@ class ReportErrorBoundary extends Component<
     if (this.state.hasError) {
       return (
         <View style={reportErrorStyles.box}>
-          <Text style={reportErrorStyles.title}>Report rendering issue</Text>
+          <Text style={reportErrorStyles.title}>{this.props.titleText}</Text>
           <Text style={reportErrorStyles.body}>
-            {this.state.error ?? "Could not display this report."}{"\n\n"}
-            The report data was saved. Try asking the same question again.
+            {this.state.error ?? this.props.defaultErrorText}{"\n\n"}
+            {this.props.hintText}
           </Text>
         </View>
       );
+    }
+    return this.props.children;
+  }
+}
+
+const ReportErrorBoundary = ReportErrorBoundaryInner;
+
+class MarkdownErrorBoundaryClass extends Component<
+  { children: React.ReactNode; fallbackText: string; fallbackStyle: object },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  render() {
+    if (this.state.hasError) {
+      return <Text style={this.props.fallbackStyle as any}>{this.props.fallbackText}</Text>;
     }
     return this.props.children;
   }
@@ -58,10 +90,32 @@ const reportErrorStyles = StyleSheet.create({
   },
 });
 
+function SafeMarkdown({
+  content,
+  markdownStyles,
+  textStyle,
+}: {
+  content: string;
+  markdownStyles: Record<string, unknown>;
+  textStyle: object;
+}) {
+  const hasMarkdownSyntax = /(^\s*[-*]\s)|(^\s*\d+\.\s)|[`*_#[\]()>|]/m.test(content);
+  if (!hasMarkdownSyntax) {
+    return <Text style={textStyle as any}>{content}</Text>;
+  }
+  return (
+    <MarkdownErrorBoundaryClass fallbackText={content} fallbackStyle={textStyle}>
+      <Markdown style={markdownStyles as any}>
+        {content}
+      </Markdown>
+    </MarkdownErrorBoundaryClass>
+  );
+}
+
 interface Props {
   message: ChatMessage;
   onFollowUp: (question: string) => void;
-  onAnalyse: (address: string) => void;
+  onAnalyse: (address: string, photoUrl?: string | null) => void;
   onRetry?: (text: string) => void;
   onConnect?: (providerId: string) => Promise<void>;
   onDismiss?: (messageId: string) => void;
@@ -69,21 +123,23 @@ interface Props {
   onUpgrade?: () => void;
 }
 
-const THINKING_MESSAGES = [
-  "Thinking…",
-  "Looking that up…",
-  "Checking property records…",
-  "This can take a moment…",
-  "Still working on it…",
-  "Almost there, hang tight…",
-];
+const THINKING_KEYS = [
+  "search.thinking",
+  "search.thinking_looking_up",
+  "search.thinking_checking_records",
+  "search.thinking_takes_moment",
+  "search.thinking_still_working",
+  "search.thinking_almost_there",
+] as const;
 
 function TypingDots() {
   const colors = useColors();
+  const { t } = useT();
   const dot1 = useRef(new Animated.Value(0)).current;
   const dot2 = useRef(new Animated.Value(0)).current;
   const dot3 = useRef(new Animated.Value(0)).current;
   const [messageIndex, setMessageIndex] = useState(0);
+  const thinkingMessages = useMemo(() => THINKING_KEYS.map((k) => t(k)), [t]);
 
   useEffect(() => {
     const makePulse = (dot: Animated.Value, delay: number) =>
@@ -107,10 +163,10 @@ function TypingDots() {
 
   useEffect(() => {
     const interval = setInterval(() => {
-      setMessageIndex((i) => Math.min(i + 1, THINKING_MESSAGES.length - 1));
+      setMessageIndex((i) => Math.min(i + 1, thinkingMessages.length - 1));
     }, 4000);
     return () => clearInterval(interval);
-  }, []);
+  }, [thinkingMessages.length]);
 
   const dotStyle = (dot: Animated.Value) => ({
     opacity: dot.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] }),
@@ -128,7 +184,7 @@ function TypingDots() {
         ))}
       </View>
       <Text style={[styles.thinkingText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-        {THINKING_MESSAGES[messageIndex]}
+        {thinkingMessages[messageIndex]}
       </Text>
     </View>
   );
@@ -136,6 +192,7 @@ function TypingDots() {
 
 export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect, onDismiss, onAgentDismiss, onUpgrade }: Props) {
   const colors = useColors();
+  const { t } = useT();
   const isUser = message.role === "user";
 
   if (message.type === "agent_contact" && message.agentPhone) {
@@ -150,7 +207,9 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
     );
   }
 
-  if (message.type === "subdivision_clarification" && message.clarification) {
+  const isInteractiveClarification =
+    (message.type === "subdivision_clarification" || message.type === "address_clarification") && message.clarification;
+  if (isInteractiveClarification && message.clarification) {
     const { question, options } = message.clarification;
     return (
       <View style={styles.aiRow}>
@@ -263,7 +322,9 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
           </View>
         ) : null}
         <Text style={[styles.searchHeader, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>
-          {results.length} {results.length === 1 ? "opportunity" : "opportunities"} found
+          {results.length === 1
+            ? t("search.opportunity_one", { n: results.length })
+            : t("search.opportunity_other", { n: results.length })}
         </Text>
         {results.map((candidate, i) => (
           <PropertyCard key={i} candidate={candidate} onAnalyse={onAnalyse} />
@@ -275,7 +336,7 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
   if (isUser) {
     const handleLongPress = () => {
       Clipboard.setString(message.content);
-      Alert.alert("Copied", "Message copied to clipboard.");
+      Alert.alert(t("search.copied_title"), t("search.copied_msg"));
     };
     return (
       <TouchableWithoutFeedback onLongPress={handleLongPress}>
@@ -358,10 +419,17 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
         <Text style={styles.aiAvatarText}>D</Text>
       </View>
       <View style={[styles.aiBubble, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        <Markdown style={markdownStyles as any}>
-          {message.content}
-        </Markdown>
-        {message.retryText && onRetry && (
+        <SafeMarkdown
+          content={message.content ?? ""}
+          markdownStyles={markdownStyles as any}
+          textStyle={{
+            color: colors.foreground,
+            fontFamily: "DM_Sans_400Regular",
+            fontSize: 15,
+            lineHeight: 23,
+          }}
+        />
+        {!!message.retryText?.trim() && onRetry ? (
           <TouchableOpacity
             onPress={() => onRetry(message.retryText!)}
             style={[styles.retryButton, { borderColor: colors.border, backgroundColor: colors.muted }]}
@@ -369,10 +437,10 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
           >
             <Feather name="refresh-cw" size={13} color={colors.accent} />
             <Text style={[styles.retryButtonText, { color: colors.accent, fontFamily: "DM_Sans_500Medium" }]}>
-              Try again
+              {t("search.try_again")}
             </Text>
           </TouchableOpacity>
-        )}
+        ) : null}
       </View>
     </View>
   );

@@ -10,56 +10,48 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
+import { useT } from "@/lib/i18n";
 
-const ROLES = [
+interface RoleCard {
+  key: "general" | "service_provider";
+  icon: "user" | "tool";
+  titleKey: string;
+  taglineKey: string;
+  accent: string;
+  badgeKey: string;
+  ctaKey: string;
+  featureKeys: string[];
+  route: string;
+}
+
+const ROLES: RoleCard[] = [
   {
-    key: "general" as const,
-    icon: "user" as const,
-    title: "General User",
-    tagline: "Explore NZ property intelligence",
+    key: "general",
+    icon: "user",
+    titleKey: "signup.role.general.title",
+    taglineKey: "signup.role.general.tagline",
     accent: "#D97757",
-    badgeLabel: "Free",
-    priceNote: "",
-    ctaLabel: "Get started",
-    features: [
-      "Feasibility reports",
-      "Chat & property search",
+    badgeKey: "signup.role.general.badge",
+    ctaKey: "signup.role.general.cta",
+    featureKeys: [
+      "signup.role.general.f1",
+      "signup.role.general.f2",
     ],
     route: "/(auth)/signup-general",
   },
-  // HIDDEN: Sales Agent signup temporarily disabled — re-add to ROLES array to restore
-  // {
-  //   key: "sales_agent" as const,
-  //   icon: "briefcase" as const,
-  //   title: "Sales Agent",
-  //   tagline: "Power your real estate career with AI",
-  //   accent: "#D97757",
-  //   badgeLabel: "$99 / mo",
-  //   priceNote: "",
-  //   ctaLabel: "Start free trial",
-  //   features: [
-  //     "Analyse NZ properties & run feasibility reports",
-  //     "Buyer leads",
-  //     "Unlimited property listings",
-  //     "Live translation phone calls",
-  //     "Secure encrypted in-app chat",
-  //   ],
-  //   route: "/(auth)/signup-agent",
-  // },
   {
-    key: "service_provider" as const,
-    icon: "tool" as const,
-    title: "Service Provider",
-    tagline: "Connect with developers who need you",
+    key: "service_provider",
+    icon: "tool",
+    titleKey: "signup.role.provider.title",
+    taglineKey: "signup.role.provider.tagline",
     accent: "#52C99A",
-    badgeLabel: "14-day free trial",
-    priceNote: "",
-    ctaLabel: "Get started",
-    features: [
-      "Get referred in chats & search",
-      "Encrypted chats with clients & investors",
-      "Feasibility reports",
-      "Chat & property search",
+    badgeKey: "signup.role.provider.badge",
+    ctaKey: "signup.role.provider.cta",
+    featureKeys: [
+      "signup.role.provider.f1",
+      "signup.role.provider.f2",
+      "signup.role.provider.f3",
+      "signup.role.provider.f4",
     ],
     route: "/(auth)/signup-provider",
   },
@@ -69,6 +61,7 @@ export default function RoleSelectionScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { t } = useT();
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -87,14 +80,14 @@ export default function RoleSelectionScreen() {
           <View>
             <Text style={[styles.brandName, { color: colors.accent, fontFamily: "SpaceGrotesk_700Bold" }]}>Project Alpha</Text>
             <Text style={[styles.brandTagline, { color: colors.mutedForeground }]}>
-              Residential property development intelligence
+              {t("signup.brand_tagline")}
             </Text>
           </View>
         </View>
 
-        <Text style={[styles.heading, { color: colors.foreground }]}>Join Project Alpha</Text>
+        <Text style={[styles.heading, { color: colors.foreground }]}>{t("signup.heading")}</Text>
         <Text style={[styles.subheading, { color: colors.mutedForeground }]}>
-          Choose the plan that fits your goals
+          {t("signup.subheading")}
         </Text>
 
         <View style={styles.cards}>
@@ -117,39 +110,33 @@ export default function RoleSelectionScreen() {
                   <Feather name={role.icon} size={18} color={role.accent} />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={[styles.cardTitle, { color: colors.foreground }]}>{role.title}</Text>
+                  <Text style={[styles.cardTitle, { color: colors.foreground }]}>{t(role.titleKey)}</Text>
                   <Text style={[styles.cardTagline, { color: colors.mutedForeground }]}>
-                    {role.tagline}
+                    {t(role.taglineKey)}
                   </Text>
                 </View>
-                {role.badgeLabel ? (
-                  <View style={[styles.badge, { backgroundColor: role.accent + "18" }]}>
-                    <Text style={[styles.badgeText, { color: role.accent }]}>{role.badgeLabel}</Text>
-                  </View>
-                ) : null}
+                <View style={[styles.badge, { backgroundColor: role.accent + "18" }]}>
+                  <Text style={[styles.badgeText, { color: role.accent }]}>{t(role.badgeKey)}</Text>
+                </View>
               </View>
 
               <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
               <View style={styles.featureList}>
-                {role.features.map((f, i) => (
+                {role.featureKeys.map((fKey, i) => (
                   <View key={i} style={styles.featureRow}>
                     <View style={[styles.checkCircle, { backgroundColor: role.accent + "15" }]}>
                       <Feather name="check" size={10} color={role.accent} />
                     </View>
-                    <Text style={[styles.featureText, { color: colors.foreground }]}>{f}</Text>
+                    <Text style={[styles.featureText, { color: colors.foreground }]}>{t(fKey)}</Text>
                   </View>
                 ))}
               </View>
 
               <View style={[styles.cardFooter, { borderTopColor: colors.border }]}>
-                {role.priceNote ? (
-                  <Text style={[styles.priceNote, { color: colors.mutedForeground }]}>
-                    {role.priceNote}
-                  </Text>
-                ) : <View />}
+                <View />
                 <View style={styles.ctaRow}>
-                  <Text style={[styles.ctaText, { color: role.accent }]}>{role.ctaLabel}</Text>
+                  <Text style={[styles.ctaText, { color: role.accent }]}>{t(role.ctaKey)}</Text>
                   <Feather name="arrow-right" size={13} color={role.accent} />
                 </View>
               </View>
@@ -159,10 +146,10 @@ export default function RoleSelectionScreen() {
 
         <View style={styles.footer}>
           <Text style={[styles.footerText, { color: colors.mutedForeground }]}>
-            Already have an account?{" "}
+            {t("signup.have_account")}
           </Text>
           <TouchableOpacity onPress={() => router.push("/(auth)/login")}>
-            <Text style={[styles.footerLink, { color: colors.accent }]}>Sign in</Text>
+            <Text style={[styles.footerLink, { color: colors.accent }]}>{t("signup.sign_in")}</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>

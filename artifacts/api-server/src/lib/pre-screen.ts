@@ -103,7 +103,13 @@ function isApartmentAddress(address: string): boolean {
     /^\d+[A-Za-z]+\/\d+/i.test(a);
 }
 
-async function screenOneFast(listing: ListingResult): Promise<PropertyCandidate | null> {
+async function screenOneFast(
+  listing: ListingResult,
+  options?: {
+    allowMissingListingPrice?: boolean;
+    pricePlaceholderNzd?: number;
+  },
+): Promise<PropertyCandidate | null> {
   try {
     if (isApartmentAddress(listing.address)) {
       logger.debug({ address: listing.address }, "Pre-screen: skipping apartment/unit address");
@@ -120,8 +126,12 @@ async function screenOneFast(listing: ListingResult): Promise<PropertyCandidate 
     const resolvedOverlays = overlays.status === "fulfilled" ? overlays.value : [];
 
     const land = listing.landArea;
-    const price = listing.price;
-
+    let price = listing.price;
+    let priceApprox = listing.priceApprox ?? false;
+    if (price == null && options?.allowMissingListingPrice) {
+      price = options.pricePlaceholderNzd ?? 1_750_000;
+      priceApprox = true;
+    }
     if (!price) return null;
 
     const lots = estimateLots(zone, land ?? null);
@@ -141,7 +151,7 @@ async function screenOneFast(listing: ListingResult): Promise<PropertyCandidate 
       bedroomsApprox: listing.bedroomsApprox || undefined,
       bathroomsApprox: listing.bathroomsApprox || undefined,
       landAreaApprox: listing.landAreaApprox || undefined,
-      priceApprox: listing.priceApprox || undefined,
+      priceApprox: priceApprox || undefined,
       floorArea: listing.floorArea ?? undefined,
       floorAreaApprox: listing.floorAreaApprox || undefined,
     };
@@ -154,6 +164,14 @@ async function screenOneFast(listing: ListingResult): Promise<PropertyCandidate 
 export async function preScreenListingsFast(
   listings: ListingResult[],
   maxConcurrent = 5,
+  /** After sorting by composite score; `null` = return all successful screens (discovery pagination). Default 3 keeps legacy behaviour. */
+  resultCap: number | null = 3,
+  options?: {
+    /** POA / auction / negotiation listings often have `price: null` — still surface them in discover using a placeholder for scoring. */
+    allowMissingListingPrice?: boolean;
+    /** Mid-range estimate when allowing missing prices (defaults ~mid-market if omitted). */
+    pricePlaceholderNzd?: number;
+  },
 ): Promise<PropertyCandidate[]> {
   const nonApartments = listings.filter((l) => !isApartmentAddress(l.address));
   const results: PropertyCandidate[] = [];
@@ -161,15 +179,15 @@ export async function preScreenListingsFast(
 
   while (queue.length > 0) {
     const batch = queue.splice(0, maxConcurrent);
-    const batchResults = await Promise.all(batch.map(screenOneFast));
+    const batchResults = await Promise.all(batch.map((listing) => screenOneFast(listing, options)));
     for (const r of batchResults) {
       if (r) results.push(r);
     }
   }
 
-  return results
-    .sort((a, b) => b.scores.composite - a.scores.composite)
-    .slice(0, 3);
+  const sorted = results.sort((a, b) => b.scores.composite - a.scores.composite);
+  if (resultCap == null) return sorted;
+  return sorted.slice(0, resultCap);
 }
 
 async function screenOne(listing: ListingResult): Promise<PropertyCandidate | null> {

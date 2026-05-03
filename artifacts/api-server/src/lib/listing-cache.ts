@@ -53,7 +53,16 @@ export function getShownUrls(key: string): string[] {
 }
 
 export function getRemainingCount(key: string): number {
+  const entry = getListingCache(key);
+  return entry ? entry.remainingListings.length : 0;
+}
+
+export function restoreListingsAfterPop(
+  key: string,
+  putAtFront: ListingResult[],
+  putAtBack: ListingResult[],
+): void {
   const entry = cache.get(key);
-  if (!entry || Date.now() > entry.expiresAt) return 0;
-  return entry.remainingListings.length;
+  if (!entry || Date.now() > entry.expiresAt) return;
+  entry.remainingListings = [...putAtFront, ...entry.remainingListings, ...putAtBack];
 }

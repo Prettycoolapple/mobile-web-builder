@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,15 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Feather } from "@expo/vector-icons";
 import { StarRating } from "@/components/StarRating";
 import { useColors } from "@/hooks/useColors";
+import { useT, translate, translateForOS } from "@/lib/i18n";
+import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
+import {
+  filterRiskSummaryRemoveIncompleteDataDisclaimerBullets,
+  filterScoreReasonStrings,
+} from "@/lib/riskSummaryIncompleteDataFilter";
+import { ensureRiskSummaryMinForReport } from "@/lib/reportRiskBackfill";
+import { formatTitleTypeForDisplay } from "@/lib/titleDisplay";
+import { viaImageProxy, streetViewUrlFor, staticMapUrlFor } from "@/lib/reportPhotoCache";
 import {
   FeasibilityReport as Report,
   ROIScenario,
@@ -22,7 +31,13 @@ import {
   AsbestosInfo,
   PlanningOverlay,
   EasementEntry,
+  DevelopmentStrategyScenario,
+  DevelopmentStrategyId,
+  SchoolZoneDetail,
 } from "@/context/ChatContext";
+
+/** Comparable sale address cards are hidden for now; `comparableSales` remains on the report for ROI logic. Set to true to show cards again. */
+const SHOW_COMPARABLE_SALES_IN_UI = false;
 
 interface Props {
   report: Report;
@@ -57,14 +72,14 @@ function getAsbestosRisk(a: AsbestosInfo): "low" | "high" | "unknown" | "moderat
   return (a.risk || a.riskLevel || "unknown") as any;
 }
 
-function getInfraLabel(loc: string): string {
+function getInfraLabel(loc: string, t: (key: string) => string): string {
   switch (loc) {
-    case "on-parcel":  return "On parcel";
-    case "boundary":   return "At boundary";
-    case "neighbour":  return "Neighbour land ⚠";
-    case "public-land":return "Public road";
-    case "unknown":    return "Unknown";
-    default:           return "Unknown";
+    case "on-parcel":  return t("report.infra_on_parcel");
+    case "boundary":   return t("report.infra_boundary");
+    case "neighbour":  return t("report.infra_neighbour");
+    case "public-land":return t("report.infra_public_road");
+    case "unknown":    return t("report.infra_unknown");
+    default:           return t("report.infra_unknown");
   }
 }
 
@@ -124,7 +139,7 @@ function getScenarioTotalCost(s: ROIScenario | undefined): number {
 }
 
 function getSaleDate(c: ComparableSale): string {
-  return c.sale_date ?? c.saleDate ?? "—";
+  return c.sale_date || c.saleDate || "—";
 }
 
 function getSalePrice(c: ComparableSale): number {
@@ -139,6 +154,12 @@ function getSalePsm(c: ComparableSale): number {
   return safeNum(c.price_per_sqm ?? c.pricePerSqm);
 }
 
+function isSourceBackedComparable(c: ComparableSale): boolean {
+  const address = c.address?.trim() ?? "";
+  if (!address || /unknown address|default/i.test(address)) return false;
+  return getSalePrice(c) > 100_000 && /\d/.test(address) && /[a-z]/i.test(address);
+}
+
 function getScenarioBest(scenarios: ROIScenario[]): ROIScenario | undefined {
   return (
     scenarios.find((s) => s.isBest || s.viable) ??
@@ -148,6 +169,74 @@ function getScenarioBest(scenarios: ROIScenario[]): ROIScenario | undefined {
 
 function getCostLow(item: CostItem): number { return safeNum(item.low); }
 function getCostHigh(item: CostItem): number { return safeNum(item.high); }
+
+/**
+ * Build the ordered list of image URLs/URIs to render in the report's hero
+ * carousel. The pipeline is, in priority order:
+ *
+ *  1. `cachedPhotoUris` — local files persisted by `lib/reportPhotoCache.ts`
+ *     after a successful download. These keep working even if the original
+ *     CDN URL has rotated or been hot-link-blocked.
+ *  2. `photoUrls`/`photoUrl` — wrapped in our `/image-proxy` so the request
+ *     succeeds against hot-link-protected real-estate CDNs.
+ *  3. `${apiBase}/streetview?…` then `${apiBase}/staticmap?…` — Google Street View
+ *     then Maps Static (satellite) when there are no listing URLs, or as
+ *     **carousel fallbacks** when listing/CDN images fail (`ReportPhotoCarousel`).
+ */
+const CAROUSEL_TARGET = 4;
+
+function getReportPhotoUrls(report: Report): string[] {
+  const address = (report.address ?? "").trim();
+  const streetview = address ? streetViewUrlFor(address) : null;
+  const staticMap = address ? staticMapUrlFor(address) : null;
+
+  /** Pad `urls` up to CAROUSEL_TARGET using Street View then Satellite. */
+  const padToTarget = (urls: string[]): string[] => {
+    let out = [...urls];
+    if (streetview && out.length < CAROUSEL_TARGET && !out.includes(streetview))
+      out.push(streetview);
+    if (staticMap && out.length < CAROUSEL_TARGET && !out.includes(staticMap))
+      out.push(staticMap);
+    return out.slice(0, CAROUSEL_TARGET);
+  };
+
+  const cached = (report.cachedPhotoUris ?? []).filter(
+    (uri): uri is string => typeof uri === "string" && uri.length > 0,
+  );
+  if (cached.length > 0) return padToTarget(cached);
+
+  const remote = Array.from(
+    new Set(
+      [
+        ...(report.photoUrls ?? []),
+        ...(report.photoUrl ? [report.photoUrl] : []),
+      ].filter((url): url is string => typeof url === "string" && url.length > 0),
+    ),
+  );
+  if (remote.length > 0) {
+    const proxied = remote.map((u) => (u.startsWith("file://") ? u : viaImageProxy(u)));
+    return padToTarget(proxied);
+  }
+
+  if (!address) return [];
+  return padToTarget([]);
+}
+
+function renderSectionChildren(
+  children: React.ReactNode,
+  colors: ReturnType<typeof useColors>,
+): React.ReactNode {
+  return React.Children.map(children, (child) => {
+    if (typeof child === "string" || typeof child === "number") {
+      return (
+        <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 13, lineHeight: 20 }}>
+          {String(child)}
+        </Text>
+      );
+    }
+    return child;
+  });
+}
 
 function SectionCard({
   title,
@@ -181,7 +270,7 @@ function SectionCard({
         </Text>
         <Feather name={open ? "chevron-up" : "chevron-down"} size={15} color={colors.mutedForeground} />
       </TouchableOpacity>
-      {open && <View style={[styles.sectionBody, { borderTopColor: colors.border }]}>{children}</View>}
+      {open && <View style={[styles.sectionBody, { borderTopColor: colors.border }]}>{renderSectionChildren(children, colors)}</View>}
     </View>
   );
 }
@@ -216,21 +305,24 @@ function ScoreStarBlock({
 }
 
 function ScoreSummaryRow({ report, colors, hideOverall }: { report: Report; colors: ReturnType<typeof useColors>; hideOverall?: boolean }) {
+  const { t } = useT();
   const raw = report.scores ?? {};
   const ease = safeNum(raw.ease);
   const cost = safeNum(raw.cost);
   const roi = safeNum(raw.roi);
   const composite = safeNum(raw.composite);
-  const { ease_reasons, cost_reasons, roi_reasons } = raw;
+  const ease_reasons = filterScoreReasonStrings(raw.ease_reasons);
+  const roi_reasons = filterScoreReasonStrings(raw.roi_reasons);
   const overallColor = scoreColor(composite, colors);
-  const overallDisplay = composite > 0 ? String(Math.round(composite)) : "—";
+  const overallDisplay = formatCompositeScoreForDisplay(composite);
+  const showReasons = ease_reasons.length > 0 || roi_reasons.length > 0;
 
   return (
     <View style={[styles.scoresSection, { backgroundColor: (colors as any).scoreCardBg }]}>
       {/* Overall score badge — top right (skipped when overlaid on hero photo) */}
       {!hideOverall && (
         <View style={styles.overallRow}>
-          <Text style={[styles.overallLabel, { color: "rgba(250,250,249,0.45)" }]}>OVERALL</Text>
+          <Text style={[styles.overallLabel, { color: "rgba(250,250,249,0.45)" }]}>{t("report.composite")}</Text>
           <View style={[styles.overallBadge, { backgroundColor: overallColor + "25", borderColor: overallColor + "55" }]}>
             <Text style={[styles.overallNumber, { color: overallColor }]}>{overallDisplay}</Text>
             <Text style={[styles.overallSubLabel, { color: overallColor + "99" }]}>/ 5</Text>
@@ -240,27 +332,27 @@ function ScoreSummaryRow({ report, colors, hideOverall }: { report: Report; colo
 
       {/* Sub-scores: Ease · Cost · ROI */}
       <View style={[styles.scoresRow, { borderTopColor: "rgba(250,250,249,0.1)" }]}>
-        <ScoreStarBlock score={ease} label="Ease" colors={colors} />
+        <ScoreStarBlock score={ease} label={t("report.ease")} colors={colors} />
         <View style={[styles.scoreDivider, { backgroundColor: "rgba(250,250,249,0.1)" }]} />
-        <ScoreStarBlock score={cost} label="Cost" colors={colors} />
+        <ScoreStarBlock score={cost} label={t("report.cost")} colors={colors} />
         <View style={[styles.scoreDivider, { backgroundColor: "rgba(250,250,249,0.1)" }]} />
-        <ScoreStarBlock score={roi} label="ROI" colors={colors} />
+        <ScoreStarBlock score={roi} label={t("report.roi")} colors={colors} />
       </View>
 
-      {/* Reasons */}
-      {(ease_reasons || cost_reasons || roi_reasons) && (
+      {/* Reasons — omit data-source / comparables disclaimer lines (server also sanitizes). */}
+      {showReasons && (
         <View style={[styles.reasonsRow, { borderTopColor: "rgba(250,250,249,0.1)" }]}>
-          {ease_reasons && ease_reasons.length > 0 && (
+          {ease_reasons.length > 0 && (
             <View style={styles.reasonBlock}>
-              <Text style={[styles.reasonTitle, { color: "rgba(250,250,249,0.45)" }]}>EASE</Text>
+              <Text style={[styles.reasonTitle, { color: "rgba(250,250,249,0.45)" }]}>{t("report.ease").toUpperCase()}</Text>
               {ease_reasons.slice(0, 2).map((r, i) => (
                 <Text key={i} style={[styles.reasonText, { color: "rgba(250,250,249,0.75)" }]}>· {r}</Text>
               ))}
             </View>
           )}
-          {roi_reasons && roi_reasons.length > 0 && (
+          {roi_reasons.length > 0 && (
             <View style={styles.reasonBlock}>
-              <Text style={[styles.reasonTitle, { color: "rgba(250,250,249,0.45)" }]}>ROI</Text>
+              <Text style={[styles.reasonTitle, { color: "rgba(250,250,249,0.45)" }]}>{t("report.roi").toUpperCase()}</Text>
               {roi_reasons.slice(0, 2).map((r, i) => (
                 <Text key={i} style={[styles.reasonText, { color: "rgba(250,250,249,0.75)" }]}>· {r}</Text>
               ))}
@@ -272,9 +364,137 @@ function ScoreSummaryRow({ report, colors, hideOverall }: { report: Report; colo
   );
 }
 
+function ReportPhotoCarousel({
+  report,
+  photoUrls,
+  colors,
+}: {
+  report: Report;
+  photoUrls: string[];
+  colors: ReturnType<typeof useColors>;
+}) {
+  const [width, setWidth] = useState(0);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [failed, setFailed] = useState<Set<string>>(new Set());
+  const composite = safeNum(report.scores?.composite);
+  const overallColor = scoreColor(composite, colors);
+  const overallDisplay = formatCompositeScoreForDisplay(composite);
+  const address = (report.address ?? "").trim();
+
+  const handleError = useCallback((url: string) => {
+    setFailed((prev) => {
+      if (prev.has(url)) return prev;
+      const next = new Set(prev);
+      next.add(url);
+      return next;
+    });
+  }, []);
+
+  const visibleUrls = photoUrls.filter((u) => !failed.has(u));
+
+  // Emergency recovery: if every photo URL in the list failed, add Street View
+  const streetviewUri = address ? streetViewUrlFor(address) : null;
+  const staticMapUri = address ? staticMapUrlFor(address) : null;
+  const streetviewRecovery = visibleUrls.length === 0 && streetviewUri != null && !failed.has(streetviewUri);
+  const staticMapRecovery = visibleUrls.length === 0 && !streetviewRecovery && staticMapUri != null && !failed.has(staticMapUri);
+  const recoveryUrl = streetviewRecovery ? streetviewUri : staticMapRecovery ? staticMapUri : null;
+
+  const displayUrls = visibleUrls.length > 0 ? visibleUrls : (recoveryUrl ? [recoveryUrl] : []);
+  const total = displayUrls.length;
+
+  const handleScroll = useCallback((e: { nativeEvent: { contentOffset: { x: number } } }) => {
+    if (width <= 0) return;
+    const newIndex = Math.round(e.nativeEvent.contentOffset.x / width);
+    setCurrentIndex(Math.min(Math.max(newIndex, 0), total - 1));
+  }, [width, total]);
+
+  return (
+    <View
+      style={styles.reportPhotoWrapper}
+      onLayout={(e) => setWidth(Math.round(e.nativeEvent.layout.width))}
+    >
+      {displayUrls.length > 0 ? (
+        <ScrollView
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          style={styles.reportPhotoScroller}
+          onMomentumScrollEnd={handleScroll}
+          scrollEventThrottle={16}
+        >
+          {displayUrls.map((url, index) => (
+            <Image
+              key={`${url}-${index}`}
+              source={{ uri: url }}
+              style={[styles.reportPhoto, width > 0 ? { width } : undefined]}
+              resizeMode="cover"
+              onError={() => handleError(url)}
+            />
+          ))}
+        </ScrollView>
+      ) : (
+        <View style={styles.reportPhotoFallback}>
+          <Feather name="image" size={28} color="rgba(255,255,255,0.4)" />
+          <Text style={styles.reportPhotoFallbackText} numberOfLines={2}>
+            {report.address || translate("report.photo_unavailable")}
+          </Text>
+        </View>
+      )}
+
+      <LinearGradient
+        colors={["rgba(0,0,0,0.65)", "rgba(0,0,0,0.08)", "rgba(0,0,0,0.45)"]}
+        style={styles.reportPhotoScrim}
+        pointerEvents="none"
+      />
+
+      {/* Overall score badge */}
+      <View style={styles.heroOverallBadge}>
+        <Text style={[styles.heroOverallLabel, { color: "rgba(255,255,255,0.85)" }]}>{translate("report.score_overall")}</Text>
+        <View style={[styles.heroOverallPill, { backgroundColor: overallColor + "EE", borderColor: "rgba(255,255,255,0.35)" }]}>
+          <Text style={styles.heroOverallNumber}>{overallDisplay}</Text>
+          <Text style={styles.heroOverallSub}>/ 5</Text>
+        </View>
+      </View>
+
+      {/* Page-indicator dots — visible only when there are multiple photos */}
+      {total > 1 && (
+        <View style={styles.photoDotRow} pointerEvents="none">
+          {displayUrls.map((_, i) => (
+            <View
+              key={i}
+              style={[
+                styles.photoDot,
+                i === currentIndex ? styles.photoDotActive : styles.photoDotInactive,
+              ]}
+            />
+          ))}
+        </View>
+      )}
+    </View>
+  );
+}
+
+function SubdivisionPathwayCallout({ note, colors }: { note: string; colors: ReturnType<typeof useColors> }) {
+  const { t } = useT();
+  return (
+    <View style={{ backgroundColor: colors.amber + "12", borderColor: colors.amber + "30", borderWidth: 1, borderRadius: 10, padding: 12, marginBottom: 10, gap: 6 }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+        <Feather name="info" size={13} color={colors.amber} />
+        <Text style={{ color: colors.amber, fontFamily: "DM_Sans_700Bold", fontSize: 13 }}>
+          {t("report.subdivision_pathway_title")}
+        </Text>
+      </View>
+      <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 18 }}>
+        {note}
+      </Text>
+    </View>
+  );
+}
+
 function OverlayChecklist({ overlays, colors }: { overlays: PlanningOverlay[]; colors: ReturnType<typeof useColors> }) {
+  const { t } = useT();
   if (!overlays || overlays.length === 0) {
-    return <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 13 }}>No overlays recorded.</Text>;
+    return <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 13 }}>{t("report.no_overlays")}</Text>;
   }
   return (
     <View style={{ gap: 8 }}>
@@ -286,7 +506,9 @@ function OverlayChecklist({ overlays, colors }: { overlays: PlanningOverlay[]; c
             <Text style={{ fontSize: 15 }}>{indicator}</Text>
             <View style={{ flex: 1 }}>
               <Text style={{ color: textColor, fontFamily: "DM_Sans_600SemiBold", fontSize: 13 }}>{o.name}</Text>
-              {o.detail && <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, marginTop: 2 }}>{o.detail}</Text>}
+              {o.detail?.trim() ? (
+                <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, marginTop: 2 }}>{o.detail}</Text>
+              ) : null}
             </View>
           </View>
         );
@@ -320,6 +542,7 @@ function EasementList({
   dataStatus?: "retrieved" | "no_memorials" | "api_error" | "no_title";
   colors: ReturnType<typeof useColors>;
 }) {
+  const { t } = useT();
   const hasBurdening = easements && easements.length > 0;
   const hasAppurtenant = appurtenant && appurtenant.length > 0;
 
@@ -335,13 +558,13 @@ function EasementList({
           <Feather name={isUnconfirmed ? "alert-circle" : "check-circle"} size={14} color={isUnconfirmed ? colors.amber : colors.success} style={{ marginTop: 1 }} />
           <Text style={{ color: isUnconfirmed ? colors.amber : colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 13, flex: 1, lineHeight: 18 }}>
             {isUnconfirmed
-              ? "Title data was inconclusive — a solicitor title search is required to confirm whether any easements or rights of way are registered on this title."
+              ? t("report.easement_title_inconclusive")
               : dataStatus === "no_memorials"
-                ? "No recorded easements found in title records — title appears clean, but verify with a solicitor before subdivision."
-                : "No easements or rights of way detected on this title."}
+                ? t("report.easement_no_memorials")
+                : t("report.easement_none_detected")}
           </Text>
         </View>
-        {summary && (
+        {!!summary?.trim() && (
           <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 17 }}>
             {summary}
           </Text>
@@ -355,23 +578,23 @@ function EasementList({
       {/* Area impact banner when easements reduce subdivisable area */}
       {easementArea != null && easementArea > 0 && grossArea != null && netArea != null && (
         <View style={[{ backgroundColor: colors.amber + "18", borderColor: colors.amber + "35", borderWidth: 1, borderRadius: 10, padding: 10, gap: 4 }]}>
-          <Text style={{ color: colors.amber, fontFamily: "DM_Sans_700Bold", fontSize: 12 }}>AREA REDUCTION DUE TO EASEMENTS</Text>
+          <Text style={{ color: colors.amber, fontFamily: "DM_Sans_700Bold", fontSize: 12 }}>{t("report.easement_area_title")}</Text>
           <View style={{ flexDirection: "row", gap: 12, marginTop: 2 }}>
             <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
-              Gross: <Text style={{ fontFamily: "DM_Sans_600SemiBold" }}>{grossArea.toLocaleString()}m²</Text>
+              {t("report.easement_gross")} <Text style={{ fontFamily: "DM_Sans_600SemiBold" }}>{grossArea.toLocaleString()}m²</Text>
             </Text>
             <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
-              Easement: <Text style={{ fontFamily: "DM_Sans_600SemiBold", color: colors.red }}>−{easementArea.toLocaleString()}m²</Text>
+              {t("report.easement_label")} <Text style={{ fontFamily: "DM_Sans_600SemiBold", color: colors.red }}>−{easementArea.toLocaleString()}m²</Text>
             </Text>
             <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
-              Net: <Text style={{ fontFamily: "DM_Sans_600SemiBold", color: colors.success }}>{netArea.toLocaleString()}m²</Text>
+              {t("report.easement_net")} <Text style={{ fontFamily: "DM_Sans_600SemiBold", color: colors.success }}>{netArea.toLocaleString()}m²</Text>
             </Text>
           </View>
         </View>
       )}
 
       {/* Lot impact note */}
-      {lotImpact && (
+      {!!lotImpact?.trim() && (
         <View style={[{ backgroundColor: colors.red + "10", borderColor: colors.red + "30", borderWidth: 1, borderRadius: 10, padding: 10, flexDirection: "row", gap: 8, alignItems: "flex-start" }]}>
           <Feather name="alert-triangle" size={13} color={colors.red} style={{ marginTop: 1 }} />
           <Text style={{ color: colors.red, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1, lineHeight: 17 }}>{lotImpact}</Text>
@@ -382,10 +605,17 @@ function EasementList({
       {hasBurdening && (
         <View style={{ gap: 6 }}>
           <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_600SemiBold", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
-            Burdening This Property
+            {t("report.easement_burdening")}
           </Text>
           {easements!.map((e, i) => {
             const sevColor = e.severity === "significant" ? colors.red : e.severity === "moderate" ? colors.amber : colors.mutedForeground;
+            const sevLabel = e.severity === "significant"
+              ? t("report.easement_severity_significant")
+              : e.severity === "moderate"
+                ? t("report.easement_severity_moderate")
+                : e.severity === "minor"
+                  ? t("report.easement_severity_minor")
+                  : (e.severity ?? "?");
             return (
               <View key={i} style={[styles.overlayRow, { backgroundColor: colors.muted, borderRadius: 10 }]}>
                 <Text style={{ fontSize: 15 }}>{easementIcon(e.type)}</Text>
@@ -393,13 +623,13 @@ function EasementList({
                   <Text style={{ color: sevColor, fontFamily: "DM_Sans_600SemiBold", fontSize: 13 }}>{e.description}</Text>
                   {e.estimated_area_sqm != null && (
                     <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, marginTop: 2 }}>
-                      Est. {e.estimated_area_sqm}m² affected
-                      {e.estimated_width_m != null ? ` (~${e.estimated_width_m}m wide)` : ""}
+                      {t("report.easement_est_affected", { n: e.estimated_area_sqm })}
+                      {e.estimated_width_m != null ? ` ${t("report.easement_width", { n: e.estimated_width_m })}` : ""}
                     </Text>
                   )}
                 </View>
                 <View style={[{ paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, backgroundColor: sevColor + "20" }]}>
-                  <Text style={{ color: sevColor, fontFamily: "DM_Sans_600SemiBold", fontSize: 10, textTransform: "uppercase" }}>{e.severity ?? "?"}</Text>
+                  <Text style={{ color: sevColor, fontFamily: "DM_Sans_600SemiBold", fontSize: 10, textTransform: "uppercase" }}>{sevLabel}</Text>
                 </View>
               </View>
             );
@@ -411,7 +641,7 @@ function EasementList({
       {hasAppurtenant && (
         <View style={{ gap: 6 }}>
           <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_600SemiBold", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
-            Benefiting This Property
+            {t("report.easement_benefiting")}
           </Text>
           {appurtenant!.map((e, i) => (
             <View key={i} style={[styles.overlayRow, { backgroundColor: colors.muted, borderRadius: 10 }]}>
@@ -423,24 +653,29 @@ function EasementList({
           ))}
         </View>
       )}
-
-      {summary && null}
     </View>
   );
 }
 
 function AsbestosPanel({ asbestos, colors }: { asbestos: AsbestosInfo; colors: ReturnType<typeof useColors> }) {
+  const { t } = useT();
   const risk = getAsbestosRisk(asbestos);
   const riskColor = risk === "high" ? colors.red : risk === "moderate" ? colors.amber : risk === "unknown" ? colors.amber : colors.success;
-  const buildYearNum = asbestos.buildYear ? parseInt(String(asbestos.buildYear), 10) : null;
+  // Guard against LLM emitting the string "null" instead of JSON null
+  const buildYearRaw = asbestos.buildYear;
+  const buildYearStr =
+    buildYearRaw != null && String(buildYearRaw) !== "null" && String(buildYearRaw).trim() !== ""
+      ? String(buildYearRaw).trim()
+      : null;
+  const buildYearNum = buildYearStr ? parseInt(buildYearStr, 10) : null;
   const riskLabel =
     risk === "high"
-      ? `HIGH — Peak asbestos era (1940–1990 build)`
+      ? t("report.asbestos_risk_high")
       : risk === "low"
         ? buildYearNum && buildYearNum <= 1940
-          ? `LOW — Pre-1940 construction (asbestos not in widespread use)`
-          : "LOW — Post-1990 build (asbestos phased out by this era)"
-        : "UNKNOWN — Pre-demolition survey required";
+          ? t("report.asbestos_risk_low_pre1940")
+          : t("report.asbestos_risk_low_post1990")
+        : t("report.asbestos_risk_unknown");
 
   const demoCostLow = asbestos.demoCostLow ?? 0;
   const demoCostHigh = asbestos.demoCostHigh ?? 0;
@@ -451,10 +686,10 @@ function AsbestosPanel({ asbestos, colors }: { asbestos: AsbestosInfo; colors: R
       <View style={[styles.riskBanner, { backgroundColor: riskColor + "15", borderColor: riskColor + "30", borderRadius: 10 }]}>
         <Text style={{ fontSize: 18 }}>{risk === "high" ? "⚠️" : risk === "low" ? "✅" : "❓"}</Text>
         <View style={{ flex: 1 }}>
-          <Text style={{ color: riskColor, fontFamily: "DM_Sans_700Bold", fontSize: 13 }}>Asbestos Risk: {riskLabel}</Text>
-          {asbestos.buildYear && (
+          <Text style={{ color: riskColor, fontFamily: "DM_Sans_700Bold", fontSize: 13 }}>{t("report.asbestos_risk_prefix")}: {riskLabel}</Text>
+          {buildYearStr && (
             <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, marginTop: 2 }}>
-              Build year: {asbestos.buildYear}
+              {t("report.build_year")}: {buildYearStr}
             </Text>
           )}
         </View>
@@ -463,31 +698,31 @@ function AsbestosPanel({ asbestos, colors }: { asbestos: AsbestosInfo; colors: R
         <View style={[styles.warningBox, { backgroundColor: colors.success + "12", borderColor: colors.success + "30" }]}>
           <Feather name="check-circle" size={13} color={colors.success} />
           <Text style={{ color: colors.success, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1, lineHeight: 17 }}>
-            No demolition required — vacant land or no existing dwelling detected.
+            {t("report.no_demolition_required")}
           </Text>
         </View>
       ) : (
         <InfoRow
-          label="Demo cost estimate"
+          label={t("report.demo_cost_estimate")}
           value={`${formatNZD(demoCostLow)} – ${formatNZD(demoCostHigh)}`}
           colors={colors}
         />
       )}
-      {asbestos.notes && (
+      {asbestos.notes?.trim() ? (
         <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 13, lineHeight: 20 }}>
           {asbestos.notes}
         </Text>
-      )}
-      {asbestos.worksafeNote && !asbestos.notes && (
+      ) : null}
+      {asbestos.worksafeNote?.trim() && !asbestos.notes?.trim() ? (
         <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 13, lineHeight: 20 }}>
           {asbestos.worksafeNote}
         </Text>
-      )}
+      ) : null}
       {(asbestos.worksafe_required || asbestos.flagged) && (
         <View style={[styles.warningBox, { backgroundColor: colors.amber + "12", borderColor: colors.amber + "30" }]}>
           <Feather name="alert-triangle" size={13} color={colors.amber} />
           <Text style={{ color: colors.amber, fontFamily: "DM_Sans_500Medium", fontSize: 13, flex: 1, lineHeight: 18 }}>
-            WorkSafe NZ requirements apply. A licensed asbestos removalist must be engaged before demolition.
+            {t("report.worksafe_asbestos_warning")}
           </Text>
         </View>
       )}
@@ -495,7 +730,15 @@ function AsbestosPanel({ asbestos, colors }: { asbestos: AsbestosInfo; colors: R
   );
 }
 
+const TERRAIN_CLS_KEY: Record<string, string> = {
+  flat:     "report.terrain_cls_flat",
+  gentle:   "report.terrain_cls_gentle",
+  moderate: "report.terrain_cls_moderate",
+  steep:    "report.terrain_cls_steep",
+};
+
 function ContourCard({ terrain, colors }: { report: Report; terrain: NonNullable<Report["terrain"]>; colors: ReturnType<typeof useColors> }) {
+  const { t } = useT();
   const cls = terrain.classification;
   if (!cls) {
     return (
@@ -503,7 +746,7 @@ function ContourCard({ terrain, colors }: { report: Report; terrain: NonNullable
         <View style={[styles.warningBox, { backgroundColor: colors.mutedForeground + "12", borderColor: colors.mutedForeground + "30" }]}>
           <Feather name="info" size={13} color={colors.mutedForeground} />
           <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1, lineHeight: 17 }}>
-            Terrain data could not be retrieved automatically. Inspect on-site or obtain a contour survey.
+            {t("report.terrain_no_data")}
           </Text>
         </View>
       </View>
@@ -514,6 +757,12 @@ function ContourCard({ terrain, colors }: { report: Report; terrain: NonNullable
   const W = 120, H = 70;
   const slopeY = H - (steepness / 45) * H;
   const terrainColor = cls === "steep" ? colors.red : cls === "moderate" ? colors.amber : colors.success;
+  const slopeSummary = terrain.slope
+    ?.replace(/(?:数据来源|來源|source)\s*[:：].*/giu, "")
+    ?.replace(/\s*[—-]\s*(?:based on|calculated|estimate|derived|from|via).*/giu, "")
+    ?.trim();
+
+  const clsLabel = t(TERRAIN_CLS_KEY[cls] ?? "report.terrain_cls_gentle");
 
   return (
     <View style={{ gap: 10 }}>
@@ -528,23 +777,23 @@ function ContourCard({ terrain, colors }: { report: Report; terrain: NonNullable
         </Svg>
         <View style={{ flex: 1, gap: 4 }}>
           <Text style={{ color: terrainColor, fontFamily: "DM_Sans_700Bold", fontSize: 15 }}>
-            {capitalize(cls)}
+            {clsLabel}
           </Text>
           {terrain.slope_degrees != null && (
             <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
-              ~{terrain.slope_degrees}° slope
+              {t("report.terrain_slope_degrees", { deg: String(terrain.slope_degrees) })}
             </Text>
           )}
-          {terrain.slope && (
+          {!!slopeSummary && (
             <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 13, lineHeight: 18 }}>
-              {terrain.slope}
+              {slopeSummary}
             </Text>
           )}
         </View>
       </View>
       {((terrain.retainingCostLow ?? 0) > 0 || (terrain.retainingCostHigh ?? 0) > 0) && (
         <InfoRow
-          label="Retaining wall cost"
+          label={t("report.retaining_wall_cost")}
           value={`${formatNZD(terrain.retainingCostLow)} – ${formatNZD(terrain.retainingCostHigh)}`}
           valueColor={terrainColor}
           colors={colors}
@@ -555,8 +804,8 @@ function ContourCard({ terrain, colors }: { report: Report; terrain: NonNullable
           <Feather name="alert-triangle" size={13} color={terrainColor} />
           <Text style={{ color: terrainColor, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1, lineHeight: 17 }}>
             {cls === "steep"
-              ? "Steep terrain significantly increases foundation and retaining costs. Single dwelling: $50k–$150k. Subdivision (multiple lots): $200k–$500k+. Engage a geotechnical engineer for site-specific assessment."
-              : "Moderate slope — retaining walls and cut-and-fill earthworks will add cost. Engineering assessment recommended."}
+              ? t("report.terrain_warning_steep")
+              : t("report.terrain_warning_moderate")}
           </Text>
         </View>
       )}
@@ -565,13 +814,14 @@ function ContourCard({ terrain, colors }: { report: Report; terrain: NonNullable
 }
 
 function InfrastructureTable({ infrastructure, colors }: { infrastructure: InfrastructureService[]; colors: ReturnType<typeof useColors> }) {
+  const { t } = useT();
   const hasNeighbour = infrastructure.some((s) => s.location === "neighbour");
   const hasUnknown = infrastructure.some((s) => s.location === "unknown");
 
   return (
     <View style={{ gap: 0 }}>
       {infrastructure.map((svc, i) => {
-        const locLabel = getInfraLabel(svc.location);
+        const locLabel = getInfraLabel(svc.location, t);
         const isUnknown = svc.location === "unknown";
         const locColor =
           svc.location === "on-parcel" ? colors.success
@@ -579,9 +829,9 @@ function InfrastructureTable({ infrastructure, colors }: { infrastructure: Infra
           : svc.location === "neighbour" ? colors.amber
           : isUnknown ? colors.mutedForeground
           : colors.mutedForeground;
-        const riskAssessment = svc.location === "neighbour" ? "Easement may be required"
-          : isUnknown ? "Location unverified"
-          : "Standard connection";
+        const riskAssessment = svc.location === "neighbour" ? t("report.easement_may_required")
+          : isUnknown ? t("report.location_unverified")
+          : t("report.standard_connection");
         const costLow = svc.estimatedCostLow ?? svc.estimated_cost_low;
         const costHigh = svc.estimatedCostHigh ?? svc.estimated_cost_high;
 
@@ -595,9 +845,9 @@ function InfrastructureTable({ infrastructure, colors }: { infrastructure: Infra
           >
             <View style={{ flex: 2 }}>
               <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", fontSize: 13 }}>{svc.name}</Text>
-              {svc.note && (
+              {svc.note?.trim() ? (
                 <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, marginTop: 2 }}>{svc.note}</Text>
-              )}
+              ) : null}
             </View>
             <View style={{ flex: 2, alignItems: "flex-start" }}>
               <View style={[styles.locationChip, { backgroundColor: locColor + "18", borderColor: locColor + "40" }]}>
@@ -621,7 +871,7 @@ function InfrastructureTable({ infrastructure, colors }: { infrastructure: Infra
         <View style={[styles.warningBox, { backgroundColor: colors.amber + "12", borderColor: colors.amber + "30", marginTop: 10 }]}>
           <Feather name="alert-triangle" size={13} color={colors.amber} />
           <Text style={{ color: colors.amber, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1, lineHeight: 17 }}>
-            One or more services are located on neighbouring property. A registered easement or private agreement will be required before building consent can be granted.
+            {t("report.warning_neighbour_services")}
           </Text>
         </View>
       )}
@@ -639,6 +889,27 @@ function InfrastructureTable({ infrastructure, colors }: { infrastructure: Infra
 
 const COST_COLORS = ["#3B82F6", "#EF4444", "#10B981", "#F59E0B", "#8B5CF6", "#EC4899", "#F97316", "#6B7280"];
 
+// Maps the English label strings produced by the backend to i18n keys so they
+// can be translated when the user's OS language is Chinese.
+const COST_LABEL_KEY_MAP: Record<string, string> = {
+  "land (cv)":                  "report.cost_label.land_cv",
+  "demolition":                  "report.cost_label.demolition",
+  "construction":                "report.cost_label.construction",
+  "retaining walls":             "report.cost_label.retaining_walls",
+  "retaining wall":              "report.cost_label.retaining_walls",
+  "services & infrastructure":   "report.cost_label.services_infrastructure",
+  "services and infrastructure": "report.cost_label.services_infrastructure",
+  "consents & professionals":    "report.cost_label.consents_professionals",
+  "consents and professionals":  "report.cost_label.consents_professionals",
+  // Legacy / LLM-mistranslated ZH labels — normalize to i18n key
+  "同意与专业人士": "report.cost_label.consents_professionals",
+  "同意于专业人士": "report.cost_label.consents_professionals",
+  "审批与专业费": "report.cost_label.consents_professionals",
+  "finance (holding)":           "report.cost_label.finance_holding",
+  "finance holding":             "report.cost_label.finance_holding",
+  "contingency":                 "report.cost_label.contingency",
+};
+
 function CostBreakdownChart({ costItems, totalCostLow, totalCostHigh, costPerUnitAvg, colors }: {
   costItems: CostItem[];
   totalCostLow?: number;
@@ -646,7 +917,13 @@ function CostBreakdownChart({ costItems, totalCostLow, totalCostHigh, costPerUni
   costPerUnitAvg?: number;
   colors: ReturnType<typeof useColors>;
 }) {
+  const { t } = useT();
   const totalMid = costItems.reduce((s, i) => s + (getCostLow(i) + getCostHigh(i)) / 2, 0);
+
+  const translateLabel = (label: string): string => {
+    const key = COST_LABEL_KEY_MAP[label.toLowerCase().trim()];
+    return key ? t(key) : label;
+  };
 
   return (
     <View style={{ gap: 12 }}>
@@ -666,7 +943,7 @@ function CostBreakdownChart({ costItems, totalCostLow, totalCostHigh, costPerUni
         {costItems.map((item, idx) => (
           <View key={item.label} style={styles.costLegendItem}>
             <View style={[styles.costLegendDot, { backgroundColor: COST_COLORS[idx % COST_COLORS.length] }]} />
-            <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11 }}>{item.label}</Text>
+            <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11 }}>{translateLabel(item.label)}</Text>
           </View>
         ))}
       </View>
@@ -678,7 +955,7 @@ function CostBreakdownChart({ costItems, totalCostLow, totalCostHigh, costPerUni
           >
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1 }}>
               <View style={[styles.costLegendDot, { backgroundColor: COST_COLORS[i % COST_COLORS.length] }]} />
-              <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 13 }}>{item.label}</Text>
+              <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 13 }}>{translateLabel(item.label)}</Text>
             </View>
             <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", fontSize: 13 }}>
               {formatNZD(getCostLow(item))} – {formatNZD(getCostHigh(item))}
@@ -686,7 +963,7 @@ function CostBreakdownChart({ costItems, totalCostLow, totalCostHigh, costPerUni
           </View>
         ))}
         <View style={[styles.totalRow, { backgroundColor: colors.muted, borderRadius: 10 }]}>
-          <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_700Bold", fontSize: 14 }}>TOTAL</Text>
+          <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_700Bold", fontSize: 14 }}>{t("report.cost_total")}</Text>
           <Text style={{ color: colors.accent, fontFamily: "DM_Sans_700Bold", fontSize: 14 }}>
             {formatNZD(totalCostLow ?? totalMid * 0.9)} – {formatNZD(totalCostHigh ?? totalMid * 1.1)}
           </Text>
@@ -694,30 +971,23 @@ function CostBreakdownChart({ costItems, totalCostLow, totalCostHigh, costPerUni
       </View>
       {costPerUnitAvg != null && (
         <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 13 }}>
-          Per unit average: {formatNZD(costPerUnitAvg)}
+          {t("report.cost_per_unit_avg", { value: formatNZD(costPerUnitAvg) })}
         </Text>
       )}
     </View>
   );
 }
 
-const CASE_CONFIGS: Record<"bear" | "base" | "bull", {
-  label: string; emoji: string; color: string; bgKey: string; description: string;
-}> = {
-  bear: { label: "Bear", emoji: "🔻", color: "#EF4444", bgKey: "#EF444415", description: "−20% pricing" },
-  base: { label: "Base", emoji: "📊", color: "#F59E0B", bgKey: "#F59E0B12", description: "Realistic" },
-  bull: { label: "Bull", emoji: "📈", color: "#10B981", bgKey: "#10B98115", description: "+20% pricing" },
-};
-
 function InterestRateBanner({ outlook, colors }: {
   outlook?: "falling" | "stable" | "rising";
   colors: ReturnType<typeof useColors>;
 }) {
+  const { t } = useT();
   if (!outlook) return null;
   const configs = {
-    falling: { text: "RBNZ OCR: FALLING 📉 — Bull case activated (rates cutting = property upside)", color: "#10B981", bg: "#10B98115" },
-    stable:  { text: "RBNZ OCR: STABLE — Bear & Base cases shown (no rate cuts imminent)", color: "#F59E0B", bg: "#F59E0B12" },
-    rising:  { text: "RBNZ OCR: RISING 📈 — Caution: rising rates compress margins", color: "#EF4444", bg: "#EF444415" },
+    falling: { text: t("report.interest_banner_falling"), color: "#10B981", bg: "#10B98115" },
+    stable:  { text: t("report.interest_banner_stable"), color: "#F59E0B", bg: "#F59E0B12" },
+    rising:  { text: t("report.interest_banner_rising"), color: "#EF4444", bg: "#EF444415" },
   };
   const c = configs[outlook];
   return (
@@ -733,37 +1003,27 @@ function ROIScenarioCards({ scenarios, interestRateOutlook, comparablesQuality, 
   comparablesQuality?: string;
   colors: ReturnType<typeof useColors>;
 }) {
+  const { t } = useT();
+  const caseConfigs: Record<"bear" | "base" | "bull", {
+    label: string; emoji: string; color: string; bgKey: string; description: string;
+  }> = {
+    bear: { label: t("report.case_bear"), emoji: "🔻", color: "#EF4444", bgKey: "#EF444415", description: t("report.case_bear_desc") },
+    base: { label: t("report.case_base"), emoji: "📊", color: "#F59E0B", bgKey: "#F59E0B12", description: t("report.case_base_desc") },
+    bull: { label: t("report.case_bull"), emoji: "📈", color: "#10B981", bgKey: "#10B98115", description: t("report.case_bull_desc") },
+  };
   const outlook = interestRateOutlook ?? scenarios[0]?.interest_rate_outlook ?? "stable";
   const hasBull = outlook === "falling";
 
   const availableCases = (["bear", "base", ...(hasBull ? ["bull"] : [])] as Array<"bear" | "base" | "bull">);
   const [selectedCase, setSelectedCase] = useState<"bear" | "base" | "bull">("base");
 
-  const scenario2yr = scenarios.find((s) => s.years === 2) ?? scenarios[0];
-  const totalCostMid = safeNum(scenario2yr?.total_cost_mid ?? scenario2yr?.totalCost);
-
-  const gdvPerLot = safeNum(scenario2yr?.gdv_per_lot);
-  const sqmPerLot = safeNum(scenario2yr?.sqm_per_lot);
-  const lots = safeNum(scenario2yr?.lots ?? 1, 1);
-
   return (
     <View style={{ gap: 10 }}>
       <InterestRateBanner outlook={outlook} colors={colors} />
 
-      {gdvPerLot > 0 && sqmPerLot > 0 && (
-        <View style={{ backgroundColor: colors.muted + "40", borderRadius: 8, padding: 10, gap: 4 }}>
-          <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
-            {lots} lot{lots > 1 ? "s" : ""} × {sqmPerLot}m² each · ~{formatNZD(gdvPerLot)} per lot (comparable-adjusted)
-          </Text>
-          <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
-            Total development cost: {formatNZD(totalCostMid)}
-          </Text>
-        </View>
-      )}
-
       <View style={{ flexDirection: "row", gap: 6 }}>
         {availableCases.map((c) => {
-          const cfg = CASE_CONFIGS[c];
+          const cfg = caseConfigs[c];
           const active = selectedCase === c;
           return (
             <TouchableOpacity
@@ -793,7 +1053,7 @@ function ROIScenarioCards({ scenarios, interestRateOutlook, comparablesQuality, 
         <View style={{ flexDirection: "row", gap: 10, paddingBottom: 4 }}>
           {scenarios.map((s, i) => {
             const caseData: ROICaseResult | undefined = (s.cases ?? []).find((c) => c.case === selectedCase);
-            const cfg = CASE_CONFIGS[selectedCase];
+            const cfg = caseConfigs[selectedCase];
 
             // If cases array is missing/incomplete, compute fallback using known multipliers
             const multipliers: Record<"bear" | "base" | "bull", number> = { bear: 0.80, base: 1.00, bull: 1.20 };
@@ -826,30 +1086,30 @@ function ROIScenarioCards({ scenarios, interestRateOutlook, comparablesQuality, 
               >
                 {!viable && (
                   <View style={[styles.bestBadge, { backgroundColor: colors.red }]}>
-                    <Text style={{ color: "#fff", fontFamily: "DM_Sans_700Bold", fontSize: 9 }}>RISK</Text>
+                    <Text style={{ color: "#fff", fontFamily: "DM_Sans_700Bold", fontSize: 9 }}>{t("report.roi_badge_risk")}</Text>
                   </View>
                 )}
                 <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
-                  {s.years}-Year exit
+                  {t("report.year_exit", { years: s.years })}
                 </Text>
                 <Text style={{ color: viable ? cfg.color : colors.red, fontFamily: "DM_Sans_700Bold", fontSize: 26, letterSpacing: -0.5, marginTop: 4 }}>
                   {isNaN(roi) ? "—" : roi.toFixed(1)}%
                 </Text>
                 <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, marginBottom: 8 }}>
-                  ROI · {isNaN(annualised) ? "—" : annualised.toFixed(1)}% p.a.
+                  {t("report.roi_annual_line", { annual: isNaN(annualised) ? "—" : annualised.toFixed(1) })}
                 </Text>
                 <View style={[styles.roiDivider, { backgroundColor: colors.border }]} />
                 <View style={{ gap: 4, marginTop: 8 }}>
                   <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                    <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>GDV</Text>
+                    <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>{t("report.gdv")}</Text>
                     <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", fontSize: 12 }}>{formatNZD(gdv)}</Text>
                   </View>
                   <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                    <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>Cost</Text>
+                    <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>{t("report.cost")}</Text>
                     <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", fontSize: 12 }}>{formatNZD(totalCost)}</Text>
                   </View>
                   <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                    <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>Profit</Text>
+                    <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>{t("report.profit")}</Text>
                     <Text style={{ color: profit >= 0 ? colors.success : colors.red, fontFamily: "DM_Sans_700Bold", fontSize: 12 }}>
                       {profit >= 0 ? "+" : ""}{formatNZD(Math.abs(profit))}
                     </Text>
@@ -861,10 +1121,129 @@ function ROIScenarioCards({ scenarios, interestRateOutlook, comparablesQuality, 
         </View>
       </ScrollView>
 
-      {comparablesQuality === "estimated" && (
-        <Text style={{ color: colors.amber, fontFamily: "DM_Sans_400Regular", fontSize: 12, fontStyle: "italic" }}>
-          Comparable prices are suburb averages — live sale data will improve accuracy.
+    </View>
+  );
+}
+
+function strategyTitle(id: DevelopmentStrategyId, fallback: string, t: (key: string) => string): string {
+  switch (id) {
+    case "hold_existing": return t("report.strategy_hold");
+    case "refurbish": return t("report.strategy_refurbish");
+    case "demolish_rebuild": return t("report.strategy_rebuild");
+    default: return fallback;
+  }
+}
+
+function strategyStatus(strategies: DevelopmentStrategyScenario[] | undefined): "good" | "warning" | "risk" | "neutral" {
+  const recommended = strategies?.find((strategy) => strategy.recommendation === "recommended");
+  if (!recommended) return "neutral";
+  if (recommended.id === "hold_existing") return "warning";
+  if (recommended.id === "refurbish") return "good";
+  return recommended.roiScenarios.some((scenario) => scenario.viable) ? "good" : "risk";
+}
+
+function DevelopmentStrategyPanel({ strategies, interestRateOutlook, comparablesQuality, colors }: {
+  strategies: DevelopmentStrategyScenario[];
+  interestRateOutlook?: "falling" | "stable" | "rising";
+  comparablesQuality?: string;
+  colors: ReturnType<typeof useColors>;
+}) {
+  const { t, locale } = useT();
+  const isZh = locale === "zh";
+  const recommended = strategies.find((strategy) => strategy.recommendation === "recommended") ?? strategies[0];
+  const [selectedId, setSelectedId] = useState<DevelopmentStrategyId>(recommended.id);
+  const selected = strategies.find((strategy) => strategy.id === selectedId) ?? recommended;
+  const hasRoi = selected.roiScenarios.length > 0;
+
+  // Pick localised rationale — rationale_zh filled by analyse + /translate-report for zh users
+  const zhRationale = typeof selected.rationale_zh === "string" ? selected.rationale_zh.trim() : "";
+  const displayRationale = isZh && zhRationale.length > 0 ? selected.rationale_zh! : selected.rationale;
+
+  // Only show assumptions that are user-facing (exclude internal references, source notes, build-year tech notes)
+  const visibleAssumptions = (selected.assumptions ?? []).filter(
+    (a) => !/realestate\.co\.nz|oneroof|build year|asking price|exit value/i.test(a),
+  );
+
+  return (
+    <View style={{ gap: 10 }}>
+      <View style={{ flexDirection: "row", gap: 6 }}>
+        {strategies.map((strategy) => {
+          const active = strategy.id === selected.id;
+          const isRecommended = strategy.recommendation === "recommended";
+          return (
+            <TouchableOpacity
+              key={strategy.id}
+              onPress={() => setSelectedId(strategy.id)}
+              style={{
+                flex: 1,
+                padding: 9,
+                borderRadius: 10,
+                borderWidth: active ? 1.5 : 1,
+                borderColor: active ? colors.accent : colors.border,
+                backgroundColor: active ? colors.accent + "12" : colors.card,
+                gap: 4,
+              }}
+            >
+              <Text style={{ color: active ? colors.accent : colors.foreground, fontFamily: "DM_Sans_700Bold", fontSize: 11 }}>
+                {strategyTitle(strategy.id, strategy.title, t)}
+              </Text>
+              {isRecommended && (
+                <Text style={{ color: colors.success, fontFamily: "DM_Sans_600SemiBold", fontSize: 10 }}>
+                  {t("report.strategy_recommended")}
+                </Text>
+              )}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      <View style={[styles.warningBox, { backgroundColor: colors.accent + "10", borderColor: colors.accent + "30" }]}>
+        <Feather name={selected.recommendation === "recommended" ? "check-circle" : "info"} size={13} color={colors.accent} />
+        <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1, lineHeight: 17 }}>
+          <Text style={{ fontFamily: "DM_Sans_700Bold" }}>{strategyTitle(selected.id, selected.title, t)}: </Text>
+          {displayRationale}
         </Text>
+      </View>
+
+      <View style={{ flexDirection: "row", gap: 8 }}>
+        <View style={[styles.strategyMetric, { backgroundColor: colors.muted + "40" }]}>
+          <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11 }}>{t("report.total_cost")}</Text>
+          <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_700Bold", fontSize: 13 }}>
+            {formatNZD(selected.totalCostLow)} – {formatNZD(selected.totalCostHigh)}
+          </Text>
+        </View>
+        <View style={[styles.strategyMetric, { backgroundColor: colors.muted + "40" }]}>
+          <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11 }}>{t("report.confidence")}</Text>
+          <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_700Bold", fontSize: 13 }}>
+            {Math.round(safeNum(selected.confidence) * 100)}%
+          </Text>
+        </View>
+      </View>
+
+      {visibleAssumptions.length > 0 && (
+        <View style={{ gap: 4 }}>
+          {visibleAssumptions.map((assumption, i) => (
+            <Text key={i} style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, lineHeight: 16 }}>
+              • {assumption}
+            </Text>
+          ))}
+        </View>
+      )}
+
+      {hasRoi ? (
+        <ROIScenarioCards
+          scenarios={selected.roiScenarios}
+          interestRateOutlook={interestRateOutlook ?? selected.roiScenarios[0]?.interest_rate_outlook}
+          comparablesQuality={comparablesQuality}
+          colors={colors}
+        />
+      ) : (
+        <View style={[styles.warningBox, { backgroundColor: colors.amber + "12", borderColor: colors.amber + "30" }]}>
+          <Feather name="alert-triangle" size={13} color={colors.amber} />
+          <Text style={{ color: colors.amber, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1, lineHeight: 17 }}>
+            {t("report.strategy_roi_unavailable")}
+          </Text>
+        </View>
       )}
     </View>
   );
@@ -875,69 +1254,99 @@ function ComparableSalesTable({ comparables, quality, colors }: {
   quality?: string;
   colors: ReturnType<typeof useColors>;
 }) {
-  const prices = comparables.map(getSalePrice).filter((p) => p > 0);
-  const avgPrice = prices.length > 0 ? prices.reduce((a, b) => a + b, 0) / prices.length : 0;
-  const psms = comparables.map(getSalePsm).filter((p) => p > 0);
-  const avgPsm = psms.length > 0 ? psms.reduce((a, b) => a + b, 0) / psms.length : 0;
+  const { t } = useT();
+  const displayed = comparables.slice(0, 3);
+
+  const getLand  = (c: ComparableSale) => (c.land_sqm ?? (c as any).size ?? 0) as number;
+  const getFloor = (c: ComparableSale) => (c.floor_sqm ?? 0) as number;
+  const getCv    = (c: ComparableSale): number | null => {
+    const v = c.cv_nzd as number | null | undefined;
+    return v != null && v > 0 ? v : null;
+  };
+  const getBuildYear = (c: ComparableSale): number | null => {
+    const v = c.build_year as number | null | undefined;
+    return v != null && v > 1800 ? v : null;
+  };
+
+  const hasCv    = displayed.some((c) => getCv(c) != null);
+  const hasYear  = displayed.some((c) => getBuildYear(c) != null);
 
   return (
-    <View style={{ gap: 10 }}>
+    <View style={{ gap: 8 }}>
       {quality === "estimated" && (
         <View style={[styles.warningBox, { backgroundColor: colors.amber + "12", borderColor: colors.amber + "30" }]}>
           <Feather name="info" size={13} color={colors.amber} />
           <Text style={{ color: colors.amber, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1 }}>
-            Comparable data estimated from suburb averages. Live data will load once web scraping is active.
+            {t("report.comparable_data_estimated_box")}
           </Text>
         </View>
       )}
-      <View style={{ gap: 0 }}>
-        <View style={[styles.tableHeader, { borderBottomColor: colors.border }]}>
-          <Text style={[styles.tableHeaderCell, { color: colors.mutedForeground, flex: 3 }]}>Address</Text>
-          <Text style={[styles.tableHeaderCell, { color: colors.mutedForeground, flex: 2, textAlign: "right" }]}>Price</Text>
-          <Text style={[styles.tableHeaderCell, { color: colors.mutedForeground, flex: 2, textAlign: "right" }]}>$/m²</Text>
-        </View>
-        {comparables.map((c, i) => (
+      {/* Each comparable as a compact card */}
+      {displayed.map((c, i) => {
+        const land  = getLand(c);
+        const floor = getFloor(c);
+        const cv    = getCv(c);
+        const year  = getBuildYear(c);
+        const date  = getSaleDate(c);
+        return (
           <View
             key={i}
-            style={[
-              styles.tableRow,
-              i < comparables.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-            ]}
+            style={{
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: colors.border,
+              borderRadius: 10,
+              padding: 10,
+              gap: 6,
+              backgroundColor: colors.card,
+            }}
           >
-            <View style={{ flex: 3 }}>
-              <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_500Medium", fontSize: 12 }} numberOfLines={1}>
-                {c.address}
+            {/* Address line */}
+            <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", fontSize: 13 }} numberOfLines={2}>
+              {c.address}
+            </Text>
+            {date ? (
+              <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 10, marginTop: -4 }}>
+                {date}
               </Text>
-              <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11 }}>
-                {getSaleDate(c)}
-              </Text>
+            ) : null}
+            {/* Stats row */}
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 2 }}>
+              {land > 0 && (
+                <View style={{ gap: 1 }}>
+                  <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 10 }}>{t("report.comparable_land")}</Text>
+                  <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_700Bold", fontSize: 12 }}>{land.toLocaleString()}m²</Text>
+                </View>
+              )}
+              {floor > 0 && (
+                <View style={{ gap: 1 }}>
+                  <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 10 }}>{t("report.comparable_floor")}</Text>
+                  <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_700Bold", fontSize: 12 }}>{floor.toLocaleString()}m²</Text>
+                </View>
+              )}
+              {year != null && (
+                <View style={{ gap: 1 }}>
+                  <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 10 }}>{t("report.build_year")}</Text>
+                  <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_700Bold", fontSize: 12 }}>{year}</Text>
+                </View>
+              )}
+              {cv != null && (
+                <View style={{ gap: 1 }}>
+                  <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 10 }}>{t("report.comparable_cv")}</Text>
+                  <Text style={{ color: colors.success, fontFamily: "DM_Sans_700Bold", fontSize: 12 }}>{formatNZD(cv)}</Text>
+                </View>
+              )}
             </View>
-            <Text style={{ color: colors.success, fontFamily: "DM_Sans_700Bold", fontSize: 12, flex: 2, textAlign: "right" }}>
-              {formatNZD(getSalePrice(c))}
-            </Text>
-            <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 2, textAlign: "right" }}>
-              ${Math.round(getSalePsm(c)).toLocaleString()}
-            </Text>
           </View>
-        ))}
-        {avgPrice > 0 && (
-          <View style={[styles.tableRow, { backgroundColor: colors.muted, borderRadius: 8 }]}>
-            <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_700Bold", fontSize: 12, flex: 3 }}>Average</Text>
-            <Text style={{ color: colors.success, fontFamily: "DM_Sans_700Bold", fontSize: 12, flex: 2, textAlign: "right" }}>{formatNZD(avgPrice)}</Text>
-            <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_600SemiBold", fontSize: 12, flex: 2, textAlign: "right" }}>${Math.round(avgPsm).toLocaleString()}</Text>
-          </View>
-        )}
-      </View>
+        );
+      })}
     </View>
   );
 }
 
 function RiskSummaryPanel({ riskSummary, colors }: { riskSummary: string[]; colors: ReturnType<typeof useColors> }) {
+  const { t } = useT();
   return (
     <View style={{ gap: 10 }}>
-      <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
-        Generated by Gemini AI based on all available data
-      </Text>
       <View style={{ gap: 8 }}>
         {riskSummary.map((r, i) => (
           <View key={i} style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
@@ -947,8 +1356,40 @@ function RiskSummaryPanel({ riskSummary, colors }: { riskSummary: string[]; colo
         ))}
       </View>
       <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, fontStyle: "italic", lineHeight: 16, marginTop: 4 }}>
-        These estimates are indicative only and based on available public data. Engage a licensed quantity surveyor, resource management consultant, and solicitor before making any development decision. Figures in NZD.
+        {t("report.risk_section_disclaimer")}
       </Text>
+    </View>
+  );
+}
+
+/** Quiet legal / data-staleness note at end of report—not a full section card. */
+function ReportAnalysisFootnote({ colors }: { colors: ReturnType<typeof useColors> }) {
+  return (
+    <View
+      style={{
+        marginTop: 4,
+        paddingTop: 12,
+        paddingHorizontal: 2,
+        paddingBottom: 2,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: colors.border,
+      }}
+    >
+      <View style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
+        <Feather name="info" size={12} color={colors.mutedForeground} style={{ marginTop: 1, opacity: 0.65 }} />
+        <Text
+          style={{
+            flex: 1,
+            color: colors.mutedForeground,
+            fontFamily: "DM_Sans_400Regular",
+            fontSize: 10,
+            lineHeight: 15,
+            opacity: 0.9,
+          }}
+        >
+          {translateForOS("report.analysis_legal_footnote")}
+        </Text>
+      </View>
     </View>
   );
 }
@@ -958,36 +1399,37 @@ function FollowUpChips({ report, onChipClick, colors }: {
   onChipClick: (msg: string) => void;
   colors: ReturnType<typeof useColors>;
 }) {
+  const { t } = useT();
   const zone = report.zone_label || report.planning?.zone || report.propertyOverview?.zone || "this zone";
   const lots = report.potential_lots || report.planning?.potentialLots || 0;
 
   const chips: string[] = [
-    "What are the main development risks here?",
-    "What building typology suits this zone?",
+    t("report.followup_main_risks"),
+    t("report.followup_building_typology"),
   ];
 
   const asbestosRisk = report.asbestos ? getAsbestosRisk(report.asbestos) : "unknown";
   if (report.asbestos && asbestosRisk === "high") {
-    chips.push("What does the asbestos removal process involve?");
+    chips.push(t("report.followup_asbestos_process"));
   }
   if (hasOverlay(report, "flood")) {
-    chips.push("How does the flooding overlay affect consent?");
+    chips.push(t("report.followup_flood_overlay"));
   }
   if (hasOverlay(report, "heritage")) {
-    chips.push("What can I still build with a heritage overlay?");
+    chips.push(t("report.followup_heritage_overlay"));
   }
   if (safeNum(report.scores?.roi) < 2.5) {
-    chips.push("How could the ROI be improved on this site?");
+    chips.push(t("report.followup_improve_roi"));
   }
   if (lots >= 3) {
-    chips.push(`What are the consent steps for ${lots} lots?`);
+    chips.push(t("report.followup_consent_steps", { lots }));
   }
-  chips.push(`Explain the ${zone} rules in plain English`);
+  chips.push(t("report.followup_explain_zone", { zone }));
 
   return (
     <View style={{ gap: 8 }}>
       <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium", fontSize: 12, textTransform: "uppercase", letterSpacing: 0.5 }}>
-        Ask a follow-up
+        {t("report.ask_follow_up")}
       </Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false}>
         <View style={{ flexDirection: "row", gap: 8, paddingBottom: 4 }}>
@@ -1012,6 +1454,7 @@ function OverlayMapSnippet({ base64, caption, colors }: {
   caption?: string;
   colors: ReturnType<typeof useColors>;
 }) {
+  const { t } = useT();
   if (!base64) return null;
   return (
     <View style={{ marginTop: 12, borderRadius: 10, overflow: "hidden", borderWidth: 1, borderColor: colors.border }}>
@@ -1023,53 +1466,116 @@ function OverlayMapSnippet({ base64, caption, colors }: {
       <View style={{ backgroundColor: colors.muted + "CC", paddingHorizontal: 10, paddingVertical: 6, flexDirection: "row", alignItems: "center", gap: 6 }}>
         <Feather name="layers" size={11} color={colors.mutedForeground} />
         <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11 }}>
-          {caption ?? "Planning overlay map"}
+          {caption ?? t("report.planning_overlay_map")}
         </Text>
       </View>
     </View>
   );
 }
 
+function authorityCategoryLabel(cat: SchoolZoneDetail["authorityCategory"]): string {
+  switch (cat) {
+    case "public":
+      return translateForOS("report.school_authority.public");
+    case "state_integrated":
+      return translateForOS("report.school_authority.state_integrated");
+    case "private":
+      return translateForOS("report.school_authority.private");
+    default:
+      return translateForOS("report.school_authority.unknown");
+  }
+}
+
+function SchoolZonesPanel({ zones, colors }: { zones: SchoolZoneDetail[]; colors: ReturnType<typeof useColors> }) {
+  return (
+    <View style={{ gap: 12 }}>
+      {zones.map((z, i) => (
+        <View
+          key={`${z.level}-${i}`}
+          style={[styles.overlayRow, { backgroundColor: colors.muted, borderRadius: 10, flexDirection: "column", alignItems: "stretch", gap: 8 }]}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+            <Text style={{ color: colors.accent, fontFamily: "DM_Sans_700Bold", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5 }}>
+              {translateForOS(`report.school_level.${z.level}`)}
+            </Text>
+            <View style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 100, backgroundColor: colors.accent + "18" }}>
+              <Text style={{ color: colors.accent, fontFamily: "DM_Sans_600SemiBold", fontSize: 10 }}>
+                {authorityCategoryLabel(z.authorityCategory)}
+              </Text>
+            </View>
+          </View>
+          <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", fontSize: 14, lineHeight: 20 }}>
+            {z.matched && z.orgName ? z.orgName : z.sourceLabel}
+          </Text>
+          {!z.matched ? (
+            <Text style={{ color: colors.amber, fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 17 }}>
+              {translateForOS("report.school_no_directory_match")}
+            </Text>
+          ) : null}
+          {z.matched && z.orgType ? (
+            <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
+              {translateForOS("report.school_org_type")}: {z.orgType}
+            </Text>
+          ) : null}
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
+            {z.equityIndex ? (
+              <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
+                <Text style={{ fontFamily: "DM_Sans_600SemiBold" }}>{translateForOS("report.school_eqi")}: </Text>
+                {z.equityIndex}
+              </Text>
+            ) : null}
+            {z.roll != null ? (
+              <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
+                <Text style={{ fontFamily: "DM_Sans_600SemiBold" }}>{translateForOS("report.school_roll")}: </Text>
+                {z.roll}
+              </Text>
+            ) : null}
+            {z.enrolmentScheme ? (
+              <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
+                <Text style={{ fontFamily: "DM_Sans_600SemiBold" }}>{translateForOS("report.school_enrolment_scheme")}: </Text>
+                {z.enrolmentScheme}
+              </Text>
+            ) : null}
+          </View>
+        </View>
+      ))}
+      <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, lineHeight: 16, fontStyle: "italic" }}>
+        {translateForOS("report.school_zones_footnote")}
+      </Text>
+    </View>
+  );
+}
+
 export function FeasibilityReportCard({ report, onFollowUp }: Props) {
   const colors = useColors();
+  const { t } = useT();
 
   const planningSection = overlayStatus(report);
   const asbestosStatus: "good" | "warning" | "risk" | "neutral" = report.asbestos
     ? (getAsbestosRisk(report.asbestos) === "high" ? "risk" : "good")
     : "neutral";
+  const photoUrls = getReportPhotoUrls(report);
+  const bedrooms = report.propertyOverview?.bedrooms;
+  const bathrooms = report.propertyOverview?.bathrooms;
+  const realComparableSales = (report.comparableSales ?? []).filter(isSourceBackedComparable);
+  // Show comparables whenever we have any — "estimated" (active listings) is still real market data
+  const hasLiveComparableSales = realComparableSales.length > 0;
+  const developmentStrategies = report.developmentStrategies ?? [];
+  const hasDevelopmentStrategies = developmentStrategies.length > 0;
+  const titleTypeDisplay = formatTitleTypeForDisplay(report.propertyOverview?.titleType);
+  const riskSummaryForDisplay = useMemo(() => {
+    const scrubbed = filterRiskSummaryRemoveIncompleteDataDisclaimerBullets(report.riskSummary ?? []);
+    return ensureRiskSummaryMinForReport(report, scrubbed, 3);
+  }, [report]);
 
   return (
     <View style={styles.container}>
       <View style={[styles.reportHeader, { backgroundColor: colors.headerBg }]}>
-        {report.photoUrl && (() => {
-          const composite = safeNum(report.scores?.composite);
-          const overallColor = scoreColor(composite, colors);
-          const overallDisplay = composite > 0 ? String(Math.round(composite)) : "—";
-          return (
-            <View style={styles.reportPhotoWrapper}>
-              <Image
-                source={{ uri: report.photoUrl }}
-                style={styles.reportPhoto}
-                resizeMode="cover"
-              />
-              <LinearGradient
-                colors={["rgba(0,0,0,0.55)", "rgba(0,0,0,0)"]}
-                style={styles.reportPhotoScrim}
-                pointerEvents="none"
-              />
-              {/* OVERALL badge overlaid top-right (mirrors PropertyCard) */}
-              <View style={styles.heroOverallBadge}>
-                <Text style={[styles.heroOverallLabel, { color: "rgba(255,255,255,0.85)" }]}>OVERALL</Text>
-                <View style={[styles.heroOverallPill, { backgroundColor: overallColor + "EE", borderColor: "rgba(255,255,255,0.35)" }]}>
-                  <Text style={styles.heroOverallNumber}>{overallDisplay}</Text>
-                  <Text style={styles.heroOverallSub}>/ 5</Text>
-                </View>
-              </View>
-            </View>
-          );
-        })()}
+        {/* Always render the carousel — when no photo URLs resolve it shows
+            a labelled placeholder rather than collapsing the hero entirely. */}
+        <ReportPhotoCarousel report={report} photoUrls={photoUrls} colors={colors} />
 
-        <View style={[styles.reportHeaderTop, report.photoUrl ? { paddingTop: 12 } : undefined]}>
+        <View style={[styles.reportHeaderTop, { paddingTop: 12 }]}>
           <View style={[styles.reportIcon, { backgroundColor: colors.accent }]}>
             <Feather name="map-pin" size={14} color="#fff" />
           </View>
@@ -1078,27 +1584,35 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
               {report.address}
             </Text>
             <View style={styles.headerMeta}>
-              {(report.zone_label || report.propertyOverview?.zone) && (
+              {(report.zone_label || report.propertyOverview?.zone)?.trim() ? (
                 <View style={[styles.zoneBadge, { backgroundColor: "rgba(250,250,249,0.15)" }]}>
                   <Text style={{ color: "rgba(250,250,249,0.85)", fontFamily: "DM_Sans_500Medium", fontSize: 11 }}>
                     {(report.zone_label || report.propertyOverview?.zone || "").split("–")[0].trim().split(" ").slice(0, 3).join(" ")}
                   </Text>
                 </View>
+              ) : null}
+              {titleTypeDisplay ? (
+                <View style={[styles.zoneBadge, { backgroundColor: "rgba(250,250,249,0.12)" }]}>
+                  <Text
+                    style={{ color: "rgba(250,250,249,0.85)", fontFamily: "DM_Sans_500Medium", fontSize: 11 }}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                  >
+                    {titleTypeDisplay}
+                  </Text>
+                </View>
+              ) : null}
+              {typeof bedrooms === "number" && bedrooms > 0 && (
+                <View style={styles.headerStatChip}>
+                  <Feather name="moon" size={10} color="rgba(250,250,249,0.85)" />
+                  <Text style={styles.headerStatText}>{t("report.header_bd", { n: bedrooms })}</Text>
+                </View>
               )}
-              {report.propertyOverview?.cv && (
-                <Text style={{ color: colors.headerSubtext, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
-                  CV {report.propertyOverview.cv}
-                </Text>
-              )}
-              {report.propertyOverview?.landArea && (
-                <Text style={{ color: colors.headerSubtext, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
-                  · {report.propertyOverview.landArea}
-                </Text>
-              )}
-              {(report.potential_lots || report.planning?.potentialLots) && (
-                <Text style={{ color: colors.headerSubtext, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
-                  · {report.potential_lots || report.planning?.potentialLots} lots
-                </Text>
+              {typeof bathrooms === "number" && bathrooms > 0 && (
+                <View style={styles.headerStatChip}>
+                  <Feather name="droplet" size={10} color="rgba(250,250,249,0.85)" />
+                  <Text style={styles.headerStatText}>{t("report.header_ba", { n: bathrooms })}</Text>
+                </View>
               )}
             </View>
           </View>
@@ -1114,13 +1628,13 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
             <View style={styles.overlayMapFooter}>
               <View style={styles.overlayMapLabelRow}>
                 <Feather name="layers" size={11} color="rgba(250,249,246,0.7)" />
-                <Text style={styles.overlayMapLabel}>Planning overlay map (via Hougarden)</Text>
+                <Text style={styles.overlayMapLabel}>{t("report.overlay_map_hougarden")}</Text>
               </View>
             </View>
           </View>
         )}
 
-        <ScoreSummaryRow report={report} colors={colors} hideOverall={!!report.photoUrl} />
+        <ScoreSummaryRow report={report} colors={colors} hideOverall />
       </View>
 
       {(report.cv_unavailable || (report.missing_critical_fields && report.missing_critical_fields.length > 0)) && (
@@ -1128,86 +1642,98 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
           <Feather name="alert-triangle" size={14} color="#CA8A04" />
           <View style={{ flex: 1 }}>
             <Text style={{ color: "#92400E", fontFamily: "DM_Sans_600SemiBold", fontSize: 13 }}>
-              Some property data could not be retrieved automatically
+              {t("report.warning_property_data_title")}
             </Text>
             <Text style={{ color: "#92400E", fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 17, marginTop: 3 }}>
-              CV and land area affect ROI accuracy — verify manually at aucklandcouncil.govt.nz
+              {t("report.warning_property_data_subtitle")}
             </Text>
           </View>
         </View>
       )}
 
       {report.propertyOverview && (
-        <SectionCard title="Property overview" icon="📍" defaultOpen={false} colors={colors}>
+        <SectionCard title={t("report.overview")} icon="📍" defaultOpen={false} colors={colors}>
           <InfoRow
-            label="Capital Value"
-            value={report.propertyOverview.cv || "Unavailable"}
+            label={t("report.cv")}
+            value={report.propertyOverview.cv || t("report.unavailable")}
             valueColor={!report.propertyOverview.cv ? colors.amber : undefined}
             colors={colors}
           />
           <InfoRow
-            label="Land Area"
-            value={report.propertyOverview.landArea || "Unavailable"}
+            label={t("report.land_area")}
+            value={report.propertyOverview.landArea || t("report.unavailable")}
             valueColor={!report.propertyOverview.landArea ? colors.amber : undefined}
             colors={colors}
           />
-          {report.propertyOverview.floorArea && (
+          {report.propertyOverview.floorArea?.trim() ? (
             <View>
-              <InfoRow label="Floor Area" value={report.propertyOverview.floorArea} colors={colors} />
+              <InfoRow label={t("report.floor_area")} value={report.propertyOverview.floorArea} colors={colors} />
             </View>
-          )}
-          <InfoRow label="Build Year" value={report.propertyOverview.buildYear || "N/A"} colors={colors} />
-          <InfoRow label="Zone" value={report.propertyOverview.zone || "N/A"} colors={colors} />
+          ) : null}
+          <InfoRow label={t("report.build_year")} value={report.propertyOverview.buildYear || t("report.na")} colors={colors} />
+          <InfoRow label={t("report.zone")} value={report.propertyOverview.zone || t("report.na")} colors={colors} />
+          {titleTypeDisplay ? (
+            <InfoRow label={translateForOS("report.title_type")} value={titleTypeDisplay} colors={colors} />
+          ) : null}
           {report.planning?.potentialLots != null && (
-            <InfoRow label="Potential Lots" value={String(report.planning.potentialLots)} valueColor={colors.success} colors={colors} />
+            <InfoRow label={t("report.potential_lots")} value={String(report.planning.potentialLots)} valueColor={colors.success} colors={colors} />
           )}
           {report.propertyOverview.isOnMarket && report.propertyOverview.listingPrice && (
-            <InfoRow label="Listing Price" value={report.propertyOverview.listingPrice} valueColor={colors.success} colors={colors} />
+            <InfoRow label={t("report.listing_price")} value={report.propertyOverview.listingPrice} valueColor={colors.success} colors={colors} />
           )}
         </SectionCard>
       )}
 
+      {report.schoolZones && report.schoolZones.length > 0 && (
+        <SectionCard title={translateForOS("report.school_zones")} icon="🎓" status="neutral" colors={colors}>
+          <SchoolZonesPanel zones={report.schoolZones} colors={colors} />
+        </SectionCard>
+      )}
+
       {report.planning?.overlays && (
-        <SectionCard title="Planning & overlays" icon="🏛" status={planningSection} colors={colors}>
-          {report.planning.subdivisionSummary && (
+        <SectionCard title={t("report.planning_overlays")} icon="🏛" status={planningSection} colors={colors}>
+          {!!report.planning.subdivisionSummary?.trim() && (
             <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 13, lineHeight: 20, marginBottom: 10 }}>
               {report.planning.subdivisionSummary}
             </Text>
           )}
+          {!!report.planning.subdivisionPathwayNote?.trim() && (
+            <SubdivisionPathwayCallout note={report.planning.subdivisionPathwayNote!} colors={colors} />
+          )}
           <OverlayChecklist overlays={report.planning.overlays} colors={colors} />
           <OverlayMapSnippet
             base64={report.overlay_map_image_base64}
-            caption="Zone & overlay map — zones, heritage, flood, viewshafts"
+            caption={t("report.planning_overlay_map")}
             colors={colors}
           />
         </SectionCard>
       )}
 
       {report.asbestos && (
-        <SectionCard title="Asbestos & demolition" icon="⚠" status={asbestosStatus as any} colors={colors}>
+        <SectionCard title={t("report.asbestos_demolition")} icon="⚠" status={asbestosStatus as any} colors={colors}>
           <AsbestosPanel asbestos={report.asbestos} colors={colors} />
         </SectionCard>
       )}
 
       {report.terrain && (
-        <SectionCard title="Terrain & contour" icon="⛰" status={contourStatus(report.terrain)} colors={colors}>
+        <SectionCard title={t("report.terrain_contour")} icon="⛰" status={contourStatus(report.terrain)} colors={colors}>
           <ContourCard report={report} terrain={report.terrain} colors={colors} />
           <OverlayMapSnippet
             base64={report.overlay_map_image_base64}
-            caption="Site context map — topographic reference"
+            caption={t("report.planning_overlay_map")}
             colors={colors}
           />
         </SectionCard>
       )}
 
       {report.infrastructure && report.infrastructure.length > 0 && (
-        <SectionCard title="Infrastructure & services" icon="🔧" status={infraStatus(report.infrastructure)} colors={colors}>
+        <SectionCard title={t("report.infrastructure_services")} icon="🔧" status={infraStatus(report.infrastructure)} colors={colors}>
           <InfrastructureTable infrastructure={report.infrastructure} colors={colors} />
         </SectionCard>
       )}
 
       {report.costItems && report.costItems.length > 0 && (
-        <SectionCard title="Development cost estimate" icon="💰" status="neutral" colors={colors}>
+        <SectionCard title={t("report.dev_cost_estimate")} icon="💰" status="neutral" colors={colors}>
           <CostBreakdownChart
             costItems={report.costItems}
             totalCostLow={report.totalCostLow}
@@ -1218,13 +1744,39 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
         </SectionCard>
       )}
 
-      {report.roiScenarios && report.roiScenarios.length > 0 && (
-        <SectionCard title="ROI scenarios" icon="📈" status={roiStatus(safeNum(report.scores?.roi))} colors={colors}>
+      {hasDevelopmentStrategies && (
+        <SectionCard title={t("report.development_strategy_scenarios")} icon="🧭" status={strategyStatus(developmentStrategies)} colors={colors}>
+          <DevelopmentStrategyPanel
+            strategies={developmentStrategies}
+            interestRateOutlook={report.interest_rate_outlook}
+            comparablesQuality={report.comparables_quality}
+            colors={colors}
+          />
+          {SHOW_COMPARABLE_SALES_IN_UI && hasLiveComparableSales && (
+            <View style={{ marginTop: 14, gap: 8 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                <Feather name="home" size={13} color={colors.mutedForeground} />
+                <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_700Bold", fontSize: 12 }}>
+                  {t("report.comparable_sales")}
+                </Text>
+              </View>
+              <ComparableSalesTable
+                comparables={realComparableSales}
+                quality={report.comparables_quality}
+                colors={colors}
+              />
+            </View>
+          )}
+        </SectionCard>
+      )}
+
+      {!hasDevelopmentStrategies && report.roiScenarios && report.roiScenarios.length > 0 && (
+        <SectionCard title={t("report.roi_scenarios")} icon="📈" status={roiStatus(safeNum(report.scores?.roi))} colors={colors}>
           {(report.cv_unavailable || report.roiScenarios[0]?.cv_unavailable) && (
             <View style={[styles.warningBox, { backgroundColor: colors.amber + "12", borderColor: colors.amber + "30", marginBottom: 10 }]}>
               <Feather name="alert-triangle" size={13} color={colors.amber} />
               <Text style={{ color: colors.amber, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1, lineHeight: 17 }}>
-                Cannot calculate accurate ROI — CV data unavailable. Land cost is excluded from these totals. Verify CV at aucklandcouncil.govt.nz before relying on these figures.
+                {t("report.cv_unavailable_roi_banner")}
               </Text>
             </View>
           )}
@@ -1234,26 +1786,32 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
             comparablesQuality={report.comparables_quality}
             colors={colors}
           />
+          {SHOW_COMPARABLE_SALES_IN_UI && hasLiveComparableSales && (
+            <View style={{ marginTop: 14, gap: 8 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                <Feather name="home" size={13} color={colors.mutedForeground} />
+                <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_700Bold", fontSize: 12 }}>
+                  {t("report.comparable_sales")}
+                </Text>
+              </View>
+              <ComparableSalesTable
+                comparables={realComparableSales}
+                quality={report.comparables_quality}
+                colors={colors}
+              />
+            </View>
+          )}
         </SectionCard>
       )}
 
-      {report.comparableSales && report.comparableSales.length > 0 && (
-        <SectionCard title="Comparable sales" icon="🏘" status="neutral" defaultOpen={false} colors={colors}>
-          <ComparableSalesTable
-            comparables={report.comparableSales}
-            quality={report.comparables_quality}
-            colors={colors}
-          />
-        </SectionCard>
-      )}
-
-      {report.riskSummary && report.riskSummary.length > 0 && (
-        <SectionCard title="Risk assessment" icon="🔍" status="neutral" colors={colors}>
-          <RiskSummaryPanel riskSummary={report.riskSummary} colors={colors} />
+      {riskSummaryForDisplay.length > 0 && (
+        <SectionCard title={t("report.risk_assessment")} icon="🔍" status="neutral" colors={colors}>
+          <RiskSummaryPanel riskSummary={riskSummaryForDisplay} colors={colors} />
         </SectionCard>
       )}
 
       <FollowUpChips report={report} onChipClick={onFollowUp} colors={colors} />
+      <ReportAnalysisFootnote colors={colors} />
     </View>
   );
 }
@@ -1262,10 +1820,13 @@ const styles = StyleSheet.create({
   container: { gap: 10 },
   reportHeader: { borderRadius: 16, overflow: "hidden" },
   reportHeaderTop: { flexDirection: "row", gap: 12, padding: 16, alignItems: "flex-start" },
-  reportPhotoWrapper: { width: "100%", height: 180, position: "relative" },
-  reportPhoto: { width: "100%", height: 180 },
+  reportPhotoWrapper: { width: "100%", height: 190, position: "relative", backgroundColor: "#1C1917" },
+  reportPhotoScroller: { width: "100%", height: 190 },
+  reportPhoto: { width: "100%", height: 190 },
+  reportPhotoFallback: { width: "100%", height: 190, alignItems: "center", justifyContent: "center", gap: 8, paddingHorizontal: 24, backgroundColor: "#1C1917" },
+  reportPhotoFallbackText: { color: "rgba(255,255,255,0.65)", fontFamily: "DM_Sans_500Medium", fontSize: 12, textAlign: "center" },
   reportPhotoOverlay: { position: "absolute", bottom: 0, left: 0, right: 0, height: 80, backgroundColor: "transparent" },
-  reportPhotoScrim: { position: "absolute", top: 0, left: 0, right: 0, height: 90 },
+  reportPhotoScrim: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
   heroOverallBadge: { position: "absolute", top: 12, right: 12, alignItems: "flex-end", gap: 4 },
   heroOverallLabel: { fontFamily: "DM_Sans_600SemiBold", fontSize: 9, textTransform: "uppercase", letterSpacing: 1.2, textShadowColor: "rgba(0,0,0,0.5)", textShadowRadius: 3 },
   heroOverallPill: { flexDirection: "row", alignItems: "baseline", gap: 3, borderRadius: 14, borderWidth: 1.5, paddingHorizontal: 12, paddingVertical: 5 },
@@ -1275,6 +1836,14 @@ const styles = StyleSheet.create({
   address: { fontSize: 16, lineHeight: 22, letterSpacing: -0.2 },
   headerMeta: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 5, flexWrap: "wrap" },
   zoneBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 100 },
+  headerStatChip: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 100, backgroundColor: "rgba(250,250,249,0.15)" },
+  headerStatText: { color: "rgba(250,250,249,0.85)", fontFamily: "DM_Sans_500Medium", fontSize: 11 },
+  photoCountPill: { position: "absolute", bottom: 10, left: 12, flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 9, paddingVertical: 4, borderRadius: 100, backgroundColor: "rgba(0,0,0,0.55)" },
+  photoCountText: { color: "rgba(255,255,255,0.9)", fontFamily: "DM_Sans_500Medium", fontSize: 11 },
+  photoDotRow: { position: "absolute", bottom: 12, left: 0, right: 0, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 5 },
+  photoDot: { borderRadius: 5 },
+  photoDotActive: { width: 20, height: 4, backgroundColor: "rgba(255,255,255,0.95)" },
+  photoDotInactive: { width: 6, height: 4, backgroundColor: "rgba(255,255,255,0.40)" },
   scoresSection: { paddingBottom: 16 },
   overallRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", paddingHorizontal: 18, paddingTop: 16, paddingBottom: 10, gap: 8 },
   overallLabel: { fontFamily: "DM_Sans_400Regular", fontSize: 10, textTransform: "uppercase", letterSpacing: 1.2 },
@@ -1299,6 +1868,7 @@ const styles = StyleSheet.create({
   overlayRow: { flexDirection: "row", alignItems: "flex-start", gap: 8, padding: 10 },
   riskBanner: { flexDirection: "row", alignItems: "flex-start", gap: 10, padding: 12, borderWidth: 1 },
   warningBox: { flexDirection: "row", alignItems: "flex-start", gap: 8, padding: 10, borderRadius: 10, borderWidth: 1 },
+  strategyMetric: { flex: 1, borderRadius: 10, padding: 10, gap: 3 },
   infraRow: { flexDirection: "row", alignItems: "flex-start", paddingVertical: 10, gap: 6 },
   locationChip: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 100, borderWidth: 1 },
   costBar: { height: 14, flexDirection: "row", borderRadius: 7, overflow: "hidden" },

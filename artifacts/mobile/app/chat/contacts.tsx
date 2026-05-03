@@ -18,13 +18,8 @@ import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { useLocalSearchParams } from "expo-router";
 import { PaywallModal } from "@/components/PaywallModal";
-
-function getApiBase(): string {
-  if (process.env.EXPO_PUBLIC_DOMAIN) {
-    return `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`;
-  }
-  return "/api";
-}
+import { getApiBase } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 interface Contact {
   id: string;
@@ -35,10 +30,14 @@ interface Contact {
   avatarUrl: string | null;
 }
 
-function roleBadge(role: string): { label: string; color: string } {
-  if (role === "sales_agent") return { label: "Sales Agent", color: "#D97757" };
-  if (role === "service_provider") return { label: "Service Provider", color: "#5B8EAD" };
-  return { label: "User", color: "#8B7355" };
+function roleBadge(
+  role: string,
+  t: (key: string) => string,
+): { label: string; color: string } {
+  if (role === "sales_agent") return { label: t("dm.header.sales_agent"), color: "#D97757" };
+  if (role === "service_provider")
+    return { label: t("dm.header.service_provider"), color: "#5B8EAD" };
+  return { label: t("dm.header.user"), color: "#8B7355" };
 }
 
 function Avatar({ name, size = 46 }: { name: string | null; size?: number }) {
@@ -75,6 +74,7 @@ export default function ContactsScreen() {
   const router = useRouter();
   const { token } = useAuth();
   const { preselect } = useLocalSearchParams<{ preselect?: string }>();
+  const { t } = useT();
 
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
@@ -125,10 +125,10 @@ export default function ContactsScreen() {
             startChat(preselect);
           }
         } else {
-          setError("Failed to load contacts");
+          setError(t("dm.contacts.error_load"));
         }
       } catch {
-        setError("Network error");
+        setError(t("common.network_error"));
       } finally {
         setLoading(false);
       }
@@ -150,7 +150,7 @@ export default function ContactsScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
           <Feather name="x" size={22} color="rgba(250,249,246,0.75)" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>New Message</Text>
+        <Text style={styles.headerTitle}>{t("dm.contacts.title")}</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -158,7 +158,7 @@ export default function ContactsScreen() {
         <Feather name="search" size={16} color={colors.mutedForeground} />
         <TextInput
           style={[styles.searchInput, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-          placeholder="Search agents & providers…"
+          placeholder={t("dm.contacts.search_placeholder")}
           placeholderTextColor={colors.mutedForeground}
           value={search}
           onChangeText={setSearch}
@@ -185,7 +185,7 @@ export default function ContactsScreen() {
           data={filtered}
           keyExtractor={(c) => c.id}
           renderItem={({ item }) => {
-            const badge = roleBadge(item.role);
+            const badge = roleBadge(item.role, t);
             const isLoading = starting === item.id;
             return (
               <Pressable
@@ -205,7 +205,7 @@ export default function ContactsScreen() {
                 </TouchableOpacity>
                 <View style={styles.contactMid}>
                   <Text style={[styles.contactName, { color: colors.foreground }]} numberOfLines={1}>
-                    {item.fullName ?? "Unknown"}
+                    {item.fullName ?? t("messages.unknown")}
                   </Text>
                   {item.subtitle ? (
                     <Text style={[styles.contactSub, { color: colors.mutedForeground }]} numberOfLines={1}>
@@ -231,7 +231,7 @@ export default function ContactsScreen() {
             <View style={styles.center}>
               <Feather name="users" size={40} color={colors.mutedForeground} />
               <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>
-                {search ? "No contacts found" : "No contacts available"}
+                {search ? t("dm.contacts.empty_search") : t("dm.contacts.empty")}
               </Text>
             </View>
           )}

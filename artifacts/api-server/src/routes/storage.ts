@@ -1,8 +1,8 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { Readable } from "stream";
 import type { ReadableStream as NodeReadableStream } from "stream/web";
-import { eq } from "drizzle-orm";
-import { db, userUploads, profiles } from "@workspace/db";
+import { and, eq, isNotNull, or } from "drizzle-orm";
+import { db, userUploads, profiles, dmMessages, dmThreads } from "@workspace/db";
 import { RequestUploadUrlBody, RequestUploadUrlResponse } from "@workspace/api-zod";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage";
 import { requireAuth } from "../lib/auth";
@@ -18,6 +18,10 @@ router.post("/storage/uploads/request-url", requireAuth, async (req: Request, re
   }
 
   try {
+    if (objectStorageService.isLocal) {
+      res.status(501).json({ error: "Signed URL upload not available in local storage mode" });
+      return;
+    }
     const { name, size, contentType } = parsed.data;
     const uploadURL = await objectStorageService.getObjectEntityUploadURL();
     const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
@@ -76,19 +80,45 @@ router.get("/storage/objects/*path", requireAuth, async (req: Request, res: Resp
       .limit(1);
 
     if (!ownerRecord || ownerRecord.userId !== userId) {
-      // Avatars are visible to any authenticated user — check whether this
-      // object is currently set as someone's profile avatar.
-      const avatarUrl = `/api/storage${objectPath}`;
+      const canonicalStorageUrl = `/api/storage${objectPath}`;
       const [avatarMatch] = await db
         .select({ id: profiles.id })
         .from(profiles)
-        .where(eq(profiles.avatarUrl, avatarUrl))
+        .where(eq(profiles.avatarUrl, canonicalStorageUrl))
         .limit(1);
 
-      if (!avatarMatch) {
+      let allowed = !!avatarMatch;
+      // DM attachments: multipart uploads omit user_uploads. Allow either participant
+      // to read blobs linked from dm_messages.image_url.
+      if (!allowed) {
+        const [dmAccess] = await db
+          .select({ id: dmMessages.id })
+          .from(dmMessages)
+          .innerJoin(dmThreads, eq(dmMessages.threadId, dmThreads.id))
+          .where(
+            and(
+              isNotNull(dmMessages.imageUrl),
+              eq(dmMessages.imageUrl, canonicalStorageUrl),
+              or(eq(dmThreads.participantA, userId), eq(dmThreads.participantB, userId)),
+            ),
+          )
+          .limit(1);
+        allowed = !!dmAccess;
+      }
+
+      if (!allowed) {
         res.status(403).json({ error: "Access denied", code: "FORBIDDEN" });
         return;
       }
+    }
+
+    if (objectStorageService.isLocal) {
+      const { stream, contentType, size } = objectStorageService.readLocalFile(objectPath);
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Cache-Control", "private, max-age=3600");
+      if (size) res.setHeader("Content-Length", String(size));
+      stream.pipe(res);
+      return;
     }
 
     const objectFile = await objectStorageService.getObjectEntityFile(objectPath);

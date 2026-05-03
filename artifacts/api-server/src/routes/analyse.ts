@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { eq, sql } from "drizzle-orm";
-import { db, profiles, searches } from "@workspace/db";
+import { db, profiles, searches, withDbRetry } from "@workspace/db";
 import {
   generateFeasibilityReport,
   generateSearchResults,
@@ -9,6 +9,9 @@ import {
   generateAnalysis,
   detectMode,
   extractChatIntent,
+  hasNumberedStreetAddress,
+  hasUnnumberedStreetLine,
+  isListingBrowseIntent,
   Message,
 } from "../lib/claude";
 import { verifyToken } from "../lib/auth";
@@ -19,7 +22,16 @@ import {
   findSuburbId,
 } from "../lib/scrapers/realestate-api";
 import { suggestNearbySuburbs } from "../lib/claude";
-import { runPropertyPipeline } from "../lib/pipeline";
+import { runPropertyPipeline, type PipelineResult } from "../lib/pipeline";
+import { buildSubdivisionPathwayNote } from "../lib/lot-calculator";
+import {
+  canonicalBuildYearFromReport,
+  filterRiskSummaryRemoveAsbestosBullets,
+  filterRiskSummaryRemoveComparableReliabilityBullets,
+  filterRiskSummaryRemoveIncompleteDataDisclaimerBullets,
+  sanitizeReportScoresReasons,
+} from "../lib/risk-summary";
+import { ensureMinRiskSummaryBulletsFromReport, type RiskBackfillContext } from "../lib/report-risk-backfill";
 import { detectSubdivision } from "../lib/subdivision";
 import { formatNZD } from "../lib/utils";
 import { searchRealEstateListings } from "../lib/scrapers/realestate-search";
@@ -30,26 +42,113 @@ import {
   popNextListings,
   markShown,
   getShownUrls,
+  restoreListingsAfterPop,
+  getRemainingCount,
 } from "../lib/listing-cache";
+import type { ListingResult } from "../lib/scrapers/oneroof";
 import { queueBackgroundScores, getCardScores } from "../lib/analysis-cache";
 import { normaliseLocale } from "../lib/prompts";
+import { translateChatContent, translateReportNarrative, ensureChinese } from "../lib/translation";
+import { maybeAddressClarification } from "../lib/address-clarification";
+import {
+  CHAT_LIMITS,
+  FREE_REPORT_LIMIT,
+  STANDARD_REPORT_LIMIT,
+  resolveChatLimitKey,
+  resolveReportLimit,
+} from "../lib/quotas";
+import { usagePeriodExpired } from "../lib/billingPeriod";
+import { formatTitleTypeForDisplay } from "../lib/titleDisplay";
+import { sendPushToUser } from "../lib/expo-push";
 
 type ReqLike = { headers: Record<string, string | string[] | undefined> };
 function localeFromReq(req: ReqLike) {
   return normaliseLocale(req.headers["x-locale"] ?? req.headers["accept-language"]);
 }
 
+function headerSingle(headers: Record<string, string | string[] | undefined>, name: string): string | undefined {
+  const lower = name.toLowerCase();
+  const v = headers[lower] ?? headers[name];
+  if (Array.isArray(v)) return v[0]?.trim();
+  return typeof v === "string" ? v.trim() : undefined;
+}
+
+/** Explicit device OS Chinese from mobile; null = legacy client (fall back to app locale). */
+function osChineseFromReq(req: ReqLike): boolean | null {
+  const raw = headerSingle(req.headers, "x-os-chinese")?.toLowerCase();
+  if (raw === "1" || raw === "true" || raw === "yes") return true;
+  if (raw === "0" || raw === "false" || raw === "no") return false;
+  return null;
+}
+
+/** Whether titleType + schoolZones should be translated to Chinese with the rest of the zh narrative. */
+function translateTitleSchoolFromReq(req: ReqLike, appLocale: ReturnType<typeof normaliseLocale>): boolean {
+  const os = osChineseFromReq(req);
+  if (os !== null) return os;
+  return appLocale === "zh";
+}
+
 const router = Router();
 
-const FREE_REPORT_LIMIT = 2;
-const STANDARD_REPORT_LIMIT = 20;
+/**
+ * Finds the substring for the outermost `{ ... }` by brace depth, respecting
+ * double-quoted JSON strings — avoids greedy `[\s\S]*` matching past truncated
+ * or nested content.
+ */
+function extractLeadingJSONObject(text: string): string | null {
+  const start = text.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (inString) {
+      if (ch === "\\") escape = true;
+      else if (ch === "\"") inString = false;
+      continue;
+    }
+    if (ch === "\"") {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+function tryParseReportJson(text: string): Record<string, unknown> | null {
+  const blob = extractLeadingJSONObject(text.trim());
+  if (!blob) return null;
+  try {
+    const v = JSON.parse(blob) as unknown;
+    return v != null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
 
 function extractJSON(text: string): unknown {
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (jsonMatch) {
-    return JSON.parse(jsonMatch[0]);
-  }
-  throw new Error("No JSON found in response");
+  const parsed = tryParseReportJson(text);
+  if (parsed != null) return parsed;
+  throw new Error("No valid JSON object found in response");
+}
+
+/**
+ * Lightweight address-like hint for chat-mode routing.
+ * We still defer canonical parsing to extractNZAddress, but this keeps the
+ * expensive extraction path focused on messages that look like addresses.
+ */
+function looksLikeStreetAddress(text: string): boolean {
+  return /\b\d+[a-zA-Z]?\s+[\w''-]+(?:\s+[\w''-]+){0,4}\s+(road|street|avenue|crescent|place|drive|way|lane|terrace|parade|close|grove|rise|view|heights|ridge|court|hill|mews|quay|boulevard|highway|motorway|esplanade|mall|row|walk|path|track|rd|st|ave|cres|pl|dr|ln|tce|pde|blvd|hwy)\b/i.test(text);
 }
 
 /**
@@ -77,10 +176,12 @@ export function applyOverviewSnapshot(
     floor_area_sqm: merged.floor_area_sqm ?? null,
     buildYear: merged.build_year != null ? String(merged.build_year) : null,
     build_year: merged.build_year ?? null,
+    build_year_range: merged.build_year_range ?? null,
     bedrooms: merged.bedrooms ?? null,
     bathrooms: merged.bathrooms ?? null,
     zone: merged.zone_description ?? merged.zone_code ?? null,
     zone_code: merged.zone_code ?? null,
+    titleType: formatTitleTypeForDisplay(merged.estate_type?.trim() || null),
     listingPrice: merged.listing_price != null ? fmt(merged.listing_price) : null,
     listing_price_nzd: merged.listing_price ?? null,
     isOnMarket: merged.listing_active === true,
@@ -104,10 +205,309 @@ export function applyOverviewSnapshot(
     bedrooms: snapshot.bedrooms ?? null,
     bathrooms: snapshot.bathrooms ?? null,
     zone: snapshot.zone ?? existingOverview.zone,
+    titleType: formatTitleTypeForDisplay(
+      (snapshot.titleType ?? existingOverview.titleType) as string | null | undefined,
+    ),
     listingPrice: snapshot.listingPrice,
     isOnMarket: snapshot.isOnMarket,
     discrepancies: snapshot.discrepancies,
   };
+}
+
+function buildDeterministicCostItems(costs: NonNullable<PipelineResult["costs"]>) {
+  const cv = costs.land_cv_nzd ?? 0;
+  return [
+    { label: cv > 0 ? "Land (CV)" : "Land (CV — unavailable)", low: cv, high: cv },
+    { label: "Demolition", low: costs.demo_low, high: costs.demo_high },
+    { label: "Construction", low: costs.construction_low, high: costs.construction_high },
+    { label: "Retaining Walls", low: costs.retaining_low, high: costs.retaining_high },
+    { label: "Services & Infrastructure", low: costs.services_low, high: costs.services_high },
+    { label: "Consents & Professionals", low: costs.consents_low, high: costs.consents_high },
+    { label: "Finance (Holding)", low: costs.finance_low, high: costs.finance_high },
+    { label: "Contingency", low: costs.contingency_low, high: costs.contingency_high },
+  ];
+}
+
+/**
+ * Removes risk bullets that cite MHS / Mixed Housing Suburban when GIS zone_code
+ * is not MHS — a frequent LLM mistake on Single House Zone sites (400m² vs 600m² rules).
+ */
+function filterRiskSummaryRemoveMhsBulletsWhenZoneIsNotMhs(bullets: string[], zoneCode: string | null | undefined): string[] {
+  if (!zoneCode) return bullets;
+  const z = zoneCode.trim().toUpperCase();
+  if (z === "MHS") return bullets;
+  return bullets.filter((b) => {
+    if (/\bMHS\b/i.test(b)) return false;
+    if (/mixed\s+housing\s+suburban/i.test(b)) return false;
+    if (/混合住房郊区/.test(b)) return false;
+    return true;
+  });
+}
+
+/** Programme / capital bullets for high lot-yield sites — allowed (not comparable-data reliability). */
+function appendMultiLotProgrammeRiskIfNeeded(bullets: string[], potentialLots: number): string[] {
+  if (potentialLots < 4) return bullets;
+  const isZh = bullets.some((b) => /[\u4e00-\u9fff]/.test(b));
+  if (
+    bullets.some((b) => /phased (construction|sales)|staged sales|分期|多期|资金占用|programme risk/i.test(b) || /资本|前期资金|去化/.test(b))
+  ) {
+    return bullets;
+  }
+  const en = `Intensive scheme (${potentialLots} potential lots): expect very high upfront capital, a multi-year construction programme, and usually phased unit sales — absorption and holding finance can stretch the timeline so money-weighted and annualised returns are typically lower than for quick single-lot projects.`;
+  const zh = `大规模方案（约 ${potentialLots} 个潜在地块）：前期资金投入大、建设周期长，单位销售往往需分期推进，资金占用与市场去化会拉长回收期，资金加权与年化回报通常低于短周期的单地块项目。`;
+  return [...bullets, isZh ? zh : en];
+}
+
+function applyDeterministicPipelineOverrides(
+  parsed: Record<string, unknown>,
+  pipelineResult: PipelineResult,
+  resolvedAddress: string,
+): void {
+  const photoUrls = Array.from(new Set([
+    ...(pipelineResult.merged?.photo_urls ?? []),
+    ...(pipelineResult.oneroof?.photo_urls ?? []),
+    ...(pipelineResult.oneroof?.main_photo_url ? [pipelineResult.oneroof.main_photo_url] : []),
+  ].filter(Boolean)));
+  const photoUrl = photoUrls[0] ?? null;
+  parsed.photoUrl = photoUrl;
+  parsed.photoUrls = photoUrls;
+  if (pipelineResult.hougarden?.overlay_map_image_base64) {
+    parsed.overlay_map_image_base64 = pipelineResult.hougarden.overlay_map_image_base64;
+  }
+
+  applyOverviewSnapshot(parsed, pipelineResult.merged ?? null, resolvedAddress);
+
+  const merged = pipelineResult.merged;
+  const lots = pipelineResult.lots;
+  const costs = pipelineResult.costs;
+  const scenarios = pipelineResult.scenarios ?? [];
+  const comparables = pipelineResult.comparables ?? [];
+  const developmentStrategies = pipelineResult.developmentStrategies ?? [];
+
+  if (merged) {
+    parsed.data_sources = merged.data_sources ?? {};
+    parsed.missing_critical_fields = merged.missing_critical_fields ?? [];
+  }
+
+  if (lots) {
+    parsed.potential_lots = lots.lots;
+    parsed.zone_label = lots.zone_label;
+
+    // Keep propertyOverview.zone in sync with the authoritative deterministic zone_label.
+    // applyOverviewSnapshot runs before this block using merged.zone_description which can
+    // disagree with the zone_code → ZONE_RULES lookup (e.g. Hougarden description says
+    // "Single House Zone" but code resolves to default MHS rules). Pin both to the same source.
+    const overviewObj = parsed.propertyOverview as Record<string, unknown> | undefined;
+    if (overviewObj && lots.zone_label) {
+      overviewObj.zone = lots.zone_label;
+    }
+
+    const existingPlanning = (parsed.planning as Record<string, unknown> | undefined) ?? {};
+    // Recompute from lot-calculator + merged GIS zone so summary/callout always match
+    // propertyOverview (avoids stale or LLM-only subdivision prose with wrong m² or zone).
+    const pathway =
+      merged != null
+        ? buildSubdivisionPathwayNote(
+            lots.net_area_sqm,
+            merged.zone_code ?? null,
+            lots.lots,
+            lots.min_lot_size,
+            lots.zone_label,
+          )
+        : pipelineResult.subdivision_pathway;
+    parsed.planning = {
+      ...existingPlanning,
+      // Always use the deterministic zone_label — never let the LLM's guess win here.
+      // The LLM can hallucinate the wrong zone (e.g. MHS when actual is SHZ), which
+      // propagates into the planning section and contradicts the zone shown in the
+      // property overview and the deterministic subdivision pathway note.
+      zone: lots.zone_label,
+      potentialLots: lots.lots,
+      grossAreaSqm: lots.gross_area_sqm,
+      netAreaSqm: lots.net_area_sqm,
+      easementAreaSqm: lots.easement_area_sqm,
+      // Always use the deterministic subdivision note — overwrite any LLM-generated version
+      subdivisionPathwayNote: pathway?.detail ?? (existingPlanning.subdivisionPathwayNote as string | undefined) ?? null,
+      // Same source as pathway callout: pin summary prose so the LLM cannot contradict
+      // net area, zone, or lot yield (e.g. wrong 750m² + MHS on an SHZ site).
+      subdivisionSummary: pathway?.headline ?? (existingPlanning.subdivisionSummary as string | undefined),
+      // Deterministic overlay list from GIS consensus — always overwrite the LLM output.
+      // The LLM is instructed to copy overlays faithfully but can hallucinate entries
+      // (e.g. "Special Character Area") that the GIS never reported. Pinning this here
+      // guarantees the published report exactly matches the 3× consensus GIS result.
+      overlays: (merged?.overlays ?? []).map((o) => ({ name: o.name, status: o.status, detail: o.detail })),
+    };
+  }
+
+  if (costs) {
+    parsed.cv_unavailable = costs.cv_unavailable;
+    parsed.total_excludes_land = costs.total_excludes_land;
+    parsed.totalCostLow = costs.total_low;
+    parsed.totalCostHigh = costs.total_high;
+    parsed.cost_per_unit_avg = costs.cost_per_unit_avg;
+    parsed.costItems = buildDeterministicCostItems(costs);
+
+    const existingTerrain = (parsed.terrain as Record<string, unknown> | undefined) ?? {};
+    parsed.terrain = {
+      ...existingTerrain,
+      retainingCostLow: costs.retaining_low,
+      retainingCostHigh: costs.retaining_high,
+    };
+
+    if (pipelineResult.asbestos_detail) {
+      const ad = pipelineResult.asbestos_detail;
+
+      parsed.asbestos = {
+        buildYear: merged?.build_year ?? null,
+        riskLevel: ad.risk,
+        risk: ad.risk,
+        flagged: ad.risk === "high",
+        notes: ad.notes,
+        worksafe_required: ad.risk === "high",
+        demoCostLow: costs.demo_low,
+        demoCostHigh: costs.demo_high,
+      };
+
+      // Sanitise riskSummary — remove any asbestos bullet the LLM may have
+      // hallucinated (wrong build year, wrong risk era) and replace with a
+      // factual bullet from the same deterministic data that drives parsed.asbestos.
+      // Locale is inferred from whether existing bullets contain Chinese characters.
+      const existingRisk = Array.isArray(parsed.riskSummary) ? (parsed.riskSummary as string[]) : [];
+      const isZh = existingRisk.some((b) => /[\u4e00-\u9fff]/.test(b));
+      const filteredBullets = filterRiskSummaryRemoveIncompleteDataDisclaimerBullets(
+        filterRiskSummaryRemoveComparableReliabilityBullets(
+          filterRiskSummaryRemoveAsbestosBullets(existingRisk),
+        ),
+      );
+
+      const { risk } = ad;
+      const demoLow = costs.demo_low;
+      const demoHigh = costs.demo_high;
+      const buildYear = merged?.build_year ?? null;
+      const costRange = `$${Math.round(demoLow / 1000)}k–$${Math.round(demoHigh / 1000)}k`;
+
+      // Modern builds: no asbestos in riskSummary (detail stays in the asbestos panel if needed).
+      // Post-1990 low-risk: same — users asked not to pad risk lists with negligible asbestos notes.
+      const omitAsbestosFromRiskSummary =
+        (buildYear != null && buildYear > 2000) ||
+        (risk === "low" && buildYear != null && buildYear > 1990);
+
+      if (!omitAsbestosFromRiskSummary) {
+        let asbestosBullet: string;
+        if (isZh) {
+          if (risk === "low" && buildYear && buildYear <= 1940) {
+            asbestosBullet = `石棉风险低 — ${buildYear} 年建造（石棉使用前时代），拆除费用约 ${costRange}。`;
+          } else if (risk === "high") {
+            asbestosBullet = `石棉风险高 — ${buildYear ? `${buildYear} 年建造` : "建造年份未知"}（1940–1990 年建筑期），需持证评估员检查，拆除费用约 ${costRange}，须向 WorkSafe 申报。`;
+          } else {
+            asbestosBullet = `石棉风险未知 — 建造年份不明，拆除前须委托持证石棉评估师检查，以确定拆除费用。`;
+          }
+        } else {
+          if (risk === "low" && buildYear && buildYear <= 1940) {
+            asbestosBullet = `Low asbestos risk — built ${buildYear} (pre-asbestos era); demolition cost estimate ${costRange}.`;
+          } else if (risk === "high") {
+            asbestosBullet = `Elevated asbestos risk — ${buildYear ? `built ${buildYear}` : "build year unknown"} (1940–1990 era); licensed removal required, demolition cost ${costRange}, WorkSafe notification needed.`;
+          } else {
+            asbestosBullet = `Asbestos risk unassessed — build year unknown; commission a licensed asbestos assessor before any demolition.`;
+          }
+        }
+
+        parsed.riskSummary = [...filteredBullets, asbestosBullet];
+      } else {
+        parsed.riskSummary = filteredBullets;
+      }
+    }
+  }
+
+  parsed.interest_rate_outlook = scenarios[0]?.interest_rate_outlook ?? parsed.interest_rate_outlook;
+  parsed.roiScenarios = scenarios.map((s) => ({
+    ...s,
+    totalCost: s.total_cost_mid,
+    grossProfit: s.gross_profit,
+    roi: s.roi_percent,
+    annualisedRoi: s.annualised_roi_percent,
+  }));
+  parsed.developmentStrategies = developmentStrategies;
+  const recommendedStrategy = developmentStrategies.find((strategy) => strategy.recommendation === "recommended");
+  if (recommendedStrategy) {
+    parsed.recommendedDevelopmentStrategy = recommendedStrategy.id;
+  }
+
+  if (pipelineResult.infrastructure.length > 0) {
+    parsed.infrastructure = pipelineResult.infrastructure;
+  }
+
+  parsed.comparableSales = comparables;
+  parsed.comparables_quality = pipelineResult.comparables_quality;
+  if (comparables.length > 0) {
+    const prices = comparables.map((c) => c.price_nzd).filter((p) => p > 0);
+    const psms = comparables.map((c) => c.price_per_sqm).filter((p) => p > 0);
+    parsed.avg_sale_price = prices.length > 0
+      ? Math.round(prices.reduce((sum, p) => sum + p, 0) / prices.length)
+      : null;
+    parsed.avgPricePerSqm = psms.length > 0
+      ? Math.round(psms.reduce((sum, p) => sum + p, 0) / psms.length)
+      : null;
+  } else {
+    parsed.avg_sale_price = null;
+    parsed.avgPricePerSqm = null;
+  }
+
+  const hadZhRiskIntent = (() => {
+    const rs = parsed.riskSummary;
+    return Array.isArray(rs) && (rs as string[]).some((b) => typeof b === "string" && /[\u4e00-\u9fff]/.test(b));
+  })();
+
+  let rs: string[] = Array.isArray(parsed.riskSummary)
+    ? ([...(parsed.riskSummary as string[])] as string[])
+    : [];
+
+  rs = rs.filter((b) => typeof b === "string" && b.trim().length > 0);
+  rs = filterRiskSummaryRemoveIncompleteDataDisclaimerBullets(
+    filterRiskSummaryRemoveComparableReliabilityBullets(rs),
+  );
+  rs = filterRiskSummaryRemoveMhsBulletsWhenZoneIsNotMhs(rs, merged?.zone_code ?? null);
+  const canonYear = canonicalBuildYearFromReport(parsed, merged?.build_year ?? null);
+  if (canonYear != null && canonYear > 2000) {
+    rs = filterRiskSummaryRemoveAsbestosBullets(rs);
+  }
+  rs = appendMultiLotProgrammeRiskIfNeeded(rs, lots?.lots ?? 0);
+
+  const isZhRisks = rs.some((b) => /[\u4e00-\u9fff]/.test(b)) || hadZhRiskIntent;
+
+  const zoneLabelForBackfill =
+    (lots?.zone_label as string | undefined) ??
+    (parsed.zone_label as string | undefined) ??
+    null;
+
+  const backfillCtx: RiskBackfillContext = {
+    isZh: isZhRisks,
+    zoneCode: merged?.zone_code ?? null,
+    zoneLabel: zoneLabelForBackfill,
+    potentialLots: lots?.lots ?? 0,
+    netAreaSqm: lots?.net_area_sqm ?? merged?.land_area_sqm ?? null,
+    minLotSqm: lots?.min_lot_size ?? merged?.min_lot_size_sqm ?? null,
+    overlays: (merged?.overlays ?? []).map((o) => ({ name: o.name, status: o.status })),
+    contour: merged?.contour ?? null,
+    infrastructure: pipelineResult.infrastructure.map((i) => ({
+      name: i.name,
+      location: i.location,
+      risk: i.risk,
+    })),
+    estateType: merged?.estate_type ?? null,
+  };
+  rs = ensureMinRiskSummaryBulletsFromReport(rs, 3, backfillCtx);
+  parsed.riskSummary = rs;
+
+  if (pipelineResult.school_zones_detail.length > 0) {
+    parsed.schoolZones = pipelineResult.school_zones_detail;
+  }
+
+  if (pipelineResult.scores) {
+    parsed.scores = pipelineResult.scores;
+  }
+
+  sanitizeReportScoresReasons(parsed.scores as Record<string, unknown> | undefined);
 }
 
 // Simple edit-distance (Levenshtein) for fuzzy suburb matching
@@ -245,6 +645,80 @@ function shufflePick<T>(arr: T[], n: number): T[] {
   return copy.slice(0, end);
 }
 
+/** Put prescreened-but-not-shown listings back at the front; failures / skipped at the back so we exhaust the suburb before falling back. */
+function partitionBatchAfterPrescreen(
+  batch: ListingResult[],
+  screened: PropertyCandidate[],
+  picked: PropertyCandidate[],
+): { putAtFront: ListingResult[]; putAtBack: ListingResult[] } {
+  const pickedUrls = new Set(picked.map((p) => p.listingUrl).filter(Boolean));
+  const screenedUrls = new Set(screened.map((s) => s.listingUrl).filter(Boolean));
+  const putAtFront: ListingResult[] = [];
+  const putAtBack: ListingResult[] = [];
+  for (const l of batch) {
+    if (pickedUrls.has(l.listingUrl)) continue;
+    if (screenedUrls.has(l.listingUrl)) putAtFront.push(l);
+    else putAtBack.push(l);
+  }
+  return { putAtFront, putAtBack };
+}
+
+async function prescreenPickRestoreBatch(
+  cacheKey: string,
+  batch: ListingResult[],
+  criteria: string | null,
+  preScreenOpts?: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number },
+): Promise<PropertyCandidate[]> {
+  const screened = await preScreenListingsFast(batch, 5, null, preScreenOpts).catch(() => [] as PropertyCandidate[]);
+  const candidates = shufflePick(rankByCriteria(screened, criteria), 3);
+  const pickedUrls = candidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u));
+  markShown(cacheKey, pickedUrls);
+  const { putAtFront, putAtBack } = partitionBatchAfterPrescreen(batch, screened, candidates);
+  restoreListingsAfterPop(cacheKey, putAtFront, putAtBack);
+  return candidates;
+}
+
+function normaliseStreetHintKey(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+/** Unnumbered or numbered road + type, e.g. "marine parade" from user discover wording. */
+function extractDiscoverStreetHint(text: string): string | null {
+  const trimmed = (text || "").trim();
+  if (!trimmed) return null;
+  const re =
+    /\b(?:\d+[A-Za-z]?\s+)?([A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]*)*)\s+(parade|road|street|avenue|drive|way|lane|terrace|place|crescent|close|rise|view|court|ridge|esplanade|boulevard|highway|track|mall|row|walk|mews|groves?|heights?|quays?|hwy|rd|st|ave|cres|pl|dr|ln|tce|pde|blvd)\b/i;
+  const m = trimmed.match(re);
+  if (!m) return null;
+  return `${m[1]!.trim()} ${m[2]!.toLowerCase()}`;
+}
+
+function extractDiscoverStreetHintFromThread(
+  threadMessages: Message[] | undefined,
+  currentUserText: string,
+): string | null {
+  const fromCurrent = extractDiscoverStreetHint(currentUserText);
+  if (fromCurrent) return fromCurrent;
+  if (!threadMessages?.length) return null;
+  for (const msg of [...threadMessages].reverse()) {
+    if (msg.role !== "user" || !msg.content) continue;
+    const h = extractDiscoverStreetHint(msg.content);
+    if (h) return h;
+  }
+  return null;
+}
+
+function rankListingsByStreetHint(listings: ListingResult[], hint: string | null): ListingResult[] {
+  if (!hint?.trim()) return listings;
+  const key = normaliseStreetHintKey(hint);
+  if (key.length < 4) return listings;
+  return [...listings].sort((a, b) => {
+    const ma = normaliseStreetHintKey(a.address).includes(key) ? 1 : 0;
+    const mb = normaliseStreetHintKey(b.address).includes(key) ? 1 : 0;
+    return mb - ma;
+  });
+}
+
 async function parseDiscoverParams(text: string): Promise<{ suburb: string | null; minPrice: number; maxPrice: number }> {
   // Resolve suburb against the live realestate.co.nz directory (1899 suburbs)
   // — no hand-curated list. Coverage tracks the data source automatically.
@@ -302,11 +776,39 @@ function getUserIdFromHeader(req: any): string | null {
   return payload?.sub ?? null;
 }
 
+/** Unwrap Drizzle-wrapped pg errors so logs show SQLSTATE, detail, and column (not only "Failed query"). */
+function pgErrorChain(err: unknown): Array<Record<string, unknown>> {
+  const chain: Array<Record<string, unknown>> = [];
+  let e: unknown = err;
+  while (e && chain.length < 8) {
+    if (typeof e === "object" && e !== null) {
+      const o = e as Record<string, unknown>;
+      chain.push({
+        name: o.name,
+        message: o.message,
+        code: o.code,
+        detail: o.detail,
+        schema: o.schema,
+        table: o.table,
+        column: o.column,
+        routine: o.routine,
+      });
+    }
+    e =
+      typeof e === "object" && e !== null && "cause" in e
+        ? (e as { cause?: unknown }).cause
+        : undefined;
+  }
+  return chain;
+}
+
 router.post("/analyse", async (req, res) => {
   const { address, conversationHistory } = req.body as {
     address: string;
     conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
   };
+
+  const analyseLocale = localeFromReq({ headers: req.headers as Record<string, string | string[] | undefined> });
 
   if (!address) {
     res.status(400).json({ error: "address is required", code: "MISSING_ADDRESS" });
@@ -316,30 +818,81 @@ router.post("/analyse", async (req, res) => {
   const userId = getUserIdFromHeader(req);
 
   if (userId) {
-    const [profile] = await db.select({
-      id: profiles.id,
-      subscriptionTier: profiles.subscriptionTier,
-      reportsUsedThisMonth: profiles.reportsUsedThisMonth,
-      lastResetAt: profiles.lastResetAt,
-    }).from(profiles).where(eq(profiles.id, userId)).limit(1);
+    let profile:
+      | {
+          id: string;
+          subscriptionTier: string;
+          reportsUsedThisMonth: number;
+          lastResetAt: Date;
+          subscriptionPeriodEndAt: Date | null;
+        }
+      | undefined;
+    try {
+      const rows = await withDbRetry(() =>
+        db
+          .select({
+            id: profiles.id,
+            subscriptionTier: profiles.subscriptionTier,
+            reportsUsedThisMonth: profiles.reportsUsedThisMonth,
+            lastResetAt: profiles.lastResetAt,
+            subscriptionPeriodEndAt: profiles.subscriptionPeriodEndAt,
+          })
+          .from(profiles)
+          .where(eq(profiles.id, userId))
+          .limit(1),
+      );
+      profile = rows[0];
+    } catch (err) {
+      req.log.error(
+        { err, pg: pgErrorChain(err), userId },
+        "Database error loading profiles row for /analyse quota check",
+      );
+      res.status(500).json({
+        error: "Could not load account from database. If this persists, run db schema sync (e.g. pnpm --filter @workspace/db run push) and verify DATABASE_URL.",
+        code: "PROFILE_DB_ERROR",
+      });
+      return;
+    }
 
     if (profile) {
       const now = new Date();
       const lastReset = new Date(profile.lastResetAt);
-      const sameMonth = now.getFullYear() === lastReset.getFullYear() && now.getMonth() === lastReset.getMonth();
+      const periodEnd = profile.subscriptionPeriodEndAt ? new Date(profile.subscriptionPeriodEndAt) : null;
+      const periodExpired = usagePeriodExpired(now, lastReset, profile.subscriptionTier, periodEnd);
 
-      const usedCount = sameMonth ? profile.reportsUsedThisMonth : 0;
-      if (!sameMonth) {
-        await db.update(profiles).set({ reportsUsedThisMonth: 0, lastResetAt: now }).where(eq(profiles.id, userId));
+      const usedCount = periodExpired ? 0 : profile.reportsUsedThisMonth;
+      if (periodExpired) {
+        try {
+          await withDbRetry(() =>
+            db
+              .update(profiles)
+              .set({
+                reportsUsedThisMonth: 0,
+                messagesUsedThisMonth: 0,
+                lastResetAt: now,
+                subscriptionPeriodEndAt: null,
+              })
+              .where(eq(profiles.id, userId)),
+          );
+        } catch (err) {
+          req.log.error({ err, pg: pgErrorChain(err), userId }, "Database error resetting profile usage period");
+          res.status(500).json({
+            error: "Could not update account usage in database.",
+            code: "PROFILE_DB_ERROR",
+          });
+          return;
+        }
       }
 
       const isStandard = profile.subscriptionTier === "pro" || profile.subscriptionTier === "standard";
-      const limit = isStandard ? STANDARD_REPORT_LIMIT : FREE_REPORT_LIMIT;
+      const limit = resolveReportLimit(profile.subscriptionTier);
       if (usedCount >= limit) {
+        const baseMsg = isStandard
+          ? `You've used all ${STANDARD_REPORT_LIMIT} reports in your current billing period. Your limit refreshes when the period renews.`
+          : `You've used all ${FREE_REPORT_LIMIT} free reports in your current billing period. Upgrade to Standard for more reports.`;
+        const translatedMsg = analyseLocale === "zh" ? await ensureChinese(baseMsg) : baseMsg;
         res.status(402).json({
-          error: isStandard
-            ? `You've used all ${STANDARD_REPORT_LIMIT} reports this month. Your limit resets on the 1st.`
-            : `You've used all ${FREE_REPORT_LIMIT} free reports this month. Upgrade to Standard for more reports.`,
+          error: translatedMsg,
           code: "LIMIT_REACHED",
           reportsUsed: usedCount,
           limit,
@@ -356,11 +909,24 @@ router.post("/analyse", async (req, res) => {
     // against stale parent data — ask which sub-lot they meant.
     const subdivision = await detectSubdivision(address).catch(() => null);
     if (subdivision?.isSubdivided) {
+      const baseQuestion = `"${address}" looks like it has been subdivided into separate lots. Which one would you like me to analyse?`;
+      const localisedQuestion = analyseLocale === "zh" ? await ensureChinese(baseQuestion) : baseQuestion;
       res.json({
         type: "clarification",
         clarificationType: "subdivision",
-        question: `"${address}" looks like it has been subdivided into separate lots. Which one would you like me to analyse?`,
+        question: localisedQuestion,
         options: subdivision.subLots,
+      });
+      return;
+    }
+
+    const addressAmbiguous = await maybeAddressClarification(address, analyseLocale);
+    if (addressAmbiguous) {
+      res.json({
+        type: "clarification",
+        clarificationType: addressAmbiguous.clarificationType,
+        question: addressAmbiguous.question,
+        options: addressAmbiguous.options,
       });
       return;
     }
@@ -368,7 +934,7 @@ router.post("/analyse", async (req, res) => {
     // Run the deterministic pipeline in parallel with the LLM report so the
     // response includes verified merge data (CV, land/floor area, listing
     // reconciliation) and a pinned property_overview_snapshot for follow-ups.
-    const locale = localeFromReq({ headers: req.headers as Record<string, string | string[] | undefined> });
+    const locale = analyseLocale;
     const [raw, pipelineResult] = await Promise.all([
       generateFeasibilityReport(address, conversationHistory || [], locale),
       runPropertyPipeline(address).catch((err) => {
@@ -379,22 +945,20 @@ router.post("/analyse", async (req, res) => {
 
     let report = extractJSON(raw) as Record<string, unknown>;
 
-    // Inject deterministic overrides (photo, overlay map, snapshot) when the
-    // pipeline succeeded.
+    // Inject deterministic pipeline-backed fields so CV/cost/ROI values remain
+    // consistent and do not drift from source data.
     if (pipelineResult && report && typeof report === "object") {
-      const photoUrl = pipelineResult.oneroof?.main_photo_url ?? null;
-      const overlayMapB64 = pipelineResult.hougarden?.overlay_map_image_base64 ?? null;
-      if (photoUrl) {
-        report.photoUrl = photoUrl;
-      } else {
-        report.photoUrl = null;
-      }
-      if (overlayMapB64) report.overlay_map_image_base64 = overlayMapB64;
-      applyOverviewSnapshot(
-        report,
-        pipelineResult.merged ?? null,
-        pipelineResult.geocode?.formatted ?? address,
+      applyDeterministicPipelineOverrides(report, pipelineResult, pipelineResult.geocode?.formatted ?? address);
+    }
+
+    // For zh users: guarantee all narrative fields are in Simplified Chinese
+    // even if the prompt-level language instruction left any English prose.
+    if (locale === "zh") {
+      const translateTitleSchool = translateTitleSchoolFromReq(
+        { headers: req.headers as Record<string, string | string[] | undefined> },
+        locale,
       );
+      report = await translateReportNarrative(report, { translateTitleAndSchoolFields: translateTitleSchool });
     }
 
     if (userId) {
@@ -402,21 +966,64 @@ router.post("/analyse", async (req, res) => {
         reportsUsedThisMonth: sql`${profiles.reportsUsedThisMonth} + 1`,
       }).where(eq(profiles.id, userId));
 
-      await db.insert(searches).values({
-        userId,
-        query: address,
-        address,
-        resultJson: report as any,
-      }).catch(() => {});
+      let savedSearchId: string | null = null;
+      try {
+        const [row] = await db
+          .insert(searches)
+          .values({
+            userId,
+            query: address,
+            address,
+            resultJson: report as Record<string, unknown>,
+          })
+          .returning({ id: searches.id });
+        savedSearchId = row?.id ?? null;
+      } catch (err) {
+        req.log.error({ err }, "Failed to save analyse report to history");
+      }
+
+      if (savedSearchId) {
+        const shortAddr = address.length > 90 ? `${address.slice(0, 87)}…` : address;
+        const pushTitle = locale === "zh" ? "分析报告已就绪" : "Report ready";
+        const pushBody =
+          locale === "zh"
+            ? `您请求的「${shortAddr}」分析已完成，请打开应用查看。`
+            : `Your analysis for ${shortAddr} is ready — open the app to view it.`;
+        void sendPushToUser(userId, pushTitle, pushBody, {
+          type: "report_ready",
+          searchId: savedSearchId,
+        }).catch((e) => req.log.warn({ e }, "Report-ready push failed (non-fatal)"));
+      }
     }
 
     res.json({ report, type: "report" });
   } catch (error) {
-    req.log.error({ error }, "Failed to analyse property");
+    req.log.error({ err: error }, "Failed to analyse property");
     res.status(500).json({
       error: "Failed to generate feasibility report. Please try again.",
       code: "ANALYSE_FAILED",
     });
+  }
+});
+
+// ── POST /translate-report ────────────────────────────────────────────────────
+// Accepts a cached FeasibilityReport object and returns it with all narrative
+// fields translated to Simplified Chinese. Used by the mobile client to
+// retrofit English-language reports that were generated before on-device
+// translation was in place.
+router.post("/translate-report", async (req, res) => {
+  const { report } = req.body as { report?: Record<string, unknown> };
+  if (!report || typeof report !== "object") {
+    res.status(400).json({ error: "report is required" });
+    return;
+  }
+  try {
+    const headerBag = { headers: req.headers as Record<string, string | string[] | undefined> };
+    const translateTitleSchool = translateTitleSchoolFromReq(headerBag, localeFromReq(headerBag));
+    const translated = await translateReportNarrative(report, { translateTitleAndSchoolFields: translateTitleSchool });
+    res.json({ report: translated });
+  } catch (err) {
+    res.status(500).json({ error: "Translation failed" });
   }
 });
 
@@ -446,7 +1053,7 @@ router.post("/search", async (req, res) => {
         query,
         address: suburb || null,
         resultJson: result as any,
-      }).catch(() => {});
+      }).catch((err) => req.log.error({ err }, "Failed to save search to history"));
     }
 
     res.json({
@@ -456,20 +1063,13 @@ router.post("/search", async (req, res) => {
       type: "search",
     });
   } catch (error) {
-    req.log.error({ error }, "Failed to search properties");
+    req.log.error({ err: error }, "Failed to search properties");
     res.status(500).json({
       error: "Failed to search properties. Please try again.",
       code: "SEARCH_FAILED",
     });
   }
 });
-
-const CHAT_LIMITS: Record<string, { limit: number; warnAt: number }> = {
-  service_provider: { limit: 300, warnAt: 280 },
-  general_standard: { limit: 50,  warnAt: 45  },
-  general_free:     { limit: 10,  warnAt: 8   },
-  default:          { limit: 50,  warnAt: 45  },
-};
 
 async function checkAndIncrementChatMessages(userId: string): Promise<{
   allowed: boolean;
@@ -481,6 +1081,7 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
     .select({
       messagesUsedThisMonth: profiles.messagesUsedThisMonth,
       lastResetAt: profiles.lastResetAt,
+      subscriptionPeriodEndAt: profiles.subscriptionPeriodEndAt,
       role: profiles.role,
       subscriptionTier: profiles.subscriptionTier,
     })
@@ -492,28 +1093,26 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
 
   const tier = profile.subscriptionTier ?? "free";
   const role = profile.role ?? "general";
-  let limitKey: string;
-  if (role === "service_provider") {
-    limitKey = "service_provider";
-  } else if (role === "general" && (tier === "standard" || tier === "pro")) {
-    limitKey = "general_standard";
-  } else {
-    limitKey = "general_free";
-  }
+  const limitKey = resolveChatLimitKey(role, tier);
   const { limit, warnAt } = CHAT_LIMITS[limitKey] ?? CHAT_LIMITS.default;
   const isFreeLimit = limitKey === "general_free";
 
   const now = new Date();
   const lastReset = new Date(profile.lastResetAt);
-  const sameMonth =
-    now.getFullYear() === lastReset.getFullYear() && now.getMonth() === lastReset.getMonth();
+  const periodEnd = profile.subscriptionPeriodEndAt ? new Date(profile.subscriptionPeriodEndAt) : null;
+  const periodExpired = usagePeriodExpired(now, lastReset, profile.subscriptionTier, periodEnd);
 
-  let currentCount = sameMonth ? profile.messagesUsedThisMonth : 0;
+  let currentCount = periodExpired ? 0 : profile.messagesUsedThisMonth;
 
-  if (!sameMonth) {
+  if (periodExpired) {
     await db
       .update(profiles)
-      .set({ messagesUsedThisMonth: 0, reportsUsedThisMonth: 0, lastResetAt: now })
+      .set({
+        messagesUsedThisMonth: 0,
+        reportsUsedThisMonth: 0,
+        lastResetAt: now,
+        subscriptionPeriodEndAt: null,
+      })
       .where(eq(profiles.id, userId));
     currentCount = 0;
   }
@@ -538,6 +1137,10 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
 
 router.post("/chat", async (req, res) => {
   const chatLocale = localeFromReq({ headers: req.headers as Record<string, string | string[] | undefined> });
+  const chatTranslateTitleSchool = translateTitleSchoolFromReq(
+    { headers: req.headers as Record<string, string | string[] | undefined> },
+    chatLocale,
+  );
   const { messages, currentReport, message, conversationHistory, reportContext } = req.body as {
     messages?: Message[];
     currentReport?: object;
@@ -546,19 +1149,23 @@ router.post("/chat", async (req, res) => {
     reportContext?: string;
   };
 
-  // Rate limiting: 50 messages/month per authenticated general user
+  // Rate limiting per authenticated user. Actual limits are tiered and live in
+  // ../lib/quotas.ts (CHAT_LIMITS): service_provider 300, general+standard/pro 50,
+  // everyone else (free general) 10. Keep the mobile mirror in sync.
   const chatUserId = getUserIdFromHeader(req);
   if (chatUserId) {
     try {
       const { allowed, messagesUsed, nearLimit, isFreeLimit } = await checkAndIncrementChatMessages(chatUserId);
       if (!allowed) {
+        const baseMessage = isFreeLimit
+          ? "You've used all your free messages in this billing period. Upgrade to Standard for more."
+          : "You've reached your monthly message limit. It refreshes when your billing cycle renews.";
+        const localisedMessage = chatLocale === "zh" ? await ensureChinese(baseMessage) : baseMessage;
         res.status(429).json({
           error: "monthly_limit_reached",
           code: isFreeLimit ? "upgrade_required" : "monthly_limit_reached",
           messagesUsed,
-          message: isFreeLimit
-            ? "You've used all your free messages this month. Upgrade to Standard for more."
-            : "You've reached your monthly message limit. It resets at the start of next month.",
+          message: localisedMessage,
         });
         return;
       }
@@ -589,15 +1196,37 @@ router.post("/chat", async (req, res) => {
       }
 
       // Already-shown addresses + URLs from conversation history (for follow-up de-duplication).
-      // Discover responses are sent to the client as `content: JSON.stringify({candidates, ...})`,
-      // so we parse those JSON payloads to recover everything previously shown across the whole
-      // chat. This survives server restarts (in-memory listing cache lost) and prevents the
-      // "show me others" bug where the same listings re-appear.
+      // Two formats are handled:
+      // 1. Mobile client: `[Search results shown: address||url; address2||url2]`
+      // 2. Legacy/raw JSON: `{"candidates":[{"address":"...","listingUrl":"..."}]}`
+      // Parsing both ensures deduplication survives server restarts and works across
+      // all client versions — no extra storage needed.
       const alreadyShownFromHistory: string[] = [];
       const alreadyShownUrlsFromHistory: string[] = [];
       for (const msg of messages) {
         if (msg.role !== "assistant" || !msg.content) continue;
         const trimmed = msg.content.trim();
+
+        // Mobile client format: [Search results shown: addr1||url1; addr2||url2]
+        const searchShownMatch = trimmed.match(/^\[Search results shown: (.+)\]$/s);
+        if (searchShownMatch) {
+          const entries = searchShownMatch[1].split(";").map((s) => s.trim()).filter(Boolean);
+          for (const entry of entries) {
+            const sepIdx = entry.indexOf("||");
+            if (sepIdx !== -1) {
+              const addr = entry.slice(0, sepIdx).trim();
+              const url = entry.slice(sepIdx + 2).trim();
+              if (addr) alreadyShownFromHistory.push(addr);
+              if (url) alreadyShownUrlsFromHistory.push(url);
+            } else {
+              // Older client format without URL — still capture address
+              if (entry) alreadyShownFromHistory.push(entry);
+            }
+          }
+          continue;
+        }
+
+        // Legacy raw-JSON format
         if (!trimmed.startsWith("{")) continue;
         try {
           const parsed = JSON.parse(trimmed) as { candidates?: Array<{ address?: unknown; listingUrl?: unknown }> };
@@ -610,28 +1239,97 @@ router.post("/chat", async (req, res) => {
         } catch { /* not JSON, skip */ }
       }
 
-      const intent = await extractChatIntent(messages, reportCtx, alreadyShownFromHistory);
+      const intent = await extractChatIntent(messages, reportCtx, alreadyShownFromHistory, chatLocale);
       const mode = intent.mode;
+
+      // Provider recommendation signal derived by the LLM from the user's message.
+      // Included in every response so the client can trigger the explicit check
+      // without relying on client-side keyword matching.
+      const providerSignal = intent.wantsProviderRecommendation
+        ? { wantsProviderRecommendation: true, suggestedDiscipline: intent.suggestedDiscipline ?? null }
+        : {};
+      const hintedAddress = looksLikeStreetAddress(userText)
+        ? await extractNZAddress(userText).catch(() => null)
+        : null;
+
+      // ─── Address hallucination guard ─────────────────────────────────────
+      // When the LLM "corrects" a suburb the user typed (e.g. "melons bay" →
+      // "Mission Bay"), the entire pipeline analyses the wrong property. We
+      // detect this by checking whether the multi-word tokens in the
+      // LLM-extracted address actually appear in the user's original text. If
+      // the LLM introduced a suburb the user never mentioned, fall back to the
+      // regex-extracted address or the raw user text.
+      let validatedIntentAddress = intent.address;
+      if (validatedIntentAddress && userText) {
+        const userLower = userText.toLowerCase();
+        const extractedLower = validatedIntentAddress.toLowerCase();
+        // Pull suburb-like multi-word segments from the extracted address
+        // (everything after the street number + street name + street type).
+        const suburMatch = extractedLower.match(
+          /,\s*([a-z][a-z ]+)/,
+        );
+        if (suburMatch) {
+          const extractedSuburb = suburMatch[1].trim();
+          // Check each multi-word suburb token against the user's raw input.
+          // Allow for minor typos by checking if at least the first 5 chars
+          // of the suburb appear somewhere in the user text.
+          const suburbPrefix = extractedSuburb.slice(0, Math.min(5, extractedSuburb.length));
+          if (
+            !userLower.includes(extractedSuburb) &&
+            !userLower.includes(suburbPrefix)
+          ) {
+            req.log.warn(
+              { llmAddress: validatedIntentAddress, extractedSuburb, userText: userText.slice(0, 120) },
+              "Address hallucination detected: LLM suburb not found in user text — falling back to regex/raw address",
+            );
+            validatedIntentAddress = null;
+          }
+        }
+      }
+
+      const forcedAnalyseAddressRaw = validatedIntentAddress ?? hintedAddress ?? null;
+      const suppressPromoteToAnalyse =
+        isListingBrowseIntent(userText) && !hasNumberedStreetAddress(userText);
+      const forcedAnalyseAddress = suppressPromoteToAnalyse ? null : forcedAnalyseAddressRaw;
+
+      let effectiveMode = mode === "discover" && forcedAnalyseAddress ? "analyse" : mode;
+      const analysisIsLikelyAreaOnly =
+        !hasNumberedStreetAddress(userText)
+        && (isListingBrowseIntent(userText) || hasUnnumberedStreetLine(userText))
+        && !/\b(re-?analy[sz]e|redo|run again|analy[sz]e again|new analysis|re-?run|fresh analysis)\b/i.test(userText);
+      if (effectiveMode === "analyse" && analysisIsLikelyAreaOnly) {
+        req.log.info({ sample: userText.slice(0, 100) }, "Chat routing: area/listing query — using discover flow");
+        effectiveMode = "discover";
+      }
+
+      if (effectiveMode === "analyse" && mode !== "analyse" && forcedAnalyseAddress) {
+        req.log.info(
+          { address: forcedAnalyseAddress, originalMode: mode, intent_reasoning: intent.reasoning },
+          "Address-like prompt detected — overriding discover intent to analyse",
+        );
+      }
 
       // ─── CLARIFICATION LOOP ─────────────────────────────────────────────────
       // When the LLM determines it can't proceed without more info (e.g. no suburb
       // for a discover search), return the clarification question immediately.
       // The next user reply will carry the answer in conversation history so the
       // intent extractor can resolve the suburb/price/address and proceed normally.
-      if (intent.needsClarification && intent.clarificationQuestion) {
+      if (intent.needsClarification && intent.clarificationQuestion && effectiveMode !== "analyse") {
         req.log.info(
           { question: intent.clarificationQuestion, intent_reasoning: intent.reasoning },
           "Returning clarification question to user",
         );
+        const translatedQuestion = await translateChatContent(intent.clarificationQuestion, "clarification", chatLocale, chatTranslateTitleSchool);
         res.json({
-          content: intent.clarificationQuestion,
+          content: translatedQuestion,
           mode: "clarification",
           intent: { needsClarification: true },
+          ...providerSignal,
         });
         return;
       }
 
-      if (mode === "discover") {
+      if (effectiveMode === "discover") {
         try {
           // ─── DISCOVER FLOW — using LLM-extracted intent ──────────────────
           // All parameters come from the intent object. Suburb may have been
@@ -640,6 +1338,11 @@ router.post("/chat", async (req, res) => {
           const isFollowUp = intent.isFollowUp;
           const includeNegotiation = intent.includeNegotiation;
           const userTextHasPrice = intent.minPrice !== null || intent.maxPrice !== null;
+
+          if (!suburb) {
+            const hit = await findSuburbInTextViaIndex(userText);
+            if (hit) suburb = hit.title.toLowerCase();
+          }
 
           // Default price range if LLM found no price constraint
           const DEFAULT_MAX = 3_000_000;
@@ -674,6 +1377,12 @@ router.post("/chat", async (req, res) => {
 
           if (suburb) {
             const cacheKey = makeCacheKey(suburb, effectiveMinPrice, effectiveMaxPrice);
+            const discoverPreOpts = {
+              allowMissingListingPrice: true as const,
+              pricePlaceholderNzd: Math.max(600_000, Math.round((effectiveMinPrice + effectiveMaxPrice) / 2)),
+            };
+            const streetHint = extractDiscoverStreetHintFromThread(messages, userText);
+            req.log.info({ streetHint }, "Discovery: street hint for listing order");
 
             // "Show more" follow-up: only try the cache if we've actually shown results before.
             // When isFollowUp=true because the user answered a clarification question (first search
@@ -686,9 +1395,7 @@ router.post("/chat", async (req, res) => {
                 const { listings: nextListings, remaining } = popNextListings(cacheKey, 8);
                 if (nextListings.length === 0) break;
                 req.log.info({ nextListings: nextListings.length, remaining, attempt: attempts + 1 }, "Follow-up: popping next listings from cache");
-                markShown(cacheKey, nextListings.map((l) => l.listingUrl));
-                const screened = await preScreenListingsFast(nextListings, 5).catch(() => []);
-                candidates = shufflePick(rankByCriteria(screened, intent.criteria), 3);
+                candidates = await prescreenPickRestoreBatch(cacheKey, nextListings, intent.criteria, discoverPreOpts);
                 attempts++;
               }
             }
@@ -716,12 +1423,19 @@ router.post("/chat", async (req, res) => {
                 const inRange = (l: { price: number | null }) =>
                   l.price == null || (l.price >= effectiveMinPrice && l.price <= effectiveMaxPrice * 1.1);
 
-                const firstFiltered = searchResult.firstBatch.filter(inRange);
-                const remainingFiltered = searchResult.remainingListings.filter(inRange);
+                const firstFiltered = rankListingsByStreetHint(
+                  searchResult.firstBatch.filter(inRange),
+                  streetHint,
+                );
+                const remainingFiltered = rankListingsByStreetHint(
+                  searchResult.remainingListings.filter(inRange),
+                  streetHint,
+                );
 
+                const priorShown = [...getShownUrls(cacheKey)];
                 setListingCache(cacheKey, {
-                  remainingListings: remainingFiltered,
-                  shownUrls: firstFiltered.map((l) => l.listingUrl),
+                  remainingListings: [...remainingFiltered],
+                  shownUrls: priorShown,
                   suburb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
                 });
                 req.log.info({ fetched: firstFiltered.length, cached: remainingFiltered.length }, "realestate.co.nz: prescreening listings");
@@ -729,19 +1443,31 @@ router.post("/chat", async (req, res) => {
                 const criteriaContext = intent.criteria ? ` matching criteria: ${intent.criteria}` : "";
                 const introPromptPreScreen = `The user asked: "${userText}". You found some matching properties in ${suburb || "the area"} on realestate.co.nz${criteriaContext}. In 1 sentence, acknowledge this result conversationally (e.g. "I found a few development sites in St Heliers under $2M:"). Do NOT mention a specific number — say "a few", "some", or "a handful". Be natural and brief — no JSON.`;
                 const [screened, introFromPreScreen] = await Promise.all([
-                  preScreenListingsFast(firstFiltered, 5).catch(() => []),
+                  preScreenListingsFast(firstFiltered, 5, null, discoverPreOpts).catch(() => []),
                   generateAnalysis(introPromptPreScreen, chatLocale).catch(() => ""),
                 ]);
-                // Re-rank by user criteria then randomly pick to show variety
                 candidates = shufflePick(rankByCriteria(screened, intent.criteria), 3);
+                const pickedUrls = candidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u));
+                markShown(cacheKey, pickedUrls);
+                const { putAtFront, putAtBack } = partitionBatchAfterPrescreen(firstFiltered, screened, candidates);
+                restoreListingsAfterPop(cacheKey, putAtFront, putAtBack);
                 prescreenedIntro = introFromPreScreen;
+
+                let drainAttempts = 0;
+                while (candidates.length === 0 && getRemainingCount(cacheKey) > 0 && drainAttempts < 6) {
+                  drainAttempts++;
+                  const { listings: nextListings } = popNextListings(cacheKey, 8);
+                  if (nextListings.length === 0) break;
+                  req.log.info({ nextListings: nextListings.length, drainAttempt: drainAttempts }, "Discovery: draining cache until prescreen hits");
+                  candidates = await prescreenPickRestoreBatch(cacheKey, nextListings, intent.criteria, discoverPreOpts);
+                }
               }
             }
 
             // ── NEARBY SUBURB FALLBACK ─────────────────────────────────────────
-            // If the primary suburb returned nothing (scraper issue, low stock, etc.)
-            // try the closest neighbouring suburbs one at a time until we get results.
-            if (candidates.length === 0 && suburb) {
+            // Only after the primary suburb queue is empty: avoid jumping to neighbours
+            // when we still have unscanned listings or prescreen returned no UI rows this round.
+            if (candidates.length === 0 && suburb && getRemainingCount(cacheKey) === 0) {
               const nearbyList = await resolveNearbySuburbs(suburb, 5);
               // Run nearby-suburb scrapes concurrently and return as soon as the first
               // one yields any listings — keeps tail latency bounded when the slow
@@ -782,22 +1508,48 @@ router.post("/chat", async (req, res) => {
                 if (fallbackResult && fallbackResult.firstBatch.length > 0) {
                   const inRangeFallback = (l: { price: number | null }) =>
                     l.price == null || (l.price >= effectiveMinPrice && l.price <= effectiveMaxPrice * 1.1);
-                  const filtered = fallbackResult.firstBatch.filter(inRangeFallback);
+                  const filtered = rankListingsByStreetHint(
+                    fallbackResult.firstBatch.filter(inRangeFallback),
+                    streetHint,
+                  );
                   if (filtered.length > 0) {
                     const fallbackCacheKey = makeCacheKey(nearbySuburb, effectiveMinPrice, effectiveMaxPrice);
+                    const priorShownFallback = [...getShownUrls(fallbackCacheKey)];
                     setListingCache(fallbackCacheKey, {
-                      remainingListings: fallbackResult.remainingListings.filter(inRangeFallback),
-                      shownUrls: filtered.map((l) => l.listingUrl),
+                      remainingListings: rankListingsByStreetHint(
+                        fallbackResult.remainingListings.filter(inRangeFallback),
+                        streetHint,
+                      ),
+                      shownUrls: priorShownFallback,
                       suburb: nearbySuburb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
                     });
                     const criteriaContextFallback = intent.criteria ? ` (${intent.criteria})` : "";
                     const introPromptFallback = `The user asked about ${suburb}${criteriaContextFallback} but no listings were found there right now. You found some properties in nearby ${nearbySuburb}. In 1 sentence acknowledge this naturally (e.g. "I couldn't find anything in ${suburb} right now, but here are some nearby options in ${nearbySuburb}:"). Do NOT mention a specific number — say "a few", "some", or "a handful". Be brief — no JSON.`;
                     const [screenedFallback, introFallback] = await Promise.all([
-                      preScreenListingsFast(filtered, 5).catch(() => [] as PropertyCandidate[]),
+                      preScreenListingsFast(filtered, 5, null, discoverPreOpts).catch(() => [] as PropertyCandidate[]),
                       generateAnalysis(introPromptFallback, chatLocale).catch(() => ""),
                     ]);
-                    if (screenedFallback.length > 0) {
-                      candidates = shufflePick(rankByCriteria(screenedFallback, intent.criteria), 3);
+                    candidates = shufflePick(rankByCriteria(screenedFallback, intent.criteria), 3);
+                    markShown(
+                      fallbackCacheKey,
+                      candidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u)),
+                    );
+                    const { putAtFront: fbFront, putAtBack: fbBack } = partitionBatchAfterPrescreen(
+                      filtered,
+                      screenedFallback,
+                      candidates,
+                    );
+                    restoreListingsAfterPop(fallbackCacheKey, fbFront, fbBack);
+
+                    let fbDrain = 0;
+                    while (candidates.length === 0 && getRemainingCount(fallbackCacheKey) > 0 && fbDrain < 6) {
+                      fbDrain++;
+                      const { listings: fbNext } = popNextListings(fallbackCacheKey, 8);
+                      if (fbNext.length === 0) break;
+                      candidates = await prescreenPickRestoreBatch(fallbackCacheKey, fbNext, intent.criteria, discoverPreOpts);
+                    }
+
+                    if (candidates.length > 0) {
                       prescreenedIntro = introFallback;
                       req.log.info({ nearbySuburb, count: candidates.length }, "Discovery: nearby suburb fallback succeeded");
                       break;
@@ -834,19 +1586,22 @@ router.post("/chat", async (req, res) => {
           }
 
           const responsePayload = JSON.stringify({ candidates, isMockData, suburb, dataSource, noListings, aiIntro });
-          res.json({ content: responsePayload, mode: "discover" });
+          const translatedContent = await translateChatContent(responsePayload, "discover", chatLocale, chatTranslateTitleSchool);
+          res.json({ content: translatedContent, mode: "discover", ...providerSignal });
           return;
         } catch (err) {
           req.log.warn({ err }, "Discovery mode error — falling through to AI");
         }
       }
 
-      if (mode === "analyse") {
+      if (effectiveMode === "analyse") {
         // Address priority:
-        // 1. LLM extracted it directly from the current message
+        // 1. LLM extracted it directly from the current message (validated against hallucination)
         // 2. extractNZAddress regex on the current message
         // 3. extractNZAddress on prior history messages
-        let extractedAddress: string | null = intent.address ?? null;
+        // 4. Raw address-like text from the user's message (last resort — strips
+        //    non-address prefixes and sends the remaining tokens to the geocoder)
+        let extractedAddress: string | null = forcedAnalyseAddress ?? null;
 
         if (!extractedAddress) {
           extractedAddress = await extractNZAddress(userText).catch(() => null);
@@ -858,6 +1613,24 @@ router.post("/chat", async (req, res) => {
               const prev = await extractNZAddress(msg.content).catch(() => null);
               if (prev) { extractedAddress = prev; break; }
             }
+          }
+        }
+
+        // Last-resort: if no extractor found an address but the intent is
+        // clearly "analyse" and the message contains something that looks like
+        // a street address, extract it with a simple regex. This catches cases
+        // where the LLM hallucinated (and was caught above) and
+        // extractNZAddress also failed because the suburb wasn't in its regex.
+        if (!extractedAddress && looksLikeStreetAddress(userText)) {
+          const addrMatch = userText.match(
+            /\b(\d+[a-zA-Z]?\s+[\w''-]+(?:\s+[\w''-]+){0,5}\s+(?:road|street|avenue|crescent|place|drive|way|lane|terrace|parade|close|grove|rise|view|heights|ridge|court|hill|mews|quay|boulevard|highway|motorway|esplanade|mall|row|walk|path|track|rd|st|ave|cres|pl|dr|ln|tce|pde|blvd|hwy)(?:\s+[\w''-]+){0,3})\b/i,
+          );
+          if (addrMatch) {
+            extractedAddress = addrMatch[1].trim();
+            req.log.info(
+              { rawExtracted: extractedAddress },
+              "Address: LLM + extractNZAddress both failed — using raw regex from user text",
+            );
           }
         }
 
@@ -883,7 +1656,8 @@ router.post("/chat", async (req, res) => {
               );
               // Fall through to generateUnifiedResponse below (mode will be treated as followup)
               const { content, mode: responseMode } = await generateUnifiedResponse(messages, currentReport, "followup", chatLocale);
-              res.json({ content, mode: responseMode });
+              const translated = await translateChatContent(content, responseMode, chatLocale, chatTranslateTitleSchool);
+              res.json({ content: translated, mode: responseMode, ...providerSignal });
               return;
             }
           }
@@ -898,12 +1672,25 @@ router.post("/chat", async (req, res) => {
           // pipeline if the parent number was actually subdivided.
           const subdivision = await detectSubdivision(extractedAddress).catch(() => null);
           if (subdivision?.isSubdivided) {
+            const subdivisionPayload = JSON.stringify({
+              clarificationType: "subdivision",
+              question: `"${extractedAddress}" looks like it has been subdivided into separate lots. Which one would you like me to analyse?`,
+              options: subdivision.subLots,
+            });
+            const translatedSubdivision = await translateChatContent(subdivisionPayload, "clarification", chatLocale, chatTranslateTitleSchool);
             res.json({
-              content: JSON.stringify({
-                clarificationType: "subdivision",
-                question: `"${extractedAddress}" looks like it has been subdivided into separate lots. Which one would you like me to analyse?`,
-                options: subdivision.subLots,
-              }),
+              content: translatedSubdivision,
+              mode: "clarification",
+            });
+            return;
+          }
+
+          const addressAmbiguous = await maybeAddressClarification(extractedAddress, chatLocale);
+          if (addressAmbiguous) {
+            const addressPayload = JSON.stringify(addressAmbiguous);
+            const translatedAddress = await translateChatContent(addressPayload, "clarification", chatLocale, chatTranslateTitleSchool);
+            res.json({
+              content: translatedAddress,
               mode: "clarification",
             });
             return;
@@ -934,11 +1721,12 @@ router.post("/chat", async (req, res) => {
           const sendAnalyseResponse = (data: object) => {
             clearInterval(_heartbeat);
             if (res.writableEnded) return;
+            const payload = { ...data, ...providerSignal };
             if (heartbeatFired) {
               // Headers already committed — write body directly
-              try { res.write(JSON.stringify(data)); res.end(); } catch { /* ignore */ }
+              try { res.write(JSON.stringify(payload)); res.end(); } catch { /* ignore */ }
             } else {
-              res.json(data);
+              res.json(payload);
             }
           };
 
@@ -956,21 +1744,24 @@ router.post("/chat", async (req, res) => {
             const {
               merged, geocode, linz_parcel, contour, property_history, asbestos,
               asbestos_detail, lots, costs, comparables, comparables_quality,
-              scenarios, scores, suburb, easements,
+              scenarios, scores, suburb, easements, developmentStrategies,
+              subdivision_pathway,
             } = pipelineResult;
 
             let enrichedContent: string;
 
-            if (merged && lots && costs && scores && scenarios.length > 0) {
+            if (merged && lots && costs && scores) {
               const interestOutlook = scenarios[0]?.interest_rate_outlook ?? "stable";
-              const scenarioLines = scenarios.map((s) => {
-                const caseLines = (s.cases ?? []).map((c) =>
-                  `    [${c.case.toUpperCase()}] GDV $${formatNZD(c.gdv)} (×${c.gdv_multiplier.toFixed(2)}), ` +
-                  `Profit $${formatNZD(c.gross_profit)}, ROI ${c.roi_percent.toFixed(1)}%, ` +
-                  `Ann. ${c.annualised_roi_percent.toFixed(1)}% p.a., Viable: ${c.viable}`
-                ).join("\n");
-                return `  ${s.years}-year (base GDV $${formatNZD(s.gdv)}, cost $${formatNZD(s.total_cost_mid)}):\n${caseLines}`;
-              }).join("\n");
+              const scenarioLines = scenarios.length > 0
+                ? scenarios.map((s) => {
+                    const caseLines = (s.cases ?? []).map((c) =>
+                      `    [${c.case.toUpperCase()}] GDV $${formatNZD(c.gdv)} (×${c.gdv_multiplier.toFixed(2)}), ` +
+                      `Profit $${formatNZD(c.gross_profit)}, ROI ${c.roi_percent.toFixed(1)}%, ` +
+                      `Ann. ${c.annualised_roi_percent.toFixed(1)}% p.a., Viable: ${c.viable}`
+                    ).join("\n");
+                    return `  ${s.years}-year (base GDV $${formatNZD(s.gdv)}, cost $${formatNZD(s.total_cost_mid)}):\n${caseLines}`;
+                  }).join("\n")
+                : "  ROI scenarios unavailable — no real fetched comparable sales were available. Do not estimate GDV or ROI.";
 
               const cvNzd = costs.land_cv_nzd ?? 0;
               const cvNote = cvNzd > 0
@@ -984,11 +1775,43 @@ router.post("/chat", async (req, res) => {
               const contourSrc = (merged as any).contour_source ?? null;
               const contourTxt = (merged as any).contour_text ?? null;
               const missingCritical = (merged as any).missing_critical_fields ?? [];
+              const comparablePrices = comparables.map((c) => c.price_nzd).filter((p) => p > 0);
+              const comparablePsms = comparables.map((c) => c.price_per_sqm).filter((p) => p > 0);
+              const avgComparableSale = comparablePrices.length > 0
+                ? Math.round(comparablePrices.reduce((sum, p) => sum + p, 0) / comparablePrices.length)
+                : null;
+              const avgComparablePsm = comparablePsms.length > 0
+                ? Math.round(comparablePsms.reduce((sum, p) => sum + p, 0) / comparablePsms.length)
+                : null;
+              const lotBreakdown = scenarios[0]
+                ? `${lots.lots} lots × ${scenarios[0].sqm_per_lot}m² each → estimated ~${formatNZD(scenarios[0].gdv_per_lot)} per lot (based on real fetched comparable data)`
+                : `${lots.lots} potential lot${lots.lots === 1 ? "" : "s"}; sale price and ROI not calculated because no real comparable sales were fetched`;
+              const avgComparableSaleText = avgComparableSale != null
+                ? `$${formatNZD(avgComparableSale)}`
+                : "unavailable — no real fetched comparable sales";
+              const strategyLines = (developmentStrategies ?? []).map((strategy) => {
+                const baseHorizon =
+                  strategy.roiScenarios.length > 0
+                    ? strategy.roiScenarios.reduce((a, b) => (a.years <= b.years ? a : b))
+                    : undefined;
+                const baseCase = baseHorizon?.cases.find((c) => c.case === "base");
+                const roiText = baseCase
+                  ? `base ROI ${baseCase.roi_percent.toFixed(1)}%, GDV $${formatNZD(baseCase.gdv)}, profit $${formatNZD(baseCase.gross_profit)}`
+                  : "ROI unavailable because no real comparable sale pricing was fetched";
+                return `  - ${strategy.title} [${strategy.recommendation}]: ${strategy.rationale} Total cost $${formatNZD(strategy.totalCostLow)}–$${formatNZD(strategy.totalCostHigh)}; ${roiText}.`;
+              }).join("\n");
+              const recommendedStrategy = developmentStrategies?.find((strategy) => strategy.recommendation === "recommended");
 
               enrichedContent = `Analyse this NZ property for development feasibility.${failedStr}
 
 ADDRESS: ${geocode?.formatted ?? extractedAddress}
 SUBURB: ${suburb}
+
+OVERLAY DATA — AUTHORITATIVE (Auckland Council GIS + Hougarden text analysis):
+⚠️  IMPORTANT: planning.overlays MUST contain ONLY the overlays listed below. Do NOT invent "clear" or any other entries for overlays not in this list — absence from GIS/Hougarden means we have no data, not that the overlay is clear.
+${merged.overlays.length > 0
+  ? merged.overlays.map((o) => `  - ${o.name}: ${o.status.toUpperCase()} — ${o.detail}`).join("\n")
+  : "  (no overlays detected by GIS or Hougarden for this property)"}
 
 PROPERTY DATA (from LINZ, Hougarden, OneRoof, Auckland Council GIS):
 ${JSON.stringify(merged, null, 2)}
@@ -1005,6 +1828,11 @@ PRE-COMPUTED SCORES — copy these numbers exactly, do not recalculate or second
 
   Composite score: ${scores.composite}/5
 
+SUBDIVISION PATHWAY (pre-computed — copy into subdivisionSummary verbatim, do NOT invent different lot counts):
+  Standard vacant-lot path viable: ${subdivision_pathway?.standard_path_viable ?? false}
+  Headline: ${subdivision_pathway?.headline ?? "unknown"}
+  Detail: ${subdivision_pathway?.detail ?? "See zone rules."}
+
 PRE-COMPUTED FINANCIALS — use verbatim:
   Potential lots: ${lots.lots}
   Zone: ${lots.zone_label} (${merged.zone_code ?? "unknown"})
@@ -1017,21 +1845,25 @@ PRE-COMPUTED FINANCIALS — use verbatim:
     High: $${formatNZD(costs.total_high)}
   Cost per unit (avg): $${formatNZD(costs.cost_per_unit_avg)}
 
-  Lot breakdown: ${lots.lots} lots × ${scenarios[0]?.sqm_per_lot ?? "?"}m² each → estimated ~${scenarios[0]?.gdv_per_lot ? formatNZD(scenarios[0].gdv_per_lot) : "?"} per lot (based on ${comparables_quality} comparable data)
+  Lot breakdown: ${lotBreakdown}
   NZ interest rate outlook: ${interestOutlook.toUpperCase()} (RBNZ OCR trajectory)${interestOutlook === "falling" ? " — BULL case enabled (+20% upside)" : ""}
 
   ROI Scenarios (Bear/Base/Bull cases per time horizon):
 ${scenarioLines}
 
   Comparables quality: ${comparables_quality}
-  Avg comparable sale (per lot): $${formatNZD(scenarios[0]?.gdv_per_lot ?? scenarios[0]?.gdv / Math.max(1, lots.lots))}
+  Avg comparable sale: ${avgComparableSaleText}
+
+  Development strategy scenarios (computed — copy these numbers verbatim):
+${strategyLines || "  unavailable"}
+  Recommended development strategy: ${recommendedStrategy ? `${recommendedStrategy.title} — ${recommendedStrategy.rationale}` : "unavailable"}
 
 ASBESTOS: ${asbestos_detail.risk} risk — ${asbestos_detail.notes}
 
 EASEMENTS & RIGHTS OF WAY (from LINZ title memorials):
 Retrieval status: ${easements.retrieval_status}
 ${easements.retrieval_status === "retrieved"
-  ? `Source: LINZ title memorials (layer 51553)
+  ? `Source: LINZ title memorials (table 51695 — NZ Title Memorials List)
 Burdening encumbrances: ${easements.burdening.length}
 Appurtenant (benefit) easements: ${easements.appurtenant.length}
 Has burdening ROW: ${easements.access_row_burdening}
@@ -1067,7 +1899,7 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
     "cv": ${cvNzd > 0 ? `"$${formatNZD(cvNzd)}"` : "null"},
     "landArea": "${merged.land_area_sqm != null ? `${merged.land_area_sqm}m²` : "null — check LINZ"}",
     "floorArea": "${merged.floor_area_sqm != null ? `${merged.floor_area_sqm}m²` : "null"}",
-    "buildYear": "${merged.build_year ?? "null"}",
+    "buildYear": ${merged.build_year != null ? `"${merged.build_year}"` : "null"},
     "zone": "...", "listingPrice": null, "isOnMarket": false
   },
   "planning": {
@@ -1077,7 +1909,7 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
     "grossAreaSqm": ${lots.gross_area_sqm},
     "netAreaSqm": ${lots.net_area_sqm},
     "easementAreaSqm": ${lots.easement_area_sqm},
-    "overlays": [{ "name": "...", "status": "clear|moderate|restricted", "detail": "..." }],
+    "overlays": [/* Copy ONLY from the OVERLAY DATA section above — do NOT add any overlay not listed there */],
     "easements": ${easements.burdening.length > 0
       ? JSON.stringify(easements.burdening.map((e) => ({
           type: e.type,
@@ -1094,7 +1926,8 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
     "easement_data_status": "${easements.retrieval_status}",
     "easement_summary": ${JSON.stringify(easements.summary)},
     "lot_impact_note": ${JSON.stringify(easements.lot_impact_note ?? null)},
-    "subdivisionSummary": "..."
+    "subdivisionSummary": "...",
+    "subdivisionPathwayNote": "${subdivision_pathway?.detail ?? ""}"
   },
   "potential_lots": ${lots.lots},
   "zone_label": "${lots.zone_label}",
@@ -1106,7 +1939,7 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
     "land_area_sqm": ${landSource ? `"${landSource}"` : "null"},
     "floor_area_sqm": ${floorSource ? `"${floorSource}"` : "null"}
   },
-  "asbestos": { "buildYear": "${merged.build_year ?? "null"}", "riskLevel": "${asbestos_detail.risk}", "risk": "${asbestos_detail.risk}", "flagged": ${asbestos_detail.risk === "high"}, "notes": "${asbestos_detail.notes}", "worksafe_required": ${asbestos_detail.risk === "high"}, "demoCostLow": ${costs.demo_low}, "demoCostHigh": ${costs.demo_high} },
+  "asbestos": { "buildYear": ${merged.build_year != null ? `"${merged.build_year}"` : "null"}, "riskLevel": "${asbestos_detail.risk}", "risk": "${asbestos_detail.risk}", "flagged": ${asbestos_detail.risk === "high"}, "notes": "${asbestos_detail.notes}", "worksafe_required": ${asbestos_detail.risk === "high"}, "demoCostLow": ${costs.demo_low}, "demoCostHigh": ${costs.demo_high} },
   "terrain": {
     "classification": ${merged.contour ? `"${merged.contour}"` : "null"},
     "official_label": ${contourTxt ? `"${contourTxt}"` : "null"},
@@ -1139,19 +1972,26 @@ ${scenarios.map((s) => {
   return `    { "years": ${s.years}, "gdv": ${s.gdv}, "gdv_per_lot": ${s.gdv_per_lot}, "sqm_per_lot": ${s.sqm_per_lot}, "lots": ${s.lots}, "total_cost_mid": ${s.total_cost_mid}, "gross_profit": ${s.gross_profit}, "roi_percent": ${s.roi_percent.toFixed(1)}, "annualised_roi_percent": ${s.annualised_roi_percent.toFixed(1)}, "viable": ${s.viable}, "cv_unavailable": ${costs.cv_unavailable}, "cases": [\n${casesJson}\n    ] }`;
 }).join(",\n")}
   ],
-  "comparableSales": [<3 real recent comparable sales for this suburb: { "address": "...", "sale_date": "YYYY-MM-DD", "price_nzd": <NZD>, "land_sqm": <number>, "floor_sqm": <number>, "price_per_sqm": <NZD> }>],
+  "developmentStrategies": ${JSON.stringify(developmentStrategies ?? [])},
+  "recommendedDevelopmentStrategy": ${recommendedStrategy ? `"${recommendedStrategy.id}"` : "null"},
+  "comparableSales": ${JSON.stringify(comparables)},
   "comparables_quality": "${comparables_quality}",
-  "avg_sale_price": ${scenarios[0]?.gdv_per_lot ?? Math.round(scenarios[0]?.gdv / Math.max(1, lots.lots))},
-  "avgPricePerSqm": <NZD/m² based on comparables>,
-  "riskSummary": ["specific risk/opportunity 1 for this exact property", "risk/opportunity 2", "risk/opportunity 3", "risk/opportunity 4", "risk/opportunity 5"],
+  "avg_sale_price": ${avgComparableSale ?? "null"},
+  "avgPricePerSqm": ${avgComparablePsm ?? "null"},
+  "riskSummary": ["At least 3 bullets, each grounded in THIS property zone/overlays/terrain/infrastructure/lots/title from the facts above — no source-availability wording", "second distinct site or planning point", "third risk or opportunity", "optional fourth", "optional fifth"],
   "disclaimer": "These are indicative estimates only. Always engage a quantity surveyor, lawyer, and urban planner before making any development decisions. Figures in NZD."
 }
 CRITICAL RULES:
 - If cv_unavailable is true: set propertyOverview.cv to null, include a riskSummary note about CV being unavailable.
 - If terrain.classification is null: terrain data was unavailable — keep it null, do not guess.
 - Infrastructure location "unknown" means GIS data was unavailable — keep as "unknown", do not guess.
+- comparableSales MUST be exactly the array provided above. If it is empty, keep it empty and keep roiScenarios empty. Never invent comparable sale addresses, dates, prices, or ROI sale-price assumptions.
+- developmentStrategies MUST be exactly the array provided above. Do not invent strategy ROI numbers or alter the recommendedDevelopmentStrategy.
 - Fill in ALL fields. Mark truly unknown fields as null (not empty string, not 0).
-- Write riskSummary items as specific, developer-focused 1-sentence statements about THIS property.
+- Write riskSummary items as specific, developer-focused 1-sentence statements about THIS property. **Minimum 3 bullets** (prefer 4–5), each clearly tied to the injected zone, overlays, terrain, infrastructure, potential lots, or title — never to whether information was "available" or to data sources.
+- NEVER include riskSummary bullets that reference comparable sales, market data availability, exit-price uncertainty, GDV reliability, or any data-source gaps — directly or indirectly. NEVER say that key facts (land area, zoning, planning data) were missing or not obtained, or that site-specific risks cannot be identified because data was incomplete — such bullets are stripped. Any such bullet (e.g. "comparable data is limited", "exit price is hard to predict", "market sales data is scarce") is stripped server-side and degrades the response. riskSummary must describe physical, planning, terrain, flood, coastal, heritage, OR (when potentialLots >= 4) programme/capital intensity — staged construction and sales, long tie-up of capital, absorption risk — without blaming data quality or report completeness. If build year is after 2000, do NOT mention asbestos in riskSummary (server strips these); the asbestos JSON block is sufficient.
+- The same rule applies to scores.ease_reasons, scores.cost_reasons, and scores.roi_reasons: never cite missing database matches, unavailable real-time sources, inability to confirm zoning/land area, assumptions about location ("assuming this site…"), missing comparables, or exit-price quantification difficulty — such lines are stripped from the property card.
+- When potentialLots from the pipeline is 4 or more: roiScenarios MUST remain exactly as provided in the injected strategies; the modelled timelines already use longer exit horizons for multi-unit schemes. Keep scores.roi_reasons honest about multi-year delivery where relevant (do not imply a quick flip).
 - Return ONLY valid JSON, no markdown fences, no other text.`;
             } else {
               const dataSummary = {
@@ -1174,108 +2014,68 @@ VERIFIED PROPERTY DATA:
 ${JSON.stringify(dataSummary, null, 2)}
 
 CRITICAL: Land (CV) cost MUST be a realistic NZD estimate based on the suburb, zone, and land area — never use $0. Research current Auckland Council CV rates for the suburb.
+CRITICAL: Do not invent comparable sales or sale-price assumptions. If real comparable sales were not fetched, return comparableSales: [], comparables_quality: "unavailable", avg_sale_price: null, avgPricePerSqm: null, and roiScenarios: [].
 
-Generate a complete FeasibilityReport JSON following your system instructions exactly. Use the fetched data as your primary source — prefer confirmed data over estimates. Where data is missing or a source failed, make reasonable NZ-market estimates and flag in riskSummary. Return ONLY valid JSON — no markdown code fences, no other text.`;
+Generate a complete FeasibilityReport JSON following your system instructions exactly. Use the fetched data as your primary source — prefer confirmed data over estimates. Where data is missing or a source failed, estimate conservatively where appropriate and describe physical/site risks in riskSummary — but NEVER mention comparable sales data, market data gaps, exit-price uncertainty, any data-source limitations, nor any language that implies the report is incomplete or unreliable because land area, zoning, or key planning facts were not captured. Return ONLY valid JSON — no markdown code fences, no other text.`;
             }
 
             const rawContent = await generateAnalysis(enrichedContent, chatLocale);
 
-            // Inject scraped fields + override ROI cases with computed values
-            const photoUrl = pipelineResult.oneroof?.main_photo_url ?? null;
-            const overlayMapB64 = pipelineResult.hougarden?.overlay_map_image_base64 ?? null;
-            const computedScenarios = pipelineResult.scenarios ?? [];
+            // Inject deterministic source-backed fields.
             let content = rawContent;
-            try {
-              const parsed = extractJSON(rawContent) as Record<string, unknown>;
-              if (parsed && typeof parsed === "object") {
-                if (photoUrl) {
-                  parsed.photoUrl = photoUrl;
-                } else {
-                  parsed.photoUrl = null;
-                }
-                if (overlayMapB64) parsed.overlay_map_image_base64 = overlayMapB64;
-
-                // Deterministic Property Overview snapshot — single source of
-                // truth shared with POST /analyse so follow-up chat answers stay
-                // consistent regardless of which entry path produced the report.
-                applyOverviewSnapshot(parsed, merged, geocode?.formatted ?? extractedAddress);
-
-                // Always override asbestos with pre-computed deterministic values.
-                // Claude ignores the schema hints and applies its own (incorrect) heuristics,
-                // e.g. flagging pre-1940 buildings as "high" risk when they predate widespread
-                // asbestos use in NZ. The classifyAsbestos() function uses the correct thresholds
-                // so we always inject its output here.
-                if (asbestos_detail && costs) {
-                  parsed.asbestos = {
-                    buildYear: merged?.build_year ?? null,
-                    riskLevel: asbestos_detail.risk,
-                    risk: asbestos_detail.risk,
-                    flagged: asbestos_detail.risk === "high",
-                    notes: asbestos_detail.notes,
-                    worksafe_required: asbestos_detail.worksafe_required,
-                    demoCostLow: costs.demo_low,
-                    demoCostHigh: costs.demo_high,
-                  };
-                }
-
-                // Always override roiScenarios cases with computed values so
-                // Bear/Base/Bull are guaranteed distinct — the LLM sometimes
-                // collapses all three to the same number.
-                if (computedScenarios.length > 0) {
-                  const computedByYears = new Map(computedScenarios.map((s) => [s.years, s]));
-                  const roiArr = parsed.roiScenarios as any[] | undefined;
-                  if (Array.isArray(roiArr)) {
-                    parsed.roiScenarios = roiArr.map((s: any) => {
-                      const computed = computedByYears.get(s.years as 2 | 3 | 4);
-                      if (computed?.cases && computed.cases.length > 0) {
-                        return { ...s, cases: computed.cases };
-                      }
-                      return s;
-                    });
-                  }
-                }
-
-                content = JSON.stringify(parsed);
-              }
-            } catch {
-              // silent — keep original content
+            const parsed = tryParseReportJson(rawContent);
+            if (parsed != null) {
+              applyDeterministicPipelineOverrides(parsed, pipelineResult, geocode?.formatted ?? extractedAddress);
+              content = JSON.stringify(parsed);
             }
 
-            // Persist to search history (non-blocking, silent fail)
+            // Persist to search history (non-blocking; invalid/truncated model JSON skips save)
             const chatUserId = getUserIdFromHeader(req);
             if (chatUserId) {
-              try {
-                const parsedForSave = extractJSON(content);
-                await db.insert(searches).values({
-                  userId: chatUserId,
-                  query: extractedAddress,
-                  address: geocode?.formatted ?? extractedAddress,
-                  resultJson: parsedForSave as any,
-                });
-                req.log.info({ address: extractedAddress }, "Chat analysis saved to history");
-              } catch {
-                // silent — don't interrupt the response
+              const parsedForSave = tryParseReportJson(content);
+              if (parsedForSave != null) {
+                try {
+                  await db.insert(searches).values({
+                    userId: chatUserId,
+                    query: extractedAddress,
+                    address: geocode?.formatted ?? extractedAddress,
+                    resultJson: parsedForSave as any,
+                  });
+                  req.log.info({ address: extractedAddress }, "Chat analysis saved to history");
+                } catch (err) {
+                  req.log.error({ err }, "Failed to save chat analysis to history");
+                }
+              } else {
+                req.log.warn(
+                  { query: extractedAddress.slice(0, 80), contentChars: content.length },
+                  "Chat analysis not saved — model output was not parseable JSON (often truncation or malformed JSON)",
+                );
               }
             }
 
-            sendAnalyseResponse({ content, mode: "analyse" });
+            const translatedAnalyse = await translateChatContent(content, "analyse", chatLocale, chatTranslateTitleSchool);
+            sendAnalyseResponse({ content: translatedAnalyse, mode: "analyse" });
             return;
           }
           // pipelineResult was null — generate AI-only response inside the heartbeat
           // context so we can use sendAnalyseResponse (avoids ERR_HTTP_HEADERS_SENT
           // if the heartbeat already committed the response headers).
           try {
-            const { content: aiContent, mode: aiMode } = await generateUnifiedResponse(messages, currentReport, intent.mode, chatLocale);
-            sendAnalyseResponse({ content: aiContent, mode: aiMode });
+            const { content: aiContent, mode: aiMode } = await generateUnifiedResponse(messages, currentReport, effectiveMode, chatLocale);
+            const translatedAi = await translateChatContent(aiContent, aiMode, chatLocale, chatTranslateTitleSchool);
+            sendAnalyseResponse({ content: translatedAi, mode: aiMode });
           } catch {
-            sendAnalyseResponse({ error: "Failed to generate reply. Please try again.", code: "CHAT_FAILED" });
+            const fallback = chatLocale === "zh"
+              ? await ensureChinese("Failed to generate reply. Please try again.")
+              : "Failed to generate reply. Please try again.";
+            sendAnalyseResponse({ error: fallback, code: "CHAT_FAILED" });
           }
           return;
         }
 
       }
 
-      const { content, mode: responseMode } = await generateUnifiedResponse(messages, currentReport, intent.mode, chatLocale);
+      const { content, mode: responseMode } = await generateUnifiedResponse(messages, currentReport, effectiveMode, chatLocale);
 
       // Safety net A: if the AI said "I'm searching..." but the discover pipeline didn't run,
       // extract the suburb from the AI's text and actually run the search now.
@@ -1293,6 +2093,11 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
           try {
             const cacheKey = makeCacheKey(suburb, minPrice, maxPrice);
             const shownUrls = getShownUrls(cacheKey);
+            const discoverPreOptsSn = {
+              allowMissingListingPrice: true as const,
+              pricePlaceholderNzd: Math.max(600_000, Math.round((minPrice + maxPrice) / 2)),
+            };
+            const streetHintSn = extractDiscoverStreetHintFromThread(messages, userText);
             const searchResult = await searchRealEstateListings({
               suburb, minPrice, maxPrice, skipUrls: shownUrls, includeNegotiation,
             }).catch(() => null);
@@ -1300,27 +2105,55 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             if (searchResult && searchResult.firstBatch.length > 0) {
               const inRange = (l: { price: number | null }) =>
                 l.price == null || (l.price >= minPrice && l.price <= maxPrice * 1.1);
-              const firstFiltered = searchResult.firstBatch.filter(inRange);
-              const remainingFiltered = searchResult.remainingListings.filter(inRange);
+              const firstFiltered = rankListingsByStreetHint(searchResult.firstBatch.filter(inRange), streetHintSn);
+              const remainingFiltered = rankListingsByStreetHint(
+                searchResult.remainingListings.filter(inRange),
+                streetHintSn,
+              );
+              const priorShownSn = [...getShownUrls(cacheKey)];
               setListingCache(cacheKey, {
                 remainingListings: remainingFiltered,
-                shownUrls: firstFiltered.map((l) => l.listingUrl),
+                shownUrls: priorShownSn,
                 suburb, minPrice, maxPrice,
               });
-              const candidates = await preScreenListingsFast(firstFiltered, 5).catch(() => []);
-              if (candidates.length > 0) {
+              const screenedSn = await preScreenListingsFast(firstFiltered, 5, null, discoverPreOptsSn).catch(
+                () => [] as PropertyCandidate[],
+              );
+              let discoverCandidates = shufflePick(rankByCriteria(screenedSn, null), 3);
+              markShown(
+                cacheKey,
+                discoverCandidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u)),
+              );
+              const { putAtFront: snFront, putAtBack: snBack } = partitionBatchAfterPrescreen(
+                firstFiltered,
+                screenedSn,
+                discoverCandidates,
+              );
+              restoreListingsAfterPop(cacheKey, snFront, snBack);
+
+              let snDrain = 0;
+              while (discoverCandidates.length === 0 && getRemainingCount(cacheKey) > 0 && snDrain < 6) {
+                snDrain++;
+                const { listings: snNext } = popNextListings(cacheKey, 8);
+                if (snNext.length === 0) break;
+                discoverCandidates = await prescreenPickRestoreBatch(cacheKey, snNext, null, discoverPreOptsSn);
+              }
+
+              if (discoverCandidates.length > 0) {
                 queueBackgroundScores(
-                  candidates.map((c) => ({ address: c.address, price: c.price, landArea: c.landArea, zone: c.zone })),
+                  discoverCandidates.map((c) => ({ address: c.address, price: c.price, landArea: c.landArea, zone: c.zone })),
                 );
-                const aiIntro = content; // Use what the AI already said as the intro
-                const payload = JSON.stringify({ candidates, isMockData: false, suburb, dataSource: "realestate.co.nz", noListings: false, aiIntro });
-                res.json({ content: payload, mode: "discover" });
+                const aiIntro = content;
+                const payload = JSON.stringify({ candidates: discoverCandidates, isMockData: false, suburb, dataSource: "realestate.co.nz", noListings: false, aiIntro });
+                const translatedPayload = await translateChatContent(payload, "discover", chatLocale, chatTranslateTitleSchool);
+                res.json({ content: translatedPayload, mode: "discover" });
                 return;
               }
             }
             // No results — use AI's text as the no-results message
             const noResultMsg = `${content.trim()} Unfortunately, I couldn't find any matching listings right now in ${suburb}. Try a different suburb or adjust your budget.`;
-            res.json({ content: noResultMsg, mode: "text" });
+            const translatedNoResult = await translateChatContent(noResultMsg, "text", chatLocale, chatTranslateTitleSchool);
+            res.json({ content: translatedNoResult, mode: "text" });
             return;
           } catch (searchErr) {
             req.log.warn({ searchErr }, "Fallback discover search failed — using AI text response");
@@ -1336,27 +2169,32 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             const parsed = JSON.parse(cleaned);
             if (parsed && Array.isArray(parsed.candidates)) {
               // Leaked discover JSON — render as property cards
-              res.json({ content: cleaned, mode: "discover" });
+              const translatedLeaked = await translateChatContent(cleaned, "discover", chatLocale, chatTranslateTitleSchool);
+              res.json({ content: translatedLeaked, mode: "discover" });
               return;
             }
             if (parsed && (parsed.reportId || (parsed.address && parsed.zoning) || parsed.propertyOverview)) {
               // Leaked feasibility report JSON — render as analyse report
-              res.json({ content: JSON.stringify(parsed), mode: "analyse" });
+              const translatedReport = await translateChatContent(JSON.stringify(parsed), "analyse", chatLocale, chatTranslateTitleSchool);
+              res.json({ content: translatedReport, mode: "analyse" });
               return;
             }
           } catch {
             const isLikelyBrokenJson = /^\s*\{[\s\S]{20,}/.test(cleaned);
             if (isLikelyBrokenJson) {
-              res.json({ content: "I'm sorry, I couldn't generate that right now. Please try again.", mode: "text" });
+              const fallbackMsg = "I'm sorry, I couldn't generate that right now. Please try again.";
+              const translatedFallback = await translateChatContent(fallbackMsg, "text", chatLocale, chatTranslateTitleSchool);
+              res.json({ content: translatedFallback, mode: "text" });
               return;
             }
           }
         }
       }
 
-      res.json({ content, mode: responseMode });
+      const translatedFinal = await translateChatContent(content, responseMode, chatLocale, chatTranslateTitleSchool);
+      res.json({ content: translatedFinal, mode: responseMode, ...providerSignal });
     } catch (error) {
-      req.log.error({ error }, "Failed to generate unified chat reply");
+      req.log.error({ err: error }, "Failed to generate unified chat reply");
       res.status(500).json({
         error: "Failed to generate reply. Please try again.",
         code: "CHAT_FAILED",
@@ -1379,7 +2217,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
     );
     res.json({ message: reply, type: "chat" });
   } catch (error) {
-    req.log.error({ error }, "Failed to generate chat reply");
+    req.log.error({ err: error }, "Failed to generate chat reply");
     res.status(500).json({
       error: "Failed to generate reply. Please try again.",
       code: "CHAT_FAILED",
@@ -1393,7 +2231,36 @@ router.get("/pipeline-test", async (req, res) => {
   req.log.info({ address }, "Pipeline test started");
 
   try {
+    const startedAt = Date.now();
     const pipelineResult = await runPropertyPipeline(address);
+    const merged = pipelineResult.merged;
+    const diagnostics = {
+      failed_sources: pipelineResult.failed_sources,
+      data_sources: merged?.data_sources ?? {},
+      missing_critical_fields: merged?.missing_critical_fields ?? [],
+      coverage: {
+        cv_nzd: merged?.cv_nzd ?? null,
+        build_year: merged?.build_year ?? null,
+        floor_area_sqm: merged?.floor_area_sqm ?? null,
+        land_area_sqm: merged?.land_area_sqm ?? null,
+      },
+      financials: {
+        cv_unavailable: pipelineResult.costs?.cv_unavailable ?? null,
+        total_excludes_land: pipelineResult.costs?.total_excludes_land ?? null,
+        total_low: pipelineResult.costs?.total_low ?? null,
+        total_high: pipelineResult.costs?.total_high ?? null,
+      },
+      lots: pipelineResult.lots
+        ? {
+            lots: pipelineResult.lots.lots,
+            zone_label: pipelineResult.lots.zone_label,
+            gross_area_sqm: pipelineResult.lots.gross_area_sqm,
+            net_area_sqm: pipelineResult.lots.net_area_sqm,
+            easement_area_sqm: pipelineResult.lots.easement_area_sqm,
+          }
+        : null,
+      timing_ms: pipelineResult.timing_ms,
+    };
 
     const debug = {
       address_input: pipelineResult.address_input,
@@ -1444,7 +2311,13 @@ router.get("/pipeline-test", async (req, res) => {
     };
 
     req.log.info(debug, "Pipeline test result");
-    res.json(debug);
+    res.json({
+      status: "ok",
+      address,
+      elapsed_ms: Date.now() - startedAt,
+      diagnostics,
+      pipeline: debug,
+    });
   } catch (err) {
     req.log.error({ err }, "Pipeline test failed");
     res.status(500).json({ error: String(err) });

@@ -37,6 +37,10 @@ const OVERLAY_MAP: Record<string, { name: string; status: Overlay["status"]; det
   "notable tree": { name: "Notable Trees", status: "moderate", detail: "Notable tree on or near site — removal requires Resource Consent." },
   "volcanic": { name: "Volcanic Viewshaft", status: "restricted", detail: "Volcanic Viewshaft — height restrictions apply, may be below zone standard." },
   "viewshaft": { name: "Viewshaft", status: "restricted", detail: "Viewshaft overlay — additional height assessment required at Resource Consent." },
+  "coastal inundation": { name: "Coastal Inundation", status: "restricted", detail: "Coastal Inundation Area — floor level controls and NES-F compliance required." },
+  "coastal erosion": { name: "Coastal Erosion Hazard", status: "restricted", detail: "Coastal Erosion Hazard Area — coastal engineer assessment required before design or consent." },
+  "coastal hazard": { name: "Coastal Erosion Hazard", status: "restricted", detail: "Coastal Hazard Area — coastal engineer assessment and setback controls apply." },
+  "coastal environment": { name: "Coastal Environment", status: "moderate", detail: "Within Auckland Unitary Plan Coastal Environment — natural character, public access, and visual amenity rules apply. Development requires assessment against AUP Chapter 9." },
   "coastal": { name: "Coastal Inundation", status: "restricted", detail: "Coastal Inundation Area — floor level controls and NES-F compliance required." },
   "overland": { name: "Overland Flow Path", status: "moderate", detail: "Overland Flow Path — stormwater management plan required." },
   "waitakere": { name: "Waitakere Ranges Heritage", status: "restricted", detail: "Waitakere Ranges Heritage Area — strict development controls." },
@@ -115,8 +119,16 @@ function extractDataFromText(pageText: string): Partial<HougardenData> {
   const floorM = /[Ff]loor\s*(?:[Aa]rea)?[:\s]+([0-9,]+\.?[0-9]*)\s*m/.exec(pageText);
   if (floorM) { const a = parseArea(floorM[1]); if (a && a > 10) result.floor_area_sqm = a; }
 
-  const yearM = /(?:[Bb]uilt?|[Bb]uild|[Dd]ecade)[:\s]+(\d{4})/.exec(pageText);
-  if (yearM) { const y = parseYear(yearM[1]); if (y) result.build_year = y; }
+  const yearPatterns = [
+    /[Yy]ear\s+[Bb]uilt[:\s]+(\d{4})/,
+    /[Bb]uilt?\s+in\s+(\d{4})/i,
+    /[Cc]onstruction\s+[Yy]ear[:\s]+(\d{4})/i,
+    /(?:[Bb]uilt?|[Bb]uild|[Dd]ecade)[:\s]+(\d{4})/,
+  ];
+  for (const p of yearPatterns) {
+    const m = p.exec(pageText);
+    if (m) { const y = parseYear(m[1]); if (y) { result.build_year = y; break; } }
+  }
 
   const zonePatterns = [
     /(Single House Zone|Mixed Housing Suburban|Mixed Housing Urban|Terrace Housing and Apartment|Large Lot Residential|Future Urban Zone|General Business Zone|Local Centre Zone|Town Centre Zone|Mixed Use Zone)/i,

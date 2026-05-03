@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Support | Project Alpha</title>
+    <meta name="description" content="Contact Project Alpha support." />
+    <link rel="stylesheet" href="/styles.css" />
+    <script defer src="/site.js"></script>
+  </head>
+  <body data-page="support">
+    <div class="site-shell">
+      <header class="topbar topbar--solid">
+        <a class="brand" href="/" aria-label="Project Alpha home">
+          <span class="brand-mark">A</span>
+          <span data-i18n="brand">Project Alpha</span>
+        </a>
+        <nav class="nav" aria-label="Primary navigation">
+          <a href="/" data-i18n="navHome">Home</a>
+          <a href="/privacy/" data-i18n="navPrivacy">Privacy</a>
+          <a href="/terms/" data-i18n="navTerms">Terms and conditions</a>
+        </nav>
+      </header>
+
+      <main class="page-main">
+        <header class="page-header">
+          <p class="section-kicker" data-i18n="kicker">Support</p>
+          <h1 data-i18n="pageTitle">How can we help?</h1>
+          <p data-i18n="pageCopy">
+            Send a message to the Project Alpha team. Include the email address linked to your
+            account so we can respond quickly.
+          </p>
+        </header>
+
+        <div class="page-content support-layout">
+          <form class="form-card" id="support-form" action="/api/support" method="post">
+            <div class="field">
+              <label for="email" data-i18n="email">Email address</label>
+              <input id="email" name="email" type="email" autocomplete="email" required />
+            </div>
+            <div class="field">
+              <label for="phone" data-i18n="phone">Phone number</label>
+              <input id="phone" name="phone" type="tel" autocomplete="tel" />
+            </div>
+            <div class="field">
+              <label for="message" data-i18n="message">Message</label>
+              <textarea
+                id="message"
+                name="message"
+                required
+                placeholder="Tell us what happened, what you were trying to do, and the best way to contact you."
+                data-i18n-placeholder="messagePlaceholder"
+              ></textarea>
+            </div>
+            <button class="button button-primary" type="submit" data-i18n="send">Send support request</button>
+            <p class="form-status" id="form-status" role="status" aria-live="polite"></p>
+          </form>
+
+          <aside class="policy-card">
+            <h3 data-i18n="sideTitle">Account and app help</h3>
+            <p data-i18n="sideCopy">
+              Use this form for login problems, billing questions, account deletion requests,
+              property report issues, or app support needed for App Store and Play Store review.
+            </p>
+          </aside>
+        </div>
+      </main>
+
+      <footer class="footer">
+        <div class="footer-inner">
+          <a class="brand" href="/">
+            <span class="brand-mark">A</span>
+            <span data-i18n="brand">Project Alpha</span>
+          </a>
+          <div class="footer-links">
+            <a class="footer-support" href="/support/" data-i18n="footerSupport">Support</a>
+            <a href="/privacy/" data-i18n="footerPrivacy">Privacy</a>
+            <a href="/terms/" data-i18n="footerTerms">Terms and conditions</a>
+          </div>
+        </div>
+      </footer>
+    </div>
+
+    <script>
+      const form = document.getElementById("support-form");
+      const statusEl = document.getElementById("form-status");
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const zh = window.__projectAlphaLang === "zh";
+        statusEl.className = "form-status";
+        statusEl.textContent = zh ? "正在发送..." : "Sending...";
+
+        const data = new FormData(form);
+        const payload = {
+          email: String(data.get("email") || ""),
+          phone: String(data.get("phone") || ""),
+          message: String(data.get("message") || ""),
+        };
+
+        try {
+          const response = await fetch("/api/support", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          const json = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(json.error || "Could not send your message.");
+          form.reset();
+          statusEl.className = "form-status success";
+          statusEl.textContent = zh ? "谢谢。你的支持请求已发送。" : "Thanks. Your support request has been sent.";
+        } catch (error) {
+          statusEl.className = "form-status error";
+          statusEl.textContent = zh ? "无法发送消息，请重试。" : error.message || "Could not send your message. Please try again.";
+        }
+      });
+    </script>
+  </body>
+</html>

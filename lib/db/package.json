@@ -8,8 +8,9 @@
     "./schema": "./src/schema/index.ts"
   },
   "scripts": {
-    "push": "drizzle-kit push --config ./drizzle.config.ts",
-    "push-force": "drizzle-kit push --force --config ./drizzle.config.ts"
+    "push": "drizzle-kit push --config ./drizzle.config.cjs",
+    "push-force": "drizzle-kit push --force --config ./drizzle.config.cjs",
+    "set-henry-zeng-provider-stats": "node ./scripts/set-henry-zeng-provider-stats.mjs"
   },
   "dependencies": {
     "drizzle-orm": "catalog:",
@@ -20,6 +21,7 @@
   "devDependencies": {
     "@types/node": "catalog:",
     "@types/pg": "^8.18.0",
+    "dotenv": "^17.2.3",
     "drizzle-kit": "^0.31.9"
   }
 }

@@ -11,3 +11,5 @@ export * from "./dm_messages";
 export * from "./push_tokens";
 export * from "./recommendations";
 export * from "./phone_verifications";
+export * from "./password_reset_tokens";
+export * from "./chat_llm_feedback";

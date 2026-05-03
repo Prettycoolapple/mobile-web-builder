@@ -47,3 +47,15 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+.local-uploads/
+
+# Local browser / tooling profiles (never commit)
+.config/
+.vercel/
+
+# local secrets
+.env
+.env.local
+.env.*.local
+.env.*.secret
+!.env.example

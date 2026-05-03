@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "export NODE_ENV=development && pnpm run build && pnpm run start",
+    "dev": "tsx watch src/index.ts",
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -22,6 +22,7 @@
     "cheerio": "^1.2.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2",
+    "dotenv": "^17.2.3",
     "drizzle-orm": "catalog:",
     "express": "^5",
     "geotiff": "^3.0.5",
@@ -48,6 +49,7 @@
     "esbuild": "^0.27.3",
     "esbuild-plugin-pino": "^2.3.3",
     "pino-pretty": "^13",
+    "tsx": "catalog:",
     "thread-stream": "3.1.0",
     "vitest": "^4.1.4"
   }

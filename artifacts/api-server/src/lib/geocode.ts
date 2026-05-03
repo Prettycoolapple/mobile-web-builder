@@ -38,18 +38,55 @@ async function nominatimGeocode(address: string): Promise<GeoResult | null> {
   if (!results || results.length === 0) return null;
 
   const best = results[0];
+  return nominatimRowToGeo(best);
+}
+
+type NominatimRow = {
+  lat: string;
+  lon: string;
+  display_name: string;
+  address?: {
+    suburb?: string;
+    town?: string;
+    city_district?: string;
+    county?: string;
+  };
+};
+
+function nominatimRowToGeo(row: NominatimRow): GeoResult {
   const suburb =
-    best.address?.suburb ??
-    best.address?.town ??
-    best.address?.city_district ??
+    row.address?.suburb ??
+    row.address?.town ??
+    row.address?.city_district ??
     null;
 
   return {
-    lat: parseFloat(best.lat),
-    lng: parseFloat(best.lon),
-    formatted: best.display_name.split(", New Zealand")[0],
+    lat: parseFloat(row.lat),
+    lng: parseFloat(row.lon),
+    formatted: row.display_name.split(", New Zealand")[0],
     suburb: suburb ? suburb.toLowerCase().trim() : null,
   };
+}
+
+/** All Nominatim hits for disambiguation (typo corrections, suburb variants). */
+export async function nominatimSearchNz(address: string, limit = 6): Promise<GeoResult[]> {
+  const q = encodeURIComponent(`${address}, New Zealand`);
+  const url = `https://nominatim.openstreetmap.org/search?q=${q}&format=json&limit=${limit}&countrycodes=nz&addressdetails=1`;
+
+  const resp = await fetch(url, {
+    headers: {
+      "User-Agent": "ProjectAlphaNZ/1.0 (property development analysis app)",
+      "Accept-Language": "en",
+    },
+    signal: AbortSignal.timeout(10000),
+  });
+
+  if (!resp.ok) throw new Error(`Nominatim HTTP ${resp.status}`);
+
+  const results = (await resp.json()) as NominatimRow[];
+
+  if (!results || results.length === 0) return [];
+  return results.map(nominatimRowToGeo);
 }
 
 async function googleGeocode(address: string, apiKey: string): Promise<GeoResult | null> {
@@ -78,7 +115,11 @@ async function googleGeocode(address: string, apiKey: string): Promise<GeoResult
   };
 }
 
-export async function geocodeAddress(address: string): Promise<GeoResult> {
+/**
+ * Same resolution order as {@link geocodeAddress} but never throws —
+ * useful for probing typos without blocking the analyse flow.
+ */
+export async function tryGeocodeAddress(address: string): Promise<GeoResult | null> {
   const googleKey = process.env["GOOGLE_MAPS_API_KEY"];
 
   if (googleKey) {
@@ -93,11 +134,20 @@ export async function geocodeAddress(address: string): Promise<GeoResult> {
     }
   }
 
-  const result = await nominatimGeocode(address);
+  try {
+    return await nominatimGeocode(address);
+  } catch (err) {
+    logger.warn({ err }, "Geocode probe failed — no result");
+    return null;
+  }
+}
+
+export async function geocodeAddress(address: string): Promise<GeoResult> {
+  const result = await tryGeocodeAddress(address);
   if (!result) {
     throw new Error(`Could not geocode address: "${address}" in New Zealand`);
   }
 
-  logger.debug({ address, result }, "Geocoded via Nominatim");
+  logger.debug({ address, result }, "Geocoded (resolved)");
   return result;
 }

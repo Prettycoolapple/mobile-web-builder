@@ -18,7 +18,9 @@ import * as ImagePicker from "expo-image-picker";
 import * as Haptics from "expo-haptics";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { useAuth } from "@/context/AuthContext";
+import { getApiBase as resolveApiBase, hasExplicitApiConfiguration } from "@/lib/api";
 import { useColors } from "@/hooks/useColors";
+import { useT } from "@/lib/i18n";
 
 const PROPERTY_TYPES = [
   { key: "house", label: "House" },
@@ -60,6 +62,7 @@ export default function AddListingScreen() {
   const { getApiHeaders } = useAuth();
   const { id: editId } = useLocalSearchParams<{ id?: string }>();
   const isEditMode = !!editId;
+  const { t } = useT();
 
   const [loadingEdit, setLoadingEdit] = useState(isEditMode);
   const [address, setAddress] = useState("");
@@ -91,12 +94,7 @@ export default function AddListingScreen() {
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const getApiBase = useCallback(() => {
-    if (process.env.EXPO_PUBLIC_DOMAIN) {
-      return `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`;
-    }
-    return "/api";
-  }, []);
+  const getApiBase = useCallback(() => resolveApiBase(), []);
 
   useEffect(() => {
     if (!editId) return;
@@ -210,7 +208,7 @@ export default function AddListingScreen() {
   const handlePickImages = useCallback(async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
-      Alert.alert("Permission needed", "Please allow access to your photo library to add images.");
+      Alert.alert(t("add_listing.permission_title"), t("add_listing.permission_body"));
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -263,7 +261,7 @@ export default function AddListingScreen() {
 
   const handleSubmit = useCallback(async () => {
     if (!address.trim()) {
-      Alert.alert("Address required", "Please enter the property address.");
+      Alert.alert(t("add_listing.address_required_title"), t("add_listing.address_required_body"));
       return;
     }
     setSubmitting(true);
@@ -320,14 +318,14 @@ export default function AddListingScreen() {
 
       if (!resp.ok) {
         const err = (await resp.json()) as { error?: string };
-        Alert.alert("Error", err.error ?? "Failed to submit listing.");
+        Alert.alert(t("common.error"), err.error ?? t("add_listing.submit_error"));
         return;
       }
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setSuccessVisible(true);
     } catch {
-      Alert.alert("Error", "Something went wrong. Please try again.");
+      Alert.alert(t("common.error"), t("common.try_again_later"));
     } finally {
       setSubmitting(false);
     }
@@ -350,7 +348,7 @@ export default function AddListingScreen() {
           <TouchableOpacity onPress={() => router.back()} style={styles.headerBack} activeOpacity={0.7}>
             <Feather name="x" size={22} color="rgba(250,249,246,0.8)" />
           </TouchableOpacity>
-          <Text style={[styles.headerTitle, { fontFamily: "DM_Sans_700Bold", color: "#FAFAF9" }]}>Edit Listing</Text>
+          <Text style={[styles.headerTitle, { fontFamily: "DM_Sans_700Bold", color: "#FAFAF9" }]}>{t("add_listing.edit")}</Text>
           <View style={styles.headerSpacer} />
         </View>
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
@@ -368,7 +366,7 @@ export default function AddListingScreen() {
           <Feather name="x" size={22} color="rgba(250,249,246,0.8)" />
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { fontFamily: "DM_Sans_700Bold", color: "#FAFAF9" }]}>
-          {isEditMode ? "Edit Listing" : "New Listing"}
+          {isEditMode ? t("add_listing.edit") : t("add_listing.new")}
         </Text>
         <View style={styles.headerSpacer} />
       </View>
@@ -381,12 +379,12 @@ export default function AddListingScreen() {
       >
         {/* — ADDRESS — */}
         <View style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>Property address</Text>
+          <Text style={[styles.sectionLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>{t("add_listing.address")}</Text>
           <View style={[styles.addressInputWrapper, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <Feather name="map-pin" size={16} color={colors.accent} style={{ marginLeft: 12 }} />
             <TextInput
               style={[styles.addressInput, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-              placeholder="Search address..."
+              placeholder={t("add_listing.address_placeholder")}
               placeholderTextColor={colors.mutedForeground}
               value={address}
               onChangeText={handleAddressChange}
@@ -419,9 +417,9 @@ export default function AddListingScreen() {
             </View>
           )}
 
-          {!process.env.EXPO_PUBLIC_DOMAIN && (
+          {!hasExplicitApiConfiguration() && (
             <Text style={[styles.hint, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-              Address suggestions require Google Places API key to be configured.
+              If address suggestions fail on a physical device, set `EXPO_PUBLIC_API_URL` in `artifacts/mobile/.env.local`.
             </Text>
           )}
         </View>
@@ -705,7 +703,7 @@ export default function AddListingScreen() {
             <>
               <Feather name="check-circle" size={18} color="#fff" />
               <Text style={[styles.submitBtnText, { fontFamily: "DM_Sans_700Bold" }]}>
-                {isEditMode ? "Save changes" : "Submit listing"}
+                {isEditMode ? t("add_listing.save_changes") : t("add_listing.submit")}
               </Text>
             </>
           )}
@@ -720,19 +718,19 @@ export default function AddListingScreen() {
               <Feather name="check-circle" size={38} color={colors.accent} />
             </View>
             <Text style={[styles.successTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
-              {isEditMode ? "Listing updated!" : "Listing submitted!"}
+              {isEditMode ? t("add_listing.success_updated_title") : t("add_listing.success_created_title")}
             </Text>
             <Text style={[styles.successBody, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
               {isEditMode
-                ? "Your listing has been updated successfully."
-                : "Project Alpha will promote your listing to suitable buyers now."}
+                ? t("add_listing.success_updated_body")
+                : t("add_listing.success_created_body")}
             </Text>
             <TouchableOpacity
               style={[styles.successBtn, { backgroundColor: colors.accent }]}
               onPress={handleSuccessDismiss}
               activeOpacity={0.85}
             >
-              <Text style={[styles.successBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>Done</Text>
+              <Text style={[styles.successBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>{t("common.done")}</Text>
             </TouchableOpacity>
           </View>
         </View>

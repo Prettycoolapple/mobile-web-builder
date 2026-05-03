@@ -14,6 +14,7 @@ export interface MergedPropertyData {
   land_area_sqm: number | null;
   floor_area_sqm: number | null;
   build_year: number | null;
+  build_year_range: string | null;
   bedrooms: number | null;
   bathrooms: number | null;
   zone_code: string | null;
@@ -26,6 +27,7 @@ export interface MergedPropertyData {
   listing_active: boolean;
   listing_price: number | null;
   main_photo_url: string | null;
+  photo_urls: string[];
   overlay_map_image_base64: string | null;
   comparables: ComparableSale[];
   data_sources: Record<string, string>;
@@ -43,6 +45,8 @@ export interface MergedPropertyData {
   asbestos_risk: "low" | "high" | "unknown";
   infrastructure: InfrastructureItem[];
   missing_critical_fields: string[];
+  /** LINZ title estate description when resolved (e.g. Fee Simple / cross lease). */
+  estate_type: string | null;
 }
 
 // ─── Simple "first non-null" helper ──────────────────────────────────────────
@@ -84,20 +88,64 @@ function bestCV(
   return { cv_nzd: bestNzd, cv_year: bestYear };
 }
 
-// ─── Smart build-year merge: majority consensus with conflict detection ────────
-// Scrapers all derive from AC records but may parse "year of last renovation"
-// vs "original construction". We group values within ±3 years and pick the
-// largest agreement group. On conflict we take the earliest value — original
-// construction is always what matters for development feasibility.
-function consensusBuildYear(
+// ─── Smart build-year merge: precision-aware with conflict detection ───────────
+// Some sources expose only a built decade (e.g. "2010s") and our scraper stores
+// that as the decade start (2010). Prefer a nearby exact year (e.g. 2016) over
+// a rounded decade value so users see the actual build year where available.
+function resolveBuildYear(
   sources: Record<string, string>,
   candidates: Array<{ src: string; build_year: number | null | undefined }>,
-): number | null {
+): { build_year: number | null; note: string | null } {
   const valid = candidates.filter((c): c is { src: string; build_year: number } => c.build_year != null);
-  if (valid.length === 0) return null;
+  if (valid.length === 0) return { build_year: null, note: null };
   if (valid.length === 1) {
     sources["build_year"] = valid[0].src;
-    return valid[0].build_year;
+    return { build_year: valid[0].build_year, note: null };
+  }
+
+  const exact = valid.filter((c) => c.build_year % 10 !== 0);
+  const decade = valid.filter((c) => c.build_year % 10 === 0);
+
+  if (exact.length > 0) {
+    const exactGroups: Array<{ key: number; members: typeof exact }> = [];
+    for (const item of exact) {
+      const existing = exactGroups.find((g) => Math.abs(item.build_year - g.key) <= 3);
+      if (existing) {
+        existing.members.push(item);
+      } else {
+        exactGroups.push({ key: item.build_year, members: [item] });
+      }
+    }
+    exactGroups.sort((a, b) => {
+      if (b.members.length !== a.members.length) return b.members.length - a.members.length;
+      const aHasOr = a.members.some((m) => m.src === "oneroof");
+      const bHasOr = b.members.some((m) => m.src === "oneroof");
+      if (aHasOr !== bHasOr) return aHasOr ? -1 : 1;
+      // Prefer newer year on tie — records often lag replacements; property pages update sooner
+      return b.key - a.key;
+    });
+
+    const winner = exactGroups[0];
+    const year = Math.round(winner.members.reduce((sum, m) => sum + m.build_year, 0) / winner.members.length);
+    sources["build_year"] = winner.members.length > 1
+      ? `exact-consensus(${winner.members.map((m) => m.src).join(",")})`
+      : winner.members[0].src;
+
+    const nearbyDecade = decade.find((d) => Math.abs(d.build_year - year) <= 9);
+    if (nearbyDecade) {
+      return {
+        build_year: year,
+        note: `Build year: exact source ${sources["build_year"]} reports ${year}; rounded decade value ${nearbyDecade.build_year} from ${nearbyDecade.src} was ignored.`,
+      };
+    }
+
+    if (exactGroups.length > 1 || decade.length > 0) {
+      logger.warn(
+        { selected: `${sources["build_year"]}:${year}`, rejected: valid.filter((v) => Math.abs(v.build_year - year) > 3).map((v) => `${v.src}:${v.build_year}`) },
+        "Build year conflict between sources — using exact-year source",
+      );
+    }
+    return { build_year: year, note: null };
   }
 
   // Group values that are within ±3 years of each other
@@ -111,10 +159,13 @@ function consensusBuildYear(
     }
   }
 
-  // Sort groups: largest first, then earliest year (original construction)
+  // Sort groups: largest first, then prefer OneRoof / newer year on tie
   groups.sort((a, b) => {
     if (b.members.length !== a.members.length) return b.members.length - a.members.length;
-    return a.key - b.key; // earlier year wins tiebreak
+    const aHasOr = a.members.some((m) => m.src === "oneroof");
+    const bHasOr = b.members.some((m) => m.src === "oneroof");
+    if (aHasOr !== bHasOr) return aHasOr ? -1 : 1;
+    return b.key - a.key; // newer year on tie (see exact-group rationale)
   });
 
   const winner = groups[0];
@@ -133,7 +184,7 @@ function consensusBuildYear(
     ? `consensus(${winner.members.map((m) => m.src).join(",")})`
     : winner.members[0].src;
 
-  return avgYear;
+  return { build_year: avgYear, note: null };
 }
 
 // ─── Smart floor-area merge: median of credible values ───────────────────────
@@ -191,6 +242,8 @@ export function mergePropertyData(
     property_history?: PropertyHistory | null;
     qv?: QVData | null;
     homes?: HomesData | null;
+    /** Active listing images from realestate.co.nz when OneRoof has none. */
+    realestate_photo_urls?: string[] | null;
   },
 ): MergedPropertyData {
   const sources: Record<string, string> = {};
@@ -217,14 +270,30 @@ export function mergePropertyData(
     { src: "homes",              cv_nzd: homes?.cv_nzd,    cv_year: undefined },
   ]);
 
-  // Build year: consensus across all sources.
-  const build_year = consensusBuildYear(sources, [
+  // Build year: prefer exact source years over rounded decade values.
+  const buildYearResult = resolveBuildYear(sources, [
     { src: "oneroof",            build_year: oneroof?.build_year },
     { src: "hougarden",          build_year: hougarden?.build_year },
     { src: "auckland_council_gis", build_year: ph?.build_year },
     { src: "qv",                 build_year: qv?.build_year },
     { src: "homes",              build_year: homes?.build_year },
   ]);
+  let build_year = buildYearResult.build_year;
+  // When we have a range but no exact year, extract the end year as a fallback
+  // (e.g. "2010-2019" → 2019). NZ council decades use the end year as the
+  // registered completion year (same data CoreLogic/PropertyValue exposes as exact).
+  const rawRange = build_year == null ? (qv?.build_year_range ?? null) : null;
+  if (build_year == null && rawRange) {
+    const rangeEndM = rawRange.match(/\d{4}[–\-](\d{4})/);
+    if (rangeEndM) {
+      const endY = parseInt(rangeEndM[1], 10);
+      if (endY >= 1800 && endY <= new Date().getFullYear() + 1) {
+        build_year = endY;
+        sources["build_year"] = "qv (range-end)";
+      }
+    }
+  }
+  const build_year_range = build_year == null ? rawRange : null;
 
   // Floor area: median of credible values.
   let floor_area_sqm = medianFloorArea(sources, [
@@ -238,10 +307,12 @@ export function mergePropertyData(
   let bedrooms = first("bedrooms", sources,
     ["oneroof", oneroof?.bedrooms],
     ["homes",   homes?.bedrooms],
+    ["qv",      qv?.bedrooms],
   );
   let bathrooms = first("bathrooms", sources,
     ["oneroof", oneroof?.bathrooms],
     ["homes",   homes?.bathrooms],
+    ["qv",      qv?.bathrooms],
   );
 
   // Track human-readable discrepancy notes for everything the live-listing
@@ -249,6 +320,7 @@ export function mergePropertyData(
   // the report UI and the follow-up chat can stay aligned on *why* a value
   // was chosen.
   const discrepancies: string[] = [];
+  if (buildYearResult.note) discrepancies.push(buildYearResult.note);
 
   // Live-listing reconciliation:
   // When OneRoof shows the property is *currently listed for sale*, the listing
@@ -257,7 +329,6 @@ export function mergePropertyData(
   // Council/QV records can lag by years. If the active-listing values
   // materially disagree with the consensus, prefer the listing.
   let live_land_area_sqm: number | null = null;
-  let live_build_year: number | null = null;
   if (oneroof?.listing_active) {
     if (oneroof.floor_area_sqm != null && floor_area_sqm != null) {
       const delta = Math.abs(oneroof.floor_area_sqm - floor_area_sqm) / floor_area_sqm;
@@ -321,26 +392,35 @@ export function mergePropertyData(
         sources["land_area_sqm"] = "oneroof (live listing)";
       }
     }
-    // Build year: a brand-new build on market is often missing from council
-    // records for 6–18 months. Trust the live listing's build year when it is
-    // newer (renovation/replacement dwelling).
-    if (oneroof.build_year != null && build_year != null && oneroof.build_year > build_year + 3) {
-      logger.info(
-        { previous: build_year, listing: oneroof.build_year },
-        "Merge: live OneRoof listing overrides build year (newer build)",
-      );
-      discrepancies.push(
-        `Build year: live OneRoof listing reports ${oneroof.build_year} vs council/QV consensus ${build_year}. Using the live listing (likely a newer build or replacement dwelling).`,
-      );
-      live_build_year = oneroof.build_year;
-      sources["build_year"] = "oneroof (live listing)";
-    } else if (oneroof.build_year != null && build_year == null) {
-      live_build_year = oneroof.build_year;
-      sources["build_year"] = "oneroof (live listing)";
-    }
   }
   const final_land_area_sqm = live_land_area_sqm ?? land_area_sqm;
-  const final_build_year = live_build_year ?? build_year;
+
+  // OneRoof property page often shows the year agents use in marketing; prefer it when it
+  // resolves ambiguity (newer build, or exact year vs a rounded decade elsewhere). Not gated
+  // on listing_active — the same HTML is used for sold/inactive property pages.
+  if (oneroof?.build_year != null) {
+    const orY = oneroof.build_year;
+    if (build_year == null) {
+      build_year = orY;
+      sources["build_year"] = "oneroof";
+    } else if (orY % 10 !== 0 && build_year % 10 === 0 && Math.abs(orY - build_year) <= 9) {
+      logger.info({ consensusDecade: build_year, oneroofExact: orY }, "Merge: OneRoof exact build year over decade from other source(s)");
+      discrepancies.push(
+        `Build year: OneRoof reports ${orY} (exact year) vs rounded decade ${build_year} from other records. Using OneRoof.`,
+      );
+      build_year = orY;
+      sources["build_year"] = "oneroof (exact vs decade)";
+    } else if (orY > build_year + 3) {
+      logger.info({ previous: build_year, oneroof: orY }, "Merge: OneRoof reports newer build year (replacement / record lag)");
+      discrepancies.push(
+        `Build year: OneRoof reports ${orY} vs other sources ${build_year}. Using OneRoof (likely newer dwelling or records not yet updated).`,
+      );
+      build_year = orY;
+      sources["build_year"] = "oneroof (newer year)";
+    }
+  }
+
+  const final_build_year = build_year;
 
   let overlays: Overlay[] = [];
   if (hougarden && hougarden.overlays.length > 0) {
@@ -382,7 +462,13 @@ export function mergePropertyData(
     : first("listing_price", sources, ["oneroof", oneroof?.listing_price]);
 
   const school_zones          = hougarden?.school_zones ?? { primary: null, intermediate: null, secondary: null };
-  const main_photo_url        = oneroof?.main_photo_url ?? null;
+  // Listing hero photos: OneRoof first, then realestate.co.nz address-matched fallbacks.
+  const photo_urls = Array.from(new Set([
+    ...(oneroof?.photo_urls ?? []),
+    ...(oneroof?.main_photo_url ? [oneroof.main_photo_url] : []),
+    ...(extra?.realestate_photo_urls ?? []),
+  ].filter(Boolean))).slice(0, 12);
+  const main_photo_url        = photo_urls[0] ?? null;
   const overlay_map_image_base64 = hougarden?.overlay_map_image_base64 ?? null;
 
   const comparables: ComparableSale[] = oneroof?.comparables ?? [];
@@ -401,6 +487,7 @@ export function mergePropertyData(
     land_area_sqm: final_land_area_sqm,
     floor_area_sqm,
     build_year: final_build_year,
+    build_year_range,
     bedrooms,
     bathrooms,
     zone_code,
@@ -413,6 +500,7 @@ export function mergePropertyData(
     listing_active: oneroof?.listing_active ?? false,
     listing_price,
     main_photo_url,
+    photo_urls,
     overlay_map_image_base64,
     comparables,
     data_sources: sources,
@@ -424,5 +512,6 @@ export function mergePropertyData(
     asbestos_risk: extra?.asbestos_risk ?? "unknown",
     infrastructure: extra?.infrastructure ?? [],
     missing_critical_fields,
+    estate_type: null,
   };
 }

@@ -5,13 +5,14 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
-  Linking,
   Image,
+  Alert,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { ServiceProvider } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
 import { avatarImageSource } from "@/lib/avatar";
+import { useT } from "@/lib/i18n";
 
 interface Props {
   provider: ServiceProvider;
@@ -48,24 +49,28 @@ function ProviderAvatar({ provider }: { provider: ServiceProvider }) {
   );
 }
 
-function intentLabel(intentType: string, hasAddress: boolean): string {
-  if (intentType === "referral" || !hasAddress) return "development projects";
+function intentLabel(
+  intentType: string,
+  hasAddress: boolean,
+  t: (key: string) => string,
+): string {
+  if (intentType === "referral" || !hasAddress) return t("bubble.recommend.dev_projects");
   switch (intentType) {
-    case "subdivision": return "subdivision potential";
-    case "newbuild": return "new build potential";
-    case "renovation": return "development potential";
-    default: return "development potential";
+    case "subdivision": return t("bubble.recommend.subdivision");
+    case "newbuild": return t("bubble.recommend.newbuild");
+    case "renovation": return t("bubble.recommend.renovation");
+    default: return t("bubble.recommend.default_label");
   }
 }
 
-function disciplineLabel(discipline: string | null): string {
-  if (!discipline) return "Development Specialist";
+function disciplineLabel(discipline: string | null, t: (key: string) => string): string {
+  if (!discipline) return t("bubble.recommend.default_discipline");
   switch (discipline) {
-    case "architect_designer": return "Architect / Designer";
-    case "planner": return "Planner";
-    case "engineer": return "Engineer";
-    case "quantity_surveyor": return "Quantity Surveyor";
-    default: return "Development Specialist";
+    case "architect_designer": return t("dm.discipline.architect_designer");
+    case "planner": return t("dm.discipline.planner");
+    case "engineer": return t("dm.discipline.engineer");
+    case "quantity_surveyor": return t("dm.discipline.quantity_surveyor");
+    default: return t("bubble.recommend.default_discipline");
   }
 }
 
@@ -78,11 +83,12 @@ export function ProviderRecommendationBubble({
 }: Props) {
   const [connecting, setConnecting] = useState(false);
   const [dismissed, setDismissed] = useState(false);
+  const { t } = useT();
 
   if (dismissed) return null;
 
   const hasAddress = !!propertyAddress;
-  const label = intentLabel(intentType, hasAddress);
+  const label = intentLabel(intentType, hasAddress, t);
 
   const locationParts = [provider.addressSuburb, provider.addressCity].filter(Boolean);
   const locationString = locationParts.length > 0 ? locationParts.join(", ") : null;
@@ -91,6 +97,9 @@ export function ProviderRecommendationBubble({
     setConnecting(true);
     try {
       await onConnect(provider.id);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : t("bubble.recommend.connect_error_body");
+      Alert.alert(t("bubble.recommend.connect_error_title"), message);
     } finally {
       setConnecting(false);
     }
@@ -101,20 +110,15 @@ export function ProviderRecommendationBubble({
     onDismiss();
   };
 
-  const handleCall = () => {
-    if (provider.contactNumber) {
-      Linking.openURL(`tel:${provider.contactNumber}`);
-    }
-  };
-
   const bodyText = hasAddress
-    ? `Based on this property's ${label}, I'd like to connect you with a specialist who can help move this forward.`
-    : `Here's a ${disciplineLabel(provider.discipline)} who can help with your ${label}.`;
+    ? t("bubble.recommend.with_address", { label })
+    : t("bubble.recommend.without_address", {
+        discipline: disciplineLabel(provider.discipline, t),
+        label,
+      });
 
   return (
     <View style={styles.container}>
-      <Text style={styles.header}>AI suggestion</Text>
-
       <Text style={styles.body}>{bodyText}</Text>
 
       <View style={styles.card}>
@@ -123,20 +127,20 @@ export function ProviderRecommendationBubble({
           <View style={styles.cardInfo}>
             <View style={styles.nameRow}>
               <Text style={styles.providerName} numberOfLines={1}>
-                {provider.fullName ?? "Development Specialist"}
+                {provider.fullName ?? t("bubble.recommend.default_discipline")}
               </Text>
               {provider.isVerified && (
                 <View style={styles.verifiedBadge}>
                   <Feather name="shield" size={10} color="#10B981" />
-                  <Text style={styles.verifiedText}>verified</Text>
+                  <Text style={styles.verifiedText}>{t("bubble.recommend.verified")}</Text>
                 </View>
               )}
             </View>
 
             <Text style={styles.specialty} numberOfLines={1}>
               {provider.companyName
-                ? `${provider.companyName} · ${disciplineLabel(provider.discipline)}`
-                : disciplineLabel(provider.discipline)}
+                ? `${provider.companyName} · ${disciplineLabel(provider.discipline, t)}`
+                : disciplineLabel(provider.discipline, t)}
             </Text>
 
             {locationString ? (
@@ -159,8 +163,9 @@ export function ProviderRecommendationBubble({
             })()}
 
             <Text style={styles.connections}>
-              ★ {provider.recommendationCount}{" "}
-              {provider.recommendationCount === 1 ? "recommendation" : "recommendations"}
+              {provider.recommendationCount === 1
+                ? t("bubble.recommend.connections_one", { n: provider.recommendationCount })
+                : t("bubble.recommend.connections_other", { n: provider.recommendationCount })}
             </Text>
           </View>
         </View>
@@ -182,20 +187,9 @@ export function ProviderRecommendationBubble({
           {connecting ? (
             <ActivityIndicator size="small" color="#fff" />
           ) : (
-            <Text style={styles.connectBtnText}>Message  →</Text>
+            <Text style={styles.connectBtnText}>{t("bubble.recommend.message_cta")}</Text>
           )}
         </TouchableOpacity>
-
-        {provider.contactNumber ? (
-          <TouchableOpacity
-            style={styles.callBtn}
-            onPress={handleCall}
-            activeOpacity={0.8}
-          >
-            <Feather name="phone" size={16} color="#7C3AED" />
-            <Text style={styles.callBtnText}>{provider.contactNumber}</Text>
-          </TouchableOpacity>
-        ) : null}
       </View>
 
       <TouchableOpacity
@@ -203,7 +197,7 @@ export function ProviderRecommendationBubble({
         onPress={handleDismiss}
         activeOpacity={0.7}
       >
-        <Text style={styles.dismissText}>Not interested</Text>
+        <Text style={styles.dismissText}>{t("bubble.recommend.dismiss")}</Text>
       </TouchableOpacity>
     </View>
   );
@@ -218,14 +212,6 @@ const styles = StyleSheet.create({
     padding: 14,
     marginHorizontal: 12,
     marginVertical: 4,
-  },
-  header: {
-    fontSize: 11,
-    color: "#7C3AED",
-    fontFamily: "DM_Sans_600SemiBold",
-    marginBottom: 8,
-    letterSpacing: 0.3,
-    textTransform: "uppercase",
   },
   body: {
     fontSize: 14,
@@ -340,23 +326,6 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 15,
     fontFamily: "DM_Sans_600SemiBold",
-  },
-  callBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    borderWidth: 1,
-    borderColor: "#DDD6FE",
-    borderRadius: 8,
-    paddingVertical: 11,
-    paddingHorizontal: 16,
-    backgroundColor: "#fff",
-  },
-  callBtnText: {
-    color: "#7C3AED",
-    fontSize: 14,
-    fontFamily: "DM_Sans_500Medium",
   },
   dismissBtn: {
     alignItems: "center",

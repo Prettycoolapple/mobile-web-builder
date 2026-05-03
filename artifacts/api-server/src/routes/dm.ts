@@ -12,7 +12,7 @@ import {
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { getIo } from "../lib/socket";
-import { sendExpoPush } from "../lib/expo-push";
+import { sendPushToUser } from "../lib/expo-push";
 
 const router: IRouter = Router();
 
@@ -300,33 +300,25 @@ router.post("/dm/threads/:threadId/messages", requireAuth, async (req: Request, 
       io.to(`user:${userId}`).emit("new_message", { threadId, message });
     }
 
-    const recipientConnected = io
-      ? (await io.in(`user:${recipientId}`).fetchSockets()).length > 0
-      : false;
+    // Always notify the recipient on a new DM so iOS/Android get a push when the
+    // app is backgrounded — socket alone misses common cases (app swiped away,
+    // OS suspended JS, user on another screen).
+    try {
+      const [sender] = await db
+        .select({ fullName: profiles.fullName })
+        .from(profiles)
+        .where(eq(profiles.id, userId))
+        .limit(1);
 
-    if (!recipientConnected) {
-      const recipientTokens = await db
-        .select({ token: pushTokens.token })
-        .from(pushTokens)
-        .where(eq(pushTokens.userId, recipientId));
+      const senderName = sender?.fullName ?? "Someone";
+      const preview = msgBody ? msgBody.slice(0, 80) : "📷 Photo";
 
-      if (recipientTokens.length > 0) {
-        const [sender] = await db
-          .select({ fullName: profiles.fullName })
-          .from(profiles)
-          .where(eq(profiles.id, userId))
-          .limit(1);
-
-        const senderName = sender?.fullName ?? "Someone";
-        const preview = msgBody ? msgBody.slice(0, 80) : "📷 Photo";
-
-        await sendExpoPush(
-          recipientTokens.map((t) => t.token),
-          senderName,
-          preview,
-          { threadId },
-        );
-      }
+      await sendPushToUser(recipientId, senderName, preview, {
+        type: "dm",
+        threadId: String(threadId),
+      });
+    } catch (pushErr) {
+      req.log.warn({ pushErr }, "DM push notification failed (non-fatal)");
     }
 
     res.status(201).json({ message });

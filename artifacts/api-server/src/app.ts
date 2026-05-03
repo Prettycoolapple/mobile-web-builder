@@ -1,16 +1,14 @@
+import "./lib/loadEnv";
 import express, { type Express } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { getTrustProxySetting } from "./lib/env";
 
 const app: Express = express();
 
-// Replit fronts every request with its own reverse proxy, so trust exactly one
-// hop. This makes `req.ip` pull from the rightmost entry of X-Forwarded-For
-// that the edge appended, instead of trusting whatever the client sent. Used
-// by per-IP rate limiting in routes/otp.ts.
-app.set("trust proxy", 1);
+app.set("trust proxy", getTrustProxySetting());
 
 app.use(
   pinoHttp({
