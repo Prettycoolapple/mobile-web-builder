@@ -99,21 +99,11 @@ const dictionaries = {
   },
   terms: {
     title: "条款与条件 | Project Alpha",
-    meta: "Project Alpha 条款与条件。",
+    meta: "Project Alpha 条款与条件 — 资格、订阅、可接受使用与责任限制。",
     kicker: "法律",
     pageTitle: "条款与条件",
-    pageCopy: "此页面已准备好用于 App Store 和 Play Store 提交所需的最终条款与条件内容。",
-    placeholderTitle: "条款与条件内容占位",
-    placeholderOne:
-      "请在此加入最终条款。常见章节包括可接受使用、订阅条款、应用限制、物业分析免责声明、用户责任、支持、退款、终止和适用法律。",
-    placeholderTwo: "你提供最终文字后，可将此占位内容替换为正式条款。",
-    cardOneTitle: "重要免责声明区域",
-    cardOneCopy:
-      "最终条款应说明应用报告仅供信息参考，不能替代法律、规划、财务或建筑专业建议。",
-    cardTwoTitle: "应用审核可用",
-    cardTwoCopy: "此页面拥有稳定公开路径：/terms/。",
+    pageCopy: "Project Alpha · 由 KNH Group Ltd 运营 · 2026 年 5 月 4 日生效 · 最后更新 2026 年 5 月 4 日",
   },
-};
 
 function isChinesePreferred() {
   const langs = navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language];

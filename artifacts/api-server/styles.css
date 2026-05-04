@@ -243,11 +243,12 @@ h1 {
 .preview-photo {
   position: relative;
   min-height: 178px;
+  /* Illustrative only: no public listing gallery exists for this demo address on NZ property sites. */
   background-image:
     linear-gradient(180deg, rgba(0, 0, 0, 0.05), rgba(0, 0, 0, 0.48)),
-    url("https://source.unsplash.com/CIaeYInasfw/900x700");
+    url("https://images.unsplash.com/photo-1600585154340-be6161a56a0c?w=900&q=85");
   background-size: cover;
-  background-position: center;
+  background-position: center 40%;
 }
 
 .score-pill {
@@ -450,14 +451,16 @@ h1 {
 
 .audience-investor {
   background-image:
-    linear-gradient(180deg, rgba(32, 25, 21, 0.12), rgba(32, 25, 21, 0.74)),
-    url("https://source.unsplash.com/JeKcHo_YlI0/1200x850");
+    linear-gradient(180deg, rgba(32, 25, 21, 0.18), rgba(32, 25, 21, 0.78)),
+    url("https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=1200&q=85");
+  background-position: center 30%;
 }
 
 .audience-agent {
   background-image:
-    linear-gradient(180deg, rgba(32, 25, 21, 0.12), rgba(32, 25, 21, 0.74)),
-    url("https://source.unsplash.com/EPHHIA8EILc/1200x850");
+    linear-gradient(180deg, rgba(32, 25, 21, 0.12), rgba(32, 25, 21, 0.76)),
+    url("https://images.unsplash.com/photo-1503387762-592deb58ef4e?w=1200&q=85");
+  background-position: center 40%;
 }
 
 .audience p {
@@ -723,6 +726,15 @@ h1 {
 
 .legal-document a:hover {
   color: var(--coral);
+}
+
+.legal-document .legal-notice {
+  font-weight: 750;
+  font-size: 0.9375rem;
+  line-height: 1.65;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink);
 }
 
 .form-card {
