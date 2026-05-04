@@ -1,21 +1,55 @@
 <!doctype html>
-<html lang="en">
+<html lang="en-NZ">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Project Alpha | NZ Property Development Intelligence</title>
+    <title>Project Alpha | NZ Property Feasibility App &amp; Development Intelligence</title>
     <meta
       name="description"
-      content="Project Alpha helps New Zealand property investors, developers, buyers, agents, and service providers understand subdivision potential, development risks, costs, and ROI."
+      content="Project Alpha is a New Zealand property feasibility app for buyers, developers, and investors. Get fast, AI-assisted development snapshots for NZ addresses—zoning, costs, ROI signals, and Auckland, Wellington, and nationwide listing context. Not financial or legal advice."
     />
+    <meta
+      name="keywords"
+      content="New Zealand property development, property feasibility NZ, Auckland feasibility, subdivision NZ, development ROI, zoning report, NZ property app, Christchurch Wellington property, LINZ, property developer tools"
+    />
+    <link rel="canonical" href="https://www.projectalpha.app/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://www.projectalpha.app/" />
+    <meta property="og:title" content="Project Alpha | NZ Property Feasibility &amp; Development Intelligence" />
+    <meta
+      property="og:description"
+      content="Feasibility-first property intelligence for New Zealand. Explore development potential, cost and ROI signals, and next-step professionals—built for Kiwi sections and city plans."
+    />
+    <meta property="og:locale" content="en_NZ" />
+    <link rel="icon" href="/alpha-icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/alpha-icon.svg" />
     <link rel="stylesheet" href="/styles.css" />
     <script defer src="/site.js"></script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Project Alpha",
+        "applicationCategory": "BusinessApplication",
+        "operatingSystem": "iOS, Android, Web",
+        "description": "New Zealand property development feasibility and intelligence for addresses across NZ.",
+        "url": "https://www.projectalpha.app/",
+        "publisher": {
+          "@type": "Organization",
+          "name": "KNH Group Ltd"
+        },
+        "areaServed": {
+          "@type": "Country",
+          "name": "New Zealand"
+        }
+      }
+    </script>
   </head>
   <body data-page="home">
     <div class="site-shell">
       <header class="topbar">
         <a class="brand" href="/" aria-label="Project Alpha home">
-          <span class="brand-mark">A</span>
+          <img class="brand-mark" src="/alpha-icon.svg" alt="" width="34" height="34" decoding="async" />
           <span data-i18n="brand">Project Alpha</span>
         </a>
         <nav class="nav" aria-label="Primary navigation">
@@ -30,29 +64,71 @@
         <section class="hero">
           <div class="hero-inner">
             <div>
-              <p class="eyebrow" data-i18n="heroEyebrow">New Zealand residential property intelligence</p>
-              <h1 data-i18n="heroTitle">Understand a property before you commit.</h1>
+              <p class="eyebrow" data-i18n="heroEyebrow">NZ property feasibility software</p>
+              <h1 data-i18n="heroTitle">See if a Kiwi site stacks up—before you spend on due diligence.</h1>
               <p class="hero-copy" data-i18n="heroCopy">
-                Project Alpha turns a New Zealand address into a development-focused feasibility view:
-                zoning, title context, services, terrain, risks, indicative costs, ROI scenarios, and
-                the professionals who can help.
+                Project Alpha blends council, title, and public listing data with AI to produce
+                development-focused feasibility snapshots for addresses across New Zealand—from Auckland and
+                Wellington to Christchurch and growing regional centres. Understand zoning context, cost
+                and ROI signals, risk prompts, and who to talk to next. Outputs are indicative only; always
+                get independent professional advice before you transact.
               </p>
               <div class="hero-actions">
-                <a class="button button-primary" href="#features" data-i18n="heroCtaFeatures">See what it does</a>
+                <a class="button button-primary" href="#features" data-i18n="heroCtaFeatures">Explore features</a>
                 <a class="button button-secondary" href="/contact/" data-i18n="heroCtaSupport">Contact us</a>
               </div>
               <div class="hero-stat-row" aria-label="Project Alpha highlights">
                 <div class="stat">
                   <strong data-i18n="statTime">5 min</strong>
-                  <span data-i18n="statTimeText">Typical automated feasibility pass</span>
+                  <span data-i18n="statTimeText">Typical first feasibility pass</span>
                 </div>
                 <div class="stat">
                   <strong data-i18n="statNz">NZ</strong>
-                  <span data-i18n="statNzText">Built around local property records</span>
+                  <span data-i18n="statNzText">Designed around NZ records &amp; plans</span>
                 </div>
                 <div class="stat">
                   <strong data-i18n="statScore">3</strong>
-                  <span data-i18n="statScoreText">Ease, cost, and ROI scoring lenses</span>
+                  <span data-i18n="statScoreText">Ease, cost &amp; ROI scoring lenses</span>
+                </div>
+              </div>
+
+              <div class="hero-store-badges">
+                <span class="hero-store-label" data-i18n="heroStoreLabel">Get the app</span>
+                <div class="store-badges store-badges--hero" role="group" aria-label="App download links">
+                  <a
+                    id="home-app-store-link"
+                    class="store-badge-link"
+                    href="https://apps.apple.com/nz"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <img
+                      class="store-badge-img"
+                      src="https://upload.wikimedia.org/wikipedia/commons/3/3c/Download_on_the_App_Store_Badge.svg"
+                      width="160"
+                      height="53"
+                      alt="Download on the App Store"
+                      loading="lazy"
+                      decoding="async"
+                    />
+                  </a>
+                  <a
+                    id="home-play-store-link"
+                    class="store-badge-link"
+                    href="https://play.google.com/store"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <img
+                      class="store-badge-img store-badge-img--play"
+                      src="https://upload.wikimedia.org/wikipedia/commons/7/78/Google_Play_Store_badge_EN.svg"
+                      width="180"
+                      height="53"
+                      alt="Get it on Google Play"
+                      loading="lazy"
+                      decoding="async"
+                    />
+                  </a>
                 </div>
               </div>
             </div>
@@ -60,6 +136,7 @@
             <div class="app-preview" aria-label="Project Alpha report preview">
               <div class="phone">
                 <div class="phone-screen">
+                  <!-- Listing image (og:image order): https://www.realestate.co.nz/43016651/residential/sale/825-riddell-road-st-heliers -->
                   <div class="preview-photo">
                     <div class="score-pill">4.0 <small>/ 5</small></div>
                   </div>
@@ -84,37 +161,40 @@
 
         <section class="section" id="features">
           <div class="section-inner">
-            <p class="section-kicker" data-i18n="featuresKicker">What the app does</p>
-            <h2 class="section-title" data-i18n="featuresTitle">A property report built for development decisions, not just browsing.</h2>
+            <p class="section-kicker" data-i18n="featuresKicker">Built for New Zealand</p>
+            <h2 class="section-title" data-i18n="featuresTitle">
+              Feasibility reporting that speaks Auckland Unitary Plan, districts, and Kiwi subdivisions—not generic offshore templates.
+            </h2>
             <p class="section-lede" data-i18n="featuresLede">
-              Ask about an address or search for opportunities. Project Alpha gathers structured property
-              context, runs development heuristics, and presents the tradeoffs in language a buyer,
-              investor, or professional team can act on.
+              Whether you are scanning St Heliers sections, Wellington infill, or South Island growth corridors,
+              Project Alpha structures council and title context with AI narrative so you can compare sites
+              faster. Ideal for pre-offer screening, listing conversations, and briefing your valuer, planner,
+              or builder before you commit serious fees.
             </p>
 
             <div class="feature-grid">
               <article class="feature-card">
                 <div class="feature-icon">01</div>
-                <h3 data-i18n="featureOneTitle">Site feasibility</h3>
+                <h3 data-i18n="featureOneTitle">Site &amp; zoning feasibility</h3>
                 <p data-i18n="featureOneCopy">
-                  Surface zoning, land area, title type, overlays, terrain, services, and subdivision
-                  pathway notes in one mobile-first report.
+                  Surface zoning labels, land area, title type, overlays, terrain, services, and subdivision
+                  pathway cues in one mobile-first report grounded in NZ data sources.
                 </p>
               </article>
               <article class="feature-card">
                 <div class="feature-icon">02</div>
-                <h3 data-i18n="featureTwoTitle">Cost and ROI scenarios</h3>
+                <h3 data-i18n="featureTwoTitle">Cost &amp; ROI scenarios</h3>
                 <p data-i18n="featureTwoCopy">
-                  Compare development cost ranges, holding costs, likely exit cases, and ROI sensitivity
-                  before spending money on deeper due diligence.
+                  Compare indicative development cost bands, holding assumptions, exit cases, and ROI
+                  sensitivity—so you can sanity-check a deal in Auckland, regional cities, or coastal markets.
                 </p>
               </article>
               <article class="feature-card">
                 <div class="feature-icon">03</div>
-                <h3 data-i18n="featureThreeTitle">Professional referrals</h3>
+                <h3 data-i18n="featureThreeTitle">Professional connections</h3>
                 <p data-i18n="featureThreeCopy">
-                  When a user needs an architect, planner, engineer, quantity surveyor, or related expert,
-                  the app can help connect them with a relevant provider.
+                  When you need an architect, planner, engineer, QS, or related NZ professional, Project Alpha
+                  can help surface relevant matches after you have reviewed the AI summary.
                 </p>
               </article>
             </div>
@@ -123,32 +203,40 @@
 
         <section class="section band" id="workflow">
           <div class="section-inner">
-            <p class="section-kicker" data-i18n="workflowKicker">Workflow</p>
-            <h2 class="section-title" data-i18n="workflowTitle">From curiosity to a clearer next step.</h2>
+            <p class="section-kicker" data-i18n="workflowKicker">How it works</p>
+            <h2 class="section-title" data-i18n="workflowTitle">From street address to a smarter next step, anywhere in NZ.</h2>
             <p class="section-lede" data-i18n="workflowLede">
-              Project Alpha is designed for the early decision window: when a property looks interesting,
-              but you need to know what could make it viable, expensive, risky, or worth investigating.
+              Use Project Alpha in that early window when a Trade Me or Bayleys listing looks promising but you
+              still need to know what could make the site feasible, expensive, or risky under local rules.
             </p>
             <div class="steps">
               <article class="step-card">
                 <span class="step-number">1</span>
-                <h3 data-i18n="stepOneTitle">Ask or search</h3>
-                <p data-i18n="stepOneCopy">Enter an address, ask a property question, or search for development sites by suburb and budget.</p>
+                <h3 data-i18n="stepOneTitle">Search or ask</h3>
+                <p data-i18n="stepOneCopy">
+                  Drop in a legal address, natural-language question, or suburb-led hunt for development-ready land across NZ.
+                </p>
               </article>
               <article class="step-card">
                 <span class="step-number">2</span>
-                <h3 data-i18n="stepTwoTitle">Analyse</h3>
-                <p data-i18n="stepTwoCopy">The app checks planning, title context, service constraints, terrain, and comparable signals.</p>
+                <h3 data-i18n="stepTwoTitle">Analyse with NZ context</h3>
+                <p data-i18n="stepTwoCopy">
+                  We cross-check planning layers, title signals, services, terrain, and live listing intel where available.
+                </p>
               </article>
               <article class="step-card">
                 <span class="step-number">3</span>
-                <h3 data-i18n="stepThreeTitle">Compare tradeoffs</h3>
-                <p data-i18n="stepThreeCopy">Read score summaries, risk notes, cost ranges, and ROI scenarios without spreadsheet wrangling.</p>
+                <h3 data-i18n="stepThreeTitle">Compare trade-offs</h3>
+                <p data-i18n="stepThreeCopy">
+                  Review score summaries, risk callouts, cost ranges, and ROI sketches without spreadsheet fatigue.
+                </p>
               </article>
               <article class="step-card">
                 <span class="step-number">4</span>
-                <h3 data-i18n="stepFourTitle">Bring in help</h3>
-                <p data-i18n="stepFourCopy">When the opportunity is worth pursuing, connect with a relevant property professional.</p>
+                <h3 data-i18n="stepFourTitle">Brief your team</h3>
+                <p data-i18n="stepFourCopy">
+                  When a site warrants deeper work, connect with the right specialist or advisor on the ground in your region.
+                </p>
               </article>
             </div>
           </div>
@@ -156,25 +244,28 @@
 
         <section class="section" id="professionals">
           <div class="section-inner">
-            <p class="section-kicker" data-i18n="audienceKicker">Who it is for</p>
-            <h2 class="section-title" data-i18n="audienceTitle">For people evaluating residential development opportunities.</h2>
+            <p class="section-kicker" data-i18n="audienceKicker">Who uses Project Alpha</p>
+            <h2 class="section-title" data-i18n="audienceTitle">
+              Developers, investors, agents, and service providers across Aotearoa New Zealand.
+            </h2>
             <p class="section-lede" data-i18n="audienceLede">
-              Project Alpha supports both sides of the property decision: users who need clarity, and
-              professionals who can help them move from analysis to action.
+              From Auckland infill to provincial growth towns, Project Alpha supports both people exploring a
+              listing and professionals guiding them with credible, fast context—always alongside registered
+              advisers for final decisions.
             </p>
             <div class="audience-grid">
               <article class="audience audience-investor">
-                <h3 data-i18n="investorTitle">Buyers, developers, and investors</h3>
+                <h3 data-i18n="investorTitle">Buyers, developers &amp; investors</h3>
                 <p data-i18n="investorCopy">
-                  Screen addresses, understand major constraints, and decide whether a property deserves
-                  deeper diligence before committing time and fees.
+                  Prioritise addresses that fit your strategy, stress-test earthworks or intensification stories,
+                  and decide when to commission valuation, geo-tech, or legal review.
                 </p>
               </article>
               <article class="audience audience-agent">
-                <h3 data-i18n="proTitle">Agents and service providers</h3>
+                <h3 data-i18n="proTitle">Sales agents &amp; project consultants</h3>
                 <p data-i18n="proCopy">
-                  Present property potential more clearly, receive relevant referral opportunities, and
-                  meet users at the moment they need expert guidance.
+                  Show vendors and purchasers a clearer development narrative, capture qualified referrals, and meet buyers
+                  exactly when they need expert help on consenting or delivery.
                 </p>
               </article>
             </div>
@@ -187,7 +278,7 @@
               <div>
                 <h2 data-i18n="ctaTitle">Questions about Project Alpha?</h2>
                 <p data-i18n="ctaCopy">
-                  If you have any questions, email us at admin@projectalpha.app or visit our contact page.
+                  Email admin@projectalpha.app or visit our contact page for media, partnerships, or app support anywhere in NZ.
                 </p>
               </div>
               <div class="cta-row">
@@ -201,7 +292,7 @@
       <footer class="footer">
         <div class="footer-inner">
           <a class="brand" href="/">
-            <span class="brand-mark">A</span>
+            <img class="brand-mark" src="/alpha-icon.svg" alt="" width="34" height="34" decoding="async" />
             <span data-i18n="brand">Project Alpha</span>
           </a>
           <div class="footer-links">

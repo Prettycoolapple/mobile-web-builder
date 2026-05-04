@@ -146,7 +146,7 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
   const deployDir = path.resolve(artifactDir, "deploy");
   await rm(deployDir, { recursive: true, force: true });
   await mkdir(deployDir, { recursive: true });
-  for (const file of ["index.html", "site.js", "styles.css"]) {
+  for (const file of ["index.html", "site.js", "styles.css", "alpha-icon.svg"]) {
     await copyFile(path.join(artifactDir, file), path.join(deployDir, file));
   }
   for (const dir of ["privacy", "terms", "support", "contact"]) {

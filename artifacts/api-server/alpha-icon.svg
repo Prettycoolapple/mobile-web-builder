@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 260" role="img" aria-labelledby="alpha-icon-title">
+  <title id="alpha-icon-title">Project Alpha</title>
+  <defs>
+    <radialGradient id="pa-bg" cx="38%" cy="28%" r="72%">
+      <stop offset="0%" stop-color="#FFAA5C"/>
+      <stop offset="50%" stop-color="#E06418"/>
+      <stop offset="100%" stop-color="#7A2C04"/>
+    </radialGradient>
+    <clipPath id="pa-cl"><rect width="260" height="260" rx="60"/></clipPath>
+  </defs>
+  <rect width="260" height="260" rx="60" fill="url(#pa-bg)"/>
+  <g clip-path="url(#pa-cl)">
+    <path d="M 130,30 L 80,200 Q 130,168 180,200 Z" fill="#EAD5BC"/>
+    <rect x="0" y="216" width="260" height="44" fill="#EAD5BC"/>
+  </g>
+</svg>

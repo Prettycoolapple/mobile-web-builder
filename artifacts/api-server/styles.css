@@ -72,14 +72,12 @@ a {
 }
 
 .brand-mark {
-  display: grid;
+  display: block;
   width: 34px;
   height: 34px;
-  place-items: center;
-  color: #fff;
-  background: var(--coral);
   border-radius: 10px;
-  font-weight: 800;
+  flex-shrink: 0;
+  object-fit: cover;
 }
 
 .nav {
@@ -218,6 +216,34 @@ h1 {
   font-size: 12px;
 }
 
+.hero-store-badges {
+  margin-top: 28px;
+  padding-top: 22px;
+  border-top: 1px solid rgba(255, 250, 243, 0.2);
+}
+
+.hero-store-label {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 12px;
+  font-weight: 760;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(255, 250, 243, 0.78);
+}
+
+.store-badges--hero {
+  gap: 12px 16px;
+}
+
+.store-badges--hero .store-badge-img {
+  height: 40px;
+}
+
+.store-badges--hero .store-badge-img--play {
+  height: 42px;
+}
+
 .app-preview {
   align-self: stretch;
   display: flex;
@@ -243,12 +269,12 @@ h1 {
 .preview-photo {
   position: relative;
   min-height: 178px;
-  /* Illustrative only: no public listing gallery exists for this demo address on NZ property sites. */
+  /* First listing image: https://www.realestate.co.nz/43016651/residential/sale/825-riddell-road-st-heliers */
   background-image:
     linear-gradient(180deg, rgba(0, 0, 0, 0.05), rgba(0, 0, 0, 0.48)),
-    url("https://images.unsplash.com/photo-1600585154340-be6161a56a0c?w=900&q=85");
+    url("https://mediaserver.realestate.co.nz/listings/43016651/f031a69ff2f37933233f57b98ca074c2.pad-ffffff.990x661.jpg");
   background-size: cover;
-  background-position: center 40%;
+  background-position: center 35%;
 }
 
 .score-pill {
