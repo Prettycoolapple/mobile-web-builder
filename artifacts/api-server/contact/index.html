@@ -1,0 +1,137 @@
+<!doctype html>
+<!--
+  Store links: replace the href on #app-store-link and #play-store-link when your listings are live.
+  Placeholders point at the NZ App Store home and Play Store home until you add real app URLs.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Contact | Project Alpha</title>
+    <meta
+      name="description"
+      content="Contact Project Alpha — questions, app downloads, and support email."
+    />
+    <link rel="stylesheet" href="/styles.css" />
+    <script defer src="/site.js"></script>
+  </head>
+  <body data-page="contact">
+    <div class="site-shell">
+      <header class="topbar topbar--solid">
+        <a class="brand" href="/" aria-label="Project Alpha home">
+          <span class="brand-mark">A</span>
+          <span data-i18n="brand">Project Alpha</span>
+        </a>
+        <nav class="nav" aria-label="Primary navigation">
+          <a href="/" data-i18n="navHome">Home</a>
+          <a href="/privacy/" data-i18n="navPrivacy">Privacy</a>
+          <a href="/terms/" data-i18n="navTerms">Terms and conditions</a>
+        </nav>
+      </header>
+
+      <section class="contact-hero" aria-hidden="true"></section>
+
+      <main class="page-main page-main--contact">
+        <div class="contact-intro">
+          <header class="page-header page-header--contact">
+            <p class="section-kicker" data-i18n="kicker">Contact</p>
+            <h1 data-i18n="pageTitle">We’d love to hear from you</h1>
+            <p class="contact-lede" data-i18n="pageCopy">
+              If you have any questions about Project Alpha, your account, or our feasibility
+              reports, send us an email and we’ll get back to you.
+            </p>
+          </header>
+        </div>
+
+        <div class="page-content contact-layout">
+          <div class="contact-primary">
+            <div class="form-card contact-card">
+              <h2 class="contact-card-title" data-i18n="emailHeading">Email us</h2>
+              <p class="contact-card-copy" data-i18n="emailBody">
+                For all enquiries, please email us at the address below. Include a short summary of
+                your question and the email address associated with your account if you have one.
+              </p>
+              <p class="support-email-label" data-i18n="supportEmailLabel">Email</p>
+              <a class="support-email" href="mailto:admin@projectalpha.app">admin@projectalpha.app</a>
+              <a class="button button-primary contact-mailto" href="mailto:admin@projectalpha.app" data-i18n="emailCta">
+                Send an email
+              </a>
+            </div>
+
+            <div class="form-card contact-card contact-card--stores">
+              <h2 class="contact-card-title" data-i18n="storesHeading">Download the app</h2>
+              <p class="contact-card-copy" data-i18n="storesCopy">
+                Install Project Alpha on your iPhone or Android device. Official store links will be
+                wired here as soon as the app is published.
+              </p>
+              <div class="store-badges" role="group" aria-label="App store links">
+                <a
+                  id="app-store-link"
+                  class="store-badge-link"
+                  href="https://apps.apple.com/nz"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <img
+                    class="store-badge-img"
+                    src="https://upload.wikimedia.org/wikipedia/commons/3/3c/Download_on_the_App_Store_Badge.svg"
+                    width="160"
+                    height="53"
+                    alt="Download on the App Store"
+                    loading="lazy"
+                  />
+                </a>
+                <a
+                  id="play-store-link"
+                  class="store-badge-link"
+                  href="https://play.google.com/store/games"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <img
+                    class="store-badge-img store-badge-img--play"
+                    src="https://upload.wikimedia.org/wikipedia/commons/7/78/Google_Play_Store_badge_EN.svg"
+                    width="180"
+                    height="53"
+                    alt="Get it on Google Play"
+                    loading="lazy"
+                  />
+                </a>
+              </div>
+            </div>
+          </div>
+
+          <aside class="contact-aside" aria-label="Illustration">
+            <figure class="contact-figure">
+              <img
+                class="contact-photo"
+                src="https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?w=900&q=80"
+                width="600"
+                height="750"
+                alt=""
+                loading="lazy"
+              />
+              <figcaption class="contact-caption" data-i18n="photoCaption">
+                NZ property intelligence for feasibility and development decisions.
+              </figcaption>
+            </figure>
+          </aside>
+        </div>
+      </main>
+
+      <footer class="footer">
+        <div class="footer-inner">
+          <a class="brand" href="/">
+            <span class="brand-mark">A</span>
+            <span data-i18n="brand">Project Alpha</span>
+          </a>
+          <div class="footer-links">
+            <a class="footer-support" href="/contact/" data-i18n="footerContact">Contact</a>
+            <a href="/privacy/" data-i18n="footerPrivacy">Privacy</a>
+            <a href="/terms/" data-i18n="footerTerms">Terms and conditions</a>
+          </div>
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>

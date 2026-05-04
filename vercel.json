@@ -9,6 +9,10 @@
       "includeFiles": "api/vercel-app.mjs"
     }
   },
+  "redirects": [
+    { "source": "/support", "destination": "/contact", "permanent": true },
+    { "source": "/support/", "destination": "/contact", "permanent": true }
+  ],
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api" },
     { "source": "/api", "destination": "/api" }

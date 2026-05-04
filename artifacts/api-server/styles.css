@@ -553,6 +553,178 @@ h1 {
   align-items: start;
 }
 
+/* --- Contact page --- */
+.contact-hero {
+  min-height: 220px;
+  background-image:
+    linear-gradient(90deg, rgba(32, 25, 21, 0.82), rgba(32, 25, 21, 0.45)),
+    url("https://images.unsplash.com/photo-1560518883-ce09059eeffa?w=1600&q=80");
+  background-size: cover;
+  background-position: center;
+}
+
+.page-main--contact {
+  padding-top: 0;
+}
+
+.contact-intro .page-header--contact {
+  padding-top: 40px;
+  padding-bottom: 12px;
+}
+
+.contact-lede {
+  max-width: 640px;
+  margin: 0;
+  font-size: 18px;
+  color: var(--muted);
+}
+
+.contact-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 380px);
+  gap: clamp(24px, 4vw, 48px);
+  align-items: start;
+  padding-bottom: 48px;
+}
+
+.contact-card-title {
+  margin: 0 0 12px;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+
+.contact-card-copy {
+  margin: 0 0 20px;
+  color: var(--muted);
+}
+
+.contact-card--stores .contact-card-copy {
+  margin-bottom: 16px;
+}
+
+.contact-mailto {
+  margin-top: 8px;
+}
+
+.store-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px 20px;
+}
+
+.store-badge-link {
+  display: inline-block;
+  line-height: 0;
+  border-radius: 8px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.store-badge-link:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px rgba(32, 25, 21, 0.12);
+}
+
+.store-badge-img {
+  display: block;
+  height: 44px;
+  width: auto;
+}
+
+.store-badge-img--play {
+  height: 48px;
+}
+
+.contact-figure {
+  margin: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.contact-photo {
+  display: block;
+  width: 100%;
+  height: auto;
+  vertical-align: middle;
+}
+
+.contact-caption {
+  padding: 14px 16px;
+  font-size: 14px;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+}
+
+/* --- Legal: privacy policy document --- */
+.legal-hero {
+  margin: -54px clamp(-18px, -5vw, -64px) 0;
+  min-height: 160px;
+  border-radius: 0 0 8px 8px;
+  background-image:
+    linear-gradient(120deg, rgba(23, 63, 46, 0.88), rgba(236, 106, 75, 0.45)),
+    url("https://images.unsplash.com/photo-1450101499163-c8848c66ca85?w=1400&q=80");
+  background-size: cover;
+  background-position: center;
+}
+
+.legal-meta {
+  max-width: 720px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 16px;
+}
+
+.legal-document {
+  max-width: 760px;
+  padding-bottom: 48px;
+}
+
+.legal-document h2 {
+  margin: 2.25rem 0 0.75rem;
+  font-size: clamp(22px, 3vw, 28px);
+  letter-spacing: -0.03em;
+  color: var(--forest);
+}
+
+.legal-document h3 {
+  margin: 1.5rem 0 0.5rem;
+  font-size: 18px;
+  letter-spacing: -0.02em;
+}
+
+.legal-document p,
+.legal-document li {
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.legal-document p {
+  margin: 0 0 1rem;
+}
+
+.legal-document ul {
+  margin: 0 0 1.25rem;
+  padding-left: 1.35rem;
+}
+
+.legal-document li {
+  margin-bottom: 0.35rem;
+}
+
+.legal-document a {
+  color: var(--moss);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.legal-document a:hover {
+  color: var(--coral);
+}
+
 .form-card {
   padding: 28px;
   border: 1px solid var(--line);
@@ -607,6 +779,31 @@ textarea:focus {
   color: #b63f32;
 }
 
+.support-email-label {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.support-email {
+  display: inline-block;
+  margin-bottom: 18px;
+  color: var(--forest);
+  font-size: clamp(26px, 4vw, 38px);
+  font-weight: 820;
+  letter-spacing: -0.04em;
+  text-decoration: none;
+}
+
+.support-copy {
+  max-width: 620px;
+  margin-bottom: 24px;
+  color: var(--muted);
+}
+
 .legal-placeholder {
   padding: 26px;
   border: 1px dashed #c8b9a6;
@@ -641,6 +838,7 @@ textarea:focus {
 
   .hero-inner,
   .support-layout,
+  .contact-layout,
   .cta-panel {
     grid-template-columns: 1fr;
   }

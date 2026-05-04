@@ -149,7 +149,7 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
   for (const file of ["index.html", "site.js", "styles.css"]) {
     await copyFile(path.join(artifactDir, file), path.join(deployDir, file));
   }
-  for (const dir of ["privacy", "terms", "support"]) {
+  for (const dir of ["privacy", "terms", "support", "contact"]) {
     await cp(path.join(artifactDir, dir), path.join(deployDir, dir), { recursive: true });
   }
 }
