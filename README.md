@@ -102,8 +102,9 @@ If your phone tests against your local API, put your machine's LAN IP in
 This API is a long-lived Express server by default, but it ships a
 Vercel-compatible serverless entry:
 
-- `artifacts/api-server/api/index.ts` exports the Express app as a
-  serverless handler.
+- `api/index.ts` at the **repo root** exports the Express app as a
+  serverless handler (Vercel only matches the `api/` directory here, not
+  `artifacts/api-server/api/`).
 - `vercel.json` at the repo root rewrites `/api/*` to that handler and sets
   `ENABLE_SOCKET_IO=false` so Socket.IO never initializes on Vercel.
 - The mobile DM context falls back to REST polling when
