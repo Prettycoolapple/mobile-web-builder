@@ -3,19 +3,33 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
-import { rm } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 
 // Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
 globalThis.require = createRequire(import.meta.url);
 
 const artifactDir = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Vercel type-checks `.ts` sources listed in linked source maps when packaging
+ * `includeFiles` (e.g. `api/vercel-app.mjs`). Strip the map so `src/app.ts` is never pulled in.
+ */
+async function stripLinkedSourcemap(bundlePath) {
+  const body = await readFile(bundlePath, "utf8");
+  const stripped = body.replace(/\r?\n\/\/# sourceMappingURL=[^\r\n]*\s*$/m, "");
+  await writeFile(bundlePath, stripped, "utf8");
+  await unlink(`${bundlePath}.map`).catch(() => {});
+}
+
 async function buildAll() {
   const distDir = path.resolve(artifactDir, "dist");
   await rm(distDir, { recursive: true, force: true });
 
   await esbuild({
-    entryPoints: [path.resolve(artifactDir, "src/index.ts")],
+    entryPoints: [
+      path.resolve(artifactDir, "src/index.ts"),
+      path.resolve(artifactDir, "src/vercel-app.ts"),
+    ],
     platform: "node",
     bundle: true,
     format: "esm",
@@ -118,6 +132,26 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     `,
     },
   });
+
+  const vercelBundle = path.join(distDir, "vercel-app.mjs");
+  await stripLinkedSourcemap(vercelBundle);
+
+  const repoApiDir = path.resolve(artifactDir, "..", "..", "api");
+  await mkdir(repoApiDir, { recursive: true });
+  await copyFile(vercelBundle, path.join(repoApiDir, "vercel-app.mjs"));
+
+  // Vercel `outputDirectory` must not point at this package root: that folder includes
+  // `src/**/*.ts`, and Vercel runs TypeScript with NodeNext on it (TS2834, Express/pino-http).
+  // Ship only static HTML/CSS/JS in `deploy/` and point vercel.json there.
+  const deployDir = path.resolve(artifactDir, "deploy");
+  await rm(deployDir, { recursive: true, force: true });
+  await mkdir(deployDir, { recursive: true });
+  for (const file of ["index.html", "site.js", "styles.css"]) {
+    await copyFile(path.join(artifactDir, file), path.join(deployDir, file));
+  }
+  for (const dir of ["privacy", "terms", "support"]) {
+    await cp(path.join(artifactDir, dir), path.join(deployDir, dir), { recursive: true });
+  }
 }
 
 buildAll().catch((err) => {

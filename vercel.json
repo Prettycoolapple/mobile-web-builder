@@ -2,10 +2,11 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "pnpm --filter @workspace/api-server run build",
   "installCommand": "pnpm install --frozen-lockfile=false",
-  "outputDirectory": "artifacts/api-server",
+  "outputDirectory": "artifacts/api-server/deploy",
   "functions": {
     "api/index.ts": {
-      "maxDuration": 60
+      "maxDuration": 60,
+      "includeFiles": "api/vercel-app.mjs"
     }
   },
   "rewrites": [
