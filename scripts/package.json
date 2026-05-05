@@ -6,6 +6,7 @@
   "scripts": {
     "hello": "tsx ./src/hello.ts",
     "seed:revenuecat": "tsx ./src/seedRevenueCat.ts",
+    "rasterize:app-icon": "tsx ./src/rasterizeAppIcon.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -13,6 +14,7 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "sharp": "^0.34.5",
     "tsx": "catalog:"
   }
 }
