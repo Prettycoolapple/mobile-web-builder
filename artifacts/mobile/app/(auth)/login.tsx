@@ -136,7 +136,7 @@ export default function LoginScreen() {
           <View style={styles.logoRow}>
             <View>
               <Text style={[styles.logoTitle, { color: colors.accent, fontFamily: "SpaceGrotesk_700Bold" }]}>
-                {isOSChineseLocale() ? "阿尔房" : "Project Alpha"}
+                {isOSChineseLocale() ? "奥房" : "Project Alpha"}
               </Text>
               <Text style={[styles.logoTagline, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
                 {t("login.tagline")}

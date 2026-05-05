@@ -59,10 +59,25 @@ async function arcgisQuery(
   outFields = "*",
   distanceM?: number,
   timeoutMs = 10000,
+  parcelBbox?: ParcelBbox | null,
 ): Promise<Record<string, unknown>[]> {
   const url = new URL(`${serviceUrl}/${layerId}/query`);
-  url.searchParams.set("geometry", `${lng},${lat}`);
-  url.searchParams.set("geometryType", "esriGeometryPoint");
+  if (parcelBbox?.polygon && parcelBbox.polygon.length >= 3) {
+    const ring = [...parcelBbox.polygon];
+    const first = ring[0];
+    const last = ring[ring.length - 1];
+    if (first && last && (first[0] !== last[0] || first[1] !== last[1])) {
+      ring.push(first);
+    }
+    url.searchParams.set("geometry", JSON.stringify({
+      rings: [ring],
+      spatialReference: { wkid: 4326 },
+    }));
+    url.searchParams.set("geometryType", "esriGeometryPolygon");
+  } else {
+    url.searchParams.set("geometry", `${lng},${lat}`);
+    url.searchParams.set("geometryType", "esriGeometryPoint");
+  }
   url.searchParams.set("inSR", "4326");
   url.searchParams.set("spatialRel", "esriSpatialRelIntersects");
   url.searchParams.set("outFields", outFields);
@@ -117,7 +132,7 @@ export async function fetchUnitaryPlanZone(lat: number, lng: number): Promise<Zo
   return { zone_code: "UNKNOWN", zone_description: "Unknown — data unavailable", min_lot_size_sqm: null, raw_zone: null };
 }
 
-export async function fetchOverlays(lat: number, lng: number): Promise<Overlay[]> {
+export async function fetchOverlays(lat: number, lng: number, parcelBbox?: ParcelBbox | null): Promise<Overlay[]> {
   const OVERLAY_LAYERS: Array<{
     name: string;
     layerId: number;
@@ -166,36 +181,9 @@ export async function fetchOverlays(lat: number, lng: number): Promise<Overlay[]
       mapDetail: () =>
         "Coastal Inundation Area (1% AEP + 1m sea level rise) — floor level controls apply. Check NES-F compliance requirements.",
     },
-    {
-      // Auckland Unitary Plan Chapter 9: Coastal Environment — Coastal Erosion Hazard Area.
-      // Covers frontline coastal sites at risk of wave erosion, landslip, and shoreline retreat.
-      // Mellons Bay had a seawall built in 2016 specifically for coastal erosion protection.
-      name: "Coastal Erosion Hazard",
-      layerId: 57,
-      mapStatus: () => "restricted",
-      mapDetail: () =>
-        "Coastal Erosion Hazard Area (Auckland Unitary Plan Chapter 9) — the site may be subject to coastal erosion, wave run-up, and shoreline retreat. Development near the coastal edge typically requires a Coastal Hazard Assessment, minimum floor levels above the coastal erosion setback, and may be subject to land-use restrictions. Engage a coastal engineer before design.",
-    },
-    {
-      // Flood Sensitive Area — the primary Auckland flood overlay. Captures 1% AEP floodplains.
-      // Separate from the flood sensitivity overlay that Hougarden text-scrapes; this queries
-      // the authoritative GIS layer directly.
-      name: "Flood Sensitive Area",
-      layerId: 5,
-      mapStatus: () => "restricted",
-      mapDetail: (attrs) => {
-        const desc = attrs["DESCRIPTION"] ?? attrs["FLOOD_TYPE"] ?? "";
-        const extra = typeof desc === "string" && desc.length > 2 ? ` (${desc})` : "";
-        return `Flood Sensitive Area${extra} — NES-F compliance required. An Engineering Flood Assessment may be needed before resource consent. Check minimum floor level and freeboard requirements.`;
-      },
-    },
-    {
-      name: "Overland Flow Path",
-      layerId: 6,
-      mapStatus: () => "moderate",
-      mapDetail: () =>
-        "Overland Flow Path — stormwater concentration route crosses or is adjacent to this site. Engineering controls required; contact Auckland Council stormwater team before any earthworks.",
-    },
+    // Do not use old layer IDs 5, 6, or 57 for flood/overland/coastal erosion:
+    // in the current AUP ManagementLayers service they are Indicative Coastline,
+    // Rural Urban Boundary, and Centre Fringe Office Control respectively.
     {
       name: "Waitakere Ranges Heritage",
       layerId: 24,
@@ -225,6 +213,7 @@ export async function fetchOverlays(lat: number, lng: number): Promise<Overlay[]
           "*",
           overlay.distanceM,
           8000,
+          parcelBbox,
         );
         if (features.length > 0) {
           overlays.push({
@@ -254,7 +243,7 @@ export async function fetchOverlays(lat: number, lng: number): Promise<Overlay[]
 // new round is started (up to MAX_ROUNDS total). After all rounds, each overlay
 // is included only when its occurrence count reaches the majority threshold
 // (> half of all valid samples), giving the most stable result we can produce.
-export async function fetchOverlaysWithConsensus(lat: number, lng: number): Promise<Overlay[]> {
+export async function fetchOverlaysWithConsensus(lat: number, lng: number, parcelBbox?: ParcelBbox | null): Promise<Overlay[]> {
   const MAX_ROUNDS = 3;
   const SAMPLES_PER_ROUND = 3;
   const TOTAL_BUDGET_MS = 35_000;
@@ -269,7 +258,7 @@ export async function fetchOverlaysWithConsensus(lat: number, lng: number): Prom
 
   const runSampleWithTimeout = async (round: number, idx: number, timeoutMs: number): Promise<Overlay[] | null> => {
     const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs));
-    const task = fetchOverlays(lat, lng).catch((err) => {
+    const task = fetchOverlays(lat, lng, parcelBbox).catch((err) => {
       logger.warn({ err: (err as Error).message, round, idx }, "fetchOverlays threw during consensus sample");
       return null;
     });
@@ -297,6 +286,19 @@ export async function fetchOverlaysWithConsensus(lat: number, lng: number): Prom
     const valid = roundResults.filter((r): r is Overlay[] => r !== null);
     if (valid.length === 0) {
       logger.warn({ round }, "Overlay consensus: all samples failed this round — retrying");
+      continue;
+    }
+    if (valid.length < 2) {
+      logger.warn({ round }, "Overlay consensus: only one valid sample — retrying before trusting overlay result");
+      totalValidSamples += valid.length;
+      for (const sample of valid) {
+        for (const overlay of sample) {
+          nameCount.set(overlay.name, (nameCount.get(overlay.name) ?? 0) + 1);
+          if (!representativeOverlay.has(overlay.name)) {
+            representativeOverlay.set(overlay.name, overlay);
+          }
+        }
+      }
       continue;
     }
 
@@ -342,8 +344,12 @@ export async function fetchOverlaysWithConsensus(lat: number, lng: number): Prom
     logger.warn({ lat, lng }, "Overlay consensus: no valid sample in any round — returning empty");
     return [];
   }
+  if (totalValidSamples < 2) {
+    logger.warn({ lat, lng, totalValidSamples }, "Overlay consensus: fewer than two valid samples — returning empty rather than trusting a single overlay read");
+    return [];
+  }
 
-  const threshold = Math.ceil(totalValidSamples / 2);
+  const threshold = Math.floor(totalValidSamples / 2) + 1;
   const finalOverlays: Overlay[] = [];
   for (const [name, count] of nameCount) {
     const rep = representativeOverlay.get(name)!;
@@ -501,7 +507,8 @@ async function fetchElevationViaLinzLiDAR(lat: number, lng: number, parcelBbox?:
 
       const elevMin = Math.min(...values);
       const elevMax = Math.max(...values);
-      const elevRange = elevMax - elevMin;
+      const elevRangeFull = elevMax - elevMin;
+      const elevRange = robustElevationSpreadM(values);
 
       // Slope: elevation range / longest axis of the parcel (conservative estimate)
       const longestAxisM = Math.max(widthM, heightM);
@@ -509,7 +516,7 @@ async function fetchElevationViaLinzLiDAR(lat: number, lng: number, parcelBbox?:
 
       const centerElev = values[Math.floor(values.length / 2)];
       logger.info(
-        { layerId, ncols, nrows, pixels: values.length, elevMin: elevMin.toFixed(1), elevMax: elevMax.toFixed(1), elevRange: elevRange.toFixed(1), slopeDeg: slopeDeg.toFixed(1) },
+        { layerId, ncols, nrows, pixels: values.length, elevMin: elevMin.toFixed(1), elevMax: elevMax.toFixed(1), elevRangeFull: elevRangeFull.toFixed(1), elevRangeRobust: elevRange.toFixed(1), slopeDeg: slopeDeg.toFixed(1) },
         "LINZ LiDAR WCS: elevation retrieved",
       );
       return classifySlope(slopeDeg, `LINZ LiDAR 1m DEM (layer ${layerId})`, centerElev);
@@ -707,26 +714,32 @@ async function fetchElevationViaTerrarium(lat: number, lng: number, parcelBbox?:
     return null;
   }
 
-  // True min and max elevation across all sampled points
-  let minSample = elevSamples[0], maxSample = elevSamples[0];
-  for (const s of elevSamples) {
-    if (s.elev < minSample.elev) minSample = s;
-    if (s.elev > maxSample.elev) maxSample = s;
+  const elevs = elevSamples.map((s) => s.elev);
+  const elevMin = Math.min(...elevs);
+  const elevMax = Math.max(...elevs);
+  const elevRange = robustElevationSpreadM(elevs);
+
+  // Use the same "relief / longest parcel axis" model as LINZ WCS when we have a
+  // parcel bbox — avoids tiny horizontal distances between unrelated min/max pixels
+  // (which inflated slope and caused run-to-run flips vs LiDAR).
+  let horizRunM: number;
+  if (parcelBbox) {
+    const widthM = (parcelBbox.maxLng - parcelBbox.minLng) * 111320 * Math.cos((lat * Math.PI) / 180);
+    const heightM = (parcelBbox.maxLat - parcelBbox.minLat) * 111320;
+    horizRunM = Math.max(widthM, heightM, 5);
+  } else {
+    let minTpx = elevSamples[0].tPx, maxTpx = elevSamples[0].tPx, minTpy = elevSamples[0].tPy, maxTpy = elevSamples[0].tPy;
+    for (const s of elevSamples) {
+      minTpx = Math.min(minTpx, s.tPx);
+      maxTpx = Math.max(maxTpx, s.tPx);
+      minTpy = Math.min(minTpy, s.tPy);
+      maxTpy = Math.max(maxTpy, s.tPy);
+    }
+    const footprintPx = Math.max(maxTpx - minTpx, maxTpy - minTpy, 1);
+    horizRunM = Math.max(footprintPx * pixelSizeM, pixelSizeM * 8);
   }
-  const elevMin = minSample.elev;
-  const elevMax = maxSample.elev;
-  const elevRange = elevMax - elevMin;
 
-  // Horizontal distance between min and max points (in metres)
-  const dxPx = maxSample.tPx - minSample.tPx;
-  const dyPx = maxSample.tPy - minSample.tPy;
-  const horizDistM = Math.sqrt(dxPx * dxPx + dyPx * dyPx) * pixelSizeM;
-
-  // Slope = arctan(elevation_change / horizontal_distance)
-  // Guard against identical pixels (flat parcel) — use 1m minimum distance
-  const slopeDeg = horizDistM > 1
-    ? Math.atan(elevRange / horizDistM) * (180 / Math.PI)
-    : 0;
+  const slopeDeg = horizRunM > 1 ? Math.atan(elevRange / horizRunM) * (180 / Math.PI) : 0;
 
   const centerElev = png.terrarium(png.getPixel(
     Math.min(Math.max(px, 0), png.width - 1),
@@ -737,7 +750,7 @@ async function fetchElevationViaTerrarium(lat: number, lng: number, parcelBbox?:
     {
       lat, lng, samplingMode, pixelCount: elevSamples.length,
       elevMin: elevMin.toFixed(1), elevMax: elevMax.toFixed(1),
-      elevRange: elevRange.toFixed(1), horizDistM: horizDistM.toFixed(1),
+      elevRange: elevRange.toFixed(1), horizRunM: horizRunM.toFixed(1),
       slopeDeg: slopeDeg.toFixed(1), pixelSizeM: pixelSizeM.toFixed(2),
     },
     "Terrarium tiles: slope measurement complete",
@@ -772,7 +785,8 @@ async function fetchElevationViaOpenTopoData(lat: number, lng: number, parcelBbo
   // nzdem8m is NZ's purpose-built 8m DEM — far more accurate than global SRTM 30m.
 
   let finePoints: { lat: number; lng: number }[] = [];
-  let stepM: number;
+  let rowStepM: number;
+  let colStepM: number;
   let gridLabel: string;
 
   if (parcelBbox) {
@@ -791,10 +805,12 @@ async function fetchElevationViaOpenTopoData(lat: number, lng: number, parcelBbo
         });
       }
     }
-    // Use the shorter axis as the step distance for slope calculation
+    // Use row and column spacing separately so elongated parcels are not
+    // over-stated by applying the short axis to long-axis elevation changes.
     const widthM  = lngRange * 111320 * Math.cos(lat * Math.PI / 180);
     const heightM = latRange * 111320;
-    stepM = Math.min(widthM, heightM) / (GRID - 1);
+    rowStepM = Math.max(heightM / (GRID - 1), 1);
+    colStepM = Math.max(widthM / (GRID - 1), 1);
     gridLabel = `parcel-bbox 7×7 (${(widthM).toFixed(0)}m×${(heightM).toFixed(0)}m)`;
   } else {
     // Fallback: 5×5 grid at ~10m spacing around geocoded point
@@ -804,7 +820,8 @@ async function fetchElevationViaOpenTopoData(lat: number, lng: number, parcelBbo
         finePoints.push({ lat: lat + i * FINE_OFFSET, lng: lng + j * FINE_OFFSET });
       }
     }
-    stepM = FINE_OFFSET * 111320;
+    rowStepM = FINE_OFFSET * 111320;
+    colStepM = FINE_OFFSET * 111320 * Math.cos(lat * Math.PI / 180);
     gridLabel = "geocode-centred 5×5 (40m×40m fallback)";
   }
 
@@ -823,7 +840,7 @@ async function fetchElevationViaOpenTopoData(lat: number, lng: number, parcelBbo
   // Try nzdem8m (NZ-specific 8m DEM) first
   try {
     const url = `https://api.opentopodata.org/v1/nzdem8m?locations=${fineLocStr}`;
-    logger.info({ lat, lng, points: finePoints.length, gridLabel, stepM: stepM.toFixed(0) }, "OpenTopoData: querying nzdem8m (NZ 8m DEM)");
+    logger.info({ lat, lng, points: finePoints.length, gridLabel, rowStepM: rowStepM.toFixed(0), colStepM: colStepM.toFixed(0) }, "OpenTopoData: querying nzdem8m (NZ 8m DEM)");
     const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
     if (!resp.ok) throw new Error(`OpenTopoData nzdem8m HTTP ${resp.status}`);
 
@@ -845,9 +862,9 @@ async function fetchElevationViaOpenTopoData(lat: number, lng: number, parcelBbo
         const idx = r * GRID_COLS + c;
         if (idx >= elevs.length) continue;
         if (c + 1 < GRID_COLS && idx + 1 < elevs.length)
-          maxGrad = Math.max(maxGrad, Math.abs(elevs[idx] - elevs[idx + 1]) / stepM);
+          maxGrad = Math.max(maxGrad, Math.abs(elevs[idx] - elevs[idx + 1]) / colStepM);
         if (r + 1 < GRID_COLS && idx + GRID_COLS < elevs.length)
-          maxGrad = Math.max(maxGrad, Math.abs(elevs[idx] - elevs[idx + GRID_COLS]) / stepM);
+          maxGrad = Math.max(maxGrad, Math.abs(elevs[idx] - elevs[idx + GRID_COLS]) / rowStepM);
       }
     }
     const slopeDeg = Math.atan(maxGrad) * (180 / Math.PI);
@@ -1136,9 +1153,11 @@ async function applyContourUpgrade(result: ContourResult, lat: number, lng: numb
 }
 
 async function fetchContourOnce(lat: number, lng: number, parcelBbox?: ParcelBbox | null): Promise<ContourResult> {
-  // Helper: run contour upgrade if parcelBbox (with polygon) is available
-  const maybeUpgrade = async (r: ContourResult): Promise<ContourResult> =>
-    parcelBbox?.polygon ? applyContourUpgrade(r, lat, lng, parcelBbox) : r;
+  // Use the measured DEM result directly. The older 20m topo-contour
+  // cross-check remains available as an audit helper, but using it to upgrade
+  // measured DEM output made borderline coastal parcels flip between gentle and
+  // moderate depending on which fallback source completed first.
+  const measured = async (r: ContourResult): Promise<ContourResult> => r;
 
   // 1. LINZ LiDAR 1m DEM via WCS — the exact dataset used by Auckland Council GIS.
   try {
@@ -1151,33 +1170,48 @@ async function fetchContourOnce(lat: number, lng: number, parcelBbox?: ParcelBbo
   // 2. AWS Terrarium terrain tiles — public, no key, ~3.8m resolution.
   try {
     const result = await fetchElevationViaTerrarium(lat, lng, parcelBbox);
-    if (result) return maybeUpgrade(result);
+    if (result) return measured(result);
   } catch (err) {
-    logger.warn({ err: (err as Error).message }, "Terrarium tiles failed — trying Google Elevation");
+    logger.warn({ err: (err as Error).message }, "Terrarium tiles failed — trying OpenTopoData");
   }
 
-  // 3. Google Elevation — fallback when Terrarium unavailable
+  // 3. Open-Topo-Data NZ 8m DEM — free, no key, NZ-specific, and parcel-aware.
+  try {
+    const result = await fetchElevationViaOpenTopoData(lat, lng, parcelBbox);
+    if (result) return measured(result);
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "OpenTopoData query failed");
+  }
+
+  // If we know the parcel, do not downgrade to point-only elevation APIs. A
+  // street geocode can sit on the road frontage or a neighbouring parcel and
+  // create false moderate/steep classifications. The pipeline can still fall
+  // back to scraper text labels when parcel-based elevation is unavailable.
+  if (parcelBbox) {
+    logger.warn({ lat, lng }, "Parcel-based elevation sources failed — returning unknown contour instead of point-only fallback");
+    return {
+      slope_degrees: null,
+      classification: null,
+      retaining_cost_low: 0,
+      retaining_cost_high: 0,
+      source: "unavailable",
+    };
+  }
+
+  // 4. Google Elevation — point-only fallback when parcel geometry is unavailable.
   if (process.env["GOOGLE_MAPS_API_KEY"]) {
     try {
       const result = await fetchElevationViaGoogle(lat, lng);
-      if (result) return maybeUpgrade(result);
+      if (result) return measured(result);
     } catch (err) {
-      logger.warn({ err: (err as Error).message }, "Google elevation query failed — trying OpenTopoData");
+      logger.warn({ err: (err as Error).message }, "Google elevation query failed — trying Open-Elevation");
     }
-  }
-
-  // 4. Open-Topo-Data NZ 8m DEM — free, no key, NZ-specific
-  try {
-    const result = await fetchElevationViaOpenTopoData(lat, lng, parcelBbox);
-    if (result) return maybeUpgrade(result);
-  } catch (err) {
-    logger.warn({ err: (err as Error).message }, "OpenTopoData query failed — trying Open-Elevation");
   }
 
   // 5. Open-Elevation API — free backup
   try {
     const result = await fetchElevationViaOpenElevation(lat, lng);
-    if (result) return maybeUpgrade(result);
+    if (result) return measured(result);
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "Open-Elevation query failed — trying LINZ DEM");
   }
@@ -1185,7 +1219,7 @@ async function fetchContourOnce(lat: number, lng: number, parcelBbox?: ParcelBbo
   // 6. LINZ DEM contour vector layer — requires LINZ_API_KEY
   try {
     const result = await fetchElevationViaLINZ(lat, lng);
-    if (result) return maybeUpgrade(result);
+    if (result) return measured(result);
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "LINZ elevation query failed");
   }
@@ -1208,6 +1242,12 @@ async function fetchContourOnce(lat: number, lng: number, parcelBbox?: ParcelBbo
 // round, the classification that appeared most often across all runs is used.
 // Running in parallel keeps the added latency to ≈1× rather than 3× per round.
 export async function fetchContour(lat: number, lng: number, parcelBbox?: ParcelBbox | null): Promise<ContourResult> {
+  // Deterministic source order beats parallel "winner" races here. Each run now
+  // uses the first available measured DEM source for the parcel, so a report
+  // cannot vary because one parallel sample timed out and another fell through
+  // to a coarser fallback.
+  return fetchContourOnce(lat, lng, parcelBbox);
+
   const MAX_ROUNDS = 3;
   const SAMPLES_PER_ROUND = 3;
   const TOTAL_BUDGET_MS = 25_000;
@@ -1306,15 +1346,30 @@ export async function fetchContour(lat: number, lng: number, parcelBbox?: Parcel
   return finalResult;
 }
 
-function classifySlope(slopeDeg: number, source: string, elevationCenter?: number): ContourResult {
+/**
+ * Elevation spread across a parcel sample (metres). Uses 10th–90th percentiles when
+ * there are enough pixels so a single DEM spike (vegetation, roof artefact) cannot
+ * flip gentle ↔ moderate between runs; falls back to full min–max for tiny samples.
+ */
+function robustElevationSpreadM(elevs: number[]): number {
+  if (elevs.length === 0) return 0;
+  const full = Math.max(...elevs) - Math.min(...elevs);
+  if (elevs.length < 10 || full <= 0) return full;
+  const sorted = [...elevs].sort((a, b) => a - b);
+  const lo = sorted[Math.floor((sorted.length - 1) * 0.1)]!;
+  const hi = sorted[Math.ceil((sorted.length - 1) * 0.9) - 1]!;
+  return Math.max(0, hi - lo);
+}
+
+export function classifySlope(slopeDeg: number, source: string, elevationCenter?: number): ContourResult {
   const rounded = Math.round(slopeDeg * 10) / 10;
   // Thresholds calibrated for NZ residential development feasibility:
   // <3°  = effectively flat, no meaningful retaining needed
-  // 3-10° = gentle slope, minor level changes / retaining required
-  // 10-20° = moderate, significant retaining and earthworks budget needed
+  // 3-12° = gentle slope (keeps borderline DEM noise out of moderate)
+  // 12-20° = moderate, significant retaining and earthworks budget needed
   // >20°  = steep, major geotechnical and retaining cost implications
   if (slopeDeg < 3)  return { slope_degrees: rounded, classification: "flat",     retaining_cost_low: 0,      retaining_cost_high: 5000,   source, elevation_center: elevationCenter ?? null };
-  if (slopeDeg < 10) return { slope_degrees: rounded, classification: "gentle",   retaining_cost_low: 15000,  retaining_cost_high: 60000,  source, elevation_center: elevationCenter ?? null };
+  if (slopeDeg < 12) return { slope_degrees: rounded, classification: "gentle",   retaining_cost_low: 15000,  retaining_cost_high: 60000,  source, elevation_center: elevationCenter ?? null };
   if (slopeDeg < 20) return { slope_degrees: rounded, classification: "moderate", retaining_cost_low: 60000,  retaining_cost_high: 200000, source, elevation_center: elevationCenter ?? null };
   return { slope_degrees: rounded, classification: "steep",    retaining_cost_low: 200000, retaining_cost_high: 500000, source, elevation_center: elevationCenter ?? null };
 }

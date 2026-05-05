@@ -10,7 +10,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
-import { useT } from "@/lib/i18n";
+import { isOSChineseLocale, useT } from "@/lib/i18n";
 
 interface RoleCard {
   key: "general" | "service_provider";
@@ -78,7 +78,9 @@ export default function RoleSelectionScreen() {
 
         <View style={styles.header}>
           <View>
-            <Text style={[styles.brandName, { color: colors.accent, fontFamily: "SpaceGrotesk_700Bold" }]}>Project Alpha</Text>
+            <Text style={[styles.brandName, { color: colors.accent, fontFamily: "SpaceGrotesk_700Bold" }]}>
+              {isOSChineseLocale() ? "奥房" : "Project Alpha"}
+            </Text>
             <Text style={[styles.brandTagline, { color: colors.mutedForeground }]}>
               {t("signup.brand_tagline")}
             </Text>

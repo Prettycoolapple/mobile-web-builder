@@ -37,6 +37,11 @@ export function isIncompleteDataDisclaimerRiskBullet(text: string): boolean {
     /\bassumed\b.{0,80}\b(location|coastal|site|property)\b/i,
     /\bhypothes(izing|is)\b.{0,60}\b(location|site)\b/i,
     /\black\s+of\s+information\b.{0,80}\b(from|in)\b.{0,40}\b(database|records?)\b/i,
+    /\bLINZ\b.{0,100}\b(fail(ed|ure)?|could\s+not|unable\s+to|not\s+retrieved|unavailable|error)\b/i,
+    /\b(fail(ed|ure)?|could\s+not|unable\s+to)\b.{0,60}\b(retriev(e|al)|fetch|obtain)\b.{0,40}\b(title|cadastral|LINZ)\b/i,
+    /\bdata\s+(fetch|fetching|retrieval)\s+fail/i,
+    /\btitle\s+(data|records?)\b.{0,70}\b(not\s+)?(retrieved|available|obtained|fetched)\b/i,
+    /\bsolicitor\b.{0,90}\btitle\s+search\b.{0,120}\b(LINZ|fail|unavailable|could\s+not)\b/i,
   ];
   if (en.some((re) => re.test(s))) return true;
 
@@ -59,6 +64,16 @@ export function isIncompleteDataDisclaimerRiskBullet(text: string): boolean {
     /假定[^。]{0,5}(该|此|本)/,
     /假设[^。]{0,30}(该|此|本)[^。]{0,20}(址|地|地块)/,
     /缺少[^。]{0,15}可靠[^。]{0,12}数据/,
+    /LINZ[^。]{0,40}(获取失败|未能获取|无法获取|失败|不可用)/,
+    /地权[^。]{0,20}(数据[^。]{0,12})?(获取失败|未能获取|无法获取|失败)/,
+    /(数据|信息)[^。]{0,12}获取失败/,
+    /获取失败[^。]{0,100}(产权|许可|分割|建筑)/,
+    /必须通过[^。]{0,20}律师[^。]{0,50}产权搜索/,
+    /律师[^。]{0,30}产权搜索[^。]{0,80}(不确定性|许可|分割|建筑)/,
+    /产权搜索[^。]{0,60}(律师|委托)/,
+    /(分割|建筑许可)[^。]{0,30}前[^。]{0,50}(产权搜索|律师)/,
+    /前期[^。]{0,20}不确定性[^。]{0,40}(产权|律师|LINZ|获取)/,
+    /(根据|依据)[^。]{0,15}(LINZ|新西兰土地信息署)[^。]{0,80}(失败|未能|无法|不可用)/,
   ];
   if (zh.some((re) => re.test(text))) return true;
 

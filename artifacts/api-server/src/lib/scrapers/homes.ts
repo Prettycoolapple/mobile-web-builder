@@ -2,6 +2,7 @@
 import { logger } from "../logger";
 import { launchBrowser, newStealthPage, randomDelay } from "./browser";
 import { fetchWithScrapingBee } from "./scrapingbee";
+import { extractBedsBaths } from "./bed-bath-extractor";
 import type { Browser } from "playwright";
 
 /** Paths we must never mint as suburb slugs (`/address/auckland/{slug}/`). */
@@ -66,13 +67,9 @@ function extractFromText(allText: string): Partial<HomesData> {
     ?? allText.match(/[Cc]onstruction\s+[Yy]ear[^0-9\n]*(\d{4})/i)
     ?? allText.match(/(?:built|year\s*built|decade\s*built)[^0-9\n]*(\d{4})/i);
   if (buildMatch) data.build_year = parseYear(buildMatch[0]);
-  const bedsMatch = allText.match(/(\d)\s*bed(?:room)?s?\b/i);
-  if (bedsMatch) data.bedrooms = parseInt(bedsMatch[1], 10);
-  const bathsMatch = allText.match(/(\d(?:\.\d)?)\s*bath(?:room)?s?\b/i);
-  if (bathsMatch) {
-    const v = parseFloat(bathsMatch[1]);
-    if (!isNaN(v) && v > 0 && v < 20) data.bathrooms = v;
-  }
+  const bb = extractBedsBaths(allText);
+  if (bb.bedrooms != null) data.bedrooms = bb.bedrooms;
+  if (bb.bathrooms != null) data.bathrooms = bb.bathrooms;
   const saleMatch = allText.match(/(?:last\s+sale|sold)\s*(?:for)?\s*\$?([\d,]+)/i);
   if (saleMatch) data.last_sale_price = parseNZD(saleMatch[1]);
   return data;

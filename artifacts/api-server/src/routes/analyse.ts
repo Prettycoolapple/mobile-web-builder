@@ -49,7 +49,7 @@ import type { ListingResult } from "../lib/scrapers/oneroof";
 import { queueBackgroundScores, getCardScores } from "../lib/analysis-cache";
 import { normaliseLocale } from "../lib/prompts";
 import { translateChatContent, translateReportNarrative, ensureChinese } from "../lib/translation";
-import { maybeAddressClarification } from "../lib/address-clarification";
+import { resolveAddressForAnalysis } from "../lib/address-clarification";
 import {
   CHAT_LIMITS,
   FREE_REPORT_LIMIT,
@@ -258,6 +258,89 @@ function appendMultiLotProgrammeRiskIfNeeded(bullets: string[], potentialLots: n
   return [...bullets, isZh ? zh : en];
 }
 
+function deterministicTerrainSlopeText(
+  contour: "flat" | "gentle" | "moderate" | "steep" | null | undefined,
+  slopeDegrees: number | null | undefined,
+): string | null {
+  if (!contour) return null;
+  const deg = typeof slopeDegrees === "number" ? ` (~${slopeDegrees} degrees)` : "";
+  if (contour === "flat") return `Flat terrain${deg} - no meaningful retaining expected from contour data.`;
+  if (contour === "gentle") return `Gentle slope${deg} - minor level changes only; standard site-specific survey still required before design.`;
+  if (contour === "moderate") return `Moderate slope${deg} - allow for benching, retaining, and geotechnical confirmation.`;
+  return `Steep terrain${deg} - significant retaining and geotechnical design likely required.`;
+}
+
+function filterRiskSummaryRemoveContradictoryTerrainBullets(
+  bullets: string[],
+  contour: "flat" | "gentle" | "moderate" | "steep" | null | undefined,
+): string[] {
+  return bullets.filter((b) => {
+    if (typeof b !== "string") return false;
+    if (contour !== "moderate" && /(moderate|medium)\s+(slope|terrain)|10\s*[-–]\s*15|中等坡|中坡/i.test(b)) return false;
+    if (contour !== "steep" && /steep\s+(slope|terrain|site)|陡坡|地形陡峭/i.test(b)) return false;
+    return true;
+  });
+}
+
+type OverlayFamily = "volcanic" | "heritage" | "tree" | "flood" | "coastal" | "ridgeline" | "special";
+
+const OVERLAY_FAMILY_PATTERNS: Record<OverlayFamily, RegExp> = {
+  // Include CJK so LLM-written Chinese bullets are stripped when GIS did not return that overlay.
+  volcanic: /volcanic|view\s*shaft|viewshaft|火山|景观廊|視廊|火山景观|景观视廊/i,
+  heritage: /heritage|historic|遗产|歷史建築/i,
+  tree: /notable\s+tree|protected\s+tree|显著树|显著树木|受保护树/i,
+  flood: /flood|overland\s+flow|洪水|漫流|洪泛/i,
+  coastal: /coastal|erosion\s+hazard|inundation|海岸|侵蚀|淹没/i,
+  ridgeline: /ridgeline|山脊/i,
+  special: /special\s+character|特色|特殊性质/i,
+};
+
+function overlayFamilies(overlays: Array<{ name?: unknown }>): Set<OverlayFamily> {
+  const out = new Set<OverlayFamily>();
+  for (const overlay of overlays) {
+    const name = typeof overlay.name === "string" ? overlay.name : "";
+    for (const [family, pattern] of Object.entries(OVERLAY_FAMILY_PATTERNS) as Array<[OverlayFamily, RegExp]>) {
+      if (pattern.test(name)) out.add(family);
+    }
+  }
+  return out;
+}
+
+function confirmedOverlayName(overlays: Array<{ name?: unknown }>, pattern: RegExp): boolean {
+  return overlays.some((overlay) => {
+    const name = typeof overlay.name === "string" ? overlay.name : "";
+    return pattern.test(name);
+  });
+}
+
+const SPECIFIC_OVERLAY_BULLET_GATES: Array<{ bullet: RegExp; confirmedName: RegExp }> = [
+  {
+    bullet: /coastal\s+erosion|erosion\s+hazard|shoreline\s+retreat|coastal\s+instability|ASCIE|海岸.*侵蚀|海岸.*侵蝕|岸线.*后退|海岸.*不稳定/i,
+    confirmedName: /erosion|instability|ASCIE/i,
+  },
+  {
+    bullet: /coastal\s+inundation|storm\s+tide|sea[-\s]?level\s+rise|minimum\s+floor\s+level|floor\s+level\s+control|海岸.*淹没|海岸.*淹沒|海平面上升/i,
+    confirmedName: /inundation|storm/i,
+  },
+];
+
+function filterRiskSummaryRemoveUnconfirmedOverlayBullets(
+  bullets: string[],
+  overlays: Array<{ name?: unknown }>,
+): string[] {
+  const confirmed = overlayFamilies(overlays);
+  return bullets.filter((b) => {
+    if (typeof b !== "string") return false;
+    for (const gate of SPECIFIC_OVERLAY_BULLET_GATES) {
+      if (gate.bullet.test(b) && !confirmedOverlayName(overlays, gate.confirmedName)) return false;
+    }
+    for (const [family, pattern] of Object.entries(OVERLAY_FAMILY_PATTERNS) as Array<[OverlayFamily, RegExp]>) {
+      if (pattern.test(b) && !confirmed.has(family)) return false;
+    }
+    return true;
+  });
+}
+
 function applyDeterministicPipelineOverrides(
   parsed: Record<string, unknown>,
   pipelineResult: PipelineResult,
@@ -287,6 +370,15 @@ function applyDeterministicPipelineOverrides(
   if (merged) {
     parsed.data_sources = merged.data_sources ?? {};
     parsed.missing_critical_fields = merged.missing_critical_fields ?? [];
+    const existingTerrain = (parsed.terrain as Record<string, unknown> | undefined) ?? {};
+    parsed.terrain = {
+      ...existingTerrain,
+      classification: merged.contour ?? null,
+      slope_degrees: merged.contour_slope_degrees ?? null,
+      official_label: merged.contour_text ?? null,
+      source: merged.contour_source ?? null,
+      slope: deterministicTerrainSlopeText(merged.contour, merged.contour_slope_degrees),
+    };
   }
 
   if (lots) {
@@ -466,6 +558,8 @@ function applyDeterministicPipelineOverrides(
   rs = filterRiskSummaryRemoveIncompleteDataDisclaimerBullets(
     filterRiskSummaryRemoveComparableReliabilityBullets(rs),
   );
+  rs = filterRiskSummaryRemoveUnconfirmedOverlayBullets(rs, merged?.overlays ?? []);
+  rs = filterRiskSummaryRemoveContradictoryTerrainBullets(rs, merged?.contour ?? null);
   rs = filterRiskSummaryRemoveMhsBulletsWhenZoneIsNotMhs(rs, merged?.zone_code ?? null);
   const canonYear = canonicalBuildYearFromReport(parsed, merged?.build_year ?? null);
   if (canonYear != null && canonYear > 2000) {
@@ -682,30 +776,196 @@ function normaliseStreetHintKey(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
+const STREET_TYPE_ALIASES: Record<string, string> = {
+  road: "road",
+  rd: "road",
+  street: "street",
+  st: "street",
+  avenue: "avenue",
+  ave: "avenue",
+  crescent: "crescent",
+  cres: "crescent",
+  place: "place",
+  pl: "place",
+  drive: "drive",
+  dr: "drive",
+  way: "way",
+  lane: "lane",
+  ln: "lane",
+  terrace: "terrace",
+  tce: "terrace",
+  parade: "parade",
+  pde: "parade",
+  close: "close",
+  grove: "grove",
+  rise: "rise",
+  view: "view",
+  heights: "heights",
+  ridge: "ridge",
+  court: "court",
+  hill: "hill",
+  mews: "mews",
+  quay: "quay",
+  boulevard: "boulevard",
+  blvd: "boulevard",
+  highway: "highway",
+  hwy: "highway",
+  motorway: "motorway",
+  esplanade: "esplanade",
+  mall: "mall",
+  row: "row",
+  walk: "walk",
+  path: "path",
+  track: "track",
+};
+
+const STREET_HINT_STOPWORDS = new Set([
+  "what", "whats", "s", "which", "property", "properties", "house", "houses",
+  "home", "homes", "land", "listing", "listings", "sale", "sell", "selling",
+  "sold", "available", "market", "on", "in", "at", "near", "around", "along",
+  "for", "the", "a", "an", "of", "and", "or", "to", "with", "street", "road",
+  "suburb", "area", "find", "search", "show", "me", "please",
+]);
+
+function canonicalStreetType(raw: string): string | null {
+  return STREET_TYPE_ALIASES[raw.toLowerCase()] ?? null;
+}
+
 /** Unnumbered or numbered road + type, e.g. "marine parade" from user discover wording. */
 function extractDiscoverStreetHint(text: string): string | null {
   const trimmed = (text || "").trim();
   if (!trimmed) return null;
-  const re =
-    /\b(?:\d+[A-Za-z]?\s+)?([A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]*)*)\s+(parade|road|street|avenue|drive|way|lane|terrace|place|crescent|close|rise|view|court|ridge|esplanade|boulevard|highway|track|mall|row|walk|mews|groves?|heights?|quays?|hwy|rd|st|ave|cres|pl|dr|ln|tce|pde|blvd)\b/i;
-  const m = trimmed.match(re);
-  if (!m) return null;
-  return `${m[1]!.trim()} ${m[2]!.toLowerCase()}`;
+
+  const tokens = [...trimmed.matchAll(/[A-Za-z0-9']+/g)].map((match) => ({
+    raw: match[0],
+    lower: match[0].toLowerCase().replace(/^'+|'+$/g, ""),
+  }));
+
+  let best: string | null = null;
+  for (let i = 0; i < tokens.length; i++) {
+    const type = canonicalStreetType(tokens[i]!.lower);
+    if (!type) continue;
+
+    let name = tokens.slice(Math.max(0, i - 5), i).map((t) => t.lower);
+    while (name.length > 0 && (/^\d+[a-z]?$/.test(name[0]!) || STREET_HINT_STOPWORDS.has(name[0]!))) {
+      name = name.slice(1);
+    }
+    while (name.length > 0 && STREET_HINT_STOPWORDS.has(name[name.length - 1]!)) {
+      name = name.slice(0, -1);
+    }
+
+    if (name.length === 0 || name.length > 4) continue;
+    if (name.some((part) => STREET_HINT_STOPWORDS.has(part))) continue;
+
+    best = `${name.join(" ")} ${type}`;
+  }
+
+  return best;
 }
 
 function extractDiscoverStreetHintFromThread(
   threadMessages: Message[] | undefined,
   currentUserText: string,
+  carryFromHistory = false,
 ): string | null {
   const fromCurrent = extractDiscoverStreetHint(currentUserText);
   if (fromCurrent) return fromCurrent;
+  if (!carryFromHistory) return null;
   if (!threadMessages?.length) return null;
   for (const msg of [...threadMessages].reverse()) {
+    if (msg.content === currentUserText) continue;
     if (msg.role !== "user" || !msg.content) continue;
     const h = extractDiscoverStreetHint(msg.content);
     if (h) return h;
   }
   return null;
+}
+
+function extractPreviousDiscoverStreetHint(
+  threadMessages: Message[] | undefined,
+  currentUserText: string,
+): string | null {
+  if (!threadMessages?.length) return null;
+  for (const msg of [...threadMessages].reverse()) {
+    if (msg.role !== "user" || !msg.content || msg.content === currentUserText) continue;
+    const h = extractDiscoverStreetHint(msg.content);
+    if (h) return h;
+  }
+  return null;
+}
+
+function isDiscoverStreetContinuation(text: string): boolean {
+  const lower = text.toLowerCase().trim();
+  if (/^\d+[a-z]?\s*(?:号|號|number|no\.?|#)?\s*(?:呢|\?)?$/i.test(text.trim())) return true;
+  return /any\s*(others?|more)|show\s*(me\s*)?more|more\s*(properties|options|results|sites)|what\s*else|other\s*properties|more\s*results|few\s*more|find\s*more|keep\s*looking|another\s*one|any\s*other|more\s*sites|other\s*options/i.test(lower);
+}
+
+function extractBareStreetNumberFollowup(text: string): string | null {
+  const trimmed = text.trim();
+  const patterns = [
+    /^(?:what\s+about\s+)?(?:number\s+|no\.?\s*|#)?(\d+[a-z]?)(?:\s*(?:号|號))?\s*(?:呢|\?)?$/i,
+    /^(\d+[a-z]?)\s*(?:号|號)\s*(?:呢|\?)?$/i,
+  ];
+  for (const pattern of patterns) {
+    const m = trimmed.match(pattern);
+    if (m) return m[1]!.toUpperCase();
+  }
+  return null;
+}
+
+function titleCaseStreetHint(hint: string): string {
+  return hint
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
+async function inferSuburbFromThread(
+  threadMessages: Message[] | undefined,
+  currentUserText: string,
+): Promise<string | null> {
+  if (!threadMessages?.length) return null;
+  for (const msg of [...threadMessages].reverse()) {
+    if (msg.role !== "user" || msg.content === currentUserText) continue;
+    const prev = await parseDiscoverParams(msg.content ?? "");
+    if (prev.suburb) return prev.suburb;
+  }
+  return null;
+}
+
+async function inferAddressFromBareStreetNumber(
+  threadMessages: Message[] | undefined,
+  currentUserText: string,
+  fallbackSuburb?: string | null,
+): Promise<string | null> {
+  const number = extractBareStreetNumberFollowup(currentUserText);
+  if (!number) return null;
+
+  const streetHint = extractDiscoverStreetHintFromThread(threadMessages, currentUserText, true);
+  if (!streetHint) return null;
+
+  let suburb = fallbackSuburb?.trim() || null;
+  if (!suburb) suburb = await inferSuburbFromThread(threadMessages, currentUserText);
+
+  const address = `${number} ${titleCaseStreetHint(streetHint)}`;
+  return suburb ? `${address}, ${suburb}` : address;
+}
+
+function appendContextSuburbIfSameStreet(
+  address: string | null,
+  threadMessages: Message[] | undefined,
+  currentUserText: string,
+  fallbackSuburb?: string | null,
+): string | null {
+  if (!address || address.includes(",") || !fallbackSuburb?.trim()) return address;
+
+  const addressStreet = extractDiscoverStreetHint(address);
+  const contextStreet = extractPreviousDiscoverStreetHint(threadMessages, currentUserText);
+  if (!addressStreet || !contextStreet) return address;
+
+  if (normaliseStreetHintKey(addressStreet) !== normaliseStreetHintKey(contextStreet)) return address;
+  return `${address}, ${fallbackSuburb.trim()}`;
 }
 
 function rankListingsByStreetHint(listings: ListingResult[], hint: string | null): ListingResult[] {
@@ -717,6 +977,13 @@ function rankListingsByStreetHint(listings: ListingResult[], hint: string | null
     const mb = normaliseStreetHintKey(b.address).includes(key) ? 1 : 0;
     return mb - ma;
   });
+}
+
+function filterListingsByStreetHint(listings: ListingResult[], hint: string | null): ListingResult[] {
+  if (!hint?.trim()) return listings;
+  const key = normaliseStreetHintKey(hint);
+  if (key.length < 4) return listings;
+  return listings.filter((listing) => normaliseStreetHintKey(listing.address).includes(key));
 }
 
 async function parseDiscoverParams(text: string): Promise<{ suburb: string | null; minPrice: number; maxPrice: number }> {
@@ -920,24 +1187,25 @@ router.post("/analyse", async (req, res) => {
       return;
     }
 
-    const addressAmbiguous = await maybeAddressClarification(address, analyseLocale);
-    if (addressAmbiguous) {
+    const addressResolution = await resolveAddressForAnalysis(address, analyseLocale);
+    if (addressResolution.clarification) {
       res.json({
         type: "clarification",
-        clarificationType: addressAmbiguous.clarificationType,
-        question: addressAmbiguous.question,
-        options: addressAmbiguous.options,
+        clarificationType: addressResolution.clarification.clarificationType,
+        question: addressResolution.clarification.question,
+        options: addressResolution.clarification.options,
       });
       return;
     }
+    const analysisAddress = addressResolution.resolvedAddress || address;
 
     // Run the deterministic pipeline in parallel with the LLM report so the
     // response includes verified merge data (CV, land/floor area, listing
     // reconciliation) and a pinned property_overview_snapshot for follow-ups.
     const locale = analyseLocale;
     const [raw, pipelineResult] = await Promise.all([
-      generateFeasibilityReport(address, conversationHistory || [], locale),
-      runPropertyPipeline(address).catch((err) => {
+      generateFeasibilityReport(analysisAddress, conversationHistory || [], locale),
+      runPropertyPipeline(analysisAddress).catch((err) => {
         req.log.warn({ err }, "Pipeline failed during /analyse — falling back to LLM-only report");
         return null;
       }),
@@ -948,7 +1216,7 @@ router.post("/analyse", async (req, res) => {
     // Inject deterministic pipeline-backed fields so CV/cost/ROI values remain
     // consistent and do not drift from source data.
     if (pipelineResult && report && typeof report === "object") {
-      applyDeterministicPipelineOverrides(report, pipelineResult, pipelineResult.geocode?.formatted ?? address);
+      applyDeterministicPipelineOverrides(report, pipelineResult, pipelineResult.geocode?.formatted ?? analysisAddress);
     }
 
     // For zh users: guarantee all narrative fields are in Simplified Chinese
@@ -961,23 +1229,25 @@ router.post("/analyse", async (req, res) => {
       report = await translateReportNarrative(report, { translateTitleAndSchoolFields: translateTitleSchool });
     }
 
+    let savedSearchId: string | null = null;
+    let savedSearchCreatedAt: string | null = null;
     if (userId) {
       await db.update(profiles).set({
         reportsUsedThisMonth: sql`${profiles.reportsUsedThisMonth} + 1`,
       }).where(eq(profiles.id, userId));
 
-      let savedSearchId: string | null = null;
       try {
         const [row] = await db
           .insert(searches)
           .values({
             userId,
             query: address,
-            address,
+            address: analysisAddress,
             resultJson: report as Record<string, unknown>,
           })
-          .returning({ id: searches.id });
+          .returning({ id: searches.id, createdAt: searches.createdAt });
         savedSearchId = row?.id ?? null;
+        savedSearchCreatedAt = row?.createdAt ? new Date(row.createdAt as unknown as string).toISOString() : null;
       } catch (err) {
         req.log.error({ err }, "Failed to save analyse report to history");
       }
@@ -996,7 +1266,7 @@ router.post("/analyse", async (req, res) => {
       }
     }
 
-    res.json({ report, type: "report" });
+    res.json({ report, type: "report", searchId: savedSearchId, historyCreatedAt: savedSearchCreatedAt });
   } catch (error) {
     req.log.error({ err: error }, "Failed to analyse property");
     res.status(500).json({
@@ -1248,9 +1518,22 @@ router.post("/chat", async (req, res) => {
       const providerSignal = intent.wantsProviderRecommendation
         ? { wantsProviderRecommendation: true, suggestedDiscipline: intent.suggestedDiscipline ?? null }
         : {};
-      const hintedAddress = looksLikeStreetAddress(userText)
+      const contextSuburb =
+        intent.suburb ?? reportCtx?.suburb ?? (await inferSuburbFromThread(messages, userText));
+      const contextualBareAddress = await inferAddressFromBareStreetNumber(
+        messages,
+        userText,
+        contextSuburb,
+      );
+      const hintedAddressRaw = looksLikeStreetAddress(userText)
         ? await extractNZAddress(userText).catch(() => null)
-        : null;
+        : contextualBareAddress;
+      const hintedAddress = appendContextSuburbIfSameStreet(
+        hintedAddressRaw,
+        messages,
+        userText,
+        contextSuburb,
+      );
 
       // ─── Address hallucination guard ─────────────────────────────────────
       // When the LLM "corrects" a suburb the user typed (e.g. "melons bay" →
@@ -1292,7 +1575,10 @@ router.post("/chat", async (req, res) => {
         isListingBrowseIntent(userText) && !hasNumberedStreetAddress(userText);
       const forcedAnalyseAddress = suppressPromoteToAnalyse ? null : forcedAnalyseAddressRaw;
 
-      let effectiveMode = mode === "discover" && forcedAnalyseAddress ? "analyse" : mode;
+      let effectiveMode =
+        forcedAnalyseAddress && (mode === "discover" || (mode === "followup" && (contextualBareAddress || looksLikeStreetAddress(userText))))
+          ? "analyse"
+          : mode;
       const analysisIsLikelyAreaOnly =
         !hasNumberedStreetAddress(userText)
         && (isListingBrowseIntent(userText) || hasUnnumberedStreetLine(userText))
@@ -1376,12 +1662,12 @@ router.post("/chat", async (req, res) => {
           let prescreenedIntro = "";
 
           if (suburb) {
-            const cacheKey = makeCacheKey(suburb, effectiveMinPrice, effectiveMaxPrice);
+            const streetHint = extractDiscoverStreetHintFromThread(messages, userText, isFollowUp);
+            const cacheKey = makeCacheKey(suburb, effectiveMinPrice, effectiveMaxPrice, streetHint);
             const discoverPreOpts = {
               allowMissingListingPrice: true as const,
               pricePlaceholderNzd: Math.max(600_000, Math.round((effectiveMinPrice + effectiveMaxPrice) / 2)),
             };
-            const streetHint = extractDiscoverStreetHintFromThread(messages, userText);
             req.log.info({ streetHint }, "Discovery: street hint for listing order");
 
             // "Show more" follow-up: only try the cache if we've actually shown results before.
@@ -1424,11 +1710,11 @@ router.post("/chat", async (req, res) => {
                   l.price == null || (l.price >= effectiveMinPrice && l.price <= effectiveMaxPrice * 1.1);
 
                 const firstFiltered = rankListingsByStreetHint(
-                  searchResult.firstBatch.filter(inRange),
+                  filterListingsByStreetHint(searchResult.firstBatch.filter(inRange), streetHint),
                   streetHint,
                 );
                 const remainingFiltered = rankListingsByStreetHint(
-                  searchResult.remainingListings.filter(inRange),
+                  filterListingsByStreetHint(searchResult.remainingListings.filter(inRange), streetHint),
                   streetHint,
                 );
 
@@ -1467,7 +1753,7 @@ router.post("/chat", async (req, res) => {
             // ── NEARBY SUBURB FALLBACK ─────────────────────────────────────────
             // Only after the primary suburb queue is empty: avoid jumping to neighbours
             // when we still have unscanned listings or prescreen returned no UI rows this round.
-            if (candidates.length === 0 && suburb && getRemainingCount(cacheKey) === 0) {
+            if (candidates.length === 0 && suburb && !streetHint && getRemainingCount(cacheKey) === 0) {
               const nearbyList = await resolveNearbySuburbs(suburb, 5);
               // Run nearby-suburb scrapes concurrently and return as soon as the first
               // one yields any listings — keeps tail latency bounded when the slow
@@ -1685,9 +1971,9 @@ router.post("/chat", async (req, res) => {
             return;
           }
 
-          const addressAmbiguous = await maybeAddressClarification(extractedAddress, chatLocale);
-          if (addressAmbiguous) {
-            const addressPayload = JSON.stringify(addressAmbiguous);
+          const addressResolution = await resolveAddressForAnalysis(extractedAddress, chatLocale);
+          if (addressResolution.clarification) {
+            const addressPayload = JSON.stringify(addressResolution.clarification);
             const translatedAddress = await translateChatContent(addressPayload, "clarification", chatLocale, chatTranslateTitleSchool);
             res.json({
               content: translatedAddress,
@@ -1695,8 +1981,9 @@ router.post("/chat", async (req, res) => {
             });
             return;
           }
+          const analysisAddress = addressResolution.resolvedAddress || extractedAddress;
 
-          req.log.info({ address: extractedAddress }, "Running property pipeline for analyse mode");
+          req.log.info({ address: analysisAddress, originalAddress: extractedAddress }, "Running property pipeline for analyse mode");
 
           // Keep-alive heartbeat — sends a silent space every 8 s so the reverse
           // proxy doesn't close the connection during the long pipeline + LLM run.
@@ -1730,7 +2017,7 @@ router.post("/chat", async (req, res) => {
             }
           };
 
-          const pipelineResult = await runPropertyPipeline(extractedAddress).catch((err) => {
+          const pipelineResult = await runPropertyPipeline(analysisAddress).catch((err) => {
             req.log.warn({ err }, "Pipeline failed — falling back to AI-only analysis");
             return null;
           });
@@ -1804,7 +2091,7 @@ router.post("/chat", async (req, res) => {
 
               enrichedContent = `Analyse this NZ property for development feasibility.${failedStr}
 
-ADDRESS: ${geocode?.formatted ?? extractedAddress}
+ADDRESS: ${geocode?.formatted ?? analysisAddress}
 SUBURB: ${suburb}
 
 OVERLAY DATA — AUTHORITATIVE (Auckland Council GIS + Hougarden text analysis):
@@ -1879,10 +2166,10 @@ ${easements.burdening.map((e, i) => `  ${i + 1}. [${e.type}] ${e.description} �
 Appurtenant easements detail:
 ${easements.appurtenant.map((e, i) => `  ${i + 1}. [${e.type}] ${e.description}`).join("\n") || "  None"}`
   : easements.retrieval_status === "api_error"
-    ? "LINZ memorials API failed — easement data is UNAVAILABLE for this title. You MUST state in subdivisionSummary that a solicitor title search is required before any subdivision or building consent."
+    ? "Easement memorial detail was not available for this automated snapshot. In planning.subdivisionSummary only (never in riskSummary), briefly recommend confirming registered interests on title through normal conveyancing due diligence before subdivision or building consent. Do NOT mention failed APIs, missing fetches, LINZ, or any data-source/provider names."
     : easements.retrieval_status === "no_title"
-      ? "Could not resolve LINZ title for this property — no easement data available. State in subdivisionSummary that title search is required."
-      : "LINZ returned no recorded memorials for this title. This may mean no registered easements/ROW, OR the data is incomplete. State that a title search is recommended to confirm."}
+      ? "Title memorial extract was not attached to this parcel snapshot. In planning.subdivisionSummary only (never in riskSummary), recommend confirming easements and rights of way through standard conveyancing due diligence before consent. Do NOT mention failed lookups, unavailable databases, or provider names."
+      : "No burdening memorials were parsed from the supplied title extract for this snapshot — registered interests may still exist. If helpful, note in subdivisionSummary (not riskSummary) that buyers typically verify title with their solicitor before consent. Do NOT attribute this to a named agency or say data failed to load."}
 
 YOUR TASK:
 Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT schema:
@@ -1988,14 +2275,14 @@ CRITICAL RULES:
 - comparableSales MUST be exactly the array provided above. If it is empty, keep it empty and keep roiScenarios empty. Never invent comparable sale addresses, dates, prices, or ROI sale-price assumptions.
 - developmentStrategies MUST be exactly the array provided above. Do not invent strategy ROI numbers or alter the recommendedDevelopmentStrategy.
 - Fill in ALL fields. Mark truly unknown fields as null (not empty string, not 0).
-- Write riskSummary items as specific, developer-focused 1-sentence statements about THIS property. **Minimum 3 bullets** (prefer 4–5), each clearly tied to the injected zone, overlays, terrain, infrastructure, potential lots, or title — never to whether information was "available" or to data sources.
+- Write riskSummary items as specific, developer-focused 1-sentence statements about THIS property. **Minimum 3 bullets** (prefer 4–5), each clearly tied to the injected zone, overlays, terrain, infrastructure, potential lots, or title — never to whether information was "available", never naming LINZ/Quotable Value/listing portals/council IT systems, and never saying data "failed to fetch" or that due diligence is required *because* automated data was missing.
 - NEVER include riskSummary bullets that reference comparable sales, market data availability, exit-price uncertainty, GDV reliability, or any data-source gaps — directly or indirectly. NEVER say that key facts (land area, zoning, planning data) were missing or not obtained, or that site-specific risks cannot be identified because data was incomplete — such bullets are stripped. Any such bullet (e.g. "comparable data is limited", "exit price is hard to predict", "market sales data is scarce") is stripped server-side and degrades the response. riskSummary must describe physical, planning, terrain, flood, coastal, heritage, OR (when potentialLots >= 4) programme/capital intensity — staged construction and sales, long tie-up of capital, absorption risk — without blaming data quality or report completeness. If build year is after 2000, do NOT mention asbestos in riskSummary (server strips these); the asbestos JSON block is sufficient.
 - The same rule applies to scores.ease_reasons, scores.cost_reasons, and scores.roi_reasons: never cite missing database matches, unavailable real-time sources, inability to confirm zoning/land area, assumptions about location ("assuming this site…"), missing comparables, or exit-price quantification difficulty — such lines are stripped from the property card.
 - When potentialLots from the pipeline is 4 or more: roiScenarios MUST remain exactly as provided in the injected strategies; the modelled timelines already use longer exit horizons for multi-unit schemes. Keep scores.roi_reasons honest about multi-year delivery where relevant (do not imply a quick flip).
 - Return ONLY valid JSON, no markdown fences, no other text.`;
             } else {
               const dataSummary = {
-                address: geocode?.formatted ?? extractedAddress,
+                address: geocode?.formatted ?? analysisAddress,
                 suburb,
                 geocode: geocode ? { lat: geocode.lat, lng: geocode.lng } : null,
                 merged_property: merged,
@@ -2025,23 +2312,27 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             let content = rawContent;
             const parsed = tryParseReportJson(rawContent);
             if (parsed != null) {
-              applyDeterministicPipelineOverrides(parsed, pipelineResult, geocode?.formatted ?? extractedAddress);
+              applyDeterministicPipelineOverrides(parsed, pipelineResult, geocode?.formatted ?? analysisAddress);
               content = JSON.stringify(parsed);
             }
 
             // Persist to search history (non-blocking; invalid/truncated model JSON skips save)
             const chatUserId = getUserIdFromHeader(req);
+            let savedSearchId: string | null = null;
+            let savedSearchCreatedAt: string | null = null;
             if (chatUserId) {
               const parsedForSave = tryParseReportJson(content);
               if (parsedForSave != null) {
                 try {
-                  await db.insert(searches).values({
+                  const [row] = await db.insert(searches).values({
                     userId: chatUserId,
                     query: extractedAddress,
-                    address: geocode?.formatted ?? extractedAddress,
+                    address: geocode?.formatted ?? analysisAddress,
                     resultJson: parsedForSave as any,
-                  });
-                  req.log.info({ address: extractedAddress }, "Chat analysis saved to history");
+                  }).returning({ id: searches.id, createdAt: searches.createdAt });
+                  savedSearchId = row?.id ?? null;
+                  savedSearchCreatedAt = row?.createdAt ? new Date(row.createdAt as unknown as string).toISOString() : null;
+                  req.log.info({ address: analysisAddress, originalAddress: extractedAddress }, "Chat analysis saved to history");
                 } catch (err) {
                   req.log.error({ err }, "Failed to save chat analysis to history");
                 }
@@ -2054,7 +2345,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             }
 
             const translatedAnalyse = await translateChatContent(content, "analyse", chatLocale, chatTranslateTitleSchool);
-            sendAnalyseResponse({ content: translatedAnalyse, mode: "analyse" });
+            sendAnalyseResponse({ content: translatedAnalyse, mode: "analyse", searchId: savedSearchId, historyCreatedAt: savedSearchCreatedAt });
             return;
           }
           // pipelineResult was null — generate AI-only response inside the heartbeat
@@ -2091,13 +2382,17 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
         if (suburb) {
           req.log.info({ suburb, aiContent: content.slice(0, 100) }, "AI said 'searching' — running actual discover pipeline");
           try {
-            const cacheKey = makeCacheKey(suburb, minPrice, maxPrice);
+            const streetHintSn = extractDiscoverStreetHintFromThread(
+              messages,
+              userText,
+              isDiscoverStreetContinuation(userText),
+            );
+            const cacheKey = makeCacheKey(suburb, minPrice, maxPrice, streetHintSn);
             const shownUrls = getShownUrls(cacheKey);
             const discoverPreOptsSn = {
               allowMissingListingPrice: true as const,
               pricePlaceholderNzd: Math.max(600_000, Math.round((minPrice + maxPrice) / 2)),
             };
-            const streetHintSn = extractDiscoverStreetHintFromThread(messages, userText);
             const searchResult = await searchRealEstateListings({
               suburb, minPrice, maxPrice, skipUrls: shownUrls, includeNegotiation,
             }).catch(() => null);
@@ -2105,9 +2400,12 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             if (searchResult && searchResult.firstBatch.length > 0) {
               const inRange = (l: { price: number | null }) =>
                 l.price == null || (l.price >= minPrice && l.price <= maxPrice * 1.1);
-              const firstFiltered = rankListingsByStreetHint(searchResult.firstBatch.filter(inRange), streetHintSn);
+              const firstFiltered = rankListingsByStreetHint(
+                filterListingsByStreetHint(searchResult.firstBatch.filter(inRange), streetHintSn),
+                streetHintSn,
+              );
               const remainingFiltered = rankListingsByStreetHint(
-                searchResult.remainingListings.filter(inRange),
+                filterListingsByStreetHint(searchResult.remainingListings.filter(inRange), streetHintSn),
                 streetHintSn,
               );
               const priorShownSn = [...getShownUrls(cacheKey)];

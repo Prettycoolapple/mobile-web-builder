@@ -290,14 +290,9 @@ function extractDataFromText(pageText: string): Partial<OneRoofData> {
     }
   }
 
-  const bedM = /(\d+)\s+[Bb]ed/.exec(pageText);
-  if (bedM) result.bedrooms = parseInt(bedM[1]);
-
-  const bathM = /(\d+(?:\.\d)?)\s+[Bb]ath/.exec(pageText);
-  if (bathM) {
-    const v = parseFloat(bathM[1]);
-    if (!isNaN(v) && v > 0 && v < 20) result.bathrooms = v;
-  }
+  const { bedrooms: eb, bathrooms: bb } = extractBedsBaths(pageText);
+  if (eb != null) result.bedrooms = eb;
+  if (bb != null) result.bathrooms = bb;
 
   const comparablesSection = pageText.split(/[Nn]earby [Ss]ales|[Rr]ecently [Ss]old|[Cc]omparable/i)[1];
   if (comparablesSection) {

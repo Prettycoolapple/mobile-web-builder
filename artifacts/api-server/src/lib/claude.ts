@@ -3,6 +3,9 @@ import { logger } from "./logger";
 import { SYSTEM_PROMPT, ANALYSE_AUGMENTATION, DISCOVER_AUGMENTATION, languageInstruction, type Locale } from "./prompts";
 import { findSuburbInTextViaIndex } from "./scrapers/realestate-api";
 import type { DevelopmentStrategyAssessment, DevelopmentStrategyId, RefurbishmentScope } from "./development-strategies";
+import { hasNumberedStreetAddress, hasUnnumberedStreetLine } from "./street-address-detect";
+
+export { hasNumberedStreetAddress, hasUnnumberedStreetLine } from "./street-address-detect";
 
 function analysisMaxOutputTokens(): number {
   const raw = process.env["AI_ANALYSIS_MAX_OUTPUT_TOKENS"]?.trim();
@@ -17,13 +20,6 @@ export interface Message {
 }
 
 export type ChatMode = "analyse" | "discover" | "followup";
-
-/** True when the text names a numbered street lot (e.g. "66 Marine Parade"). */
-export function hasNumberedStreetAddress(message: string): boolean {
-  return /\d+\s+\w[\w''-]*(?:\s+\w[\w''-]*)?\s+(?:road|street|avenue|crescent|place|drive|way|lane|terrace|parade|close|grove|rise|view|heights|ridge|court|hill|boulevard|esplanade|quay|highway|motorway|mall|row|walk|path|track|rd|st|ave|cres|pl|dr|ln|tce|pde|blvd|hwy)\b/i.test(
-    message,
-  );
-}
 
 /** User is browsing listings / market availability (not asking for a single-title feasibility report). */
 export function isListingBrowseIntent(message: string): boolean {
@@ -42,14 +38,6 @@ export function isListingBrowseIntent(message: string): boolean {
   }
   if (/(?:looking|search|searching)\s+for\s+.+\s+in\s+/i.test(lower)) return true;
   return false;
-}
-
-/** Street type present but no leading street number — describes a road/area, not one postal address. */
-export function hasUnnumberedStreetLine(message: string): boolean {
-  if (hasNumberedStreetAddress(message)) return false;
-  return /\b(?:road|street|avenue|crescent|place|drive|way|lane|terrace|parade|close|grove|rise|view|heights|ridge|court|hill|mews|quay|boulevard|esplanade|mall|row|walk|path|track|rd|st|ave|cres|pl|dr|ln|tce|pde|blvd|hwy)\b/i.test(
-    message,
-  );
 }
 
 // ─── LLM-powered intent extraction ───────────────────────────────────────────
@@ -107,7 +95,9 @@ mode="analyse"
     "what's for sale", "anything on the market", "有什么在卖的", "在售", "房源", etc.) even if they name a road or suburb without a street number.
   • The user only gives a road name + suburb without a number (e.g. "Marine Parade, Mellons Bay",
     "分析 Marine Parade, Howick") — they want listings or area exploration, not a single-parcel report.
-  • Exception: numbered address + feasibility request → analyse.
+  • Exception: numbered address + feasibility request → analyse. Street numbers often include a
+    letter suffix (66A, 12B) or unit prefix (2/14) — these STILL count as a numbered lot; use
+    mode="analyse" when the user asks to analyse that property.
 
   Examples: "8 Hampton Drive, St Heliers", "can you assess 12 Remuera Rd?",
   "run a feasibility on this one"
@@ -479,7 +469,9 @@ export function detectMode(lastMessage: string): ChatMode {
   const numbered = hasNumberedStreetAddress(lastMessage);
   const browse = isListingBrowseIntent(lastMessage);
   const hasAnalyseVerbEn = /\b(analyse|analyze|analysis|feasibility|assess|evaluate)\b/i.test(lower);
-  const hasAnalyseVerbZh = /(?:^|[\s，。!?])(?:分析|可行性分析|跑一下分析)/.test(lastMessage);
+  const hasAnalyseVerbZh =
+    /(?:^|[\s，。!?])(?:分析|可行性分析|跑一下分析)/.test(lastMessage) ||
+    /(?:我要|我想|还请|帮我|请).{0,6}分析/.test(lastMessage);
   const hasAddressCity = /,\s*(auckland|wellington|christchurch|hamilton|tauranga|dunedin|napier|hastings|palmerston|rotorua|new zealand|nz)\b/i.test(lastMessage);
 
   // Market / listing browse without a numbered lot → always discover (road + suburb is a filter, not one title).

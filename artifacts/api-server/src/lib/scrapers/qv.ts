@@ -224,7 +224,9 @@ export async function scrapeQV(address: string): Promise<QVData | null> {
     }
 
     const bathroomsMatch = allText.match(/\bbathrooms\s*\n?\s*(\d+(?:\.\d+)?)\*?\b/i)
-      ?? allText.match(/\b(\d+(?:\.\d+)?)\s+bath(?:room)?s?\b/i);
+      ?? allText.match(
+        /\b(\d+(?:\.\d+)?)\s+(?!living\s+(?:area|areas|space|spaces)\b)bath(?:room)?s?\b/i,
+      );
     if (bathroomsMatch) {
       const n = parseFloat(bathroomsMatch[1]);
       if (!isNaN(n) && n > 0 && n < 20) data.bathrooms = n;

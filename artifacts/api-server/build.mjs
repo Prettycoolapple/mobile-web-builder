@@ -149,6 +149,8 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
   for (const file of ["index.html", "site.js", "styles.css", "alpha-icon.svg"]) {
     await copyFile(path.join(artifactDir, file), path.join(deployDir, file));
   }
+  const mobileAppIconPng = path.resolve(artifactDir, "..", "mobile", "assets", "images", "icon.png");
+  await copyFile(mobileAppIconPng, path.join(deployDir, "favicon.png")).catch(() => {});
   for (const dir of ["privacy", "terms", "support", "contact"]) {
     await cp(path.join(artifactDir, dir), path.join(deployDir, dir), { recursive: true });
   }

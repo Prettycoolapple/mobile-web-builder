@@ -12,8 +12,11 @@ interface CacheEntry {
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const cache = new Map<string, CacheEntry>();
 
-export function makeCacheKey(suburb: string, minPrice: number, maxPrice: number): string {
-  return `${suburb.toLowerCase().trim()}-${minPrice}-${maxPrice}`;
+export function makeCacheKey(suburb: string, minPrice: number, maxPrice: number, streetHint?: string | null): string {
+  const streetPart = streetHint?.trim()
+    ? `-${streetHint.toLowerCase().replace(/[^a-z0-9]+/g, "")}`
+    : "";
+  return `${suburb.toLowerCase().trim()}-${minPrice}-${maxPrice}${streetPart}`;
 }
 
 export function getListingCache(key: string): CacheEntry | null {

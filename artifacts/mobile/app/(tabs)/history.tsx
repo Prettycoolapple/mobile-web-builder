@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -16,7 +16,7 @@ import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
 import { useColors } from "@/hooks/useColors";
 import { useChat, FeasibilityReport } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { getApiBase } from "@/lib/api";
 import { useT, getCurrentLocale } from "@/lib/i18n";
 import { translateReportViaApi } from "@/lib/translateReport";
@@ -27,6 +27,7 @@ type SearchSummary = {
   created_at: string;
   composite_score: number | null;
   zone: string | null;
+  localReport?: FeasibilityReport;
 };
 
 function useFormatDate() {
@@ -118,10 +119,21 @@ function HistoryItem({ item, onTap, onDelete, isOpening }: HistoryItemProps) {
   );
 }
 
+function reportAddress(report: FeasibilityReport): string {
+  const direct = typeof report.address === "string" ? report.address.trim() : "";
+  if (direct) return direct;
+  const overview = report.propertyOverview?.address;
+  return typeof overview === "string" ? overview.trim() : "";
+}
+
+function reportZone(report: FeasibilityReport): string | null {
+  return report.propertyOverview?.zone ?? report.planning?.zone ?? report.zone_label ?? null;
+}
+
 export default function HistoryScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { openHistoryReport, startNewChat } = useChat();
+  const { sessions, openHistoryReport, startNewChat, searchHistoryTick } = useChat();
   const { getApiHeaders } = useAuth();
   const router = useRouter();
   const { t } = useT();
@@ -133,6 +145,36 @@ export default function HistoryScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [openingId, setOpeningId] = useState<string | null>(null);
+  const hasLoadedRef = useRef(false);
+
+  const localSearches = useMemo<SearchSummary[]>(() => {
+    const rows: SearchSummary[] = [];
+    for (const session of sessions) {
+      if (session.skipFirstTurnRating) continue;
+      for (const msg of session.messages) {
+        if (msg.type !== "report" || !msg.report) continue;
+        const address = reportAddress(msg.report);
+        if (!address) continue;
+        rows.push({
+          id: msg.report.historyId ?? `local:${session.id}:${msg.id}`,
+          address,
+          created_at: msg.report.historyCreatedAt ?? new Date(msg.timestamp).toISOString(),
+          composite_score: typeof msg.report.scores?.composite === "number" ? msg.report.scores.composite : null,
+          zone: reportZone(msg.report),
+          localReport: msg.report,
+        });
+      }
+    }
+    return rows.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  }, [sessions]);
+
+  const visibleSearches = useMemo(() => {
+    const serverIds = new Set(searches.map((s) => s.id));
+    const localOnly = localSearches.filter((s) => !serverIds.has(s.id));
+    return [...localOnly, ...searches].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    );
+  }, [localSearches, searches]);
 
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -152,11 +194,25 @@ export default function HistoryScreen() {
     }
   }, [getApiHeaders]);
 
+  useFocusEffect(
+    useCallback(() => {
+      const isRefresh = hasLoadedRef.current;
+      hasLoadedRef.current = true;
+      load(isRefresh);
+    }, [load]),
+  );
+
   useEffect(() => {
-    load();
-  }, [load]);
+    if (searchHistoryTick === 0) return;
+    load(true);
+  }, [searchHistoryTick, load]);
 
   const handleTap = useCallback(async (item: SearchSummary) => {
+    if (item.localReport) {
+      openHistoryReport(item.address, item.localReport);
+      router.push("/");
+      return;
+    }
     setOpeningId(item.id);
     try {
       const resp = await fetch(`${getApiBase()}/searches/${item.id}`, {
@@ -236,7 +292,7 @@ export default function HistoryScreen() {
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={colors.accent} />
         </View>
-      ) : searches.length === 0 ? (
+      ) : visibleSearches.length === 0 ? (
         <View style={styles.empty}>
           <View style={[styles.emptyIcon, { backgroundColor: colors.muted }]}>
             <Feather name="clock" size={28} color={colors.mutedForeground} />
@@ -257,7 +313,7 @@ export default function HistoryScreen() {
         </View>
       ) : (
         <FlatList
-          data={searches}
+          data={visibleSearches}
           keyExtractor={(s) => s.id}
           renderItem={({ item }) => (
             <HistoryItem

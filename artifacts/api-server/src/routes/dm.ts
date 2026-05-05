@@ -164,7 +164,12 @@ router.get("/dm/threads", requireAuth, async (req: Request, res: Response) => {
           thread.participantA === userId ? thread.participantB : thread.participantA;
 
         const [other] = await db
-          .select({ id: profiles.id, fullName: profiles.fullName, role: profiles.role })
+          .select({
+            id: profiles.id,
+            fullName: profiles.fullName,
+            role: profiles.role,
+            avatarUrl: profiles.avatarUrl,
+          })
           .from(profiles)
           .where(eq(profiles.id, otherId))
           .limit(1);

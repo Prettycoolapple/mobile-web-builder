@@ -150,14 +150,24 @@ router.post("/users/:userId/recommend", requireAuth, async (req: Request, res: R
         .select({ count: sql<number>`count(*)::int` })
         .from(recommendations)
         .where(eq(recommendations.toUserId, toUserId));
-      res.json({ hasRecommended: false, recommendationCount: countRow?.count ?? 0 });
+      const recommendationCount = countRow?.count ?? 0;
+      await db
+        .update(serviceProviderProfiles)
+        .set({ recommendationCount })
+        .where(eq(serviceProviderProfiles.userId, toUserId));
+      res.json({ hasRecommended: false, recommendationCount });
     } else {
       await db.insert(recommendations).values({ fromUserId, toUserId });
       const [countRow] = await db
         .select({ count: sql<number>`count(*)::int` })
         .from(recommendations)
         .where(eq(recommendations.toUserId, toUserId));
-      res.json({ hasRecommended: true, recommendationCount: countRow?.count ?? 0 });
+      const recommendationCount = countRow?.count ?? 0;
+      await db
+        .update(serviceProviderProfiles)
+        .set({ recommendationCount })
+        .where(eq(serviceProviderProfiles.userId, toUserId));
+      res.json({ hasRecommended: true, recommendationCount });
     }
   } catch (err) {
     req.log.error({ err }, "POST /users/:userId/recommend failed");

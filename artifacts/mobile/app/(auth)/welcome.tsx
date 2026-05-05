@@ -186,7 +186,7 @@ export default function WelcomeScreen() {
             </View>
           )}
           {brandZh ? (
-            <Text style={styles.wordmarkZh}>阿尔房</Text>
+            <Text style={styles.wordmarkZh}>奥房</Text>
           ) : (
             <Text style={styles.wordmark}>
               <Text style={styles.wordmarkProject}>project</Text>

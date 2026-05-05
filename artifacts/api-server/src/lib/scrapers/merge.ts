@@ -422,14 +422,11 @@ export function mergePropertyData(
 
   const final_build_year = build_year;
 
-  let overlays: Overlay[] = [];
-  if (hougarden && hougarden.overlays.length > 0) {
-    overlays = hougarden.overlays;
-    sources["overlays"] = "hougarden";
-  } else if (councilOverlays.length > 0) {
-    overlays = councilOverlays;
-    sources["overlays"] = "auckland_council_gis";
-  }
+  // Auckland Council GIS is the authoritative overlay source. Hougarden text can
+  // mention nearby/generic overlay names and has caused false report risks such
+  // as volcanic viewshafts on sites where the AUP maps show none.
+  const overlays: Overlay[] = councilOverlays;
+  sources["overlays"] = "auckland_council_gis";
 
   let zone_code: string | null = null;
   let zone_description: string | null = null;

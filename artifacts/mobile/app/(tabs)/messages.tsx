@@ -11,11 +11,13 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
+import { Image } from "expo-image";
 
 import { useColors } from "@/hooks/useColors";
 import { useDm, DmThread } from "@/context/DmContext";
 import { useAuth } from "@/context/AuthContext";
 import { useT } from "@/lib/i18n";
+import { avatarImageSource } from "@/lib/avatar";
 
 function useTimeAgo() {
   const { t, locale } = useT();
@@ -53,14 +55,41 @@ function useRoleBadge() {
   );
 }
 
-function Avatar({ name, size = 44 }: { name: string | null; size?: number }) {
+function Avatar({
+  name,
+  avatarUrl,
+  size = 44,
+  authHeaders,
+}: {
+  name: string | null;
+  avatarUrl?: string | null;
+  size?: number;
+  authHeaders: Record<string, string>;
+}) {
   const colors = useColors();
+  const source = avatarImageSource(avatarUrl ?? null, authHeaders);
   const initials = (name ?? "?")
     .split(" ")
     .slice(0, 2)
     .map((w) => w[0])
     .join("")
     .toUpperCase();
+  if (source) {
+    return (
+      <Image
+        source={source}
+        style={{
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          borderWidth: 1.5,
+          borderColor: colors.accent + "44",
+        }}
+        contentFit="cover"
+        transition={120}
+      />
+    );
+  }
   return (
     <View
       style={{
@@ -84,6 +113,7 @@ function Avatar({ name, size = 44 }: { name: string | null; size?: number }) {
 function ThreadRow({ thread, myId }: { thread: DmThread; myId: string }) {
   const colors = useColors();
   const router = useRouter();
+  const { getApiHeaders } = useAuth();
   const { t } = useT();
   const timeAgo = useTimeAgo();
   const roleBadge = useRoleBadge();
@@ -120,7 +150,7 @@ function ThreadRow({ thread, myId }: { thread: DmThread; myId: string }) {
         activeOpacity={0.75}
         hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
       >
-        <Avatar name={name} />
+        <Avatar name={name} avatarUrl={other?.avatarUrl} authHeaders={getApiHeaders()} />
       </TouchableOpacity>
       <View style={styles.rowMid}>
         <View style={styles.rowTop}>

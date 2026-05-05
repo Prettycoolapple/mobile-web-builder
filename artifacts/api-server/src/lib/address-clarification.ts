@@ -10,8 +10,20 @@ export type AddressClarificationPayload = {
   options: string[];
 };
 
+export type AddressOption = {
+  formatted: string;
+  lat: number | null;
+  lng: number | null;
+};
+
+export type AddressResolution = {
+  resolvedAddress: string;
+  clarification: AddressClarificationPayload | null;
+};
+
 /** At or above: trust geocoder alignment and proceed without confirmation. */
 const DICE_THRESHOLD_AUTO = 0.74;
+const SAME_ADDRESS_DISTANCE_M = 250;
 
 function leadingStreetNumber(s: string): string | null {
   const m = s.trim().match(/^(\d+[a-z]?)\b/i);
@@ -21,6 +33,16 @@ function leadingStreetNumber(s: string): string | null {
 function tokenizeRough(s: string): string[] {
   return s
     .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\bsaint\b/g, "st")
+    .replace(/\bst\.\b/g, "st")
+    .replace(/\broad\b/g, "rd")
+    .replace(/\bstreet\b/g, "st")
+    .replace(/\bavenue\b/g, "ave")
+    .replace(/\bdrive\b/g, "dr")
+    .replace(/\bterrace\b/g, "tce")
+    .replace(/\bnew zealand\b/g, "nz")
     .replace(/,/g, " ")
     .replace(/[^a-z0-9\s']/gi, " ")
     .split(/\s+/)
@@ -50,6 +72,72 @@ function diceSimilarityTokens(aRaw: string, bRaw: string): number {
   }
 
   return (2 * inter) / (a.length + b.length);
+}
+
+function exactAddressKey(s: string): string {
+  return tokenizeRough(s).join(" ");
+}
+
+function streetKey(s: string): string | null {
+  const tokens = tokenizeRough(s);
+  let numberIdx = -1;
+  for (let i = 0; i < tokens.length; i++) {
+    if (/^\d+[a-z]?$/.test(tokens[i]!)) {
+      numberIdx = i;
+      break;
+    }
+  }
+  if (numberIdx < 0) return null;
+
+  const streetTypes = new Set(["rd", "st", "ave", "crescent", "place", "pl", "dr", "way", "lane", "tce", "close", "parade"]);
+  let typeIdx = -1;
+  for (let i = numberIdx + 1; i < tokens.length; i++) {
+    if (streetTypes.has(tokens[i]!)) typeIdx = i;
+  }
+  if (typeIdx < numberIdx + 1) return null;
+
+  return tokens.slice(numberIdx, typeIdx + 1).join(" ");
+}
+
+function distanceMetres(a: AddressOption, b: AddressOption): number | null {
+  if (a.lat == null || a.lng == null || b.lat == null || b.lng == null) return null;
+
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const h =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return 2 * 6_371_000 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+function sameAddressCandidate(a: AddressOption, b: AddressOption): boolean {
+  const exactA = exactAddressKey(a.formatted);
+  const exactB = exactAddressKey(b.formatted);
+  if (exactA && exactA === exactB) return true;
+
+  const streetA = streetKey(a.formatted);
+  const streetB = streetKey(b.formatted);
+  if (!streetA || streetA !== streetB) return false;
+
+  const distance = distanceMetres(a, b);
+  if (distance != null) return distance <= SAME_ADDRESS_DISTANCE_M;
+
+  return diceSimilarityTokens(a.formatted, b.formatted) >= 0.78;
+}
+
+export function dedupeEquivalentAddressOptions(options: AddressOption[]): AddressOption[] {
+  const deduped: AddressOption[] = [];
+  for (const option of options) {
+    const formatted = option.formatted.trim();
+    if (!formatted) continue;
+    const candidate = { ...option, formatted };
+    if (deduped.some((existing) => sameAddressCandidate(existing, candidate))) continue;
+    deduped.push(candidate);
+  }
+  return deduped;
 }
 
 async function llmSuggestedAddresses(raw: string): Promise<string[]> {
@@ -101,12 +189,12 @@ async function llmSuggestedAddresses(raw: string): Promise<string[]> {
  * Uses fuzzy comparison between user input and best geocoder string + extra Nominatim hits.
  * Gemini suggests strings only when nobody returns a usable hit.
  */
-export async function maybeAddressClarification(
+export async function resolveAddressForAnalysis(
   userTypedAddress: string,
   locale: Locale,
-): Promise<AddressClarificationPayload | null> {
+): Promise<AddressResolution> {
   const trimmed = userTypedAddress.trim();
-  if (trimmed.length < 10) return null;
+  if (trimmed.length < 10) return { resolvedAddress: trimmed, clarification: null };
 
   let nominatim: Awaited<ReturnType<typeof nominatimSearchNz>> = [];
   try {
@@ -117,31 +205,32 @@ export async function maybeAddressClarification(
 
   const geoPrimary = await tryGeocodeAddress(trimmed);
 
-  const uniqLower = new Set<string>();
-  const opts: string[] = [];
-  const push = (f?: string | null) => {
-    const v = (f ?? "").trim();
+  const opts: AddressOption[] = [];
+  const push = (g?: { formatted?: string | null; lat?: number | null; lng?: number | null } | null) => {
+    const v = (g?.formatted ?? "").trim();
     if (!v) return;
-    const key = v.toLowerCase().replace(/\s+/g, " ").replace(/,\s*$/, "").trim();
-    if (uniqLower.has(key)) return;
-    uniqLower.add(key);
-    opts.push(v);
+    opts.push({
+      formatted: v,
+      lat: typeof g?.lat === "number" ? g.lat : null,
+      lng: typeof g?.lng === "number" ? g.lng : null,
+    });
   };
 
-  push(geoPrimary?.formatted);
-  for (const g of nominatim) push(g.formatted);
+  push(geoPrimary);
+  for (const g of nominatim) push(g);
 
   if (!opts.length) {
     const llmAdds = await llmSuggestedAddresses(trimmed);
     for (const sug of llmAdds) {
       const gHit = await tryGeocodeAddress(sug);
-      if (gHit?.formatted) push(gHit.formatted);
+      if (gHit?.formatted) push(gHit);
     }
   }
 
-  if (!opts.length) return null;
+  const deduped = dedupeEquivalentAddressOptions(opts);
+  if (!deduped.length) return { resolvedAddress: trimmed, clarification: null };
 
-  let resolvedBest = geoPrimary?.formatted ?? opts[0];
+  let resolvedBest = geoPrimary?.formatted ?? deduped[0]!.formatted;
   resolvedBest = resolvedBest.trim();
 
   const dice = diceSimilarityTokens(trimmed, resolvedBest);
@@ -150,7 +239,11 @@ export async function maybeAddressClarification(
   const numMismatch = !!(nu && nr && nu !== nr);
 
   if (!numMismatch && dice >= DICE_THRESHOLD_AUTO) {
-    return null;
+    return { resolvedAddress: resolvedBest, clarification: null };
+  }
+
+  if (!numMismatch && deduped.length === 1 && dice >= 0.62) {
+    return { resolvedAddress: resolvedBest, clarification: null };
   }
 
   const questionEn =
@@ -164,8 +257,19 @@ export async function maybeAddressClarification(
       : questionEn;
 
   return {
-    clarificationType: "address",
-    question,
-    options: opts.slice(0, 5),
+    resolvedAddress: trimmed,
+    clarification: {
+      clarificationType: "address",
+      question,
+      options: deduped.map((o) => o.formatted).slice(0, 5),
+    },
   };
+}
+
+export async function maybeAddressClarification(
+  userTypedAddress: string,
+  locale: Locale,
+): Promise<AddressClarificationPayload | null> {
+  const resolution = await resolveAddressForAnalysis(userTypedAddress, locale);
+  return resolution.clarification;
 }

@@ -50,6 +50,12 @@ const realEstateOgCases: Case[] = [
     expected: { bedrooms: 4, bathrooms: 3 },
     note: "long og:description with land area in same string",
   },
+  {
+    source: "realestate-search-og",
+    text: "House for sale at 66A Marine Parade with 6 beds, 3 living areas, 5 baths. Price by negotiation.",
+    expected: { bedrooms: 6, bathrooms: 5 },
+    note: "living areas count must never be parsed as bathrooms",
+  },
 ];
 
 const cardCases: Case[] = [
@@ -142,20 +148,10 @@ describe("extractBedsBaths", () => {
     }
   });
 
-  /**
-   * Documented limitation: label-first form WITHOUT an explicit `:` or `=`
-   * separator is intentionally not supported. None of the three live sources
-   * we consume emit text in this shape — they always use either "N bed/bath"
-   * or "Label: N". Supporting it would re-introduce the regression where
-   * "3-Bedroom 2-Bathroom" was being mis-parsed as 2 bedrooms.
-   *
-   * This test pins the current (partial) behaviour so a future "fix" that
-   * accidentally re-broadens the regex will fail loudly here.
-   */
-  it("DOCUMENTED LIMITATION: label-first without separator returns partial result", () => {
+  it("label + space + number (no colon): Bedrooms 3 Bathrooms 2", () => {
     expect(extractBedsBaths("Bedrooms 3 Bathrooms 2")).toEqual({
-      bedrooms: null,
-      bathrooms: 3,
+      bedrooms: 3,
+      bathrooms: 2,
     });
   });
 });

@@ -364,10 +364,10 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     homesResult,
   ] = await Promise.allSettled([
     timed("zone",             () => fetchUnitaryPlanZone(lat, lng),                                               timing),
-    timed("overlays",         () => fetchOverlaysWithConsensus(lat, lng),                                          timing),
+    timed("overlays",         () => fetchOverlaysWithConsensus(lat, lng, linzParcelData?.bbox ?? null),            timing),
     timed("contour",          () => fetchContour(lat, lng, linzParcelData?.bbox ?? null),                         timing),
     timed("property_history", () => fetchPropertyHistory(address, lat, lng),                                      timing),
-    timed("infrastructure",   () => fetchInfrastructure(lat, lng),                                                timing),
+    timed("infrastructure",   () => fetchInfrastructure(lat, lng, linzParcelData?.bbox ?? null, linzParcelData?.parcel_id ?? null), timing),
     timed("hougarden",        () => withBrowserSlot(() => scrapeHougarden(lat, lng, address)),                    timing),
     timed("oneroof",          () => withBrowserSlot(() => scrapeOneRoof(address)),                                timing),
     timed("qv",               () => withBrowserSlot(() => scrapeQV(address)),                                     timing),

@@ -1486,59 +1486,61 @@ function authorityCategoryLabel(cat: SchoolZoneDetail["authorityCategory"]): str
   }
 }
 
+/** Map listing/MoE enrolment-scheme text to a simple in-zone signal for the UI. */
+function inZoneDisplayFromEnrolmentScheme(
+  scheme: string | null | undefined,
+): "yes" | "no" | "unknown" {
+  const s = scheme?.trim();
+  if (!s) return "unknown";
+  const lower = s.toLowerCase();
+  if (/^(no|n|false|0)$/i.test(lower)) return "no";
+  if (/不是|^否/.test(s) || s === "否" || s === "无") return "no";
+  if (/^(yes|y|true|1)$/i.test(lower)) return "yes";
+  if (s === "是" || s === "是的" || /^是的/.test(s)) return "yes";
+  if (s === "有" || s === "适用") return "yes";
+  return "unknown";
+}
+
 function SchoolZonesPanel({ zones, colors }: { zones: SchoolZoneDetail[]; colors: ReturnType<typeof useColors> }) {
   return (
     <View style={{ gap: 12 }}>
-      {zones.map((z, i) => (
-        <View
-          key={`${z.level}-${i}`}
-          style={[styles.overlayRow, { backgroundColor: colors.muted, borderRadius: 10, flexDirection: "column", alignItems: "stretch", gap: 8 }]}
-        >
-          <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
-            <Text style={{ color: colors.accent, fontFamily: "DM_Sans_700Bold", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5 }}>
-              {translateForOS(`report.school_level.${z.level}`)}
-            </Text>
-            <View style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 100, backgroundColor: colors.accent + "18" }}>
-              <Text style={{ color: colors.accent, fontFamily: "DM_Sans_600SemiBold", fontSize: 10 }}>
-                {authorityCategoryLabel(z.authorityCategory)}
+      {zones.map((z, i) => {
+        const inZone = inZoneDisplayFromEnrolmentScheme(z.enrolmentScheme);
+        const inZoneText =
+          inZone === "yes"
+            ? translateForOS("report.school_in_zone_yes")
+            : inZone === "no"
+              ? translateForOS("report.school_in_zone_no")
+              : translateForOS("report.school_in_zone_unknown");
+        return (
+          <View
+            key={`${z.orgName ?? z.sourceLabel}-${i}`}
+            style={[styles.overlayRow, { backgroundColor: colors.muted, borderRadius: 10, flexDirection: "column", alignItems: "stretch", gap: 10 }]}
+          >
+            <View style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+              <Text style={{ flex: 1, color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", fontSize: 14, lineHeight: 20 }}>
+                {z.matched && z.orgName ? z.orgName : z.sourceLabel}
               </Text>
+              <View style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 100, backgroundColor: colors.accent + "18" }}>
+                <Text style={{ color: colors.accent, fontFamily: "DM_Sans_600SemiBold", fontSize: 10 }}>
+                  {authorityCategoryLabel(z.authorityCategory)}
+                </Text>
+              </View>
             </View>
-          </View>
-          <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", fontSize: 14, lineHeight: 20 }}>
-            {z.matched && z.orgName ? z.orgName : z.sourceLabel}
-          </Text>
-          {!z.matched ? (
-            <Text style={{ color: colors.amber, fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 17 }}>
-              {translateForOS("report.school_no_directory_match")}
-            </Text>
-          ) : null}
-          {z.matched && z.orgType ? (
+            {!z.matched ? (
+              <Text style={{ color: colors.amber, fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 17 }}>
+                {translateForOS("report.school_no_directory_match")}
+              </Text>
+            ) : null}
             <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
-              {translateForOS("report.school_org_type")}: {z.orgType}
+              <Text style={{ fontFamily: "DM_Sans_600SemiBold", color: colors.foreground }}>
+                {translateForOS("report.school_in_zone_label")}:{" "}
+              </Text>
+              {inZoneText}
             </Text>
-          ) : null}
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
-            {z.equityIndex ? (
-              <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
-                <Text style={{ fontFamily: "DM_Sans_600SemiBold" }}>{translateForOS("report.school_eqi")}: </Text>
-                {z.equityIndex}
-              </Text>
-            ) : null}
-            {z.roll != null ? (
-              <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
-                <Text style={{ fontFamily: "DM_Sans_600SemiBold" }}>{translateForOS("report.school_roll")}: </Text>
-                {z.roll}
-              </Text>
-            ) : null}
-            {z.enrolmentScheme ? (
-              <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
-                <Text style={{ fontFamily: "DM_Sans_600SemiBold" }}>{translateForOS("report.school_enrolment_scheme")}: </Text>
-                {z.enrolmentScheme}
-              </Text>
-            ) : null}
           </View>
-        </View>
-      ))}
+        );
+      })}
       <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, lineHeight: 16, fontStyle: "italic" }}>
         {translateForOS("report.school_zones_footnote")}
       </Text>

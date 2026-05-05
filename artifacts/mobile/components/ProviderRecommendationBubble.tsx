@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import { Feather } from "@expo/vector-icons";
 import { ServiceProvider } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
 import { avatarImageSource } from "@/lib/avatar";
+import { getApiBase } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 
 interface Props {
@@ -83,7 +84,34 @@ export function ProviderRecommendationBubble({
 }: Props) {
   const [connecting, setConnecting] = useState(false);
   const [dismissed, setDismissed] = useState(false);
+  const [recommendationCount, setRecommendationCount] = useState(provider.recommendationCount);
+  const { getApiHeaders, token } = useAuth();
   const { t } = useT();
+
+  useEffect(() => {
+    setRecommendationCount(provider.recommendationCount);
+  }, [provider.id, provider.recommendationCount]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const headers = getApiHeaders();
+        if (!headers.Authorization) return;
+        const resp = await fetch(`${getApiBase()}/users/${provider.id}`, { headers });
+        if (cancelled || !resp.ok) return;
+        const data = (await resp.json()) as { recommendationCount?: number };
+        if (typeof data.recommendationCount === "number") {
+          setRecommendationCount(data.recommendationCount);
+        }
+      } catch {
+        /* keep snapshot from message */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [provider.id, token]);
 
   if (dismissed) return null;
 
@@ -163,9 +191,9 @@ export function ProviderRecommendationBubble({
             })()}
 
             <Text style={styles.connections}>
-              {provider.recommendationCount === 1
-                ? t("bubble.recommend.connections_one", { n: provider.recommendationCount })
-                : t("bubble.recommend.connections_other", { n: provider.recommendationCount })}
+              {recommendationCount === 1
+                ? t("bubble.recommend.connections_one", { n: recommendationCount })
+                : t("bubble.recommend.connections_other", { n: recommendationCount })}
             </Text>
           </View>
         </View>

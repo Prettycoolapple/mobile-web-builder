@@ -27,6 +27,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useDm, DmMessage, DmThread } from "@/context/DmContext";
 import { ImageViewerModal } from "@/components/ImageViewerModal";
 import { getApiBase } from "@/lib/api";
+import { avatarImageSource } from "@/lib/avatar";
 import { useT, type Locale } from "@/lib/i18n";
 
 function formatDiscipline(
@@ -110,14 +111,35 @@ function buildListItems(
   return items;
 }
 
-function Avatar({ name, size = 32 }: { name: string | null; size?: number }) {
+function Avatar({
+  name,
+  avatarUrl,
+  size = 32,
+  authHeaders,
+}: {
+  name: string | null;
+  avatarUrl?: string | null;
+  size?: number;
+  authHeaders: Record<string, string>;
+}) {
   const colors = useColors();
+  const source = avatarImageSource(avatarUrl ?? null, authHeaders);
   const initials = (name ?? "?")
     .split(" ")
     .slice(0, 2)
     .map((w) => w[0])
     .join("")
     .toUpperCase();
+  if (source) {
+    return (
+      <Image
+        source={source}
+        style={{ width: size, height: size, borderRadius: size / 2 }}
+        contentFit="cover"
+        transition={120}
+      />
+    );
+  }
   return (
     <View
       style={{
@@ -141,7 +163,7 @@ export default function ChatScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { threadId } = useLocalSearchParams<{ threadId: string }>();
-  const { user, token } = useAuth();
+  const { user, token, getApiHeaders } = useAuth();
   const { socket, fetchThreads, threads } = useDm();
   const { t, locale } = useT();
 
@@ -157,6 +179,7 @@ export default function ChatScreen() {
   const [otherOtherDiscipline, setOtherOtherDiscipline] = useState<string | null>(null);
   const [otherPrimaryLanguage, setOtherPrimaryLanguage] = useState<string | null>(null);
   const [otherSecondaryLanguage, setOtherSecondaryLanguage] = useState<string | null>(null);
+  const [otherAvatarUrl, setOtherAvatarUrl] = useState<string | null>(null);
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
@@ -174,6 +197,7 @@ export default function ChatScreen() {
       setOtherName(threadFromContext.otherParticipant.fullName ?? null);
       setOtherRole(threadFromContext.otherParticipant.role ?? "general");
       setOtherUserId(threadFromContext.otherParticipant.id);
+      setOtherAvatarUrl(threadFromContext.otherParticipant.avatarUrl ?? null);
     }
   }, [threadFromContext]);
 
@@ -183,12 +207,19 @@ export default function ChatScreen() {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((r) => r.ok ? r.json() : null)
-      .then((data: { roleData?: { contactNumber?: string; discipline?: string | null; otherDiscipline?: string | null; primaryLanguage?: string | null; secondaryLanguage?: string | null } } | null) => {
-        setOtherPhone(data?.roleData?.contactNumber ?? null);
-        setOtherDiscipline(data?.roleData?.discipline ?? null);
-        setOtherOtherDiscipline(data?.roleData?.otherDiscipline ?? null);
-        setOtherPrimaryLanguage(data?.roleData?.primaryLanguage ?? null);
-        setOtherSecondaryLanguage(data?.roleData?.secondaryLanguage ?? null);
+      .then((data: {
+        fullName?: string | null;
+        avatarUrl?: string | null;
+        roleData?: { contactNumber?: string; discipline?: string | null; otherDiscipline?: string | null; primaryLanguage?: string | null; secondaryLanguage?: string | null };
+      } | null) => {
+        if (!data) return;
+        if (data.fullName) setOtherName(data.fullName);
+        setOtherAvatarUrl(data.avatarUrl ?? null);
+        setOtherPhone(data.roleData?.contactNumber ?? null);
+        setOtherDiscipline(data.roleData?.discipline ?? null);
+        setOtherOtherDiscipline(data.roleData?.otherDiscipline ?? null);
+        setOtherPrimaryLanguage(data.roleData?.primaryLanguage ?? null);
+        setOtherSecondaryLanguage(data.roleData?.secondaryLanguage ?? null);
       })
       .catch(() => {});
   }, [otherUserId, token]);
@@ -368,7 +399,14 @@ export default function ChatScreen() {
       >
         {!isMine && (
           <View style={{ width: 28, alignSelf: "flex-end" }}>
-            {showAvatar ? <Avatar name={otherName} size={28} /> : null}
+            {showAvatar ? (
+              <Avatar
+                name={otherName}
+                avatarUrl={otherAvatarUrl}
+                size={28}
+                authHeaders={getApiHeaders()}
+              />
+            ) : null}
           </View>
         )}
         <View style={{ maxWidth: "75%" }}>
@@ -451,7 +489,12 @@ export default function ChatScreen() {
           disabled={!otherUserId}
           activeOpacity={0.75}
         >
-          <Avatar name={otherName} size={34} />
+          <Avatar
+            name={otherName}
+            avatarUrl={otherAvatarUrl}
+            size={34}
+            authHeaders={getApiHeaders()}
+          />
           <View>
             <Text style={styles.headerName} numberOfLines={1}>{otherName ?? "…"}</Text>
             <Text style={styles.headerRole}>

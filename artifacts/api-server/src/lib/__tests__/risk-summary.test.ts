@@ -31,6 +31,15 @@ describe("incomplete-data disclaimer bullets", () => {
       ),
     ).toBe(false);
   });
+
+  it("removes LINZ / title-fetch failure disclaimer bullets (ZH)", () => {
+    const zh =
+      "LINZ 地权数据获取失败，在提交任何分割或建筑许可前必须通过律师进行产权搜索，这增加了前期的不确定性。";
+    expect(isIncompleteDataDisclaimerRiskBullet(zh)).toBe(true);
+    expect(filterRiskSummaryRemoveIncompleteDataDisclaimerBullets([zh, "坡度可能影响土方。"])).toEqual([
+      "坡度可能影响土方。",
+    ]);
+  });
 });
 
 describe("filterRiskSummaryRemoveAsbestosBullets", () => {

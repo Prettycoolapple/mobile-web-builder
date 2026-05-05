@@ -237,6 +237,10 @@ export interface SchoolZoneDetail {
 
 export interface FeasibilityReport {
   address: string;
+  /** Server search-history row id when this report was persisted. */
+  historyId?: string | null;
+  /** Server-created timestamp for history ordering when available. */
+  historyCreatedAt?: string | null;
   scores: Score;
   propertyOverview?: PropertyOverview;
   planning?: PlanningInfo;
@@ -333,6 +337,9 @@ interface ChatContextValue {
   isLoading: boolean;
   setIsLoading: (v: boolean) => void;
   setFirstLlmResponseRating: (sessionId: string, rating: "up" | "down") => void;
+  /** Increment to signal the server-side search history list may have new rows (e.g. after /analyse). */
+  searchHistoryTick: number;
+  bumpSearchHistory: () => void;
 }
 
 const ChatContext = createContext<ChatContextValue | null>(null);
@@ -403,6 +410,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [searchHistoryTick, setSearchHistoryTick] = useState(0);
+
+  const bumpSearchHistory = useCallback(() => {
+    setSearchHistoryTick((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -812,6 +824,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         isLoading,
         setIsLoading,
         setFirstLlmResponseRating,
+        searchHistoryTick,
+        bumpSearchHistory,
       }}
     >
       {children}

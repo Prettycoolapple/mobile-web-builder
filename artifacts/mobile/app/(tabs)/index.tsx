@@ -39,6 +39,19 @@ function resolveReportAddress(report: FeasibilityReport | null | undefined): str
   return typeof ov === "string" ? ov.trim() : "";
 }
 
+function withHistoryMetadata(
+  report: FeasibilityReport,
+  searchId?: string | null,
+  historyCreatedAt?: string | null,
+): FeasibilityReport {
+  if (!searchId && !historyCreatedAt) return report;
+  return {
+    ...report,
+    historyId: searchId ?? report.historyId ?? null,
+    historyCreatedAt: historyCreatedAt ?? report.historyCreatedAt ?? null,
+  };
+}
+
 
 // Keywords that indicate the user explicitly wants a service provider referral/recommendation.
 // Checked against the lowercased user message before sending to /api/chat.
@@ -142,6 +155,7 @@ export default function SearchScreen() {
     isLoading,
     setIsLoading,
     setFirstLlmResponseRating,
+    bumpSearchHistory,
   } = useChat();
 
   const [inputText, setInputText] = useState("");
@@ -530,8 +544,10 @@ export default function SearchScreen() {
     const detectedMode =
       isDiscoverQuery
         ? "discover"
-        : text.match(/\d+\s+\w+\s+(road|street|ave|avenue|crescent|place|drive|way|lane|terrace)/i) ||
-          lowerText.match(/analys[ei]|feasibility|check|assess|evaluate/)
+        : text.match(
+            /\d+[a-zA-Z]?(?:\s*\/\s*\d+[a-zA-Z]?)?\s+[\w']+(?:\s+[\w']+){0,4}\s+(road|street|ave|avenue|crescent|place|drive|way|lane|terrace|parade|close|grove|esplanade|quay|rd|st|ave|cres|pl|dr|ln|tce|pde|blvd|hwy)\b/i,
+          ) ||
+          lowerText.match(/analys[ei]|feasibility|check|assess|evaluate|(?:^|[\s，。!?])(?:分析|可行性|评估)/)
           ? "analyse"
           : "followup";
 
@@ -637,6 +653,8 @@ export default function SearchScreen() {
           let data: {
             content: string;
             mode: string;
+            searchId?: string | null;
+            historyCreatedAt?: string | null;
             wantsProviderRecommendation?: boolean;
             suggestedDiscipline?: string | null;
           };
@@ -701,13 +719,14 @@ export default function SearchScreen() {
           }
           if (data.mode === "analyse") {
             if (maybeParsed && isFeasibilityReport(maybeParsed)) {
-              const reportObj = maybeParsed as unknown as FeasibilityReport;
+              const reportObj = withHistoryMetadata(maybeParsed as unknown as FeasibilityReport, data.searchId, data.historyCreatedAt);
               setCurrentReport(reportObj);
               updateLastMessage({ type: "report", report: reportObj, content: "" }, sessionId);
               if (reportObj.scores && reportObj.address) {
                 updateCandidateScores({ [reportObj.address]: reportObj.scores }, sessionId);
               }
               refreshProfile().catch(() => {});
+              bumpSearchHistory();
             } else {
               updateLastMessage({ type: "text", content: sanitizeForDisplay(rawContent, t("search.format_error")) }, sessionId);
             }
@@ -725,13 +744,14 @@ export default function SearchScreen() {
             // structured result, render it as such — otherwise treat as text
             // but always strip any JSON before displaying.
             if (isFeasibilityReport(maybeParsed)) {
-              const reportObj = maybeParsed as unknown as FeasibilityReport;
+              const reportObj = withHistoryMetadata(maybeParsed as unknown as FeasibilityReport, data.searchId, data.historyCreatedAt);
               setCurrentReport(reportObj);
               updateLastMessage({ type: "report", report: reportObj, content: "" }, sessionId);
               if (reportObj.scores && reportObj.address) {
                 updateCandidateScores({ [reportObj.address]: reportObj.scores }, sessionId);
               }
               refreshProfile().catch(() => {});
+              bumpSearchHistory();
             } else if (maybeParsed?.candidates && maybeParsed.candidates.length > 0) {
               updateLastMessage({ type: "search", searchResults: maybeParsed.candidates, content: "" }, sessionId);
             } else if (hasJsonShape) {
@@ -864,6 +884,7 @@ export default function SearchScreen() {
     getApiBase,
     getApiHeaders,
     refreshProfile,
+    bumpSearchHistory,
     user?.role,
     t,
   ]);
@@ -935,6 +956,8 @@ export default function SearchScreen() {
             const data = (await resp.json()) as {
               report?: FeasibilityReport;
               type: string;
+              searchId?: string | null;
+              historyCreatedAt?: string | null;
               clarificationType?: string;
               question?: string;
               options?: string[];
@@ -959,15 +982,17 @@ export default function SearchScreen() {
             }
 
             if (data.report && data.report.scores) {
+              const reportWithHistory = withHistoryMetadata(data.report, data.searchId, data.historyCreatedAt);
               const patchedReport: FeasibilityReport = (
                 !data.report.photoUrl && selectedPhotoUrl
-              ) ? { ...data.report, photoUrl: selectedPhotoUrl } : data.report;
+              ) ? { ...reportWithHistory, photoUrl: selectedPhotoUrl } : reportWithHistory;
               setCurrentReport(patchedReport);
               updateLastMessage({ type: "report", report: patchedReport, content: "" }, sessionId);
               if (patchedReport.scores && patchedReport.address) {
                 updateCandidateScores({ [patchedReport.address]: patchedReport.scores }, sessionId);
               }
               refreshProfile().catch(() => {});
+              bumpSearchHistory();
               return;
             }
 
@@ -998,6 +1023,7 @@ export default function SearchScreen() {
       getApiBase,
       getApiHeaders,
       refreshProfile,
+      bumpSearchHistory,
       t,
     ],
   );
@@ -1046,7 +1072,7 @@ export default function SearchScreen() {
         <View style={styles.topBarContent}>
           <View style={styles.brandRow}>
             <Text style={[styles.appName, { fontFamily: "SpaceGrotesk_700Bold", letterSpacing: -0.4 }]}>
-              {isOSChineseLocale() ? "阿尔房" : "Project Alpha"}
+              {isOSChineseLocale() ? "奥房" : "Project Alpha"}
             </Text>
           </View>
           <View style={styles.headerActions}>

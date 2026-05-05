@@ -144,15 +144,6 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
               </Text>
             </View>
           )}
-          {(candidate.bedroomsApprox || candidate.bathroomsApprox || candidate.landAreaApprox || candidate.priceApprox || candidate.floorAreaApprox) && (
-            <View style={[styles.tag, { backgroundColor: "transparent", paddingHorizontal: 0 }]}>
-              <Text
-                style={[styles.tagText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontStyle: "italic" }]}
-              >
-                Listing sources disagree — figure may be approximate
-              </Text>
-            </View>
-          )}
           {!!candidate.zone?.trim() && (
             <View style={[styles.tag, { backgroundColor: colors.muted }]}>
               <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>

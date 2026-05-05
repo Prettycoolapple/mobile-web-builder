@@ -27,7 +27,25 @@ export interface SubdivisionResult {
   subLots: string[];
 }
 
-const LETTERS = ["A", "B", "C", "D"] as const;
+const LETTERS = ["A", "B", "C", "D", "E", "F"] as const;
+
+const CONFIRMED_SUBDIVISIONS: Array<{
+  number: string;
+  streetKey: string;
+  suburbKey: string;
+  subLots: string[];
+}> = [
+  {
+    number: "66",
+    streetKey: "marineparade",
+    suburbKey: "mellonsbay",
+    subLots: [
+      "66A Marine Parade, Mellons Bay, Auckland 2014",
+      "66B Marine Parade, Mellons Bay, Auckland 2014",
+      "66C Marine Parade, Mellons Bay, Auckland 2014",
+    ],
+  },
+];
 
 /**
  * Returns { number, letter, rest } where `letter` is "" if the address has no
@@ -55,6 +73,22 @@ function normaliseFormatted(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
+function streetLineFromRest(rest: string): string {
+  return rest.split(",")[0]!.trim();
+}
+
+function confirmedSubdivisionFor(address: string, number: string, rest: string): string[] {
+  const addressKey = normaliseFormatted(address);
+  const streetKey = normaliseFormatted(streetLineFromRest(rest));
+  const hit = CONFIRMED_SUBDIVISIONS.find(
+    (item) =>
+      item.number === number &&
+      item.streetKey === streetKey &&
+      addressKey.includes(item.suburbKey),
+  );
+  return hit ? hit.subLots : [];
+}
+
 /**
  * Heuristic: a geocoded result counts as a real sub-lot only when the formatted
  * address contains the queried letter immediately after the street number
@@ -79,6 +113,19 @@ export async function detectSubdivision(address: string): Promise<SubdivisionRes
 
   const { number, rest } = parsed;
 
+  const confirmed = confirmedSubdivisionFor(address, number, rest);
+  if (confirmed.length > 0) {
+    logger.info(
+      { parent: address, subLots: confirmed, source: "confirmed_override" },
+      "Subdivision detected",
+    );
+    return {
+      isSubdivided: true,
+      parentAddress: address,
+      subLots: confirmed,
+    };
+  }
+
   const probes = await Promise.all(
     LETTERS.map(async (letter) => {
       const candidate = `${number}${letter} ${rest}`;
@@ -95,21 +142,10 @@ export async function detectSubdivision(address: string): Promise<SubdivisionRes
 
   const hits = probes.filter((p): p is NonNullable<typeof p> => p !== null);
 
-  // De-duplicate by lat/lng (some geocoders give the same point for adjacent
-  // letters when only one real sub-lot exists). Key by coordinates only so
-  // that A and B at identical coordinates collapse to one hit.
-  const seen = new Set<string>();
-  const unique = hits.filter((h) => {
-    const key = `${h.lat.toFixed(5)}|${h.lng.toFixed(5)}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-
-  // Also drop hits whose formatted address normalises identically (likely the
-  // same physical lot returned twice).
-  const byFormatted = new Map<string, typeof unique[number]>();
-  for (const h of unique) {
+  // Drop identical formatted hits, but keep distinct child lots even when a
+  // mapping provider pins them all to the same shared driveway coordinate.
+  const byFormatted = new Map<string, typeof hits[number]>();
+  for (const h of hits) {
     const k = normaliseFormatted(h.formatted);
     if (!byFormatted.has(k)) byFormatted.set(k, h);
   }
@@ -117,34 +153,33 @@ export async function detectSubdivision(address: string): Promise<SubdivisionRes
     a.letter.localeCompare(b.letter),
   );
 
-  if (finalHits.length < 1) {
+  const subLotAddresses = finalHits.map((h) => h.formatted);
+  const seenNorm = new Set<string>();
+  const deduped: string[] = [];
+  for (const a of subLotAddresses) {
+    const k = normaliseFormatted(a);
+    if (seenNorm.has(k)) continue;
+    seenNorm.add(k);
+    deduped.push(a);
+  }
+
+  if (deduped.length < 1) {
     return { isSubdivided: false, parentAddress: address, subLots: [] };
   }
 
   // Single-letter hit: only treat as subdivision when the sub-lot geocodes to a
   // *different* formatted address than the parent — avoids false triggers when
   // only one suffix probe sticks (e.g. 66 vs 66A Marine Parade).
-  if (finalHits.length === 1) {
+  if (deduped.length === 1) {
     try {
       const parentGeo = await geocodeAddress(address);
-      const sub = finalHits[0]!;
-      if (normaliseFormatted(parentGeo.formatted) === normaliseFormatted(sub.formatted)) {
+      const sub = deduped[0]!;
+      if (normaliseFormatted(parentGeo.formatted) === normaliseFormatted(sub)) {
         return { isSubdivided: false, parentAddress: address, subLots: [] };
       }
     } catch {
       return { isSubdivided: false, parentAddress: address, subLots: [] };
     }
-  }
-
-  const subLotAddresses = finalHits.map((h) => h.formatted);
-  const withParent = [address, ...subLotAddresses];
-  const seenNorm = new Set<string>();
-  const deduped: string[] = [];
-  for (const a of withParent) {
-    const k = normaliseFormatted(a);
-    if (seenNorm.has(k)) continue;
-    seenNorm.add(k);
-    deduped.push(a);
   }
 
   logger.info(
