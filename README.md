@@ -102,7 +102,7 @@ If your phone tests against your local API, put your machine's LAN IP in
 This API is a long-lived Express server by default, but it ships a
 Vercel-compatible serverless entry:
 
-- `api/index.ts` at the **repo root** exports the Express app as a
+- `api/index.mjs` at the **repo root** exports the Express app as a
   serverless handler (Vercel only matches the `api/` directory here, not
   `artifacts/api-server/api/`).
 - `vercel.json` at the repo root rewrites `/api/*` to that handler and sets

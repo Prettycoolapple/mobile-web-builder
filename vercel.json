@@ -4,7 +4,7 @@
   "installCommand": "pnpm install --frozen-lockfile=false",
   "outputDirectory": "artifacts/api-server/deploy",
   "functions": {
-    "api/index.ts": {
+    "api/index.mjs": {
       "maxDuration": 60,
       "includeFiles": "api/vercel-app.mjs"
     }
