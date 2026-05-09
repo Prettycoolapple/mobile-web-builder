@@ -1,16 +1,9 @@
 /**
- * Lightweight health check for Vercel — no Express bundle, no DATABASE_URL.
- * Kept separate because vercel.json rewrites `/api/(.*)` → `/api`, which strips
- * the subpath before `api/index.ts` runs, so `/api/healthz` never matched there.
+ * Health check with zero dependencies — no Express, no DATABASE_URL import.
+ * Uses the Web fetch handler shape required by current Vercel Node runtimes.
  */
-import type { IncomingMessage, ServerResponse } from "node:http";
-
-export const config = {
-  runtime: "nodejs",
+export default {
+  fetch(): Response {
+    return Response.json({ status: "ok" });
+  },
 };
-
-export default function handler(_req: IncomingMessage, res: ServerResponse): void {
-  res.statusCode = 200;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify({ status: "ok" }));
-}

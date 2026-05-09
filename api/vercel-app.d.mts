@@ -1,4 +1,4 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Express } from "express";
 
-declare const app: (req: IncomingMessage, res: ServerResponse) => void;
+declare const app: Express;
 export default app;
