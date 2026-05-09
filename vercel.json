@@ -14,6 +14,7 @@
     { "source": "/support/", "destination": "/contact", "permanent": true }
   ],
   "rewrites": [
+    { "source": "/api/healthz", "destination": "/api/healthz" },
     { "source": "/api/(.*)", "destination": "/api" },
     { "source": "/api", "destination": "/api" }
   ],
