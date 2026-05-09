@@ -1,10 +1,31 @@
 /// <reference lib="dom" />
 import fs from "node:fs";
 import { execSync } from "child_process";
+import { createRequire } from "node:module";
+import path from "node:path";
 import { logger } from "../logger";
-import { chromium, type Browser, type Page, type BrowserContext } from "playwright";
+import type { Browser, Page, BrowserContext } from "playwright";
 
 let _chromiumPath: string | null = null;
+
+/** Vercel bundles omit node_modules for externalized deps; never touch Playwright there. */
+function isVercelServerless(): boolean {
+  return process.env.VERCEL === "1" || process.env.VERCEL === "true";
+}
+
+let _playwrightRequire: NodeRequire | null = null;
+
+function requirePlaywright(): typeof import("playwright") {
+  if (isVercelServerless()) {
+    throw new Error(
+      "Browser automation (Playwright) is not available on Vercel serverless. Use a long-running host for full scrapers or ScrapingBee-only flows.",
+    );
+  }
+  if (!_playwrightRequire) {
+    _playwrightRequire = createRequire(path.join(process.cwd(), "package.json"));
+  }
+  return _playwrightRequire("playwright") as typeof import("playwright");
+}
 
 function firstPathFromCommandOutput(output: string): string | null {
   const candidates = output
@@ -48,7 +69,9 @@ function getPathFromEnv(): string | null {
 }
 
 function getBundledPlaywrightPath(): string | null {
+  if (isVercelServerless()) return null;
   try {
+    const { chromium } = requirePlaywright();
     const bundled = chromium.executablePath();
     if (bundled && fs.existsSync(bundled)) return bundled;
   } catch {
@@ -129,6 +152,7 @@ try {
 export { _startupChromiumOk as chromiumAvailable };
 
 export async function launchBrowser(): Promise<Browser> {
+  const { chromium } = requirePlaywright();
   const executablePath = getChromiumPath();
   try {
     return await chromium.launch({ executablePath, headless: true, args: BROWSER_ARGS });
