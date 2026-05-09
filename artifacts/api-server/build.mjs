@@ -21,117 +21,169 @@ async function stripLinkedSourcemap(bundlePath) {
   await unlink(`${bundlePath}.map`).catch(() => {});
 }
 
-async function buildAll() {
-  const distDir = path.resolve(artifactDir, "dist");
-  await rm(distDir, { recursive: true, force: true });
+/**
+ * Long-running Node server (`dist/index.mjs`): keep broad externals so esbuild stays fast
+ * and optional native deps resolve from node_modules at runtime.
+ */
+const EXTERNALS_NODE_SERVER = [
+  "*.node",
+  "sharp",
+  "better-sqlite3",
+  "sqlite3",
+  "canvas",
+  "bcrypt",
+  "argon2",
+  "fsevents",
+  "re2",
+  "farmhash",
+  "xxhash-addon",
+  "bufferutil",
+  "utf-8-validate",
+  "ssh2",
+  "cpu-features",
+  "dtrace-provider",
+  "isolated-vm",
+  "lightningcss",
+  "pg-native",
+  "oracledb",
+  "mongodb-client-encryption",
+  "nodemailer",
+  "handlebars",
+  "knex",
+  "typeorm",
+  "protobufjs",
+  "onnxruntime-node",
+  "@tensorflow/*",
+  "@prisma/client",
+  "@mikro-orm/*",
+  "@grpc/*",
+  "@swc/*",
+  "@aws-sdk/*",
+  "@azure/*",
+  "@opentelemetry/*",
+  "@google-cloud/*",
+  "googleapis",
+  "firebase-admin",
+  "@parcel/watcher",
+  "@sentry/profiling-node",
+  "@tree-sitter/*",
+  "aws-sdk",
+  "classic-level",
+  "dd-trace",
+  "ffi-napi",
+  "grpc",
+  "hiredis",
+  "kerberos",
+  "leveldown",
+  "miniflare",
+  "mysql2",
+  "newrelic",
+  "odbc",
+  "piscina",
+  "realm",
+  "ref-napi",
+  "rocksdb",
+  "sass-embedded",
+  "sequelize",
+  "serialport",
+  "snappy",
+  "tinypool",
+  "usb",
+  "workerd",
+  "wrangler",
+  "zeromq",
+  "zeromq-prebuilt",
+  "playwright",
+  "puppeteer",
+  "puppeteer-core",
+  "electron",
+];
 
-  await esbuild({
-    entryPoints: [
-      path.resolve(artifactDir, "src/index.ts"),
-      path.resolve(artifactDir, "src/vercel-app.ts"),
-    ],
-    platform: "node",
-    bundle: true,
-    format: "esm",
-    outdir: distDir,
-    outExtension: { ".js": ".mjs" },
-    logLevel: "info",
-    // Some packages may not be bundleable, so we externalize them, we can add more here as needed.
-    // Some of the packages below may not be imported or installed, but we're adding them in case they are in the future.
-    // Examples of unbundleable packages:
-    // - uses native modules and loads them dynamically (e.g. sharp)
-    // - use path traversal to read files (e.g. @google-cloud/secret-manager loads sibling .proto files)
-    external: [
-      "*.node",
-      "sharp",
-      "better-sqlite3",
-      "sqlite3",
-      "canvas",
-      "bcrypt",
-      "argon2",
-      "fsevents",
-      "re2",
-      "farmhash",
-      "xxhash-addon",
-      "bufferutil",
-      "utf-8-validate",
-      "ssh2",
-      "cpu-features",
-      "dtrace-provider",
-      "isolated-vm",
-      "lightningcss",
-      "pg-native",
-      "oracledb",
-      "mongodb-client-encryption",
-      // nodemailer: must bundle for Vercel (external leaves bare import; lambda has no package).
-      "handlebars",
-      "knex",
-      "typeorm",
-      "protobufjs",
-      "onnxruntime-node",
-      "@tensorflow/*",
-      "@prisma/client",
-      "@mikro-orm/*",
-      "@grpc/*",
-      "@swc/*",
-      "@aws-sdk/*",
-      "@azure/*",
-      "@opentelemetry/*",
-      "@google-cloud/*",
-      // Do not externalize "@google/*": @google/genai must be bundled for Vercel
-      // (serverless has no node_modules for bare imports from vercel-app.mjs).
-      "googleapis",
-      "firebase-admin",
-      "@parcel/watcher",
-      "@sentry/profiling-node",
-      "@tree-sitter/*",
-      "aws-sdk",
-      "classic-level",
-      "dd-trace",
-      "ffi-napi",
-      "grpc",
-      "hiredis",
-      "kerberos",
-      "leveldown",
-      "miniflare",
-      "mysql2",
-      "newrelic",
-      "odbc",
-      "piscina",
-      "realm",
-      "ref-napi",
-      "rocksdb",
-      "sass-embedded",
-      "sequelize",
-      "serialport",
-      "snappy",
-      "tinypool",
-      "usb",
-      "workerd",
-      "wrangler",
-      "zeromq",
-      "zeromq-prebuilt",
-      "playwright",
-      "puppeteer",
-      "puppeteer-core",
-      "electron",
-    ],
-    sourcemap: "linked",
-    plugins: [
-      // pino relies on workers to handle logging, instead of externalizing it we use a plugin to handle it
-      esbuildPluginPino({ transports: ["pino-pretty"] })
-    ],
-    // Make sure packages that are cjs only (e.g. express) but are bundled continue to work in our esm output file
-    banner: {
-      js: `import { createRequire as __bannerCrReq } from 'node:module';
+/**
+ * Vercel serverless (`vercel-app.mjs`): the lambda does not ship a usable node_modules
+ * tree for bare imports. Bundle all JS dependencies except known-native / unbundleable packages.
+ * (Do not add wide patterns like `@google-cloud/*` here — that caused ERR_MODULE_NOT_FOUND.)
+ */
+const EXTERNALS_VERCEL_SERVERLESS = [
+  "*.node",
+  "sharp",
+  "better-sqlite3",
+  "sqlite3",
+  "canvas",
+  "bcrypt",
+  "argon2",
+  "fsevents",
+  "re2",
+  "farmhash",
+  "xxhash-addon",
+  "bufferutil",
+  "utf-8-validate",
+  "ssh2",
+  "cpu-features",
+  "dtrace-provider",
+  "isolated-vm",
+  "lightningcss",
+  "pg-native",
+  "oracledb",
+  "mongodb-client-encryption",
+  "onnxruntime-node",
+  "@tensorflow/*",
+  "@sentry/profiling-node",
+  "ffi-napi",
+  "playwright",
+  "puppeteer",
+  "puppeteer-core",
+  "electron",
+  "usb",
+  "serialport",
+  "snappy",
+  "leveldown",
+  "rocksdb",
+  "realm",
+  "ref-napi",
+];
+
+const ESBUILD_BANNER = {
+  js: `import { createRequire as __bannerCrReq } from 'node:module';
 import __bannerPath from 'node:path';
 import __bannerUrl from 'node:url';
 
 globalThis.require = __bannerCrReq(import.meta.url);
 globalThis.__filename = __bannerUrl.fileURLToPath(import.meta.url);
 globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
-    `,
-    },
+`,
+};
+
+const ESBUILD_PLUGINS = [
+  esbuildPluginPino({ transports: ["pino-pretty"] }),
+];
+
+async function buildAll() {
+  const distDir = path.resolve(artifactDir, "dist");
+  await rm(distDir, { recursive: true, force: true });
+
+  const shared = {
+    platform: "node",
+    bundle: true,
+    format: "esm",
+    outdir: distDir,
+    outExtension: { ".js": ".mjs" },
+    logLevel: "info",
+    sourcemap: "linked",
+    plugins: ESBUILD_PLUGINS,
+    banner: ESBUILD_BANNER,
+  };
+
+  await esbuild({
+    ...shared,
+    entryPoints: [path.resolve(artifactDir, "src/index.ts")],
+    external: EXTERNALS_NODE_SERVER,
+  });
+
+  await esbuild({
+    ...shared,
+    entryPoints: [path.resolve(artifactDir, "src/vercel-app.ts")],
+    external: EXTERNALS_VERCEL_SERVERLESS,
   });
 
   const vercelBundle = path.join(distDir, "vercel-app.mjs");
