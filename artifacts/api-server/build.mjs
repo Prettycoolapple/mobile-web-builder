@@ -63,7 +63,7 @@ async function buildAll() {
       "pg-native",
       "oracledb",
       "mongodb-client-encryption",
-      "nodemailer",
+      // nodemailer: must bundle for Vercel (external leaves bare import; lambda has no package).
       "handlebars",
       "knex",
       "typeorm",
