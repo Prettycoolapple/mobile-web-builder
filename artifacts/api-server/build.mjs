@@ -78,7 +78,8 @@ async function buildAll() {
       "@azure/*",
       "@opentelemetry/*",
       "@google-cloud/*",
-      "@google/*",
+      // Do not externalize "@google/*": @google/genai must be bundled for Vercel
+      // (serverless has no node_modules for bare imports from vercel-app.mjs).
       "googleapis",
       "firebase-admin",
       "@parcel/watcher",
