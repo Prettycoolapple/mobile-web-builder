@@ -24,8 +24,8 @@ const PLANS = [
   {
     offeringKey: "default",
     offeringName: "Standard Plan",
-    productIdentifier: "standard_monthly",
-    playStoreIdentifier: "standard_monthly:monthly",
+    productIdentifier: "monthly",
+    playStoreIdentifier: "monthly:monthly",
     displayName: "Standard Monthly",
     title: "Standard Plan — $24.99/mo",
     priceNzd: 24990000,

@@ -68,4 +68,27 @@ describe("estimateCosts — existing dwelling / demolition", () => {
     expect(c.demo_vacant).toBe(true);
     expect(c.demo_low).toBe(0);
   });
+
+  it("scales construction and consent costs by the final dwelling count", () => {
+    const property = minimal({
+      cv_nzd: 1_770_000,
+      land_area_sqm: 825,
+      floor_area_sqm: 220,
+      zone_code: "MHS",
+      min_lot_size_sqm: 400,
+      contour: "flat",
+    });
+
+    const oneDwelling = estimateCosts(property, 1, { sqm_per_lot: 412 });
+    const twoDwellings = estimateCosts(property, 2, { sqm_per_lot: 412 });
+
+    expect(oneDwelling.construction_low).toBe(541_000);
+    expect(oneDwelling.construction_high).toBe(704_000);
+    expect(twoDwellings.units).toBe(2);
+    expect(twoDwellings.construction_low).toBe(oneDwelling.construction_low * 2);
+    expect(twoDwellings.construction_high).toBe(oneDwelling.construction_high * 2);
+    expect(twoDwellings.consents_low).toBe(oneDwelling.consents_low * 2);
+    expect(twoDwellings.consents_high).toBe(oneDwelling.consents_high * 2);
+    expect(twoDwellings.total_low).toBeGreaterThan(oneDwelling.total_low);
+  });
 });

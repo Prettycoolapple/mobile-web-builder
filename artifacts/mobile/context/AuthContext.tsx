@@ -5,6 +5,21 @@ import { loginRevenueCat, logoutRevenueCat, getSubscriptionSyncBody, IS_TEST_PAY
 import { getApiBase } from "@/lib/api";
 import { getCurrentLocale, isOSChineseLocale } from "@/lib/i18n";
 
+/** Avoid opaque "JSON Parse error" when the API returns HTML or plain text (e.g. Vercel error page). */
+async function readResponseJson(resp: Response): Promise<unknown> {
+  const text = await resp.text();
+  const trimmed = text.trim();
+  if (!trimmed) return {};
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    const preview = trimmed.replace(/\s+/g, " ").slice(0, 200);
+    throw new Error(
+      `Server returned non-JSON (${resp.status}): ${preview}${trimmed.length > 200 ? "…" : ""}`,
+    );
+  }
+}
+
 export type UserRole = "general" | "sales_agent" | "service_provider";
 
 export interface UserProfile {
@@ -224,7 +239,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (resp.ok) {
-        const data = (await resp.json()) as { user: UserProfile & { role?: UserRole; languages?: string[] } };
+        const data = (await readResponseJson(resp)) as { user: UserProfile & { role?: UserRole; languages?: string[] } };
         const profile: UserProfile = {
           ...data.user,
           role: data.user.role ?? "general",
@@ -279,7 +294,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    const json = (await resp.json()) as {
+    const json = (await readResponseJson(resp)) as {
       token: string;
       user: UserProfile & { role?: UserRole; languages?: string[] };
       error?: string;
@@ -305,7 +320,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
     });
-    const data = (await resp.json()) as { token: string; user: UserProfile & { role?: UserRole; languages?: string[] }; error?: string };
+    const data = (await readResponseJson(resp)) as { token: string; user: UserProfile & { role?: UserRole; languages?: string[] }; error?: string };
     if (!resp.ok) throw new Error(data.error ?? "Login failed");
     const profile: UserProfile = {
       ...data.user,
@@ -325,7 +340,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email }),
     });
-    const data = (await resp.json().catch(() => ({}))) as { error?: string };
+    const data = (await readResponseJson(resp)) as { error?: string };
     if (!resp.ok) throw new Error(data.error ?? "Could not send reset code");
   }, []);
 
@@ -339,7 +354,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, code, password }),
     });
-    const data = (await resp.json().catch(() => ({}))) as { error?: string };
+    const data = (await readResponseJson(resp)) as { error?: string };
     if (!resp.ok) throw new Error(data.error ?? "Could not reset password");
   }, []);
 

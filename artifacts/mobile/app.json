@@ -1,8 +1,8 @@
 {
   "expo": {
     "name": "Project Alpha",
-    "slug": "devfeasible-nz",
-    "version": "1.0.0",
+    "slug": "workspace",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "devfeasible",
@@ -16,7 +16,10 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "nz.devfeasible.app",
-      "buildNumber": "1"
+      "buildNumber": "5",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "nz.devfeasible.app",
@@ -50,6 +53,11 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "d24f94f9-0041-43da-8cc8-036b39127668"
+      }
     }
   }
 }

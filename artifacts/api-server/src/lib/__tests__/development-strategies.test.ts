@@ -124,4 +124,46 @@ describe("development strategies", () => {
     expect(hold?.totalCostLow).toBeLessThan(rebuild?.totalCostLow ?? 0);
     expect(hold?.roiScenarios.length).toBeGreaterThan(0);
   });
+
+  it("uses the multi-unit rebuild cost stack when calculating subdivision ROI", () => {
+    const twoLotResult: LotResult = {
+      ...lotResult,
+      lots: 2,
+      min_lot_size: 400,
+      zone_label: "Mixed Housing Suburban",
+      sqm_per_lot: 416,
+    };
+    const twoUnitCosts: CostBreakdown = {
+      ...baseCosts,
+      construction_low: 672_000,
+      construction_high: 840_000,
+      consents_low: 87_000,
+      consents_high: 134_000,
+      total_low: 2_999_000,
+      total_high: 3_549_000,
+      units: 2,
+      cost_per_unit_avg: 1_637_000,
+    };
+    const assessment = buildFallbackDevelopmentStrategyAssessment(
+      merged({ build_year: 1960, zone_code: "MHS", min_lot_size_sqm: 400 }),
+      twoLotResult,
+    );
+    const strategies = calculateDevelopmentStrategies({
+      data: merged({ build_year: 1960, zone_code: "MHS", min_lot_size_sqm: 400 }),
+      baseCosts: twoUnitCosts,
+      lotResult: twoLotResult,
+      avgSalePrice: 2_400_000,
+      avgPricePerSqm: 10_000,
+      interestRateOutlook: "stable",
+      assessment,
+    });
+
+    const rebuild = strategies.find((strategy) => strategy.id === "demolish_rebuild");
+    const scenario = rebuild?.roiScenarios[0];
+
+    expect(rebuild?.totalCostLow).toBe(twoUnitCosts.total_low);
+    expect(rebuild?.totalCostHigh).toBe(twoUnitCosts.total_high);
+    expect(scenario?.lots).toBe(2);
+    expect(scenario?.total_cost_mid).toBe(3_274_000);
+  });
 });

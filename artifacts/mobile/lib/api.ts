@@ -17,9 +17,28 @@ function normalizeOrigin(value: string): string {
 
 function normalizeApiBase(value: string): string {
   const url = new URL(/^https?:\/\//i.test(value) ? value : `https://${value}`);
+  assertNotSupabaseUrl(url);
   const pathname = url.pathname.replace(/\/+$/, "");
   url.pathname = pathname.endsWith("/api") ? pathname : `${pathname}/api`;
   return stripTrailingSlash(url.toString());
+}
+
+function assertNotSupabaseUrl(url: URL): void {
+  if (/\.supabase\.(co|com)$/i.test(url.hostname)) {
+    throw new Error(
+      "The mobile API URL is pointing at Supabase. Set EXPO_PUBLIC_API_URL in EAS to your Vercel URL, for example https://your-project.vercel.app/api, then rebuild TestFlight.",
+    );
+  }
+}
+
+function isStoreBuildWithoutApiConfig(): boolean {
+  return Platform.OS !== "web" && !__DEV__ && Constants.appOwnership !== "expo";
+}
+
+function requireHostedApiConfiguration(): never {
+  throw new Error(
+    "This TestFlight build is missing EXPO_PUBLIC_API_URL. Set it in EAS production to your Vercel API URL, for example https://your-project.vercel.app/api, then rebuild.",
+  );
 }
 
 function getExpoHost(): string | null {
@@ -74,12 +93,21 @@ export function getApiOrigin(): string {
   }
 
   const explicitAppUrl = trim(process.env.EXPO_PUBLIC_APP_URL);
-  if (explicitAppUrl) return normalizeOrigin(explicitAppUrl);
+  if (explicitAppUrl) {
+    const origin = normalizeOrigin(explicitAppUrl);
+    assertNotSupabaseUrl(new URL(origin));
+    return origin;
+  }
 
   const legacyDomain = trim(process.env.EXPO_PUBLIC_DOMAIN);
-  if (legacyDomain) return normalizeOrigin(legacyDomain);
+  if (legacyDomain) {
+    const origin = normalizeOrigin(legacyDomain);
+    assertNotSupabaseUrl(new URL(origin));
+    return origin;
+  }
 
   if (Platform.OS === "web") return "";
+  if (isStoreBuildWithoutApiConfig()) return requireHostedApiConfiguration();
   return getLanOrigin() ?? getSimulatorOrigin();
 }
 
@@ -88,12 +116,21 @@ export function getApiBase(): string {
   if (explicitApiUrl) return normalizeApiBase(explicitApiUrl);
 
   const explicitAppUrl = trim(process.env.EXPO_PUBLIC_APP_URL);
-  if (explicitAppUrl) return `${normalizeOrigin(explicitAppUrl)}/api`;
+  if (explicitAppUrl) {
+    const origin = normalizeOrigin(explicitAppUrl);
+    assertNotSupabaseUrl(new URL(origin));
+    return `${origin}/api`;
+  }
 
   const legacyDomain = trim(process.env.EXPO_PUBLIC_DOMAIN);
-  if (legacyDomain) return `${normalizeOrigin(legacyDomain)}/api`;
+  if (legacyDomain) {
+    const origin = normalizeOrigin(legacyDomain);
+    assertNotSupabaseUrl(new URL(origin));
+    return `${origin}/api`;
+  }
 
   if (Platform.OS === "web") return "/api";
+  if (isStoreBuildWithoutApiConfig()) return requireHostedApiConfiguration();
   return `${getLanOrigin() ?? getSimulatorOrigin()}/api`;
 }
 

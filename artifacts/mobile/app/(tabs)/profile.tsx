@@ -22,7 +22,7 @@ import { useSubscription, getSubscriptionSyncBody } from "@/lib/revenuecat";
 import { avatarImageSource } from "@/lib/avatar";
 import { getApiBase } from "@/lib/api";
 import { WORLD_LANGUAGES } from "@/lib/languages";
-import { useT, type Locale, isOSChineseLocale } from "@/lib/i18n";
+import { useT } from "@/lib/i18n";
 
 const FREE_LIMIT = 2;
 const STANDARD_LIMIT = 20;
@@ -84,7 +84,7 @@ export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const { user, signOut, getApiHeaders, refreshProfile, isSubscriptionIdentityReady } = useAuth();
   const router = useRouter();
-  const { t, locale, setLocale } = useT();
+  const { t } = useT();
   const PLAN_FEATURES = buildPlanFeatures(t);
 
   const { purchase, isSubscribed, customerInfoLoaded, isTestPaymentMode, refetchCustomerInfo, getPackageForRole, getPriceForRole } = useSubscription();
@@ -527,62 +527,6 @@ export default function ProfileScreen() {
             </View>
           )}
         </View>
-
-        {/* ─── App Language Toggle ───
-            Hidden for Chinese-OS users: their device locale forces the whole
-            app to Chinese (see isOSChineseLocale / LocaleProvider), so showing
-            an "English / 中文" picker here would be misleading — it cannot be
-            changed at runtime. Non-Chinese-OS users still see the toggle. */}
-        {!isOSChineseLocale() && (
-          <>
-            <SectionHeader title={t("profile.app_language")} />
-            <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border, padding: 0 }]}>
-              {(["en", "zh"] as Locale[]).map((code, idx) => {
-                const label = code === "en" ? "English" : "中文(简体)";
-                const selected = locale === code;
-                return (
-                  <TouchableOpacity
-                    key={code}
-                    onPress={() => setLocale(code)}
-                    activeOpacity={0.7}
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      paddingHorizontal: 16,
-                      paddingVertical: 14,
-                      borderTopWidth: idx === 0 ? 0 : StyleSheet.hairlineWidth,
-                      borderTopColor: colors.border,
-                    }}
-                  >
-                    <Text
-                      style={{
-                        color: selected ? colors.accent : colors.foreground,
-                        fontFamily: selected ? "DM_Sans_600SemiBold" : "DM_Sans_400Regular",
-                        fontSize: 15,
-                      }}
-                    >
-                      {label}
-                    </Text>
-                    {selected && <Feather name="check" size={16} color={colors.accent} />}
-                  </TouchableOpacity>
-                );
-              })}
-              <Text
-                style={{
-                  color: colors.mutedForeground,
-                  fontFamily: "DM_Sans_400Regular",
-                  fontSize: 12,
-                  padding: 14,
-                  paddingTop: 6,
-                  lineHeight: 17,
-                }}
-              >
-                {t("profile.app_language_hint")}
-              </Text>
-            </View>
-          </>
-        )}
 
         {/* ─── Plan card — general users ─── */}
         {role === "general" && (

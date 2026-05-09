@@ -1,24 +1,21 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
 import * as Localization from "expo-localization";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export type Locale = "en" | "zh";
-
-const STORAGE_KEY = "@devfeasible/locale_override";
 
 function detectDeviceLocale(): Locale {
   try {
     const locales = Localization.getLocales();
     const primary = locales?.[0];
-    const tag = (primary?.languageTag ?? primary?.languageCode ?? "en").toLowerCase();
-    if (tag.startsWith("zh")) return "zh";
+    const tag = String(primary?.languageTag ?? "").toLowerCase();
+    const code = String(primary?.languageCode ?? "").toLowerCase();
+    if (tag.startsWith("zh") || code === "zh") return "zh";
   } catch {}
   return "en";
 }
 
-// Product decision: when the OS reports Chinese as the primary locale, the app
-// is forced to zh regardless of any previously saved manual override. This
-// guarantees Chinese-OS users see a consistent Chinese experience end-to-end.
+// When the OS primary locale is Chinese (zh*), the app uses Chinese UI strings;
+// otherwise English. Same rule as `detectDeviceLocale()`.
 export function isOSChineseLocale(): boolean {
   return detectDeviceLocale() === "zh";
 }
@@ -694,6 +691,7 @@ const en: Catalog = {
   "report.strategy_hold": "Do nothing",
   "report.strategy_refurbish": "Refurbish",
   "report.strategy_rebuild": "Rebuild",
+  "report.strategy_subdivide_rebuild": "Subdivide / rebuild",
   "report.strategy_recommended": "Recommended",
   "report.strategy_roi_unavailable": "ROI unavailable until real comparable sales are fetched. Strategy advice is shown, but sale-price assumptions are not estimated.",
   "report.infra_on_parcel": "On parcel",
@@ -1439,6 +1437,7 @@ const zh: Catalog = {
   "report.strategy_hold": "保持现状",
   "report.strategy_refurbish": "翻新",
   "report.strategy_rebuild": "拆除重建",
+  "report.strategy_subdivide_rebuild": "分割 / 重建",
   "report.strategy_recommended": "推荐",
   "report.strategy_roi_unavailable": "尚未抓取到真实可比成交，暂无法计算 ROI。可显示策略建议，但不会估算售价假设。",
   "report.infra_on_parcel": "地块内",
@@ -1519,8 +1518,7 @@ const CATALOGS: Record<Locale, Catalog> = { en, zh };
 
 /**
  * Subdivision pathway callout header: use Chinese only when the device OS
- * primary locale is Chinese. English for all other OS locales — independent
- * of any in-app language override stored in AsyncStorage.
+ * primary locale is Chinese. English for all other OS locales.
  */
 export function subdivisionPathwaySectionTitle(): string {
   const cat = isOSChineseLocale() ? zh : en;
@@ -1529,8 +1527,7 @@ export function subdivisionPathwaySectionTitle(): string {
 
 /**
  * UI strings for school zones and land title follow the device OS primary locale
- * only: Chinese when OS is Chinese, English otherwise — independent of in-app
- * language (e.g. English OS + app 中文 still uses English for these labels).
+ * only: Chinese when OS is Chinese, English otherwise.
  */
 export function translateForOS(key: string, vars?: Record<string, string | number>): string {
   const cat = isOSChineseLocale() ? zh : en;
@@ -1562,32 +1559,15 @@ export function LocaleProvider({ children }: { children: React.ReactNode }) {
     return detected;
   });
 
+  // App UI language follows the device primary locale only (zh* → Chinese, else English).
   useEffect(() => {
-    (async () => {
-      try {
-        // Chinese-OS users are always forced to zh — skip any stored override.
-        if (isOSChineseLocale()) {
-          setLocaleState("zh");
-          _setCurrentLocale("zh");
-          return;
-        }
-        const stored = await AsyncStorage.getItem(STORAGE_KEY);
-        if (stored === "en" || stored === "zh") {
-          setLocaleState(stored);
-          _setCurrentLocale(stored);
-        }
-      } catch {}
-    })();
+    const detected = detectDeviceLocale();
+    setLocaleState(detected);
+    _setCurrentLocale(detected);
   }, []);
 
-  const setLocale = useCallback(async (l: Locale) => {
-    // Chinese-OS users cannot switch away from zh at runtime either.
-    const effective: Locale = isOSChineseLocale() ? "zh" : l;
-    setLocaleState(effective);
-    _setCurrentLocale(effective);
-    try {
-      await AsyncStorage.setItem(STORAGE_KEY, effective);
-    } catch {}
+  const setLocale = useCallback(async (_l: Locale) => {
+    // Intentional no-op: locale is OS-driven only (no in-app override).
   }, []);
 
   const t = useCallback(

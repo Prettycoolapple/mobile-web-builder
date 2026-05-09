@@ -37,20 +37,29 @@ export interface EstimateCostsOptions {
    * When provided the construction floor area is derived from lot size, matching
    * the GDV estimate in roi-calculator (estimateGdvPerLot → estimateNewBuildFloorSqm).
    * Without this the calculator falls back to the existing building's floor area,
-   * which overstates construction cost on multi-lot rebuild scenarios.
+   * which can misstate multi-lot rebuild scenarios where the new dwelling size
+   * differs materially from the existing house.
    */
   sqm_per_lot?: number | null;
 }
 
 /**
- * Floor area estimate for a single new-build unit based on lot size.
+ * Total finished floor area estimate for a single new-build unit based on lot size.
  * Mirrors estimateNewBuildFloorSqm in roi-calculator.ts (kept local to avoid
  * a circular import: roi-calculator imports CostBreakdown from this module).
- * NZ townhouses/houses typically cover 30–45% of lot area, 80–260 m² range.
+ * The first step estimates a plausible ground-floor footprint, then allows
+ * extra upper-floor area on smaller infill lots where two-storey homes are common.
  */
 function newBuildFloorSqmFromLotSize(sqmPerLot: number): number {
-  const raw = sqmPerLot * 0.38;
-  return Math.round(Math.min(260, Math.max(80, raw)));
+  const footprint = sqmPerLot * 0.38;
+  const storeyMultiplier =
+    sqmPerLot < 180 ? 1.55 :
+    sqmPerLot < 300 ? 1.45 :
+    sqmPerLot < 500 ? 1.30 :
+    sqmPerLot < 650 ? 1.15 :
+    1.00;
+  const raw = footprint * storeyMultiplier;
+  return Math.round(Math.min(320, Math.max(90, raw)));
 }
 
 function effectiveNewBuildFloorSqm(floorFromProperty: number | null | undefined): number {
@@ -152,8 +161,8 @@ export function estimateCosts(
   const services_low  = infra.reduce((sum, i) => sum + (i.estimated_cost_low ?? 0),  0);
   const services_high = infra.reduce((sum, i) => sum + (i.estimated_cost_high ?? 0), 0);
 
-  // Prefer lot-size-derived floor area so construction cost aligns with the GDV
-  // estimate (estimateGdvPerLot also uses ~38% of lot area for new-build floor).
+  // Prefer lot-size-derived finished floor area so construction cost aligns with the GDV
+  // estimate (estimateGdvPerLot mirrors the same likely-storeys assumption).
   // Fall back to the existing dwelling's floor area only when sqm_per_lot is absent.
   const sqmPerLotOpt = options?.sqm_per_lot;
   const floorSqm = sqmPerLotOpt != null && Number.isFinite(sqmPerLotOpt) && sqmPerLotOpt > 0

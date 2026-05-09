@@ -83,16 +83,22 @@ export function exitHorizonYearsForUnitCount(units: number): number[] {
 }
 
 /**
- * Estimate the floor area a new-build house would occupy on a lot of the given size.
- * NZ new builds typically use 30–45% of lot area, capped to realistic townhouse/house sizes.
+ * Estimate total finished floor area for a new-build house on the given lot size.
+ * Starts with a plausible ground-floor footprint, then allows upper-floor area
+ * on smaller infill lots where two-storey homes are common.
  */
 export function estimateNewBuildFloorSqm(sqm_per_lot: number): number {
-  // Tiny lots (< 150m²): compact 2-storey townhouse 80–100 m² floor
-  // Medium lots (150–400m²): 2-3BR townhouse 100–160 m² floor
-  // Large lots (400–600m²): 3-4BR house 150–200 m² floor
-  // Premium lots (600m²+): 4BR+ house 180–260 m² floor
-  const raw = sqm_per_lot * 0.38;
-  return Math.round(Math.min(260, Math.max(80, raw)));
+  // Smaller lots often use two storeys, so total GFA can exceed the footprint
+  // implied by site coverage alone.
+  const footprint = sqm_per_lot * 0.38;
+  const storeyMultiplier =
+    sqm_per_lot < 180 ? 1.55 :
+    sqm_per_lot < 300 ? 1.45 :
+    sqm_per_lot < 500 ? 1.30 :
+    sqm_per_lot < 650 ? 1.15 :
+    1.00;
+  const raw = footprint * storeyMultiplier;
+  return Math.round(Math.min(320, Math.max(90, raw)));
 }
 
 /**

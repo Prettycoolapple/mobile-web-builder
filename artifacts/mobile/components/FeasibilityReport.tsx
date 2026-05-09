@@ -1125,11 +1125,11 @@ function ROIScenarioCards({ scenarios, interestRateOutlook, comparablesQuality, 
   );
 }
 
-function strategyTitle(id: DevelopmentStrategyId, fallback: string, t: (key: string) => string): string {
+function strategyTitle(id: DevelopmentStrategyId, fallback: string, t: (key: string) => string, potentialLots?: number): string {
   switch (id) {
     case "hold_existing": return t("report.strategy_hold");
     case "refurbish": return t("report.strategy_refurbish");
-    case "demolish_rebuild": return t("report.strategy_rebuild");
+    case "demolish_rebuild": return (potentialLots ?? 0) > 1 ? t("report.strategy_subdivide_rebuild") : t("report.strategy_rebuild");
     default: return fallback;
   }
 }
@@ -1142,10 +1142,11 @@ function strategyStatus(strategies: DevelopmentStrategyScenario[] | undefined): 
   return recommended.roiScenarios.some((scenario) => scenario.viable) ? "good" : "risk";
 }
 
-function DevelopmentStrategyPanel({ strategies, interestRateOutlook, comparablesQuality, colors }: {
+function DevelopmentStrategyPanel({ strategies, interestRateOutlook, comparablesQuality, potentialLots, colors }: {
   strategies: DevelopmentStrategyScenario[];
   interestRateOutlook?: "falling" | "stable" | "rising";
   comparablesQuality?: string;
+  potentialLots?: number;
   colors: ReturnType<typeof useColors>;
 }) {
   const { t, locale } = useT();
@@ -1185,7 +1186,7 @@ function DevelopmentStrategyPanel({ strategies, interestRateOutlook, comparables
               }}
             >
               <Text style={{ color: active ? colors.accent : colors.foreground, fontFamily: "DM_Sans_700Bold", fontSize: 11 }}>
-                {strategyTitle(strategy.id, strategy.title, t)}
+                {strategyTitle(strategy.id, strategy.title, t, potentialLots)}
               </Text>
               {isRecommended && (
                 <Text style={{ color: colors.success, fontFamily: "DM_Sans_600SemiBold", fontSize: 10 }}>
@@ -1200,7 +1201,7 @@ function DevelopmentStrategyPanel({ strategies, interestRateOutlook, comparables
       <View style={[styles.warningBox, { backgroundColor: colors.accent + "10", borderColor: colors.accent + "30" }]}>
         <Feather name={selected.recommendation === "recommended" ? "check-circle" : "info"} size={13} color={colors.accent} />
         <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1, lineHeight: 17 }}>
-          <Text style={{ fontFamily: "DM_Sans_700Bold" }}>{strategyTitle(selected.id, selected.title, t)}: </Text>
+          <Text style={{ fontFamily: "DM_Sans_700Bold" }}>{strategyTitle(selected.id, selected.title, t, potentialLots)}: </Text>
           {displayRationale}
         </Text>
       </View>
@@ -1752,6 +1753,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
             strategies={developmentStrategies}
             interestRateOutlook={report.interest_rate_outlook}
             comparablesQuality={report.comparables_quality}
+            potentialLots={report.potential_lots || report.planning?.potentialLots}
             colors={colors}
           />
           {SHOW_COMPARABLE_SALES_IN_UI && hasLiveComparableSales && (

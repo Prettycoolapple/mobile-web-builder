@@ -295,7 +295,9 @@ function buildAssumptions(
     assumptions.push(`${scope[0].toUpperCase()}${scope.slice(1)} refurbishment scope applied to existing floor area.`);
   }
   if (id === "demolish_rebuild") {
-    assumptions.push(`${n} potential lot${n === 1 ? "" : "s"} modelled using the existing development cost stack.`);
+    assumptions.push(
+      `${n} potential lot${n === 1 ? "" : "s"} / new dwelling${n === 1 ? "" : "s"} modelled; construction, consents, finance, and contingency scale with the dwelling count.`,
+    );
   }
   if (intensiveMultiLot) {
     assumptions.push(

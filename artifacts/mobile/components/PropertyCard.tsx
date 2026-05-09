@@ -4,7 +4,7 @@ import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { PropertyCandidate } from "@/context/ChatContext";
 import { StarRating } from "@/components/StarRating";
-import { useT, translateForOS } from "@/lib/i18n";
+import { useT } from "@/lib/i18n";
 import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
 
 interface Props {
@@ -163,11 +163,11 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
         )}
 
         <View style={[styles.scoresRow, { borderTopColor: colors.border }]}>
-          <ScorePip score={candidate.scores.ease} label={translateForOS("report.ease")} loading={candidate.scoresLoading} />
+          <ScorePip score={candidate.scores.ease} label={t("report.ease")} loading={candidate.scoresLoading} />
           <View style={[styles.scoreDivider, { backgroundColor: colors.border }]} />
-          <ScorePip score={candidate.scores.cost} label={translateForOS("report.cost")} loading={candidate.scoresLoading} />
+          <ScorePip score={candidate.scores.cost} label={t("report.cost")} loading={candidate.scoresLoading} />
           <View style={[styles.scoreDivider, { backgroundColor: colors.border }]} />
-          <ScorePip score={candidate.scores.roi} label={translateForOS("report.roi")} loading={candidate.scoresLoading} />
+          <ScorePip score={candidate.scores.roi} label={t("report.roi")} loading={candidate.scoresLoading} />
         </View>
       </View>
 
