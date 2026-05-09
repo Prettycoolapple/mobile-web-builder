@@ -41,7 +41,7 @@ function sendBootstrapError(res: ServerResponse, error: unknown): void {
 
 function maybeHandleHealthCheck(req: IncomingMessage, res: ServerResponse): boolean {
   const path = (req.url ?? "").split("?")[0]?.replace(/\/+$/, "") || "";
-  if (req.method !== "GET" || path !== "/api/healthz") return false;
+  if (req.method !== "GET" || !["/api/healthz", "/healthz"].includes(path)) return false;
 
   res.statusCode = 200;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
