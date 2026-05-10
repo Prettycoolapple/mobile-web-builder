@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 import { logger } from "../logger";
-import { launchBrowser, newStealthPage, randomDelay, logScrapeAttempt } from "./browser";
+import { launchBrowser, newStealthPage, randomDelay, logScrapeAttempt, isVercelServerless } from "./browser";
 import { fetchWithScrapingBee } from "./scrapingbee";
 
 export interface ListingResult {
@@ -446,6 +446,24 @@ async function scrapeOneRoofViaBee(address: string): Promise<OneRoofData | null>
 }
 
 export async function scrapeOneRoof(address: string): Promise<OneRoofData> {
+  if (isVercelServerless()) {
+    try {
+      const beeFirst = await scrapeOneRoofViaBee(address);
+      if (beeFirst && hasUsefulData(beeFirst)) {
+        logScrapeAttempt(
+          "OneRoof",
+          "scrapingbee",
+          true,
+          `cv=${beeFirst.cv_nzd}, comparables=${beeFirst.comparables.length} (Vercel: Playwright unavailable)`,
+        );
+        return beeFirst;
+      }
+      logScrapeAttempt("OneRoof", "scrapingbee", false, "no useful data on Vercel — trying Playwright path anyway");
+    } catch (err) {
+      logScrapeAttempt("OneRoof", "scrapingbee", false, String(err));
+    }
+  }
+
   try {
     const result = await Promise.race([
       scrapeOneRoofPlaywright(address),

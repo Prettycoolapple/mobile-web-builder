@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 import { logger } from "../logger";
-import { launchBrowser, newStealthPage, randomDelay, logScrapeAttempt } from "./browser";
+import { launchBrowser, newStealthPage, randomDelay, logScrapeAttempt, isVercelServerless } from "./browser";
 import { fetchWithScrapingBee } from "./scrapingbee";
 import type { Overlay } from "../auckland-council";
 import { mapNZContour } from "./qv";
@@ -232,6 +232,24 @@ async function scrapeHougardenViaBee(address: string): Promise<HougardenData | n
 }
 
 export async function scrapeHougarden(lat: number, lng: number, address: string): Promise<HougardenData> {
+  if (isVercelServerless()) {
+    try {
+      const beeFirst = await scrapeHougardenViaBee(address);
+      if (beeFirst && hasUsefulData(beeFirst)) {
+        logScrapeAttempt(
+          "Hougarden",
+          "scrapingbee",
+          true,
+          `zone=${beeFirst.zone_code}, overlays=${beeFirst.overlays.length} (Vercel: Playwright unavailable)`,
+        );
+        return beeFirst;
+      }
+      logScrapeAttempt("Hougarden", "scrapingbee", false, "no useful data on Vercel — trying Playwright path anyway");
+    } catch (err) {
+      logScrapeAttempt("Hougarden", "scrapingbee", false, String(err));
+    }
+  }
+
   try {
     const result = await Promise.race([
       scrapeHougardenPlaywright(lat, lng, address),

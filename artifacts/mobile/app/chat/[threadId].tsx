@@ -26,8 +26,8 @@ import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { useDm, DmMessage, DmThread } from "@/context/DmContext";
 import { ImageViewerModal } from "@/components/ImageViewerModal";
-import { getApiBase } from "@/lib/api";
-import { avatarImageSource } from "@/lib/avatar";
+import { getApiBase, resolveAppUrl } from "@/lib/api";
+import { avatarImageSource, sanitizeHeadersForImageRequest } from "@/lib/avatar";
 import { useT, type Locale } from "@/lib/i18n";
 
 function formatDiscipline(
@@ -74,7 +74,9 @@ function isSameDay(a: string, b: string): boolean {
 
 /** Absolute URL for API storage images (authenticated); pass through http(s) unchanged. */
 function resolveDmStoredImageUri(imageUrl: string): string {
-  return imageUrl.startsWith("http") ? imageUrl : `${getApiBase().replace(/\/api$/, "")}${imageUrl}`;
+  if (/^https?:\/\//i.test(imageUrl)) return imageUrl;
+  const path = imageUrl.startsWith("/") ? imageUrl : `/${imageUrl}`;
+  return resolveAppUrl(path);
 }
 
 interface MessageItem {
@@ -437,7 +439,7 @@ export default function ChatScreen() {
                 recyclingKey={msg.id}
                 source={{
                   uri: resolveDmStoredImageUri(msg.imageUrl),
-                  headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+                  headers: token ? sanitizeHeadersForImageRequest(getApiHeaders()) : undefined,
                 }}
                 style={styles.msgImage}
                 contentFit="cover"

@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 import { logger } from "../logger";
-import { launchBrowser, newStealthPage, randomDelay, logScrapeAttempt } from "./browser";
+import { launchBrowser, newStealthPage, randomDelay, logScrapeAttempt, isVercelServerless } from "./browser";
 import { fetchWithScrapingBee } from "./scrapingbee";
 
 export interface AgentContactResult {
@@ -189,6 +189,18 @@ async function scrapeAgentViaBee(address: string): Promise<AgentContactResult | 
 }
 
 export async function scrapeListingAgent(address: string): Promise<AgentContactResult> {
+  if (isVercelServerless()) {
+    try {
+      const beeFirst = await scrapeAgentViaBee(address);
+      if (beeFirst && beeFirst.found) {
+        logScrapeAttempt("AgentContact", "scrapingbee", !!beeFirst.agentName, "Vercel: Playwright unavailable");
+        return beeFirst;
+      }
+    } catch (err) {
+      logScrapeAttempt("AgentContact", "scrapingbee", false, String(err));
+    }
+  }
+
   try {
     const result = await Promise.race([
       scrapeAgentViaPlaywright(address),

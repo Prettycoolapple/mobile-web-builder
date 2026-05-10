@@ -9,7 +9,7 @@ import type { Browser, Page, BrowserContext } from "playwright";
 let _chromiumPath: string | null = null;
 
 /** Vercel bundles omit node_modules for externalized deps; never touch Playwright there. */
-function isVercelServerless(): boolean {
+export function isVercelServerless(): boolean {
   return process.env.VERCEL === "1" || process.env.VERCEL === "true";
 }
 

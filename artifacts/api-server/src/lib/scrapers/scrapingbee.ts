@@ -35,7 +35,16 @@ export async function fetchWithScrapingBee(
 
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      logger.warn({ status: response.status, body: body.slice(0, 200) }, "ScrapingBee: HTTP error");
+      const hint =
+        response.status === 401 || response.status === 403
+          ? " (check SCRAPINGBEE_API_KEY)"
+          : response.status === 402 || response.status === 429
+            ? " (quota / billing — ScrapingBee dashboard)"
+            : "";
+      logger.warn(
+        { status: response.status, body: body.slice(0, 240), hint },
+        `ScrapingBee: HTTP error${hint}`,
+      );
       return null;
     }
 
