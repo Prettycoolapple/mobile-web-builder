@@ -13,3 +13,5 @@ export * from "./recommendations";
 export * from "./phone_verifications";
 export * from "./password_reset_tokens";
 export * from "./chat_llm_feedback";
+export * from "./user_blocks";
+export * from "./user_reports";

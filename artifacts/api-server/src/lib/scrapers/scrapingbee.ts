@@ -5,7 +5,14 @@ let warnedMissingApiKey = false;
 
 export async function fetchWithScrapingBee(
   targetUrl: string,
-  options: { render_js?: boolean; premium_proxy?: boolean; wait?: number } = {},
+  options: {
+    render_js?: boolean;
+    premium_proxy?: boolean;
+    wait?: number;
+    wait_for?: string;
+    js_scenario?: unknown;
+    stealth_proxy?: boolean;
+  } = {},
 ): Promise<string | null> {
   const apiKey = process.env["SCRAPINGBEE_API_KEY"];
   if (!apiKey) {
@@ -22,11 +29,19 @@ export async function fetchWithScrapingBee(
       url: targetUrl,
       render_js: String(options.render_js ?? true),
       premium_proxy: String(options.premium_proxy ?? false),
+      stealth_proxy: String(options.stealth_proxy ?? false),
       country_code: "nz",
       block_ads: "true",
       block_resources: "false",
       wait: String(options.wait ?? 2000),
     });
+    if (options.wait_for) params.set("wait_for", options.wait_for);
+    if (options.js_scenario) {
+      params.set(
+        "js_scenario",
+        typeof options.js_scenario === "string" ? options.js_scenario : JSON.stringify(options.js_scenario),
+      );
+    }
 
     logger.debug({ url: targetUrl }, "ScrapingBee: fetching");
     const response = await fetch(`${SCRAPINGBEE_URL}?${params.toString()}`, {

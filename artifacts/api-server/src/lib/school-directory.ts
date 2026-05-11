@@ -35,11 +35,65 @@ function authorityCategory(raw: string | null | undefined): SchoolAuthorityCateg
 
 const searchCache = new Map<string, CkanRecord | null>();
 
-async function searchSchoolRecord(query: string): Promise<CkanRecord | null> {
+function normaliseSchoolName(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/\bst[.]?\b/g, "saint")
+    .replace(/\bmt[.]?\b/g, "mount")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\b(the|school|college|intermediate|primary)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildSchoolSearchQueries(query: string): string[] {
+  const q = query.trim().replace(/\s+/g, " ");
+  const variants = [
+    q,
+    q.replace(/\bSt[.]?\b/gi, "Saint"),
+    q.replace(/\bSaint\b/gi, "St"),
+    q.replace(/\bMt[.]?\b/gi, "Mount"),
+    q.replace(/\bMount\b/gi, "Mt"),
+    q.replace(/\bSchool\b/gi, "").trim(),
+    q.replace(/\bCollege\b/gi, "").trim(),
+    normaliseSchoolName(q),
+  ];
+  return [...new Set(variants.filter((v) => v.length >= 2))];
+}
+
+function schoolMatchScore(query: string, rec: CkanRecord): number {
+  const orgName = String(rec.Org_Name ?? "").trim();
+  if (!orgName) return -1;
+  const q = normaliseSchoolName(query);
+  const name = normaliseSchoolName(orgName);
+  if (!q || !name) return -1;
+
+  let score = 0;
+  if (q === name) score += 100;
+  if (name.startsWith(q) || q.startsWith(name)) score += 45;
+  if (name.includes(q) || q.includes(name)) score += 35;
+
+  const qTokens = new Set(q.split(" ").filter((t) => t.length > 1));
+  const nameTokens = new Set(name.split(" ").filter((t) => t.length > 1));
+  let overlap = 0;
+  for (const token of qTokens) {
+    if (nameTokens.has(token)) overlap++;
+  }
+  score += overlap * 12;
+
+  const status = String(rec.Status ?? "").toLowerCase();
+  if (status === "open") score += 10;
+  const authority = String(rec.Authority ?? "").toLowerCase();
+  if (authority === "state") score += 5;
+  if (authority.includes("integrated")) score += 3;
+  if (authority.includes("private")) score -= 3;
+  return score;
+}
+
+async function fetchSchoolRecords(query: string): Promise<CkanRecord[]> {
   const q = query.trim();
-  if (q.length < 2) return null;
-  const cacheKey = q.toLowerCase();
-  if (searchCache.has(cacheKey)) return searchCache.get(cacheKey) ?? null;
+  if (q.length < 2) return [];
 
   const url = `${CKAN_DATASTORE_SEARCH}?resource_id=${encodeURIComponent(SCHOOLS_RESOURCE_ID)}&limit=10&q=${encodeURIComponent(q)}`;
   try {
@@ -52,25 +106,53 @@ async function searchSchoolRecord(query: string): Promise<CkanRecord | null> {
     });
     if (!resp.ok) {
       logger.warn({ status: resp.status }, "school-directory: CKAN HTTP error");
-      searchCache.set(cacheKey, null);
-      return null;
+      return [];
     }
     const json = (await resp.json()) as { success?: boolean; result?: { records?: CkanRecord[] } };
     if (!json.success || !json.result?.records?.length) {
-      searchCache.set(cacheKey, null);
-      return null;
+      return [];
     }
-    const open = json.result.records.filter((r) => String(r.Status ?? "").toLowerCase() === "open");
-    const pool = open.length > 0 ? open : json.result.records;
-    pool.sort((a, b) => (Number(b.rank) || 0) - (Number(a.rank) || 0));
-    const best = pool[0];
-    searchCache.set(cacheKey, best);
-    return best;
+    return json.result.records;
   } catch (err) {
     logger.warn({ err: (err as Error).message, query: q }, "school-directory: fetch failed");
+    return [];
+  }
+}
+
+async function searchSchoolRecord(query: string): Promise<CkanRecord | null> {
+  const q = query.trim();
+  if (q.length < 2) return null;
+  const cacheKey = normaliseSchoolName(q);
+  if (searchCache.has(cacheKey)) return searchCache.get(cacheKey) ?? null;
+
+  const seen = new Set<string>();
+  const candidates: CkanRecord[] = [];
+  for (const variant of buildSchoolSearchQueries(q)) {
+    const records = await fetchSchoolRecords(variant);
+    for (const rec of records) {
+      const orgName = String(rec.Org_Name ?? "").trim();
+      const key = normaliseSchoolName(orgName);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      candidates.push(rec);
+    }
+  }
+
+  if (candidates.length === 0) {
     searchCache.set(cacheKey, null);
     return null;
   }
+
+  const ranked = candidates
+    .map((rec) => ({ rec, score: schoolMatchScore(q, rec) }))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return (Number(b.rec.rank) || 0) - (Number(a.rec.rank) || 0);
+    });
+  const best = ranked[0];
+  const result = best && best.score >= 20 ? best.rec : null;
+  searchCache.set(cacheKey, result);
+  return result;
 }
 
 function detailFromRecord(level: SchoolZoneDetail["level"], label: string, rec: CkanRecord | null): SchoolZoneDetail {

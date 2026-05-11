@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useQueryClient } from "@tanstack/react-query";
+import * as FileSystem from "expo-file-system/legacy";
 import { loginRevenueCat, logoutRevenueCat, getSubscriptionSyncBody, IS_TEST_PAYMENT_MODE } from "@/lib/revenuecat";
 import { getApiBase } from "@/lib/api";
 import { getCurrentLocale, isOSChineseLocale } from "@/lib/i18n";
@@ -117,6 +118,22 @@ interface ProfilePictureSignedUrlResponse {
   requiredHeaders?: {
     "Content-Type"?: string;
   };
+}
+
+function normalizeAvatarContentType(mimeType: string): string {
+  const normalized = mimeType.split(";")[0]?.trim().toLowerCase();
+  if (!normalized) return "image/jpeg";
+  if (normalized === "image/jpg") return "image/jpeg";
+  return normalized;
+}
+
+function extensionForAvatarContentType(contentType: string, fallbackName: string): string {
+  if (contentType === "image/jpeg") return "jpg";
+  if (contentType === "image/png") return "png";
+  if (contentType === "image/webp") return "webp";
+  if (contentType === "image/heic") return "heic";
+  if (contentType === "image/heif") return "heif";
+  return fallbackName.split(".").pop()?.split("?")[0] || "jpg";
 }
 
 export interface ApiValidationIssue {
@@ -449,27 +466,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   ): Promise<{ fileUrl: string }> => {
     const activeToken = tokenOverride ?? token;
     if (!activeToken) throw new Error("Not authenticated");
+    const contentType = normalizeAvatarContentType(mimeType);
+    const normalizedFileName = fileName.includes(".")
+      ? fileName
+      : `avatar.${extensionForAvatarContentType(contentType, fileName)}`;
     const legacyUpload = async (): Promise<{ fileUrl: string }> => {
       const formData = new FormData();
-      const fileBlob: ReactNativeFileBlob = { uri: fileUri, type: mimeType, name: fileName };
+      const fileBlob: ReactNativeFileBlob = { uri: fileUri, type: contentType, name: normalizedFileName };
       formData.append("file", fileBlob as unknown as Blob);
       const resp = await fetch(`${getApiBase()}/upload/profile-picture`, {
         method: "POST",
         headers: { Authorization: `Bearer ${activeToken}` },
         body: formData,
       });
-      const json = (await resp.json()) as { fileUrl: string; error?: string };
+      const json = (await readResponseJson(resp)) as { fileUrl: string; error?: string };
       if (!resp.ok) throw new Error(json.error ?? "Upload failed");
       return { fileUrl: json.fileUrl };
     };
 
     try {
-      // Read the local file as a Blob so we can send exact bytes via PUT.
-      const localFileResponse = await fetch(fileUri);
-      if (!localFileResponse.ok) {
+      const localInfo = await FileSystem.getInfoAsync(fileUri);
+      if (!localInfo.exists || localInfo.isDirectory || !localInfo.size) {
         throw new Error("Could not read local image file");
       }
-      const localBlob = await localFileResponse.blob();
 
       const signResp = await fetch(`${getApiBase()}/upload/profile-picture/request-url`, {
         method: "POST",
@@ -478,25 +497,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           Authorization: `Bearer ${activeToken}`,
         },
         body: JSON.stringify({
-          name: fileName,
-          size: localBlob.size,
-          contentType: mimeType,
+          name: normalizedFileName,
+          size: localInfo.size,
+          contentType,
         }),
       });
-      const signJson = (await signResp.json()) as ProfilePictureSignedUrlResponse & { error?: string };
+      const signJson = (await readResponseJson(signResp)) as ProfilePictureSignedUrlResponse & { error?: string };
       if (!signResp.ok) {
         throw new Error(signJson.error ?? "Failed to request upload URL");
       }
 
-      const signedContentType = signJson.requiredHeaders?.["Content-Type"] ?? mimeType;
-      const putResp = await fetch(signJson.uploadURL, {
-        method: "PUT",
+      const signedContentType = signJson.requiredHeaders?.["Content-Type"] ?? contentType;
+      const uploadResult = await FileSystem.uploadAsync(signJson.uploadURL, fileUri, {
+        httpMethod: "PUT",
+        uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+        sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
         headers: {
           "Content-Type": signedContentType,
         },
-        body: localBlob,
       });
-      if (!putResp.ok) {
+      if (uploadResult.status < 200 || uploadResult.status >= 300) {
         throw new Error("Failed to upload image to storage");
       }
 
@@ -508,7 +528,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         },
         body: JSON.stringify({ objectPath: signJson.objectPath }),
       });
-      const completeJson = (await completeResp.json()) as { fileUrl: string; error?: string };
+      const completeJson = (await readResponseJson(completeResp)) as { fileUrl: string; error?: string };
       if (!completeResp.ok) {
         throw new Error(completeJson.error ?? "Failed to finalize upload");
       }

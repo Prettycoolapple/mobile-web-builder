@@ -114,9 +114,9 @@ Caveats:
 
 - **Socket.IO does not run on Vercel.** Live DMs work via polling; push
   notifications continue to work for the "not connected" recipient path.
-- **Playwright-based scraper routes will not run on Vercel** out of the
-  box. Keep those flows on a long-lived host (or replace them with
-  external APIs) if you need them.
+- **Playwright-based scraper routes need a browser backend on Vercel.** Set
+  `PLAYWRIGHT_CDP_ENDPOINT` / `BROWSERLESS_WS_ENDPOINT` to a remote browser
+  service, or keep those flows on a long-lived host with local Chromium.
 - **The `/analyse` route streams long-running work**; it may hit Vercel's
   function-duration cap. Increase `maxDuration` in `vercel.json` or
   refactor to async jobs + polling for production.
@@ -133,6 +133,10 @@ Caveats:
 - `GOOGLE_APPLICATION_CREDENTIALS_JSON` (paste the whole service-account
   JSON; the server will parse it at runtime)
 - `AI_INTEGRATIONS_GEMINI_API_KEY`, `AI_INTEGRATIONS_GEMINI_BASE_URL`
+- `PLAYWRIGHT_CDP_ENDPOINT` or `BROWSERLESS_WS_ENDPOINT` for hosted scraper data
+  on Vercel. A Browserless-style endpoint is expected, e.g.
+  `wss://<browserless-host>?token=<token>`. You may instead set
+  `BROWSERLESS_TOKEN` plus optional `BROWSERLESS_HOST`.
 - `ENABLE_SOCKET_IO=false`
 - `TRUST_PROXY=1`
 

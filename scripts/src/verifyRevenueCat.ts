@@ -1,6 +1,6 @@
 /**
  * Validates RevenueCat project config against artifacts/mobile/lib/revenuecat.ts
- * and App Store product IDs (standard: monthly, provider: provider_monthly).
+ * and App Store product IDs (standard: standard_monthly, agent: agent_monthly, provider: provider_monthly).
  *
  * Requires: REVENUECAT_PROJECT_ID, REVENUECAT_SECRET_API_KEY (from .env.local at repo root).
  *
@@ -16,11 +16,17 @@ import {
 const PROJECT_ID = getRevenueCatProjectId();
 
 const APP_ENTITLEMENT_ID = "Pro";
-const EXPECTED_APP_STORE_IDS = new Set(["monthly", "provider_monthly"]);
+const EXPECTED_APP_STORE_IDS = new Set(["standard_monthly", "agent_monthly", "provider_monthly"]);
 
 const OFFERING_DEFAULT = "default";
+const OFFERING_AGENT = "agent";
 const OFFERING_PROVIDER = "provider";
 const MONTHLY_PACKAGE_KEY = "$rc_monthly";
+const EXPECTED_MONTHLY_APP_STORE_ID_BY_OFFERING: Record<string, string> = {
+  [OFFERING_DEFAULT]: "standard_monthly",
+  [OFFERING_AGENT]: "agent_monthly",
+  [OFFERING_PROVIDER]: "provider_monthly",
+};
 
 type RcApp = { id: string; type: string; name?: string };
 type RcPackage = {
@@ -68,7 +74,7 @@ function describeProductRowsForDebug(items: unknown[] | undefined): string {
   return parts.length ? parts.join(", ") : "no rows";
 }
 
-function appStoreStoreIdsFromRows(items: unknown[] | undefined): string[] {
+function appStoreStoreIdsFromRows(items: unknown[] | undefined, iosAppId: string): string[] {
   const out: string[] = [];
   for (const row of items ?? []) {
     if (!row || typeof row !== "object") continue;
@@ -76,11 +82,14 @@ function appStoreStoreIdsFromRows(items: unknown[] | undefined): string[] {
     const p = (r.product ?? r) as Record<string, unknown> | null;
     if (!p || typeof p !== "object") continue;
     const app = p.app as Record<string, unknown> | undefined;
-    const type = app?.type;
+    const appId = typeof p.app_id === "string"
+      ? p.app_id
+      : typeof app?.id === "string"
+        ? app.id
+        : null;
     const sid = typeof p.store_identifier === "string" ? p.store_identifier.trim() : "";
     if (!sid) continue;
-    // RC v2 sometimes omits `app` on package product rows; Play composite IDs use ":" (e.g. base plans).
-    if (type === "app_store" || ((type == null || type === "") && !sid.includes(":"))) {
+    if (appId === iosAppId || app?.type === "app_store") {
       out.push(sid);
     }
   }
@@ -113,8 +122,8 @@ async function listOfferingPackages(offeringId: string): Promise<RcPackage[]> {
 }
 
 /** Package → App Store store_identifiers (handles truncated offering responses). */
-async function packageAppStoreIds(pkg: RcPackage): Promise<string[]> {
-  const inline = appStoreStoreIdsFromRows(pkg.products?.items);
+async function packageAppStoreIds(pkg: RcPackage, iosAppId: string): Promise<string[]> {
+  const inline = appStoreStoreIdsFromRows(pkg.products?.items, iosAppId);
   if (inline.length > 0 || !pkg.id) return inline;
   const res = await revenueCatRequest<RevenueCatListResponse<unknown>>(
     `/projects/${PROJECT_ID}/packages/${pkg.id}/products?limit=50`,
@@ -122,7 +131,7 @@ async function packageAppStoreIds(pkg: RcPackage): Promise<string[]> {
   if (process.env.VERIFY_RC_DEBUG === "1") {
     console.error("  [debug] package", pkg.id, "products:", describeProductRowsForDebug(res.items));
   }
-  return appStoreStoreIdsFromRows(res.items);
+  return appStoreStoreIdsFromRows(res.items, iosAppId);
 }
 
 async function listEntitlementProducts(entitlementId: string): Promise<unknown[]> {
@@ -132,10 +141,10 @@ async function listEntitlementProducts(entitlementId: string): Promise<unknown[]
   return res.items ?? [];
 }
 
-async function summarizeOfferingLines(off: RcOfferingDetail, pkgs: RcPackage[]): Promise<string[]> {
+async function summarizeOfferingLines(off: RcOfferingDetail, pkgs: RcPackage[], iosAppId: string): Promise<string[]> {
   const lines: string[] = [`  offering "${off.lookup_key}" id=${off.id} current=${Boolean(off.is_current)}`];
   for (const p of pkgs) {
-    const keys = await packageAppStoreIds(p);
+    const keys = await packageAppStoreIds(p, iosAppId);
     lines.push(
       `    package ${p.lookup_key ?? "?"} (${p.display_name ?? ""}) → App Store: [${keys.join(", ") || "none"}]`,
     );
@@ -192,7 +201,7 @@ Then run:
   }
 
   const proProductRows = await listEntitlementProducts(proEnt.id);
-  const proAppStoreIds = new Set(appStoreStoreIdsFromRows(proProductRows));
+  const proAppStoreIds = new Set(appStoreStoreIdsFromRows(proProductRows, ios.id));
   console.log(`Entitlement "${APP_ENTITLEMENT_ID}" — App Store products attached:`);
   console.log(
     proAppStoreIds.size
@@ -215,7 +224,7 @@ Then run:
   const offeringItems = offeringsRes.items ?? [];
   const offeringIds = new Map(offeringItems.map((o) => [o.lookup_key ?? "", o.id]));
 
-  const needOfferings = [OFFERING_DEFAULT, OFFERING_PROVIDER] as const;
+  const needOfferings = [OFFERING_DEFAULT, OFFERING_AGENT, OFFERING_PROVIDER] as const;
   for (const key of needOfferings) {
     const oid = offeringIds.get(key);
     if (!oid) {
@@ -226,7 +235,7 @@ Then run:
     const detail = await getOffering(oid);
     const pkgs =
       (detail.packages?.items?.length ? detail.packages.items : null) ?? (await listOfferingPackages(oid));
-    console.log("\n" + (await summarizeOfferingLines(detail, pkgs)).join("\n"));
+    console.log("\n" + (await summarizeOfferingLines(detail, pkgs, ios.id)).join("\n"));
 
     const monthlyPkg = pkgs.find((p) => p.lookup_key === MONTHLY_PACKAGE_KEY);
     if (!monthlyPkg) {
@@ -238,15 +247,25 @@ Then run:
       continue;
     }
 
-    const storeIds = await packageAppStoreIds(monthlyPkg);
+    const storeIds = await packageAppStoreIds(monthlyPkg, ios.id);
     if (key === OFFERING_DEFAULT) {
-      if (!storeIds.includes("monthly")) {
+      if (!storeIds.includes("standard_monthly")) {
         console.error(
-          `✖ Offering "${key}" / ${MONTHLY_PACKAGE_KEY} must include App Store product "monthly". Got: [${storeIds.join(", ") || "none"}]`,
+          `✖ Offering "${key}" / ${MONTHLY_PACKAGE_KEY} must include App Store product "standard_monthly". Got: [${storeIds.join(", ") || "none"}]`,
         );
         process.exitCode = 1;
       } else {
-        console.log(`  ✓ "${key}" monthly package → App Store monthly`);
+        console.log(`  ✓ "${key}" monthly package → App Store standard_monthly`);
+      }
+    }
+    if (key === OFFERING_AGENT) {
+      if (!storeIds.includes("agent_monthly")) {
+        console.error(
+          `RevenueCat offering "${key}" / ${MONTHLY_PACKAGE_KEY} must include App Store product "agent_monthly". Got: [${storeIds.join(", ") || "none"}]`,
+        );
+        process.exitCode = 1;
+      } else {
+        console.log(`  "${key}" monthly package -> App Store agent_monthly`);
       }
     }
     if (key === OFFERING_PROVIDER) {
@@ -262,6 +281,42 @@ Then run:
 
     if (key === OFFERING_DEFAULT && !detail.is_current) {
       console.warn(`⚠ Offering "${key}" is not marked as current/default in RevenueCat (recommended).`);
+    }
+  }
+
+  type RcAppWithBundle = typeof ios & { app_store?: { bundle_id?: string } };
+  const bundleId = (ios as RcAppWithBundle).app_store?.bundle_id;
+  if (bundleId && bundleId !== "nz.devfeasible.app") {
+    console.warn(
+      `\n⚠ RevenueCat iOS app bundle_id is "${bundleId}" but app.json uses nz.devfeasible.app — the native app may not receive offerings.`,
+    );
+  }
+
+  const expoIosKey = process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY?.trim();
+  console.log("\n--- Expo iOS SDK key (optional cross-check from repo .env.local) ---");
+  if (!expoIosKey) {
+    console.log(
+      "  (skip) EXPO_PUBLIC_REVENUECAT_IOS_API_KEY not set in .env.local — cannot compare to EAS automatically.",
+    );
+    console.log(
+      "        Paste the same key into .env.local (or run `eas env:pull`) and re-run: pnpm --filter @workspace/scripts run verify:revenuecat",
+    );
+  } else {
+    const keysRes = await revenueCatRequest<
+      RevenueCatListResponse<{ id: string; key: string; environment?: string | null }>
+    >(`/projects/${PROJECT_ID}/apps/${ios.id}/public_api_keys?limit=20`);
+    const pubKeys = keysRes.items ?? [];
+    const match = pubKeys.some((k) => k.key === expoIosKey);
+    if (match) {
+      console.log("  ✓ EXPO_PUBLIC_REVENUECAT_IOS_API_KEY matches a RevenueCat public key for this iOS app.");
+    } else {
+      console.warn("  ✖ No match: that key is not registered on this RevenueCat iOS app.");
+      console.warn("    EAS/TestFlight may be using a different project’s key, so getOfferings() can be empty.");
+      console.warn("    Registered public keys (prefix only):");
+      for (const k of pubKeys) {
+        console.warn(`      ${k.environment ?? "?"}  ${k.key.slice(0, 14)}…`);
+      }
+      console.warn(`    Your .env.local key prefix: ${expoIosKey.slice(0, 14)}…`);
     }
   }
 
@@ -281,13 +336,15 @@ Then run:
 --- App Store Connect (verify in browser; this script does not call Apple) ---
   Bundle ID must be: nz.devfeasible.app
   Subscription product IDs must be exactly:
-    - monthly            (standard plan)
+    - standard_monthly   (standard plan)
+    - agent_monthly      (sales agent plan)
     - provider_monthly   (service provider plan)
   Fix the RevenueCat errors above by:
     1. Product catalog → Products: import/create those App Store subscriptions for the iOS app
-    2. Entitlement "Pro": attach both App Store products so purchases unlock Pro
-    3. Offering "default" → package $rc_monthly: attach App Store product "monthly"
-    4. Offering "provider" → package $rc_monthly: attach App Store product "provider_monthly"
+    2. Entitlement "Pro": attach all App Store products so purchases unlock Pro
+    3. Offering "default" → package $rc_monthly: attach App Store product "standard_monthly"
+    4. Offering "agent" -> package $rc_monthly: attach App Store product "agent_monthly"
+    5. Offering "provider" → package $rc_monthly: attach App Store product "provider_monthly"
   Optional: remove $rc_annual / $rc_lifetime from offering "default" if you only sell monthly.
 `);
   }

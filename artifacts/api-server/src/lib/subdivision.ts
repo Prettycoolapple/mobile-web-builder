@@ -4,21 +4,11 @@ import { geocodeAddress } from "./geocode";
 /**
  * Subdivision detection.
  *
- * When a user types a "parent" street number (e.g. "66 Marine Parade") that has
- * been subdivided into sub-lots ("66A", "66B", "66C"), the data sources we
- * rely on (LINZ, Auckland Council GIS, OneRoof, Hougarden, QV) may still hold
- * stale parent-parcel data — leading to a feasibility report that does not
- * match what is actually on the ground today.
- *
- * This helper probes the geocoder for letter-suffixed variants of the input
- * address. With 2+ distinct sub-lot hits we treat the site as subdivided. With
- * exactly one hit we only subdivide when that formatted address differs from
- * geocoding the parent (real 66A vs stale parent 66). Options always include
- * the parent plus each distinct sub-lot (deduped) so the user can pick the
- * correct title.
- *
- * The detection runs in parallel and is bounded by the geocoder's own timeout
- * (~10 s per probe) — total worst case ~10 s for 4 concurrent probes.
+ * When a user types a parent street number, the public property sources we use
+ * can sometimes still hold stale parent-parcel data after a true subdivision.
+ * This helper checks for letter-suffixed child lots, but only interrupts the
+ * user when the evidence is strong. A single neighbouring suffix, such as "8A"
+ * beside a still-valid "8", is not enough to claim the parent address has gone.
  */
 
 export interface SubdivisionResult {
@@ -49,8 +39,8 @@ const CONFIRMED_SUBDIVISIONS: Array<{
 
 /**
  * Returns { number, letter, rest } where `letter` is "" if the address has no
- * unit-letter suffix on the street number. Returns null when no leading
- * number can be parsed.
+ * unit-letter suffix on the street number. Returns null when no leading number
+ * can be parsed.
  */
 export function parseStreetNumberSuffix(address: string): {
   number: string;
@@ -58,8 +48,6 @@ export function parseStreetNumberSuffix(address: string): {
   rest: string;
 } | null {
   const trimmed = address.trim();
-  // Match "<digits><optional-letter> <rest>" — letter is captured separately so
-  // we can detect parents (no letter) vs. sub-lots (with letter).
   const m = trimmed.match(/^(\d+)([A-Za-z])?\s+(.+)$/);
   if (!m) return null;
   return {
@@ -90,23 +78,19 @@ function confirmedSubdivisionFor(address: string, number: string, rest: string):
 }
 
 /**
- * Heuristic: a geocoded result counts as a real sub-lot only when the formatted
- * address contains the queried letter immediately after the street number
- * (e.g. "66a marine parade"). This guards against geocoders that silently
- * normalise "66A" → "66" and return the parent address.
+ * A geocoded result counts as a real sub-lot only when the formatted address
+ * contains the queried letter immediately after the street number, e.g.
+ * "66a marine parade". This guards against geocoders silently normalising
+ * "66A" back to "66" and returning the parent address.
  */
 function formattedContainsSubLot(formatted: string, number: string, letter: string): boolean {
   const norm = formatted.toLowerCase();
-  // Require a non-digit boundary before the street number so "66a" does not
-  // false-match inside "166a". Allow start-of-string or any non-digit prefix.
   const re = new RegExp(`(^|[^0-9])${number}${letter.toLowerCase()}(\\s|,)`);
   return re.test(norm);
 }
 
 export async function detectSubdivision(address: string): Promise<SubdivisionResult> {
   const parsed = parseStreetNumberSuffix(address);
-  // Only probe when the user typed a parent number (no letter). If they already
-  // gave us "66A Marine Parade" trust them and skip the probe.
   if (!parsed || parsed.letter !== "") {
     return { isSubdivided: false, parentAddress: address, subLots: [] };
   }
@@ -131,9 +115,8 @@ export async function detectSubdivision(address: string): Promise<SubdivisionRes
       const candidate = `${number}${letter} ${rest}`;
       try {
         const geo = await geocodeAddress(candidate);
-        if (!geo) return null;
         if (!formattedContainsSubLot(geo.formatted, number, letter)) return null;
-        return { letter, formatted: geo.formatted, lat: geo.lat, lng: geo.lng };
+        return { letter, formatted: geo.formatted };
       } catch {
         return null;
       }
@@ -142,44 +125,18 @@ export async function detectSubdivision(address: string): Promise<SubdivisionRes
 
   const hits = probes.filter((p): p is NonNullable<typeof p> => p !== null);
 
-  // Drop identical formatted hits, but keep distinct child lots even when a
-  // mapping provider pins them all to the same shared driveway coordinate.
   const byFormatted = new Map<string, typeof hits[number]>();
   for (const h of hits) {
     const k = normaliseFormatted(h.formatted);
     if (!byFormatted.has(k)) byFormatted.set(k, h);
   }
-  const finalHits = Array.from(byFormatted.values()).sort((a, b) =>
-    a.letter.localeCompare(b.letter),
-  );
 
-  const subLotAddresses = finalHits.map((h) => h.formatted);
-  const seenNorm = new Set<string>();
-  const deduped: string[] = [];
-  for (const a of subLotAddresses) {
-    const k = normaliseFormatted(a);
-    if (seenNorm.has(k)) continue;
-    seenNorm.add(k);
-    deduped.push(a);
-  }
+  const deduped = Array.from(byFormatted.values())
+    .sort((a, b) => a.letter.localeCompare(b.letter))
+    .map((h) => h.formatted);
 
-  if (deduped.length < 1) {
+  if (deduped.length < 2) {
     return { isSubdivided: false, parentAddress: address, subLots: [] };
-  }
-
-  // Single-letter hit: only treat as subdivision when the sub-lot geocodes to a
-  // *different* formatted address than the parent — avoids false triggers when
-  // only one suffix probe sticks (e.g. 66 vs 66A Marine Parade).
-  if (deduped.length === 1) {
-    try {
-      const parentGeo = await geocodeAddress(address);
-      const sub = deduped[0]!;
-      if (normaliseFormatted(parentGeo.formatted) === normaliseFormatted(sub)) {
-        return { isSubdivided: false, parentAddress: address, subLots: [] };
-      }
-    } catch {
-      return { isSubdivided: false, parentAddress: address, subLots: [] };
-    }
   }
 
   logger.info(

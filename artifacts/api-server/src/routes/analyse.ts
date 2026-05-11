@@ -604,6 +604,99 @@ function applyDeterministicPipelineOverrides(
   sanitizeReportScoresReasons(parsed.scores as Record<string, unknown> | undefined);
 }
 
+function buildDeterministicFallbackReport(
+  pipelineResult: PipelineResult,
+  resolvedAddress: string,
+): Record<string, unknown> | null {
+  const { merged, lots, costs, scores } = pipelineResult;
+  if (!merged || !lots || !costs || !scores) return null;
+
+  const zoneLabel = lots.zone_label || merged.zone_description || merged.zone_code || "Unknown zone";
+  const minLotSize = lots.min_lot_size ? `${lots.min_lot_size}m2` : null;
+  const riskSeed = [
+    zoneLabel
+      ? `${zoneLabel} controls should be checked against the intended building layout before assuming the full lot yield is practical.`
+      : "The planning controls should be checked against the intended building layout before assuming the full lot yield is practical.",
+    merged.contour
+      ? `Terrain is classified as ${merged.contour}; earthworks and retaining allowances should follow the measured slope rather than a suburb-level assumption.`
+      : "Confirm finished levels, stormwater paths, and service tie-ins early because they can materially affect consent design.",
+  ];
+
+  const parsed: Record<string, unknown> = {
+    address: resolvedAddress,
+    scores,
+    propertyOverview: {
+      address: resolvedAddress,
+      cv: merged.cv_nzd != null ? `$${merged.cv_nzd.toLocaleString("en-NZ")}` : null,
+      landArea: merged.land_area_sqm != null ? `${merged.land_area_sqm}m2` : null,
+      floorArea: merged.floor_area_sqm != null ? `${merged.floor_area_sqm}m2` : null,
+      buildYear: merged.build_year != null ? String(merged.build_year) : null,
+      zone: zoneLabel,
+      listingPrice: merged.listing_price != null ? `$${merged.listing_price.toLocaleString("en-NZ")}` : null,
+      isOnMarket: merged.listing_active === true,
+    },
+    planning: {
+      zone: zoneLabel,
+      minLotSize,
+      potentialLots: lots.lots,
+      grossAreaSqm: lots.gross_area_sqm,
+      netAreaSqm: lots.net_area_sqm,
+      easementAreaSqm: lots.easement_area_sqm,
+      overlays: merged.overlays.map((o) => ({ name: o.name, status: o.status, detail: o.detail })),
+      easements: [],
+      appurtenant_easements: [],
+      easement_data_status: pipelineResult.easements.retrieval_status,
+      easement_summary: pipelineResult.easements.summary,
+      lot_impact_note: pipelineResult.easements.lot_impact_note ?? null,
+      subdivisionSummary: pipelineResult.subdivision_pathway?.headline ?? null,
+      subdivisionPathwayNote: pipelineResult.subdivision_pathway?.detail ?? null,
+    },
+    potential_lots: lots.lots,
+    zone_label: zoneLabel,
+    cv_unavailable: costs.cv_unavailable,
+    total_excludes_land: costs.total_excludes_land,
+    missing_critical_fields: merged.missing_critical_fields ?? [],
+    data_sources: merged.data_sources ?? {},
+    terrain: {
+      classification: merged.contour ?? null,
+      official_label: merged.contour_text ?? null,
+      slope_degrees: merged.contour_slope_degrees ?? null,
+      source: merged.contour_source ?? null,
+      retainingCostLow: costs.retaining_low,
+      retainingCostHigh: costs.retaining_high,
+    },
+    infrastructure: pipelineResult.infrastructure,
+    costItems: buildDeterministicCostItems(costs),
+    totalCostLow: costs.total_low,
+    totalCostHigh: costs.total_high,
+    cost_per_unit_avg: costs.cost_per_unit_avg,
+    interest_rate_outlook: pipelineResult.scenarios[0]?.interest_rate_outlook ?? "stable",
+    roiScenarios: [],
+    developmentStrategies: pipelineResult.developmentStrategies ?? [],
+    comparableSales: pipelineResult.comparables ?? [],
+    comparables_quality: pipelineResult.comparables_quality,
+    avg_sale_price: null,
+    avgPricePerSqm: null,
+    riskSummary: riskSeed,
+    disclaimer: "These are indicative estimates only. Always engage a quantity surveyor, lawyer, and urban planner before making development decisions. Figures in NZD.",
+  };
+
+  applyDeterministicPipelineOverrides(parsed, pipelineResult, resolvedAddress);
+  return parsed;
+}
+
+function emptyAnalyseFallback(address: string, locale: ReturnType<typeof normaliseLocale>): string {
+  return locale === "zh"
+    ? `我找到了「${address}」，但这次没有成功生成完整分析。请再试一次；如果仍然发生，我会继续用可用的地址、分区和地块数据生成保守版本。`
+    : `I found ${address}, but I could not generate the full analysis this time. Please try once more; if a live source is unavailable, I will still build the report from the address, zoning, and parcel data I can verify.`;
+}
+
+function emptyChatFallback(locale: ReturnType<typeof normaliseLocale>): string {
+  return locale === "zh"
+    ? "我没有成功生成回复。请再试一次。"
+    : "I could not generate a reply just now. Please try again.";
+}
+
 // Simple edit-distance (Levenshtein) for fuzzy suburb matching
 function editDistance(a: string, b: string): number {
   const dp: number[][] = Array.from({ length: a.length + 1 }, (_, i) => [i, ...new Array(b.length).fill(0)]);
@@ -1942,8 +2035,10 @@ router.post("/chat", async (req, res) => {
               );
               // Fall through to generateUnifiedResponse below (mode will be treated as followup)
               const { content, mode: responseMode } = await generateUnifiedResponse(messages, currentReport, "followup", chatLocale);
-              const translated = await translateChatContent(content, responseMode, chatLocale, chatTranslateTitleSchool);
-              res.json({ content: translated, mode: responseMode, ...providerSignal });
+              const safeContent = content.trim() || emptyChatFallback(chatLocale);
+              const safeMode = content.trim() ? responseMode : "text";
+              const translated = await translateChatContent(safeContent, safeMode, chatLocale, chatTranslateTitleSchool);
+              res.json({ content: translated, mode: safeMode, ...providerSignal });
               return;
             }
           }
@@ -2295,7 +2390,7 @@ CRITICAL RULES:
                 failed_sources: pipelineResult.failed_sources,
               };
 
-              enrichedContent = `Analyse this NZ property for development feasibility. Real data has been fetched from Hougarden, OneRoof, LINZ, and Auckland Council GIS sources.${failedStr}
+              enrichedContent = `Analyse this NZ property for development feasibility. Real data has been fetched from PropertyValue, Hougarden, OneRoof, LINZ, and Auckland Council GIS sources.${failedStr}
 
 VERIFIED PROPERTY DATA:
 ${JSON.stringify(dataSummary, null, 2)}
@@ -2306,14 +2401,37 @@ CRITICAL: Do not invent comparable sales or sale-price assumptions. If real comp
 Generate a complete FeasibilityReport JSON following your system instructions exactly. Use the fetched data as your primary source — prefer confirmed data over estimates. Where data is missing or a source failed, estimate conservatively where appropriate and describe physical/site risks in riskSummary — but NEVER mention comparable sales data, market data gaps, exit-price uncertainty, any data-source limitations, nor any language that implies the report is incomplete or unreliable because land area, zoning, or key planning facts were not captured. Return ONLY valid JSON — no markdown code fences, no other text.`;
             }
 
-            const rawContent = await generateAnalysis(enrichedContent, chatLocale);
+            let rawContent = "";
+            try {
+              rawContent = await generateAnalysis(enrichedContent, chatLocale);
+            } catch (err) {
+              req.log.warn({ err }, "Analysis model returned no usable report - using deterministic fallback");
+            }
 
-            // Inject deterministic source-backed fields.
-            let content = rawContent;
+            // Inject deterministic source-backed fields. If the model returns
+            // empty or malformed output, still send a complete report assembled
+            // from the verified pipeline data so the client never renders a
+            // blank assistant bubble.
+            let content = "";
+            let analyseResponseMode = "analyse";
             const parsed = tryParseReportJson(rawContent);
             if (parsed != null) {
               applyDeterministicPipelineOverrides(parsed, pipelineResult, geocode?.formatted ?? analysisAddress);
               content = JSON.stringify(parsed);
+            } else {
+              const deterministicFallback = buildDeterministicFallbackReport(
+                pipelineResult,
+                geocode?.formatted ?? analysisAddress,
+              );
+              if (deterministicFallback) {
+                content = JSON.stringify(deterministicFallback);
+              } else if (rawContent.trim()) {
+                content = rawContent.trim();
+                analyseResponseMode = "text";
+              } else {
+                content = emptyAnalyseFallback(geocode?.formatted ?? analysisAddress, chatLocale);
+                analyseResponseMode = "text";
+              }
             }
 
             // Persist to search history (non-blocking; invalid/truncated model JSON skips save)
@@ -2344,8 +2462,8 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
               }
             }
 
-            const translatedAnalyse = await translateChatContent(content, "analyse", chatLocale, chatTranslateTitleSchool);
-            sendAnalyseResponse({ content: translatedAnalyse, mode: "analyse", searchId: savedSearchId, historyCreatedAt: savedSearchCreatedAt });
+            const translatedAnalyse = await translateChatContent(content, analyseResponseMode, chatLocale, chatTranslateTitleSchool);
+            sendAnalyseResponse({ content: translatedAnalyse, mode: analyseResponseMode, searchId: savedSearchId, historyCreatedAt: savedSearchCreatedAt });
             return;
           }
           // pipelineResult was null — generate AI-only response inside the heartbeat
@@ -2353,8 +2471,10 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
           // if the heartbeat already committed the response headers).
           try {
             const { content: aiContent, mode: aiMode } = await generateUnifiedResponse(messages, currentReport, effectiveMode, chatLocale);
-            const translatedAi = await translateChatContent(aiContent, aiMode, chatLocale, chatTranslateTitleSchool);
-            sendAnalyseResponse({ content: translatedAi, mode: aiMode });
+            const safeContent = aiContent.trim() || emptyAnalyseFallback(analysisAddress, chatLocale);
+            const safeMode = aiContent.trim() ? aiMode : "text";
+            const translatedAi = await translateChatContent(safeContent, safeMode, chatLocale, chatTranslateTitleSchool);
+            sendAnalyseResponse({ content: translatedAi, mode: safeMode });
           } catch {
             const fallback = chatLocale === "zh"
               ? await ensureChinese("Failed to generate reply. Please try again.")
@@ -2489,8 +2609,10 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
         }
       }
 
-      const translatedFinal = await translateChatContent(content, responseMode, chatLocale, chatTranslateTitleSchool);
-      res.json({ content: translatedFinal, mode: responseMode, ...providerSignal });
+      const finalContent = content.trim() || emptyChatFallback(chatLocale);
+      const finalMode = content.trim() ? responseMode : "text";
+      const translatedFinal = await translateChatContent(finalContent, finalMode, chatLocale, chatTranslateTitleSchool);
+      res.json({ content: translatedFinal, mode: finalMode, ...providerSignal });
     } catch (error) {
       req.log.error({ err: error }, "Failed to generate unified chat reply");
       res.status(500).json({
@@ -2584,6 +2706,16 @@ router.get("/pipeline-test", async (req, res) => {
         floor_area_sqm: pipelineResult.oneroof?.floor_area_sqm,
         build_year: pipelineResult.oneroof?.build_year,
         last_sale_price: pipelineResult.oneroof?.last_sale_price,
+      },
+      raw_propertyvalue: {
+        property_id: pipelineResult.propertyValue?.property_id,
+        cv_nzd: pipelineResult.propertyValue?.cv_nzd,
+        cv_year: pipelineResult.propertyValue?.cv_year,
+        land_area_sqm: pipelineResult.propertyValue?.land_area_sqm,
+        floor_area_sqm: pipelineResult.propertyValue?.floor_area_sqm,
+        build_year: pipelineResult.propertyValue?.build_year,
+        bedrooms: pipelineResult.propertyValue?.bedrooms,
+        bathrooms: pipelineResult.propertyValue?.bathrooms,
       },
       raw_contour: pipelineResult.contour,
       merged_final: {

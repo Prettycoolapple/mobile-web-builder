@@ -130,7 +130,6 @@ const EXTERNALS_VERCEL_SERVERLESS = [
   "@tensorflow/*",
   "@sentry/profiling-node",
   "ffi-napi",
-  "playwright",
   "puppeteer",
   "puppeteer-core",
   "electron",

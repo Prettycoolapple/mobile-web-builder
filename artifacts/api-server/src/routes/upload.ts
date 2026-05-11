@@ -40,6 +40,8 @@ const ALLOWED_MIME_TYPES = new Set([
   "image/jpg",
   "image/png",
   "image/webp",
+  "image/heic",
+  "image/heif",
 ]);
 
 const ALLOWED_IMAGE_MIME_TYPES = new Set([
@@ -47,6 +49,8 @@ const ALLOWED_IMAGE_MIME_TYPES = new Set([
   "image/jpg",
   "image/png",
   "image/webp",
+  "image/heic",
+  "image/heif",
 ]);
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;

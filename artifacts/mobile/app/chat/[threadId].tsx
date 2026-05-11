@@ -6,10 +6,13 @@ import React, {
 } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   KeyboardAvoidingView,
   Linking,
+  Modal,
   Platform,
+  Pressable,
   StyleSheet,
   Text,
   TextInput,
@@ -24,7 +27,7 @@ import * as ImagePicker from "expo-image-picker";
 
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
-import { useDm, DmMessage, DmThread } from "@/context/DmContext";
+import { useDm, DmMessage, type DmBlockStatus } from "@/context/DmContext";
 import { ImageViewerModal } from "@/components/ImageViewerModal";
 import { getApiBase, resolveAppUrl } from "@/lib/api";
 import { avatarImageSource, sanitizeHeadersForImageRequest } from "@/lib/avatar";
@@ -186,6 +189,15 @@ export default function ChatScreen() {
   const [sending, setSending] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [viewerUri, setViewerUri] = useState<string | null>(null);
+  const [actionMenuVisible, setActionMenuVisible] = useState(false);
+  const [reportModalVisible, setReportModalVisible] = useState(false);
+  const [reportComment, setReportComment] = useState("");
+  const [reportSubmitting, setReportSubmitting] = useState(false);
+  const [blockStatus, setBlockStatus] = useState<DmBlockStatus>({
+    messagingBlocked: false,
+    iBlockedThem: false,
+    theyBlockedMe: false,
+  });
 
   const flatListRef = useRef<FlatList>(null);
   const joinedRef = useRef(false);
@@ -200,6 +212,9 @@ export default function ChatScreen() {
       setOtherRole(threadFromContext.otherParticipant.role ?? "general");
       setOtherUserId(threadFromContext.otherParticipant.id);
       setOtherAvatarUrl(threadFromContext.otherParticipant.avatarUrl ?? null);
+    }
+    if (threadFromContext?.blockStatus) {
+      setBlockStatus(threadFromContext.blockStatus);
     }
   }, [threadFromContext]);
 
@@ -236,8 +251,12 @@ export default function ChatScreen() {
     const data = await resp.json() as {
       messages: DmMessage[];
       nextCursor: string | null;
+      blockStatus?: DmBlockStatus;
     };
     const msgs = [...(data.messages ?? [])].reverse();
+    if (data.blockStatus) {
+      setBlockStatus(data.blockStatus);
+    }
     if (!fromCursor) {
       setMessages(msgs);
     } else {
@@ -302,10 +321,14 @@ export default function ChatScreen() {
 
   const sendMessage = useCallback(async (msgBody?: string, imageUrl?: string) => {
     if (!threadId || !token) return;
+    if (blockStatus.messagingBlocked) {
+      Alert.alert(t("dm.block.title"), t("dm.block.cannot_send"));
+      return;
+    }
     if (!msgBody && !imageUrl) return;
     setSending(true);
     try {
-      await fetch(`${getApiBase()}/dm/threads/${threadId}/messages`, {
+      const resp = await fetch(`${getApiBase()}/dm/threads/${threadId}/messages`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -313,6 +336,19 @@ export default function ChatScreen() {
         },
         body: JSON.stringify({ body: msgBody ?? null, imageUrl: imageUrl ?? null }),
       });
+      if (!resp.ok) {
+        let code: string | undefined;
+        try {
+          const errJson = (await resp.json()) as { code?: string; error?: string };
+          code = errJson.code;
+        } catch {
+        }
+        if (code === "BLOCKED") {
+          Alert.alert(t("dm.block.title"), t("dm.block.cannot_send"));
+          setBlockStatus((s) => ({ ...s, messagingBlocked: true }));
+        }
+        return;
+      }
       setBody("");
       fetchThreads();
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
@@ -320,10 +356,10 @@ export default function ChatScreen() {
     } finally {
       setSending(false);
     }
-  }, [threadId, token, fetchThreads]);
+  }, [threadId, token, fetchThreads, t, blockStatus.messagingBlocked]);
 
   const pickImage = useCallback(async (useCamera: boolean) => {
-    if (uploadingImage) return;
+    if (uploadingImage || blockStatus.messagingBlocked) return;
     let result: ImagePicker.ImagePickerResult;
     if (useCamera) {
       const perm = await ImagePicker.requestCameraPermissionsAsync();
@@ -366,7 +402,85 @@ export default function ChatScreen() {
     } finally {
       setUploadingImage(false);
     }
-  }, [token, uploadingImage, sendMessage]);
+  }, [token, uploadingImage, sendMessage, blockStatus.messagingBlocked]);
+
+  const submitBlock = useCallback(async () => {
+    if (!token || !otherUserId) return;
+    const resp = await fetch(`${getApiBase()}/dm/block`, {
+      method: "POST",
+      headers: getApiHeaders(),
+      body: JSON.stringify({ blockedUserId: otherUserId }),
+    });
+    if (!resp.ok) {
+      Alert.alert(t("common.error"), t("dm.block.failed"));
+      return;
+    }
+    setBlockStatus((s) => ({
+      messagingBlocked: true,
+      iBlockedThem: true,
+      theyBlockedMe: s.theyBlockedMe,
+    }));
+    fetchThreads();
+    setActionMenuVisible(false);
+    Alert.alert(t("dm.block.title"), t("dm.block.done"), [
+      { text: t("dm.block.go_back"), onPress: () => router.back() },
+      { text: t("dm.block.stay"), style: "cancel" },
+    ]);
+  }, [token, otherUserId, getApiHeaders, fetchThreads, router, t]);
+
+  const submitUnblock = useCallback(async () => {
+    if (!token || !otherUserId) return;
+    const resp = await fetch(`${getApiBase()}/dm/block/${otherUserId}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) {
+      Alert.alert(t("common.error"), t("dm.block.failed"));
+      return;
+    }
+    setBlockStatus((s) => ({
+      messagingBlocked: s.theyBlockedMe,
+      iBlockedThem: false,
+      theyBlockedMe: s.theyBlockedMe,
+    }));
+    fetchThreads();
+    setActionMenuVisible(false);
+  }, [token, otherUserId, fetchThreads, t]);
+
+  const confirmBlock = useCallback(() => {
+    setActionMenuVisible(false);
+    Alert.alert(t("dm.menu.block_confirm_title"), t("dm.menu.block_confirm_body"), [
+      { text: t("common.cancel"), style: "cancel" },
+      { text: t("dm.menu.block"), style: "destructive", onPress: () => void submitBlock() },
+    ]);
+  }, [t, submitBlock]);
+
+  const submitReport = useCallback(async () => {
+    if (!token || !otherUserId || reportComment.trim().length < 10) return;
+    setReportSubmitting(true);
+    try {
+      const resp = await fetch(`${getApiBase()}/dm/report`, {
+        method: "POST",
+        headers: getApiHeaders(),
+        body: JSON.stringify({
+          reportedUserId: otherUserId,
+          threadId,
+          comment: reportComment.trim(),
+        }),
+      });
+      if (!resp.ok) {
+        const j = (await resp.json().catch(() => ({}))) as { error?: string };
+        Alert.alert(t("common.error"), j.error ?? t("dm.report.failed"));
+        return;
+      }
+      setReportModalVisible(false);
+      setReportComment("");
+      setActionMenuVisible(false);
+      Alert.alert(t("dm.report.sent_title"), t("dm.report.sent_body"));
+    } finally {
+      setReportSubmitting(false);
+    }
+  }, [token, otherUserId, threadId, reportComment, getApiHeaders, t]);
 
   const loadMore = useCallback(async () => {
     if (!nextCursor || loadingMore) return;
@@ -374,6 +488,10 @@ export default function ChatScreen() {
     await fetchMessages(nextCursor);
     setLoadingMore(false);
   }, [nextCursor, loadingMore, fetchMessages]);
+
+  const inputLocked = blockStatus.messagingBlocked;
+  const sendDisabled = !body.trim() || sending || blockStatus.messagingBlocked;
+  const mediaDisabled = blockStatus.messagingBlocked || uploadingImage || sending;
 
   const items: ListItem[] = buildListItems(messages, locale, t);
 
@@ -518,18 +636,29 @@ export default function ChatScreen() {
             })()}
           </View>
         </TouchableOpacity>
-        {otherPhone ? (
+        <View style={styles.headerRight}>
           <TouchableOpacity
-            style={styles.callBtn}
-            onPress={() => Linking.openURL(`tel:${otherPhone}`)}
-            activeOpacity={0.75}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            style={styles.headerIconBtn}
+            onPress={() => setActionMenuVisible(true)}
+            disabled={!otherUserId}
+            accessibilityRole="button"
+            accessibilityLabel={t("dm.menu.a11y")}
           >
-            <Feather name="phone" size={18} color="#4ADE80" />
+            <Feather name="more-vertical" size={22} color="rgba(250,249,246,0.85)" />
           </TouchableOpacity>
-        ) : (
-          <View style={{ width: 44 }} />
-        )}
+          {otherPhone ? (
+            <TouchableOpacity
+              style={styles.callBtn}
+              onPress={() => Linking.openURL(`tel:${otherPhone}`)}
+              activeOpacity={0.75}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Feather name="phone" size={18} color="#4ADE80" />
+            </TouchableOpacity>
+          ) : (
+            <View style={{ width: 44 }} />
+          )}
+        </View>
       </View>
 
       {loadingInitial ? (
@@ -560,11 +689,30 @@ export default function ChatScreen() {
           onStartReachedThreshold={0.2}
           onStartReached={loadMore}
           ListHeaderComponent={
-            loadingMore ? (
-              <View style={{ paddingVertical: 12, alignItems: "center" }}>
-                <ActivityIndicator color={colors.accent} size="small" />
-              </View>
-            ) : null
+            <>
+              {blockStatus.messagingBlocked ? (
+                <View
+                  style={[
+                    styles.blockBanner,
+                    { backgroundColor: "rgba(0,0,0,0.2)", borderColor: "rgba(250,249,246,0.15)" },
+                  ]}
+                >
+                  <Feather name="slash" size={16} color="rgba(250,249,246,0.7)" />
+                  <Text style={styles.blockBannerText}>
+                    {blockStatus.iBlockedThem && blockStatus.theyBlockedMe
+                      ? t("dm.block.banner_both")
+                      : blockStatus.iBlockedThem
+                        ? t("dm.block.banner_you")
+                        : t("dm.block.banner_them")}
+                  </Text>
+                </View>
+              ) : null}
+              {loadingMore ? (
+                <View style={{ paddingVertical: 12, alignItems: "center" }}>
+                  <ActivityIndicator color={colors.accent} size="small" />
+                </View>
+              ) : null}
+            </>
           }
         />
       )}
@@ -582,21 +730,29 @@ export default function ChatScreen() {
         <TouchableOpacity
           style={styles.mediaBtn}
           onPress={() => pickImage(false)}
-          disabled={uploadingImage || sending}
+          disabled={mediaDisabled}
         >
           {uploadingImage ? (
             <ActivityIndicator color={colors.mutedForeground} size="small" />
           ) : (
-            <Feather name="image" size={22} color={colors.mutedForeground} />
+            <Feather
+              name="image"
+              size={22}
+              color={mediaDisabled ? colors.mutedForeground : colors.mutedForeground}
+            />
           )}
         </TouchableOpacity>
         {Platform.OS !== "web" && (
           <TouchableOpacity
             style={styles.mediaBtn}
             onPress={() => pickImage(true)}
-            disabled={uploadingImage || sending}
+            disabled={mediaDisabled}
           >
-            <Feather name="camera" size={22} color={colors.mutedForeground} />
+            <Feather
+              name="camera"
+              size={22}
+              color={mediaDisabled ? colors.mutedForeground : colors.mutedForeground}
+            />
           </TouchableOpacity>
         )}
         <View
@@ -606,39 +762,166 @@ export default function ChatScreen() {
               backgroundColor: colors.card,
               borderColor: colors.border,
               shadowColor: colors.shadow,
+              opacity: inputLocked ? 0.65 : 1,
             },
           ]}
         >
           <TextInput
             style={[styles.input, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-            placeholder={t("dm.placeholder.message")}
+            placeholder={inputLocked ? t("dm.block.placeholder") : t("dm.placeholder.message")}
             placeholderTextColor={colors.mutedForeground}
             value={body}
             onChangeText={setBody}
             multiline
             maxLength={2000}
             returnKeyType="default"
+            editable={!inputLocked}
           />
           <TouchableOpacity
             style={[
               styles.sendBtn,
-              { backgroundColor: body.trim() ? colors.accent : colors.muted },
+              { backgroundColor: body.trim() && !sendDisabled ? colors.accent : colors.muted },
             ]}
             onPress={() => {
               const trimmed = body.trim();
-              if (!trimmed || sending) return;
+              if (!trimmed || sendDisabled) return;
               sendMessage(trimmed);
             }}
-            disabled={!body.trim() || sending}
+            disabled={sendDisabled}
           >
             {sending ? (
               <ActivityIndicator color="#fff" size="small" />
             ) : (
-              <Feather name="send" size={16} color={body.trim() ? "#fff" : colors.mutedForeground} />
+              <Feather
+                name="send"
+                size={16}
+                color={body.trim() && !sendDisabled ? "#fff" : colors.mutedForeground}
+              />
             )}
           </TouchableOpacity>
         </View>
       </View>
+
+      <Modal
+        visible={actionMenuVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setActionMenuVisible(false)}
+      >
+        <View style={styles.modalRoot}>
+          <Pressable
+            style={styles.actionMenuBackdrop}
+            onPress={() => setActionMenuVisible(false)}
+          />
+          <View
+            style={[
+              styles.actionSheetCard,
+              { backgroundColor: colors.card, paddingBottom: insets.bottom + 16 },
+            ]}
+          >
+            <Text style={[styles.actionSheetTitle, { color: colors.foreground }]}>{t("dm.menu.title")}</Text>
+            <TouchableOpacity
+              style={[styles.actionSheetRow, { borderTopColor: colors.border }]}
+              onPress={() => {
+                setActionMenuVisible(false);
+                setReportModalVisible(true);
+              }}
+            >
+              <Feather name="flag" size={20} color={colors.foreground} />
+              <Text style={[styles.actionSheetLabel, { color: colors.foreground }]}>{t("dm.menu.report")}</Text>
+            </TouchableOpacity>
+            {blockStatus.iBlockedThem ? (
+              <TouchableOpacity
+                style={[styles.actionSheetRow, { borderTopColor: colors.border }]}
+                onPress={() => void submitUnblock()}
+              >
+                <Feather name="user-check" size={20} color={colors.foreground} />
+                <Text style={[styles.actionSheetLabel, { color: colors.foreground }]}>{t("dm.menu.unblock")}</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[styles.actionSheetRow, { borderTopColor: colors.border }]}
+                onPress={() => void confirmBlock()}
+              >
+                <Feather name="user-x" size={20} color="#DC2626" />
+                <Text style={[styles.actionSheetLabel, styles.actionSheetDanger]}>{t("dm.menu.block")}</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={[styles.actionSheetRow, { borderTopColor: colors.border }]}
+              onPress={() => setActionMenuVisible(false)}
+            >
+              <Text style={[styles.actionSheetLabel, { color: colors.mutedForeground, textAlign: "center", flex: 1 }]}>
+                {t("common.cancel")}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={reportModalVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => !reportSubmitting && setReportModalVisible(false)}
+      >
+        <View style={styles.reportModalRoot}>
+          <Pressable
+            style={[StyleSheet.absoluteFillObject, { backgroundColor: "rgba(0,0,0,0.5)" }]}
+            onPress={() => !reportSubmitting && setReportModalVisible(false)}
+          />
+          <View style={styles.reportModalCenter} pointerEvents="box-none">
+            <View style={[styles.reportModalCard, { backgroundColor: colors.card }]}>
+              <Text style={[styles.reportModalTitle, { color: colors.foreground }]}>{t("dm.report.title")}</Text>
+              <Text style={[styles.reportModalSubtitle, { color: colors.mutedForeground }]}>{t("dm.report.subtitle")}</Text>
+              <TextInput
+                style={[
+                  styles.reportInput,
+                  {
+                    backgroundColor: colors.background,
+                    borderColor: colors.border,
+                    color: colors.foreground,
+                  },
+                ]}
+                placeholder={t("dm.report.comment_placeholder")}
+                placeholderTextColor={colors.mutedForeground}
+                value={reportComment}
+                onChangeText={setReportComment}
+                multiline
+                maxLength={2000}
+                editable={!reportSubmitting}
+              />
+              <Text style={[styles.reportHint, { color: colors.mutedForeground }]}>{t("dm.report.min_hint")}</Text>
+              <View style={styles.reportActions}>
+                <TouchableOpacity
+                  style={[styles.reportBtnSecondary, { borderColor: colors.border }]}
+                  onPress={() => !reportSubmitting && setReportModalVisible(false)}
+                  disabled={reportSubmitting}
+                >
+                  <Text style={{ color: colors.foreground }}>{t("common.cancel")}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.reportBtnPrimary,
+                    {
+                      backgroundColor:
+                        reportComment.trim().length >= 10 && !reportSubmitting ? colors.accent : colors.muted,
+                    },
+                  ]}
+                  onPress={() => void submitReport()}
+                  disabled={reportComment.trim().length < 10 || reportSubmitting}
+                >
+                  {reportSubmitting ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <Text style={styles.reportBtnPrimaryText}>{t("dm.report.submit")}</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <ImageViewerModal
         visible={!!viewerUri}
@@ -783,4 +1066,106 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(74,222,128,0.3)",
   },
+  headerRight: { flexDirection: "row", alignItems: "center", gap: 2 },
+  headerIconBtn: {
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  blockBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginBottom: 10,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  blockBannerText: {
+    flex: 1,
+    fontFamily: "DM_Sans_400Regular",
+    fontSize: 13,
+    lineHeight: 18,
+    color: "rgba(250,249,246,0.85)",
+  },
+  modalRoot: { flex: 1 },
+  actionMenuBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)" },
+  actionSheetCard: {
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingTop: 4,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(0,0,0,0.06)",
+  },
+  actionSheetTitle: {
+    fontFamily: "DM_Sans_600SemiBold",
+    fontSize: 15,
+    paddingVertical: 10,
+    textAlign: "center",
+  },
+  actionSheetRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  actionSheetLabel: { fontFamily: "DM_Sans_500Medium", fontSize: 16, flex: 1 },
+  actionSheetDanger: { color: "#DC2626" },
+  reportModalRoot: { flex: 1 },
+  reportModalCenter: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: "center",
+    paddingHorizontal: 20,
+  },
+  reportModalCard: {
+    borderRadius: 14,
+    padding: 20,
+    maxWidth: 420,
+    width: "100%",
+    alignSelf: "center",
+  },
+  reportModalTitle: {
+    fontFamily: "DM_Sans_600SemiBold",
+    fontSize: 18,
+    marginBottom: 6,
+  },
+  reportModalSubtitle: {
+    fontFamily: "DM_Sans_400Regular",
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 14,
+  },
+  reportInput: {
+    minHeight: 120,
+    maxHeight: 200,
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 15,
+    fontFamily: "DM_Sans_400Regular",
+    textAlignVertical: "top",
+  },
+  reportHint: { fontFamily: "DM_Sans_400Regular", fontSize: 12, marginTop: 8 },
+  reportActions: { flexDirection: "row", gap: 12, marginTop: 18, justifyContent: "flex-end" },
+  reportBtnSecondary: {
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  reportBtnPrimary: {
+    paddingVertical: 12,
+    paddingHorizontal: 22,
+    borderRadius: 10,
+    minWidth: 100,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  reportBtnPrimaryText: { color: "#fff", fontFamily: "DM_Sans_600SemiBold", fontSize: 15 },
 });

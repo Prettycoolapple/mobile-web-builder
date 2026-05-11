@@ -1,6 +1,7 @@
 /// <reference lib="dom" />
 import { logger } from "../logger";
-import { launchBrowser, newStealthPage, randomDelay } from "./browser";
+import { hasRemoteBrowserEndpoint, isVercelServerless, launchBrowser, logScrapeAttempt, newStealthPage, randomDelay } from "./browser";
+import { fetchWithScrapingBee } from "./scrapingbee";
 import type { Browser } from "playwright";
 
 export interface QVData {
@@ -45,8 +46,174 @@ function parseYear(raw: string): number | null {
   return y >= 1900 && y <= new Date().getFullYear() + 1 ? y : null;
 }
 
+function htmlToText(html: string): string {
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractQvDataFromText(allText: string, addressConfirmed: string): QVData | null {
+  const data: Partial<QVData> = {};
+
+  const cvMatch = allText.match(/capital\s*value\s*\$?([\d,]+)/i);
+  if (cvMatch) data.cv_nzd = parseNZD(cvMatch[1]);
+
+  const lvMatch = allText.match(/land\s*value\s*\$?([\d,]+)/i);
+  if (lvMatch) data.lv_nzd = parseNZD(lvMatch[1]);
+
+  const ivMatch = allText.match(/improvement\s*value\s*\$?([\d,]+)/i);
+  if (ivMatch) data.iv_nzd = parseNZD(ivMatch[1]);
+
+  const cvValuationMatch = allText.match(/(?:rating values|capital value).*?(\d{4})/is);
+  if (cvValuationMatch) data.cv_year = parseYear(cvValuationMatch[0]);
+
+  const landMatch = allText.match(/\bland\s*area\s*([\d,]+(?:\.\d+)?)\s*m/i)
+    ?? allText.match(/\bland\s*\n?\s*([\d,]+(?:\.\d+)?)\s*m/i)
+    ?? allText.match(/site\s*area\s*([\d,]+(?:\.\d+)?)\s*m/i);
+  if (landMatch) data.land_area_sqm = parseSqm(landMatch[1]);
+
+  const floorMatch = allText.match(/floor\s*area\s*\n?\s*([\d,]+(?:\.\d+)?)\s*m/i)
+    ?? allText.match(/house\s*area\s*([\d,]+(?:\.\d+)?)\s*m/i);
+  if (floorMatch) data.floor_area_sqm = parseSqm(floorMatch[1]);
+
+  const buildMatch = allText.match(/\bbuilt\s*\n?\s*(\d{4})/i)
+    ?? allText.match(/(?:year\s*built|construction\s*year)\s*\n?\s*(\d{4})/i);
+  const buildRangeMatch = allText.match(/\bbuilt\s*\n?\s*((?:19|20)\d0)[–-](\d{2})\b/i);
+  if (buildRangeMatch) {
+    const start = parseInt(buildRangeMatch[1], 10);
+    const suffix = parseInt(buildRangeMatch[2], 10);
+    const end = Math.floor(start / 100) * 100 + suffix;
+    data.build_year_range = `${start}-${end}`;
+    const endYear = parseYear(String(end));
+    if (endYear) data.build_year = endYear;
+  }
+  if (!data.build_year && buildMatch) data.build_year = parseYear(buildMatch[1]);
+
+  const bedroomsMatch = allText.match(/\bbedrooms\s*\n?\s*(\d{1,2})\b/i)
+    ?? allText.match(/\b(\d{1,2})\s+bed(?:room)?s?\b/i);
+  if (bedroomsMatch) {
+    const n = parseInt(bedroomsMatch[1], 10);
+    if (!isNaN(n) && n > 0 && n < 20) data.bedrooms = n;
+  }
+
+  const bathroomsMatch = allText.match(/\bbathrooms\s*\n?\s*(\d+(?:\.\d+)?)\*?\b/i)
+    ?? allText.match(
+      /\b(\d+(?:\.\d+)?)\s+(?!living\s+(?:area|areas|space|spaces)\b)bath(?:room)?s?\b/i,
+    );
+  if (bathroomsMatch) {
+    const n = parseFloat(bathroomsMatch[1]);
+    if (!isNaN(n) && n > 0 && n < 20) data.bathrooms = n;
+  }
+
+  const contourMatch = allText.match(/\bcontour[:\s\n]+([A-Za-z][A-Za-z /]{1,30}?)(?:\n|\r|$)/im)
+    ?? allText.match(/\bproperty\s*contour\s+([A-Za-z][A-Za-z /]{1,30}?)(?=\s+(?:Position|View|Deck|Buy|Image|$))/i);
+  let contourText: string | null = null;
+  let contourClass: "flat" | "gentle" | "moderate" | "steep" | null = null;
+  if (contourMatch) {
+    contourText = contourMatch[1].trim().replace(/\s+/g, " ");
+    contourClass = mapNZContour(contourText);
+  }
+
+  if (!data.cv_nzd && !data.land_area_sqm && !data.lv_nzd) return null;
+
+  return {
+    cv_nzd: data.cv_nzd ?? null,
+    lv_nzd: data.lv_nzd ?? null,
+    iv_nzd: data.iv_nzd ?? null,
+    cv_year: data.cv_year ?? null,
+    land_area_sqm: data.land_area_sqm ?? null,
+    floor_area_sqm: data.floor_area_sqm ?? null,
+    build_year: data.build_year ?? null,
+    build_year_range: data.build_year_range ?? null,
+    bedrooms: data.bedrooms ?? null,
+    bathrooms: data.bathrooms ?? null,
+    address_confirmed: addressConfirmed,
+    contour_text: contourText,
+    contour_classification: contourClass,
+  };
+}
+
+async function scrapeQvViaBee(address: string): Promise<QVData | null> {
+  const searchTerm = address.trim();
+  const shortAddr = address.split(" ").slice(0, 2).join(" ");
+  const scenario = {
+    strict: false,
+    instructions: [
+      { wait: 2500 },
+      {
+        evaluate: `
+          (() => {
+            const query = ${JSON.stringify(searchTerm)};
+            const input = Array.from(document.querySelectorAll('input')).find((el) => {
+              const s = [el.placeholder, el.ariaLabel, el.id, el.name, el.className].join(' ').toLowerCase();
+              return /address|property|search/.test(s);
+            }) || document.querySelector('input[type="text"], input');
+            if (!input) return 'no-input';
+            input.focus();
+            input.value = query;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+            input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
+            return 'filled';
+          })();
+        `,
+      },
+      { wait: 4500 },
+      {
+        evaluate: `
+          (() => {
+            const prefix = ${JSON.stringify(shortAddr.toLowerCase())};
+            const candidates = Array.from(document.querySelectorAll('a, button, li, div, span'))
+              .filter((el) => (el.innerText || '').trim().toLowerCase().startsWith(prefix));
+            const el = candidates[0];
+            if (!el) return 'no-suggestion';
+            el.click();
+            return (el.innerText || '').trim();
+          })();
+        `,
+      },
+      { wait: 6000 },
+    ],
+  };
+
+  const html = await fetchWithScrapingBee("https://www.qv.co.nz/property-search/", {
+    render_js: true,
+    premium_proxy: true,
+    wait: 1000,
+    js_scenario: scenario,
+  });
+  if (!html || html.length < 500) return null;
+
+  const propertyLink = html.match(/href=["']([^"']*\/property-search\/property-details\/\d+\/?)["']/i)?.[1];
+  if (propertyLink) {
+    const propertyUrl = propertyLink.startsWith("http") ? propertyLink : `https://www.qv.co.nz${propertyLink}`;
+    const detailHtml = await fetchWithScrapingBee(propertyUrl, { render_js: false, premium_proxy: false, wait: 500 });
+    if (detailHtml) {
+      const parsedDetail = extractQvDataFromText(htmlToText(detailHtml), propertyUrl);
+      if (parsedDetail) return parsedDetail;
+    }
+  }
+
+  return extractQvDataFromText(htmlToText(html), "https://www.qv.co.nz/property-search/");
+}
+
 export async function scrapeQV(address: string): Promise<QVData | null> {
   logger.info({ address }, "QV.co.nz: starting search-based scrape");
+
+  if (isVercelServerless() && !hasRemoteBrowserEndpoint()) {
+    const bee = await scrapeQvViaBee(address);
+    logScrapeAttempt(
+      "QV",
+      "scrapingbee",
+      !!bee,
+      bee ? `cv=${bee.cv_nzd}, land=${bee.land_area_sqm} (Vercel: Playwright unavailable)` : "no usable data on Vercel",
+    );
+    return bee;
+  }
 
   let browser: Browser | null = null;
   try {
@@ -265,7 +432,14 @@ export async function scrapeQV(address: string): Promise<QVData | null> {
     };
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "QV.co.nz scrape failed");
-    return null;
+    const bee = await scrapeQvViaBee(address);
+    logScrapeAttempt(
+      "QV",
+      "scrapingbee",
+      !!bee,
+      bee ? `cv=${bee.cv_nzd}, land=${bee.land_area_sqm}` : "no usable data after Playwright failure",
+    );
+    return bee;
   } finally {
     browser?.close().catch(() => {});
   }

@@ -82,12 +82,12 @@ function SectionHeader({ title }: { title: string }) {
 export default function ProfileScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { user, signOut, getApiHeaders, refreshProfile, isSubscriptionIdentityReady } = useAuth();
+  const { user, signOut, getApiHeaders, refreshProfile, uploadProfilePicture, isSubscriptionIdentityReady } = useAuth();
   const router = useRouter();
   const { t } = useT();
   const PLAN_FEATURES = buildPlanFeatures(t);
 
-  const { purchase, isSubscribed, customerInfoLoaded, isTestPaymentMode, refetchCustomerInfo, getPackageForRole, getPriceForRole } = useSubscription();
+  const { purchase, isSubscribed, customerInfoLoaded, isTestPaymentMode, refetchCustomerInfo, refetchOfferings, offeringsLoading, purchaseReadyForRole, getFreshPackageForRole, getPriceForRole } = useSubscription();
   const [upgradeLoading, setUpgradeLoading] = useState(false);
 
   // Refresh RevenueCat status each time the profile screen mounts so the correct
@@ -97,7 +97,8 @@ export default function ProfileScreen() {
     if (isTestPaymentMode) return;
     if (!isSubscriptionIdentityReady) return;
     refetchCustomerInfo();
-  }, [isTestPaymentMode, isSubscriptionIdentityReady]);
+    void refetchOfferings();
+  }, [isTestPaymentMode, isSubscriptionIdentityReady, refetchCustomerInfo, refetchOfferings]);
 
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -173,7 +174,7 @@ export default function ProfileScreen() {
   const handleUpgrade = useCallback(async () => {
     setUpgradeLoading(true);
     try {
-      const pkg = getPackageForRole(role);
+      const pkg = await getFreshPackageForRole(role);
       if (!pkg) {
         Alert.alert(t("profile.unavailable"), t("profile.sub_unavailable"));
         return;
@@ -201,7 +202,7 @@ export default function ProfileScreen() {
     } finally {
       setUpgradeLoading(false);
     }
-  }, [syncToBackend, role, purchase, getPackageForRole, refetchCustomerInfo]);
+  }, [syncToBackend, role, purchase, getFreshPackageForRole, refetchCustomerInfo, t]);
 
   const handleManageSubscription = useCallback(() => {
     if (Platform.OS === "ios") {
@@ -253,30 +254,14 @@ export default function ProfileScreen() {
     try {
       const mime = asset.mimeType ?? "image/jpeg";
       const ext = mime.split("/")[1]?.split(";")[0] || "jpg";
-      const formData = new FormData();
-      formData.append("file", {
-        uri: asset.uri,
-        type: mime,
-        name: `avatar.${ext}`,
-      } as any);
-
-      const { "Content-Type": _ct, ...headersWithoutCT } = getApiHeaders() as Record<string, string>;
-      const resp = await fetch(`${getApiBase()}/upload/profile-picture`, {
-        method: "POST",
-        headers: headersWithoutCT,
-        body: formData,
-      });
-      if (resp.ok) {
-        await refreshProfile().catch(() => {});
-      } else {
-        Alert.alert(t("profile.error"), t("profile.error_upload"));
-      }
+      await uploadProfilePicture(asset.uri, mime, `avatar.${ext}`);
+      await refreshProfile().catch(() => {});
     } catch {
       Alert.alert(t("profile.error"), t("profile.error_upload_conn"));
     } finally {
       setAvatarUploading(false);
     }
-  }, [getApiHeaders, refreshProfile]);
+  }, [refreshProfile, uploadProfilePicture]);
 
   const handleSignOut = () => {
     Alert.alert(t("profile.sign_out"), t("profile.sign_out_q"), [
@@ -716,7 +701,7 @@ export default function ProfileScreen() {
                     Standard Plan
                   </Text>
                   <View style={styles.priceRow}>
-                    <Text style={[styles.price, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>$24.99</Text>
+                    <Text style={[styles.price, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>{getPriceForRole("general")}</Text>
                     <Text style={[styles.pricePer, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
                       /mo NZD
                     </Text>
@@ -736,9 +721,9 @@ export default function ProfileScreen() {
                 style={[styles.upgradeBtn, { backgroundColor: upgradeLoading ? colors.accent + "80" : colors.accent }]}
                 activeOpacity={0.8}
                 onPress={handleUpgrade}
-                disabled={upgradeLoading}
+                disabled={upgradeLoading || (!isTestPaymentMode && (offeringsLoading || !purchaseReadyForRole(role)))}
               >
-                {upgradeLoading ? (
+                {upgradeLoading || (!isTestPaymentMode && offeringsLoading) ? (
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
                   <>
@@ -780,9 +765,9 @@ export default function ProfileScreen() {
                 style={[styles.upgradeBtn, { backgroundColor: upgradeLoading ? colors.accent + "80" : colors.accent }]}
                 activeOpacity={0.8}
                 onPress={handleUpgrade}
-                disabled={upgradeLoading}
+                disabled={upgradeLoading || (!isTestPaymentMode && (offeringsLoading || !purchaseReadyForRole(role)))}
               >
-                {upgradeLoading ? (
+                {upgradeLoading || (!isTestPaymentMode && offeringsLoading) ? (
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
                   <>
@@ -822,9 +807,9 @@ export default function ProfileScreen() {
                 style={[styles.upgradeBtn, { backgroundColor: upgradeLoading ? colors.accent + "80" : colors.accent }]}
                 activeOpacity={0.8}
                 onPress={handleUpgrade}
-                disabled={upgradeLoading}
+                disabled={upgradeLoading || (!isTestPaymentMode && (offeringsLoading || !purchaseReadyForRole(role)))}
               >
-                {upgradeLoading ? (
+                {upgradeLoading || (!isTestPaymentMode && offeringsLoading) ? (
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
                   <>

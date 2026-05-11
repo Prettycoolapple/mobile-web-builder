@@ -26,7 +26,7 @@ interface Props {
 export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
   const colors = useColors();
   const { getApiHeaders, refreshProfile } = useAuth();
-  const { purchase, restore, isPurchasing, isRestoring, getPackageForRole, getPriceForRole, refetchCustomerInfo } =
+  const { purchase, restore, isPurchasing, isRestoring, getFreshPackageForRole, getPriceForRole, refetchCustomerInfo, refetchOfferings, offeringsLoading, purchaseReadyForRole } =
     useSubscription();
   const { t } = useT();
   const FEATURES = [
@@ -38,6 +38,12 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
   ];
   const slideAnim = useRef(new Animated.Value(400)).current;
   const overlayAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (visible) {
+      void refetchOfferings();
+    }
+  }, [visible, refetchOfferings]);
 
   useEffect(() => {
     if (visible) {
@@ -69,9 +75,9 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
   };
 
   const handleUpgrade = async () => {
-    const pkg = getPackageForRole("general");
+    const pkg = await getFreshPackageForRole("general");
     if (!pkg) {
-      Alert.alert(t("paywall.not_available"), t("paywall.iap_required"));
+      Alert.alert(t("paywall.not_available"), t("profile.sub_unavailable"));
       return;
     }
     try {
@@ -161,9 +167,9 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
             style={[styles.upgradeBtn, { backgroundColor: isPurchasing ? colors.accent + "80" : colors.accent }]}
             onPress={handleUpgrade}
             activeOpacity={0.85}
-            disabled={isPurchasing || isRestoring}
+            disabled={isPurchasing || isRestoring || offeringsLoading || !purchaseReadyForRole("general")}
           >
-            {isPurchasing
+            {isPurchasing || (offeringsLoading && !isPurchasing)
               ? <ActivityIndicator size="small" color="#fff" />
               : <>
                   <Text style={[styles.upgradeBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>

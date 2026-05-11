@@ -1,4 +1,4 @@
-import React, { createContext, useContext } from "react";
+import React, { createContext, useContext, useCallback } from "react";
 import { Platform } from "react-native";
 import Purchases from "react-native-purchases";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -46,6 +46,22 @@ export const OFFERING_BY_ROLE: Record<string, string> = {
   sales_agent: "agent",
   service_provider: "provider",
 };
+
+type OfferingPackage = object;
+type OfferingLike = {
+  monthly?: OfferingPackage | null;
+  availablePackages?: OfferingPackage[] | null;
+};
+type OfferingsLike = {
+  all?: Record<string, OfferingLike | null | undefined> | null;
+  current?: OfferingLike | null;
+};
+
+function pickStorePackageFromOfferings(role: string, offerings: OfferingsLike | null | undefined): object | null {
+  const offeringKey = OFFERING_BY_ROLE[role] ?? "default";
+  const offering = offerings?.all?.[offeringKey] ?? offerings?.current ?? null;
+  return (offering?.monthly ?? offering?.availablePackages?.[0] ?? null) as object | null;
+}
 
 // Test payment mode is active when we cannot reach native StoreKit / Billing
 // (Expo Go, web, or any dev build without configured store products).
@@ -136,7 +152,8 @@ function useSubscriptionContext(identityReady: boolean) {
     queryKey: ["revenuecat", "offerings"],
     queryFn: () => Purchases.getOfferings(),
     staleTime: 300_000,
-    retry: false,
+    retry: 2,
+    retryDelay: (n) => 800 * (n + 1),
     enabled: queriesEnabled,
   });
 
@@ -177,11 +194,12 @@ function useSubscriptionContext(identityReady: boolean) {
     ? false
     : !customerInfoQuery.isLoading && !customerInfoQuery.isError && customerInfoQuery.data !== undefined;
 
+  function pickStorePackageForRole(role: string): object | null {
+    return pickStorePackageFromOfferings(role, offeringsQuery.data as OfferingsLike | null | undefined);
+  }
+
   function getPackageForRole(role: string): object | null {
-    const offeringKey = OFFERING_BY_ROLE[role] ?? "default";
-    const offering =
-      offeringsQuery.data?.all?.[offeringKey] ?? offeringsQuery.data?.current ?? null;
-    const realPkg = (offering?.monthly ?? offering?.availablePackages?.[0] ?? null) as object | null;
+    const realPkg = pickStorePackageForRole(role);
     if (realPkg) return realPkg;
     if (IS_TEST_PAYMENT_MODE) {
       return {
@@ -194,9 +212,11 @@ function useSubscriptionContext(identityReady: boolean) {
   }
 
   function getPriceForRole(role: string): string {
-    const pkg = getPackageForRole(role) as { product?: { priceString?: string } } | null;
-    if (pkg?.product?.priceString) return pkg.product.priceString;
-    return TEST_PRICE_BY_ROLE[role] ?? TEST_PRICE_BY_ROLE.general;
+    const realPkg = pickStorePackageForRole(role) as { product?: { priceString?: string } } | null;
+    if (realPkg?.product?.priceString) return realPkg.product.priceString;
+    if (IS_TEST_PAYMENT_MODE) return TEST_PRICE_BY_ROLE[role] ?? TEST_PRICE_BY_ROLE.general;
+    // Do not show a fake fallback price while StoreKit / RC offerings are still loading or failed.
+    return "\u2026";
   }
 
   // Allow auth context to wipe the cached identity-bound RC data when a
@@ -205,6 +225,34 @@ function useSubscriptionContext(identityReady: boolean) {
   function resetSubscriptionCache() {
     queryClient.removeQueries({ queryKey: ["revenuecat"] });
   }
+
+  const refetchOfferings = useCallback(() => offeringsQuery.refetch(), [offeringsQuery.refetch]);
+
+  const getFreshPackageForRole = useCallback(async (role: string): Promise<object | null> => {
+    if (IS_TEST_PAYMENT_MODE) {
+      return {
+        __testMode: true,
+        role,
+        product: { priceString: TEST_PRICE_BY_ROLE[role] ?? TEST_PRICE_BY_ROLE.general },
+      } as TestPackage;
+    }
+    if (!queriesEnabled) return null;
+    const result = await offeringsQuery.refetch();
+    return pickStorePackageFromOfferings(role, result.data as OfferingsLike | null | undefined)
+      ?? pickStorePackageFromOfferings(role, offeringsQuery.data as OfferingsLike | null | undefined);
+  }, [queriesEnabled, offeringsQuery.refetch, offeringsQuery.data]);
+
+  const offeringsLoading = Boolean(queriesEnabled && offeringsQuery.isPending);
+  const offeringsError = queriesEnabled ? offeringsQuery.error : null;
+
+  const purchaseReadyForRole = useCallback(
+    (role: string): boolean => {
+      if (IS_TEST_PAYMENT_MODE) return true;
+      if (!queriesEnabled) return false;
+      return pickStorePackageForRole(role) !== null;
+    },
+    [queriesEnabled, offeringsQuery.data],
+  );
 
   return {
     customerInfo: customerInfoQuery.data,
@@ -218,6 +266,11 @@ function useSubscriptionContext(identityReady: boolean) {
     isPurchasing: purchaseMutation.isPending,
     isRestoring: restoreMutation.isPending,
     refetchCustomerInfo: customerInfoQuery.refetch,
+    refetchOfferings,
+    offeringsLoading,
+    offeringsError,
+    purchaseReadyForRole,
+    getFreshPackageForRole,
     resetSubscriptionCache,
     getPackageForRole,
     getPriceForRole,

@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 import { logger } from "../logger";
-import { launchBrowser, newStealthPage, randomDelay } from "./browser";
+import { hasRemoteBrowserEndpoint, isVercelServerless, launchBrowser, newStealthPage, randomDelay } from "./browser";
 import { fetchWithScrapingBee } from "./scrapingbee";
 import { extractBedsBaths } from "./bed-bath-extractor";
 import type { Browser } from "playwright";
@@ -295,6 +295,12 @@ export async function scrapeHomes(
   const bee = await tryScrapingBee(address, suburb, formattedAddress);
   if (bee) return bee;
 
-  logger.info("homes.co.nz: ScrapingBee failed — Playwright fallback disabled (blocked by site)");
+  if (!isVercelServerless() || hasRemoteBrowserEndpoint()) {
+    logger.info("homes.co.nz: ScrapingBee failed - trying Playwright browser fallback");
+    const pw = await tryPlaywrightSearch(address, formattedAddress);
+    if (pw) return pw;
+  }
+
+  logger.info("homes.co.nz: all attempts failed");
   return null;
 }

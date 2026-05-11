@@ -6,6 +6,7 @@ import type { HougardenData } from "./hougarden";
 import type { OneRoofData, ComparableSale } from "./oneroof";
 import type { QVData } from "./qv";
 import type { HomesData } from "./homes";
+import type { PropertyValueData } from "./propertyvalue";
 import type { PropertyHistory } from "../property-data";
 
 export interface MergedPropertyData {
@@ -242,6 +243,7 @@ export function mergePropertyData(
     property_history?: PropertyHistory | null;
     qv?: QVData | null;
     homes?: HomesData | null;
+    propertyValue?: PropertyValueData | null;
     /** Active listing images from realestate.co.nz when OneRoof has none. */
     realestate_photo_urls?: string[] | null;
   },
@@ -250,11 +252,13 @@ export function mergePropertyData(
   const ph = extra?.property_history ?? null;
   const qv = extra?.qv ?? null;
   const homes = extra?.homes ?? null;
+  const propertyValue = extra?.propertyValue ?? null;
 
   // Land area: LINZ is the authoritative cadastral measurement — always wins.
   const land_area_sqm = first("land_area_sqm", sources,
     ["linz", linz?.area_sqm],
     ["auckland_council_gis", ph?.land_area_sqm],
+    ["propertyvalue", propertyValue?.land_area_sqm],
     ["hougarden", hougarden?.land_area_sqm],
     ["oneroof", oneroof?.land_area_sqm],
     ["qv", qv?.land_area_sqm],
@@ -263,6 +267,7 @@ export function mergePropertyData(
 
   // CV: pick the valuation with the most recent year, not just the first non-null.
   const { cv_nzd, cv_year } = bestCV(sources, [
+    { src: "propertyvalue",      cv_nzd: propertyValue?.cv_nzd, cv_year: propertyValue?.cv_year },
     { src: "oneroof",            cv_nzd: oneroof?.cv_nzd,  cv_year: oneroof?.cv_year },
     { src: "hougarden",          cv_nzd: hougarden?.cv_nzd, cv_year: undefined },
     { src: "auckland_council_gis", cv_nzd: ph?.cv_nzd,     cv_year: ph?.cv_year },
@@ -272,6 +277,7 @@ export function mergePropertyData(
 
   // Build year: prefer exact source years over rounded decade values.
   const buildYearResult = resolveBuildYear(sources, [
+    { src: "propertyvalue",      build_year: propertyValue?.build_year },
     { src: "oneroof",            build_year: oneroof?.build_year },
     { src: "hougarden",          build_year: hougarden?.build_year },
     { src: "auckland_council_gis", build_year: ph?.build_year },
@@ -282,7 +288,7 @@ export function mergePropertyData(
   // When we have a range but no exact year, extract the end year as a fallback
   // (e.g. "2010-2019" → 2019). NZ council decades use the end year as the
   // registered completion year (same data CoreLogic/PropertyValue exposes as exact).
-  const rawRange = build_year == null ? (qv?.build_year_range ?? null) : null;
+  const rawRange = build_year == null ? (propertyValue?.build_year_range ?? qv?.build_year_range ?? null) : null;
   if (build_year == null && rawRange) {
     const rangeEndM = rawRange.match(/\d{4}[–\-](\d{4})/);
     if (rangeEndM) {
@@ -297,6 +303,7 @@ export function mergePropertyData(
 
   // Floor area: median of credible values.
   let floor_area_sqm = medianFloorArea(sources, [
+    { src: "propertyvalue",      floor_area_sqm: propertyValue?.floor_area_sqm },
     { src: "oneroof",            floor_area_sqm: oneroof?.floor_area_sqm },
     { src: "hougarden",          floor_area_sqm: hougarden?.floor_area_sqm },
     { src: "auckland_council_gis", floor_area_sqm: ph?.floor_area_sqm },
@@ -306,11 +313,13 @@ export function mergePropertyData(
 
   let bedrooms = first("bedrooms", sources,
     ["oneroof", oneroof?.bedrooms],
+    ["propertyvalue", propertyValue?.bedrooms],
     ["homes",   homes?.bedrooms],
     ["qv",      qv?.bedrooms],
   );
   let bathrooms = first("bathrooms", sources,
     ["oneroof", oneroof?.bathrooms],
+    ["propertyvalue", propertyValue?.bathrooms],
     ["homes",   homes?.bathrooms],
     ["qv",      qv?.bathrooms],
   );
@@ -464,6 +473,7 @@ export function mergePropertyData(
     ...(oneroof?.photo_urls ?? []),
     ...(oneroof?.main_photo_url ? [oneroof.main_photo_url] : []),
     ...(extra?.realestate_photo_urls ?? []),
+    ...(propertyValue?.photo_urls ?? []),
   ].filter(Boolean))).slice(0, 12);
   const main_photo_url        = photo_urls[0] ?? null;
   const overlay_map_image_base64 = hougarden?.overlay_map_image_base64 ?? null;

@@ -67,3 +67,5 @@ artifacts/mobile/app.json.*
 .env.*.local
 .env.*.secret
 !.env.example
+
+.vercel

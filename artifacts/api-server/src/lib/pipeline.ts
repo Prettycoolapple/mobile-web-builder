@@ -9,6 +9,7 @@ import { scrapeHougarden, type HougardenData } from "./scrapers/hougarden";
 import { scrapeOneRoof, type OneRoofData } from "./scrapers/oneroof";
 import { scrapeHomes, type HomesData } from "./scrapers/homes";
 import { scrapeQV, type QVData } from "./scrapers/qv";
+import { scrapePropertyValue, type PropertyValueData } from "./scrapers/propertyvalue";
 import { mergePropertyData, type MergedPropertyData } from "./scrapers/merge";
 import { withBrowserSlot } from "./scrapers/browser";
 import { classifyAsbestos, type AsbestosClassification } from "./asbestos";
@@ -232,6 +233,7 @@ export interface PipelineResult {
   oneroof: OneRoofData | null;
   homes: HomesData | null;
   qv: QVData | null;
+  propertyValue: PropertyValueData | null;
   merged: MergedPropertyData | null;
   lots: LotResult | null;
   subdivision_pathway: SubdivisionPathwayNote | null;
@@ -313,6 +315,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       oneroof: null,
       homes: null,
       qv: null,
+      propertyValue: null,
       merged: null,
       lots: null,
       subdivision_pathway: null,
@@ -360,6 +363,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     infrastructureResult,
     hougardenResult,
     oneRoofResult,
+    propertyValueResult,
     qvResult,
     homesResult,
   ] = await Promise.allSettled([
@@ -370,6 +374,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     timed("infrastructure",   () => fetchInfrastructure(lat, lng, linzParcelData?.bbox ?? null, linzParcelData?.parcel_id ?? null), timing),
     timed("hougarden",        () => withBrowserSlot(() => scrapeHougarden(lat, lng, address)),                    timing),
     timed("oneroof",          () => withBrowserSlot(() => scrapeOneRoof(address)),                                timing),
+    timed("propertyvalue",    () => scrapePropertyValue(geocode!.formatted ?? address),                           timing),
     timed("qv",               () => withBrowserSlot(() => scrapeQV(address)),                                     timing),
     timed("homes",            () => withBrowserSlot(() => scrapeHomes(address, suburb, geocode!.formatted ?? address)), timing),
   ]);
@@ -381,11 +386,13 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   const infrastructureData  = infrastructureResult.status  === "fulfilled" ? (infrastructureResult.value.value ?? []) : [];
   let hougardenData         = hougardenResult.status       === "fulfilled" ? hougardenResult.value.value        : null;
   let oneRoofData           = oneRoofResult.status         === "fulfilled" ? oneRoofResult.value.value          : null;
+  let propertyValueData     = propertyValueResult.status   === "fulfilled" ? propertyValueResult.value.value    : null;
   let qvData                = qvResult.status              === "fulfilled" ? qvResult.value.value               : null;
   let homesData             = homesResult.status           === "fulfilled" ? homesResult.value.value            : null;
 
   const wave1HougardenFailed = hougardenResult.status === "rejected" || (hougardenResult.status === "fulfilled" && hougardenResult.value.failed);
   const wave1OneRoofFailed   = oneRoofResult.status   === "rejected" || (oneRoofResult.status   === "fulfilled" && oneRoofResult.value.failed);
+  const wave1PropertyValueFailed = propertyValueResult.status === "rejected" || (propertyValueResult.status === "fulfilled" && propertyValueResult.value.failed);
   const wave1QvFailed        = qvResult.status        === "rejected" || (qvResult.status        === "fulfilled" && qvResult.value.failed);
   const wave1HomesFailed     = homesResult.status     === "rejected" || (homesResult.status     === "fulfilled" && homesResult.value.failed);
 
@@ -396,6 +403,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   if (infrastructureResult.status  === "rejected" || (infrastructureResult.status  === "fulfilled" && infrastructureResult.value.failed))  failedSources.push("infrastructure");
   if (wave1HougardenFailed) failedSources.push("hougarden");
   if (wave1OneRoofFailed)   failedSources.push("oneroof");
+  if (wave1PropertyValueFailed) failedSources.push("propertyvalue");
   if (wave1QvFailed)        failedSources.push("qv");
   if (wave1HomesFailed)     failedSources.push("homes");
 
@@ -436,18 +444,19 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   // adds at most one extra scraper-duration to the total pipeline time.
   const getCriticalCoverage = (
     hg: HougardenData | null, or: OneRoofData | null,
-    qv: QVData | null, hm: HomesData | null, ph: typeof propertyHistoryData,
+    pv: PropertyValueData | null, qv: QVData | null, hm: HomesData | null, ph: typeof propertyHistoryData,
   ) => ({
-    hasCV:        !!(hg?.cv_nzd    || or?.cv_nzd    || qv?.cv_nzd    || hm?.cv_nzd    || ph?.cv_nzd),
-    hasBuildYear: !!(hg?.build_year || or?.build_year || qv?.build_year || hm?.build_year || ph?.build_year),
-    hasFloorArea: !!(hg?.floor_area_sqm || or?.floor_area_sqm || qv?.floor_area_sqm || hm?.floor_area_sqm),
+    hasCV:        !!(pv?.cv_nzd    || hg?.cv_nzd    || or?.cv_nzd    || qv?.cv_nzd    || hm?.cv_nzd    || ph?.cv_nzd),
+    hasBuildYear: !!(pv?.build_year || hg?.build_year || or?.build_year || qv?.build_year || hm?.build_year || ph?.build_year),
+    hasFloorArea: !!(pv?.floor_area_sqm || hg?.floor_area_sqm || or?.floor_area_sqm || qv?.floor_area_sqm || hm?.floor_area_sqm),
   });
 
   const getCriticalSourceMap = (
     hg: HougardenData | null, or: OneRoofData | null,
-    qv: QVData | null, hm: HomesData | null, ph: typeof propertyHistoryData,
+    pv: PropertyValueData | null, qv: QVData | null, hm: HomesData | null, ph: typeof propertyHistoryData,
   ) => ({
     cv: {
+      propertyvalue: !!pv?.cv_nzd,
       property_history: !!ph?.cv_nzd,
       hougarden: !!hg?.cv_nzd,
       oneroof: !!or?.cv_nzd,
@@ -455,6 +464,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       homes: !!hm?.cv_nzd,
     },
     build_year: {
+      propertyvalue: !!pv?.build_year,
       property_history: !!ph?.build_year,
       hougarden: !!hg?.build_year,
       oneroof: !!or?.build_year,
@@ -462,6 +472,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       homes: !!hm?.build_year,
     },
     floor_area: {
+      propertyvalue: !!pv?.floor_area_sqm,
       property_history: !!ph?.floor_area_sqm,
       hougarden: !!hg?.floor_area_sqm,
       oneroof: !!or?.floor_area_sqm,
@@ -470,8 +481,8 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     },
   });
 
-  const wave1Coverage = getCriticalCoverage(hougardenData, oneRoofData, qvData, homesData, propertyHistoryData);
-  const wave1SourceMap = getCriticalSourceMap(hougardenData, oneRoofData, qvData, homesData, propertyHistoryData);
+  const wave1Coverage = getCriticalCoverage(hougardenData, oneRoofData, propertyValueData, qvData, homesData, propertyHistoryData);
+  const wave1SourceMap = getCriticalSourceMap(hougardenData, oneRoofData, propertyValueData, qvData, homesData, propertyHistoryData);
   logger.info({ wave: 1, coverage: wave1Coverage, source_map: wave1SourceMap }, "Critical field coverage snapshot");
 
   // ─── Detailed scraper diagnostics ───────────────────────────────────────
@@ -488,13 +499,16 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     oneroof: oneRoofData
       ? { cv_nzd: oneRoofData.cv_nzd, build_year: oneRoofData.build_year, floor_area_sqm: oneRoofData.floor_area_sqm, land_area_sqm: oneRoofData.land_area_sqm, listing_active: oneRoofData.listing_active }
       : (wave1OneRoofFailed ? "FAILED" : "NULL"),
+    propertyvalue: propertyValueData
+      ? { cv_nzd: propertyValueData.cv_nzd, cv_year: propertyValueData.cv_year, build_year: propertyValueData.build_year, bedrooms: propertyValueData.bedrooms, bathrooms: propertyValueData.bathrooms, floor_area_sqm: propertyValueData.floor_area_sqm, land_area_sqm: propertyValueData.land_area_sqm }
+      : (wave1PropertyValueFailed ? "FAILED" : "NULL"),
     qv: qvData
       ? { cv_nzd: qvData.cv_nzd, build_year: qvData.build_year, build_year_range: qvData.build_year_range, bedrooms: qvData.bedrooms, bathrooms: qvData.bathrooms, floor_area_sqm: qvData.floor_area_sqm, land_area_sqm: qvData.land_area_sqm }
       : (wave1QvFailed ? "FAILED" : "NULL"),
     homes: homesData
       ? { cv_nzd: homesData.cv_nzd, build_year: homesData.build_year, floor_area_sqm: homesData.floor_area_sqm, land_area_sqm: homesData.land_area_sqm }
       : (wave1HomesFailed ? "FAILED" : "NULL"),
-    all_scrapers_failed: wave1HougardenFailed && wave1OneRoofFailed && wave1QvFailed && wave1HomesFailed,
+    all_scrapers_failed: wave1HougardenFailed && wave1OneRoofFailed && wave1PropertyValueFailed && wave1QvFailed && wave1HomesFailed,
   }, "Wave 1 scraper diagnostics — check for FAILED sources if CV/build-year missing");
 
   const criticalMissing = !wave1Coverage.hasCV || !wave1Coverage.hasBuildYear || !wave1Coverage.hasFloorArea;
@@ -511,7 +525,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       missing_cv: !wave1Coverage.hasCV,
       missing_build_year: !wave1Coverage.hasBuildYear,
       missing_floor_area: !wave1Coverage.hasFloorArea,
-      retrying: { hougarden: wave1HougardenFailed, oneroof: wave1OneRoofFailed, qv: wave1QvFailed, homes: wave1HomesFailed },
+      retrying: { hougarden: wave1HougardenFailed, oneroof: wave1OneRoofFailed, propertyvalue: wave1PropertyValueFailed, qv: wave1QvFailed, homes: wave1HomesFailed },
     }, "Wave 1 missing critical data — retrying failed scrapers");
 
     const retryPromises: Promise<void>[] = [];
@@ -527,6 +541,13 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       retryPromises.push(
         timed("oneroof_retry", () => withBrowserSlot(() => scrapeOneRoof(address)), timing)
           .then((r) => { if (!r.failed && r.value) oneRoofData = r.value; })
+          .catch(() => {}),
+      );
+    }
+    if (wave1PropertyValueFailed) {
+      retryPromises.push(
+        timed("propertyvalue_retry", () => scrapePropertyValue(geocode!.formatted ?? address), timing)
+          .then((r) => { if (!r.failed && r.value) propertyValueData = r.value; })
           .catch(() => {}),
       );
     }
@@ -547,8 +568,8 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
 
     if (retryPromises.length > 0) {
       await Promise.allSettled(retryPromises);
-      const wave2Coverage = getCriticalCoverage(hougardenData, oneRoofData, qvData, homesData, propertyHistoryData);
-      const wave2SourceMap = getCriticalSourceMap(hougardenData, oneRoofData, qvData, homesData, propertyHistoryData);
+      const wave2Coverage = getCriticalCoverage(hougardenData, oneRoofData, propertyValueData, qvData, homesData, propertyHistoryData);
+      const wave2SourceMap = getCriticalSourceMap(hougardenData, oneRoofData, propertyValueData, qvData, homesData, propertyHistoryData);
       logger.info({
         recovered_cv: !wave1Coverage.hasCV && wave2Coverage.hasCV,
         recovered_build_year: !wave1Coverage.hasBuildYear && wave2Coverage.hasBuildYear,
@@ -560,8 +581,8 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     logger.warn({ wave1ElapsedMs, missing_cv: !wave1Coverage.hasCV, missing_build_year: !wave1Coverage.hasBuildYear, missing_floor_area: !wave1Coverage.hasFloorArea }, "Wave 2 skipped — time budget exceeded (>70 s elapsed). Proceeding with wave 1 data.");
   }
 
-  const finalCoverage = getCriticalCoverage(hougardenData, oneRoofData, qvData, homesData, propertyHistoryData);
-  const finalSourceMap = getCriticalSourceMap(hougardenData, oneRoofData, qvData, homesData, propertyHistoryData);
+  const finalCoverage = getCriticalCoverage(hougardenData, oneRoofData, propertyValueData, qvData, homesData, propertyHistoryData);
+  const finalSourceMap = getCriticalSourceMap(hougardenData, oneRoofData, propertyValueData, qvData, homesData, propertyHistoryData);
   if (!finalCoverage.hasCV || !finalCoverage.hasBuildYear) {
     logger.warn(
       {
@@ -637,6 +658,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       property_history: propertyHistoryData,
       qv: qvData,
       homes: homesData,
+      propertyValue: propertyValueData,
       realestate_photo_urls: realestatePhotoUrls,
     },
   );
@@ -648,7 +670,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   // Cross-validate land area between LINZ and scrapers — log warning if they diverge >10%.
   // LINZ is already the canonical source (first priority in mergePropertyData), but we surface
   // discrepancies so engineers can investigate data quality issues.
-  const scraperLandArea = hougardenData?.land_area_sqm ?? oneRoofData?.land_area_sqm ?? homesData?.land_area_sqm ?? qvData?.land_area_sqm ?? null;
+  const scraperLandArea = propertyValueData?.land_area_sqm ?? hougardenData?.land_area_sqm ?? oneRoofData?.land_area_sqm ?? homesData?.land_area_sqm ?? qvData?.land_area_sqm ?? null;
   if (linzAreaSqm && scraperLandArea && linzAreaSqm > 0) {
     const diffPct = Math.abs(linzAreaSqm - scraperLandArea) / linzAreaSqm;
     if (diffPct > 0.1) {
@@ -857,6 +879,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     oneroof: oneRoofData,
     homes: homesData,
     qv: qvData,
+    propertyValue: propertyValueData,
     merged,
     lots: lotResult,
     subdivision_pathway: subdivisionPathway,

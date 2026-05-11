@@ -3,23 +3,56 @@ import fs from "node:fs";
 import { execSync } from "child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { chromium as playwrightChromium } from "playwright";
 import { logger } from "../logger";
 import type { Browser, Page, BrowserContext } from "playwright";
 
 let _chromiumPath: string | null = null;
 
-/** Vercel bundles omit node_modules for externalized deps; never touch Playwright there. */
 export function isVercelServerless(): boolean {
   return process.env.VERCEL === "1" || process.env.VERCEL === "true";
 }
 
 let _playwrightRequire: NodeRequire | null = null;
 
+function appendTokenIfNeeded(endpoint: string, token: string | null): string {
+  if (!token || /[?&]token=/.test(endpoint)) return endpoint;
+  const sep = endpoint.includes("?") ? "&" : "?";
+  return `${endpoint}${sep}token=${encodeURIComponent(token)}`;
+}
+
+export function getRemoteBrowserEndpoint(): string | null {
+  const token = process.env["BROWSERLESS_TOKEN"]?.trim() || null;
+  const explicit =
+    process.env["PLAYWRIGHT_CDP_ENDPOINT"] ??
+    process.env["BROWSERLESS_WS_ENDPOINT"] ??
+    process.env["BROWSERLESS_WS_URL"] ??
+    process.env["BROWSER_WS_ENDPOINT"] ??
+    process.env["BROWSER_WS_URL"] ??
+    null;
+
+  if (explicit?.trim()) return appendTokenIfNeeded(explicit.trim(), token);
+
+  if (token) {
+    const host = process.env["BROWSERLESS_HOST"]?.trim() || "production-sfo.browserless.io";
+    return `wss://${host}?token=${encodeURIComponent(token)}`;
+  }
+
+  return null;
+}
+
+export function hasRemoteBrowserEndpoint(): boolean {
+  return getRemoteBrowserEndpoint() !== null;
+}
+
 function requirePlaywright(): typeof import("playwright") {
-  if (isVercelServerless()) {
+  if (isVercelServerless() && !hasRemoteBrowserEndpoint()) {
     throw new Error(
-      "Browser automation (Playwright) is not available on Vercel serverless. Use a long-running host for full scrapers or ScrapingBee-only flows.",
+      "Browser automation (Playwright) is not available on Vercel serverless without a remote browser endpoint. Set PLAYWRIGHT_CDP_ENDPOINT or BROWSERLESS_WS_ENDPOINT.",
     );
+  }
+  if (isVercelServerless()) {
+    return { chromium: playwrightChromium } as typeof import("playwright");
   }
   if (!_playwrightRequire) {
     _playwrightRequire = createRequire(path.join(process.cwd(), "package.json"));
@@ -75,7 +108,6 @@ function getBundledPlaywrightPath(): string | null {
     const bundled = chromium.executablePath();
     if (bundled && fs.existsSync(bundled)) return bundled;
   } catch {
-    // Playwright browser bundle may not be installed on this host.
   }
   return null;
 }
@@ -132,34 +164,53 @@ export const BROWSER_ARGS = [
 
 const STEALTH_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-// ─── Startup diagnostic ─────────────────────────────────────────────────────
-// Eagerly resolve Chromium at import time so operators see immediately whether
-// browser-based scrapers will work. If it fails, all 4 scrapers (Hougarden,
-// OneRoof, QV, Homes) will return null data — this is the #1 cause of missing
-// CV/build-year after a migration.
 let _startupChromiumOk = false;
 try {
-  const p = getChromiumPath();
+  const remoteEndpoint = getRemoteBrowserEndpoint();
+  const p = remoteEndpoint ? "remote-cdp-browser" : getChromiumPath();
   _startupChromiumOk = true;
-  logger.info({ chromiumPath: p }, "Browser startup check: Chromium resolved OK — scrapers will use this executable");
+  logger.info(
+    remoteEndpoint ? { browser: p } : { chromiumPath: p },
+    remoteEndpoint
+      ? "Browser startup check: remote CDP browser configured OK - scrapers will use it"
+      : "Browser startup check: Chromium resolved OK - scrapers will use this executable",
+  );
 } catch (err) {
   logger.error(
     { err: (err as Error).message },
-    "Browser startup check: Chromium NOT found — ALL browser-based scrapers (Hougarden, OneRoof, QV, Homes) will FAIL. " +
-      "Run `npx playwright install chromium` or set PLAYWRIGHT_CHROMIUM_PATH in .env",
+    "Browser startup check: Chromium NOT found - browser-based scrapers (Hougarden, OneRoof, QV, Homes) will fail. " +
+      "Run `npx playwright install chromium`, set PLAYWRIGHT_CHROMIUM_PATH, or configure PLAYWRIGHT_CDP_ENDPOINT / BROWSERLESS_WS_ENDPOINT.",
   );
 }
 export { _startupChromiumOk as chromiumAvailable };
 
 export async function launchBrowser(): Promise<Browser> {
   const { chromium } = requirePlaywright();
+  const remoteEndpoint = getRemoteBrowserEndpoint();
+
+  if (remoteEndpoint) {
+    const timeout = Number(process.env["PLAYWRIGHT_CDP_TIMEOUT_MS"] ?? 30_000);
+    try {
+      logger.info({ endpointHost: new URL(remoteEndpoint).host }, "Connecting to remote Playwright browser over CDP");
+      return await chromium.connectOverCDP(remoteEndpoint, {
+        timeout: Number.isFinite(timeout) && timeout > 0 ? timeout : 30_000,
+      });
+    } catch (err) {
+      logger.error(
+        { err: (err as Error).message },
+        "Failed to connect to remote Playwright browser - scraper will return null data",
+      );
+      throw err;
+    }
+  }
+
   const executablePath = getChromiumPath();
   try {
     return await chromium.launch({ executablePath, headless: true, args: BROWSER_ARGS });
   } catch (err) {
     logger.error(
       { err: (err as Error).message, executablePath },
-      "Failed to launch Chromium browser — scraper will return null data",
+      "Failed to launch Chromium browser - scraper will return null data",
     );
     throw err;
   }
@@ -196,7 +247,12 @@ export async function newStealthPage(browser: Browser): Promise<{ context: Brows
           { name: "Chrome PDF Viewer", filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai", description: "" },
           { name: "Native Client", filename: "internal-nacl-plugin", description: "" },
         ];
-        return Object.assign(fakePlugins, { length: 3, item: (i: number) => fakePlugins[i], namedItem: (n: string) => fakePlugins.find(p => p.name === n) || null, refresh: () => {} });
+        return Object.assign(fakePlugins, {
+          length: 3,
+          item: (i: number) => fakePlugins[i],
+          namedItem: (n: string) => fakePlugins.find((p) => p.name === n) || null,
+          refresh: () => {},
+        });
       },
     });
     Object.defineProperty(navigator, "languages", { get: () => ["en-NZ", "en-US", "en"] });
@@ -225,7 +281,7 @@ export const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(r
 export const randomDelay = (min = 1000, max = 3000) =>
   delay(Math.floor(Math.random() * (max - min) + min));
 
-const MAX_BROWSERS = 3;
+const MAX_BROWSERS = Math.max(1, Number(process.env["MAX_BROWSER_SLOTS"] ?? 3) || 3);
 let activeBrowsers = 0;
 
 export async function withBrowserSlot<T>(fn: () => Promise<T>): Promise<T> {
@@ -242,8 +298,8 @@ export async function withBrowserSlot<T>(fn: () => Promise<T>): Promise<T> {
 
 export function logScrapeAttempt(scraper: string, method: string, success: boolean, detail?: string) {
   if (success) {
-    logger.info({ scraper, method }, `${scraper}: ${method} succeeded${detail ? " — " + detail : ""}`);
+    logger.info({ scraper, method }, `${scraper}: ${method} succeeded${detail ? " - " + detail : ""}`);
   } else {
-    logger.warn({ scraper, method }, `${scraper}: ${method} failed${detail ? " — " + detail : ""}`);
+    logger.warn({ scraper, method }, `${scraper}: ${method} failed${detail ? " - " + detail : ""}`);
   }
 }

@@ -9,12 +9,45 @@ import {
   dmMessages,
   pushTokens,
   recommendations,
+  userBlocks,
+  userReports,
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { getIo } from "../lib/socket";
 import { sendPushToUser } from "../lib/expo-push";
+import { sendOwnerNotification } from "../lib/mailer";
 
 const router: IRouter = Router();
+
+type BlockRow = typeof userBlocks.$inferSelect;
+
+function blockStatusForPair(userId: string, otherId: string, incident: BlockRow[]) {
+  let iBlockedThem = false;
+  let theyBlockedMe = false;
+  for (const b of incident) {
+    if (b.blockerId === userId && b.blockedId === otherId) iBlockedThem = true;
+    if (b.blockerId === otherId && b.blockedId === userId) theyBlockedMe = true;
+  }
+  return {
+    iBlockedThem,
+    theyBlockedMe,
+    messagingBlocked: iBlockedThem || theyBlockedMe,
+  };
+}
+
+async function pairHasAnyBlock(userId: string, otherId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: userBlocks.id })
+    .from(userBlocks)
+    .where(
+      or(
+        and(eq(userBlocks.blockerId, userId), eq(userBlocks.blockedId, otherId)),
+        and(eq(userBlocks.blockerId, otherId), eq(userBlocks.blockedId, userId)),
+      ),
+    )
+    .limit(1);
+  return !!row;
+}
 
 router.get("/dm/contacts", requireAuth, async (req: Request, res: Response) => {
   const userId = (req as any).userId as string;
@@ -107,6 +140,11 @@ router.post("/dm/threads", requireAuth, async (req: Request, res: Response) => {
       }
     }
 
+    if (await pairHasAnyBlock(userId, targetUserId)) {
+      res.status(403).json({ error: "Messaging is not available with this user", code: "BLOCKED" });
+      return;
+    }
+
     const [canonA, canonB] = [userId, targetUserId].sort();
 
     const existing = await db
@@ -158,6 +196,11 @@ router.get("/dm/threads", requireAuth, async (req: Request, res: Response) => {
       )
       .orderBy(desc(dmThreads.lastMessageAt));
 
+    const incidentBlocks = await db
+      .select()
+      .from(userBlocks)
+      .where(or(eq(userBlocks.blockerId, userId), eq(userBlocks.blockedId, userId)));
+
     const enriched = await Promise.all(
       threads.map(async (thread) => {
         const otherId =
@@ -197,6 +240,8 @@ router.get("/dm/threads", requireAuth, async (req: Request, res: Response) => {
             ),
           );
 
+        const blockStatus = blockStatusForPair(userId, otherId, incidentBlocks);
+
         return {
           ...thread,
           otherParticipant: other
@@ -204,6 +249,7 @@ router.get("/dm/threads", requireAuth, async (req: Request, res: Response) => {
             : null,
           lastMessage: lastMessage ?? null,
           unreadCount: count,
+          blockStatus,
         };
       }),
     );
@@ -233,6 +279,13 @@ router.get("/dm/threads/:threadId/messages", requireAuth, async (req: Request, r
       return;
     }
 
+    const otherId = thread.participantA === userId ? thread.participantB : thread.participantA;
+    const incidentBlocks = await db
+      .select()
+      .from(userBlocks)
+      .where(or(eq(userBlocks.blockerId, userId), eq(userBlocks.blockedId, userId)));
+    const blockStatus = blockStatusForPair(userId, otherId, incidentBlocks);
+
     const conditions = [eq(dmMessages.threadId, threadId)];
     if (cursor) {
       const [cursorRow] = await db
@@ -256,7 +309,7 @@ router.get("/dm/threads/:threadId/messages", requireAuth, async (req: Request, r
     const page = hasMore ? messages.slice(0, limit) : messages;
     const nextCursor = hasMore ? page[page.length - 1]?.id ?? null : null;
 
-    res.json({ messages: page, nextCursor });
+    res.json({ messages: page, nextCursor, blockStatus });
   } catch (err) {
     req.log.error({ err }, "GET /dm/threads/:threadId/messages failed");
     res.status(500).json({ error: "Failed to fetch messages" });
@@ -285,6 +338,13 @@ router.post("/dm/threads/:threadId/messages", requireAuth, async (req: Request, 
       return;
     }
 
+    const recipientId =
+      thread.participantA === userId ? thread.participantB : thread.participantA;
+    if (await pairHasAnyBlock(userId, recipientId)) {
+      res.status(403).json({ error: "Messaging is not available with this user", code: "BLOCKED" });
+      return;
+    }
+
     const [message] = await db
       .insert(dmMessages)
       .values({ threadId, senderId: userId, body: msgBody ?? null, imageUrl: imageUrl ?? null })
@@ -296,9 +356,6 @@ router.post("/dm/threads/:threadId/messages", requireAuth, async (req: Request, 
       .where(eq(dmThreads.id, threadId));
 
     const io = getIo();
-
-    const recipientId =
-      thread.participantA === userId ? thread.participantB : thread.participantA;
 
     if (io) {
       io.to(`user:${recipientId}`).emit("new_message", { threadId, message });
@@ -364,6 +421,167 @@ router.patch("/dm/threads/:threadId/read", requireAuth, async (req: Request, res
   } catch (err) {
     req.log.error({ err }, "PATCH /dm/threads/:threadId/read failed");
     res.status(500).json({ error: "Failed to mark as read" });
+  }
+});
+
+router.post("/dm/block", requireAuth, async (req: Request, res: Response) => {
+  const userId = (req as any).userId as string;
+  const { blockedUserId } = req.body as { blockedUserId?: string };
+
+  if (!blockedUserId || typeof blockedUserId !== "string") {
+    res.status(400).json({ error: "blockedUserId is required" });
+    return;
+  }
+  if (blockedUserId === userId) {
+    res.status(400).json({ error: "Invalid request" });
+    return;
+  }
+
+  try {
+    const [target] = await db
+      .select({ id: profiles.id })
+      .from(profiles)
+      .where(eq(profiles.id, blockedUserId))
+      .limit(1);
+    if (!target) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    const [already] = await db
+      .select({ id: userBlocks.id })
+      .from(userBlocks)
+      .where(and(eq(userBlocks.blockerId, userId), eq(userBlocks.blockedId, blockedUserId)))
+      .limit(1);
+    if (!already) {
+      await db.insert(userBlocks).values({ blockerId: userId, blockedId: blockedUserId });
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "POST /dm/block failed");
+    res.status(500).json({ error: "Failed to block user" });
+  }
+});
+
+router.delete("/dm/block/:blockedUserId", requireAuth, async (req: Request, res: Response) => {
+  const userId = (req as any).userId as string;
+  const { blockedUserId } = req.params;
+
+  if (!blockedUserId) {
+    res.status(400).json({ error: "blockedUserId is required" });
+    return;
+  }
+
+  try {
+    await db
+      .delete(userBlocks)
+      .where(and(eq(userBlocks.blockerId, userId), eq(userBlocks.blockedId, blockedUserId)));
+
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "DELETE /dm/block/:blockedUserId failed");
+    res.status(500).json({ error: "Failed to unblock user" });
+  }
+});
+
+router.post("/dm/report", requireAuth, async (req: Request, res: Response) => {
+  const userId = (req as any).userId as string;
+  const { reportedUserId, threadId, comment } = req.body as {
+    reportedUserId?: string;
+    threadId?: string | null;
+    comment?: string;
+  };
+  const trimmed = (comment ?? "").trim();
+
+  if (!reportedUserId || typeof reportedUserId !== "string") {
+    res.status(400).json({ error: "reportedUserId is required" });
+    return;
+  }
+  if (reportedUserId === userId) {
+    res.status(400).json({ error: "Invalid request" });
+    return;
+  }
+  if (trimmed.length < 10) {
+    res.status(400).json({ error: "Comment must be at least 10 characters", code: "COMMENT_TOO_SHORT" });
+    return;
+  }
+
+  try {
+    const [reported] = await db
+      .select({ id: profiles.id })
+      .from(profiles)
+      .where(eq(profiles.id, reportedUserId))
+      .limit(1);
+    if (!reported) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    if (threadId && typeof threadId === "string") {
+      const [thread] = await db
+        .select()
+        .from(dmThreads)
+        .where(eq(dmThreads.id, threadId))
+        .limit(1);
+      if (!thread || (thread.participantA !== userId && thread.participantB !== userId)) {
+        res.status(400).json({ error: "Invalid thread for this report" });
+        return;
+      }
+      const other = thread.participantA === userId ? thread.participantB : thread.participantA;
+      if (other !== reportedUserId) {
+        res.status(400).json({ error: "Reported user must be the other participant in this thread" });
+        return;
+      }
+    }
+
+    await db.insert(userReports).values({
+      reporterId: userId,
+      reportedUserId,
+      threadId: threadId && typeof threadId === "string" ? threadId : null,
+      comment: trimmed,
+    });
+
+    const [reporterProfile] = await db
+      .select({ email: profiles.email, fullName: profiles.fullName, role: profiles.role })
+      .from(profiles)
+      .where(eq(profiles.id, userId))
+      .limit(1);
+    const [reportedProfile] = await db
+      .select({ email: profiles.email, fullName: profiles.fullName, role: profiles.role })
+      .from(profiles)
+      .where(eq(profiles.id, reportedUserId))
+      .limit(1);
+
+    const subject = "[Project Alpha] DM user report";
+    const body = [
+      "A user submitted a report from a private chat.",
+      "",
+      `Reporter: ${reporterProfile?.fullName ?? "Unknown"} <${reporterProfile?.email ?? userId}>`,
+      `Reporter id: ${userId} (${reporterProfile?.role ?? "?"})`,
+      "",
+      `Reported: ${reportedProfile?.fullName ?? "Unknown"} <${reportedProfile?.email ?? reportedUserId}>`,
+      `Reported id: ${reportedUserId} (${reportedProfile?.role ?? "?"})`,
+      "",
+      threadId && typeof threadId === "string" ? `Thread id: ${threadId}` : "Thread id: (not specified)",
+      "",
+      "Comment:",
+      trimmed,
+      "",
+      "—",
+      "This message was generated by the Project Alpha API when SMTP owner notifications are configured (SMTP_USER / SMTP_PASS / SMTP_TO).",
+    ].join("\n");
+
+    try {
+      await sendOwnerNotification(subject, body);
+    } catch (mailErr) {
+      req.log.warn({ mailErr }, "DM report saved but owner email failed");
+    }
+
+    res.status(201).json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "POST /dm/report failed");
+    res.status(500).json({ error: "Failed to submit report" });
   }
 });
 

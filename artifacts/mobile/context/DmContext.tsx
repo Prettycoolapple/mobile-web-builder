@@ -13,6 +13,12 @@ export interface DmMessage {
   createdAt: string;
 }
 
+export interface DmBlockStatus {
+  messagingBlocked: boolean;
+  iBlockedThem: boolean;
+  theyBlockedMe: boolean;
+}
+
 export interface DmThread {
   id: string;
   participantA: string;
@@ -28,6 +34,7 @@ export interface DmThread {
   } | null;
   lastMessage: DmMessage | null;
   unreadCount: number;
+  blockStatus?: DmBlockStatus;
 }
 
 interface DmContextValue {
