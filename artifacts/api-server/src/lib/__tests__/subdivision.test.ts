@@ -38,6 +38,17 @@ describe("subdivision detection", () => {
     expect(result.subLots).not.toContain("66 Marine Parade, Mellons Bay");
   });
 
+  it("recognises confirmed subdivisions even when the suburb is misspelled and not comma-separated", async () => {
+    const result = await detectSubdivision("66 marine parade melons bay");
+
+    expect(result.isSubdivided).toBe(true);
+    expect(result.subLots).toEqual([
+      "66A Marine Parade, Mellons Bay, Auckland 2014",
+      "66B Marine Parade, Mellons Bay, Auckland 2014",
+      "66C Marine Parade, Mellons Bay, Auckland 2014",
+    ]);
+  });
+
   it("does not block an explicitly selected child lot", async () => {
     await expect(detectSubdivision("66A Marine Parade, Mellons Bay")).resolves.toEqual({
       isSubdivided: false,

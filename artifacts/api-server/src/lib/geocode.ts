@@ -7,6 +7,44 @@ export interface GeoResult {
   suburb: string | null;
 }
 
+type ParsedStreetNumber = {
+  base: string;
+  suffix: string;
+  full: string;
+};
+
+function parseLeadingStreetNumber(input: string): ParsedStreetNumber | null {
+  const match = input.trim().match(/^(\d+)([a-z])?\b/i);
+  if (!match) return null;
+  const base = match[1]!;
+  const suffix = (match[2] ?? "").toUpperCase();
+  return { base, suffix, full: `${base}${suffix}`.toLowerCase() };
+}
+
+function streetNumberFromFormatted(formatted: string): string | null {
+  const match = formatted.trim().match(/^(\d+[a-z]?)(?:\b|,)/i);
+  return match ? match[1]!.toLowerCase() : null;
+}
+
+function scoreStreetNumberMatch(input: string, candidateNumber: string | null): number {
+  const requested = parseLeadingStreetNumber(input);
+  if (!requested || !candidateNumber) return 0;
+
+  const candidate = parseLeadingStreetNumber(candidateNumber);
+  if (!candidate) return 0;
+
+  if (candidate.full === requested.full) return 100;
+  if (candidate.base !== requested.base) return -50;
+
+  // If the user typed the parent lot, prefer the exact parent over 8A/8B.
+  if (!requested.suffix && candidate.suffix) return -25;
+
+  // If the user typed a child lot, don't let the parent win by accident.
+  if (requested.suffix && !candidate.suffix) return -20;
+
+  return 0;
+}
+
 async function nominatimGeocode(address: string): Promise<GeoResult | null> {
   const query = encodeURIComponent(`${address}, New Zealand`);
   const url = `https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=5&countrycodes=nz&addressdetails=1`;
@@ -37,7 +75,7 @@ async function nominatimGeocode(address: string): Promise<GeoResult | null> {
 
   if (!results || results.length === 0) return null;
 
-  const best = results[0];
+  const best = chooseBestNominatimRow(address, results);
   return nominatimRowToGeo(best);
 }
 
@@ -46,12 +84,30 @@ type NominatimRow = {
   lon: string;
   display_name: string;
   address?: {
+    house_number?: string;
     suburb?: string;
     town?: string;
     city_district?: string;
     county?: string;
   };
 };
+
+function chooseBestNominatimRow(address: string, rows: NominatimRow[]): NominatimRow {
+  let best = rows[0]!;
+  let bestScore = -Infinity;
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!;
+    const candidateNumber = row.address?.house_number ?? streetNumberFromFormatted(row.display_name);
+    const score = scoreStreetNumberMatch(address, candidateNumber) - i * 0.01;
+    if (score > bestScore) {
+      best = row;
+      bestScore = score;
+    }
+  }
+
+  return best;
+}
 
 function nominatimRowToGeo(row: NominatimRow): GeoResult {
   const suburb =
@@ -101,18 +157,50 @@ async function googleGeocode(address: string, apiKey: string): Promise<GeoResult
     results: Array<{
       geometry: { location: { lat: number; lng: number } };
       formatted_address: string;
+      address_components?: Array<{
+        long_name: string;
+        short_name: string;
+        types: string[];
+      }>;
     }>;
   };
 
   if (data.status !== "OK" || !data.results.length) return null;
 
-  const r = data.results[0];
+  const r = chooseBestGoogleResult(address, data.results);
   return {
     lat: r.geometry.location.lat,
     lng: r.geometry.location.lng,
     formatted: r.formatted_address,
     suburb: null,
   };
+}
+
+function googleStreetNumber(result: {
+  formatted_address: string;
+  address_components?: Array<{ long_name: string; short_name: string; types: string[] }>;
+}): string | null {
+  const component = result.address_components?.find((c) => c.types.includes("street_number"));
+  return component?.short_name?.trim() || component?.long_name?.trim() || streetNumberFromFormatted(result.formatted_address);
+}
+
+function chooseBestGoogleResult<T extends {
+  formatted_address: string;
+  address_components?: Array<{ long_name: string; short_name: string; types: string[] }>;
+}>(address: string, results: T[]): T {
+  let best = results[0]!;
+  let bestScore = -Infinity;
+
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i]!;
+    const score = scoreStreetNumberMatch(address, googleStreetNumber(result)) - i * 0.01;
+    if (score > bestScore) {
+      best = result;
+      bestScore = score;
+    }
+  }
+
+  return best;
 }
 
 /**

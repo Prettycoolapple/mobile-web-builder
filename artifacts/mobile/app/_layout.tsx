@@ -57,6 +57,18 @@ function SubscriptionGate({ children }: { children: React.ReactNode }) {
   );
 }
 
+function SplashUntilReady({ fontsReady }: { fontsReady: boolean }) {
+  const { isLoading } = useAuth();
+
+  useEffect(() => {
+    if (fontsReady && !isLoading) {
+      void SplashScreen.hideAsync();
+    }
+  }, [fontsReady, isLoading]);
+
+  return null;
+}
+
 function NotificationSetup() {
   const { token, user } = useAuth();
   const router = useRouter();
@@ -132,6 +144,7 @@ function NotificationSetup() {
 function RootLayoutNav() {
   return (
     <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="index" options={{ headerShown: false }} />
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="(auth)" options={{ headerShown: false }} />
       <Stack.Screen name="(onboarding)" options={{ headerShown: false }} />
@@ -159,13 +172,9 @@ export default function RootLayout() {
     Fraunces_700Bold,
   });
 
-  useEffect(() => {
-    if (fontsLoaded || fontError) {
-      SplashScreen.hideAsync();
-    }
-  }, [fontsLoaded, fontError]);
+  const fontsReady = fontsLoaded || !!fontError;
 
-  if (!fontsLoaded && !fontError) return null;
+  if (!fontsReady) return null;
 
   return (
     <SafeAreaProvider>
@@ -177,6 +186,7 @@ export default function RootLayout() {
         <ErrorBoundary>
           <QueryClientProvider client={queryClient}>
             <AuthProvider>
+              <SplashUntilReady fontsReady={fontsReady} />
               <SubscriptionGate>
                 <DmProvider>
                   <ChatProvider>

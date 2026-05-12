@@ -1,6 +1,7 @@
 import { Storage, File } from "@google-cloud/storage";
 import { Readable } from "stream";
 import { randomUUID } from "crypto";
+import * as os from "os";
 import * as fs from "fs";
 import * as path from "path";
 import { getGoogleCloudProjectId } from "./env";
@@ -25,24 +26,32 @@ function buildStorageClient(): Storage | null {
         credentials,
       });
     } catch (err) {
-      throw new Error(
-        "GOOGLE_APPLICATION_CREDENTIALS_JSON is not valid JSON: " +
-          (err instanceof Error ? err.message : String(err)),
+      console.error(
+        "[storage] GOOGLE_APPLICATION_CREDENTIALS_JSON is not valid JSON; falling back to local mode:",
+        err instanceof Error ? err.message : String(err),
       );
+      return null;
     }
   }
 
-  return new Storage({ projectId });
+  try {
+    return new Storage({ projectId });
+  } catch (err) {
+    console.error(
+      "[storage] Failed to initialize Google Cloud Storage client; falling back to local mode:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  }
 }
 
 export const objectStorageClient = buildStorageClient();
 
-const LOCAL_UPLOAD_DIR = path.resolve(process.cwd(), ".local-uploads");
+const LOCAL_UPLOAD_DIR = path.join(os.tmpdir(), "project-alpha-uploads");
 
 export const isLocalStorageMode = !objectStorageClient;
 
 if (isLocalStorageMode) {
-  fs.mkdirSync(LOCAL_UPLOAD_DIR, { recursive: true });
   console.log(`[storage] GCS not configured — using local filesystem at ${LOCAL_UPLOAD_DIR}`);
 }
 

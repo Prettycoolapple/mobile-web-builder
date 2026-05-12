@@ -32,6 +32,18 @@ import { inferSchoolZonesFromLocation } from "./school-zones-llm";
 
 const AC_PROP_MAPSERVER = "https://mapspublic.aucklandcouncil.govt.nz/arcgis3/rest/services/NonCouncil/PropertyValueInfo/MapServer";
 
+function browserScrapersEnabled(): boolean {
+  const explicit = process.env["ENABLE_BROWSER_SCRAPERS"]?.trim().toLowerCase();
+  if (explicit === "1" || explicit === "true" || explicit === "yes" || explicit === "on") return true;
+  if (explicit === "0" || explicit === "false" || explicit === "no" || explicit === "off") return false;
+
+  // Vercel/serverless has a short request ceiling and does not reliably run
+  // browser-backed scrapers. The direct PropertyValue + GIS paths are the
+  // production source of truth for CV/build year/beds/baths.
+  if (process.env["VERCEL"] || process.env["ENABLE_SOCKET_IO"] === "false") return false;
+  return true;
+}
+
 /**
  * Parse a build decade string or year from AC GIS.
  * AC GIS returns "DECADEBUILT" as values like 2010, 1990, "2010s", "1990s".
@@ -347,6 +359,10 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   // 3–8 s and is independent of the scrapers. Kicking it off here means it runs
   // concurrently with wave 1 rather than adding to the sequential tail.
   const interestRatePromise = assessInterestRateOutlook().catch(() => "stable" as const);
+  const useBrowserScrapers = browserScrapersEnabled();
+  if (!useBrowserScrapers) {
+    logger.info("Browser-backed property scrapers disabled for this runtime; using direct APIs only");
+  }
 
   // ─── WAVE 1: Run all data sources in parallel ─────────────────────────────
   // All 4 scrapers (Hougarden, OneRoof, QV, Homes) run simultaneously from the
@@ -372,11 +388,11 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     timed("contour",          () => fetchContour(lat, lng, linzParcelData?.bbox ?? null),                         timing),
     timed("property_history", () => fetchPropertyHistory(address, lat, lng),                                      timing),
     timed("infrastructure",   () => fetchInfrastructure(lat, lng, linzParcelData?.bbox ?? null, linzParcelData?.parcel_id ?? null), timing),
-    timed("hougarden",        () => withBrowserSlot(() => scrapeHougarden(lat, lng, address)),                    timing),
-    timed("oneroof",          () => withBrowserSlot(() => scrapeOneRoof(address)),                                timing),
+    timed("hougarden",        () => useBrowserScrapers ? withBrowserSlot(() => scrapeHougarden(lat, lng, address)) : Promise.resolve(null), timing),
+    timed("oneroof",          () => useBrowserScrapers ? withBrowserSlot(() => scrapeOneRoof(address)) : Promise.resolve(null), timing),
     timed("propertyvalue",    () => scrapePropertyValue(address, geocode!.formatted ?? address),                  timing),
-    timed("qv",               () => withBrowserSlot(() => scrapeQV(address)),                                     timing),
-    timed("homes",            () => withBrowserSlot(() => scrapeHomes(address, suburb, geocode!.formatted ?? address)), timing),
+    timed("qv",               () => useBrowserScrapers ? withBrowserSlot(() => scrapeQV(address)) : Promise.resolve(null), timing),
+    timed("homes",            () => useBrowserScrapers ? withBrowserSlot(() => scrapeHomes(address, suburb, geocode!.formatted ?? address)) : Promise.resolve(null), timing),
   ]);
 
   const zoneData            = zoneResult.status            === "fulfilled" ? zoneResult.value.value            : null;
@@ -530,14 +546,14 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
 
     const retryPromises: Promise<void>[] = [];
 
-    if (wave1HougardenFailed) {
+    if (useBrowserScrapers && wave1HougardenFailed) {
       retryPromises.push(
         timed("hougarden_retry", () => withBrowserSlot(() => scrapeHougarden(lat, lng, address)), timing)
           .then((r) => { if (!r.failed && r.value) hougardenData = r.value; })
           .catch(() => {}),
       );
     }
-    if (wave1OneRoofFailed) {
+    if (useBrowserScrapers && wave1OneRoofFailed) {
       retryPromises.push(
         timed("oneroof_retry", () => withBrowserSlot(() => scrapeOneRoof(address)), timing)
           .then((r) => { if (!r.failed && r.value) oneRoofData = r.value; })
@@ -551,14 +567,14 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
           .catch(() => {}),
       );
     }
-    if (wave1QvFailed) {
+    if (useBrowserScrapers && wave1QvFailed) {
       retryPromises.push(
         timed("qv_retry", () => withBrowserSlot(() => scrapeQV(address)), timing)
           .then((r) => { if (!r.failed && r.value) qvData = r.value; })
           .catch(() => {}),
       );
     }
-    if (wave1HomesFailed) {
+    if (useBrowserScrapers && wave1HomesFailed) {
       retryPromises.push(
         timed("homes_retry", () => withBrowserSlot(() => scrapeHomes(address, suburb, geocode!.formatted ?? address)), timing)
           .then((r) => { if (!r.failed && r.value) homesData = r.value; })

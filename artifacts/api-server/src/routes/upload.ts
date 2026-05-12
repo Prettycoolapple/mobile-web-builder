@@ -51,6 +51,20 @@ async function uploadToStorage(
   return { objectPath };
 }
 
+function profilePictureDataUrl(buffer: Buffer | Uint8Array, mimetype: string): string {
+  return `data:${mimetype};base64,${Buffer.from(buffer).toString("base64")}`;
+}
+
+async function saveInlineProfilePicture(
+  userId: string,
+  buffer: Buffer | Uint8Array,
+  mimetype: string,
+): Promise<{ fileUrl: string }> {
+  const fileUrl = profilePictureDataUrl(buffer, mimetype);
+  await db.update(profiles).set({ avatarUrl: fileUrl }).where(eq(profiles.id, userId));
+  return { fileUrl };
+}
+
 const ALLOWED_MIME_TYPES = new Set([
   "application/pdf",
   "image/jpeg",
@@ -356,6 +370,11 @@ router.post(
 
     try {
       const { buffer, mimetype, size } = req.file;
+      if (objectStorageService.isLocal) {
+        const inline = await saveInlineProfilePicture(userId, buffer, mimetype);
+        res.status(201).json({ ...inline, objectPath: null });
+        return;
+      }
       const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size, "avatars");
 
       const fileUrl = `/api/storage${objectPath}`;
@@ -367,6 +386,13 @@ router.post(
       res.status(201).json({ fileUrl, objectPath });
     } catch (error) {
       req.log.error({ err: error }, "Profile picture upload failed");
+      try {
+        const inline = await saveInlineProfilePicture(userId, req.file.buffer, req.file.mimetype);
+        res.status(201).json({ ...inline, objectPath: null });
+        return;
+      } catch (inlineError) {
+        req.log.error({ err: inlineError }, "Inline profile picture fallback failed");
+      }
       const classified = classifyStorageUploadError(error);
       if (classified) {
         res.status(classified.status).json({ error: classified.error, code: classified.code });

@@ -47,6 +47,12 @@ export const OFFERING_BY_ROLE: Record<string, string> = {
   service_provider: "provider",
 };
 
+const PRODUCT_ID_BY_ROLE: Record<string, string> = {
+  general: "standard_monthly",
+  sales_agent: "agent_monthly",
+  service_provider: "provider_monthly",
+};
+
 type OfferingPackage = object;
 type OfferingLike = {
   monthly?: OfferingPackage | null;
@@ -57,10 +63,26 @@ type OfferingsLike = {
   current?: OfferingLike | null;
 };
 
+type StoreProductLike = {
+  identifier?: string;
+  productIdentifier?: string;
+  priceString?: string;
+};
+
 function pickStorePackageFromOfferings(role: string, offerings: OfferingsLike | null | undefined): object | null {
   const offeringKey = OFFERING_BY_ROLE[role] ?? "default";
   const offering = offerings?.all?.[offeringKey] ?? offerings?.current ?? null;
   return (offering?.monthly ?? offering?.availablePackages?.[0] ?? null) as object | null;
+}
+
+function pickDirectStoreProduct(
+  role: string,
+  products: StoreProductLike[] | null | undefined,
+): StoreProductLike | null {
+  const productId = PRODUCT_ID_BY_ROLE[role] ?? PRODUCT_ID_BY_ROLE.general;
+  return products?.find(
+    (product) => product.identifier === productId || product.productIdentifier === productId,
+  ) ?? null;
 }
 
 // Test payment mode is active when we cannot reach native StoreKit / Billing
@@ -127,8 +149,18 @@ interface TestPackage {
   product: { priceString: string };
 }
 
+interface DirectStoreProductPurchase {
+  __storeProduct: true;
+  role: string;
+  storeProduct: StoreProductLike & object;
+}
+
 function isTestPackage(pkg: unknown): pkg is TestPackage {
   return typeof pkg === "object" && pkg !== null && (pkg as { __testMode?: boolean }).__testMode === true;
+}
+
+function isDirectStoreProductPurchase(pkg: unknown): pkg is DirectStoreProductPurchase {
+  return typeof pkg === "object" && pkg !== null && (pkg as { __storeProduct?: boolean }).__storeProduct === true;
 }
 
 function useSubscriptionContext(identityReady: boolean) {
@@ -157,6 +189,16 @@ function useSubscriptionContext(identityReady: boolean) {
     enabled: queriesEnabled,
   });
 
+  const storeProductsQuery = useQuery({
+    queryKey: ["revenuecat", "store-products"],
+    queryFn: async () =>
+      (await Purchases.getProducts(Object.values(PRODUCT_ID_BY_ROLE))) as unknown as StoreProductLike[],
+    staleTime: 300_000,
+    retry: 2,
+    retryDelay: (n) => 800 * (n + 1),
+    enabled: queriesEnabled,
+  });
+
   const purchaseMutation = useMutation({
     mutationFn: async (pkg: object) => {
       if (isTestPackage(pkg)) {
@@ -164,6 +206,10 @@ function useSubscriptionContext(identityReady: boolean) {
         // for syncing the new tier to the backend (POST /subscription/sync).
         await new Promise((r) => setTimeout(r, 600));
         return null;
+      }
+      if (isDirectStoreProductPurchase(pkg)) {
+        const { customerInfo } = await Purchases.purchaseStoreProduct(pkg.storeProduct as never);
+        return customerInfo;
       }
       const { customerInfo } = await Purchases.purchasePackage(pkg as never);
       return customerInfo;
@@ -198,9 +244,24 @@ function useSubscriptionContext(identityReady: boolean) {
     return pickStorePackageFromOfferings(role, offeringsQuery.data as OfferingsLike | null | undefined);
   }
 
+  function getDirectStoreProductForRole(role: string): DirectStoreProductPurchase | null {
+    const product = pickDirectStoreProduct(
+      role,
+      storeProductsQuery.data as StoreProductLike[] | null | undefined,
+    );
+    if (!product) return null;
+    return {
+      __storeProduct: true,
+      role,
+      storeProduct: product as StoreProductLike & object,
+    };
+  }
+
   function getPackageForRole(role: string): object | null {
     const realPkg = pickStorePackageForRole(role);
     if (realPkg) return realPkg;
+    const directProduct = getDirectStoreProductForRole(role);
+    if (directProduct) return directProduct;
     if (IS_TEST_PAYMENT_MODE) {
       return {
         __testMode: true,
@@ -211,9 +272,14 @@ function useSubscriptionContext(identityReady: boolean) {
     return null;
   }
 
-function getPriceForRole(role: string): string {
+  function getPriceForRole(role: string): string {
     const realPkg = pickStorePackageForRole(role) as { product?: { priceString?: string } } | null;
     if (realPkg?.product?.priceString) return realPkg.product.priceString;
+    const directProduct = pickDirectStoreProduct(
+      role,
+      storeProductsQuery.data as StoreProductLike[] | null | undefined,
+    );
+    if (directProduct?.priceString) return directProduct.priceString;
     return TEST_PRICE_BY_ROLE[role] ?? TEST_PRICE_BY_ROLE.general;
   }
 
@@ -225,6 +291,7 @@ function getPriceForRole(role: string): string {
   }
 
   const refetchOfferings = useCallback(() => offeringsQuery.refetch(), [offeringsQuery.refetch]);
+  const refetchStoreProducts = useCallback(() => storeProductsQuery.refetch(), [storeProductsQuery.refetch]);
 
   const getFreshPackageForRole = useCallback(async (role: string): Promise<object | null> => {
     if (IS_TEST_PAYMENT_MODE) {
@@ -236,9 +303,23 @@ function getPriceForRole(role: string): string {
     }
     if (!queriesEnabled) return null;
     const result = await offeringsQuery.refetch();
-    return pickStorePackageFromOfferings(role, result.data as OfferingsLike | null | undefined)
+    const pkg = pickStorePackageFromOfferings(role, result.data as OfferingsLike | null | undefined)
       ?? pickStorePackageFromOfferings(role, offeringsQuery.data as OfferingsLike | null | undefined);
-  }, [queriesEnabled, offeringsQuery.refetch, offeringsQuery.data]);
+    if (pkg) return pkg;
+
+    const productsResult = await storeProductsQuery.refetch();
+    const directProduct = pickDirectStoreProduct(
+      role,
+      (productsResult.data as StoreProductLike[] | null | undefined)
+        ?? (storeProductsQuery.data as StoreProductLike[] | null | undefined),
+    );
+    if (!directProduct) return null;
+    return {
+      __storeProduct: true,
+      role,
+      storeProduct: directProduct as StoreProductLike & object,
+    } as DirectStoreProductPurchase;
+  }, [queriesEnabled, offeringsQuery.refetch, offeringsQuery.data, storeProductsQuery.refetch, storeProductsQuery.data]);
 
   const offeringsLoading = Boolean(queriesEnabled && offeringsQuery.isPending);
   const offeringsError = queriesEnabled ? offeringsQuery.error : null;
@@ -247,9 +328,9 @@ function getPriceForRole(role: string): string {
     (role: string): boolean => {
       if (IS_TEST_PAYMENT_MODE) return true;
       if (!queriesEnabled) return false;
-      return pickStorePackageForRole(role) !== null;
+      return pickStorePackageForRole(role) !== null || getDirectStoreProductForRole(role) !== null;
     },
-    [queriesEnabled, offeringsQuery.data],
+    [queriesEnabled, offeringsQuery.data, storeProductsQuery.data],
   );
 
   return {
@@ -265,6 +346,7 @@ function getPriceForRole(role: string): string {
     isRestoring: restoreMutation.isPending,
     refetchCustomerInfo: customerInfoQuery.refetch,
     refetchOfferings,
+    refetchStoreProducts,
     offeringsLoading,
     offeringsError,
     purchaseReadyForRole,

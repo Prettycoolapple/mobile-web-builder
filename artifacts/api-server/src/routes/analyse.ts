@@ -1292,19 +1292,26 @@ router.post("/analyse", async (req, res) => {
     }
     const analysisAddress = addressResolution.resolvedAddress || address;
 
-    // Run the deterministic pipeline in parallel with the LLM report so the
-    // response includes verified merge data (CV, land/floor area, listing
-    // reconciliation) and a pinned property_overview_snapshot for follow-ups.
+    // Prefer the deterministic pipeline report. It is faster and keeps Vercel
+    // serverless requests below the function timeout, while still carrying the
+    // verified CV/build year/beds/baths/source-backed fields.
     const locale = analyseLocale;
-    const [raw, pipelineResult] = await Promise.all([
-      generateFeasibilityReport(analysisAddress, conversationHistory || [], locale),
-      runPropertyPipeline(analysisAddress).catch((err) => {
+    const pipelineResult = await runPropertyPipeline(analysisAddress).catch((err) => {
         req.log.warn({ err }, "Pipeline failed during /analyse — falling back to LLM-only report");
         return null;
-      }),
-    ]);
+    });
 
-    let report = extractJSON(raw) as Record<string, unknown>;
+    let report: Record<string, unknown>;
+    const deterministicReport = pipelineResult
+      ? buildDeterministicFallbackReport(pipelineResult, pipelineResult.geocode?.formatted ?? analysisAddress)
+      : null;
+
+    if (deterministicReport) {
+      report = deterministicReport;
+    } else {
+      const raw = await generateFeasibilityReport(analysisAddress, conversationHistory || [], locale);
+      report = extractJSON(raw) as Record<string, unknown>;
+    }
 
     // Inject deterministic pipeline-backed fields so CV/cost/ROI values remain
     // consistent and do not drift from source data.
@@ -2118,6 +2125,42 @@ router.post("/chat", async (req, res) => {
           });
 
           if (pipelineResult) {
+            const deterministicReport = buildDeterministicFallbackReport(
+              pipelineResult,
+              pipelineResult.geocode?.formatted ?? analysisAddress,
+            );
+
+            if (deterministicReport) {
+              const content = JSON.stringify(deterministicReport);
+              let savedSearchId: string | null = null;
+              let savedSearchCreatedAt: string | null = null;
+
+              if (chatUserId) {
+                try {
+                  const [row] = await db.insert(searches).values({
+                    userId: chatUserId,
+                    query: extractedAddress,
+                    address: pipelineResult.geocode?.formatted ?? analysisAddress,
+                    resultJson: deterministicReport as any,
+                  }).returning({ id: searches.id, createdAt: searches.createdAt });
+                  savedSearchId = row?.id ?? null;
+                  savedSearchCreatedAt = row?.createdAt ? new Date(row.createdAt as unknown as string).toISOString() : null;
+                  req.log.info({ address: analysisAddress, originalAddress: extractedAddress }, "Chat deterministic analysis saved to history");
+                } catch (err) {
+                  req.log.error({ err }, "Failed to save deterministic chat analysis to history");
+                }
+              }
+
+              const translatedAnalyse = await translateChatContent(content, "analyse", chatLocale, chatTranslateTitleSchool);
+              sendAnalyseResponse({
+                content: translatedAnalyse,
+                mode: "analyse",
+                searchId: savedSearchId,
+                historyCreatedAt: savedSearchCreatedAt,
+              });
+              return;
+            }
+
             const failedStr =
               pipelineResult.failed_sources.length > 0
                 ? `\nFailed sources (treat as unknown): ${pipelineResult.failed_sources.join(", ")}`
@@ -2435,15 +2478,15 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             }
 
             // Persist to search history (non-blocking; invalid/truncated model JSON skips save)
-            const chatUserId = getUserIdFromHeader(req);
+            const chatSaveUserId = getUserIdFromHeader(req);
             let savedSearchId: string | null = null;
             let savedSearchCreatedAt: string | null = null;
-            if (chatUserId) {
+            if (chatSaveUserId) {
               const parsedForSave = tryParseReportJson(content);
               if (parsedForSave != null) {
                 try {
                   const [row] = await db.insert(searches).values({
-                    userId: chatUserId,
+                    userId: chatSaveUserId,
                     query: extractedAddress,
                     address: geocode?.formatted ?? analysisAddress,
                     resultJson: parsedForSave as any,

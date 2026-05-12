@@ -87,7 +87,7 @@ export default function ProfileScreen() {
   const { t } = useT();
   const PLAN_FEATURES = buildPlanFeatures(t);
 
-  const { purchase, isSubscribed, customerInfoLoaded, isTestPaymentMode, refetchCustomerInfo, refetchOfferings, offeringsLoading, purchaseReadyForRole, getFreshPackageForRole, getPriceForRole } = useSubscription();
+  const { purchase, isSubscribed, customerInfoLoaded, isTestPaymentMode, refetchCustomerInfo, refetchOfferings, refetchStoreProducts, offeringsLoading, purchaseReadyForRole, getFreshPackageForRole, getPriceForRole } = useSubscription();
   const [upgradeLoading, setUpgradeLoading] = useState(false);
 
   // Refresh RevenueCat status each time the profile screen mounts so the correct
@@ -98,7 +98,8 @@ export default function ProfileScreen() {
     if (!isSubscriptionIdentityReady) return;
     refetchCustomerInfo();
     void refetchOfferings();
-  }, [isTestPaymentMode, isSubscriptionIdentityReady, refetchCustomerInfo, refetchOfferings]);
+    void refetchStoreProducts();
+  }, [isTestPaymentMode, isSubscriptionIdentityReady, refetchCustomerInfo, refetchOfferings, refetchStoreProducts]);
 
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);

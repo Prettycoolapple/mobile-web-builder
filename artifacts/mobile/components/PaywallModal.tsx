@@ -26,7 +26,7 @@ interface Props {
 export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
   const colors = useColors();
   const { getApiHeaders, refreshProfile } = useAuth();
-  const { purchase, restore, isPurchasing, isRestoring, getFreshPackageForRole, getPriceForRole, refetchCustomerInfo, refetchOfferings, offeringsLoading, purchaseReadyForRole } =
+  const { purchase, restore, isPurchasing, isRestoring, getFreshPackageForRole, getPriceForRole, refetchCustomerInfo, refetchOfferings, refetchStoreProducts, offeringsLoading, purchaseReadyForRole } =
     useSubscription();
   const { t } = useT();
   const FEATURES = [
@@ -42,8 +42,9 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
   useEffect(() => {
     if (visible) {
       void refetchOfferings();
+      void refetchStoreProducts();
     }
-  }, [visible, refetchOfferings]);
+  }, [visible, refetchOfferings, refetchStoreProducts]);
 
   useEffect(() => {
     if (visible) {

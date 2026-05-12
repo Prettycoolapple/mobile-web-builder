@@ -10,6 +10,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { Image } from "expo-image";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
@@ -19,6 +20,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useLocalSearchParams } from "expo-router";
 import { PaywallModal } from "@/components/PaywallModal";
 import { getApiBase } from "@/lib/api";
+import { avatarImageSource } from "@/lib/avatar";
 import { useT } from "@/lib/i18n";
 
 interface Contact {
@@ -40,14 +42,41 @@ function roleBadge(
   return { label: t("dm.header.user"), color: "#8B7355" };
 }
 
-function Avatar({ name, size = 46 }: { name: string | null; size?: number }) {
+function Avatar({
+  name,
+  avatarUrl,
+  authHeaders,
+  size = 46,
+}: {
+  name: string | null;
+  avatarUrl?: string | null;
+  authHeaders: Record<string, string>;
+  size?: number;
+}) {
   const colors = useColors();
+  const source = avatarImageSource(avatarUrl ?? null, authHeaders);
   const initials = (name ?? "?")
     .split(" ")
     .slice(0, 2)
     .map((w) => w[0])
     .join("")
     .toUpperCase();
+  if (source) {
+    return (
+      <Image
+        source={source}
+        style={{
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          borderWidth: 1.5,
+          borderColor: colors.accent + "40",
+        }}
+        contentFit="cover"
+        transition={120}
+      />
+    );
+  }
   return (
     <View
       style={{
@@ -72,7 +101,7 @@ export default function ContactsScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { token } = useAuth();
+  const { token, getApiHeaders } = useAuth();
   const { preselect } = useLocalSearchParams<{ preselect?: string }>();
   const { t } = useT();
 
@@ -201,7 +230,11 @@ export default function ContactsScreen() {
                   activeOpacity={0.75}
                   hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
                 >
-                  <Avatar name={item.fullName} />
+                  <Avatar
+                    name={item.fullName}
+                    avatarUrl={item.avatarUrl}
+                    authHeaders={getApiHeaders()}
+                  />
                 </TouchableOpacity>
                 <View style={styles.contactMid}>
                   <Text style={[styles.contactName, { color: colors.foreground }]} numberOfLines={1}>

@@ -2,15 +2,13 @@
   "expo": {
     "name": "Project Alpha",
     "slug": "workspace",
-    "version": "1.0.6",
+    "version": "1.0.7",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "devfeasible",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/images/icon.png",
-      "resizeMode": "contain",
       "backgroundColor": "#1C1917"
     },
     "ios": {
@@ -35,6 +33,12 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#1C1917"
+        }
+      ],
       "expo-dev-client",
       "expo-font",
       "expo-web-browser",

@@ -58,11 +58,19 @@ export function parseStreetNumberSuffix(address: string): {
 }
 
 function normaliseFormatted(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return s
+    .toLowerCase()
+    .replace(/\bmelons\s+bay\b/g, "mellons bay")
+    .replace(/[^a-z0-9]/g, "");
 }
 
 function streetLineFromRest(rest: string): string {
-  return rest.split(",")[0]!.trim();
+  const firstPart = rest.split(",")[0]!.trim();
+  const streetType =
+    /\b(?:road|street|avenue|crescent|place|drive|way|lane|terrace|parade|close|grove|rise|view|heights|ridge|court|hill|mews|quay|boulevard|highway|motorway|esplanade|mall|row|walk|path|track|rd|st|ave|cres|pl|dr|ln|tce|pde|blvd|hwy)\b/i;
+  const match = streetType.exec(firstPart);
+  if (!match || match.index == null) return firstPart;
+  return firstPart.slice(0, match.index + match[0].length).trim();
 }
 
 function confirmedSubdivisionFor(address: string, number: string, rest: string): string[] {
