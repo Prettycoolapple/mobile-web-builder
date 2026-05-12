@@ -46,7 +46,7 @@ function hasAnyZone(z: InferredSchoolZones | null): z is InferredSchoolZones {
 
 /**
  * When Hougarden / listing scrape has no school zone lines, infer likely NZ state
- * zone schools from address + suburb via Gemini. Names are then matched against
+ * zone schools from address + suburb via the LLM. Names are then matched against
  * the MoE directory in {@link enrichSchoolZonesDetail} like listing-sourced names.
  */
 export async function inferSchoolZonesFromLocation(
@@ -78,7 +78,7 @@ Rules:
 
   try {
     const llmCall = ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "deepseek-chat",
       config: {
         maxOutputTokens: 512,
         temperature: 0.15,

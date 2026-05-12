@@ -395,7 +395,9 @@ export default function SignupProviderScreen() {
         try {
           const ext = avatarMimeType.split("/")[1] ?? "jpg";
           await uploadProfilePicture(avatarUri, avatarMimeType, `avatar.${ext}`, newToken);
-        } catch {
+        } catch (err) {
+          const message = err instanceof Error && err.message ? err.message : t("profile.error_upload_conn");
+          Alert.alert(t("profile.error"), message);
         }
       }
 

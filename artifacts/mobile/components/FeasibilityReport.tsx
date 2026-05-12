@@ -1673,6 +1673,18 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
               <InfoRow label={t("report.floor_area")} value={report.propertyOverview.floorArea} colors={colors} />
             </View>
           ) : null}
+          <InfoRow
+            label={t("report.bedrooms")}
+            value={typeof bedrooms === "number" && bedrooms > 0 ? String(bedrooms) : t("report.na")}
+            valueColor={!(typeof bedrooms === "number" && bedrooms > 0) ? colors.amber : undefined}
+            colors={colors}
+          />
+          <InfoRow
+            label={t("report.bathrooms")}
+            value={typeof bathrooms === "number" && bathrooms > 0 ? String(bathrooms) : t("report.na")}
+            valueColor={!(typeof bathrooms === "number" && bathrooms > 0) ? colors.amber : undefined}
+            colors={colors}
+          />
           <InfoRow label={t("report.build_year")} value={report.propertyOverview.buildYear || t("report.na")} colors={colors} />
           <InfoRow label={t("report.zone")} value={report.propertyOverview.zone || t("report.na")} colors={colors} />
           {titleTypeDisplay ? (

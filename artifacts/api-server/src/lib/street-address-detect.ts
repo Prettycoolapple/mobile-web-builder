@@ -1,6 +1,6 @@
 /**
  * Heuristics for spotting a numbered NZ street lot in free text (chat intent, routing).
- * Kept Gemini-free so callers and tests do not load `@workspace/integrations-gemini-ai`.
+ * Kept LLM-free so callers and tests do not load `@workspace/integrations-gemini-ai`.
  */
 
 const NUMBERED_STREET_RE =

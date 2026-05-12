@@ -535,11 +535,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       setUser((prev) => (prev ? { ...prev, avatarUrl: completeJson.fileUrl } : prev));
       return { fileUrl: completeJson.fileUrl };
-    } catch {
-      // Keep signup/profile edits working if signed URL flow is unavailable.
-      const fallback = await legacyUpload();
-      setUser((prev) => (prev ? { ...prev, avatarUrl: fallback.fileUrl } : prev));
-      return fallback;
+    } catch (signedError) {
+      try {
+        // Keep signup/profile edits working if signed URL flow is unavailable.
+        const fallback = await legacyUpload();
+        setUser((prev) => (prev ? { ...prev, avatarUrl: fallback.fileUrl } : prev));
+        return fallback;
+      } catch (legacyError) {
+        const fallbackMessage =
+          legacyError instanceof Error && legacyError.message
+            ? legacyError.message
+            : "Upload failed";
+        const signedMessage =
+          signedError instanceof Error && signedError.message
+            ? signedError.message
+            : null;
+        throw new Error(
+          signedMessage && signedMessage !== fallbackMessage
+            ? `${fallbackMessage} (signed upload fallback also failed: ${signedMessage})`
+            : fallbackMessage,
+        );
+      }
     }
   }, [token]);
 

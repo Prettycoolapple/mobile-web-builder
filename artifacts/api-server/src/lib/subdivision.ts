@@ -89,6 +89,12 @@ function formattedContainsSubLot(formatted: string, number: string, letter: stri
   return re.test(norm);
 }
 
+function formattedContainsParentLot(formatted: string, number: string): boolean {
+  const norm = formatted.toLowerCase();
+  const re = new RegExp(`(^|[^0-9])${number}(?![a-z])(\\s|,)`);
+  return re.test(norm);
+}
+
 export async function detectSubdivision(address: string): Promise<SubdivisionResult> {
   const parsed = parseStreetNumberSuffix(address);
   if (!parsed || parsed.letter !== "") {
@@ -108,6 +114,15 @@ export async function detectSubdivision(address: string): Promise<SubdivisionRes
       parentAddress: address,
       subLots: confirmed,
     };
+  }
+
+  try {
+    const parentGeo = await geocodeAddress(address);
+    if (formattedContainsParentLot(parentGeo.formatted, number)) {
+      return { isSubdivided: false, parentAddress: address, subLots: [] };
+    }
+  } catch {
+    // Ignore parent geocode failures and keep probing likely child lots.
   }
 
   const probes = await Promise.all(

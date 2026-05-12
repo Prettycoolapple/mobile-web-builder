@@ -14,6 +14,7 @@ import {
   Modal,
   FlatList,
   Image,
+  Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -190,7 +191,9 @@ export default function SignupGeneralScreen() {
           const ext = avatarUri.split(".").pop() ?? "jpg";
           await uploadProfilePicture(avatarUri, avatarMimeType, `avatar.${ext}`, newToken);
           await refreshProfile().catch(() => {});
-        } catch {
+        } catch (err) {
+          const message = err instanceof Error && err.message ? err.message : t("profile.error_upload_conn");
+          Alert.alert(t("profile.error"), message);
         }
       }
 

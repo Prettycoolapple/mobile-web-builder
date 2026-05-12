@@ -184,7 +184,7 @@ Return ONLY a JSON array of ${maxSelect} zero-based indices, e.g. [0, 3, 5]. No 
 
   try {
     const resp = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "deepseek-chat",
       config: { maxOutputTokens: 64 },
       contents: [{
         role: "user",
@@ -374,7 +374,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     timed("infrastructure",   () => fetchInfrastructure(lat, lng, linzParcelData?.bbox ?? null, linzParcelData?.parcel_id ?? null), timing),
     timed("hougarden",        () => withBrowserSlot(() => scrapeHougarden(lat, lng, address)),                    timing),
     timed("oneroof",          () => withBrowserSlot(() => scrapeOneRoof(address)),                                timing),
-    timed("propertyvalue",    () => scrapePropertyValue(geocode!.formatted ?? address),                           timing),
+    timed("propertyvalue",    () => scrapePropertyValue(address, geocode!.formatted ?? address),                  timing),
     timed("qv",               () => withBrowserSlot(() => scrapeQV(address)),                                     timing),
     timed("homes",            () => withBrowserSlot(() => scrapeHomes(address, suburb, geocode!.formatted ?? address)), timing),
   ]);
@@ -515,7 +515,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
 
   // ── Time-budget guard ────────────────────────────────────────────────────
   // Wave 2 retries add 15–40 s. Skip them if we're already past the 70 s
-  // mark so the Gemini analysis call still fits inside the client's 200 s
+  // mark so the LLM analysis call still fits inside the client's 200 s
   // window. The report will use whatever data wave 1 collected.
   const wave1ElapsedMs = Date.now() - pipelineStart;
   const skipWave2 = wave1ElapsedMs > 70_000;
@@ -546,7 +546,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     }
     if (wave1PropertyValueFailed) {
       retryPromises.push(
-        timed("propertyvalue_retry", () => scrapePropertyValue(geocode!.formatted ?? address), timing)
+        timed("propertyvalue_retry", () => scrapePropertyValue(address, geocode!.formatted ?? address), timing)
           .then((r) => { if (!r.failed && r.value) propertyValueData = r.value; })
           .catch(() => {}),
       );

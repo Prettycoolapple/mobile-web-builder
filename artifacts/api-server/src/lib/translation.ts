@@ -30,7 +30,7 @@ export function isPredominantlyChinese(text: string, threshold = 0.3): boolean {
   return cjk / stripped.length >= threshold;
 }
 
-// ─── Translation call (Gemini Flash — low latency) ───────────────────────────
+// ─── Translation call (DeepSeek chat — low latency) ───────────────────────────
 // Strict translation prompt: preserve entities, numbers, JSON shapes, currency,
 // addresses and enum values. Translate natural-language prose only.
 const TRANSLATION_SYSTEM = `You are a precise English → Simplified Chinese (简体中文) translator for a New Zealand real estate feasibility app.
@@ -47,7 +47,7 @@ export async function translateToChinese(text: string): Promise<string> {
   if (!text) return text;
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "deepseek-chat",
       config: {
         systemInstruction: TRANSLATION_SYSTEM,
         maxOutputTokens: Math.min(8192, Math.max(512, text.length * 3)),

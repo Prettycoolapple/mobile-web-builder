@@ -274,7 +274,7 @@ async function signObjectURL({
   ttlSec: number;
   contentType?: string;
 }): Promise<string> {
-  const bucket = objectStorageClient.bucket(bucketName);
+  const bucket = objectStorageClient!.bucket(bucketName);
   const file = bucket.file(objectName);
   const action =
     method === "PUT" ? "write" : method === "DELETE" ? "delete" : "read";

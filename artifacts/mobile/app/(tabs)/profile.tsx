@@ -256,8 +256,9 @@ export default function ProfileScreen() {
       const ext = mime.split("/")[1]?.split(";")[0] || "jpg";
       await uploadProfilePicture(asset.uri, mime, `avatar.${ext}`);
       await refreshProfile().catch(() => {});
-    } catch {
-      Alert.alert(t("profile.error"), t("profile.error_upload_conn"));
+    } catch (err) {
+      const message = err instanceof Error && err.message ? err.message : t("profile.error_upload_conn");
+      Alert.alert(t("profile.error"), message);
     } finally {
       setAvatarUploading(false);
     }
@@ -721,7 +722,7 @@ export default function ProfileScreen() {
                 style={[styles.upgradeBtn, { backgroundColor: upgradeLoading ? colors.accent + "80" : colors.accent }]}
                 activeOpacity={0.8}
                 onPress={handleUpgrade}
-                disabled={upgradeLoading || (!isTestPaymentMode && (offeringsLoading || !purchaseReadyForRole(role)))}
+                disabled={upgradeLoading || (!isTestPaymentMode && offeringsLoading)}
               >
                 {upgradeLoading || (!isTestPaymentMode && offeringsLoading) ? (
                   <ActivityIndicator size="small" color="#fff" />
@@ -765,7 +766,7 @@ export default function ProfileScreen() {
                 style={[styles.upgradeBtn, { backgroundColor: upgradeLoading ? colors.accent + "80" : colors.accent }]}
                 activeOpacity={0.8}
                 onPress={handleUpgrade}
-                disabled={upgradeLoading || (!isTestPaymentMode && (offeringsLoading || !purchaseReadyForRole(role)))}
+                disabled={upgradeLoading || (!isTestPaymentMode && offeringsLoading)}
               >
                 {upgradeLoading || (!isTestPaymentMode && offeringsLoading) ? (
                   <ActivityIndicator size="small" color="#fff" />
@@ -807,7 +808,7 @@ export default function ProfileScreen() {
                 style={[styles.upgradeBtn, { backgroundColor: upgradeLoading ? colors.accent + "80" : colors.accent }]}
                 activeOpacity={0.8}
                 onPress={handleUpgrade}
-                disabled={upgradeLoading || (!isTestPaymentMode && (offeringsLoading || !purchaseReadyForRole(role)))}
+                disabled={upgradeLoading || (!isTestPaymentMode && offeringsLoading)}
               >
                 {upgradeLoading || (!isTestPaymentMode && offeringsLoading) ? (
                   <ActivityIndicator size="small" color="#fff" />

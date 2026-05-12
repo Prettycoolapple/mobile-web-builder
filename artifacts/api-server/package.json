@@ -14,12 +14,12 @@
   },
   "dependencies": {
     "@google-cloud/storage": "^7.19.0",
-    "@google/genai": "^1.49.0",
     "@types/jsonwebtoken": "^9.0.10",
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",
     "@workspace/integrations-gemini-ai": "workspace:*",
     "cheerio": "^1.2.0",
+    "chromium-bidi": "15.0.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2",
     "dotenv": "^17.2.3",
@@ -49,8 +49,8 @@
     "esbuild": "^0.27.3",
     "esbuild-plugin-pino": "^2.3.3",
     "pino-pretty": "^13",
-    "tsx": "catalog:",
     "thread-stream": "3.1.0",
+    "tsx": "catalog:",
     "vitest": "^4.1.4"
   }
 }

@@ -711,7 +711,7 @@ function editDistance(a: string, b: string): number {
 
 /**
  * Find suburbs to fall back to when the primary suburb has no listings.
- * Strategy: prefer LLM suggestions (Gemini knows real NZ geography), then
+ * Strategy: prefer LLM suggestions (the LLM can infer NZ geography candidates), then
  * top up with sister suburbs from the same realestate.co.nz district. Both
  * sources are de-duplicated and capped. No hand-curated map.
  */

@@ -28,7 +28,7 @@ async function detectAgentContactIntent(messages: Message[]): Promise<boolean> {
   const hasKeyword = keywords.some((kw) => recentText.includes(kw));
   if (!hasKeyword) return false;
 
-  // Gemini semantic confirmation
+  // LLM semantic confirmation
   try {
     const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
     if (!lastUserMessage) return false;
@@ -45,7 +45,7 @@ Answer with ONLY valid JSON (no markdown):
 Answer false if the user is asking about something unrelated to contacting the agent.`;
 
     const result = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+      model: "deepseek-chat",
       contents: [{ role: "user", parts: [{ text: prompt }] }],
       config: { maxOutputTokens: 80, temperature: 0 },
     });
@@ -55,7 +55,7 @@ Answer false if the user is asking about something unrelated to contacting the a
     const parsed = JSON.parse(cleaned);
     return Boolean(parsed.wantsAgentContact);
   } catch {
-    // If Gemini fails, fall back to keyword result
+    // If the LLM fails, fall back to keyword result
     return hasKeyword;
   }
 }

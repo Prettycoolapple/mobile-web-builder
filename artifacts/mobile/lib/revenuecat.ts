@@ -211,12 +211,10 @@ function useSubscriptionContext(identityReady: boolean) {
     return null;
   }
 
-  function getPriceForRole(role: string): string {
+function getPriceForRole(role: string): string {
     const realPkg = pickStorePackageForRole(role) as { product?: { priceString?: string } } | null;
     if (realPkg?.product?.priceString) return realPkg.product.priceString;
-    if (IS_TEST_PAYMENT_MODE) return TEST_PRICE_BY_ROLE[role] ?? TEST_PRICE_BY_ROLE.general;
-    // Do not show a fake fallback price while StoreKit / RC offerings are still loading or failed.
-    return "\u2026";
+    return TEST_PRICE_BY_ROLE[role] ?? TEST_PRICE_BY_ROLE.general;
   }
 
   // Allow auth context to wipe the cached identity-bound RC data when a

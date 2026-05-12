@@ -8,6 +8,23 @@ import { ObjectNotFoundError, ObjectStorageService } from "../lib/objectStorage"
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
 
+function classifyStorageUploadError(error: unknown): { status: number; error: string; code: string } | null {
+  const message = error instanceof Error ? error.message : "";
+  if (
+    message.includes("PRIVATE_OBJECT_DIR not set") ||
+    message.includes("PUBLIC_OBJECT_SEARCH_PATHS not set") ||
+    message.includes("GOOGLE_APPLICATION_CREDENTIALS") ||
+    message.includes("local storage mode")
+  ) {
+    return {
+      status: 503,
+      error: "Profile photo storage is not configured on the server. Please contact support.",
+      code: "STORAGE_NOT_CONFIGURED",
+    };
+  }
+  return null;
+}
+
 async function uploadToStorage(
   service: ObjectStorageService,
   buffer: Buffer | Uint8Array,
@@ -179,6 +196,11 @@ router.post(
       });
     } catch (error) {
       req.log.error({ err: error }, "Profile picture signed URL generation failed");
+      const classified = classifyStorageUploadError(error);
+      if (classified) {
+        res.status(classified.status).json({ error: classified.error, code: classified.code });
+        return;
+      }
       res.status(500).json({ error: "Failed to generate upload URL", code: "SIGN_URL_FAILED" });
     }
   },
@@ -345,6 +367,11 @@ router.post(
       res.status(201).json({ fileUrl, objectPath });
     } catch (error) {
       req.log.error({ err: error }, "Profile picture upload failed");
+      const classified = classifyStorageUploadError(error);
+      if (classified) {
+        res.status(classified.status).json({ error: classified.error, code: classified.code });
+        return;
+      }
       res.status(500).json({ error: "Upload failed. Please try again.", code: "UPLOAD_FAILED" });
     }
   },

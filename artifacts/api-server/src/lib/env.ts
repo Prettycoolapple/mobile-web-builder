@@ -36,18 +36,6 @@ export function getTrustProxySetting(): boolean | number | string {
   return Number.isNaN(asNumber) ? value : asNumber;
 }
 
-export function getStripeSecretKey(): string {
-  return readRequired("STRIPE_SECRET_KEY");
-}
-
-export function getStripePublishableKey(): string {
-  return readRequired("STRIPE_PUBLISHABLE_KEY");
-}
-
-export function getStripeWebhookSecret(): string {
-  return readRequired("STRIPE_WEBHOOK_SECRET");
-}
-
 export function getTwilioAccountSid(): string {
   return readRequired("TWILIO_ACCOUNT_SID");
 }

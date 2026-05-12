@@ -41,7 +41,7 @@ export function isListingBrowseIntent(message: string): boolean {
 }
 
 // ─── LLM-powered intent extraction ───────────────────────────────────────────
-// Instead of hardcoded keyword lists and regex, we ask Gemini Flash to parse
+// Instead of hardcoded keyword lists and regex, we ask DeepSeek chat to parse
 // the user's intent from the full conversation context. This handles arbitrary
 // phrasing, context references ("it", "this area", "currently"), and implicit
 // suburb resolution from the currently open report.
@@ -309,9 +309,9 @@ ${INTENT_SCHEMA}`;
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "deepseek-chat",
       config: {
-        // Gemini 2.5 spends "thinking" tokens out of this budget before any
+        // Some providers spend "thinking" tokens out of this budget before any
         // visible output. 512 was being fully consumed by thinking on
         // ambiguous follow-ups (e.g. "show me more"), leaving no room for the
         // JSON answer. Disable thinking and give plenty of room for output.
@@ -535,7 +535,7 @@ export function detectMode(lastMessage: string): ChatMode {
 }
 
 // ─── LLM-driven nearby suburb suggestions ────────────────────────────────────
-// Replaces a hand-curated NEARBY_SUBURBS adjacency map with a tiny Gemini call
+// Replaces a hand-curated NEARBY_SUBURBS adjacency map with a tiny LLM call
 // that uses the model's geographic knowledge of NZ. Results are cached for the
 // lifetime of the process so we only pay the LLM cost once per suburb.
 const nearbySuburbCache = new Map<string, { value: string[]; expiresAt: number }>();
@@ -557,7 +557,7 @@ Example: ["kohimarama","mission bay","glendowie","meadowbank","saint johns"]`;
 
   try {
     const llmCall = ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "deepseek-chat",
       config: {
         maxOutputTokens: 256,
         temperature: 0.2,
@@ -585,14 +585,14 @@ Example: ["kohimarama","mission bay","glendowie","meadowbank","saint johns"]`;
     logger.info({ suburb, nearby: cleaned }, "LLM nearby suburbs");
     return cleaned;
   } catch (err) {
-    // Negative-cache briefly so we don't hammer Gemini during an outage
+    // Negative-cache briefly so we don't hammer the LLM provider during an outage
     nearbySuburbCache.set(key, { value: [], expiresAt: now + NEARBY_NEG_TTL_MS });
     logger.warn({ err: (err as Error).message, suburb }, "LLM nearby-suburb suggestion failed");
     return [];
   }
 }
 
-function buildGeminiHistory(conversationHistory: Message[]) {
+function buildLlmHistory(conversationHistory: Message[]) {
   return conversationHistory.map((m) => ({
     role: m.role === "assistant" ? ("model" as const) : ("user" as const),
     parts: [{ text: m.content }],
@@ -809,11 +809,11 @@ export async function generateUnifiedResponse(
     userContent = `${lastMessage.content}\n\n${DISCOVER_AUGMENTATION}`;
   }
 
-  const history = buildGeminiHistory(conversationHistory);
+  const history = buildLlmHistory(conversationHistory);
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-pro",
+      model: "deepseek-reasoner",
       config: {
         systemInstruction: systemWithContext,
         maxOutputTokens: 8192,
@@ -837,7 +837,7 @@ export async function generateAnalysis(
 ): Promise<string> {
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-pro",
+      model: "deepseek-reasoner",
       config: {
         systemInstruction: SYSTEM_PROMPT + languageInstruction(locale),
         maxOutputTokens: analysisMaxOutputTokens(),
@@ -857,11 +857,11 @@ export async function generateFeasibilityReport(
   locale: Locale = "en",
 ): Promise<string> {
   const prompt = `Analyse this NZ property for development feasibility: ${address}\n\n${ANALYSE_AUGMENTATION}`;
-  const history = buildGeminiHistory(conversationHistory);
+  const history = buildLlmHistory(conversationHistory);
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-pro",
+      model: "deepseek-reasoner",
       config: {
         systemInstruction: SYSTEM_PROMPT + languageInstruction(locale),
         maxOutputTokens: 8192,
@@ -894,7 +894,7 @@ ${DISCOVER_AUGMENTATION}`;
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-pro",
+      model: "deepseek-reasoner",
       config: {
         systemInstruction: SYSTEM_PROMPT + languageInstruction(locale),
         maxOutputTokens: 8192,
@@ -954,7 +954,7 @@ Rules:
     );
 
     const selectionPromise = ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "deepseek-chat",
       config: { maxOutputTokens: 2048 },
       contents: [{ role: "user", parts: [{ text: prompt }] }],
     }).then((response: { text?: string }) => {
@@ -1052,7 +1052,7 @@ FACTS:
 ${JSON.stringify(facts, null, 2)}`;
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: "deepseek-chat",
     config: {
       maxOutputTokens: 1024,
       temperature: 0.1,
@@ -1093,7 +1093,7 @@ ${JSON.stringify(facts, null, 2)}`;
 export async function assessInterestRateOutlook(): Promise<InterestRateOutlook> {
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "deepseek-chat",
       config: {
         systemInstruction:
           "You are an NZ macroeconomic analyst. Answer concisely with exactly one word from the options given.",
@@ -1135,11 +1135,11 @@ export async function generateChatReply(
     ? `${SYSTEM_PROMPT}${langSuffix}\n\nCURRENT PROPERTY CONTEXT:\n${reportContext}`
     : SYSTEM_PROMPT + langSuffix;
 
-  const history = buildGeminiHistory(conversationHistory);
+  const history = buildLlmHistory(conversationHistory);
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-pro",
+      model: "deepseek-reasoner",
       config: {
         systemInstruction: systemWithContext,
         maxOutputTokens: 8192,

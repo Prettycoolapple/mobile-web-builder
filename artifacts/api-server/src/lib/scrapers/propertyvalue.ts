@@ -30,6 +30,12 @@ type SuggestionsPayload = {
   suggestions?: Suggestion[];
 };
 
+type RankedSuggestion = {
+  suggestion: Suggestion;
+  score: number;
+  query: string;
+};
+
 type PropertyPayload = {
   propertyId?: number;
   core?: {
@@ -105,6 +111,8 @@ function normaliseAddress(raw: string): string {
     .toLowerCase()
     .replace(/\bsaint\b/g, "st")
     .replace(/\bmount\b/g, "mt")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -130,6 +138,56 @@ function scoreSuggestion(input: string, suggestion: Suggestion): number {
   return score;
 }
 
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of values) {
+    const value = raw?.trim();
+    if (!value) continue;
+    const key = normaliseAddress(value);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    result.push(value);
+  }
+  return result;
+}
+
+function buildAddressQueries(addresses: string[]): string[] {
+  const variants: string[] = [];
+  for (const address of addresses) {
+    variants.push(address);
+
+    const noNz = address
+      .replace(/\bnew zealand\b/ig, "")
+      .replace(/\baotearoa\b/ig, "")
+      .replace(/\s*,\s*/g, ", ")
+      .replace(/\s+/g, " ")
+      .replace(/,\s*$/g, "")
+      .trim();
+    variants.push(noNz);
+
+    const parts = noNz.split(",").map((p) => p.trim()).filter(Boolean);
+    if (parts.length >= 2) variants.push(parts.slice(0, 3).join(", "));
+    if (parts.length >= 2) variants.push(parts.slice(0, 2).join(", "));
+
+    const withoutPostcode = noNz.replace(/\b\d{4}\b/g, "").replace(/\s*,\s*/g, ", ").replace(/\s+/g, " ").trim();
+    variants.push(withoutPostcode);
+
+    const norm = normaliseAddress(noNz);
+    const tokens = norm.split(" ").filter(Boolean);
+    const streetTypeIndex = tokens.findIndex((t) =>
+      /^(road|street|avenue|crescent|place|drive|way|lane|terrace|parade|close|grove|rise|view|heights|ridge|court|hill|mews|quay|boulevard|highway|motorway|esplanade|mall|row|walk|path|track|rd|st|ave|cres|pl|dr|ln|tce|pde|blvd|hwy)$/.test(t),
+    );
+    if (tokens.length >= 4 && streetTypeIndex > 1) {
+      const street = tokens.slice(0, streetTypeIndex + 1).join(" ");
+      const locality = tokens.slice(streetTypeIndex + 1).filter((t) => !/^\d{4}$/.test(t));
+      if (locality.length > 0) variants.push(`${street} ${locality[0]} Auckland`);
+      variants.push(`${street} Auckland`);
+    }
+  }
+  return uniqueStrings(variants);
+}
+
 async function getJson<T>(url: string): Promise<T> {
   const resp = await fetch(url, {
     headers: {
@@ -138,6 +196,19 @@ async function getJson<T>(url: string): Promise<T> {
     },
     signal: AbortSignal.timeout(12_000),
   });
+  if (!resp.ok) throw new Error(`PropertyValue HTTP ${resp.status}`);
+  return (await resp.json()) as T;
+}
+
+async function getJsonOrNull<T>(url: string): Promise<T | null> {
+  const resp = await fetch(url, {
+    headers: {
+      Accept: "application/json",
+      "User-Agent": "ProjectAlphaNZ/1.0 (property data enrichment)",
+    },
+    signal: AbortSignal.timeout(12_000),
+  });
+  if (resp.status === 404) return null;
   if (!resp.ok) throw new Error(`PropertyValue HTTP ${resp.status}`);
   return (await resp.json()) as T;
 }
@@ -161,23 +232,42 @@ function hasUsableData(data: PropertyValueData): boolean {
   );
 }
 
-export async function scrapePropertyValue(address: string): Promise<PropertyValueData | null> {
-  const suggestionsUrl = new URL(`${BASE_URL}/api/public/clapi/suggestions`);
-  suggestionsUrl.searchParams.set("q", address);
-  suggestionsUrl.searchParams.set("suggestionTypes", "address");
-  suggestionsUrl.searchParams.set("limit", "5");
+export async function scrapePropertyValue(address: string, ...alternateAddresses: string[]): Promise<PropertyValueData | null> {
+  const queries = buildAddressQueries([address, ...alternateAddresses]);
+  const ranked: RankedSuggestion[] = [];
 
-  const suggestionsPayload = await getJson<SuggestionsPayload | Suggestion[]>(suggestionsUrl.toString());
-  const suggestions = Array.isArray(suggestionsPayload)
-    ? suggestionsPayload
-    : suggestionsPayload.suggestions ?? [];
-  const ranked = suggestions
-    .filter((s) => s.propertyId != null)
-    .map((s) => ({ suggestion: s, score: scoreSuggestion(address, s) }))
-    .sort((a, b) => b.score - a.score);
+  for (const query of queries) {
+    const suggestionsUrl = new URL(`${BASE_URL}/api/public/clapi/suggestions`);
+    suggestionsUrl.searchParams.set("q", query);
+    suggestionsUrl.searchParams.set("suggestionTypes", "address");
+    suggestionsUrl.searchParams.set("limit", "8");
+
+    const suggestionsPayload = await getJsonOrNull<SuggestionsPayload | Suggestion[]>(suggestionsUrl.toString());
+    const suggestions = Array.isArray(suggestionsPayload)
+      ? suggestionsPayload
+      : suggestionsPayload?.suggestions ?? [];
+
+    ranked.push(
+      ...suggestions
+        .filter((s) => s.propertyId != null)
+        .map((s) => ({
+          suggestion: s,
+          score: Math.max(
+            scoreSuggestion(address, s),
+            ...alternateAddresses.map((alt) => scoreSuggestion(alt, s)),
+            scoreSuggestion(query, s),
+          ),
+          query,
+        })),
+    );
+
+    if (ranked.some((r) => r.score >= 35)) break;
+  }
+
+  ranked.sort((a, b) => b.score - a.score);
   const best = ranked[0];
   if (!best || best.score < 10 || best.suggestion.propertyId == null) {
-    logger.info({ address, count: suggestions.length }, "PropertyValue: no confident address match");
+    logger.info({ address, queries, count: ranked.length }, "PropertyValue: no confident address match");
     return null;
   }
 
@@ -222,6 +312,9 @@ export async function scrapePropertyValue(address: string): Promise<PropertyValu
       build_year: data.build_year,
       bedrooms: data.bedrooms,
       bathrooms: data.bathrooms,
+      query: best.query,
+      match: best.suggestion.suggestion,
+      score: best.score,
     },
     "PropertyValue: resolved property data",
   );

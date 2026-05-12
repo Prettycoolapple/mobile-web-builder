@@ -19,15 +19,46 @@ export interface AsbestosRisk {
 }
 
 const AC_MAPSERVER = "https://mapspublic.aucklandcouncil.govt.nz/arcgis3/rest/services/Website/ACWebsite2007/MapServer";
+const AC_PROPERTY_VALUE_MAPSERVER = "https://mapspublic.aucklandcouncil.govt.nz/arcgis3/rest/services/NonCouncil/PropertyValueInfo/MapServer";
+
+function numberFromAttr(attrs: Record<string, unknown>, keys: string[]): number | null {
+  for (const key of keys) {
+    const raw = attrs[key];
+    if (raw == null || raw === "") continue;
+    const n = typeof raw === "number" ? raw : Number(String(raw).replace(/[$,\s]/g, ""));
+    if (Number.isFinite(n) && n > 0) return Math.round(n);
+  }
+  return null;
+}
+
+function yearFromAttr(attrs: Record<string, unknown>, keys: string[]): number | null {
+  for (const key of keys) {
+    const raw = attrs[key];
+    if (raw == null || raw === "") continue;
+    const text = String(raw);
+    const yearMatch = text.match(/\b(18|19|20)\d{2}\b/);
+    if (yearMatch) {
+      const year = Number(yearMatch[0]);
+      if (year >= 1800 && year <= new Date().getFullYear() + 1) return year;
+    }
+    const decadeMatch = text.match(/\b((?:18|19|20)\d0)s?\b/);
+    if (decadeMatch) {
+      const year = Number(decadeMatch[1]);
+      if (year >= 1800 && year <= new Date().getFullYear()) return year;
+    }
+  }
+  return null;
+}
 
 async function arcgisPointQuery(
+  mapServer: string,
   layerId: number,
   lat: number,
   lng: number,
   outFields: string,
   timeoutMs = 18000,
 ): Promise<Record<string, unknown> | null> {
-  const url = new URL(`${AC_MAPSERVER}/${layerId}/query`);
+  const url = new URL(`${mapServer}/${layerId}/query`);
   url.searchParams.set("geometry", `${lng},${lat}`);
   url.searchParams.set("geometryType", "esriGeometryPoint");
   url.searchParams.set("inSR", "4326");
@@ -58,26 +89,49 @@ async function arcgisPointQuery(
 async function fetchFromACRateAssessment(lat: number, lng: number, timeoutMs = 8000): Promise<Partial<PropertyHistory>> {
   try {
     const attrs = await arcgisPointQuery(
+      AC_MAPSERVER,
       3,
       lat,
       lng,
-      "LCV,LLV,LIV,CV,LV,LATESTVALUATIONDATE,VALUATIONDATE,FORMATTEDADDRESS,LANDUSEDESCRIPTION",
+      "*",
       timeoutMs,
     );
     if (!attrs) return {};
 
-    const lcv = Number(attrs["LCV"] ?? NaN);
-    const cv = Number(attrs["CV"] ?? NaN);
-    const cvFinal = !isNaN(lcv) && lcv > 0 ? lcv : (!isNaN(cv) && cv > 0 ? cv : NaN);
+    const lcv = numberFromAttr(attrs, ["LCV"]);
+    const cv = numberFromAttr(attrs, ["CV", "CAPITALVALUE", "CAPITAL_VALUE"]);
+    const cvFinal = lcv ?? cv;
 
     const latestDateMs = attrs["LATESTVALUATIONDATE"] ?? attrs["VALUATIONDATE"];
-    const cvYear = latestDateMs ? new Date(Number(latestDateMs)).getFullYear() : null;
+    const cvYearFromDate = latestDateMs ? new Date(Number(latestDateMs)).getFullYear() : null;
+    const cvYear = cvYearFromDate && cvYearFromDate > 2000
+      ? cvYearFromDate
+      : yearFromAttr(attrs, ["VALUATIONYEAR", "VALUATION_YEAR", "CVYEAR", "CV_YEAR"]);
 
-    logger.info({ lcv, cv, cvFinal, cvYear, addr: attrs["FORMATTEDADDRESS"] }, "AC Rate Assessment result");
+    const buildYear = yearFromAttr(attrs, [
+      "YEARBUILT",
+      "YEAR_BUILT",
+      "BUILT_YEAR",
+      "BUILDYEAR",
+      "DECADEBUILT",
+      "DECADE_BUILT",
+    ]);
+    const floorArea = numberFromAttr(attrs, [
+      "FLOORAREA",
+      "FLOOR_AREA",
+      "BUILDINGFLOORAREA",
+      "BUILDING_FLOOR_AREA",
+      "HOUSEAREA",
+      "HOUSE_AREA",
+    ]);
+
+    logger.info({ cvFinal, cvYear, buildYear, floorArea, addr: attrs["FORMATTEDADDRESS"] }, "AC Rate Assessment result");
 
     return {
-      cv_nzd: !isNaN(cvFinal) && cvFinal > 0 ? cvFinal : null,
+      cv_nzd: cvFinal,
       cv_year: cvYear && cvYear > 2000 ? cvYear : null,
+      build_year: buildYear,
+      floor_area_sqm: floorArea,
       property_type: (attrs["LANDUSEDESCRIPTION"] as string) ?? null,
     };
   } catch (err) {
@@ -86,9 +140,44 @@ async function fetchFromACRateAssessment(lat: number, lng: number, timeoutMs = 8
   }
 }
 
+async function fetchFromACPropertyValueInfo(lat: number, lng: number, timeoutMs = 8000): Promise<Partial<PropertyHistory>> {
+  try {
+    const attrs = await arcgisPointQuery(
+      AC_PROPERTY_VALUE_MAPSERVER,
+      3,
+      lat,
+      lng,
+      "*",
+      timeoutMs,
+    );
+    if (!attrs) return {};
+
+    const cvFinal = numberFromAttr(attrs, ["LCV", "CV", "CAPITALVALUE", "CAPITAL_VALUE"]);
+    const cvYear = yearFromAttr(attrs, ["VALUATIONDATE", "LATESTVALUATIONDATE", "VALUATIONYEAR", "CVYEAR"]);
+    const buildYear = yearFromAttr(attrs, ["YEARBUILT", "YEAR_BUILT", "BUILT_YEAR", "BUILDYEAR", "DECADEBUILT", "DECADE_BUILT"]);
+    const floorArea = numberFromAttr(attrs, ["FLOORAREA", "FLOOR_AREA", "BUILDINGFLOORAREA", "BUILDING_FLOOR_AREA"]);
+    const landArea = numberFromAttr(attrs, ["LANDAREA", "LAND_AREA", "SITEAREA", "SITE_AREA"]);
+
+    logger.info({ cvFinal, cvYear, buildYear, floorArea, landArea }, "AC PropertyValueInfo result");
+
+    return {
+      cv_nzd: cvFinal,
+      cv_year: cvYear && cvYear > 2000 ? cvYear : null,
+      build_year: buildYear,
+      floor_area_sqm: floorArea,
+      land_area_sqm: landArea,
+      property_type: (attrs["LANDUSEDESCRIPTION"] as string) ?? null,
+    };
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "AC PropertyValueInfo fetch failed");
+    return {};
+  }
+}
+
 async function fetchFromACPropertyLayer(lat: number, lng: number, timeoutMs = 8000): Promise<Partial<PropertyHistory>> {
   try {
     const attrs = await arcgisPointQuery(
+      AC_MAPSERVER,
       2,
       lat,
       lng,
@@ -133,12 +222,14 @@ export async function fetchPropertyHistory(
   const results: Partial<PropertyHistory>[] = [];
 
   if (lat != null && lng != null) {
-    const [rateResult, propertyResult] = await Promise.allSettled([
+    const [rateResult, propertyValueResult, propertyLayerResult] = await Promise.allSettled([
       fetchFromACRateAssessment(lat, lng, 8000),
+      fetchFromACPropertyValueInfo(lat, lng, 8000),
       fetchFromACPropertyLayer(lat, lng, 8000),
     ]);
     if (rateResult.status === "fulfilled") results.push(rateResult.value);
-    if (propertyResult.status === "fulfilled") results.push(propertyResult.value);
+    if (propertyValueResult.status === "fulfilled") results.push(propertyValueResult.value);
+    if (propertyLayerResult.status === "fulfilled") results.push(propertyLayerResult.value);
   } else {
     logger.warn({ address }, "fetchPropertyHistory: no lat/lng — skipping AC GIS queries");
   }

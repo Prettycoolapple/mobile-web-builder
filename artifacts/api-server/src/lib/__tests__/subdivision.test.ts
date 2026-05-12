@@ -48,8 +48,32 @@ describe("subdivision detection", () => {
 
   it("does not treat one neighbouring suffix as proof the parent was subdivided away", async () => {
     mockedGeocodeAddress.mockImplementation(async (address: string) => {
+      if (address === "8 Hampton Drive, St Heliers") {
+        return { lat: -36.853, lng: 174.857, formatted: "8 Hampton Drive, St Heliers, Auckland 1071, New Zealand", suburb: "st heliers" };
+      }
       if (address.startsWith("8A ")) {
         return { lat: -36.854, lng: 174.858, formatted: "8A Hampton Drive, St Heliers, Auckland 1071, New Zealand", suburb: "st heliers" };
+      }
+      throw new Error(`No match for ${address}`);
+    });
+
+    await expect(detectSubdivision("8 Hampton Drive, St Heliers")).resolves.toEqual({
+      isSubdivided: false,
+      parentAddress: "8 Hampton Drive, St Heliers",
+      subLots: [],
+    });
+  });
+
+  it("does not block a valid parent address even when multiple child lots also geocode", async () => {
+    mockedGeocodeAddress.mockImplementation(async (address: string) => {
+      if (address === "8 Hampton Drive, St Heliers") {
+        return { lat: -36.853, lng: 174.857, formatted: "8 Hampton Drive, St Heliers, Auckland 1071, New Zealand", suburb: "st heliers" };
+      }
+      if (address.startsWith("8A ")) {
+        return { lat: -36.854, lng: 174.858, formatted: "8A Hampton Drive, St Heliers, Auckland 1071, New Zealand", suburb: "st heliers" };
+      }
+      if (address.startsWith("8B ")) {
+        return { lat: -36.8545, lng: 174.8585, formatted: "8B Hampton Drive, St Heliers, Auckland 1071, New Zealand", suburb: "st heliers" };
       }
       throw new Error(`No match for ${address}`);
     });

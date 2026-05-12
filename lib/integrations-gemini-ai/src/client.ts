@@ -1,5 +1,3 @@
-import { GoogleGenAI } from "@google/genai";
-
 type ContentPart = { text?: string };
 type ChatContent = { role: string; parts: ContentPart[] };
 type GenerateContentArgs = {
@@ -21,14 +19,13 @@ type AiLike = {
   };
 };
 
-type ProviderMode = "gemini" | "openai_compat";
+type ProviderMode = "openai_compat";
 
 function normalizeProvider(raw: string | undefined): ProviderMode {
-  const provider = (raw ?? "gemini").trim().toLowerCase();
-  if (provider === "gemini") return "gemini";
+  const provider = (raw ?? "deepseek").trim().toLowerCase();
   if (provider === "deepseek" || provider === "grok" || provider === "openai_compat") return "openai_compat";
   throw new Error(
-    `Unsupported AI provider "${provider}". Use one of: gemini, deepseek, grok, openai_compat.`,
+    `Unsupported AI provider "${provider}". Use one of: deepseek, grok, openai_compat.`,
   );
 }
 
@@ -37,18 +34,15 @@ function mapRequestedModel(inputModel: string): string {
   const fastFallback = process.env.AI_OPENAI_COMPAT_MODEL_FAST?.trim();
   const proFallback = process.env.AI_OPENAI_COMPAT_MODEL_PRO?.trim();
   const defaultFallback = process.env.AI_OPENAI_COMPAT_MODEL_DEFAULT?.trim();
+  const provider = process.env.AI_PROVIDER?.trim().toLowerCase() || "deepseek";
+  const providerFastDefault = provider === "deepseek" ? "deepseek-chat" : inputModel;
+  const providerProDefault = provider === "deepseek" ? "deepseek-reasoner" : providerFastDefault;
 
-  // Gemini callsites generally use "flash" for fast ops and "pro" for heavier reasoning.
-  if (model.includes("flash")) {
-    return fastFallback ?? defaultFallback ?? proFallback ?? inputModel;
+  // Legacy callsites use "flash" for fast ops and "pro" for heavier reasoning.
+  if (model.includes("flash") || model.includes("chat")) {
+    return fastFallback ?? defaultFallback ?? proFallback ?? providerFastDefault;
   }
-  return proFallback ?? defaultFallback ?? fastFallback ?? inputModel;
-}
-
-function isTruthy(raw: string | undefined, defaultValue = false): boolean {
-  if (raw == null) return defaultValue;
-  const v = raw.trim().toLowerCase();
-  return v === "1" || v === "true" || v === "yes" || v === "on";
+  return proFallback ?? defaultFallback ?? fastFallback ?? providerProDefault;
 }
 
 function mapRole(role: string): "user" | "assistant" {
@@ -58,23 +52,6 @@ function mapRole(role: string): "user" | "assistant" {
 function flattenParts(parts: ContentPart[] | undefined): string {
   if (!parts || parts.length === 0) return "";
   return parts.map((p) => p?.text ?? "").join("").trim();
-}
-
-function createGeminiClient(): AiLike {
-  const geminiApiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY?.trim();
-  if (!geminiApiKey) {
-    throw new Error(
-      "AI_INTEGRATIONS_GEMINI_API_KEY must be set when AI_PROVIDER=gemini.",
-    );
-  }
-
-  const geminiBaseUrl = process.env.AI_INTEGRATIONS_GEMINI_BASE_URL?.trim();
-  const aiOptions: ConstructorParameters<typeof GoogleGenAI>[0] = { apiKey: geminiApiKey };
-  if (geminiBaseUrl) {
-    aiOptions.httpOptions = { apiVersion: "", baseUrl: geminiBaseUrl };
-  }
-
-  return new GoogleGenAI(aiOptions) as unknown as AiLike;
 }
 
 function createOpenAICompatClient(): AiLike {
@@ -173,71 +150,6 @@ function createOpenAICompatClient(): AiLike {
   return client;
 }
 
-function maybeCreateOpenAICompatClient(): AiLike | null {
-  const apiKey = process.env.AI_OPENAI_COMPAT_API_KEY?.trim();
-  const baseUrl = process.env.AI_OPENAI_COMPAT_BASE_URL?.trim();
-  if (!apiKey || !baseUrl) return null;
-  return createOpenAICompatClient();
-}
+normalizeProvider(process.env.AI_PROVIDER);
 
-function shouldFailoverFromGemini(err: unknown): boolean {
-  const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
-  if (!message) return false;
-
-  // Typical transient/provider-side failures and quota/rate limits.
-  const patterns = [
-    "429",
-    "500",
-    "502",
-    "503",
-    "504",
-    "rate limit",
-    "quota",
-    "resource exhausted",
-    "unavailable",
-    "deadline exceeded",
-    "timed out",
-    "timeout",
-    "network",
-    "fetch failed",
-    "econn",
-    "enotfound",
-    "socket hang up",
-  ];
-  return patterns.some((p) => message.includes(p));
-}
-
-const provider = normalizeProvider(process.env.AI_PROVIDER);
-const failoverEnabled = isTruthy(process.env.AI_FAILOVER_ENABLED, true);
-
-function createGeminiWithFailoverClient(): AiLike {
-  const primary = createGeminiClient();
-  const fallback = maybeCreateOpenAICompatClient();
-
-  return {
-    models: {
-      generateContent: async (args: GenerateContentArgs): Promise<GenerateContentResult> => {
-        try {
-          return await primary.models.generateContent(args);
-        } catch (primaryErr) {
-          const canFailover = failoverEnabled && fallback && shouldFailoverFromGemini(primaryErr);
-          if (!canFailover) throw primaryErr;
-
-          try {
-            console.warn(
-              "[ai] Gemini call failed; attempting failover to OpenAI-compatible provider.",
-            );
-            return await fallback.models.generateContent(args);
-          } catch {
-            // Preserve the original Gemini error for easier debugging.
-            throw primaryErr;
-          }
-        }
-      },
-    },
-  };
-}
-
-export const ai: AiLike = provider === "gemini"
-  ? createGeminiWithFailoverClient()
-  : createOpenAICompatClient();
+export const ai: AiLike = createOpenAICompatClient();

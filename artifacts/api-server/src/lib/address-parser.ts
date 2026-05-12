@@ -52,7 +52,7 @@ export async function extractNZAddress(message: string): Promise<string | null> 
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "deepseek-chat",
       config: { maxOutputTokens: 64 },
       contents: [
         {

@@ -112,13 +112,13 @@ Reply with ONLY valid JSON (no markdown, no explanation):
 "discipline" must reflect what kind of professional they appear to need; use null when unclear.
 Set "recommend": false only when there is clearly no development interest or professional guidance needed.`;
 
-    const geminiResult = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+    const llmResult = await ai.models.generateContent({
+      model: "deepseek-chat",
       contents: [{ role: "user", parts: [{ text: prompt }] }],
       config: { maxOutputTokens: 200, temperature: 0 },
     });
 
-    const raw = geminiResult.text?.trim() ?? "";
+    const raw = llmResult.text?.trim() ?? "";
     const cleaned = raw.replace(/```(?:json)?\s*/gi, "").replace(/```\s*/g, "").trim();
     const parsed = JSON.parse(cleaned);
 

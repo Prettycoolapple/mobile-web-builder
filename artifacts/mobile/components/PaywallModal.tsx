@@ -167,7 +167,7 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
             style={[styles.upgradeBtn, { backgroundColor: isPurchasing ? colors.accent + "80" : colors.accent }]}
             onPress={handleUpgrade}
             activeOpacity={0.85}
-            disabled={isPurchasing || isRestoring || offeringsLoading || !purchaseReadyForRole("general")}
+            disabled={isPurchasing || isRestoring || offeringsLoading}
           >
             {isPurchasing || (offeringsLoading && !isPurchasing)
               ? <ActivityIndicator size="small" color="#fff" />

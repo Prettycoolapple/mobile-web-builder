@@ -145,7 +145,7 @@ async function llmSuggestedAddresses(raw: string): Promise<string[]> {
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "deepseek-chat",
       config: {
         maxOutputTokens: 512,
         temperature: 0.1,
@@ -177,7 +177,7 @@ async function llmSuggestedAddresses(raw: string): Promise<string[]> {
     const arr = Array.isArray(parsed.addresses) ? parsed.addresses.filter((x) => typeof x === "string") : [];
     return arr.map((x) => x.trim()).filter((x) => x.length > 8);
   } catch (err) {
-    logger.warn({ err: (err as Error).message }, "Gemini address-suggestion fallback failed");
+    logger.warn({ err: (err as Error).message }, "LLM address-suggestion fallback failed");
     return [];
   }
 }
@@ -187,7 +187,7 @@ async function llmSuggestedAddresses(raw: string): Promise<string[]> {
  * return a clarification payload so the client can confirm before consuming a full report quota.
  *
  * Uses fuzzy comparison between user input and best geocoder string + extra Nominatim hits.
- * Gemini suggests strings only when nobody returns a usable hit.
+ * The LLM suggests strings only when nobody returns a usable hit.
  */
 export async function resolveAddressForAnalysis(
   userTypedAddress: string,
