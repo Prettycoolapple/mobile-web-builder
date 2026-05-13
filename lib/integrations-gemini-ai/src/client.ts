@@ -54,14 +54,28 @@ function flattenParts(parts: ContentPart[] | undefined): string {
   return parts.map((p) => p?.text ?? "").join("").trim();
 }
 
-function createOpenAICompatClient(): AiLike {
-  const apiKey = process.env.AI_OPENAI_COMPAT_API_KEY?.trim();
-  const baseUrl = process.env.AI_OPENAI_COMPAT_BASE_URL?.trim();
+function readOpenAICompatConfig(): { apiKey: string; baseUrl: string } {
+  const provider = process.env.AI_PROVIDER?.trim().toLowerCase() || "deepseek";
+  const apiKey =
+    process.env.AI_OPENAI_COMPAT_API_KEY?.trim() ||
+    process.env.DEEPSEEK_API_KEY?.trim();
+  const baseUrl =
+    process.env.AI_OPENAI_COMPAT_BASE_URL?.trim() ||
+    process.env.DEEPSEEK_BASE_URL?.trim() ||
+    (provider === "deepseek" ? "https://api.deepseek.com/v1" : "");
+
   if (!apiKey || !baseUrl) {
     throw new Error(
-      "AI_OPENAI_COMPAT_API_KEY and AI_OPENAI_COMPAT_BASE_URL must be set when AI_PROVIDER is deepseek, grok, or openai_compat.",
+      "AI provider is not configured. Set AI_OPENAI_COMPAT_API_KEY and AI_OPENAI_COMPAT_BASE_URL, or set DEEPSEEK_API_KEY for the default DeepSeek provider.",
     );
   }
+
+  return { apiKey, baseUrl };
+}
+
+function createOpenAICompatClient(): AiLike {
+  normalizeProvider(process.env.AI_PROVIDER);
+  const { apiKey, baseUrl } = readOpenAICompatConfig();
 
   const client: AiLike = {
     models: {
@@ -150,6 +164,15 @@ function createOpenAICompatClient(): AiLike {
   return client;
 }
 
-normalizeProvider(process.env.AI_PROVIDER);
+let cachedClient: AiLike | null = null;
 
-export const ai: AiLike = createOpenAICompatClient();
+function getOpenAICompatClient(): AiLike {
+  cachedClient ??= createOpenAICompatClient();
+  return cachedClient;
+}
+
+export const ai: AiLike = {
+  models: {
+    generateContent: async (args) => getOpenAICompatClient().models.generateContent(args),
+  },
+};

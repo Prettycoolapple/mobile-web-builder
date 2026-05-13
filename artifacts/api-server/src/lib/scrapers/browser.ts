@@ -3,7 +3,6 @@ import fs from "node:fs";
 import { execSync } from "child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { chromium as playwrightChromium } from "playwright";
 import { logger } from "../logger";
 import type { Browser, Page, BrowserContext } from "playwright";
 
@@ -50,9 +49,6 @@ function requirePlaywright(): typeof import("playwright") {
     throw new Error(
       "Browser automation (Playwright) is not available on Vercel serverless without a remote browser endpoint. Set PLAYWRIGHT_CDP_ENDPOINT or BROWSERLESS_WS_ENDPOINT.",
     );
-  }
-  if (isVercelServerless()) {
-    return { chromium: playwrightChromium } as typeof import("playwright");
   }
   if (!_playwrightRequire) {
     _playwrightRequire = createRequire(path.join(process.cwd(), "package.json"));
@@ -167,14 +163,18 @@ const STEALTH_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/
 let _startupChromiumOk = false;
 try {
   const remoteEndpoint = getRemoteBrowserEndpoint();
-  const p = remoteEndpoint ? "remote-cdp-browser" : getChromiumPath();
-  _startupChromiumOk = true;
-  logger.info(
-    remoteEndpoint ? { browser: p } : { chromiumPath: p },
-    remoteEndpoint
-      ? "Browser startup check: remote CDP browser configured OK - scrapers will use it"
-      : "Browser startup check: Chromium resolved OK - scrapers will use this executable",
-  );
+  if (isVercelServerless() && !remoteEndpoint) {
+    logger.info("Browser startup check skipped on Vercel serverless without a remote browser endpoint");
+  } else {
+    const p = remoteEndpoint ? "remote-cdp-browser" : getChromiumPath();
+    _startupChromiumOk = true;
+    logger.info(
+      remoteEndpoint ? { browser: p } : { chromiumPath: p },
+      remoteEndpoint
+        ? "Browser startup check: remote CDP browser configured OK - scrapers will use it"
+        : "Browser startup check: Chromium resolved OK - scrapers will use this executable",
+    );
+  }
 } catch (err) {
   logger.error(
     { err: (err as Error).message },
