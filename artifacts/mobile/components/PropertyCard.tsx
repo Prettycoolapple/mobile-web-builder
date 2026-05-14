@@ -151,23 +151,7 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
               </Text>
             </View>
           )}
-          {typeof candidate.potentialLots === "number" && candidate.potentialLots > 1 && (
-            <View style={[styles.tag, { backgroundColor: colors.success + "18" }]}>
-              <Text style={[styles.tagText, { color: colors.success, fontFamily: "DM_Sans_600SemiBold" }]}>
-                {candidate.potentialLots} lots?
-              </Text>
-            </View>
-          )}
         </View>
-
-        {!!candidate.briefSummary?.trim() && (
-          <Text
-            style={[styles.summary, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}
-            numberOfLines={2}
-          >
-            {candidate.briefSummary}
-          </Text>
-        )}
 
         <View style={[styles.scoresRow, { borderTopColor: colors.border }]}>
           <ScorePip score={candidate.scores.ease} label={t("report.ease")} loading={candidate.scoresLoading} />
@@ -269,10 +253,6 @@ const styles = StyleSheet.create({
   },
   tagText: {
     fontSize: 11,
-  },
-  summary: {
-    fontSize: 13,
-    lineHeight: 19,
   },
   scoresRow: {
     flexDirection: "row",

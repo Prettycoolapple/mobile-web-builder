@@ -200,6 +200,7 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
       <AgentCallBubble
         agentName={message.agentName ?? null}
         agencyName={message.agencyName ?? null}
+        agentAvatarUrl={message.agentAvatarUrl ?? null}
         agentPhone={message.agentPhone}
         propertyAddress={message.propertyAddress ?? ""}
         onDismiss={() => onAgentDismiss?.(message.id)}

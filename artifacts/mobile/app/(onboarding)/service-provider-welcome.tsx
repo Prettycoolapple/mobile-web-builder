@@ -165,9 +165,6 @@ export default function ServiceProviderWelcomeScreen() {
                 <Text style={styles.pricePer}>{t("provider_welcome.per_month")}</Text>
               </View>
             </View>
-            <View style={styles.trialBadge}>
-              <Text style={styles.trialBadgeText}>{t("provider_welcome.trial_badge")}</Text>
-            </View>
           </View>
           <Text style={styles.trialNote}>{t("provider_welcome.trial_note")}</Text>
         </Animated.View>
@@ -333,19 +330,6 @@ const styles = StyleSheet.create({
     fontFamily: "DM_Sans_400Regular",
     fontSize: 14,
     paddingBottom: 6,
-  },
-  trialBadge: {
-    backgroundColor: ACCENT2 + "20",
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderWidth: 1,
-    borderColor: ACCENT2 + "40",
-  },
-  trialBadgeText: {
-    color: ACCENT2,
-    fontFamily: "DM_Sans_600SemiBold",
-    fontSize: 12,
   },
   trialNote: {
     color: MUTED,

@@ -13,41 +13,52 @@ interface Message {
 }
 
 async function detectAgentContactIntent(messages: Message[]): Promise<boolean> {
-  // Fast keyword pre-check — skip LLM call if no signal at all
+  const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
+  if (!lastUserMessage?.content?.trim()) return false;
+
   const recentText = messages
-    .slice(-4)
+    .slice(-8)
     .map((m) => m.content)
     .join(" ")
     .toLowerCase();
 
-  const keywords = [
-    "call", "contact", "phone", "number", "agent", "reach", "speak",
-    "get in touch", "seller", "vendor", "realtor", "salesperson",
-    "ring", "talk to", "who is selling", "who listed",
-  ];
-  const hasKeyword = keywords.some((kw) => recentText.includes(kw));
-  if (!hasKeyword) return false;
+  const conversationText = messages
+    .slice(-8)
+    .map((m) => `[${m.role.toUpperCase()}]: ${m.content.slice(0, 500)}`)
+    .join("\n");
 
-  // LLM semantic confirmation
+  // Primary path: semantic intent detection. Do not keyword-gate this call;
+  // users ask for agent contact in many natural ways.
   try {
-    const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
-    if (!lastUserMessage) return false;
+    const prompt = `You are an intent analyser for a New Zealand property app.
 
-    const prompt = `A user has just asked the following question about a NZ property they are researching:
+The user has completed or is discussing a feasibility report for a specific property.
 
+RECENT CONVERSATION:
+${conversationText}
+
+LATEST USER MESSAGE:
 "${lastUserMessage.content}"
 
-Does this message indicate the user wants to contact or get in touch with the real estate agent (or salesperson) who is listing or selling this property?
+TASK:
+Determine whether the latest user message means they want the sales/listing agent's contact card for this property.
 
-Answer with ONLY valid JSON (no markdown):
-{"wantsAgentContact": true, "reason": "one sentence"}
+Return true when the user expresses the same intent as any of these, even if worded differently:
+- wants to call, phone, ring, text, message, email, or speak with the listing/sales agent
+- asks who is selling, who listed it, who handles viewings, or who can show them the property
+- asks for the agent, agency, salesperson, vendor contact path, or contact details
+- asks to arrange a viewing, inspection, walkthrough, open home, or next step with the selling side
+- uses Chinese or other multilingual phrasing for contacting the agent/listing side
 
-Answer false if the user is asking about something unrelated to contacting the agent.`;
+Return false when they are asking about development professionals, planners, architects, builders, feasibility, ROI, zoning, risks, or general property advice without wanting the listing/sales agent.
+
+Reply with ONLY valid JSON (no markdown):
+{"wantsAgentContact": <true|false>, "reason": "one sentence"}`;
 
     const result = await ai.models.generateContent({
       model: "deepseek-chat",
       contents: [{ role: "user", parts: [{ text: prompt }] }],
-      config: { maxOutputTokens: 80, temperature: 0 },
+      config: { maxOutputTokens: 120, temperature: 0 },
     });
 
     const raw = result.text?.trim() ?? "";
@@ -55,8 +66,15 @@ Answer false if the user is asking about something unrelated to contacting the a
     const parsed = JSON.parse(cleaned);
     return Boolean(parsed.wantsAgentContact);
   } catch {
-    // If the LLM fails, fall back to keyword result
-    return hasKeyword;
+    // Conservative fallback only when AI is unavailable.
+    const fallbackSignals = [
+      "call", "contact", "phone", "number", "agent", "reach", "speak",
+      "get in touch", "seller", "vendor", "realtor", "salesperson",
+      "ring", "talk to", "who is selling", "who listed", "listing agent",
+      "sales agent", "viewing", "inspection", "open home", "walkthrough",
+      "kan fang", "zhong jie", "jing ji", "lian xi", "dian hua", "xiao shou",
+    ];
+    return fallbackSignals.some((kw) => recentText.includes(kw));
   }
 }
 
@@ -100,6 +118,7 @@ router.post("/agent-contact/lookup", requireAuth, async (req: Request, res: Resp
       agentName: agentInfo.agentName,
       agentPhone: agentInfo.agentPhone,
       agencyName: agentInfo.agencyName,
+      agentAvatarUrl: agentInfo.agentAvatarUrl,
       listingUrl: agentInfo.listingUrl,
       source: agentInfo.source,
     });

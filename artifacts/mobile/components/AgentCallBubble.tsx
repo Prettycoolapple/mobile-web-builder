@@ -8,11 +8,13 @@ import {
   Alert,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
+import { Image } from "expo-image";
 import { useT } from "@/lib/i18n";
 
 interface Props {
   agentName: string | null;
   agencyName: string | null;
+  agentAvatarUrl?: string | null;
   agentPhone: string;
   propertyAddress: string;
   onDismiss: () => void;
@@ -21,6 +23,7 @@ interface Props {
 export function AgentCallBubble({
   agentName,
   agencyName,
+  agentAvatarUrl,
   agentPhone,
   propertyAddress,
   onDismiss,
@@ -31,7 +34,8 @@ export function AgentCallBubble({
   if (dismissed) return null;
 
   const handleCall = async () => {
-    const telUrl = `tel:${agentPhone}`;
+    const dialNumber = agentPhone.replace(/[^\d+]/g, "");
+    const telUrl = `tel:${dialNumber}`;
     const canOpen = await Linking.canOpenURL(telUrl);
     if (canOpen) {
       await Linking.openURL(telUrl);
@@ -60,9 +64,18 @@ export function AgentCallBubble({
 
       <View style={styles.card}>
         <View style={styles.avatarWrap}>
-          <View style={styles.avatar}>
-            <Feather name="user" size={20} color="#fff" />
-          </View>
+          {agentAvatarUrl ? (
+            <Image
+              source={{ uri: agentAvatarUrl }}
+              style={styles.avatarImage}
+              contentFit="cover"
+              transition={120}
+            />
+          ) : (
+            <View style={styles.avatar}>
+              <Feather name="user" size={20} color="#fff" />
+            </View>
+          )}
           <View style={styles.cardInfo}>
             <Text style={styles.agentName} numberOfLines={1}>
               {displayName}
@@ -70,11 +83,10 @@ export function AgentCallBubble({
             <Text style={styles.agencyName} numberOfLines={1}>
               {displayAgency}
             </Text>
+            <Text style={styles.phoneText} numberOfLines={1}>
+              {agentPhone}
+            </Text>
           </View>
-        </View>
-        <View style={styles.privateNote}>
-          <Feather name="lock" size={11} color="#6B7280" />
-          <Text style={styles.privateText}>{t("bubble.agent.private_note")}</Text>
         </View>
       </View>
 
@@ -145,6 +157,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flexShrink: 0,
   },
+  avatarImage: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#EDE7E1",
+    flexShrink: 0,
+  },
   cardInfo: {
     flex: 1,
     gap: 2,
@@ -159,16 +178,10 @@ const styles = StyleSheet.create({
     color: "#6B7280",
     fontFamily: "DM_Sans_400Regular",
   },
-  privateNote: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-  },
-  privateText: {
+  phoneText: {
     fontSize: 11,
-    color: "#6B7280",
+    color: "#15803D",
     fontFamily: "DM_Sans_400Regular",
-    flexShrink: 1,
   },
   callBtn: {
     backgroundColor: "#16A34A",

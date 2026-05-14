@@ -292,7 +292,8 @@ export async function scrapePropertyValue(address: string, ...alternateAddresses
   ]);
   const rv = ratingValuation ?? property.ratingValuation ?? null;
   const decade = parseDecadeRange(property.additional?.decadeBuilt);
-  const buildYear = parseYear(property.additional?.yearBuilt) ?? decade.year;
+  const exactBuildYear = parseYear(property.additional?.yearBuilt);
+  const buildYear = exactBuildYear ?? decade.year;
 
   const data: PropertyValueData = {
     cv_nzd: toNumber(rv?.capitalValue),
@@ -304,7 +305,7 @@ export async function scrapePropertyValue(address: string, ...alternateAddresses
     land_area_sqm: toNumber(property.core?.landArea),
     floor_area_sqm: toNumber(property.additional?.floorArea),
     build_year: buildYear,
-    build_year_range: buildYear == null ? decade.range : null,
+    build_year_range: exactBuildYear == null ? decade.range : null,
     bedrooms: toNumber(property.core?.beds),
     bathrooms: toNumber(property.core?.baths),
     listing_active: property.isForSale === true,

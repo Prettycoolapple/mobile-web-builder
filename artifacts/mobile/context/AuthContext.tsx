@@ -305,6 +305,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     ]);
   }, []);
 
+  const persistAvatarUrl = useCallback((fileUrl: string) => {
+    setUser((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, avatarUrl: fileUrl };
+      void AsyncStorage.setItem(STORAGE_KEY_USER, JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
   const signUp = useCallback(async (data: SignUpData): Promise<{ token: string }> => {
     const resp = await fetch(`${getApiBase()}/auth/signup`, {
       method: "POST",
@@ -533,13 +542,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw new Error(completeJson.error ?? "Failed to finalize upload");
       }
 
-      setUser((prev) => (prev ? { ...prev, avatarUrl: completeJson.fileUrl } : prev));
+      persistAvatarUrl(completeJson.fileUrl);
       return { fileUrl: completeJson.fileUrl };
     } catch (signedError) {
       try {
         // Keep signup/profile edits working if signed URL flow is unavailable.
         const fallback = await legacyUpload();
-        setUser((prev) => (prev ? { ...prev, avatarUrl: fallback.fileUrl } : prev));
+        persistAvatarUrl(fallback.fileUrl);
         return fallback;
       } catch (legacyError) {
         const fallbackMessage =
@@ -557,7 +566,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         );
       }
     }
-  }, [token]);
+  }, [persistAvatarUrl, token]);
 
   return (
     <AuthContext.Provider value={{

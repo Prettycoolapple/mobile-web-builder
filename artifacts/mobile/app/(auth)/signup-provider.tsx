@@ -199,7 +199,7 @@ export default function SignupProviderScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { signUp, uploadIncorporationCertPreSignup, uploadProfilePicture } = useAuth();
+  const { signUp, uploadIncorporationCertPreSignup, uploadProfilePicture, refreshProfile } = useAuth();
   const { width: SCREEN_W } = useWindowDimensions();
   const { t } = useT();
   const DISCIPLINE_OPTIONS = React.useMemo(() => buildDisciplineOptions(t), [t]);
@@ -325,7 +325,7 @@ export default function SignupProviderScreen() {
     slide(step - 1, -1);
   };
 
-  const handleSignup = async () => {
+  const handleSignup = async (options?: { skipAvatar?: boolean }) => {
     setSubmitError(null);
     setCertError(null);
     setIsLoading(true);
@@ -354,7 +354,12 @@ export default function SignupProviderScreen() {
         setUploadStatus("done");
       } catch (certErr) {
         setUploadStatus("error");
-        setCertError(certErr instanceof Error ? certErr.message : t("signup.cert.upload_failed"));
+        const detail = certErr instanceof Error ? certErr.message.trim() : "";
+        setCertError(
+          detail && !/^upload failed\.?$/i.test(detail)
+            ? `${t("signup.cert.upload_failed")} ${detail}`
+            : t("signup.cert.upload_failed"),
+        );
         setIsLoading(false);
         return;
       }
@@ -391,13 +396,16 @@ export default function SignupProviderScreen() {
         },
       });
 
-      if (avatarUri) {
+      if (avatarUri && !options?.skipAvatar) {
         try {
           const ext = avatarMimeType.split("/")[1] ?? "jpg";
           await uploadProfilePicture(avatarUri, avatarMimeType, `avatar.${ext}`, newToken);
+          await refreshProfile().catch(() => {});
         } catch (err) {
-          const message = err instanceof Error && err.message ? err.message : t("profile.error_upload_conn");
-          Alert.alert(t("profile.error"), message);
+          Alert.alert(
+            t("profile.error"),
+            t("profile.error_upload_conn"),
+          );
         }
       }
 
@@ -864,7 +872,7 @@ export default function SignupProviderScreen() {
 
         <TouchableOpacity
           style={[styles.primaryBtn, { backgroundColor: ACCENT, opacity: isLoading ? 0.7 : 1 }]}
-          onPress={handleSignup}
+          onPress={() => handleSignup()}
           disabled={isLoading}
           activeOpacity={0.85}
         >
@@ -879,7 +887,7 @@ export default function SignupProviderScreen() {
         </TouchableOpacity>
 
         <TouchableOpacity
-          onPress={handleSignup}
+          onPress={() => handleSignup({ skipAvatar: true })}
           disabled={isLoading}
           activeOpacity={0.7}
           style={styles.skipBtn}

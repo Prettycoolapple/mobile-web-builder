@@ -233,9 +233,9 @@ export function ProviderRecommendationBubble({
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: "#F5F3FF",
+    backgroundColor: "#FBF6F1",
     borderWidth: 1,
-    borderColor: "#DDD6FE",
+    borderColor: "#E8D6CB",
     borderRadius: 12,
     padding: 14,
     marginHorizontal: 12,
@@ -252,7 +252,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: "#E5E7EB",
+    borderColor: "#EADFD8",
     padding: 12,
     marginBottom: 12,
     gap: 8,
@@ -266,7 +266,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: "#7C3AED",
+    backgroundColor: "#D87355",
     justifyContent: "center",
     alignItems: "center",
     flexShrink: 0,
@@ -360,7 +360,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   dismissText: {
-    color: "#9CA3AF",
+    color: "#9A8F87",
     fontSize: 13,
     fontFamily: "DM_Sans_400Regular",
   },

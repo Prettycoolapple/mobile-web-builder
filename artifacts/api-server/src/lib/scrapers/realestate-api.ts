@@ -282,6 +282,10 @@ function levenshtein(a: string, b: string): number {
 
 interface RawListing {
   id: string;
+  relationships?: {
+    agents?: { data?: Array<{ id: string; type: string }> };
+    offices?: { data?: Array<{ id: string; type: string }> };
+  };
   attributes: {
     address?: {
       "full-address"?: string;
@@ -306,6 +310,38 @@ interface ListingsResponse {
   data?: RawListing[];
   meta?: { totalResults?: number };
   message?: string;
+}
+
+interface RawAgentImage {
+  "base-url"?: string;
+  square?: string;
+  large?: string;
+  medium?: string;
+  small?: string;
+}
+
+interface RawAgentResponse {
+  data?: {
+    id: string;
+    type: "agent";
+    attributes?: {
+      name?: string;
+      "first-name"?: string;
+      "last-name"?: string;
+      "phone-mobile"?: string;
+      phone?: string;
+      "office-name"?: string;
+      image?: RawAgentImage;
+    };
+  };
+}
+
+export interface RealestateAgentContact {
+  agentName: string | null;
+  agentPhone: string | null;
+  agencyName: string | null;
+  agentAvatarUrl: string | null;
+  listingUrl: string | null;
 }
 
 /**
@@ -410,6 +446,67 @@ async function fetchListingsForSuburbId(suburbId: string, limit = 100): Promise<
   return mapped;
 }
 
+async function fetchRawListingsForSuburbId(suburbId: string, limit = 100): Promise<RawListing[]> {
+  const params = new URLSearchParams();
+  params.append("filter[category][]", "res_sale");
+  params.append("filter[suburb][]", suburbId);
+  params.append("page[limit]", String(Math.min(limit, 100)));
+
+  const url = `${PLATFORM_BASE}/listings?${params.toString()}`;
+  const json = await fetchJsonWithTimeout<ListingsResponse>(url);
+  if (json.message || !json.data) {
+    logger.warn({ err: json.message, url }, "realestate-api: raw listings request failed");
+    return [];
+  }
+  return json.data.filter((it) => it.attributes["listing-status"] !== "withdrawn");
+}
+
+function buildMediaUrl(baseUrl: string | null | undefined, suffix?: string | null): string | null {
+  if (!baseUrl) return null;
+  return `${MEDIA_BASE}${baseUrl}${suffix || ".crop.110x110.jpg"}`;
+}
+
+function normaliseNzPhone(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const stripped = raw.replace(/[\s\-().]/g, "");
+  if (/^\+64\d{7,11}$/.test(stripped)) return stripped;
+  if (/^0\d{7,10}$/.test(stripped)) return `+64${stripped.slice(1)}`;
+  return raw.trim();
+}
+
+function cleanAgencyName(raw: string | null | undefined): string | null {
+  if (!raw?.trim()) return null;
+  const withoutLicence = raw.replace(/\s*\(Licensed:\s*REAA\s*2008\)\s*/gi, " ").replace(/\s+/g, " ").trim();
+  const afterDash = withoutLicence.split(/\s+-\s+/).pop()?.trim();
+  const candidate = afterDash && afterDash.length >= 3 ? afterDash : withoutLicence;
+  return candidate.replace(/\s*,\s*/g, ", ").trim() || null;
+}
+
+function agentImageUrl(image: RawAgentImage | undefined): string | null {
+  if (!image?.["base-url"]) return null;
+  return buildMediaUrl(image["base-url"], image.square ?? image.large ?? image.medium ?? image.small);
+}
+
+async function fetchAgentById(agentId: string): Promise<RealestateAgentContact | null> {
+  const url = `${PLATFORM_BASE}/agents/${encodeURIComponent(agentId)}`;
+  const json = await fetchJsonWithTimeout<RawAgentResponse>(url);
+  const attrs = json.data?.attributes;
+  if (!attrs) return null;
+
+  const name =
+    attrs.name ??
+    [attrs["first-name"], attrs["last-name"]].filter(Boolean).join(" ").trim() ??
+    null;
+  const phone = normaliseNzPhone(attrs["phone-mobile"] ?? attrs.phone);
+  return {
+    agentName: name?.trim() || null,
+    agentPhone: phone,
+    agencyName: cleanAgencyName(attrs["office-name"]),
+    agentAvatarUrl: agentImageUrl(attrs.image),
+    listingUrl: null,
+  };
+}
+
 function firstAddressLine(s: string): string {
   return s
     .split(",")[0]
@@ -492,6 +589,80 @@ export async function fetchRealestateListingForAddress(
 
   logger.info({ suburb: suburb.title, address: trimmed.slice(0, 80) }, "realestate-api: no active subject listing match");
   return null;
+}
+
+/**
+ * Match a subject property against the active listing feed and return the
+ * selling agent details attached to that listing. This is intentionally
+ * separate from the feasibility data scraper because the chat UI uses it only
+ * when the user asks to call/contact the listing agent.
+ */
+export async function fetchRealestateAgentContactForAddress(
+  freeformAddress: string,
+): Promise<RealestateAgentContact | null> {
+  const trimmed = freeformAddress.trim();
+  if (!trimmed) return null;
+
+  const suburb = await findSuburbInTextViaIndex(trimmed);
+  if (!suburb) {
+    logger.info({ address: trimmed.slice(0, 80) }, "realestate-api: agent contact - suburb not found");
+    return null;
+  }
+
+  let listings: RawListing[] = [];
+  try {
+    listings = await fetchRawListingsForSuburbId(suburb.id, 100);
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "realestate-api: agent contact - listings fetch failed");
+    return null;
+  }
+
+  let matched = listings.find((l) => {
+    const address = l.attributes.address?.["full-address"] ?? l.attributes.address?.["display-address"] ?? "";
+    return addressesLikelyMatch(trimmed, address);
+  });
+
+  if (!matched) {
+    logger.info({ suburb: suburb.title, address: trimmed.slice(0, 80) }, "realestate-api: agent contact - no active listing match");
+    return null;
+  }
+
+  const listingUrl = matched.attributes["website-full-url"] ?? null;
+  let agentIds = matched.relationships?.agents?.data?.map((a) => a.id).filter(Boolean) ?? [];
+
+  if (agentIds.length === 0) {
+    try {
+      const detail = await fetchJsonWithTimeout<{ data?: RawListing }>(
+        `${PLATFORM_BASE}/listings/${encodeURIComponent(matched.id)}`,
+      );
+      if (detail.data) matched = detail.data;
+      agentIds = matched.relationships?.agents?.data?.map((a) => a.id).filter(Boolean) ?? [];
+    } catch (err) {
+      logger.warn({ err: (err as Error).message, listingId: matched.id }, "realestate-api: agent contact - listing detail failed");
+    }
+  }
+
+  for (const agentId of agentIds) {
+    try {
+      const agent = await fetchAgentById(agentId);
+      if (!agent?.agentPhone) continue;
+      return {
+        ...agent,
+        listingUrl,
+      };
+    } catch (err) {
+      logger.warn({ err: (err as Error).message, agentId }, "realestate-api: agent contact - agent fetch failed");
+    }
+  }
+
+  logger.info({ listingId: matched.id, address: trimmed.slice(0, 80) }, "realestate-api: agent contact - no callable agent");
+  return {
+    agentName: null,
+    agentPhone: null,
+    agencyName: null,
+    agentAvatarUrl: null,
+    listingUrl,
+  };
 }
 
 /**

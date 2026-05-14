@@ -22,6 +22,7 @@ export const profiles = pgTable("profiles", {
    * this (not calendar month) so renewal aligns with IAP. Null for free / unknown.
    */
   subscriptionPeriodEndAt: timestamp("subscription_period_end_at", { withTimezone: true }),
+  stripeCustomerId: text("stripe_customer_id"),
   avatarUrl: text("avatar_url"),
   isVerified: boolean("is_verified").default(false).notNull(),
   phoneNumber: text("phone_number"),

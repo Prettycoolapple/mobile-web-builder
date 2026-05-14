@@ -2,6 +2,7 @@
 import { logger } from "../logger";
 import { launchBrowser, newStealthPage, randomDelay, logScrapeAttempt, isVercelServerless } from "./browser";
 import { fetchWithScrapingBee } from "./scrapingbee";
+import { fetchRealestateAgentContactForAddress } from "./realestate-api";
 
 export interface AgentContactResult {
   found: boolean;
@@ -9,12 +10,13 @@ export interface AgentContactResult {
   agentName: string | null;
   agentPhone: string | null;
   agencyName: string | null;
+  agentAvatarUrl: string | null;
   listingUrl: string | null;
   source: string | null;
 }
 
 function emptyResult(): AgentContactResult {
-  return { found: false, isListed: false, agentName: null, agentPhone: null, agencyName: null, listingUrl: null, source: null };
+  return { found: false, isListed: false, agentName: null, agentPhone: null, agencyName: null, agentAvatarUrl: null, listingUrl: null, source: null };
 }
 
 function normalisePhone(raw: string): string {
@@ -171,7 +173,7 @@ async function scrapeAgentViaBee(address: string): Promise<AgentContactResult | 
 
   const isForSale = /for[\s\-]?sale|asking price|enquire now|price on application|POA/i.test(pageText);
   if (!isForSale) {
-    return { found: true, isListed: false, agentName: null, agentPhone: null, agencyName: null, listingUrl: propertyUrl, source: null };
+    return { found: true, isListed: false, agentName: null, agentPhone: null, agencyName: null, agentAvatarUrl: null, listingUrl: propertyUrl, source: null };
   }
 
   const parsed = parseAgent(pageText);
@@ -183,12 +185,32 @@ async function scrapeAgentViaBee(address: string): Promise<AgentContactResult | 
     agentName: parsed.agentName,
     agentPhone: parsed.agentPhone,
     agencyName: parsed.agencyName,
+    agentAvatarUrl: null,
     listingUrl: propertyUrl,
     source: "oneroof",
   };
 }
 
 export async function scrapeListingAgent(address: string): Promise<AgentContactResult> {
+  try {
+    const realestateAgent = await fetchRealestateAgentContactForAddress(address);
+    if (realestateAgent?.agentPhone) {
+      logScrapeAttempt("AgentContact", "realestate-api", true, `agent=${realestateAgent.agentName ?? "found"}`);
+      return {
+        found: true,
+        isListed: true,
+        agentName: realestateAgent.agentName,
+        agentPhone: realestateAgent.agentPhone,
+        agencyName: realestateAgent.agencyName,
+        agentAvatarUrl: realestateAgent.agentAvatarUrl,
+        listingUrl: realestateAgent.listingUrl,
+        source: "realestate-api",
+      };
+    }
+  } catch (err) {
+    logScrapeAttempt("AgentContact", "realestate-api", false, String(err));
+  }
+
   if (isVercelServerless()) {
     try {
       const beeFirst = await scrapeAgentViaBee(address);

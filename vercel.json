@@ -3,9 +3,9 @@
   "buildCommand": "pnpm --filter @workspace/api-server run build",
   "installCommand": "pnpm install --frozen-lockfile=false",
   "outputDirectory": "artifacts/api-server/deploy",
-  "functions": {
+    "functions": {
     "api/index.mjs": {
-      "maxDuration": 60,
+      "maxDuration": 300,
       "includeFiles": "api/vercel-app.mjs"
     }
   },

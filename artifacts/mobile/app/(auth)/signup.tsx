@@ -18,7 +18,7 @@ interface RoleCard {
   titleKey: string;
   taglineKey: string;
   accent: string;
-  badgeKey: string;
+  badgeKey?: string;
   ctaKey: string;
   featureKeys: string[];
   route: string;
@@ -45,7 +45,6 @@ const ROLES: RoleCard[] = [
     titleKey: "signup.role.provider.title",
     taglineKey: "signup.role.provider.tagline",
     accent: "#52C99A",
-    badgeKey: "signup.role.provider.badge",
     ctaKey: "signup.role.provider.cta",
     featureKeys: [
       "signup.role.provider.f1",
@@ -117,9 +116,11 @@ export default function RoleSelectionScreen() {
                     {t(role.taglineKey)}
                   </Text>
                 </View>
-                <View style={[styles.badge, { backgroundColor: role.accent + "18" }]}>
-                  <Text style={[styles.badgeText, { color: role.accent }]}>{t(role.badgeKey)}</Text>
-                </View>
+                {role.badgeKey ? (
+                  <View style={[styles.badge, { backgroundColor: role.accent + "18" }]}>
+                    <Text style={[styles.badgeText, { color: role.accent }]}>{t(role.badgeKey)}</Text>
+                  </View>
+                ) : null}
               </View>
 
               <View style={[styles.divider, { backgroundColor: colors.border }]} />

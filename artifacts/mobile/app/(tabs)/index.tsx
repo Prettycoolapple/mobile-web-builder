@@ -374,17 +374,7 @@ export default function SearchScreen() {
     const alreadyHasAgentBubble = msgs.some((m) => m.type === "agent_contact");
     if (alreadyHasAgentBubble) return;
 
-    const lastUserMsg = [...msgs].reverse().find((m) => m.role === "user");
-    if (!lastUserMsg) return;
-
-    const userText = lastUserMsg.content.toLowerCase();
-    const agentKeywords = [
-      "call", "contact", "phone", "number", "agent", "reach", "speak",
-      "get in touch", "seller", "vendor", "ring", "talk to", "who is selling",
-      "who listed", "realtor", "salesperson",
-    ];
-    const hasKeyword = agentKeywords.some((kw) => userText.includes(kw));
-    if (!hasKeyword) return;
+    if (![...msgs].reverse().some((m) => m.role === "user")) return;
 
     checkedFollowupIds.current.add(lastAssistantText.id);
 
@@ -412,6 +402,7 @@ export default function SearchScreen() {
           agentName?: string | null;
           agentPhone?: string | null;
           agencyName?: string | null;
+          agentAvatarUrl?: string | null;
           propertyAddress?: string;
         };
 
@@ -423,6 +414,7 @@ export default function SearchScreen() {
             agentName: data.agentName ?? null,
             agentPhone: data.agentPhone,
             agencyName: data.agencyName ?? null,
+            agentAvatarUrl: data.agentAvatarUrl ?? null,
             propertyAddress: address,
           }, currentSessionId ?? undefined);
         }
@@ -553,8 +545,89 @@ export default function SearchScreen() {
 
     addMessage({ role: "assistant", content: "", type: "loading", loadingMode: detectedMode as any }, sessionId);
 
+    const currentReport = currentSession?.currentReport ?? undefined;
+    const agentAddress = resolveReportAddress(currentReport);
+    const shouldLookupListingAgent =
+      user?.role === "general" &&
+      (user?.subscriptionTier === "standard" || user?.subscriptionTier === "pro") &&
+      !!agentAddress;
+
+    if (shouldLookupListingAgent) {
+      try {
+        const conversationHistory = [
+          ...(currentSession?.messages ?? [])
+            .filter((m) => m.type === "text")
+            .slice(-5)
+            .map((m) => ({ role: m.role, content: m.content })),
+          { role: "user" as const, content: text },
+        ];
+        const resp = await fetch(`${getApiBase()}/agent-contact/lookup`, {
+          method: "POST",
+          headers: getApiHeaders(),
+          body: JSON.stringify({ address: agentAddress, messages: conversationHistory }),
+        });
+
+        if (resp.status === 402) {
+          setShowPaywall(true);
+          updateLastMessage({ type: "text", content: t("search.usage_used_upgrade") }, sessionId);
+          return;
+        }
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+        const data = await resp.json() as {
+          wantsAgentContact: boolean;
+          found?: boolean;
+          isListed?: boolean;
+          agentName?: string | null;
+          agentPhone?: string | null;
+          agencyName?: string | null;
+          agentAvatarUrl?: string | null;
+        };
+
+        if (!data.wantsAgentContact) {
+          // Not an agent-contact request; keep the normal chat flow running.
+        } else if (data.found && data.isListed && data.agentPhone) {
+          updateLastMessage({
+            role: "assistant",
+            content: "",
+            type: "agent_contact",
+            agentName: data.agentName ?? null,
+            agentPhone: data.agentPhone,
+            agencyName: data.agencyName ?? null,
+            agentAvatarUrl: data.agentAvatarUrl ?? null,
+            propertyAddress: agentAddress,
+          }, sessionId);
+          setIsLoading(false);
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          return;
+        } else {
+          updateLastMessage({
+            type: "text",
+            content: "I couldn't find a direct listing agent phone number for this property yet.",
+          }, sessionId);
+          setIsLoading(false);
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          return;
+        }
+      } catch (err) {
+        console.log("Agent contact lookup failed:", err);
+        updateLastMessage({
+          type: "text",
+          content: "I couldn't fetch the listing agent details just now. Please try again.",
+          retryText: text,
+        }, sessionId);
+        setIsLoading(false);
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        return;
+      }
+    }
+
+    /** Chat-driven feasibility runs can exceed 3 minutes; OS may suspend the app in background. */
+    const isLongRunningAnalyseChat = detectedMode === "analyse";
     const MAX_RETRIES = 5;
-    const TIMEOUT_MS = 200_000;
+    const CHAT_TIMEOUT_MS = 200_000;
+    const ANALYSE_CHAT_TIMEOUT_MS = 420_000;
+    const TIMEOUT_MS = isLongRunningAnalyseChat ? ANALYSE_CHAT_TIMEOUT_MS : CHAT_TIMEOUT_MS;
 
     const currentMessages = currentSession?.messages ?? [];
     const allMessages = [
@@ -566,8 +639,9 @@ export default function SearchScreen() {
         })),
       { role: "user" as const, content: text },
     ];
-    const currentReport = currentSession?.currentReport ?? undefined;
     const headers = getApiHeaders();
+
+    const useBackgroundAnalyse = detectedMode === "analyse" && Boolean(user) && Platform.OS !== "web";
 
     // Warms the backend in case it's cold-starting. Pings /healthz repeatedly
     // (short timeout per ping) until it responds OK or we give up. Returns true
@@ -592,26 +666,122 @@ export default function SearchScreen() {
     };
 
     try {
+      if (useBackgroundAnalyse) {
+        try {
+          const qCtrl = new AbortController();
+          const qT = setTimeout(() => qCtrl.abort(), 60_000);
+          const r = await fetch(`${getApiBase()}/analyse`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              address: text,
+              conversationHistory: allMessages,
+              async: true,
+            }),
+            signal: qCtrl.signal,
+          });
+          clearTimeout(qT);
+
+          if (r.status === 402) {
+            const err = await r.json().catch(() => ({} as { error?: string }));
+            updateLastMessage({ type: "text", content: (err as { error?: string })?.error || t("search.usage_used_upgrade") }, sessionId);
+            setShowPaywall(true);
+            return;
+          }
+          if (r.status === 401) {
+            updateLastMessage({ type: "text", content: t("search.session_expired") }, sessionId);
+            return;
+          }
+          if (r.status === 202) {
+            updateLastMessage({ type: "text", content: t("search.analyse_background") }, sessionId);
+            return;
+          }
+          if (!r.ok) {
+            throw new Error(`HTTP ${r.status}`);
+          }
+
+          const data = (await r.json()) as {
+            report?: FeasibilityReport;
+            type: string;
+            searchId?: string | null;
+            historyCreatedAt?: string | null;
+            clarificationType?: string;
+            question?: string;
+            options?: string[];
+          };
+
+          if (data.type === "clarification" && data.clarificationType === "subdivision" && Array.isArray(data.options) && data.options.length > 0) {
+            updateLastMessage({
+              type: "subdivision_clarification",
+              content: "",
+              clarification: { question: data.question || t("search.which_lot"), options: data.options },
+            }, sessionId);
+            return;
+          }
+          if (data.type === "clarification" && data.clarificationType === "address" && Array.isArray(data.options) && data.options.length > 0) {
+            updateLastMessage({
+              type: "address_clarification",
+              content: "",
+              clarification: { question: data.question || t("search.confirm_address_intro"), options: data.options },
+            }, sessionId);
+            return;
+          }
+          if (data.report && data.report.scores) {
+            const reportWithHistory = withHistoryMetadata(data.report, data.searchId, data.historyCreatedAt);
+            setCurrentReport(reportWithHistory);
+            updateLastMessage({ type: "report", report: reportWithHistory, content: "" }, sessionId);
+            if (reportWithHistory.scores && reportWithHistory.address) {
+              updateCandidateScores({ [reportWithHistory.address]: reportWithHistory.scores }, sessionId);
+            }
+            refreshProfile().catch(() => {});
+            bumpSearchHistory();
+            return;
+          }
+          updateLastMessage({ type: "text", content: t("search.could_clarify"), retryText: text }, sessionId);
+        } catch {
+          updateLastMessage({ type: "text", content: t("search.cant_reach"), retryText: text }, sessionId);
+        }
+        return;
+      }
+
       let lastErr: any = null;
-      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      let attempt = 0;
+      // Feasibility-via-chat uses the same long retry strategy as /analyse so
+      // backgrounding or locking the device does not exhaust a small retry budget.
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        attempt++;
         if (attempt > 1) {
           const isRetryableLast = lastErr?.name === "AbortError" || lastErr?.isServerError || lastErr?.isNetworkError;
           if (isRetryableLast) {
-          updateLastMessage({
-            type: "loading",
-            content: "",
-            retryLabel: t("search.waking"),
-          }, sessionId);
+            updateLastMessage({
+              type: "loading",
+              content: "",
+              loadingMode: detectedMode as "analyse" | "discover" | "followup",
+              retryLabel: t("search.waking"),
+            }, sessionId);
             const woke = await warmUpService();
             if (!woke) {
-              // Service still not responding — don't burn more attempts blindly.
-              break;
+              if (!isLongRunningAnalyseChat) {
+                break;
+              }
+              const backoffMs = Math.min(30_000, 1000 * Math.pow(2, Math.min(attempt - 1, 5)));
+              await new Promise<void>((r) => setTimeout(r, backoffMs));
+              updateLastMessage({
+                type: "loading",
+                content: "",
+                loadingMode: "analyse",
+              }, sessionId);
             }
           }
           updateLastMessage({
             type: "loading",
             content: "",
-            retryLabel: attempt === MAX_RETRIES ? t("search.still_fetching") : t("search.fetching"),
+            loadingMode: detectedMode as "analyse" | "discover" | "followup",
+            retryLabel:
+              !isLongRunningAnalyseChat && attempt >= MAX_RETRIES
+                ? t("search.still_fetching")
+                : t("search.fetching"),
           }, sessionId);
           await new Promise<void>((r) => setTimeout(r, 1500));
         }
@@ -771,19 +941,23 @@ export default function SearchScreen() {
           // Retry on server errors, network errors, and timeouts; bail otherwise
           const isRetryable =
             err?.name === "AbortError" || err?.isServerError || err?.isNetworkError;
-          if (!isRetryable || attempt >= MAX_RETRIES) break;
+          if (!isRetryable) break;
+          if (!isLongRunningAnalyseChat && attempt >= MAX_RETRIES) break;
         }
       }
 
       const isTimeout = lastErr?.name === "AbortError";
       const statusCode = lastErr?.statusCode;
-      const finalContent = isTimeout
-        ? t("search.slow_data")
-        : statusCode === 402
-          ? t("search.usage_used_upgrade")
-          : statusCode === 401
-            ? t("search.session_expired")
-            : t("search.cant_reach");
+      const finalContent =
+        isTimeout
+          ? t("search.slow_data")
+          : statusCode === 402
+            ? t("search.usage_used_upgrade")
+            : statusCode === 401
+              ? t("search.session_expired")
+              : isLongRunningAnalyseChat
+                ? t("search.slow_data")
+                : t("search.cant_reach");
       if (statusCode === 402) setShowPaywall(true);
       updateLastMessage({ type: "text", content: finalContent, retryText: text }, sessionId);
     } finally {
@@ -886,6 +1060,8 @@ export default function SearchScreen() {
     refreshProfile,
     bumpSearchHistory,
     user?.role,
+    user?.subscriptionTier,
+    user,
     t,
   ]);
 
@@ -927,15 +1103,24 @@ export default function SearchScreen() {
           attempt++;
           try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 200_000);
+            const timeoutId = setTimeout(() => controller.abort(), 420_000);
 
             const resp = await fetch(`${getApiBase()}/analyse`, {
               method: "POST",
               headers: getApiHeaders(),
-              body: JSON.stringify({ address, conversationHistory }),
+              body: JSON.stringify({
+                address,
+                conversationHistory,
+                async: Platform.OS !== "web",
+              }),
               signal: controller.signal,
             });
             clearTimeout(timeoutId);
+
+            if (resp.status === 202) {
+              updateLastMessage({ type: "text", content: t("search.analyse_background") }, sessionId);
+              return;
+            }
 
             if (resp.status === 402) {
               const err = await resp.json().catch(() => ({} as { error?: string }));

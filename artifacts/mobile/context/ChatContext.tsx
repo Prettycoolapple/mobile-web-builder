@@ -50,6 +50,7 @@ export interface ChatMessage {
   agentName?: string | null;
   agentPhone?: string;
   agencyName?: string | null;
+  agentAvatarUrl?: string | null;
 }
 
 export interface Score {
@@ -356,6 +357,17 @@ function generateId(): string {
   return Date.now().toString() + Math.random().toString(36).substr(2, 9);
 }
 
+function normaliseAddressKey(address: string): string {
+  return address.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function addressMatchKeys(address: string): string[] {
+  const full = normaliseAddressKey(address);
+  const streetPart = address.split(",")[0]?.trim() ?? "";
+  const street = /\d/.test(streetPart) ? normaliseAddressKey(streetPart) : "";
+  return Array.from(new Set([full, street].filter(Boolean)));
+}
+
 /** True if the string contains no CJK characters — used to detect untranslated English fields. */
 function isEnglishText(s: unknown): boolean {
   if (typeof s !== "string" || !s.trim()) return false;
@@ -549,7 +561,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     ) => {
       const normMap: Record<string, { ease: number; cost: number; roi: number; composite: number; landArea?: number; zone?: string | null }> = {};
       for (const [addr, data] of Object.entries(scoreMap)) {
-        normMap[addr.toLowerCase().replace(/[^a-z0-9]/g, "")] = data;
+        for (const key of addressMatchKeys(addr)) {
+          normMap[key] = data;
+        }
       }
       setSessions((prev) => {
         const targetId = sessionId ?? currentSessionId;
@@ -558,8 +572,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           const messages = s.messages.map((m) => {
             if (m.type !== "search" || !m.searchResults) return m;
             const updatedResults = m.searchResults.map((c) => {
-              const normAddr = c.address.toLowerCase().replace(/[^a-z0-9]/g, "");
-              const update = normMap[normAddr];
+              const update = addressMatchKeys(c.address).map((key) => normMap[key]).find(Boolean);
               if (!update) return c;
               const { landArea, zone, ...scoreFields } = update;
               return {

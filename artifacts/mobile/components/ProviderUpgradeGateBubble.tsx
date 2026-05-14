@@ -19,7 +19,8 @@ export function ProviderUpgradeGateBubble({ onUpgrade, onDismiss }: Props) {
     () => [
       t("bubble.upgrade.feature_message"),
       t("bubble.upgrade.feature_reports"),
-      t("bubble.upgrade.feature_history"),
+      t("bubble.upgrade.feature_transactions"),
+      t("bubble.upgrade.feature_off_market"),
     ],
     [t],
   );
@@ -35,7 +36,7 @@ export function ProviderUpgradeGateBubble({ onUpgrade, onDismiss }: Props) {
     <View style={styles.container}>
       <View style={styles.headerRow}>
         <View style={styles.iconWrap}>
-          <Feather name="zap" size={14} color="#7C3AED" />
+          <Feather name="zap" size={14} color="#C86B4E" />
         </View>
         <Text style={styles.header}>{t("bubble.upgrade.badge")}</Text>
       </View>
@@ -50,7 +51,7 @@ export function ProviderUpgradeGateBubble({ onUpgrade, onDismiss }: Props) {
         <View style={styles.features}>
           {features.map((f) => (
             <View key={f} style={styles.featureRow}>
-              <Feather name="check-circle" size={12} color="#10B981" />
+              <Feather name="check-circle" size={13} color="#2FA87A" />
               <Text style={styles.featureText}>{f}</Text>
             </View>
           ))}
@@ -79,9 +80,9 @@ export function ProviderUpgradeGateBubble({ onUpgrade, onDismiss }: Props) {
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: "#F5F3FF",
+    backgroundColor: "#FBF6F1",
     borderWidth: 1,
-    borderColor: "#DDD6FE",
+    borderColor: "#E8D6CB",
     borderRadius: 12,
     padding: 14,
     marginHorizontal: 12,
@@ -97,13 +98,13 @@ const styles = StyleSheet.create({
     width: 22,
     height: 22,
     borderRadius: 6,
-    backgroundColor: "#EDE9FE",
+    backgroundColor: "#F3E2D8",
     alignItems: "center",
     justifyContent: "center",
   },
   header: {
     fontSize: 11,
-    color: "#7C3AED",
+    color: "#B95E43",
     fontFamily: "DM_Sans_600SemiBold",
     letterSpacing: 0.3,
     textTransform: "uppercase",
@@ -119,7 +120,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: "#E5E7EB",
+    borderColor: "#EADFD8",
     padding: 12,
     marginBottom: 12,
     gap: 10,
@@ -136,7 +137,7 @@ const styles = StyleSheet.create({
   },
   planPrice: {
     fontSize: 16,
-    color: "#7C3AED",
+    color: "#C86B4E",
     fontFamily: "DM_Sans_700Bold",
     letterSpacing: -0.3,
   },
@@ -159,7 +160,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
-    backgroundColor: "#7C3AED",
+    backgroundColor: "#D87355",
     borderRadius: 8,
     paddingVertical: 13,
     paddingHorizontal: 16,
@@ -175,7 +176,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   dismissText: {
-    color: "#9CA3AF",
+    color: "#9A8F87",
     fontSize: 13,
     fontFamily: "DM_Sans_400Regular",
   },

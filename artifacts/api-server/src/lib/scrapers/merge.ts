@@ -203,6 +203,20 @@ function medianFloorArea(
   if (valid.length === 0) return null;
 
   const sorted = [...valid].sort((a, b) => a.floor_area_sqm - b.floor_area_sqm);
+
+  if (sorted.length === 2) {
+    const [lo, hi] = sorted;
+    if ((hi.floor_area_sqm - lo.floor_area_sqm) / lo.floor_area_sqm > 0.2) {
+      const stable = sorted.find((v) => v.src !== "realestate.co.nz") ?? lo;
+      logger.warn(
+        { values: valid.map((v) => `${v.src}:${v.floor_area_sqm}`), selected: `${stable.src}:${stable.floor_area_sqm}` },
+        "Floor area has one uncorroborated listing outlier - using stable source",
+      );
+      sources["floor_area_sqm"] = `${stable.src} (preferred over uncorroborated listing outlier)`;
+      return stable.floor_area_sqm;
+    }
+  }
+
   const mid = Math.floor(sorted.length / 2);
   const median = sorted.length % 2 === 0
     ? Math.round((sorted[mid - 1].floor_area_sqm + sorted[mid].floor_area_sqm) / 2)
@@ -225,6 +239,40 @@ function medianFloorArea(
     : valid[0].src;
 
   return median;
+}
+
+function areaClose(a: number, b: number, tolerancePct: number): boolean {
+  const pct = Math.abs(a - b) / Math.max(a, b);
+  return pct <= tolerancePct;
+}
+
+function corroboratingAreaSource(
+  target: number,
+  candidates: Array<{ src: string; value: number | null | undefined }>,
+  tolerancePct: number,
+): { src: string; value: number } | null {
+  for (const candidate of candidates) {
+    if (candidate.value == null) continue;
+    if (areaClose(candidate.value, target, tolerancePct)) {
+      return { src: candidate.src, value: candidate.value };
+    }
+  }
+  return null;
+}
+
+function shouldUseLiveAreaOverride(
+  current: number | null,
+  liveValue: number | null | undefined,
+  liveApprox: boolean | undefined,
+  corroborators: Array<{ src: string; value: number | null | undefined }>,
+  tolerancePct: number,
+): { use: boolean; corroborator: { src: string; value: number } | null } {
+  if (liveValue == null) return { use: false, corroborator: null };
+  if (liveApprox) return { use: false, corroborator: null };
+  if (current == null) return { use: true, corroborator: null };
+  if (areaClose(current, liveValue, tolerancePct)) return { use: false, corroborator: null };
+  const corroborator = corroboratingAreaSource(liveValue, corroborators, tolerancePct);
+  return { use: !!corroborator, corroborator };
 }
 
 function inferLifestyleZone(
@@ -281,13 +329,13 @@ export function mergePropertyData(
   // Land area: LINZ is the authoritative cadastral measurement — always wins.
   const land_area_sqm = first("land_area_sqm", sources,
     ["linz", linz?.area_sqm],
-    ["realestate.co.nz", realestateListing?.landArea],
     ["auckland_council_gis", ph?.land_area_sqm],
     ["propertyvalue", propertyValue?.land_area_sqm],
-    ["hougarden", hougarden?.land_area_sqm],
-    ["oneroof", oneroof?.land_area_sqm],
     ["qv", qv?.land_area_sqm],
     ["homes", homes?.land_area_sqm],
+    ["hougarden", hougarden?.land_area_sqm],
+    ["oneroof", oneroof?.land_area_sqm],
+    ["realestate.co.nz", realestateListing?.landArea],
   );
 
   // CV: pick the valuation with the most recent year, not just the first non-null.
@@ -369,7 +417,21 @@ export function mergePropertyData(
   if (oneroof?.listing_active) {
     if (oneroof.floor_area_sqm != null && floor_area_sqm != null) {
       const delta = Math.abs(oneroof.floor_area_sqm - floor_area_sqm) / floor_area_sqm;
-      if (delta > 0.15) {
+      const override = shouldUseLiveAreaOverride(
+        floor_area_sqm,
+        oneroof.floor_area_sqm,
+        false,
+        [
+          { src: "realestate.co.nz", value: realestateListing?.floorArea },
+          { src: "propertyvalue", value: propertyValue?.floor_area_sqm },
+          { src: "auckland_council_gis", value: ph?.floor_area_sqm },
+          { src: "qv", value: qv?.floor_area_sqm },
+          { src: "homes", value: homes?.floor_area_sqm },
+          { src: "hougarden", value: hougarden?.floor_area_sqm },
+        ],
+        0.15,
+      );
+      if (delta > 0.15 && override.use) {
         logger.info(
           { previous: floor_area_sqm, listing: oneroof.floor_area_sqm, delta },
           "Merge: live OneRoof listing overrides floor area (>15% disagreement)",
@@ -379,6 +441,11 @@ export function mergePropertyData(
         );
         floor_area_sqm = oneroof.floor_area_sqm;
         sources["floor_area_sqm"] = "oneroof (live listing)";
+      } else if (delta > 0.15) {
+        logger.warn(
+          { current: floor_area_sqm, listing: oneroof.floor_area_sqm, delta },
+          "Merge: ignored uncorroborated OneRoof floor-area outlier",
+        );
       }
     } else if (oneroof.floor_area_sqm != null && floor_area_sqm == null) {
       floor_area_sqm = oneroof.floor_area_sqm;
@@ -417,7 +484,21 @@ export function mergePropertyData(
     // last LINZ refresh and the listing reflects the new title size.
     if (oneroof.land_area_sqm != null && land_area_sqm != null) {
       const delta = Math.abs(oneroof.land_area_sqm - land_area_sqm) / land_area_sqm;
-      if (delta > 0.1) {
+      const override = shouldUseLiveAreaOverride(
+        land_area_sqm,
+        oneroof.land_area_sqm,
+        false,
+        [
+          { src: "realestate.co.nz", value: realestateListing?.landArea },
+          { src: "propertyvalue", value: propertyValue?.land_area_sqm },
+          { src: "auckland_council_gis", value: ph?.land_area_sqm },
+          { src: "qv", value: qv?.land_area_sqm },
+          { src: "homes", value: homes?.land_area_sqm },
+          { src: "hougarden", value: hougarden?.land_area_sqm },
+        ],
+        0.1,
+      );
+      if (delta > 0.1 && override.use) {
         logger.info(
           { previous: land_area_sqm, listing: oneroof.land_area_sqm, delta },
           "Merge: live OneRoof listing overrides land area (>10% disagreement — likely post-subdivision)",
@@ -427,6 +508,11 @@ export function mergePropertyData(
         );
         live_land_area_sqm = oneroof.land_area_sqm;
         sources["land_area_sqm"] = "oneroof (live listing)";
+      } else if (delta > 0.1) {
+        logger.warn(
+          { cadastral: land_area_sqm, listing: oneroof.land_area_sqm, delta },
+          "Merge: ignored uncorroborated OneRoof land-area outlier",
+        );
       }
     }
   }
@@ -439,7 +525,21 @@ export function mergePropertyData(
   if (realestateListing) {
     if (realestateListing.floorArea != null && floor_area_sqm != null) {
       const delta = Math.abs(realestateListing.floorArea - floor_area_sqm) / floor_area_sqm;
-      if (delta > 0.15) {
+      const override = shouldUseLiveAreaOverride(
+        floor_area_sqm,
+        realestateListing.floorArea,
+        realestateListing.floorAreaApprox,
+        [
+          { src: "oneroof", value: oneroof?.floor_area_sqm },
+          { src: "propertyvalue", value: propertyValue?.floor_area_sqm },
+          { src: "auckland_council_gis", value: ph?.floor_area_sqm },
+          { src: "qv", value: qv?.floor_area_sqm },
+          { src: "homes", value: homes?.floor_area_sqm },
+          { src: "hougarden", value: hougarden?.floor_area_sqm },
+        ],
+        0.15,
+      );
+      if (delta > 0.15 && override.use) {
         logger.info(
           { previous: floor_area_sqm, listing: realestateListing.floorArea, delta },
           "Merge: active realestate.co.nz listing overrides floor area (>15% disagreement)",
@@ -449,6 +549,11 @@ export function mergePropertyData(
         );
         floor_area_sqm = realestateListing.floorArea;
         sources["floor_area_sqm"] = "realestate.co.nz (active listing)";
+      } else if (delta > 0.15) {
+        logger.warn(
+          { current: floor_area_sqm, listing: realestateListing.floorArea, delta, approximate: realestateListing.floorAreaApprox },
+          "Merge: ignored uncorroborated realestate.co.nz floor-area outlier",
+        );
       }
     } else if (realestateListing.floorArea != null && floor_area_sqm == null) {
       floor_area_sqm = realestateListing.floorArea;
@@ -487,7 +592,21 @@ export function mergePropertyData(
 
     if (realestateListing.landArea != null && land_area_sqm != null) {
       const delta = Math.abs(realestateListing.landArea - land_area_sqm) / land_area_sqm;
-      if (delta > 0.1) {
+      const override = shouldUseLiveAreaOverride(
+        land_area_sqm,
+        realestateListing.landArea,
+        realestateListing.landAreaApprox,
+        [
+          { src: "oneroof", value: oneroof?.land_area_sqm },
+          { src: "propertyvalue", value: propertyValue?.land_area_sqm },
+          { src: "auckland_council_gis", value: ph?.land_area_sqm },
+          { src: "qv", value: qv?.land_area_sqm },
+          { src: "homes", value: homes?.land_area_sqm },
+          { src: "hougarden", value: hougarden?.land_area_sqm },
+        ],
+        0.1,
+      );
+      if (delta > 0.1 && override.use) {
         logger.info(
           { previous: land_area_sqm, listing: realestateListing.landArea, delta },
           "Merge: active realestate.co.nz listing overrides land area (>10% disagreement)",
@@ -497,6 +616,11 @@ export function mergePropertyData(
         );
         live_land_area_sqm = realestateListing.landArea;
         sources["land_area_sqm"] = "realestate.co.nz (active listing)";
+      } else if (delta > 0.1) {
+        logger.warn(
+          { cadastral: land_area_sqm, listing: realestateListing.landArea, delta, approximate: realestateListing.landAreaApprox },
+          "Merge: ignored uncorroborated realestate.co.nz land-area outlier",
+        );
       }
     }
   }
@@ -528,6 +652,13 @@ export function mergePropertyData(
   }
 
   const final_build_year = build_year;
+  let final_build_year_range = build_year_range;
+  const buildYearSource = sources["build_year"] ?? "";
+  if (!final_build_year_range && buildYearSource.includes("propertyvalue") && propertyValue?.build_year_range) {
+    final_build_year_range = propertyValue.build_year_range;
+  } else if (!final_build_year_range && buildYearSource.includes("qv") && qv?.build_year_range) {
+    final_build_year_range = qv.build_year_range;
+  }
 
   // Auckland Council GIS is the authoritative overlay source. Hougarden text can
   // mention nearby/generic overlay names and has caused false report risks such
@@ -603,7 +734,7 @@ export function mergePropertyData(
     land_area_sqm: final_land_area_sqm,
     floor_area_sqm,
     build_year: final_build_year,
-    build_year_range,
+    build_year_range: final_build_year_range,
     bedrooms,
     bathrooms,
     zone_code,

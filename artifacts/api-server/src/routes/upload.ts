@@ -55,6 +55,10 @@ function profilePictureDataUrl(buffer: Buffer | Uint8Array, mimetype: string): s
   return `data:${mimetype};base64,${Buffer.from(buffer).toString("base64")}`;
 }
 
+function inlineImageDataUrl(buffer: Buffer | Uint8Array, mimetype: string): string {
+  return `data:${mimetype};base64,${Buffer.from(buffer).toString("base64")}`;
+}
+
 async function saveInlineProfilePicture(
   userId: string,
   buffer: Buffer | Uint8Array,
@@ -355,6 +359,18 @@ router.post(
       res.status(201).json({ fileUrl, objectPath });
     } catch (error) {
       req.log.error({ err: error }, "DM image upload failed");
+      try {
+        const fileUrl = inlineImageDataUrl(req.file.buffer, req.file.mimetype);
+        res.status(201).json({ fileUrl, objectPath: null, storage: "inline_fallback" });
+        return;
+      } catch (inlineError) {
+        req.log.error({ err: inlineError }, "Inline DM image fallback failed");
+      }
+      const classified = classifyStorageUploadError(error);
+      if (classified) {
+        res.status(classified.status).json({ error: classified.error, code: classified.code });
+        return;
+      }
       res.status(500).json({ error: "Upload failed. Please try again.", code: "UPLOAD_FAILED" });
     }
   },

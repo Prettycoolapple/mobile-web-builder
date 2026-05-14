@@ -279,7 +279,7 @@ export function checkAsbestosRisk(build_year: number | null): AsbestosRisk {
     };
   }
 
-  if (build_year <= 1940) {
+  if (build_year < 1940) {
     return {
       risk: "low",
       notes: `Built ${build_year}, pre-asbestos manufacturing era. Low risk of asbestos-containing materials.`,

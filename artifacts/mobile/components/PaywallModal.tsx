@@ -34,7 +34,6 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
     t("paywall.f2"),
     t("paywall.f3"),
     t("paywall.f4"),
-    t("paywall.f5"),
   ];
   const slideAnim = useRef(new Animated.Value(400)).current;
   const overlayAnim = useRef(new Animated.Value(0)).current;
@@ -130,10 +129,10 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
         <Animated.View
           style={[styles.sheet, { backgroundColor: colors.card, transform: [{ translateY: slideAnim }] }]}
         >
-          <View style={[styles.handle, { backgroundColor: colors.border }]} />
+          <View style={[styles.handle, { backgroundColor: "#EADFD8" }]} />
 
-          <View style={[styles.iconWrap, { backgroundColor: colors.accent + "15" }]}>
-            <Feather name="zap" size={22} color={colors.accent} />
+          <View style={[styles.iconWrap, { backgroundColor: "#F3E2D8" }]}>
+            <Feather name="zap" size={22} color="#C86B4E" />
           </View>
 
           <Text style={[styles.title, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
@@ -146,17 +145,17 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
           <View style={styles.features}>
             {FEATURES.map((f) => (
               <View key={f} style={styles.featureRow}>
-                <Feather name="check-circle" size={14} color={colors.success} />
+                <Feather name="check-circle" size={14} color="#2FA87A" />
                 <Text style={[styles.featureText, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}>{f}</Text>
               </View>
             ))}
           </View>
 
-          <View style={[styles.planCard, { borderColor: colors.accent, backgroundColor: colors.accent + "10", borderWidth: 2, alignSelf: "stretch" }]}>
+          <View style={[styles.planCard, { borderColor: "#D87355", backgroundColor: "#FBF6F1", borderWidth: 2, alignSelf: "stretch" }]}>
             <Text style={[styles.planLabel, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>
               {t("paywall.standard_monthly")}
             </Text>
-            <Text style={[styles.planPrice, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
+            <Text style={[styles.planPrice, { color: "#C86B4E", fontFamily: "DM_Sans_700Bold" }]}>
               {priceString}
             </Text>
             <Text style={[styles.planDesc, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
@@ -165,7 +164,7 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
           </View>
 
           <TouchableOpacity
-            style={[styles.upgradeBtn, { backgroundColor: isPurchasing ? colors.accent + "80" : colors.accent }]}
+            style={[styles.upgradeBtn, { backgroundColor: isPurchasing ? "#D8735580" : "#D87355" }]}
             onPress={handleUpgrade}
             activeOpacity={0.85}
             disabled={isPurchasing || isRestoring || offeringsLoading}

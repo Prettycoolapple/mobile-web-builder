@@ -14,7 +14,7 @@ export function classifyAsbestos(build_year: number | null): AsbestosClassificat
     };
   }
 
-  if (build_year <= 1940) {
+  if (build_year < 1940) {
     return {
       risk: "low",
       notes:

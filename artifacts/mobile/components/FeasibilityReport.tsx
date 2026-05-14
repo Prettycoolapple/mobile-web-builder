@@ -672,7 +672,7 @@ function AsbestosPanel({ asbestos, colors }: { asbestos: AsbestosInfo; colors: R
     risk === "high"
       ? t("report.asbestos_risk_high")
       : risk === "low"
-        ? buildYearNum && buildYearNum <= 1940
+        ? buildYearNum && buildYearNum < 1940
           ? t("report.asbestos_risk_low_pre1940")
           : t("report.asbestos_risk_low_post1990")
         : t("report.asbestos_risk_unknown");

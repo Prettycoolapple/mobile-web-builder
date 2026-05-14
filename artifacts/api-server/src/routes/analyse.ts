@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { eq, sql } from "drizzle-orm";
-import { db, profiles, searches, withDbRetry } from "@workspace/db";
+import { db, profiles, searches, feasibilityJobs, withDbRetry } from "@workspace/db";
 import {
   generateFeasibilityReport,
   generateSearchResults,
@@ -60,6 +60,8 @@ import {
 import { usagePeriodExpired } from "../lib/billingPeriod";
 import { formatTitleTypeForDisplay } from "../lib/titleDisplay";
 import { sendPushToUser } from "../lib/expo-push";
+import { runAfterResponse } from "../lib/vercel-wait-until";
+import type { Logger } from "pino";
 
 type ReqLike = { headers: Record<string, string | string[] | undefined> };
 function localeFromReq(req: ReqLike) {
@@ -174,7 +176,7 @@ export function applyOverviewSnapshot(
     land_area_sqm: merged.land_area_sqm ?? null,
     floorArea: merged.floor_area_sqm != null ? `${merged.floor_area_sqm}m²` : null,
     floor_area_sqm: merged.floor_area_sqm ?? null,
-    buildYear: merged.build_year != null ? String(merged.build_year) : null,
+    buildYear: merged.build_year_range ?? (merged.build_year != null ? String(merged.build_year) : null),
     build_year: merged.build_year ?? null,
     build_year_range: merged.build_year_range ?? null,
     bedrooms: merged.bedrooms ?? null,
@@ -450,7 +452,7 @@ function applyDeterministicPipelineOverrides(
       const ad = pipelineResult.asbestos_detail;
 
       parsed.asbestos = {
-        buildYear: merged?.build_year ?? null,
+        buildYear: merged?.build_year_range ?? (merged?.build_year ?? null),
         riskLevel: ad.risk,
         risk: ad.risk,
         flagged: ad.risk === "high",
@@ -487,7 +489,7 @@ function applyDeterministicPipelineOverrides(
       if (!omitAsbestosFromRiskSummary) {
         let asbestosBullet: string;
         if (isZh) {
-          if (risk === "low" && buildYear && buildYear <= 1940) {
+          if (risk === "low" && buildYear && buildYear < 1940) {
             asbestosBullet = `石棉风险低 — ${buildYear} 年建造（石棉使用前时代），拆除费用约 ${costRange}。`;
           } else if (risk === "high") {
             asbestosBullet = `石棉风险高 — ${buildYear ? `${buildYear} 年建造` : "建造年份未知"}（1940–1990 年建筑期），需持证评估员检查，拆除费用约 ${costRange}，须向 WorkSafe 申报。`;
@@ -495,7 +497,7 @@ function applyDeterministicPipelineOverrides(
             asbestosBullet = `石棉风险未知 — 建造年份不明，拆除前须委托持证石棉评估师检查，以确定拆除费用。`;
           }
         } else {
-          if (risk === "low" && buildYear && buildYear <= 1940) {
+          if (risk === "low" && buildYear && buildYear < 1940) {
             asbestosBullet = `Low asbestos risk — built ${buildYear} (pre-asbestos era); demolition cost estimate ${costRange}.`;
           } else if (risk === "high") {
             asbestosBullet = `Elevated asbestos risk — ${buildYear ? `built ${buildYear}` : "build year unknown"} (1940–1990 era); licensed removal required, demolition cost ${costRange}, WorkSafe notification needed.`;
@@ -630,7 +632,7 @@ function buildDeterministicFallbackReport(
       cv: merged.cv_nzd != null ? `$${merged.cv_nzd.toLocaleString("en-NZ")}` : null,
       landArea: merged.land_area_sqm != null ? `${merged.land_area_sqm}m2` : null,
       floorArea: merged.floor_area_sqm != null ? `${merged.floor_area_sqm}m2` : null,
-      buildYear: merged.build_year != null ? String(merged.build_year) : null,
+      buildYear: merged.build_year_range ?? (merged.build_year != null ? String(merged.build_year) : null),
       zone: zoneLabel,
       listingPrice: merged.listing_price != null ? `$${merged.listing_price.toLocaleString("en-NZ")}` : null,
       isOnMarket: merged.listing_active === true,
@@ -1200,10 +1202,144 @@ function pgErrorChain(err: unknown): Array<Record<string, unknown>> {
   return chain;
 }
 
+type FeasibilityLog = Pick<Logger, "warn" | "error" | "info">;
+
+async function runFeasibilityAnalyseCore(args: {
+  address: string;
+  analysisAddress: string;
+  locale: ReturnType<typeof normaliseLocale>;
+  translateTitleSchool: boolean;
+  conversationHistory: Array<{ role: "user" | "assistant"; content: string }>;
+  userId: string | null;
+  log: FeasibilityLog;
+}): Promise<{
+  report: Record<string, unknown>;
+  savedSearchId: string | null;
+  savedSearchCreatedAt: string | null;
+}> {
+  const { address, analysisAddress, locale, translateTitleSchool, conversationHistory, userId, log } = args;
+
+  const pipelineResult = await runPropertyPipeline(analysisAddress).catch((err) => {
+    log.warn({ err }, "Pipeline failed during feasibility core — falling back to LLM-only report");
+    return null;
+  });
+
+  let report: Record<string, unknown>;
+  const deterministicReport = pipelineResult
+    ? buildDeterministicFallbackReport(pipelineResult, pipelineResult.geocode?.formatted ?? analysisAddress)
+    : null;
+
+  if (deterministicReport) {
+    report = deterministicReport;
+  } else {
+    const raw = await generateFeasibilityReport(analysisAddress, conversationHistory || [], locale);
+    report = extractJSON(raw) as Record<string, unknown>;
+  }
+
+  if (pipelineResult && report && typeof report === "object") {
+    applyDeterministicPipelineOverrides(report, pipelineResult, pipelineResult.geocode?.formatted ?? analysisAddress);
+  }
+
+  if (locale === "zh") {
+    report = await translateReportNarrative(report, { translateTitleAndSchoolFields: translateTitleSchool });
+  }
+
+  let savedSearchId: string | null = null;
+  let savedSearchCreatedAt: string | null = null;
+  if (userId) {
+    await db.update(profiles).set({
+      reportsUsedThisMonth: sql`${profiles.reportsUsedThisMonth} + 1`,
+    }).where(eq(profiles.id, userId));
+
+    try {
+      const [row] = await db
+        .insert(searches)
+        .values({
+          userId,
+          query: address,
+          address: analysisAddress,
+          resultJson: report as Record<string, unknown>,
+        })
+        .returning({ id: searches.id, createdAt: searches.createdAt });
+      savedSearchId = row?.id ?? null;
+      savedSearchCreatedAt = row?.createdAt ? new Date(row.createdAt as unknown as string).toISOString() : null;
+    } catch (err) {
+      log.error({ err }, "Failed to save analyse report to history");
+    }
+
+    if (savedSearchId) {
+      const shortAddr = address.length > 90 ? `${address.slice(0, 87)}…` : address;
+      const pushTitle = locale === "zh" ? "分析报告已就绪" : "Report ready";
+      const pushBody =
+        locale === "zh"
+          ? `您请求的「${shortAddr}」分析已完成，请打开应用查看。`
+          : `Your analysis for ${shortAddr} is ready — open the app to view it.`;
+      void sendPushToUser(userId, pushTitle, pushBody, {
+        type: "report_ready",
+        searchId: savedSearchId,
+      }).catch((e) => log.warn({ e }, "Report-ready push failed (non-fatal)"));
+    }
+  }
+
+  return { report, savedSearchId, savedSearchCreatedAt };
+}
+
+async function processFeasibilityJob(jobId: string, log: FeasibilityLog): Promise<void> {
+  const rows = await withDbRetry(() =>
+    db.select().from(feasibilityJobs).where(eq(feasibilityJobs.id, jobId)).limit(1),
+  );
+  const job = rows[0];
+  if (!job || job.status !== "pending") return;
+
+  await withDbRetry(() =>
+    db
+      .update(feasibilityJobs)
+      .set({ status: "processing", updatedAt: new Date() })
+      .where(eq(feasibilityJobs.id, jobId)),
+  );
+
+  try {
+    const conv = (job.conversationHistory as Array<{ role: "user" | "assistant"; content: string }> | null) ?? [];
+    const locale = (job.locale === "zh" ? "zh" : "en") as ReturnType<typeof normaliseLocale>;
+    const result = await runFeasibilityAnalyseCore({
+      address: job.queryAddress,
+      analysisAddress: job.analysisAddress,
+      locale,
+      translateTitleSchool: Boolean(job.translateTitleSchool),
+      conversationHistory: conv,
+      userId: job.userId,
+      log,
+    });
+    await withDbRetry(() =>
+      db
+        .update(feasibilityJobs)
+        .set({
+          status: "completed",
+          searchId: result.savedSearchId,
+          updatedAt: new Date(),
+        })
+        .where(eq(feasibilityJobs.id, jobId)),
+    );
+  } catch (err) {
+    await withDbRetry(() =>
+      db
+        .update(feasibilityJobs)
+        .set({
+          status: "failed",
+          error: err instanceof Error ? err.message : String(err),
+          updatedAt: new Date(),
+        })
+        .where(eq(feasibilityJobs.id, jobId)),
+    );
+    log.error({ err }, "Background feasibility job failed");
+  }
+}
+
 router.post("/analyse", async (req, res) => {
-  const { address, conversationHistory } = req.body as {
+  const { address, conversationHistory, async: asyncFlag } = req.body as {
     address: string;
     conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
+    async?: boolean;
   };
 
   const analyseLocale = localeFromReq({ headers: req.headers as Record<string, string | string[] | undefined> });
@@ -1330,87 +1466,116 @@ router.post("/analyse", async (req, res) => {
     }
     const analysisAddress = addressResolution.resolvedAddress || address;
 
-    // Prefer the deterministic pipeline report. It is faster and keeps Vercel
-    // serverless requests below the function timeout, while still carrying the
-    // verified CV/build year/beds/baths/source-backed fields.
-    const locale = analyseLocale;
-    const pipelineResult = await runPropertyPipeline(analysisAddress).catch((err) => {
-        req.log.warn({ err }, "Pipeline failed during /analyse — falling back to LLM-only report");
-        return null;
-    });
-
-    let report: Record<string, unknown>;
-    const deterministicReport = pipelineResult
-      ? buildDeterministicFallbackReport(pipelineResult, pipelineResult.geocode?.formatted ?? analysisAddress)
-      : null;
-
-    if (deterministicReport) {
-      report = deterministicReport;
-    } else {
-      const raw = await generateFeasibilityReport(analysisAddress, conversationHistory || [], locale);
-      report = extractJSON(raw) as Record<string, unknown>;
-    }
-
-    // Inject deterministic pipeline-backed fields so CV/cost/ROI values remain
-    // consistent and do not drift from source data.
-    if (pipelineResult && report && typeof report === "object") {
-      applyDeterministicPipelineOverrides(report, pipelineResult, pipelineResult.geocode?.formatted ?? analysisAddress);
-    }
-
-    // For zh users: guarantee all narrative fields are in Simplified Chinese
-    // even if the prompt-level language instruction left any English prose.
-    if (locale === "zh") {
+    const wantAsync = Boolean(asyncFlag) && Boolean(userId);
+    if (wantAsync) {
       const translateTitleSchool = translateTitleSchoolFromReq(
         { headers: req.headers as Record<string, string | string[] | undefined> },
-        locale,
+        analyseLocale,
       );
-      report = await translateReportNarrative(report, { translateTitleAndSchoolFields: translateTitleSchool });
-    }
-
-    let savedSearchId: string | null = null;
-    let savedSearchCreatedAt: string | null = null;
-    if (userId) {
-      await db.update(profiles).set({
-        reportsUsedThisMonth: sql`${profiles.reportsUsedThisMonth} + 1`,
-      }).where(eq(profiles.id, userId));
-
+      let inserted: { id: string } | undefined;
       try {
-        const [row] = await db
-          .insert(searches)
-          .values({
-            userId,
-            query: address,
-            address: analysisAddress,
-            resultJson: report as Record<string, unknown>,
-          })
-          .returning({ id: searches.id, createdAt: searches.createdAt });
-        savedSearchId = row?.id ?? null;
-        savedSearchCreatedAt = row?.createdAt ? new Date(row.createdAt as unknown as string).toISOString() : null;
+        const rows = await withDbRetry(() =>
+          db
+            .insert(feasibilityJobs)
+            .values({
+              userId: userId!,
+              status: "pending",
+              queryAddress: address,
+              analysisAddress,
+              locale: analyseLocale,
+              translateTitleSchool,
+              conversationHistory: conversationHistory ?? null,
+            })
+            .returning({ id: feasibilityJobs.id }),
+        );
+        inserted = rows[0];
       } catch (err) {
-        req.log.error({ err }, "Failed to save analyse report to history");
+        req.log.error({ err }, "Failed to insert feasibility_jobs row");
+        res.status(500).json({ error: "Could not queue background analysis.", code: "JOB_QUEUE_FAILED" });
+        return;
       }
-
-      if (savedSearchId) {
-        const shortAddr = address.length > 90 ? `${address.slice(0, 87)}…` : address;
-        const pushTitle = locale === "zh" ? "分析报告已就绪" : "Report ready";
-        const pushBody =
-          locale === "zh"
-            ? `您请求的「${shortAddr}」分析已完成，请打开应用查看。`
-            : `Your analysis for ${shortAddr} is ready — open the app to view it.`;
-        void sendPushToUser(userId, pushTitle, pushBody, {
-          type: "report_ready",
-          searchId: savedSearchId,
-        }).catch((e) => req.log.warn({ e }, "Report-ready push failed (non-fatal)"));
+      if (!inserted?.id) {
+        res.status(500).json({ error: "Could not queue background analysis.", code: "JOB_QUEUE_FAILED" });
+        return;
       }
+      runAfterResponse(processFeasibilityJob(inserted.id, req.log));
+      res.status(202).json({ type: "queued", jobId: inserted.id, status: "queued" });
+      return;
     }
 
-    res.json({ report, type: "report", searchId: savedSearchId, historyCreatedAt: savedSearchCreatedAt });
+    const translateTitleSchool = translateTitleSchoolFromReq(
+      { headers: req.headers as Record<string, string | string[] | undefined> },
+      analyseLocale,
+    );
+    const result = await runFeasibilityAnalyseCore({
+      address,
+      analysisAddress,
+      locale: analyseLocale,
+      translateTitleSchool,
+      conversationHistory: conversationHistory || [],
+      userId,
+      log: req.log,
+    });
+    res.json({
+      report: result.report,
+      type: "report",
+      searchId: result.savedSearchId,
+      historyCreatedAt: result.savedSearchCreatedAt,
+    });
   } catch (error) {
     req.log.error({ err: error }, "Failed to analyse property");
     res.status(500).json({
       error: "Failed to generate feasibility report. Please try again.",
       code: "ANALYSE_FAILED",
     });
+  }
+});
+
+router.get("/analyse/jobs/:jobId", async (req, res) => {
+  const jobId = (req.params as { jobId?: string }).jobId;
+  const uid = getUserIdFromHeader(req);
+  if (!jobId) {
+    res.status(400).json({ error: "jobId is required", code: "MISSING_JOB_ID" });
+    return;
+  }
+  if (!uid) {
+    res.status(401).json({ error: "Unauthorized", code: "UNAUTHORIZED" });
+    return;
+  }
+  try {
+    const rows = await withDbRetry(() =>
+      db.select().from(feasibilityJobs).where(eq(feasibilityJobs.id, jobId)).limit(1),
+    );
+    const job = rows[0];
+    if (!job || job.userId !== uid) {
+      res.status(404).json({ error: "Not found", code: "NOT_FOUND" });
+      return;
+    }
+    if (job.status === "completed" && job.searchId) {
+      const searchId = job.searchId;
+      const srows = await withDbRetry(() =>
+        db
+          .select({ resultJson: searches.resultJson })
+          .from(searches)
+          .where(eq(searches.id, searchId))
+          .limit(1),
+      );
+      const report = srows[0]?.resultJson as Record<string, unknown> | undefined;
+      res.json({
+        status: job.status,
+        searchId: job.searchId,
+        report: report ?? null,
+      });
+      return;
+    }
+    res.json({
+      status: job.status,
+      searchId: job.searchId,
+      error: job.error,
+    });
+  } catch (err) {
+    req.log.error({ err }, "GET /analyse/jobs/:jobId failed");
+    res.status(500).json({ error: "Failed to load job", code: "JOB_LOAD_FAILED" });
   }
 });
 
@@ -2371,7 +2536,7 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
     "cv": ${cvNzd > 0 ? `"$${formatNZD(cvNzd)}"` : "null"},
     "landArea": "${merged.land_area_sqm != null ? `${merged.land_area_sqm}m²` : "null — check LINZ"}",
     "floorArea": "${merged.floor_area_sqm != null ? `${merged.floor_area_sqm}m²` : "null"}",
-    "buildYear": ${merged.build_year != null ? `"${merged.build_year}"` : "null"},
+    "buildYear": ${merged.build_year_range ? `"${merged.build_year_range}"` : (merged.build_year != null ? `"${merged.build_year}"` : "null")},
     "zone": "...", "listingPrice": null, "isOnMarket": false
   },
   "planning": {
@@ -2411,7 +2576,7 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
     "land_area_sqm": ${landSource ? `"${landSource}"` : "null"},
     "floor_area_sqm": ${floorSource ? `"${floorSource}"` : "null"}
   },
-  "asbestos": { "buildYear": ${merged.build_year != null ? `"${merged.build_year}"` : "null"}, "riskLevel": "${asbestos_detail.risk}", "risk": "${asbestos_detail.risk}", "flagged": ${asbestos_detail.risk === "high"}, "notes": "${asbestos_detail.notes}", "worksafe_required": ${asbestos_detail.risk === "high"}, "demoCostLow": ${costs.demo_low}, "demoCostHigh": ${costs.demo_high} },
+  "asbestos": { "buildYear": ${merged.build_year_range ? `"${merged.build_year_range}"` : (merged.build_year != null ? `"${merged.build_year}"` : "null")}, "riskLevel": "${asbestos_detail.risk}", "risk": "${asbestos_detail.risk}", "flagged": ${asbestos_detail.risk === "high"}, "notes": "${asbestos_detail.notes}", "worksafe_required": ${asbestos_detail.risk === "high"}, "demoCostLow": ${costs.demo_low}, "demoCostHigh": ${costs.demo_high} },
   "terrain": {
     "classification": ${merged.contour ? `"${merged.contour}"` : "null"},
     "official_label": ${contourTxt ? `"${contourTxt}"` : "null"},

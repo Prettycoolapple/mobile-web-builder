@@ -77,7 +77,7 @@ function isSameDay(a: string, b: string): boolean {
 
 /** Absolute URL for API storage images (authenticated); pass through http(s) unchanged. */
 function resolveDmStoredImageUri(imageUrl: string): string {
-  if (/^https?:\/\//i.test(imageUrl)) return imageUrl;
+  if (/^(https?:|data:|file:|blob:)/i.test(imageUrl)) return imageUrl;
   const path = imageUrl.startsWith("/") ? imageUrl : `/${imageUrl}`;
   return resolveAppUrl(path);
 }
