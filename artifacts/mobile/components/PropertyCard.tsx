@@ -151,6 +151,13 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
               </Text>
             </View>
           )}
+          {typeof candidate.potentialLots === "number" && candidate.potentialLots > 1 && (
+            <View style={[styles.tag, { backgroundColor: colors.success + "18" }]}>
+              <Text style={[styles.tagText, { color: colors.success, fontFamily: "DM_Sans_600SemiBold" }]}>
+                {candidate.potentialLots} lots?
+              </Text>
+            </View>
+          )}
         </View>
 
         {!!candidate.briefSummary?.trim() && (

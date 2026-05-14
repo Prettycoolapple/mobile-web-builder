@@ -320,6 +320,18 @@ function chooseBetterClassification(
   return nextDistance < currentDistance ? next : current;
 }
 
+function classifyNoMappedService(serviceName: string): InfrastructureClassification {
+  const critical = serviceName === "Wastewater" || serviceName === "Water Supply";
+  return {
+    location: "unknown",
+    distance_metres: null,
+    estimated_cost_low: critical ? 30000 : 15000,
+    estimated_cost_high: critical ? 120000 : 60000,
+    risk: critical ? "high" : "moderate",
+    note: `No mapped public ${serviceName.toLowerCase()} service found within 200m of the parcel - confirm private/on-site servicing or extension costs during civil design`,
+  };
+}
+
 export function classifyInfrastructureFeatures(
   serviceName: string,
   lat: number,
@@ -607,15 +619,16 @@ export async function fetchInfrastructure(
       }
 
       if (!best) {
-        logger.warn({ infraType: infraType.name }, "No infrastructure feature found in any layer - returning unknown");
+        const missing = classifyNoMappedService(infraType.name);
+        logger.warn({ infraType: infraType.name, classification: missing }, "No mapped infrastructure feature found in any layer");
         results.push({
           name: infraType.name,
-          location: "unknown",
-          distance_metres: null,
-          estimated_cost_low: 15000,
-          estimated_cost_high: 40000,
-          risk: "moderate",
-          note: "Service location data unavailable - field investigation required",
+          location: missing.location,
+          distance_metres: missing.distance_metres,
+          estimated_cost_low: missing.estimated_cost_low,
+          estimated_cost_high: missing.estimated_cost_high,
+          risk: missing.risk,
+          note: missing.note,
         });
         return;
       }

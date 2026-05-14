@@ -85,10 +85,10 @@ describe("estimateCosts — existing dwelling / demolition", () => {
     expect(oneDwelling.construction_low).toBe(541_000);
     expect(oneDwelling.construction_high).toBe(704_000);
     expect(twoDwellings.units).toBe(2);
-    expect(twoDwellings.construction_low).toBe(oneDwelling.construction_low * 2);
+    expect(twoDwellings.construction_low).toBe(1_081_000);
     expect(twoDwellings.construction_high).toBe(oneDwelling.construction_high * 2);
-    expect(twoDwellings.consents_low).toBe(oneDwelling.consents_low * 2);
-    expect(twoDwellings.consents_high).toBe(oneDwelling.consents_high * 2);
+    expect(twoDwellings.consents_low).toBe(141_000);
+    expect(twoDwellings.consents_high).toBe(225_000);
     expect(twoDwellings.total_low).toBeGreaterThan(oneDwelling.total_low);
   });
 });

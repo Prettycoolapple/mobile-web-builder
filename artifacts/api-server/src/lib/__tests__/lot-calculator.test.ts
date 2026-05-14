@@ -1,0 +1,27 @@
+import { describe, expect, it } from "vitest";
+import { buildSubdivisionPathwayNote, calculatePotentialLots } from "../lot-calculator";
+
+describe("lot calculator", () => {
+  it("does not default unknown zoning to Mixed Housing Suburban", () => {
+    const result = calculatePotentialLots(19996, null);
+
+    expect(result.lots).toBe(1);
+    expect(result.min_lot_size).toBe(0);
+    expect(result.zone_label).toBe("Unknown zone");
+  });
+
+  it("calculates countryside living yield using a 10,000sqm minimum lot size", () => {
+    const result = calculatePotentialLots(19996, "CLZ");
+
+    expect(result.lots).toBe(2);
+    expect(result.min_lot_size).toBe(10000);
+    expect(result.zone_label).toBe("Countryside Living Zone");
+  });
+
+  it("explains that unknown zoning cannot produce an automatic lot yield", () => {
+    const note = buildSubdivisionPathwayNote(19996, null, 1, 0, "Unknown zone");
+
+    expect(note.standard_path_viable).toBe(false);
+    expect(note.headline).toContain("Zone unavailable");
+  });
+});

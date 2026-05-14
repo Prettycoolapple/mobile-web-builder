@@ -8,6 +8,8 @@ export interface PropertyValueData {
   lv_nzd: number | null;
   iv_nzd: number | null;
   cv_year: number | null;
+  property_type: string | null;
+  property_sub_type: string | null;
   land_area_sqm: number | null;
   floor_area_sqm: number | null;
   build_year: number | null;
@@ -43,6 +45,9 @@ type PropertyPayload = {
     baths?: unknown;
     carSpaces?: unknown;
     landArea?: unknown;
+    propertyType?: unknown;
+    propertySubType?: unknown;
+    propertySubTypeShort?: unknown;
   };
   additional?: {
     floorArea?: unknown;
@@ -74,6 +79,12 @@ function toNumber(raw: unknown): number | null {
   if (raw == null || raw === "") return null;
   const n = typeof raw === "number" ? raw : Number(String(raw).replace(/[$,\s]/g, ""));
   return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+}
+
+function toStringOrNull(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const value = raw.trim();
+  return value.length > 0 ? value : null;
 }
 
 function parseYear(raw: unknown): number | null {
@@ -288,6 +299,8 @@ export async function scrapePropertyValue(address: string, ...alternateAddresses
     lv_nzd: toNumber(rv?.landValue),
     iv_nzd: toNumber(rv?.improvementValue),
     cv_year: cvYearFromDate(rv?.valuationDate),
+    property_type: toStringOrNull(property.core?.propertyType),
+    property_sub_type: toStringOrNull(property.core?.propertySubType ?? property.core?.propertySubTypeShort),
     land_area_sqm: toNumber(property.core?.landArea),
     floor_area_sqm: toNumber(property.additional?.floorArea),
     build_year: buildYear,
@@ -309,6 +322,8 @@ export async function scrapePropertyValue(address: string, ...alternateAddresses
       property_id: propertyId,
       cv_nzd: data.cv_nzd,
       cv_year: data.cv_year,
+      property_type: data.property_type,
+      property_sub_type: data.property_sub_type,
       build_year: data.build_year,
       bedrooms: data.bedrooms,
       bathrooms: data.bathrooms,

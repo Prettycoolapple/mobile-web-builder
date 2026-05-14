@@ -166,4 +166,41 @@ describe("development strategies", () => {
     expect(scenario?.lots).toBe(2);
     expect(scenario?.total_cost_mid).toBe(3_274_000);
   });
+
+  it("treats vacant land as a new-build scenario even if assessment recommends holding", () => {
+    const vacant = merged({
+      floor_area_sqm: null,
+      build_year: null,
+      bedrooms: null,
+      bathrooms: null,
+      zone_code: "CLZ",
+      zone_description: "Countryside Living Zone",
+      min_lot_size_sqm: 10000,
+    });
+    const countrysideLots: LotResult = {
+      ...lotResult,
+      lots: 2,
+      min_lot_size: 10000,
+      zone_label: "Countryside Living Zone",
+      gross_area_sqm: 19996,
+      net_area_sqm: 19996,
+      sqm_per_lot: 9998,
+    };
+    const staleAssessment = buildFallbackDevelopmentStrategyAssessment(merged(), lotResult);
+    const strategies = calculateDevelopmentStrategies({
+      data: vacant,
+      baseCosts: { ...baseCosts, demo_low: 0, demo_high: 0, demo_vacant: true, has_existing_dwelling: false, units: 2 },
+      lotResult: countrysideLots,
+      avgSalePrice: 0,
+      avgPricePerSqm: 0,
+      interestRateOutlook: "stable",
+      assessment: { ...staleAssessment, recommended_strategy: "hold_existing" },
+    });
+
+    const rebuild = strategies.find((strategy) => strategy.id === "demolish_rebuild");
+
+    expect(rebuild?.recommendation).toBe("recommended");
+    expect(rebuild?.title).toBe("Build new dwelling(s)");
+    expect(rebuild?.costItems.some((item) => item.label === "Demolition")).toBe(false);
+  });
 });

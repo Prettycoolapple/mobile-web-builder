@@ -6,7 +6,7 @@ import { fetchUnitaryPlanZone, fetchOverlaysWithConsensus, fetchContour, type Zo
 import { fetchPropertyHistory, checkAsbestosRisk, type PropertyHistory, type AsbestosRisk } from "./property-data";
 import { fetchInfrastructure, type InfrastructureItem } from "./infrastructure";
 import { scrapeHougarden, type HougardenData } from "./scrapers/hougarden";
-import { scrapeOneRoof, type OneRoofData } from "./scrapers/oneroof";
+import { scrapeOneRoof, type OneRoofData, type ListingResult } from "./scrapers/oneroof";
 import { scrapeHomes, type HomesData } from "./scrapers/homes";
 import { scrapeQV, type QVData } from "./scrapers/qv";
 import { scrapePropertyValue, type PropertyValueData } from "./scrapers/propertyvalue";
@@ -26,7 +26,7 @@ import {
   calculateDevelopmentStrategies,
   type DevelopmentStrategyScenario,
 } from "./development-strategies";
-import { fetchRealestatePhotosForAddress, fetchSupplementListingComparables } from "./scrapers/realestate-api";
+import { fetchRealestateListingForAddress, fetchSupplementListingComparables } from "./scrapers/realestate-api";
 import { enrichSchoolZonesDetail, type SchoolZoneDetail } from "./school-directory";
 import { inferSchoolZonesFromLocation } from "./school-zones-llm";
 
@@ -54,6 +54,23 @@ function parseACBuildDecade(raw: unknown): number | null {
   const s = String(raw).replace(/s$/i, "").trim();
   const n = parseInt(s, 10);
   if (!isNaN(n) && n >= 1800 && n <= new Date().getFullYear()) return n;
+  return null;
+}
+
+function inferEstateTypeFromParcel(parcel: LinzParcel | null): string | null {
+  if (!parcel?.title_no) return null;
+  const text = [
+    parcel.legal_description,
+    parcel.appellation,
+    parcel.topology_type,
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  if (/\b(cross\s*lease|leasehold|unit title|stratum|flat|unit)\b/.test(text)) {
+    return null;
+  }
+  if (/\blot\s+\d+\b.*\bdp\b|\bdp\s*\d+\b/.test(text)) {
+    return "Fee Simple";
+  }
   return null;
 }
 
@@ -637,21 +654,24 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     logger.info({ classification: scrapedContourText.classification, text: scrapedContourText.text }, "Contour: elevation API unavailable — using scraped text fallback");
   }
 
-  // If OneRoof returned no listing photos, try matching the address to an
-  // active realestate.co.nz listing in the same suburb (JSON API + address match).
-  let realestatePhotoUrls: string[] = [];
-  const oneroofHasListingPhotos =
-    (oneRoofData?.photo_urls?.length ?? 0) > 0 || !!oneRoofData?.main_photo_url;
-  if (!oneroofHasListingPhotos) {
-    const photoFb = await timed(
-      "realestate_photos",
-      () => fetchRealestatePhotosForAddress(geocode.formatted ?? address, suburb),
-      timing,
-    );
-    if (!photoFb.failed && photoFb.value) {
-      realestatePhotoUrls = photoFb.value;
-    }
+  // Match the subject against active realestate.co.nz listings. This is a
+  // direct JSON API path, so it still works in Vercel where browser scrapers
+  // are disabled. The merge step can use it to override stale valuation fields.
+  let realestateListing: ListingResult | null = null;
+  const realestateListingResult = await timed(
+    "realestate_listing",
+    () => fetchRealestateListingForAddress(geocode.formatted ?? address, suburb),
+    timing,
+  );
+  if (!realestateListingResult.failed) {
+    realestateListing = realestateListingResult.value;
+  } else {
+    failedSources.push("realestate_listing");
   }
+
+  const realestatePhotoUrls = realestateListing
+    ? Array.from(new Set(realestateListing.photoUrls?.length ? realestateListing.photoUrls : (realestateListing.photoUrl ? [realestateListing.photoUrl] : [])))
+    : [];
 
   // Merge all data sources together. QV and Homes are now passed directly into
   // mergePropertyData (not patched in afterwards) so the smart merge rules
@@ -675,13 +695,16 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       qv: qvData,
       homes: homesData,
       propertyValue: propertyValueData,
+      realestate_listing: realestateListing,
       realestate_photo_urls: realestatePhotoUrls,
     },
   );
 
-  const estateFromTitle = linzTitle?.estate_type?.trim() ?? null;
+  const titleEstate = linzTitle?.estate_type?.trim() ?? null;
+  const parcelEstate = inferEstateTypeFromParcel(linzParcelData);
+  const estateFromTitle = titleEstate ?? parcelEstate;
   merged.estate_type = estateFromTitle;
-  if (estateFromTitle) merged.data_sources["estate_type"] = "linz_title";
+  if (estateFromTitle) merged.data_sources["estate_type"] = titleEstate ? "linz_title" : "linz_parcel_inferred";
 
   // Cross-validate land area between LINZ and scrapers — log warning if they diverge >10%.
   // LINZ is already the canonical source (first priority in mergePropertyData), but we surface

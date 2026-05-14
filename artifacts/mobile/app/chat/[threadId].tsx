@@ -338,21 +338,33 @@ export default function ChatScreen() {
       });
       if (!resp.ok) {
         let code: string | undefined;
+        let message: string | undefined;
         try {
           const errJson = (await resp.json()) as { code?: string; error?: string };
           code = errJson.code;
+          message = errJson.error;
         } catch {
         }
         if (code === "BLOCKED") {
           Alert.alert(t("dm.block.title"), t("dm.block.cannot_send"));
           setBlockStatus((s) => ({ ...s, messagingBlocked: true }));
+        } else {
+          Alert.alert(t("common.error"), message ?? t("dm.error.send_failed"));
         }
         return;
+      }
+      const data = (await resp.json()) as { message?: DmMessage };
+      if (data.message) {
+        setMessages((prev) => {
+          if (prev.some((m) => m.id === data.message!.id)) return prev;
+          return [...prev, data.message!];
+        });
       }
       setBody("");
       fetchThreads();
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     } catch {
+      Alert.alert(t("common.error"), t("dm.error.send_failed"));
     } finally {
       setSending(false);
     }
@@ -363,13 +375,23 @@ export default function ChatScreen() {
     let result: ImagePicker.ImagePickerResult;
     if (useCamera) {
       const perm = await ImagePicker.requestCameraPermissionsAsync();
-      if (!perm.granted) return;
-      result = await ImagePicker.launchCameraAsync({ quality: 0.75, allowsEditing: true });
+      if (!perm.granted) {
+        Alert.alert(t("profile.permission_required"), t("dm.permission.photo"));
+        return;
+      }
+      result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ["images"],
+        quality: 0.75,
+        allowsEditing: true,
+      });
     } else {
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm.granted) return;
+      if (!perm.granted) {
+        Alert.alert(t("profile.permission_required"), t("dm.permission.photo"));
+        return;
+      }
       result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: "images",
+        mediaTypes: ["images"],
         quality: 0.75,
         allowsEditing: false,
       });
@@ -394,11 +416,19 @@ export default function ChatScreen() {
         headers: { Authorization: `Bearer ${token}` },
         body: form,
       });
-      if (uploadResp.ok) {
-        const { fileUrl } = await uploadResp.json() as { fileUrl: string };
-        await sendMessage(undefined, fileUrl);
+      if (!uploadResp.ok) {
+        const errJson = (await uploadResp.json().catch(() => ({}))) as { error?: string };
+        Alert.alert(t("common.error"), errJson.error ?? t("dm.error.image_upload_failed"));
+        return;
       }
+      const { fileUrl } = await uploadResp.json() as { fileUrl?: string };
+      if (!fileUrl) {
+        Alert.alert(t("common.error"), t("dm.error.image_upload_failed"));
+        return;
+      }
+      await sendMessage(undefined, fileUrl);
     } catch {
+      Alert.alert(t("common.error"), t("dm.error.image_upload_failed"));
     } finally {
       setUploadingImage(false);
     }

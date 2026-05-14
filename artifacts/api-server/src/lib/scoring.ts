@@ -39,9 +39,9 @@ export function scoreProperty(
       reason: "Single House Zone — subdivision heavily restricted",
     },
     {
-      condition: merged.zone_code === "LSZ" || merged.zone_code === "RUR" || merged.zone_code === "LLRZ",
+      condition: merged.zone_code === "LSZ" || merged.zone_code === "RUR" || merged.zone_code === "LLRZ" || merged.zone_code === "CLZ",
       points: 2.0,
-      reason: "Large Lot / Rural zone — development very limited",
+      reason: "Large Lot / Countryside / Rural zone - development very limited",
     },
     {
       condition: hasOverlay(merged, "heritage"),

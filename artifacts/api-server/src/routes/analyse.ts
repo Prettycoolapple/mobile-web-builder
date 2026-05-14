@@ -745,12 +745,29 @@ async function resolveNearbySuburbs(suburb: string, max = 5): Promise<string[]> 
 // Applies rule-based score boosts derived from the LLM-extracted criteria string
 // so that properties best matching the user's intent surface to the top before
 // the final random pick.
+function isDevelopmentDiscoveryIntent(criteria: string | null | undefined): boolean {
+  if (!criteria) return false;
+  return /\b(develop(?:ment)?|subdivi\w*|sub[-\s]?divide|section|sections|lot|lots|townhouse|terrace|duplex|infill|unitary|yield)\b/i.test(criteria);
+}
+
+function buildDiscoveryCriteriaText(
+  threadMessages: Message[] | undefined,
+  currentUserText: string,
+  intentCriteria: string | null,
+): string {
+  const recentUserTurns = (threadMessages ?? [])
+    .filter((msg) => msg.role === "user")
+    .slice(-4)
+    .map((msg) => msg.content ?? "");
+  return [...recentUserTurns, currentUserText, intentCriteria ?? ""].filter(Boolean).join(" ");
+}
+
 function rankByCriteria(candidates: PropertyCandidate[], criteria: string | null): PropertyCandidate[] {
   if (!criteria || candidates.length === 0) return candidates;
   const c = criteria.toLowerCase();
 
   // Parse intent signals from criteria text
-  const wantsDevelopment  = /develop|subdiv|subdividable|section|lots?|townhouse|unit|multi/i.test(c);
+  const wantsDevelopment  = isDevelopmentDiscoveryIntent(c);
   const wantsLargeLand    = /large|big|big\s+section|land\s+size|land\s+area|estate|wide|spacious/i.test(c);
   const wantsInvestment   = /invest|roi|yield|return|rental|income/i.test(c);
   const wantsLifestyle    = /lifestyle|rural|acreage|farm|rural/i.test(c);
@@ -766,7 +783,7 @@ function rankByCriteria(candidates: PropertyCandidate[], criteria: string | null
     return m ? parseInt(m[1], 10) : null;
   })();
 
-  const DEVELOPMENT_ZONES = new Set(["THAB", "MHU", "MHU-H", "MHU-S", "MHS", "TBC", "TC", "LC"]);
+  const DEVELOPMENT_ZONES = new Set(["THAB", "MHU", "MHU-H", "MHU-S", "MHS"]);
 
   const ranked = candidates.map((p) => {
     let boost = 0;
@@ -774,14 +791,22 @@ function rankByCriteria(candidates: PropertyCandidate[], criteria: string | null
     const land = p.landArea ?? 0;
 
     if (wantsDevelopment) {
-      // Prefer zones that allow multi-lot development
+      const potentialLots = p.potentialLots ?? 1;
+      if (potentialLots >= 4) boost += 4;
+      else if (potentialLots >= 3) boost += 3;
+      else if (potentialLots >= 2) boost += 2.4;
+      else boost -= 2.5;
+
       if (DEVELOPMENT_ZONES.has(zone)) boost += 2;
-      // Prefer larger sites (more lot potential)
-      if (land >= 800) boost += 1.5;
-      else if (land >= 600) boost += 1;
-      else if (land >= 400) boost += 0.5;
-      // Prefer high ease score (few overlay restrictions)
-      boost += p.scores.ease * 0.4;
+      else if (zone === "SHZ" && potentialLots >= 2) boost += 0.5;
+      else if (zone === "LLRZ" || zone === "CLZ" || zone === "RUR") boost -= 1.5;
+
+      if (land >= 1200) boost += 1.5;
+      else if (land >= 800) boost += 1.1;
+      else if (land >= 600) boost += 0.7;
+      else if (land > 0) boost -= 0.8;
+
+      boost += p.scores.ease * 0.25;
     }
 
     if (wantsLargeLand) {
@@ -832,6 +857,12 @@ function shufflePick<T>(arr: T[], n: number): T[] {
   return copy.slice(0, end);
 }
 
+function pickRankedCandidates(candidates: PropertyCandidate[], criteria: string | null, n = 3): PropertyCandidate[] {
+  const ranked = rankByCriteria(candidates, criteria);
+  if (isDevelopmentDiscoveryIntent(criteria)) return ranked.slice(0, n);
+  return shufflePick(ranked.slice(0, Math.max(n, 6)), n);
+}
+
 /** Put prescreened-but-not-shown listings back at the front; failures / skipped at the back so we exhaust the suburb before falling back. */
 function partitionBatchAfterPrescreen(
   batch: ListingResult[],
@@ -857,7 +888,7 @@ async function prescreenPickRestoreBatch(
   preScreenOpts?: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number },
 ): Promise<PropertyCandidate[]> {
   const screened = await preScreenListingsFast(batch, 5, null, preScreenOpts).catch(() => [] as PropertyCandidate[]);
-  const candidates = shufflePick(rankByCriteria(screened, criteria), 3);
+  const candidates = pickRankedCandidates(screened, criteria, 3);
   const pickedUrls = candidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u));
   markShown(cacheKey, pickedUrls);
   const { putAtFront, putAtBack } = partitionBatchAfterPrescreen(batch, screened, candidates);
@@ -917,7 +948,12 @@ const STREET_HINT_STOPWORDS = new Set([
   "home", "homes", "land", "listing", "listings", "sale", "sell", "selling",
   "sold", "available", "market", "on", "in", "at", "near", "around", "along",
   "for", "the", "a", "an", "of", "and", "or", "to", "with", "street", "road",
-  "suburb", "area", "find", "search", "show", "me", "please",
+  "suburb", "area", "find", "search", "show", "me", "please", "is", "are",
+  "good", "best", "better", "subdivision", "subdivide", "subdividable",
+  "opportunity", "opportunities", "development", "developable", "site",
+  "sites", "zone", "zoned", "unitary", "potential", "anything", "else",
+  "more", "other", "others", "another", "few", "keep", "looking", "options",
+  "results",
 ]);
 
 function canonicalStreetType(raw: string): string | null {
@@ -1076,7 +1112,8 @@ function filterListingsByStreetHint(listings: ListingResult[], hint: string | nu
   if (!hint?.trim()) return listings;
   const key = normaliseStreetHintKey(hint);
   if (key.length < 4) return listings;
-  return listings.filter((listing) => normaliseStreetHintKey(listing.address).includes(key));
+  const matches = listings.filter((listing) => normaliseStreetHintKey(listing.address).includes(key));
+  return matches.length > 0 ? matches : listings;
 }
 
 async function parseDiscoverParams(text: string): Promise<{ suburb: string | null; minPrice: number; maxPrice: number }> {
@@ -1093,7 +1130,8 @@ async function parseDiscoverParams(text: string): Promise<{ suburb: string | nul
     /max(?:imum)?\s+\$?([0-9]+(?:\.[0-9]+)?)\s*([mk]?)/i,
   ];
 
-  let maxPrice = 3_000_000;
+  const developmentSearch = isDevelopmentDiscoveryIntent(text);
+  let maxPrice = developmentSearch ? 20_000_000 : 3_000_000;
   for (const p of pricePatterns) {
     const m = p.exec(text);
     if (m) {
@@ -1108,7 +1146,7 @@ async function parseDiscoverParams(text: string): Promise<{ suburb: string | nul
   }
 
   const rangeM = /\$?([0-9]+(?:\.[0-9]+)?)\s*([mk]?)\s*(?:to|-)\s*\$?([0-9]+(?:\.[0-9]+)?)\s*([mk]?)/i.exec(text);
-  let minPrice = Math.max(0, maxPrice - 1_500_000);
+  let minPrice = developmentSearch ? 0 : Math.max(0, maxPrice - 1_500_000);
   if (rangeM) {
     let lo = parseFloat(rangeM[1]);
     const loS = rangeM[2]?.toLowerCase();
@@ -1722,7 +1760,9 @@ router.post("/chat", async (req, res) => {
           // inferred from the current report context when absent from the message.
           let suburb = intent.suburb;
           const isFollowUp = intent.isFollowUp;
-          const includeNegotiation = intent.includeNegotiation;
+          const discoveryCriteria = buildDiscoveryCriteriaText(messages, userText, intent.criteria);
+          const wantsDevelopmentDiscovery = isDevelopmentDiscoveryIntent(discoveryCriteria);
+          const includeNegotiation = intent.includeNegotiation || wantsDevelopmentDiscovery;
           const userTextHasPrice = intent.minPrice !== null || intent.maxPrice !== null;
 
           if (!suburb) {
@@ -1730,9 +1770,11 @@ router.post("/chat", async (req, res) => {
             if (hit) suburb = hit.title.toLowerCase();
           }
 
-          // Default price range if LLM found no price constraint
-          const DEFAULT_MAX = 3_000_000;
-          let effectiveMinPrice = intent.minPrice ?? Math.max(0, (intent.maxPrice ?? DEFAULT_MAX) - 1_500_000);
+          // Default price range if LLM found no price constraint. Development
+          // searches must scan high-value suburbs without a normal buyer-budget cap.
+          const DEFAULT_MAX = wantsDevelopmentDiscovery ? 20_000_000 : 3_000_000;
+          const DEFAULT_SPAN = wantsDevelopmentDiscovery ? DEFAULT_MAX : 1_500_000;
+          let effectiveMinPrice = intent.minPrice ?? Math.max(0, (intent.maxPrice ?? DEFAULT_MAX) - DEFAULT_SPAN);
           let effectiveMaxPrice = intent.maxPrice ?? DEFAULT_MAX;
           let alreadyShownAddresses: string[] = alreadyShownFromHistory;
 
@@ -1754,19 +1796,22 @@ router.post("/chat", async (req, res) => {
             }
           }
 
-          req.log.info({ suburb, effectiveMinPrice, effectiveMaxPrice, isFollowUp, includeNegotiation, intent_reasoning: intent.reasoning }, "Discovery search started");
+          req.log.info({ suburb, effectiveMinPrice, effectiveMaxPrice, isFollowUp, includeNegotiation, wantsDevelopmentDiscovery, intent_reasoning: intent.reasoning }, "Discovery search started");
 
           let candidates: import("../lib/pre-screen").PropertyCandidate[] = [];
           let isMockData = false;
           let dataSource = "realestate.co.nz";
           let prescreenedIntro = "";
+          const criteriaLabel = intent.criteria || (wantsDevelopmentDiscovery ? "subdivision/development potential" : "");
 
           if (suburb) {
             const streetHint = extractDiscoverStreetHintFromThread(messages, userText, isFollowUp);
             const cacheKey = makeCacheKey(suburb, effectiveMinPrice, effectiveMaxPrice, streetHint);
             const discoverPreOpts = {
               allowMissingListingPrice: true as const,
-              pricePlaceholderNzd: Math.max(600_000, Math.round((effectiveMinPrice + effectiveMaxPrice) / 2)),
+              pricePlaceholderNzd: wantsDevelopmentDiscovery && !userTextHasPrice
+                ? 3_500_000
+                : Math.max(600_000, Math.round((effectiveMinPrice + effectiveMaxPrice) / 2)),
             };
             req.log.info({ streetHint }, "Discovery: street hint for listing order");
 
@@ -1781,7 +1826,7 @@ router.post("/chat", async (req, res) => {
                 const { listings: nextListings, remaining } = popNextListings(cacheKey, 8);
                 if (nextListings.length === 0) break;
                 req.log.info({ nextListings: nextListings.length, remaining, attempt: attempts + 1 }, "Follow-up: popping next listings from cache");
-                candidates = await prescreenPickRestoreBatch(cacheKey, nextListings, intent.criteria, discoverPreOpts);
+                candidates = await prescreenPickRestoreBatch(cacheKey, nextListings, discoveryCriteria, discoverPreOpts);
                 attempts++;
               }
             }
@@ -1802,6 +1847,7 @@ router.post("/chat", async (req, res) => {
                 suburb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
                 skipUrls: shownUrls,
                 includeNegotiation,
+                firstBatchSize: wantsDevelopmentDiscovery ? 24 : undefined,
               }).catch((err) => { req.log.warn({ err }, "realestate.co.nz search failed"); return null; });
 
               if (searchResult && searchResult.firstBatch.length > 0) {
@@ -1826,13 +1872,13 @@ router.post("/chat", async (req, res) => {
                 });
                 req.log.info({ fetched: firstFiltered.length, cached: remainingFiltered.length }, "realestate.co.nz: prescreening listings");
                 // Run pre-screening and AI intro generation in parallel to save time
-                const criteriaContext = intent.criteria ? ` matching criteria: ${intent.criteria}` : "";
+                const criteriaContext = criteriaLabel ? ` matching criteria: ${criteriaLabel}` : "";
                 const introPromptPreScreen = `The user asked: "${userText}". You found some matching properties in ${suburb || "the area"} on realestate.co.nz${criteriaContext}. In 1 sentence, acknowledge this result conversationally (e.g. "I found a few development sites in St Heliers under $2M:"). Do NOT mention a specific number — say "a few", "some", or "a handful". Be natural and brief — no JSON.`;
                 const [screened, introFromPreScreen] = await Promise.all([
                   preScreenListingsFast(firstFiltered, 5, null, discoverPreOpts).catch(() => []),
                   generateAnalysis(introPromptPreScreen, chatLocale).catch(() => ""),
                 ]);
-                candidates = shufflePick(rankByCriteria(screened, intent.criteria), 3);
+                candidates = pickRankedCandidates(screened, discoveryCriteria, 3);
                 const pickedUrls = candidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u));
                 markShown(cacheKey, pickedUrls);
                 const { putAtFront, putAtBack } = partitionBatchAfterPrescreen(firstFiltered, screened, candidates);
@@ -1845,7 +1891,7 @@ router.post("/chat", async (req, res) => {
                   const { listings: nextListings } = popNextListings(cacheKey, 8);
                   if (nextListings.length === 0) break;
                   req.log.info({ nextListings: nextListings.length, drainAttempt: drainAttempts }, "Discovery: draining cache until prescreen hits");
-                  candidates = await prescreenPickRestoreBatch(cacheKey, nextListings, intent.criteria, discoverPreOpts);
+                  candidates = await prescreenPickRestoreBatch(cacheKey, nextListings, discoveryCriteria, discoverPreOpts);
                 }
               }
             }
@@ -1866,6 +1912,7 @@ router.post("/chat", async (req, res) => {
                     suburb: nb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
                     skipUrls: [],
                     includeNegotiation,
+                    firstBatchSize: wantsDevelopmentDiscovery ? 18 : undefined,
                   }).then((res) => {
                     if (!res || res.firstBatch.length === 0) {
                       // Reject so Promise.any moves on; if all reject we fall through to no-listings
@@ -1909,13 +1956,13 @@ router.post("/chat", async (req, res) => {
                       shownUrls: priorShownFallback,
                       suburb: nearbySuburb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
                     });
-                    const criteriaContextFallback = intent.criteria ? ` (${intent.criteria})` : "";
+                    const criteriaContextFallback = criteriaLabel ? ` (${criteriaLabel})` : "";
                     const introPromptFallback = `The user asked about ${suburb}${criteriaContextFallback} but no listings were found there right now. You found some properties in nearby ${nearbySuburb}. In 1 sentence acknowledge this naturally (e.g. "I couldn't find anything in ${suburb} right now, but here are some nearby options in ${nearbySuburb}:"). Do NOT mention a specific number — say "a few", "some", or "a handful". Be brief — no JSON.`;
                     const [screenedFallback, introFallback] = await Promise.all([
                       preScreenListingsFast(filtered, 5, null, discoverPreOpts).catch(() => [] as PropertyCandidate[]),
                       generateAnalysis(introPromptFallback, chatLocale).catch(() => ""),
                     ]);
-                    candidates = shufflePick(rankByCriteria(screenedFallback, intent.criteria), 3);
+                    candidates = pickRankedCandidates(screenedFallback, discoveryCriteria, 3);
                     markShown(
                       fallbackCacheKey,
                       candidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u)),
@@ -1932,7 +1979,7 @@ router.post("/chat", async (req, res) => {
                       fbDrain++;
                       const { listings: fbNext } = popNextListings(fallbackCacheKey, 8);
                       if (fbNext.length === 0) break;
-                      candidates = await prescreenPickRestoreBatch(fallbackCacheKey, fbNext, intent.criteria, discoverPreOpts);
+                      candidates = await prescreenPickRestoreBatch(fallbackCacheKey, fbNext, discoveryCriteria, discoverPreOpts);
                     }
 
                     if (candidates.length > 0) {
@@ -1952,7 +1999,7 @@ router.post("/chat", async (req, res) => {
           let aiIntro = (!noListings && prescreenedIntro) ? prescreenedIntro : "";
           if (!aiIntro) {
             try {
-              const criteriaContextGeneral = intent.criteria ? ` (${intent.criteria})` : "";
+              const criteriaContextGeneral = criteriaLabel ? ` (${criteriaLabel})` : "";
               const introPrompt = noListings
                 ? `The user asked: "${userText}". No matching listings were found on realestate.co.nz right now for ${suburb || "this area"}${criteriaContextGeneral}. In 1-2 sentences, acknowledge this warmly and suggest they try a different suburb, adjust their budget, or check back soon. Do NOT output any JSON.`
                 : `The user asked: "${userText}". You found some matching properties in ${suburb || "the area"} on realestate.co.nz${criteriaContextGeneral}. In 1 sentence, acknowledge the results conversationally. Do NOT mention a specific number — say "a few", "some", or "a handful". Be natural and brief — no JSON.`;
@@ -2540,7 +2587,9 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
         const { suburb: userSuburb, minPrice, maxPrice } = await parseDiscoverParams(userText);
         const aiHit = userSuburb == null ? await findSuburbInTextViaIndex(content) : null;
         const suburb = userSuburb ?? (aiHit ? aiHit.title.toLowerCase() : null);
-        const includeNegotiation = /negotiat|without\s+price|no\s+price|poa|tender|auction/i.test(userText);
+        const safetyNetCriteria = buildDiscoveryCriteriaText(messages, userText, null);
+        const wantsDevelopmentSafetyNet = isDevelopmentDiscoveryIntent(safetyNetCriteria);
+        const includeNegotiation = wantsDevelopmentSafetyNet || /negotiat|without\s+price|no\s+price|poa|tender|auction/i.test(userText);
 
         if (suburb) {
           req.log.info({ suburb, aiContent: content.slice(0, 100) }, "AI said 'searching' — running actual discover pipeline");
@@ -2554,10 +2603,13 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             const shownUrls = getShownUrls(cacheKey);
             const discoverPreOptsSn = {
               allowMissingListingPrice: true as const,
-              pricePlaceholderNzd: Math.max(600_000, Math.round((minPrice + maxPrice) / 2)),
+              pricePlaceholderNzd: wantsDevelopmentSafetyNet
+                ? 3_500_000
+                : Math.max(600_000, Math.round((minPrice + maxPrice) / 2)),
             };
             const searchResult = await searchRealEstateListings({
               suburb, minPrice, maxPrice, skipUrls: shownUrls, includeNegotiation,
+              firstBatchSize: wantsDevelopmentSafetyNet ? 24 : undefined,
             }).catch(() => null);
 
             if (searchResult && searchResult.firstBatch.length > 0) {
@@ -2580,7 +2632,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
               const screenedSn = await preScreenListingsFast(firstFiltered, 5, null, discoverPreOptsSn).catch(
                 () => [] as PropertyCandidate[],
               );
-              let discoverCandidates = shufflePick(rankByCriteria(screenedSn, null), 3);
+              let discoverCandidates = pickRankedCandidates(screenedSn, safetyNetCriteria, 3);
               markShown(
                 cacheKey,
                 discoverCandidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u)),
@@ -2597,7 +2649,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                 snDrain++;
                 const { listings: snNext } = popNextListings(cacheKey, 8);
                 if (snNext.length === 0) break;
-                discoverCandidates = await prescreenPickRestoreBatch(cacheKey, snNext, null, discoverPreOptsSn);
+                discoverCandidates = await prescreenPickRestoreBatch(cacheKey, snNext, safetyNetCriteria, discoverPreOptsSn);
               }
 
               if (discoverCandidates.length > 0) {

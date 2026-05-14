@@ -320,22 +320,6 @@ export default function UserProfileScreen() {
             )}
           </View>
 
-          {!isSelf && (
-            <TouchableOpacity
-              style={[styles.messageBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
-              onPress={() =>
-                router.push({
-                  pathname: "/chat/contacts",
-                  params: { preselect: profile.id },
-                })
-              }
-              activeOpacity={0.8}
-            >
-              <Feather name="message-circle" size={16} color={colors.foreground} />
-              <Text style={[styles.messageBtnText, { color: colors.foreground }]}>{t("public_profile.message_cta")}</Text>
-            </TouchableOpacity>
-          )}
-
           {profile.role === "sales_agent" && profile.roleData && (
             <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <Text style={[styles.sectionTitle, { color: colors.foreground }]}>{t("public_profile.agent_details")}</Text>
@@ -503,16 +487,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontFamily: "DM_Sans_700Bold",
   },
-  messageBtn: {
-    height: 46,
-    borderRadius: 12,
-    borderWidth: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 7,
-  },
-  messageBtnText: { fontSize: 14, fontFamily: "DM_Sans_500Medium" },
   section: {
     borderRadius: 16,
     borderWidth: 1,

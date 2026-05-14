@@ -718,6 +718,35 @@ async function fetchElevationViaTerrarium(lat: number, lng: number, parcelBbox?:
   const elevMin = Math.min(...elevs);
   const elevMax = Math.max(...elevs);
   const elevRange = robustElevationSpreadM(elevs);
+  let localSlopeDeg: number | null = null;
+
+  if (parcelBbox && elevSamples.length >= 8) {
+    const sampleByPixel = new Map<string, number>();
+    for (const sample of elevSamples) {
+      sampleByPixel.set(`${sample.tPx},${sample.tPy}`, sample.elev);
+    }
+
+    const gradients: number[] = [];
+    const neighbours: Array<[number, number, number]> = [
+      [1, 0, pixelSizeM],
+      [0, 1, pixelSizeM],
+      [1, 1, pixelSizeM * Math.SQRT2],
+      [1, -1, pixelSizeM * Math.SQRT2],
+    ];
+    for (const sample of elevSamples) {
+      for (const [dx, dy, distM] of neighbours) {
+        const other = sampleByPixel.get(`${sample.tPx + dx},${sample.tPy + dy}`);
+        if (other == null || distM <= 0) continue;
+        gradients.push(Math.abs(sample.elev - other) / distM);
+      }
+    }
+
+    if (gradients.length >= 5) {
+      gradients.sort((a, b) => a - b);
+      const p90Gradient = gradients[Math.floor((gradients.length - 1) * 0.9)] ?? 0;
+      localSlopeDeg = Math.atan(p90Gradient) * (180 / Math.PI);
+    }
+  }
 
   // Use the same "relief / longest parcel axis" model as LINZ WCS when we have a
   // parcel bbox — avoids tiny horizontal distances between unrelated min/max pixels
@@ -739,7 +768,8 @@ async function fetchElevationViaTerrarium(lat: number, lng: number, parcelBbox?:
     horizRunM = Math.max(footprintPx * pixelSizeM, pixelSizeM * 8);
   }
 
-  const slopeDeg = horizRunM > 1 ? Math.atan(elevRange / horizRunM) * (180 / Math.PI) : 0;
+  const reliefSlopeDeg = horizRunM > 1 ? Math.atan(elevRange / horizRunM) * (180 / Math.PI) : 0;
+  const slopeDeg = Math.max(reliefSlopeDeg, localSlopeDeg ?? 0);
 
   const centerElev = png.terrarium(png.getPixel(
     Math.min(Math.max(px, 0), png.width - 1),
@@ -751,6 +781,8 @@ async function fetchElevationViaTerrarium(lat: number, lng: number, parcelBbox?:
       lat, lng, samplingMode, pixelCount: elevSamples.length,
       elevMin: elevMin.toFixed(1), elevMax: elevMax.toFixed(1),
       elevRange: elevRange.toFixed(1), horizRunM: horizRunM.toFixed(1),
+      reliefSlopeDeg: reliefSlopeDeg.toFixed(1),
+      localSlopeDeg: localSlopeDeg?.toFixed(1) ?? null,
       slopeDeg: slopeDeg.toFixed(1), pixelSizeM: pixelSizeM.toFixed(2),
     },
     "Terrarium tiles: slope measurement complete",
@@ -1049,6 +1081,27 @@ function segmentIntersectsBbox(
   return false;
 }
 
+function contourLineStrings(coordinates: unknown): Array<[number, number][]> {
+  if (!Array.isArray(coordinates) || coordinates.length === 0) return [];
+  const first = coordinates[0];
+  if (
+    Array.isArray(first) &&
+    typeof first[0] === "number" &&
+    typeof first[1] === "number"
+  ) {
+    return [coordinates as [number, number][]];
+  }
+  if (
+    Array.isArray(first) &&
+    Array.isArray(first[0]) &&
+    typeof first[0][0] === "number" &&
+    typeof first[0][1] === "number"
+  ) {
+    return coordinates as Array<[number, number][]>;
+  }
+  return [];
+}
+
 async function checkLinzContoursForSlope(
   lat: number,
   lng: number,
@@ -1090,24 +1143,30 @@ async function checkLinzContoursForSlope(
       const geom = feature.geometry;
       if (!geom || geom.coordinates == null) continue;
 
-      const coords = geom.coordinates as [number, number][];
+      const lineStrings = contourLineStrings(geom.coordinates);
       let found = false;
 
       // First try: any vertex inside bbox (fast)
-      for (const [cLng, cLat] of coords) {
-        if (cLng >= parcelBbox.minLng && cLng <= parcelBbox.maxLng &&
-            cLat >= parcelBbox.minLat && cLat <= parcelBbox.maxLat) {
-          found = true;
-          break;
+      for (const coords of lineStrings) {
+        for (const [cLng, cLat] of coords) {
+          if (cLng >= parcelBbox.minLng && cLng <= parcelBbox.maxLng &&
+              cLat >= parcelBbox.minLat && cLat <= parcelBbox.maxLat) {
+            found = true;
+            break;
+          }
         }
+        if (found) break;
       }
       // Second try: segment intersection with bbox (catches long segments crossing through)
       if (!found) {
-        for (let i = 0; i < coords.length - 1 && !found; i++) {
-          const [x1, y1] = coords[i], [x2, y2] = coords[i + 1];
-          if (segmentIntersectsBbox(x1, y1, x2, y2, parcelBbox.minLng, parcelBbox.maxLng, parcelBbox.minLat, parcelBbox.maxLat)) {
-            found = true;
+        for (const coords of lineStrings) {
+          for (let i = 0; i < coords.length - 1 && !found; i++) {
+            const [x1, y1] = coords[i], [x2, y2] = coords[i + 1];
+            if (segmentIntersectsBbox(x1, y1, x2, y2, parcelBbox.minLng, parcelBbox.maxLng, parcelBbox.minLat, parcelBbox.maxLat)) {
+              found = true;
+            }
           }
+          if (found) break;
         }
       }
       if (found) throughContours.push(elev);
@@ -1153,11 +1212,11 @@ async function applyContourUpgrade(result: ContourResult, lat: number, lng: numb
 }
 
 async function fetchContourOnce(lat: number, lng: number, parcelBbox?: ParcelBbox | null): Promise<ContourResult> {
-  // Use the measured DEM result directly. The older 20m topo-contour
-  // cross-check remains available as an audit helper, but using it to upgrade
-  // measured DEM output made borderline coastal parcels flip between gentle and
-  // moderate depending on which fallback source completed first.
-  const measured = async (r: ContourResult): Promise<ContourResult> => r;
+  // Use measured DEM output, with the 20m LINZ topo contour layer as an
+  // upgrade-only guard. It never lowers a result; it only catches hillside
+  // parcels where a smoothed DEM average underestimates the real site contour.
+  const measured = async (r: ContourResult): Promise<ContourResult> =>
+    parcelBbox ? applyContourUpgrade(r, lat, lng, parcelBbox) : r;
 
   // 1. LINZ LiDAR 1m DEM via WCS — the exact dataset used by Auckland Council GIS.
   try {

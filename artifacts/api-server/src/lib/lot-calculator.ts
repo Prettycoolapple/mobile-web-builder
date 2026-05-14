@@ -14,13 +14,14 @@ const ZONE_RULES: Record<string, { min_lot_sqm: number; label: string }> = {
   MHS:  { min_lot_sqm: 400,  label: "Mixed Housing Suburban" },
   SHZ:  { min_lot_sqm: 600,  label: "Single House Zone" },
   LLRZ: { min_lot_sqm: 4000, label: "Large Lot Residential Zone" },
+  CLZ:  { min_lot_sqm: 10000, label: "Countryside Living Zone" },
   LDRZ: { min_lot_sqm: 600,  label: "Low Density Residential Zone" },
   RCSZ: { min_lot_sqm: 2000, label: "Rural and Coastal Settlement Zone" },
   FUZ:  { min_lot_sqm: 600,  label: "Future Urban Zone" },
   MIX:  { min_lot_sqm: 200,  label: "Mixed Use" },
   MUZ:  { min_lot_sqm: 200,  label: "Business - Mixed Use Zone" },
   LSZ:  { min_lot_sqm: 1200, label: "Large Lot" },
-  RUR:  { min_lot_sqm: 4000, label: "Rural" },
+  RUR:  { min_lot_sqm: 40000, label: "Rural" },
   CCZ:  { min_lot_sqm: 0,    label: "City Centre Zone" },
   TCZ:  { min_lot_sqm: 0,    label: "Town Centre Zone" },
   MCZ:  { min_lot_sqm: 0,    label: "Metropolitan Centre Zone" },
@@ -32,7 +33,7 @@ const ZONE_RULES: Record<string, { min_lot_sqm: number; label: string }> = {
   HIZ:  { min_lot_sqm: 0,    label: "Heavy Industry Zone" },
 };
 
-const DEFAULT_ZONE = { min_lot_sqm: 400, label: "Mixed Housing Suburban (default)" };
+const UNKNOWN_ZONE = { min_lot_sqm: 0, label: "Unknown zone" };
 
 /**
  * Zones that support the Auckland Unitary Plan "land-use + subdivision joint consent"
@@ -70,6 +71,14 @@ export function buildSubdivisionPathwayNote(
   min_lot_sqm: number,
   zone_label: string,
 ): SubdivisionPathwayNote {
+  if (!zone_code || zone_label === UNKNOWN_ZONE.label) {
+    return {
+      headline: "Zone unavailable - lot yield not estimated automatically.",
+      detail: "The zoning layer was not resolved for this parcel, so the report does not infer a multi-lot subdivision yield. Confirm the Auckland Unitary Plan zone before relying on any development scenario.",
+      standard_path_viable: false,
+    };
+  }
+
   if (min_lot_sqm <= 0) {
     return {
       headline: `${zone_label} — no minimum lot size. Multiple lots possible.`,
@@ -135,14 +144,27 @@ export function calculatePotentialLots(
   zone_code: string | null,
   easement_area_sqm = 0,
 ): LotResult {
-  const zone = zone_code ? (ZONE_RULES[zone_code] ?? DEFAULT_ZONE) : DEFAULT_ZONE;
+  const grossArea = land_area_sqm;
+  const netArea = Math.max(0, land_area_sqm - easement_area_sqm);
+  const zone = zone_code ? ZONE_RULES[zone_code] : undefined;
+
+  if (!zone) {
+    return {
+      lots: 1,
+      min_lot_size: UNKNOWN_ZONE.min_lot_sqm,
+      zone_label: UNKNOWN_ZONE.label,
+      sqm_per_lot: Math.round(netArea || grossArea || 0),
+      gross_area_sqm: grossArea,
+      net_area_sqm: netArea,
+      easement_area_sqm,
+    };
+  }
+
   const min = zone.min_lot_sqm;
   const effectiveMin = min === 0 ? 60 : min;
 
-  const grossArea = land_area_sqm;
-  const netArea = Math.max(0, land_area_sqm - easement_area_sqm);
-
-  const raw = Math.floor(netArea / effectiveMin);
+  const roundingTolerance = effectiveMin * 0.01;
+  const raw = Math.floor((netArea + roundingTolerance) / effectiveMin);
   const lots = Math.max(1, Math.min(20, raw));
   const sqm_per_lot = Math.round(netArea / lots);
 

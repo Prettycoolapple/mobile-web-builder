@@ -43,6 +43,8 @@ describe("getComparables", () => {
         land_sqm: 612,
         floor_sqm: 0,
         price_per_sqm: 0,
+        cv_nzd: null,
+        build_year: null,
       },
     ]);
   });

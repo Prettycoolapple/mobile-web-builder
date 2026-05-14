@@ -289,6 +289,8 @@ export interface PropertyCandidate {
   scores: Score;
   scoresLoading?: boolean;
   briefSummary?: string;
+  potentialLots?: number;
+  minLotSize?: number;
   photoUrl?: string;
   listingUrl?: string;
   bedrooms?: number;

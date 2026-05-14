@@ -340,6 +340,8 @@ router.post(
   requireAuth,
   uploadImageOnly.single("file"),
   async (req: Request, res: Response) => {
+    const userId = (req as any).userId as string;
+
     if (!req.file) {
       res.status(400).json({ error: "No file provided", code: "MISSING_FILE" });
       return;
@@ -348,9 +350,11 @@ router.post(
     try {
       const { buffer, mimetype, size } = req.file;
       const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size);
+      await db.insert(userUploads).values({ userId, objectPath }).onConflictDoNothing();
       const fileUrl = `/api/storage${objectPath}`;
       res.status(201).json({ fileUrl, objectPath });
     } catch (error) {
+      req.log.error({ err: error }, "DM image upload failed");
       res.status(500).json({ error: "Upload failed. Please try again.", code: "UPLOAD_FAILED" });
     }
   },

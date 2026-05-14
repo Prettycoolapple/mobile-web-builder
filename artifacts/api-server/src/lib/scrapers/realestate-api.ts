@@ -446,6 +446,55 @@ function addressesLikelyMatch(target: string, candidate: string): boolean {
 }
 
 /**
+ * Match a subject property against active realestate.co.nz listings in the
+ * same suburb. This gives the analysis pipeline current sale-listing data
+ * without needing a browser-backed scraper.
+ */
+export async function fetchRealestateListingForAddress(
+  freeformAddress: string,
+  suburbName: string,
+): Promise<ListingResult | null> {
+  const trimmed = freeformAddress.trim();
+  if (!trimmed || !suburbName.trim()) return null;
+
+  const suburb = await findSuburbId(suburbName);
+  if (!suburb) {
+    logger.info({ suburbName }, "realestate-api: subject listing match - suburb not in directory");
+    return null;
+  }
+
+  let listings: ListingResult[];
+  try {
+    listings = await fetchListingsForSuburbId(suburb.id, 100);
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "realestate-api: subject listing match - listings fetch failed");
+    return null;
+  }
+
+  for (const l of listings) {
+    if (!addressesLikelyMatch(trimmed, l.address)) continue;
+    const [annotated] = await annotateApproxFields([l]).catch(() => [l]);
+    const match = annotated ?? l;
+    logger.info(
+      {
+        suburb: suburb.title,
+        address: trimmed.slice(0, 80),
+        listing: match.address,
+        bedrooms: match.bedrooms,
+        bathrooms: match.bathrooms,
+        floorArea: match.floorArea,
+        landArea: match.landArea,
+      },
+      "realestate-api: matched active subject listing",
+    );
+    return match;
+  }
+
+  logger.info({ suburb: suburb.title, address: trimmed.slice(0, 80) }, "realestate-api: no active subject listing match");
+  return null;
+}
+
+/**
  * When OneRoof has no listing photos, match the property against active
  * realestate.co.nz listings in the same suburb and return image URL(s) from
  * the platform JSON API.

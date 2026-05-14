@@ -3,7 +3,7 @@ import type { LinzParcel } from "../linz";
 import type { Overlay, ZoneResult } from "../auckland-council";
 import type { InfrastructureItem } from "../infrastructure";
 import type { HougardenData } from "./hougarden";
-import type { OneRoofData, ComparableSale } from "./oneroof";
+import type { OneRoofData, ComparableSale, ListingResult } from "./oneroof";
 import type { QVData } from "./qv";
 import type { HomesData } from "./homes";
 import type { PropertyValueData } from "./propertyvalue";
@@ -227,6 +227,27 @@ function medianFloorArea(
   return median;
 }
 
+function inferLifestyleZone(
+  propertyValue: PropertyValueData | null,
+  landAreaSqm: number | null,
+): { code: string; description: string; minLotSizeSqm: number } | null {
+  const typeText = [
+    propertyValue?.property_type,
+    propertyValue?.property_sub_type,
+  ].filter(Boolean).join(" ").toLowerCase();
+  const area = landAreaSqm ?? propertyValue?.land_area_sqm ?? null;
+
+  if (area != null && area >= 8000 && /\blifestyle\b/.test(typeText)) {
+    return {
+      code: "CLZ",
+      description: "Countryside Living Zone",
+      minLotSizeSqm: 10000,
+    };
+  }
+
+  return null;
+}
+
 export function mergePropertyData(
   linz: LinzParcel | null,
   hougarden: HougardenData | null,
@@ -244,6 +265,8 @@ export function mergePropertyData(
     qv?: QVData | null;
     homes?: HomesData | null;
     propertyValue?: PropertyValueData | null;
+    /** Active address-matched listing from realestate.co.nz. */
+    realestate_listing?: ListingResult | null;
     /** Active listing images from realestate.co.nz when OneRoof has none. */
     realestate_photo_urls?: string[] | null;
   },
@@ -253,10 +276,12 @@ export function mergePropertyData(
   const qv = extra?.qv ?? null;
   const homes = extra?.homes ?? null;
   const propertyValue = extra?.propertyValue ?? null;
+  const realestateListing = extra?.realestate_listing ?? null;
 
   // Land area: LINZ is the authoritative cadastral measurement — always wins.
   const land_area_sqm = first("land_area_sqm", sources,
     ["linz", linz?.area_sqm],
+    ["realestate.co.nz", realestateListing?.landArea],
     ["auckland_council_gis", ph?.land_area_sqm],
     ["propertyvalue", propertyValue?.land_area_sqm],
     ["hougarden", hougarden?.land_area_sqm],
@@ -305,6 +330,7 @@ export function mergePropertyData(
   let floor_area_sqm = medianFloorArea(sources, [
     { src: "propertyvalue",      floor_area_sqm: propertyValue?.floor_area_sqm },
     { src: "oneroof",            floor_area_sqm: oneroof?.floor_area_sqm },
+    { src: "realestate.co.nz",   floor_area_sqm: realestateListing?.floorArea },
     { src: "hougarden",          floor_area_sqm: hougarden?.floor_area_sqm },
     { src: "auckland_council_gis", floor_area_sqm: ph?.floor_area_sqm },
     { src: "qv",                 floor_area_sqm: qv?.floor_area_sqm },
@@ -313,12 +339,14 @@ export function mergePropertyData(
 
   let bedrooms = first("bedrooms", sources,
     ["oneroof", oneroof?.bedrooms],
+    ["realestate.co.nz", realestateListing?.bedrooms],
     ["propertyvalue", propertyValue?.bedrooms],
     ["homes",   homes?.bedrooms],
     ["qv",      qv?.bedrooms],
   );
   let bathrooms = first("bathrooms", sources,
     ["oneroof", oneroof?.bathrooms],
+    ["realestate.co.nz", realestateListing?.bathrooms],
     ["propertyvalue", propertyValue?.bathrooms],
     ["homes",   homes?.bathrooms],
     ["qv",      qv?.bathrooms],
@@ -402,6 +430,76 @@ export function mergePropertyData(
       }
     }
   }
+
+  // realestate.co.nz active-listing reconciliation:
+  // In production the browser scrapers are often disabled, but the
+  // realestate.co.nz JSON API still gives us structured active listing data.
+  // Treat an address-matched active listing as fresher than static valuation
+  // records for bed/bath/floor counts.
+  if (realestateListing) {
+    if (realestateListing.floorArea != null && floor_area_sqm != null) {
+      const delta = Math.abs(realestateListing.floorArea - floor_area_sqm) / floor_area_sqm;
+      if (delta > 0.15) {
+        logger.info(
+          { previous: floor_area_sqm, listing: realestateListing.floorArea, delta },
+          "Merge: active realestate.co.nz listing overrides floor area (>15% disagreement)",
+        );
+        discrepancies.push(
+          `Floor area: active realestate.co.nz listing reports ${realestateListing.floorArea}m² vs council/QV consensus ${floor_area_sqm}m² (${(delta * 100).toFixed(0)}% difference). Using the active listing.`,
+        );
+        floor_area_sqm = realestateListing.floorArea;
+        sources["floor_area_sqm"] = "realestate.co.nz (active listing)";
+      }
+    } else if (realestateListing.floorArea != null && floor_area_sqm == null) {
+      floor_area_sqm = realestateListing.floorArea;
+      sources["floor_area_sqm"] = "realestate.co.nz (active listing)";
+    }
+
+    if (realestateListing.bedrooms != null && bedrooms != null && realestateListing.bedrooms !== bedrooms) {
+      logger.info(
+        { previous: bedrooms, listing: realestateListing.bedrooms },
+        "Merge: active realestate.co.nz listing overrides bedroom count",
+      );
+      discrepancies.push(
+        `Bedrooms: active realestate.co.nz listing reports ${realestateListing.bedrooms} vs council/QV record ${bedrooms}. Using the active listing.`,
+      );
+      bedrooms = realestateListing.bedrooms;
+      sources["bedrooms"] = "realestate.co.nz (active listing)";
+    } else if (realestateListing.bedrooms != null && bedrooms == null) {
+      bedrooms = realestateListing.bedrooms;
+      sources["bedrooms"] = "realestate.co.nz (active listing)";
+    }
+
+    if (realestateListing.bathrooms != null && bathrooms != null && realestateListing.bathrooms !== bathrooms) {
+      logger.info(
+        { previous: bathrooms, listing: realestateListing.bathrooms },
+        "Merge: active realestate.co.nz listing overrides bathroom count",
+      );
+      discrepancies.push(
+        `Bathrooms: active realestate.co.nz listing reports ${realestateListing.bathrooms} vs council/QV record ${bathrooms}. Using the active listing.`,
+      );
+      bathrooms = realestateListing.bathrooms;
+      sources["bathrooms"] = "realestate.co.nz (active listing)";
+    } else if (realestateListing.bathrooms != null && bathrooms == null) {
+      bathrooms = realestateListing.bathrooms;
+      sources["bathrooms"] = "realestate.co.nz (active listing)";
+    }
+
+    if (realestateListing.landArea != null && land_area_sqm != null) {
+      const delta = Math.abs(realestateListing.landArea - land_area_sqm) / land_area_sqm;
+      if (delta > 0.1) {
+        logger.info(
+          { previous: land_area_sqm, listing: realestateListing.landArea, delta },
+          "Merge: active realestate.co.nz listing overrides land area (>10% disagreement)",
+        );
+        discrepancies.push(
+          `Land area: active realestate.co.nz listing reports ${realestateListing.landArea}m² vs LINZ cadastre ${land_area_sqm}m² (${(delta * 100).toFixed(0)}% difference). Using the active listing.`,
+        );
+        live_land_area_sqm = realestateListing.landArea;
+        sources["land_area_sqm"] = "realestate.co.nz (active listing)";
+      }
+    }
+  }
   const final_land_area_sqm = live_land_area_sqm ?? land_area_sqm;
 
   // OneRoof property page often shows the year agents use in marketing; prefer it when it
@@ -440,6 +538,7 @@ export function mergePropertyData(
   let zone_code: string | null = null;
   let zone_description: string | null = null;
   let min_lot_size_sqm: number | null = null;
+  const inferredLifestyleZone = inferLifestyleZone(propertyValue, final_land_area_sqm);
   if (hougarden?.zone_code) {
     zone_code = hougarden.zone_code;
     zone_description = hougarden.zone_description;
@@ -449,11 +548,17 @@ export function mergePropertyData(
     zone_description = councilZone.zone_description;
     min_lot_size_sqm = councilZone.min_lot_size_sqm;
     sources["zone"] = "auckland_council_gis";
+  } else if (inferredLifestyleZone) {
+    zone_code = inferredLifestyleZone.code;
+    zone_description = inferredLifestyleZone.description;
+    min_lot_size_sqm = inferredLifestyleZone.minLotSizeSqm;
+    sources["zone"] = "propertyvalue (lifestyle land inferred)";
   }
 
   if (!min_lot_size_sqm && zone_code) {
     const LOT_SIZES: Record<string, number> = {
       THAB: 0, MHU: 300, MHS: 400, SHZ: 600, LLRZ: 4000, RCSZ: 2000, LDRZ: 600, FUZ: 0,
+      CLZ: 10000, RUR: 40000, LSZ: 1200,
       BPZ: 0, CCZ: 0, GBZ: 0, BPIZ: 0, LCZ: 0, MCZ: 0, MUZ: 0, NCZ: 0, TCZ: 0,
     };
     min_lot_size_sqm = LOT_SIZES[zone_code] ?? null;
@@ -465,13 +570,17 @@ export function mergePropertyData(
   // its asking price is the freshest figure; prefer it unconditionally.
   const listing_price = oneroof?.listing_active && oneroof.listing_price != null
     ? (sources["listing_price"] = "oneroof (live listing)", oneroof.listing_price)
-    : first("listing_price", sources, ["oneroof", oneroof?.listing_price]);
+    : realestateListing?.price != null
+      ? (sources["listing_price"] = "realestate.co.nz (active listing)", realestateListing.price)
+      : first("listing_price", sources, ["oneroof", oneroof?.listing_price]);
 
   const school_zones          = hougarden?.school_zones ?? { primary: null, intermediate: null, secondary: null };
   // Listing hero photos: OneRoof first, then realestate.co.nz address-matched fallbacks.
   const photo_urls = Array.from(new Set([
     ...(oneroof?.photo_urls ?? []),
     ...(oneroof?.main_photo_url ? [oneroof.main_photo_url] : []),
+    ...(realestateListing?.photoUrls ?? []),
+    ...(realestateListing?.photoUrl ? [realestateListing.photoUrl] : []),
     ...(extra?.realestate_photo_urls ?? []),
     ...(propertyValue?.photo_urls ?? []),
   ].filter(Boolean))).slice(0, 12);
@@ -504,7 +613,7 @@ export function mergePropertyData(
     school_zones,
     last_sale_price,
     last_sale_date,
-    listing_active: oneroof?.listing_active ?? false,
+    listing_active: (oneroof?.listing_active ?? false) || !!realestateListing,
     listing_price,
     main_photo_url,
     photo_urls,

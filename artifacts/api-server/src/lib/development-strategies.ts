@@ -72,25 +72,40 @@ function isDevelopmentZone(zoneCode: string | null): boolean {
   return zoneCode === "MHS" || zoneCode === "MHU" || zoneCode === "THAB";
 }
 
+function hasExistingDwelling(data: MergedPropertyData): boolean {
+  if (data.build_year != null) return true;
+  if (data.floor_area_sqm != null && data.floor_area_sqm >= 30) return true;
+  if (data.bedrooms != null && data.bedrooms > 0) return true;
+  if (data.bathrooms != null && data.bathrooms > 0) return true;
+  return false;
+}
+
 export function buildFallbackDevelopmentStrategyAssessment(
   data: MergedPropertyData,
   lots: LotResult,
 ): DevelopmentStrategyAssessment {
   const age = ageFromBuildYear(data.build_year);
+  const hasDwelling = hasExistingDwelling(data);
   const hasMultipleLotPotential = lots.lots > 1 && isDevelopmentZone(data.zone_code);
   const intensiveLots = lots.lots >= 4 && isDevelopmentZone(data.zone_code);
 
-  let recommended: DevelopmentStrategyId = "refurbish";
-  let scope: RefurbishmentScope = "moderate";
+  let recommended: DevelopmentStrategyId = hasDwelling ? "refurbish" : "demolish_rebuild";
+  let scope: RefurbishmentScope = hasDwelling ? "moderate" : "none";
   const factors: string[] = [];
 
   if (age != null) factors.push(`Dwelling age is approximately ${age} years`);
+  if (!hasDwelling) {
+    factors.push("Vacant site - no existing dwelling or demolition allowance needed");
+  }
   if (intensiveLots) {
     factors.push(
       `${lots.lots} potential lots imply major capital, long programme, and staged sales — absorption and holding costs can materially reduce annualised returns`,
     );
   }
-  if (data.build_year && data.build_year >= 2010) {
+  if (!hasDwelling) {
+    recommended = "demolish_rebuild";
+    scope = "none";
+  } else if (data.build_year && data.build_year >= 2010) {
     recommended = "hold_existing";
     scope = "light";
     factors.push("Modern post-2010 dwelling makes demolition value-destructive unless land value is exceptional");
@@ -114,11 +129,17 @@ export function buildFallbackDevelopmentStrategyAssessment(
     rationale: fallbackRationale(recommended, data, lots),
     refurbish_scope: scope,
     strategy_rationales: {
-      hold_existing: data.build_year && data.build_year >= 2010
+      hold_existing: !hasDwelling
+        ? "Holding preserves the land position, but it does not create dwelling value on a vacant site."
+        : data.build_year && data.build_year >= 2010
         ? "Modern dwelling condition is likely to preserve more value by avoiding unnecessary demolition and construction risk."
         : "Holding limits capital works, but may underuse the land if redevelopment potential is strong.",
-      refurbish: "Refurbishment tests a middle path with lower capital exposure than full rebuild while improving resale appeal.",
-      demolish_rebuild: hasMultipleLotPotential
+      refurbish: hasDwelling
+        ? "Refurbishment tests a middle path with lower capital exposure than full rebuild while improving resale appeal."
+        : "No existing dwelling was identified, so refurbishment is not applicable.",
+      demolish_rebuild: !hasDwelling
+        ? "New-build feasibility should be tested from the land value, service availability, contour, and consent constraints without adding demolition cost."
+        : hasMultipleLotPotential
         ? "Rebuild may unlock land value if planning, services, and comparable-sale evidence support new dwellings."
         : "Full rebuild carries high capital cost and may not be justified without clear planning or resale upside.",
     },
@@ -136,15 +157,23 @@ export function buildFallbackDevelopmentStrategyAssessment(
 }
 
 function fallbackRationale(strategy: DevelopmentStrategyId, data: MergedPropertyData, lots: LotResult): string {
+  const hasDwelling = hasExistingDwelling(data);
   if (strategy === "hold_existing") {
     return data.build_year
       ? `The dwelling was built in ${data.build_year}, so preserving the existing house should be tested before adding demolition or rebuild cost.`
-      : "The safest baseline is to test the existing dwelling first because build condition is not fully confirmed.";
+      : hasDwelling
+        ? "The safest baseline is to test the existing dwelling first because build condition is not fully confirmed."
+        : "Holding is the land-only baseline because no existing dwelling was identified.";
   }
   if (strategy === "demolish_rebuild") {
+    if (!hasDwelling) {
+      return `The site appears vacant, so the new-build scenario excludes demolition and tests development feasibility against ${lots.lots} potential lot${lots.lots === 1 ? "" : "s"}.`;
+    }
     return `The site has ${lots.lots} potential lot${lots.lots === 1 ? "" : "s"} and the existing dwelling appears old enough that redevelopment may unlock more value.`;
   }
-  return "A refurbishment path balances lower capital cost against improved resale value and should be compared with holding and rebuilding.";
+  return hasDwelling
+    ? "A refurbishment path balances lower capital cost against improved resale value and should be compared with holding and rebuilding."
+    : "Refurbishment is not applicable because no existing dwelling was identified.";
 }
 
 function fallbackRationaleZh(strategy: DevelopmentStrategyId, data: MergedPropertyData, lots: LotResult): string {
@@ -330,9 +359,24 @@ export function calculateDevelopmentStrategies(params: {
   comparablesQuality?: "live" | "estimated" | "unavailable";
 }): DevelopmentStrategyScenario[] {
   const { data, baseCosts, lotResult, avgSalePrice, avgPricePerSqm, interestRateOutlook, assessment, comparablesQuality } = params;
+  const hasDwelling = hasExistingDwelling(data);
+  const effectiveAssessment: DevelopmentStrategyAssessment = !hasDwelling && assessment.recommended_strategy !== "demolish_rebuild"
+    ? {
+        ...assessment,
+        recommended_strategy: "demolish_rebuild",
+        refurbish_scope: "none",
+        rationale: fallbackRationale("demolish_rebuild", data, lotResult),
+        strategy_rationales: {
+          ...assessment.strategy_rationales,
+          hold_existing: "Holding preserves the land position, but it does not create dwelling value on a vacant site.",
+          refurbish: "No existing dwelling was identified, so refurbishment is not applicable.",
+          demolish_rebuild: "New-build feasibility should be tested from the land value, service availability, contour, and consent constraints without adding demolition cost.",
+        },
+      }
+    : assessment;
   const hasComparablePricing = avgSalePrice > 0 || avgPricePerSqm > 0;
   const floorArea = Math.max(80, data.floor_area_sqm ?? 120);
-  const refurbScope = assessment.refurbish_scope === "none" ? "light" : assessment.refurbish_scope;
+  const refurbScope = effectiveAssessment.refurbish_scope === "none" ? "light" : effectiveAssessment.refurbish_scope;
   const lotIntensityPenalty =
     lotResult.lots >= 7 ? 0.2 : lotResult.lots >= 5 ? 0.16 : lotResult.lots >= 4 ? 0.12 : 0;
   const exitTypologyMultiplier = exitGdvTypologyDiscountFactor(
@@ -363,15 +407,15 @@ export function calculateDevelopmentStrategies(params: {
       ? calculateScenariosFromGdv(row.costs, row.gdv, row.units, row.sqmPerLot, row.gdvPerLot, interestRateOutlook)
       : [];
     const baseConf =
-      row.id === assessment.recommended_strategy ? assessment.confidence : Math.max(0.35, assessment.confidence - 0.15);
+      row.id === effectiveAssessment.recommended_strategy ? effectiveAssessment.confidence : Math.max(0.35, effectiveAssessment.confidence - 0.15);
     const confidence = Math.max(0.25, parseFloat((baseConf - lotIntensityPenalty).toFixed(2)));
     return {
       id: row.id,
-      title: STRATEGY_TITLES[row.id],
-      recommendation: statusFor(row.id, assessment, roiScenarios),
+      title: row.id === "demolish_rebuild" && !hasDwelling ? "Build new dwelling(s)" : STRATEGY_TITLES[row.id],
+      recommendation: statusFor(row.id, effectiveAssessment, roiScenarios),
       confidence,
-      rationale: assessment.strategy_rationales[row.id] ?? fallbackRationale(row.id, data, lotResult),
-      rationale_zh: assessment.strategy_rationales_zh?.[row.id] ?? fallbackRationaleZh(row.id, data, lotResult),
+      rationale: effectiveAssessment.strategy_rationales[row.id] ?? fallbackRationale(row.id, data, lotResult),
+      rationale_zh: effectiveAssessment.strategy_rationales_zh?.[row.id] ?? fallbackRationaleZh(row.id, data, lotResult),
       assumptions: buildAssumptions(
         row.id,
         data,

@@ -1506,39 +1506,24 @@ function SchoolZonesPanel({ zones, colors }: { zones: SchoolZoneDetail[]; colors
   return (
     <View style={{ gap: 12 }}>
       {zones.map((z, i) => {
-        const inZone = inZoneDisplayFromEnrolmentScheme(z.enrolmentScheme);
-        const inZoneText =
-          inZone === "yes"
-            ? translateForOS("report.school_in_zone_yes")
-            : inZone === "no"
-              ? translateForOS("report.school_in_zone_no")
-              : translateForOS("report.school_in_zone_unknown");
+        const showAuthorityBadge = z.authorityCategory !== "unknown";
         return (
           <View
             key={`${z.orgName ?? z.sourceLabel}-${i}`}
-            style={[styles.overlayRow, { backgroundColor: colors.muted, borderRadius: 10, flexDirection: "column", alignItems: "stretch", gap: 10 }]}
+            style={[styles.overlayRow, { backgroundColor: colors.muted, borderRadius: 10, flexDirection: "column", alignItems: "stretch", gap: 8 }]}
           >
             <View style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
               <Text style={{ flex: 1, color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", fontSize: 14, lineHeight: 20 }}>
                 {z.matched && z.orgName ? z.orgName : z.sourceLabel}
               </Text>
-              <View style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 100, backgroundColor: colors.accent + "18" }}>
-                <Text style={{ color: colors.accent, fontFamily: "DM_Sans_600SemiBold", fontSize: 10 }}>
-                  {authorityCategoryLabel(z.authorityCategory)}
-                </Text>
-              </View>
+              {showAuthorityBadge ? (
+                <View style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 100, backgroundColor: colors.accent + "18" }}>
+                  <Text style={{ color: colors.accent, fontFamily: "DM_Sans_600SemiBold", fontSize: 10 }}>
+                    {authorityCategoryLabel(z.authorityCategory)}
+                  </Text>
+                </View>
+              ) : null}
             </View>
-            {!z.matched ? (
-              <Text style={{ color: colors.amber, fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 17 }}>
-                {translateForOS("report.school_no_directory_match")}
-              </Text>
-            ) : null}
-            <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
-              <Text style={{ fontFamily: "DM_Sans_600SemiBold", color: colors.foreground }}>
-                {translateForOS("report.school_in_zone_label")}:{" "}
-              </Text>
-              {inZoneText}
-            </Text>
           </View>
         );
       })}

@@ -58,19 +58,19 @@ export function extractBedsBaths(text: string): { bedrooms: number | null; bathr
   if (m) bedrooms = clampCount(parseFloat(m[1]));
 
   if (bedrooms == null) {
-    m = norm.match(/\bbed(?:room)?s?\s+(\d+(?:\.\d+)?)\b/i);
-    if (m) bedrooms = clampCount(parseFloat(m[1]));
-  }
-  if (bedrooms == null) {
-    m = norm.match(/\bbeds?\s+(\d+(?:\.\d+)?)\b/i);
-    if (m) bedrooms = clampCount(parseFloat(m[1]));
-  }
-  if (bedrooms == null) {
     m = norm.match(/(\d+)(?:\.\d+)?\s*[-\s]?\s*(?:bed(?:room)?s?|br|bd)\b/i);
     if (m) bedrooms = clampCount(parseFloat(m[1]));
   }
   if (bedrooms == null) {
     m = norm.match(/(\d+)(?:\s*\+\s*|\s+)(?:bed(?:room)?s?|br|bd)\b/i);
+    if (m) bedrooms = clampCount(parseFloat(m[1]));
+  }
+  if (bedrooms == null) {
+    m = norm.match(/\bbed(?:room)?s?\s+(\d+(?:\.\d+)?)\b/i);
+    if (m) bedrooms = clampCount(parseFloat(m[1]));
+  }
+  if (bedrooms == null) {
+    m = norm.match(/\bbeds?\s+(\d+(?:\.\d+)?)\b/i);
     if (m) bedrooms = clampCount(parseFloat(m[1]));
   }
 
