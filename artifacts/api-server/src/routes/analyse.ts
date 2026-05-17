@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { db, profiles, searches, feasibilityJobs, withDbRetry } from "@workspace/db";
 import {
   generateFeasibilityReport,
@@ -12,6 +12,7 @@ import {
   hasNumberedStreetAddress,
   hasUnnumberedStreetLine,
   isListingBrowseIntent,
+  sanitizeAssistantProse,
   Message,
 } from "../lib/claude";
 import { verifyToken } from "../lib/auth";
@@ -53,6 +54,7 @@ import { resolveAddressForAnalysis } from "../lib/address-clarification";
 import {
   CHAT_LIMITS,
   FREE_REPORT_LIMIT,
+  SERVICE_PROVIDER_FREE_REPORT_LIMIT,
   STANDARD_REPORT_LIMIT,
   resolveChatLimitKey,
   resolveReportLimit,
@@ -526,6 +528,8 @@ function applyDeterministicPipelineOverrides(
   if (recommendedStrategy) {
     parsed.recommendedDevelopmentStrategy = recommendedStrategy.id;
   }
+  parsed.neighbourhoodContext = pipelineResult.neighbourhoodContext ?? null;
+  parsed.transportContext = pipelineResult.transportContext ?? null;
 
   if (pipelineResult.infrastructure.length > 0) {
     parsed.infrastructure = pipelineResult.infrastructure;
@@ -677,6 +681,8 @@ function buildDeterministicFallbackReport(
     developmentStrategies: pipelineResult.developmentStrategies ?? [],
     comparableSales: pipelineResult.comparables ?? [],
     comparables_quality: pipelineResult.comparables_quality,
+    neighbourhoodContext: pipelineResult.neighbourhoodContext ?? null,
+    transportContext: pipelineResult.transportContext ?? null,
     avg_sale_price: null,
     avgPricePerSqm: null,
     riskSummary: riskSeed,
@@ -1203,6 +1209,37 @@ function pgErrorChain(err: unknown): Array<Record<string, unknown>> {
 }
 
 type FeasibilityLog = Pick<Logger, "warn" | "error" | "info">;
+const STALE_FEASIBILITY_JOB_MS = 10 * 60 * 1000;
+
+function isStaleFeasibilityJob(job: { status: string; updatedAt: Date | string | null }): boolean {
+  if (job.status !== "processing") return false;
+  const updatedAt = job.updatedAt ? new Date(job.updatedAt).getTime() : 0;
+  return !Number.isFinite(updatedAt) || Date.now() - updatedAt > STALE_FEASIBILITY_JOB_MS;
+}
+
+async function findReusableFeasibilityJob(args: {
+  userId: string;
+  queryAddress: string;
+  analysisAddress: string;
+}): Promise<{ id: string; status: string } | null> {
+  const rows = await withDbRetry(() =>
+    db
+      .select({ id: feasibilityJobs.id, status: feasibilityJobs.status })
+      .from(feasibilityJobs)
+      .where(
+        and(
+          eq(feasibilityJobs.userId, args.userId),
+          eq(feasibilityJobs.queryAddress, args.queryAddress),
+          eq(feasibilityJobs.analysisAddress, args.analysisAddress),
+          sql`${feasibilityJobs.status} in ('pending', 'processing')`,
+          sql`${feasibilityJobs.createdAt} > now() - interval '6 hours'`,
+        ),
+      )
+      .orderBy(desc(feasibilityJobs.createdAt))
+      .limit(1),
+  );
+  return rows[0] ?? null;
+}
 
 async function runFeasibilityAnalyseCore(args: {
   address: string;
@@ -1289,7 +1326,8 @@ async function processFeasibilityJob(jobId: string, log: FeasibilityLog): Promis
     db.select().from(feasibilityJobs).where(eq(feasibilityJobs.id, jobId)).limit(1),
   );
   const job = rows[0];
-  if (!job || job.status !== "pending") return;
+  if (!job) return;
+  if (job.status !== "pending" && !isStaleFeasibilityJob(job)) return;
 
   await withDbRetry(() =>
     db
@@ -1355,6 +1393,7 @@ router.post("/analyse", async (req, res) => {
     let profile:
       | {
           id: string;
+          role: string;
           subscriptionTier: string;
           reportsUsedThisMonth: number;
           lastResetAt: Date;
@@ -1366,6 +1405,7 @@ router.post("/analyse", async (req, res) => {
         db
           .select({
             id: profiles.id,
+            role: profiles.role,
             subscriptionTier: profiles.subscriptionTier,
             reportsUsedThisMonth: profiles.reportsUsedThisMonth,
             lastResetAt: profiles.lastResetAt,
@@ -1419,7 +1459,18 @@ router.post("/analyse", async (req, res) => {
       }
 
       const isStandard = profile.subscriptionTier === "pro" || profile.subscriptionTier === "standard";
-      const limit = resolveReportLimit(profile.subscriptionTier);
+      const limit = resolveReportLimit(profile.subscriptionTier, profile.role);
+      if (profile.role === "service_provider" && limit === SERVICE_PROVIDER_FREE_REPORT_LIMIT) {
+        const baseMsg = "Service provider accounts require an active subscription before generating feasibility reports.";
+        const translatedMsg = analyseLocale === "zh" ? await ensureChinese(baseMsg) : baseMsg;
+        res.status(402).json({
+          error: translatedMsg,
+          code: "SUBSCRIPTION_REQUIRED",
+          reportsUsed: usedCount,
+          limit,
+        });
+        return;
+      }
       if (usedCount >= limit) {
         const baseMsg = isStandard
           ? `You've used all ${STANDARD_REPORT_LIMIT} reports in your current billing period. Your limit refreshes when the period renews.`
@@ -1437,13 +1488,14 @@ router.post("/analyse", async (req, res) => {
   }
 
   try {
+    const analysisInput = (await extractNZAddress(address).catch(() => null)) ?? address;
     // ── Subdivision pre-check ───────────────────────────────────────────────
     // If the user typed a parent street number that has been subdivided into
     // sub-lots (e.g. "66 Marine Parade" → 66A/66B/66C), don't run the pipeline
     // against stale parent data — ask which sub-lot they meant.
-    const subdivision = await detectSubdivision(address).catch(() => null);
+    const subdivision = await detectSubdivision(analysisInput).catch(() => null);
     if (subdivision?.isSubdivided) {
-      const baseQuestion = `"${address}" looks like it has been subdivided into separate lots. Which one would you like me to analyse?`;
+      const baseQuestion = `"${analysisInput}" looks like it has been subdivided into separate lots. Which one would you like me to analyse?`;
       const localisedQuestion = analyseLocale === "zh" ? await ensureChinese(baseQuestion) : baseQuestion;
       res.json({
         type: "clarification",
@@ -1454,7 +1506,7 @@ router.post("/analyse", async (req, res) => {
       return;
     }
 
-    const addressResolution = await resolveAddressForAnalysis(address, analyseLocale);
+    const addressResolution = await resolveAddressForAnalysis(analysisInput, analyseLocale);
     if (addressResolution.clarification) {
       res.json({
         type: "clarification",
@@ -1464,7 +1516,7 @@ router.post("/analyse", async (req, res) => {
       });
       return;
     }
-    const analysisAddress = addressResolution.resolvedAddress || address;
+    const analysisAddress = addressResolution.resolvedAddress || analysisInput;
 
     const wantAsync = Boolean(asyncFlag) && Boolean(userId);
     if (wantAsync) {
@@ -1472,6 +1524,20 @@ router.post("/analyse", async (req, res) => {
         { headers: req.headers as Record<string, string | string[] | undefined> },
         analyseLocale,
       );
+
+      const existing = await findReusableFeasibilityJob({
+        userId: userId!,
+        queryAddress: address,
+        analysisAddress,
+      });
+      if (existing) {
+        if (existing.status === "pending") {
+          runAfterResponse(processFeasibilityJob(existing.id, req.log));
+        }
+        res.status(202).json({ type: "queued", jobId: existing.id, status: existing.status });
+        return;
+      }
+
       let inserted: { id: string } | undefined;
       try {
         const rows = await withDbRetry(() =>
@@ -1551,19 +1617,27 @@ router.get("/analyse/jobs/:jobId", async (req, res) => {
       res.status(404).json({ error: "Not found", code: "NOT_FOUND" });
       return;
     }
+    if (job.status === "pending" || isStaleFeasibilityJob(job)) {
+      runAfterResponse(processFeasibilityJob(job.id, req.log));
+    }
+
     if (job.status === "completed" && job.searchId) {
       const searchId = job.searchId;
       const srows = await withDbRetry(() =>
         db
-          .select({ resultJson: searches.resultJson })
+          .select({ resultJson: searches.resultJson, createdAt: searches.createdAt })
           .from(searches)
           .where(eq(searches.id, searchId))
           .limit(1),
       );
       const report = srows[0]?.resultJson as Record<string, unknown> | undefined;
+      const historyCreatedAt = srows[0]?.createdAt
+        ? new Date(srows[0].createdAt as unknown as string).toISOString()
+        : null;
       res.json({
         status: job.status,
         searchId: job.searchId,
+        historyCreatedAt,
         report: report ?? null,
       });
       return;
@@ -1649,6 +1723,7 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
   messagesUsed: number;
   nearLimit: boolean;
   isFreeLimit: boolean;
+  subscriptionRequired?: boolean;
 }> {
   const [profile] = await db
     .select({
@@ -1666,6 +1741,9 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
 
   const tier = profile.subscriptionTier ?? "free";
   const role = profile.role ?? "general";
+  if (role === "service_provider" && tier !== "standard" && tier !== "pro") {
+    return { allowed: false, messagesUsed: profile.messagesUsedThisMonth, nearLimit: true, isFreeLimit: false, subscriptionRequired: true };
+  }
   const limitKey = resolveChatLimitKey(role, tier);
   const { limit, warnAt } = CHAT_LIMITS[limitKey] ?? CHAT_LIMITS.default;
   const isFreeLimit = limitKey === "general_free";
@@ -1721,15 +1799,31 @@ router.post("/chat", async (req, res) => {
     conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
     reportContext?: string;
   };
+  const translateSafeChatContent = async (content: string, mode: string | undefined): Promise<string> => {
+    const proseMode = mode !== "analyse" && mode !== "discover" && mode !== "clarification";
+    const preSanitized = proseMode ? sanitizeAssistantProse(content, chatLocale) : content;
+    const translated = await translateChatContent(preSanitized, mode, chatLocale, chatTranslateTitleSchool);
+    return proseMode ? sanitizeAssistantProse(translated, chatLocale) : translated;
+  };
 
   // Rate limiting per authenticated user. Actual limits are tiered and live in
-  // ../lib/quotas.ts (CHAT_LIMITS): service_provider 300, general+standard/pro 50,
-  // everyone else (free general) 10. Keep the mobile mirror in sync.
+  // ../lib/quotas.ts (CHAT_LIMITS). Keep the mobile mirror in sync.
   const chatUserId = getUserIdFromHeader(req);
   if (chatUserId) {
     try {
-      const { allowed, messagesUsed, nearLimit, isFreeLimit } = await checkAndIncrementChatMessages(chatUserId);
+      const { allowed, messagesUsed, nearLimit, isFreeLimit, subscriptionRequired } = await checkAndIncrementChatMessages(chatUserId);
       if (!allowed) {
+        if (subscriptionRequired) {
+          const baseMessage = "Service provider accounts require an active subscription before using AI chat.";
+          const localisedMessage = chatLocale === "zh" ? await ensureChinese(baseMessage) : baseMessage;
+          res.status(402).json({
+            error: "subscription_required",
+            code: "subscription_required",
+            messagesUsed,
+            message: localisedMessage,
+          });
+          return;
+        }
         const baseMessage = isFreeLimit
           ? "You've used all your free messages in this billing period. Upgrade to Standard for more."
           : "You've reached your monthly message limit. It refreshes when your billing cycle renews.";
@@ -2256,7 +2350,7 @@ router.post("/chat", async (req, res) => {
               const { content, mode: responseMode } = await generateUnifiedResponse(messages, currentReport, "followup", chatLocale);
               const safeContent = content.trim() || emptyChatFallback(chatLocale);
               const safeMode = content.trim() ? responseMode : "text";
-              const translated = await translateChatContent(safeContent, safeMode, chatLocale, chatTranslateTitleSchool);
+              const translated = await translateSafeChatContent(safeContent, safeMode);
               res.json({ content: translated, mode: safeMode, ...providerSignal });
               return;
             }
@@ -2728,7 +2822,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             const { content: aiContent, mode: aiMode } = await generateUnifiedResponse(messages, currentReport, effectiveMode, chatLocale);
             const safeContent = aiContent.trim() || emptyAnalyseFallback(analysisAddress, chatLocale);
             const safeMode = aiContent.trim() ? aiMode : "text";
-            const translatedAi = await translateChatContent(safeContent, safeMode, chatLocale, chatTranslateTitleSchool);
+            const translatedAi = await translateSafeChatContent(safeContent, safeMode);
             sendAnalyseResponse({ content: translatedAi, mode: safeMode });
           } catch {
             const fallback = chatLocale === "zh"
@@ -2830,7 +2924,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             }
             // No results — use AI's text as the no-results message
             const noResultMsg = `${content.trim()} Unfortunately, I couldn't find any matching listings right now in ${suburb}. Try a different suburb or adjust your budget.`;
-            const translatedNoResult = await translateChatContent(noResultMsg, "text", chatLocale, chatTranslateTitleSchool);
+            const translatedNoResult = await translateSafeChatContent(noResultMsg, "text");
             res.json({ content: translatedNoResult, mode: "text" });
             return;
           } catch (searchErr) {
@@ -2861,7 +2955,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             const isLikelyBrokenJson = /^\s*\{[\s\S]{20,}/.test(cleaned);
             if (isLikelyBrokenJson) {
               const fallbackMsg = "I'm sorry, I couldn't generate that right now. Please try again.";
-              const translatedFallback = await translateChatContent(fallbackMsg, "text", chatLocale, chatTranslateTitleSchool);
+              const translatedFallback = await translateSafeChatContent(fallbackMsg, "text");
               res.json({ content: translatedFallback, mode: "text" });
               return;
             }
@@ -2871,7 +2965,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
 
       const finalContent = content.trim() || emptyChatFallback(chatLocale);
       const finalMode = content.trim() ? responseMode : "text";
-      const translatedFinal = await translateChatContent(finalContent, finalMode, chatLocale, chatTranslateTitleSchool);
+      const translatedFinal = await translateSafeChatContent(finalContent, finalMode);
       res.json({ content: translatedFinal, mode: finalMode, ...providerSignal });
     } catch (error) {
       req.log.error({ err: error }, "Failed to generate unified chat reply");
@@ -2895,7 +2989,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
       reportContext,
       chatLocale,
     );
-    res.json({ message: reply, type: "chat" });
+    res.json({ message: sanitizeAssistantProse(reply, chatLocale), type: "chat" });
   } catch (error) {
     req.log.error({ err: error }, "Failed to generate chat reply");
     res.status(500).json({

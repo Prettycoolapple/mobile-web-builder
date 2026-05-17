@@ -36,6 +36,7 @@ const ROLES: RoleCard[] = [
     featureKeys: [
       "signup.role.general.f1",
       "signup.role.general.f2",
+      "signup.role.general.f3",
     ],
     route: "/(auth)/signup-general",
   },
@@ -50,7 +51,6 @@ const ROLES: RoleCard[] = [
       "signup.role.provider.f1",
       "signup.role.provider.f2",
       "signup.role.provider.f3",
-      "signup.role.provider.f4",
     ],
     route: "/(auth)/signup-provider",
   },

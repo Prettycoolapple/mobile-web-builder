@@ -17,6 +17,7 @@ interface Props {
   agentAvatarUrl?: string | null;
   agentPhone: string;
   propertyAddress: string;
+  matchType?: "subject" | "suburb";
   onDismiss: () => void;
 }
 
@@ -26,6 +27,7 @@ export function AgentCallBubble({
   agentAvatarUrl,
   agentPhone,
   propertyAddress,
+  matchType,
   onDismiss,
 }: Props) {
   const [dismissed, setDismissed] = useState(false);
@@ -60,7 +62,9 @@ export function AgentCallBubble({
     <View style={styles.container}>
       <Text style={styles.header}>{t("bubble.agent.header")}</Text>
 
-      <Text style={styles.body}>{t("bubble.agent.body", { address: addressShort })}</Text>
+      <Text style={styles.body}>
+        {t(matchType === "suburb" ? "bubble.agent.body_suburb" : "bubble.agent.body", { address: addressShort })}
+      </Text>
 
       <View style={styles.card}>
         <View style={styles.avatarWrap}>
@@ -82,9 +86,6 @@ export function AgentCallBubble({
             </Text>
             <Text style={styles.agencyName} numberOfLines={1}>
               {displayAgency}
-            </Text>
-            <Text style={styles.phoneText} numberOfLines={1}>
-              {agentPhone}
             </Text>
           </View>
         </View>
@@ -176,11 +177,6 @@ const styles = StyleSheet.create({
   agencyName: {
     fontSize: 12,
     color: "#6B7280",
-    fontFamily: "DM_Sans_400Regular",
-  },
-  phoneText: {
-    fontSize: 11,
-    color: "#15803D",
     fontFamily: "DM_Sans_400Regular",
   },
   callBtn: {

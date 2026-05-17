@@ -34,6 +34,8 @@ import {
   DevelopmentStrategyScenario,
   DevelopmentStrategyId,
   SchoolZoneDetail,
+  NeighbourhoodContext,
+  TransportContext,
 } from "@/context/ChatContext";
 
 /** Comparable sale address cards are hidden for now; `comparableSales` remains on the report for ROI logic. Set to true to show cards again. */
@@ -50,6 +52,13 @@ function formatNZD(n: number | string | undefined | null): string {
   if (num >= 1_000_000) return `$${(num / 1_000_000).toFixed(2)}M`;
   if (num >= 1_000) return `$${Math.round(num / 1_000).toLocaleString()}k`;
   return `$${Math.round(num).toLocaleString()}`;
+}
+
+function formatDistanceM(m: number | null | undefined): string {
+  if (m == null || !Number.isFinite(Number(m))) return "unknown";
+  const n = Number(m);
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)} km`;
+  return `${Math.round(n)} m`;
 }
 
 function safeNum(v: unknown, fallback = 0): number {
@@ -1142,10 +1151,192 @@ function strategyStatus(strategies: DevelopmentStrategyScenario[] | undefined): 
   return recommended.roiScenarios.some((scenario) => scenario.viable) ? "good" : "risk";
 }
 
-function DevelopmentStrategyPanel({ strategies, interestRateOutlook, comparablesQuality, potentialLots, colors }: {
+function NeighbourhoodContextNote({ context, colors }: { context?: NeighbourhoodContext | null; colors: ReturnType<typeof useColors> }) {
+  if (!context || context.assessedLots <= 0) return null;
+  const marketReason = context.marketAdjustment?.reason;
+  const terrace = context.terraceHousingSignal;
+  const lines = [
+    marketReason,
+    terrace && terrace.count > 0
+      ? `${terrace.count} of ${terrace.assessedLots} nearby lots show attached-housing signals (${terrace.confidence} confidence).`
+      : null,
+  ].filter((line): line is string => typeof line === "string" && line.trim().length > 0);
+  if (lines.length === 0) return null;
+
+  return (
+    <View style={[styles.warningBox, { backgroundColor: colors.muted + "35", borderColor: colors.border }]}>
+      <Feather name="map-pin" size={13} color={colors.mutedForeground} />
+      <View style={{ flex: 1, gap: 3 }}>
+        {lines.map((line, i) => (
+          <Text key={i} style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, lineHeight: 16 }}>
+            {line}
+          </Text>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function TransportContextNote({ context, colors }: { context?: TransportContext | null; colors: ReturnType<typeof useColors> }) {
+  if (!context) return null;
+  const stop = context.publicTransport.nearestStop;
+  const highway = context.highwayAccess;
+  const commute = context.cityCommute;
+  const reasons = context.roiInfluence.reasons.filter((line) => line.trim().length > 0);
+  const detailLines = [
+    stop ? `Nearest ${stop.mode}: ${stop.name}, ${formatDistanceM(stop.distanceM)} away (${stop.serviceIntensity} service).` : null,
+    highway.name && highway.distanceM != null
+      ? `${highway.name}: ${formatDistanceM(highway.distanceM)} away; access ${highway.accessTier}.`
+      : null,
+    commute.centreName && commute.distanceKm != null
+      ? `${commute.centreName}: ${commute.distanceKm.toFixed(1)} km straight-line; commute convenience ${commute.convenienceTier}.`
+      : null,
+  ].filter((line): line is string => typeof line === "string" && line.trim().length > 0);
+  const lines = [...reasons, ...detailLines, "Transport context is narrative-only in this report; no ROI number adjustment has been applied."];
+  if (lines.length <= 1) return null;
+
+  return (
+    <View style={[styles.warningBox, { backgroundColor: colors.muted + "35", borderColor: colors.border }]}>
+      <Feather name="navigation" size={13} color={colors.mutedForeground} />
+      <View style={{ flex: 1, gap: 3 }}>
+        {lines.map((line, i) => (
+          <Text key={i} style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, lineHeight: 16 }}>
+            {line}
+          </Text>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function signalSummary(signal: NeighbourhoodContext["publicHousingSignal"] | NeighbourhoodContext["terraceHousingSignal"]): string {
+  if (signal.confidence === "unknown" || signal.level === "unknown") {
+    return `Unknown (${signal.confidence} confidence)`;
+  }
+  if (signal.count <= 0 || signal.level === "none") {
+    return `None detected across ${signal.assessedLots} nearby lots`;
+  }
+  return `${signal.count} of ${signal.assessedLots} nearby lots (${signal.level}, ${signal.confidence} confidence)`;
+}
+
+function influenceLabel(influence?: string): string {
+  if (!influence) return "Neutral";
+  return influence.charAt(0).toUpperCase() + influence.slice(1);
+}
+
+function MarketAccessContextPanel({ neighbourhoodContext, transportContext, colors }: {
+  neighbourhoodContext?: NeighbourhoodContext | null;
+  transportContext?: TransportContext | null;
+  colors: ReturnType<typeof useColors>;
+}) {
+  const publicHousing = neighbourhoodContext?.publicHousingSignal;
+  const terrace = neighbourhoodContext?.terraceHousingSignal;
+  const adjustment = neighbourhoodContext?.marketAdjustment;
+  const stop = transportContext?.publicTransport.nearestStop;
+  const highway = transportContext?.highwayAccess;
+  const commute = transportContext?.cityCommute;
+  const transportReasons = transportContext?.roiInfluence.reasons ?? [];
+
+  return (
+    <View style={{ gap: 8 }}>
+      {neighbourhoodContext ? (
+        <>
+          <InfoRow
+            label="Nearby public housing"
+            value={publicHousing ? signalSummary(publicHousing) : "Unknown"}
+            colors={colors}
+          />
+          <InfoRow
+            label="Public-housing ROI effect"
+            value={adjustment?.applied ? `GDV adjusted to ${(adjustment.gdvMultiplier * 100).toFixed(0)}%` : "No GDV adjustment"}
+            valueColor={adjustment?.applied ? colors.amber : colors.success}
+            colors={colors}
+          />
+          {adjustment?.reason ? (
+            <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, lineHeight: 16 }}>
+              {adjustment.reason}
+            </Text>
+          ) : null}
+          <InfoRow
+            label="Nearby terrace/townhouse signal"
+            value={terrace ? signalSummary(terrace) : "Unknown"}
+            colors={colors}
+          />
+          <InfoRow
+            label="Typology ROI effect"
+            value={terrace && terrace.count > 0 ? "Use matched attached-home comparables where available" : "No local typology adjustment"}
+            colors={colors}
+          />
+        </>
+      ) : (
+        <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 17 }}>
+          Neighbourhood market context is not available on this saved report. Re-run the analysis to add it.
+        </Text>
+      )}
+
+      {transportContext ? (
+        <>
+          <InfoRow
+            label="Public transport"
+            value={stop ? `${transportContext.publicTransport.accessTier}: ${stop.mode} ${formatDistanceM(stop.distanceM)} away` : `${transportContext.publicTransport.accessTier}`}
+            colors={colors}
+          />
+          {stop ? (
+            <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, lineHeight: 16 }}>
+              Nearest stop: {stop.name}; {stop.routeCount} route{stop.routeCount === 1 ? "" : "s"}; {stop.serviceIntensity} service.
+            </Text>
+          ) : null}
+          <InfoRow
+            label="Highway access"
+            value={highway?.name && highway.distanceM != null ? `${formatDistanceM(highway.distanceM)} to ${highway.name}` : "Unknown"}
+            colors={colors}
+          />
+          <InfoRow
+            label="Highway exposure"
+            value={highway ? highway.exposureTier : "Unknown"}
+            valueColor={highway?.exposureTier === "high" ? colors.red : colors.foreground}
+            colors={colors}
+          />
+          <InfoRow
+            label="CBD commute context"
+            value={commute?.centreName && commute.distanceKm != null ? `${commute.distanceKm.toFixed(1)} km to ${commute.centreName}; ${commute.convenienceTier}` : "Unknown"}
+            colors={colors}
+          />
+          <InfoRow
+            label="Transport ROI influence"
+            value={`${influenceLabel(transportContext.roiInfluence.influence)}; no numeric adjustment`}
+            valueColor={transportContext.roiInfluence.influence === "negative" ? colors.red : transportContext.roiInfluence.influence === "mixed" ? colors.amber : colors.success}
+            colors={colors}
+          />
+          {transportReasons.map((reason, i) => (
+            <Text key={i} style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, lineHeight: 16 }}>
+              {reason}
+            </Text>
+          ))}
+        </>
+      ) : (
+        <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 17 }}>
+          Transport and commute context is not available on this saved report. Re-run the analysis to add it.
+        </Text>
+      )}
+    </View>
+  );
+}
+
+function marketAccessStatus(report: Report): "good" | "warning" | "risk" | "neutral" {
+  if (report.neighbourhoodContext?.marketAdjustment.applied) return "warning";
+  if (report.transportContext?.highwayAccess.exposureTier === "high") return "warning";
+  if (report.transportContext?.roiInfluence.influence === "negative") return "warning";
+  if (report.transportContext || report.neighbourhoodContext) return "good";
+  return "neutral";
+}
+
+function DevelopmentStrategyPanel({ strategies, interestRateOutlook, comparablesQuality, neighbourhoodContext, transportContext, potentialLots, colors }: {
   strategies: DevelopmentStrategyScenario[];
   interestRateOutlook?: "falling" | "stable" | "rising";
   comparablesQuality?: string;
+  neighbourhoodContext?: NeighbourhoodContext | null;
+  transportContext?: TransportContext | null;
   potentialLots?: number;
   colors: ReturnType<typeof useColors>;
 }) {
@@ -1550,6 +1741,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
   const hasLiveComparableSales = realComparableSales.length > 0;
   const developmentStrategies = report.developmentStrategies ?? [];
   const hasDevelopmentStrategies = developmentStrategies.length > 0;
+  const hasMarketAccessContext = Boolean(report.neighbourhoodContext || report.transportContext);
   const titleTypeDisplay = formatTitleTypeForDisplay(report.propertyOverview?.titleType);
   const riskSummaryForDisplay = useMemo(() => {
     const scrubbed = filterRiskSummaryRemoveIncompleteDataDisclaimerBullets(report.riskSummary ?? []);
@@ -1744,12 +1936,28 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
         </SectionCard>
       )}
 
+      <SectionCard
+        title={t("report.market_access_context")}
+        icon="ðŸ§­"
+        status={marketAccessStatus(report)}
+        defaultOpen={hasMarketAccessContext}
+        colors={colors}
+      >
+        <MarketAccessContextPanel
+          neighbourhoodContext={report.neighbourhoodContext}
+          transportContext={report.transportContext}
+          colors={colors}
+        />
+      </SectionCard>
+
       {hasDevelopmentStrategies && (
         <SectionCard title={t("report.development_strategy_scenarios")} icon="🧭" status={strategyStatus(developmentStrategies)} colors={colors}>
           <DevelopmentStrategyPanel
             strategies={developmentStrategies}
             interestRateOutlook={report.interest_rate_outlook}
             comparablesQuality={report.comparables_quality}
+            neighbourhoodContext={report.neighbourhoodContext}
+            transportContext={report.transportContext}
             potentialLots={report.potential_lots || report.planning?.potentialLots}
             colors={colors}
           />

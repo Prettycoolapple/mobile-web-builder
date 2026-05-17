@@ -136,8 +136,80 @@ export const AnalysePropertyResponse = zod.object({
           price: zod.number(),
           size: zod.number(),
           pricePerSqm: zod.number(),
+          typology: zod.enum(["standalone", "terrace_townhouse", "unit_apartment", "unknown"]).optional(),
+          distanceM: zod.number().nullable().optional(),
+          source: zod.enum(["oneroof_sold", "realestate_active_listing", "licensed_provider", "unknown"]).optional(),
+          relevanceScore: zod.number().optional(),
+          selectionReason: zod.string().optional(),
         }),
       )
+      .optional(),
+    neighbourhoodContext: zod
+      .object({
+        assessedLots: zod.number(),
+        radiusM: zod.number(),
+        publicHousingSignal: zod.object({
+          level: zod.enum(["none", "low", "moderate", "high", "unknown"]),
+          count: zod.number(),
+          assessedLots: zod.number(),
+          confidence: zod.enum(["high", "medium", "low", "unknown"]),
+        }),
+        terraceHousingSignal: zod.object({
+          level: zod.enum(["none", "low", "moderate", "high", "unknown"]),
+          count: zod.number(),
+          assessedLots: zod.number(),
+          confidence: zod.enum(["high", "medium", "low", "unknown"]),
+        }),
+        confidence: zod.enum(["high", "medium", "low", "unknown"]),
+        marketAdjustment: zod.object({
+          gdvMultiplier: zod.number(),
+          applied: zod.boolean(),
+          reason: zod.string().nullable(),
+        }),
+        reasons: zod.array(zod.string()),
+      })
+      .nullable()
+      .optional(),
+    transportContext: zod
+      .object({
+        publicTransport: zod.object({
+          accessTier: zod.enum(["excellent", "good", "limited", "poor", "unknown"]),
+          nearestStop: zod.object({
+            name: zod.string(),
+            mode: zod.enum(["bus", "train", "ferry", "unknown"]),
+            distanceM: zod.number(),
+            routeCount: zod.number(),
+            serviceIntensity: zod.enum(["frequent", "regular", "limited", "unknown"]),
+          }).nullable(),
+          nearestByMode: zod.array(zod.object({
+            name: zod.string(),
+            mode: zod.enum(["bus", "train", "ferry", "unknown"]),
+            distanceM: zod.number(),
+            routeCount: zod.number(),
+            serviceIntensity: zod.enum(["frequent", "regular", "limited", "unknown"]),
+          })),
+          confidence: zod.enum(["high", "medium", "low", "unknown"]),
+        }),
+        highwayAccess: zod.object({
+          name: zod.string().nullable(),
+          distanceM: zod.number().nullable(),
+          accessTier: zod.enum(["excellent", "good", "neutral", "remote", "exposureRisk", "unknown"]),
+          exposureTier: zod.enum(["low", "moderate", "high", "unknown"]),
+          confidence: zod.enum(["high", "medium", "low", "unknown"]),
+        }),
+        cityCommute: zod.object({
+          centreName: zod.string().nullable(),
+          distanceKm: zod.number().nullable(),
+          convenienceTier: zod.enum(["excellent", "good", "limited", "poor", "unknown"]),
+          confidence: zod.enum(["high", "medium", "low", "unknown"]),
+        }),
+        roiInfluence: zod.object({
+          influence: zod.enum(["positive", "neutral", "negative", "mixed"]),
+          reasons: zod.array(zod.string()),
+          numericAdjustmentApplied: zod.literal(false),
+        }),
+      })
+      .nullable()
       .optional(),
     avgPricePerSqm: zod.number().optional(),
     schoolZones: zod

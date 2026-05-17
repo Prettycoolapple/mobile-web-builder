@@ -120,6 +120,8 @@ interface ProfilePictureSignedUrlResponse {
   };
 }
 
+interface CertificateSignedUrlResponse extends ProfilePictureSignedUrlResponse {}
+
 function normalizeAvatarContentType(mimeType: string): string {
   const normalized = mimeType.split(";")[0]?.trim().toLowerCase();
   if (!normalized) return "image/jpeg";
@@ -134,6 +136,13 @@ function extensionForAvatarContentType(contentType: string, fallbackName: string
   if (contentType === "image/heic") return "heic";
   if (contentType === "image/heif") return "heif";
   return fallbackName.split(".").pop()?.split("?")[0] || "jpg";
+}
+
+function normalizeUploadContentType(mimeType: string, fallback = "application/octet-stream"): string {
+  const normalized = mimeType.split(";")[0]?.trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (normalized === "image/jpg") return "image/jpeg";
+  return normalized;
 }
 
 export interface ApiValidationIssue {
@@ -435,16 +444,62 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     mimeType: string,
     fileName: string,
   ): Promise<{ objectPath: string; fileUrl: string }> => {
-    const formData = new FormData();
-    const fileBlob: ReactNativeFileBlob = { uri: fileUri, type: mimeType, name: fileName };
-    formData.append("file", fileBlob as unknown as Blob);
-    const resp = await fetch(`${getApiBase()}/upload/incorporation-cert-pre-signup`, {
-      method: "POST",
-      body: formData,
-    });
-    const json = (await resp.json()) as { objectPath: string; fileUrl: string; error?: string };
-    if (!resp.ok) throw new Error(json.error ?? "Upload failed");
-    return { objectPath: json.objectPath, fileUrl: json.fileUrl };
+    const contentType = normalizeUploadContentType(mimeType, "application/pdf");
+    const legacyUpload = async (): Promise<{ objectPath: string; fileUrl: string }> => {
+      const formData = new FormData();
+      const fileBlob: ReactNativeFileBlob = { uri: fileUri, type: contentType, name: fileName };
+      formData.append("file", fileBlob as unknown as Blob);
+      const resp = await fetch(`${getApiBase()}/upload/incorporation-cert-pre-signup`, {
+        method: "POST",
+        body: formData,
+      });
+      const json = (await readResponseJson(resp)) as { objectPath: string; fileUrl: string; error?: string };
+      if (!resp.ok) throw new Error(json.error ?? "Upload failed");
+      return { objectPath: json.objectPath, fileUrl: json.fileUrl };
+    };
+
+    try {
+      const localInfo = await FileSystem.getInfoAsync(fileUri);
+      if (!localInfo.exists || localInfo.isDirectory || !localInfo.size) {
+        throw new Error("Could not read local file");
+      }
+
+      const signResp = await fetch(`${getApiBase()}/upload/incorporation-cert-pre-signup/request-url`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: fileName,
+          size: localInfo.size,
+          contentType,
+        }),
+      });
+      const signJson = (await readResponseJson(signResp)) as CertificateSignedUrlResponse & { error?: string; code?: string };
+      if (!signResp.ok) {
+        throw new ApiError(signJson.error ?? "Could not prepare upload", signJson.code ?? "SIGN_URL_FAILED");
+      }
+
+      const signedContentType = signJson.requiredHeaders?.["Content-Type"] ?? contentType;
+      const uploadResult = await FileSystem.uploadAsync(signJson.uploadURL, fileUri, {
+        httpMethod: "PUT",
+        uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+        sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
+        headers: {
+          "Content-Type": signedContentType,
+        },
+      });
+      if (uploadResult.status < 200 || uploadResult.status >= 300) {
+        throw new Error("Upload failed");
+      }
+
+      return { objectPath: signJson.objectPath, fileUrl: signJson.fileUrl };
+    } catch (signedError) {
+      if (signedError instanceof ApiError) {
+        if (["INVALID_NAME", "INVALID_SIZE", "INVALID_FILE_TYPE"].includes(signedError.code)) {
+          throw signedError;
+        }
+      }
+      return legacyUpload();
+    }
   }, []);
 
   const updateServiceProviderCert = useCallback(async (

@@ -99,7 +99,7 @@ export default function ServiceProviderWelcomeScreen() {
       if (!synced) {
         Alert.alert(
           t("provider_welcome.almost_there"),
-          t("provider_welcome.trial_no_activate"),
+          t("provider_welcome.subscription_no_activate"),
         );
         return;
       }
@@ -166,7 +166,7 @@ export default function ServiceProviderWelcomeScreen() {
               </View>
             </View>
           </View>
-          <Text style={styles.trialNote}>{t("provider_welcome.trial_note")}</Text>
+          <Text style={styles.subscriptionNote}>{t("provider_welcome.subscription_note")}</Text>
         </Animated.View>
 
         {!hasSubscription && (
@@ -235,7 +235,7 @@ export default function ServiceProviderWelcomeScreen() {
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
                 <>
-                  <Text style={styles.primaryBtnText}>{t("provider_welcome.start_trial")}</Text>
+                  <Text style={styles.primaryBtnText}>{t("provider_welcome.start_subscription")}</Text>
                   <Feather name="arrow-right" size={18} color="#fff" />
                 </>
               )}
@@ -331,7 +331,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     paddingBottom: 6,
   },
-  trialNote: {
+  subscriptionNote: {
     color: MUTED,
     fontFamily: "DM_Sans_400Regular",
     fontSize: 12,

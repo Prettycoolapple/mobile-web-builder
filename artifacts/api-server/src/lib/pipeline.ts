@@ -17,6 +17,9 @@ import { calculatePotentialLots, buildSubdivisionPathwayNote, type LotResult, ty
 import { estimateCosts, type CostBreakdown } from "./cost-estimator";
 import { getComparables, type ComparableSale, type ComparablesResult } from "./comparables";
 import { calculateBearBaseBullScenarios, exitGdvTypologyDiscountFactor, type ROIScenario } from "./roi-calculator";
+import { selectComparableSalesForExit } from "./market-comparables";
+import { fetchNeighbourhoodContext, type NeighbourhoodContext } from "./neighbourhood-context";
+import { fetchTransportContext, type TransportContext } from "./transport-context";
 import { assessDevelopmentStrategy, assessInterestRateOutlook } from "./claude";
 import { scoreProperty, type ScoringResult } from "./scoring";
 import { extractSuburb } from "./utils";
@@ -81,6 +84,7 @@ function inferEstateTypeFromParcel(parcel: LinzParcel | null): string | null {
  */
 async function enrichComparables(
   comparables: ComparableSale[],
+  subject?: { lat: number; lng: number },
   maxToEnrich = 5,
 ): Promise<ComparableSale[]> {
   const enriched: ComparableSale[] = [];
@@ -135,6 +139,7 @@ async function enrichComparables(
             build_year: comp.build_year ?? buildYear,
             // Prefer scraped floor area; fall back to GIS if missing
             floor_sqm: comp.floor_sqm > 0 ? comp.floor_sqm : (floorEnriched ?? comp.floor_sqm),
+            distanceM: subject ? distanceMeters(subject.lat, subject.lng, geo.lat, geo.lng) : comp.distanceM,
           });
           logger.debug({ address: comp.address, cv_nzd: cvFinal, build_year: buildYear, floor_sqm: floorEnriched }, "Comparable enriched");
           continue;
@@ -148,6 +153,28 @@ async function enrichComparables(
   }
 
   return enriched;
+}
+
+function distanceMeters(aLat: number, aLng: number, bLat: number, bLng: number): number {
+  const r = 6_371_000;
+  const phi1 = (aLat * Math.PI) / 180;
+  const phi2 = (bLat * Math.PI) / 180;
+  const dPhi = ((bLat - aLat) * Math.PI) / 180;
+  const dLambda = ((bLng - aLng) * Math.PI) / 180;
+  const h = Math.sin(dPhi / 2) ** 2 + Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLambda / 2) ** 2;
+  return Math.round(2 * r * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h)));
+}
+
+function withComparableAverages(result: ComparablesResult, comparables: ComparableSale[]): ComparablesResult {
+  if (comparables.length === 0) {
+    return { ...result, comparables: [], avg_sale_price: 0, avg_price_per_sqm: 0 };
+  }
+  const avg_sale_price = Math.round(comparables.reduce((sum, c) => sum + c.price_nzd, 0) / comparables.length);
+  const psms = comparables.map((c) => c.price_per_sqm).filter((p) => p > 0);
+  const avg_price_per_sqm = psms.length > 0 ? Math.round(psms.reduce((sum, p) => sum + p, 0) / psms.length) : 0;
+  const selectedSoldCount = comparables.filter((c) => c.source === "oneroof_sold").length;
+  const data_quality: ComparablesResult["data_quality"] = selectedSoldCount >= 3 ? "live" : "estimated";
+  return { ...result, comparables, avg_sale_price, avg_price_per_sqm, data_quality };
 }
 
 /**
@@ -269,6 +296,8 @@ export interface PipelineResult {
   costs: CostBreakdown | null;
   comparables: ComparableSale[];
   comparables_quality: "live" | "estimated" | "unavailable";
+  neighbourhoodContext: NeighbourhoodContext | null;
+  transportContext: TransportContext | null;
   scenarios: ROIScenario[];
   developmentStrategies: DevelopmentStrategyScenario[];
   scores: ScoringResult | null;
@@ -351,6 +380,8 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       costs: null,
       comparables: [],
       comparables_quality: "unavailable",
+      neighbourhoodContext: null,
+      transportContext: null,
       scenarios: [],
       developmentStrategies: [],
       scores: null,
@@ -754,6 +785,22 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     lotResult.zone_label,
   );
 
+  const neighbourhoodContextResult = await timed(
+    "neighbourhood_context",
+    () => fetchNeighbourhoodContext({ lat, lng, subjectParcelId: linzParcelData?.parcel_id ?? null }),
+    timing,
+  );
+  if (neighbourhoodContextResult.failed) failedSources.push("neighbourhood_context");
+  const neighbourhoodContext = neighbourhoodContextResult.value;
+
+  const transportContextResult = await timed(
+    "transport_context",
+    () => fetchTransportContext(lat, lng),
+    timing,
+  );
+  if (transportContextResult.failed) failedSources.push("transport_context");
+  const transportContext = transportContextResult.value;
+
   let comparablesResult = getComparables(
     suburb,
     merged.zone_code,
@@ -787,26 +834,25 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     }
   }
 
-  // Step 1 — LLM picks the best 3 comparables from the pool based on semantic
-  // similarity (land size, floor area, build era, location). Old houses must not
-  // be compared with new ones. Falls back to pool order if LLM unavailable.
-  if (comparablesResult.comparables.length > 3) {
-    const selected = await selectComparablesByLLM(comparablesResult.comparables, {
-      address: geocode.formatted ?? address,
-      suburb,
-      land_area_sqm: merged.land_area_sqm,
-      floor_area_sqm: merged.floor_area_sqm,
-      build_year: merged.build_year,
-      zone_code: merged.zone_code,
-    }, 3);
-    comparablesResult = { ...comparablesResult, comparables: selected };
-  }
-
-  // Step 2 — Sequentially enrich each selected comparable with CV, build year,
+  // Step 1 — Sequentially enrich comparable candidates with CV, build year,
   // and floor area from AC GIS. Each property is fully resolved before the next.
   if (comparablesResult.comparables.length > 0) {
-    const enriched = await enrichComparables(comparablesResult.comparables, 3);
-    comparablesResult = { ...comparablesResult, comparables: enriched };
+    const enriched = await enrichComparables(comparablesResult.comparables, { lat, lng }, 8);
+    comparablesResult = withComparableAverages(comparablesResult, enriched);
+  }
+
+  // Step 2 — deterministically prefer comparables that match the expected exit
+  // product. For 3+ small-lot rebuilds this means terrace/townhouse product,
+  // not generic standalone suburb sales.
+  const comparableSelection = selectComparableSalesForExit({
+    comparables: comparablesResult.comparables,
+    lots: lotResult.lots,
+    sqmPerLot: lotResult.sqm_per_lot,
+    subjectLandSqm: merged.land_area_sqm,
+    maxSelect: 3,
+  });
+  if (comparablesResult.comparables.length > 0) {
+    comparablesResult = withComparableAverages(comparablesResult, comparableSelection.comparables);
   }
 
   const marketPsm = comparablesResult.avg_price_per_sqm > 0 ? comparablesResult.avg_price_per_sqm : null;
@@ -843,7 +889,11 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   ]);
 
   const hasRealComparablePricing = comparablesResult.avg_sale_price > 0 || comparablesResult.avg_price_per_sqm > 0;
-  const gdvTypologyMultiplier = exitGdvTypologyDiscountFactor(merged.zone_code, lotResult.lots, lotResult.sqm_per_lot);
+  const gdvTypologyMultiplier = comparableSelection.typologyMatched
+    ? 1
+    : exitGdvTypologyDiscountFactor(merged.zone_code, lotResult.lots, lotResult.sqm_per_lot);
+  const neighbourhoodGdvMultiplier = neighbourhoodContext?.marketAdjustment.gdvMultiplier ?? 1;
+  const combinedGdvMultiplier = Math.max(0.5, Math.min(1, gdvTypologyMultiplier * neighbourhoodGdvMultiplier));
   const scenarios = hasRealComparablePricing
     ? calculateBearBaseBullScenarios(
         costs,
@@ -852,7 +902,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
         lotResult.lots,
         lotResult.sqm_per_lot,
         interestRateOutlook,
-        gdvTypologyMultiplier,
+        combinedGdvMultiplier,
       )
     : [];
 
@@ -865,9 +915,22 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     interestRateOutlook,
     assessment: strategyAssessment,
     comparablesQuality: comparablesResult.data_quality,
+    gdvTypologyMultiplier,
+    marketGdvMultiplier: neighbourhoodGdvMultiplier,
+    typologyMatchedComparables: comparableSelection.typologyMatched,
+    neighbourhoodContext,
   });
 
   const scores = scoreProperty(merged, costs, scenarios, lotResult.lots);
+  if (neighbourhoodContext?.marketAdjustment.reason && !scores.roi_reasons.includes(neighbourhoodContext.marketAdjustment.reason)) {
+    scores.roi_reasons.push(neighbourhoodContext.marketAdjustment.reason);
+  }
+  if (comparableSelection.typologyMatched && !scores.roi_reasons.some((r) => /terrace\/townhouse comparables/i.test(r))) {
+    scores.roi_reasons.push("ROI uses terrace/townhouse comparables for the modelled exit product rather than generic standalone-house suburb sales.");
+  }
+  for (const reason of transportContext?.roiInfluence.reasons ?? []) {
+    if (!scores.roi_reasons.includes(reason)) scores.roi_reasons.push(reason);
+  }
 
   let schoolZonesForEnrichment = merged.school_zones;
   const missingAllSchoolZones =
@@ -925,6 +988,8 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     costs,
     comparables: comparablesResult.comparables,
     comparables_quality: comparablesResult.data_quality,
+    neighbourhoodContext,
+    transportContext,
     scenarios,
     developmentStrategies,
     scores,

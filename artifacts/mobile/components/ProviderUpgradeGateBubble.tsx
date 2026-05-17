@@ -17,10 +17,12 @@ export function ProviderUpgradeGateBubble({ onUpgrade, onDismiss }: Props) {
 
   const features = useMemo(
     () => [
-      t("bubble.upgrade.feature_message"),
-      t("bubble.upgrade.feature_reports"),
-      t("bubble.upgrade.feature_transactions"),
-      t("bubble.upgrade.feature_off_market"),
+      t("paywall.f1"),
+      t("paywall.f2"),
+      t("paywall.f3"),
+      t("paywall.f4"),
+      t("paywall.f5"),
+      t("paywall.f6"),
     ],
     [t],
   );

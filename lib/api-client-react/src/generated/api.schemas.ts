@@ -307,6 +307,67 @@ export interface ComparableSale {
   price: number;
   size: number;
   pricePerSqm: number;
+  typology?: "standalone" | "terrace_townhouse" | "unit_apartment" | "unknown";
+  distanceM?: number | null;
+  source?: "oneroof_sold" | "realestate_active_listing" | "licensed_provider" | "unknown";
+  relevanceScore?: number;
+  selectionReason?: string;
+}
+
+export interface NeighbourhoodSignal {
+  level: "none" | "low" | "moderate" | "high" | "unknown";
+  count: number;
+  assessedLots: number;
+  confidence: "high" | "medium" | "low" | "unknown";
+}
+
+export interface NeighbourhoodContext {
+  assessedLots: number;
+  radiusM: number;
+  publicHousingSignal: NeighbourhoodSignal;
+  terraceHousingSignal: NeighbourhoodSignal;
+  confidence: "high" | "medium" | "low" | "unknown";
+  marketAdjustment: {
+    gdvMultiplier: number;
+    applied: boolean;
+    reason: string | null;
+  };
+  reasons: string[];
+}
+
+export interface TransportStopContext {
+  name: string;
+  mode: "bus" | "train" | "ferry" | "unknown";
+  distanceM: number;
+  routeCount: number;
+  serviceIntensity: "frequent" | "regular" | "limited" | "unknown";
+}
+
+export interface TransportContext {
+  publicTransport: {
+    accessTier: "excellent" | "good" | "limited" | "poor" | "unknown";
+    nearestStop: TransportStopContext | null;
+    nearestByMode: TransportStopContext[];
+    confidence: "high" | "medium" | "low" | "unknown";
+  };
+  highwayAccess: {
+    name: string | null;
+    distanceM: number | null;
+    accessTier: "excellent" | "good" | "neutral" | "remote" | "exposureRisk" | "unknown";
+    exposureTier: "low" | "moderate" | "high" | "unknown";
+    confidence: "high" | "medium" | "low" | "unknown";
+  };
+  cityCommute: {
+    centreName: string | null;
+    distanceKm: number | null;
+    convenienceTier: "excellent" | "good" | "limited" | "poor" | "unknown";
+    confidence: "high" | "medium" | "low" | "unknown";
+  };
+  roiInfluence: {
+    influence: "positive" | "neutral" | "negative" | "mixed";
+    reasons: string[];
+    numericAdjustmentApplied: false;
+  };
 }
 
 export interface SchoolZoneDetail {
@@ -335,6 +396,8 @@ export interface FeasibilityReport {
   totalCostHigh?: number;
   roiScenarios?: ROIScenario[];
   comparableSales?: ComparableSale[];
+  neighbourhoodContext?: NeighbourhoodContext | null;
+  transportContext?: TransportContext | null;
   avgPricePerSqm?: number;
   schoolZones?: SchoolZoneDetail[];
   riskSummary?: string[];

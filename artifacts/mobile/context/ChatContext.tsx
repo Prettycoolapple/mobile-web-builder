@@ -51,6 +51,8 @@ export interface ChatMessage {
   agentPhone?: string;
   agencyName?: string | null;
   agentAvatarUrl?: string | null;
+  agentMatchType?: "subject" | "suburb";
+  backgroundJobId?: string;
 }
 
 export interface Score {
@@ -220,6 +222,67 @@ export interface ComparableSale {
   price_per_sqm?: number;
   cv_nzd?: number | null;
   build_year?: number | null;
+  typology?: "standalone" | "terrace_townhouse" | "unit_apartment" | "unknown";
+  distanceM?: number | null;
+  source?: "oneroof_sold" | "realestate_active_listing" | "licensed_provider" | "unknown";
+  relevanceScore?: number;
+  selectionReason?: string;
+}
+
+export interface NeighbourhoodSignal {
+  level: "none" | "low" | "moderate" | "high" | "unknown";
+  count: number;
+  assessedLots: number;
+  confidence: "high" | "medium" | "low" | "unknown";
+}
+
+export interface NeighbourhoodContext {
+  assessedLots: number;
+  radiusM: number;
+  publicHousingSignal: NeighbourhoodSignal;
+  terraceHousingSignal: NeighbourhoodSignal;
+  confidence: "high" | "medium" | "low" | "unknown";
+  marketAdjustment: {
+    gdvMultiplier: number;
+    applied: boolean;
+    reason: string | null;
+  };
+  reasons: string[];
+}
+
+export interface TransportStopContext {
+  name: string;
+  mode: "bus" | "train" | "ferry" | "unknown";
+  distanceM: number;
+  routeCount: number;
+  serviceIntensity: "frequent" | "regular" | "limited" | "unknown";
+}
+
+export interface TransportContext {
+  publicTransport: {
+    accessTier: "excellent" | "good" | "limited" | "poor" | "unknown";
+    nearestStop: TransportStopContext | null;
+    nearestByMode: TransportStopContext[];
+    confidence: "high" | "medium" | "low" | "unknown";
+  };
+  highwayAccess: {
+    name: string | null;
+    distanceM: number | null;
+    accessTier: "excellent" | "good" | "neutral" | "remote" | "exposureRisk" | "unknown";
+    exposureTier: "low" | "moderate" | "high" | "unknown";
+    confidence: "high" | "medium" | "low" | "unknown";
+  };
+  cityCommute: {
+    centreName: string | null;
+    distanceKm: number | null;
+    convenienceTier: "excellent" | "good" | "limited" | "poor" | "unknown";
+    confidence: "high" | "medium" | "low" | "unknown";
+  };
+  roiInfluence: {
+    influence: "positive" | "neutral" | "negative" | "mixed";
+    reasons: string[];
+    numericAdjustmentApplied: false;
+  };
 }
 
 /** MoE Schools Directory enrichment for home-zone listing text (Hougarden). */
@@ -262,6 +325,8 @@ export interface FeasibilityReport {
   interest_rate_outlook?: "falling" | "stable" | "rising";
   comparableSales?: ComparableSale[];
   comparables_quality?: "live" | "estimated" | "unavailable";
+  neighbourhoodContext?: NeighbourhoodContext | null;
+  transportContext?: TransportContext | null;
   avgPricePerSqm?: number | null;
   avg_sale_price?: number | null;
   /** Enriched state/intermediate/secondary zone schools (MoE directory). */
@@ -329,6 +394,7 @@ interface ChatContextValue {
   switchSession: (id: string) => void;
   addMessage: (msg: Omit<ChatMessage, "id" | "timestamp">, sessionId?: string) => void;
   updateLastMessage: (updates: Partial<ChatMessage>, sessionId?: string) => void;
+  replaceBackgroundAnalyseMessage: (jobId: string, msg: Omit<ChatMessage, "id" | "timestamp">, sessionId?: string) => void;
   removeMessage: (messageId: string, sessionId?: string) => void;
   updateCandidateScores: (
     scoreMap: Record<string, { ease: number; cost: number; roi: number; composite: number; landArea?: number; zone?: string | null }>,
@@ -396,6 +462,9 @@ function reportHasEnglishNarrative(report: FeasibilityReport): boolean {
   }
   if (report.riskSummary?.some((r) => isEnglishText(r))) return true;
   if (isEnglishText(report.disclaimer)) return true;
+  if (isEnglishText(report.neighbourhoodContext?.marketAdjustment?.reason)) return true;
+  if (report.neighbourhoodContext?.reasons?.some((r) => isEnglishText(r))) return true;
+  if (report.transportContext?.roiInfluence?.reasons?.some((r) => isEnglishText(r))) return true;
   if (isEnglishText(report.asbestos?.notes)) return true;
   if (isEnglishText(report.propertyOverview?.titleType)) return true;
   if (isEnglishText(report.terrain?.slope)) return true;
@@ -531,6 +600,42 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           return { ...s, messages, updatedAt: Date.now() };
         });
         saveSessions(updated);
+        return updated;
+      });
+    },
+    [currentSessionId, saveSessions],
+  );
+
+  const replaceBackgroundAnalyseMessage = useCallback(
+    (jobId: string, msg: Omit<ChatMessage, "id" | "timestamp">, sessionId?: string) => {
+      if (!jobId) return;
+      const fullMsg: ChatMessage = {
+        ...msg,
+        id: generateId(),
+        timestamp: Date.now(),
+      };
+      setSessions((prev) => {
+        const targetId = sessionId ?? currentSessionId;
+        let shouldSave = false;
+        const updated = prev.map((s) => {
+          if (s.id !== targetId) return s;
+          const currentReport = msg.type === "report" && msg.report ? msg.report : s.currentReport;
+          const idx = s.messages.findIndex((m) => m.backgroundJobId === jobId);
+          if (idx < 0) {
+            shouldSave = true;
+            return { ...s, messages: [...s.messages, fullMsg], currentReport, updatedAt: Date.now() };
+          }
+          const messages = [...s.messages];
+          const existing = messages[idx]!;
+          messages[idx] = {
+            ...fullMsg,
+            id: existing.id,
+            timestamp: existing.timestamp,
+          };
+          shouldSave = true;
+          return { ...s, messages, currentReport, updatedAt: Date.now() };
+        });
+        if (shouldSave) saveSessions(updated);
         return updated;
       });
     },
@@ -831,6 +936,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         switchSession,
         addMessage,
         updateLastMessage,
+        replaceBackgroundAnalyseMessage,
         removeMessage,
         updateCandidateScores,
         setCurrentReport,

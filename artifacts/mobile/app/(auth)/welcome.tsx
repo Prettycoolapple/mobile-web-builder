@@ -1,24 +1,24 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
   Animated,
   Easing,
   Image,
-  Pressable,
   Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
   useWindowDimensions,
+  View,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
-import { LinearGradient } from "expo-linear-gradient";
-import { useVideoPlayer, VideoView } from "expo-video";
 import { Asset } from "expo-asset";
+import { LinearGradient } from "expo-linear-gradient";
+import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { AlphaTail } from "@/components/GroundupLogo";
-import { useT, isOSChineseLocale } from "@/lib/i18n";
+import { useVideoPlayer, VideoView } from "expo-video";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+import { isOSChineseLocale, useT } from "@/lib/i18n";
 
 const HERO_VIDEO = require("../../assets/videos/welcome-hero.mp4");
 const HERO_POSTER = require("../../assets/videos/welcome-hero-poster.jpg");
@@ -29,9 +29,9 @@ export default function WelcomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { t } = useT();
-  const { height: screenHeight, width: screenWidth } = useWindowDimensions();
-  const brandZh = isOSChineseLocale();
-
+  const isZhOS = isOSChineseLocale();
+  const { height, width } = useWindowDimensions();
+  const compact = height < 740;
   const [videoReady, setVideoReady] = useState(false);
 
   const player = useVideoPlayer(HERO_VIDEO, (p) => {
@@ -48,69 +48,45 @@ export default function WelcomeScreen() {
     return () => sub.remove();
   }, [player]);
 
-  // Staggered entrance animations
-  const fadeBrand = useRef(new Animated.Value(0)).current;
-  const fadeHead = useRef(new Animated.Value(0)).current;
-  const fadeCta = useRef(new Animated.Value(0)).current;
-  const lift = useRef(new Animated.Value(16)).current;
+  const fade = useRef(new Animated.Value(0)).current;
+  const lift = useRef(new Animated.Value(18)).current;
 
   useEffect(() => {
     Animated.parallel([
+      Animated.timing(fade, {
+        toValue: 1,
+        duration: 850,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
       Animated.timing(lift, {
         toValue: 0,
-        duration: 900,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-      Animated.timing(fadeBrand, {
-        toValue: 1,
-        duration: 650,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-      Animated.timing(fadeHead, {
-        toValue: 1,
-        duration: 700,
-        delay: 220,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-      Animated.timing(fadeCta, {
-        toValue: 1,
-        duration: 700,
-        delay: 420,
+        duration: 850,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }),
     ]).start();
-  }, []);
+  }, [fade, lift]);
 
-  // Full-bleed scrim covers the entire screen including safe-area regions.
   const bleed = {
     position: "absolute" as const,
     top: -insets.top,
+    right: -insets.right,
     bottom: -insets.bottom,
     left: -insets.left,
-    right: -insets.right,
   };
 
-  // Hero video is rendered 30% larger than the visible viewport and centered,
-  // guaranteeing full-bleed coverage on every phone size and aspect ratio.
-  const totalH = screenHeight + insets.top + insets.bottom;
-  const totalW = screenWidth + insets.left + insets.right;
-  const heroScale = 1.3;
-  const heroW = totalW * heroScale;
-  const heroH = totalH * heroScale;
-  const heroBleed = {
+  const totalHeight = height + insets.top + insets.bottom;
+  const totalWidth = width + insets.left + insets.right;
+  const mediaWidth = totalWidth * 1.12;
+  const mediaHeight = totalHeight * 1.12;
+  const mediaStyle = {
     position: "absolute" as const,
-    width: heroW,
-    height: heroH,
-    top: -insets.top - (heroH - totalH) / 2,
-    left: -insets.left - (heroW - totalW) / 2,
+    width: mediaWidth,
+    height: mediaHeight,
+    top: -insets.top - (mediaHeight - totalHeight) / 2,
+    left: -insets.left - (mediaWidth - totalWidth) / 2,
   };
-
-  // Headline anchored ~52% down — gives the logo room to breathe.
-  const headlineTop = screenHeight * 0.5;
 
   return (
     <View style={styles.container}>
@@ -127,18 +103,18 @@ export default function WelcomeScreen() {
           preload: "auto",
           style: {
             position: "absolute",
-            top: heroBleed.top,
-            left: heroBleed.left,
-            width: heroBleed.width,
-            height: heroBleed.height,
+            top: mediaStyle.top,
+            left: mediaStyle.left,
+            width: mediaStyle.width,
+            height: mediaStyle.height,
             objectFit: "cover",
           },
         })
       ) : (
         <>
-          <Image source={HERO_POSTER} style={heroBleed} resizeMode="cover" />
+          <Image source={HERO_POSTER} style={mediaStyle} resizeMode="cover" />
           <VideoView
-            style={[heroBleed, { opacity: videoReady ? 1 : 0 }]}
+            style={[mediaStyle, { opacity: videoReady ? 1 : 0 }]}
             player={player}
             contentFit="cover"
             nativeControls={false}
@@ -148,108 +124,60 @@ export default function WelcomeScreen() {
         </>
       )}
 
-      {/* Cinematic legibility scrim — darker top & bottom, softer middle */}
       <LinearGradient
         colors={[
-          "rgba(15,10,7,0.78)",
-          "rgba(15,10,7,0.18)",
-          "rgba(15,10,7,0.45)",
-          "rgba(15,10,7,0.92)",
+          "rgba(5,5,5,0.62)",
+          "rgba(5,5,5,0.25)",
+          "rgba(5,5,5,0.42)",
+          "rgba(5,5,5,0.88)",
         ]}
-        locations={[0, 0.32, 0.62, 1]}
+        locations={[0, 0.26, 0.58, 1]}
         style={bleed}
       />
-
-      {/* Subtle warm vignette tint */}
       <LinearGradient
-        colors={["rgba(217,119,87,0.10)", "rgba(0,0,0,0)", "rgba(217,119,87,0.08)"]}
-        locations={[0, 0.5, 1]}
+        colors={["rgba(0,0,0,0.72)", "rgba(0,0,0,0)", "rgba(0,0,0,0.5)"]}
+        start={{ x: 0, y: 0.15 }}
+        end={{ x: 1, y: 0.7 }}
         style={bleed}
       />
 
-      {/* ── Brand block: wordmark with calligraphic "a" tail ── */}
       <Animated.View
         style={[
-          styles.brandBlock,
+          styles.content,
+          compact && styles.contentCompact,
           {
-            top: insets.top + 72,
-            opacity: fadeBrand,
+            paddingTop: insets.top + (compact ? 34 : 58),
+            paddingBottom: insets.bottom + (compact ? 14 : 22),
+            opacity: fade,
             transform: [{ translateY: lift }],
           },
         ]}
       >
-        <View style={styles.wordmarkWrap}>
-          {/* Tail flourish sits BEHIND the text — English wordmark only */}
-          {!brandZh && (
-            <View pointerEvents="none" style={styles.tailWrap}>
-              <AlphaTail width={300} color="#D97757" accentColor="#F1D9A8" />
-            </View>
-          )}
-          {brandZh ? (
-            <Text style={styles.wordmarkZh}>奥房</Text>
-          ) : (
-            <Text style={styles.wordmark}>
-              <Text style={styles.wordmarkProject}>project</Text>
-              <Text style={styles.wordmarkAlpha}> alpha</Text>
-            </Text>
-          )}
+        <View style={[styles.heroBlock, compact && styles.heroBlockCompact]}>
+          <Text style={[styles.headline, compact && styles.headlineCompact]}>
+            {isZhOS ? "奥房" : "Project\nAlpha"}
+          </Text>
+          <Text style={[styles.stay, compact && styles.stayCompact]}>{t("welcome.stay_word")}</Text>
         </View>
 
-        <View style={styles.eyebrowRow}>
-          <View style={styles.eyebrowDot} />
-          <Text style={styles.eyebrow}>{t("welcome.eyebrow")}</Text>
-          <View style={styles.eyebrowDot} />
+        <View style={[styles.bottomBlock, compact && styles.bottomBlockCompact]}>
+          <TouchableOpacity
+            style={styles.primaryButton}
+            activeOpacity={0.88}
+            onPress={() => router.push("/(auth)/signup")}
+          >
+            <Text style={styles.primaryButtonText}>{t("welcome.cta_primary")}</Text>
+            <Text style={styles.primaryButtonArrow}>{">"}</Text>
+          </TouchableOpacity>
+
+          <Pressable
+            onPress={() => router.push("/(auth)/login")}
+            hitSlop={10}
+            style={({ pressed }) => [styles.loginLink, { opacity: pressed ? 0.6 : 1 }]}
+          >
+            <Text style={styles.loginText}>{t("welcome.cta_secondary")}</Text>
+          </Pressable>
         </View>
-      </Animated.View>
-
-      {/* ── Headline block ── */}
-      <Animated.View
-        pointerEvents="none"
-        style={[
-          styles.headlineBlock,
-          {
-            top: headlineTop,
-            opacity: fadeHead,
-            transform: [{ translateY: lift }],
-          },
-        ]}
-      >
-        <Text style={styles.headline}>
-          {t("welcome.headline_a")}{" "}
-          <Text style={styles.headlineEm}>{t("welcome.headline_b")}</Text>
-        </Text>
-        <View style={styles.headlineRule} />
-        <Text style={styles.subhead}>
-          {t("welcome.subhead")}
-        </Text>
-      </Animated.View>
-
-      {/* ── CTAs ── */}
-      <Animated.View
-        style={[
-          styles.ctaBlock,
-          { paddingBottom: insets.bottom + 28, opacity: fadeCta },
-        ]}
-      >
-        <TouchableOpacity
-          style={styles.primaryBtn}
-          onPress={() => router.push("/(auth)/signup")}
-          activeOpacity={0.88}
-        >
-          <Text style={styles.primaryBtnText}>{t("welcome.cta_primary")}</Text>
-          <Text style={styles.primaryBtnArrow}>→</Text>
-        </TouchableOpacity>
-
-        <Pressable
-          onPress={() => router.push("/(auth)/login")}
-          hitSlop={12}
-          style={({ pressed }) => [
-            styles.secondaryBtn,
-            { opacity: pressed ? 0.55 : 1 },
-          ]}
-        >
-          <Text style={styles.secondaryBtnText}>{t("welcome.cta_secondary")}</Text>
-        </Pressable>
       </Animated.View>
     </View>
   );
@@ -258,182 +186,96 @@ export default function WelcomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#0F0A07",
+    backgroundColor: "#050505",
   },
-
-  // Brand
-  brandBlock: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    alignItems: "center",
-    gap: 22,
+  content: {
+    flex: 1,
+    paddingHorizontal: 30,
+    justifyContent: "flex-end",
+    gap: 112,
   },
-  wordmarkWrap: {
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    minHeight: 80,
+  contentCompact: {
+    paddingHorizontal: 24,
+    gap: 72,
   },
-  wordmark: {
-    fontSize: 46,
-    lineHeight: 52,
-    letterSpacing: -1.4,
-    color: "#FBF6EC",
-    textShadowColor: "rgba(0,0,0,0.55)",
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 10,
+  heroBlock: {
+    gap: 20,
   },
-  wordmarkZh: {
-    fontSize: 46,
-    lineHeight: 52,
-    letterSpacing: 2,
-    color: "#F1D9A8",
-    fontFamily: "DM_Sans_700Bold",
-    textShadowColor: "rgba(0,0,0,0.55)",
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 10,
-  },
-  /**
-   * "project" — clean sans-serif so the j renders cleanly without an unusual
-   * curl/descender from the serif font.
-   */
-  wordmarkProject: {
-    fontFamily: "DM_Sans_700Bold",
-    color: "#FBF6EC",
-    letterSpacing: -1.6,
-  },
-  /**
-   * "alpha" — serif accent in cream, paired with the flourish behind it.
-   */
-  wordmarkAlpha: {
-    fontFamily: "Fraunces_600SemiBold",
-    color: "#F1D9A8",
-    letterSpacing: -0.8,
-  },
-  /**
-   * Tail flourish positioned absolutely behind the wordmark, centered.
-   * Slightly nudged down so the curve passes under the baseline of the text.
-   */
-  tailWrap: {
-    position: "absolute",
-    top: 26,
-    alignItems: "center",
-    justifyContent: "center",
-    opacity: 0.9,
-  },
-  eyebrowRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    marginTop: 2,
-  },
-  eyebrowDot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: "rgba(232,200,135,0.85)",
-  },
-  eyebrow: {
-    fontFamily: "DM_Sans_500Medium",
-    fontSize: 11,
-    letterSpacing: 2.4,
-    color: "rgba(251,246,236,0.78)",
-  },
-
-  // Headline
-  headlineBlock: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    alignItems: "center",
-    paddingHorizontal: 28,
-    gap: 18,
+  heroBlockCompact: {
+    gap: 15,
   },
   headline: {
-    fontFamily: "Fraunces_400Regular",
-    fontSize: 26,
+    fontFamily: "Fraunces_700Bold",
+    fontSize: 66,
+    lineHeight: 72,
+    color: "#FFFFFF",
+    letterSpacing: 0,
+    textShadowColor: "rgba(0,0,0,0.48)",
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 12,
+  },
+  headlineCompact: {
+    fontSize: 54,
+    lineHeight: 60,
+  },
+  stay: {
+    fontFamily: "DM_Sans_600SemiBold",
+    fontSize: 25,
     lineHeight: 32,
-    letterSpacing: -0.4,
-    color: "#FBF6EC",
-    textAlign: "center",
-    textShadowColor: "rgba(0,0,0,0.55)",
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 10,
-  },
-  headlineEm: {
-    fontFamily: "Fraunces_600SemiBold",
-    fontStyle: "italic",
-    color: "#F1D9A8",
-  },
-  headlineRule: {
-    width: 28,
-    height: 1,
-    backgroundColor: "rgba(232,200,135,0.7)",
-  },
-  subhead: {
-    fontFamily: "DM_Sans_400Regular",
-    fontSize: 14,
-    lineHeight: 20,
-    letterSpacing: 0.2,
-    color: "rgba(251,246,236,0.82)",
-    textAlign: "center",
-    paddingHorizontal: 16,
+    color: "rgba(255,255,255,0.84)",
     textShadowColor: "rgba(0,0,0,0.5)",
     textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 6,
+    textShadowRadius: 8,
+    maxWidth: 335,
   },
-
-  // CTAs
-  ctaBlock: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    paddingHorizontal: 24,
-    gap: 6,
-    alignItems: "center",
+  stayCompact: {
+    fontSize: 22,
+    lineHeight: 29,
   },
-  primaryBtn: {
-    width: "100%",
-    height: 56,
-    borderRadius: 999,
+  bottomBlock: {
+    gap: 18,
+  },
+  bottomBlockCompact: {
+    gap: 12,
+  },
+  primaryButton: {
+    height: 64,
+    borderRadius: 13,
+    paddingHorizontal: 22,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-    backgroundColor: "#FBF6EC",
-    shadowColor: "#000",
-    shadowOpacity: 0.35,
-    shadowRadius: 18,
+    justifyContent: "space-between",
+    backgroundColor: "#D97757",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255,255,255,0.22)",
+    shadowColor: "#000000",
     shadowOffset: { width: 0, height: 8 },
-    elevation: 6,
+    shadowOpacity: 0.25,
+    shadowRadius: 14,
+    elevation: 4,
   },
-  primaryBtnText: {
-    fontFamily: "DM_Sans_600SemiBold",
-    fontSize: 16,
-    color: "#1C1917",
-    letterSpacing: 0.2,
+  primaryButtonText: {
+    fontFamily: "DM_Sans_700Bold",
+    fontSize: 19,
+    lineHeight: 24,
+    color: "#FFFFFF",
   },
-  primaryBtnArrow: {
+  primaryButtonArrow: {
+    color: "#FFFFFF",
     fontFamily: "DM_Sans_500Medium",
-    fontSize: 18,
-    color: "#1C1917",
+    fontSize: 42,
+    lineHeight: 42,
     marginTop: -2,
   },
-  secondaryBtn: {
-    height: 48,
-    paddingHorizontal: 18,
-    alignItems: "center",
-    justifyContent: "center",
+  loginLink: {
+    alignSelf: "center",
+    paddingVertical: 4,
+    paddingHorizontal: 10,
   },
-  secondaryBtnText: {
-    fontFamily: "DM_Sans_500Medium",
-    fontSize: 13.5,
-    color: "rgba(251,246,236,0.92)",
-    letterSpacing: 0.4,
+  loginText: {
+    fontFamily: "DM_Sans_600SemiBold",
+    fontSize: 14,
+    color: "rgba(255,255,255,0.88)",
     textDecorationLine: "underline",
-    textDecorationColor: "rgba(232,200,135,0.5)",
   },
 });

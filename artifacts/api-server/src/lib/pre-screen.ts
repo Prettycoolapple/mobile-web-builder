@@ -4,6 +4,7 @@ import { scrapeHougarden } from "./scrapers/hougarden";
 import { fetchUnitaryPlanZone, fetchOverlays } from "./auckland-council";
 import type { ListingResult } from "./scrapers/oneroof";
 import { calculatePotentialLots } from "./lot-calculator";
+import { fetchLINZParcel } from "./linz";
 
 export interface PropertyCandidate {
   address: string;
@@ -129,15 +130,19 @@ async function screenOneFast(
     }
 
     const geo = await geocodeAddress(listing.address);
-    const [zoneResult, overlays] = await Promise.allSettled([
+    const shouldVerifyLandArea = listing.landAreaApprox || listing.landArea == null;
+    const [zoneResult, overlays, linzParcelResult] = await Promise.allSettled([
       fetchUnitaryPlanZone(geo.lat, geo.lng),
       fetchOverlays(geo.lat, geo.lng),
+      shouldVerifyLandArea ? fetchLINZParcel(geo.lat, geo.lng) : Promise.resolve(null),
     ]);
 
     const zone = zoneResult.status === "fulfilled" ? zoneResult.value?.zone_code : null;
     const resolvedOverlays = overlays.status === "fulfilled" ? overlays.value : [];
+    const linzParcel = linzParcelResult.status === "fulfilled" ? linzParcelResult.value : null;
 
-    const land = listing.landArea;
+    const land = linzParcel?.area_sqm ?? listing.landArea;
+    const landAreaApprox = linzParcel?.area_sqm != null ? false : (listing.landAreaApprox ?? false);
     let price = listing.price;
     let priceApprox = listing.priceApprox ?? false;
     if (price == null && options?.allowMissingListingPrice) {
@@ -164,7 +169,7 @@ async function screenOneFast(
       bathrooms: listing.bathrooms ?? undefined,
       bedroomsApprox: listing.bedroomsApprox || undefined,
       bathroomsApprox: listing.bathroomsApprox || undefined,
-      landAreaApprox: listing.landAreaApprox || undefined,
+      landAreaApprox: landAreaApprox || undefined,
       priceApprox: priceApprox || undefined,
       floorArea: listing.floorArea ?? undefined,
       floorAreaApprox: listing.floorAreaApprox || undefined,

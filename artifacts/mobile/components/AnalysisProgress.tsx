@@ -67,7 +67,7 @@ export function AnalysisProgress({ retryLabel }: Props) {
       <View style={styles.header}>
         <Animated.View style={[styles.dot, { backgroundColor: colors.accent, opacity: dotOpacity }]} />
         <Text style={[styles.label, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-          {retryLabel ? t("search.retrying_analysis") : t("search.analysing_property")}
+          {t("search.analysing_property")}
         </Text>
       </View>
 

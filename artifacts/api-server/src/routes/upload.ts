@@ -55,10 +55,6 @@ function profilePictureDataUrl(buffer: Buffer | Uint8Array, mimetype: string): s
   return `data:${mimetype};base64,${Buffer.from(buffer).toString("base64")}`;
 }
 
-function inlineImageDataUrl(buffer: Buffer | Uint8Array, mimetype: string): string {
-  return `data:${mimetype};base64,${Buffer.from(buffer).toString("base64")}`;
-}
-
 async function saveInlineProfilePicture(
   userId: string,
   buffer: Buffer | Uint8Array,
@@ -89,10 +85,25 @@ const ALLOWED_IMAGE_MIME_TYPES = new Set([
 ]);
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+const MAX_CERT_FILE_SIZE_BYTES = 30 * 1024 * 1024;
+const CERTIFICATE_NAMESPACE = "provider-certificates";
+const DM_IMAGE_NAMESPACE = "dm-images";
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_FILE_SIZE_BYTES },
+  fileFilter: (_req, file, cb) => {
+    if (ALLOWED_MIME_TYPES.has(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only PDF and image files are accepted"));
+    }
+  },
+});
+
+const uploadCertificate = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_CERT_FILE_SIZE_BYTES },
   fileFilter: (_req, file, cb) => {
     if (ALLOWED_MIME_TYPES.has(file.mimetype)) {
       cb(null, true);
@@ -155,6 +166,198 @@ function preSignupRateLimit(req: Request, res: Response, next: NextFunction) {
   }
   next();
 }
+
+function validateCertificateUploadRequest(body: unknown):
+  | { ok: true; name: string; size: number; contentType: string }
+  | { ok: false; status: number; error: string; code: string } {
+  const { name, size, contentType } = (body ?? {}) as {
+    name?: string;
+    size?: number;
+    contentType?: string;
+  };
+  const fileSize = typeof size === "number" ? size : Number.NaN;
+  const normalizedContentType = contentType?.split(";")[0]?.trim().toLowerCase() ?? "";
+
+  if (!name || typeof name !== "string") {
+    return { ok: false, status: 400, error: "Missing or invalid file name", code: "INVALID_NAME" };
+  }
+  if (!Number.isFinite(fileSize) || fileSize <= 0 || fileSize > MAX_CERT_FILE_SIZE_BYTES) {
+    return {
+      ok: false,
+      status: 400,
+      error: `Invalid file size. Maximum size is ${MAX_CERT_FILE_SIZE_BYTES / (1024 * 1024)}MB`,
+      code: "INVALID_SIZE",
+    };
+  }
+  if (!normalizedContentType || !ALLOWED_MIME_TYPES.has(normalizedContentType)) {
+    return { ok: false, status: 415, error: "Only PDF and image files are accepted", code: "INVALID_FILE_TYPE" };
+  }
+  return { ok: true, name, size: fileSize, contentType: normalizedContentType };
+}
+
+function validateImageUploadRequest(body: unknown):
+  | { ok: true; name: string; size: number; contentType: string }
+  | { ok: false; status: number; error: string; code: string } {
+  const { name, size, contentType } = (body ?? {}) as {
+    name?: string;
+    size?: number;
+    contentType?: string;
+  };
+  const fileSize = typeof size === "number" ? size : Number.NaN;
+  const normalizedContentType = contentType?.split(";")[0]?.trim().toLowerCase() ?? "";
+
+  if (!name || typeof name !== "string") {
+    return { ok: false, status: 400, error: "Missing or invalid file name", code: "INVALID_NAME" };
+  }
+  if (!Number.isFinite(fileSize) || fileSize <= 0 || fileSize > MAX_FILE_SIZE_BYTES) {
+    return {
+      ok: false,
+      status: 400,
+      error: `Invalid file size. Maximum size is ${MAX_FILE_SIZE_BYTES / (1024 * 1024)}MB`,
+      code: "INVALID_SIZE",
+    };
+  }
+  if (!normalizedContentType || !ALLOWED_IMAGE_MIME_TYPES.has(normalizedContentType)) {
+    return { ok: false, status: 415, error: "Only image files are accepted", code: "INVALID_FILE_TYPE" };
+  }
+  return { ok: true, name, size: fileSize, contentType: normalizedContentType };
+}
+
+router.post(
+  "/upload/incorporation-cert-pre-signup/request-url",
+  preSignupRateLimit,
+  async (req: Request, res: Response) => {
+    const validated = validateCertificateUploadRequest(req.body);
+    if (!validated.ok) {
+      res.status(validated.status).json({ error: validated.error, code: validated.code });
+      return;
+    }
+
+    try {
+      if (objectStorageService.isLocal) {
+        res.status(501).json({
+          error: "Signed URL upload not available in local storage mode. Use the multipart upload endpoint instead.",
+          code: "LOCAL_MODE",
+        });
+        return;
+      }
+      const uploadURL = await objectStorageService.getObjectEntityUploadURL({
+        contentType: validated.contentType,
+        namespace: CERTIFICATE_NAMESPACE,
+      });
+      const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
+      const fileUrl = `/api/storage${objectPath}`;
+      res.json({
+        uploadURL,
+        objectPath,
+        fileUrl,
+        expiresInSec: 900,
+        requiredHeaders: {
+          "Content-Type": validated.contentType,
+        },
+        metadata: {
+          name: validated.name,
+          size: validated.size,
+          contentType: validated.contentType,
+        },
+      });
+    } catch (error) {
+      req.log.error({ err: error }, "Pre-signup incorporation cert signed URL generation failed");
+      const classified = classifyStorageUploadError(error);
+      if (classified) {
+        res.status(classified.status).json({ error: classified.error, code: classified.code });
+        return;
+      }
+      res.status(500).json({ error: "Could not prepare upload. Please try again.", code: "SIGN_URL_FAILED" });
+    }
+  },
+);
+
+router.post(
+  "/upload/dm-image/request-url",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    const validated = validateImageUploadRequest(req.body);
+    if (!validated.ok) {
+      res.status(validated.status).json({ error: validated.error, code: validated.code });
+      return;
+    }
+
+    try {
+      if (objectStorageService.isLocal) {
+        res.status(501).json({
+          error: "Signed URL upload not available in local storage mode. Use the multipart upload endpoint instead.",
+          code: "LOCAL_MODE",
+        });
+        return;
+      }
+      const uploadURL = await objectStorageService.getObjectEntityUploadURL({
+        contentType: validated.contentType,
+        namespace: DM_IMAGE_NAMESPACE,
+      });
+      const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
+      const fileUrl = `/api/storage${objectPath}`;
+      res.json({
+        uploadURL,
+        objectPath,
+        fileUrl,
+        expiresInSec: 900,
+        requiredHeaders: {
+          "Content-Type": validated.contentType,
+        },
+        metadata: {
+          name: validated.name,
+          size: validated.size,
+          contentType: validated.contentType,
+        },
+      });
+    } catch (error) {
+      req.log.error({ err: error }, "DM image signed URL generation failed");
+      const classified = classifyStorageUploadError(error);
+      if (classified) {
+        res.status(classified.status).json({ error: classified.error, code: classified.code });
+        return;
+      }
+      res.status(500).json({ error: "Could not prepare upload. Please try again.", code: "SIGN_URL_FAILED" });
+    }
+  },
+);
+
+router.post(
+  "/upload/dm-image/complete",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    const userId = (req as any).userId as string;
+    const { objectPath } = (req.body ?? {}) as { objectPath?: string };
+
+    if (!objectPath || typeof objectPath !== "string" || !objectPath.startsWith(`/objects/${DM_IMAGE_NAMESPACE}/`)) {
+      res.status(400).json({ error: "Missing or invalid objectPath", code: "INVALID_OBJECT_PATH" });
+      return;
+    }
+
+    try {
+      if (objectStorageService.isLocal) {
+        if (!objectStorageService.localFileExists(objectPath)) {
+          res.status(404).json({ error: "Uploaded object not found", code: "OBJECT_NOT_FOUND" });
+          return;
+        }
+      } else {
+        await objectStorageService.getObjectEntityFile(objectPath);
+      }
+
+      const fileUrl = `/api/storage${objectPath}`;
+      await db.insert(userUploads).values({ userId, objectPath }).onConflictDoNothing();
+      res.json({ fileUrl, objectPath });
+    } catch (error) {
+      if (error instanceof ObjectNotFoundError) {
+        res.status(404).json({ error: "Uploaded object not found", code: "OBJECT_NOT_FOUND" });
+        return;
+      }
+      req.log.error({ err: error }, "DM image completion failed");
+      res.status(500).json({ error: "Failed to finalize image upload", code: "FINALIZE_FAILED" });
+    }
+  },
+);
 
 router.post(
   "/upload/profile-picture/request-url",
@@ -267,7 +470,7 @@ router.post(
 router.post(
   "/upload/incorporation-cert-pre-signup",
   preSignupRateLimit,
-  upload.single("file"),
+  uploadCertificate.single("file"),
   async (req: Request, res: Response) => {
     if (!req.file) {
       res.status(400).json({ error: "No file provided", code: "MISSING_FILE" });
@@ -275,7 +478,7 @@ router.post(
     }
     try {
       const { buffer, mimetype, originalname, size } = req.file;
-      const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size);
+      const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size, CERTIFICATE_NAMESPACE);
       const fileUrl = `/api/storage${objectPath}`;
       res.status(201).json({
         objectPath,
@@ -292,7 +495,7 @@ router.post(
 router.post(
   "/upload/incorporation-cert",
   requireAuth,
-  upload.single("file"),
+  uploadCertificate.single("file"),
   async (req: Request, res: Response) => {
     const userId = (req as any).userId as string;
 
@@ -303,7 +506,7 @@ router.post(
 
     try {
       const { buffer, mimetype, originalname, size } = req.file;
-      const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size);
+      const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size, CERTIFICATE_NAMESPACE);
       await db.insert(userUploads).values({ userId, objectPath });
       const fileUrl = `/api/storage${objectPath}`;
       res.status(201).json({
@@ -359,13 +562,6 @@ router.post(
       res.status(201).json({ fileUrl, objectPath });
     } catch (error) {
       req.log.error({ err: error }, "DM image upload failed");
-      try {
-        const fileUrl = inlineImageDataUrl(req.file.buffer, req.file.mimetype);
-        res.status(201).json({ fileUrl, objectPath: null, storage: "inline_fallback" });
-        return;
-      } catch (inlineError) {
-        req.log.error({ err: inlineError }, "Inline DM image fallback failed");
-      }
       const classified = classifyStorageUploadError(error);
       if (classified) {
         res.status(classified.status).json({ error: classified.error, code: classified.code });
@@ -423,11 +619,12 @@ router.post(
   },
 );
 
-router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+router.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof MulterError) {
     if (err.code === "LIMIT_FILE_SIZE") {
+      const maxBytes = req.path.includes("incorporation-cert") ? MAX_CERT_FILE_SIZE_BYTES : MAX_FILE_SIZE_BYTES;
       res.status(413).json({
-        error: `File too large. Maximum size is ${MAX_FILE_SIZE_BYTES / (1024 * 1024)}MB`,
+        error: `File too large. Maximum size is ${maxBytes / (1024 * 1024)}MB`,
         code: "FILE_TOO_LARGE",
       });
       return;

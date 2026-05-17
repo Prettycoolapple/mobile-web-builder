@@ -344,6 +344,10 @@ export interface RealestateAgentContact {
   listingUrl: string | null;
 }
 
+export interface RealestateSuburbAgentContact extends RealestateAgentContact {
+  listingAddress: string | null;
+}
+
 /**
  * Parse realestate.co.nz `price-display` strings into a numeric price.
  * Returns null for "Auction", "Negotiation", "Price by negotiation", "POA", "Tender", etc.
@@ -666,6 +670,72 @@ export async function fetchRealestateAgentContactForAddress(
 }
 
 /**
+ * Fallback for users who explicitly still want an agent after the subject
+ * property is not actively listed. Returns a callable agent attached to a
+ * different active listing in the same suburb, not a Project Alpha sales-agent
+ * directory entry.
+ */
+export async function fetchRealestateAgentContactForSuburbListing(
+  freeformAddress: string,
+): Promise<RealestateSuburbAgentContact | null> {
+  const trimmed = freeformAddress.trim();
+  if (!trimmed) return null;
+
+  const suburb = await findSuburbInTextViaIndex(trimmed);
+  if (!suburb) {
+    logger.info({ address: trimmed.slice(0, 80) }, "realestate-api: suburb agent fallback - suburb not found");
+    return null;
+  }
+
+  let listings: RawListing[] = [];
+  try {
+    listings = await fetchRawListingsForSuburbId(suburb.id, 60);
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "realestate-api: suburb agent fallback - listings fetch failed");
+    return null;
+  }
+
+  for (let listing of listings) {
+    const listingAddress =
+      listing.attributes.address?.["full-address"] ??
+      listing.attributes.address?.["display-address"] ??
+      null;
+    if (!listingAddress || addressesLikelyMatch(trimmed, listingAddress)) continue;
+
+    const listingUrl = listing.attributes["website-full-url"] ?? null;
+    let agentIds = listing.relationships?.agents?.data?.map((a) => a.id).filter(Boolean) ?? [];
+    if (agentIds.length === 0) {
+      try {
+        const detail = await fetchJsonWithTimeout<{ data?: RawListing }>(
+          `${PLATFORM_BASE}/listings/${encodeURIComponent(listing.id)}`,
+        );
+        if (detail.data) listing = detail.data;
+        agentIds = listing.relationships?.agents?.data?.map((a) => a.id).filter(Boolean) ?? [];
+      } catch (err) {
+        logger.warn({ err: (err as Error).message, listingId: listing.id }, "realestate-api: suburb agent fallback - listing detail failed");
+      }
+    }
+
+    for (const agentId of agentIds) {
+      try {
+        const agent = await fetchAgentById(agentId);
+        if (!agent?.agentPhone) continue;
+        return {
+          ...agent,
+          listingUrl,
+          listingAddress,
+        };
+      } catch (err) {
+        logger.warn({ err: (err as Error).message, agentId }, "realestate-api: suburb agent fallback - agent fetch failed");
+      }
+    }
+  }
+
+  logger.info({ suburb: suburb.title, address: trimmed.slice(0, 80) }, "realestate-api: suburb agent fallback - no callable agent");
+  return null;
+}
+
+/**
  * When OneRoof has no listing photos, match the property against active
  * realestate.co.nz listings in the same suburb and return image URL(s) from
  * the platform JSON API.
@@ -846,6 +916,30 @@ function extractFloorAreaSqm(text: string): number | null {
   return n;
 }
 
+function htmlToSearchableText(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function extractListingFactAreaSqm(text: string, kind: "land" | "floor"): number | null {
+  if (!text) return null;
+  const label = kind === "land" ? "Land" : "Floor";
+  const re = new RegExp(`${label}\\s*Area\\s*:\\s*(\\d[\\d,]*)\\s*(?:m[Â²2]|sqm|sq\\s*m)`, "i");
+  const match = text.match(re);
+  if (!match) return null;
+  const n = parseInt(match[1].replace(/,/g, ""), 10);
+  const min = kind === "land" ? 50 : 20;
+  const max = kind === "land" ? 1_000_000 : 5_000;
+  if (!Number.isFinite(n) || n < min || n > max) return null;
+  return n;
+}
+
 /**
  * Look for a JSON-LD "floorSize" field anywhere in the fetched HTML.
  * Realestate.co.nz embeds a Residence/SingleFamilyResidence record in many
@@ -877,6 +971,20 @@ interface OgMeta {
   price: number | null;
 }
 
+export function reconcileListingLandArea(
+  apiLandArea: number | null | undefined,
+  pageLandArea: number | null | undefined,
+): { landArea: number | null; landAreaApprox: boolean } {
+  if (apiLandArea != null && pageLandArea != null) {
+    const diff = Math.abs(apiLandArea - pageLandArea);
+    const pct = diff / Math.max(apiLandArea, pageLandArea);
+    if (diff > 10 && pct > 0.05) {
+      return { landArea: pageLandArea, landAreaApprox: true };
+    }
+  }
+  return { landArea: apiLandArea ?? null, landAreaApprox: false };
+}
+
 async function fetchOgMeta(url: string): Promise<OgMeta | null> {
   try {
     const ctrl = new AbortController();
@@ -899,13 +1007,14 @@ async function fetchOgMeta(url: string): Promise<OgMeta | null> {
     const ogTitle = html.match(/<meta property="og:title" content="([^"]+)"/)?.[1] ?? "";
     const ogDesc = html.match(/<meta property="og:description" content="([^"]+)"/)?.[1] ?? "";
     if (!ogTitle && !ogDesc) return null;
+    const bodyText = htmlToSearchableText(html);
     const combined = `${ogTitle} ${ogDesc}`;
     const beds = extractBedsBaths(combined);
     return {
       bedrooms: beds.bedrooms,
       bathrooms: beds.bathrooms,
-      landAreaSqm: extractLandAreaSqm(combined),
-      floorAreaSqm: extractFloorAreaSqm(combined),
+      landAreaSqm: extractListingFactAreaSqm(bodyText, "land") ?? extractLandAreaSqm(combined),
+      floorAreaSqm: extractListingFactAreaSqm(bodyText, "floor") ?? extractFloorAreaSqm(combined),
       floorAreaSqmJsonLd: extractFloorSizeFromJsonLd(html),
       price: parsePriceDisplay(combined),
     };
@@ -930,8 +1039,13 @@ async function fetchOgMeta(url: string): Promise<OgMeta | null> {
  */
 async function annotateApproxFields(listings: ListingResult[]): Promise<ListingResult[]> {
   if (listings.length === 0) return listings;
-  const checks = await Promise.all(
-    listings.map(async (l) => {
+  const checks: ListingResult[] = [];
+  const batchSize = 12;
+
+  for (let i = 0; i < listings.length; i += batchSize) {
+    const batch = listings.slice(i, i + batchSize);
+    const annotated = await Promise.all(
+      batch.map(async (l) => {
       // Always fetch — even when the API gave us no numbers to verify, the og
       // payload is our only source of floor area, which is worth surfacing on
       // the card. (The first-batch annotation budget already accounted for
@@ -944,12 +1058,11 @@ async function annotateApproxFields(listings: ListingResult[]): Promise<ListingR
       const bathroomsApprox =
         l.bathrooms != null && og.bathrooms != null && og.bathrooms !== l.bathrooms;
 
-      let landAreaApprox = false;
-      if (l.landArea != null && og.landAreaSqm != null) {
-        const diff = Math.abs(l.landArea - og.landAreaSqm);
-        const pct = diff / Math.max(l.landArea, og.landAreaSqm);
-        landAreaApprox = diff > 10 && pct > 0.05;
-      }
+      // The public search API can occasionally attach an aggregate or
+      // neighbouring parcel area to a listing card. The listing page's own
+      // metadata is closer to what users see on property portals, so prefer it
+      // for the card while still marking it approximate.
+      const { landArea, landAreaApprox } = reconcileListingLandArea(l.landArea, og.landAreaSqm);
 
       let priceApprox = false;
       if (l.price != null && og.price != null) {
@@ -983,6 +1096,7 @@ async function annotateApproxFields(listings: ListingResult[]): Promise<ListingR
       }
       return {
         ...l,
+        landArea,
         floorArea,
         bedroomsApprox,
         bathroomsApprox,
@@ -990,8 +1104,11 @@ async function annotateApproxFields(listings: ListingResult[]): Promise<ListingR
         priceApprox,
         floorAreaApprox,
       };
-    }),
-  );
+      }),
+    );
+    checks.push(...annotated);
+  }
+
   return checks;
 }
 
@@ -1069,18 +1186,15 @@ export async function searchListingsByName(opts: {
   const negotiation = filtered.filter((l) => l.price == null);
   const ordered = [...priced, ...negotiation];
 
-  // Cross-check the user-facing first batch against the listing's
-  // og:description so we can flag any bed/bath disagreement as approximate.
-  // We only annotate the first batch — those are the listings that get
-  // surfaced as cards immediately; the remainder is paginated lazily and
-  // not worth the extra request burst per search.
-  const firstBatchRaw = ordered.slice(0, firstBatchSize);
-  const firstBatch = await annotateApproxFields(firstBatchRaw).catch(() => firstBatchRaw);
+  // Cross-check listing detail pages before cards are shown. realestate.co.nz's
+  // search API occasionally carries aggregate/header values from package listings.
+  // The report pipeline later reconciles these values against LINZ/council data.
+  const annotatedOrdered = await annotateApproxFields(ordered).catch(() => ordered);
 
   return {
-    firstBatch,
-    remainingListings: ordered.slice(firstBatchSize),
-    totalFound: ordered.length,
+    firstBatch: annotatedOrdered.slice(0, firstBatchSize),
+    remainingListings: annotatedOrdered.slice(firstBatchSize),
+    totalFound: annotatedOrdered.length,
     source: "realestate.co.nz/api",
     suburbResolved: { id: suburb.id, title: suburb.title, fqSlug: suburb.fqSlug },
   };

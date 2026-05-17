@@ -203,6 +203,7 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
         agentAvatarUrl={message.agentAvatarUrl ?? null}
         agentPhone={message.agentPhone}
         propertyAddress={message.propertyAddress ?? ""}
+        matchType={message.agentMatchType}
         onDismiss={() => onAgentDismiss?.(message.id)}
       />
     );

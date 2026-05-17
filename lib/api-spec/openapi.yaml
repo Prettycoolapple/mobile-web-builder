@@ -773,12 +773,195 @@ components:
           type: number
         pricePerSqm:
           type: number
+        typology:
+          type: string
+          enum: [standalone, terrace_townhouse, unit_apartment, unknown]
+        distanceM:
+          type: number
+          nullable: true
+        source:
+          type: string
+          enum: [oneroof_sold, realestate_active_listing, licensed_provider, unknown]
+        relevanceScore:
+          type: number
+        selectionReason:
+          type: string
       required:
         - address
         - saleDate
         - price
         - size
         - pricePerSqm
+    NeighbourhoodSignal:
+      type: object
+      properties:
+        level:
+          type: string
+          enum: [none, low, moderate, high, unknown]
+        count:
+          type: number
+        assessedLots:
+          type: number
+        confidence:
+          type: string
+          enum: [high, medium, low, unknown]
+      required:
+        - level
+        - count
+        - assessedLots
+        - confidence
+    NeighbourhoodContext:
+      type: object
+      properties:
+        assessedLots:
+          type: number
+        radiusM:
+          type: number
+        publicHousingSignal:
+          $ref: "#/components/schemas/NeighbourhoodSignal"
+        terraceHousingSignal:
+          $ref: "#/components/schemas/NeighbourhoodSignal"
+        confidence:
+          type: string
+          enum: [high, medium, low, unknown]
+        marketAdjustment:
+          type: object
+          properties:
+            gdvMultiplier:
+              type: number
+            applied:
+              type: boolean
+            reason:
+              type: string
+              nullable: true
+          required:
+            - gdvMultiplier
+            - applied
+            - reason
+        reasons:
+          type: array
+          items:
+            type: string
+      required:
+        - assessedLots
+        - radiusM
+        - publicHousingSignal
+        - terraceHousingSignal
+        - confidence
+        - marketAdjustment
+        - reasons
+    TransportStopContext:
+      type: object
+      properties:
+        name:
+          type: string
+        mode:
+          type: string
+          enum: [bus, train, ferry, unknown]
+        distanceM:
+          type: number
+        routeCount:
+          type: number
+        serviceIntensity:
+          type: string
+          enum: [frequent, regular, limited, unknown]
+      required:
+        - name
+        - mode
+        - distanceM
+        - routeCount
+        - serviceIntensity
+    TransportContext:
+      type: object
+      properties:
+        publicTransport:
+          type: object
+          properties:
+            accessTier:
+              type: string
+              enum: [excellent, good, limited, poor, unknown]
+            nearestStop:
+              allOf:
+                - $ref: "#/components/schemas/TransportStopContext"
+              nullable: true
+            nearestByMode:
+              type: array
+              items:
+                $ref: "#/components/schemas/TransportStopContext"
+            confidence:
+              type: string
+              enum: [high, medium, low, unknown]
+          required:
+            - accessTier
+            - nearestStop
+            - nearestByMode
+            - confidence
+        highwayAccess:
+          type: object
+          properties:
+            name:
+              type: string
+              nullable: true
+            distanceM:
+              type: number
+              nullable: true
+            accessTier:
+              type: string
+              enum: [excellent, good, neutral, remote, exposureRisk, unknown]
+            exposureTier:
+              type: string
+              enum: [low, moderate, high, unknown]
+            confidence:
+              type: string
+              enum: [high, medium, low, unknown]
+          required:
+            - name
+            - distanceM
+            - accessTier
+            - exposureTier
+            - confidence
+        cityCommute:
+          type: object
+          properties:
+            centreName:
+              type: string
+              nullable: true
+            distanceKm:
+              type: number
+              nullable: true
+            convenienceTier:
+              type: string
+              enum: [excellent, good, limited, poor, unknown]
+            confidence:
+              type: string
+              enum: [high, medium, low, unknown]
+          required:
+            - centreName
+            - distanceKm
+            - convenienceTier
+            - confidence
+        roiInfluence:
+          type: object
+          properties:
+            influence:
+              type: string
+              enum: [positive, neutral, negative, mixed]
+            reasons:
+              type: array
+              items:
+                type: string
+            numericAdjustmentApplied:
+              type: boolean
+              enum: [false]
+          required:
+            - influence
+            - reasons
+            - numericAdjustmentApplied
+      required:
+        - publicTransport
+        - highwayAccess
+        - cityCommute
+        - roiInfluence
     FeasibilityReport:
       type: object
       properties:
@@ -814,6 +997,12 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ComparableSale"
+        neighbourhoodContext:
+          $ref: "#/components/schemas/NeighbourhoodContext"
+          nullable: true
+        transportContext:
+          $ref: "#/components/schemas/TransportContext"
+          nullable: true
         avgPricePerSqm:
           type: number
         riskSummary:

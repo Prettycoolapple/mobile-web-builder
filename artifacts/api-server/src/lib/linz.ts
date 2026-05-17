@@ -29,6 +29,10 @@ export interface LinzParcel {
   bbox: ParcelBbox | null;
 }
 
+export interface LinzParcelNearby extends LinzParcel {
+  distance_m: number | null;
+}
+
 function extractBbox(geometry: { type: string; coordinates: unknown } | null | undefined): ParcelBbox | null {
   if (!geometry) return null;
   let coords: [number, number][] = [];
@@ -293,6 +297,101 @@ export async function fetchLINZParcel(lat: number, lng: number): Promise<LinzPar
   }
 
   logger.warn({ lat, lng }, "LINZ parcel: all CQL formats exhausted with no result");
+  return null;
+}
+
+function latLngBBox(lat: number, lng: number, radiusM: number): { minLat: number; minLng: number; maxLat: number; maxLng: number } {
+  const latDelta = radiusM / 111_320;
+  const lngDelta = radiusM / (111_320 * Math.max(0.25, Math.cos((lat * Math.PI) / 180)));
+  return {
+    minLat: lat - latDelta,
+    maxLat: lat + latDelta,
+    minLng: lng - lngDelta,
+    maxLng: lng + lngDelta,
+  };
+}
+
+function parcelCentroid(parcel: LinzParcel): { lat: number; lng: number } | null {
+  const coords = parcel.bbox?.polygon;
+  if (coords && coords.length > 0) {
+    const usable = coords.length > 1 && coords[0][0] === coords[coords.length - 1][0] && coords[0][1] === coords[coords.length - 1][1]
+      ? coords.slice(0, -1)
+      : coords;
+    const sum = usable.reduce((acc, c) => ({ lng: acc.lng + c[0], lat: acc.lat + c[1] }), { lat: 0, lng: 0 });
+    return { lat: sum.lat / usable.length, lng: sum.lng / usable.length };
+  }
+  const bbox = parcel.bbox;
+  if (!bbox) return null;
+  return {
+    lat: (bbox.minLat + bbox.maxLat) / 2,
+    lng: (bbox.minLng + bbox.maxLng) / 2,
+  };
+}
+
+function distanceMeters(aLat: number, aLng: number, bLat: number, bLng: number): number {
+  const r = 6_371_000;
+  const phi1 = (aLat * Math.PI) / 180;
+  const phi2 = (bLat * Math.PI) / 180;
+  const dPhi = ((bLat - aLat) * Math.PI) / 180;
+  const dLambda = ((bLng - aLng) * Math.PI) / 180;
+  const h = Math.sin(dPhi / 2) ** 2 + Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLambda / 2) ** 2;
+  return Math.round(2 * r * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h)));
+}
+
+function parseLinzParcel(props: Record<string, unknown>, lat: number, lng: number): LinzParcelNearby {
+  const geometry = props["_geometry"] as { type: string; coordinates: unknown } | null | undefined;
+  const bbox = extractBbox(geometry);
+  const calcArea = props["calc_area"] ?? props["survey_area"] ?? null;
+  const areaSqm = calcArea != null ? Math.round(Number(calcArea)) : null;
+  const titlesRaw = props["titles"] ?? props["title_no"];
+  const titleNo = titlesRaw ? String(titlesRaw).split(",")[0].trim() : null;
+  const parcel: LinzParcel = {
+    parcel_id: String(props["_id"] ?? props["id"] ?? ""),
+    appellation: (props["appellation"] as string) ?? null,
+    area_sqm: areaSqm && areaSqm > 0 ? areaSqm : null,
+    title_no: titleNo,
+    legal_description: (props["appellation"] as string) ?? null,
+    topology_type: (props["topology_type"] as string) ?? null,
+    bbox,
+  };
+  const centroid = parcelCentroid(parcel);
+  return {
+    ...parcel,
+    distance_m: centroid ? distanceMeters(lat, lng, centroid.lat, centroid.lng) : null,
+  };
+}
+
+export async function fetchLINZParcelsNear(lat: number, lng: number, radiusM = 120, count = 30): Promise<LinzParcelNearby[] | null> {
+  const key = getKey();
+  if (!key) {
+    logger.warn("LINZ_API_KEY not set — skipping nearby parcel lookup");
+    return null;
+  }
+
+  const box = latLngBBox(lat, lng, radiusM);
+  const cqlFormats = [
+    `BBOX(shape,${box.minLng},${box.minLat},${box.maxLng},${box.maxLat},'EPSG:4326')`,
+    `BBOX(shape,${box.minLng},${box.minLat},${box.maxLng},${box.maxLat})`,
+  ];
+
+  for (const cql of cqlFormats) {
+    try {
+      let features = await queryLinzLayer(LAYER_PRIMARY_PARCELS, cql, key, 12000, count);
+      if (features === null) {
+        logger.debug({ cql }, "LINZ nearby parcels REST failed — trying WFS");
+        features = await queryLinzLayerWFS(LAYER_PRIMARY_PARCELS, cql, key, 12000, count);
+      }
+      if (features === null) continue;
+      return features
+        .map((props) => parseLinzParcel(props, lat, lng))
+        .filter((parcel) => parcel.distance_m == null || parcel.distance_m <= radiusM * 1.35)
+        .sort((a, b) => (a.distance_m ?? Number.MAX_SAFE_INTEGER) - (b.distance_m ?? Number.MAX_SAFE_INTEGER));
+    } catch (err) {
+      logger.warn({ err: (err as Error).message, cql }, "LINZ nearby parcels fetch attempt failed");
+    }
+  }
+
+  logger.warn({ lat, lng, radiusM }, "LINZ nearby parcels: all CQL formats exhausted");
   return null;
 }
 

@@ -24,6 +24,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
+import * as FileSystem from "expo-file-system/legacy";
 
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
@@ -80,6 +81,34 @@ function resolveDmStoredImageUri(imageUrl: string): string {
   if (/^(https?:|data:|file:|blob:)/i.test(imageUrl)) return imageUrl;
   const path = imageUrl.startsWith("/") ? imageUrl : `/${imageUrl}`;
   return resolveAppUrl(path);
+}
+
+async function readJsonResponse(resp: Response): Promise<unknown> {
+  const text = await resp.text();
+  const trimmed = text.trim();
+  if (!trimmed) return {};
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    const preview = trimmed.replace(/\s+/g, " ").slice(0, 160);
+    throw new Error(`Server returned non-JSON (${resp.status}): ${preview}`);
+  }
+}
+
+function normalizeImageContentType(mimeType: string | null | undefined): string {
+  const normalized = mimeType?.split(";")[0]?.trim().toLowerCase();
+  if (!normalized) return "image/jpeg";
+  if (normalized === "image/jpg") return "image/jpeg";
+  return normalized;
+}
+
+interface SignedDmUploadResponse {
+  uploadURL: string;
+  objectPath: string;
+  fileUrl: string;
+  requiredHeaders?: {
+    "Content-Type"?: string;
+  };
 }
 
 interface MessageItem {
@@ -400,39 +429,116 @@ export default function ChatScreen() {
     const asset = result.assets[0];
     setUploadingImage(true);
     try {
-      const form = new FormData();
       const filename = asset.fileName ?? `photo_${Date.now()}.jpg`;
-      const mimeType = asset.mimeType ?? "image/jpeg";
+      const mimeType = normalizeImageContentType(asset.mimeType);
+
+      const uploadWithMultipart = async (): Promise<string | undefined> => {
+        const form = new FormData();
+        if (Platform.OS === "web") {
+          const resp = await fetch(asset.uri);
+          const blob = await resp.blob();
+          form.append("file", blob, filename);
+        } else {
+          const rnFile: { uri: string; name: string; type: string } = { uri: asset.uri, name: filename, type: mimeType };
+          (form as unknown as { append(k: string, v: { uri: string; name: string; type: string }): void }).append("file", rnFile);
+        }
+        const uploadResp = await fetch(`${getApiBase()}/upload/dm-image`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+          body: form,
+        });
+        const uploadJson = (await readJsonResponse(uploadResp)) as { fileUrl?: string; error?: string };
+        if (!uploadResp.ok) {
+          throw new Error(uploadJson.error ?? t("dm.error.image_upload_failed"));
+        }
+        return uploadJson.fileUrl;
+      };
+
+      const uploadWithSignedUrl = async (): Promise<string | undefined> => {
+        const info = await FileSystem.getInfoAsync(asset.uri);
+        if (!info.exists || info.isDirectory || !info.size) {
+          throw new Error("Could not read local image file");
+        }
+
+        const signResp = await fetch(`${getApiBase()}/upload/dm-image/request-url`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            name: filename,
+            size: info.size,
+            contentType: mimeType,
+          }),
+        });
+        const signJson = (await readJsonResponse(signResp)) as SignedDmUploadResponse & { error?: string; code?: string };
+        if (!signResp.ok) {
+          const err = new Error(signJson.error ?? t("dm.error.image_upload_failed"));
+          (err as Error & { code?: string }).code = signJson.code;
+          throw err;
+        }
+
+        const signedContentType = signJson.requiredHeaders?.["Content-Type"] ?? mimeType;
+        const uploadResult = await FileSystem.uploadAsync(signJson.uploadURL, asset.uri, {
+          httpMethod: "PUT",
+          uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+          sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
+          headers: {
+            "Content-Type": signedContentType,
+          },
+        });
+        if (uploadResult.status < 200 || uploadResult.status >= 300) {
+          throw new Error(t("dm.error.image_upload_failed"));
+        }
+
+        const completeResp = await fetch(`${getApiBase()}/upload/dm-image/complete`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ objectPath: signJson.objectPath }),
+        });
+        const completeJson = (await readJsonResponse(completeResp)) as { fileUrl?: string; error?: string };
+        if (!completeResp.ok) {
+          throw new Error(completeJson.error ?? t("dm.error.image_upload_failed"));
+        }
+        return completeJson.fileUrl ?? signJson.fileUrl;
+      };
+
+      let fileUrl: string | undefined;
       if (Platform.OS === "web") {
-        const resp = await fetch(asset.uri);
-        const blob = await resp.blob();
-        form.append("file", blob, filename);
+        fileUrl = await uploadWithMultipart();
       } else {
-        const rnFile: { uri: string; name: string; type: string } = { uri: asset.uri, name: filename, type: mimeType };
-        (form as unknown as { append(k: string, v: { uri: string; name: string; type: string }): void }).append("file", rnFile);
+        try {
+          fileUrl = await uploadWithSignedUrl();
+        } catch (signedError) {
+          const code = (signedError as Error & { code?: string }).code;
+          if (code === "INVALID_FILE_TYPE" || code === "INVALID_SIZE" || code === "INVALID_NAME") {
+            throw signedError;
+          }
+          fileUrl = await uploadWithMultipart();
+        }
       }
-      const uploadResp = await fetch(`${getApiBase()}/upload/dm-image`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        body: form,
-      });
-      if (!uploadResp.ok) {
-        const errJson = (await uploadResp.json().catch(() => ({}))) as { error?: string };
-        Alert.alert(t("common.error"), errJson.error ?? t("dm.error.image_upload_failed"));
-        return;
-      }
-      const { fileUrl } = await uploadResp.json() as { fileUrl?: string };
       if (!fileUrl) {
         Alert.alert(t("common.error"), t("dm.error.image_upload_failed"));
         return;
       }
+      if (fileUrl.startsWith("data:")) {
+        Alert.alert(t("common.error"), t("dm.error.image_upload_failed"));
+        return;
+      }
       await sendMessage(undefined, fileUrl);
-    } catch {
-      Alert.alert(t("common.error"), t("dm.error.image_upload_failed"));
+    } catch (error) {
+      Alert.alert(
+        t("common.error"),
+        error instanceof Error && error.message ? error.message : t("dm.error.image_upload_failed"),
+      );
     } finally {
       setUploadingImage(false);
     }
-  }, [token, uploadingImage, sendMessage, blockStatus.messagingBlocked]);
+  }, [token, uploadingImage, sendMessage, blockStatus.messagingBlocked, t]);
 
   const submitBlock = useCallback(async () => {
     if (!token || !otherUserId) return;

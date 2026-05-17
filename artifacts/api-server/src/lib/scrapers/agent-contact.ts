@@ -2,11 +2,13 @@
 import { logger } from "../logger";
 import { launchBrowser, newStealthPage, randomDelay, logScrapeAttempt, isVercelServerless } from "./browser";
 import { fetchWithScrapingBee } from "./scrapingbee";
-import { fetchRealestateAgentContactForAddress } from "./realestate-api";
+import { fetchRealestateAgentContactForAddress, fetchRealestateAgentContactForSuburbListing } from "./realestate-api";
 
 export interface AgentContactResult {
   found: boolean;
   isListed: boolean;
+  matchType: "subject" | "suburb" | null;
+  listingAddress: string | null;
   agentName: string | null;
   agentPhone: string | null;
   agencyName: string | null;
@@ -16,7 +18,7 @@ export interface AgentContactResult {
 }
 
 function emptyResult(): AgentContactResult {
-  return { found: false, isListed: false, agentName: null, agentPhone: null, agencyName: null, agentAvatarUrl: null, listingUrl: null, source: null };
+  return { found: false, isListed: false, matchType: null, listingAddress: null, agentName: null, agentPhone: null, agencyName: null, agentAvatarUrl: null, listingUrl: null, source: null };
 }
 
 function normalisePhone(raw: string): string {
@@ -137,6 +139,7 @@ async function scrapeAgentViaPlaywright(address: string): Promise<AgentContactRe
 
     result.found = true;
     result.isListed = true;
+    result.matchType = "subject";
     result.listingUrl = propertyUrl;
 
     const parsed = parseAgent(pageText);
@@ -173,7 +176,7 @@ async function scrapeAgentViaBee(address: string): Promise<AgentContactResult | 
 
   const isForSale = /for[\s\-]?sale|asking price|enquire now|price on application|POA/i.test(pageText);
   if (!isForSale) {
-    return { found: true, isListed: false, agentName: null, agentPhone: null, agencyName: null, agentAvatarUrl: null, listingUrl: propertyUrl, source: null };
+    return { found: true, isListed: false, matchType: null, listingAddress: null, agentName: null, agentPhone: null, agencyName: null, agentAvatarUrl: null, listingUrl: propertyUrl, source: null };
   }
 
   const parsed = parseAgent(pageText);
@@ -182,6 +185,8 @@ async function scrapeAgentViaBee(address: string): Promise<AgentContactResult | 
   return {
     found: true,
     isListed: true,
+    matchType: "subject",
+    listingAddress: null,
     agentName: parsed.agentName,
     agentPhone: parsed.agentPhone,
     agencyName: parsed.agencyName,
@@ -191,7 +196,10 @@ async function scrapeAgentViaBee(address: string): Promise<AgentContactResult | 
   };
 }
 
-export async function scrapeListingAgent(address: string): Promise<AgentContactResult> {
+export async function scrapeListingAgent(
+  address: string,
+  options: { allowSuburbFallback?: boolean } = {},
+): Promise<AgentContactResult> {
   try {
     const realestateAgent = await fetchRealestateAgentContactForAddress(address);
     if (realestateAgent?.agentPhone) {
@@ -199,6 +207,8 @@ export async function scrapeListingAgent(address: string): Promise<AgentContactR
       return {
         found: true,
         isListed: true,
+        matchType: "subject",
+        listingAddress: null,
         agentName: realestateAgent.agentName,
         agentPhone: realestateAgent.agentPhone,
         agencyName: realestateAgent.agencyName,
@@ -209,6 +219,29 @@ export async function scrapeListingAgent(address: string): Promise<AgentContactR
     }
   } catch (err) {
     logScrapeAttempt("AgentContact", "realestate-api", false, String(err));
+  }
+
+  if (options.allowSuburbFallback) {
+    try {
+      const suburbAgent = await fetchRealestateAgentContactForSuburbListing(address);
+      if (suburbAgent?.agentPhone) {
+        logScrapeAttempt("AgentContact", "realestate-api-suburb", true, `agent=${suburbAgent.agentName ?? "found"}`);
+        return {
+          found: true,
+          isListed: true,
+          matchType: "suburb",
+          listingAddress: suburbAgent.listingAddress,
+          agentName: suburbAgent.agentName,
+          agentPhone: suburbAgent.agentPhone,
+          agencyName: suburbAgent.agencyName,
+          agentAvatarUrl: suburbAgent.agentAvatarUrl,
+          listingUrl: suburbAgent.listingUrl,
+          source: "realestate-api-suburb",
+        };
+      }
+    } catch (err) {
+      logScrapeAttempt("AgentContact", "realestate-api-suburb", false, String(err));
+    }
   }
 
   if (isVercelServerless()) {

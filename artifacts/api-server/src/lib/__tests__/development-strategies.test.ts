@@ -6,6 +6,7 @@ import {
 import type { CostBreakdown } from "../cost-estimator";
 import type { LotResult } from "../lot-calculator";
 import type { MergedPropertyData } from "../scrapers/merge";
+import type { NeighbourhoodContext } from "../neighbourhood-context";
 
 function merged(overrides: Partial<MergedPropertyData> = {}): MergedPropertyData {
   return {
@@ -202,5 +203,48 @@ describe("development strategies", () => {
     expect(rebuild?.recommendation).toBe("recommended");
     expect(rebuild?.title).toBe("Build new dwelling(s)");
     expect(rebuild?.costItems.some((item) => item.label === "Demolition")).toBe(false);
+  });
+
+  it("does not double-apply the generic typology discount when terrace comparables are matched", () => {
+    const fourLotResult: LotResult = {
+      ...lotResult,
+      lots: 4,
+      min_lot_size: 320,
+      zone_label: "Mixed Housing Urban",
+      sqm_per_lot: 185,
+    };
+    const assessment = buildFallbackDevelopmentStrategyAssessment(
+      merged({ build_year: 1960, zone_code: "MHU", min_lot_size_sqm: 320 }),
+      fourLotResult,
+    );
+    const context: NeighbourhoodContext = {
+      assessedLots: 7,
+      radiusM: 90,
+      publicHousingSignal: { level: "none", count: 0, assessedLots: 7, confidence: "high" },
+      terraceHousingSignal: { level: "high", count: 4, assessedLots: 7, confidence: "medium" },
+      confidence: "high",
+      marketAdjustment: { gdvMultiplier: 0.97, applied: true, reason: "Local public-housing concentration detected with medium confidence; GDV adjusted by 3% to reflect buyer-perception risk." },
+      reasons: [],
+    };
+    const strategies = calculateDevelopmentStrategies({
+      data: merged({ build_year: 1960, zone_code: "MHU", min_lot_size_sqm: 320 }),
+      baseCosts: { ...baseCosts, units: 4, total_low: 3_000_000, total_high: 3_500_000 },
+      lotResult: fourLotResult,
+      avgSalePrice: 1_050_000,
+      avgPricePerSqm: 8_000,
+      interestRateOutlook: "stable",
+      assessment,
+      gdvTypologyMultiplier: 1,
+      marketGdvMultiplier: 0.97,
+      typologyMatchedComparables: true,
+      neighbourhoodContext: context,
+    });
+
+    const rebuild = strategies.find((strategy) => strategy.id === "demolish_rebuild");
+    const scenario = rebuild?.roiScenarios[0];
+
+    expect(scenario?.gdv_per_lot).toBe(792_000);
+    expect(rebuild?.assumptions.some((a) => /no generic standalone-house typology discount/i.test(a))).toBe(true);
+    expect(rebuild?.assumptions.some((a) => /buyer-perception risk/i.test(a))).toBe(true);
   });
 });

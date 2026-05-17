@@ -21,6 +21,32 @@ export interface Message {
 
 export type ChatMode = "analyse" | "discover" | "followup";
 
+export function sanitizeAssistantProse(content: string, locale: Locale = "en"): string {
+  let out = content;
+
+  // Keep conversational replies out of code/JSON territory. The report JSON is
+  // still returned untouched in analyse mode; this is only for plain chat text.
+  out = out.replace(/```[\s\S]*?```/g, (block) => {
+    const body = block.replace(/^```[a-zA-Z0-9_-]*\s*/, "").replace(/```\s*$/, "").trim();
+    return body.startsWith("{") || body.startsWith("[") ? "" : body;
+  });
+  out = out.replace(/`([^`]+)`/g, "$1");
+  out = out.replace(/\(\s*(?:isOnMarket|isListed|listingPrice|agentName|agentPhone|agencyName|found|source|listingUrl)\s*:\s*(?:true|false|null|undefined|"[^"]*"|'[^']*'|[^)\s,，。;；]+)\s*\)/gi, "");
+  out = out.replace(/\b(?:isOnMarket|isListed|listingPrice|agentName|agentPhone|agencyName|found|source|listingUrl)\s*:\s*(?:true|false|null|undefined|"[^"]*"|'[^']*'|[^\s,，。;；)]+)/gi, "");
+  out = out.replace(/\{\s*(?:isOnMarket|isListed|listingPrice|agentName|agentPhone|agencyName|found|source|listingUrl)[^{}]*\}/gi, "");
+  out = out.replace(/\n{3,}/g, "\n\n").replace(/[ \t]{2,}/g, " ").replace(/\s+([,，。.;；])/g, "$1").trim();
+
+  if (locale === "zh") {
+    out = out.replace(/如果您希望出售或评估该房产[，,]\s*/g, "");
+    out = out.replace(/我可以为您联系\s*Project Alpha\s*网络内的大奥克兰地区房地产中介。?/g, "");
+    out = out.replace(/您需要我为您介绍一位熟悉[^？?]*的销售代理吗[？?]?/g, "");
+  } else {
+    out = out.replace(/I can (?:connect|introduce|refer) you (?:with|to) (?:a )?(?:Project Alpha )?(?:network )?(?:sales|real estate|listing) agent[^.?!]*[.?!]?/gi, "");
+  }
+
+  return out.replace(/\n{3,}/g, "\n\n").trim();
+}
+
 /** User is browsing listings / market availability (not asking for a single-title feasibility report). */
 export function isListingBrowseIntent(message: string): boolean {
   if (
@@ -732,7 +758,9 @@ export async function generateUnifiedResponse(
     if (bedrooms)     sections.push(`  Bedrooms: ${bedrooms}`);
     if (bathrooms)    sections.push(`  Bathrooms: ${bathrooms}`);
     if (listingPrice) sections.push(`  Listing price: ${listingPrice}`);
-    if (isOnMarket != null) sections.push(`  Currently listed for sale: ${isOnMarket}`);
+    if (isOnMarket != null) {
+      sections.push(`  Sale listing status: ${isOnMarket ? "currently listed for sale" : "not currently on the market"}`);
+    }
     if (discrepancies.length > 0) {
       sections.push(`  Source reconciliation notes (live listing overrode council/QV — quote these if asked why a value differs from public records):`);
       for (const note of discrepancies) sections.push(`    • ${note}`);
@@ -1149,7 +1177,7 @@ export async function generateChatReply(
         { role: "user", parts: [{ text: message }] },
       ],
     });
-    return response.text ?? "";
+    return sanitizeAssistantProse(response.text ?? "", locale);
   } catch (error) {
     logger.error({ error }, "Failed to generate chat reply");
     throw error;

@@ -1,4 +1,5 @@
 import type { ComparableSale as ScrapedComparable } from "./scrapers/oneroof";
+import { inferComparableTypology, type ComparableSource, type ComparableTypology } from "./market-comparables";
 
 export interface ComparableSale {
   address: string;
@@ -11,6 +12,11 @@ export interface ComparableSale {
   cv_nzd: number | null;
   /** Build year from AC GIS or scraper — null if unavailable */
   build_year: number | null;
+  typology?: ComparableTypology;
+  distanceM?: number | null;
+  source?: ComparableSource;
+  relevanceScore?: number;
+  selectionReason?: string;
 }
 
 export interface ComparablesResult {
@@ -36,7 +42,7 @@ export function addressKeyForDedupe(address: string): string {
   return address.toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 48);
 }
 
-function mapScrapedToComparable(c: ScrapedComparable): ComparableSale {
+function mapScrapedToComparable(c: ScrapedComparable, source: ComparableSource): ComparableSale {
   const landSqm = finiteNumber(c.land_area_sqm);
   const floorSqm = finiteNumber(c.floor_sqm);
   const priceNzd = finiteNumber(c.price_nzd);
@@ -50,6 +56,8 @@ function mapScrapedToComparable(c: ScrapedComparable): ComparableSale {
     price_per_sqm: priceNzd > 0 && floorSqm > 0 ? Math.round(priceNzd / floorSqm) : 0,
     cv_nzd: null,
     build_year: null,
+    typology: inferComparableTypology({ address: addr, land_sqm: landSqm, floor_sqm: floorSqm, bedrooms: c.bedrooms ?? null }),
+    source,
   };
 }
 
@@ -70,23 +78,27 @@ export function getComparables(
   const supplement = supplementComparables ?? [];
 
   const oneroofPassing = oneroof
-    .map(mapScrapedToComparable)
+    .map((c) => mapScrapedToComparable(c, "oneroof_sold"))
     .filter((sale) => sale.price_nzd > 100_000 && hasRealAddress(sale.address));
   const oneroofSufficient = oneroofPassing.length >= 3;
 
   const seen = new Set<string>();
-  const merged: ScrapedComparable[] = [];
-  for (const c of [...oneroof, ...supplement]) {
+  const merged: Array<{ comparable: ScrapedComparable; source: ComparableSource }> = [];
+  for (const item of [
+    ...oneroof.map((comparable) => ({ comparable, source: "oneroof_sold" as const })),
+    ...supplement.map((comparable) => ({ comparable, source: "realestate_active_listing" as const })),
+  ]) {
+    const c = item.comparable;
     const addr = typeof c.address === "string" ? c.address.trim() : "";
     if (!addr) continue;
     const k = addressKeyForDedupe(addr);
     if (seen.has(k)) continue;
     seen.add(k);
-    merged.push(c);
+    merged.push(item);
   }
 
   const liveSales: ComparableSale[] = merged
-    .map(mapScrapedToComparable)
+    .map((item) => mapScrapedToComparable(item.comparable, item.source))
     .filter((sale) => sale.price_nzd > 100_000 && hasRealAddress(sale.address))
     .slice(0, 8);
 

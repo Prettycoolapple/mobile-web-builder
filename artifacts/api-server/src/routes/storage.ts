@@ -6,6 +6,7 @@ import { db, userUploads, profiles, dmMessages, dmThreads } from "@workspace/db"
 import { RequestUploadUrlBody, RequestUploadUrlResponse } from "@workspace/api-zod";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage";
 import { requireAuth } from "../lib/auth";
+import { verifyStorageReviewToken } from "../lib/storage-review-token";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
@@ -71,7 +72,9 @@ router.get("/storage/objects/*path", requireAuth, async (req: Request, res: Resp
   try {
     const raw = req.params.path;
     const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
-    const objectPath = `/objects/${wildcardPath}`;
+    const objectPath = wildcardPath.startsWith("objects/")
+      ? `/${wildcardPath}`
+      : `/objects/${wildcardPath}`;
 
     const [ownerRecord] = await db
       .select({ userId: userUploads.userId })
@@ -141,6 +144,49 @@ router.get("/storage/objects/*path", requireAuth, async (req: Request, res: Resp
     }
     req.log.error({ err: error }, "Error serving object");
     res.status(500).json({ error: "Failed to serve object" });
+  }
+});
+
+router.get("/storage/review/*path", async (req: Request, res: Response) => {
+  try {
+    const raw = req.params.path;
+    const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
+    const objectPath = `/objects/${wildcardPath}`;
+    const token = typeof req.query.token === "string" ? req.query.token : undefined;
+
+    if (!verifyStorageReviewToken(token, objectPath)) {
+      res.status(403).json({ error: "Access denied", code: "FORBIDDEN" });
+      return;
+    }
+
+    if (objectStorageService.isLocal) {
+      const { stream, contentType, size } = objectStorageService.readLocalFile(objectPath);
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Cache-Control", "private, max-age=300");
+      if (size) res.setHeader("Content-Length", String(size));
+      stream.pipe(res);
+      return;
+    }
+
+    const objectFile = await objectStorageService.getObjectEntityFile(objectPath);
+    const response = await objectStorageService.downloadObject(objectFile, 300);
+
+    res.status(response.status);
+    response.headers.forEach((value, key) => res.setHeader(key, value));
+
+    if (response.body) {
+      const nodeStream = Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>);
+      nodeStream.pipe(res);
+    } else {
+      res.end();
+    }
+  } catch (error) {
+    if (error instanceof ObjectNotFoundError) {
+      res.status(404).json({ error: "Object not found", code: "OBJECT_NOT_FOUND" });
+      return;
+    }
+    req.log.error({ err: error }, "Error serving review object");
+    res.status(500).json({ error: "Failed to serve object", code: "OBJECT_SERVE_FAILED" });
   }
 });
 

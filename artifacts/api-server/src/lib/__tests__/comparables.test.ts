@@ -45,6 +45,8 @@ describe("getComparables", () => {
         price_per_sqm: 0,
         cv_nzd: null,
         build_year: null,
+        typology: "standalone",
+        source: "oneroof_sold",
       },
     ]);
   });

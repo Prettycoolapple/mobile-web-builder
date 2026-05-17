@@ -352,6 +352,33 @@ export async function translateReportNarrative(
     out.riskSummary = await translateReportZhStringArray(pre, osChinese);
   }
 
+  // neighbourhoodContext: aggregate market-context prose shown in the ROI section.
+  if (out.neighbourhoodContext && typeof out.neighbourhoodContext === "object") {
+    const context = { ...(out.neighbourhoodContext as Record<string, unknown>) };
+    if (context.marketAdjustment && typeof context.marketAdjustment === "object") {
+      const marketAdjustment = { ...(context.marketAdjustment as Record<string, unknown>) };
+      marketAdjustment.reason = await translateIfString(marketAdjustment.reason);
+      context.marketAdjustment = marketAdjustment;
+    }
+    if (Array.isArray(context.reasons)) {
+      context.reasons = await translateReportZhStringArray(context.reasons, osChinese);
+    }
+    out.neighbourhoodContext = context;
+  }
+
+  // transportContext: commute/highway/public-transport prose shown in the ROI section.
+  if (out.transportContext && typeof out.transportContext === "object") {
+    const context = { ...(out.transportContext as Record<string, unknown>) };
+    if (context.roiInfluence && typeof context.roiInfluence === "object") {
+      const roiInfluence = { ...(context.roiInfluence as Record<string, unknown>) };
+      if (Array.isArray(roiInfluence.reasons)) {
+        roiInfluence.reasons = await translateReportZhStringArray(roiInfluence.reasons, osChinese);
+      }
+      context.roiInfluence = roiInfluence;
+    }
+    out.transportContext = context;
+  }
+
   // disclaimer
   if ("disclaimer" in out) {
     out.disclaimer = await translateIfString(out.disclaimer);

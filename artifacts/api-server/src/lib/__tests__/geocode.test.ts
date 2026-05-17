@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { tryGeocodeAddress } from "../geocode";
+import { normaliseNzAddressForGeocode, tryGeocodeAddress } from "../geocode";
 
 describe("geocode address selection", () => {
   const originalGoogleKey = process.env.GOOGLE_MAPS_API_KEY;
@@ -73,5 +73,12 @@ describe("geocode address selection", () => {
     await expect(tryGeocodeAddress("8A Hampton Drive, St Heliers")).resolves.toMatchObject({
       formatted: "8A Hampton Drive, St Heliers, Auckland 1071, New Zealand",
     });
+  });
+});
+
+describe("normaliseNzAddressForGeocode", () => {
+  it("cleans realestate.co.nz address punctuation and Auckland City admin labels", () => {
+    expect(normaliseNzAddressForGeocode("9 Rukutai Street , Orakei, Auckland City, Auckland"))
+      .toBe("9 Rukutai Street, Orakei, Auckland");
   });
 });

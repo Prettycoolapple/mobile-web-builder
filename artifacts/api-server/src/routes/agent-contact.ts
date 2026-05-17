@@ -78,6 +78,27 @@ Reply with ONLY valid JSON (no markdown):
   }
 }
 
+function allowsSameSuburbAgentFallback(messages: Message[]): boolean {
+  const latestUser = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
+  const recentAssistantText = messages
+    .slice(-8)
+    .filter((m) => m.role === "assistant")
+    .map((m) => m.content)
+    .join(" ")
+    .toLowerCase();
+  const latestLower = latestUser.toLowerCase();
+
+  const wasToldSubjectHasNoAgent =
+    /not currently on market|not on the market|not actively listed|no active listing|couldn't find a direct listing agent|could not find a direct listing agent/i.test(recentAssistantText) ||
+    /未挂牌|未掛牌|没有活跃|沒有活躍|没有找到.*中介|沒有找到.*中介|没有.*挂牌中介|沒有.*掛牌中介/i.test(recentAssistantText);
+
+  const asksForFallback =
+    /still|any agent|another agent|other agent|nearby|same suburb|same area|local agent|someone else/i.test(latestLower) ||
+    /还是|仍然|也行|可以|随便|其他|别的|附近|同区|同一.*区|当地|本地.*中介|中介.*也可以/i.test(latestUser);
+
+  return wasToldSubjectHasNoAgent && asksForFallback;
+}
+
 router.post("/agent-contact/lookup", requireAuth, async (req: Request, res: Response) => {
   const userId = (req as any).userId as string;
 
@@ -109,12 +130,15 @@ router.post("/agent-contact/lookup", requireAuth, async (req: Request, res: Resp
       return;
     }
 
-    const agentInfo = await scrapeListingAgent(address);
+    const allowSuburbFallback = allowsSameSuburbAgentFallback(messages ?? []);
+    const agentInfo = await scrapeListingAgent(address, { allowSuburbFallback });
 
     res.json({
       wantsAgentContact: true,
       found: agentInfo.found,
       isListed: agentInfo.isListed,
+      matchType: agentInfo.matchType,
+      listingAddress: agentInfo.listingAddress,
       agentName: agentInfo.agentName,
       agentPhone: agentInfo.agentPhone,
       agencyName: agentInfo.agencyName,

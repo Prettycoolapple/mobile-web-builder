@@ -13,6 +13,9 @@ export default function Index() {
   if (isLoading) return null;
 
   if (user) {
+    if (user.role === "service_provider" && user.subscriptionTier === "free") {
+      return <Redirect href="/(onboarding)/service-provider-welcome" />;
+    }
     return <Redirect href="/(tabs)" />;
   }
 

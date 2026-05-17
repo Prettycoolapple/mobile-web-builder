@@ -148,6 +148,8 @@ type SignupNotifyProvider = {
   contactNumber?: string | null;
   primaryLanguage?: string | null;
   addressCity?: string | null;
+  incorporationCertUrl?: string | null;
+  incorporationCertReviewUrl?: string | null;
 };
 
 /** Fire-and-forget owner alert for any successful self-serve signup (SMTP must be configured). */
@@ -196,6 +198,8 @@ export function sendNewUserSignupNotification(args: {
       `Primary language: ${p.primaryLanguage ?? "Not provided"}`,
       `City: ${p.addressCity ?? "Not provided"}`,
       `NZ Companies Register #: ${p.nzCompanyRegisterNumber ?? "Not provided"}`,
+      `Certificate URL: ${p.incorporationCertUrl ?? "Not provided"}`,
+      `Certificate review link: ${p.incorporationCertReviewUrl ?? "Not available"}`,
       ``,
       `Please review their Certificate of Incorporation and verify them:`,
       `UPDATE profiles SET is_verified = true WHERE id = '${args.profileId}';`,

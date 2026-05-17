@@ -68,6 +68,22 @@ interface FieldErrors {
 
 const ACCENT = "#52C99A";
 
+function cleanUploadError(baseMessage: string, error: unknown): string {
+  const detail = error instanceof Error ? error.message.trim() : "";
+  if (!detail) return baseMessage;
+  const normalizedBase = baseMessage.replace(/[.\s]+$/g, "").toLowerCase();
+  const normalizedDetail = detail.replace(/[.\s]+$/g, "").toLowerCase();
+  if (
+    normalizedDetail === normalizedBase ||
+    normalizedDetail === "upload failed" ||
+    normalizedDetail === "upload failed please try again" ||
+    normalizedDetail.startsWith(`${normalizedBase} `)
+  ) {
+    return baseMessage;
+  }
+  return `${baseMessage} ${detail}`;
+}
+
 function LanguagePicker({
   label,
   value,
@@ -354,12 +370,7 @@ export default function SignupProviderScreen() {
         setUploadStatus("done");
       } catch (certErr) {
         setUploadStatus("error");
-        const detail = certErr instanceof Error ? certErr.message.trim() : "";
-        setCertError(
-          detail && !/^upload failed\.?$/i.test(detail)
-            ? `${t("signup.cert.upload_failed")} ${detail}`
-            : t("signup.cert.upload_failed"),
-        );
+        setCertError(cleanUploadError(t("signup.cert.upload_failed"), certErr));
         setIsLoading(false);
         return;
       }

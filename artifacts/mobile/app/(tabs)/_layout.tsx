@@ -119,10 +119,14 @@ export default function TabLayout() {
   useEffect(() => {
     if (!isLoading && !user) {
       router.replace("/(auth)/welcome" as never);
+      return;
+    }
+    if (!isLoading && user?.role === "service_provider" && user.subscriptionTier === "free") {
+      router.replace("/(onboarding)/service-provider-welcome" as never);
     }
   }, [user, isLoading, router]);
 
-  if (isLoading || !user) return null;
+  if (isLoading || !user || (user.role === "service_provider" && user.subscriptionTier === "free")) return null;
 
   return <ClassicTabLayout />;
 }

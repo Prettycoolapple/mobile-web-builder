@@ -1,5 +1,7 @@
 import React, { useRef, useState, useCallback, useEffect, useLayoutEffect, useMemo } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
+  AppState,
   View,
   Text,
   TextInput,
@@ -15,10 +17,12 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import * as StoreReview from "expo-store-review";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useChat, ChatMessage, FeasibilityReport, PropertyCandidate, ServiceProvider } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
+import { AppRatingPrompt } from "@/components/AppRatingPrompt";
 import { ChatBubble } from "@/components/ChatBubble";
 import { ResponseRatingBar } from "@/components/ResponseRatingBar";
 import { PaywallModal } from "@/components/PaywallModal";
@@ -50,6 +54,82 @@ function withHistoryMetadata(
     historyId: searchId ?? report.historyId ?? null,
     historyCreatedAt: historyCreatedAt ?? report.historyCreatedAt ?? null,
   };
+}
+
+type BackgroundAnalyseJob = {
+  jobId: string;
+  userId: string;
+  sessionId: string;
+  address: string;
+  createdAt: number;
+};
+
+const BACKGROUND_ANALYSE_JOBS_KEY = "@devfeasible/background-analyse-jobs";
+const APP_RATING_STATE_KEY = "@devfeasible/app-rating-state";
+const APP_RATING_CHAT_THRESHOLD = 3;
+const APP_RATING_SNOOZE_MS = 14 * 24 * 60 * 60 * 1000;
+
+async function readBackgroundAnalyseJobs(): Promise<BackgroundAnalyseJob[]> {
+  try {
+    const raw = await AsyncStorage.getItem(BACKGROUND_ANALYSE_JOBS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((job): job is BackgroundAnalyseJob =>
+      job &&
+      typeof job === "object" &&
+      typeof job.jobId === "string" &&
+      typeof job.userId === "string" &&
+      typeof job.sessionId === "string" &&
+      typeof job.address === "string" &&
+      typeof job.createdAt === "number",
+    );
+  } catch {
+    return [];
+  }
+}
+
+async function writeBackgroundAnalyseJobs(jobs: BackgroundAnalyseJob[]): Promise<void> {
+  await AsyncStorage.setItem(BACKGROUND_ANALYSE_JOBS_KEY, JSON.stringify(jobs));
+}
+
+async function upsertBackgroundAnalyseJob(job: BackgroundAnalyseJob): Promise<void> {
+  const jobs = await readBackgroundAnalyseJobs();
+  const withoutCurrent = jobs.filter((item) => item.jobId !== job.jobId);
+  await writeBackgroundAnalyseJobs([job, ...withoutCurrent].slice(0, 20));
+}
+
+async function removeBackgroundAnalyseJob(jobId: string): Promise<void> {
+  const jobs = await readBackgroundAnalyseJobs();
+  await writeBackgroundAnalyseJobs(jobs.filter((job) => job.jobId !== jobId));
+}
+
+type AppRatingState = {
+  completed?: boolean;
+  rating?: number;
+  promptCount?: number;
+  chatCompletions?: number;
+  lastPromptAt?: number;
+  lastTriggeredMessageKey?: string;
+};
+
+function appRatingStorageKey(userId: string): string {
+  return `${APP_RATING_STATE_KEY}/${userId}`;
+}
+
+async function readAppRatingState(userId: string): Promise<AppRatingState> {
+  try {
+    const raw = await AsyncStorage.getItem(appRatingStorageKey(userId));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+async function writeAppRatingState(userId: string, state: AppRatingState): Promise<void> {
+  await AsyncStorage.setItem(appRatingStorageKey(userId), JSON.stringify(state));
 }
 
 
@@ -149,6 +229,7 @@ export default function SearchScreen() {
     startNewChat,
     addMessage,
     updateLastMessage,
+    replaceBackgroundAnalyseMessage,
     removeMessage,
     updateCandidateScores,
     setCurrentReport,
@@ -160,6 +241,7 @@ export default function SearchScreen() {
 
   const [inputText, setInputText] = useState("");
   const [showPaywall, setShowPaywall] = useState(false);
+  const [showAppRatingPrompt, setShowAppRatingPrompt] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [messageLimitReached, setMessageLimitReached] = useState(false);
   const flatListRef = useRef<FlatList>(null);
@@ -168,6 +250,7 @@ export default function SearchScreen() {
   const lastCheckedFollowUpCount = useRef<Map<string, number>>(new Map());
   const checkedFollowupIds = useRef<Set<string>>(new Set());
   const lastReportIdRef = useRef<string | null>(null);
+  const appRatingPromptOpenRef = useRef(false);
   const cardScorePollRef = useRef<{ addresses: string[]; sessionId: string; intervalId: ReturnType<typeof setInterval> | null }>({ addresses: [], sessionId: "", intervalId: null });
   const handleAnalyseRef = useRef<((address: string, selectedPhotoUrl?: string | null) => Promise<void>) | null>(null);
 
@@ -404,6 +487,8 @@ export default function SearchScreen() {
           agencyName?: string | null;
           agentAvatarUrl?: string | null;
           propertyAddress?: string;
+          matchType?: "subject" | "suburb" | null;
+          listingAddress?: string | null;
         };
 
         if (data.wantsAgentContact && data.found && data.isListed && data.agentPhone) {
@@ -415,7 +500,8 @@ export default function SearchScreen() {
             agentPhone: data.agentPhone,
             agencyName: data.agencyName ?? null,
             agentAvatarUrl: data.agentAvatarUrl ?? null,
-            propertyAddress: address,
+            propertyAddress: data.matchType === "suburb" ? (data.listingAddress ?? address) : address,
+            agentMatchType: data.matchType ?? "subject",
           }, currentSessionId ?? undefined);
         }
       } catch (err) {
@@ -490,6 +576,187 @@ export default function SearchScreen() {
     },
     [getApiBase, getApiHeaders, updateCandidateScores],
   );
+
+  const maybeTriggerAppRatingPrompt = useCallback(
+    async (kind: "chat" | "report", messageKey: string) => {
+      if (Platform.OS === "web" || !user?.id || appRatingPromptOpenRef.current) return;
+      const state = await readAppRatingState(user.id);
+      if (state.completed || state.lastTriggeredMessageKey === messageKey) return;
+
+      const chatCompletions = (state.chatCompletions ?? 0) + (kind === "chat" ? 1 : 0);
+      const nextState: AppRatingState = {
+        ...state,
+        chatCompletions,
+        lastTriggeredMessageKey: messageKey,
+      };
+      await writeAppRatingState(user.id, nextState);
+
+      const promptCount = nextState.promptCount ?? 0;
+      const lastPromptAt = nextState.lastPromptAt ?? 0;
+      const snoozed = lastPromptAt > 0 && Date.now() - lastPromptAt < APP_RATING_SNOOZE_MS;
+      const shouldPrompt = kind === "report" || chatCompletions >= APP_RATING_CHAT_THRESHOLD;
+      if (!shouldPrompt || promptCount >= 2 || snoozed || appRatingPromptOpenRef.current) return;
+
+      appRatingPromptOpenRef.current = true;
+      setShowAppRatingPrompt(true);
+    },
+    [user?.id],
+  );
+
+  useEffect(() => {
+    if (!currentSession?.id || currentSession.skipFirstTurnRating) return;
+    const latest = currentSession.messages[currentSession.messages.length - 1];
+    if (!latest || latest.role !== "assistant") return;
+    const key = `${currentSession.id}:${latest.id}`;
+    if (latest.type === "report" && latest.report) {
+      void maybeTriggerAppRatingPrompt("report", key);
+      return;
+    }
+    if (latest.type === "text" && latest.content.trim() && !latest.retryText) {
+      void maybeTriggerAppRatingPrompt("chat", key);
+    }
+  }, [currentSession?.id, currentSession?.messages, currentSession?.skipFirstTurnRating, maybeTriggerAppRatingPrompt]);
+
+  const handleDismissAppRating = useCallback(() => {
+    setShowAppRatingPrompt(false);
+    appRatingPromptOpenRef.current = false;
+    if (!user?.id) return;
+    void (async () => {
+      const state = await readAppRatingState(user.id);
+      await writeAppRatingState(user.id, {
+        ...state,
+        promptCount: (state.promptCount ?? 0) + 1,
+        lastPromptAt: Date.now(),
+      });
+    })();
+  }, [user?.id]);
+
+  const handleSubmitAppRating = useCallback(
+    (rating: number) => {
+      setShowAppRatingPrompt(false);
+      appRatingPromptOpenRef.current = false;
+      if (user?.id) {
+        void (async () => {
+          const state = await readAppRatingState(user.id);
+          await writeAppRatingState(user.id, {
+            ...state,
+            completed: true,
+            rating,
+            promptCount: (state.promptCount ?? 0) + 1,
+            lastPromptAt: Date.now(),
+          });
+        })();
+      }
+
+      if (rating >= 4) {
+        void (async () => {
+          try {
+            if (await StoreReview.hasAction()) {
+              await StoreReview.requestReview();
+            }
+          } catch {}
+        })();
+      }
+    },
+    [user?.id],
+  );
+
+  const trackBackgroundAnalyseJob = useCallback(
+    async (jobId: string | null | undefined, sessionId: string, address: string) => {
+      if (!jobId || !user?.id) return;
+      await upsertBackgroundAnalyseJob({
+        jobId,
+        userId: user.id,
+        sessionId,
+        address,
+        createdAt: Date.now(),
+      });
+    },
+    [user?.id],
+  );
+
+  const backgroundJobPollInFlightRef = useRef(false);
+  const pollBackgroundAnalyseJobs = useCallback(async () => {
+    if (!user?.id || backgroundJobPollInFlightRef.current) return;
+    backgroundJobPollInFlightRef.current = true;
+    try {
+      const stored = await readBackgroundAnalyseJobs();
+      const jobs = stored.filter((job) => job.userId === user.id);
+      for (const job of jobs) {
+        try {
+          const resp = await fetch(`${getApiBase()}/analyse/jobs/${job.jobId}`, {
+            headers: getApiHeaders(),
+          });
+          if (!resp.ok) continue;
+          const data = (await resp.json()) as {
+            status: string;
+            searchId?: string | null;
+            historyCreatedAt?: string | null;
+            report?: FeasibilityReport | null;
+            error?: string | null;
+          };
+
+          if (data.status === "completed") {
+            await removeBackgroundAnalyseJob(job.jobId);
+            if (data.report && data.report.scores) {
+              const reportWithHistory = withHistoryMetadata(data.report, data.searchId, data.historyCreatedAt);
+              if (currentSessionId === job.sessionId) {
+                setCurrentReport(reportWithHistory);
+              }
+              replaceBackgroundAnalyseMessage(job.jobId, { role: "assistant", content: "", type: "report", report: reportWithHistory }, job.sessionId);
+              if (reportWithHistory.scores && reportWithHistory.address) {
+                updateCandidateScores({ [reportWithHistory.address]: reportWithHistory.scores }, job.sessionId);
+              }
+              refreshProfile().catch(() => {});
+              bumpSearchHistory();
+            }
+          } else if (data.status === "failed") {
+            await removeBackgroundAnalyseJob(job.jobId);
+            replaceBackgroundAnalyseMessage(job.jobId, {
+              role: "assistant",
+              type: "text",
+              content: data.error || t("search.cant_reach"),
+              retryText: job.address,
+            }, job.sessionId);
+          }
+        } catch {
+          // The next foreground/resume poll will try again.
+        }
+      }
+    } finally {
+      backgroundJobPollInFlightRef.current = false;
+    }
+  }, [
+    bumpSearchHistory,
+    currentSessionId,
+    getApiBase,
+    getApiHeaders,
+    replaceBackgroundAnalyseMessage,
+    refreshProfile,
+    setCurrentReport,
+    t,
+    updateCandidateScores,
+    user?.id,
+  ]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    void pollBackgroundAnalyseJobs();
+    const appStateSub = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        void pollBackgroundAnalyseJobs();
+      }
+    });
+    const intervalId = setInterval(() => {
+      if (AppState.currentState === "active") {
+        void pollBackgroundAnalyseJobs();
+      }
+    }, 30000);
+    return () => {
+      appStateSub.remove();
+      clearInterval(intervalId);
+    };
+  }, [pollBackgroundAnalyseJobs, user?.id]);
 
   const handleSend = useCallback(async (overrideText?: string) => {
     const text = (overrideText !== undefined ? overrideText : inputText).trim();
@@ -582,6 +849,8 @@ export default function SearchScreen() {
           agentPhone?: string | null;
           agencyName?: string | null;
           agentAvatarUrl?: string | null;
+          matchType?: "subject" | "suburb" | null;
+          listingAddress?: string | null;
         };
 
         if (!data.wantsAgentContact) {
@@ -595,7 +864,8 @@ export default function SearchScreen() {
             agentPhone: data.agentPhone,
             agencyName: data.agencyName ?? null,
             agentAvatarUrl: data.agentAvatarUrl ?? null,
-            propertyAddress: agentAddress,
+            propertyAddress: data.matchType === "suburb" ? (data.listingAddress ?? agentAddress) : agentAddress,
+            agentMatchType: data.matchType ?? "subject",
           }, sessionId);
           setIsLoading(false);
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -603,7 +873,9 @@ export default function SearchScreen() {
         } else {
           updateLastMessage({
             type: "text",
-            content: "I couldn't find a direct listing agent phone number for this property yet.",
+            content: data.isListed === false
+              ? t("bubble.agent.not_on_market", { address: agentAddress.split(",")[0] ?? agentAddress })
+              : t("bubble.agent.no_callable"),
           }, sessionId);
           setIsLoading(false);
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -693,7 +965,15 @@ export default function SearchScreen() {
             return;
           }
           if (r.status === 202) {
-            updateLastMessage({ type: "text", content: t("search.analyse_background") }, sessionId);
+            const queued = await r.json().catch(() => ({} as { jobId?: string }));
+            await trackBackgroundAnalyseJob(queued.jobId, sessionId, text);
+            updateLastMessage({
+              type: "loading",
+              content: "",
+              loadingMode: "analyse",
+              retryLabel: t("search.analyse_background"),
+              backgroundJobId: queued.jobId,
+            }, sessionId);
             return;
           }
           if (!r.ok) {
@@ -1059,6 +1339,7 @@ export default function SearchScreen() {
     getApiHeaders,
     refreshProfile,
     bumpSearchHistory,
+    trackBackgroundAnalyseJob,
     user?.role,
     user?.subscriptionTier,
     user,
@@ -1118,7 +1399,15 @@ export default function SearchScreen() {
             clearTimeout(timeoutId);
 
             if (resp.status === 202) {
-              updateLastMessage({ type: "text", content: t("search.analyse_background") }, sessionId);
+              const queued = await resp.json().catch(() => ({} as { jobId?: string }));
+              await trackBackgroundAnalyseJob(queued.jobId, sessionId, address);
+              updateLastMessage({
+                type: "loading",
+                content: "",
+                loadingMode: "analyse",
+                retryLabel: t("search.analyse_background"),
+                backgroundJobId: queued.jobId,
+              }, sessionId);
               return;
             }
 
@@ -1209,6 +1498,7 @@ export default function SearchScreen() {
       getApiHeaders,
       refreshProfile,
       bumpSearchHistory,
+      trackBackgroundAnalyseJob,
       t,
     ],
   );
@@ -1457,6 +1747,11 @@ export default function SearchScreen() {
       )}
 
       <PaywallModal visible={showPaywall} onClose={() => setShowPaywall(false)} />
+      <AppRatingPrompt
+        visible={showAppRatingPrompt}
+        onDismiss={handleDismissAppRating}
+        onSubmit={handleSubmitAppRating}
+      />
     </KeyboardAvoidingView>
   );
 }

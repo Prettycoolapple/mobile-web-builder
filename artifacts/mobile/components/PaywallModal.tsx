@@ -16,6 +16,7 @@ import { useAuth } from "@/context/AuthContext";
 import { getApiBase } from "@/lib/api";
 import { useSubscription, getSubscriptionSyncBody } from "@/lib/revenuecat";
 import { useT } from "@/lib/i18n";
+import { STANDARD_REPORT_LIMIT } from "@/lib/quotas";
 
 interface Props {
   visible: boolean;
@@ -34,6 +35,8 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
     t("paywall.f2"),
     t("paywall.f3"),
     t("paywall.f4"),
+    t("paywall.f5"),
+    t("paywall.f6"),
   ];
   const slideAnim = useRef(new Animated.Value(400)).current;
   const overlayAnim = useRef(new Animated.Value(0)).current;
@@ -90,7 +93,7 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
       }
       onPurchaseSuccess?.();
       onClose();
-      Alert.alert(t("paywall.welcome_title"), t("paywall.welcome_msg"));
+      Alert.alert(t("paywall.welcome_title"), t("paywall.welcome_msg", { n: STANDARD_REPORT_LIMIT }));
     } catch (err: unknown) {
       const userCancelled = (err as { userCancelled?: boolean })?.userCancelled;
       if (!userCancelled) {

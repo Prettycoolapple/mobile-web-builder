@@ -14,8 +14,12 @@ import { hashPassword, verifyPassword, signToken, requireAuth } from "../lib/aut
 import { sendNewUserSignupNotification, sendPasswordResetCodeEmail } from "../lib/mailer";
 import { usagePeriodExpired } from "../lib/billingPeriod";
 import { verifyPhoneVerificationToken, consumePhoneVerification } from "./otp";
+import { getPublicAppUrl } from "../lib/env";
+import { ObjectNotFoundError, ObjectStorageService } from "../lib/objectStorage";
+import { createStorageReviewToken } from "../lib/storage-review-token";
 
 const router = Router();
+const objectStorageService = new ObjectStorageService();
 
 const salesAgentSchema = z.object({
   agencyName: z.string().optional(),
@@ -132,6 +136,32 @@ function resolvePasswordResetSecret(): string {
 }
 
 const PASSWORD_RESET_SECRET = resolvePasswordResetSecret();
+
+function objectPathFromStorageUrl(fileUrl: string | undefined): string | null {
+  if (!fileUrl) return null;
+  const relativeMatch = fileUrl.match(/\/api\/storage(\/objects\/[^?#]+)/);
+  if (relativeMatch?.[1]) return relativeMatch[1];
+  try {
+    const parsed = new URL(fileUrl);
+    const absoluteMatch = parsed.pathname.match(/\/api\/storage(\/objects\/[^?#]+)/);
+    return absoluteMatch?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function assertUploadedObjectExists(objectPath: string): Promise<void> {
+  if (objectStorageService.isLocal) {
+    if (!objectStorageService.localFileExists(objectPath)) throw new ObjectNotFoundError();
+    return;
+  }
+  await objectStorageService.getObjectEntityFile(objectPath);
+}
+
+function makeReviewUrl(objectPath: string): string {
+  const token = createStorageReviewToken(objectPath);
+  return `${getPublicAppUrl()}/api/storage/review${objectPath}?token=${encodeURIComponent(token)}`;
+}
 
 const passwordResetRateBuckets = new Map<string, number[]>();
 function rateLimitPasswordReset(key: string, limit: number, windowMs: number): boolean {
@@ -284,15 +314,15 @@ router.post("/signup", async (req, res) => {
         // newly created user so /api/storage/objects/* ownership checks pass
         // and the file is no longer "orphaned" if signup is later rolled back
         // or audited. The URL shape is `/api/storage/objects/<id>`.
-        if (providerData?.incorporationCertUrl) {
-          const m = providerData.incorporationCertUrl.match(/\/api\/storage(\/objects\/[^?#]+)/);
-          if (m) {
-            await tx
-              .insert(userUploads)
-              .values({ userId: newProfile.id, objectPath: m[1] })
-              .onConflictDoNothing();
-          }
+        const certObjectPath = objectPathFromStorageUrl(providerData?.incorporationCertUrl);
+        if (!certObjectPath) {
+          throw new Error("Certificate upload is missing or invalid.");
         }
+        await assertUploadedObjectExists(certObjectPath);
+        await tx
+          .insert(userUploads)
+          .values({ userId: newProfile.id, objectPath: certObjectPath })
+          .onConflictDoNothing();
         await tx.insert(serviceProviderProfiles).values({
           userId: newProfile.id,
           companyName: providerData?.companyName,
@@ -325,9 +355,27 @@ router.post("/signup", async (req, res) => {
       phone: phoneTrimmed,
       languages,
       agentData: agentData ?? undefined,
-      providerData: providerData ?? undefined,
+      providerData: providerData
+        ? {
+            ...providerData,
+            incorporationCertUrl: providerData.incorporationCertUrl,
+            incorporationCertReviewUrl: objectPathFromStorageUrl(providerData.incorporationCertUrl)
+              ? makeReviewUrl(objectPathFromStorageUrl(providerData.incorporationCertUrl)!)
+              : undefined,
+          }
+        : undefined,
     });
   } catch (error) {
+    if (
+      error instanceof ObjectNotFoundError ||
+      (error instanceof Error && error.message === "Certificate upload is missing or invalid.")
+    ) {
+      res.status(400).json({
+        error: "Certificate upload could not be verified. Please upload the file again.",
+        code: "CERT_UPLOAD_NOT_VERIFIED",
+      });
+      return;
+    }
     req.log.error({ error }, "Signup failed");
     res.status(500).json({ error: "Signup failed. Please try again.", code: "SIGNUP_FAILED" });
   }

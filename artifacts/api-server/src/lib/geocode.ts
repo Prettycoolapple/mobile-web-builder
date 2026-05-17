@@ -7,6 +7,15 @@ export interface GeoResult {
   suburb: string | null;
 }
 
+export function normaliseNzAddressForGeocode(address: string): string {
+  return address
+    .replace(/\s+,/g, ",")
+    .replace(/,\s*Auckland City\s*,/gi, ", ")
+    .replace(/\bAuckland City\b/gi, "Auckland")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 type ParsedStreetNumber = {
   base: string;
   suffix: string;
@@ -209,6 +218,8 @@ function chooseBestGoogleResult<T extends {
  */
 export async function tryGeocodeAddress(address: string): Promise<GeoResult | null> {
   const googleKey = process.env["GOOGLE_MAPS_API_KEY"];
+  const candidates = Array.from(new Set([address.trim(), normaliseNzAddressForGeocode(address)]))
+    .filter(Boolean);
 
   if (googleKey) {
     try {
@@ -223,11 +234,31 @@ export async function tryGeocodeAddress(address: string): Promise<GeoResult | nu
   }
 
   try {
-    return await nominatimGeocode(address);
+    const result = await nominatimGeocode(address);
+    if (result) return result;
   } catch (err) {
     logger.warn({ err }, "Geocode probe failed — no result");
+    for (const candidate of candidates.slice(1)) {
+      try {
+        const result = await nominatimGeocode(candidate);
+        if (result) return result;
+      } catch (fallbackErr) {
+        logger.warn({ err: fallbackErr, candidate }, "Geocode normalized fallback failed");
+      }
+    }
     return null;
   }
+
+  for (const candidate of candidates.slice(1)) {
+    try {
+      const result = await nominatimGeocode(candidate);
+      if (result) return result;
+    } catch (fallbackErr) {
+      logger.warn({ err: fallbackErr, candidate }, "Geocode normalized fallback failed");
+    }
+  }
+
+  return null;
 }
 
 export async function geocodeAddress(address: string): Promise<GeoResult> {

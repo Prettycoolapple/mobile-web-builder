@@ -23,17 +23,18 @@ import { avatarImageSource } from "@/lib/avatar";
 import { getApiBase } from "@/lib/api";
 import { WORLD_LANGUAGES } from "@/lib/languages";
 import { useT } from "@/lib/i18n";
-
-const FREE_LIMIT = 2;
-const STANDARD_LIMIT = 20;
+import { STANDARD_REPORT_LIMIT, resolveReportLimit } from "@/lib/quotas";
 
 function buildPlanFeatures(t: (k: string) => string) {
   return {
     free: [t("feature.feasibility_reports"), t("feature.chat_search")],
     standard: [
-      t("feature.feasibility_reports"),
-      t("feature.chat_search"),
-      t("feature.chat_planners"),
+      t("paywall.f1"),
+      t("paywall.f2"),
+      t("paywall.f3"),
+      t("paywall.f4"),
+      t("paywall.f5"),
+      t("paywall.f6"),
     ],
     agent: [
       t("feature.unlimited_listings"),
@@ -131,10 +132,10 @@ export default function ProfileScreen() {
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
 
   const isStandard = user?.subscriptionTier === "pro" || user?.subscriptionTier === "standard";
-  const planLimit = isStandard ? STANDARD_LIMIT : FREE_LIMIT;
+  const planLimit = resolveReportLimit(user?.subscriptionTier, user?.role);
   const usage = user?.reportsUsedThisMonth ?? 0;
   const remaining = planLimit - usage;
-  const usagePct = Math.min((usage / planLimit) * 100, 100);
+  const usagePct = planLimit > 0 ? Math.min((usage / planLimit) * 100, 100) : 100;
   const showWarning = remaining <= 3 && remaining >= 0;
 
   const role = user?.role ?? "general";
@@ -192,7 +193,7 @@ export default function ProfileScreen() {
       } else if (role === "service_provider") {
         Alert.alert(t("profile.provider_activated_title"), t("profile.provider_activated_msg"));
       } else {
-        Alert.alert(t("profile.welcome_standard"), t("profile.welcome_standard_msg", { n: STANDARD_LIMIT }));
+        Alert.alert(t("profile.welcome_standard"), t("profile.welcome_standard_msg", { n: STANDARD_REPORT_LIMIT }));
       }
     } catch (err: unknown) {
       const userCancelled = (err as { userCancelled?: boolean })?.userCancelled;
@@ -711,11 +712,7 @@ export default function ProfileScreen() {
                 </View>
               </View>
               <View style={styles.featuresList}>
-                {[
-                  t("feature.more_reports"),
-                  t("feature.more_chat_search"),
-                  t("feature.chat_planners"),
-                ].map((f) => (
+                {PLAN_FEATURES.standard.map((f) => (
                   <FeatureRow key={f} text={f} included />
                 ))}
               </View>
