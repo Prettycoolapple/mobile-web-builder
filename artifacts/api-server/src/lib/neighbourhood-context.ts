@@ -21,6 +21,7 @@ export interface NeighbourhoodContext {
   assessedLots: number;
   radiusM: number;
   publicHousingSignal: NeighbourhoodSignal;
+  /** @deprecated Retained so older saved reports and generated clients remain tolerant. */
   terraceHousingSignal: NeighbourhoodSignal;
   confidence: SignalConfidence;
   marketAdjustment: NeighbourhoodMarketAdjustment;
@@ -30,8 +31,9 @@ export interface NeighbourhoodContext {
 interface NeighbourParcelAssessment {
   parcel: LinzParcelNearby;
   title: LinzTitle | null;
-  ownerLookupAttempted: boolean;
+  titleLookupSucceeded: boolean;
   publicHousing: boolean;
+  /** @deprecated Surrounding typology is no longer used for ROI or active report UI. */
   terraceHousing: boolean;
 }
 
@@ -78,20 +80,34 @@ function isRoadOrAccessParcel(parcel: LinzParcel): boolean {
   return /\b(road|legal road|motorway|railway|access way|right of way|reserve|esplanade|stream|river|drainage)\b/.test(text);
 }
 
-export function selectNearestResidentialParcels(parcels: LinzParcelNearby[], subjectParcelId?: string | null, maxLots = 7): LinzParcelNearby[] {
+export function selectNearestResidentialParcels(
+  parcels: LinzParcelNearby[],
+  subjectParcelId?: string | null,
+  maxLots = Number.POSITIVE_INFINITY,
+  radiusM?: number,
+): LinzParcelNearby[] {
   const subject = (subjectParcelId ?? "").trim();
   const seen = new Set<string>();
-  return parcels
+  const selected = parcels
     .filter((parcel) => {
       if (subject && parcel.parcel_id === subject) return false;
       if (seen.has(parcel.parcel_id)) return false;
       seen.add(parcel.parcel_id);
+      if (radiusM != null && (parcel.distance_m == null || parcel.distance_m > radiusM)) return false;
       if (isRoadOrAccessParcel(parcel)) return false;
       if (parcel.area_sqm != null && parcel.area_sqm < 35) return false;
       return true;
     })
-    .sort((a, b) => (a.distance_m ?? Number.MAX_SAFE_INTEGER) - (b.distance_m ?? Number.MAX_SAFE_INTEGER))
-    .slice(0, maxLots);
+    .sort((a, b) => (a.distance_m ?? Number.MAX_SAFE_INTEGER) - (b.distance_m ?? Number.MAX_SAFE_INTEGER));
+  return Number.isFinite(maxLots) ? selected.slice(0, maxLots) : selected;
+}
+
+export function selectResidentialParcelsWithinRadius(
+  parcels: LinzParcelNearby[],
+  subjectParcelId?: string | null,
+  radiusM = 100,
+): LinzParcelNearby[] {
+  return selectNearestResidentialParcels(parcels, subjectParcelId, Number.POSITIVE_INFINITY, radiusM);
 }
 
 export function isTerraceLikeParcel(parcel: LinzParcel, title: LinzTitle | null): boolean {
@@ -117,17 +133,11 @@ function signalLevel(count: number, assessed: number): SignalLevel {
 }
 
 function confidenceForPublicHousing(assessed: number, ownerLookups: number): SignalConfidence {
-  if (assessed < 3) return "unknown";
+  if (assessed <= 0 || ownerLookups <= 0) return "unknown";
   const ratio = ownerLookups / assessed;
-  if (ratio >= 0.75) return "high";
-  if (ratio >= 0.45) return "medium";
+  if (ownerLookups >= 3 && ratio >= 0.75) return "high";
+  if (ownerLookups >= 2 && ratio >= 0.45) return "medium";
   if (ownerLookups > 0) return "low";
-  return "unknown";
-}
-
-function confidenceForTerrace(assessed: number): SignalConfidence {
-  if (assessed >= 5) return "medium";
-  if (assessed >= 3) return "low";
   return "unknown";
 }
 
@@ -152,43 +162,44 @@ export function marketAdjustmentFromSignals(publicSignal: NeighbourhoodSignal): 
   };
 }
 
-function combineConfidence(publicSignal: NeighbourhoodSignal, terraceSignal: NeighbourhoodSignal): SignalConfidence {
+function combineConfidence(publicSignal: NeighbourhoodSignal): SignalConfidence {
   if (publicSignal.confidence === "high") return "high";
-  if (publicSignal.confidence === "medium" || terraceSignal.confidence === "medium") return "medium";
-  if (publicSignal.confidence === "low" || terraceSignal.confidence === "low") return "low";
+  if (publicSignal.confidence === "medium") return "medium";
+  if (publicSignal.confidence === "low") return "low";
   return "unknown";
 }
 
 function buildContext(assessments: NeighbourParcelAssessment[], radiusM: number): NeighbourhoodContext {
   const assessedLots = assessments.length;
-  const ownerLookups = assessments.filter((a) => a.ownerLookupAttempted).length;
+  const ownerLookups = assessments.filter((a) => a.titleLookupSucceeded).length;
   const publicCount = assessments.filter((a) => a.publicHousing).length;
-  const terraceCount = assessments.filter((a) => a.terraceHousing).length;
 
   const publicHousingSignal: NeighbourhoodSignal = {
-    level: signalLevel(publicCount, assessedLots),
+    level: signalLevel(publicCount, ownerLookups),
     count: publicCount,
-    assessedLots,
+    assessedLots: ownerLookups,
     confidence: confidenceForPublicHousing(assessedLots, ownerLookups),
   };
   const terraceHousingSignal: NeighbourhoodSignal = {
-    level: signalLevel(terraceCount, assessedLots),
-    count: terraceCount,
-    assessedLots,
-    confidence: confidenceForTerrace(assessedLots),
+    level: "unknown",
+    count: 0,
+    assessedLots: 0,
+    confidence: "unknown",
   };
   const marketAdjustment = marketAdjustmentFromSignals(publicHousingSignal);
   const reasons: string[] = [];
 
-  if (assessedLots < 3) {
-    reasons.push("Fewer than three nearby residential lots could be assessed, so no neighbourhood market adjustment was applied.");
+  if (assessedLots <= 0) {
+    reasons.push(`No nearby residential parcels could be assessed within ${radiusM} m.`);
+  } else if (ownerLookups <= 0) {
+    reasons.push(`LINZ title-owner data was unavailable for residential parcels within ${radiusM} m, so no public-housing conclusion was made.`);
   } else {
-    reasons.push(`${assessedLots} nearby residential lots were assessed for aggregate market context.`);
+    reasons.push(`LINZ title-owner data was checked for ${ownerLookups} of ${assessedLots} residential parcels within ${radiusM} m.`);
     if (publicCount > 0) {
       reasons.push(`${publicCount} nearby lot${publicCount === 1 ? "" : "s"} showed a confirmed public-housing ownership signal.`);
     }
-    if (terraceCount > 0) {
-      reasons.push(`${terraceCount} nearby lot${terraceCount === 1 ? "" : "s"} showed terrace, townhouse, unit-title, or small-lot attached-housing signals.`);
+    if (ownerLookups < assessedLots) {
+      reasons.push(`${assessedLots - ownerLookups} nearby residential parcel${assessedLots - ownerLookups === 1 ? "" : "s"} could not be checked against title-owner records.`);
     }
     if (marketAdjustment.reason) reasons.push(marketAdjustment.reason);
   }
@@ -198,7 +209,7 @@ function buildContext(assessments: NeighbourParcelAssessment[], radiusM: number)
     radiusM,
     publicHousingSignal,
     terraceHousingSignal,
-    confidence: combineConfidence(publicHousingSignal, terraceHousingSignal),
+    confidence: combineConfidence(publicHousingSignal),
     marketAdjustment,
     reasons,
   };
@@ -208,9 +219,7 @@ async function assessParcels(parcels: LinzParcelNearby[]): Promise<NeighbourParc
   const out: NeighbourParcelAssessment[] = [];
   for (const parcel of parcels) {
     let title: LinzTitle | null = null;
-    let ownerLookupAttempted = false;
     if (parcel.title_no) {
-      ownerLookupAttempted = true;
       try {
         title = await fetchLINZTitle(parcel.title_no);
       } catch (err) {
@@ -221,9 +230,9 @@ async function assessParcels(parcels: LinzParcelNearby[]): Promise<NeighbourParc
     out.push({
       parcel,
       title,
-      ownerLookupAttempted,
+      titleLookupSucceeded: title !== null,
       publicHousing: owners.some(isPublicHousingOwner),
-      terraceHousing: isTerraceLikeParcel(parcel, title),
+      terraceHousing: false,
     });
   }
   return out;
@@ -234,14 +243,10 @@ export async function fetchNeighbourhoodContext(opts: {
   lng: number;
   subjectParcelId?: string | null;
 }): Promise<NeighbourhoodContext> {
-  const radii = [90, 150];
-  for (const radiusM of radii) {
-    const parcels = await fetchLINZParcelsNear(opts.lat, opts.lng, radiusM, 35);
-    if (parcels === null) return DEFAULT_CONTEXT;
-    const selected = selectNearestResidentialParcels(parcels, opts.subjectParcelId, 7);
-    if (selected.length < 3 && radiusM !== radii[radii.length - 1]) continue;
-    const assessments = await assessParcels(selected);
-    return buildContext(assessments, radiusM);
-  }
-  return DEFAULT_CONTEXT;
+  const radiusM = 100;
+  const parcels = await fetchLINZParcelsNear(opts.lat, opts.lng, radiusM, 100);
+  if (parcels === null) return DEFAULT_CONTEXT;
+  const selected = selectResidentialParcelsWithinRadius(parcels, opts.subjectParcelId, radiusM);
+  const assessments = await assessParcels(selected);
+  return buildContext(assessments, radiusM);
 }

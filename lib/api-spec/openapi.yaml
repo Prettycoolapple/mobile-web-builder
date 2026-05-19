@@ -929,6 +929,9 @@ components:
             distanceKm:
               type: number
               nullable: true
+            durationMinutes:
+              type: number
+              nullable: true
             convenienceTier:
               type: string
               enum: [excellent, good, limited, poor, unknown]

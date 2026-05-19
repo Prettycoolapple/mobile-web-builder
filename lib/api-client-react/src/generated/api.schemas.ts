@@ -360,6 +360,7 @@ export interface TransportContext {
   cityCommute: {
     centreName: string | null;
     distanceKm: number | null;
+    durationMinutes?: number | null;
     convenienceTier: "excellent" | "good" | "limited" | "poor" | "unknown";
     confidence: "high" | "medium" | "low" | "unknown";
   };

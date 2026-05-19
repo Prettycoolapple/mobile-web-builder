@@ -240,7 +240,8 @@ export interface NeighbourhoodContext {
   assessedLots: number;
   radiusM: number;
   publicHousingSignal: NeighbourhoodSignal;
-  terraceHousingSignal: NeighbourhoodSignal;
+  /** @deprecated Retained for old saved reports; active UI ignores surrounding typology. */
+  terraceHousingSignal?: NeighbourhoodSignal;
   confidence: "high" | "medium" | "low" | "unknown";
   marketAdjustment: {
     gdvMultiplier: number;
@@ -265,7 +266,8 @@ export interface TransportContext {
     nearestByMode: TransportStopContext[];
     confidence: "high" | "medium" | "low" | "unknown";
   };
-  highwayAccess: {
+  /** @deprecated Retained for old saved reports; active UI ignores highway context. */
+  highwayAccess?: {
     name: string | null;
     distanceM: number | null;
     accessTier: "excellent" | "good" | "neutral" | "remote" | "exposureRisk" | "unknown";
@@ -275,6 +277,7 @@ export interface TransportContext {
   cityCommute: {
     centreName: string | null;
     distanceKm: number | null;
+    durationMinutes?: number | null;
     convenienceTier: "excellent" | "good" | "limited" | "poor" | "unknown";
     confidence: "high" | "medium" | "low" | "unknown";
   };
@@ -397,7 +400,7 @@ interface ChatContextValue {
   replaceBackgroundAnalyseMessage: (jobId: string, msg: Omit<ChatMessage, "id" | "timestamp">, sessionId?: string) => void;
   removeMessage: (messageId: string, sessionId?: string) => void;
   updateCandidateScores: (
-    scoreMap: Record<string, { ease: number; cost: number; roi: number; composite: number; landArea?: number; zone?: string | null }>,
+    scoreMap: Record<string, { ease: number; cost: number; roi: number; composite: number; landArea?: number; zone?: string | null; potentialLots?: number; minLotSize?: number | null }>,
     sessionId?: string,
   ) => void;
   setCurrentReport: (report: FeasibilityReport) => void;
@@ -661,10 +664,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const updateCandidateScores = useCallback(
     (
-      scoreMap: Record<string, { ease: number; cost: number; roi: number; composite: number; landArea?: number; zone?: string | null }>,
+      scoreMap: Record<string, { ease: number; cost: number; roi: number; composite: number; landArea?: number; zone?: string | null; potentialLots?: number; minLotSize?: number | null }>,
       sessionId?: string,
     ) => {
-      const normMap: Record<string, { ease: number; cost: number; roi: number; composite: number; landArea?: number; zone?: string | null }> = {};
+      const normMap: Record<string, { ease: number; cost: number; roi: number; composite: number; landArea?: number; zone?: string | null; potentialLots?: number; minLotSize?: number | null }> = {};
       for (const [addr, data] of Object.entries(scoreMap)) {
         for (const key of addressMatchKeys(addr)) {
           normMap[key] = data;
@@ -679,13 +682,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             const updatedResults = m.searchResults.map((c) => {
               const update = addressMatchKeys(c.address).map((key) => normMap[key]).find(Boolean);
               if (!update) return c;
-              const { landArea, zone, ...scoreFields } = update;
+              const { landArea, zone, potentialLots, minLotSize, ...scoreFields } = update;
               return {
                 ...c,
                 scores: { ...c.scores, ...scoreFields },
                 scoresLoading: false,
                 ...(landArea != null ? { landArea } : {}),
                 ...(zone != null ? { zone } : {}),
+                ...(potentialLots != null ? { potentialLots } : {}),
+                ...(minLotSize !== undefined ? { minLotSize: minLotSize ?? undefined } : {}),
               };
             });
             return { ...m, searchResults: updatedResults };

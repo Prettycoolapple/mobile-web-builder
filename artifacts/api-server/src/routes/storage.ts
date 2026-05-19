@@ -115,7 +115,7 @@ router.get("/storage/objects/*path", requireAuth, async (req: Request, res: Resp
       }
     }
 
-    if (objectStorageService.isLocal) {
+    if (objectStorageService.isLocal || objectStorageService.localFileExists(objectPath)) {
       const { stream, contentType, size } = objectStorageService.readLocalFile(objectPath);
       res.setHeader("Content-Type", contentType);
       res.setHeader("Cache-Control", "private, max-age=3600");
@@ -159,7 +159,7 @@ router.get("/storage/review/*path", async (req: Request, res: Response) => {
       return;
     }
 
-    if (objectStorageService.isLocal) {
+    if (objectStorageService.isLocal || objectStorageService.localFileExists(objectPath)) {
       const { stream, contentType, size } = objectStorageService.readLocalFile(objectPath);
       res.setHeader("Content-Type", contentType);
       res.setHeader("Cache-Control", "private, max-age=300");

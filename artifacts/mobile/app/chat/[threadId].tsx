@@ -410,7 +410,7 @@ export default function ChatScreen() {
       }
       result = await ImagePicker.launchCameraAsync({
         mediaTypes: ["images"],
-        quality: 0.75,
+        quality: 0.55,
         allowsEditing: true,
       });
     } else {
@@ -421,7 +421,7 @@ export default function ChatScreen() {
       }
       result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ["images"],
-        quality: 0.75,
+        quality: 0.55,
         allowsEditing: false,
       });
     }
@@ -522,10 +522,6 @@ export default function ChatScreen() {
         }
       }
       if (!fileUrl) {
-        Alert.alert(t("common.error"), t("dm.error.image_upload_failed"));
-        return;
-      }
-      if (fileUrl.startsWith("data:")) {
         Alert.alert(t("common.error"), t("dm.error.image_upload_failed"));
         return;
       }

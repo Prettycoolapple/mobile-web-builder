@@ -34,6 +34,7 @@ if (enableSocketIo) {
     cors: { origin: "*" },
     transports: ["websocket", "polling"],
     path: "/api/socket.io",
+    maxHttpBufferSize: 8 * 1024 * 1024,
   });
 
   setIo(io);

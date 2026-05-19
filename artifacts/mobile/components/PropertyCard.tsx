@@ -79,6 +79,11 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
   const showOverall =
     !candidate.scoresLoading && typeof compositeRaw === "number" && compositeRaw > 0;
   const composite = showOverall ? compositeRaw : 0;
+  const potentialLots = candidate.potentialLots ?? 1;
+  const showSubdivisionRecommendation = potentialLots >= 2;
+  const subdivisionRuleText = candidate.minLotSize
+    ? t("search.subdivision_rule", { min: candidate.minLotSize })
+    : null;
 
   return (
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -152,6 +157,18 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
             </View>
           )}
         </View>
+
+        {showSubdivisionRecommendation ? (
+          <View style={[styles.subdivisionBox, { backgroundColor: colors.success + "12", borderColor: colors.success + "44" }]}>
+            <Feather name="check-circle" size={13} color={colors.success} />
+            <Text style={[styles.subdivisionText, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}>
+              <Text style={{ color: colors.success, fontFamily: "DM_Sans_700Bold" }}>
+                {t("search.subdivision_candidate", { lots: potentialLots })}
+              </Text>
+              {subdivisionRuleText ? ` · ${subdivisionRuleText}` : ""}
+            </Text>
+          </View>
+        ) : null}
 
         <View style={[styles.scoresRow, { borderTopColor: colors.border }]}>
           <ScorePip score={candidate.scores.ease} label={t("report.ease")} loading={candidate.scoresLoading} />
@@ -253,6 +270,20 @@ const styles = StyleSheet.create({
   },
   tagText: {
     fontSize: 11,
+  },
+  subdivisionBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+  },
+  subdivisionText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 16,
   },
   scoresRow: {
     flexDirection: "row",

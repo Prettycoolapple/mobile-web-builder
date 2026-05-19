@@ -3,6 +3,7 @@ import {
   buildFallbackDevelopmentStrategyAssessment,
   calculateDevelopmentStrategies,
 } from "../development-strategies";
+import { estimateGdvPerLot } from "../roi-calculator";
 import type { CostBreakdown } from "../cost-estimator";
 import type { LotResult } from "../lot-calculator";
 import type { MergedPropertyData } from "../scrapers/merge";
@@ -124,6 +125,54 @@ describe("development strategies", () => {
     expect(hold?.costItems.some((item) => item.label === "Demolition")).toBe(false);
     expect(hold?.totalCostLow).toBeLessThan(rebuild?.totalCostLow ?? 0);
     expect(hold?.roiScenarios.length).toBeGreaterThan(0);
+    expect(hold?.costItems.find((item) => item.label === "Contingency")?.high ?? 0).toBeLessThan(
+      rebuild?.costItems.find((item) => item.label === "Contingency")?.low ?? 0,
+    );
+  });
+
+  it("floors hold-existing exit value at CV and uses light holding allowances", () => {
+    const data = merged({ cv_nzd: 3_950_000, floor_area_sqm: 220 });
+    const costs = { ...baseCosts, land_cv_nzd: 3_950_000 };
+    const assessment = buildFallbackDevelopmentStrategyAssessment(data, lotResult);
+    const strategies = calculateDevelopmentStrategies({
+      data,
+      baseCosts: costs,
+      lotResult,
+      avgSalePrice: 1_700_000,
+      avgPricePerSqm: 6_000,
+      interestRateOutlook: "stable",
+      assessment,
+    });
+
+    const hold = strategies.find((strategy) => strategy.id === "hold_existing");
+    const scenario = hold?.roiScenarios[0];
+    const baseCase = scenario?.cases.find((c) => c.case === "base");
+
+    expect(scenario?.gdv).toBe(4_110_000);
+    expect(baseCase?.gdv).toBe(4_110_000);
+    expect(hold?.roiScenarios.map((s) => s.gdv)).toEqual([4_110_000, 4_192_000, 4_276_000]);
+    expect(hold?.totalCostLow).toBe(3_990_000);
+    expect(hold?.totalCostHigh).toBe(4_069_000);
+    expect(hold?.costItems.find((item) => item.label === "Contingency")?.high).toBe(20_000);
+  });
+
+  it("applies organic annual growth across hold, refurbish, and rebuild horizons", () => {
+    const assessment = buildFallbackDevelopmentStrategyAssessment(merged(), lotResult);
+    const strategies = calculateDevelopmentStrategies({
+      data: merged(),
+      baseCosts,
+      lotResult,
+      avgSalePrice: 2_400_000,
+      avgPricePerSqm: 10_000,
+      interestRateOutlook: "stable",
+      assessment,
+    });
+
+    for (const strategy of strategies) {
+      expect(strategy.roiScenarios.map((scenario) => scenario.years)).toEqual([2, 3, 4]);
+      expect(strategy.roiScenarios[1].gdv).toBeGreaterThan(strategy.roiScenarios[0].gdv);
+      expect(strategy.roiScenarios[2].gdv).toBeGreaterThan(strategy.roiScenarios[1].gdv);
+    }
   });
 
   it("uses the multi-unit rebuild cost stack when calculating subdivision ROI", () => {
@@ -205,7 +254,7 @@ describe("development strategies", () => {
     expect(rebuild?.costItems.some((item) => item.label === "Demolition")).toBe(false);
   });
 
-  it("does not double-apply the generic typology discount when terrace comparables are matched", () => {
+  it("does not apply a generic terrace/townhouse typology GDV discount", () => {
     const fourLotResult: LotResult = {
       ...lotResult,
       lots: 4,
@@ -234,17 +283,17 @@ describe("development strategies", () => {
       avgPricePerSqm: 8_000,
       interestRateOutlook: "stable",
       assessment,
-      gdvTypologyMultiplier: 1,
       marketGdvMultiplier: 0.97,
-      typologyMatchedComparables: true,
+      typologyMatchedComparables: false,
       neighbourhoodContext: context,
     });
 
     const rebuild = strategies.find((strategy) => strategy.id === "demolish_rebuild");
     const scenario = rebuild?.roiScenarios[0];
+    const expectedSourceBackedGdv = Math.round(estimateGdvPerLot(8_000, 1_050_000, fourLotResult.sqm_per_lot) * 0.97 * Math.pow(1.02, 3) / 1000) * 1000;
 
-    expect(scenario?.gdv_per_lot).toBe(792_000);
-    expect(rebuild?.assumptions.some((a) => /no generic standalone-house typology discount/i.test(a))).toBe(true);
+    expect(scenario?.gdv_per_lot).toBe(expectedSourceBackedGdv);
+    expect(rebuild?.assumptions.some((a) => /typology discount|terrace\/townhouse comparables|standalone-house/i.test(a))).toBe(false);
     expect(rebuild?.assumptions.some((a) => /buyer-perception risk/i.test(a))).toBe(true);
   });
 });

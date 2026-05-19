@@ -4,7 +4,6 @@ import type { MergedPropertyData } from "./scrapers/merge";
 import {
   calculateScenariosFromGdv,
   estimateGdvPerLot,
-  exitGdvTypologyDiscountFactor,
   type DevelopmentStrategyId,
   type InterestRateOutlook,
   type RefurbishmentScope,
@@ -189,9 +188,17 @@ function fallbackRationaleZh(strategy: DevelopmentStrategyId, data: MergedProper
   return "翻新方案在较低资本支出与提升转售价值之间取得平衡，建议与保留现状及重建方案进行比较。";
 }
 
-function makeZeroCostBreakdown(base: CostBreakdown, units: number): CostBreakdown {
+function makeHoldExistingCostBreakdown(base: CostBreakdown, units: number): CostBreakdown {
   const cv = base.land_cv_nzd ?? 0;
   const safeUnits = Math.max(1, units);
+  // Holding the existing dwelling should not inherit the development finance /
+  // contingency stack used for subdivision or rebuild work.
+  const holdingLow = cv * 0.01;
+  const holdingHigh = cv * 0.025;
+  const contingencyLow = 0;
+  const contingencyHigh = cv * 0.005;
+  const totalLow = cv + holdingLow + contingencyLow;
+  const totalHigh = cv + holdingHigh + contingencyHigh;
   return {
     land_cv_nzd: base.land_cv_nzd,
     cv_unavailable: base.cv_unavailable,
@@ -207,15 +214,15 @@ function makeZeroCostBreakdown(base: CostBreakdown, units: number): CostBreakdow
     construction_high: 0,
     consents_low: 0,
     consents_high: 0,
-    finance_low: r(cv * 0.075),
-    finance_high: r(cv * 0.075 * 2),
-    contingency_low: 0,
-    contingency_high: 0,
-    total_low: r(cv + cv * 0.075),
-    total_high: r(cv + cv * 0.075 * 2),
+    finance_low: r(holdingLow),
+    finance_high: r(holdingHigh),
+    contingency_low: r(contingencyLow),
+    contingency_high: r(contingencyHigh),
+    total_low: r(totalLow),
+    total_high: r(totalHigh),
     total_excludes_land: base.total_excludes_land,
     units: safeUnits,
-    cost_per_unit_avg: r((cv + cv * 0.075 * 1.5) / safeUnits),
+    cost_per_unit_avg: r(((totalLow + totalHigh) / 2) / safeUnits),
     has_existing_dwelling: base.has_existing_dwelling,
   };
 }
@@ -295,7 +302,8 @@ function costItemsForStrategy(id: DevelopmentStrategyId, costs: CostBreakdown): 
 function existingDwellingValue(data: MergedPropertyData, avgSalePrice: number, avgPricePerSqm: number): number {
   const floorArea = data.floor_area_sqm ?? 0;
   const floorBased = avgPricePerSqm > 0 && floorArea > 0 ? avgPricePerSqm * floorArea : 0;
-  return r(Math.max(avgSalePrice, floorBased));
+  const cvFloor = data.cv_nzd ?? 0;
+  return r(Math.max(cvFloor, avgSalePrice, floorBased));
 }
 
 function statusFor(id: DevelopmentStrategyId, assessment: DevelopmentStrategyAssessment, scenarios: ROIScenario[]): DevelopmentStrategyRecommendationStatus {
@@ -339,18 +347,6 @@ function buildAssumptions(
     if (comparablesQuality === "estimated") {
       assumptions.push("Exit pricing uses listing-ask comparables — staged delivery over several years adds market-timing risk not fully captured in a single snapshot.");
     }
-  }
-  if (
-    id === "demolish_rebuild" &&
-    exitTypologyMultiplier != null &&
-    exitTypologyMultiplier < 0.999
-  ) {
-    assumptions.push(
-      "Total development value (GDV) is discounted versus raw suburb comparables: those sales are often standalone houses, while this scenario models smaller terrace or townhouse lots — a different buyer product and typically lower achievable pricing per dwelling.",
-    );
-  }
-  if (id === "demolish_rebuild" && typologyMatchedComparables) {
-    assumptions.push("Exit pricing prioritises terrace/townhouse comparables, so no generic standalone-house typology discount was applied.");
   }
   if (marketGdvMultiplier != null && marketGdvMultiplier < 0.999 && neighbourhoodContext?.marketAdjustment.reason) {
     assumptions.push(neighbourhoodContext.marketAdjustment.reason);
@@ -404,16 +400,12 @@ export function calculateDevelopmentStrategies(params: {
   const refurbScope = effectiveAssessment.refurbish_scope === "none" ? "light" : effectiveAssessment.refurbish_scope;
   const lotIntensityPenalty =
     lotResult.lots >= 7 ? 0.2 : lotResult.lots >= 5 ? 0.16 : lotResult.lots >= 4 ? 0.12 : 0;
-  const exitTypologyMultiplier = params.gdvTypologyMultiplier ?? exitGdvTypologyDiscountFactor(
-    data.zone_code,
-    lotResult.lots,
-    lotResult.sqm_per_lot,
-  );
+  const exitTypologyMultiplier = params.gdvTypologyMultiplier ?? 1;
   const marketGdvMultiplier = Number.isFinite(params.marketGdvMultiplier)
     ? Math.min(1, Math.max(0.9, params.marketGdvMultiplier ?? 1))
     : 1;
 
-  const holdCosts = makeZeroCostBreakdown(baseCosts, 1);
+  const holdCosts = makeHoldExistingCostBreakdown(baseCosts, 1);
   const refurbCosts = makeRefurbishCostBreakdown(baseCosts, floorArea, refurbScope);
   const rebuildCosts = baseCosts;
 
@@ -436,9 +428,8 @@ export function calculateDevelopmentStrategies(params: {
       : [];
     const baseConf =
       row.id === effectiveAssessment.recommended_strategy ? effectiveAssessment.confidence : Math.max(0.35, effectiveAssessment.confidence - 0.15);
-    const typologyFallbackPenalty = row.id === "demolish_rebuild" && lotResult.lots >= 3 && !typologyMatchedComparables ? 0.08 : 0;
     const localMarketPenalty = marketGdvMultiplier < 0.999 ? 0.05 : 0;
-    const confidence = Math.max(0.25, parseFloat((baseConf - lotIntensityPenalty - typologyFallbackPenalty - localMarketPenalty).toFixed(2)));
+    const confidence = Math.max(0.25, parseFloat((baseConf - lotIntensityPenalty - localMarketPenalty).toFixed(2)));
     return {
       id: row.id,
       title: row.id === "demolish_rebuild" && !hasDwelling ? "Build new dwelling(s)" : STRATEGY_TITLES[row.id],

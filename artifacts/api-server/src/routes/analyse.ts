@@ -758,6 +758,15 @@ function isDevelopmentDiscoveryIntent(criteria: string | null | undefined): bool
   return /\b(develop(?:ment)?|subdivi\w*|sub[-\s]?divide|section|sections|lot|lots|townhouse|terrace|duplex|infill|unitary|yield)\b/i.test(criteria);
 }
 
+function isStandardSubdivisionDiscoveryIntent(criteria: string | null | undefined): boolean {
+  if (!criteria) return false;
+  return /\b(subdivi\w*|sub[-\s]?divide|subdivision|vacant\s+lots?|new\s+titles?|separate\s+titles?|split\s+(?:the\s+)?(?:site|section|land|lot)|(?:2|two)\s+(?:vacant\s+)?lots?)\b/i.test(criteria);
+}
+
+function passesStandardSubdivisionSizeScreen(candidate: PropertyCandidate): boolean {
+  return (candidate.potentialLots ?? 1) >= 2;
+}
+
 function buildDiscoveryCriteriaText(
   threadMessages: Message[] | undefined,
   currentUserText: string,
@@ -867,6 +876,9 @@ function shufflePick<T>(arr: T[], n: number): T[] {
 
 function pickRankedCandidates(candidates: PropertyCandidate[], criteria: string | null, n = 3): PropertyCandidate[] {
   const ranked = rankByCriteria(candidates, criteria);
+  if (isStandardSubdivisionDiscoveryIntent(criteria)) {
+    return ranked.filter(passesStandardSubdivisionSizeScreen).slice(0, n);
+  }
   if (isDevelopmentDiscoveryIntent(criteria)) return ranked.slice(0, n);
   return shufflePick(ranked.slice(0, Math.max(n, 6)), n);
 }
@@ -876,14 +888,25 @@ function partitionBatchAfterPrescreen(
   batch: ListingResult[],
   screened: PropertyCandidate[],
   picked: PropertyCandidate[],
+  criteria?: string | null,
 ): { putAtFront: ListingResult[]; putAtBack: ListingResult[] } {
   const pickedUrls = new Set(picked.map((p) => p.listingUrl).filter(Boolean));
   const screenedUrls = new Set(screened.map((s) => s.listingUrl).filter(Boolean));
+  const subdivisionHardScreen = isStandardSubdivisionDiscoveryIntent(criteria);
+  const subdivisionViableUrls = new Set(
+    screened
+      .filter(passesStandardSubdivisionSizeScreen)
+      .map((s) => s.listingUrl)
+      .filter(Boolean),
+  );
   const putAtFront: ListingResult[] = [];
   const putAtBack: ListingResult[] = [];
   for (const l of batch) {
     if (pickedUrls.has(l.listingUrl)) continue;
-    if (screenedUrls.has(l.listingUrl)) putAtFront.push(l);
+    if (screenedUrls.has(l.listingUrl)) {
+      if (subdivisionHardScreen && !subdivisionViableUrls.has(l.listingUrl)) putAtBack.push(l);
+      else putAtFront.push(l);
+    }
     else putAtBack.push(l);
   }
   return { putAtFront, putAtBack };
@@ -899,7 +922,7 @@ async function prescreenPickRestoreBatch(
   const candidates = pickRankedCandidates(screened, criteria, 3);
   const pickedUrls = candidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u));
   markShown(cacheKey, pickedUrls);
-  const { putAtFront, putAtBack } = partitionBatchAfterPrescreen(batch, screened, candidates);
+  const { putAtFront, putAtBack } = partitionBatchAfterPrescreen(batch, screened, candidates, criteria);
   restoreListingsAfterPop(cacheKey, putAtFront, putAtBack);
   return candidates;
 }
@@ -2140,7 +2163,7 @@ router.post("/chat", async (req, res) => {
                 candidates = pickRankedCandidates(screened, discoveryCriteria, 3);
                 const pickedUrls = candidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u));
                 markShown(cacheKey, pickedUrls);
-                const { putAtFront, putAtBack } = partitionBatchAfterPrescreen(firstFiltered, screened, candidates);
+                const { putAtFront, putAtBack } = partitionBatchAfterPrescreen(firstFiltered, screened, candidates, discoveryCriteria);
                 restoreListingsAfterPop(cacheKey, putAtFront, putAtBack);
                 prescreenedIntro = introFromPreScreen;
 
@@ -2230,6 +2253,7 @@ router.post("/chat", async (req, res) => {
                       filtered,
                       screenedFallback,
                       candidates,
+                      discoveryCriteria,
                     );
                     restoreListingsAfterPop(fallbackCacheKey, fbFront, fbBack);
 

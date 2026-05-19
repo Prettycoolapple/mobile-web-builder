@@ -34,6 +34,8 @@ export interface ROIScenario {
 
 export type InterestRateOutlook = "falling" | "stable" | "rising";
 
+const ORGANIC_ANNUAL_GROWTH_RATE = 0.02;
+
 /**
  * Suburb comparables are usually standalone dwellings on larger sites. Modelled GDV for
  * many small lots in dense zones (THAB / MHU) is terrace or townhouse product — typically
@@ -187,18 +189,21 @@ export function calculateScenariosFromGdv(
   interest_rate_outlook: InterestRateOutlook,
 ): ROIScenario[] {
   const safeUnits = Math.max(1, lots);
-  const bear_gdv = roundToNearest(base_gdv * 0.80, 1000);
-  const bull_gdv = roundToNearest(base_gdv * 1.20, 1000);
-
   const total_cost_mid = roundToNearest((costs.total_low + costs.total_high) / 2, 1000);
   const cvUnavailable = costs.cv_unavailable === true;
 
   const horizonYears = exitHorizonYearsForUnitCount(safeUnits);
 
   return horizonYears.map((years) => {
-    const bearCase = buildCase("bear", bear_gdv, total_cost_mid, years);
-    const baseCase = buildCase("base", base_gdv, total_cost_mid, years);
-    const bullCase = buildCase("bull", bull_gdv, total_cost_mid, years);
+    const organicGrowthMultiplier = Math.pow(1 + ORGANIC_ANNUAL_GROWTH_RATE, years);
+    const horizonBaseGdv = roundToNearest(base_gdv * organicGrowthMultiplier, 1000);
+    const horizonGdvPerLot = roundToNearest(gdv_per_lot * organicGrowthMultiplier, 1000);
+    const bearGdv = roundToNearest(horizonBaseGdv * 0.80, 1000);
+    const bullGdv = roundToNearest(horizonBaseGdv * 1.20, 1000);
+
+    const bearCase = buildCase("bear", bearGdv, total_cost_mid, years);
+    const baseCase = buildCase("base", horizonBaseGdv, total_cost_mid, years);
+    const bullCase = buildCase("bull", bullGdv, total_cost_mid, years);
 
     const activeCases: ROICaseResult[] = [
       bearCase,
@@ -208,7 +213,7 @@ export function calculateScenariosFromGdv(
 
     return {
       years,
-      gdv: base_gdv,
+      gdv: horizonBaseGdv,
       total_cost_mid,
       gross_profit: baseCase.gross_profit,
       roi_percent: baseCase.roi_percent,
@@ -218,7 +223,7 @@ export function calculateScenariosFromGdv(
       cases: activeCases,
       lots: safeUnits,
       sqm_per_lot,
-      gdv_per_lot,
+      gdv_per_lot: horizonGdvPerLot,
       interest_rate_outlook,
     };
   });

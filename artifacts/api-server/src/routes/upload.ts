@@ -18,7 +18,7 @@ function classifyStorageUploadError(error: unknown): { status: number; error: st
   ) {
     return {
       status: 503,
-      error: "Profile photo storage is not configured on the server. Please contact support.",
+      error: "Image storage is not configured on the server. Please contact support.",
       code: "STORAGE_NOT_CONFIGURED",
     };
   }
@@ -55,6 +55,10 @@ function profilePictureDataUrl(buffer: Buffer | Uint8Array, mimetype: string): s
   return `data:${mimetype};base64,${Buffer.from(buffer).toString("base64")}`;
 }
 
+function imageDataUrl(buffer: Buffer | Uint8Array, mimetype: string): string {
+  return `data:${mimetype};base64,${Buffer.from(buffer).toString("base64")}`;
+}
+
 async function saveInlineProfilePicture(
   userId: string,
   buffer: Buffer | Uint8Array,
@@ -85,7 +89,9 @@ const ALLOWED_IMAGE_MIME_TYPES = new Set([
 ]);
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+const MAX_IMAGE_FILE_SIZE_BYTES = 20 * 1024 * 1024;
 const MAX_CERT_FILE_SIZE_BYTES = 30 * 1024 * 1024;
+const MAX_DM_INLINE_IMAGE_BYTES = 2 * 1024 * 1024;
 const CERTIFICATE_NAMESPACE = "provider-certificates";
 const DM_IMAGE_NAMESPACE = "dm-images";
 
@@ -115,7 +121,7 @@ const uploadCertificate = multer({
 
 const uploadImageOnly = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_FILE_SIZE_BYTES },
+  limits: { fileSize: MAX_IMAGE_FILE_SIZE_BYTES },
   fileFilter: (_req, file, cb) => {
     if (ALLOWED_IMAGE_MIME_TYPES.has(file.mimetype)) {
       cb(null, true);
@@ -209,11 +215,11 @@ function validateImageUploadRequest(body: unknown):
   if (!name || typeof name !== "string") {
     return { ok: false, status: 400, error: "Missing or invalid file name", code: "INVALID_NAME" };
   }
-  if (!Number.isFinite(fileSize) || fileSize <= 0 || fileSize > MAX_FILE_SIZE_BYTES) {
+  if (!Number.isFinite(fileSize) || fileSize <= 0 || fileSize > MAX_IMAGE_FILE_SIZE_BYTES) {
     return {
       ok: false,
       status: 400,
-      error: `Invalid file size. Maximum size is ${MAX_FILE_SIZE_BYTES / (1024 * 1024)}MB`,
+      error: `Invalid file size. Maximum size is ${MAX_IMAGE_FILE_SIZE_BYTES / (1024 * 1024)}MB`,
       code: "INVALID_SIZE",
     };
   }
@@ -374,9 +380,9 @@ router.post(
       res.status(400).json({ error: "Missing or invalid file name", code: "INVALID_NAME" });
       return;
     }
-    if (!Number.isFinite(fileSize) || fileSize <= 0 || fileSize > MAX_FILE_SIZE_BYTES) {
+    if (!Number.isFinite(fileSize) || fileSize <= 0 || fileSize > MAX_IMAGE_FILE_SIZE_BYTES) {
       res.status(400).json({
-        error: `Invalid file size. Maximum size is ${MAX_FILE_SIZE_BYTES / (1024 * 1024)}MB`,
+        error: `Invalid file size. Maximum size is ${MAX_IMAGE_FILE_SIZE_BYTES / (1024 * 1024)}MB`,
         code: "INVALID_SIZE",
       });
       return;
@@ -556,12 +562,35 @@ router.post(
 
     try {
       const { buffer, mimetype, size } = req.file;
-      const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size);
+      const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size, DM_IMAGE_NAMESPACE);
       await db.insert(userUploads).values({ userId, objectPath }).onConflictDoNothing();
       const fileUrl = `/api/storage${objectPath}`;
       res.status(201).json({ fileUrl, objectPath });
     } catch (error) {
       req.log.error({ err: error }, "DM image upload failed");
+      const { buffer, mimetype, size } = req.file;
+      if (size <= MAX_DM_INLINE_IMAGE_BYTES) {
+        res.status(201).json({
+          fileUrl: imageDataUrl(buffer, mimetype),
+          objectPath: null,
+          fallback: "inline",
+        });
+        return;
+      }
+
+      try {
+        const { objectPath } = await objectStorageService.saveLocal(buffer, mimetype, DM_IMAGE_NAMESPACE);
+        await db.insert(userUploads).values({ userId, objectPath }).onConflictDoNothing();
+        res.status(201).json({
+          fileUrl: `/api/storage${objectPath}`,
+          objectPath,
+          fallback: "local",
+        });
+        return;
+      } catch (localError) {
+        req.log.error({ err: localError }, "DM image local fallback failed");
+      }
+
       const classified = classifyStorageUploadError(error);
       if (classified) {
         res.status(classified.status).json({ error: classified.error, code: classified.code });
@@ -622,7 +651,11 @@ router.post(
 router.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof MulterError) {
     if (err.code === "LIMIT_FILE_SIZE") {
-      const maxBytes = req.path.includes("incorporation-cert") ? MAX_CERT_FILE_SIZE_BYTES : MAX_FILE_SIZE_BYTES;
+      const maxBytes = req.path.includes("incorporation-cert")
+        ? MAX_CERT_FILE_SIZE_BYTES
+        : req.path.includes("dm-image") || req.path.includes("profile-picture")
+          ? MAX_IMAGE_FILE_SIZE_BYTES
+          : MAX_FILE_SIZE_BYTES;
       res.status(413).json({
         error: `File too large. Maximum size is ${maxBytes / (1024 * 1024)}MB`,
         code: "FILE_TOO_LARGE",

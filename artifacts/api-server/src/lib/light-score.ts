@@ -3,7 +3,7 @@ import { fetchUnitaryPlanZone, fetchOverlays, fetchContour, type Overlay } from 
 import { fetchLINZParcel } from "./linz";
 import { calculatePotentialLots } from "./lot-calculator";
 import { estimateCosts } from "./cost-estimator";
-import { calculateBearBaseBullScenarios, exitGdvTypologyDiscountFactor } from "./roi-calculator";
+import { calculateBearBaseBullScenarios } from "./roi-calculator";
 import { scoreProperty, type ScoringResult } from "./scoring";
 import type { MergedPropertyData } from "./scrapers/merge";
 
@@ -19,6 +19,8 @@ export interface LightScoreResult {
   scores: ScoringResult;
   landArea: number;
   zone: string | null;
+  potentialLots: number;
+  minLotSize: number | null;
 }
 
 /**
@@ -107,12 +109,14 @@ export async function computeLightScore(input: LightScoreInput): Promise<LightSc
     lots,
     lotResult.sqm_per_lot,
     "stable",
-    exitGdvTypologyDiscountFactor(zoneCode, lots, lotResult.sqm_per_lot),
+    1,
   );
 
   return {
     scores: scoreProperty(minimalMerged, costs, scenarios, lots),
     landArea: land,
     zone: zoneCode,
+    potentialLots: lots,
+    minLotSize: lotResult.min_lot_size > 0 ? lotResult.min_lot_size : null,
   };
 }

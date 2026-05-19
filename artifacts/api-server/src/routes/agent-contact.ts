@@ -73,6 +73,9 @@ Reply with ONLY valid JSON (no markdown):
       "ring", "talk to", "who is selling", "who listed", "listing agent",
       "sales agent", "viewing", "inspection", "open home", "walkthrough",
       "kan fang", "zhong jie", "jing ji", "lian xi", "dian hua", "xiao shou",
+      "\u4e2d\u4ecb", "\u7ecf\u7eaa", "\u7d93\u7d00", "\u8054\u7cfb", "\u806f\u7e6b",
+      "\u7535\u8bdd", "\u96fb\u8a71", "\u8c01\u5728\u5356", "\u8ab0\u5728\u8ce3",
+      "\u8c01\u5356", "\u8ab0\u8ce3", "\u770b\u623f", "\u9500\u552e", "\u92b7\u552e",
     ];
     return fallbackSignals.some((kw) => recentText.includes(kw));
   }

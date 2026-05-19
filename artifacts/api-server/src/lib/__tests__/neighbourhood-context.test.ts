@@ -5,6 +5,7 @@ import {
   marketAdjustmentFromSignals,
   normaliseOwnerName,
   selectNearestResidentialParcels,
+  selectResidentialParcelsWithinRadius,
 } from "../neighbourhood-context";
 import type { LinzParcelNearby, LinzTitle } from "../linz";
 
@@ -41,6 +42,20 @@ describe("neighbourhood context classifiers", () => {
     ], "subject");
 
     expect(selected.map((p) => p.parcel_id)).toEqual(["n1", "n2"]);
+  });
+
+  it("selects all eligible residential parcels within the 100m public-housing scan radius", () => {
+    const parcels = Array.from({ length: 10 }, (_, i) =>
+      parcel({ parcel_id: `n${i + 1}`, distance_m: 10 + i * 8 }),
+    );
+    const selected = selectResidentialParcelsWithinRadius([
+      parcel({ parcel_id: "subject", distance_m: 0 }),
+      ...parcels,
+      parcel({ parcel_id: "outside", distance_m: 101 }),
+    ], "subject", 100);
+
+    expect(selected.map((p) => p.parcel_id)).toEqual(parcels.map((p) => p.parcel_id));
+    expect(selected).toHaveLength(10);
   });
 
   it("does not classify terrace housing from zoning alone", () => {

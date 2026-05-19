@@ -87,7 +87,6 @@ const signupSchema = z
         { key: "discipline", label: "Discipline is required." },
         { key: "contactNumber", label: "Contact number is required." },
         { key: "primaryLanguage", label: "Primary language is required." },
-        { key: "incorporationCertUrl", label: "Certificate of Incorporation is required." },
       ];
       for (const r of required) {
         const v = p[r.key];
@@ -310,19 +309,21 @@ router.post("/signup", async (req, res) => {
         if (providerData?.avatarUrl) {
           await tx.update(profiles).set({ avatarUrl: providerData.avatarUrl }).where(eq(profiles.id, newProfile.id));
         }
-        // Bind the pre-signup-uploaded Certificate of Incorporation to this
-        // newly created user so /api/storage/objects/* ownership checks pass
-        // and the file is no longer "orphaned" if signup is later rolled back
-        // or audited. The URL shape is `/api/storage/objects/<id>`.
-        const certObjectPath = objectPathFromStorageUrl(providerData?.incorporationCertUrl);
-        if (!certObjectPath) {
-          throw new Error("Certificate upload is missing or invalid.");
+        // Signup no longer requires a certificate. If one is still supplied
+        // by an older client, bind it to the new user so admin review keeps
+        // working.
+        const certUrl = providerData?.incorporationCertUrl?.trim();
+        const certObjectPath = objectPathFromStorageUrl(certUrl);
+        if (certUrl) {
+          if (!certObjectPath) {
+            throw new Error("Certificate upload is invalid.");
+          }
+          await assertUploadedObjectExists(certObjectPath);
+          await tx
+            .insert(userUploads)
+            .values({ userId: newProfile.id, objectPath: certObjectPath })
+            .onConflictDoNothing();
         }
-        await assertUploadedObjectExists(certObjectPath);
-        await tx
-          .insert(userUploads)
-          .values({ userId: newProfile.id, objectPath: certObjectPath })
-          .onConflictDoNothing();
         await tx.insert(serviceProviderProfiles).values({
           userId: newProfile.id,
           companyName: providerData?.companyName,
@@ -335,7 +336,7 @@ router.post("/signup", async (req, res) => {
           addressPostcode: providerData?.addressPostcode,
           contactNumber: providerData?.contactNumber,
           languages,
-          incorporationCertUrl: providerData?.incorporationCertUrl,
+          incorporationCertUrl: certUrl || undefined,
           primaryLanguage: providerData?.primaryLanguage,
           secondaryLanguage: providerData?.secondaryLanguage,
         });
@@ -347,6 +348,9 @@ router.post("/signup", async (req, res) => {
     const token = signToken(profile.id, profile.email, role);
     res.status(201).json({ token, user: { ...profile, isVerified: false } });
 
+    const providerCertObjectPath = providerData
+      ? objectPathFromStorageUrl(providerData.incorporationCertUrl)
+      : null;
     sendNewUserSignupNotification({
       role,
       profileId: profile.id,
@@ -358,9 +362,9 @@ router.post("/signup", async (req, res) => {
       providerData: providerData
         ? {
             ...providerData,
-            incorporationCertUrl: providerData.incorporationCertUrl,
-            incorporationCertReviewUrl: objectPathFromStorageUrl(providerData.incorporationCertUrl)
-              ? makeReviewUrl(objectPathFromStorageUrl(providerData.incorporationCertUrl)!)
+            incorporationCertUrl: providerData.incorporationCertUrl || undefined,
+            incorporationCertReviewUrl: providerCertObjectPath
+              ? makeReviewUrl(providerCertObjectPath)
               : undefined,
           }
         : undefined,
@@ -368,7 +372,7 @@ router.post("/signup", async (req, res) => {
   } catch (error) {
     if (
       error instanceof ObjectNotFoundError ||
-      (error instanceof Error && error.message === "Certificate upload is missing or invalid.")
+      (error instanceof Error && error.message === "Certificate upload is invalid.")
     ) {
       res.status(400).json({
         error: "Certificate upload could not be verified. Please upload the file again.",

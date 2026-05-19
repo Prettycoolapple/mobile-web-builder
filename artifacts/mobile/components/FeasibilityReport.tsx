@@ -256,7 +256,7 @@ function SectionCard({
   colors,
 }: {
   title: string;
-  icon: string;
+  icon?: string;
   status?: "good" | "warning" | "risk" | "neutral";
   defaultOpen?: boolean;
   children: React.ReactNode;
@@ -273,7 +273,7 @@ function SectionCard({
     <View style={[styles.sectionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
       <TouchableOpacity style={styles.sectionHeader} onPress={() => setOpen((o) => !o)} activeOpacity={0.7}>
         {dotColor && <View style={[styles.statusDot, { backgroundColor: dotColor }]} />}
-        <Text style={styles.sectionIcon}>{icon}</Text>
+        {icon?.trim() ? <Text style={styles.sectionIcon}>{icon}</Text> : null}
         <Text style={[styles.sectionTitle, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", flex: 1 }]}>
           {title}
         </Text>
@@ -313,15 +313,76 @@ function ScoreStarBlock({
   );
 }
 
+const CJK_TEXT_RE = /[\u3400-\u9fff]/;
+
+function normalizeScoreReason(reason: string): string {
+  return reason
+    .trim()
+    .replace(/[—–]/g, "-")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+const SCORE_REASON_ZH: Record<string, string> = {
+  "single house zone - subdivision heavily restricted": "Single House Zone（单一住宅区）— 分割开发限制较强",
+  "large lot / countryside / rural zone - development very limited": "大地块 / 乡村 / 农村分区 — 开发潜力非常有限",
+  "heritage overlay - demolition may require resource consent": "历史保护叠加层 — 拆除可能需要资源许可",
+  "flood overlay - engineering and consent complexity": "洪涝叠加层 — 工程和审批复杂度较高",
+  "notable tree overlay - design constraints apply": "显著树木叠加层 — 设计将受到限制",
+  "volcanic viewshaft - height restrictions apply": "火山视线保护 — 建筑高度将受限制",
+  "coastal protection overlay - additional consenting required": "海岸保护叠加层 — 可能需要额外审批",
+  "steep terrain - significant earthworks required": "陡坡地形 — 预计需要大量土方工程",
+  "moderate slope - some retaining wall work expected": "中等坡度 — 预计需要一定挡土墙工程",
+  "probable asbestos - specialist demolition required": "可能存在石棉 — 需要专业拆除处理",
+  "service infrastructure on neighbouring land - easement needed": "基础设施位于邻地 — 可能需要地役权",
+  "land area limits subdivision to single dwelling": "土地面积限制分割 — 可能仅适合单一住宅",
+  "excellent cost efficiency per unit": "单元成本效率优秀",
+  "good cost per unit for nz market": "单元成本在新西兰市场中较好",
+  "moderate cost - market viable": "成本中等 — 市场上仍具可行性",
+  "high cost per unit - margin is thin": "单元成本较高 — 利润空间偏薄",
+  "very high cost - roi challenging": "成本很高 — 投资回报具挑战",
+  "extreme cost - feasibility doubtful": "成本极高 — 可行性存疑",
+  "exceptional return - strong development opportunity": "卓越回报 — 开发机会强",
+  "strong return - well above typical nz threshold": "强劲回报 — 明显高于新西兰常见门槛",
+  "solid return - meets typical developer hurdle rate": "稳健回报 — 符合常见开发门槛",
+  "marginal return - viable but sensitive to cost overruns": "边际回报 — 可行但对成本超支敏感",
+  "low return - high risk of negative outcome": "低回报 — 出现负收益的风险较高",
+  "negative return - not viable at current market values": "负回报 — 按当前市场价值不可行",
+  "roi unavailable - no real fetched comparable sales were available": "回报暂不可用 — 暂未获取到真实可比销售记录",
+  "sale price assumptions were not estimated from synthetic comparables": "售价假设未使用模拟可比销售估算",
+  "roi uses terrace/townhouse comparables for the modelled exit product rather than generic standalone-house suburb sales.": "回报估算已优先使用排房 / 联排房可比销售，而不是泛化的独栋住宅区域成交。",
+  "several potential lots increase programme length and absorption exposure versus a single-dwelling flip.": "多个潜在地块会拉长开发周期，并增加销售吸收风险。",
+  "high lot count - long construction and phased sales typically stretch capital recovery; headline roi is a full-project figure, not short-cycle annualised performance.": "潜在地块数量较多 — 较长施工周期和分批销售通常会拉长资金回收；显示的回报是整个项目口径，并非短周期年化表现。",
+};
+
+function localizeScoreReason(reason: string, locale: string): string {
+  if (locale !== "zh" || CJK_TEXT_RE.test(reason)) return reason;
+
+  const normalized = normalizeScoreReason(reason);
+  const translated = SCORE_REASON_ZH[normalized];
+  if (translated) return translated;
+
+  const costPerUnit = reason.match(/^Cost per unit:\s*(.+)$/i);
+  if (costPerUnit) return `单元成本：${costPerUnit[1]}`;
+
+  const bestCase = reason.match(/^Best case:\s*(.+?)\s+ROI over\s+(.+?)\s+years?$/i);
+  if (bestCase) return `最佳情况：${bestCase[1]} ROI，周期 ${bestCase[2]} 年`;
+
+  const baseCase = reason.match(/^Base case:\s*(.+?)\s+ROI over\s+(.+?)\s+years?$/i);
+  if (baseCase) return `基准情况：${baseCase[1]} ROI，周期 ${baseCase[2]} 年`;
+
+  return reason;
+}
+
 function ScoreSummaryRow({ report, colors, hideOverall }: { report: Report; colors: ReturnType<typeof useColors>; hideOverall?: boolean }) {
-  const { t } = useT();
+  const { t, locale } = useT();
   const raw = report.scores ?? {};
   const ease = safeNum(raw.ease);
   const cost = safeNum(raw.cost);
   const roi = safeNum(raw.roi);
   const composite = safeNum(raw.composite);
-  const ease_reasons = filterScoreReasonStrings(raw.ease_reasons);
-  const roi_reasons = filterScoreReasonStrings(raw.roi_reasons);
+  const ease_reasons = filterScoreReasonStrings(raw.ease_reasons).map((reason) => localizeScoreReason(reason, locale));
+  const roi_reasons = filterScoreReasonStrings(raw.roi_reasons).map((reason) => localizeScoreReason(reason, locale));
   const overallColor = scoreColor(composite, colors);
   const overallDisplay = formatCompositeScoreForDisplay(composite);
   const showReasons = ease_reasons.length > 0 || roi_reasons.length > 0;
@@ -1154,12 +1215,8 @@ function strategyStatus(strategies: DevelopmentStrategyScenario[] | undefined): 
 function NeighbourhoodContextNote({ context, colors }: { context?: NeighbourhoodContext | null; colors: ReturnType<typeof useColors> }) {
   if (!context || context.assessedLots <= 0) return null;
   const marketReason = context.marketAdjustment?.reason;
-  const terrace = context.terraceHousingSignal;
   const lines = [
     marketReason,
-    terrace && terrace.count > 0
-      ? `${terrace.count} of ${terrace.assessedLots} nearby lots show attached-housing signals (${terrace.confidence} confidence).`
-      : null,
   ].filter((line): line is string => typeof line === "string" && line.trim().length > 0);
   if (lines.length === 0) return null;
 
@@ -1179,27 +1236,14 @@ function NeighbourhoodContextNote({ context, colors }: { context?: Neighbourhood
 
 function TransportContextNote({ context, colors }: { context?: TransportContext | null; colors: ReturnType<typeof useColors> }) {
   if (!context) return null;
-  const stop = context.publicTransport.nearestStop;
-  const highway = context.highwayAccess;
-  const commute = context.cityCommute;
-  const reasons = context.roiInfluence.reasons.filter((line) => line.trim().length > 0);
-  const detailLines = [
-    stop ? `Nearest ${stop.mode}: ${stop.name}, ${formatDistanceM(stop.distanceM)} away (${stop.serviceIntensity} service).` : null,
-    highway.name && highway.distanceM != null
-      ? `${highway.name}: ${formatDistanceM(highway.distanceM)} away; access ${highway.accessTier}.`
-      : null,
-    commute.centreName && commute.distanceKm != null
-      ? `${commute.centreName}: ${commute.distanceKm.toFixed(1)} km straight-line; commute convenience ${commute.convenienceTier}.`
-      : null,
-  ].filter((line): line is string => typeof line === "string" && line.trim().length > 0);
-  const lines = [...reasons, ...detailLines, "Transport context is narrative-only in this report; no ROI number adjustment has been applied."];
-  if (lines.length <= 1) return null;
+  const reasons = context.roiInfluence?.reasons?.filter((line) => line.trim().length > 0) ?? [];
+  if (reasons.length === 0) return null;
 
   return (
     <View style={[styles.warningBox, { backgroundColor: colors.muted + "35", borderColor: colors.border }]}>
       <Feather name="navigation" size={13} color={colors.mutedForeground} />
       <View style={{ flex: 1, gap: 3 }}>
-        {lines.map((line, i) => (
+        {reasons.map((line, i) => (
           <Text key={i} style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, lineHeight: 16 }}>
             {line}
           </Text>
@@ -1209,7 +1253,7 @@ function TransportContextNote({ context, colors }: { context?: TransportContext 
   );
 }
 
-function signalSummary(signal: NeighbourhoodContext["publicHousingSignal"] | NeighbourhoodContext["terraceHousingSignal"]): string {
+function signalSummary(signal: NeighbourhoodContext["publicHousingSignal"]): string {
   if (signal.confidence === "unknown" || signal.level === "unknown") {
     return `Unknown (${signal.confidence} confidence)`;
   }
@@ -1219,9 +1263,31 @@ function signalSummary(signal: NeighbourhoodContext["publicHousingSignal"] | Nei
   return `${signal.count} of ${signal.assessedLots} nearby lots (${signal.level}, ${signal.confidence} confidence)`;
 }
 
-function influenceLabel(influence?: string): string {
-  if (!influence) return "Neutral";
-  return influence.charAt(0).toUpperCase() + influence.slice(1);
+function publicHousingSummary(
+  signal: NeighbourhoodContext["publicHousingSignal"] | undefined,
+  radiusM: number | undefined,
+  t: (key: string, vars?: Record<string, string | number>) => string,
+): { text: string; tone: "good" | "warning" | "muted" } | null {
+  const radius = Math.round(radiusM ?? 100);
+  if (!signal || signal.confidence === "unknown" || signal.level === "unknown" || signal.assessedLots <= 0) {
+    return { text: t("report.public_housing_unavailable"), tone: "muted" };
+  }
+  if (signal.count <= 0 || signal.level === "none") {
+    return {
+      text: t("report.public_housing_none", { radius, count: signal.assessedLots }),
+      tone: "good",
+    };
+  }
+  return {
+    text: t("report.public_housing_detected", { radius, count: signal.count, confidence: signal.confidence }),
+    tone: "warning",
+  };
+}
+
+function transitModeLabel(mode: string, t: (key: string) => string): string {
+  if (mode === "train") return t("report.mode_train");
+  if (mode === "ferry") return t("report.mode_ferry");
+  return mode;
 }
 
 function MarketAccessContextPanel({ neighbourhoodContext, transportContext, colors }: {
@@ -1229,104 +1295,83 @@ function MarketAccessContextPanel({ neighbourhoodContext, transportContext, colo
   transportContext?: TransportContext | null;
   colors: ReturnType<typeof useColors>;
 }) {
+  const { t } = useT();
   const publicHousing = neighbourhoodContext?.publicHousingSignal;
-  const terrace = neighbourhoodContext?.terraceHousingSignal;
-  const adjustment = neighbourhoodContext?.marketAdjustment;
-  const stop = transportContext?.publicTransport.nearestStop;
-  const highway = transportContext?.highwayAccess;
+  const publicHousingDisplay = publicHousingSummary(publicHousing, neighbourhoodContext?.radiusM, t);
+  const rapidStop = transportContext?.publicTransport.nearestStop;
+  const hasRapidTransitContext = Boolean(transportContext && transportContext.publicTransport.confidence !== "unknown");
   const commute = transportContext?.cityCommute;
-  const transportReasons = transportContext?.roiInfluence.reasons ?? [];
+  const hasCommuteContext = Boolean(
+    commute?.confidence !== "unknown" &&
+    commute?.centreName &&
+    commute.distanceKm != null &&
+    commute.durationMinutes != null,
+  );
+  const hasAnyRows = Boolean(publicHousingDisplay || hasRapidTransitContext || hasCommuteContext);
 
   return (
     <View style={{ gap: 8 }}>
-      {neighbourhoodContext ? (
-        <>
+      {publicHousingDisplay ? (
           <InfoRow
-            label="Nearby public housing"
-            value={publicHousing ? signalSummary(publicHousing) : "Unknown"}
+            label={t("report.nearby_public_housing")}
+            value={publicHousingDisplay.text}
+            valueColor={
+              publicHousingDisplay.tone === "warning"
+                ? colors.amber
+                : publicHousingDisplay.tone === "good"
+                  ? colors.success
+                  : colors.mutedForeground
+            }
             colors={colors}
           />
-          <InfoRow
-            label="Public-housing ROI effect"
-            value={adjustment?.applied ? `GDV adjusted to ${(adjustment.gdvMultiplier * 100).toFixed(0)}%` : "No GDV adjustment"}
-            valueColor={adjustment?.applied ? colors.amber : colors.success}
-            colors={colors}
-          />
-          {adjustment?.reason ? (
-            <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, lineHeight: 16 }}>
-              {adjustment.reason}
-            </Text>
-          ) : null}
-          <InfoRow
-            label="Nearby terrace/townhouse signal"
-            value={terrace ? signalSummary(terrace) : "Unknown"}
-            colors={colors}
-          />
-          <InfoRow
-            label="Typology ROI effect"
-            value={terrace && terrace.count > 0 ? "Use matched attached-home comparables where available" : "No local typology adjustment"}
-            colors={colors}
-          />
-        </>
-      ) : (
-        <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 17 }}>
-          Neighbourhood market context is not available on this saved report. Re-run the analysis to add it.
-        </Text>
-      )}
+      ) : null}
 
-      {transportContext ? (
+      {hasRapidTransitContext ? (
         <>
           <InfoRow
-            label="Public transport"
-            value={stop ? `${transportContext.publicTransport.accessTier}: ${stop.mode} ${formatDistanceM(stop.distanceM)} away` : `${transportContext.publicTransport.accessTier}`}
+            label={t("report.rapid_transit")}
+            value={
+              rapidStop
+                ? t("report.rapid_transit_found", {
+                    mode: transitModeLabel(rapidStop.mode, t),
+                    name: rapidStop.name,
+                    distance: formatDistanceM(rapidStop.distanceM),
+                  })
+                : t("report.rapid_transit_none")
+            }
             colors={colors}
           />
-          {stop ? (
+          {rapidStop ? (
             <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, lineHeight: 16 }}>
-              Nearest stop: {stop.name}; {stop.routeCount} route{stop.routeCount === 1 ? "" : "s"}; {stop.serviceIntensity} service.
+              {rapidStop.routeCount} route{rapidStop.routeCount === 1 ? "" : "s"}; {rapidStop.serviceIntensity} service.
             </Text>
           ) : null}
-          <InfoRow
-            label="Highway access"
-            value={highway?.name && highway.distanceM != null ? `${formatDistanceM(highway.distanceM)} to ${highway.name}` : "Unknown"}
-            colors={colors}
-          />
-          <InfoRow
-            label="Highway exposure"
-            value={highway ? highway.exposureTier : "Unknown"}
-            valueColor={highway?.exposureTier === "high" ? colors.red : colors.foreground}
-            colors={colors}
-          />
-          <InfoRow
-            label="CBD commute context"
-            value={commute?.centreName && commute.distanceKm != null ? `${commute.distanceKm.toFixed(1)} km to ${commute.centreName}; ${commute.convenienceTier}` : "Unknown"}
-            colors={colors}
-          />
-          <InfoRow
-            label="Transport ROI influence"
-            value={`${influenceLabel(transportContext.roiInfluence.influence)}; no numeric adjustment`}
-            valueColor={transportContext.roiInfluence.influence === "negative" ? colors.red : transportContext.roiInfluence.influence === "mixed" ? colors.amber : colors.success}
-            colors={colors}
-          />
-          {transportReasons.map((reason, i) => (
-            <Text key={i} style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, lineHeight: 16 }}>
-              {reason}
-            </Text>
-          ))}
         </>
-      ) : (
+      ) : null}
+
+      {hasCommuteContext ? (
+          <InfoRow
+            label={t("report.cbd_commute")}
+            value={t("report.cbd_commute_value", {
+              distance: commute!.distanceKm!.toFixed(1),
+              minutes: commute!.durationMinutes!,
+              centre: commute!.centreName!,
+            })}
+            colors={colors}
+          />
+      ) : null}
+
+      {!hasAnyRows ? (
         <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 17 }}>
-          Transport and commute context is not available on this saved report. Re-run the analysis to add it.
+          Market and transport context is not available on this saved report. Re-run the analysis to add it.
         </Text>
-      )}
+      ) : null}
     </View>
   );
 }
 
 function marketAccessStatus(report: Report): "good" | "warning" | "risk" | "neutral" {
   if (report.neighbourhoodContext?.marketAdjustment.applied) return "warning";
-  if (report.transportContext?.highwayAccess.exposureTier === "high") return "warning";
-  if (report.transportContext?.roiInfluence.influence === "negative") return "warning";
   if (report.transportContext || report.neighbourhoodContext) return "good";
   return "neutral";
 }
@@ -1421,6 +1466,9 @@ function DevelopmentStrategyPanel({ strategies, interestRateOutlook, comparables
           ))}
         </View>
       )}
+
+      <NeighbourhoodContextNote context={neighbourhoodContext} colors={colors} />
+      <TransportContextNote context={transportContext} colors={colors} />
 
       {hasRoi ? (
         <ROIScenarioCards
@@ -1938,7 +1986,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
 
       <SectionCard
         title={t("report.market_access_context")}
-        icon="ðŸ§­"
+        icon=""
         status={marketAccessStatus(report)}
         defaultOpen={hasMarketAccessContext}
         colors={colors}
@@ -1989,6 +2037,8 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
               </Text>
             </View>
           )}
+          <NeighbourhoodContextNote context={report.neighbourhoodContext} colors={colors} />
+          <TransportContextNote context={report.transportContext} colors={colors} />
           <ROIScenarioCards
             scenarios={report.roiScenarios}
             interestRateOutlook={report.interest_rate_outlook ?? report.roiScenarios[0]?.interest_rate_outlook}

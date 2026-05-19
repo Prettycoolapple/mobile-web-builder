@@ -19,7 +19,6 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
-import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { useColors } from "@/hooks/useColors";
 import { useAuth, ApiError, type ProviderDiscipline } from "@/context/AuthContext";
@@ -41,14 +40,6 @@ function buildDisciplineOptions(t: (k: string) => string): DisciplineOption[] {
   ];
 }
 
-interface PickedFile {
-  name: string;
-  uri: string;
-  mimeType: string;
-}
-
-type UploadStatus = "idle" | "uploading" | "done" | "error";
-
 const TOTAL_STEPS = 6;
 
 interface FieldErrors {
@@ -61,28 +52,11 @@ interface FieldErrors {
   regNumber?: string;
   discipline?: string;
   otherDiscipline?: string;
-  cert?: string;
   contactNumber?: string;
   primaryLanguage?: string;
 }
 
 const ACCENT = "#52C99A";
-
-function cleanUploadError(baseMessage: string, error: unknown): string {
-  const detail = error instanceof Error ? error.message.trim() : "";
-  if (!detail) return baseMessage;
-  const normalizedBase = baseMessage.replace(/[.\s]+$/g, "").toLowerCase();
-  const normalizedDetail = detail.replace(/[.\s]+$/g, "").toLowerCase();
-  if (
-    normalizedDetail === normalizedBase ||
-    normalizedDetail === "upload failed" ||
-    normalizedDetail === "upload failed please try again" ||
-    normalizedDetail.startsWith(`${normalizedBase} `)
-  ) {
-    return baseMessage;
-  }
-  return `${baseMessage} ${detail}`;
-}
 
 function LanguagePicker({
   label,
@@ -215,7 +189,7 @@ export default function SignupProviderScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { signUp, uploadIncorporationCertPreSignup, uploadProfilePicture, refreshProfile } = useAuth();
+  const { signUp, uploadProfilePicture, refreshProfile } = useAuth();
   const { width: SCREEN_W } = useWindowDimensions();
   const { t } = useT();
   const DISCIPLINE_OPTIONS = React.useMemo(() => buildDisciplineOptions(t), [t]);
@@ -241,11 +215,8 @@ export default function SignupProviderScreen() {
   const [secondaryLanguage, setSecondaryLanguage] = useState("");
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
   const [avatarMimeType, setAvatarMimeType] = useState("image/jpeg");
-  const [pickedFile, setPickedFile] = useState<PickedFile | null>(null);
-  const [uploadStatus, setUploadStatus] = useState<UploadStatus>("idle");
   const [isLoading, setIsLoading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [certError, setCertError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
 
   const [step, setStep] = useState(0);
@@ -265,20 +236,6 @@ export default function SignupProviderScreen() {
         useNativeDriver: true,
       }).start();
     });
-  };
-
-  const handlePickDocument = async () => {
-    try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: ["application/pdf", "image/jpeg", "image/jpg", "image/png", "image/webp"],
-        copyToCacheDirectory: true,
-      });
-      if (result.canceled || !result.assets?.length) return;
-      const asset = result.assets[0];
-      setPickedFile({ name: asset.name, uri: asset.uri, mimeType: asset.mimeType ?? "application/pdf" });
-    } catch {
-      Alert.alert(t("common.error"), t("signup.cert.pick_error"));
-    }
   };
 
   const handlePickAvatar = async () => {
@@ -320,7 +277,6 @@ export default function SignupProviderScreen() {
       if (!regNumber.trim()) errors.regNumber = t("signup.error.reg_number");
       if (!discipline) errors.discipline = t("signup.error.discipline");
       else if (discipline === "other" && !otherDisciplineText.trim()) errors.otherDiscipline = t("signup.error.discipline_other");
-      if (!pickedFile) errors.cert = t("signup.error.cert");
     } else if (step === 3) {
       if (!phoneVerificationToken || !verifiedPhone) {
         errors.contactNumber = t("signup.error.phone_verify");
@@ -343,38 +299,8 @@ export default function SignupProviderScreen() {
 
   const handleSignup = async (options?: { skipAvatar?: boolean }) => {
     setSubmitError(null);
-    setCertError(null);
     setIsLoading(true);
     try {
-      // Atomic provider signup: upload the Certificate of Incorporation FIRST
-      // and only attempt to create the account once we have a URL. The server
-      // requires providerData.incorporationCertUrl, so a failed upload aborts
-      // signup before any half-formed profile is written.
-      if (!pickedFile) {
-        setFieldErrors((e) => ({ ...e, cert: t("signup.error.cert") }));
-        setUploadStatus("error");
-        setStep(5);
-        setIsLoading(false);
-        return;
-      }
-
-      setUploadStatus("uploading");
-      let certFileUrl: string;
-      try {
-        const { fileUrl } = await uploadIncorporationCertPreSignup(
-          pickedFile.uri,
-          pickedFile.mimeType,
-          pickedFile.name,
-        );
-        certFileUrl = fileUrl;
-        setUploadStatus("done");
-      } catch (certErr) {
-        setUploadStatus("error");
-        setCertError(cleanUploadError(t("signup.cert.upload_failed"), certErr));
-        setIsLoading(false);
-        return;
-      }
-
       if (!phoneVerificationToken || !verifiedPhone) {
         setFieldErrors({ contactNumber: t("signup.error.phone_verify") });
         setStep(3);
@@ -403,7 +329,6 @@ export default function SignupProviderScreen() {
           contactNumber: verifiedPhone,
           primaryLanguage: primaryLanguage || undefined,
           secondaryLanguage: secondaryLanguage || undefined,
-          incorporationCertUrl: certFileUrl,
         },
       });
 
@@ -411,7 +336,7 @@ export default function SignupProviderScreen() {
         try {
           const ext = avatarMimeType.split("/")[1] ?? "jpg";
           await uploadProfilePicture(avatarUri, avatarMimeType, `avatar.${ext}`, newToken);
-          await refreshProfile().catch(() => {});
+          await refreshProfile(newToken).catch(() => {});
         } catch (err) {
           Alert.alert(
             t("profile.error"),
@@ -422,7 +347,6 @@ export default function SignupProviderScreen() {
 
       router.replace("/(onboarding)/service-provider-welcome");
     } catch (err) {
-      setUploadStatus("idle");
       if (err instanceof ApiError && err.details?.length) {
         const mapped: FieldErrors = {};
         for (const issue of err.details) {
@@ -656,39 +580,6 @@ export default function SignupProviderScreen() {
                 {fieldErrors.otherDiscipline && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.otherDiscipline}</Text>}
               </View>
             )}
-
-            <View style={styles.field}>
-              <Text style={[styles.label, { color: colors.foreground }]}>{t("signup.company.cert")}</Text>
-              <TouchableOpacity
-                onPress={() => { handlePickDocument(); if (fieldErrors.cert) setFieldErrors((p) => ({ ...p, cert: undefined })); }}
-                disabled={uploadStatus === "uploading"}
-                style={[
-                  styles.uploadBtn,
-                  {
-                    backgroundColor: uploadStatus === "done" ? colors.success + "10" : uploadStatus === "error" || fieldErrors.cert ? colors.danger + "10" : pickedFile ? ACCENT + "10" : colors.card,
-                    borderColor: uploadStatus === "done" ? colors.success : uploadStatus === "error" || fieldErrors.cert ? colors.danger : pickedFile ? ACCENT : colors.border,
-                  },
-                ]}
-                activeOpacity={0.7}
-              >
-                {pickedFile ? (
-                  <>
-                    <Feather name="file-text" size={18} color={ACCENT} />
-                    <Text style={[styles.uploadBtnText, { color: ACCENT, fontFamily: "DM_Sans_500Medium" }]} numberOfLines={1}>{pickedFile.name}</Text>
-                    <TouchableOpacity onPress={(e) => { e.stopPropagation(); setPickedFile(null); }} hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}>
-                      <Feather name="x" size={16} color={colors.mutedForeground} />
-                    </TouchableOpacity>
-                  </>
-                ) : (
-                  <>
-                    <Feather name="file" size={18} color={colors.mutedForeground} />
-                    <Text style={[styles.uploadBtnText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{t("signup.company.cert_choose")}</Text>
-                  </>
-                )}
-              </TouchableOpacity>
-              <Text style={[styles.uploadHint, { color: colors.mutedForeground }]}>{t("signup.company.cert_hint")}</Text>
-              {fieldErrors.cert && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.cert}</Text>}
-            </View>
           </View>
 
           <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: ACCENT }]} onPress={goNext} activeOpacity={0.85}>
@@ -848,10 +739,10 @@ export default function SignupProviderScreen() {
           <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }}>{t("signup.photo.optional")}</Text>
         </Text>
 
-        {(submitError || certError) && (
-          <View style={[styles.errorBanner, { backgroundColor: (certError ? "#F59E0B" : colors.danger) + "18", borderColor: (certError ? "#F59E0B" : colors.danger) + "40" }]}>
-            <Feather name={certError ? "alert-triangle" : "alert-circle"} size={15} color={certError ? "#F59E0B" : colors.danger} />
-            <Text style={[styles.errorText, { color: certError ? "#92400E" : colors.danger }]}>{certError ?? submitError}</Text>
+        {submitError && (
+          <View style={[styles.errorBanner, { backgroundColor: colors.danger + "18", borderColor: colors.danger + "40" }]}>
+            <Feather name="alert-circle" size={15} color={colors.danger} />
+            <Text style={[styles.errorText, { color: colors.danger }]}>{submitError}</Text>
           </View>
         )}
 
@@ -976,12 +867,6 @@ const styles = StyleSheet.create({
   passwordWrapper: { height: 52, borderRadius: 12, borderWidth: 1, flexDirection: "row", alignItems: "center" },
   passwordInput: { flex: 1, height: "100%", paddingHorizontal: 16, fontSize: 15 },
   eyeBtn: { paddingHorizontal: 14 },
-  uploadBtn: {
-    flexDirection: "row", alignItems: "center", gap: 10,
-    borderRadius: 12, borderWidth: 1, paddingHorizontal: 16, paddingVertical: 14,
-  },
-  uploadBtnText: { flex: 1, fontSize: 14 },
-  uploadHint: { fontSize: 12, fontFamily: "DM_Sans_400Regular", marginTop: 4 },
   pickerBtn: {
     height: 52, borderRadius: 12, borderWidth: 1,
     paddingHorizontal: 16, flexDirection: "row",

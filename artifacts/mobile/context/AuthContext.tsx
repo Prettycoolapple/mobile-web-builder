@@ -174,7 +174,7 @@ interface AuthContextValue {
   requestPasswordReset: (email: string) => Promise<void>;
   resetPassword: (email: string, code: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
-  refreshProfile: () => Promise<void>;
+  refreshProfile: (tokenOverride?: string) => Promise<void>;
   getApiHeaders: () => Record<string, string>;
   uploadIncorporationCert: (
     fileUri: string,
@@ -258,11 +258,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })();
   }, [switchRevenueCatIdentity]);
 
-  const refreshProfile = useCallback(async () => {
-    if (!token) return;
+  const refreshProfile = useCallback(async (tokenOverride?: string) => {
+    const activeToken = tokenOverride ?? token;
+    if (!activeToken) return;
     try {
       const resp = await fetch(`${getApiBase()}/auth/me`, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${activeToken}` },
       });
       if (resp.ok) {
         const data = (await readResponseJson(resp)) as { user: UserProfile & { role?: UserRole; languages?: string[] } };

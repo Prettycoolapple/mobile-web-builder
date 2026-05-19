@@ -14,6 +14,8 @@ export interface CardScoreEntry {
   };
   landArea?: number;
   zone?: string | null;
+  potentialLots?: number;
+  minLotSize?: number | null;
   updatedAt: number;
 }
 
@@ -55,10 +57,12 @@ export function queueBackgroundScores(candidates: LightScoreInput[]): void {
           },
           landArea: result.landArea,
           zone: result.zone,
+          potentialLots: result.potentialLots,
+          minLotSize: result.minLotSize,
           updatedAt: Date.now(),
         });
         logger.info(
-          { address: c.address, scores: { ease: result.scores.ease, cost: result.scores.cost, roi: result.scores.roi }, landArea: result.landArea, zone: result.zone },
+          { address: c.address, scores: { ease: result.scores.ease, cost: result.scores.cost, roi: result.scores.roi }, landArea: result.landArea, zone: result.zone, potentialLots: result.potentialLots, minLotSize: result.minLotSize },
           "Light score computed for card",
         );
       })
@@ -71,7 +75,7 @@ export function queueBackgroundScores(candidates: LightScoreInput[]): void {
 
 export function getCardScores(
   addresses: string[],
-): Array<{ address: string; status: string; scores?: CardScoreEntry["scores"]; landArea?: number; zone?: string | null }> {
+): Array<{ address: string; status: string; scores?: CardScoreEntry["scores"]; landArea?: number; zone?: string | null; potentialLots?: number; minLotSize?: number | null }> {
   evictStale();
   return addresses.map((addr) => {
     const key = normalise(addr);
@@ -83,6 +87,8 @@ export function getCardScores(
       scores: entry.scores,
       landArea: entry.landArea,
       zone: entry.zone,
+      potentialLots: entry.potentialLots,
+      minLotSize: entry.minLotSize,
     };
   });
 }

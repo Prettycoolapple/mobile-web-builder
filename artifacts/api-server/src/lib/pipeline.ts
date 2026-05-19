@@ -16,7 +16,7 @@ import { classifyAsbestos, type AsbestosClassification } from "./asbestos";
 import { calculatePotentialLots, buildSubdivisionPathwayNote, type LotResult, type SubdivisionPathwayNote } from "./lot-calculator";
 import { estimateCosts, type CostBreakdown } from "./cost-estimator";
 import { getComparables, type ComparableSale, type ComparablesResult } from "./comparables";
-import { calculateBearBaseBullScenarios, exitGdvTypologyDiscountFactor, type ROIScenario } from "./roi-calculator";
+import { calculateBearBaseBullScenarios, type ROIScenario } from "./roi-calculator";
 import { selectComparableSalesForExit } from "./market-comparables";
 import { fetchNeighbourhoodContext, type NeighbourhoodContext } from "./neighbourhood-context";
 import { fetchTransportContext, type TransportContext } from "./transport-context";
@@ -889,11 +889,9 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   ]);
 
   const hasRealComparablePricing = comparablesResult.avg_sale_price > 0 || comparablesResult.avg_price_per_sqm > 0;
-  const gdvTypologyMultiplier = comparableSelection.typologyMatched
-    ? 1
-    : exitGdvTypologyDiscountFactor(merged.zone_code, lotResult.lots, lotResult.sqm_per_lot);
+  const gdvTypologyMultiplier = 1;
   const neighbourhoodGdvMultiplier = neighbourhoodContext?.marketAdjustment.gdvMultiplier ?? 1;
-  const combinedGdvMultiplier = Math.max(0.5, Math.min(1, gdvTypologyMultiplier * neighbourhoodGdvMultiplier));
+  const combinedGdvMultiplier = Math.max(0.5, Math.min(1, neighbourhoodGdvMultiplier));
   const scenarios = hasRealComparablePricing
     ? calculateBearBaseBullScenarios(
         costs,
@@ -917,16 +915,13 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     comparablesQuality: comparablesResult.data_quality,
     gdvTypologyMultiplier,
     marketGdvMultiplier: neighbourhoodGdvMultiplier,
-    typologyMatchedComparables: comparableSelection.typologyMatched,
+    typologyMatchedComparables: false,
     neighbourhoodContext,
   });
 
   const scores = scoreProperty(merged, costs, scenarios, lotResult.lots);
   if (neighbourhoodContext?.marketAdjustment.reason && !scores.roi_reasons.includes(neighbourhoodContext.marketAdjustment.reason)) {
     scores.roi_reasons.push(neighbourhoodContext.marketAdjustment.reason);
-  }
-  if (comparableSelection.typologyMatched && !scores.roi_reasons.some((r) => /terrace\/townhouse comparables/i.test(r))) {
-    scores.roi_reasons.push("ROI uses terrace/townhouse comparables for the modelled exit product rather than generic standalone-house suburb sales.");
   }
   for (const reason of transportContext?.roiInfluence.reasons ?? []) {
     if (!scores.roi_reasons.includes(reason)) scores.roi_reasons.push(reason);

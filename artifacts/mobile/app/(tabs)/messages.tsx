@@ -209,8 +209,6 @@ function EmptyInbox() {
     <View style={styles.empty}>
       <Feather name="inbox" size={48} color="#D1D5DB" />
       <Text style={styles.emptyTitle}>{t("messages.empty_title")}</Text>
-      <Text style={styles.emptyDescription}>{t("messages.empty_desc")}</Text>
-      <Text style={styles.emptySubDescription}>{t("messages.empty_sub")}</Text>
     </View>
   );
 }
@@ -350,20 +348,5 @@ const styles = StyleSheet.create({
     color: "#1F2937",
     marginTop: 16,
     textAlign: "center",
-  },
-  emptyDescription: {
-    fontFamily: "DM_Sans_400Regular",
-    fontSize: 14,
-    color: "#6B7280",
-    lineHeight: 22,
-    textAlign: "center",
-    marginTop: 8,
-  },
-  emptySubDescription: {
-    fontFamily: "DM_Sans_400Regular",
-    fontSize: 13,
-    color: "#9CA3AF",
-    textAlign: "center",
-    marginTop: 8,
   },
 });

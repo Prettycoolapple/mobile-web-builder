@@ -444,9 +444,11 @@ export default function SearchScreen() {
   }, [removeMessage]);
 
   useEffect(() => {
-    if (user?.role !== "general" || (user?.subscriptionTier !== "standard" && user?.subscriptionTier !== "pro")) return;
+    if (user?.role !== "general") return;
     const msgs = currentSession?.messages ?? [];
-    if (!currentSession?.currentReport) return;
+    const latestReport = [...msgs].reverse().find((m) => m.type === "report" && m.report)?.report;
+    const reportForAgentLookup = currentSession?.currentReport ?? latestReport;
+    if (!reportForAgentLookup) return;
 
     const lastAssistantText = [...msgs].reverse().find(
       (m) => m.role === "assistant" && m.type === "text",
@@ -465,7 +467,8 @@ export default function SearchScreen() {
       try {
         const apiBase = resolveApiBase();
         const headers = getApiHeaders();
-        const address = currentSession?.currentReport?.address ?? "";
+        const address = resolveReportAddress(reportForAgentLookup);
+        if (!address) return;
         const conversationHistory = msgs
           .filter((m) => m.type === "text")
           .slice(-6)
@@ -545,9 +548,11 @@ export default function SearchScreen() {
             scores?: { ease: number; cost: number; roi: number; composite: number };
             landArea?: number;
             zone?: string | null;
+            potentialLots?: number;
+            minLotSize?: number | null;
           }>;
 
-          const readyScores: Record<string, { ease: number; cost: number; roi: number; composite: number; landArea?: number; zone?: string | null }> = {};
+          const readyScores: Record<string, { ease: number; cost: number; roi: number; composite: number; landArea?: number; zone?: string | null; potentialLots?: number; minLotSize?: number | null }> = {};
           let allDone = results.length > 0;
           for (const r of results) {
             if (r.status === "pending") { allDone = false; continue; }
@@ -556,6 +561,8 @@ export default function SearchScreen() {
                 ...r.scores,
                 ...(r.landArea != null ? { landArea: r.landArea } : {}),
                 ...(r.zone !== undefined ? { zone: r.zone } : {}),
+                ...(r.potentialLots != null ? { potentialLots: r.potentialLots } : {}),
+                ...(r.minLotSize !== undefined ? { minLotSize: r.minLotSize } : {}),
               };
             }
           }
@@ -812,11 +819,12 @@ export default function SearchScreen() {
 
     addMessage({ role: "assistant", content: "", type: "loading", loadingMode: detectedMode as any }, sessionId);
 
-    const currentReport = currentSession?.currentReport ?? undefined;
+    const currentReport =
+      currentSession?.currentReport ??
+      [...(currentSession?.messages ?? [])].reverse().find((m) => m.type === "report" && m.report)?.report;
     const agentAddress = resolveReportAddress(currentReport);
     const shouldLookupListingAgent =
       user?.role === "general" &&
-      (user?.subscriptionTier === "standard" || user?.subscriptionTier === "pro") &&
       !!agentAddress;
 
     if (shouldLookupListingAgent) {

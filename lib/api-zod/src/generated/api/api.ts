@@ -200,6 +200,7 @@ export const AnalysePropertyResponse = zod.object({
         cityCommute: zod.object({
           centreName: zod.string().nullable(),
           distanceKm: zod.number().nullable(),
+          durationMinutes: zod.number().nullable().optional(),
           convenienceTier: zod.enum(["excellent", "good", "limited", "poor", "unknown"]),
           confidence: zod.enum(["high", "medium", "low", "unknown"]),
         }),

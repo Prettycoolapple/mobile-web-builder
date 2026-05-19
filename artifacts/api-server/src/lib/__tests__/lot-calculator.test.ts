@@ -18,6 +18,15 @@ describe("lot calculator", () => {
     expect(result.zone_label).toBe("Countryside Living Zone");
   });
 
+  it("requires 800sqm for two standard vacant lots in Mixed Housing Suburban", () => {
+    const undersized = calculatePotentialLots(300, "MHS");
+    const twoLots = calculatePotentialLots(800, "MHS");
+
+    expect(undersized.lots).toBe(1);
+    expect(undersized.min_lot_size).toBe(400);
+    expect(twoLots.lots).toBe(2);
+  });
+
   it("explains that unknown zoning cannot produce an automatic lot yield", () => {
     const note = buildSubdivisionPathwayNote(19996, null, 1, 0, "Unknown zone");
 

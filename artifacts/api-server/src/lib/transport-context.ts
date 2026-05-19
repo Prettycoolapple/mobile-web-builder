@@ -35,12 +35,14 @@ export interface HighwayAccessContext {
 export interface CityCommuteContext {
   centreName: string | null;
   distanceKm: number | null;
+  durationMinutes: number | null;
   convenienceTier: TransportAccessTier;
   confidence: TransportConfidence;
 }
 
 export interface TransportContext {
   publicTransport: PublicTransportContext;
+  /** @deprecated Highway context is retained for old saved reports; active UI ignores it. */
   highwayAccess: HighwayAccessContext;
   cityCommute: CityCommuteContext;
   roiInfluence: {
@@ -63,7 +65,7 @@ interface GtfsFeedConfig {
   centre: CityCentre;
 }
 
-interface CityCentre extends Point {
+export interface CityCentre extends Point {
   name: string;
   region: FeedRegion | "regional";
 }
@@ -153,6 +155,14 @@ const HIGHWAY_CORRIDORS: Array<{ name: string; region: FeedRegion; points: Point
     { lat: -43.430, lng: 172.650 }, { lat: -43.480, lng: 172.675 }, { lat: -43.530, lng: 172.690 },
   ] },
 ];
+
+const UNKNOWN_HIGHWAY_CONTEXT: HighwayAccessContext = {
+  name: null,
+  distanceM: null,
+  accessTier: "unknown",
+  exposureTier: "unknown",
+  confidence: "unknown",
+};
 
 function distanceMeters(a: Point, b: Point): number {
   const r = 6_371_000;
@@ -371,9 +381,13 @@ function buildPublicTransportContext(feed: CachedFeed | null, lat: number, lng: 
       };
     })
     .filter((s) => s.distance <= 1800 && s.routeIds.size > 0)
+    .filter((s) => {
+      const mode = bestMode(s.routeTypes);
+      return mode === "train" || mode === "ferry";
+    })
     .sort((a, b) => a.distance - b.distance);
 
-  const nearestByMode = (["bus", "train", "ferry"] as TransportMode[])
+  const nearestByMode = (["train", "ferry"] as TransportMode[])
     .map((mode) => {
       const stop = nearby.find((s) => bestMode(s.routeTypes) === mode);
       if (!stop) return null;
@@ -440,20 +454,115 @@ export function classifyCommuteConvenience(distanceKm: number | null, highway: H
   return "poor";
 }
 
-export function buildTransportRoiInfluence(pt: PublicTransportContext, highway: HighwayAccessContext, commute: CityCommuteContext): TransportContext["roiInfluence"] {
+export function classifyRouteCommuteConvenience(distanceKm: number | null, durationMinutes: number | null): TransportAccessTier {
+  if (distanceKm == null || durationMinutes == null) return "unknown";
+  if (durationMinutes <= 20 || distanceKm <= 8) return "excellent";
+  if (durationMinutes <= 30 || distanceKm <= 14) return "good";
+  if (durationMinutes <= 45 || distanceKm <= 24) return "limited";
+  return "poor";
+}
+
+export function parseGoogleDurationSeconds(duration: string | null | undefined): number | null {
+  if (!duration) return null;
+  const match = duration.trim().match(/^(\d+(?:\.\d+)?)s$/);
+  if (!match) return null;
+  const seconds = Number(match[1]);
+  return Number.isFinite(seconds) ? seconds : null;
+}
+
+export async function fetchGoogleRoutesCommute(
+  lat: number,
+  lng: number,
+  centre: CityCentre,
+): Promise<CityCommuteContext> {
+  const unavailable: CityCommuteContext = {
+    centreName: centre.name,
+    distanceKm: null,
+    durationMinutes: null,
+    convenienceTier: "unknown",
+    confidence: "unknown",
+  };
+  const apiKey = process.env["GOOGLE_MAPS_API_KEY"]?.trim();
+  if (!apiKey) {
+    logger.info("Transport context: GOOGLE_MAPS_API_KEY not set; CBD route commute hidden");
+    return unavailable;
+  }
+
+  try {
+    const resp = await fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": apiKey,
+        "X-Goog-FieldMask": "routes.duration,routes.distanceMeters",
+      },
+      body: JSON.stringify({
+        origin: { location: { latLng: { latitude: lat, longitude: lng } } },
+        destination: { location: { latLng: { latitude: centre.lat, longitude: centre.lng } } },
+        travelMode: "DRIVE",
+        routingPreference: "TRAFFIC_AWARE",
+        languageCode: "en-NZ",
+        regionCode: "NZ",
+        units: "METRIC",
+      }),
+      signal: AbortSignal.timeout(8_000),
+    });
+
+    const data = (await resp.json().catch(() => ({}))) as {
+      routes?: Array<{ duration?: string; distanceMeters?: number }>;
+      error?: { message?: string };
+    };
+    if (!resp.ok) {
+      throw new Error(data.error?.message || `Google Routes returned HTTP ${resp.status}`);
+    }
+
+    const route = data.routes?.[0];
+    const distanceMeters = Number(route?.distanceMeters);
+    const seconds = parseGoogleDurationSeconds(route?.duration);
+    if (!Number.isFinite(distanceMeters) || distanceMeters <= 0 || seconds == null || seconds <= 0) {
+      return unavailable;
+    }
+
+    const distanceKm = Math.round((distanceMeters / 1000) * 10) / 10;
+    const durationMinutes = Math.max(1, Math.round(seconds / 60));
+    return {
+      centreName: centre.name,
+      distanceKm,
+      durationMinutes,
+      convenienceTier: classifyRouteCommuteConvenience(distanceKm, durationMinutes),
+      confidence: "high",
+    };
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "Transport context: Google Routes commute unavailable");
+    return unavailable;
+  }
+}
+
+function formatKm(km: number): string {
+  return `${km.toFixed(1)} km`;
+}
+
+export function buildTransportRoiInfluence(
+  pt: PublicTransportContext,
+  commuteOrHighway: CityCommuteContext | HighwayAccessContext,
+  maybeCommute?: CityCommuteContext,
+): TransportContext["roiInfluence"] {
+  const commute = maybeCommute ?? (commuteOrHighway as CityCommuteContext);
   const positives: string[] = [];
   const negatives: string[] = [];
-  if (pt.accessTier === "excellent" || pt.accessTier === "good") {
-    positives.push("Nearby public transport access may support buyer demand and rental appeal.");
+  const stop = pt.nearestStop;
+  if (stop && (pt.accessTier === "excellent" || pt.accessTier === "good")) {
+    positives.push(`Nearby ${stop.mode} access at ${stop.name} (${Math.round(stop.distanceM)} m) may support buyer demand and rental appeal.`);
   }
-  if (highway.accessTier === "excellent" || highway.accessTier === "good") {
-    positives.push("Quick motorway/state-highway access is a practical commute benefit for many NZ buyers.");
-  }
-  if (commute.convenienceTier === "excellent" || commute.convenienceTier === "good") {
-    positives.push(`Reasonable access to ${commute.centreName} may support sales-price resilience.`);
-  }
-  if (highway.accessTier === "exposureRisk") {
-    negatives.push("Very close motorway/state-highway proximity may reduce buyer appeal because of noise, emissions, or visual exposure.");
+  if (commute.confidence !== "unknown" && commute.centreName && commute.distanceKm != null && commute.durationMinutes != null) {
+    const commuteText = `Google Routes estimates about ${commute.durationMinutes} min / ${formatKm(commute.distanceKm)} to ${commute.centreName}.`;
+    if (commute.convenienceTier === "excellent" || commute.convenienceTier === "good") {
+      positives.push(`${commuteText} That commute profile may support sales-price resilience.`);
+    } else if (commute.convenienceTier === "poor") {
+      negatives.push(`${commuteText} Longer CBD access may narrow buyer demand for commute-sensitive purchasers.`);
+    } else {
+      positives.push(`${commuteText} This gives a source-backed commute context for pricing assumptions.`);
+    }
   }
   const influence: RoiInfluence = positives.length > 0 && negatives.length > 0
     ? "mixed"
@@ -474,19 +583,12 @@ export async function fetchTransportContext(lat: number, lng: number): Promise<T
   const feedConfig = region ? FEEDS.find((f) => f.region === region) ?? null : null;
   const feed = feedConfig ? await loadFeed(feedConfig) : null;
   const publicTransport = buildPublicTransportContext(feed, lat, lng);
-  const highwayAccess = buildHighwayContext(lat, lng, region);
   const centre = feedConfig?.centre ?? nearestCentre(lat, lng);
-  const centreDistanceKm = Math.round((distanceMeters({ lat, lng }, centre) / 1000) * 10) / 10;
-  const cityCommute: CityCommuteContext = {
-    centreName: centre.name,
-    distanceKm: centreDistanceKm,
-    convenienceTier: classifyCommuteConvenience(centreDistanceKm, highwayAccess.accessTier, publicTransport.accessTier),
-    confidence: region ? "low" : "unknown",
-  };
+  const cityCommute = await fetchGoogleRoutesCommute(lat, lng, centre);
   return {
     publicTransport,
-    highwayAccess,
+    highwayAccess: UNKNOWN_HIGHWAY_CONTEXT,
     cityCommute,
-    roiInfluence: buildTransportRoiInfluence(publicTransport, highwayAccess, cityCommute),
+    roiInfluence: buildTransportRoiInfluence(publicTransport, cityCommute),
   };
 }

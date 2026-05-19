@@ -154,10 +154,20 @@ export default function WelcomeScreen() {
         ]}
       >
         <View style={[styles.heroBlock, compact && styles.heroBlockCompact]}>
-          <Text style={[styles.headline, compact && styles.headlineCompact]}>
-            {isZhOS ? "奥房" : "Project\nAlpha"}
+          <Text
+            style={[
+              styles.headline,
+              isZhOS && styles.headlineZh,
+              compact && styles.headlineCompact,
+              compact && isZhOS && styles.headlineZhCompact,
+            ]}
+          >
+            {isZhOS ? "\u5965\u623F" : "Project\nAlpha"}
           </Text>
           <Text style={[styles.stay, compact && styles.stayCompact]}>{t("welcome.stay_word")}</Text>
+          <Text style={[styles.description, compact && styles.descriptionCompact]}>
+            {t("welcome.description")}
+          </Text>
         </View>
 
         <View style={[styles.bottomBlock, compact && styles.bottomBlockCompact]}>
@@ -199,10 +209,10 @@ const styles = StyleSheet.create({
     gap: 72,
   },
   heroBlock: {
-    gap: 20,
+    gap: 14,
   },
   heroBlockCompact: {
-    gap: 15,
+    gap: 10,
   },
   headline: {
     fontFamily: "Fraunces_700Bold",
@@ -218,6 +228,22 @@ const styles = StyleSheet.create({
     fontSize: 54,
     lineHeight: 60,
   },
+  headlineZh: {
+    fontFamily: Platform.select({
+      ios: "PingFang SC",
+      android: "sans-serif-condensed",
+      default: "sans-serif",
+    }),
+    fontWeight: "800",
+    fontSize: 76,
+    lineHeight: 92,
+    paddingTop: 6,
+  },
+  headlineZhCompact: {
+    fontSize: 66,
+    lineHeight: 80,
+    paddingTop: 5,
+  },
   stay: {
     fontFamily: "DM_Sans_600SemiBold",
     fontSize: 25,
@@ -231,6 +257,21 @@ const styles = StyleSheet.create({
   stayCompact: {
     fontSize: 22,
     lineHeight: 29,
+  },
+  description: {
+    fontFamily: "DM_Sans_500Medium",
+    fontSize: 16,
+    lineHeight: 23,
+    color: "rgba(255,255,255,0.78)",
+    textShadowColor: "rgba(0,0,0,0.45)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 7,
+    maxWidth: 340,
+  },
+  descriptionCompact: {
+    fontSize: 14,
+    lineHeight: 20,
+    maxWidth: 315,
   },
   bottomBlock: {
     gap: 18,
