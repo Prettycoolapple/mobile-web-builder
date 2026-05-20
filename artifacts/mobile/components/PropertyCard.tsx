@@ -79,11 +79,9 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
   const showOverall =
     !candidate.scoresLoading && typeof compositeRaw === "number" && compositeRaw > 0;
   const composite = showOverall ? compositeRaw : 0;
-  const potentialLots = candidate.potentialLots ?? 1;
-  const showSubdivisionRecommendation = potentialLots >= 2;
-  const subdivisionRuleText = candidate.minLotSize
-    ? t("search.subdivision_rule", { min: candidate.minLotSize })
-    : null;
+  const potentialLots = 0;
+  const showSubdivisionRecommendation = false;
+  const subdivisionRuleText = null;
 
   return (
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>

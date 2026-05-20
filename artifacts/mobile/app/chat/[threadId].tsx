@@ -226,6 +226,7 @@ export default function ChatScreen() {
   const [reportModalVisible, setReportModalVisible] = useState(false);
   const [reportComment, setReportComment] = useState("");
   const [reportSubmitting, setReportSubmitting] = useState(false);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [blockStatus, setBlockStatus] = useState<DmBlockStatus>({
     messagingBlocked: false,
     iBlockedThem: false,
@@ -236,6 +237,12 @@ export default function ChatScreen() {
   const joinedRef = useRef(false);
   const isAtBottomRef = useRef(true);
   const initialScrollDoneRef = useRef(false);
+
+  const scrollToLatest = useCallback((animated = true) => {
+    flatListRef.current?.scrollToEnd({ animated });
+    isAtBottomRef.current = true;
+    setShowJumpToLatest(false);
+  }, []);
 
   const threadFromContext = threads.find((t) => t.id === threadId);
 
@@ -306,6 +313,7 @@ export default function ChatScreen() {
     async function init() {
       initialScrollDoneRef.current = false;
       isAtBottomRef.current = true;
+      setShowJumpToLatest(false);
       setLoadingInitial(true);
       await fetchMessages(null);
       setLoadingInitial(false);
@@ -333,7 +341,7 @@ export default function ChatScreen() {
         return [...prev, message];
       });
       if (isAtBottomRef.current) {
-        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 80);
+        setTimeout(() => scrollToLatest(true), 80);
       }
       if (threadId && token) {
         fetch(`${getApiBase()}/dm/threads/${threadId}/read`, {
@@ -350,7 +358,7 @@ export default function ChatScreen() {
       socket.off("new_message", onNewMessage);
       joinedRef.current = false;
     };
-  }, [socket, threadId, token]);
+  }, [socket, threadId, token, scrollToLatest]);
 
   const sendMessage = useCallback(async (
     msgBody?: string,
@@ -418,7 +426,7 @@ export default function ChatScreen() {
       }
       setBody("");
       fetchThreads();
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+      setTimeout(() => scrollToLatest(true), 100);
     } catch {
       if (options.optimisticId) {
         setMessages((prev) => prev.map((m) =>
@@ -429,7 +437,7 @@ export default function ChatScreen() {
     } finally {
       if (!isOptimisticImage) setSending(false);
     }
-  }, [threadId, token, fetchThreads, t, blockStatus.messagingBlocked]);
+  }, [threadId, token, fetchThreads, t, blockStatus.messagingBlocked, scrollToLatest]);
 
   const pickImage = useCallback(async (useCamera: boolean) => {
     if (uploadingImage || blockStatus.messagingBlocked) return;
@@ -471,7 +479,7 @@ export default function ChatScreen() {
       localStatus: "uploading",
     };
     setMessages((prev) => [...prev, optimisticMessage]);
-    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+    setTimeout(() => scrollToLatest(true), 50);
     setUploadingImage(true);
     try {
       const filename = asset.fileName ?? `photo_${Date.now()}.jpg`;
@@ -585,7 +593,7 @@ export default function ChatScreen() {
     } finally {
       setUploadingImage(false);
     }
-  }, [token, uploadingImage, sendMessage, blockStatus.messagingBlocked, t, threadId, user?.id]);
+  }, [token, uploadingImage, sendMessage, blockStatus.messagingBlocked, t, threadId, user?.id, scrollToLatest]);
 
   const submitBlock = useCallback(async () => {
     if (!token || !otherUserId) return;
@@ -677,6 +685,22 @@ export default function ChatScreen() {
   const mediaDisabled = blockStatus.messagingBlocked || uploadingImage || sending;
 
   const items: ListItem[] = buildListItems(messages, locale, t);
+
+  const handleInitialContentReady = useCallback(() => {
+    if (initialScrollDoneRef.current) return;
+    scrollToLatest(false);
+    setTimeout(() => scrollToLatest(false), 80);
+    setTimeout(() => scrollToLatest(false), 220);
+    initialScrollDoneRef.current = true;
+  }, [scrollToLatest]);
+
+  const handleMessageListScroll = useCallback((e: { nativeEvent: { contentOffset: { y: number }; layoutMeasurement: { height: number }; contentSize: { height: number } } }) => {
+    const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent;
+    const distFromBottom = Math.max(0, contentSize.height - layoutMeasurement.height - contentOffset.y);
+    const atBottom = distFromBottom < 120;
+    isAtBottomRef.current = atBottom;
+    setShowJumpToLatest(!atBottom && initialScrollDoneRef.current);
+  }, []);
 
   const renderItem = ({ item }: { item: ListItem }) => {
     if (item.type === "date") {
@@ -864,55 +888,60 @@ export default function ChatScreen() {
           <ActivityIndicator color={colors.accent} size="large" />
         </View>
       ) : (
-        <FlatList
-          ref={flatListRef}
-          data={items}
-          keyExtractor={(item, i) =>
-            item.type === "date" ? `date-${i}` : item.data.id
-          }
-          renderItem={renderItem}
-          contentContainerStyle={[styles.listContent, { paddingBottom: 16 }]}
-          onContentSizeChange={() => {
-            if (!initialScrollDoneRef.current) {
-              flatListRef.current?.scrollToEnd({ animated: false });
-              initialScrollDoneRef.current = true;
+        <View style={styles.listWrap}>
+          <FlatList
+            ref={flatListRef}
+            data={items}
+            keyExtractor={(item, i) =>
+              item.type === "date" ? `date-${i}` : item.data.id
             }
-          }}
-          onScroll={(e) => {
-            const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent;
-            const distFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
-            isAtBottomRef.current = distFromBottom < 80;
-          }}
-          scrollEventThrottle={100}
-          onStartReachedThreshold={0.2}
-          onStartReached={loadMore}
-          ListHeaderComponent={
-            <>
-              {blockStatus.messagingBlocked ? (
-                <View
-                  style={[
-                    styles.blockBanner,
-                    { backgroundColor: "rgba(0,0,0,0.2)", borderColor: "rgba(250,249,246,0.15)" },
-                  ]}
-                >
-                  <Feather name="slash" size={16} color="rgba(250,249,246,0.7)" />
-                  <Text style={styles.blockBannerText}>
-                    {blockStatus.iBlockedThem && blockStatus.theyBlockedMe
-                      ? t("dm.block.banner_both")
-                      : blockStatus.iBlockedThem
-                        ? t("dm.block.banner_you")
-                        : t("dm.block.banner_them")}
-                  </Text>
-                </View>
-              ) : null}
-              {loadingMore ? (
-                <View style={{ paddingVertical: 12, alignItems: "center" }}>
-                  <ActivityIndicator color={colors.accent} size="small" />
-                </View>
-              ) : null}
-            </>
-          }
-        />
+            renderItem={renderItem}
+            contentContainerStyle={[styles.listContent, { paddingBottom: 16 }]}
+            onLayout={handleInitialContentReady}
+            onContentSizeChange={handleInitialContentReady}
+            onScroll={handleMessageListScroll}
+            scrollEventThrottle={100}
+            onStartReachedThreshold={0.2}
+            onStartReached={loadMore}
+            ListHeaderComponent={
+              <>
+                {blockStatus.messagingBlocked ? (
+                  <View
+                    style={[
+                      styles.blockBanner,
+                      { backgroundColor: "rgba(0,0,0,0.2)", borderColor: "rgba(250,249,246,0.15)" },
+                    ]}
+                  >
+                    <Feather name="slash" size={16} color="rgba(250,249,246,0.7)" />
+                    <Text style={styles.blockBannerText}>
+                      {blockStatus.iBlockedThem && blockStatus.theyBlockedMe
+                        ? t("dm.block.banner_both")
+                        : blockStatus.iBlockedThem
+                          ? t("dm.block.banner_you")
+                          : t("dm.block.banner_them")}
+                    </Text>
+                  </View>
+                ) : null}
+                {loadingMore ? (
+                  <View style={{ paddingVertical: 12, alignItems: "center" }}>
+                    <ActivityIndicator color={colors.accent} size="small" />
+                  </View>
+                ) : null}
+              </>
+            }
+          />
+          {showJumpToLatest ? (
+            <TouchableOpacity
+              style={[styles.jumpLatestBtn, { backgroundColor: colors.accent, shadowColor: colors.shadow }]}
+              onPress={() => scrollToLatest(true)}
+              activeOpacity={0.82}
+              accessibilityRole="button"
+              accessibilityLabel={t("dm.jump_latest")}
+            >
+              <Feather name="arrow-down" size={20} color="#fff" />
+            </TouchableOpacity>
+          ) : null}
+        </View>
       )}
 
       <View
@@ -1167,10 +1196,25 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
+  listWrap: { flex: 1 },
   listContent: {
     paddingHorizontal: 12,
     paddingTop: 12,
     gap: 2,
+  },
+  jumpLatestBtn: {
+    position: "absolute",
+    right: 16,
+    bottom: 14,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.22,
+    shadowRadius: 8,
+    elevation: 5,
   },
   dateSepRow: {
     flexDirection: "row",
