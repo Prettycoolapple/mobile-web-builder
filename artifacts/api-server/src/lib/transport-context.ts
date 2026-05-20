@@ -90,6 +90,7 @@ interface CachedFeed {
 }
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+export const RAPID_TRANSIT_SCAN_RADIUS_M = 3600;
 const feedCache = new Map<FeedRegion, CachedFeed>();
 const inflight = new Map<FeedRegion, Promise<CachedFeed | null>>();
 
@@ -380,7 +381,7 @@ function buildPublicTransportContext(feed: CachedFeed | null, lat: number, lng: 
         distance: Math.round(distanceMeters(p, s)),
       };
     })
-    .filter((s) => s.distance <= 1800 && s.routeIds.size > 0)
+    .filter((s) => s.distance <= RAPID_TRANSIT_SCAN_RADIUS_M && s.routeIds.size > 0)
     .filter((s) => {
       const mode = bestMode(s.routeTypes);
       return mode === "train" || mode === "ferry";
@@ -555,13 +556,13 @@ export function buildTransportRoiInfluence(
     positives.push(`Nearby ${stop.mode} access at ${stop.name} (${Math.round(stop.distanceM)} m) may support buyer demand and rental appeal.`);
   }
   if (commute.confidence !== "unknown" && commute.centreName && commute.distanceKm != null && commute.durationMinutes != null) {
-    const commuteText = `Google Routes estimates about ${commute.durationMinutes} min / ${formatKm(commute.distanceKm)} to ${commute.centreName}.`;
+    const commuteText = `About ${commute.durationMinutes} min / ${formatKm(commute.distanceKm)} to ${commute.centreName}.`;
     if (commute.convenienceTier === "excellent" || commute.convenienceTier === "good") {
       positives.push(`${commuteText} That commute profile may support sales-price resilience.`);
     } else if (commute.convenienceTier === "poor") {
       negatives.push(`${commuteText} Longer CBD access may narrow buyer demand for commute-sensitive purchasers.`);
     } else {
-      positives.push(`${commuteText} This gives a source-backed commute context for pricing assumptions.`);
+      positives.push(`${commuteText} This commute context supports pricing assumptions.`);
     }
   }
   const influence: RoiInfluence = positives.length > 0 && negatives.length > 0

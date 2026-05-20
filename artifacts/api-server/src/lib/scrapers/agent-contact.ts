@@ -202,13 +202,13 @@ export async function scrapeListingAgent(
 ): Promise<AgentContactResult> {
   try {
     const realestateAgent = await fetchRealestateAgentContactForAddress(address);
-    if (realestateAgent?.agentPhone) {
-      logScrapeAttempt("AgentContact", "realestate-api", true, `agent=${realestateAgent.agentName ?? "found"}`);
+    if (realestateAgent) {
+      logScrapeAttempt("AgentContact", "realestate-api", !!realestateAgent.agentPhone, `agent=${realestateAgent.agentName ?? "found"}`);
       return {
         found: true,
         isListed: true,
         matchType: "subject",
-        listingAddress: null,
+        listingAddress: realestateAgent.listingAddress,
         agentName: realestateAgent.agentName,
         agentPhone: realestateAgent.agentPhone,
         agencyName: realestateAgent.agencyName,

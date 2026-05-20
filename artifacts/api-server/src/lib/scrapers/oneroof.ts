@@ -11,7 +11,7 @@ export interface ListingResult {
   /** Floor (dwelling) area in m². Sourced opportunistically from og:description; null when not advertised. */
   floorArea?: number | null;
   photoUrl: string | null;
-  /** All available high-res photo URLs for this listing (up to 4). */
+  /** All available high-res photo URLs for this listing. */
   photoUrls?: string[];
   listingUrl: string;
   zone: string | null;
@@ -387,8 +387,7 @@ async function scrapeOneRoofPlaywright(address: string): Promise<OneRoofData> {
       }).catch(() => [] as string[]);
       const imageUrls = Array.from(new Set(rawImages
         .map((u) => normaliseImageUrl(u, page.url()))
-        .filter((u): u is string => Boolean(u))))
-        .slice(0, 8);
+        .filter((u): u is string => Boolean(u))));
       result.photo_urls = imageUrls;
       result.main_photo_url = imageUrls[0] ?? null;
     } catch { /* non-critical */ }
@@ -432,8 +431,7 @@ async function scrapeOneRoofViaBee(address: string): Promise<OneRoofData | null>
   ];
   const photo_urls = Array.from(new Set(rawImages
     .map((u) => normaliseImageUrl(u, propertyUrl))
-    .filter((u): u is string => Boolean(u))))
-    .slice(0, 8);
+    .filter((u): u is string => Boolean(u))));
 
   return {
     ...emptyOneRoofData(),

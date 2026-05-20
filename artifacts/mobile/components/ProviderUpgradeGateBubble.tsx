@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useSubscription } from "@/lib/revenuecat";
 import { useT } from "@/lib/i18n";
+import { useAuth } from "@/context/AuthContext";
 
 interface Props {
   onUpgrade: () => void;
@@ -10,10 +11,13 @@ interface Props {
 }
 
 export function ProviderUpgradeGateBubble({ onUpgrade, onDismiss }: Props) {
-  const { getPriceForRole } = useSubscription();
+  const { user } = useAuth();
+  const { getPriceForRole, isSubscribed } = useSubscription();
   const price = getPriceForRole("general");
   const [dismissed, setDismissed] = useState(false);
   const { t } = useT();
+  const subscriptionTier = user?.subscriptionTier ?? "free";
+  const isActive = isSubscribed || subscriptionTier === "standard" || subscriptionTier === "pro";
 
   const features = useMemo(
     () => [
@@ -37,13 +41,17 @@ export function ProviderUpgradeGateBubble({ onUpgrade, onDismiss }: Props) {
   return (
     <View style={styles.container}>
       <View style={styles.headerRow}>
-        <View style={styles.iconWrap}>
-          <Feather name="zap" size={14} color="#C86B4E" />
+        <View style={[styles.iconWrap, isActive && styles.activeIconWrap]}>
+          <Feather name={isActive ? "check" : "zap"} size={14} color={isActive ? "#2FA87A" : "#C86B4E"} />
         </View>
-        <Text style={styles.header}>{t("bubble.upgrade.badge")}</Text>
+        <Text style={[styles.header, isActive && styles.activeHeader]}>
+          {isActive ? t("bubble.upgrade.active_badge") : t("bubble.upgrade.badge")}
+        </Text>
       </View>
 
-      <Text style={styles.body}>{t("bubble.upgrade.body")}</Text>
+      <Text style={styles.body}>
+        {isActive ? t("bubble.upgrade.active_body") : t("bubble.upgrade.body")}
+      </Text>
 
       <View style={styles.card}>
         <View style={styles.planRow}>
@@ -61,21 +69,26 @@ export function ProviderUpgradeGateBubble({ onUpgrade, onDismiss }: Props) {
       </View>
 
       <TouchableOpacity
-        style={styles.upgradeBtn}
+        style={[styles.upgradeBtn, isActive && styles.activeBtn]}
         onPress={onUpgrade}
         activeOpacity={0.85}
+        disabled={isActive}
       >
-        <Text style={styles.upgradeBtnText}>{t("bubble.upgrade.cta")}</Text>
-        <Feather name="arrow-right" size={15} color="#fff" />
+        <Text style={styles.upgradeBtnText}>
+          {isActive ? t("bubble.upgrade.active_cta") : t("bubble.upgrade.cta")}
+        </Text>
+        <Feather name={isActive ? "check-circle" : "arrow-right"} size={15} color="#fff" />
       </TouchableOpacity>
 
-      <TouchableOpacity
-        style={styles.dismissBtn}
-        onPress={handleDismiss}
-        activeOpacity={0.7}
-      >
-        <Text style={styles.dismissText}>{t("bubble.upgrade.dismiss")}</Text>
-      </TouchableOpacity>
+      {!isActive && (
+        <TouchableOpacity
+          style={styles.dismissBtn}
+          onPress={handleDismiss}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.dismissText}>{t("bubble.upgrade.dismiss")}</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -104,12 +117,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  activeIconWrap: {
+    backgroundColor: "#E4F6EE",
+  },
   header: {
     fontSize: 11,
     color: "#B95E43",
     fontFamily: "DM_Sans_600SemiBold",
     letterSpacing: 0.3,
     textTransform: "uppercase",
+  },
+  activeHeader: {
+    color: "#25865F",
   },
   body: {
     fontSize: 14,
@@ -166,6 +185,9 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingVertical: 13,
     paddingHorizontal: 16,
+  },
+  activeBtn: {
+    backgroundColor: "#2FA87A",
   },
   upgradeBtnText: {
     color: "#fff",

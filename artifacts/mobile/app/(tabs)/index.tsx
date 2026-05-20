@@ -251,8 +251,16 @@ export default function SearchScreen() {
   const checkedFollowupIds = useRef<Set<string>>(new Set());
   const lastReportIdRef = useRef<string | null>(null);
   const appRatingPromptOpenRef = useRef(false);
+  const reportMessageHeightsRef = useRef<Map<string, number>>(new Map());
   const cardScorePollRef = useRef<{ addresses: string[]; sessionId: string; intervalId: ReturnType<typeof setInterval> | null }>({ addresses: [], sessionId: "", intervalId: null });
   const handleAnalyseRef = useRef<((address: string, selectedPhotoUrl?: string | null) => Promise<void>) | null>(null);
+  const [listViewportHeight, setListViewportHeight] = useState(0);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+
+  const handlePurchaseSuccess = useCallback(() => {
+    setMessageLimitReached(false);
+    refreshProfile().catch(() => {});
+  }, [refreshProfile]);
 
   useEffect(() => {
     const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
@@ -271,6 +279,29 @@ export default function SearchScreen() {
   }, [user, chatQuota]);
 
   const messages = currentSession?.messages || [];
+
+  const scrollToNewestMessage = useCallback(() => {
+    flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+    setShowJumpToLatest(false);
+  }, []);
+
+  const scrollToReportPropertyCard = useCallback((messageId: string) => {
+    let attempts = 0;
+    const run = () => {
+      attempts += 1;
+      const itemHeight = reportMessageHeightsRef.current.get(messageId) ?? 0;
+      if (itemHeight > 0 && listViewportHeight > 0) {
+        const offset = Math.max(0, itemHeight - listViewportHeight + 16);
+        flatListRef.current?.scrollToOffset({ offset, animated: true });
+        setShowJumpToLatest(offset > 80);
+        return;
+      }
+      if (attempts < 10) {
+        setTimeout(run, 80);
+      }
+    };
+    setTimeout(run, 80);
+  }, [listViewportHeight]);
 
   const showRatingStrip = useMemo(() => {
     if (!currentSession?.id || currentSession.skipFirstTurnRating) return false;
@@ -305,11 +336,9 @@ export default function SearchScreen() {
     const latestMsg = msgs[msgs.length - 1];
     if (latestMsg?.type === "report" && latestMsg.id !== lastReportIdRef.current) {
       lastReportIdRef.current = latestMsg.id;
-      setTimeout(() => {
-        flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
-      }, 100);
+      scrollToReportPropertyCard(latestMsg.id);
     }
-  }, [currentSession?.messages]);
+  }, [currentSession?.messages, scrollToReportPropertyCard]);
 
   useEffect(() => {
     if (user?.role !== "general") return;
@@ -503,7 +532,7 @@ export default function SearchScreen() {
             agentPhone: data.agentPhone,
             agencyName: data.agencyName ?? null,
             agentAvatarUrl: data.agentAvatarUrl ?? null,
-            propertyAddress: data.matchType === "suburb" ? (data.listingAddress ?? address) : address,
+            propertyAddress: data.listingAddress ?? address,
             agentMatchType: data.matchType ?? "subject",
           }, currentSessionId ?? undefined);
         }
@@ -872,7 +901,7 @@ export default function SearchScreen() {
             agentPhone: data.agentPhone,
             agencyName: data.agencyName ?? null,
             agentAvatarUrl: data.agentAvatarUrl ?? null,
-            propertyAddress: data.matchType === "suburb" ? (data.listingAddress ?? agentAddress) : agentAddress,
+            propertyAddress: data.listingAddress ?? agentAddress,
             agentMatchType: data.matchType ?? "subject",
           }, sessionId);
           setIsLoading(false);
@@ -1310,7 +1339,7 @@ export default function SearchScreen() {
               intentType: string;
               upgradeRequired?: boolean;
             };
-            if (data.upgradeRequired) {
+            if (data.shouldRecommend && data.provider && data.upgradeRequired) {
               addMessage({
                 role: "assistant",
                 content: "",
@@ -1516,18 +1545,28 @@ export default function SearchScreen() {
   }, [handleAnalyse]);
 
   const renderItem = useCallback(
-    ({ item }: { item: ChatMessage }) => (
-      <ChatBubble
-        message={item}
-        onFollowUp={handleFollowUp}
-        onAnalyse={handleAnalyse}
-        onRetry={handleSend}
-        onConnect={(providerId) => handleConnect(providerId, item.propertyAddress ?? "")}
-        onDismiss={handleDismiss}
-        onAgentDismiss={handleAgentDismiss}
-        onUpgrade={() => setShowPaywall(true)}
-      />
-    ),
+    ({ item }: { item: ChatMessage }) => {
+      const handleLayout = item.type === "report"
+        ? (event: { nativeEvent: { layout: { height: number } } }) => {
+            reportMessageHeightsRef.current.set(item.id, event.nativeEvent.layout.height);
+          }
+        : undefined;
+
+      return (
+        <View onLayout={handleLayout}>
+          <ChatBubble
+            message={item}
+            onFollowUp={handleFollowUp}
+            onAnalyse={handleAnalyse}
+            onRetry={handleSend}
+            onConnect={(providerId) => handleConnect(providerId, item.propertyAddress ?? "")}
+            onDismiss={handleDismiss}
+            onAgentDismiss={handleAgentDismiss}
+            onUpgrade={() => setShowPaywall(true)}
+          />
+        </View>
+      );
+    },
     [handleFollowUp, handleAnalyse, handleSend, handleConnect, handleDismiss, handleAgentDismiss],
   );
 
@@ -1688,12 +1727,37 @@ export default function SearchScreen() {
               ) : null
             }
             contentContainerStyle={[styles.messageList, { paddingBottom: 16 }]}
+            onLayout={(event) => setListViewportHeight(event.nativeEvent.layout.height)}
+            onScroll={(event) => {
+              setShowJumpToLatest(event.nativeEvent.contentOffset.y > 80);
+            }}
+            scrollEventThrottle={80}
             keyboardDismissMode="interactive"
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
             automaticallyAdjustKeyboardInsets
             nestedScrollEnabled
           />
+
+          {showJumpToLatest && (
+            <TouchableOpacity
+              style={[
+                styles.jumpToLatestBtn,
+                {
+                  backgroundColor: colors.card,
+                  borderColor: colors.border,
+                  shadowColor: colors.shadow,
+                  bottom: keyboardVisible ? 96 : tabBarOffset + 86,
+                },
+              ]}
+              onPress={scrollToNewestMessage}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Jump to newest message"
+            >
+              <Feather name="arrow-down" size={18} color={colors.accent} />
+            </TouchableOpacity>
+          )}
 
           {messageLimitReached ? (
             <View style={[styles.limitWarningBar, { backgroundColor: "#FEF2F2", borderTopColor: "#FECACA" }]}>
@@ -1754,7 +1818,11 @@ export default function SearchScreen() {
         </>
       )}
 
-      <PaywallModal visible={showPaywall} onClose={() => setShowPaywall(false)} />
+      <PaywallModal
+        visible={showPaywall}
+        onClose={() => setShowPaywall(false)}
+        onPurchaseSuccess={handlePurchaseSuccess}
+      />
       <AppRatingPrompt
         visible={showAppRatingPrompt}
         onDismiss={handleDismissAppRating}
@@ -1921,6 +1989,21 @@ const styles = StyleSheet.create({
   messageList: {
     gap: 4,
     paddingTop: 16,
+  },
+  jumpToLatestBtn: {
+    position: "absolute",
+    right: 18,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 1,
+    shadowRadius: 10,
+    elevation: 5,
+    zIndex: 20,
   },
   limitWarningBar: {
     flexDirection: "row",

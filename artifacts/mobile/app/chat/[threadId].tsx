@@ -111,9 +111,13 @@ interface SignedDmUploadResponse {
   };
 }
 
+type LocalDmMessage = DmMessage & {
+  localStatus?: "uploading" | "sending" | "failed";
+};
+
 interface MessageItem {
   type: "message";
-  data: DmMessage;
+  data: LocalDmMessage;
   isFirstInGroup: boolean;
   isLastInGroup: boolean;
 }
@@ -124,7 +128,7 @@ interface DateSepItem {
 type ListItem = MessageItem | DateSepItem;
 
 function buildListItems(
-  messages: DmMessage[],
+  messages: LocalDmMessage[],
   locale: Locale,
   t: (key: string) => string,
 ): ListItem[] {
@@ -201,7 +205,7 @@ export default function ChatScreen() {
   const { socket, fetchThreads, threads } = useDm();
   const { t, locale } = useT();
 
-  const [messages, setMessages] = useState<DmMessage[]>([]);
+  const [messages, setMessages] = useState<LocalDmMessage[]>([]);
   const [loadingInitial, setLoadingInitial] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -348,14 +352,25 @@ export default function ChatScreen() {
     };
   }, [socket, threadId, token]);
 
-  const sendMessage = useCallback(async (msgBody?: string, imageUrl?: string) => {
+  const sendMessage = useCallback(async (
+    msgBody?: string,
+    imageUrl?: string,
+    options: { optimisticId?: string } = {},
+  ) => {
     if (!threadId || !token) return;
     if (blockStatus.messagingBlocked) {
       Alert.alert(t("dm.block.title"), t("dm.block.cannot_send"));
       return;
     }
     if (!msgBody && !imageUrl) return;
-    setSending(true);
+    const isOptimisticImage = !!options.optimisticId;
+    if (isOptimisticImage) {
+      setMessages((prev) => prev.map((m) =>
+        m.id === options.optimisticId ? { ...m, localStatus: "sending" } : m,
+      ));
+    } else {
+      setSending(true);
+    }
     try {
       const resp = await fetch(`${getApiBase()}/dm/threads/${threadId}/messages`, {
         method: "POST",
@@ -380,11 +395,23 @@ export default function ChatScreen() {
         } else {
           Alert.alert(t("common.error"), message ?? t("dm.error.send_failed"));
         }
+        if (options.optimisticId) {
+          setMessages((prev) => prev.map((m) =>
+            m.id === options.optimisticId ? { ...m, localStatus: "failed" } : m,
+          ));
+        }
         return;
       }
       const data = (await resp.json()) as { message?: DmMessage };
       if (data.message) {
         setMessages((prev) => {
+          if (options.optimisticId) {
+            const serverAlreadyInserted = prev.some((m) => m.id === data.message!.id);
+            if (serverAlreadyInserted) {
+              return prev.filter((m) => m.id !== options.optimisticId);
+            }
+            return prev.map((m) => m.id === options.optimisticId ? data.message! : m);
+          }
           if (prev.some((m) => m.id === data.message!.id)) return prev;
           return [...prev, data.message!];
         });
@@ -393,9 +420,14 @@ export default function ChatScreen() {
       fetchThreads();
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     } catch {
+      if (options.optimisticId) {
+        setMessages((prev) => prev.map((m) =>
+          m.id === options.optimisticId ? { ...m, localStatus: "failed" } : m,
+        ));
+      }
       Alert.alert(t("common.error"), t("dm.error.send_failed"));
     } finally {
-      setSending(false);
+      if (!isOptimisticImage) setSending(false);
     }
   }, [threadId, token, fetchThreads, t, blockStatus.messagingBlocked]);
 
@@ -427,6 +459,19 @@ export default function ChatScreen() {
     }
     if (result.canceled || !result.assets?.length) return;
     const asset = result.assets[0];
+    const optimisticId = `local-photo-${Date.now()}`;
+    const optimisticMessage: LocalDmMessage = {
+      id: optimisticId,
+      threadId: String(threadId),
+      senderId: user?.id ?? "",
+      body: null,
+      imageUrl: asset.uri,
+      readAt: null,
+      createdAt: new Date().toISOString(),
+      localStatus: "uploading",
+    };
+    setMessages((prev) => [...prev, optimisticMessage]);
+    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
     setUploadingImage(true);
     try {
       const filename = asset.fileName ?? `photo_${Date.now()}.jpg`;
@@ -522,11 +567,17 @@ export default function ChatScreen() {
         }
       }
       if (!fileUrl) {
+        setMessages((prev) => prev.map((m) =>
+          m.id === optimisticId ? { ...m, localStatus: "failed" } : m,
+        ));
         Alert.alert(t("common.error"), t("dm.error.image_upload_failed"));
         return;
       }
-      await sendMessage(undefined, fileUrl);
+      await sendMessage(undefined, fileUrl, { optimisticId });
     } catch (error) {
+      setMessages((prev) => prev.map((m) =>
+        m.id === optimisticId ? { ...m, localStatus: "failed" } : m,
+      ));
       Alert.alert(
         t("common.error"),
         error instanceof Error && error.message ? error.message : t("dm.error.image_upload_failed"),
@@ -534,7 +585,7 @@ export default function ChatScreen() {
     } finally {
       setUploadingImage(false);
     }
-  }, [token, uploadingImage, sendMessage, blockStatus.messagingBlocked, t]);
+  }, [token, uploadingImage, sendMessage, blockStatus.messagingBlocked, t, threadId, user?.id]);
 
   const submitBlock = useCallback(async () => {
     if (!token || !otherUserId) return;
@@ -641,6 +692,14 @@ export default function ChatScreen() {
     const isMine = msg.senderId === user?.id;
     const showAvatar = !isMine && isLastInGroup;
     const showSenderName = !isMine && isFirstInGroup && !!otherName;
+    const isLocalImage = !!msg.imageUrl && /^(file:|data:|blob:)/i.test(msg.imageUrl);
+    const isPendingImage = msg.localStatus === "uploading" || msg.localStatus === "sending";
+    const imageSource = msg.imageUrl
+      ? {
+          uri: resolveDmStoredImageUri(msg.imageUrl),
+          headers: token && !isLocalImage ? sanitizeHeadersForImageRequest(getApiHeaders()) : undefined,
+        }
+      : null;
     return (
       <View
         style={[
@@ -687,14 +746,21 @@ export default function ChatScreen() {
               <Image
                 pointerEvents="none"
                 recyclingKey={msg.id}
-                source={{
-                  uri: resolveDmStoredImageUri(msg.imageUrl),
-                  headers: token ? sanitizeHeadersForImageRequest(getApiHeaders()) : undefined,
-                }}
+                source={imageSource ?? undefined}
                 style={styles.msgImage}
                 contentFit="cover"
-                transition={120}
+                transition={isLocalImage ? 0 : 120}
               />
+              {isPendingImage ? (
+                <View style={styles.imageSendingOverlay}>
+                  <ActivityIndicator color="#fff" size="small" />
+                </View>
+              ) : null}
+              {msg.localStatus === "failed" ? (
+                <View style={styles.imageFailedOverlay}>
+                  <Feather name="alert-circle" size={18} color="#fff" />
+                </View>
+              ) : null}
             </TouchableOpacity>
           ) : (
             <View
@@ -1137,6 +1203,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   msgImage: { width: 220, height: 180 },
+  imageSendingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.22)",
+  },
+  imageFailedOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(220,38,38,0.45)",
+  },
   msgTime: {
     fontFamily: "DM_Sans_400Regular",
     fontSize: 10,

@@ -22,7 +22,7 @@ function statusColor(status: SectionStatus | undefined, colors: any) {
   }
 }
 
-export function AccordionSection({ title, icon, status, defaultOpen = true, children }: Props) {
+export function AccordionSection({ title, icon, status, defaultOpen = false, children }: Props) {
   const colors = useColors();
   const [open, setOpen] = useState(defaultOpen);
   const dot = statusColor(status, colors);

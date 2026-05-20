@@ -31,6 +31,21 @@ export interface ServiceProvider {
   secondaryLanguage: string | null;
 }
 
+const VALID_PROVIDER_DISCIPLINES = [
+  "architect_designer",
+  "planner",
+  "engineer",
+  "quantity_surveyor",
+  "other",
+] as const;
+type ProviderDiscipline = (typeof VALID_PROVIDER_DISCIPLINES)[number];
+
+function normaliseProviderDiscipline(value: unknown): ProviderDiscipline | null {
+  return typeof value === "string" && (VALID_PROVIDER_DISCIPLINES as readonly string[]).includes(value)
+    ? (value as ProviderDiscipline)
+    : null;
+}
+
 interface FeasibilityReport {
   address?: string;
   scores?: { ease?: number; cost?: number; roi?: number };
@@ -174,10 +189,15 @@ async function selectServiceProvider(options?: {
   /** When set (and `preferredDiscipline` is not), keep providers whose discipline is in this list. */
   disciplineIn?: string[];
   excludeProviderIds?: string[];
+  /** Defaults to true for discipline filters so the DB remains the source of truth. */
+  strictDiscipline?: boolean;
 }): Promise<ServiceProvider | null> {
-  const preferredDiscipline = options?.preferredDiscipline ?? null;
-  const disciplineIn = options?.disciplineIn;
+  const preferredDiscipline = normaliseProviderDiscipline(options?.preferredDiscipline);
+  const disciplineIn = (options?.disciplineIn ?? [])
+    .map(normaliseProviderDiscipline)
+    .filter((discipline): discipline is ProviderDiscipline => discipline !== null);
   const exclude = new Set((options?.excludeProviderIds ?? []).filter(Boolean));
+  const strictDiscipline = options?.strictDiscipline ?? true;
 
   /** Same source as GET /users/:id — count of profile "recommend" rows, not the denormalised column. */
   const recommendationCountExpr = sql<number>`coalesce((
@@ -215,10 +235,15 @@ async function selectServiceProvider(options?: {
 
   if (preferredDiscipline) {
     const matched = candidates.filter((r) => r.discipline === preferredDiscipline);
+    if (matched.length === 0 && strictDiscipline) return null;
     if (matched.length > 0) candidates = matched;
-  } else if (disciplineIn && disciplineIn.length > 0) {
+  } else if (disciplineIn.length > 0) {
     const allow = new Set(disciplineIn);
-    const matched = candidates.filter((r) => r.discipline != null && allow.has(r.discipline));
+    const matched = candidates.filter((r) => {
+      const discipline = normaliseProviderDiscipline(r.discipline);
+      return discipline !== null && allow.has(discipline);
+    });
+    if (matched.length === 0 && strictDiscipline) return null;
     if (matched.length > 0) candidates = matched;
   }
 
@@ -274,14 +299,12 @@ router.post("/recommendations/check", requireAuth, async (req: Request, res: Res
       report,
       conversationHistory,
       explicitRequest = false,
-      askForOthers = false,
       preferredDiscipline,
       excludeProviderIds = [],
     } = req.body as {
       report?: FeasibilityReport;
       conversationHistory?: Message[];
       explicitRequest?: boolean;
-      askForOthers?: boolean;
       preferredDiscipline?: string;
       excludeProviderIds?: string[];
     };
@@ -293,27 +316,25 @@ router.post("/recommendations/check", requireAuth, async (req: Request, res: Res
       const strategy = report?.recommendedDevelopmentStrategy ?? null;
       const strategySuggestsDesignProfessional =
         strategy === "demolish_rebuild" || strategy === "refurbish";
+      const requestedDiscipline = normaliseProviderDiscipline(preferredDiscipline);
       const disciplineIn =
-        !preferredDiscipline && strategySuggestsDesignProfessional
+        !requestedDiscipline && strategySuggestsDesignProfessional
           ? (["architect_designer", "planner"] as const)
           : undefined;
-      let provider = await selectServiceProvider({
-        preferredDiscipline: preferredDiscipline ?? null,
+      const provider = await selectServiceProvider({
+        preferredDiscipline: requestedDiscipline,
         ...(disciplineIn ? { disciplineIn: [...disciplineIn] } : {}),
         excludeProviderIds,
       });
-      if (!provider && disciplineIn && disciplineIn.length > 0) {
-        provider = await selectServiceProvider({ excludeProviderIds });
-      }
-      // External/online recommendation is allowed only when user explicitly asks
-      // for others AND there are no internal providers left in this chat round.
-      if (!provider && askForOthers) {
+      if (!provider) {
         res.json({
           shouldRecommend: false,
           provider: null,
           intentType: "referral",
-          reason: "No more internal service providers available in this round",
-          allowExternalSearch: true,
+          reason: requestedDiscipline
+            ? "No matching internal service provider is available for the requested discipline"
+            : "No matching internal service provider is available right now",
+          allowExternalSearch: false,
           upgradeRequired,
         });
         return;
@@ -339,13 +360,10 @@ router.post("/recommendations/check", requireAuth, async (req: Request, res: Res
     if (strategy && designProfessionalStrategies.has(strategy)) {
       const intentType = strategy === "demolish_rebuild" ? "newbuild" : "renovation";
       const designDisciplines = ["architect_designer", "planner"];
-      let provider = await selectServiceProvider({
+      const provider = await selectServiceProvider({
         disciplineIn: designDisciplines,
         excludeProviderIds,
       });
-      if (!provider) {
-        provider = await selectServiceProvider({ excludeProviderIds });
-      }
       res.json({
         shouldRecommend: provider !== null,
         provider,
@@ -366,7 +384,7 @@ router.post("/recommendations/check", requireAuth, async (req: Request, res: Res
 
     // Prefer DB providers; pass discipline inferred by the LLM for better matching.
     const provider = await selectServiceProvider({
-      preferredDiscipline: intent.suggestedDiscipline,
+      preferredDiscipline: normaliseProviderDiscipline(intent.suggestedDiscipline),
       excludeProviderIds,
     });
     res.json({

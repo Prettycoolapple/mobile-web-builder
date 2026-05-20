@@ -714,7 +714,7 @@ export function mergePropertyData(
     ...(realestateListing?.photoUrl ? [realestateListing.photoUrl] : []),
     ...(extra?.realestate_photo_urls ?? []),
     ...(propertyValue?.photo_urls ?? []),
-  ].filter(Boolean))).slice(0, 12);
+  ].filter(Boolean)));
   const main_photo_url        = photo_urls[0] ?? null;
   const overlay_map_image_base64 = hougarden?.overlay_map_image_base64 ?? null;
 

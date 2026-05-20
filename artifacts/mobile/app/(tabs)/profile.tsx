@@ -25,6 +25,8 @@ import { WORLD_LANGUAGES } from "@/lib/languages";
 import { useT } from "@/lib/i18n";
 import { STANDARD_REPORT_LIMIT, resolveReportLimit } from "@/lib/quotas";
 
+type PlanFeatureItem = { text: string; included: boolean };
+
 function buildPlanFeatures(t: (k: string) => string) {
   return {
     free: [t("feature.feasibility_reports"), t("feature.chat_search")],
@@ -44,11 +46,12 @@ function buildPlanFeatures(t: (k: string) => string) {
       t("feature.priority_support"),
     ],
     provider: [
-      t("feature.referred"),
-      t("feature.encrypted_chats"),
-      t("feature.feasibility_reports"),
-      t("feature.chat_search"),
-    ],
+      { text: t("provider_welcome.feature_investors"), included: true },
+      { text: t("provider_welcome.feature_search_reports"), included: true },
+      { text: t("provider_welcome.feature_encrypted_chat"), included: true },
+      { text: t("feature.provider_live_translation_soon"), included: false },
+      { text: t("feature.provider_automation_tools_soon"), included: false },
+    ] satisfies PlanFeatureItem[],
   };
 }
 
@@ -593,10 +596,10 @@ export default function ProfileScreen() {
             <View style={styles.planTop}>
               <View>
                 <Text style={[styles.planLabel, { color: "rgba(250,250,249,0.45)", fontFamily: "DM_Sans_400Regular" }]}>
-                  Current plan
+                  {t("profile.current_plan")}
                 </Text>
                 <Text style={[styles.planName, { color: colors.headerText, fontFamily: "DM_Sans_700Bold" }]}>
-                  {isStandard ? "Agent Pro" : "Not subscribed"}
+                  {isStandard ? t("profile.agent_pro") : t("profile.not_subscribed")}
                 </Text>
               </View>
               <View style={[styles.planBadge, {
@@ -607,7 +610,7 @@ export default function ProfileScreen() {
                   color: isStandard ? colors.accent : "rgba(250,250,249,0.6)",
                   fontFamily: "DM_Sans_500Medium",
                 }]}>
-                  {isStandard ? "Active" : "Inactive"}
+                  {isStandard ? t("profile.active") : t("profile.inactive")}
                 </Text>
               </View>
             </View>
@@ -634,10 +637,10 @@ export default function ProfileScreen() {
             <View style={styles.planTop}>
               <View>
                 <Text style={[styles.planLabel, { color: "rgba(250,250,249,0.45)", fontFamily: "DM_Sans_400Regular" }]}>
-                  Current plan
+                  {t("profile.current_plan")}
                 </Text>
                 <Text style={[styles.planName, { color: colors.headerText, fontFamily: "DM_Sans_700Bold" }]}>
-                  {isStandard ? "Provider Pro" : "Not subscribed"}
+                  {isStandard ? t("profile.provider_pro") : t("profile.not_subscribed")}
                 </Text>
               </View>
               <View style={[styles.planBadge, {
@@ -648,7 +651,7 @@ export default function ProfileScreen() {
                   color: isStandard ? colors.accent : "rgba(250,250,249,0.6)",
                   fontFamily: "DM_Sans_500Medium",
                 }]}>
-                  {isStandard ? "Active" : "Inactive"}
+                  {isStandard ? t("profile.active") : t("profile.inactive")}
                 </Text>
               </View>
             </View>
@@ -658,21 +661,21 @@ export default function ProfileScreen() {
                   <>
                     <Feather name="shield" size={13} color="#52C99A" />
                     <Text style={[styles.verificationLabel, { color: "#52C99A", fontFamily: "DM_Sans_500Medium" }]}>
-                      Account verified
+                      {t("profile.account_verified")}
                     </Text>
                   </>
                 ) : (
                   <>
                     <Feather name="clock" size={13} color="rgba(250,249,246,0.4)" />
                     <Text style={[styles.verificationLabel, { color: "rgba(250,249,246,0.5)", fontFamily: "DM_Sans_400Regular" }]}>
-                      Verification pending — we'll review your credentials shortly
+                      {t("profile.verification_pending")}
                     </Text>
                   </>
                 )}
               </View>
               {!user?.isVerified && (
                 <Text style={[styles.verificationNote, { color: "rgba(250,249,246,0.35)", fontFamily: "DM_Sans_400Regular" }]}>
-                  You have full access to Provider Pro features. Your verified badge will display automatically once your account is reviewed.
+                  {t("profile.provider_pro_verification_note")}
                 </Text>
               )}
             </View>
@@ -685,7 +688,7 @@ export default function ProfileScreen() {
                 >
                   <Feather name="credit-card" size={14} color="rgba(250,250,249,0.6)" />
                   <Text style={[styles.actionBtnText, { color: "rgba(250,250,249,0.6)", fontFamily: "DM_Sans_400Regular" }]}>
-                    Manage subscription
+                    {t("profile.manage_sub")}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -701,12 +704,12 @@ export default function ProfileScreen() {
               <View style={styles.proTop}>
                 <View>
                   <Text style={[styles.proTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
-                    Standard Plan
+                    {t("profile.standard_plan")}
                   </Text>
                   <View style={styles.priceRow}>
                     <Text style={[styles.price, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>{getPriceForRole("general")}</Text>
                     <Text style={[styles.pricePer, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                      /mo NZD
+                      {t("profile.per_month_nzd")}
                     </Text>
                   </View>
                 </View>
@@ -782,24 +785,24 @@ export default function ProfileScreen() {
         {/* ─── Upgrade card — service provider ─── */}
         {role === "service_provider" && !isStandard && (
           <>
-            <SectionHeader title="Activate Provider Pro" />
+            <SectionHeader title={t("profile.activate_provider_pro")} />
             <View style={[styles.proCard, { backgroundColor: colors.card, borderColor: colors.accent + "35" }]}>
               <View style={styles.proTop}>
                 <View>
                   <Text style={[styles.proTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
-                    Provider Pro Plan
+                    {t("profile.provider_pro_plan")}
                   </Text>
                   <View style={styles.priceRow}>
                     <Text style={[styles.price, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>{getPriceForRole("service_provider")}</Text>
                     <Text style={[styles.pricePer, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                      /mo NZD
+                      {t("profile.per_month_nzd")}
                     </Text>
                   </View>
                 </View>
               </View>
               <View style={styles.featuresList}>
                 {PLAN_FEATURES.provider.map((f) => (
-                  <FeatureRow key={f} text={f} included />
+                  <FeatureRow key={f.text} text={f.text} included={f.included} />
                 ))}
               </View>
               <TouchableOpacity
@@ -836,9 +839,10 @@ export default function ProfileScreen() {
             : role === "service_provider"
             ? PLAN_FEATURES.provider
             : isStandard ? PLAN_FEATURES.standard : PLAN_FEATURES.free
-          ).map((f) => (
-            <FeatureRow key={f} text={f} included />
-          ))}
+          ).map((f) => {
+            const item = typeof f === "string" ? { text: f, included: true } : f;
+            return <FeatureRow key={item.text} text={item.text} included={item.included} />;
+          })}
         </View>
 
         {/* ─── Actions ─── */}

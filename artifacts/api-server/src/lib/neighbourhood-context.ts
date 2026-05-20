@@ -37,6 +37,9 @@ interface NeighbourParcelAssessment {
   terraceHousing: boolean;
 }
 
+export const PUBLIC_HOUSING_SCAN_RADIUS_M = 500;
+const PUBLIC_HOUSING_SCAN_COUNT = 300;
+
 const DEFAULT_CONTEXT: NeighbourhoodContext = {
   assessedLots: 0,
   radiusM: 0,
@@ -243,8 +246,8 @@ export async function fetchNeighbourhoodContext(opts: {
   lng: number;
   subjectParcelId?: string | null;
 }): Promise<NeighbourhoodContext> {
-  const radiusM = 100;
-  const parcels = await fetchLINZParcelsNear(opts.lat, opts.lng, radiusM, 100);
+  const radiusM = PUBLIC_HOUSING_SCAN_RADIUS_M;
+  const parcels = await fetchLINZParcelsNear(opts.lat, opts.lng, radiusM, PUBLIC_HOUSING_SCAN_COUNT);
   if (parcels === null) return DEFAULT_CONTEXT;
   const selected = selectResidentialParcelsWithinRadius(parcels, opts.subjectParcelId, radiusM);
   const assessments = await assessParcels(selected);

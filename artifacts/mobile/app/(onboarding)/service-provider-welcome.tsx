@@ -9,6 +9,7 @@ import {
   Animated,
   ActivityIndicator,
   Alert,
+  Platform,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -28,15 +29,30 @@ const BORDER = "rgba(250,249,246,0.1)";
 
 const FEATURES: { icon: React.ComponentProps<typeof Feather>["name"]; labelKey: string }[] = [
   { icon: "users", labelKey: "provider_welcome.feature_investors" },
-  { icon: "search", labelKey: "provider_welcome.feature_search_reports" },
-  { icon: "lock", labelKey: "provider_welcome.feature_encrypted_chat" },
+  { icon: "file-text", labelKey: "provider_welcome.feature_search_reports" },
+  { icon: "message-circle", labelKey: "provider_welcome.feature_encrypted_chat" },
+];
+
+const COMING_SOON: { labelKey: string }[] = [
+  { labelKey: "provider_welcome.coming_soon_item" },
+  { labelKey: "provider_welcome.coming_soon_automation_tools" },
 ];
 
 export default function ServiceProviderWelcomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user, token, getApiHeaders, refreshProfile } = useAuth();
-  const { purchase, isPurchasing, isSubscribed, getPriceForRole, getPackageForRole, refetchCustomerInfo } =
+  const {
+    purchase,
+    isPurchasing,
+    isSubscribed,
+    getPriceForRole,
+    getFreshPackageForRole,
+    refetchCustomerInfo,
+    refetchOfferings,
+    refetchStoreProducts,
+    offeringsLoading,
+  } =
     useSubscription();
   const { t } = useT();
   const [showWelcomePopup, setShowWelcomePopup] = useState(true);
@@ -44,6 +60,7 @@ export default function ServiceProviderWelcomeScreen() {
   const firstName = user?.fullName?.split(" ")[0] || t("provider_welcome.fallback_name");
   const hasSubscription = isSubscribed || (user?.subscriptionTier && user.subscriptionTier !== "free");
   const priceString = getPriceForRole("service_provider");
+  const storeName = Platform.OS === "ios" ? "App Store" : "Google Play";
 
   const heroAnim = useRef(new Animated.Value(0)).current;
   const cardAnim = useRef(new Animated.Value(0)).current;
@@ -52,6 +69,8 @@ export default function ServiceProviderWelcomeScreen() {
   const btnAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
+    void refetchOfferings();
+    void refetchStoreProducts();
     Animated.sequence([
       Animated.timing(heroAnim, { toValue: 1, duration: 480, useNativeDriver: true }),
       Animated.timing(cardAnim, { toValue: 1, duration: 320, useNativeDriver: true }),
@@ -64,11 +83,11 @@ export default function ServiceProviderWelcomeScreen() {
       Animated.timing(comingSoonAnim, { toValue: 1, duration: 280, useNativeDriver: true }),
       Animated.timing(btnAnim, { toValue: 1, duration: 280, useNativeDriver: true }),
     ]).start();
-  }, []);
+  }, [refetchOfferings, refetchStoreProducts]);
 
   const handleSubscribe = async () => {
     try {
-      const pkg = getPackageForRole("service_provider");
+      const pkg = await getFreshPackageForRole("service_provider");
       if (!pkg) {
         Alert.alert(t("provider_welcome.unavailable"), t("provider_welcome.sub_unavailable"));
         return;
@@ -166,7 +185,9 @@ export default function ServiceProviderWelcomeScreen() {
               </View>
             </View>
           </View>
-          <Text style={styles.subscriptionNote}>{t("provider_welcome.subscription_note")}</Text>
+          <Text style={styles.subscriptionNote}>
+            {t("provider_welcome.subscription_note", { store: storeName })}
+          </Text>
         </Animated.View>
 
         {!hasSubscription && (
@@ -211,10 +232,12 @@ export default function ServiceProviderWelcomeScreen() {
             ]}
           >
             <Text style={styles.comingSoonHeading}>{t("provider_welcome.coming_soon_heading")}</Text>
-            <View style={styles.comingSoonRow}>
-              <Feather name="clock" size={14} color={MUTED} style={styles.comingSoonBulletIcon} />
-              <Text style={styles.comingSoonText}>{t("provider_welcome.coming_soon_item")}</Text>
-            </View>
+            {COMING_SOON.map((item) => (
+              <View key={item.labelKey} style={styles.comingSoonRow}>
+                <Feather name="clock" size={14} color={MUTED} style={styles.comingSoonBulletIcon} />
+                <Text style={styles.comingSoonText}>{t(item.labelKey)}</Text>
+              </View>
+            ))}
           </Animated.View>
         </View>
 
@@ -226,12 +249,12 @@ export default function ServiceProviderWelcomeScreen() {
             </TouchableOpacity>
           ) : (
             <TouchableOpacity
-              style={[styles.primaryBtn, isPurchasing && styles.primaryBtnDisabled]}
+              style={[styles.primaryBtn, (isPurchasing || offeringsLoading) && styles.primaryBtnDisabled]}
               onPress={handleSubscribe}
               activeOpacity={0.85}
-              disabled={isPurchasing}
+              disabled={isPurchasing || offeringsLoading}
             >
-              {isPurchasing ? (
+              {isPurchasing || offeringsLoading ? (
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
                 <>
@@ -416,6 +439,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-start",
     gap: 10,
+    marginBottom: 10,
   },
   comingSoonBulletIcon: {
     marginTop: 2,

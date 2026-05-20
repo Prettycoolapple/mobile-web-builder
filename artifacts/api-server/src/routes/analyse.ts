@@ -38,6 +38,11 @@ import { formatNZD } from "../lib/utils";
 import { searchRealEstateListings } from "../lib/scrapers/realestate-search";
 import { preScreenListingsFast, type PropertyCandidate } from "../lib/pre-screen";
 import {
+  hasStandardSubdivisionYield,
+  isDevelopmentDiscoveryIntent,
+  isStandardSubdivisionDiscoveryIntent,
+} from "../lib/discovery-intent";
+import {
   makeCacheKey,
   setListingCache,
   popNextListings,
@@ -753,18 +758,8 @@ async function resolveNearbySuburbs(suburb: string, max = 5): Promise<string[]> 
 // Applies rule-based score boosts derived from the LLM-extracted criteria string
 // so that properties best matching the user's intent surface to the top before
 // the final random pick.
-function isDevelopmentDiscoveryIntent(criteria: string | null | undefined): boolean {
-  if (!criteria) return false;
-  return /\b(develop(?:ment)?|subdivi\w*|sub[-\s]?divide|section|sections|lot|lots|townhouse|terrace|duplex|infill|unitary|yield)\b/i.test(criteria);
-}
-
-function isStandardSubdivisionDiscoveryIntent(criteria: string | null | undefined): boolean {
-  if (!criteria) return false;
-  return /\b(subdivi\w*|sub[-\s]?divide|subdivision|vacant\s+lots?|new\s+titles?|separate\s+titles?|split\s+(?:the\s+)?(?:site|section|land|lot)|(?:2|two)\s+(?:vacant\s+)?lots?)\b/i.test(criteria);
-}
-
 function passesStandardSubdivisionSizeScreen(candidate: PropertyCandidate): boolean {
-  return (candidate.potentialLots ?? 1) >= 2;
+  return hasStandardSubdivisionYield(candidate);
 }
 
 function buildDiscoveryCriteriaText(

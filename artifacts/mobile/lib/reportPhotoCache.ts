@@ -100,10 +100,8 @@ export interface ReportPhotoSource {
   photoUrls?: string[] | null;
 }
 
-const TARGET_PHOTO_COUNT = 4;
-
 /**
- * Download up to TARGET_PHOTO_COUNT (4) property photos for the given report.
+ * Download every property photo supplied by the report.
  *
  * Priority order:
  *  1. Scraped listing photos (OneRoof gallery + realestate.co.nz)
@@ -131,24 +129,24 @@ export async function cacheReportPhotos(
 
   const localUris: string[] = [];
   for (const url of remoteUrls) {
-    if (localUris.length >= TARGET_PHOTO_COUNT) break;
     const local = await downloadOne(url, dir);
     if (local) localUris.push(local);
   }
 
-  // Pad with Google Street View then Satellite so users always see 4 images.
-  if (report.address && localUris.length < TARGET_PHOTO_COUNT) {
+  // Fall back to Google Street View then Satellite only when listing photos
+  // are unavailable or blocked.
+  if (report.address && localUris.length === 0) {
     const svUrl = streetViewUrlFor(report.address);
     if (!remoteUrls.includes(svUrl)) {
       const sv = await downloadOne(svUrl, dir);
-      if (sv && localUris.length < TARGET_PHOTO_COUNT) localUris.push(sv);
+      if (sv) localUris.push(sv);
     }
   }
-  if (report.address && localUris.length < TARGET_PHOTO_COUNT) {
+  if (report.address && localUris.length === 0) {
     const smUrl = staticMapUrlFor(report.address);
     if (!remoteUrls.includes(smUrl)) {
       const sm = await downloadOne(smUrl, dir);
-      if (sm && localUris.length < TARGET_PHOTO_COUNT) localUris.push(sm);
+      if (sm) localUris.push(sm);
     }
   }
 

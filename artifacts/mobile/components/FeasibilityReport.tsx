@@ -192,27 +192,27 @@ function getCostHigh(item: CostItem): number { return safeNum(item.high); }
  *     then Maps Static (satellite) when there are no listing URLs, or as
  *     **carousel fallbacks** when listing/CDN images fail (`ReportPhotoCarousel`).
  */
-const CAROUSEL_TARGET = 4;
+const FALLBACK_PHOTO_TARGET = 4;
 
 function getReportPhotoUrls(report: Report): string[] {
   const address = (report.address ?? "").trim();
   const streetview = address ? streetViewUrlFor(address) : null;
   const staticMap = address ? staticMapUrlFor(address) : null;
 
-  /** Pad `urls` up to CAROUSEL_TARGET using Street View then Satellite. */
-  const padToTarget = (urls: string[]): string[] => {
+  /** Keep all listing photos, then lightly pad sparse sets with Street View/Satellite. */
+  const withFallbacks = (urls: string[]): string[] => {
     let out = [...urls];
-    if (streetview && out.length < CAROUSEL_TARGET && !out.includes(streetview))
+    if (streetview && out.length < FALLBACK_PHOTO_TARGET && !out.includes(streetview))
       out.push(streetview);
-    if (staticMap && out.length < CAROUSEL_TARGET && !out.includes(staticMap))
+    if (staticMap && out.length < FALLBACK_PHOTO_TARGET && !out.includes(staticMap))
       out.push(staticMap);
-    return out.slice(0, CAROUSEL_TARGET);
+    return out;
   };
 
   const cached = (report.cachedPhotoUris ?? []).filter(
     (uri): uri is string => typeof uri === "string" && uri.length > 0,
   );
-  if (cached.length > 0) return padToTarget(cached);
+  if (cached.length > 0) return withFallbacks(cached);
 
   const remote = Array.from(
     new Set(
@@ -224,11 +224,11 @@ function getReportPhotoUrls(report: Report): string[] {
   );
   if (remote.length > 0) {
     const proxied = remote.map((u) => (u.startsWith("file://") ? u : viaImageProxy(u)));
-    return padToTarget(proxied);
+    return withFallbacks(proxied);
   }
 
   if (!address) return [];
-  return padToTarget([]);
+  return withFallbacks([]);
 }
 
 function renderSectionChildren(
@@ -315,6 +315,13 @@ function ScoreStarBlock({
 
 const CJK_TEXT_RE = /[\u3400-\u9fff]/;
 
+/** Drop vendor attribution from commute lines (legacy cached reports). */
+function stripGoogleRoutesAttribution(text: string): string {
+  return text
+    .replace(/^Google Routes estimates about /i, "About ")
+    .replace(/^Google Routes\s*/i, "");
+}
+
 function normalizeScoreReason(reason: string): string {
   return reason
     .trim()
@@ -356,22 +363,23 @@ const SCORE_REASON_ZH: Record<string, string> = {
 };
 
 function localizeScoreReason(reason: string, locale: string): string {
-  if (locale !== "zh" || CJK_TEXT_RE.test(reason)) return reason;
+  const cleaned = stripGoogleRoutesAttribution(reason);
+  if (locale !== "zh" || CJK_TEXT_RE.test(cleaned)) return cleaned;
 
-  const normalized = normalizeScoreReason(reason);
+  const normalized = normalizeScoreReason(cleaned);
   const translated = SCORE_REASON_ZH[normalized];
   if (translated) return translated;
 
-  const costPerUnit = reason.match(/^Cost per unit:\s*(.+)$/i);
+  const costPerUnit = cleaned.match(/^Cost per unit:\s*(.+)$/i);
   if (costPerUnit) return `单元成本：${costPerUnit[1]}`;
 
-  const bestCase = reason.match(/^Best case:\s*(.+?)\s+ROI over\s+(.+?)\s+years?$/i);
+  const bestCase = cleaned.match(/^Best case:\s*(.+?)\s+ROI over\s+(.+?)\s+years?$/i);
   if (bestCase) return `最佳情况：${bestCase[1]} ROI，周期 ${bestCase[2]} 年`;
 
-  const baseCase = reason.match(/^Base case:\s*(.+?)\s+ROI over\s+(.+?)\s+years?$/i);
+  const baseCase = cleaned.match(/^Base case:\s*(.+?)\s+ROI over\s+(.+?)\s+years?$/i);
   if (baseCase) return `基准情况：${baseCase[1]} ROI，周期 ${baseCase[2]} 年`;
 
-  return reason;
+  return cleaned;
 }
 
 function ScoreSummaryRow({ report, colors, hideOverall }: { report: Report; colors: ReturnType<typeof useColors>; hideOverall?: boolean }) {
@@ -1236,7 +1244,9 @@ function NeighbourhoodContextNote({ context, colors }: { context?: Neighbourhood
 
 function TransportContextNote({ context, colors }: { context?: TransportContext | null; colors: ReturnType<typeof useColors> }) {
   if (!context) return null;
-  const reasons = context.roiInfluence?.reasons?.filter((line) => line.trim().length > 0) ?? [];
+  const reasons = context.roiInfluence?.reasons
+    ?.filter((line) => line.trim().length > 0)
+    .map(stripGoogleRoutesAttribution) ?? [];
   if (reasons.length === 0) return null;
 
   return (
@@ -1789,7 +1799,6 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
   const hasLiveComparableSales = realComparableSales.length > 0;
   const developmentStrategies = report.developmentStrategies ?? [];
   const hasDevelopmentStrategies = developmentStrategies.length > 0;
-  const hasMarketAccessContext = Boolean(report.neighbourhoodContext || report.transportContext);
   const titleTypeDisplay = formatTitleTypeForDisplay(report.propertyOverview?.titleType);
   const riskSummaryForDisplay = useMemo(() => {
     const scrubbed = filterRiskSummaryRemoveIncompleteDataDisclaimerBullets(report.riskSummary ?? []);
@@ -1988,7 +1997,6 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
         title={t("report.market_access_context")}
         icon=""
         status={marketAccessStatus(report)}
-        defaultOpen={hasMarketAccessContext}
         colors={colors}
       >
         <MarketAccessContextPanel

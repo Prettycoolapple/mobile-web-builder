@@ -71,7 +71,8 @@ type StoreProductLike = {
 
 function pickStorePackageFromOfferings(role: string, offerings: OfferingsLike | null | undefined): object | null {
   const offeringKey = OFFERING_BY_ROLE[role] ?? "default";
-  const offering = offerings?.all?.[offeringKey] ?? offerings?.current ?? null;
+  const roleOffering = offerings?.all?.[offeringKey] ?? null;
+  const offering = roleOffering ?? (role === "general" ? offerings?.current ?? null : null);
   return (offering?.monthly ?? offering?.availablePackages?.[0] ?? null) as object | null;
 }
 

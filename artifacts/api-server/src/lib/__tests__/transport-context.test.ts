@@ -8,6 +8,7 @@ import {
   classifyTransitAccessForStop,
   fetchGoogleRoutesCommute,
   parseGoogleDurationSeconds,
+  RAPID_TRANSIT_SCAN_RADIUS_M,
   routeTypeToMode,
 } from "../transport-context";
 import type { CityCommuteContext, HighwayAccessContext, PublicTransportContext } from "../transport-context";
@@ -36,6 +37,7 @@ describe("transport context classifiers", () => {
   });
 
   it("classifies public transport access from nearest stop distance and mode", () => {
+    expect(RAPID_TRANSIT_SCAN_RADIUS_M).toBe(3600);
     expect(classifyTransitAccessForStop(null)).toBe("poor");
     expect(classifyTransitAccessForStop({
       name: "Frequent bus stop",
@@ -116,7 +118,8 @@ describe("transport context classifiers", () => {
     expect(influence.influence).toBe("positive");
     expect(influence.numericAdjustmentApplied).toBe(false);
     expect(influence.reasons.join(" ")).toContain("train");
-    expect(influence.reasons.join(" ")).toContain("Google Routes");
+    expect(influence.reasons.join(" ")).toContain("Auckland CBD");
+    expect(influence.reasons.join(" ")).not.toContain("Google Routes");
     expect(influence.reasons.join(" ")).not.toContain("motorway");
     expect(influence.reasons.join(" ")).not.toContain("noise");
   });
