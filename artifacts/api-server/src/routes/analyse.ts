@@ -878,12 +878,66 @@ function pickRankedCandidates(candidates: PropertyCandidate[], criteria: string 
   return shufflePick(ranked.slice(0, Math.max(n, 6)), n);
 }
 
+function normaliseDiscoveryAddressKey(address: string | null | undefined): string {
+  if (!address?.trim()) return "";
+  return address
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\b(new zealand|nz|auckland city|auckland)\b/g, "")
+    .replace(/\b\d{4}\b/g, "")
+    .replace(/\b(street|st)\b/g, "street")
+    .replace(/\b(road|rd)\b/g, "road")
+    .replace(/\b(avenue|ave)\b/g, "avenue")
+    .replace(/\b(crescent|cres)\b/g, "crescent")
+    .replace(/\b(place|pl)\b/g, "place")
+    .replace(/\b(drive|dr)\b/g, "drive")
+    .replace(/\b(lane|ln)\b/g, "lane")
+    .replace(/\b(terrace|tce)\b/g, "terrace")
+    .replace(/\b(parade|pde)\b/g, "parade")
+    .replace(/\b(boulevard|blvd)\b/g, "boulevard")
+    .replace(/\b(highway|hwy)\b/g, "highway")
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function isAlreadyShownAddress(address: string | null | undefined, shownKeys: Set<string>): boolean {
+  if (shownKeys.size === 0) return false;
+  const key = normaliseDiscoveryAddressKey(address);
+  return !!key && shownKeys.has(key);
+}
+
+function filterAlreadyShownListings<T extends { address?: string | null }>(
+  listings: T[],
+  shownKeys: Set<string>,
+): T[] {
+  if (shownKeys.size === 0) return listings;
+  return listings.filter((listing) => !isAlreadyShownAddress(listing.address, shownKeys));
+}
+
+function filterAlreadyShownCandidates(
+  candidates: PropertyCandidate[],
+  shownKeys: Set<string>,
+): PropertyCandidate[] {
+  if (shownKeys.size === 0) return candidates;
+  return candidates.filter((candidate) => !isAlreadyShownAddress(candidate.address, shownKeys));
+}
+
+function pickDiscoveryCandidates(
+  candidates: PropertyCandidate[],
+  criteria: string | null,
+  shownKeys: Set<string>,
+  n = 3,
+): PropertyCandidate[] {
+  return pickRankedCandidates(filterAlreadyShownCandidates(candidates, shownKeys), criteria, n);
+}
+
 /** Put prescreened-but-not-shown listings back at the front; failures / skipped at the back so we exhaust the suburb before falling back. */
 function partitionBatchAfterPrescreen(
   batch: ListingResult[],
   screened: PropertyCandidate[],
   picked: PropertyCandidate[],
   criteria?: string | null,
+  shownAddressKeys: Set<string> = new Set(),
 ): { putAtFront: ListingResult[]; putAtBack: ListingResult[] } {
   const pickedUrls = new Set(picked.map((p) => p.listingUrl).filter(Boolean));
   const screenedUrls = new Set(screened.map((s) => s.listingUrl).filter(Boolean));
@@ -898,6 +952,7 @@ function partitionBatchAfterPrescreen(
   const putAtBack: ListingResult[] = [];
   for (const l of batch) {
     if (pickedUrls.has(l.listingUrl)) continue;
+    if (isAlreadyShownAddress(l.address, shownAddressKeys)) continue;
     if (screenedUrls.has(l.listingUrl)) {
       if (subdivisionHardScreen && !subdivisionViableUrls.has(l.listingUrl)) putAtBack.push(l);
       else putAtFront.push(l);
@@ -912,12 +967,15 @@ async function prescreenPickRestoreBatch(
   batch: ListingResult[],
   criteria: string | null,
   preScreenOpts?: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number },
+  shownAddressKeys: Set<string> = new Set(),
 ): Promise<PropertyCandidate[]> {
-  const screened = await preScreenListingsFast(batch, 5, null, preScreenOpts).catch(() => [] as PropertyCandidate[]);
-  const candidates = pickRankedCandidates(screened, criteria, 3);
+  const visibleBatch = filterAlreadyShownListings(batch, shownAddressKeys);
+  if (visibleBatch.length === 0) return [];
+  const screened = await preScreenListingsFast(visibleBatch, 5, null, preScreenOpts).catch(() => [] as PropertyCandidate[]);
+  const candidates = pickDiscoveryCandidates(screened, criteria, shownAddressKeys, 3);
   const pickedUrls = candidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u));
   markShown(cacheKey, pickedUrls);
-  const { putAtFront, putAtBack } = partitionBatchAfterPrescreen(batch, screened, candidates, criteria);
+  const { putAtFront, putAtBack } = partitionBatchAfterPrescreen(visibleBatch, screened, candidates, criteria, shownAddressKeys);
   restoreListingsAfterPop(cacheKey, putAtFront, putAtBack);
   return candidates;
 }
@@ -1051,8 +1109,18 @@ function extractPreviousDiscoverStreetHint(
 
 function isDiscoverStreetContinuation(text: string): boolean {
   const lower = text.toLowerCase().trim();
+  if (/(?:\u663e\u793a|\u518d\u6765|\u7ed9\u6211|\u627e|\u770b).{0,6}\u66f4\u591a|\u8fd8\u6709(?:\u5417|\u6ca1\u6709)?|\u522b\u7684|\u5176\u4ed6|\u66f4\u591a(?:\u623f|\u5730|\u623f\u6e90|\u9009\u9879|\u7ed3\u679c)/.test(text)) return true;
   if (/^\d+[a-z]?\s*(?:号|號|number|no\.?|#)?\s*(?:呢|\?)?$/i.test(text.trim())) return true;
   return /any\s*(others?|more)|show\s*(me\s*)?more|more\s*(properties|options|results|sites)|what\s*else|other\s*properties|more\s*results|few\s*more|find\s*more|keep\s*looking|another\s*one|any\s*other|more\s*sites|other\s*options/i.test(lower);
+}
+
+function isContextualAreaBrowseFollowup(text: string): boolean {
+  const lower = text.toLowerCase();
+  return (
+    /\b(?:this|same|current|the)\s+(?:suburb|area|neighbou?rhood)\b/i.test(lower) ||
+    /\b(?:nearby|around here|in the area|in this area)\b/i.test(lower) ||
+    /(?:\u8fd9|\u6b64).{0,4}(?:\u533a|\u533a\u57df|\u90ca\u533a|\u4e00\u5e26)|\u9644\u8fd1|\u540c\u533a/.test(text)
+  );
 }
 
 function extractBareStreetNumberFollowup(text: string): string | null {
@@ -1876,7 +1944,11 @@ router.post("/chat", async (req, res) => {
         const overview = r["propertyOverview"] as Record<string, unknown> | undefined;
         const addr = (r["address"] as string | null) ?? (overview?.["address"] as string | null) ?? null;
         // Extract suburb from address or pipeline suburb field
-        const suburbFromReport = (r["suburb"] as string | null) ?? null;
+        let suburbFromReport = (r["suburb"] as string | null) ?? null;
+        if (!suburbFromReport && addr) {
+          const hit = await findSuburbInTextViaIndex(addr).catch(() => null);
+          if (hit) suburbFromReport = hit.title.toLowerCase();
+        }
         reportCtx = { address: addr, suburb: suburbFromReport };
       }
 
@@ -1891,6 +1963,16 @@ router.post("/chat", async (req, res) => {
       for (const msg of messages) {
         if (msg.role !== "assistant" || !msg.content) continue;
         const trimmed = msg.content.trim();
+
+        // Mobile client report marker: [Feasibility report for address]
+        const reportShownMatch = trimmed.match(/^\[Feasibility report for (.+)\]$/s);
+        if (reportShownMatch) {
+          const reportAddress = reportShownMatch[1].trim();
+          if (reportAddress && reportAddress.toLowerCase() !== "property") {
+            alreadyShownFromHistory.push(reportAddress);
+          }
+          continue;
+        }
 
         // Mobile client format: [Search results shown: addr1||url1; addr2||url2]
         const searchShownMatch = trimmed.match(/^\[Search results shown: (.+)\]$/s);
@@ -1923,6 +2005,12 @@ router.post("/chat", async (req, res) => {
           }
         } catch { /* not JSON, skip */ }
       }
+      if (reportCtx?.address) alreadyShownFromHistory.push(reportCtx.address);
+      const alreadyShownAddressKeys = new Set(
+        alreadyShownFromHistory
+          .map((address) => normaliseDiscoveryAddressKey(address))
+          .filter((key) => key.length > 0),
+      );
 
       const intent = await extractChatIntent(messages, reportCtx, alreadyShownFromHistory, chatLocale);
       const mode = intent.mode;
@@ -1994,6 +2082,19 @@ router.post("/chat", async (req, res) => {
         forcedAnalyseAddress && (mode === "discover" || (mode === "followup" && (contextualBareAddress || looksLikeStreetAddress(userText))))
           ? "analyse"
           : mode;
+      if (
+        effectiveMode === "followup"
+        && !hasNumberedStreetAddress(userText)
+        && (
+          detectMode(userText) === "discover" ||
+          isListingBrowseIntent(userText) ||
+          isContextualAreaBrowseFollowup(userText) ||
+          isDiscoverStreetContinuation(userText)
+        )
+      ) {
+        req.log.info({ sample: userText.slice(0, 100) }, "Chat routing: listing browse follow-up — using discover flow");
+        effectiveMode = "discover";
+      }
       const analysisIsLikelyAreaOnly =
         !hasNumberedStreetAddress(userText)
         && (isListingBrowseIntent(userText) || hasUnnumberedStreetLine(userText))
@@ -2035,8 +2136,9 @@ router.post("/chat", async (req, res) => {
           // ─── DISCOVER FLOW — using LLM-extracted intent ──────────────────
           // All parameters come from the intent object. Suburb may have been
           // inferred from the current report context when absent from the message.
-          let suburb = intent.suburb;
-          const isFollowUp = intent.isFollowUp;
+          const contextualAreaBrowse = isContextualAreaBrowseFollowup(userText);
+          let suburb = intent.suburb ?? (contextualAreaBrowse ? reportCtx?.suburb ?? null : null);
+          const isFollowUp = intent.isFollowUp || contextualAreaBrowse || isDiscoverStreetContinuation(userText);
           const discoveryCriteria = buildDiscoveryCriteriaText(messages, userText, intent.criteria);
           const wantsDevelopmentDiscovery = isDevelopmentDiscoveryIntent(discoveryCriteria);
           const includeNegotiation = intent.includeNegotiation || wantsDevelopmentDiscovery;
@@ -2046,6 +2148,9 @@ router.post("/chat", async (req, res) => {
             const hit = await findSuburbInTextViaIndex(userText);
             if (hit) suburb = hit.title.toLowerCase();
           }
+          if (!suburb && isFollowUp && reportCtx?.suburb) {
+            suburb = reportCtx.suburb.toLowerCase().trim();
+          }
 
           // Default price range if LLM found no price constraint. Development
           // searches must scan high-value suburbs without a normal buyer-budget cap.
@@ -2053,8 +2158,6 @@ router.post("/chat", async (req, res) => {
           const DEFAULT_SPAN = wantsDevelopmentDiscovery ? DEFAULT_MAX : 1_500_000;
           let effectiveMinPrice = intent.minPrice ?? Math.max(0, (intent.maxPrice ?? DEFAULT_MAX) - DEFAULT_SPAN);
           let effectiveMaxPrice = intent.maxPrice ?? DEFAULT_MAX;
-          let alreadyShownAddresses: string[] = alreadyShownFromHistory;
-
           // If the LLM didn't find a suburb, scan history messages with fast regex
           // (covers follow-ups like "show more" where no suburb is mentioned)
           if (!suburb && isFollowUp) {
@@ -2103,7 +2206,7 @@ router.post("/chat", async (req, res) => {
                 const { listings: nextListings, remaining } = popNextListings(cacheKey, 8);
                 if (nextListings.length === 0) break;
                 req.log.info({ nextListings: nextListings.length, remaining, attempt: attempts + 1 }, "Follow-up: popping next listings from cache");
-                candidates = await prescreenPickRestoreBatch(cacheKey, nextListings, discoveryCriteria, discoverPreOpts);
+                candidates = await prescreenPickRestoreBatch(cacheKey, nextListings, discoveryCriteria, discoverPreOpts, alreadyShownAddressKeys);
                 attempts++;
               }
             }
@@ -2132,14 +2235,14 @@ router.post("/chat", async (req, res) => {
                 const inRange = (l: { price: number | null }) =>
                   l.price == null || (l.price >= effectiveMinPrice && l.price <= effectiveMaxPrice * 1.1);
 
-                const firstFiltered = rankListingsByStreetHint(
+                const firstFiltered = filterAlreadyShownListings(rankListingsByStreetHint(
                   filterListingsByStreetHint(searchResult.firstBatch.filter(inRange), streetHint),
                   streetHint,
-                );
-                const remainingFiltered = rankListingsByStreetHint(
+                ), alreadyShownAddressKeys);
+                const remainingFiltered = filterAlreadyShownListings(rankListingsByStreetHint(
                   filterListingsByStreetHint(searchResult.remainingListings.filter(inRange), streetHint),
                   streetHint,
-                );
+                ), alreadyShownAddressKeys);
 
                 const priorShown = [...getShownUrls(cacheKey)];
                 setListingCache(cacheKey, {
@@ -2155,10 +2258,10 @@ router.post("/chat", async (req, res) => {
                   preScreenListingsFast(firstFiltered, 5, null, discoverPreOpts).catch(() => []),
                   generateAnalysis(introPromptPreScreen, chatLocale).catch(() => ""),
                 ]);
-                candidates = pickRankedCandidates(screened, discoveryCriteria, 3);
+                candidates = pickDiscoveryCandidates(screened, discoveryCriteria, alreadyShownAddressKeys, 3);
                 const pickedUrls = candidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u));
                 markShown(cacheKey, pickedUrls);
-                const { putAtFront, putAtBack } = partitionBatchAfterPrescreen(firstFiltered, screened, candidates, discoveryCriteria);
+                const { putAtFront, putAtBack } = partitionBatchAfterPrescreen(firstFiltered, screened, candidates, discoveryCriteria, alreadyShownAddressKeys);
                 restoreListingsAfterPop(cacheKey, putAtFront, putAtBack);
                 prescreenedIntro = introFromPreScreen;
 
@@ -2168,7 +2271,7 @@ router.post("/chat", async (req, res) => {
                   const { listings: nextListings } = popNextListings(cacheKey, 8);
                   if (nextListings.length === 0) break;
                   req.log.info({ nextListings: nextListings.length, drainAttempt: drainAttempts }, "Discovery: draining cache until prescreen hits");
-                  candidates = await prescreenPickRestoreBatch(cacheKey, nextListings, discoveryCriteria, discoverPreOpts);
+                  candidates = await prescreenPickRestoreBatch(cacheKey, nextListings, discoveryCriteria, discoverPreOpts, alreadyShownAddressKeys);
                 }
               }
             }
@@ -2187,7 +2290,7 @@ router.post("/chat", async (req, res) => {
                 (nb): Promise<FallbackHit> =>
                   searchRealEstateListings({
                     suburb: nb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
-                    skipUrls: [],
+                    skipUrls: alreadyShownUrlsFromHistory,
                     includeNegotiation,
                     firstBatchSize: wantsDevelopmentDiscovery ? 18 : undefined,
                   }).then((res) => {
@@ -2218,18 +2321,18 @@ router.post("/chat", async (req, res) => {
                 if (fallbackResult && fallbackResult.firstBatch.length > 0) {
                   const inRangeFallback = (l: { price: number | null }) =>
                     l.price == null || (l.price >= effectiveMinPrice && l.price <= effectiveMaxPrice * 1.1);
-                  const filtered = rankListingsByStreetHint(
+                  const filtered = filterAlreadyShownListings(rankListingsByStreetHint(
                     fallbackResult.firstBatch.filter(inRangeFallback),
                     streetHint,
-                  );
+                  ), alreadyShownAddressKeys);
                   if (filtered.length > 0) {
                     const fallbackCacheKey = makeCacheKey(nearbySuburb, effectiveMinPrice, effectiveMaxPrice);
                     const priorShownFallback = [...getShownUrls(fallbackCacheKey)];
                     setListingCache(fallbackCacheKey, {
-                      remainingListings: rankListingsByStreetHint(
+                      remainingListings: filterAlreadyShownListings(rankListingsByStreetHint(
                         fallbackResult.remainingListings.filter(inRangeFallback),
                         streetHint,
-                      ),
+                      ), alreadyShownAddressKeys),
                       shownUrls: priorShownFallback,
                       suburb: nearbySuburb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
                     });
@@ -2239,7 +2342,7 @@ router.post("/chat", async (req, res) => {
                       preScreenListingsFast(filtered, 5, null, discoverPreOpts).catch(() => [] as PropertyCandidate[]),
                       generateAnalysis(introPromptFallback, chatLocale).catch(() => ""),
                     ]);
-                    candidates = pickRankedCandidates(screenedFallback, discoveryCriteria, 3);
+                    candidates = pickDiscoveryCandidates(screenedFallback, discoveryCriteria, alreadyShownAddressKeys, 3);
                     markShown(
                       fallbackCacheKey,
                       candidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u)),
@@ -2249,6 +2352,7 @@ router.post("/chat", async (req, res) => {
                       screenedFallback,
                       candidates,
                       discoveryCriteria,
+                      alreadyShownAddressKeys,
                     );
                     restoreListingsAfterPop(fallbackCacheKey, fbFront, fbBack);
 
@@ -2257,7 +2361,7 @@ router.post("/chat", async (req, res) => {
                       fbDrain++;
                       const { listings: fbNext } = popNextListings(fallbackCacheKey, 8);
                       if (fbNext.length === 0) break;
-                      candidates = await prescreenPickRestoreBatch(fallbackCacheKey, fbNext, discoveryCriteria, discoverPreOpts);
+                      candidates = await prescreenPickRestoreBatch(fallbackCacheKey, fbNext, discoveryCriteria, discoverPreOpts, alreadyShownAddressKeys);
                     }
 
                     if (candidates.length > 0) {
@@ -2878,7 +2982,10 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
               isDiscoverStreetContinuation(userText),
             );
             const cacheKey = makeCacheKey(suburb, minPrice, maxPrice, streetHintSn);
-            const shownUrls = getShownUrls(cacheKey);
+            const shownUrls = Array.from(new Set([
+              ...getShownUrls(cacheKey),
+              ...alreadyShownUrlsFromHistory,
+            ]));
             const discoverPreOptsSn = {
               allowMissingListingPrice: true as const,
               pricePlaceholderNzd: wantsDevelopmentSafetyNet
@@ -2893,14 +3000,14 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             if (searchResult && searchResult.firstBatch.length > 0) {
               const inRange = (l: { price: number | null }) =>
                 l.price == null || (l.price >= minPrice && l.price <= maxPrice * 1.1);
-              const firstFiltered = rankListingsByStreetHint(
+              const firstFiltered = filterAlreadyShownListings(rankListingsByStreetHint(
                 filterListingsByStreetHint(searchResult.firstBatch.filter(inRange), streetHintSn),
                 streetHintSn,
-              );
-              const remainingFiltered = rankListingsByStreetHint(
+              ), alreadyShownAddressKeys);
+              const remainingFiltered = filterAlreadyShownListings(rankListingsByStreetHint(
                 filterListingsByStreetHint(searchResult.remainingListings.filter(inRange), streetHintSn),
                 streetHintSn,
-              );
+              ), alreadyShownAddressKeys);
               const priorShownSn = [...getShownUrls(cacheKey)];
               setListingCache(cacheKey, {
                 remainingListings: remainingFiltered,
@@ -2910,7 +3017,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
               const screenedSn = await preScreenListingsFast(firstFiltered, 5, null, discoverPreOptsSn).catch(
                 () => [] as PropertyCandidate[],
               );
-              let discoverCandidates = pickRankedCandidates(screenedSn, safetyNetCriteria, 3);
+              let discoverCandidates = pickDiscoveryCandidates(screenedSn, safetyNetCriteria, alreadyShownAddressKeys, 3);
               markShown(
                 cacheKey,
                 discoverCandidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u)),
@@ -2919,6 +3026,8 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                 firstFiltered,
                 screenedSn,
                 discoverCandidates,
+                safetyNetCriteria,
+                alreadyShownAddressKeys,
               );
               restoreListingsAfterPop(cacheKey, snFront, snBack);
 
@@ -2927,7 +3036,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                 snDrain++;
                 const { listings: snNext } = popNextListings(cacheKey, 8);
                 if (snNext.length === 0) break;
-                discoverCandidates = await prescreenPickRestoreBatch(cacheKey, snNext, safetyNetCriteria, discoverPreOptsSn);
+                discoverCandidates = await prescreenPickRestoreBatch(cacheKey, snNext, safetyNetCriteria, discoverPreOptsSn, alreadyShownAddressKeys);
               }
 
               if (discoverCandidates.length > 0) {

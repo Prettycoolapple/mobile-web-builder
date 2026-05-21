@@ -121,6 +121,7 @@ interface Props {
   onDismiss?: (messageId: string) => void;
   onAgentDismiss?: (messageId: string) => void;
   onUpgrade?: () => void;
+  onShowMore?: (prompt: string) => void;
 }
 
 const THINKING_KEYS = [
@@ -190,7 +191,7 @@ function TypingDots() {
   );
 }
 
-export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect, onDismiss, onAgentDismiss, onUpgrade }: Props) {
+export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect, onDismiss, onAgentDismiss, onUpgrade, onShowMore }: Props) {
   const colors = useColors();
   const { t } = useT();
   const isUser = message.role === "user";
@@ -331,6 +332,18 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
         {results.map((candidate, i) => (
           <PropertyCard key={i} candidate={candidate} onAnalyse={onAnalyse} />
         ))}
+        {results.length > 0 ? (
+          <TouchableOpacity
+            style={[styles.showMoreButton, { backgroundColor: colors.card, borderColor: colors.border }]}
+            activeOpacity={0.78}
+            onPress={() => onShowMore?.(t("search.show_more"))}
+          >
+            <Feather name="plus" size={15} color={colors.accent} />
+            <Text style={[styles.showMoreText, { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" }]}>
+              {t("search.show_more")}
+            </Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
     );
   }
@@ -546,6 +559,21 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     paddingHorizontal: 4,
     paddingBottom: 2,
+  },
+  showMoreButton: {
+    alignSelf: "center",
+    minHeight: 42,
+    minWidth: 148,
+    borderRadius: 21,
+    borderWidth: 1,
+    paddingHorizontal: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+  },
+  showMoreText: {
+    fontSize: 14,
   },
   noListingsText: {
     fontSize: 15,

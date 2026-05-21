@@ -3,7 +3,7 @@ import { createInsertSchema } from "drizzle-zod";
 import { sql } from "drizzle-orm";
 import { z } from "zod/v4";
 
-export const userRoleEnum = pgEnum("user_role", ["general", "sales_agent", "service_provider"]);
+export const userRoleEnum = pgEnum("user_role", ["general", "sales_agent", "service_provider", "admin"]);
 
 export const profiles = pgTable("profiles", {
   id: text("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -28,6 +28,7 @@ export const profiles = pgTable("profiles", {
   phoneNumber: text("phone_number"),
   phoneVerifiedAt: timestamp("phone_verified_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
 });
 
 export const insertProfileSchema = createInsertSchema(profiles).omit({

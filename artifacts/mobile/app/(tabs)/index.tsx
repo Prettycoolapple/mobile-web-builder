@@ -13,6 +13,7 @@ import {
   Pressable,
   Keyboard,
   KeyboardAvoidingView,
+  Modal,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
@@ -66,8 +67,37 @@ type BackgroundAnalyseJob = {
 
 const BACKGROUND_ANALYSE_JOBS_KEY = "@devfeasible/background-analyse-jobs";
 const APP_RATING_STATE_KEY = "@devfeasible/app-rating-state";
+const ANALYSE_DISCLAIMER_DISMISSED_KEY = "@devfeasible/analyse-disclaimer-dismissed";
 const APP_RATING_CHAT_THRESHOLD = 3;
 const APP_RATING_SNOOZE_MS = 14 * 24 * 60 * 60 * 1000;
+
+function getAnalyseDisclaimerDismissedKey(userId?: string | null): string {
+  return userId ? `${ANALYSE_DISCLAIMER_DISMISSED_KEY}:${userId}` : ANALYSE_DISCLAIMER_DISMISSED_KEY;
+}
+
+type PendingAnalyseAction =
+  | { type: "send"; text: string }
+  | { type: "analyse"; address: string; selectedPhotoUrl?: string | null };
+
+function detectClientMode(text: string): "analyse" | "discover" | "followup" {
+  const lowerText = text.toLowerCase();
+  const isDiscoverQuery =
+    lowerText.match(/find\s+|search\s+|discover\s+|looking\s+for\s+|show\s+me\s+properties|subdividable|subdivision\s+opp|development\s+sites|lifestyle\s+prop|investment\s+prop/) ||
+    lowerText.match(/any\s+(others?|more|properties|homes|houses|sections|land)|show\s+(me\s+)?more|more\s+(properties|options|results|sites)|what\s+else|anything\s+else|few\s+more|find\s+more|keep\s+looking|another\s+one|any\s+other|more\s+sites|other\s+options/) ||
+    lowerText.match(/properties\s+(for\s+sale|on\s+sale|available|listed|in\s+)/i) ||
+    lowerText.match(/(for\s+sale|on\s+sale|on\s+the\s+market)\s+in/i) ||
+    lowerText.match(/what.*market|on.*market|market.*in/i);
+
+  if (isDiscoverQuery) return "discover";
+
+  const hasAddress =
+    text.match(
+      /\d+[a-zA-Z]?(?:\s*\/\s*\d+[a-zA-Z]?)?\s+[\w']+(?:\s+[\w']+){0,4}\s+(road|street|ave|avenue|crescent|place|drive|way|lane|terrace|parade|close|grove|esplanade|quay|rd|st|ave|cres|pl|dr|ln|tce|pde|blvd|hwy)\b/i,
+    ) ||
+    lowerText.match(/analys[ei]|feasibility|check|assess|evaluate|(?:^|[\s，。!?])(?:分析|可行性|评估)/);
+
+  return hasAddress ? "analyse" : "followup";
+}
 
 async function readBackgroundAnalyseJobs(): Promise<BackgroundAnalyseJob[]> {
   try {
@@ -253,9 +283,13 @@ export default function SearchScreen() {
   const appRatingPromptOpenRef = useRef(false);
   const reportMessageHeightsRef = useRef<Map<string, number>>(new Map());
   const cardScorePollRef = useRef<{ addresses: string[]; sessionId: string; intervalId: ReturnType<typeof setInterval> | null }>({ addresses: [], sessionId: "", intervalId: null });
-  const handleAnalyseRef = useRef<((address: string, selectedPhotoUrl?: string | null) => Promise<void>) | null>(null);
+  const handleAnalyseRef = useRef<((address: string, selectedPhotoUrl?: string | null, skipAnalyseDisclaimer?: boolean) => Promise<void>) | null>(null);
   const [listViewportHeight, setListViewportHeight] = useState(0);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const [analyseDisclaimerVisible, setAnalyseDisclaimerVisible] = useState(false);
+  const [analyseDisclaimerDontRemind, setAnalyseDisclaimerDontRemind] = useState(false);
+  const [analyseDisclaimerDismissed, setAnalyseDisclaimerDismissed] = useState(false);
+  const pendingAnalyseActionRef = useRef<PendingAnalyseAction | null>(null);
 
   const handlePurchaseSuccess = useCallback(() => {
     setMessageLimitReached(false);
@@ -268,6 +302,23 @@ export default function SearchScreen() {
     const showSub = Keyboard.addListener(showEvent, () => setKeyboardVisible(true));
     const hideSub = Keyboard.addListener(hideEvent, () => setKeyboardVisible(false));
     return () => { showSub.remove(); hideSub.remove(); };
+  }, []);
+
+  useEffect(() => {
+    AsyncStorage.getItem(getAnalyseDisclaimerDismissedKey(user?.id))
+      .then((value) => setAnalyseDisclaimerDismissed(value === "true"))
+      .catch(() => {});
+  }, [user?.id]);
+
+  const shouldShowAnalyseDisclaimer = useCallback(
+    () => !analyseDisclaimerDismissed,
+    [analyseDisclaimerDismissed],
+  );
+
+  const openAnalyseDisclaimer = useCallback((action: PendingAnalyseAction) => {
+    pendingAnalyseActionRef.current = action;
+    setAnalyseDisclaimerDontRemind(false);
+    setAnalyseDisclaimerVisible(true);
   }, []);
 
   const chatQuota = user ? resolveChatQuota(user.role, user.subscriptionTier) : null;
@@ -794,9 +845,14 @@ export default function SearchScreen() {
     };
   }, [pollBackgroundAnalyseJobs, user?.id]);
 
-  const handleSend = useCallback(async (overrideText?: string) => {
+  const handleSend = useCallback(async (overrideText?: string, skipAnalyseDisclaimer = false) => {
     const text = (overrideText !== undefined ? overrideText : inputText).trim();
     if (!text || isLoading) return;
+    const detectedMode = detectClientMode(text);
+    if (!skipAnalyseDisclaimer && detectedMode === "analyse" && shouldShowAnalyseDisclaimer()) {
+      openAnalyseDisclaimer({ type: "send", text });
+      return;
+    }
 
     const sessionIdEarly = currentSessionId ?? createSession();
     const pendingAddressPick = [...(currentSession?.messages ?? [])]
@@ -829,22 +885,6 @@ export default function SearchScreen() {
     // list above doesn't match (e.g. Chinese, nuanced phrasing).
     let llmWantsRecommendation = false;
     let llmSuggestedDiscipline: string | null = null;
-
-    const isDiscoverQuery =
-      lowerText.match(/find\s+|search\s+|discover\s+|looking\s+for\s+|show\s+me\s+properties|subdividable|subdivision\s+opp|development\s+sites|lifestyle\s+prop|investment\s+prop/) ||
-      lowerText.match(/any\s+(others?|more|properties|homes|houses|sections|land)|show\s+(me\s+)?more|more\s+(properties|options|results|sites)|what\s+else|anything\s+else|few\s+more|find\s+more|keep\s+looking|another\s+one|any\s+other|more\s+sites|other\s+options/) ||
-      lowerText.match(/properties\s+(for\s+sale|on\s+sale|available|listed|in\s+)/i) ||
-      lowerText.match(/(for\s+sale|on\s+sale|on\s+the\s+market)\s+in/i) ||
-      lowerText.match(/what.*market|on.*market|market.*in/i);
-    const detectedMode =
-      isDiscoverQuery
-        ? "discover"
-        : text.match(
-            /\d+[a-zA-Z]?(?:\s*\/\s*\d+[a-zA-Z]?)?\s+[\w']+(?:\s+[\w']+){0,4}\s+(road|street|ave|avenue|crescent|place|drive|way|lane|terrace|parade|close|grove|esplanade|quay|rd|st|ave|cres|pl|dr|ln|tce|pde|blvd|hwy)\b/i,
-          ) ||
-          lowerText.match(/analys[ei]|feasibility|check|assess|evaluate|(?:^|[\s，。!?])(?:分析|可行性|评估)/)
-          ? "analyse"
-          : "followup";
 
     addMessage({ role: "assistant", content: "", type: "loading", loadingMode: detectedMode as any }, sessionId);
 
@@ -1377,6 +1417,8 @@ export default function SearchScreen() {
     refreshProfile,
     bumpSearchHistory,
     trackBackgroundAnalyseJob,
+    shouldShowAnalyseDisclaimer,
+    openAnalyseDisclaimer,
     user?.role,
     user?.subscriptionTier,
     user,
@@ -1392,8 +1434,12 @@ export default function SearchScreen() {
   );
 
   const handleAnalyse = useCallback(
-    async (address: string, selectedPhotoUrl?: string | null) => {
+    async (address: string, selectedPhotoUrl?: string | null, skipAnalyseDisclaimer = false) => {
       if (isLoading) return;
+      if (!skipAnalyseDisclaimer && shouldShowAnalyseDisclaimer()) {
+        openAnalyseDisclaimer({ type: "analyse", address, selectedPhotoUrl });
+        return;
+      }
       setInputText("");
       Keyboard.dismiss();
 
@@ -1536,6 +1582,8 @@ export default function SearchScreen() {
       refreshProfile,
       bumpSearchHistory,
       trackBackgroundAnalyseJob,
+      shouldShowAnalyseDisclaimer,
+      openAnalyseDisclaimer,
       t,
     ],
   );
@@ -1543,6 +1591,24 @@ export default function SearchScreen() {
   useLayoutEffect(() => {
     handleAnalyseRef.current = handleAnalyse;
   }, [handleAnalyse]);
+
+  const confirmAnalyseDisclaimer = useCallback(async () => {
+    const action = pendingAnalyseActionRef.current;
+    pendingAnalyseActionRef.current = null;
+    setAnalyseDisclaimerVisible(false);
+
+    if (analyseDisclaimerDontRemind) {
+      setAnalyseDisclaimerDismissed(true);
+      await AsyncStorage.setItem(getAnalyseDisclaimerDismissedKey(user?.id), "true").catch(() => {});
+    }
+
+    if (!action) return;
+    if (action.type === "send") {
+      await handleSend(action.text, true);
+    } else {
+      await handleAnalyse(action.address, action.selectedPhotoUrl, true);
+    }
+  }, [analyseDisclaimerDontRemind, handleAnalyse, handleSend, user?.id]);
 
   const renderItem = useCallback(
     ({ item }: { item: ChatMessage }) => {
@@ -1563,6 +1629,7 @@ export default function SearchScreen() {
             onDismiss={handleDismiss}
             onAgentDismiss={handleAgentDismiss}
             onUpgrade={() => setShowPaywall(true)}
+            onShowMore={handleSend}
           />
         </View>
       );
@@ -1823,6 +1890,53 @@ export default function SearchScreen() {
         onClose={() => setShowPaywall(false)}
         onPurchaseSuccess={handlePurchaseSuccess}
       />
+      <Modal
+        visible={analyseDisclaimerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAnalyseDisclaimerVisible(false)}
+      >
+        <View style={styles.disclaimerModalRoot}>
+          <View style={styles.disclaimerBackdrop} />
+          <View style={styles.disclaimerCenter}>
+            <View style={[styles.disclaimerCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Text style={[styles.disclaimerTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
+                {t("analyse_disclaimer.title")}
+              </Text>
+              <Text style={[styles.disclaimerBody, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                {t("analyse_disclaimer.body")}
+              </Text>
+              <TouchableOpacity
+                style={styles.disclaimerCheckRow}
+                onPress={() => setAnalyseDisclaimerDontRemind((value) => !value)}
+                activeOpacity={0.75}
+              >
+                <View style={[
+                  styles.disclaimerCheckbox,
+                  {
+                    borderColor: analyseDisclaimerDontRemind ? colors.accent : colors.border,
+                    backgroundColor: analyseDisclaimerDontRemind ? colors.accent : "transparent",
+                  },
+                ]}>
+                  {analyseDisclaimerDontRemind && <Feather name="check" size={14} color="#fff" />}
+                </View>
+                <Text style={[styles.disclaimerCheckText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
+                  {t("analyse_disclaimer.dont_remind")}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.disclaimerOkBtn, { backgroundColor: colors.accent }]}
+                onPress={confirmAnalyseDisclaimer}
+                activeOpacity={0.85}
+              >
+                <Text style={[styles.disclaimerOkText, { fontFamily: "DM_Sans_600SemiBold" }]}>
+                  {t("common.ok")}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
       <AppRatingPrompt
         visible={showAppRatingPrompt}
         onDismiss={handleDismissAppRating}
@@ -2046,5 +2160,67 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     justifyContent: "center",
     alignItems: "center",
+  },
+  disclaimerModalRoot: {
+    flex: 1,
+  },
+  disclaimerBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.42)",
+  },
+  disclaimerCenter: {
+    flex: 1,
+    justifyContent: "center",
+    paddingHorizontal: 22,
+  },
+  disclaimerCard: {
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: 20,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.2,
+    shadowRadius: 24,
+    elevation: 12,
+  },
+  disclaimerTitle: {
+    fontSize: 18,
+    lineHeight: 24,
+    marginBottom: 10,
+  },
+  disclaimerBody: {
+    fontSize: 14,
+    lineHeight: 22,
+    marginBottom: 18,
+  },
+  disclaimerCheckRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 8,
+    marginBottom: 14,
+  },
+  disclaimerCheckbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  disclaimerCheckText: {
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  disclaimerOkBtn: {
+    height: 48,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  disclaimerOkText: {
+    color: "#fff",
+    fontSize: 16,
   },
 });

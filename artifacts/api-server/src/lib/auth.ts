@@ -52,3 +52,13 @@ export const requireAuth: RequestHandler = (req, res, next) => {
   (req as any).role = payload.role ?? "general";
   next();
 };
+
+export const requireAdmin: RequestHandler = (req, res, next) => {
+  requireAuth(req, res, () => {
+    if ((req as any).role !== "admin") {
+      res.status(403).json({ error: "Admin access required", code: "FORBIDDEN" });
+      return;
+    }
+    next();
+  });
+};

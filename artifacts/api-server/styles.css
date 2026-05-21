@@ -550,6 +550,28 @@ h1 {
   font-weight: 740;
 }
 
+.footer-admin-cog {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  margin-left: 4px;
+  line-height: 0;
+  color: rgba(255, 250, 243, 0.78);
+  opacity: 0.05;
+  transition: opacity 0.15s ease;
+}
+
+.footer-admin-cog:hover,
+.footer-admin-cog:focus {
+  opacity: 0.18;
+  outline: none;
+}
+
+.footer-admin-cog svg {
+  fill: currentColor;
+}
+
 .page-main {
   padding: 54px clamp(18px, 5vw, 64px) 88px;
 }

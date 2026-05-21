@@ -24,6 +24,7 @@ import { useColors } from "@/hooks/useColors";
 import { useAuth, ApiError, type ProviderDiscipline } from "@/context/AuthContext";
 import { MultiSelectChips } from "@/components/MultiSelectChips";
 import { PhoneOtpStep } from "@/components/PhoneOtpStep";
+import { SignupLegalConsentModal } from "@/components/SignupLegalConsentModal";
 import { useT, isOSChineseLocale } from "@/lib/i18n";
 
 import { WORLD_LANGUAGES, languageDisplayName } from "@/lib/languages";
@@ -218,6 +219,9 @@ export default function SignupProviderScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  const [legalModalVisible, setLegalModalVisible] = useState(false);
+  const [legalAccepted, setLegalAccepted] = useState(false);
+  const pendingSignupOptionsRef = useRef<{ skipAvatar?: boolean }>({});
 
   const [step, setStep] = useState(0);
   const slideAnim = useRef(new Animated.Value(0)).current;
@@ -298,6 +302,7 @@ export default function SignupProviderScreen() {
   };
 
   const handleSignup = async (options?: { skipAvatar?: boolean }) => {
+    setLegalModalVisible(false);
     setSubmitError(null);
     setIsLoading(true);
     try {
@@ -371,6 +376,14 @@ export default function SignupProviderScreen() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const requestSignupCompletion = (options?: { skipAvatar?: boolean }) => {
+    if (!validateStep()) return;
+    pendingSignupOptionsRef.current = options ?? {};
+    setSubmitError(null);
+    setLegalAccepted(false);
+    setLegalModalVisible(true);
   };
 
   const inputBase = (field: keyof FieldErrors) => [
@@ -774,7 +787,7 @@ export default function SignupProviderScreen() {
 
         <TouchableOpacity
           style={[styles.primaryBtn, { backgroundColor: ACCENT, opacity: isLoading ? 0.7 : 1 }]}
-          onPress={() => handleSignup()}
+          onPress={() => requestSignupCompletion()}
           disabled={isLoading}
           activeOpacity={0.85}
         >
@@ -789,7 +802,7 @@ export default function SignupProviderScreen() {
         </TouchableOpacity>
 
         <TouchableOpacity
-          onPress={() => handleSignup({ skipAvatar: true })}
+          onPress={() => requestSignupCompletion({ skipAvatar: true })}
           disabled={isLoading}
           activeOpacity={0.7}
           style={styles.skipBtn}
@@ -840,6 +853,17 @@ export default function SignupProviderScreen() {
           </ScrollView>
         </Animated.View>
       </KeyboardAvoidingView>
+      <SignupLegalConsentModal
+        visible={legalModalVisible}
+        accepted={legalAccepted}
+        loading={isLoading}
+        onAcceptedChange={setLegalAccepted}
+        onCancel={() => {
+          if (isLoading) return;
+          setLegalModalVisible(false);
+        }}
+        onComplete={() => void handleSignup(pendingSignupOptionsRef.current)}
+      />
     </View>
   );
 }

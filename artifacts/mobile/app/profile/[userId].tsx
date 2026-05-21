@@ -13,7 +13,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
-import { avatarImageSource } from "@/lib/avatar";
+import { avatarImageSource, getAvatarInitials } from "@/lib/avatar";
 import { getApiBase } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 
@@ -73,12 +73,7 @@ function Avatar({
   colors: ReturnType<typeof useColors>;
 }) {
   const { getApiHeaders } = useAuth();
-  const initials = (name ?? "?")
-    .split(" ")
-    .slice(0, 2)
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase();
+  const initials = getAvatarInitials(name);
   const color = roleColor(role, colors);
   const source = avatarImageSource(avatarUrl, getApiHeaders());
 

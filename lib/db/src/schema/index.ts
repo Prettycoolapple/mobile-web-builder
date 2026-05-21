@@ -16,3 +16,5 @@ export * from "./password_reset_tokens";
 export * from "./chat_llm_feedback";
 export * from "./user_blocks";
 export * from "./user_reports";
+export * from "./user_login_events";
+export * from "./support_requests";

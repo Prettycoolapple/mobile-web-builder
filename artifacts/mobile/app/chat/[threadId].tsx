@@ -31,7 +31,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useDm, DmMessage, type DmBlockStatus } from "@/context/DmContext";
 import { ImageViewerModal } from "@/components/ImageViewerModal";
 import { getApiBase, resolveAppUrl } from "@/lib/api";
-import { avatarImageSource, sanitizeHeadersForImageRequest } from "@/lib/avatar";
+import { avatarImageSource, getAvatarInitials, sanitizeHeadersForImageRequest } from "@/lib/avatar";
 import { useT, type Locale } from "@/lib/i18n";
 
 function formatDiscipline(
@@ -162,12 +162,7 @@ function Avatar({
 }) {
   const colors = useColors();
   const source = avatarImageSource(avatarUrl ?? null, authHeaders);
-  const initials = (name ?? "?")
-    .split(" ")
-    .slice(0, 2)
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase();
+  const initials = getAvatarInitials(name);
   if (source) {
     return (
       <Image
@@ -886,6 +881,9 @@ export default function ChatScreen() {
       {loadingInitial ? (
         <View style={styles.center}>
           <ActivityIndicator color={colors.accent} size="large" />
+          <Text style={[styles.securityCheckText, { color: colors.mutedForeground }]}>
+            {t("dm.security_check")}
+          </Text>
         </View>
       ) : (
         <View style={styles.listWrap}>
@@ -1196,6 +1194,12 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
+  securityCheckText: {
+    marginTop: 10,
+    fontFamily: "DM_Sans_500Medium",
+    fontSize: 12,
+    letterSpacing: 0.2,
+  },
   listWrap: { flex: 1 },
   listContent: {
     paddingHorizontal: 12,

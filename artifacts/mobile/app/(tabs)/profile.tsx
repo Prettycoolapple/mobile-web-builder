@@ -19,7 +19,7 @@ import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { useSubscription, getSubscriptionSyncBody } from "@/lib/revenuecat";
-import { avatarImageSource } from "@/lib/avatar";
+import { avatarImageSource, getAvatarInitials } from "@/lib/avatar";
 import { getApiBase } from "@/lib/api";
 import { WORLD_LANGUAGES } from "@/lib/languages";
 import { useT } from "@/lib/i18n";
@@ -325,7 +325,7 @@ export default function ProfileScreen() {
   };
 
   const avatarSource = avatarImageSource(user?.avatarUrl, getApiHeaders());
-  const displayInitial = (user?.fullName ?? user?.email ?? "?").slice(0, 1).toUpperCase();
+  const displayInitial = getAvatarInitials(user?.fullName, user?.email);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>

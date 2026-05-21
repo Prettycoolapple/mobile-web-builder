@@ -20,7 +20,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useLocalSearchParams } from "expo-router";
 import { PaywallModal } from "@/components/PaywallModal";
 import { getApiBase } from "@/lib/api";
-import { avatarImageSource } from "@/lib/avatar";
+import { avatarImageSource, getAvatarInitials } from "@/lib/avatar";
 import { useT } from "@/lib/i18n";
 
 interface Contact {
@@ -55,12 +55,7 @@ function Avatar({
 }) {
   const colors = useColors();
   const source = avatarImageSource(avatarUrl ?? null, authHeaders);
-  const initials = (name ?? "?")
-    .split(" ")
-    .slice(0, 2)
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase();
+  const initials = getAvatarInitials(name);
   if (source) {
     return (
       <Image

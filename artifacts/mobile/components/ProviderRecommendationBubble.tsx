@@ -11,7 +11,7 @@ import {
 import { Feather } from "@expo/vector-icons";
 import { ServiceProvider } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
-import { avatarImageSource } from "@/lib/avatar";
+import { avatarImageSource, getAvatarInitials } from "@/lib/avatar";
 import { getApiBase } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 
@@ -26,12 +26,7 @@ interface Props {
 function ProviderAvatar({ provider }: { provider: ServiceProvider }) {
   const { getApiHeaders } = useAuth();
   const source = avatarImageSource(provider.avatarUrl, getApiHeaders());
-  const initials = (provider.fullName ?? "?")
-    .split(" ")
-    .slice(0, 2)
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase();
+  const initials = getAvatarInitials(provider.fullName);
 
   if (source) {
     return (

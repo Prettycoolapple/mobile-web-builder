@@ -16,7 +16,9 @@
   "rewrites": [
     { "source": "/api/healthz", "destination": "/api/healthz" },
     { "source": "/api/(.*)", "destination": "/api" },
-    { "source": "/api", "destination": "/api" }
+    { "source": "/api", "destination": "/api" },
+    { "source": "/admin", "destination": "/admin/index.html" },
+    { "source": "/admin/(.*)", "destination": "/admin/index.html" }
   ],
   "env": {
     "ENABLE_SOCKET_IO": "false"

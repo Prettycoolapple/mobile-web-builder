@@ -51,3 +51,47 @@ export function avatarImageSource(
   }
   return { uri: resolved };
 }
+
+function firstCodePoints(value: string, count: number): string {
+  return Array.from(value).slice(0, count).join("");
+}
+
+function firstCjkChars(value: string, count: number): string {
+  return Array.from(value.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu) ?? [])
+    .slice(0, count)
+    .join("");
+}
+
+export function getAvatarInitials(
+  name: string | null | undefined,
+  fallback?: string | null,
+): string {
+  const cleanedName = (name ?? "").trim();
+  const source = cleanedName || (fallback ?? "").trim();
+  if (!source) return "?";
+
+  const words = cleanedName.split(/\s+/).filter(Boolean);
+  const hasCjk = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(cleanedName);
+  if (hasCjk) {
+    if (words.length >= 2) {
+      const chars = words
+        .map((word) => firstCjkChars(word, 1) || firstCodePoints(word, 1))
+        .filter(Boolean)
+        .slice(0, 2)
+        .join("");
+      if (chars) return chars;
+    }
+    const chars = firstCjkChars(cleanedName, 2);
+    if (chars) return chars;
+  }
+
+  if (words.length >= 2) {
+    return words
+      .slice(0, 2)
+      .map((word) => firstCodePoints(word, 1))
+      .join("")
+      .toUpperCase();
+  }
+
+  return firstCodePoints(source, 1).toUpperCase();
+}

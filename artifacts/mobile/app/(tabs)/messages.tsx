@@ -17,7 +17,7 @@ import { useColors } from "@/hooks/useColors";
 import { useDm, DmThread } from "@/context/DmContext";
 import { useAuth } from "@/context/AuthContext";
 import { useT } from "@/lib/i18n";
-import { avatarImageSource } from "@/lib/avatar";
+import { avatarImageSource, getAvatarInitials } from "@/lib/avatar";
 
 function useTimeAgo() {
   const { t, locale } = useT();
@@ -68,12 +68,7 @@ function Avatar({
 }) {
   const colors = useColors();
   const source = avatarImageSource(avatarUrl ?? null, authHeaders);
-  const initials = (name ?? "?")
-    .split(" ")
-    .slice(0, 2)
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase();
+  const initials = getAvatarInitials(name);
   if (source) {
     return (
       <Image

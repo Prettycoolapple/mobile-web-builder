@@ -23,6 +23,7 @@ import { useColors } from "@/hooks/useColors";
 import { useAuth, ApiError } from "@/context/AuthContext";
 import * as ImagePicker from "expo-image-picker";
 import { PhoneOtpStep } from "@/components/PhoneOtpStep";
+import { SignupLegalConsentModal } from "@/components/SignupLegalConsentModal";
 import { useT, isOSChineseLocale } from "@/lib/i18n";
 import { languageDisplayName } from "@/lib/languages";
 
@@ -85,6 +86,8 @@ export default function SignupGeneralScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  const [legalModalVisible, setLegalModalVisible] = useState(false);
+  const [legalAccepted, setLegalAccepted] = useState(false);
 
   const [step, setStep] = useState(0);
   const slideAnim = useRef(new Animated.Value(0)).current;
@@ -167,6 +170,7 @@ export default function SignupGeneralScreen() {
 
   const handleSignup = async () => {
     if (!validateStep()) return;
+    setLegalModalVisible(false);
     setSubmitError(null);
     setIsLoading(true);
     try {
@@ -219,6 +223,13 @@ export default function SignupGeneralScreen() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const requestSignupCompletion = () => {
+    if (!validateStep()) return;
+    setSubmitError(null);
+    setLegalAccepted(false);
+    setLegalModalVisible(true);
   };
 
   const inputBase = (field: keyof FieldErrors) => [
@@ -580,7 +591,7 @@ export default function SignupGeneralScreen() {
 
         <TouchableOpacity
           style={[styles.primaryBtn, { backgroundColor: colors.accent, opacity: isLoading ? 0.7 : 1 }]}
-          onPress={handleSignup}
+          onPress={requestSignupCompletion}
           disabled={isLoading}
           activeOpacity={0.85}
         >
@@ -637,6 +648,17 @@ export default function SignupGeneralScreen() {
           </ScrollView>
         </Animated.View>
       </KeyboardAvoidingView>
+      <SignupLegalConsentModal
+        visible={legalModalVisible}
+        accepted={legalAccepted}
+        loading={isLoading}
+        onAcceptedChange={setLegalAccepted}
+        onCancel={() => {
+          if (isLoading) return;
+          setLegalModalVisible(false);
+        }}
+        onComplete={() => void handleSignup()}
+      />
     </View>
   );
 }

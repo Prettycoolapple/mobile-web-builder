@@ -8,6 +8,7 @@ import {
   profiles,
   salesAgentProfiles,
   serviceProviderProfiles,
+  userLoginEvents,
   userUploads,
 } from "@workspace/db";
 import { hashPassword, verifyPassword, signToken, requireAuth } from "../lib/auth";
@@ -184,6 +185,20 @@ function normalizeEmail(raw: string): string {
   return raw.toLowerCase().trim();
 }
 
+// Record a login event without blocking the response. Fire-and-forget — best-effort
+// for admin retention/cohort analytics; failure must never break auth.
+function recordLoginEvent(userId: string): void {
+  void (async () => {
+    try {
+      const now = new Date();
+      await db.update(profiles).set({ lastLoginAt: now }).where(eq(profiles.id, userId));
+      await db.insert(userLoginEvents).values({ userId });
+    } catch {
+      // intentionally swallow — analytics must not impact auth
+    }
+  })();
+}
+
 function generateResetCode(): string {
   return crypto.randomInt(0, 1_000_000).toString().padStart(6, "0");
 }
@@ -347,6 +362,7 @@ router.post("/signup", async (req, res) => {
 
     const token = signToken(profile.id, profile.email, role);
     res.status(201).json({ token, user: { ...profile, isVerified: false } });
+    recordLoginEvent(profile.id);
 
     const providerCertObjectPath = providerData
       ? objectPathFromStorageUrl(providerData.incorporationCertUrl)
@@ -602,6 +618,7 @@ router.post("/login", async (req, res) => {
     }
 
     const token = signToken(profile.id, profile.email, profile.role);
+    recordLoginEvent(profile.id);
     res.json({
       token,
       user: {

@@ -1644,6 +1644,15 @@ function ReportAnalysisFootnote({ colors }: { colors: ReturnType<typeof useColor
   );
 }
 
+function shuffleFollowUpChips(chips: string[]): string[] {
+  const shuffled = [...chips];
+  for (let i = shuffled.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+}
+
 function FollowUpChips({ report, onChipClick, colors }: {
   report: Report;
   onChipClick: (msg: string) => void;
@@ -1653,28 +1662,51 @@ function FollowUpChips({ report, onChipClick, colors }: {
   const zone = report.zone_label || report.planning?.zone || report.propertyOverview?.zone || "this zone";
   const lots = report.potential_lots || report.planning?.potentialLots || 0;
 
-  const chips: string[] = [
-    t("report.followup_main_risks"),
-    t("report.followup_building_typology"),
-  ];
-
   const asbestosRisk = report.asbestos ? getAsbestosRisk(report.asbestos) : "unknown";
-  if (report.asbestos && asbestosRisk === "high") {
-    chips.push(t("report.followup_asbestos_process"));
-  }
-  if (hasOverlay(report, "flood")) {
-    chips.push(t("report.followup_flood_overlay"));
-  }
-  if (hasOverlay(report, "heritage")) {
-    chips.push(t("report.followup_heritage_overlay"));
-  }
-  if (safeNum(report.scores?.roi) < 2.5) {
-    chips.push(t("report.followup_improve_roi"));
-  }
-  if (lots >= 3) {
-    chips.push(t("report.followup_consent_steps", { lots }));
-  }
-  chips.push(t("report.followup_explain_zone", { zone }));
+  const hasFloodOverlay = hasOverlay(report, "flood");
+  const hasHeritageOverlay = hasOverlay(report, "heritage");
+  const lowRoi = safeNum(report.scores?.roi) < 2.5;
+  const chips = useMemo(() => {
+    const randomisedChips: string[] = [
+      t("report.followup_recommend_architect"),
+      t("report.followup_main_risks"),
+      t("report.followup_building_typology"),
+    ];
+
+    if (report.asbestos && asbestosRisk === "high") {
+      randomisedChips.push(t("report.followup_asbestos_process"));
+    }
+    if (hasFloodOverlay) {
+      randomisedChips.push(t("report.followup_flood_overlay"));
+    }
+    if (hasHeritageOverlay) {
+      randomisedChips.push(t("report.followup_heritage_overlay"));
+    }
+    if (lowRoi) {
+      randomisedChips.push(t("report.followup_improve_roi"));
+    }
+    if (lots >= 3) {
+      randomisedChips.push(t("report.followup_consent_steps", { lots }));
+    }
+    randomisedChips.push(t("report.followup_explain_zone", { zone }));
+
+    return [
+      t("report.followup_contact_sales_agent"),
+      ...shuffleFollowUpChips(randomisedChips),
+    ];
+  }, [
+    asbestosRisk,
+    hasFloodOverlay,
+    hasHeritageOverlay,
+    lots,
+    lowRoi,
+    report.address,
+    report.asbestos,
+    report.historyCreatedAt,
+    report.historyId,
+    t,
+    zone,
+  ]);
 
   return (
     <View style={{ gap: 8 }}>

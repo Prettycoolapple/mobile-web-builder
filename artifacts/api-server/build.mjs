@@ -1,9 +1,10 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
-import { copyFile, cp, mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
 
 // Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
 globalThis.require = createRequire(import.meta.url);
@@ -206,6 +207,39 @@ async function buildAll() {
   for (const dir of ["privacy", "terms", "support", "contact"]) {
     await cp(path.join(artifactDir, dir), path.join(deployDir, dir), { recursive: true });
   }
+
+  await buildAdminPortal(deployDir);
+}
+
+async function buildAdminPortal(deployDir) {
+  const adminPortalDir = path.resolve(artifactDir, "..", "admin-portal");
+
+  try {
+    await stat(adminPortalDir);
+  } catch {
+    console.warn("[build] admin-portal directory not found; skipping admin SPA build.");
+    return;
+  }
+
+  console.log("[build] building admin portal SPA…");
+  await new Promise((resolve, reject) => {
+    const proc = spawn("pnpm", ["--filter", "@workspace/admin-portal", "run", "build"], {
+      cwd: path.resolve(artifactDir, "..", ".."),
+      stdio: "inherit",
+      shell: process.platform === "win32",
+    });
+    proc.on("error", reject);
+    proc.on("exit", (code) => {
+      if (code === 0) resolve(undefined);
+      else reject(new Error(`admin-portal build exited with code ${code}`));
+    });
+  });
+
+  const adminDist = path.join(adminPortalDir, "dist");
+  const adminDeploy = path.join(deployDir, "admin");
+  await rm(adminDeploy, { recursive: true, force: true });
+  await cp(adminDist, adminDeploy, { recursive: true });
+  console.log(`[build] copied admin SPA → ${adminDeploy}`);
 }
 
 buildAll().catch((err) => {
