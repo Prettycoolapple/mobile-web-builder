@@ -22,7 +22,6 @@ import { fetchNeighbourhoodContext, type NeighbourhoodContext } from "./neighbou
 import { fetchTransportContext, type TransportContext } from "./transport-context";
 import { assessDevelopmentStrategy, assessInterestRateOutlook } from "./claude";
 import { scoreProperty, type ScoringResult } from "./scoring";
-import { extractSuburb } from "./utils";
 import { parseEasements, NO_TITLE, API_ERROR, type EasementAnalysis } from "./easements";
 import {
   buildFallbackDevelopmentStrategyAssessment,
@@ -32,6 +31,7 @@ import {
 import { fetchRealestateListingForAddress, fetchSupplementListingComparables } from "./scrapers/realestate-api";
 import { enrichSchoolZonesDetail, type SchoolZoneDetail } from "./school-directory";
 import { inferSchoolZonesFromLocation } from "./school-zones-llm";
+import { resolvePipelineSuburb } from "./suburb-resolver";
 
 const AC_PROP_MAPSERVER = "https://mapspublic.aucklandcouncil.govt.nz/arcgis3/rest/services/NonCouncil/PropertyValueInfo/MapServer";
 
@@ -394,7 +394,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   }
 
   const { lat, lng } = geocode;
-  const suburb = geocode.suburb ?? extractSuburb(geocode.formatted ?? address);
+  const suburb = await resolvePipelineSuburb(address, geocode);
 
   // LINZ parcel is fetched first so its parcel polygon bbox can be passed to the contour
   // elevation fetch — this ensures we sample across the full parcel extent (not just a

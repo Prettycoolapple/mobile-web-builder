@@ -233,6 +233,8 @@ router.get("/admin/users", requireAdmin, async (req, res) => {
         lastLoginAt: profiles.lastLoginAt,
         isVerified: profiles.isVerified,
         phoneNumber: profiles.phoneNumber,
+        specialStatus: profiles.specialStatus,
+        specialStatusExpiresAt: profiles.specialStatusExpiresAt,
       })
       .from(profiles)
       .where(whereClause)
@@ -503,6 +505,55 @@ router.post("/admin/providers/:userId/verify", requireAdmin, async (req, res) =>
   } catch (err) {
     req.log.error({ err }, "admin verify provider failed");
     res.status(500).json({ error: "Failed to verify provider" });
+  }
+});
+
+// PATCH /admin/users/:userId/status
+// Body: { status: "free" | "supercharge" | "friends_family" }
+// "supercharge"    → 60 reports/month, expires 6 months from now
+// "friends_family" → 9999 reports/month, no expiry
+// "free"           → clear special status, normal plan limits apply
+router.patch("/admin/users/:userId/status", requireAdmin, async (req, res) => {
+  const { userId } = req.params;
+  const { status } = req.body as { status?: unknown };
+
+  if (status !== "free" && status !== "supercharge" && status !== "friends_family") {
+    res.status(400).json({ error: 'status must be "free", "supercharge", or "friends_family"' });
+    return;
+  }
+
+  let specialStatus: string | null;
+  let specialStatusExpiresAt: Date | null;
+
+  if (status === "supercharge") {
+    specialStatus = "supercharge";
+    const exp = new Date();
+    exp.setMonth(exp.getMonth() + 6);
+    specialStatusExpiresAt = exp;
+  } else if (status === "friends_family") {
+    specialStatus = "friends_family";
+    specialStatusExpiresAt = null;
+  } else {
+    specialStatus = null;
+    specialStatusExpiresAt = null;
+  }
+
+  try {
+    const result = await db
+      .update(profiles)
+      .set({ specialStatus, specialStatusExpiresAt })
+      .where(eq(profiles.id, userId))
+      .returning({ id: profiles.id, specialStatus: profiles.specialStatus, specialStatusExpiresAt: profiles.specialStatusExpiresAt });
+
+    if (result.length === 0) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    res.json({ ok: true, ...result[0] });
+  } catch (err) {
+    req.log.error({ err }, "admin set user status failed");
+    res.status(500).json({ error: "Failed to update user status" });
   }
 });
 

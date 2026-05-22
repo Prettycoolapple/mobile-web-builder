@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { normaliseNzAddressForGeocode, tryGeocodeAddress } from "../geocode";
+import { extractSuburb } from "../utils";
 
 describe("geocode address selection", () => {
   const originalGoogleKey = process.env.GOOGLE_MAPS_API_KEY;
@@ -80,5 +81,17 @@ describe("normaliseNzAddressForGeocode", () => {
   it("cleans realestate.co.nz address punctuation and Auckland City admin labels", () => {
     expect(normaliseNzAddressForGeocode("9 Rukutai Street , Orakei, Auckland City, Auckland"))
       .toBe("9 Rukutai Street, Orakei, Auckland");
+  });
+
+  it("removes duplicated country and postcode noise from app-formatted addresses", () => {
+    expect(normaliseNzAddressForGeocode("70 Screen Road, Coatesville 0793, New Zealand"))
+      .toBe("70 Screen Road, Coatesville");
+  });
+});
+
+describe("extractSuburb", () => {
+  it("skips street fragments in Nominatim-style rural addresses", () => {
+    expect(extractSuburb("70, Screen Road, Coatesville, Rodney, Auckland, 0792"))
+      .toBe("coatesville");
   });
 });

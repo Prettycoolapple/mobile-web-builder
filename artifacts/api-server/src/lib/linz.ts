@@ -22,7 +22,12 @@ export interface ParcelBbox {
 export interface LinzParcel {
   parcel_id: string;
   appellation: string | null;
+  /** Preferred legal/survey parcel area for display and report facts. */
   area_sqm: number | null;
+  /** Survey/legal area from LINZ when available. */
+  survey_area_sqm?: number | null;
+  /** Calculated GIS polygon area from LINZ, useful for geometry diagnostics. */
+  calc_area_sqm?: number | null;
   title_no: string | null;
   legal_description: string | null;
   topology_type: string | null;
@@ -245,6 +250,34 @@ function ecqlTitleNoEquals(title_no: string): string {
   return `title_no='${t}'`;
 }
 
+function parseLinzArea(raw: unknown): number | null {
+  if (raw == null || raw === "") return null;
+  const n = typeof raw === "number" ? raw : Number(String(raw).replace(/[,\s]/g, ""));
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+}
+
+export function mapLinzParcelFeature(props: Record<string, unknown>): LinzParcel {
+  const geometry = props["_geometry"] as { type: string; coordinates: unknown } | null | undefined;
+  const bbox = extractBbox(geometry);
+  const calcAreaSqm = parseLinzArea(props["calc_area"]);
+  const surveyAreaSqm = parseLinzArea(props["survey_area"]);
+  const areaSqm = surveyAreaSqm ?? calcAreaSqm;
+  const titlesRaw = props["titles"] ?? props["title_no"];
+  const titleNo = titlesRaw ? String(titlesRaw).split(",")[0].trim() : null;
+
+  return {
+    parcel_id: String(props["_id"] ?? props["id"] ?? ""),
+    appellation: (props["appellation"] as string) ?? null,
+    area_sqm: areaSqm,
+    survey_area_sqm: surveyAreaSqm,
+    calc_area_sqm: calcAreaSqm,
+    title_no: titleNo,
+    legal_description: (props["appellation"] as string) ?? null,
+    topology_type: (props["topology_type"] as string) ?? null,
+    bbox,
+  };
+}
+
 export async function fetchLINZParcel(lat: number, lng: number): Promise<LinzParcel | null> {
   const key = getKey();
   if (!key) {
@@ -271,26 +304,12 @@ export async function fetchLINZParcel(lat: number, lng: number): Promise<LinzPar
         continue;
       }
 
-      const props = features[0];
-      const geometry = props["_geometry"] as { type: string; coordinates: unknown } | null | undefined;
-      const bbox = extractBbox(geometry);
-      logger.info({ parcel_id: props["_id"], bbox }, "LINZ primary parcel found");
-
-      const calcArea = props["calc_area"] ?? props["survey_area"] ?? null;
-      const areaSqm = calcArea != null ? Math.round(Number(calcArea)) : null;
-
-      const titlesRaw = props["titles"] ?? props["title_no"];
-      const titleNo = titlesRaw ? String(titlesRaw).split(",")[0].trim() : null;
-
-      return {
-        parcel_id: String(props["_id"] ?? props["id"] ?? ""),
-        appellation: (props["appellation"] as string) ?? null,
-        area_sqm: areaSqm && areaSqm > 0 ? areaSqm : null,
-        title_no: titleNo,
-        legal_description: (props["appellation"] as string) ?? null,
-        topology_type: (props["topology_type"] as string) ?? null,
-        bbox,
-      };
+      const parcel = mapLinzParcelFeature(features[0]);
+      logger.info(
+        { parcel_id: parcel.parcel_id, bbox: parcel.bbox, survey_area_sqm: parcel.survey_area_sqm, calc_area_sqm: parcel.calc_area_sqm },
+        "LINZ primary parcel found",
+      );
+      return parcel;
     } catch (err) {
       logger.warn({ err: (err as Error).message, cql }, "LINZ parcel fetch attempt failed");
     }

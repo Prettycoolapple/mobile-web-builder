@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractListingFactAreaSqm, reconcileListingLandArea } from "../realestate-api";
+import { extractListingFactAreaSqm, normaliseListingLandAreaSqm, reconcileListingLandArea } from "../realestate-api";
 
 describe("realestate-api listing land-area reconciliation", () => {
   it("uses listing-page land area when the search API returns a large outlier", () => {
@@ -32,5 +32,12 @@ describe("realestate-api listing fact extraction", () => {
 
     expect(extractListingFactAreaSqm(text, "floor")).toBe(79);
     expect(extractListingFactAreaSqm(text, "land")).toBe(1199);
+  });
+});
+
+describe("realestate-api structured listing area units", () => {
+  it("converts hectare land-area values to square metres", () => {
+    expect(normaliseListingLandAreaSqm(1.4933, "HA")).toBe(14933);
+    expect(normaliseListingLandAreaSqm(8734, "SQM")).toBe(8734);
   });
 });

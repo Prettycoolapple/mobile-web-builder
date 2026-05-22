@@ -29,6 +29,14 @@ export const profiles = pgTable("profiles", {
   phoneVerifiedAt: timestamp("phone_verified_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+  /**
+   * Admin-granted special status that overrides the normal plan report limit.
+   * "supercharge"    → 60 reports/month, expires after 6 months (see specialStatusExpiresAt)
+   * "friends_family" → 9999 reports/month, no expiry
+   * null             → normal plan-based limits apply
+   */
+  specialStatus: text("special_status"),
+  specialStatusExpiresAt: timestamp("special_status_expires_at", { withTimezone: true }),
 });
 
 export const insertProfileSchema = createInsertSchema(profiles).omit({

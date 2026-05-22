@@ -957,7 +957,7 @@ function InfrastructureTable({ infrastructure, colors }: { infrastructure: Infra
         <View style={[styles.warningBox, { backgroundColor: colors.mutedForeground + "12", borderColor: colors.mutedForeground + "30", marginTop: 10 }]}>
           <Feather name="info" size={13} color={colors.mutedForeground} />
           <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1, lineHeight: 17 }}>
-            Infrastructure location could not be determined automatically. Verify service locations at geomapspublic.aucklandcouncil.govt.nz or engage a civil engineer.
+            {t("report.infrastructure_unavailable_warning")}
           </Text>
         </View>
       )}

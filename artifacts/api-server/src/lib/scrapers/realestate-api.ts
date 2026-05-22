@@ -371,6 +371,15 @@ function parsePriceDisplay(s: string | undefined): number | null {
   return Math.round((matches[0] + matches[matches.length - 1]) / 2);
 }
 
+export function normaliseListingLandAreaSqm(rawArea: number | null | undefined, rawUnit: string | null | undefined): number | null {
+  if (typeof rawArea !== "number" || !Number.isFinite(rawArea) || rawArea <= 0) return null;
+  const unit = (rawUnit ?? "").trim().toUpperCase();
+  if (unit === "HA" || unit === "HECTARE" || unit === "HECTARES") {
+    return Math.round(rawArea * 10_000);
+  }
+  return Math.round(rawArea);
+}
+
 function buildPhotoUrl(photos: RawListing["attributes"]["photos"]): string | null {
   if (!photos || photos.length === 0) return null;
   const first = photos[0];
@@ -405,7 +414,7 @@ function mapListing(raw: RawListing): ListingResult | null {
 
   const priceText = a["price-display"] ?? "";
   const price = parsePriceDisplay(priceText);
-  const landArea = typeof a["land-area"] === "number" ? a["land-area"] : null;
+  const landArea = normaliseListingLandAreaSqm(a["land-area"], a["land-area-unit"] ?? null);
 
   const photoUrls = buildPhotoUrls(a.photos);
   return {

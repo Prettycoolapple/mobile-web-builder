@@ -18,10 +18,20 @@ export function roundToHalf(value: number): number {
 }
 
 export function extractSuburb(formattedAddress: string): string {
-  const parts = formattedAddress.split(",").map((p) => p.trim());
-  if (parts.length >= 2) {
-    const candidate = parts[1].toLowerCase().trim();
-    if (candidate && !candidate.match(/^\d/)) return candidate;
+  const streetType = /\b(road|street|avenue|crescent|place|drive|way|lane|terrace|parade|close|grove|rise|view|heights|ridge|court|hill|mews|quay|boulevard|highway|motorway|esplanade|mall|row|walk|path|track|rd|st|ave|cres|pl|dr|ln|tce|pde|blvd|hwy)\b/i;
+  const adminArea = /^(auckland|auckland city|rodney|rodney district|new zealand|aotearoa)$/i;
+  const parts = formattedAddress
+    .replace(/\b\d{4}\b/g, "")
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  for (const part of parts) {
+    if (/^\d/.test(part)) continue;
+    if (streetType.test(part)) continue;
+    if (adminArea.test(part)) continue;
+    return part.toLowerCase().trim();
   }
+
   return "default";
 }

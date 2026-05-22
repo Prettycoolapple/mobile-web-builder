@@ -29,6 +29,7 @@ export interface ContourResult {
 }
 
 const ZONE_DOMAIN: Record<number, { code: string; description: string; minLot: number | null }> = {
+  3:  { code: "CLZ",  description: "Rural - Countryside Living Zone", minLot: 10000 },
   8:  { code: "THAB", description: "Terrace Housing and Apartment Buildings", minLot: 0 },
   18: { code: "MHS",  description: "Mixed Housing Suburban", minLot: 400 },
   60: { code: "MHU",  description: "Mixed Housing Urban", minLot: 300 },
@@ -39,6 +40,12 @@ const ZONE_DOMAIN: Record<number, { code: string; description: string; minLot: n
   70: { code: "2SDA", description: "Two-Storey Single Dwelling Area", minLot: 600 },
   71: { code: "2SMDA", description: "Two-Storey Medium Density Area", minLot: 400 },
   4:  { code: "FUZ",  description: "Future Urban Zone", minLot: null },
+  11: { code: "RUR",  description: "Rural - Mixed Rural Zone", minLot: 40000 },
+  15: { code: "RUR",  description: "Rural - Rural Conservation Zone", minLot: 40000 },
+  16: { code: "RUR",  description: "Rural - Rural Production Zone", minLot: 40000 },
+  46: { code: "RUR",  description: "Rural - Rural Coastal Zone", minLot: 40000 },
+  68: { code: "RUR",  description: "Rural - Waitakere Foothills Zone", minLot: 40000 },
+  69: { code: "RUR",  description: "Rural - Waitakere Ranges Zone", minLot: 40000 },
   1:  { code: "BPZ",  description: "Business - Business Park Zone", minLot: 0 },
   35: { code: "CCZ",  description: "Business - City Centre Zone", minLot: 0 },
   49: { code: "GBZ",  description: "Business - General Business Zone", minLot: 0 },
@@ -49,6 +56,34 @@ const ZONE_DOMAIN: Record<number, { code: string; description: string; minLot: n
   12: { code: "MUZ",  description: "Business - Mixed Use Zone", minLot: 0 },
   44: { code: "NCZ",  description: "Business - Neighbourhood Centre Zone", minLot: 0 },
   22: { code: "TCZ",  description: "Business - Town Centre Zone", minLot: 0 },
+  25: { code: "WAT",  description: "Water", minLot: null },
+  26: { code: "STCZ", description: "Strategic Transport Corridor Zone", minLot: null },
+  27: { code: "ROAD", description: "Road", minLot: null },
+  30: { code: "CGCMZ", description: "Coastal - General Coastal Marine Zone", minLot: null },
+  31: { code: "OSCZ", description: "Open Space - Conservation Zone", minLot: null },
+  32: { code: "OSIRZ", description: "Open Space - Informal Recreation Zone", minLot: null },
+  33: { code: "OSSARZ", description: "Open Space - Sport and Active Recreation Zone", minLot: null },
+  34: { code: "OSCOMZ", description: "Open Space - Community Zone", minLot: null },
+  37: { code: "CMPZ", description: "Coastal - Minor Port Zone", minLot: null },
+  39: { code: "CDZ", description: "Coastal - Defence Zone", minLot: null },
+  40: { code: "CMZ", description: "Coastal - Marina Zone", minLot: null },
+  41: { code: "CMOZ", description: "Coastal - Mooring Zone", minLot: null },
+  43: { code: "HGI", description: "Hauraki Gulf Islands", minLot: null },
+  45: { code: "CFTZ", description: "Coastal - Ferry Terminal Zone", minLot: null },
+  51: { code: "SPQZ", description: "Special Purpose - Quarry Zone", minLot: null },
+  52: { code: "SPMPZ", description: "Special Purpose - Maori Purpose Zone", minLot: null },
+  53: { code: "SPCZ", description: "Special Purpose - Cemetery Zone", minLot: null },
+  54: { code: "SPMRFZ", description: "Special Purpose - Major Recreation Facility Zone", minLot: null },
+  55: { code: "SPHCHZ", description: "Special Purpose - Healthcare Facility and Hospital Zone", minLot: null },
+  56: { code: "SPAAZ", description: "Special Purpose - Airports and Airfields Zone", minLot: null },
+  59: { code: "CCTZ", description: "Coastal - Coastal Transition Zone", minLot: null },
+  61: { code: "GIC", description: "Green Infrastructure Corridor", minLot: null },
+  62: { code: "OSCSZ", description: "Open Space - Civic Spaces Zone", minLot: null },
+  63: { code: "SPSZ", description: "Special Purpose - School Zone", minLot: null },
+  64: { code: "SPTEZ", description: "Special Purpose - Tertiary Education Zone", minLot: null },
+  65: { code: "AA", description: "Ardmore Airport", minLot: null },
+  66: { code: "AAR", description: "Ardmore Airport Residential", minLot: null },
+  67: { code: "SPLZ", description: "Special Purpose - Landfill Zone", minLot: null },
 };
 
 async function arcgisQuery(
@@ -106,6 +141,11 @@ export async function fetchUnitaryPlanZone(lat: number, lng: number): Promise<Zo
     if (features.length > 0) {
       const attrs = features[0];
       const rawZoneCode = attrs["ZONE"] as number | null;
+      const mappedZone = zoneResultFromRawCode(rawZoneCode);
+      if (mappedZone.zone_code !== `Z${rawZoneCode ?? "?"}`) {
+        logger.debug({ rawZoneCode, code: mappedZone.zone_code, description: mappedZone.zone_description }, "Zone resolved from Auckland Council GIS");
+        return mappedZone;
+      }
 
       if (rawZoneCode != null && ZONE_DOMAIN[rawZoneCode]) {
         const { code, description, minLot } = ZONE_DOMAIN[rawZoneCode];
@@ -130,6 +170,25 @@ export async function fetchUnitaryPlanZone(lat: number, lng: number): Promise<Zo
   }
 
   return { zone_code: "UNKNOWN", zone_description: "Unknown — data unavailable", min_lot_size_sqm: null, raw_zone: null };
+}
+
+export function zoneResultFromRawCode(rawZoneCode: number | null): ZoneResult {
+  if (rawZoneCode != null && ZONE_DOMAIN[rawZoneCode]) {
+    const { code, description, minLot } = ZONE_DOMAIN[rawZoneCode];
+    return {
+      zone_code: code,
+      zone_description: description,
+      min_lot_size_sqm: minLot,
+      raw_zone: String(rawZoneCode),
+    };
+  }
+
+  return {
+    zone_code: `Z${rawZoneCode ?? "?"}`,
+    zone_description: `Zone code ${rawZoneCode} - refer to Auckland Unitary Plan`,
+    min_lot_size_sqm: null,
+    raw_zone: rawZoneCode != null ? String(rawZoneCode) : null,
+  };
 }
 
 export async function fetchOverlays(lat: number, lng: number, parcelBbox?: ParcelBbox | null): Promise<Overlay[]> {

@@ -234,6 +234,157 @@ function normaliseImageUrl(raw: string | null | undefined, base = "https://www.o
   }
 }
 
+function srcsetToImageUrls(srcset: string | null | undefined): string[] {
+  if (!srcset) return [];
+  return srcset
+    .split(",")
+    .map((candidate) => candidate.trim().split(/\s+/)[0])
+    .filter(Boolean);
+}
+
+function oneroofImageVariantScore(url: string): number {
+  const width = Number(url.match(/(?:resize,w_|[?&]w=)(\d+)/i)?.[1] ?? 0);
+  const quality = Number(url.match(/(?:quality,q_|[?&]q=)(\d+)/i)?.[1] ?? 0);
+  return width * 10 + quality;
+}
+
+function dedupeOneRoofImageVariants(urls: string[]): string[] {
+  const bestByPath = new Map<string, string>();
+  for (const url of urls) {
+    let key = url;
+    try {
+      const parsed = new URL(url);
+      key = `${parsed.origin}${parsed.pathname}`;
+    } catch {
+      // Keep the original string as its own key.
+    }
+    const existing = bestByPath.get(key);
+    if (!existing || oneroofImageVariantScore(url) > oneroofImageVariantScore(existing)) {
+      bestByPath.set(key, url);
+    }
+  }
+  return [...bestByPath.values()];
+}
+
+function addressStreetSlug(address: string): string {
+  return (address.split(",")[0] ?? address)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function addressSuburbSlug(address: string): string | null {
+  const suburb = address.split(",")[1]?.replace(/\b\d{4}\b/g, "").trim();
+  if (!suburb) return null;
+  return suburb
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || null;
+}
+
+export function extractOneRoofPropertyUrlsFromSearchHtml(html: string, address: string): string[] {
+  const streetSlug = addressStreetSlug(address);
+  const suburbSlug = addressSuburbSlug(address);
+  const candidates = new Set<string>();
+
+  for (const match of html.matchAll(/href=["']([^"']+)["']/gi)) {
+    let href = match[1].replace(/&amp;/g, "&");
+    try {
+      if (href.startsWith("//duckduckgo.com/l/")) href = `https:${href}`;
+      const parsed = new URL(href);
+      const encodedTarget = parsed.searchParams.get("uddg");
+      if (encodedTarget) href = decodeURIComponent(encodedTarget);
+    } catch {
+      // Ignore non-URL hrefs below.
+    }
+
+    try {
+      const parsed = new URL(href);
+      if (parsed.hostname !== "www.oneroof.co.nz") continue;
+      if (!parsed.pathname.startsWith("/property/")) continue;
+      const pathname = parsed.pathname.toLowerCase();
+      if (!pathname.includes(streetSlug)) continue;
+      if (suburbSlug && !pathname.includes(suburbSlug)) continue;
+      candidates.add(parsed.toString());
+    } catch {
+      // Ignore malformed search links.
+    }
+  }
+
+  return [...candidates];
+}
+
+export async function extractOneRoofDataFromHtml(html: string, propertyUrl: string): Promise<OneRoofData> {
+  const { load } = await import("cheerio");
+  const $ = load(html);
+  const pageText = $("body").text();
+  const extracted = extractDataFromText(pageText);
+  const titleAddress = (
+    $('meta[property="og:title"]').attr("content") ??
+    $("h1").first().text() ??
+    ""
+  ).replace(/\s+/g, " ").trim();
+  const normaliseAltText = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const subjectImageNeedle = normaliseAltText(titleAddress.split(",").slice(0, 2).join(" "));
+
+  const rawImages: Array<string | null | undefined> = [
+    $('meta[property="og:image"]').attr("content"),
+    $('meta[name="twitter:image"]').attr("content"),
+    ...srcsetToImageUrls($('meta[property="og:image"]').attr("content")),
+  ];
+
+  $('link[rel="preload"][as="image"], link[as="image"]').slice(0, 8).each((_, el) => {
+    const node = $(el);
+    rawImages.push(
+      node.attr("href"),
+      node.attr("imageSrcSet"),
+      node.attr("imagesrcset"),
+    );
+  });
+
+  $("img").each((_, el) => {
+    const node = $(el);
+    const alt = node.attr("alt") ?? "";
+    if (subjectImageNeedle && !normaliseAltText(alt).includes(subjectImageNeedle)) return;
+    rawImages.push(
+      node.attr("src"),
+      node.attr("data-src"),
+      node.attr("srcset"),
+      node.attr("data-srcset"),
+    );
+  });
+
+  if (!rawImages.some((value) => value?.includes("s.oneroof.co.nz/image/"))) {
+    const scriptImageMatches = html
+      .replace(/\\u002F/g, "/")
+      .replace(/\\\//g, "/")
+      .match(/https?:\/\/s\.oneroof\.co\.nz\/image\/[^"'\\<>\s)]+/gi) ?? [];
+    rawImages.push(...scriptImageMatches.slice(0, 80));
+  }
+
+  const expanded = rawImages.flatMap((value) => srcsetToImageUrls(value).concat(value ? [value] : []));
+  const photo_urls = dedupeOneRoofImageVariants(Array.from(new Set(expanded
+    .map((u) => normaliseImageUrl(u, propertyUrl))
+    .filter((u): u is string => Boolean(u))
+    .filter((u) => {
+      try {
+        const parsed = new URL(u);
+        return parsed.hostname === "s.oneroof.co.nz" && parsed.pathname.startsWith("/image/");
+      } catch {
+        return false;
+      }
+    }))));
+
+  return {
+    ...emptyOneRoofData(),
+    ...extracted,
+    found: hasUsefulData(extracted) || photo_urls.length > 0,
+    main_photo_url: photo_urls[0] ?? null,
+    photo_urls,
+    scraped_at: new Date().toISOString(),
+  };
+}
+
 function extractDataFromText(pageText: string): Partial<OneRoofData> {
   const result: Partial<OneRoofData> = { found: true, comparables: [] };
 
@@ -367,30 +518,8 @@ async function scrapeOneRoofPlaywright(address: string): Promise<OneRoofData> {
       await randomDelay(2000, 3000);
     }
 
-    result.found = true;
-    const pageText = await page.evaluate(() => document.body.innerText || "");
-    const extracted = extractDataFromText(pageText);
+    const extracted = await extractOneRoofDataFromHtml(await page.content(), page.url());
     Object.assign(result, extracted);
-
-    try {
-      const rawImages = await page.evaluate(() => {
-        const selector = [
-          'img[src*="oneroof"]',
-          'img[src*="property"]',
-          '[class*="hero"] img',
-          '[class*="gallery"] img',
-          "picture img",
-        ].join(",");
-        return Array.from(document.querySelectorAll<HTMLImageElement>(selector))
-          .map((img) => img.currentSrc || img.src || img.getAttribute("data-src") || img.getAttribute("src") || "")
-          .filter(Boolean);
-      }).catch(() => [] as string[]);
-      const imageUrls = Array.from(new Set(rawImages
-        .map((u) => normaliseImageUrl(u, page.url()))
-        .filter((u): u is string => Boolean(u))));
-      result.photo_urls = imageUrls;
-      result.main_photo_url = imageUrls[0] ?? null;
-    } catch { /* non-critical */ }
 
     await context.close().catch(() => {});
   } finally {
@@ -417,37 +546,38 @@ async function scrapeOneRoofViaBee(address: string): Promise<OneRoofData | null>
   const propHtml = await fetchWithScrapingBee(propertyUrl, { render_js: true, premium_proxy: false, wait: 3000 });
   if (!propHtml || propHtml.length < 500) return null;
 
-  const $prop = load(propHtml);
-  const pageText = $prop("body").text();
+  const extracted = await extractOneRoofDataFromHtml(propHtml, propertyUrl);
+  return hasUsefulData(extracted) || extracted.photo_urls.length > 0 ? extracted : null;
+}
 
-  const extracted = extractDataFromText(pageText);
-  if (!hasUsefulData(extracted)) return null;
-
-  const rawImages = [
-    $prop('meta[property="og:image"]').attr("content"),
-    ...$prop('img[src*="oneroof"], img[src*="property"], [class*="hero"] img, [class*="gallery"] img, picture img')
-      .toArray()
-      .map((el) => $prop(el).attr("src") ?? $prop(el).attr("data-src")),
-  ];
-  const photo_urls = Array.from(new Set(rawImages
-    .map((u) => normaliseImageUrl(u, propertyUrl))
-    .filter((u): u is string => Boolean(u))));
-
-  return {
-    ...emptyOneRoofData(),
-    ...extracted,
-    found: true,
-    main_photo_url: photo_urls[0] ?? null,
-    photo_urls,
-    scraped_at: new Date().toISOString(),
+async function scrapeOneRoofViaPublicSearch(address: string): Promise<OneRoofData | null> {
+  const street = address.split(",")[0]?.trim() || address;
+  const suburb = address.split(",")[1]?.replace(/\b\d{4}\b/g, "").trim();
+  const query = suburb ? `"${street}" "${suburb}" "OneRoof"` : `"${street}" "OneRoof"`;
+  const searchUrl = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const headers = {
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
+    "accept-language": "en-NZ,en;q=0.9",
   };
+
+  const searchHtml = await fetch(searchUrl, { headers }).then((r) => r.ok ? r.text() : "");
+  if (!searchHtml || searchHtml.length < 500) return null;
+
+  const propertyUrl = extractOneRoofPropertyUrlsFromSearchHtml(searchHtml, address)[0];
+  if (!propertyUrl) return null;
+
+  const propertyHtml = await fetch(propertyUrl, { headers }).then((r) => r.ok ? r.text() : "");
+  if (!propertyHtml || propertyHtml.length < 500) return null;
+
+  const extracted = await extractOneRoofDataFromHtml(propertyHtml, propertyUrl);
+  return hasUsefulData(extracted) || extracted.photo_urls.length > 0 ? extracted : null;
 }
 
 export async function scrapeOneRoof(address: string): Promise<OneRoofData> {
   if (isVercelServerless()) {
     try {
       const beeFirst = await scrapeOneRoofViaBee(address);
-      if (beeFirst && hasUsefulData(beeFirst)) {
+      if (beeFirst && (hasUsefulData(beeFirst) || beeFirst.photo_urls.length > 0)) {
         logScrapeAttempt(
           "OneRoof",
           "scrapingbee",
@@ -467,8 +597,8 @@ export async function scrapeOneRoof(address: string): Promise<OneRoofData> {
       scrapeOneRoofPlaywright(address),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Playwright timeout")), PLAYWRIGHT_TIMEOUT_MS)),
     ]);
-    if (hasUsefulData(result)) {
-      logScrapeAttempt("OneRoof", "stealth-playwright", true, `cv=${result.cv_nzd}, comparables=${result.comparables.length}`);
+    if (hasUsefulData(result) || result.photo_urls.length > 0) {
+      logScrapeAttempt("OneRoof", "stealth-playwright", true, `cv=${result.cv_nzd}, photos=${result.photo_urls.length}, comparables=${result.comparables.length}`);
       return result;
     }
     logScrapeAttempt("OneRoof", "stealth-playwright", false, "no useful data — trying ScrapingBee");
@@ -484,6 +614,17 @@ export async function scrapeOneRoof(address: string): Promise<OneRoofData> {
     }
   } catch (err) {
     logScrapeAttempt("OneRoof", "scrapingbee", false, String(err));
+  }
+
+  try {
+    const result = await scrapeOneRoofViaPublicSearch(address);
+    if (result) {
+      logScrapeAttempt("OneRoof", "public-search", true, `photos=${result.photo_urls.length}, cv=${result.cv_nzd}`);
+      return result;
+    }
+    logScrapeAttempt("OneRoof", "public-search", false, "no matching OneRoof property page");
+  } catch (err) {
+    logScrapeAttempt("OneRoof", "public-search", false, String(err));
   }
 
   logger.warn("OneRoof: all attempts failed — returning empty data");

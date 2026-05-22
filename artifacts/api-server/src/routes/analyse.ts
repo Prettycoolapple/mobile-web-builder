@@ -1484,6 +1484,8 @@ router.post("/analyse", async (req, res) => {
           reportsUsedThisMonth: number;
           lastResetAt: Date;
           subscriptionPeriodEndAt: Date | null;
+          specialStatus: string | null;
+          specialStatusExpiresAt: Date | null;
         }
       | undefined;
     try {
@@ -1496,6 +1498,8 @@ router.post("/analyse", async (req, res) => {
             reportsUsedThisMonth: profiles.reportsUsedThisMonth,
             lastResetAt: profiles.lastResetAt,
             subscriptionPeriodEndAt: profiles.subscriptionPeriodEndAt,
+            specialStatus: profiles.specialStatus,
+            specialStatusExpiresAt: profiles.specialStatusExpiresAt,
           })
           .from(profiles)
           .where(eq(profiles.id, userId))
@@ -1516,6 +1520,32 @@ router.post("/analyse", async (req, res) => {
 
     if (profile) {
       const now = new Date();
+
+      // ── Special admin-granted status (checked before plan limits) ──────────
+      // "friends_family" → 9999/month, never expires
+      // "supercharge"    → 60/month, auto-reverts to null after 6 months
+      let specialLimit: number | null = null;
+      if (profile.specialStatus === "friends_family") {
+        specialLimit = 9999;
+      } else if (profile.specialStatus === "supercharge") {
+        if (profile.specialStatusExpiresAt && now >= profile.specialStatusExpiresAt) {
+          // Status has expired — silently revert (fire-and-forget)
+          void (async () => {
+            try {
+              await db
+                .update(profiles)
+                .set({ specialStatus: null, specialStatusExpiresAt: null })
+                .where(eq(profiles.id, userId));
+            } catch {
+              // non-critical; next request will retry
+            }
+          })();
+          // fall through to normal plan limit below
+        } else {
+          specialLimit = 60;
+        }
+      }
+
       const lastReset = new Date(profile.lastResetAt);
       const periodEnd = profile.subscriptionPeriodEndAt ? new Date(profile.subscriptionPeriodEndAt) : null;
       const periodExpired = usagePeriodExpired(now, lastReset, profile.subscriptionTier, periodEnd);
@@ -1544,9 +1574,11 @@ router.post("/analyse", async (req, res) => {
         }
       }
 
+      // Use special limit if active, otherwise resolve from plan/role
+      const limit = specialLimit !== null ? specialLimit : resolveReportLimit(profile.subscriptionTier, profile.role);
       const isStandard = profile.subscriptionTier === "pro" || profile.subscriptionTier === "standard";
-      const limit = resolveReportLimit(profile.subscriptionTier, profile.role);
-      if (profile.role === "service_provider" && limit === SERVICE_PROVIDER_FREE_REPORT_LIMIT) {
+
+      if (specialLimit === null && profile.role === "service_provider" && limit === SERVICE_PROVIDER_FREE_REPORT_LIMIT) {
         const baseMsg = "Service provider accounts require an active subscription before generating feasibility reports.";
         const translatedMsg = analyseLocale === "zh" ? await ensureChinese(baseMsg) : baseMsg;
         res.status(402).json({
@@ -1558,7 +1590,9 @@ router.post("/analyse", async (req, res) => {
         return;
       }
       if (usedCount >= limit) {
-        const baseMsg = isStandard
+        const baseMsg = specialLimit !== null
+          ? `You've used all ${limit} reports in your current billing period. Your limit refreshes next month.`
+          : isStandard
           ? `You've used all ${STANDARD_REPORT_LIMIT} reports in your current billing period. Your limit refreshes when the period renews.`
           : `You've used all ${FREE_REPORT_LIMIT} free reports in your current billing period. Upgrade to Standard for more reports.`;
         const translatedMsg = analyseLocale === "zh" ? await ensureChinese(baseMsg) : baseMsg;

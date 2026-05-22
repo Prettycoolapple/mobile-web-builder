@@ -9,10 +9,14 @@ export interface GeoResult {
 
 export function normaliseNzAddressForGeocode(address: string): string {
   return address
+    .replace(/\b(?:New Zealand|Aotearoa)\b/gi, "")
     .replace(/\s+,/g, ",")
     .replace(/,\s*Auckland City\s*,/gi, ", ")
     .replace(/\bAuckland City\b/gi, "Auckland")
+    .replace(/\b\d{4}\b/g, "")
     .replace(/\s+/g, " ")
+    .replace(/\s*,\s*/g, ", ")
+    .replace(/^,\s*|,\s*$/g, "")
     .trim();
 }
 
@@ -222,14 +226,16 @@ export async function tryGeocodeAddress(address: string): Promise<GeoResult | nu
     .filter(Boolean);
 
   if (googleKey) {
-    try {
-      const result = await googleGeocode(address, googleKey);
-      if (result) {
-        logger.debug({ address, result }, "Geocoded via Google Maps");
-        return result;
+    for (const candidate of candidates) {
+      try {
+        const result = await googleGeocode(candidate, googleKey);
+        if (result) {
+          logger.debug({ address, candidate, result }, "Geocoded via Google Maps");
+          return result;
+        }
+      } catch (err) {
+        logger.warn({ err, candidate }, "Google geocoding candidate failed");
       }
-    } catch (err) {
-      logger.warn({ err }, "Google geocoding failed, falling back to Nominatim");
     }
   }
 
