@@ -43,6 +43,13 @@ export interface MergedPropertyData {
   contour_slope_degrees: number | null;
   contour_source: string | null;
   contour_text: string | null;
+  contour_steep_area_ratio?: number | null;
+  contour_moderate_area_ratio?: number | null;
+  contour_local_slope_p90_degrees?: number | null;
+  contour_local_slope_p95_degrees?: number | null;
+  contour_sample_count?: number | null;
+  large_site_terrain_adjusted?: boolean;
+  retaining_area_sqm_estimate?: number | null;
   asbestos_risk: "low" | "high" | "unknown";
   infrastructure: InfrastructureItem[];
   missing_critical_fields: string[];
@@ -307,6 +314,13 @@ export function mergePropertyData(
     contour_slope_degrees?: number | null;
     contour_source?: string | null;
     contour_text?: string | null;
+    contour_steep_area_ratio?: number | null;
+    contour_moderate_area_ratio?: number | null;
+    contour_local_slope_p90_degrees?: number | null;
+    contour_local_slope_p95_degrees?: number | null;
+    contour_sample_count?: number | null;
+    large_site_terrain_adjusted?: boolean;
+    retaining_area_sqm_estimate?: number | null;
     asbestos_risk: "low" | "high" | "unknown";
     infrastructure: InfrastructureItem[];
     property_history?: PropertyHistory | null;
@@ -756,6 +770,13 @@ export function mergePropertyData(
     contour_slope_degrees: extra?.contour_slope_degrees ?? null,
     contour_source: extra?.contour_source ?? null,
     contour_text: extra?.contour_text ?? null,
+    contour_steep_area_ratio: extra?.contour_steep_area_ratio ?? null,
+    contour_moderate_area_ratio: extra?.contour_moderate_area_ratio ?? null,
+    contour_local_slope_p90_degrees: extra?.contour_local_slope_p90_degrees ?? null,
+    contour_local_slope_p95_degrees: extra?.contour_local_slope_p95_degrees ?? null,
+    contour_sample_count: extra?.contour_sample_count ?? null,
+    large_site_terrain_adjusted: extra?.large_site_terrain_adjusted ?? false,
+    retaining_area_sqm_estimate: extra?.retaining_area_sqm_estimate ?? null,
     asbestos_risk: extra?.asbestos_risk ?? "unknown",
     infrastructure: extra?.infrastructure ?? [],
     missing_critical_fields,

@@ -16,14 +16,29 @@ export interface CardScoreEntry {
   zone?: string | null;
   potentialLots?: number;
   minLotSize?: number | null;
+  listingUrl?: string;
   updatedAt: number;
 }
 
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 const cache = new Map<string, CardScoreEntry>();
 
-function normalise(address: string): string {
-  return address.toLowerCase().replace(/[^a-z0-9]/g, "");
+function cleanKeyPart(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function normalise(address: string, listingUrl?: string | null): string {
+  return `${cleanKeyPart(address)}::${cleanKeyPart(listingUrl ?? "")}`;
+}
+
+function getCachedScore(address: string, listingUrl?: string | null): CardScoreEntry | undefined {
+  const exact = cache.get(normalise(address, listingUrl));
+  if (exact || listingUrl) return exact;
+  const addressPrefix = `${cleanKeyPart(address)}::`;
+  for (const [key, value] of cache.entries()) {
+    if (key.startsWith(addressPrefix)) return value;
+  }
+  return undefined;
 }
 
 function evictStale(): void {
@@ -36,7 +51,7 @@ function evictStale(): void {
 export function queueBackgroundScores(candidates: LightScoreInput[]): void {
   evictStale();
   for (const c of candidates) {
-    const key = normalise(c.address);
+    const key = normalise(c.address, c.listingUrl);
     const existing = cache.get(key);
     if (existing && existing.status !== "failed") continue;
 
@@ -59,6 +74,7 @@ export function queueBackgroundScores(candidates: LightScoreInput[]): void {
           zone: result.zone,
           potentialLots: result.potentialLots,
           minLotSize: result.minLotSize,
+          listingUrl: c.listingUrl,
           updatedAt: Date.now(),
         });
         logger.info(
@@ -74,21 +90,27 @@ export function queueBackgroundScores(candidates: LightScoreInput[]): void {
 }
 
 export function getCardScores(
-  addresses: string[],
-): Array<{ address: string; status: string; scores?: CardScoreEntry["scores"]; landArea?: number; zone?: string | null; potentialLots?: number; minLotSize?: number | null }> {
+  entries: Array<string | { address: string; listingUrl?: string | null }>,
+): Array<{ address: string; listingUrl?: string | null; status: string; scores?: CardScoreEntry["scores"]; landArea?: number; zone?: string | null; potentialLots?: number; minLotSize?: number | null }> {
   evictStale();
-  return addresses.map((addr) => {
-    const key = normalise(addr);
-    const entry = cache.get(key);
-    if (!entry) return { address: addr, status: "pending" };
+  return entries.map((requested) => {
+    const addr = typeof requested === "string" ? requested : requested.address;
+    const listingUrl = typeof requested === "string" ? null : requested.listingUrl ?? null;
+    const cached = getCachedScore(addr, listingUrl);
+    if (!cached) return { address: addr, listingUrl, status: "pending" };
     return {
       address: addr,
-      status: entry.status,
-      scores: entry.scores,
-      landArea: entry.landArea,
-      zone: entry.zone,
-      potentialLots: entry.potentialLots,
-      minLotSize: entry.minLotSize,
+      listingUrl,
+      status: cached.status,
+      scores: cached.scores,
+      landArea: cached.landArea,
+      zone: cached.zone,
+      potentialLots: cached.potentialLots,
+      minLotSize: cached.minLotSize,
     };
   });
+}
+
+export function clearCardScoreCacheForTests(): void {
+  cache.clear();
 }

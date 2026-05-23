@@ -37,6 +37,10 @@ export interface UserProfile {
   avatarUrl?: string | null;
   isVerified?: boolean;
   discipline?: string | null;
+  /** Admin-granted override: "supercharge" (60/mo, 6mo) | "friends_family" (9999/mo) | null. */
+  specialStatus?: string | null;
+  /** ISO date; only set for "supercharge". null = never expires (friends_family). */
+  specialStatusExpiresAt?: string | null;
 }
 
 export type ProviderDiscipline =

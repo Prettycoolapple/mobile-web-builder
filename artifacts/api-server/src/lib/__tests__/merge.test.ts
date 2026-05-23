@@ -44,4 +44,34 @@ describe("mergePropertyData", () => {
     expect(merged.data_sources.land_area_sqm).toBe("linz");
     expect(merged.data_sources.floor_area_sqm).toContain("auckland_council_gis");
   });
+
+  it("passes optional terrain distribution metrics through the merged payload", () => {
+    const merged = mergePropertyData(
+      { area_sqm: 32_113 } as any,
+      null,
+      null,
+      { zone_code: "CLZ", zone_description: "Rural - Countryside Living Zone", min_lot_size_sqm: 10_000 } as any,
+      [],
+      {
+        contour: "steep",
+        contour_slope_degrees: 23,
+        contour_source: "test-dem",
+        contour_steep_area_ratio: 0.12,
+        contour_moderate_area_ratio: 0.28,
+        contour_local_slope_p90_degrees: 23,
+        contour_local_slope_p95_degrees: 31,
+        contour_sample_count: 420,
+        large_site_terrain_adjusted: true,
+        asbestos_risk: "unknown",
+        infrastructure: [],
+      },
+    );
+
+    expect(merged.contour).toBe("steep");
+    expect(merged.contour_steep_area_ratio).toBe(0.12);
+    expect(merged.contour_moderate_area_ratio).toBe(0.28);
+    expect(merged.contour_local_slope_p90_degrees).toBe(23);
+    expect(merged.contour_sample_count).toBe(420);
+    expect(merged.large_site_terrain_adjusted).toBe(true);
+  });
 });

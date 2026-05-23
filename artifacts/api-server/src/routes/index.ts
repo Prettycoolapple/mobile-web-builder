@@ -19,6 +19,7 @@ import imageProxyRouter from "./image-proxy";
 import otpRouter from "./otp";
 import supportRouter from "./support";
 import feedbackRouter from "./feedback";
+import agentCallEventRouter from "./agent-call-event";
 import adminRouter from "./admin";
 
 const router: IRouter = Router();
@@ -43,6 +44,7 @@ router.use(imageProxyRouter);
 router.use(otpRouter);
 router.use(supportRouter);
 router.use(feedbackRouter);
+router.use(agentCallEventRouter);
 router.use(adminRouter);
 
 export default router;

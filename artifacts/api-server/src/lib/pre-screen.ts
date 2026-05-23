@@ -5,6 +5,12 @@ import { fetchUnitaryPlanZone, fetchOverlays } from "./auckland-council";
 import type { ListingResult } from "./scrapers/oneroof";
 import { calculatePotentialLots } from "./lot-calculator";
 import { fetchLINZParcel } from "./linz";
+import {
+  passesStrictStandardSubdivisionScreen,
+  verifyDiscoveryLandArea,
+  type DiscoveryLandAreaConfidence,
+  type DiscoveryLandAreaSource,
+} from "./discovery-land-area";
 
 export interface PropertyCandidate {
   address: string;
@@ -24,6 +30,10 @@ export interface PropertyCandidate {
   bathroomsApprox?: boolean;
   /** True when listing sources disagree on land area / price — UI renders "~503 m²" / "~$1.25M". */
   landAreaApprox?: boolean;
+  landAreaSource?: DiscoveryLandAreaSource;
+  landAreaConfidence?: DiscoveryLandAreaConfidence;
+  isParentParcelSuspect?: boolean;
+  isAlreadySubdividedChild?: boolean;
   priceApprox?: boolean;
   /** Floor (dwelling) area in m², extracted from listing og:description / JSON-LD. */
   floorArea?: number;
@@ -66,6 +76,10 @@ function estimateLotCapacity(zone: string | null, land: number | null): { lots: 
     lots: lotResult.lots,
     minLotSize: lotResult.min_lot_size > 0 ? lotResult.min_lot_size : null,
   };
+}
+
+function hasVerifiedListingLandArea(listing: ListingResult): boolean {
+  return listing.landArea != null && listing.landAreaConfidence === "verified";
 }
 
 function quickScore(
@@ -121,6 +135,7 @@ async function screenOneFast(
   options?: {
     allowMissingListingPrice?: boolean;
     pricePlaceholderNzd?: number;
+    strictStandardSubdivision?: boolean;
   },
 ): Promise<PropertyCandidate | null> {
   try {
@@ -130,7 +145,11 @@ async function screenOneFast(
     }
 
     const geo = await geocodeAddress(listing.address);
-    const shouldVerifyLandArea = listing.landAreaApprox || listing.landArea == null;
+    const shouldVerifyLandArea =
+      options?.strictStandardSubdivision ||
+      listing.landAreaApprox ||
+      listing.landArea == null ||
+      !hasVerifiedListingLandArea(listing);
     const [zoneResult, overlays, linzParcelResult] = await Promise.allSettled([
       fetchUnitaryPlanZone(geo.lat, geo.lng),
       fetchOverlays(geo.lat, geo.lng),
@@ -141,8 +160,21 @@ async function screenOneFast(
     const resolvedOverlays = overlays.status === "fulfilled" ? overlays.value : [];
     const linzParcel = linzParcelResult.status === "fulfilled" ? linzParcelResult.value : null;
 
-    const land = linzParcel?.area_sqm ?? listing.landArea;
-    const landAreaApprox = linzParcel?.area_sqm != null ? false : (listing.landAreaApprox ?? false);
+    const verifiedLand = await verifyDiscoveryLandArea({
+      address: listing.address,
+      listingLandArea: listing.landArea,
+      listingLandAreaSource: listing.landAreaSource,
+      listingLandAreaConfidence: listing.landAreaConfidence,
+      linzParcel,
+      formattedAddress: geo.formatted,
+      strictStandardSubdivision: options?.strictStandardSubdivision,
+    });
+    const land = verifiedLand.landArea;
+    const landAreaApprox =
+      verifiedLand.landAreaConfidence !== "verified" ||
+      listing.landAreaApprox ||
+      verifiedLand.isParentParcelSuspect ||
+      undefined;
     let price = listing.price;
     let priceApprox = listing.priceApprox ?? false;
     if (price == null && options?.allowMissingListingPrice) {
@@ -152,6 +184,29 @@ async function screenOneFast(
     if (!price) return null;
 
     const { lots, minLotSize } = estimateLotCapacity(zone, land ?? null);
+    if (options?.strictStandardSubdivision && !passesStrictStandardSubdivisionScreen({
+      address: listing.address,
+      landArea: land,
+      zone,
+      potentialLots: lots,
+      minLotSize,
+      landAreaConfidence: verifiedLand.landAreaConfidence,
+      isAlreadySubdividedChild: verifiedLand.isAlreadySubdividedChild,
+    })) {
+      logger.info(
+        {
+          address: listing.address,
+          landArea: land,
+          zone,
+          lots,
+          minLotSize,
+          landAreaConfidence: verifiedLand.landAreaConfidence,
+          isAlreadySubdividedChild: verifiedLand.isAlreadySubdividedChild,
+        },
+        "Pre-screen: rejected strict subdivision candidate",
+      );
+      return null;
+    }
     const scores = quickScore(zone, resolvedOverlays, land ?? null, price);
 
     return {
@@ -170,6 +225,10 @@ async function screenOneFast(
       bedroomsApprox: listing.bedroomsApprox || undefined,
       bathroomsApprox: listing.bathroomsApprox || undefined,
       landAreaApprox: landAreaApprox || undefined,
+      landAreaSource: verifiedLand.landAreaSource,
+      landAreaConfidence: verifiedLand.landAreaConfidence,
+      isParentParcelSuspect: verifiedLand.isParentParcelSuspect || undefined,
+      isAlreadySubdividedChild: verifiedLand.isAlreadySubdividedChild || undefined,
       priceApprox: priceApprox || undefined,
       floorArea: listing.floorArea ?? undefined,
       floorAreaApprox: listing.floorAreaApprox || undefined,
@@ -190,6 +249,7 @@ export async function preScreenListingsFast(
     allowMissingListingPrice?: boolean;
     /** Mid-range estimate when allowing missing prices (defaults ~mid-market if omitted). */
     pricePlaceholderNzd?: number;
+    strictStandardSubdivision?: boolean;
   },
 ): Promise<PropertyCandidate[]> {
   const nonApartments = listings.filter((l) => !isApartmentAddress(l.address));
@@ -240,6 +300,10 @@ async function screenOne(listing: ListingResult): Promise<PropertyCandidate | nu
       bedroomsApprox: listing.bedroomsApprox || undefined,
       bathroomsApprox: listing.bathroomsApprox || undefined,
       landAreaApprox: listing.landAreaApprox || undefined,
+      landAreaSource: listing.landAreaSource,
+      landAreaConfidence: listing.landAreaConfidence,
+      isParentParcelSuspect: listing.isParentParcelSuspect || undefined,
+      isAlreadySubdividedChild: listing.isAlreadySubdividedChild || undefined,
       priceApprox: listing.priceApprox || undefined,
       floorArea: listing.floorArea ?? undefined,
       floorAreaApprox: listing.floorAreaApprox || undefined,

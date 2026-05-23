@@ -9,6 +9,10 @@ export interface InfrastructureItem {
   estimated_cost_high: number;
   risk: "low" | "moderate" | "high";
   note: string;
+  search_radius_metres?: number;
+  service_source_owner?: string | null;
+  service_source_maintainer?: string | null;
+  rural_infrastructure_adjusted?: boolean;
 }
 
 export type InfrastructureGeometry = {
@@ -30,6 +34,8 @@ type InfrastructureClassification = {
   estimated_cost_high: number;
   risk: InfrastructureItem["risk"];
   note: string;
+  service_source_owner?: string | null;
+  service_source_maintainer?: string | null;
 };
 
 type Point = { x: number; y: number };
@@ -42,10 +48,12 @@ const UNDERGROUND_SVC = `${MAPS_BASE}/LiveMaps/UndergroundServices/MapServer`;
 
 const INFRA_LAYERS: Array<{
   name: string;
+  ruralSearchDistanceM: number;
   layers: Array<{ id: number; label: string }>;
 }> = [
   {
     name: "Wastewater",
+    ruralSearchDistanceM: 500,
     layers: [
       { id: 5, label: "Wastewater Pipe (Local)" },
       { id: 12, label: "Wastewater Pipe (Transmission)" },
@@ -53,6 +61,7 @@ const INFRA_LAYERS: Array<{
   },
   {
     name: "Stormwater",
+    ruralSearchDistanceM: 1000,
     layers: [
       { id: 109, label: "Stormwater Pipe" },
       { id: 32, label: "Stormwater Watercourse" },
@@ -61,6 +70,7 @@ const INFRA_LAYERS: Array<{
   },
   {
     name: "Water Supply",
+    ruralSearchDistanceM: 500,
     layers: [
       { id: 52, label: "Water Pipe (Local)" },
       { id: 61, label: "Water Pipe (Transmission)" },
@@ -74,6 +84,14 @@ const LOCATION_RANK: Record<InfrastructureItem["location"], number> = {
   "public-land": 2,
   neighbour: 3,
   unknown: 4,
+};
+
+const DEFAULT_SEARCH_DISTANCE_M = 200;
+const RURAL_INFRASTRUCTURE_ZONES = new Set(["CLZ", "LLRZ", "RCSZ", "RUR"]);
+
+export type InfrastructureFetchOptions = {
+  zoneCode?: string | null;
+  landAreaSqm?: number | null;
 };
 
 function degLat(metres: number): number {
@@ -203,10 +221,65 @@ function featureText(feature: InfrastructureFeature): string {
     .toLowerCase();
 }
 
+function featureAttributeValue(feature: InfrastructureFeature, pattern: RegExp): string | null {
+  for (const [key, value] of Object.entries(feature.attributes ?? {})) {
+    if (!pattern.test(key)) continue;
+    const text = String(value ?? "").trim();
+    if (text) return text;
+  }
+  return null;
+}
+
+function serviceSourceMetadata(features: InfrastructureFeature[]): {
+  owner: string | null;
+  maintainer: string | null;
+} {
+  for (const feature of features) {
+    const owner = featureAttributeValue(feature, /owner/i);
+    const maintainer = featureAttributeValue(feature, /maintainer|maintenance/i);
+    if (owner || maintainer) return { owner, maintainer };
+  }
+  return { owner: null, maintainer: null };
+}
+
 function hasPrivateServiceHint(features: InfrastructureFeature[]): boolean {
   return features.some((feature) =>
     /\b(private|customer|non[-\s]?public|easement|right\s*of\s*way|row)\b/i.test(featureText(feature)),
   );
+}
+
+function hasPublicServiceHint(features: InfrastructureFeature[]): boolean {
+  return features.some((feature) =>
+    /\b(transport|auckland\s+council|watercare|council|public|road|reserve)\b/i.test(featureText(feature)),
+  );
+}
+
+function withServiceSource(
+  classification: InfrastructureClassification,
+  features: InfrastructureFeature[],
+): InfrastructureClassification {
+  const source = serviceSourceMetadata(features);
+  return {
+    ...classification,
+    service_source_owner: source.owner,
+    service_source_maintainer: source.maintainer,
+  };
+}
+
+function isRuralInfrastructureContext(options?: InfrastructureFetchOptions): boolean {
+  const zone = options?.zoneCode?.trim().toUpperCase();
+  if (zone && RURAL_INFRASTRUCTURE_ZONES.has(zone)) return true;
+  const landAreaSqm = options?.landAreaSqm;
+  return landAreaSqm != null && Number.isFinite(landAreaSqm) && landAreaSqm >= 10_000;
+}
+
+export function infrastructureSearchDistanceMetres(
+  serviceName: string,
+  options?: InfrastructureFetchOptions,
+  ruralSearchDistanceM?: number,
+): number {
+  if (!isRuralInfrastructureContext(options)) return DEFAULT_SEARCH_DISTANCE_M;
+  return ruralSearchDistanceM ?? (serviceName === "Stormwater" ? 1000 : 500);
 }
 
 function classifyPointDistance(serviceName: string, distanceM: number | null): InfrastructureClassification {
@@ -274,7 +347,10 @@ function classifyParcelDistance(
     };
   }
 
-  if (offsiteLandContext === "neighbour" || hasPrivateServiceHint(features)) {
+  const privateHint = hasPrivateServiceHint(features);
+  const publicHint = hasPublicServiceHint(features);
+
+  if (offsiteLandContext === "neighbour" || privateHint) {
     return {
       location: "neighbour",
       distance_metres: d,
@@ -282,6 +358,17 @@ function classifyParcelDistance(
       estimated_cost_high: 60000,
       risk: "moderate",
       note: `${serviceName} service appears off-site on private land (~${d}m from parcel boundary) - easement or owner approval may be required`,
+    };
+  }
+
+  if (publicHint) {
+    return {
+      location: "public-land",
+      distance_metres: d,
+      estimated_cost_low: distanceToBoundaryM < 50 ? 5000 : 10000,
+      estimated_cost_high: distanceToBoundaryM < 50 ? 25000 : 40000,
+      risk: distanceToBoundaryM < 50 ? "low" : "moderate",
+      note: `${serviceName} service is off-site in the public network (~${d}m from parcel boundary) - verify tie-in route during civil design`,
     };
   }
 
@@ -320,7 +407,7 @@ function chooseBetterClassification(
   return nextDistance < currentDistance ? next : current;
 }
 
-function classifyNoMappedService(serviceName: string): InfrastructureClassification {
+function classifyNoMappedService(serviceName: string, searchDistanceM = DEFAULT_SEARCH_DISTANCE_M): InfrastructureClassification {
   const critical = serviceName === "Wastewater" || serviceName === "Water Supply";
   return {
     location: "unknown",
@@ -328,7 +415,7 @@ function classifyNoMappedService(serviceName: string): InfrastructureClassificat
     estimated_cost_low: critical ? 30000 : 15000,
     estimated_cost_high: critical ? 120000 : 60000,
     risk: critical ? "high" : "moderate",
-    note: `No mapped public ${serviceName.toLowerCase()} service found within 200m of the parcel - confirm private/on-site servicing or extension costs during civil design`,
+    note: `No mapped public ${serviceName.toLowerCase()} service found within ${searchDistanceM}m of the parcel`,
   };
 }
 
@@ -350,8 +437,20 @@ export function classifyInfrastructureFeatures(
     const parcelSegs = polygonSegments(parcelPoly);
 
     let minDistanceToBoundary = Infinity;
+    let nearestFeatureDistance = Infinity;
+    let nearestFeatures: InfrastructureFeature[] = [];
     let hasDeepInside = false;
     let touchesParcel = false;
+
+    const recordNearestFeature = (feature: InfrastructureFeature, distance: number) => {
+      if (!Number.isFinite(distance)) return;
+      if (distance < nearestFeatureDistance - 0.5) {
+        nearestFeatureDistance = distance;
+        nearestFeatures = [feature];
+      } else if (Math.abs(distance - nearestFeatureDistance) <= 0.5 && !nearestFeatures.includes(feature)) {
+        nearestFeatures.push(feature);
+      }
+    };
 
     for (const feature of features) {
       for (const path of geometryPaths(feature.geometry)) {
@@ -361,6 +460,7 @@ export function classifyInfrastructureFeatures(
           const p = projected[0]!;
           const inside = pointInPolygon(p, parcelPoly);
           const boundaryDistance = distanceToPolygonBoundary(p, parcelSegs);
+          recordNearestFeature(feature, boundaryDistance);
           minDistanceToBoundary = Math.min(minDistanceToBoundary, boundaryDistance);
           if (inside) {
             touchesParcel = true;
@@ -373,6 +473,7 @@ export function classifyInfrastructureFeatures(
           const a = projected[i - 1]!;
           const b = projected[i]!;
           const boundaryDistance = distanceToPolygonFromSegment(a, b, parcelSegs);
+          recordNearestFeature(feature, boundaryDistance);
           minDistanceToBoundary = Math.min(minDistanceToBoundary, boundaryDistance);
           if (boundaryDistance <= 0.5) touchesParcel = true;
 
@@ -390,50 +491,66 @@ export function classifyInfrastructureFeatures(
       }
     }
 
+    const classificationFeatures = nearestFeatures.length > 0 ? nearestFeatures : features;
     if (hasDeepInside) {
-      return {
+      return withServiceSource({
         location: "on-parcel",
         distance_metres: 0,
         estimated_cost_low: 0,
         estimated_cost_high: 5000,
         risk: "low",
         note: `${serviceName} service crosses or sits within the parcel - straightforward on-site connection subject to asset-protection checks`,
-      };
+      }, classificationFeatures);
     }
 
     if (touchesParcel && minDistanceToBoundary <= 2) {
-      return classifyParcelDistance(serviceName, 0, features, offsiteLandContext);
+      return withServiceSource(classifyParcelDistance(serviceName, 0, classificationFeatures, offsiteLandContext), classificationFeatures);
     }
 
-    return classifyParcelDistance(
+    return withServiceSource(classifyParcelDistance(
       serviceName,
       isFinite(minDistanceToBoundary) ? minDistanceToBoundary : null,
-      features,
+      classificationFeatures,
       offsiteLandContext,
-    );
+    ), classificationFeatures);
   }
 
   const refLat = lat;
   const refLng = lng;
   const addressPoint = project(lng, lat, refLat, refLng);
   let minDistanceToPoint = Infinity;
+  let nearestFeatureDistance = Infinity;
+  let nearestFeatures: InfrastructureFeature[] = [];
+  const recordNearestFeature = (feature: InfrastructureFeature, distance: number) => {
+    if (!Number.isFinite(distance)) return;
+    if (distance < nearestFeatureDistance - 0.5) {
+      nearestFeatureDistance = distance;
+      nearestFeatures = [feature];
+    } else if (Math.abs(distance - nearestFeatureDistance) <= 0.5 && !nearestFeatures.includes(feature)) {
+      nearestFeatures.push(feature);
+    }
+  };
   for (const feature of features) {
     for (const path of geometryPaths(feature.geometry)) {
       const projected = path.map(([x, y]) => project(x, y, refLat, refLng));
       if (projected.length === 1) {
-        minDistanceToPoint = Math.min(minDistanceToPoint, Math.hypot(projected[0]!.x, projected[0]!.y));
+        const distance = Math.hypot(projected[0]!.x, projected[0]!.y);
+        recordNearestFeature(feature, distance);
+        minDistanceToPoint = Math.min(minDistanceToPoint, distance);
         continue;
       }
       for (let i = 1; i < projected.length; i++) {
-        minDistanceToPoint = Math.min(
-          minDistanceToPoint,
-          distancePointToSegment(addressPoint, projected[i - 1]!, projected[i]!),
-        );
+        const distance = distancePointToSegment(addressPoint, projected[i - 1]!, projected[i]!);
+        recordNearestFeature(feature, distance);
+        minDistanceToPoint = Math.min(minDistanceToPoint, distance);
       }
     }
   }
 
-  return classifyPointDistance(serviceName, isFinite(minDistanceToPoint) ? minDistanceToPoint : null);
+  return withServiceSource(
+    classifyPointDistance(serviceName, isFinite(minDistanceToPoint) ? minDistanceToPoint : null),
+    nearestFeatures.length > 0 ? nearestFeatures : features,
+  );
 }
 
 function collectOffsiteProbePoints(
@@ -577,16 +694,19 @@ export async function fetchInfrastructure(
   lng: number,
   parcelBbox?: ParcelBbox | null,
   targetParcelId?: string | null,
+  options?: InfrastructureFetchOptions,
 ): Promise<InfrastructureItem[]> {
   const results: InfrastructureItem[] = [];
+  const ruralAdjusted = isRuralInfrastructureContext(options);
 
   await Promise.allSettled(
     INFRA_LAYERS.map(async (infraType) => {
       let best: InfrastructureClassification | null = null;
+      const searchDistanceM = infrastructureSearchDistanceMetres(infraType.name, options, infraType.ruralSearchDistanceM);
 
       for (const { id, label } of infraType.layers) {
         try {
-          const features = await queryLayerFeatures(lat, lng, id, parcelBbox);
+          const features = await queryLayerFeatures(lat, lng, id, parcelBbox, searchDistanceM);
           if (features.length === 0) continue;
 
           let classification = classifyInfrastructureFeatures(infraType.name, lat, lng, features, parcelBbox);
@@ -619,7 +739,7 @@ export async function fetchInfrastructure(
       }
 
       if (!best) {
-        const missing = classifyNoMappedService(infraType.name);
+        const missing = classifyNoMappedService(infraType.name, searchDistanceM);
         logger.warn({ infraType: infraType.name, classification: missing }, "No mapped infrastructure feature found in any layer");
         results.push({
           name: infraType.name,
@@ -629,6 +749,10 @@ export async function fetchInfrastructure(
           estimated_cost_high: missing.estimated_cost_high,
           risk: missing.risk,
           note: missing.note,
+          search_radius_metres: searchDistanceM,
+          service_source_owner: missing.service_source_owner ?? null,
+          service_source_maintainer: missing.service_source_maintainer ?? null,
+          rural_infrastructure_adjusted: ruralAdjusted,
         });
         return;
       }
@@ -641,6 +765,10 @@ export async function fetchInfrastructure(
         estimated_cost_high: best.estimated_cost_high,
         risk: best.risk,
         note: best.note,
+        search_radius_metres: searchDistanceM,
+        service_source_owner: best.service_source_owner ?? null,
+        service_source_maintainer: best.service_source_maintainer ?? null,
+        rural_infrastructure_adjusted: ruralAdjusted,
       });
     }),
   );

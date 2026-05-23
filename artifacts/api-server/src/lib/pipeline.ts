@@ -433,9 +433,9 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   ] = await Promise.allSettled([
     timed("zone",             () => fetchUnitaryPlanZone(lat, lng),                                               timing),
     timed("overlays",         () => fetchOverlaysWithConsensus(lat, lng, linzParcelData?.bbox ?? null),            timing),
-    timed("contour",          () => fetchContour(lat, lng, linzParcelData?.bbox ?? null),                         timing),
+    timed("contour",          () => fetchContour(lat, lng, linzParcelData?.bbox ?? null, { landAreaSqm: linzParcelData?.area_sqm ?? null }), timing),
     timed("property_history", () => fetchPropertyHistory(address, lat, lng),                                      timing),
-    timed("infrastructure",   () => fetchInfrastructure(lat, lng, linzParcelData?.bbox ?? null, linzParcelData?.parcel_id ?? null), timing),
+    timed("infrastructure",   () => fetchInfrastructure(lat, lng, linzParcelData?.bbox ?? null, linzParcelData?.parcel_id ?? null, { landAreaSqm: linzParcelData?.area_sqm ?? null }), timing),
     timed("hougarden",        () => useBrowserScrapers ? withBrowserSlot(() => scrapeHougarden(lat, lng, address)) : Promise.resolve(null), timing),
     timed("oneroof",          () => useBrowserScrapers ? withBrowserSlot(() => scrapeOneRoof(address)) : Promise.resolve(null), timing),
     timed("propertyvalue",    () => scrapePropertyValue(address, geocode!.formatted ?? address),                  timing),
@@ -447,7 +447,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   const overlaysData        = overlaysResult.status        === "fulfilled" ? (overlaysResult.value.value ?? []) : [];
   const contourData         = contourResult.status         === "fulfilled" ? contourResult.value.value         : null;
   const propertyHistoryData = propertyHistoryResult.status === "fulfilled" ? propertyHistoryResult.value.value  : null;
-  const infrastructureData  = infrastructureResult.status  === "fulfilled" ? (infrastructureResult.value.value ?? []) : [];
+  let infrastructureData    = infrastructureResult.status  === "fulfilled" ? (infrastructureResult.value.value ?? []) : [];
   let hougardenData         = hougardenResult.status       === "fulfilled" ? hougardenResult.value.value        : null;
   let oneRoofData           = oneRoofResult.status         === "fulfilled" ? oneRoofResult.value.value          : null;
   let propertyValueData     = propertyValueResult.status   === "fulfilled" ? propertyValueResult.value.value    : null;
@@ -470,6 +470,25 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   if (wave1PropertyValueFailed) failedSources.push("propertyvalue");
   if (wave1QvFailed)        failedSources.push("qv");
   if (wave1HomesFailed)     failedSources.push("homes");
+
+  const zoneCodeForInfrastructure = zoneData?.zone_code?.trim().toUpperCase() ?? null;
+  const needsZoneBasedRuralInfrastructure =
+    zoneCodeForInfrastructure != null &&
+    ["CLZ", "LLRZ", "RCSZ", "RUR"].includes(zoneCodeForInfrastructure) &&
+    !infrastructureData.some((item) => item.rural_infrastructure_adjusted);
+  if (needsZoneBasedRuralInfrastructure) {
+    const zoneAwareInfrastructure = await timed(
+      "infrastructure_rural_zone_retry",
+      () => fetchInfrastructure(lat, lng, linzParcelData?.bbox ?? null, linzParcelData?.parcel_id ?? null, {
+        zoneCode: zoneCodeForInfrastructure,
+        landAreaSqm: linzParcelData?.area_sqm ?? null,
+      }),
+      timing,
+    );
+    if (!zoneAwareInfrastructure.failed && zoneAwareInfrastructure.value) {
+      infrastructureData = zoneAwareInfrastructure.value;
+    }
+  }
 
   // ─── LINZ title, memorials ────────────────────────────────────────────────
   let linzTitle: LinzTitle | null = null;
@@ -721,6 +740,12 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       contour_source: resolvedContour?.source ?? null,
       contour_text: resolvedContour?.text ?? null,
       asbestos_risk: "unknown", // placeholder — updated below after build_year is resolved
+      contour_steep_area_ratio: elevationMeasured ? (contourData?.steep_area_ratio ?? null) : null,
+      contour_moderate_area_ratio: elevationMeasured ? (contourData?.moderate_area_ratio ?? null) : null,
+      contour_local_slope_p90_degrees: elevationMeasured ? (contourData?.local_slope_p90_degrees ?? null) : null,
+      contour_local_slope_p95_degrees: elevationMeasured ? (contourData?.local_slope_p95_degrees ?? null) : null,
+      contour_sample_count: elevationMeasured ? (contourData?.sample_count ?? null) : null,
+      large_site_terrain_adjusted: contourData?.large_site_terrain_adjusted ?? false,
       infrastructure: infrastructureData,
       property_history: propertyHistoryData,
       qv: qvData,

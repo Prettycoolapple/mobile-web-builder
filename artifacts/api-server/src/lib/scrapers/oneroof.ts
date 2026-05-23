@@ -8,6 +8,10 @@ export interface ListingResult {
   price: number | null;
   priceText: string;
   landArea: number | null;
+  landAreaSource?: "realestate_api" | "realestate_page" | "homes" | "linz" | "unknown";
+  landAreaConfidence?: "verified" | "unverified";
+  isParentParcelSuspect?: boolean;
+  isAlreadySubdividedChild?: boolean;
   /** Floor (dwelling) area in m². Sourced opportunistically from og:description; null when not advertised. */
   floorArea?: number | null;
   photoUrl: string | null;

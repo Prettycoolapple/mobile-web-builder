@@ -1,6 +1,13 @@
 import { Router } from "express";
 import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
-import { db, profiles, serviceProviderProfiles } from "@workspace/db";
+import {
+  db,
+  profiles,
+  serviceProviderProfiles,
+  feasibilityJobs,
+  agentCallEvents,
+  chatLlmFeedback,
+} from "@workspace/db";
 import { requireAdmin } from "../lib/auth";
 import { createStorageReviewToken } from "../lib/storage-review-token";
 import { getPublicAppUrl } from "../lib/env";
@@ -554,6 +561,256 @@ router.patch("/admin/users/:userId/status", requireAdmin, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "admin set user status failed");
     res.status(500).json({ error: "Failed to update user status" });
+  }
+});
+
+// ============================================================
+// Per-user analytics — detail page + paginated sub-lists
+// ============================================================
+
+// GET /admin/users/:userId  → profile + counts
+router.get("/admin/users/:userId", requireAdmin, async (req, res) => {
+  const { userId } = req.params;
+  if (!userId) {
+    res.status(400).json({ error: "userId is required" });
+    return;
+  }
+
+  try {
+    const [profile] = await db
+      .select({
+        id: profiles.id,
+        email: profiles.email,
+        fullName: profiles.fullName,
+        role: profiles.role,
+        languages: profiles.languages,
+        phoneNumber: profiles.phoneNumber,
+        subscriptionTier: profiles.subscriptionTier,
+        specialStatus: profiles.specialStatus,
+        specialStatusExpiresAt: profiles.specialStatusExpiresAt,
+        isVerified: profiles.isVerified,
+        createdAt: profiles.createdAt,
+        lastLoginAt: profiles.lastLoginAt,
+        reportsUsedThisMonth: profiles.reportsUsedThisMonth,
+      })
+      .from(profiles)
+      .where(eq(profiles.id, userId))
+      .limit(1);
+
+    if (!profile) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    const countsResult = await db.execute<{
+      feasibility_reports: string;
+      agent_calls: string;
+      thumbs_down: string;
+    }>(sql`
+      SELECT
+        (SELECT COUNT(*) FROM feasibility_jobs WHERE user_id = ${userId}) AS feasibility_reports,
+        (SELECT COUNT(*) FROM agent_call_events WHERE user_id = ${userId}) AS agent_calls,
+        (SELECT COUNT(*) FROM chat_llm_feedback WHERE user_id = ${userId} AND rating = 'down') AS thumbs_down
+    `);
+    const countsRows = (countsResult as any).rows ?? countsResult;
+    const c = (countsRows[0] ?? {}) as Record<string, string>;
+    const feasibilityReports = Number(c.feasibility_reports ?? 0);
+    const agentCalls = Number(c.agent_calls ?? 0);
+    const thumbsDown = Number(c.thumbs_down ?? 0);
+    const callsPerReport = feasibilityReports > 0 ? agentCalls / feasibilityReports : 0;
+
+    res.json({
+      profile: {
+        ...profile,
+        planLabel: planLabel(profile.subscriptionTier, profile.role),
+      },
+      counts: {
+        feasibilityReports,
+        agentCalls,
+        thumbsDown,
+        callsPerReport,
+      },
+    });
+  } catch (err) {
+    req.log.error({ err }, "admin user detail failed");
+    res.status(500).json({ error: "Failed to load user" });
+  }
+});
+
+// GET /admin/users/:userId/feedback  → thumbs-down rows
+router.get("/admin/users/:userId/feedback", requireAdmin, async (req, res) => {
+  const { userId } = req.params;
+  const limit = parseLimit(req.query.limit, 20, 100);
+  const offset = parseOffset(req.query.offset);
+
+  try {
+    const rows = await db
+      .select({
+        id: chatLlmFeedback.id,
+        createdAt: chatLlmFeedback.createdAt,
+        responseMode: chatLlmFeedback.responseMode,
+        reason: chatLlmFeedback.reason,
+      })
+      .from(chatLlmFeedback)
+      .where(and(eq(chatLlmFeedback.userId, userId), eq(chatLlmFeedback.rating, "down")))
+      .orderBy(desc(chatLlmFeedback.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    const totalResult = await db.execute<{ total: string }>(sql`
+      SELECT COUNT(*)::text AS total FROM chat_llm_feedback
+      WHERE user_id = ${userId} AND rating = 'down'
+    `);
+    const totalRows = (totalResult as any).rows ?? totalResult;
+    const total = Number((totalRows[0] as any)?.total ?? 0);
+
+    res.json({ total, limit, offset, rows });
+  } catch (err) {
+    req.log.error({ err }, "admin user feedback list failed");
+    res.status(500).json({ error: "Failed to load feedback" });
+  }
+});
+
+// GET /admin/users/:userId/addresses  → feasibility_jobs rows
+router.get("/admin/users/:userId/addresses", requireAdmin, async (req, res) => {
+  const { userId } = req.params;
+  const limit = parseLimit(req.query.limit, 20, 100);
+  const offset = parseOffset(req.query.offset);
+
+  try {
+    const rows = await db
+      .select({
+        id: feasibilityJobs.id,
+        createdAt: feasibilityJobs.createdAt,
+        queryAddress: feasibilityJobs.queryAddress,
+        analysisAddress: feasibilityJobs.analysisAddress,
+        status: feasibilityJobs.status,
+      })
+      .from(feasibilityJobs)
+      .where(eq(feasibilityJobs.userId, userId))
+      .orderBy(desc(feasibilityJobs.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    const totalResult = await db.execute<{ total: string }>(sql`
+      SELECT COUNT(*)::text AS total FROM feasibility_jobs WHERE user_id = ${userId}
+    `);
+    const totalRows = (totalResult as any).rows ?? totalResult;
+    const total = Number((totalRows[0] as any)?.total ?? 0);
+
+    res.json({ total, limit, offset, rows });
+  } catch (err) {
+    req.log.error({ err }, "admin user addresses list failed");
+    res.status(500).json({ error: "Failed to load addresses" });
+  }
+});
+
+// GET /admin/users/:userId/agent-calls  → agent_call_events rows
+router.get("/admin/users/:userId/agent-calls", requireAdmin, async (req, res) => {
+  const { userId } = req.params;
+  const limit = parseLimit(req.query.limit, 20, 100);
+  const offset = parseOffset(req.query.offset);
+
+  try {
+    const rows = await db
+      .select({
+        id: agentCallEvents.id,
+        createdAt: agentCallEvents.createdAt,
+        agentName: agentCallEvents.agentName,
+        agencyName: agentCallEvents.agencyName,
+        agentPhone: agentCallEvents.agentPhone,
+        propertyAddress: agentCallEvents.propertyAddress,
+      })
+      .from(agentCallEvents)
+      .where(eq(agentCallEvents.userId, userId))
+      .orderBy(desc(agentCallEvents.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    const totalResult = await db.execute<{ total: string }>(sql`
+      SELECT COUNT(*)::text AS total FROM agent_call_events WHERE user_id = ${userId}
+    `);
+    const totalRows = (totalResult as any).rows ?? totalResult;
+    const total = Number((totalRows[0] as any)?.total ?? 0);
+
+    res.json({ total, limit, offset, rows });
+  } catch (err) {
+    req.log.error({ err }, "admin user agent-calls list failed");
+    res.status(500).json({ error: "Failed to load agent calls" });
+  }
+});
+
+// ============================================================
+// Global stats — Dashboard tiles + top addresses
+// ============================================================
+
+// GET /admin/stats/global-counts
+router.get("/admin/stats/global-counts", requireAdmin, async (req, res) => {
+  try {
+    const result = await db.execute<{
+      total_reports: string;
+      total_agent_calls: string;
+    }>(sql`
+      SELECT
+        (SELECT COUNT(*) FROM feasibility_jobs) AS total_reports,
+        (SELECT COUNT(*) FROM agent_call_events) AS total_agent_calls
+    `);
+    const rows = (result as any).rows ?? result;
+    const r = (rows[0] ?? {}) as Record<string, string>;
+    const totalReports = Number(r.total_reports ?? 0);
+    const totalAgentCalls = Number(r.total_agent_calls ?? 0);
+    res.json({
+      totalReports,
+      totalAgentCalls,
+      callsPerReport: totalReports > 0 ? totalAgentCalls / totalReports : 0,
+    });
+  } catch (err) {
+    req.log.error({ err }, "admin global counts failed");
+    res.status(500).json({ error: "Failed to load global counts" });
+  }
+});
+
+// GET /admin/stats/top-addresses?limit=10&offset=0
+router.get("/admin/stats/top-addresses", requireAdmin, async (req, res) => {
+  const limit = parseLimit(req.query.limit, 10, 100);
+  const offset = parseOffset(req.query.offset);
+
+  try {
+    const result = await db.execute<{ address: string; count: string }>(sql`
+      SELECT
+        LOWER(TRIM(COALESCE(NULLIF(TRIM(analysis_address), ''), query_address))) AS address,
+        COUNT(*) AS count
+      FROM feasibility_jobs
+      WHERE COALESCE(NULLIF(TRIM(analysis_address), ''), query_address) IS NOT NULL
+      GROUP BY address
+      ORDER BY count DESC, address ASC
+      LIMIT ${limit} OFFSET ${offset}
+    `);
+    const rows = (result as any).rows ?? result;
+
+    const totalResult = await db.execute<{ total: string }>(sql`
+      SELECT COUNT(*)::text AS total FROM (
+        SELECT LOWER(TRIM(COALESCE(NULLIF(TRIM(analysis_address), ''), query_address))) AS address
+        FROM feasibility_jobs
+        WHERE COALESCE(NULLIF(TRIM(analysis_address), ''), query_address) IS NOT NULL
+        GROUP BY address
+      ) t
+    `);
+    const totalRows = (totalResult as any).rows ?? totalResult;
+    const total = Number((totalRows[0] as any)?.total ?? 0);
+
+    res.json({
+      total,
+      limit,
+      offset,
+      rows: (rows as any[]).map((r) => ({
+        address: r.address,
+        count: Number(r.count),
+      })),
+    });
+  } catch (err) {
+    req.log.error({ err }, "admin top addresses failed");
+    res.status(500).json({ error: "Failed to load top addresses" });
   }
 });
 

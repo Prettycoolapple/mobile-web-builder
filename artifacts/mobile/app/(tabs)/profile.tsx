@@ -134,12 +134,24 @@ export default function ProfileScreen() {
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
 
+  const specialStatus = user?.specialStatus ?? null;
+  const isFriendsFamily = specialStatus === "friends_family";
+  const isSupercharge = specialStatus === "supercharge";
+  const hasSpecialStatus = isFriendsFamily || isSupercharge;
   const isStandard = user?.subscriptionTier === "pro" || user?.subscriptionTier === "standard";
-  const planLimit = resolveReportLimit(user?.subscriptionTier, user?.role);
+  const planLimit = resolveReportLimit(user?.subscriptionTier, user?.role, specialStatus);
   const usage = user?.reportsUsedThisMonth ?? 0;
   const remaining = planLimit - usage;
   const usagePct = planLimit > 0 ? Math.min((usage / planLimit) * 100, 100) : 100;
   const showWarning = remaining <= 3 && remaining >= 0;
+
+  // Formatted expiry date for Supercharge (e.g. "11/23/2026")
+  const superchargeExpiryLabel = (() => {
+    if (!isSupercharge || !user?.specialStatusExpiresAt) return null;
+    const d = new Date(user.specialStatusExpiresAt);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toLocaleDateString();
+  })();
 
   const role = user?.role ?? "general";
   const primaryLanguage = user?.languages?.[0] ?? null;
@@ -528,18 +540,35 @@ export default function ProfileScreen() {
                   {t("profile.current_plan")}
                 </Text>
                 <Text style={[styles.planName, { color: colors.headerText, fontFamily: "DM_Sans_700Bold" }]}>
-                  {isStandard ? t("profile.standard") : t("profile.free")}
+                  {isFriendsFamily
+                    ? t("profile.friendsFamily")
+                    : isSupercharge
+                    ? t("profile.supercharge")
+                    : isStandard
+                    ? t("profile.standard")
+                    : t("profile.free")}
                 </Text>
+                {isSupercharge && superchargeExpiryLabel && (
+                  <Text style={[styles.planLabel, { color: "rgba(250,250,249,0.45)", fontFamily: "DM_Sans_400Regular", marginTop: 4 }]}>
+                    {t("profile.expiresOn", { date: superchargeExpiryLabel })}
+                  </Text>
+                )}
               </View>
               <View style={[styles.planBadge, {
-                borderColor: isStandard ? colors.accent + "80" : "rgba(250,250,249,0.2)",
-                backgroundColor: isStandard ? colors.accent + "20" : "transparent",
+                borderColor: hasSpecialStatus || isStandard ? colors.accent + "80" : "rgba(250,250,249,0.2)",
+                backgroundColor: hasSpecialStatus || isStandard ? colors.accent + "20" : "transparent",
               }]}>
                 <Text style={[styles.planBadgeText, {
-                  color: isStandard ? colors.accent : "rgba(250,250,249,0.6)",
+                  color: hasSpecialStatus || isStandard ? colors.accent : "rgba(250,250,249,0.6)",
                   fontFamily: "DM_Sans_500Medium",
                 }]}>
-                  {isStandard ? t("profile.standard") : t("profile.free_tier")}
+                  {isFriendsFamily
+                    ? t("profile.friendsFamily")
+                    : isSupercharge
+                    ? t("profile.supercharge")
+                    : isStandard
+                    ? t("profile.standard")
+                    : t("profile.free_tier")}
                 </Text>
               </View>
             </View>
@@ -697,7 +726,7 @@ export default function ProfileScreen() {
         )}
 
         {/* ─── Upgrade card — general user ─── */}
-        {role === "general" && !isStandard && (
+        {role === "general" && !isStandard && !hasSpecialStatus && (
           <>
             <SectionHeader title={t("profile.upgrade_to_standard")} />
             <View style={[styles.proCard, { backgroundColor: colors.card, borderColor: colors.accent + "35" }]}>
@@ -741,7 +770,7 @@ export default function ProfileScreen() {
         )}
 
         {/* ─── Upgrade card — sales agent ─── */}
-        {role === "sales_agent" && !isStandard && (
+        {role === "sales_agent" && !isStandard && !hasSpecialStatus && (
           <>
             <SectionHeader title={t("profile.activate_agent_pro")} />
             <View style={[styles.proCard, { backgroundColor: colors.card, borderColor: colors.accent + "35" }]}>

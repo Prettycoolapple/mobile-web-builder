@@ -44,6 +44,20 @@ export function sanitizeAssistantProse(content: string, locale: Locale = "en"): 
     out = out.replace(/I can (?:connect|introduce|refer) you (?:with|to) (?:a )?(?:Project Alpha )?(?:network )?(?:sales|real estate|listing) agent[^.?!]*[.?!]?/gi, "");
   }
 
+  const genericOutroPatterns = [
+    /^\s*>?\s*(?:以上|以上建议|以上分析|以上内容|上述内容|上述分析)[\s\S]*(?:仅供|不构成|专业建议|专业意见|已签约|服务提供商|Project Alpha)[\s\S]*$/i,
+    /^\s*>?\s*(?:如需|如果您需要|若需要|如果需要)[\s\S]*(?:Project Alpha|已签约|服务提供商|专业人士)[\s\S]*$/i,
+    /^\s*>?\s*(?:The above|This analysis|These estimates|This is based on)[\s\S]*(?:indicative|professional advice|not financial|not investment|Project Alpha|provider database|service provider)[\s\S]*$/i,
+    /^\s*>?\s*(?:If you need|If you'd like|For next steps)[\s\S]*(?:Project Alpha|provider database|service provider|professional advice)[\s\S]*$/i,
+  ];
+  const paragraphs = out.split(/\n{2,}/);
+  while (paragraphs.length > 1) {
+    const last = paragraphs[paragraphs.length - 1].trim();
+    if (!genericOutroPatterns.some((pattern) => pattern.test(last))) break;
+    paragraphs.pop();
+  }
+  out = paragraphs.join("\n\n");
+
   return out.replace(/\n{3,}/g, "\n\n").trim();
 }
 

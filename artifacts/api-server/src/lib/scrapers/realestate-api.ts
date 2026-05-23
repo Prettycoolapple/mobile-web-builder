@@ -422,6 +422,8 @@ function mapListing(raw: RawListing): ListingResult | null {
     price,
     priceText,
     landArea,
+    landAreaSource: landArea != null ? "realestate_api" : "unknown",
+    landAreaConfidence: "unverified",
     photoUrl: photoUrls[0] ?? null,
     photoUrls,
     listingUrl: url,
@@ -1128,6 +1130,12 @@ async function annotateApproxFields(listings: ListingResult[]): Promise<ListingR
       // metadata is closer to what users see on property portals, so prefer it
       // for the card while still marking it approximate.
       const { landArea, landAreaApprox } = reconcileListingLandArea(l.landArea, og.landAreaSqm);
+      const pageHasLandArea = og.landAreaSqm != null;
+      const landAreaSource = pageHasLandArea ? "realestate_page" : (l.landAreaSource ?? (landArea != null ? "realestate_api" : "unknown"));
+      const landAreaConfidence = pageHasLandArea ? "verified" : (l.landAreaConfidence ?? "unverified");
+      const isParentParcelSuspect =
+        l.isParentParcelSuspect ||
+        (pageHasLandArea && l.landArea != null && landAreaApprox);
 
       let priceApprox = false;
       if (l.price != null && og.price != null) {
@@ -1162,6 +1170,9 @@ async function annotateApproxFields(listings: ListingResult[]): Promise<ListingR
       return {
         ...l,
         landArea,
+        landAreaSource,
+        landAreaConfidence,
+        isParentParcelSuspect,
         floorArea,
         bedroomsApprox,
         bathroomsApprox,

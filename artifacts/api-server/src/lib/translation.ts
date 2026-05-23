@@ -156,6 +156,18 @@ async function translateIfString(value: unknown): Promise<unknown> {
   return ensureChinese(value);
 }
 
+function translateInfrastructureNoteIfKnown(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const match = value.match(/^No mapped public (water supply|wastewater|stormwater) service found within (\d+)m of the parcel$/i);
+  if (!match) return null;
+  const service = match[1]!.toLowerCase();
+  const label =
+    service === "water supply" ? "供水" :
+    service === "wastewater" ? "污水" :
+    "雨水";
+  return `在距离该地块${match[2]}米范围内未找到已规划的公共${label}服务`;
+}
+
 export type TranslateReportNarrativeOptions = {
   /**
    * When false, `propertyOverview.titleType` and `schoolZones` user-facing strings
@@ -333,7 +345,7 @@ export async function translateReportNarrative(
       (out.infrastructure as Array<Record<string, unknown>>).map(async (i) => ({
         ...i,
         name: await translateIfString(i.name),
-        note: await translateIfString(i.note),
+        note: translateInfrastructureNoteIfKnown(i.note) ?? (await translateIfString(i.note)),
       })),
     );
   }

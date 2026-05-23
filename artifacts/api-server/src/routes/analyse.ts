@@ -42,6 +42,7 @@ import {
   isDevelopmentDiscoveryIntent,
   isStandardSubdivisionDiscoveryIntent,
 } from "../lib/discovery-intent";
+import { passesStrictStandardSubdivisionScreen } from "../lib/discovery-land-area";
 import {
   makeCacheKey,
   setListingCache,
@@ -225,7 +226,7 @@ export function applyOverviewSnapshot(
 
 function buildDeterministicCostItems(costs: NonNullable<PipelineResult["costs"]>) {
   const cv = costs.land_cv_nzd ?? 0;
-  return [
+  const items = [
     { label: cv > 0 ? "Land (CV)" : "Land (CV — unavailable)", low: cv, high: cv },
     { label: "Demolition", low: costs.demo_low, high: costs.demo_high },
     { label: "Construction", low: costs.construction_low, high: costs.construction_high },
@@ -235,6 +236,10 @@ function buildDeterministicCostItems(costs: NonNullable<PipelineResult["costs"]>
     { label: "Finance (Holding)", low: costs.finance_low, high: costs.finance_high },
     { label: "Contingency", low: costs.contingency_low, high: costs.contingency_high },
   ];
+  if (costs.tdr_ttr_required) {
+    items.splice(4, 0, { label: "TDR/TTR transfer right", low: costs.tdr_ttr_low ?? 0, high: costs.tdr_ttr_high ?? 0 });
+  }
+  return items;
 }
 
 /**
@@ -264,6 +269,15 @@ function appendMultiLotProgrammeRiskIfNeeded(bullets: string[], potentialLots: n
   }
   const en = `Intensive scheme (${potentialLots} potential lots): expect very high upfront capital, a multi-year construction programme, and usually phased unit sales — absorption and holding finance can stretch the timeline so money-weighted and annualised returns are typically lower than for quick single-lot projects.`;
   const zh = `大规模方案（约 ${potentialLots} 个潜在地块）：前期资金投入大、建设周期长，单位销售往往需分期推进，资金占用与市场去化会拉长回收期，资金加权与年化回报通常低于短周期的单地块项目。`;
+  return [...bullets, isZh ? zh : en];
+}
+
+function appendRuralTransferRightRiskIfNeeded(bullets: string[], costs: NonNullable<PipelineResult["costs"]> | null | undefined): string[] {
+  if (!costs?.tdr_ttr_required) return bullets;
+  const isZh = bullets.some((b) => /[\u4e00-\u9fff]/.test(b));
+  if (bullets.some((b) => /TDR|TTR|transferable rural site|transfer[- ]right|转移开发权|转移农村建房权/i.test(b))) return bullets;
+  const en = "Rural/countryside subdivision may require a transferable rural site right (TDR/TTR); availability, price, and Council pathway confirmation can materially affect cost and timing.";
+  const zh = "乡村/生活方式分区分割可能需要 TDR/TTR 转移开发权；其供应、价格及 Council 审批路径确认会显著影响成本与时间。";
   return [...bullets, isZh ? zh : en];
 }
 
@@ -387,6 +401,12 @@ function applyDeterministicPipelineOverrides(
       official_label: merged.contour_text ?? null,
       source: merged.contour_source ?? null,
       slope: deterministicTerrainSlopeText(merged.contour, merged.contour_slope_degrees),
+      steep_area_ratio: merged.contour_steep_area_ratio ?? null,
+      moderate_area_ratio: merged.contour_moderate_area_ratio ?? null,
+      local_slope_p90_degrees: merged.contour_local_slope_p90_degrees ?? null,
+      local_slope_p95_degrees: merged.contour_local_slope_p95_degrees ?? null,
+      sample_count: merged.contour_sample_count ?? null,
+      large_site_terrain_adjusted: merged.large_site_terrain_adjusted ?? false,
     };
   }
 
@@ -453,6 +473,8 @@ function applyDeterministicPipelineOverrides(
       ...existingTerrain,
       retainingCostLow: costs.retaining_low,
       retainingCostHigh: costs.retaining_high,
+      retaining_area_sqm_estimate: costs.retaining_area_sqm_estimate ?? null,
+      large_site_terrain_adjusted: costs.large_site_terrain_adjusted ?? existingTerrain.large_site_terrain_adjusted ?? false,
     };
 
     if (pipelineResult.asbestos_detail) {
@@ -576,7 +598,10 @@ function applyDeterministicPipelineOverrides(
   if (canonYear != null && canonYear > 2000) {
     rs = filterRiskSummaryRemoveAsbestosBullets(rs);
   }
-  rs = appendMultiLotProgrammeRiskIfNeeded(rs, lots?.lots ?? 0);
+  rs = appendRuralTransferRightRiskIfNeeded(
+    appendMultiLotProgrammeRiskIfNeeded(rs, lots?.lots ?? 0),
+    costs,
+  );
 
   const isZhRisks = rs.some((b) => /[\u4e00-\u9fff]/.test(b)) || hadZhRiskIntent;
 
@@ -632,6 +657,7 @@ function buildDeterministicFallbackReport(
       ? `Terrain is classified as ${merged.contour}; earthworks and retaining allowances should follow the measured slope rather than a suburb-level assumption.`
       : "Confirm finished levels, stormwater paths, and service tie-ins early because they can materially affect consent design.",
   ];
+  const finalRiskSeed = appendRuralTransferRightRiskIfNeeded(riskSeed, costs);
 
   const parsed: Record<string, unknown> = {
     address: resolvedAddress,
@@ -675,6 +701,13 @@ function buildDeterministicFallbackReport(
       source: merged.contour_source ?? null,
       retainingCostLow: costs.retaining_low,
       retainingCostHigh: costs.retaining_high,
+      steep_area_ratio: merged.contour_steep_area_ratio ?? null,
+      moderate_area_ratio: merged.contour_moderate_area_ratio ?? null,
+      local_slope_p90_degrees: merged.contour_local_slope_p90_degrees ?? null,
+      local_slope_p95_degrees: merged.contour_local_slope_p95_degrees ?? null,
+      sample_count: merged.contour_sample_count ?? null,
+      retaining_area_sqm_estimate: costs.retaining_area_sqm_estimate ?? null,
+      large_site_terrain_adjusted: costs.large_site_terrain_adjusted ?? merged.large_site_terrain_adjusted ?? false,
     },
     infrastructure: pipelineResult.infrastructure,
     costItems: buildDeterministicCostItems(costs),
@@ -690,7 +723,7 @@ function buildDeterministicFallbackReport(
     transportContext: pipelineResult.transportContext ?? null,
     avg_sale_price: null,
     avgPricePerSqm: null,
-    riskSummary: riskSeed,
+    riskSummary: finalRiskSeed,
     disclaimer: "These are indicative estimates only. Always engage a quantity surveyor, lawyer, and urban planner before making development decisions. Figures in NZD.",
   };
 
@@ -759,7 +792,7 @@ async function resolveNearbySuburbs(suburb: string, max = 5): Promise<string[]> 
 // so that properties best matching the user's intent surface to the top before
 // the final random pick.
 function passesStandardSubdivisionSizeScreen(candidate: PropertyCandidate): boolean {
-  return hasStandardSubdivisionYield(candidate);
+  return hasStandardSubdivisionYield(candidate) && passesStrictStandardSubdivisionScreen(candidate);
 }
 
 function buildDiscoveryCriteriaText(
@@ -2217,6 +2250,7 @@ router.post("/chat", async (req, res) => {
           let dataSource = "realestate.co.nz";
           let prescreenedIntro = "";
           const criteriaLabel = intent.criteria || (wantsDevelopmentDiscovery ? "subdivision/development potential" : "");
+          const strictStandardSubdivision = isStandardSubdivisionDiscoveryIntent(discoveryCriteria);
 
           if (suburb) {
             const streetHint = extractDiscoverStreetHintFromThread(messages, userText, isFollowUp);
@@ -2226,6 +2260,7 @@ router.post("/chat", async (req, res) => {
               pricePlaceholderNzd: wantsDevelopmentDiscovery && !userTextHasPrice
                 ? 3_500_000
                 : Math.max(600_000, Math.round((effectiveMinPrice + effectiveMaxPrice) / 2)),
+              strictStandardSubdivision,
             };
             req.log.info({ streetHint }, "Discovery: street hint for listing order");
 
@@ -2427,8 +2462,11 @@ router.post("/chat", async (req, res) => {
             queueBackgroundScores(
               candidates.map((c) => ({
                 address: c.address,
+                listingUrl: c.listingUrl,
                 price: c.price,
                 landArea: c.landArea,
+                landAreaConfidence: c.landAreaConfidence,
+                isAlreadySubdividedChild: c.isAlreadySubdividedChild,
                 zone: c.zone,
               })),
             );
@@ -2835,7 +2873,14 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
     "slope": ${merged.contour ? `"${contourTxt ? contourTxt : `~${contourSlope ?? "?"}° slope`} — ${merged.contour}"` : "null"},
     "source": ${contourSrc ? `"${contourSrc}"` : "null"},
     "retainingCostLow": ${costs.retaining_low},
-    "retainingCostHigh": ${costs.retaining_high}
+    "retainingCostHigh": ${costs.retaining_high},
+    "steep_area_ratio": ${merged.contour_steep_area_ratio ?? "null"},
+    "moderate_area_ratio": ${merged.contour_moderate_area_ratio ?? "null"},
+    "local_slope_p90_degrees": ${merged.contour_local_slope_p90_degrees ?? "null"},
+    "local_slope_p95_degrees": ${merged.contour_local_slope_p95_degrees ?? "null"},
+    "sample_count": ${merged.contour_sample_count ?? "null"},
+    "retaining_area_sqm_estimate": ${costs.retaining_area_sqm_estimate ?? "null"},
+    "large_site_terrain_adjusted": ${costs.large_site_terrain_adjusted ?? merged.large_site_terrain_adjusted ?? false}
   },
   "infrastructure": [ { "name": "Wastewater|Stormwater|Water Supply", "location": "on-parcel|boundary|neighbour|public-land|unknown", "distance_metres": <number or null>, "estimatedCostLow": <NZD or null>, "estimatedCostHigh": <NZD or null>, "risk": "low|moderate|high", "note": "..." } ],
   "costItems": [
@@ -2843,6 +2888,7 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
     { "label": "Demolition", "low": ${costs.demo_low}, "high": ${costs.demo_high} },
     { "label": "Construction", "low": ${costs.construction_low}, "high": ${costs.construction_high} },
     { "label": "Retaining Walls", "low": ${costs.retaining_low}, "high": ${costs.retaining_high} },
+    { "label": "TDR/TTR transfer right", "low": ${costs.tdr_ttr_low ?? 0}, "high": ${costs.tdr_ttr_high ?? 0} },
     { "label": "Services & Infrastructure", "low": ${costs.services_low}, "high": ${costs.services_high} },
     { "label": "Consents & Professionals", "low": ${costs.consents_low}, "high": ${costs.consents_high} },
     { "label": "Finance (Holding)", "low": ${costs.finance_low}, "high": ${costs.finance_high} },
@@ -3025,6 +3071,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
               pricePlaceholderNzd: wantsDevelopmentSafetyNet
                 ? 3_500_000
                 : Math.max(600_000, Math.round((minPrice + maxPrice) / 2)),
+              strictStandardSubdivision: isStandardSubdivisionDiscoveryIntent(safetyNetCriteria),
             };
             const searchResult = await searchRealEstateListings({
               suburb, minPrice, maxPrice, skipUrls: shownUrls, includeNegotiation,
@@ -3075,7 +3122,15 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
 
               if (discoverCandidates.length > 0) {
                 queueBackgroundScores(
-                  discoverCandidates.map((c) => ({ address: c.address, price: c.price, landArea: c.landArea, zone: c.zone })),
+                  discoverCandidates.map((c) => ({
+                    address: c.address,
+                    listingUrl: c.listingUrl,
+                    price: c.price,
+                    landArea: c.landArea,
+                    landAreaConfidence: c.landAreaConfidence,
+                    isAlreadySubdividedChild: c.isAlreadySubdividedChild,
+                    zone: c.zone,
+                  })),
                 );
                 const aiIntro = content;
                 const payload = JSON.stringify({ candidates: discoverCandidates, isMockData: false, suburb, dataSource: "realestate.co.nz", noListings: false, aiIntro });
@@ -3277,13 +3332,22 @@ router.get("/analyse/card-scores", async (req, res) => {
     : typeof raw === "string"
       ? [raw]
       : [];
+  const rawUrls = req.query.urls;
+  const urls: string[] = Array.isArray(rawUrls)
+    ? (rawUrls as string[])
+    : typeof rawUrls === "string"
+      ? [rawUrls]
+      : [];
 
   if (addresses.length === 0) {
     res.json([]);
     return;
   }
 
-  const results = getCardScores(addresses);
+  const results = getCardScores(addresses.map((address, index) => ({
+    address,
+    listingUrl: urls[index] || null,
+  })));
   res.json(results);
 });
 

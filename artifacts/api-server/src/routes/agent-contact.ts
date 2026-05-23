@@ -4,6 +4,7 @@ import { db, profiles } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { ai } from "@workspace/integrations-gemini-ai";
 import { scrapeListingAgent } from "../lib/scrapers/agent-contact";
+import { hasExplicitAgentContactSignal } from "../lib/agent-contact-intent";
 
 const router: IRouter = Router();
 
@@ -15,6 +16,7 @@ interface Message {
 async function detectAgentContactIntent(messages: Message[]): Promise<boolean> {
   const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
   if (!lastUserMessage?.content?.trim()) return false;
+  if (hasExplicitAgentContactSignal(lastUserMessage.content)) return true;
 
   const recentText = messages
     .slice(-8)

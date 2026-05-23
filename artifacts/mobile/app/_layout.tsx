@@ -74,6 +74,8 @@ function NotificationSetup() {
   const router = useRouter();
   const notificationListener = useRef<Notifications.EventSubscription | null>(null);
   const responseListener = useRef<Notifications.EventSubscription | null>(null);
+  const checkedInitialNotificationRef = useRef(false);
+  const handledNotificationIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!user || !token) return;
@@ -107,8 +109,12 @@ function NotificationSetup() {
 
     registerPushToken();
 
-    const openFromNotificationData = (data: Record<string, unknown> | undefined) => {
+    const openFromNotificationData = (data: Record<string, unknown> | undefined, notificationId?: string) => {
       if (!data || typeof data !== "object") return;
+      if (notificationId) {
+        if (handledNotificationIdsRef.current.has(notificationId)) return;
+        handledNotificationIdsRef.current.add(notificationId);
+      }
       const type = typeof data.type === "string" ? data.type : undefined;
       const threadId = typeof data.threadId === "string" ? data.threadId : undefined;
       if (type === "report_ready") {
@@ -124,13 +130,22 @@ function NotificationSetup() {
     });
 
     responseListener.current = Notifications.addNotificationResponseReceivedListener((response) => {
-      openFromNotificationData(response.notification.request.content.data as Record<string, unknown>);
+      openFromNotificationData(
+        response.notification.request.content.data as Record<string, unknown>,
+        response.notification.request.identifier,
+      );
     });
 
-    Notifications.getLastNotificationResponseAsync().then((response) => {
-      if (!response) return;
-      openFromNotificationData(response.notification.request.content.data as Record<string, unknown>);
-    });
+    if (!checkedInitialNotificationRef.current) {
+      checkedInitialNotificationRef.current = true;
+      Notifications.getLastNotificationResponseAsync().then((response) => {
+        if (!response) return;
+        openFromNotificationData(
+          response.notification.request.content.data as Record<string, unknown>,
+          response.notification.request.identifier,
+        );
+      });
+    }
 
     return () => {
       notificationListener.current?.remove();

@@ -131,6 +131,13 @@ export interface TerrainInfo {
   retainingCostLow?: number;
   retainingCostHigh?: number;
   source?: string;
+  steep_area_ratio?: number | null;
+  moderate_area_ratio?: number | null;
+  local_slope_p90_degrees?: number | null;
+  local_slope_p95_degrees?: number | null;
+  sample_count?: number | null;
+  retaining_area_sqm_estimate?: number | null;
+  large_site_terrain_adjusted?: boolean;
 }
 
 export interface InfrastructureService {
@@ -348,6 +355,8 @@ export interface FeasibilityReport {
    * with the session and cleared when the user deletes the report.
    */
   cachedPhotoUris?: string[];
+  /** Signature of the remote report photo sources used to populate cachedPhotoUris. */
+  cachedPhotoSignature?: string;
 }
 
 export interface PropertyCandidate {
@@ -369,6 +378,10 @@ export interface PropertyCandidate {
   bathroomsApprox?: boolean;
   /** True when listing sources disagreed on land area / price — render as "~503 m²" / "~$1.25M". */
   landAreaApprox?: boolean;
+  landAreaSource?: "realestate_api" | "realestate_page" | "homes" | "linz" | "unknown";
+  landAreaConfidence?: "verified" | "unverified";
+  isParentParcelSuspect?: boolean;
+  isAlreadySubdividedChild?: boolean;
   priceApprox?: boolean;
   /** Floor (dwelling) area in m². */
   floorArea?: number;
@@ -771,8 +784,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const pending: Pending[] = [];
     for (const session of sessions) {
       const collect = (report: FeasibilityReport, messageId: string | null) => {
-        if ((report.cachedPhotoUris?.length ?? 0) > 0) return;
         const sig = reportPhotoSignature(report);
+        if ((report.cachedPhotoUris?.length ?? 0) > 0 && report.cachedPhotoSignature === sig) return;
         const attemptKey = `${session.id}::${messageId ?? "current"}::${sig}`;
         if (photoCacheAttemptsRef.current.has(attemptKey)) return;
         pending.push({ sessionId: session.id, messageId, report, attemptKey });
@@ -804,13 +817,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             const patch = (target: FeasibilityReport): FeasibilityReport => ({
               ...target,
               cachedPhotoUris: uris,
+              cachedPhotoSignature: reportPhotoSignature(item.report),
             });
 
             if (
               item.messageId === null &&
               s.currentReport &&
               reportPhotoSignature(s.currentReport) === reportPhotoSignature(item.report) &&
-              (s.currentReport.cachedPhotoUris?.length ?? 0) === 0
+              s.currentReport.cachedPhotoSignature !== reportPhotoSignature(item.report)
             ) {
               updatedSession = { ...updatedSession, currentReport: patch(s.currentReport) };
               mutated = true;
@@ -819,7 +833,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             if (item.messageId !== null) {
               const newMessages = s.messages.map((m) => {
                 if (m.id !== item.messageId || !m.report) return m;
-                if ((m.report.cachedPhotoUris?.length ?? 0) > 0) return m;
+                if (m.report.cachedPhotoSignature === reportPhotoSignature(item.report)) return m;
                 return { ...m, report: patch(m.report) };
               });
               if (newMessages !== s.messages) {

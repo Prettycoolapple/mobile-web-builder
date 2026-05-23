@@ -26,6 +26,31 @@ export interface ContourResult {
   retaining_cost_high: number;
   source: string;
   elevation_center?: number | null;
+  steep_area_ratio?: number | null;
+  moderate_area_ratio?: number | null;
+  local_slope_p90_degrees?: number | null;
+  local_slope_p95_degrees?: number | null;
+  sample_count?: number | null;
+  large_site_terrain_adjusted?: boolean;
+  retaining_area_sqm_estimate?: number | null;
+}
+
+interface ContourOptions {
+  landAreaSqm?: number | null;
+}
+
+interface TerrainGridSample {
+  x: number;
+  y: number;
+  elev: number;
+}
+
+export interface TerrainProfile {
+  steep_area_ratio: number;
+  moderate_area_ratio: number;
+  local_slope_p90_degrees: number | null;
+  local_slope_p95_degrees: number | null;
+  sample_count: number;
 }
 
 const ZONE_DOMAIN: Record<number, { code: string; description: string; minLot: number | null }> = {
@@ -485,7 +510,7 @@ function parseAscGrid(text: string): { values: number[]; ncols: number; nrows: n
   };
 }
 
-async function fetchElevationViaLinzLiDAR(lat: number, lng: number, parcelBbox?: ParcelBbox | null): Promise<ContourResult | null> {
+async function fetchElevationViaLinzLiDAR(lat: number, lng: number, parcelBbox?: ParcelBbox | null, options?: ContourOptions): Promise<ContourResult | null> {
   const LINZ_API_KEY = process.env["LINZ_API_KEY"];
   if (!LINZ_API_KEY) return null;
 
@@ -546,6 +571,7 @@ async function fetchElevationViaLinzLiDAR(lat: number, lng: number, parcelBbox?:
 
       // Apply point-in-polygon filter if polygon is available
       let values: number[];
+      const terrainSamples: TerrainGridSample[] = [];
       if (parcelBbox?.polygon && parcelBbox.polygon.length >= 3) {
         const filtered: number[] = [];
         const polygon = parcelBbox.polygon;
@@ -555,13 +581,22 @@ async function fetchElevationViaLinzLiDAR(lat: number, lng: number, parcelBbox?:
             const pxLat = grid.yll + (grid.nrows - r - 0.5) * grid.cellsize; // ASC rows top-to-bottom
             if (pointInPolygon(pxLng, pxLat, polygon)) {
               const v = grid.values[r * grid.ncols + c];
-              if (v !== undefined && !isNaN(v)) filtered.push(v);
+              if (v !== undefined && !isNaN(v)) {
+                filtered.push(v);
+                terrainSamples.push({ x: c, y: r, elev: v });
+              }
             }
           }
         }
         values = filtered.length > 0 ? filtered : grid.values;
       } else {
         values = grid.values;
+        for (let r = 0; r < grid.nrows; r++) {
+          for (let c = 0; c < grid.ncols; c++) {
+            const v = grid.values[r * grid.ncols + c];
+            if (v !== undefined && !isNaN(v)) terrainSamples.push({ x: c, y: r, elev: v });
+          }
+        }
       }
 
       const elevMin = Math.min(...values);
@@ -574,11 +609,31 @@ async function fetchElevationViaLinzLiDAR(lat: number, lng: number, parcelBbox?:
       const slopeDeg = longestAxisM > 1 ? Math.atan(elevRange / longestAxisM) * (180 / Math.PI) : 0;
 
       const centerElev = values[Math.floor(values.length / 2)];
+      const xStepM = Math.max(widthM / Math.max(grid.ncols - 1, 1), 1);
+      const yStepM = Math.max(heightM / Math.max(grid.nrows - 1, 1), 1);
+      const profile = terrainProfileFromGridSamples(terrainSamples, xStepM, yStepM);
+      const largeSite = shouldUseLargeSiteTerrainProfile(lat, parcelBbox, options);
+      const classified = withTerrainProfile(
+        classifySlope(slopeDeg, `LINZ LiDAR 1m DEM (layer ${layerId})`, centerElev),
+        profile,
+        largeSite,
+      );
+
       logger.info(
-        { layerId, ncols, nrows, pixels: values.length, elevMin: elevMin.toFixed(1), elevMax: elevMax.toFixed(1), elevRangeFull: elevRangeFull.toFixed(1), elevRangeRobust: elevRange.toFixed(1), slopeDeg: slopeDeg.toFixed(1) },
+        {
+          layerId, ncols, nrows, pixels: values.length,
+          elevMin: elevMin.toFixed(1), elevMax: elevMax.toFixed(1),
+          elevRangeFull: elevRangeFull.toFixed(1), elevRangeRobust: elevRange.toFixed(1),
+          slopeDeg: slopeDeg.toFixed(1),
+          steepAreaRatio: profile?.steep_area_ratio ?? null,
+          moderateAreaRatio: profile?.moderate_area_ratio ?? null,
+          p90Slope: profile?.local_slope_p90_degrees ?? null,
+          largeSite,
+          adjusted: classified.large_site_terrain_adjusted ?? false,
+        },
         "LINZ LiDAR WCS: elevation retrieved",
       );
-      return classifySlope(slopeDeg, `LINZ LiDAR 1m DEM (layer ${layerId})`, centerElev);
+      return classified;
     } catch (err) {
       logger.debug({ layerId, err: (err as Error).message }, "LINZ WCS layer attempt failed");
     }
@@ -687,7 +742,127 @@ function pointInPolygon(lng: number, lat: number, ring: [number, number][]): boo
   return inside;
 }
 
-async function fetchElevationViaTerrarium(lat: number, lng: number, parcelBbox?: ParcelBbox | null): Promise<ContourResult | null> {
+function clampRatio(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
+}
+
+function percentile(values: number[], p: number): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((sorted.length - 1) * p)));
+  return sorted[idx] ?? null;
+}
+
+export function summarizeTerrainSlopeDistribution(slopesDeg: number[], sampleCount: number): TerrainProfile | null {
+  const slopes = slopesDeg.filter((s) => Number.isFinite(s) && s >= 0);
+  if (slopes.length < 5 || sampleCount < 8) return null;
+  const steepCount = slopes.filter((s) => s >= 20).length;
+  const moderateCount = slopes.filter((s) => s >= 12 && s < 20).length;
+  const p90 = percentile(slopes, 0.9);
+  const p95 = percentile(slopes, 0.95);
+  return {
+    steep_area_ratio: Math.round(clampRatio(steepCount / slopes.length) * 1000) / 1000,
+    moderate_area_ratio: Math.round(clampRatio(moderateCount / slopes.length) * 1000) / 1000,
+    local_slope_p90_degrees: p90 == null ? null : Math.round(p90 * 10) / 10,
+    local_slope_p95_degrees: p95 == null ? null : Math.round(p95 * 10) / 10,
+    sample_count: sampleCount,
+  };
+}
+
+function terrainProfileFromGridSamples(
+  samples: TerrainGridSample[],
+  xStepM: number,
+  yStepM: number,
+): TerrainProfile | null {
+  if (samples.length < 8 || xStepM <= 0 || yStepM <= 0) return null;
+
+  const sampleByPixel = new Map<string, number>();
+  for (const sample of samples) {
+    sampleByPixel.set(`${sample.x},${sample.y}`, sample.elev);
+  }
+
+  const gradients: number[] = [];
+  const neighbours: Array<[number, number, number]> = [
+    [1, 0, xStepM],
+    [0, 1, yStepM],
+    [1, 1, Math.hypot(xStepM, yStepM)],
+    [1, -1, Math.hypot(xStepM, yStepM)],
+  ];
+
+  for (const sample of samples) {
+    for (const [dx, dy, distM] of neighbours) {
+      const other = sampleByPixel.get(`${sample.x + dx},${sample.y + dy}`);
+      if (other == null || distM <= 0) continue;
+      gradients.push(Math.atan(Math.abs(sample.elev - other) / distM) * (180 / Math.PI));
+    }
+  }
+
+  return summarizeTerrainSlopeDistribution(gradients, samples.length);
+}
+
+function parcelBboxAreaSqm(lat: number, parcelBbox?: ParcelBbox | null): number | null {
+  if (!parcelBbox) return null;
+  const widthM = Math.max(0, (parcelBbox.maxLng - parcelBbox.minLng) * 111320 * Math.cos((lat * Math.PI) / 180));
+  const heightM = Math.max(0, (parcelBbox.maxLat - parcelBbox.minLat) * 111320);
+  const area = widthM * heightM;
+  return Number.isFinite(area) && area > 0 ? area : null;
+}
+
+function shouldUseLargeSiteTerrainProfile(
+  lat: number,
+  parcelBbox: ParcelBbox | null | undefined,
+  options?: ContourOptions,
+): boolean {
+  const landArea = options?.landAreaSqm ?? null;
+  if (landArea != null && landArea >= 10_000) return true;
+  const bboxArea = parcelBboxAreaSqm(lat, parcelBbox);
+  return bboxArea != null && bboxArea >= 10_000;
+}
+
+function withTerrainProfile(
+  result: ContourResult,
+  profile: TerrainProfile | null,
+  largeSite: boolean,
+): ContourResult {
+  if (!profile) return result;
+
+  let slope = result.slope_degrees ?? 0;
+  let classification = result.classification;
+  let adjusted = false;
+
+  if (largeSite) {
+    const steepSignal = profile.steep_area_ratio >= 0.08 || (profile.local_slope_p90_degrees ?? 0) >= 20;
+    const moderateSignal =
+      steepSignal ||
+      profile.steep_area_ratio + profile.moderate_area_ratio >= 0.20 ||
+      (profile.local_slope_p90_degrees ?? 0) >= 12;
+
+    if (steepSignal && classification !== "steep") {
+      classification = "steep";
+      slope = Math.max(slope, profile.local_slope_p90_degrees ?? 20);
+      adjusted = true;
+    } else if (moderateSignal && (classification === "flat" || classification === "gentle" || classification == null)) {
+      classification = "moderate";
+      slope = Math.max(slope, profile.local_slope_p90_degrees ?? 12);
+      adjusted = true;
+    }
+  }
+
+  return {
+    ...result,
+    slope_degrees: Math.round(slope * 10) / 10,
+    classification,
+    steep_area_ratio: profile.steep_area_ratio,
+    moderate_area_ratio: profile.moderate_area_ratio,
+    local_slope_p90_degrees: profile.local_slope_p90_degrees,
+    local_slope_p95_degrees: profile.local_slope_p95_degrees,
+    sample_count: profile.sample_count,
+    large_site_terrain_adjusted: adjusted,
+  };
+}
+
+async function fetchElevationViaTerrarium(lat: number, lng: number, parcelBbox?: ParcelBbox | null, options?: ContourOptions): Promise<ContourResult | null> {
   const ZOOM = 15; // ~3.8m per pixel for Auckland — backed by Mapzen/LINZ 1m NZ LiDAR
   const { tileX, tileY, px, py, pixelSizeM } = terrariumTileCoords(lat, lng, ZOOM);
   const url = `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${ZOOM}/${tileX}/${tileY}.png`;
@@ -777,35 +952,12 @@ async function fetchElevationViaTerrarium(lat: number, lng: number, parcelBbox?:
   const elevMin = Math.min(...elevs);
   const elevMax = Math.max(...elevs);
   const elevRange = robustElevationSpreadM(elevs);
-  let localSlopeDeg: number | null = null;
-
-  if (parcelBbox && elevSamples.length >= 8) {
-    const sampleByPixel = new Map<string, number>();
-    for (const sample of elevSamples) {
-      sampleByPixel.set(`${sample.tPx},${sample.tPy}`, sample.elev);
-    }
-
-    const gradients: number[] = [];
-    const neighbours: Array<[number, number, number]> = [
-      [1, 0, pixelSizeM],
-      [0, 1, pixelSizeM],
-      [1, 1, pixelSizeM * Math.SQRT2],
-      [1, -1, pixelSizeM * Math.SQRT2],
-    ];
-    for (const sample of elevSamples) {
-      for (const [dx, dy, distM] of neighbours) {
-        const other = sampleByPixel.get(`${sample.tPx + dx},${sample.tPy + dy}`);
-        if (other == null || distM <= 0) continue;
-        gradients.push(Math.abs(sample.elev - other) / distM);
-      }
-    }
-
-    if (gradients.length >= 5) {
-      gradients.sort((a, b) => a - b);
-      const p90Gradient = gradients[Math.floor((gradients.length - 1) * 0.9)] ?? 0;
-      localSlopeDeg = Math.atan(p90Gradient) * (180 / Math.PI);
-    }
-  }
+  const profile = terrainProfileFromGridSamples(
+    elevSamples.map((s) => ({ x: s.tPx, y: s.tPy, elev: s.elev })),
+    pixelSizeM,
+    pixelSizeM,
+  );
+  const localSlopeDeg = profile?.local_slope_p90_degrees ?? null;
 
   // Use the same "relief / longest parcel axis" model as LINZ WCS when we have a
   // parcel bbox — avoids tiny horizontal distances between unrelated min/max pixels
@@ -835,6 +987,13 @@ async function fetchElevationViaTerrarium(lat: number, lng: number, parcelBbox?:
     Math.min(Math.max(py, 0), png.height - 1),
   ));
 
+  const largeSite = shouldUseLargeSiteTerrainProfile(lat, parcelBbox, options);
+  const classified = withTerrainProfile(
+    classifySlope(slopeDeg, "LINZ parcel polygon + 1m NZ LiDAR terrain tiles", centerElev),
+    profile,
+    largeSite,
+  );
+
   logger.info(
     {
       lat, lng, samplingMode, pixelCount: elevSamples.length,
@@ -843,11 +1002,15 @@ async function fetchElevationViaTerrarium(lat: number, lng: number, parcelBbox?:
       reliefSlopeDeg: reliefSlopeDeg.toFixed(1),
       localSlopeDeg: localSlopeDeg?.toFixed(1) ?? null,
       slopeDeg: slopeDeg.toFixed(1), pixelSizeM: pixelSizeM.toFixed(2),
+      steepAreaRatio: profile?.steep_area_ratio ?? null,
+      moderateAreaRatio: profile?.moderate_area_ratio ?? null,
+      largeSite,
+      adjusted: classified.large_site_terrain_adjusted ?? false,
     },
     "Terrarium tiles: slope measurement complete",
   );
 
-  return classifySlope(slopeDeg, "LINZ parcel polygon + 1m NZ LiDAR terrain tiles", centerElev);
+  return classified;
 }
 
 function slopeFromGrid9(elevations: number[], offsetDeg: number): { slopeDeg: number; centerElevation: number } {
@@ -866,7 +1029,7 @@ function slopeFromGrid9(elevations: number[], offsetDeg: number): { slopeDeg: nu
   return { slopeDeg: Math.max(slopeDegCorner, slopeDegAdjacent), centerElevation };
 }
 
-async function fetchElevationViaOpenTopoData(lat: number, lng: number, parcelBbox?: ParcelBbox | null): Promise<ContourResult | null> {
+async function fetchElevationViaOpenTopoData(lat: number, lng: number, parcelBbox?: ParcelBbox | null, options?: ContourOptions): Promise<ContourResult | null> {
   // Strategy: if we have the parcel polygon bbox from LINZ, sample uniformly across it.
   // This captures the lowest and highest contour within the actual parcel — even for elongated
   // hillside properties where the geocoded point (road frontage) sits at the top and the
@@ -960,11 +1123,34 @@ async function fetchElevationViaOpenTopoData(lat: number, lng: number, parcelBbo
     }
     const slopeDeg = Math.atan(maxGrad) * (180 / Math.PI);
 
+    const terrainSamples: TerrainGridSample[] = [];
+    for (let r = 0; r < GRID_COLS; r++) {
+      for (let c = 0; c < GRID_COLS; c++) {
+        const idx = r * GRID_COLS + c;
+        const elev = elevs[idx];
+        if (elev != null && Number.isFinite(elev)) terrainSamples.push({ x: c, y: r, elev });
+      }
+    }
+    const profile = terrainProfileFromGridSamples(terrainSamples, colStepM, rowStepM);
+    const largeSite = shouldUseLargeSiteTerrainProfile(lat, parcelBbox, options);
+    const classified = withTerrainProfile(
+      classifySlope(slopeDeg, "Auckland Council / LINZ NZ 8m DEM", centerElevation),
+      profile,
+      largeSite,
+    );
+
     logger.info(
-      { lat, lng, centerElevation, elevMin, elevMax, elevRange: elevRange.toFixed(1), slopeDeg: slopeDeg.toFixed(1), maxGradPct: (maxGrad*100).toFixed(1), gridLabel },
+      {
+        lat, lng, centerElevation, elevMin, elevMax, elevRange: elevRange.toFixed(1),
+        slopeDeg: slopeDeg.toFixed(1), maxGradPct: (maxGrad*100).toFixed(1), gridLabel,
+        steepAreaRatio: profile?.steep_area_ratio ?? null,
+        moderateAreaRatio: profile?.moderate_area_ratio ?? null,
+        largeSite,
+        adjusted: classified.large_site_terrain_adjusted ?? false,
+      },
       "OpenTopoData nzdem8m: slope measurement complete"
     );
-    return classifySlope(slopeDeg, "Auckland Council / LINZ NZ 8m DEM", centerElevation);
+    return classified;
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "OpenTopoData nzdem8m failed — falling back to SRTM30m broad grid");
   }
@@ -988,7 +1174,19 @@ async function fetchElevationViaOpenTopoData(lat: number, lng: number, parcelBbo
   const { slopeDeg, centerElevation } = slopeFromGrid9(elevations, BROAD_OFFSET);
 
   logger.info({ lat, lng, centerElevation, elevations, slopeDeg }, "OpenTopoData SRTM30m broad fallback: raw values");
-  return classifySlope(slopeDeg, "Open-Topo-Data (SRTM 30m, broad grid)", centerElevation);
+  const terrainSamples: TerrainGridSample[] = [];
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < 3; c++) {
+      const elev = elevations[r * 3 + c];
+      if (elev != null && Number.isFinite(elev)) terrainSamples.push({ x: c, y: r, elev });
+    }
+  }
+  const profile = terrainProfileFromGridSamples(terrainSamples, BROAD_OFFSET * 111320, BROAD_OFFSET * 111320);
+  return withTerrainProfile(
+    classifySlope(slopeDeg, "Open-Topo-Data (SRTM 30m, broad grid)", centerElevation),
+    profile,
+    shouldUseLargeSiteTerrainProfile(lat, parcelBbox, options),
+  );
 }
 
 async function fetchElevationViaOpenElevation(lat: number, lng: number): Promise<ContourResult | null> {
@@ -1262,7 +1460,10 @@ async function applyContourUpgrade(result: ContourResult, lat: number, lng: numb
   const check = await checkLinzContoursForSlope(lat, lng, parcelBbox, srtmSlope).catch(() => null);
   if (!check || check.upgradedSlope <= srtmSlope + 0.5) return result; // no meaningful upgrade
 
-  const upgraded = classifySlope(check.upgradedSlope, `${result.source} + LINZ topo contours`, result.elevation_center ?? undefined);
+  const upgraded = {
+    ...result,
+    ...classifySlope(check.upgradedSlope, `${result.source} + LINZ topo contours`, result.elevation_center ?? undefined),
+  };
   logger.info(
     { original: srtmSlope.toFixed(1), upgraded: check.upgradedSlope.toFixed(1), contoursFound: check.contoursFound },
     "Slope upgraded via LINZ contour cross-check",
@@ -1270,7 +1471,7 @@ async function applyContourUpgrade(result: ContourResult, lat: number, lng: numb
   return upgraded;
 }
 
-async function fetchContourOnce(lat: number, lng: number, parcelBbox?: ParcelBbox | null): Promise<ContourResult> {
+async function fetchContourOnce(lat: number, lng: number, parcelBbox?: ParcelBbox | null, options?: ContourOptions): Promise<ContourResult> {
   // Use measured DEM output, with the 20m LINZ topo contour layer as an
   // upgrade-only guard. It never lowers a result; it only catches hillside
   // parcels where a smoothed DEM average underestimates the real site contour.
@@ -1279,7 +1480,7 @@ async function fetchContourOnce(lat: number, lng: number, parcelBbox?: ParcelBbo
 
   // 1. LINZ LiDAR 1m DEM via WCS — the exact dataset used by Auckland Council GIS.
   try {
-    const result = await fetchElevationViaLinzLiDAR(lat, lng, parcelBbox);
+    const result = await fetchElevationViaLinzLiDAR(lat, lng, parcelBbox, options);
     if (result) return result; // LiDAR is already accurate — no contour upgrade needed
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "LINZ LiDAR WCS failed — trying Terrarium tiles");
@@ -1287,7 +1488,7 @@ async function fetchContourOnce(lat: number, lng: number, parcelBbox?: ParcelBbo
 
   // 2. AWS Terrarium terrain tiles — public, no key, ~3.8m resolution.
   try {
-    const result = await fetchElevationViaTerrarium(lat, lng, parcelBbox);
+    const result = await fetchElevationViaTerrarium(lat, lng, parcelBbox, options);
     if (result) return measured(result);
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "Terrarium tiles failed — trying OpenTopoData");
@@ -1295,7 +1496,7 @@ async function fetchContourOnce(lat: number, lng: number, parcelBbox?: ParcelBbo
 
   // 3. Open-Topo-Data NZ 8m DEM — free, no key, NZ-specific, and parcel-aware.
   try {
-    const result = await fetchElevationViaOpenTopoData(lat, lng, parcelBbox);
+    const result = await fetchElevationViaOpenTopoData(lat, lng, parcelBbox, options);
     if (result) return measured(result);
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "OpenTopoData query failed");
@@ -1359,12 +1560,12 @@ async function fetchContourOnce(lat: number, lng: number, parcelBbox?: ParcelBbo
 // unanimous, a fresh round is started — up to MAX_ROUNDS total. After the final
 // round, the classification that appeared most often across all runs is used.
 // Running in parallel keeps the added latency to ≈1× rather than 3× per round.
-export async function fetchContour(lat: number, lng: number, parcelBbox?: ParcelBbox | null): Promise<ContourResult> {
+export async function fetchContour(lat: number, lng: number, parcelBbox?: ParcelBbox | null, options?: ContourOptions): Promise<ContourResult> {
   // Deterministic source order beats parallel "winner" races here. Each run now
   // uses the first available measured DEM source for the parcel, so a report
   // cannot vary because one parallel sample timed out and another fell through
   // to a coarser fallback.
-  return fetchContourOnce(lat, lng, parcelBbox);
+  return fetchContourOnce(lat, lng, parcelBbox, options);
 
   const MAX_ROUNDS = 3;
   const SAMPLES_PER_ROUND = 3;
@@ -1378,7 +1579,7 @@ export async function fetchContour(lat: number, lng: number, parcelBbox?: Parcel
     const timed = new Promise<ContourResult | null>((resolve) => {
       setTimeout(() => resolve(null), timeoutMs);
     });
-    const task = fetchContourOnce(lat, lng, parcelBbox)
+    const task = fetchContourOnce(lat, lng, parcelBbox, options)
       .then((result) => result)
       .catch((err) => {
         logger.warn({ err: (err as Error).message, round, sampleIdx }, "fetchContourOnce threw during consensus sample");

@@ -617,6 +617,28 @@ router.post("/login", async (req, res) => {
       profile.messagesUsedThisMonth = 0;
     }
 
+    // Auto-revert expired Supercharge status so /login response reflects reality
+    let effectiveSpecialStatus = profile.specialStatus;
+    let effectiveSpecialStatusExpiresAt = profile.specialStatusExpiresAt;
+    if (
+      effectiveSpecialStatus === "supercharge" &&
+      effectiveSpecialStatusExpiresAt &&
+      now >= effectiveSpecialStatusExpiresAt
+    ) {
+      void (async () => {
+        try {
+          await db
+            .update(profiles)
+            .set({ specialStatus: null, specialStatusExpiresAt: null })
+            .where(eq(profiles.id, profile.id));
+        } catch {
+          // non-critical; next /me request will retry
+        }
+      })();
+      effectiveSpecialStatus = null;
+      effectiveSpecialStatusExpiresAt = null;
+    }
+
     const token = signToken(profile.id, profile.email, profile.role);
     recordLoginEvent(profile.id);
     res.json({
@@ -633,6 +655,8 @@ router.post("/login", async (req, res) => {
         messagesUsedThisMonth: profile.messagesUsedThisMonth,
         avatarUrl: profile.avatarUrl,
         isVerified: profile.isVerified,
+        specialStatus: effectiveSpecialStatus,
+        specialStatusExpiresAt: effectiveSpecialStatusExpiresAt,
       },
     });
   } catch (error) {
@@ -660,6 +684,8 @@ router.get("/me", requireAuth, async (req, res) => {
         createdAt: profiles.createdAt,
         avatarUrl: profiles.avatarUrl,
         isVerified: profiles.isVerified,
+        specialStatus: profiles.specialStatus,
+        specialStatusExpiresAt: profiles.specialStatusExpiresAt,
         discipline: serviceProviderProfiles.discipline,
       })
       .from(profiles)
@@ -687,6 +713,26 @@ router.get("/me", requireAuth, async (req, res) => {
         .where(eq(profiles.id, userId));
       profile.reportsUsedThisMonth = 0;
       profile.messagesUsedThisMonth = 0;
+    }
+
+    // Auto-revert expired Supercharge status so the mobile UI never lies
+    if (
+      profile.specialStatus === "supercharge" &&
+      profile.specialStatusExpiresAt &&
+      now >= profile.specialStatusExpiresAt
+    ) {
+      void (async () => {
+        try {
+          await db
+            .update(profiles)
+            .set({ specialStatus: null, specialStatusExpiresAt: null })
+            .where(eq(profiles.id, userId));
+        } catch {
+          // non-critical; next request will retry
+        }
+      })();
+      profile.specialStatus = null;
+      profile.specialStatusExpiresAt = null;
     }
 
     res.json({ user: profile });

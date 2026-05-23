@@ -44,6 +44,13 @@ const RESIDENTIAL_ZONES_WITH_JOINT_CONSENT = new Set([
   "MHS", "MHU", "THAB", "SHZ", "LDRZ", "LLRZ",
 ]);
 
+const RURAL_TRANSFER_RIGHT_ZONES = new Set(["CLZ", "LLRZ", "RCSZ", "RUR"]);
+
+function ruralTransferRightNote(zone_code: string | null, lots: number): string | null {
+  if (!zone_code || lots < 2 || !RURAL_TRANSFER_RIGHT_ZONES.has(zone_code.toUpperCase())) return null;
+  return "Because this is a rural/countryside-style subdivision, creating extra titles may require a transferable rural site right (TDR/TTR) under Auckland Unitary Plan rural subdivision rules. The report includes an indicative allowance for each additional title, but a planner/surveyor must confirm the exact pathway and availability.";
+}
+
 export interface SubdivisionPathwayNote {
   /** One-liner used in Property Overview scorecard area */
   headline: string;
@@ -93,9 +100,13 @@ export function buildSubdivisionPathwayNote(
   const supportsJointConsent = RESIDENTIAL_ZONES_WITH_JOINT_CONSENT.has(zone_code ?? "");
 
   if (lots >= vacantLotsNeeded) {
+    const transferRightNote = ruralTransferRightNote(zone_code, lots);
     return {
-      headline: `${lots} lots feasible under standard vacant-lot rules (${zone_label}, min ${min_lot_sqm}m²/lot).`,
-      detail: `The site (${net_area_sqm}m² net) is large enough to create ${lots} independent titles as vacant sections under Auckland Unitary Plan standard rules — each lot would be at least ${min_lot_sqm}m². A surveyor and resource consent are still required.`,
+      headline: `${lots} lots feasible under standard vacant-lot rules (${zone_label}, min ${min_lot_sqm}m²/lot).${transferRightNote ? " TDR/TTR transfer-right allowance may apply." : ""}`,
+      detail: [
+        `The site (${net_area_sqm}m² net) is large enough to create ${lots} independent titles as vacant sections under Auckland Unitary Plan standard rules — each lot would be at least ${min_lot_sqm}m². A surveyor and resource consent are still required.`,
+        transferRightNote,
+      ].filter(Boolean).join(" "),
       standard_path_viable: true,
     };
   }

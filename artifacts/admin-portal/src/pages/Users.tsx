@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { apiGet, apiPatch } from "@/lib/api";
 import { formatDate, relativeTime } from "@/lib/format";
 
@@ -185,7 +186,11 @@ export default function UsersPage() {
               <tbody>
                 {rows.map((u) => (
                   <tr key={u.id}>
-                    <td>{u.email}</td>
+                    <td>
+                      <Link to={`/users/${u.id}`} style={{ color: "var(--accent, #2563eb)", textDecoration: "none" }}>
+                        {u.email}
+                      </Link>
+                    </td>
                     <td>{u.fullName ?? "—"}</td>
                     <td>
                       <span className="badge role">{u.role}</span>

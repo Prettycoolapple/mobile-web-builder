@@ -208,6 +208,10 @@ function makeHoldExistingCostBreakdown(base: CostBreakdown, units: number): Cost
     retaining_low: 0,
     retaining_high: 0,
     retaining_unknown: base.retaining_unknown,
+    tdr_ttr_low: 0,
+    tdr_ttr_high: 0,
+    tdr_ttr_required: false,
+    tdr_ttr_note: null,
     services_low: 0,
     services_high: 0,
     construction_low: 0,
@@ -257,6 +261,10 @@ function makeRefurbishCostBreakdown(
     retaining_low: 0,
     retaining_high: 0,
     retaining_unknown: base.retaining_unknown,
+    tdr_ttr_low: 0,
+    tdr_ttr_high: 0,
+    tdr_ttr_required: false,
+    tdr_ttr_note: null,
     services_low: 0,
     services_high: 0,
     construction_low: r(refurbLow),
@@ -286,6 +294,7 @@ function costItemsForStrategy(id: DevelopmentStrategyId, costs: CostBreakdown): 
       { label: "Demolition", low: costs.demo_low, high: costs.demo_high },
       { label: "Construction", low: costs.construction_low, high: costs.construction_high },
       { label: "Retaining Walls", low: costs.retaining_low, high: costs.retaining_high },
+      { label: "TDR/TTR transfer right", low: costs.tdr_ttr_low, high: costs.tdr_ttr_high },
       { label: "Services & Infrastructure", low: costs.services_low, high: costs.services_high },
     );
   } else if (id === "refurbish") {
@@ -306,10 +315,68 @@ function existingDwellingValue(data: MergedPropertyData, avgSalePrice: number, a
   return r(Math.max(cvFloor, avgSalePrice, floorBased));
 }
 
-function statusFor(id: DevelopmentStrategyId, assessment: DevelopmentStrategyAssessment, scenarios: ROIScenario[]): DevelopmentStrategyRecommendationStatus {
-  if (id === assessment.recommended_strategy) return "recommended";
-  if (scenarios.some((scenario) => scenario.viable)) return "viable";
+function hasViableReturn(scenarios: ROIScenario[]): boolean {
+  return scenarios.some((scenario) => scenario.viable || scenario.cases.some((c) => c.viable));
+}
+
+function bestBaseAnnualisedReturn(scenarios: ROIScenario[]): number | null {
+  let best: number | null = null;
+  for (const scenario of scenarios) {
+    const baseCase = scenario.cases.find((c) => c.case === "base");
+    const annualised = baseCase?.annualised_roi_percent ?? scenario.annualised_roi_percent;
+    if (Number.isFinite(annualised)) {
+      best = best == null ? annualised : Math.max(best, annualised);
+    }
+  }
+  return best;
+}
+
+function selectRoiBackedRecommendation(
+  strategies: DevelopmentStrategyScenario[],
+  fallback: DevelopmentStrategyId,
+): DevelopmentStrategyId {
+  const scored = strategies
+    .map((strategy) => ({
+      id: strategy.id,
+      score: bestBaseAnnualisedReturn(strategy.roiScenarios),
+      viable: hasViableReturn(strategy.roiScenarios),
+      totalCostMid: (strategy.totalCostLow + strategy.totalCostHigh) / 2,
+      fallbackMatch: strategy.id === fallback,
+    }))
+    .filter((strategy): strategy is typeof strategy & { score: number } => strategy.score != null);
+
+  if (scored.length === 0) return fallback;
+
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if (a.viable !== b.viable) return a.viable ? -1 : 1;
+    if (a.fallbackMatch !== b.fallbackMatch) return a.fallbackMatch ? -1 : 1;
+    return a.totalCostMid - b.totalCostMid;
+  });
+
+  return scored[0].id;
+}
+
+function roiAlignedStatus(id: DevelopmentStrategyId, recommendedId: DevelopmentStrategyId, scenarios: ROIScenario[]): DevelopmentStrategyRecommendationStatus {
+  if (id === recommendedId) return "recommended";
+  if (hasViableReturn(scenarios)) return "viable";
   return "not_recommended";
+}
+
+function appendRoiSelectionReason(
+  strategy: DevelopmentStrategyScenario,
+  roiRecommendedId: DevelopmentStrategyId,
+  assessmentRecommendedId: DevelopmentStrategyId,
+): DevelopmentStrategyScenario {
+  if (strategy.id !== roiRecommendedId || roiRecommendedId === assessmentRecommendedId) return strategy;
+
+  return {
+    ...strategy,
+    rationale: `${strategy.rationale} The computed ROI scenarios currently rank this option ahead of ${STRATEGY_TITLES[assessmentRecommendedId].toLowerCase()}.`,
+    rationale_zh: strategy.rationale_zh
+      ? `${strategy.rationale_zh} 当前 ROI 测算显示，该方案优于${STRATEGY_TITLES[assessmentRecommendedId].toLowerCase()}。`
+      : strategy.rationale_zh,
+  };
 }
 
 function buildAssumptions(
@@ -339,6 +406,9 @@ function buildAssumptions(
     assumptions.push(
       `${n} potential lot${n === 1 ? "" : "s"} / new dwelling${n === 1 ? "" : "s"} modelled; construction, consents, finance, and contingency scale with the dwelling count.`,
     );
+    if (data.zone_code && ["CLZ", "LLRZ", "RCSZ", "RUR"].includes(data.zone_code.toUpperCase()) && n > 1) {
+      assumptions.push("Rural/countryside title creation may require a transferable rural site right (TDR/TTR); allowance is included for each additional title and must be confirmed at resource consent stage.");
+    }
   }
   if (intensiveMultiLot) {
     assumptions.push(
@@ -422,7 +492,7 @@ export function calculateDevelopmentStrategies(params: {
     { id: "demolish_rebuild", costs: rebuildCosts, gdv: rebuildValue, units: lotResult.lots, sqmPerLot: lotResult.sqm_per_lot, gdvPerLot: rebuildGdvPerLot },
   ];
 
-  return rows.map((row) => {
+  const strategies = rows.map((row) => {
     const roiScenarios = hasComparablePricing && row.gdv > 0
       ? calculateScenariosFromGdv(row.costs, row.gdv, row.units, row.sqmPerLot, row.gdvPerLot, interestRateOutlook)
       : [];
@@ -433,7 +503,7 @@ export function calculateDevelopmentStrategies(params: {
     return {
       id: row.id,
       title: row.id === "demolish_rebuild" && !hasDwelling ? "Build new dwelling(s)" : STRATEGY_TITLES[row.id],
-      recommendation: statusFor(row.id, effectiveAssessment, roiScenarios),
+      recommendation: "not_recommended" as DevelopmentStrategyRecommendationStatus,
       confidence,
       rationale: effectiveAssessment.strategy_rationales[row.id] ?? fallbackRationale(row.id, data, lotResult),
       rationale_zh: effectiveAssessment.strategy_rationales_zh?.[row.id] ?? fallbackRationaleZh(row.id, data, lotResult),
@@ -457,4 +527,15 @@ export function calculateDevelopmentStrategies(params: {
       roiScenarios,
     };
   });
+
+  const roiRecommendedId = selectRoiBackedRecommendation(strategies, effectiveAssessment.recommended_strategy);
+
+  return strategies.map((strategy) => appendRoiSelectionReason(
+    {
+      ...strategy,
+      recommendation: roiAlignedStatus(strategy.id, roiRecommendedId, strategy.roiScenarios),
+    },
+    roiRecommendedId,
+    effectiveAssessment.recommended_strategy,
+  ));
 }

@@ -212,7 +212,6 @@ function getReportPhotoUrls(report: Report): string[] {
   const cached = (report.cachedPhotoUris ?? []).filter(
     (uri): uri is string => typeof uri === "string" && uri.length > 0,
   );
-  if (cached.length > 0) return withFallbacks(cached);
 
   const remote = Array.from(
     new Set(
@@ -224,8 +223,10 @@ function getReportPhotoUrls(report: Report): string[] {
   );
   if (remote.length > 0) {
     const proxied = remote.map((u) => (u.startsWith("file://") ? u : viaImageProxy(u)));
-    return withFallbacks(proxied);
+    return withFallbacks([...proxied, ...cached.filter((uri) => !proxied.includes(uri))]);
   }
+
+  if (cached.length > 0) return withFallbacks(cached);
 
   if (!address) return [];
   return withFallbacks([]);
@@ -877,6 +878,14 @@ function ContourCard({ terrain, colors }: { report: Report; terrain: NonNullable
           colors={colors}
         />
       )}
+      {terrain.large_site_terrain_adjusted && (
+        <View style={[styles.warningBox, { backgroundColor: colors.amber + "12", borderColor: colors.amber + "30" }]}>
+          <Feather name="info" size={13} color={colors.amber} />
+          <Text style={{ color: colors.amber, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1, lineHeight: 17 }}>
+            {t("report.terrain_large_site_note")}
+          </Text>
+        </View>
+      )}
       {(cls === "steep" || cls === "moderate") && (
         <View style={[styles.warningBox, { backgroundColor: terrainColor + "12", borderColor: terrainColor + "30" }]}>
           <Feather name="alert-triangle" size={13} color={terrainColor} />
@@ -975,6 +984,7 @@ const COST_LABEL_KEY_MAP: Record<string, string> = {
   "construction":                "report.cost_label.construction",
   "retaining walls":             "report.cost_label.retaining_walls",
   "retaining wall":              "report.cost_label.retaining_walls",
+  "tdr/ttr transfer right":       "report.cost_label.tdr_ttr_transfer_right",
   "services & infrastructure":   "report.cost_label.services_infrastructure",
   "services and infrastructure": "report.cost_label.services_infrastructure",
   "consents & professionals":    "report.cost_label.consents_professionals",

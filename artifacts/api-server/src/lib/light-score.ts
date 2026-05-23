@@ -9,8 +9,11 @@ import type { MergedPropertyData } from "./scrapers/merge";
 
 export interface LightScoreInput {
   address: string;
+  listingUrl?: string;
   price: number;
   landArea?: number;
+  landAreaConfidence?: "verified" | "unverified";
+  isAlreadySubdividedChild?: boolean;
   zone?: string;
   buildYear?: number | null;
 }
@@ -34,7 +37,7 @@ export interface LightScoreResult {
  * Land area:   sourced from LINZ (the same authoritative source as the full report)
  */
 export async function computeLightScore(input: LightScoreInput): Promise<LightScoreResult> {
-  const { address, price, landArea: listingLandArea, zone: hintZone, buildYear } = input;
+  const { address, price, landArea: listingLandArea, landAreaConfidence, zone: hintZone, buildYear } = input;
 
   const geo = await geocodeAddress(address);
 
@@ -53,7 +56,8 @@ export async function computeLightScore(input: LightScoreInput): Promise<LightSc
     overlayResult.status === "fulfilled" ? overlayResult.value : [];
   const contourData = contourResult.status === "fulfilled" ? contourResult.value : null;
 
-  const land = linzParcel?.area_sqm ?? listingLandArea ?? 400;
+  const hasVerifiedListingArea = listingLandArea != null && landAreaConfidence === "verified";
+  const land = hasVerifiedListingArea ? listingLandArea : (linzParcel?.area_sqm ?? listingLandArea ?? 400);
 
   const asbestosRisk: "low" | "high" | "unknown" =
     buildYear && buildYear >= 1940 && buildYear <= 1990 ? "high"
@@ -84,7 +88,7 @@ export async function computeLightScore(input: LightScoreInput): Promise<LightSc
     photo_urls: [],
     overlay_map_image_base64: null,
     comparables: [],
-    data_sources: { light_score: linzParcel ? "linz" : "listing" },
+    data_sources: { light_score: hasVerifiedListingArea ? "verified_listing" : (linzParcel ? "linz" : "listing") },
     contour: contourData?.classification ?? null,
     contour_slope_degrees: contourData?.slope_degrees ?? null,
     contour_source: contourData?.source ?? null,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifySlope, zoneResultFromRawCode } from "../auckland-council";
+import { classifySlope, summarizeTerrainSlopeDistribution, zoneResultFromRawCode } from "../auckland-council";
 
 describe("terrain slope classification", () => {
   it("keeps borderline parcel DEM readings gentle until 12 degrees", () => {
@@ -11,6 +11,18 @@ describe("terrain slope classification", () => {
     const result = classifySlope(4.24, "parcel-dem");
     expect(result.slope_degrees).toBe(4.2);
     expect(result.source).toBe("parcel-dem");
+  });
+
+  it("summarises local slope distribution for large-site terrain screening", () => {
+    const profile = summarizeTerrainSlopeDistribution(
+      [4, 7, 9, 11, 12, 13, 15, 18, 21, 24, 27, 30],
+      16,
+    );
+
+    expect(profile?.moderate_area_ratio).toBeCloseTo(0.333, 3);
+    expect(profile?.steep_area_ratio).toBeCloseTo(0.333, 3);
+    expect(profile?.local_slope_p90_degrees).toBe(27);
+    expect(profile?.sample_count).toBe(16);
   });
 });
 

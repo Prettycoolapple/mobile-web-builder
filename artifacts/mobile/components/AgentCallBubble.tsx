@@ -10,6 +10,8 @@ import {
 import { Feather } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { useT } from "@/lib/i18n";
+import { getApiBase } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 
 interface Props {
   agentName: string | null;
@@ -32,10 +34,30 @@ export function AgentCallBubble({
 }: Props) {
   const [dismissed, setDismissed] = useState(false);
   const { t } = useT();
+  const { getApiHeaders } = useAuth();
 
   if (dismissed) return null;
 
+  const logAgentCallEvent = () => {
+    // Fire-and-forget — the dialer must NEVER be blocked by this network call.
+    try {
+      void fetch(`${getApiBase()}/agent-call-event`, {
+        method: "POST",
+        headers: { ...getApiHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agentPhone,
+          agentName,
+          agencyName,
+          propertyAddress,
+        }),
+      }).catch(() => {});
+    } catch {
+      // swallow — logging failure must not affect the call
+    }
+  };
+
   const handleCall = async () => {
+    logAgentCallEvent();
     const dialNumber = agentPhone.replace(/[^\d+]/g, "");
     const telUrl = `tel:${dialNumber}`;
     const canOpen = await Linking.canOpenURL(telUrl);

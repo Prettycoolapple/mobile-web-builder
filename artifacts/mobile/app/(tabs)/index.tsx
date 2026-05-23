@@ -364,19 +364,23 @@ export default function SearchScreen() {
   }, [currentSession]);
 
   const submitFirstTurnRating = useCallback(
-    (rating: "up" | "down") => {
+    (rating: "up" | "down", reason?: string) => {
       const sid = currentSessionId;
       if (!sid || !currentSession) return;
       setFirstLlmResponseRating(sid, rating);
       const responseMode = getFirstTurnResponseMode(currentSession.messages);
+      const body: Record<string, unknown> = {
+        clientSessionId: sid,
+        rating,
+        responseMode,
+      };
+      if (rating === "down" && reason && reason.trim().length > 0) {
+        body.reason = reason.trim();
+      }
       void fetch(`${resolveApiBase()}/feedback/llm`, {
         method: "POST",
         headers: { ...getApiHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify({
-          clientSessionId: sid,
-          rating,
-          responseMode,
-        }),
+        body: JSON.stringify(body),
       }).catch(() => {});
     },
     [currentSessionId, currentSession, getApiHeaders, setFirstLlmResponseRating],
@@ -600,10 +604,11 @@ export default function SearchScreen() {
   const getApiBase = useCallback(() => resolveApiBase(), []);
 
   const startCardScorePoll = useCallback(
-    (addresses: string[], sessionId: string) => {
+    (candidates: Array<Pick<PropertyCandidate, "address" | "listingUrl">>, sessionId: string) => {
       if (cardScorePollRef.current.intervalId) {
         clearInterval(cardScorePollRef.current.intervalId);
       }
+      const addresses = candidates.map((c) => c.address);
       cardScorePollRef.current = { addresses, sessionId, intervalId: null };
 
       let attempts = 0;
@@ -618,7 +623,10 @@ export default function SearchScreen() {
         try {
           const apiBase = getApiBase();
           const params = addresses.map((a) => `addresses[]=${encodeURIComponent(a)}`).join("&");
-          const resp = await fetch(`${apiBase}/analyse/card-scores?${params}`, {
+          const urlParams = candidates
+            .map((c) => `urls[]=${encodeURIComponent(c.listingUrl ?? "")}`)
+            .join("&");
+          const resp = await fetch(`${apiBase}/analyse/card-scores?${params}${urlParams ? `&${urlParams}` : ""}`, {
             headers: getApiHeaders(),
           });
           if (!resp.ok) return;
@@ -1261,7 +1269,7 @@ export default function SearchScreen() {
             const aiIntro = maybeParsed?.aiIntro ?? "";
             if (maybeParsed?.candidates && maybeParsed.candidates.length > 0) {
               updateLastMessage({ type: "search", searchResults: maybeParsed.candidates, content: "", aiIntro }, sessionId);
-              startCardScorePoll(maybeParsed.candidates.map((c) => c.address), sessionId);
+              startCardScorePoll(maybeParsed.candidates.map((c) => ({ address: c.address, listingUrl: c.listingUrl })), sessionId);
             } else {
               const noResultMsg = aiIntro || t("search.no_listings_msg");
               updateLastMessage({ type: "text", content: noResultMsg }, sessionId);
@@ -1427,10 +1435,9 @@ export default function SearchScreen() {
 
   const handleFollowUp = useCallback(
     (question: string) => {
-      setInputText(question);
-      setTimeout(() => inputRef.current?.focus(), 100);
+      void handleSend(question);
     },
-    [],
+    [handleSend],
   );
 
   const handleAnalyse = useCallback(

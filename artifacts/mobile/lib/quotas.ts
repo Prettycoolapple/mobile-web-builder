@@ -20,6 +20,8 @@ export const CHAT_LIMITS: Record<ChatLimitKey, QuotaTier> = {
 export const FREE_REPORT_LIMIT = 6;
 export const STANDARD_REPORT_LIMIT = 60;
 export const SERVICE_PROVIDER_FREE_REPORT_LIMIT = 0;
+export const SUPERCHARGE_REPORT_LIMIT = 60;
+export const FRIENDS_FAMILY_REPORT_LIMIT = 9999;
 
 export function resolveChatLimitKey(
   role: string | null | undefined,
@@ -42,7 +44,10 @@ export function resolveChatQuota(
 export function resolveReportLimit(
   tier: string | null | undefined,
   role?: string | null | undefined,
+  specialStatus?: string | null | undefined,
 ): number {
+  if (specialStatus === "friends_family") return FRIENDS_FAMILY_REPORT_LIMIT;
+  if (specialStatus === "supercharge") return SUPERCHARGE_REPORT_LIMIT;
   if (role === "service_provider" && tier !== "standard" && tier !== "pro") {
     return SERVICE_PROVIDER_FREE_REPORT_LIMIT;
   }

@@ -12,6 +12,7 @@ export const chatLlmFeedback = pgTable("chat_llm_feedback", {
   clientSessionId: text("client_session_id").notNull(),
   rating: text("rating").notNull(),
   responseMode: text("response_mode"),
+  reason: text("reason"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

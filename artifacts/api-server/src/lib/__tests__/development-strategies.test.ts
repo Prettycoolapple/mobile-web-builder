@@ -65,6 +65,10 @@ const baseCosts: CostBreakdown = {
   retaining_low: 10_000,
   retaining_high: 30_000,
   retaining_unknown: false,
+  tdr_ttr_low: 0,
+  tdr_ttr_high: 0,
+  tdr_ttr_required: false,
+  tdr_ttr_note: null,
   services_low: 0,
   services_high: 0,
   construction_low: 336_000,
@@ -128,6 +132,33 @@ describe("development strategies", () => {
     expect(hold?.costItems.find((item) => item.label === "Contingency")?.high ?? 0).toBeLessThan(
       rebuild?.costItems.find((item) => item.label === "Contingency")?.low ?? 0,
     );
+  });
+
+  it("moves the recommended badge to the strongest calculated ROI strategy", () => {
+    const olderHouse = merged({ build_year: 1976, cv_nzd: 1_550_000, floor_area_sqm: 207 });
+    const staleAssessment = buildFallbackDevelopmentStrategyAssessment(olderHouse, lotResult);
+    const strategies = calculateDevelopmentStrategies({
+      data: olderHouse,
+      baseCosts: { ...baseCosts, land_cv_nzd: 1_550_000 },
+      lotResult,
+      avgSalePrice: 1_550_000,
+      avgPricePerSqm: 5_500,
+      interestRateOutlook: "falling",
+      assessment: { ...staleAssessment, recommended_strategy: "demolish_rebuild" },
+    });
+
+    const hold = strategies.find((strategy) => strategy.id === "hold_existing");
+    const refurbish = strategies.find((strategy) => strategy.id === "refurbish");
+    const rebuild = strategies.find((strategy) => strategy.id === "demolish_rebuild");
+
+    const bestAnnualised = (strategy: typeof hold) => Math.max(
+      ...(strategy?.roiScenarios.map((scenario) => scenario.cases.find((c) => c.case === "base")?.annualised_roi_percent ?? scenario.annualised_roi_percent) ?? []),
+    );
+
+    expect(bestAnnualised(hold)).toBeGreaterThan(bestAnnualised(refurbish));
+    expect(bestAnnualised(hold)).toBeGreaterThan(bestAnnualised(rebuild));
+    expect(hold?.recommendation).toBe("recommended");
+    expect(rebuild?.recommendation).not.toBe("recommended");
   });
 
   it("floors hold-existing exit value at CV and uses light holding allowances", () => {
@@ -239,7 +270,18 @@ describe("development strategies", () => {
     const staleAssessment = buildFallbackDevelopmentStrategyAssessment(merged(), lotResult);
     const strategies = calculateDevelopmentStrategies({
       data: vacant,
-      baseCosts: { ...baseCosts, demo_low: 0, demo_high: 0, demo_vacant: true, has_existing_dwelling: false, units: 2 },
+      baseCosts: {
+        ...baseCosts,
+        demo_low: 0,
+        demo_high: 0,
+        demo_vacant: true,
+        has_existing_dwelling: false,
+        units: 2,
+        tdr_ttr_low: 160_000,
+        tdr_ttr_high: 250_000,
+        tdr_ttr_required: true,
+        tdr_ttr_note: "Rural/countryside subdivision may require a transferable rural site right (TDR/TTR).",
+      },
       lotResult: countrysideLots,
       avgSalePrice: 0,
       avgPricePerSqm: 0,
@@ -252,6 +294,8 @@ describe("development strategies", () => {
     expect(rebuild?.recommendation).toBe("recommended");
     expect(rebuild?.title).toBe("Build new dwelling(s)");
     expect(rebuild?.costItems.some((item) => item.label === "Demolition")).toBe(false);
+    expect(rebuild?.costItems).toContainEqual({ label: "TDR/TTR transfer right", low: 160_000, high: 250_000 });
+    expect(rebuild?.assumptions.some((item) => /TDR\/TTR/.test(item))).toBe(true);
   });
 
   it("does not apply a generic terrace/townhouse typology GDV discount", () => {

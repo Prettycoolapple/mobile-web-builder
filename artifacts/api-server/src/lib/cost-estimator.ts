@@ -10,6 +10,12 @@ export interface CostBreakdown {
   retaining_low: number;
   retaining_high: number;
   retaining_unknown: boolean;
+  retaining_area_sqm_estimate?: number | null;
+  large_site_terrain_adjusted?: boolean;
+  tdr_ttr_low: number;
+  tdr_ttr_high: number;
+  tdr_ttr_required: boolean;
+  tdr_ttr_note: string | null;
   services_low: number;
   services_high: number;
   construction_low: number;
@@ -120,6 +126,94 @@ function inferHasExistingDwellingForDemolition(data: MergedPropertyData): boolea
   return false;
 }
 
+const RURAL_LIFESTYLE_ZONES = new Set(["CLZ", "LLRZ", "RCSZ", "RUR"]);
+const RURAL_TRANSFER_RIGHT_ZONES = new Set(["CLZ", "LLRZ", "RCSZ", "RUR"]);
+
+function isLargeRuralLifestyleSite(data: MergedPropertyData): boolean {
+  const land = data.land_area_sqm ?? 0;
+  const zone = (data.zone_code ?? "").toUpperCase();
+  return land >= 10_000 || RURAL_LIFESTYLE_ZONES.has(zone);
+}
+
+function retainingBucketForContour(contour: MergedPropertyData["contour"]): {
+  low: number;
+  high: number;
+} {
+  if (contour === "gentle") return { low: 10_000, high: 30_000 };
+  if (contour === "moderate") return { low: 50_000, high: 150_000 };
+  if (contour === "steep") return { low: 200_000, high: 400_000 };
+  return { low: 0, high: 0 };
+}
+
+function estimateLargeSiteRetaining(data: MergedPropertyData): {
+  low: number;
+  high: number;
+  areaSqm: number | null;
+  adjusted: boolean;
+} | null {
+  if (!isLargeRuralLifestyleSite(data)) return null;
+
+  const contour = data.contour ?? null;
+  if (contour == null || contour === "flat") return null;
+
+  const land = data.land_area_sqm ?? null;
+  const steepRatio = Math.max(0, Math.min(1, data.contour_steep_area_ratio ?? 0));
+  const moderateRatio = Math.max(0, Math.min(1, data.contour_moderate_area_ratio ?? 0));
+  const p90 = data.contour_local_slope_p90_degrees ?? 0;
+  const p95 = data.contour_local_slope_p95_degrees ?? 0;
+  const sampleCount = data.contour_sample_count ?? 0;
+  const hasDistribution = sampleCount >= 8 && (steepRatio > 0 || moderateRatio > 0 || p90 > 0 || p95 > 0);
+  const steepSignal = contour === "steep" || steepRatio >= 0.08 || p90 >= 20 || p95 >= 24;
+  const moderateSignal = contour === "moderate" || steepSignal || steepRatio + moderateRatio >= 0.2 || p90 >= 12;
+
+  if (!steepSignal && !moderateSignal) return null;
+  if (!hasDistribution && contour !== "steep") return null;
+
+  const effectiveLand = land != null && Number.isFinite(land) && land > 0 ? land : 10_000;
+  const pressureRatio = hasDistribution
+    ? Math.max(0.015, steepRatio + moderateRatio * 0.35)
+    : 0.04;
+  const maxEnvelope = Math.min(2_500, Math.max(450, effectiveLand * 0.08));
+  const minEnvelope = steepSignal ? 900 : 350;
+  const affectedAreaSqm = Math.round(Math.max(minEnvelope, Math.min(maxEnvelope, effectiveLand * pressureRatio)));
+
+  const lowRate = steepSignal ? 180 : 90;
+  const highRate = steepSignal ? 420 : 240;
+  const ruralMultiplier = RURAL_LIFESTYLE_ZONES.has((data.zone_code ?? "").toUpperCase()) ? 1.15 : 1;
+  const calculatedLow = affectedAreaSqm * lowRate * ruralMultiplier;
+  const calculatedHigh = affectedAreaSqm * highRate * ruralMultiplier;
+  const floorLow = steepSignal ? 250_000 : 120_000;
+  const floorHigh = steepSignal ? 750_000 : 350_000;
+
+  return {
+    low: Math.max(floorLow, calculatedLow),
+    high: Math.max(floorHigh, calculatedHigh),
+    areaSqm: affectedAreaSqm,
+    adjusted: true,
+  };
+}
+
+function estimateRuralTransferRightCosts(data: MergedPropertyData, units: number): {
+  low: number;
+  high: number;
+  required: boolean;
+  note: string | null;
+} {
+  const zone = (data.zone_code ?? "").toUpperCase();
+  const additionalTitles = Math.max(0, Math.floor(units) - 1);
+  if (additionalTitles <= 0 || !RURAL_TRANSFER_RIGHT_ZONES.has(zone)) {
+    return { low: 0, high: 0, required: false, note: null };
+  }
+
+  const low = additionalTitles * 160_000;
+  const high = additionalTitles * 250_000;
+  const note =
+    `Rural/countryside subdivision may require a transferable rural site right (TDR/TTR) under Auckland Unitary Plan rural subdivision rules. ` +
+    `Allowance is modelled for ${additionalTitles} additional title${additionalTitles === 1 ? "" : "s"} at $160k-$250k each; confirm availability and pathway with a planner/surveyor.`;
+
+  return { low, high, required: true, note };
+}
+
 export function estimateCosts(
   data: MergedPropertyData,
   units: number,
@@ -149,17 +243,23 @@ export function estimateCosts(
   let retaining_low = 0;
   let retaining_high = 0;
   const retainingUnknown = contour === null;
-  if (contour === "gentle") {
-    retaining_low = 10000;  retaining_high = 30000;
-  } else if (contour === "moderate") {
-    retaining_low = 50000;  retaining_high = 150000;
-  } else if (contour === "steep") {
-    retaining_low = 200000; retaining_high = 400000;
+  const baseRetaining = retainingBucketForContour(contour);
+  retaining_low = baseRetaining.low;
+  retaining_high = baseRetaining.high;
+  const largeSiteRetaining = estimateLargeSiteRetaining(data);
+  let retaining_area_sqm_estimate: number | null = data.retaining_area_sqm_estimate ?? null;
+  let large_site_terrain_adjusted = data.large_site_terrain_adjusted ?? false;
+  if (largeSiteRetaining) {
+    retaining_low = Math.max(retaining_low, largeSiteRetaining.low);
+    retaining_high = Math.max(retaining_high, largeSiteRetaining.high);
+    retaining_area_sqm_estimate = largeSiteRetaining.areaSqm;
+    large_site_terrain_adjusted = true;
   }
 
   const infra = data.infrastructure ?? [];
   const services_low  = infra.reduce((sum, i) => sum + (i.estimated_cost_low ?? 0),  0);
   const services_high = infra.reduce((sum, i) => sum + (i.estimated_cost_high ?? 0), 0);
+  const tdrTtr = estimateRuralTransferRightCosts(data, safeUnits);
 
   // Prefer lot-size-derived finished floor area so construction cost aligns with the GDV
   // estimate (estimateGdvPerLot mirrors the same likely-storeys assumption).
@@ -181,8 +281,8 @@ export function estimateCosts(
   const finance_low  = loan_base * 0.075 * 1.5;
   const finance_high = loan_base * 0.075 * 2.5;
 
-  const subtotal_low  = demo_low  + retaining_low  + services_low  + construction_low  + consents_low  + finance_low;
-  const subtotal_high = demo_high + retaining_high + services_high + construction_high + consents_high + finance_high;
+  const subtotal_low  = demo_low  + retaining_low  + tdrTtr.low  + services_low  + construction_low  + consents_low  + finance_low;
+  const subtotal_high = demo_high + retaining_high + tdrTtr.high + services_high + construction_high + consents_high + finance_high;
 
   const contingency_low  = subtotal_low  * 0.08;
   const contingency_high = subtotal_high * 0.12;
@@ -205,6 +305,12 @@ export function estimateCosts(
     retaining_low:     r(retaining_low),
     retaining_high:    r(retaining_high),
     retaining_unknown: retainingUnknown,
+    retaining_area_sqm_estimate,
+    large_site_terrain_adjusted,
+    tdr_ttr_low:       r(tdrTtr.low),
+    tdr_ttr_high:      r(tdrTtr.high),
+    tdr_ttr_required:  tdrTtr.required,
+    tdr_ttr_note:      tdrTtr.note,
     services_low:      r(services_low),
     services_high:     r(services_high),
     construction_low:  r(construction_low),

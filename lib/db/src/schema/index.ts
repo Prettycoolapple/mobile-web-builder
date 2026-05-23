@@ -18,3 +18,4 @@ export * from "./user_blocks";
 export * from "./user_reports";
 export * from "./user_login_events";
 export * from "./support_requests";
+export * from "./agent_call_events";
