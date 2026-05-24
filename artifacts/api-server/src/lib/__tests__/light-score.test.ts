@@ -54,6 +54,6 @@ describe("light card scoring", () => {
     });
 
     expect(result.landArea).toBe(503);
-    expect(result.potentialLots).toBe(3);
+    expect(result.potentialLots).toBe(1);
   });
 });

@@ -24,3 +24,19 @@ export function hasUnnumberedStreetLine(message: string): boolean {
   if (hasNumberedStreetAddress(message)) return false;
   return UNNUMBERED_STREET_TYPE_RE.test(message);
 }
+
+/**
+ * True for sale/listing labels that mention a road but are not a normal titled
+ * street address, e.g. "Village 2/& Balance Land, Ara Weiti Road".
+ *
+ * These should not enter the ordinary suburb-clarification loop. The app can
+ * acknowledge that the exact property is currently unavailable and offer a
+ * nearby-suburb sale search instead.
+ */
+export function hasNonStandardSalePropertyReference(message: string): boolean {
+  if (!message.trim()) return false;
+  if (hasNumberedStreetAddress(message)) return false;
+  if (!hasUnnumberedStreetLine(message)) return false;
+
+  return /(?:\bbalance\s+land\b|\bvillage\s*\d+\b|\bsuper\s*lot\b|\bsuperlot\b|\bstage\s*\d+\b|\blot\s*\d+\b|\bsection\s*\d+\b|\bdevelopment\s+(?:site|land)\b)/i.test(message);
+}

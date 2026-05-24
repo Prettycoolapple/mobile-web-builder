@@ -17,7 +17,12 @@ export function ProviderUpgradeGateBubble({ onUpgrade, onDismiss }: Props) {
   const [dismissed, setDismissed] = useState(false);
   const { t } = useT();
   const subscriptionTier = user?.subscriptionTier ?? "free";
-  const isActive = isSubscribed || subscriptionTier === "standard" || subscriptionTier === "pro";
+  const hasActiveSpecialStatus =
+    user?.specialStatus === "friends_family" ||
+    (user?.specialStatus === "supercharge" &&
+      (!user?.specialStatusExpiresAt ||
+        new Date(user.specialStatusExpiresAt) > new Date()));
+  const isActive = isSubscribed || hasActiveSpecialStatus || subscriptionTier === "standard" || subscriptionTier === "pro";
 
   const features = useMemo(
     () => [

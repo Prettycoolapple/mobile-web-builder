@@ -8,6 +8,7 @@ import type { QVData } from "./qv";
 import type { HomesData } from "./homes";
 import type { PropertyValueData } from "./propertyvalue";
 import type { PropertyHistory } from "../property-data";
+import type { PropertyEligibilityConfidence, PropertyTypology } from "../property-eligibility";
 
 export interface MergedPropertyData {
   cv_nzd: number | null;
@@ -55,6 +56,12 @@ export interface MergedPropertyData {
   missing_critical_fields: string[];
   /** LINZ title estate description when resolved (e.g. Fee Simple / cross lease). */
   estate_type: string | null;
+  property_type?: string | null;
+  typology?: PropertyTypology;
+  typologyConfidence?: PropertyEligibilityConfidence;
+  titleConfidence?: PropertyEligibilityConfidence;
+  subdivisionEligible?: boolean | null;
+  subdivisionRejectReason?: string | null;
 }
 
 // ─── Simple "first non-null" helper ──────────────────────────────────────────
@@ -282,6 +289,17 @@ function shouldUseLiveAreaOverride(
   return { use: !!corroborator, corroborator };
 }
 
+function hasUnitOrCrossLeaseListingSignal(listing: ListingResult | null): boolean {
+  if (!listing) return false;
+  const text = [
+    listing.propertyType,
+    listing.listingCategory,
+    listing.tenureText,
+    listing.legalDescription,
+  ].filter(Boolean).join(" ").toLowerCase();
+  return /\b(unit\s+title|unit\s+[a-z]\b|accessory\s+unit|unit|stratum|body\s+corporate|cross\s*lease|crosslease|flat|apartment)\b/i.test(text);
+}
+
 function inferLifestyleZone(
   propertyValue: PropertyValueData | null,
   landAreaSqm: number | null,
@@ -412,6 +430,11 @@ export function mergePropertyData(
     ["propertyvalue", propertyValue?.bathrooms],
     ["homes",   homes?.bathrooms],
     ["qv",      qv?.bathrooms],
+  );
+  const property_type = first("property_type", sources,
+    ["realestate.co.nz", realestateListing?.propertyType],
+    ["propertyvalue", propertyValue?.property_type],
+    ["auckland_council_gis", ph?.property_type],
   );
 
   // Track human-readable discrepancy notes for everything the live-listing
@@ -606,6 +629,11 @@ export function mergePropertyData(
 
     if (realestateListing.landArea != null && land_area_sqm != null) {
       const delta = Math.abs(realestateListing.landArea - land_area_sqm) / land_area_sqm;
+      const exactUnitChildArea =
+        hasUnitOrCrossLeaseListingSignal(realestateListing) &&
+        realestateListing.landAreaConfidence === "verified" &&
+        !realestateListing.landAreaApprox &&
+        realestateListing.landArea < land_area_sqm;
       const override = shouldUseLiveAreaOverride(
         land_area_sqm,
         realestateListing.landArea,
@@ -620,9 +648,9 @@ export function mergePropertyData(
         ],
         0.1,
       );
-      if (delta > 0.1 && override.use) {
+      if (delta > 0.1 && (override.use || exactUnitChildArea)) {
         logger.info(
-          { previous: land_area_sqm, listing: realestateListing.landArea, delta },
+          { previous: land_area_sqm, listing: realestateListing.landArea, delta, exactUnitChildArea },
           "Merge: active realestate.co.nz listing overrides land area (>10% disagreement)",
         );
         discrepancies.push(
@@ -781,5 +809,11 @@ export function mergePropertyData(
     infrastructure: extra?.infrastructure ?? [],
     missing_critical_fields,
     estate_type: null,
+    property_type,
+    typology: "unknown",
+    typologyConfidence: "unknown",
+    titleConfidence: "unknown",
+    subdivisionEligible: null,
+    subdivisionRejectReason: null,
   };
 }

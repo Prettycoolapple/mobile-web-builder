@@ -1,11 +1,11 @@
 import { ai } from "@workspace/integrations-gemini-ai";
 import { logger } from "./logger";
 import { SYSTEM_PROMPT, ANALYSE_AUGMENTATION, DISCOVER_AUGMENTATION, languageInstruction, type Locale } from "./prompts";
-import { findSuburbInTextViaIndex } from "./scrapers/realestate-api";
+import { findSuburbId, findSuburbInTextViaIndex } from "./scrapers/realestate-api";
 import type { DevelopmentStrategyAssessment, DevelopmentStrategyId, RefurbishmentScope } from "./development-strategies";
 import { hasNumberedStreetAddress, hasUnnumberedStreetLine } from "./street-address-detect";
 
-export { hasNumberedStreetAddress, hasUnnumberedStreetLine } from "./street-address-detect";
+export { hasNumberedStreetAddress, hasNonStandardSalePropertyReference, hasUnnumberedStreetLine } from "./street-address-detect";
 
 function analysisMaxOutputTokens(): number {
   const raw = process.env["AI_ANALYSIS_MAX_OUTPUT_TOKENS"]?.trim();
@@ -632,6 +632,62 @@ Example: ["kohimarama","mission bay","glendowie","meadowbank","saint johns"]`;
   }
 }
 
+const unresolvedPropertySuburbCache = new Map<string, { value: string | null; expiresAt: number }>();
+const UNRESOLVED_PROPERTY_SUBURB_TTL_MS = 60 * 60 * 1000;
+const UNRESOLVED_PROPERTY_SUBURB_TIMEOUT_MS = 2500;
+
+export async function inferLikelySuburbForUnresolvedProperty(text: string): Promise<string | null> {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  const directHit = await findSuburbInTextViaIndex(trimmed).catch(() => null);
+  if (directHit) return directHit.title.toLowerCase();
+
+  const key = trimmed.toLowerCase();
+  const cached = unresolvedPropertySuburbCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+  const prompt = `The user typed a non-standard NZ property sale label or road reference:
+"${trimmed}"
+
+Identify the most likely realestate.co.nz suburb/locality to search nearby sale listings.
+Return ONLY one suburb/locality name, or "null" if you cannot infer it confidently.
+Do not include a street name, district, explanation, punctuation, or markdown.`;
+
+  try {
+    const llmCall = ai.models.generateContent({
+      model: "deepseek-chat",
+      config: {
+        maxOutputTokens: 64,
+        temperature: 0,
+        thinkingConfig: { thinkingBudget: 0 },
+      },
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+    });
+    const response = await Promise.race([
+      llmCall,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("unresolved property suburb timeout")), UNRESOLVED_PROPERTY_SUBURB_TIMEOUT_MS),
+      ),
+    ]);
+    const raw = (response.text ?? "").trim().replace(/^["'`]+|["'`.]+$/g, "");
+    if (!raw || /^null$/i.test(raw)) {
+      unresolvedPropertySuburbCache.set(key, { value: null, expiresAt: Date.now() + UNRESOLVED_PROPERTY_SUBURB_TTL_MS });
+      return null;
+    }
+
+    const suburb = raw.toLowerCase().replace(/\s+/g, " ").trim();
+    const verified = await findSuburbId(suburb).catch(() => null);
+    const value = verified ? verified.title.toLowerCase() : null;
+    unresolvedPropertySuburbCache.set(key, { value, expiresAt: Date.now() + UNRESOLVED_PROPERTY_SUBURB_TTL_MS });
+    return value;
+  } catch (err) {
+    logger.warn({ err: (err as Error).message, sample: trimmed.slice(0, 80) }, "Unresolved property suburb inference failed");
+    unresolvedPropertySuburbCache.set(key, { value: null, expiresAt: Date.now() + 60_000 });
+    return null;
+  }
+}
+
 function buildLlmHistory(conversationHistory: Message[]) {
   return conversationHistory.map((m) => ({
     role: m.role === "assistant" ? ("model" as const) : ("user" as const),
@@ -693,6 +749,12 @@ export async function generateUnifiedResponse(
     const bathrooms = fmt(overview?.["bathrooms"]);
     const zoneLabel = fmt(r["zone_label"] ?? planning?.["zone"] ?? overview?.["zone"]);
     const zoneCode  = fmt(r["zone_code"]);
+    const titleType = fmt(overview?.["titleType"]);
+    const typology = fmt(overview?.["typology"]);
+    const typologyConfidence = fmt(overview?.["typologyConfidence"]);
+    const titleConfidence = fmt(overview?.["titleConfidence"]);
+    const subdivisionEligible = overview?.["subdivisionEligible"];
+    const subdivisionRejectReason = fmt(overview?.["subdivisionRejectReason"]);
     const listingPrice = fmt(overview?.["listingPrice"]);
     const isOnMarket   = overview?.["isOnMarket"];
     const discrepancies = (overview?.["discrepancies"] as string[] | undefined) ?? [];
@@ -771,6 +833,11 @@ export async function generateUnifiedResponse(
     if (buildYear)    sections.push(`  Build year: ${buildYear}`);
     if (bedrooms)     sections.push(`  Bedrooms: ${bedrooms}`);
     if (bathrooms)    sections.push(`  Bathrooms: ${bathrooms}`);
+    if (titleType)    sections.push(`  Title type: ${titleType}${titleConfidence ? ` (confidence: ${titleConfidence})` : ""}`);
+    if (typology)     sections.push(`  Typology: ${typology}${typologyConfidence ? ` (confidence: ${typologyConfidence})` : ""}`);
+    if (subdivisionEligible != null) {
+      sections.push(`  Strict subdivision eligibility: ${subdivisionEligible ? "eligible" : "not eligible"}${subdivisionRejectReason ? ` (${subdivisionRejectReason})` : ""}`);
+    }
     if (listingPrice) sections.push(`  Listing price: ${listingPrice}`);
     if (isOnMarket != null) {
       sections.push(`  Sale listing status: ${isOnMarket ? "currently listed for sale" : "not currently on the market"}`);
@@ -833,6 +900,7 @@ export async function generateUnifiedResponse(
       `You are answering a follow-up question about the property analysed in this session.\n` +
       `ALL figures, classifications, scores, and facts below come from verified pipeline data (LINZ, LiDAR, Auckland Council GIS, QV).\n` +
       `You MUST base your answer ONLY on this data. You MUST NOT:\n` +
+      `  - claim the property is standalone/freehold/subdividable unless the pinned title, typology, and eligibility fields say so with verified confidence\n` +
       `  • contradict any figure, score, or classification listed here\n` +
       `  • substitute general suburb knowledge (e.g. "Remuera is hilly") for measured data\n` +
       `  • recalculate scores, costs, or ROI — quote the numbers below verbatim\n` +

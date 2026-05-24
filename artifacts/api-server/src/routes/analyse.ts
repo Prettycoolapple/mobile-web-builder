@@ -9,7 +9,9 @@ import {
   generateAnalysis,
   detectMode,
   extractChatIntent,
+  inferLikelySuburbForUnresolvedProperty,
   hasNumberedStreetAddress,
+  hasNonStandardSalePropertyReference,
   hasUnnumberedStreetLine,
   isListingBrowseIntent,
   sanitizeAssistantProse,
@@ -192,6 +194,11 @@ export function applyOverviewSnapshot(
     zone: merged.zone_description ?? merged.zone_code ?? null,
     zone_code: merged.zone_code ?? null,
     titleType: formatTitleTypeForDisplay(merged.estate_type?.trim() || null),
+    typology: merged.typology ?? "unknown",
+    typologyConfidence: merged.typologyConfidence ?? "unknown",
+    titleConfidence: merged.titleConfidence ?? "unknown",
+    subdivisionEligible: merged.subdivisionEligible ?? null,
+    subdivisionRejectReason: merged.subdivisionRejectReason ?? null,
     listingPrice: merged.listing_price != null ? fmt(merged.listing_price) : null,
     listing_price_nzd: merged.listing_price ?? null,
     isOnMarket: merged.listing_active === true,
@@ -218,6 +225,11 @@ export function applyOverviewSnapshot(
     titleType: formatTitleTypeForDisplay(
       (snapshot.titleType ?? existingOverview.titleType) as string | null | undefined,
     ),
+    typology: snapshot.typology,
+    typologyConfidence: snapshot.typologyConfidence,
+    titleConfidence: snapshot.titleConfidence,
+    subdivisionEligible: snapshot.subdivisionEligible,
+    subdivisionRejectReason: snapshot.subdivisionRejectReason,
     listingPrice: snapshot.listingPrice,
     isOnMarket: snapshot.isOnMarket,
     discrepancies: snapshot.discrepancies,
@@ -741,6 +753,39 @@ function emptyChatFallback(locale: ReturnType<typeof normaliseLocale>): string {
   return locale === "zh"
     ? "我没有成功生成回复。请再试一次。"
     : "I could not generate a reply just now. Please try again.";
+}
+
+function titleCaseSuburb(suburb: string): string {
+  return suburb
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => {
+      const lower = part.toLowerCase();
+      if (lower === "st") return "St";
+      if (lower === "mt") return "Mt";
+      return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
+    })
+    .join(" ");
+}
+
+function unavailablePropertyTopicReply(
+  subject: string,
+  nearbySuburb: string | null,
+  locale: ReturnType<typeof normaliseLocale>,
+): string {
+  const cleanedSubject = subject.trim();
+  const suburbLabel = nearbySuburb ? titleCaseSuburb(nearbySuburb) : null;
+  if (locale === "zh") {
+    const subjectText = cleanedSubject ? `「${cleanedSubject}」` : "这个物业";
+    return suburbLabel
+      ? `抱歉，${subjectText}目前暂不可用。要不要我帮你搜索 ${suburbLabel} 附近的在售房源？`
+      : `抱歉，${subjectText}目前暂不可用。要不要我帮你搜索附近的在售房源？`;
+  }
+
+  const subjectText = cleanedSubject ? `"${cleanedSubject}"` : "that property";
+  return suburbLabel
+    ? `Sorry, ${subjectText} is currently unavailable. Would you like me to search what is on sale near ${suburbLabel}?`
+    : `Sorry, ${subjectText} is currently unavailable. Would you like me to search what is on sale nearby?`;
 }
 
 // Simple edit-distance (Levenshtein) for fuzzy suburb matching
@@ -1806,6 +1851,145 @@ router.get("/analyse/jobs/:jobId", async (req, res) => {
   }
 });
 
+// ── POST /analyse/:searchId/refresh-photos ───────────────────────────────────
+// Re-runs photo-only scrapers (Trade Me + Hougarden + Homes + AI fallback)
+// for an existing search row and merges fresh photoUrls back into resultJson.
+// Does NOT re-run the full feasibility analysis (no quota cost, no core scoring
+// rerun) — only photo coverage is updated.
+//
+// Rate-limited to 1 request per searchId per 60s via an in-memory map.
+const refreshPhotosLastRunAt = new Map<string, number>();
+const REFRESH_PHOTOS_COOLDOWN_MS = 60_000;
+
+router.post("/analyse/:searchId/refresh-photos", async (req, res) => {
+  const searchId = (req.params as { searchId?: string }).searchId;
+  const uid = getUserIdFromHeader(req);
+  if (!searchId) {
+    res.status(400).json({ error: "searchId is required", code: "MISSING_SEARCH_ID" });
+    return;
+  }
+  if (!uid) {
+    res.status(401).json({ error: "Unauthorized", code: "UNAUTHORIZED" });
+    return;
+  }
+
+  const now = Date.now();
+  const last = refreshPhotosLastRunAt.get(searchId) ?? 0;
+  if (now - last < REFRESH_PHOTOS_COOLDOWN_MS) {
+    const retryAfterMs = REFRESH_PHOTOS_COOLDOWN_MS - (now - last);
+    res
+      .status(429)
+      .json({ error: "Refresh too frequent — try again in a moment", retryAfterMs, code: "REFRESH_RATE_LIMITED" });
+    return;
+  }
+
+  try {
+    const rows = await withDbRetry(() =>
+      db
+        .select({ userId: searches.userId, resultJson: searches.resultJson, address: searches.address })
+        .from(searches)
+        .where(eq(searches.id, searchId))
+        .limit(1),
+    );
+    const row = rows[0];
+    if (!row || row.userId !== uid) {
+      res.status(404).json({ error: "Not found", code: "NOT_FOUND" });
+      return;
+    }
+
+    const report = (row.resultJson ?? {}) as Record<string, unknown>;
+    const reportAddress =
+      (typeof report["address"] === "string" && (report["address"] as string)) ||
+      (typeof row.address === "string" && row.address) ||
+      "";
+    if (!reportAddress) {
+      res.status(400).json({ error: "Report has no address to re-scrape", code: "MISSING_ADDRESS" });
+      return;
+    }
+
+    refreshPhotosLastRunAt.set(searchId, now);
+
+    // Run photo-only scrapers in parallel with a hard budget. Lazy-import so
+    // this endpoint stays light when not called.
+    const { scrapeTradeMePropertyPhotos } = await import("../lib/scrapers/trademe-property");
+    const { scrapeHougardenPhotos } = await import("../lib/scrapers/hougarden-photos");
+    const { scrapeHomesPhotos } = await import("../lib/scrapers/homes-photos");
+    const { findPropertyPhotosWithFallback } = await import("../lib/scrapers/web-image-search");
+
+    const TIMEOUT_MS = 15_000;
+    const withTimeout = <T>(p: Promise<T>, fallback: T): Promise<T> =>
+      Promise.race([
+        p,
+        new Promise<T>((resolve) => setTimeout(() => resolve(fallback), TIMEOUT_MS)),
+      ]).catch(() => fallback);
+
+    const [trademe, hougardenPhotos, homesPhotos] = await Promise.all([
+      withTimeout(scrapeTradeMePropertyPhotos(reportAddress), { photo_urls: [] as string[], listing_url: null, data_source: "trademe" as const, scraped_at: "" }),
+      withTimeout(scrapeHougardenPhotos(reportAddress), { photo_urls: [] as string[], listing_url: null, data_source: "hougarden_photos" as const, scraped_at: "" }),
+      withTimeout(scrapeHomesPhotos(reportAddress), { photo_urls: [] as string[], listing_url: null, data_source: "homes_photos" as const, scraped_at: "" }),
+    ]);
+
+    const existingPhotos: string[] = Array.isArray(report["photoUrls"])
+      ? ((report["photoUrls"] as unknown[]).filter((u): u is string => typeof u === "string"))
+      : [];
+
+    let combined = Array.from(new Set([
+      ...trademe.photo_urls,
+      ...hougardenPhotos.photo_urls,
+      ...homesPhotos.photo_urls,
+      ...existingPhotos,
+    ].filter(Boolean)));
+
+    let aiFallbackUsed = false;
+    if (combined.length === 0) {
+      try {
+        const aiPhotos = await findPropertyPhotosWithFallback(reportAddress);
+        if (aiPhotos.length > 0) {
+          combined = aiPhotos;
+          aiFallbackUsed = true;
+        }
+      } catch (err) {
+        req.log.warn({ err: String(err), reportAddress }, "Refresh photos AI fallback errored");
+      }
+    }
+
+    const newPhotoUrl = combined[0] ?? (typeof report["photoUrl"] === "string" ? (report["photoUrl"] as string) : null);
+
+    // Merge into resultJson WITHOUT overwriting any other field
+    report["photoUrls"] = combined;
+    report["photoUrl"] = newPhotoUrl;
+
+    await withDbRetry(() =>
+      db
+        .update(searches)
+        .set({ resultJson: report as Record<string, unknown> })
+        .where(eq(searches.id, searchId)),
+    );
+
+    req.log.info({
+      searchId,
+      address: reportAddress,
+      photoSources: {
+        trademe: trademe.photo_urls.length,
+        hougardenPhotos: hougardenPhotos.photo_urls.length,
+        homesPhotos: homesPhotos.photo_urls.length,
+      },
+      totalAfter: combined.length,
+      aiFallbackUsed,
+    }, "Refresh photos: complete");
+
+    res.json({
+      ok: true,
+      photoUrls: combined,
+      photoUrl: newPhotoUrl,
+      aiFallbackUsed,
+    });
+  } catch (err) {
+    req.log.error({ err, searchId }, "POST /analyse/:searchId/refresh-photos failed");
+    res.status(500).json({ error: "Failed to refresh photos", code: "REFRESH_FAILED" });
+  }
+});
+
 // ── POST /translate-report ────────────────────────────────────────────────────
 // Accepts a cached FeasibilityReport object and returns it with all narrative
 // fields translated to Simplified Chinese. Used by the mobile client to
@@ -2178,6 +2362,27 @@ router.post("/chat", async (req, res) => {
         );
       }
 
+      if (
+        effectiveMode !== "analyse"
+        && hasNonStandardSalePropertyReference(userText)
+        && !forcedAnalyseAddress
+      ) {
+        const nearbySuburb =
+          intent.suburb
+          ?? await inferLikelySuburbForUnresolvedProperty(userText).catch(() => null);
+        req.log.info(
+          { sample: userText.slice(0, 100), nearbySuburb },
+          "Chat routing: unresolved non-standard property label - returning unavailable topic prompt",
+        );
+        res.json({
+          content: unavailablePropertyTopicReply(userText, nearbySuburb, chatLocale),
+          mode: "text",
+          intent: { unavailableProperty: true, suggestedSuburb: nearbySuburb },
+          ...providerSignal,
+        });
+        return;
+      }
+
       // ─── CLARIFICATION LOOP ─────────────────────────────────────────────────
       // When the LLM determines it can't proceed without more info (e.g. no suburb
       // for a discover search), return the clarification question immediately.
@@ -2468,6 +2673,11 @@ router.post("/chat", async (req, res) => {
                 landAreaConfidence: c.landAreaConfidence,
                 isAlreadySubdividedChild: c.isAlreadySubdividedChild,
                 zone: c.zone,
+                buildYear: c.buildYear,
+                typology: c.typology,
+                titleConfidence: c.titleConfidence,
+                subdivisionEligible: c.subdivisionEligible,
+                subdivisionRejectReason: c.subdivisionRejectReason,
               })),
             );
           }
@@ -2826,7 +3036,14 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
     "landArea": "${merged.land_area_sqm != null ? `${merged.land_area_sqm}m²` : "null — check LINZ"}",
     "floorArea": "${merged.floor_area_sqm != null ? `${merged.floor_area_sqm}m²` : "null"}",
     "buildYear": ${merged.build_year_range ? `"${merged.build_year_range}"` : (merged.build_year != null ? `"${merged.build_year}"` : "null")},
-    "zone": "...", "listingPrice": null, "isOnMarket": false
+    "zone": "...",
+    "titleType": ${merged.estate_type ? JSON.stringify(formatTitleTypeForDisplay(merged.estate_type) ?? merged.estate_type) : "null"},
+    "typology": ${JSON.stringify(merged.typology ?? "unknown")},
+    "typologyConfidence": ${JSON.stringify(merged.typologyConfidence ?? "unknown")},
+    "titleConfidence": ${JSON.stringify(merged.titleConfidence ?? "unknown")},
+    "subdivisionEligible": ${merged.subdivisionEligible ?? "null"},
+    "subdivisionRejectReason": ${merged.subdivisionRejectReason ? JSON.stringify(merged.subdivisionRejectReason) : "null"},
+    "listingPrice": null, "isOnMarket": false
   },
   "planning": {
     "zone": "...",
@@ -3130,6 +3347,11 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                     landAreaConfidence: c.landAreaConfidence,
                     isAlreadySubdividedChild: c.isAlreadySubdividedChild,
                     zone: c.zone,
+                    buildYear: c.buildYear,
+                    typology: c.typology,
+                    titleConfidence: c.titleConfidence,
+                    subdivisionEligible: c.subdivisionEligible,
+                    subdivisionRejectReason: c.subdivisionRejectReason,
                   })),
                 );
                 const aiIntro = content;

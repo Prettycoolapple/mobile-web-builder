@@ -76,6 +76,11 @@ export interface PropertyOverview {
   zone?: string;
   /** LINZ estate description / tenure (e.g. Fee Simple, Cross lease). */
   titleType?: string | null;
+  typology?: "standalone" | "terrace_townhouse" | "unit_apartment" | "unknown";
+  typologyConfidence?: "verified" | "inferred" | "unknown";
+  titleConfidence?: "verified" | "inferred" | "unknown";
+  subdivisionEligible?: boolean | null;
+  subdivisionRejectReason?: string | null;
   listingPrice?: string;
   isOnMarket?: boolean;
 }
@@ -386,6 +391,12 @@ export interface PropertyCandidate {
   /** Floor (dwelling) area in m². */
   floorArea?: number;
   floorAreaApprox?: boolean;
+  typology?: "standalone" | "terrace_townhouse" | "unit_apartment" | "unknown";
+  typologyConfidence?: "verified" | "inferred" | "unknown";
+  titleConfidence?: "verified" | "inferred" | "unknown";
+  subdivisionEligible?: boolean;
+  subdivisionRejectReason?: string | null;
+  buildYear?: number | null;
 }
 
 export interface Session {

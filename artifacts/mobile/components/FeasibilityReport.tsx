@@ -6,7 +6,10 @@ import {
   ScrollView,
   TouchableOpacity,
   Image,
+  ActivityIndicator,
 } from "react-native";
+import { useAuth } from "@/context/AuthContext";
+import { getApiBase } from "@/lib/api";
 import Svg, { Polygon } from "react-native-svg";
 import { LinearGradient } from "expo-linear-gradient";
 import { Feather } from "@expo/vector-icons";
@@ -447,10 +450,14 @@ function ReportPhotoCarousel({
   report,
   photoUrls,
   colors,
+  onRefreshPhotos,
+  isRefreshingPhotos,
 }: {
   report: Report;
   photoUrls: string[];
   colors: ReturnType<typeof useColors>;
+  onRefreshPhotos?: () => void;
+  isRefreshingPhotos?: boolean;
 }) {
   const [width, setWidth] = useState(0);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -480,6 +487,13 @@ function ReportPhotoCarousel({
 
   const displayUrls = visibleUrls.length > 0 ? visibleUrls : (recoveryUrl ? [recoveryUrl] : []);
   const total = displayUrls.length;
+
+  // Show refresh pill only when there are zero real listing photos (i.e. the
+  // user is staring at a Street View / Satellite fallback, or the placeholder).
+  // Hides itself when we have ANY real listing photo so we don't pollute the
+  // UI for healthy reports.
+  const showRefreshPill =
+    !!onRefreshPhotos && visibleUrls.length === 0;
 
   const handleScroll = useCallback((e: { nativeEvent: { contentOffset: { x: number } } }) => {
     if (width <= 0) return;
@@ -548,6 +562,28 @@ function ReportPhotoCarousel({
             />
           ))}
         </View>
+      )}
+
+      {/* Refresh-photos pill — appears only when carousel is showing fallback */}
+      {showRefreshPill && (
+        <TouchableOpacity
+          style={styles.refreshPhotosPill}
+          onPress={onRefreshPhotos}
+          activeOpacity={0.8}
+          disabled={!!isRefreshingPhotos}
+        >
+          {isRefreshingPhotos ? (
+            <>
+              <ActivityIndicator size="small" color="#fff" />
+              <Text style={styles.refreshPhotosPillText}>{translate("report.photos.refreshing")}</Text>
+            </>
+          ) : (
+            <>
+              <Feather name="refresh-cw" size={12} color="#fff" />
+              <Text style={styles.refreshPhotosPillText}>{translate("report.photos.refresh")}</Text>
+            </>
+          )}
+        </TouchableOpacity>
       )}
     </View>
   );
@@ -1828,12 +1864,52 @@ function SchoolZonesPanel({ zones, colors }: { zones: SchoolZoneDetail[]; colors
 export function FeasibilityReportCard({ report, onFollowUp }: Props) {
   const colors = useColors();
   const { t } = useT();
+  const { getApiHeaders } = useAuth();
 
   const planningSection = overlayStatus(report);
   const asbestosStatus: "good" | "warning" | "risk" | "neutral" = report.asbestos
     ? (getAsbestosRisk(report.asbestos) === "high" ? "risk" : "good")
     : "neutral";
-  const photoUrls = getReportPhotoUrls(report);
+
+  // Local override for refreshed photos — server persists into resultJson so
+  // history view will see them on next fetch; this state keeps the in-memory
+  // carousel showing the new photos immediately.
+  const [refreshedPhotoUrls, setRefreshedPhotoUrls] = useState<string[] | null>(null);
+  const [isRefreshingPhotos, setIsRefreshingPhotos] = useState(false);
+
+  const effectiveReport = useMemo<Report>(() => {
+    if (!refreshedPhotoUrls || refreshedPhotoUrls.length === 0) return report;
+    return { ...report, photoUrls: refreshedPhotoUrls, photoUrl: refreshedPhotoUrls[0] ?? report.photoUrl };
+  }, [report, refreshedPhotoUrls]);
+
+  const photoUrls = getReportPhotoUrls(effectiveReport);
+
+  const handleRefreshPhotos = useCallback(async () => {
+    const searchId = report.historyId ?? null;
+    if (!searchId || isRefreshingPhotos) return;
+    setIsRefreshingPhotos(true);
+    try {
+      const headers = getApiHeaders();
+      const resp = await fetch(`${getApiBase()}/analyse/${encodeURIComponent(searchId)}/refresh-photos`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!resp.ok) {
+        // Silent failure — the pill returns to its idle state. Don't pop alerts
+        // for what is essentially a best-effort retry.
+        return;
+      }
+      const data = await resp.json() as { photoUrls?: string[] };
+      if (Array.isArray(data.photoUrls) && data.photoUrls.length > 0) {
+        setRefreshedPhotoUrls(data.photoUrls);
+      }
+    } catch {
+      // Network failure — silent. User can retry.
+    } finally {
+      setIsRefreshingPhotos(false);
+    }
+  }, [report.historyId, isRefreshingPhotos, getApiHeaders]);
   const bedrooms = report.propertyOverview?.bedrooms;
   const bathrooms = report.propertyOverview?.bathrooms;
   const realComparableSales = (report.comparableSales ?? []).filter(isSourceBackedComparable);
@@ -1852,7 +1928,13 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
       <View style={[styles.reportHeader, { backgroundColor: colors.headerBg }]}>
         {/* Always render the carousel — when no photo URLs resolve it shows
             a labelled placeholder rather than collapsing the hero entirely. */}
-        <ReportPhotoCarousel report={report} photoUrls={photoUrls} colors={colors} />
+        <ReportPhotoCarousel
+          report={effectiveReport}
+          photoUrls={photoUrls}
+          colors={colors}
+          onRefreshPhotos={report.historyId ? handleRefreshPhotos : undefined}
+          isRefreshingPhotos={isRefreshingPhotos}
+        />
 
         <View style={[styles.reportHeaderTop, { paddingTop: 12 }]}>
           <View style={[styles.reportIcon, { backgroundColor: colors.accent }]}>
@@ -2153,6 +2235,8 @@ const styles = StyleSheet.create({
   photoDot: { borderRadius: 5 },
   photoDotActive: { width: 20, height: 4, backgroundColor: "rgba(255,255,255,0.95)" },
   photoDotInactive: { width: 6, height: 4, backgroundColor: "rgba(255,255,255,0.40)" },
+  refreshPhotosPill: { position: "absolute", bottom: 10, right: 12, flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 100, backgroundColor: "rgba(0,0,0,0.65)", borderWidth: StyleSheet.hairlineWidth, borderColor: "rgba(255,255,255,0.25)" },
+  refreshPhotosPillText: { color: "#fff", fontFamily: "DM_Sans_500Medium", fontSize: 11 },
   scoresSection: { paddingBottom: 16 },
   overallRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", paddingHorizontal: 18, paddingTop: 16, paddingBottom: 10, gap: 8 },
   overallLabel: { fontFamily: "DM_Sans_400Regular", fontSize: 10, textTransform: "uppercase", letterSpacing: 1.2 },

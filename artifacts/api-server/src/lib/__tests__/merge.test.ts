@@ -74,4 +74,40 @@ describe("mergePropertyData", () => {
     expect(merged.contour_sample_count).toBe(420);
     expect(merged.large_site_terrain_adjusted).toBe(true);
   });
+
+  it("uses exact active listing area for unit-like properties instead of parent LINZ parcel area", () => {
+    const merged = mergePropertyData(
+      { area_sqm: 832 } as any,
+      null,
+      null,
+      { zone_code: "MHS", zone_description: "Mixed Housing Suburban", min_lot_size_sqm: 400 } as any,
+      [],
+      {
+        contour: null,
+        asbestos_risk: "unknown",
+        infrastructure: [],
+        realestate_listing: {
+          address: "1 Chesterfield Avenue, St Heliers, Auckland",
+          price: 1_259_000,
+          priceText: "$1,259,000",
+          landArea: 342,
+          landAreaSource: "realestate_page",
+          landAreaConfidence: "verified",
+          listingUrl: "https://www.realestate.co.nz/example",
+          photoUrl: null,
+          photoUrls: [],
+          zone: null,
+          bedrooms: 2,
+          bathrooms: 1,
+          floorArea: 115,
+          propertyType: "Unit",
+          tenureText: "Unit Title",
+          legalDescription: "Unit A and Accessory Unit 1-2 Deposited Plan 91363",
+        },
+      },
+    );
+
+    expect(merged.land_area_sqm).toBe(342);
+    expect(merged.data_sources.land_area_sqm).toContain("realestate.co.nz");
+  });
 });

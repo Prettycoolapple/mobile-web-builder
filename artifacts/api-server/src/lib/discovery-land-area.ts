@@ -92,8 +92,16 @@ export function passesStrictStandardSubdivisionScreen(input: {
   minLotSize?: number | null;
   landAreaConfidence?: DiscoveryLandAreaConfidence | null;
   isAlreadySubdividedChild?: boolean | null;
+  typology?: "standalone" | "terrace_townhouse" | "unit_apartment" | "unknown" | null;
+  titleConfidence?: "verified" | "inferred" | "unknown" | null;
+  subdivisionEligible?: boolean | null;
+  buildYear?: number | null;
 }): boolean {
   if (input.isAlreadySubdividedChild) return false;
+  if (input.subdivisionEligible === false) return false;
+  if (input.typology !== "standalone") return false;
+  if (input.titleConfidence !== "verified") return false;
+  if (input.buildYear == null || input.buildYear >= 2000) return false;
   if (input.landAreaConfidence !== "verified") return false;
   if (!input.landArea || input.landArea <= 0) return false;
   if (!input.zone) return false;

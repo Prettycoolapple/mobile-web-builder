@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { hasNumberedStreetAddress, hasUnnumberedStreetLine } from "../street-address-detect";
+import {
+  hasNonStandardSalePropertyReference,
+  hasNumberedStreetAddress,
+  hasUnnumberedStreetLine,
+} from "../street-address-detect";
 
 describe("hasNumberedStreetAddress", () => {
   it("accepts letter suffix after number (66A Marine Parade)", () => {
@@ -23,5 +27,20 @@ describe("hasNumberedStreetAddress", () => {
 describe("hasUnnumberedStreetLine", () => {
   it("is false when a numbered lot is present (66A)", () => {
     expect(hasUnnumberedStreetLine("66A marine parade")).toBe(false);
+  });
+});
+
+describe("hasNonStandardSalePropertyReference", () => {
+  it("detects balance-land style listing labels on a road", () => {
+    expect(hasNonStandardSalePropertyReference("Village 2/& Balance Land, Ara weiti road")).toBe(true);
+  });
+
+  it("does not flag normal numbered addresses", () => {
+    expect(hasNonStandardSalePropertyReference("2/14 Example Street Road")).toBe(false);
+    expect(hasNonStandardSalePropertyReference("66A Marine Parade")).toBe(false);
+  });
+
+  it("requires a street/road reference so generic land searches still use discovery", () => {
+    expect(hasNonStandardSalePropertyReference("show me lifestyle land in Okura Bush")).toBe(false);
   });
 });

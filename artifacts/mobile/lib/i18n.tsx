@@ -863,6 +863,10 @@ const en: Catalog = {
   "report.easement_severity_significant": "significant",
   // Hero / photo
   "report.photo_unavailable": "Property image unavailable",
+  "report.photos.refresh": "Refresh photos",
+  "report.photos.refreshing": "Refreshing…",
+  "report.photos.refresh_failed": "Couldn't find new photos",
+  "report.photos.refresh_success": "Photos updated",
   "report.score_overall": "OVERALL",
   // Overlay map caption in header
   "report.overlay_map_hougarden": "Planning overlay map (via Hougarden)",
@@ -1712,6 +1716,10 @@ const zh: Catalog = {
   "report.easement_severity_significant": "显著",
   // Hero / photo
   "report.photo_unavailable": "物业照片暂不可用",
+  "report.photos.refresh": "刷新照片",
+  "report.photos.refreshing": "正在刷新…",
+  "report.photos.refresh_failed": "未能找到新照片",
+  "report.photos.refresh_success": "照片已更新",
   "report.score_overall": "总评",
   // Overlay map caption in header
   "report.overlay_map_hougarden": "规划叠加层地图（来源：Hougarden）",

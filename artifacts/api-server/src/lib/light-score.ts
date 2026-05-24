@@ -6,6 +6,7 @@ import { estimateCosts } from "./cost-estimator";
 import { calculateBearBaseBullScenarios } from "./roi-calculator";
 import { scoreProperty, type ScoringResult } from "./scoring";
 import type { MergedPropertyData } from "./scrapers/merge";
+import type { PropertyEligibilityConfidence, PropertyTypology } from "./property-eligibility";
 
 export interface LightScoreInput {
   address: string;
@@ -16,6 +17,10 @@ export interface LightScoreInput {
   isAlreadySubdividedChild?: boolean;
   zone?: string;
   buildYear?: number | null;
+  typology?: PropertyTypology;
+  titleConfidence?: PropertyEligibilityConfidence;
+  subdivisionEligible?: boolean;
+  subdivisionRejectReason?: string | null;
 }
 
 export interface LightScoreResult {
@@ -65,7 +70,12 @@ export async function computeLightScore(input: LightScoreInput): Promise<LightSc
         : "unknown";
 
   const lotResult = calculatePotentialLots(land, zoneCode, 0);
-  const lots = lotResult.lots;
+  const forceSingleLot = input.subdivisionEligible === false
+    || input.isAlreadySubdividedChild === true
+    || (input.typology != null && input.typology !== "standalone")
+    || (input.titleConfidence != null && input.titleConfidence !== "verified")
+    || (input.buildYear != null && input.buildYear >= 2000);
+  const lots = forceSingleLot ? 1 : lotResult.lots;
 
   const minimalMerged: MergedPropertyData = {
     cv_nzd: price,
@@ -99,6 +109,12 @@ export async function computeLightScore(input: LightScoreInput): Promise<LightSc
     discrepancies: [],
     bathrooms: null,
     estate_type: null,
+    property_type: null,
+    typology: input.typology ?? "unknown",
+    typologyConfidence: input.typology ? "inferred" : "unknown",
+    titleConfidence: input.titleConfidence ?? "unknown",
+    subdivisionEligible: input.subdivisionEligible ?? null,
+    subdivisionRejectReason: input.subdivisionRejectReason ?? null,
   };
 
   const costs = estimateCosts(minimalMerged, lots, { sqm_per_lot: lotResult.sqm_per_lot });

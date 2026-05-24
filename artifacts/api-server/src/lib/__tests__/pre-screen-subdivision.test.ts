@@ -4,6 +4,7 @@ import { geocodeAddress } from "../geocode";
 import { fetchOverlays, fetchUnitaryPlanZone } from "../auckland-council";
 import { fetchLINZParcel } from "../linz";
 import { scrapeHomes } from "../scrapers/homes";
+import { fetchPropertyHistory } from "../property-data";
 import type { ListingResult } from "../scrapers/oneroof";
 
 vi.mock("../geocode", () => ({ geocodeAddress: vi.fn() }));
@@ -13,12 +14,14 @@ vi.mock("../auckland-council", () => ({
 }));
 vi.mock("../linz", () => ({ fetchLINZParcel: vi.fn() }));
 vi.mock("../scrapers/homes", () => ({ scrapeHomes: vi.fn() }));
+vi.mock("../property-data", () => ({ fetchPropertyHistory: vi.fn() }));
 
 const mockedGeocode = vi.mocked(geocodeAddress);
 const mockedZone = vi.mocked(fetchUnitaryPlanZone);
 const mockedOverlays = vi.mocked(fetchOverlays);
 const mockedLinz = vi.mocked(fetchLINZParcel);
 const mockedHomes = vi.mocked(scrapeHomes);
+const mockedPropertyHistory = vi.mocked(fetchPropertyHistory);
 
 function listing(overrides: Partial<ListingResult>): ListingResult {
   return {
@@ -33,6 +36,9 @@ function listing(overrides: Partial<ListingResult>): ListingResult {
     zone: null,
     bedrooms: 3,
     bathrooms: 2,
+    propertyType: "House",
+    tenureText: "Freehold",
+    legalDescription: "Lot 1 Deposited Plan 12345",
     ...overrides,
   };
 }
@@ -49,6 +55,16 @@ describe("strict subdivision pre-screening", () => {
     mockedOverlays.mockResolvedValue([]);
     mockedLinz.mockResolvedValue(null);
     mockedHomes.mockResolvedValue(null);
+    mockedPropertyHistory.mockResolvedValue({
+      cv_nzd: null,
+      cv_year: null,
+      build_year: 1950,
+      floor_area_sqm: 150,
+      land_area_sqm: 800,
+      property_type: "Residential Dwelling",
+      sources_confirmed: [],
+      sources_estimated: [],
+    });
   });
 
   it("excludes 352F Kohimarama Road after exact land area verifies below subdivision threshold", async () => {
@@ -95,6 +111,8 @@ describe("strict subdivision pre-screening", () => {
     expect(results[0].landArea).toBe(800);
     expect(results[0].potentialLots).toBeGreaterThanOrEqual(2);
     expect(results[0].landAreaConfidence).toBe("verified");
+    expect(results[0].typology).toBe("standalone");
+    expect(results[0].subdivisionEligible).toBe(true);
   });
 
   it("excludes an MHS site below the two-lot minimum area", async () => {
@@ -102,6 +120,50 @@ describe("strict subdivision pre-screening", () => {
 
     const results = await preScreenListingsFast([
       listing({ address: "31 Example Street, St Heliers, Auckland City, Auckland", landArea: 300 }),
+    ], 1, null, { allowMissingListingPrice: true, strictStandardSubdivision: true });
+
+    expect(results).toEqual([]);
+  });
+
+  it("excludes a unit-title listing even when parent parcel land area would pass", async () => {
+    mockedPropertyHistory.mockResolvedValue({
+      cv_nzd: null,
+      cv_year: null,
+      build_year: 1950,
+      floor_area_sqm: 115,
+      land_area_sqm: 342,
+      property_type: "Unit",
+      sources_confirmed: [],
+      sources_estimated: [],
+    });
+
+    const results = await preScreenListingsFast([
+      listing({
+        address: "1 Chesterfield Avenue, St Heliers, Auckland City, Auckland",
+        landArea: 342,
+        propertyType: "Unit",
+        tenureText: "Unit Title",
+        legalDescription: "Unit A and Accessory Unit 1-2 Deposited Plan 91363",
+      }),
+    ], 1, null, { allowMissingListingPrice: true, strictStandardSubdivision: true });
+
+    expect(results).toEqual([]);
+  });
+
+  it("excludes post-2000 standalone freehold sites from strict subdividable cards", async () => {
+    mockedPropertyHistory.mockResolvedValue({
+      cv_nzd: null,
+      cv_year: null,
+      build_year: 2005,
+      floor_area_sqm: 180,
+      land_area_sqm: 900,
+      property_type: "Residential Dwelling",
+      sources_confirmed: [],
+      sources_estimated: [],
+    });
+
+    const results = await preScreenListingsFast([
+      listing({ address: "24 Example Road, St Heliers, Auckland City, Auckland", landArea: 900 }),
     ], 1, null, { allowMissingListingPrice: true, strictStandardSubdivision: true });
 
     expect(results).toEqual([]);

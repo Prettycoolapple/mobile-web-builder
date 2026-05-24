@@ -29,9 +29,18 @@ import {
   type DevelopmentStrategyScenario,
 } from "./development-strategies";
 import { fetchRealestateListingForAddress, fetchSupplementListingComparables } from "./scrapers/realestate-api";
+import { scrapeTradeMePropertyPhotos } from "./scrapers/trademe-property";
+import { scrapeHougardenPhotos } from "./scrapers/hougarden-photos";
+import { scrapeHomesPhotos } from "./scrapers/homes-photos";
+import { findPropertyPhotosWithFallback } from "./scrapers/web-image-search";
 import { enrichSchoolZonesDetail, type SchoolZoneDetail } from "./school-directory";
 import { inferSchoolZonesFromLocation } from "./school-zones-llm";
 import { resolvePipelineSuburb } from "./suburb-resolver";
+import {
+  assessPropertyEligibility,
+  eligibilityPlanningNote,
+  shouldForceSingleLotForEligibility,
+} from "./property-eligibility";
 
 const AC_PROP_MAPSERVER = "https://mapspublic.aucklandcouncil.govt.nz/arcgis3/rest/services/NonCouncil/PropertyValueInfo/MapServer";
 
@@ -75,6 +84,14 @@ function inferEstateTypeFromParcel(parcel: LinzParcel | null): string | null {
     return "Fee Simple";
   }
   return null;
+}
+
+function forceSingleLotResult(lotResult: LotResult): LotResult {
+  return {
+    ...lotResult,
+    lots: 1,
+    sqm_per_lot: Math.round(lotResult.net_area_sqm || lotResult.gross_area_sqm || 0),
+  };
 }
 
 /**
@@ -756,11 +773,91 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     },
   );
 
+  // ── Photo enrichment ───────────────────────────────────────────────────
+  // Run additional photo-only scrapers in parallel. These are Vercel-safe
+  // (ScrapingBee + plain fetch) and add coverage for archived/sold listings
+  // that the main scrapers (OneRoof, realestate.co.nz) commonly miss.
+  // Best-effort: any scraper that fails or times out simply contributes [].
+  const PHOTO_ENRICHMENT_TIMEOUT_MS = 12_000;
+  const photoEnrichmentPromise = (async () => {
+    const withTimeout = <T>(p: Promise<T>, fallback: T): Promise<T> =>
+      Promise.race([
+        p,
+        new Promise<T>((resolve) => setTimeout(() => resolve(fallback), PHOTO_ENRICHMENT_TIMEOUT_MS)),
+      ]).catch(() => fallback);
+
+    const [trademe, hougardenPhotos, homesPhotos] = await Promise.all([
+      withTimeout(scrapeTradeMePropertyPhotos(address), { photo_urls: [] as string[], listing_url: null as string | null, data_source: "trademe" as const, scraped_at: "" }),
+      withTimeout(scrapeHougardenPhotos(address), { photo_urls: [] as string[], listing_url: null as string | null, data_source: "hougarden_photos" as const, scraped_at: "" }),
+      withTimeout(scrapeHomesPhotos(address), { photo_urls: [] as string[], listing_url: null as string | null, data_source: "homes_photos" as const, scraped_at: "" }),
+    ]);
+    return { trademe, hougardenPhotos, homesPhotos };
+  })();
+
+  const enrichment = await photoEnrichmentPromise;
+
+  // Append new photo sources into merged.photo_urls (deduped). Keep existing
+  // first-priority sources up front; new sources only fill gaps.
+  const beforeEnrichCount = merged.photo_urls.length;
+  const enriched = Array.from(new Set([
+    ...merged.photo_urls,
+    ...enrichment.trademe.photo_urls,
+    ...enrichment.hougardenPhotos.photo_urls,
+    ...enrichment.homesPhotos.photo_urls,
+  ].filter(Boolean)));
+  merged.photo_urls = enriched;
+  if (!merged.main_photo_url && merged.photo_urls.length > 0) {
+    merged.main_photo_url = merged.photo_urls[0];
+  }
+
+  // If after deterministic enrichment we STILL have zero photos, fall back to
+  // DuckDuckGo image search restricted to NZ real-estate CDN hosts. Honours
+  // the DISABLE_AI_PHOTO_FALLBACK env-var kill switch.
+  let aiFallbackUsed = false;
+  if (merged.photo_urls.length === 0) {
+    try {
+      const aiPhotos = await findPropertyPhotosWithFallback(address);
+      if (aiPhotos.length > 0) {
+        merged.photo_urls = aiPhotos;
+        merged.main_photo_url = aiPhotos[0];
+        aiFallbackUsed = true;
+      }
+    } catch (err) {
+      logger.warn({ err: String(err), address }, "Photo AI fallback errored");
+    }
+  }
+
+  // ── PhotoScrape diagnostic — observability for triage ──
+  logger.info({
+    address,
+    photoSources: {
+      oneroof: oneRoofData?.photo_urls?.length ?? 0,
+      oneroofMain: oneRoofData?.main_photo_url ? 1 : 0,
+      realestate: realestateListing?.photoUrls?.length ?? 0,
+      realestateExtra: realestatePhotoUrls.length,
+      propertyValue: propertyValueData?.photo_urls?.length ?? 0,
+      trademe: enrichment.trademe.photo_urls.length,
+      hougardenPhotos: enrichment.hougardenPhotos.photo_urls.length,
+      homesPhotos: enrichment.homesPhotos.photo_urls.length,
+    },
+    beforeEnrichCount,
+    totalUnique: merged.photo_urls.length,
+    aiFallbackUsed,
+    aiPhotoCount: aiFallbackUsed ? merged.photo_urls.length : 0,
+    realestateListingFound: !!realestateListing,
+  }, "PhotoScrape: summary");
+
   const titleEstate = linzTitle?.estate_type?.trim() ?? null;
   const parcelEstate = inferEstateTypeFromParcel(linzParcelData);
-  const estateFromTitle = titleEstate ?? parcelEstate;
+  const estateFromTitle = titleEstate ?? parcelEstate ?? realestateListing?.tenureText?.trim() ?? null;
   merged.estate_type = estateFromTitle;
-  if (estateFromTitle) merged.data_sources["estate_type"] = titleEstate ? "linz_title" : "linz_parcel_inferred";
+  if (estateFromTitle) {
+    merged.data_sources["estate_type"] = titleEstate
+      ? "linz_title"
+      : parcelEstate
+        ? "linz_parcel_inferred"
+        : "realestate.co.nz";
+  }
 
   // Cross-validate land area between LINZ and scrapers — log warning if they diverge >10%.
   // LINZ is already the canonical source (first priority in mergePropertyData), but we surface
@@ -797,11 +894,46 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   ];
 
   const easementAreaSqm = easementAnalysis?.total_burdening_area_sqm ?? 0;
-  const lotResult = calculatePotentialLots(
+  const rawLotResult = calculatePotentialLots(
     merged.land_area_sqm ?? 400,
     merged.zone_code,
     easementAreaSqm,
   );
+  const eligibility = assessPropertyEligibility({
+    address: geocode.formatted ?? address,
+    estateType: merged.estate_type,
+    legalDescription: [
+      linzParcelData?.legal_description,
+      linzParcelData?.appellation,
+      realestateListing?.legalDescription,
+    ].filter(Boolean).join(" "),
+    propertyType: merged.property_type ?? propertyHistoryData?.property_type ?? propertyValueData?.property_type,
+    listingPropertyType: realestateListing?.propertyType,
+    listingCategory: realestateListing?.listingCategory,
+    listingTenureText: realestateListing?.tenureText,
+    listingLegalDescription: realestateListing?.legalDescription,
+    linzParcel: linzParcelData,
+    landAreaSqm: merged.land_area_sqm,
+    floorAreaSqm: merged.floor_area_sqm,
+    buildYear: merged.build_year,
+    buildYearRange: merged.build_year_range,
+    zoneCode: merged.zone_code,
+    potentialLots: rawLotResult.lots,
+    minLotSize: rawLotResult.min_lot_size,
+  });
+  merged.typology = eligibility.typology;
+  merged.typologyConfidence = eligibility.typologyConfidence;
+  merged.titleConfidence = eligibility.titleConfidence;
+  merged.subdivisionEligible = eligibility.subdivisionEligible;
+  merged.subdivisionRejectReason = eligibility.subdivisionRejectReason;
+  if (eligibility.typology !== "unknown") merged.data_sources["typology"] = eligibility.typologyConfidence;
+  if (eligibility.titleConfidence !== "unknown") merged.data_sources["title_confidence"] = eligibility.titleConfidence;
+  if (eligibility.subdivisionRejectReason) {
+    merged.data_sources["subdivision_reject_reason"] = eligibility.subdivisionRejectReason;
+  }
+  const lotResult = shouldForceSingleLotForEligibility(eligibility)
+    ? forceSingleLotResult(rawLotResult)
+    : rawLotResult;
   const subdivisionPathway = buildSubdivisionPathwayNote(
     lotResult.net_area_sqm,
     merged.zone_code,
@@ -809,6 +941,13 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     lotResult.min_lot_size,
     lotResult.zone_label,
   );
+  const eligibilityNote = eligibilityPlanningNote(eligibility);
+  if (eligibilityNote) {
+    subdivisionPathway.detail = `${subdivisionPathway.detail} ${eligibilityNote}`;
+    subdivisionPathway.headline = lotResult.lots <= 1
+      ? `${subdivisionPathway.headline} Title/typology verification required.`
+      : subdivisionPathway.headline;
+  }
 
   const neighbourhoodContextResult = await timed(
     "neighbourhood_context",

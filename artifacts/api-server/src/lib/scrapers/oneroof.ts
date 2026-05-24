@@ -14,6 +14,14 @@ export interface ListingResult {
   isAlreadySubdividedChild?: boolean;
   /** Floor (dwelling) area in m². Sourced opportunistically from og:description; null when not advertised. */
   floorArea?: number | null;
+  /** Listing/category signal such as House, Unit, Apartment, or Townhouse. */
+  propertyType?: string | null;
+  /** Broader listing category signal from the source when available. */
+  listingCategory?: string | null;
+  /** Tenure/title text from a listing page, e.g. Freehold, Unit Title, Cross Lease. */
+  tenureText?: string | null;
+  /** Legal description text from a listing page when exposed. */
+  legalDescription?: string | null;
   photoUrl: string | null;
   /** All available high-res photo URLs for this listing. */
   photoUrls?: string[];
@@ -557,24 +565,34 @@ async function scrapeOneRoofViaBee(address: string): Promise<OneRoofData | null>
 async function scrapeOneRoofViaPublicSearch(address: string): Promise<OneRoofData | null> {
   const street = address.split(",")[0]?.trim() || address;
   const suburb = address.split(",")[1]?.replace(/\b\d{4}\b/g, "").trim();
-  const query = suburb ? `"${street}" "${suburb}" "OneRoof"` : `"${street}" "OneRoof"`;
-  const searchUrl = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
   const headers = {
     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
     "accept-language": "en-NZ,en;q=0.9",
   };
 
-  const searchHtml = await fetch(searchUrl, { headers }).then((r) => r.ok ? r.text() : "");
-  if (!searchHtml || searchHtml.length < 500) return null;
+  // Try multiple queries — second one is site-restricted to OneRoof so archived/
+  // sold listings (e.g. `/property/auckland/coatesville/70-screen-road/GfkeQ`)
+  // surface even when DuckDuckGo's default ranking favours active listings.
+  const queries: string[] = [];
+  queries.push(suburb ? `"${street}" "${suburb}" "OneRoof"` : `"${street}" "OneRoof"`);
+  queries.push(suburb ? `site:oneroof.co.nz/property "${street}" "${suburb}"` : `site:oneroof.co.nz/property "${street}"`);
 
-  const propertyUrl = extractOneRoofPropertyUrlsFromSearchHtml(searchHtml, address)[0];
-  if (!propertyUrl) return null;
+  for (const query of queries) {
+    const searchUrl = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const searchHtml = await fetch(searchUrl, { headers }).then((r) => r.ok ? r.text() : "").catch(() => "");
+    if (!searchHtml || searchHtml.length < 500) continue;
 
-  const propertyHtml = await fetch(propertyUrl, { headers }).then((r) => r.ok ? r.text() : "");
-  if (!propertyHtml || propertyHtml.length < 500) return null;
+    const propertyUrl = extractOneRoofPropertyUrlsFromSearchHtml(searchHtml, address)[0];
+    if (!propertyUrl) continue;
 
-  const extracted = await extractOneRoofDataFromHtml(propertyHtml, propertyUrl);
-  return hasUsefulData(extracted) || extracted.photo_urls.length > 0 ? extracted : null;
+    const propertyHtml = await fetch(propertyUrl, { headers }).then((r) => r.ok ? r.text() : "").catch(() => "");
+    if (!propertyHtml || propertyHtml.length < 500) continue;
+
+    const extracted = await extractOneRoofDataFromHtml(propertyHtml, propertyUrl);
+    if (hasUsefulData(extracted) || extracted.photo_urls.length > 0) return extracted;
+  }
+
+  return null;
 }
 
 export async function scrapeOneRoof(address: string): Promise<OneRoofData> {

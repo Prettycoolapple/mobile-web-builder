@@ -302,6 +302,13 @@ interface RawListing {
     "website-full-url"?: string;
     "listing-status"?: string;
     "is-featured"?: boolean;
+    "property-type"?: string;
+    "propertyType"?: string;
+    "listing-category"?: string;
+    "property-category"?: string;
+    "title-type"?: string;
+    tenure?: string;
+    "legal-description"?: string;
     photos?: Array<{ "base-url"?: string; large?: string; medium?: string }>;
   };
 }
@@ -388,6 +395,14 @@ function buildPhotoUrl(photos: RawListing["attributes"]["photos"]): string | nul
   return `${MEDIA_BASE}${baseUrl}.crop.1280x720.jpg`;
 }
 
+function stringAttr(attrs: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = attrs[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
 /**
  * Return up to `limit` high-res photo URLs from a listing's photo array.
  * Each photo uses the same 1280×720 crop path as the hero image.
@@ -408,6 +423,7 @@ export function buildPhotoUrls(
 
 function mapListing(raw: RawListing): ListingResult | null {
   const a = raw.attributes;
+  const rawAttrs = a as Record<string, unknown>;
   const url = a["website-full-url"];
   const address = a.address?.["full-address"] ?? a.address?.["display-address"];
   if (!url || !address) return null;
@@ -430,6 +446,10 @@ function mapListing(raw: RawListing): ListingResult | null {
     zone: null,
     bedrooms: typeof a["bedroom-count"] === "number" ? a["bedroom-count"] : null,
     bathrooms: typeof a["bathrooms-total-count"] === "number" ? a["bathrooms-total-count"] : null,
+    propertyType: stringAttr(rawAttrs, ["property-type", "propertyType", "property_type"]),
+    listingCategory: stringAttr(rawAttrs, ["listing-category", "property-category"]),
+    tenureText: stringAttr(rawAttrs, ["title-type", "tenure", "estate-type"]),
+    legalDescription: stringAttr(rawAttrs, ["legal-description", "legalDescription"]),
   };
 }
 
@@ -1007,6 +1027,54 @@ export function extractListingFactAreaSqm(text: string, kind: "land" | "floor"):
   return n;
 }
 
+function extractLabelledText(text: string, labels: string[], maxLen = 140): string | null {
+  if (!text) return null;
+  for (const label of labels) {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = text.match(new RegExp(`${escaped}\\s*:?\\s*([^|\\n]{2,${maxLen}})`, "i"));
+    const raw = match?.[1]?.trim();
+    if (raw) return raw.replace(/\s{2,}/g, " ").trim();
+  }
+  return null;
+}
+
+function extractPropertyTypeSignal(text: string): string | null {
+  const labelled = extractLabelledText(text, ["Property Type", "Type"], 80);
+  const contextual =
+    text.match(/\bproperty\s+type\b.{0,50}\b(unit|apartment|townhouse|terrace|house|dwelling)\b/i)?.[1] ??
+    text.match(/\btype\b.{0,30}\b(unit|apartment|townhouse|terrace|house|dwelling)\b/i)?.[1] ??
+    null;
+  const source = labelled ?? contextual;
+  if (!source) return null;
+  if (/\bunit\b/i.test(source)) return "Unit";
+  if (/\bapartment\b/i.test(source)) return "Apartment";
+  if (/\btownhouse\b|\bterrace\b/i.test(source)) return "Townhouse";
+  if (/\bhouse\b|\bdwelling\b|\bstandalone\b/i.test(source)) return "House";
+  return labelled;
+}
+
+function extractTenureSignal(text: string): string | null {
+  const labelled = extractLabelledText(text, ["Title", "Title Type", "Tenure", "Estate"], 100);
+  const source = labelled ?? text;
+  if (/\bunit\s+title\b/i.test(source)) return "Unit Title";
+  if (/\bcross\s*lease\b|\bcrosslease\b/i.test(source)) return "Cross Lease";
+  if (/\bstratum\b/i.test(source)) return "Stratum";
+  if (/\bfee\s+simple\b/i.test(source)) return "Fee Simple";
+  if (/\bfreehold\b/i.test(source)) return "Freehold";
+  return labelled;
+}
+
+function extractLegalDescriptionSignal(text: string): string | null {
+  const labelled = extractLabelledText(text, ["Legal Description", "Legal"], 180);
+  if (labelled && /\b(unit|accessory|lot|dp|deposited\s+plan|cross\s*lease|stratum)\b/i.test(labelled)) {
+    return labelled;
+  }
+  const unitMatch = text.match(/\b(unit\s+[a-z]\b.{0,120}?(?:deposited\s+plan|dp)\s*\d+)/i);
+  if (unitMatch?.[1]) return unitMatch[1].trim();
+  const lotMatch = text.match(/\b(lot\s+\d+[a-z]?.{0,120}?(?:deposited\s+plan|dp)\s*\d+)/i);
+  return lotMatch?.[1]?.trim() ?? null;
+}
+
 /**
  * Look for a JSON-LD "floorSize" field anywhere in the fetched HTML.
  * Realestate.co.nz embeds a Residence/SingleFamilyResidence record in many
@@ -1036,6 +1104,10 @@ interface OgMeta {
   /** Second-source floor area from page JSON-LD; used to cross-check against the og:description value. */
   floorAreaSqmJsonLd: number | null;
   price: number | null;
+  propertyType: string | null;
+  listingCategory: string | null;
+  tenureText: string | null;
+  legalDescription: string | null;
 }
 
 export function reconcileListingLandArea(
@@ -1084,6 +1156,10 @@ async function fetchOgMeta(url: string): Promise<OgMeta | null> {
       floorAreaSqm: extractListingFactAreaSqm(bodyText, "floor") ?? extractFloorAreaSqm(combined),
       floorAreaSqmJsonLd: extractFloorSizeFromJsonLd(html),
       price: parsePriceDisplay(combined),
+      propertyType: extractPropertyTypeSignal(bodyText),
+      listingCategory: null,
+      tenureText: extractTenureSignal(bodyText),
+      legalDescription: extractLegalDescriptionSignal(bodyText),
     };
   } catch {
     return null;
@@ -1174,6 +1250,10 @@ async function annotateApproxFields(listings: ListingResult[]): Promise<ListingR
         landAreaConfidence,
         isParentParcelSuspect,
         floorArea,
+        propertyType: og.propertyType ?? l.propertyType ?? null,
+        listingCategory: og.listingCategory ?? l.listingCategory ?? null,
+        tenureText: og.tenureText ?? l.tenureText ?? null,
+        legalDescription: og.legalDescription ?? l.legalDescription ?? null,
         bedroomsApprox,
         bathroomsApprox,
         landAreaApprox,

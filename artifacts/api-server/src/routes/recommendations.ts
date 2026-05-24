@@ -280,7 +280,12 @@ router.post("/recommendations/check", requireAuth, async (req: Request, res: Res
 
   try {
     const [currentUser] = await db
-      .select({ role: profiles.role, subscriptionTier: profiles.subscriptionTier })
+      .select({
+        role: profiles.role,
+        subscriptionTier: profiles.subscriptionTier,
+        specialStatus: profiles.specialStatus,
+        specialStatusExpiresAt: profiles.specialStatusExpiresAt,
+      })
       .from(profiles)
       .where(eq(profiles.id, userId))
       .limit(1);
@@ -292,8 +297,14 @@ router.post("/recommendations/check", requireAuth, async (req: Request, res: Res
 
     // Provider recommendations are visible to free users as an upsell;
     // initiating an in-app DM is gated on Standard/Pro by /recommendations/connect.
+    // Users with active special status (friends_family / supercharge) get Standard-equivalent access.
     const tier = currentUser.subscriptionTier ?? "free";
-    const upgradeRequired = tier !== "standard" && tier !== "pro";
+    const hasActiveSpecialStatus =
+      currentUser.specialStatus === "friends_family" ||
+      (currentUser.specialStatus === "supercharge" &&
+        (currentUser.specialStatusExpiresAt == null ||
+          new Date(currentUser.specialStatusExpiresAt) > new Date()));
+    const upgradeRequired = !hasActiveSpecialStatus && tier !== "standard" && tier !== "pro";
 
     const {
       report,
@@ -417,7 +428,12 @@ router.post("/recommendations/connect", requireAuth, async (req: Request, res: R
 
   try {
     const [me] = await db
-      .select({ role: profiles.role, subscriptionTier: profiles.subscriptionTier })
+      .select({
+        role: profiles.role,
+        subscriptionTier: profiles.subscriptionTier,
+        specialStatus: profiles.specialStatus,
+        specialStatusExpiresAt: profiles.specialStatusExpiresAt,
+      })
       .from(profiles)
       .where(eq(profiles.id, userId))
       .limit(1);
@@ -427,9 +443,15 @@ router.post("/recommendations/connect", requireAuth, async (req: Request, res: R
     }
     // Only general users with a paid tier can initiate provider DMs.
     // Sales agents and providers can always reply via the DM routes themselves.
+    // Users with active special status (friends_family / supercharge) get Standard-equivalent access.
     if (me.role === "general") {
       const tier = me.subscriptionTier ?? "free";
-      if (tier !== "standard" && tier !== "pro") {
+      const hasActiveSpecialStatus =
+        me.specialStatus === "friends_family" ||
+        (me.specialStatus === "supercharge" &&
+          (me.specialStatusExpiresAt == null ||
+            new Date(me.specialStatusExpiresAt) > new Date()));
+      if (!hasActiveSpecialStatus && tier !== "standard" && tier !== "pro") {
         res.status(402).json({ error: "Upgrade required", upgradeRequired: true });
         return;
       }
