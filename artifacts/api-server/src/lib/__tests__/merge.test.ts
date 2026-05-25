@@ -110,4 +110,64 @@ describe("mergePropertyData", () => {
     expect(merged.land_area_sqm).toBe(342);
     expect(merged.data_sources.land_area_sqm).toContain("realestate.co.nz");
   });
+
+  it("does not apply aggregate facts from a combined active listing to one subject address", () => {
+    const merged = mergePropertyData(
+      { area_sqm: 393 } as any,
+      null,
+      null,
+      { zone_code: "MHU", zone_description: "Mixed Housing Urban", min_lot_size_sqm: 300 } as any,
+      [],
+      {
+        contour: null,
+        asbestos_risk: "unknown",
+        infrastructure: [],
+        propertyValue: {
+          cv_nzd: 2_075_000,
+          lv_nzd: null,
+          iv_nzd: null,
+          cv_year: 2024,
+          property_type: "House",
+          property_sub_type: null,
+          land_area_sqm: 393,
+          floor_area_sqm: 139,
+          build_year: 1910,
+          build_year_range: null,
+          bedrooms: 3,
+          bathrooms: 1,
+          listing_active: false,
+          photo_urls: [],
+          address_confirmed: "15 Fisherton Street, Grey Lynn",
+          property_id: 123,
+        },
+        analysed_address: "15 Fisherton Street, Grey Lynn, Auckland",
+        realestate_listing: {
+          address: "15 Fisherton Street & 7 Stanmore Road, Grey Lynn, Auckland",
+          price: 3_000_000,
+          priceText: "By negotiation",
+          landArea: 786,
+          landAreaSource: "realestate_page",
+          landAreaConfidence: "verified",
+          isCombinedListing: true,
+          combinedListingReason: "multi_address_listing",
+          listingUrl: "https://www.realestate.co.nz/example",
+          photoUrl: null,
+          photoUrls: [],
+          zone: null,
+          bedrooms: 6,
+          bathrooms: 2,
+          floorArea: 278,
+          propertyType: "House",
+          tenureText: "Freehold",
+          legalDescription: "Lot 1 Deposited Plan 12345",
+        },
+      },
+    );
+
+    expect(merged.land_area_sqm).toBe(393);
+    expect(merged.floor_area_sqm).toBe(139);
+    expect(merged.bedrooms).toBe(3);
+    expect(merged.bathrooms).toBe(1);
+    expect(merged.data_sources.realestate_listing).toBe("ignored combined listing");
+  });
 });

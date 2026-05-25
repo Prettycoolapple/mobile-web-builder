@@ -215,6 +215,7 @@ async function screenOneFast(
           zoneCode: zone,
           potentialLots: lots,
           minLotSize,
+          isCombinedListingAggregate: listing.isCombinedListing,
         })
       : null;
     if (options?.strictStandardSubdivision && !passesStrictStandardSubdivisionScreen({

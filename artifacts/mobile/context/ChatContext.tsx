@@ -32,7 +32,7 @@ export interface ChatMessage {
   role: MessageRole;
   content: string;
   timestamp: number;
-  type: "text" | "report" | "search" | "loading" | "provider_recommendation" | "provider_upgrade_gate" | "agent_contact" | "subdivision_clarification" | "address_clarification";
+  type: "text" | "report" | "report_group" | "search" | "loading" | "provider_recommendation" | "provider_upgrade_gate" | "agent_contact" | "subdivision_clarification" | "address_clarification";
   clarification?: {
     question: string;
     options: string[];
@@ -41,6 +41,7 @@ export interface ChatMessage {
   retryLabel?: string;
   retryText?: string;
   report?: FeasibilityReport;
+  reportGroup?: FeasibilityReportGroup;
   searchResults?: PropertyCandidate[];
   isMockData?: boolean;
   aiIntro?: string;
@@ -83,6 +84,15 @@ export interface PropertyOverview {
   subdivisionRejectReason?: string | null;
   listingPrice?: string;
   isOnMarket?: boolean;
+  combinedListingContext?: CombinedListingContext;
+}
+
+export interface CombinedListingContext {
+  isCombinedListingMatch: boolean;
+  packageAddress: string;
+  childAddresses: string[];
+  aggregateFactsExcluded: boolean;
+  note: string;
 }
 
 export interface PlanningOverlay {
@@ -362,6 +372,25 @@ export interface FeasibilityReport {
   cachedPhotoUris?: string[];
   /** Signature of the remote report photo sources used to populate cachedPhotoUris. */
   cachedPhotoSignature?: string;
+  combinedListingContext?: CombinedListingContext;
+}
+
+export interface FeasibilityReportGroup {
+  kind: "combined_listing_group";
+  packageAddress: string;
+  childAddresses: string[];
+  reports: FeasibilityReport[];
+  failures?: Array<{ address: string; error: string }>;
+  comparison: {
+    summary: string;
+    subdivisionView: string[];
+    investmentView: string[];
+    risks: string[];
+    recommendedNextStep: string;
+  };
+  warnings?: string[];
+  historyId?: string | null;
+  historyCreatedAt?: string | null;
 }
 
 export interface PropertyCandidate {
@@ -406,6 +435,7 @@ export interface Session {
   createdAt: number;
   updatedAt: number;
   currentReport?: FeasibilityReport;
+  currentReportGroup?: FeasibilityReportGroup;
   /** User rated the first LLM reply (thumbs up/down). */
   firstLlmResponseRating?: "up" | "down";
   /** Opened from History — skip first-turn rating prompt. */
@@ -428,8 +458,10 @@ interface ChatContextValue {
     sessionId?: string,
   ) => void;
   setCurrentReport: (report: FeasibilityReport) => void;
+  setCurrentReportGroup: (group: FeasibilityReportGroup) => void;
   deleteSession: (id: string) => void;
   openHistoryReport: (address: string, report: FeasibilityReport) => string;
+  openHistoryReportGroup: (address: string, group: FeasibilityReportGroup) => string;
   isLoading: boolean;
   setIsLoading: (v: boolean) => void;
   setFirstLlmResponseRating: (sessionId: string, rating: "up" | "down") => void;
@@ -647,10 +679,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         const updated = prev.map((s) => {
           if (s.id !== targetId) return s;
           const currentReport = msg.type === "report" && msg.report ? msg.report : s.currentReport;
+          const currentReportGroup = msg.type === "report_group" && msg.reportGroup ? msg.reportGroup : s.currentReportGroup;
           const idx = s.messages.findIndex((m) => m.backgroundJobId === jobId);
           if (idx < 0) {
             shouldSave = true;
-            return { ...s, messages: [...s.messages, fullMsg], currentReport, updatedAt: Date.now() };
+            return { ...s, messages: [...s.messages, fullMsg], currentReport, currentReportGroup, updatedAt: Date.now() };
           }
           const messages = [...s.messages];
           const existing = messages[idx]!;
@@ -660,7 +693,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             timestamp: existing.timestamp,
           };
           shouldSave = true;
-          return { ...s, messages, currentReport, updatedAt: Date.now() };
+          return { ...s, messages, currentReport, currentReportGroup, updatedAt: Date.now() };
         });
         if (shouldSave) saveSessions(updated);
         return updated;
@@ -733,7 +766,21 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       setSessions((prev) => {
         const updated = prev.map((s) => {
           if (s.id !== currentSessionId) return s;
-          return { ...s, currentReport: report };
+          return { ...s, currentReport: report, currentReportGroup: undefined };
+        });
+        saveSessions(updated);
+        return updated;
+      });
+    },
+    [currentSessionId, saveSessions],
+  );
+
+  const setCurrentReportGroup = useCallback(
+    (group: FeasibilityReportGroup) => {
+      setSessions((prev) => {
+        const updated = prev.map((s) => {
+          if (s.id !== currentSessionId) return s;
+          return { ...s, currentReportGroup: group, currentReport: group.reports[0] };
         });
         saveSessions(updated);
         return updated;
@@ -802,8 +849,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         pending.push({ sessionId: session.id, messageId, report, attemptKey });
       };
       if (session.currentReport) collect(session.currentReport, null);
+      if (session.currentReportGroup) {
+        for (const report of session.currentReportGroup.reports) collect(report, null);
+      }
       for (const msg of session.messages) {
         if (msg.type === "report" && msg.report) collect(msg.report, msg.id);
+        if (msg.type === "report_group" && msg.reportGroup) {
+          for (const report of msg.reportGroup.reports) collect(report, msg.id);
+        }
       }
     }
 
@@ -840,14 +893,52 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               updatedSession = { ...updatedSession, currentReport: patch(s.currentReport) };
               mutated = true;
             }
+            if (item.messageId === null && s.currentReportGroup) {
+              let groupChanged = false;
+              const reports = s.currentReportGroup.reports.map((report) => {
+                if (
+                  reportPhotoSignature(report) !== reportPhotoSignature(item.report) ||
+                  report.cachedPhotoSignature === reportPhotoSignature(item.report)
+                ) {
+                  return report;
+                }
+                groupChanged = true;
+                return patch(report);
+              });
+              if (groupChanged) {
+                updatedSession = { ...updatedSession, currentReportGroup: { ...s.currentReportGroup, reports } };
+                mutated = true;
+              }
+            }
 
             if (item.messageId !== null) {
+              let messagesChanged = false;
               const newMessages = s.messages.map((m) => {
-                if (m.id !== item.messageId || !m.report) return m;
-                if (m.report.cachedPhotoSignature === reportPhotoSignature(item.report)) return m;
-                return { ...m, report: patch(m.report) };
+                if (m.id !== item.messageId) return m;
+                if (m.report) {
+                  if (m.report.cachedPhotoSignature === reportPhotoSignature(item.report)) return m;
+                  messagesChanged = true;
+                  return { ...m, report: patch(m.report) };
+                }
+                if (m.reportGroup) {
+                  let groupChanged = false;
+                  const reports = m.reportGroup.reports.map((report) => {
+                    if (
+                      reportPhotoSignature(report) !== reportPhotoSignature(item.report) ||
+                      report.cachedPhotoSignature === reportPhotoSignature(item.report)
+                    ) {
+                      return report;
+                    }
+                    groupChanged = true;
+                    return patch(report);
+                  });
+                  if (!groupChanged) return m;
+                  messagesChanged = true;
+                  return { ...m, reportGroup: { ...m.reportGroup, reports } };
+                }
+                return m;
               });
-              if (newMessages !== s.messages) {
+              if (messagesChanged) {
                 updatedSession = { ...updatedSession, messages: newMessages };
                 mutated = true;
               }
@@ -955,6 +1046,47 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     [saveSessions],
   );
 
+  const openHistoryReportGroup = useCallback(
+    (address: string, group: FeasibilityReportGroup): string => {
+      const now = Date.now();
+      const sessionId = generateId();
+      const newSession: Session = {
+        id: sessionId,
+        title: address.slice(0, 50),
+        messages: [
+          {
+            id: generateId(),
+            role: "user",
+            content: address,
+            timestamp: now,
+            type: "text",
+          },
+          {
+            id: generateId(),
+            role: "assistant",
+            content: "",
+            timestamp: now + 1,
+            type: "report_group",
+            reportGroup: group,
+          },
+        ],
+        createdAt: now,
+        updatedAt: now,
+        currentReport: group.reports[0],
+        currentReportGroup: group,
+        skipFirstTurnRating: true,
+      };
+      setSessions((prev) => {
+        const updated = [newSession, ...prev];
+        saveSessions(updated);
+        return updated;
+      });
+      setCurrentSessionId(sessionId);
+      return sessionId;
+    },
+    [saveSessions],
+  );
+
   return (
     <ChatContext.Provider
       value={{
@@ -970,8 +1102,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         removeMessage,
         updateCandidateScores,
         setCurrentReport,
+        setCurrentReportGroup,
         deleteSession,
         openHistoryReport,
+        openHistoryReportGroup,
         isLoading,
         setIsLoading,
         setFirstLlmResponseRating,

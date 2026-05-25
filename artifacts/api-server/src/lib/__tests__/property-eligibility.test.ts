@@ -55,11 +55,30 @@ describe("property eligibility verifier", () => {
       buildYear: 1960,
       zoneCode: "MHU",
       potentialLots: 6,
-      minLotSize: 150,
+      minLotSize: 300,
     });
 
     expect(result.subdivisionEligible).toBe(false);
     expect(result.subdivisionRejectReason).toBe("unit_or_crosslease_signal");
+  });
+
+  it("rejects combined listing aggregate facts for strict subdivision", () => {
+    const result = assessPropertyEligibility({
+      address: "15 Fisherton Street & 7 Stanmore Road, Grey Lynn",
+      estateType: "Freehold",
+      legalDescription: "Lot 1 Deposited Plan 12345",
+      propertyType: "House",
+      buildYear: 1910,
+      landAreaSqm: 786,
+      floorAreaSqm: 139,
+      zoneCode: "MHU",
+      potentialLots: 2,
+      minLotSize: 300,
+      isCombinedListingAggregate: true,
+    });
+
+    expect(result.subdivisionEligible).toBe(false);
+    expect(result.subdivisionRejectReason).toBe("combined_listing_aggregate");
   });
 
   it("rejects unknown title or typology for strict subdivision discovery", () => {

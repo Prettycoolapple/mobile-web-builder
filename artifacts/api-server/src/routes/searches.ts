@@ -28,19 +28,40 @@ router.get("/searches", requireAuth, async (req, res) => {
       .map((s) => {
         const rj = s.resultJson as any;
         if (!rj || typeof rj !== "object") return null;
-        const compositeRaw = rj.scores?.composite;
+        const isGroup = rj.kind === "combined_listing_group" && Array.isArray(rj.reports);
+        const groupReports = isGroup ? rj.reports.filter((r: unknown) => r && typeof r === "object") : [];
+        const groupScores = groupReports
+          .map((r: any) => r.scores?.composite)
+          .map((v: unknown) =>
+            typeof v === "number"
+              ? v
+              : typeof v === "string" && v.trim() !== "" && !Number.isNaN(Number(v))
+                ? Number(v)
+                : null,
+          )
+          .filter((v: number | null): v is number => v != null);
+        const compositeRaw = isGroup
+          ? (groupScores.length > 0 ? groupScores.reduce((sum: number, v: number) => sum + v, 0) / groupScores.length : null)
+          : rj.scores?.composite;
         const composite =
           typeof compositeRaw === "number"
             ? compositeRaw
             : typeof compositeRaw === "string" && compositeRaw.trim() !== "" && !Number.isNaN(Number(compositeRaw))
               ? Number(compositeRaw)
               : null;
+        const firstReport = groupReports[0] as any;
         return {
           id: s.id,
-          address: s.address ?? s.query,
+          address: isGroup
+            ? `${rj.packageAddress ?? s.address ?? s.query} · ${groupReports.length}-property package`
+            : s.address ?? s.query,
           created_at: s.createdAt,
           composite_score: composite,
-          zone: (rj.propertyOverview?.zone ?? rj.planning?.zone ?? null) as string | null,
+          zone: (isGroup ? `${groupReports.length} reports` : (rj.propertyOverview?.zone ?? rj.planning?.zone ?? null)) as string | null,
+          kind: isGroup ? "combined_listing_group" : "report",
+          package_count: isGroup ? groupReports.length : undefined,
+          package_address: isGroup ? rj.packageAddress ?? s.address ?? s.query : undefined,
+          first_child_zone: isGroup ? (firstReport?.propertyOverview?.zone ?? firstReport?.planning?.zone ?? null) : undefined,
         };
       })
       .filter(Boolean);

@@ -11,7 +11,7 @@ describe("lot calculator", () => {
   });
 
   it("calculates countryside living yield using a 10,000sqm minimum lot size", () => {
-    const result = calculatePotentialLots(19996, "CLZ");
+    const result = calculatePotentialLots(20000, "CLZ");
 
     expect(result.lots).toBe(2);
     expect(result.min_lot_size).toBe(10000);
@@ -25,6 +25,16 @@ describe("lot calculator", () => {
     expect(undersized.lots).toBe(1);
     expect(undersized.min_lot_size).toBe(400);
     expect(twoLots.lots).toBe(2);
+  });
+
+  it("requires 600sqm for two standard vacant lots in Mixed Housing Urban", () => {
+    const undersized = calculatePotentialLots(599, "MHU");
+    const twoLots = calculatePotentialLots(600, "MHU");
+
+    expect(undersized.lots).toBe(1);
+    expect(undersized.min_lot_size).toBe(300);
+    expect(twoLots.lots).toBe(2);
+    expect(twoLots.min_lot_size).toBe(300);
   });
 
   it("explains that unknown zoning cannot produce an automatic lot yield", () => {

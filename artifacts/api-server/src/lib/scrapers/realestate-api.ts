@@ -431,6 +431,7 @@ function mapListing(raw: RawListing): ListingResult | null {
   const priceText = a["price-display"] ?? "";
   const price = parsePriceDisplay(priceText);
   const landArea = normaliseListingLandAreaSqm(a["land-area"], a["land-area-unit"] ?? null);
+  const isCombinedListing = looksLikeCombinedListingAddress(address);
 
   const photoUrls = buildPhotoUrls(a.photos);
   return {
@@ -440,6 +441,8 @@ function mapListing(raw: RawListing): ListingResult | null {
     landArea,
     landAreaSource: landArea != null ? "realestate_api" : "unknown",
     landAreaConfidence: "unverified",
+    isCombinedListing,
+    combinedListingReason: isCombinedListing ? "multi_address_listing" : null,
     photoUrl: photoUrls[0] ?? null,
     photoUrls,
     listingUrl: url,
@@ -556,6 +559,62 @@ function firstAddressLine(s: string): string {
 function streetNumberToken(line: string): string {
   const t = line.split(" ")[0] ?? "";
   return t.replace(/[^a-z0-9]/gi, "").toLowerCase();
+}
+
+export function looksLikeCombinedListingAddress(address: string | null | undefined): boolean {
+  if (!address?.trim()) return false;
+  const firstLine = address.split(",")[0] ?? address;
+  return /\s(?:&|\+|\/|and)\s*\d+[a-z]?\b/i.test(firstLine);
+}
+
+export type CombinedListingAddressParts = {
+  packageAddress: string;
+  childAddresses: string[];
+};
+
+const STREET_TYPE_RE = /\b(road|street|avenue|crescent|place|drive|way|lane|terrace|parade|close|grove|rise|view|heights|ridge|court|hill|mews|quay|boulevard|highway|motorway|esplanade|mall|row|walk|path|track|rd|st|ave|cres|pl|dr|ln|tce|pde|blvd|hwy)\b/i;
+
+function normaliseAddressForDedupe(address: string): string {
+  return address.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Splits package-style listing titles such as
+ * "15 Fisherton Street & 7 Stanmore Road, Grey Lynn" into individual subject
+ * addresses. Returns null when the text is just a normal single address.
+ */
+export function extractCombinedListingAddressParts(rawAddress: string | null | undefined): CombinedListingAddressParts | null {
+  const address = rawAddress?.trim();
+  if (!address || !looksLikeCombinedListingAddress(address)) return null;
+
+  const commaParts = address.split(",").map((p) => p.trim()).filter(Boolean);
+  const firstLineRaw = commaParts[0] ?? address;
+  const firstLine = firstLineRaw.replace(/^.*?(?=\d+[a-z]?\b)/i, "").trim();
+  const suffix = commaParts.length > 1 ? `, ${commaParts.slice(1).join(", ")}` : "";
+  const pieces = firstLine.split(/\s+(?:&|\+|\/|and)\s+/i).map((p) => p.trim()).filter(Boolean);
+  if (pieces.length < 2) return null;
+
+  const lastStreetPiece = [...pieces].reverse().find((p) => STREET_TYPE_RE.test(p));
+  const sharedStreetTail = lastStreetPiece
+    ? lastStreetPiece.replace(/^\d+[a-z]?\s*/i, "").trim()
+    : "";
+
+  const childAddresses = pieces
+    .map((piece) => {
+      const hasStreetType = STREET_TYPE_RE.test(piece);
+      const firstToken = piece.match(/^\d+[a-z]?\b/i)?.[0] ?? null;
+      if (!hasStreetType && firstToken && sharedStreetTail) {
+        return `${firstToken} ${sharedStreetTail}${suffix}`.trim();
+      }
+      return `${piece}${suffix}`.trim();
+    })
+    .filter((child) => STREET_TYPE_RE.test(child));
+
+  const unique = Array.from(
+    new Map(childAddresses.map((child) => [normaliseAddressForDedupe(child), child])).values(),
+  );
+  const packageAddress = `${firstLine}${suffix}`.trim();
+  return unique.length >= 2 ? { packageAddress, childAddresses: unique } : null;
 }
 
 /** True when `candidate` looks like the same street address as `target` (first line). */
@@ -1211,7 +1270,8 @@ async function annotateApproxFields(listings: ListingResult[]): Promise<ListingR
       const landAreaConfidence = pageHasLandArea ? "verified" : (l.landAreaConfidence ?? "unverified");
       const isParentParcelSuspect =
         l.isParentParcelSuspect ||
-        (pageHasLandArea && l.landArea != null && landAreaApprox);
+        (pageHasLandArea && l.landArea != null && landAreaApprox) ||
+        l.isCombinedListing;
 
       let priceApprox = false;
       if (l.price != null && og.price != null) {
@@ -1249,6 +1309,8 @@ async function annotateApproxFields(listings: ListingResult[]): Promise<ListingR
         landAreaSource,
         landAreaConfidence,
         isParentParcelSuspect,
+        isCombinedListing: l.isCombinedListing,
+        combinedListingReason: l.combinedListingReason ?? (l.isCombinedListing ? "multi_address_listing" : null),
         floorArea,
         propertyType: og.propertyType ?? l.propertyType ?? null,
         listingCategory: og.listingCategory ?? l.listingCategory ?? null,

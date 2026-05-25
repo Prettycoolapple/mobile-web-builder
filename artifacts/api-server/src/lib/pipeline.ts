@@ -32,6 +32,7 @@ import { fetchRealestateListingForAddress, fetchSupplementListingComparables } f
 import { scrapeTradeMePropertyPhotos } from "./scrapers/trademe-property";
 import { scrapeHougardenPhotos } from "./scrapers/hougarden-photos";
 import { scrapeHomesPhotos } from "./scrapers/homes-photos";
+import { scrapeOneRoofPhotos } from "./scrapers/oneroof-photos";
 import { findPropertyPhotosWithFallback } from "./scrapers/web-image-search";
 import { enrichSchoolZonesDetail, type SchoolZoneDetail } from "./school-directory";
 import { inferSchoolZonesFromLocation } from "./school-zones-llm";
@@ -43,6 +44,24 @@ import {
 } from "./property-eligibility";
 
 const AC_PROP_MAPSERVER = "https://mapspublic.aucklandcouncil.govt.nz/arcgis3/rest/services/NonCouncil/PropertyValueInfo/MapServer";
+
+function normaliseListingScope(value: string | null | undefined): string {
+  return (value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\b(new zealand|nz|auckland city|auckland)\b/g, "")
+    .replace(/\b\d{4}\b/g, "")
+    .replace(/[^a-z0-9&+]+/g, "");
+}
+
+function activeListingFactsMatchSubject(
+  listing: ListingResult | null,
+  subjectAddress: string | null | undefined,
+): boolean {
+  if (!listing?.isCombinedListing) return true;
+  return normaliseListingScope(listing.address) === normaliseListingScope(subjectAddress);
+}
 
 function browserScrapersEnabled(): boolean {
   const explicit = process.env["ENABLE_BROWSER_SCRAPERS"]?.trim().toLowerCase();
@@ -307,6 +326,7 @@ export interface PipelineResult {
   homes: HomesData | null;
   qv: QVData | null;
   propertyValue: PropertyValueData | null;
+  realestate_listing: ListingResult | null;
   merged: MergedPropertyData | null;
   lots: LotResult | null;
   subdivision_pathway: SubdivisionPathwayNote | null;
@@ -391,6 +411,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       homes: null,
       qv: null,
       propertyValue: null,
+      realestate_listing: null,
       merged: null,
       lots: null,
       subdivision_pathway: null,
@@ -735,6 +756,9 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   } else {
     failedSources.push("realestate_listing");
   }
+  const realestateListingForFacts = activeListingFactsMatchSubject(realestateListing, geocode!.formatted ?? address)
+    ? realestateListing
+    : null;
 
   const realestatePhotoUrls = realestateListing
     ? Array.from(new Set(realestateListing.photoUrls?.length ? realestateListing.photoUrls : (realestateListing.photoUrl ? [realestateListing.photoUrl] : [])))
@@ -768,6 +792,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       qv: qvData,
       homes: homesData,
       propertyValue: propertyValueData,
+      analysed_address: geocode!.formatted ?? address,
       realestate_listing: realestateListing,
       realestate_photo_urls: realestatePhotoUrls,
     },
@@ -786,21 +811,27 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
         new Promise<T>((resolve) => setTimeout(() => resolve(fallback), PHOTO_ENRICHMENT_TIMEOUT_MS)),
       ]).catch(() => fallback);
 
-    const [trademe, hougardenPhotos, homesPhotos] = await Promise.all([
+    const [trademe, hougardenPhotos, homesPhotos, oneroofPhotos] = await Promise.all([
       withTimeout(scrapeTradeMePropertyPhotos(address), { photo_urls: [] as string[], listing_url: null as string | null, data_source: "trademe" as const, scraped_at: "" }),
       withTimeout(scrapeHougardenPhotos(address), { photo_urls: [] as string[], listing_url: null as string | null, data_source: "hougarden_photos" as const, scraped_at: "" }),
       withTimeout(scrapeHomesPhotos(address), { photo_urls: [] as string[], listing_url: null as string | null, data_source: "homes_photos" as const, scraped_at: "" }),
+      withTimeout(scrapeOneRoofPhotos(address), { photo_urls: [] as string[], listing_url: null as string | null, data_source: "oneroof_photos" as const, scraped_at: "" }),
     ]);
-    return { trademe, hougardenPhotos, homesPhotos };
+    return { trademe, hougardenPhotos, homesPhotos, oneroofPhotos };
   })();
 
   const enrichment = await photoEnrichmentPromise;
 
   // Append new photo sources into merged.photo_urls (deduped). Keep existing
-  // first-priority sources up front; new sources only fill gaps.
+  // first-priority sources up front; new sources only fill gaps. OneRoof's
+  // historical-listing photos are typically higher resolution and more
+  // complete than Trade Me/Hougarden archives — prepend them so the carousel's
+  // leading image (`main_photo_url`) is the strongest available when no
+  // active-listing photos exist yet.
   const beforeEnrichCount = merged.photo_urls.length;
   const enriched = Array.from(new Set([
     ...merged.photo_urls,
+    ...enrichment.oneroofPhotos.photo_urls,
     ...enrichment.trademe.photo_urls,
     ...enrichment.hougardenPhotos.photo_urls,
     ...enrichment.homesPhotos.photo_urls,
@@ -839,6 +870,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       trademe: enrichment.trademe.photo_urls.length,
       hougardenPhotos: enrichment.hougardenPhotos.photo_urls.length,
       homesPhotos: enrichment.homesPhotos.photo_urls.length,
+      oneroofPhotos: enrichment.oneroofPhotos.photo_urls.length,
     },
     beforeEnrichCount,
     totalUnique: merged.photo_urls.length,
@@ -849,7 +881,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
 
   const titleEstate = linzTitle?.estate_type?.trim() ?? null;
   const parcelEstate = inferEstateTypeFromParcel(linzParcelData);
-  const estateFromTitle = titleEstate ?? parcelEstate ?? realestateListing?.tenureText?.trim() ?? null;
+  const estateFromTitle = titleEstate ?? parcelEstate ?? realestateListingForFacts?.tenureText?.trim() ?? null;
   merged.estate_type = estateFromTitle;
   if (estateFromTitle) {
     merged.data_sources["estate_type"] = titleEstate
@@ -905,13 +937,13 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     legalDescription: [
       linzParcelData?.legal_description,
       linzParcelData?.appellation,
-      realestateListing?.legalDescription,
+      realestateListingForFacts?.legalDescription,
     ].filter(Boolean).join(" "),
     propertyType: merged.property_type ?? propertyHistoryData?.property_type ?? propertyValueData?.property_type,
-    listingPropertyType: realestateListing?.propertyType,
-    listingCategory: realestateListing?.listingCategory,
-    listingTenureText: realestateListing?.tenureText,
-    listingLegalDescription: realestateListing?.legalDescription,
+    listingPropertyType: realestateListingForFacts?.propertyType,
+    listingCategory: realestateListingForFacts?.listingCategory,
+    listingTenureText: realestateListingForFacts?.tenureText,
+    listingLegalDescription: realestateListingForFacts?.legalDescription,
     linzParcel: linzParcelData,
     landAreaSqm: merged.land_area_sqm,
     floorAreaSqm: merged.floor_area_sqm,
@@ -920,6 +952,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     zoneCode: merged.zone_code,
     potentialLots: rawLotResult.lots,
     minLotSize: rawLotResult.min_lot_size,
+    isCombinedListingAggregate: !!realestateListing?.isCombinedListing && !realestateListingForFacts,
   });
   merged.typology = eligibility.typology;
   merged.typologyConfidence = eligibility.typologyConfidence;
@@ -1141,6 +1174,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     homes: homesData,
     qv: qvData,
     propertyValue: propertyValueData,
+    realestate_listing: realestateListing,
     merged,
     lots: lotResult,
     subdivision_pathway: subdivisionPathway,

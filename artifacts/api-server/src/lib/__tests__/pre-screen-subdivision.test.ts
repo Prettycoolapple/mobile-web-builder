@@ -51,7 +51,7 @@ describe("strict subdivision pre-screening", () => {
       formatted: `${address}, New Zealand`,
       suburb: "st heliers",
     }));
-    mockedZone.mockResolvedValue({ zone_code: "MHU", zone_description: "Mixed Housing Urban", min_lot_size_sqm: 150 } as any);
+    mockedZone.mockResolvedValue({ zone_code: "MHU", zone_description: "Mixed Housing Urban", min_lot_size_sqm: 300 } as any);
     mockedOverlays.mockResolvedValue([]);
     mockedLinz.mockResolvedValue(null);
     mockedHomes.mockResolvedValue(null);
@@ -113,6 +113,56 @@ describe("strict subdivision pre-screening", () => {
     expect(results[0].landAreaConfidence).toBe("verified");
     expect(results[0].typology).toBe("standalone");
     expect(results[0].subdivisionEligible).toBe(true);
+  });
+
+  it("excludes a Fisherton-style MHU single property below the 600sqm two-lot threshold", async () => {
+    mockedPropertyHistory.mockResolvedValue({
+      cv_nzd: null,
+      cv_year: null,
+      build_year: 1910,
+      floor_area_sqm: 139,
+      land_area_sqm: 393,
+      property_type: "Residential Dwelling",
+      sources_confirmed: [],
+      sources_estimated: [],
+    });
+
+    const results = await preScreenListingsFast([
+      listing({
+        address: "15 Fisherton Street, Grey Lynn, Auckland City, Auckland",
+        landArea: 393,
+        bedrooms: 3,
+        bathrooms: 1,
+      }),
+    ], 1, null, { allowMissingListingPrice: true, strictStandardSubdivision: true });
+
+    expect(results).toEqual([]);
+  });
+
+  it("excludes combined multi-address package listings from strict subdivision cards", async () => {
+    mockedPropertyHistory.mockResolvedValue({
+      cv_nzd: null,
+      cv_year: null,
+      build_year: 1910,
+      floor_area_sqm: 139,
+      land_area_sqm: 393,
+      property_type: "Residential Dwelling",
+      sources_confirmed: [],
+      sources_estimated: [],
+    });
+
+    const results = await preScreenListingsFast([
+      listing({
+        address: "15 Fisherton Street & 7 Stanmore Road, Grey Lynn, Auckland City, Auckland",
+        landArea: 786,
+        bedrooms: 6,
+        bathrooms: 2,
+        isCombinedListing: true,
+        combinedListingReason: "multi_address_listing",
+      }),
+    ], 1, null, { allowMissingListingPrice: true, strictStandardSubdivision: true });
+
+    expect(results).toEqual([]);
   });
 
   it("excludes an MHS site below the two-lot minimum area", async () => {

@@ -27,3 +27,17 @@ export function isStandardSubdivisionDiscoveryIntent(criteria: string | null | u
 export function hasStandardSubdivisionYield(candidate: SubdivisionYieldCandidate): boolean {
   return (candidate.potentialLots ?? 1) >= 2;
 }
+
+export function shouldContinueDiscoveryDrain(input: {
+  currentCount: number;
+  remainingCount: number;
+  attempts: number;
+  strictStandardSubdivision: boolean;
+  nonStrictAttemptLimit: number;
+  targetCount?: number;
+}): boolean {
+  if (input.remainingCount <= 0) return false;
+  const target = input.targetCount ?? 3;
+  if (input.strictStandardSubdivision) return input.currentCount < target;
+  return input.currentCount === 0 && input.attempts < input.nonStrictAttemptLimit;
+}

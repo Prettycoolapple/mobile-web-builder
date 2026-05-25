@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractListingFactAreaSqm, normaliseListingLandAreaSqm, reconcileListingLandArea } from "../realestate-api";
+import { extractCombinedListingAddressParts, extractListingFactAreaSqm, looksLikeCombinedListingAddress, normaliseListingLandAreaSqm, reconcileListingLandArea } from "../realestate-api";
 
 describe("realestate-api listing land-area reconciliation", () => {
   it("uses listing-page land area when the search API returns a large outlier", () => {
@@ -39,5 +39,42 @@ describe("realestate-api structured listing area units", () => {
   it("converts hectare land-area values to square metres", () => {
     expect(normaliseListingLandAreaSqm(1.4933, "HA")).toBe(14933);
     expect(normaliseListingLandAreaSqm(8734, "SQM")).toBe(8734);
+  });
+});
+
+describe("realestate-api combined listing detection", () => {
+  it("flags package listings with multiple street addresses", () => {
+    expect(looksLikeCombinedListingAddress("15 Fisherton Street & 7 Stanmore Road, Grey Lynn")).toBe(true);
+    expect(looksLikeCombinedListingAddress("15 Fisherton Street, Grey Lynn")).toBe(false);
+  });
+
+  it("extracts child addresses from explicit package listings", () => {
+    expect(extractCombinedListingAddressParts("15 Fisherton Street & 7 Stanmore Road, Grey Lynn, Auckland")).toEqual({
+      packageAddress: "15 Fisherton Street & 7 Stanmore Road, Grey Lynn, Auckland",
+      childAddresses: [
+        "15 Fisherton Street, Grey Lynn, Auckland",
+        "7 Stanmore Road, Grey Lynn, Auckland",
+      ],
+    });
+  });
+
+  it("expands shared street names for package listing shorthand", () => {
+    expect(extractCombinedListingAddressParts("15 & 17 Fisherton Street, Grey Lynn")).toEqual({
+      packageAddress: "15 & 17 Fisherton Street, Grey Lynn",
+      childAddresses: [
+        "15 Fisherton Street, Grey Lynn",
+        "17 Fisherton Street, Grey Lynn",
+      ],
+    });
+  });
+
+  it("ignores prompt text before an embedded package address", () => {
+    expect(extractCombinedListingAddressParts("Analyse the package 15 Fisherton Street & 7 Stanmore Road, Grey Lynn")).toEqual({
+      packageAddress: "15 Fisherton Street & 7 Stanmore Road, Grey Lynn",
+      childAddresses: [
+        "15 Fisherton Street, Grey Lynn",
+        "7 Stanmore Road, Grey Lynn",
+      ],
+    });
   });
 });

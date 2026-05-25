@@ -307,7 +307,7 @@ describe("development strategies", () => {
       sqm_per_lot: 185,
     };
     const assessment = buildFallbackDevelopmentStrategyAssessment(
-      merged({ build_year: 1960, zone_code: "MHU", min_lot_size_sqm: 320 }),
+      merged({ build_year: 1960, zone_code: "MHU", min_lot_size_sqm: 300 }),
       fourLotResult,
     );
     const context: NeighbourhoodContext = {
@@ -320,7 +320,7 @@ describe("development strategies", () => {
       reasons: [],
     };
     const strategies = calculateDevelopmentStrategies({
-      data: merged({ build_year: 1960, zone_code: "MHU", min_lot_size_sqm: 320 }),
+      data: merged({ build_year: 1960, zone_code: "MHU", min_lot_size_sqm: 300 }),
       baseCosts: { ...baseCosts, units: 4, total_low: 3_000_000, total_high: 3_500_000 },
       lotResult: fourLotResult,
       avgSalePrice: 1_050_000,

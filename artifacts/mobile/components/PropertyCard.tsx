@@ -79,9 +79,22 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
   const showOverall =
     !candidate.scoresLoading && typeof compositeRaw === "number" && compositeRaw > 0;
   const composite = showOverall ? compositeRaw : 0;
-  const potentialLots = 0;
-  const showSubdivisionRecommendation = false;
-  const subdivisionRuleText = null;
+  const potentialLots = candidate.potentialLots ?? 0;
+  const minLotSize = candidate.minLotSize ?? null;
+  const showSubdivisionRecommendation =
+    candidate.subdivisionEligible === true &&
+    potentialLots >= 2 &&
+    minLotSize != null &&
+    minLotSize > 0 &&
+    candidate.titleConfidence === "verified" &&
+    candidate.typology === "standalone" &&
+    candidate.landAreaConfidence === "verified" &&
+    candidate.landAreaApprox !== true &&
+    candidate.isParentParcelSuspect !== true &&
+    candidate.isAlreadySubdividedChild !== true &&
+    typeof candidate.buildYear === "number" &&
+    candidate.buildYear < 2000;
+  const subdivisionRuleText = minLotSize ? t("search.subdivision_rule", { min: minLotSize }) : null;
 
   return (
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -163,7 +176,8 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
               <Text style={{ color: colors.success, fontFamily: "DM_Sans_700Bold" }}>
                 {t("search.subdivision_candidate", { lots: potentialLots })}
               </Text>
-              {subdivisionRuleText ? ` · ${subdivisionRuleText}` : ""}
+              {subdivisionRuleText ? ` - ${subdivisionRuleText}` : ""}
+              {` - ${t("search.subdivision_prescreen")}`}
             </Text>
           </View>
         ) : null}

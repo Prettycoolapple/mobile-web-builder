@@ -72,10 +72,13 @@ router.get("/streetview", async (req: Request, res: Response) => {
   }
 
   try {
-    const url = `https://maps.googleapis.com/maps/api/streetview?size=${size}&location=${encodeURIComponent(address)}&fov=80&pitch=0&source=outdoor&key=${apiKey}`;
+    const url = `https://maps.googleapis.com/maps/api/streetview?size=${size}&location=${encodeURIComponent(address)}&fov=80&pitch=0&source=outdoor&return_error_code=true&key=${apiKey}`;
     const resp = await fetch(url);
     if (!resp.ok) {
-      res.status(502).json({ error: "Upstream Street View error" });
+      // 404 means no Street View coverage at this location (rural, no imagery).
+      // Return 404 so the client falls through to the satellite map fallback.
+      const status = resp.status === 404 ? 404 : 502;
+      res.status(status).json({ error: status === 404 ? "No Street View imagery at this location" : "Upstream Street View error" });
       return;
     }
     const contentType = resp.headers.get("content-type") ?? "image/jpeg";

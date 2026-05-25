@@ -21,7 +21,7 @@ import * as Haptics from "expo-haptics";
 import * as StoreReview from "expo-store-review";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
-import { useChat, ChatMessage, FeasibilityReport, PropertyCandidate, ServiceProvider } from "@/context/ChatContext";
+import { useChat, ChatMessage, FeasibilityReport, FeasibilityReportGroup, PropertyCandidate, ServiceProvider } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
 import { AppRatingPrompt } from "@/components/AppRatingPrompt";
 import { ChatBubble } from "@/components/ChatBubble";
@@ -54,6 +54,20 @@ function withHistoryMetadata(
     ...report,
     historyId: searchId ?? report.historyId ?? null,
     historyCreatedAt: historyCreatedAt ?? report.historyCreatedAt ?? null,
+  };
+}
+
+function withGroupHistoryMetadata(
+  group: FeasibilityReportGroup,
+  searchId?: string | null,
+  historyCreatedAt?: string | null,
+): FeasibilityReportGroup {
+  if (!searchId && !historyCreatedAt) return group;
+  return {
+    ...group,
+    historyId: searchId ?? group.historyId ?? null,
+    historyCreatedAt: historyCreatedAt ?? group.historyCreatedAt ?? null,
+    reports: group.reports.map((report) => withHistoryMetadata(report, searchId, historyCreatedAt)),
   };
 }
 
@@ -192,6 +206,13 @@ function extractJSON(text: string): unknown | null {
   return null;
 }
 
+function isFeasibilityReportGroup(value: unknown): value is FeasibilityReportGroup {
+  return !!value &&
+    typeof value === "object" &&
+    (value as FeasibilityReportGroup).kind === "combined_listing_group" &&
+    Array.isArray((value as FeasibilityReportGroup).reports);
+}
+
 // Removes any JSON-looking blocks from a text string so raw JSON is never
 // shown to the user in the chat. If the string is *only* JSON, returns a
 // friendly fallback message instead. The fallback is picked based on the
@@ -237,6 +258,7 @@ function getFirstTurnResponseMode(messages: ChatMessage[]): string | null {
   if (assistant.length !== 1) return null;
   const a = assistant[0];
   if (a.type === "report") return "analyse";
+  if (a.type === "report_group") return "analyse";
   if (a.type === "search") return "discover";
   return "text";
 }
@@ -263,6 +285,7 @@ export default function SearchScreen() {
     removeMessage,
     updateCandidateScores,
     setCurrentReport,
+    setCurrentReportGroup,
     isLoading,
     setIsLoading,
     setFirstLlmResponseRating,
@@ -788,12 +811,26 @@ export default function SearchScreen() {
             searchId?: string | null;
             historyCreatedAt?: string | null;
             report?: FeasibilityReport | null;
+            reportGroup?: FeasibilityReportGroup | null;
             error?: string | null;
           };
 
           if (data.status === "completed") {
             await removeBackgroundAnalyseJob(job.jobId);
-            if (data.report && data.report.scores) {
+            if (data.reportGroup && isFeasibilityReportGroup(data.reportGroup)) {
+              const groupWithHistory = withGroupHistoryMetadata(data.reportGroup, data.searchId, data.historyCreatedAt);
+              if (currentSessionId === job.sessionId) {
+                setCurrentReportGroup(groupWithHistory);
+              }
+              replaceBackgroundAnalyseMessage(job.jobId, { role: "assistant", content: "", type: "report_group", reportGroup: groupWithHistory }, job.sessionId);
+              for (const report of groupWithHistory.reports) {
+                if (report.scores && report.address) {
+                  updateCandidateScores({ [report.address]: report.scores }, job.sessionId);
+                }
+              }
+              refreshProfile().catch(() => {});
+              bumpSearchHistory();
+            } else if (data.report && data.report.scores) {
               const reportWithHistory = withHistoryMetadata(data.report, data.searchId, data.historyCreatedAt);
               if (currentSessionId === job.sessionId) {
                 setCurrentReport(reportWithHistory);
@@ -829,6 +866,7 @@ export default function SearchScreen() {
     replaceBackgroundAnalyseMessage,
     refreshProfile,
     setCurrentReport,
+    setCurrentReportGroup,
     t,
     updateCandidateScores,
     user?.id,
@@ -899,6 +937,7 @@ export default function SearchScreen() {
     const currentReport =
       currentSession?.currentReport ??
       [...(currentSession?.messages ?? [])].reverse().find((m) => m.type === "report" && m.report)?.report;
+    const currentReportContext = currentSession?.currentReportGroup ?? currentReport;
     const agentAddress = resolveReportAddress(currentReport);
     const shouldLookupListingAgent =
       user?.role === "general" &&
@@ -989,10 +1028,16 @@ export default function SearchScreen() {
     const currentMessages = currentSession?.messages ?? [];
     const allMessages = [
       ...currentMessages
-        .filter((m) => m.type === "text" || m.type === "report" || m.type === "search")
+        .filter((m) => m.type === "text" || m.type === "report" || m.type === "report_group" || m.type === "search")
         .map((m) => ({
           role: m.role as "user" | "assistant",
-          content: m.type === "text" ? m.content : m.type === "report" ? `[Feasibility report for ${m.report?.address || "property"}]` : `[Search results shown: ${(m.searchResults ?? []).map((r) => `${r.address}||${r.listingUrl ?? ""}`).join("; ")}]`,
+          content: m.type === "text"
+            ? m.content
+            : m.type === "report"
+              ? `[Feasibility report for ${m.report?.address || "property"}]`
+              : m.type === "report_group"
+                ? `[Combined listing reports shown: ${(m.reportGroup?.reports ?? []).map((r) => r.address).join("; ")}]`
+                : `[Search results shown: ${(m.searchResults ?? []).map((r) => `${r.address}||${r.listingUrl ?? ""}`).join("; ")}]`,
         })),
       { role: "user" as const, content: text },
     ];
@@ -1067,6 +1112,7 @@ export default function SearchScreen() {
 
           const data = (await r.json()) as {
             report?: FeasibilityReport;
+            reportGroup?: FeasibilityReportGroup;
             type: string;
             searchId?: string | null;
             historyCreatedAt?: string | null;
@@ -1089,6 +1135,19 @@ export default function SearchScreen() {
               content: "",
               clarification: { question: data.question || t("search.confirm_address_intro"), options: data.options },
             }, sessionId);
+            return;
+          }
+          if (data.reportGroup && isFeasibilityReportGroup(data.reportGroup)) {
+            const groupWithHistory = withGroupHistoryMetadata(data.reportGroup, data.searchId, data.historyCreatedAt);
+            setCurrentReportGroup(groupWithHistory);
+            updateLastMessage({ type: "report_group", reportGroup: groupWithHistory, content: "" }, sessionId);
+            for (const report of groupWithHistory.reports) {
+              if (report.scores && report.address) {
+                updateCandidateScores({ [report.address]: report.scores }, sessionId);
+              }
+            }
+            refreshProfile().catch(() => {});
+            bumpSearchHistory();
             return;
           }
           if (data.report && data.report.scores) {
@@ -1158,7 +1217,7 @@ export default function SearchScreen() {
           const resp = await fetch(`${getApiBase()}/chat`, {
             method: "POST",
             headers,
-            body: JSON.stringify({ messages: allMessages, currentReport }),
+            body: JSON.stringify({ messages: allMessages, currentReport: currentReportContext }),
             signal: controller.signal,
           });
           clearTimeout(timeoutId);
@@ -1221,6 +1280,7 @@ export default function SearchScreen() {
           const maybeParsed = hasJsonShape
             ? (extractJSON(trimmed) as
                 | { candidates?: PropertyCandidate[]; isMockData?: boolean; noListings?: boolean; aiIntro?: string }
+                | FeasibilityReportGroup
                 | null)
             : null;
 
@@ -1253,7 +1313,18 @@ export default function SearchScreen() {
             return;
           }
           if (data.mode === "analyse") {
-            if (maybeParsed && isFeasibilityReport(maybeParsed)) {
+            if (isFeasibilityReportGroup(maybeParsed)) {
+              const groupObj = withGroupHistoryMetadata(maybeParsed, data.searchId, data.historyCreatedAt);
+              setCurrentReportGroup(groupObj);
+              updateLastMessage({ type: "report_group", reportGroup: groupObj, content: "" }, sessionId);
+              for (const report of groupObj.reports) {
+                if (report.scores && report.address) {
+                  updateCandidateScores({ [report.address]: report.scores }, sessionId);
+                }
+              }
+              refreshProfile().catch(() => {});
+              bumpSearchHistory();
+            } else if (maybeParsed && isFeasibilityReport(maybeParsed)) {
               const reportObj = withHistoryMetadata(maybeParsed as unknown as FeasibilityReport, data.searchId, data.historyCreatedAt);
               setCurrentReport(reportObj);
               updateLastMessage({ type: "report", report: reportObj, content: "" }, sessionId);
@@ -1266,10 +1337,11 @@ export default function SearchScreen() {
               updateLastMessage({ type: "text", content: sanitizeForDisplay(rawContent, t("search.format_error")) }, sessionId);
             }
           } else if (data.mode === "discover") {
-            const aiIntro = maybeParsed?.aiIntro ?? "";
-            if (maybeParsed?.candidates && maybeParsed.candidates.length > 0) {
-              updateLastMessage({ type: "search", searchResults: maybeParsed.candidates, content: "", aiIntro }, sessionId);
-              startCardScorePoll(maybeParsed.candidates.map((c) => ({ address: c.address, listingUrl: c.listingUrl })), sessionId);
+            const searchPayload = !isFeasibilityReportGroup(maybeParsed) ? maybeParsed : null;
+            const aiIntro = searchPayload?.aiIntro ?? "";
+            if (searchPayload?.candidates && searchPayload.candidates.length > 0) {
+              updateLastMessage({ type: "search", searchResults: searchPayload.candidates, content: "", aiIntro }, sessionId);
+              startCardScorePoll(searchPayload.candidates.map((c: PropertyCandidate) => ({ address: c.address, listingUrl: c.listingUrl })), sessionId);
             } else {
               const noResultMsg = aiIntro || t("search.no_listings_msg");
               updateLastMessage({ type: "text", content: noResultMsg }, sessionId);
@@ -1278,7 +1350,18 @@ export default function SearchScreen() {
             // Mode is unknown / followup / text. If the payload looks like a
             // structured result, render it as such — otherwise treat as text
             // but always strip any JSON before displaying.
-            if (isFeasibilityReport(maybeParsed)) {
+            if (isFeasibilityReportGroup(maybeParsed)) {
+              const groupObj = withGroupHistoryMetadata(maybeParsed, data.searchId, data.historyCreatedAt);
+              setCurrentReportGroup(groupObj);
+              updateLastMessage({ type: "report_group", reportGroup: groupObj, content: "" }, sessionId);
+              for (const report of groupObj.reports) {
+                if (report.scores && report.address) {
+                  updateCandidateScores({ [report.address]: report.scores }, sessionId);
+                }
+              }
+              refreshProfile().catch(() => {});
+              bumpSearchHistory();
+            } else if (isFeasibilityReport(maybeParsed)) {
               const reportObj = withHistoryMetadata(maybeParsed as unknown as FeasibilityReport, data.searchId, data.historyCreatedAt);
               setCurrentReport(reportObj);
               updateLastMessage({ type: "report", report: reportObj, content: "" }, sessionId);
@@ -1287,12 +1370,15 @@ export default function SearchScreen() {
               }
               refreshProfile().catch(() => {});
               bumpSearchHistory();
-            } else if (maybeParsed?.candidates && maybeParsed.candidates.length > 0) {
-              updateLastMessage({ type: "search", searchResults: maybeParsed.candidates, content: "" }, sessionId);
-            } else if (hasJsonShape) {
-              updateLastMessage({ type: "text", content: sanitizeForDisplay(rawContent, t("search.format_error")) }, sessionId);
             } else {
-              updateLastMessage({ type: "text", content: rawContent }, sessionId);
+              const searchPayload = !isFeasibilityReportGroup(maybeParsed) ? maybeParsed : null;
+              if (searchPayload?.candidates && searchPayload.candidates.length > 0) {
+                updateLastMessage({ type: "search", searchResults: searchPayload.candidates, content: "" }, sessionId);
+              } else if (hasJsonShape) {
+                updateLastMessage({ type: "text", content: sanitizeForDisplay(rawContent, t("search.format_error")) }, sessionId);
+              } else {
+                updateLastMessage({ type: "text", content: rawContent }, sessionId);
+              }
             }
           }
           return;
@@ -1419,6 +1505,7 @@ export default function SearchScreen() {
     addMessage,
     updateLastMessage,
     setCurrentReport,
+    setCurrentReportGroup,
     setIsLoading,
     getApiBase,
     getApiHeaders,
@@ -1458,10 +1545,14 @@ export default function SearchScreen() {
 
       const currentMessages = currentSession?.messages ?? [];
       const conversationHistory = currentMessages
-        .filter((m) => m.type === "text" || m.type === "report")
+        .filter((m) => m.type === "text" || m.type === "report" || m.type === "report_group")
         .map((m) => ({
           role: m.role as "user" | "assistant",
-          content: m.type === "text" ? m.content : `[Report for ${(m as any).report?.address ?? "property"}]`,
+          content: m.type === "text"
+            ? m.content
+            : m.type === "report_group"
+              ? `[Combined listing reports for ${(m.reportGroup?.reports ?? []).map((r) => r.address).join("; ")}]`
+              : `[Report for ${(m as any).report?.address ?? "property"}]`,
         }));
 
       // Resilient analyse loop — silently retries forever (with exponential
@@ -1519,6 +1610,7 @@ export default function SearchScreen() {
 
             const data = (await resp.json()) as {
               report?: FeasibilityReport;
+              reportGroup?: FeasibilityReportGroup;
               type: string;
               searchId?: string | null;
               historyCreatedAt?: string | null;
@@ -1542,6 +1634,20 @@ export default function SearchScreen() {
                 content: "",
                 clarification: { question: data.question || t("search.confirm_address_intro"), options: data.options },
               }, sessionId);
+              return;
+            }
+
+            if (data.reportGroup && isFeasibilityReportGroup(data.reportGroup)) {
+              const groupWithHistory = withGroupHistoryMetadata(data.reportGroup, data.searchId, data.historyCreatedAt);
+              setCurrentReportGroup(groupWithHistory);
+              updateLastMessage({ type: "report_group", reportGroup: groupWithHistory, content: "" }, sessionId);
+              for (const report of groupWithHistory.reports) {
+                if (report.scores && report.address) {
+                  updateCandidateScores({ [report.address]: report.scores }, sessionId);
+                }
+              }
+              refreshProfile().catch(() => {});
+              bumpSearchHistory();
               return;
             }
 
@@ -1583,6 +1689,7 @@ export default function SearchScreen() {
       addMessage,
       updateLastMessage,
       setCurrentReport,
+      setCurrentReportGroup,
       setIsLoading,
       getApiBase,
       getApiHeaders,

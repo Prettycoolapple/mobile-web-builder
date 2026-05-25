@@ -14,7 +14,7 @@ import { Feather } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
 import { useColors } from "@/hooks/useColors";
-import { useChat, FeasibilityReport } from "@/context/ChatContext";
+import { useChat, FeasibilityReport, FeasibilityReportGroup } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
 import { useFocusEffect, useRouter } from "expo-router";
 import { getApiBase } from "@/lib/api";
@@ -28,6 +28,9 @@ type SearchSummary = {
   composite_score: number | null;
   zone: string | null;
   localReport?: FeasibilityReport;
+  localReportGroup?: FeasibilityReportGroup;
+  kind?: "report" | "combined_listing_group";
+  package_count?: number;
 };
 
 function useFormatDate() {
@@ -130,10 +133,23 @@ function reportZone(report: FeasibilityReport): string | null {
   return report.propertyOverview?.zone ?? report.planning?.zone ?? report.zone_label ?? null;
 }
 
+function withGroupHistoryMetadata(group: FeasibilityReportGroup, id: string, createdAt: string): FeasibilityReportGroup {
+  return {
+    ...group,
+    historyId: group.historyId ?? id,
+    historyCreatedAt: group.historyCreatedAt ?? createdAt,
+    reports: group.reports.map((report) => ({
+      ...report,
+      historyId: report.historyId ?? id,
+      historyCreatedAt: report.historyCreatedAt ?? createdAt,
+    })),
+  };
+}
+
 export default function HistoryScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { sessions, openHistoryReport, startNewChat, searchHistoryTick } = useChat();
+  const { sessions, openHistoryReport, openHistoryReportGroup, startNewChat, searchHistoryTick } = useChat();
   const { getApiHeaders } = useAuth();
   const router = useRouter();
   const { t } = useT();
@@ -152,17 +168,32 @@ export default function HistoryScreen() {
     for (const session of sessions) {
       if (session.skipFirstTurnRating) continue;
       for (const msg of session.messages) {
-        if (msg.type !== "report" || !msg.report) continue;
-        const address = reportAddress(msg.report);
-        if (!address) continue;
-        rows.push({
-          id: msg.report.historyId ?? `local:${session.id}:${msg.id}`,
-          address,
-          created_at: msg.report.historyCreatedAt ?? new Date(msg.timestamp).toISOString(),
-          composite_score: typeof msg.report.scores?.composite === "number" ? msg.report.scores.composite : null,
-          zone: reportZone(msg.report),
-          localReport: msg.report,
-        });
+        if (msg.type === "report" && msg.report) {
+          const address = reportAddress(msg.report);
+          if (!address) continue;
+          rows.push({
+            id: msg.report.historyId ?? `local:${session.id}:${msg.id}`,
+            address,
+            created_at: msg.report.historyCreatedAt ?? new Date(msg.timestamp).toISOString(),
+            composite_score: typeof msg.report.scores?.composite === "number" ? msg.report.scores.composite : null,
+            zone: reportZone(msg.report),
+            localReport: msg.report,
+            kind: "report",
+          });
+        }
+        if (msg.type === "report_group" && msg.reportGroup) {
+          const scores = msg.reportGroup.reports.map((r) => r.scores?.composite).filter((n): n is number => typeof n === "number");
+          rows.push({
+            id: msg.reportGroup.historyId ?? `local:${session.id}:${msg.id}`,
+            address: `${msg.reportGroup.packageAddress} · ${msg.reportGroup.reports.length}-property package`,
+            created_at: msg.reportGroup.historyCreatedAt ?? new Date(msg.timestamp).toISOString(),
+            composite_score: scores.length ? scores.reduce((sum, n) => sum + n, 0) / scores.length : null,
+            zone: `${msg.reportGroup.reports.length} reports`,
+            localReportGroup: msg.reportGroup,
+            kind: "combined_listing_group",
+            package_count: msg.reportGroup.reports.length,
+          });
+        }
       }
     }
     return rows.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
@@ -213,6 +244,11 @@ export default function HistoryScreen() {
       router.push("/");
       return;
     }
+    if (item.localReportGroup) {
+      openHistoryReportGroup(item.localReportGroup.packageAddress, item.localReportGroup);
+      router.push("/");
+      return;
+    }
     setOpeningId(item.id);
     try {
       const resp = await fetch(`${getApiBase()}/searches/${item.id}`, {
@@ -223,10 +259,16 @@ export default function HistoryScreen() {
         return;
       }
       const data = await resp.json() as {
-        search: { result_json: FeasibilityReport; address: string };
+        search: { result_json: FeasibilityReport | FeasibilityReportGroup; address: string };
       };
-      let report = data.search.result_json;
+      const resultJson = data.search.result_json;
       const address = data.search.address ?? item.address;
+      if ((resultJson as FeasibilityReportGroup)?.kind === "combined_listing_group") {
+        openHistoryReportGroup(address, withGroupHistoryMetadata(resultJson as FeasibilityReportGroup, item.id, item.created_at));
+        router.push("/");
+        return;
+      }
+      let report = resultJson as FeasibilityReport;
       if (getCurrentLocale() === "zh") {
         const zhReport = await translateReportViaApi(report, getApiHeaders());
         if (zhReport) report = zhReport;
@@ -238,7 +280,7 @@ export default function HistoryScreen() {
     } finally {
       setOpeningId(null);
     }
-  }, [getApiHeaders, openHistoryReport, router, t]);
+  }, [getApiHeaders, openHistoryReport, openHistoryReportGroup, router, t]);
 
   const handleDelete = useCallback((item: SearchSummary) => {
     Alert.alert(

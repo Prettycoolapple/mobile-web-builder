@@ -26,14 +26,14 @@ describe("card score cache", () => {
         landArea: 290,
         zone: "MHU",
         potentialLots: 1,
-        minLotSize: 150,
+        minLotSize: 300,
       })
       .mockResolvedValueOnce({
         scores: { ease: 4, cost: 4, roi: 4, composite: 4, ease_reasons: [], cost_reasons: [], roi_reasons: [] },
         landArea: 900,
         zone: "MHU",
         potentialLots: 6,
-        minLotSize: 150,
+        minLotSize: 300,
       });
 
     queueBackgroundScores([
@@ -57,7 +57,7 @@ describe("card score cache", () => {
       landArea: 290,
       zone: "MHU",
       potentialLots: 1,
-      minLotSize: 150,
+      minLotSize: 300,
     });
 
     queueBackgroundScores([

@@ -321,6 +321,26 @@ function inferLifestyleZone(
   return null;
 }
 
+function normaliseAddressScope(value: string | null | undefined): string {
+  return (value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\b(new zealand|nz|auckland city|auckland)\b/g, "")
+    .replace(/\b\d{4}\b/g, "")
+    .replace(/[^a-z0-9&+]+/g, "");
+}
+
+function realestateListingScopedToSubject(
+  listing: ListingResult | null,
+  analysedAddress: string | null | undefined,
+): boolean {
+  if (!listing?.isCombinedListing) return true;
+  const listingScope = normaliseAddressScope(listing.address);
+  const subjectScope = normaliseAddressScope(analysedAddress);
+  return !!listingScope && listingScope === subjectScope;
+}
+
 export function mergePropertyData(
   linz: LinzParcel | null,
   hougarden: HougardenData | null,
@@ -345,6 +365,7 @@ export function mergePropertyData(
     qv?: QVData | null;
     homes?: HomesData | null;
     propertyValue?: PropertyValueData | null;
+    analysed_address?: string | null;
     /** Active address-matched listing from realestate.co.nz. */
     realestate_listing?: ListingResult | null;
     /** Active listing images from realestate.co.nz when OneRoof has none. */
@@ -356,7 +377,10 @@ export function mergePropertyData(
   const qv = extra?.qv ?? null;
   const homes = extra?.homes ?? null;
   const propertyValue = extra?.propertyValue ?? null;
-  const realestateListing = extra?.realestate_listing ?? null;
+  const realestateListingRaw = extra?.realestate_listing ?? null;
+  const realestateListing = realestateListingScopedToSubject(realestateListingRaw, extra?.analysed_address)
+    ? realestateListingRaw
+    : null;
 
   // Land area: LINZ is the authoritative cadastral measurement — always wins.
   const land_area_sqm = first("land_area_sqm", sources,
@@ -443,6 +467,12 @@ export function mergePropertyData(
   // was chosen.
   const discrepancies: string[] = [];
   if (buildYearResult.note) discrepancies.push(buildYearResult.note);
+  if (realestateListingRaw?.isCombinedListing && !realestateListing) {
+    discrepancies.push(
+      `Active realestate.co.nz listing "${realestateListingRaw.address}" appears to package multiple addresses, so its bed/bath/floor/land figures were not used for this single-property report.`,
+    );
+    sources["realestate_listing"] = "ignored combined listing";
+  }
 
   // Live-listing reconciliation:
   // When OneRoof shows the property is *currently listed for sale*, the listing

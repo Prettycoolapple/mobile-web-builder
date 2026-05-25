@@ -10,7 +10,7 @@ export interface LotResult {
 
 const ZONE_RULES: Record<string, { min_lot_sqm: number; label: string }> = {
   THAB: { min_lot_sqm: 60,   label: "Terrace Housing & Apartments" },
-  MHU:  { min_lot_sqm: 150,  label: "Mixed Housing Urban" },
+  MHU:  { min_lot_sqm: 300,  label: "Mixed Housing Urban" },
   MHS:  { min_lot_sqm: 400,  label: "Mixed Housing Suburban" },
   SHZ:  { min_lot_sqm: 600,  label: "Single House Zone" },
   LLRZ: { min_lot_sqm: 4000, label: "Large Lot Residential Zone" },
@@ -174,7 +174,7 @@ export function calculatePotentialLots(
   const min = zone.min_lot_sqm;
   const effectiveMin = min === 0 ? 60 : min;
 
-  const roundingTolerance = effectiveMin * 0.01;
+  const roundingTolerance = 0.000001;
   const raw = Math.floor((netArea + roundingTolerance) / effectiveMin);
   const lots = Math.max(1, Math.min(20, raw));
   const sqm_per_lot = Math.round(netArea / lots);

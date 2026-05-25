@@ -26,7 +26,7 @@ describe("light card scoring", () => {
       formatted: "166A St Heliers Bay Road, Saint Heliers, Auckland 1071, New Zealand",
       suburb: "saint heliers",
     });
-    mockedZone.mockResolvedValue({ zone_code: "MHU", zone_description: "Mixed Housing Urban", min_lot_size_sqm: 150 } as any);
+    mockedZone.mockResolvedValue({ zone_code: "MHU", zone_description: "Mixed Housing Urban", min_lot_size_sqm: 300 } as any);
     mockedOverlays.mockResolvedValue([]);
     mockedContour.mockResolvedValue(null as any);
     mockedLinz.mockResolvedValue({

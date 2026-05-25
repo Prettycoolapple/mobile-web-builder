@@ -6,6 +6,7 @@ import { useColors } from "@/hooks/useColors";
 import { ChatMessage } from "@/context/ChatContext";
 import { useT } from "@/lib/i18n";
 import { FeasibilityReportCard } from "./FeasibilityReport";
+import { CombinedReportGroupCard } from "./CombinedReportGroup";
 import { PropertyCard } from "./PropertyCard";
 import { AnalysisProgress } from "./AnalysisProgress";
 import { ProviderRecommendationBubble } from "./ProviderRecommendationBubble";
@@ -302,6 +303,16 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
       <View style={styles.reportContainer}>
         <ReportErrorBoundary>
           <FeasibilityReportCard report={message.report} onFollowUp={onFollowUp} />
+        </ReportErrorBoundary>
+      </View>
+    );
+  }
+
+  if (message.type === "report_group" && message.reportGroup) {
+    return (
+      <View style={styles.reportContainer}>
+        <ReportErrorBoundary>
+          <CombinedReportGroupCard group={message.reportGroup} onFollowUp={onFollowUp} />
         </ReportErrorBoundary>
       </View>
     );

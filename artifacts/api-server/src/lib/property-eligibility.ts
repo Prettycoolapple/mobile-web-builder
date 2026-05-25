@@ -20,6 +20,7 @@ export interface PropertyEligibilityInput {
   zoneCode?: string | null;
   potentialLots?: number | null;
   minLotSize?: number | null;
+  isCombinedListingAggregate?: boolean | null;
 }
 
 export interface PropertyEligibilityResult {
@@ -158,6 +159,7 @@ export function assessPropertyEligibility(input: PropertyEligibilityInput): Prop
   else if (!titleIsFreehold || titleConfidence !== "verified") subdivisionRejectReason = "title_not_confirmed_freehold";
   else if (typology !== "standalone") subdivisionRejectReason = "typology_not_confirmed_standalone";
   else if (landAreaParentOrTypologySuspect) subdivisionRejectReason = "land_area_parent_or_typology_suspect";
+  else if (input.isCombinedListingAggregate) subdivisionRejectReason = "combined_listing_aggregate";
   else if (input.buildYear == null) subdivisionRejectReason = "build_year_unknown";
   else if (!buildYearEligible) subdivisionRejectReason = "post_2000_build";
   else if (!input.zoneCode || !input.minLotSize || input.minLotSize <= 0) subdivisionRejectReason = "zone_or_min_lot_unknown";

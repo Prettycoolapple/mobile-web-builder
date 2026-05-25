@@ -1346,6 +1346,23 @@ function transitModeLabel(mode: string, t: (key: string) => string): string {
   return mode;
 }
 
+function transitServiceIntensityLabel(intensity: string, t: (key: string) => string): string {
+  if (intensity === "frequent") return t("report.service_intensity_frequent");
+  if (intensity === "regular") return t("report.service_intensity_regular");
+  if (intensity === "limited") return t("report.service_intensity_limited");
+  return t("report.service_intensity_unknown");
+}
+
+function formatTransitServiceSummary(
+  routeCount: number,
+  serviceIntensity: string,
+  t: (key: string, vars?: Record<string, string | number>) => string,
+): string {
+  const intensity = transitServiceIntensityLabel(serviceIntensity, t);
+  const key = routeCount === 1 ? "report.transit_routes_one" : "report.transit_routes_other";
+  return t(key, { n: routeCount, intensity });
+}
+
 function MarketAccessContextPanel({ neighbourhoodContext, transportContext, colors }: {
   neighbourhoodContext?: NeighbourhoodContext | null;
   transportContext?: TransportContext | null;
@@ -1399,7 +1416,7 @@ function MarketAccessContextPanel({ neighbourhoodContext, transportContext, colo
           />
           {rapidStop ? (
             <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, lineHeight: 16 }}>
-              {rapidStop.routeCount} route{rapidStop.routeCount === 1 ? "" : "s"}; {rapidStop.serviceIntensity} service.
+              {formatTransitServiceSummary(rapidStop.routeCount, rapidStop.serviceIntensity, t)}
             </Text>
           ) : null}
         </>
@@ -2012,6 +2029,32 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
         </View>
       )}
 
+      {report.combinedListingContext?.isCombinedListingMatch && (
+        <View style={[styles.warningBox, { backgroundColor: colors.accent + "12", borderColor: colors.accent + "35", borderRadius: 12, padding: 12 }]}>
+          <Feather name="git-branch" size={14} color={colors.accent} />
+          <View style={{ flex: 1, gap: 6 }}>
+            <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", fontSize: 13 }}>
+              {t("report.combined_listing_title")}
+            </Text>
+            <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 17 }}>
+              {report.combinedListingContext.note}
+            </Text>
+            {report.combinedListingContext.childAddresses.length > 1 ? (
+              <TouchableOpacity
+                activeOpacity={0.78}
+                onPress={() => onFollowUp(t("report.combined_listing_analyse_prompt", { address: report.combinedListingContext!.packageAddress }))}
+                style={[styles.combinedAction, { borderColor: colors.accent + "45", backgroundColor: colors.accent + "10" }]}
+              >
+                <Feather name="layers" size={13} color={colors.accent} />
+                <Text style={{ color: colors.accent, fontFamily: "DM_Sans_600SemiBold", fontSize: 12 }}>
+                  {t("report.combined_listing_analyse_both")}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        </View>
+      )}
+
       {report.propertyOverview && (
         <SectionCard title={t("report.overview")} icon="📍" defaultOpen={false} colors={colors}>
           <InfoRow
@@ -2261,6 +2304,7 @@ const styles = StyleSheet.create({
   overlayRow: { flexDirection: "row", alignItems: "flex-start", gap: 8, padding: 10 },
   riskBanner: { flexDirection: "row", alignItems: "flex-start", gap: 10, padding: 12, borderWidth: 1 },
   warningBox: { flexDirection: "row", alignItems: "flex-start", gap: 8, padding: 10, borderRadius: 10, borderWidth: 1 },
+  combinedAction: { alignSelf: "flex-start", borderWidth: 1, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7, flexDirection: "row", gap: 6, alignItems: "center" },
   strategyMetric: { flex: 1, borderRadius: 10, padding: 10, gap: 3 },
   infraRow: { flexDirection: "row", alignItems: "flex-start", paddingVertical: 10, gap: 6 },
   locationChip: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 100, borderWidth: 1 },

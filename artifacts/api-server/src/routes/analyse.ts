@@ -20,6 +20,7 @@ import {
 import { verifyToken } from "../lib/auth";
 import { extractNZAddress } from "../lib/address-parser";
 import {
+  extractCombinedListingAddressParts,
   findSuburbInTextViaIndex,
   getDistrictSiblings,
   findSuburbId,
@@ -43,6 +44,7 @@ import {
   hasStandardSubdivisionYield,
   isDevelopmentDiscoveryIntent,
   isStandardSubdivisionDiscoveryIntent,
+  shouldContinueDiscoveryDrain,
 } from "../lib/discovery-intent";
 import { passesStrictStandardSubdivisionScreen } from "../lib/discovery-land-area";
 import {
@@ -1044,18 +1046,61 @@ async function prescreenPickRestoreBatch(
   cacheKey: string,
   batch: ListingResult[],
   criteria: string | null,
-  preScreenOpts?: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number },
+  preScreenOpts?: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number; strictStandardSubdivision?: boolean },
   shownAddressKeys: Set<string> = new Set(),
+  n = 3,
+  restoreUnpicked = true,
 ): Promise<PropertyCandidate[]> {
   const visibleBatch = filterAlreadyShownListings(batch, shownAddressKeys);
   if (visibleBatch.length === 0) return [];
   const screened = await preScreenListingsFast(visibleBatch, 5, null, preScreenOpts).catch(() => [] as PropertyCandidate[]);
-  const candidates = pickDiscoveryCandidates(screened, criteria, shownAddressKeys, 3);
+  const candidates = pickDiscoveryCandidates(screened, criteria, shownAddressKeys, n);
   const pickedUrls = candidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u));
   markShown(cacheKey, pickedUrls);
   const { putAtFront, putAtBack } = partitionBatchAfterPrescreen(visibleBatch, screened, candidates, criteria, shownAddressKeys);
-  restoreListingsAfterPop(cacheKey, putAtFront, putAtBack);
+  if (restoreUnpicked) restoreListingsAfterPop(cacheKey, putAtFront, putAtBack);
   return candidates;
+}
+
+async function topUpDiscoveryCandidates(
+  cacheKey: string,
+  existing: PropertyCandidate[],
+  criteria: string | null,
+  preScreenOpts: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number; strictStandardSubdivision?: boolean },
+  shownAddressKeys: Set<string>,
+  options: { batchSize?: number; nonStrictAttemptLimit?: number; targetCount?: number } = {},
+): Promise<PropertyCandidate[]> {
+  const batchSize = options.batchSize ?? 8;
+  const nonStrictAttemptLimit = options.nonStrictAttemptLimit ?? 6;
+  const targetCount = options.targetCount ?? 3;
+  const strictStandardSubdivision = preScreenOpts.strictStandardSubdivision === true;
+  const out = [...existing];
+  let attempts = 0;
+
+  while (shouldContinueDiscoveryDrain({
+    currentCount: out.length,
+    remainingCount: getRemainingCount(cacheKey),
+    attempts,
+    strictStandardSubdivision,
+    nonStrictAttemptLimit,
+    targetCount,
+  })) {
+    attempts++;
+    const { listings: nextListings } = popNextListings(cacheKey, batchSize);
+    if (nextListings.length === 0) break;
+    const next = await prescreenPickRestoreBatch(
+      cacheKey,
+      nextListings,
+      criteria,
+      preScreenOpts,
+      shownAddressKeys,
+      Math.max(1, targetCount - out.length),
+      !strictStandardSubdivision,
+    );
+    out.push(...next);
+  }
+
+  return out.slice(0, targetCount);
 }
 
 function normaliseStreetHintKey(s: string): string {
@@ -1405,6 +1450,179 @@ async function findReusableFeasibilityJob(args: {
   return rows[0] ?? null;
 }
 
+type CombinedReportFailure = {
+  address: string;
+  error: string;
+};
+
+type CombinedReportGroup = {
+  kind: "combined_listing_group";
+  packageAddress: string;
+  childAddresses: string[];
+  reports: Record<string, unknown>[];
+  failures: CombinedReportFailure[];
+  comparison: {
+    summary: string;
+    subdivisionView: string[];
+    investmentView: string[];
+    risks: string[];
+    recommendedNextStep: string;
+  };
+  warnings: string[];
+  historyId?: string | null;
+  historyCreatedAt?: string | null;
+};
+
+function resolveCombinedPackage(raw: string): { packageAddress: string; childAddresses: string[] } | null {
+  const parsed = extractCombinedListingAddressParts(raw);
+  if (!parsed) return null;
+  return {
+    packageAddress: parsed.packageAddress,
+    childAddresses: parsed.childAddresses.slice(0, 4),
+  };
+}
+
+function reportAddress(report: Record<string, unknown>, fallback: string): string {
+  const direct = typeof report.address === "string" && report.address.trim() ? report.address.trim() : "";
+  const overview = report.propertyOverview;
+  const overviewAddress =
+    overview && typeof overview === "object" && typeof (overview as Record<string, unknown>).address === "string"
+      ? ((overview as Record<string, unknown>).address as string).trim()
+      : "";
+  return direct || overviewAddress || fallback;
+}
+
+function numericScore(report: Record<string, unknown>, key: "composite" | "roi"): number | null {
+  const scores = report.scores;
+  if (!scores || typeof scores !== "object") return null;
+  const value = (scores as Record<string, unknown>)[key];
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() && !Number.isNaN(Number(value))) return Number(value);
+  return null;
+}
+
+function potentialLots(report: Record<string, unknown>): number | null {
+  const planning = report.planning;
+  if (planning && typeof planning === "object") {
+    const value = (planning as Record<string, unknown>).potentialLots;
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  const legacy = report.potential_lots;
+  return typeof legacy === "number" && Number.isFinite(legacy) ? legacy : null;
+}
+
+async function localiseCombinedComparison(
+  comparison: CombinedReportGroup["comparison"],
+  warnings: string[],
+  locale: ReturnType<typeof normaliseLocale>,
+): Promise<{ comparison: CombinedReportGroup["comparison"]; warnings: string[] }> {
+  if (locale !== "zh") return { comparison, warnings };
+  const [summary, recommendedNextStep, ...translatedLists] = await Promise.all([
+    ensureChinese(comparison.summary),
+    ensureChinese(comparison.recommendedNextStep),
+    ...comparison.subdivisionView.map((s) => ensureChinese(s)),
+    ...comparison.investmentView.map((s) => ensureChinese(s)),
+    ...comparison.risks.map((s) => ensureChinese(s)),
+    ...warnings.map((s) => ensureChinese(s)),
+  ]);
+  const subdivisionEnd = comparison.subdivisionView.length;
+  const investmentEnd = subdivisionEnd + comparison.investmentView.length;
+  const risksEnd = investmentEnd + comparison.risks.length;
+  return {
+    comparison: {
+      summary,
+      recommendedNextStep,
+      subdivisionView: translatedLists.slice(0, subdivisionEnd),
+      investmentView: translatedLists.slice(subdivisionEnd, investmentEnd),
+      risks: translatedLists.slice(investmentEnd, risksEnd),
+    },
+    warnings: translatedLists.slice(risksEnd),
+  };
+}
+
+async function buildCombinedReportGroup(args: {
+  packageAddress: string;
+  childAddresses: string[];
+  reports: Record<string, unknown>[];
+  failures: CombinedReportFailure[];
+  locale: ReturnType<typeof normaliseLocale>;
+}): Promise<CombinedReportGroup> {
+  const reportSummaries = args.reports.map((report, idx) => {
+    const address = reportAddress(report, args.childAddresses[idx] ?? `Property ${idx + 1}`);
+    return {
+      address,
+      composite: numericScore(report, "composite"),
+      roi: numericScore(report, "roi"),
+      lots: potentialLots(report),
+    };
+  });
+  const bestByComposite = reportSummaries
+    .filter((r) => r.composite != null)
+    .sort((a, b) => (b.composite ?? 0) - (a.composite ?? 0))[0];
+  const bestByLots = reportSummaries
+    .filter((r) => r.lots != null)
+    .sort((a, b) => (b.lots ?? 0) - (a.lots ?? 0))[0];
+
+  const comparison: CombinedReportGroup["comparison"] = {
+    summary: `This appears to be a combined listing package. Each address has been analysed separately so land area, title, services, zoning and return assumptions stay tied to the correct property.`,
+    subdivisionView: reportSummaries.map((r) =>
+      `${r.address}: ${r.lots != null ? `${r.lots} potential lot${r.lots === 1 ? "" : "s"} indicated by the individual report` : "subdivision yield is not confirmed in the individual report"}.`,
+    ),
+    investmentView: reportSummaries.map((r) =>
+      `${r.address}: ${r.composite != null ? `${r.composite.toFixed(1)}/5 overall feasibility` : "overall feasibility score unavailable"}${r.roi != null ? `, ROI score ${r.roi.toFixed(1)}/5` : ""}.`,
+    ),
+    risks: [
+      "Do not add the package land area to one address unless a planner or surveyor confirms the legal titles and sale structure.",
+      "Treat shared driveways, services, easements and access as package-level due diligence items.",
+      ...args.failures.map((f) => `${f.address}: report generation failed (${f.error}).`),
+    ],
+    recommendedNextStep: bestByLots
+      ? `Start subdivision due diligence with ${bestByLots.address}, then compare the purchase price allocation across both titles.`
+      : bestByComposite
+        ? `Start commercial due diligence with ${bestByComposite.address}, then verify whether the package price fairly reflects both titles.`
+        : "Verify title boundaries and package price allocation before relying on any combined-listing development assumptions.",
+  };
+  const warnings = [
+    "Combined listing facts are shown as listing context only. They are not used as verified facts for any one child property.",
+  ];
+  const localised = await localiseCombinedComparison(comparison, warnings, args.locale);
+  return {
+    kind: "combined_listing_group",
+    packageAddress: args.packageAddress,
+    childAddresses: args.childAddresses,
+    reports: args.reports,
+    failures: args.failures,
+    comparison: localised.comparison,
+    warnings: localised.warnings,
+  };
+}
+
+async function applyCombinedListingContextToReport(
+  report: Record<string, unknown>,
+  pipelineResult: PipelineResult | null,
+  locale: ReturnType<typeof normaliseLocale>,
+): Promise<void> {
+  const listing = pipelineResult?.realestate_listing;
+  if (!listing?.isCombinedListing) return;
+  const parsed = extractCombinedListingAddressParts(listing.address);
+  if (!parsed) return;
+  const note = "The active listing appears to package multiple addresses. Package land, bedroom and bathroom figures were excluded from this single-property report.";
+  const localisedNote = locale === "zh" ? await ensureChinese(note) : note;
+  const context = {
+    isCombinedListingMatch: true,
+    packageAddress: parsed.packageAddress,
+    childAddresses: parsed.childAddresses,
+    aggregateFactsExcluded: true,
+    note: localisedNote,
+  };
+  report.combinedListingContext = context;
+  const overview = (report.propertyOverview as Record<string, unknown> | undefined) ?? {};
+  report.propertyOverview = {
+    ...overview,
+    combinedListingContext: context,
+  };
+}
+
 async function runFeasibilityAnalyseCore(args: {
   address: string;
   analysisAddress: string;
@@ -1439,6 +1657,7 @@ async function runFeasibilityAnalyseCore(args: {
 
   if (pipelineResult && report && typeof report === "object") {
     applyDeterministicPipelineOverrides(report, pipelineResult, pipelineResult.geocode?.formatted ?? analysisAddress);
+    await applyCombinedListingContextToReport(report, pipelineResult, locale);
   }
 
   if (locale === "zh") {
@@ -1485,6 +1704,89 @@ async function runFeasibilityAnalyseCore(args: {
   return { report, savedSearchId, savedSearchCreatedAt };
 }
 
+async function runCombinedFeasibilityGroupCore(args: {
+  packageAddress: string;
+  childAddresses: string[];
+  locale: ReturnType<typeof normaliseLocale>;
+  translateTitleSchool: boolean;
+  conversationHistory: Array<{ role: "user" | "assistant"; content: string }>;
+  userId: string | null;
+  log: FeasibilityLog;
+}): Promise<{
+  reportGroup: CombinedReportGroup;
+  savedSearchId: string | null;
+  savedSearchCreatedAt: string | null;
+}> {
+  const reports: Record<string, unknown>[] = [];
+  const failures: CombinedReportFailure[] = [];
+
+  for (const childAddress of args.childAddresses) {
+    try {
+      const result = await runFeasibilityAnalyseCore({
+        address: args.packageAddress,
+        analysisAddress: childAddress,
+        locale: args.locale,
+        translateTitleSchool: args.translateTitleSchool,
+        conversationHistory: args.conversationHistory,
+        userId: null,
+        log: args.log,
+      });
+      reports.push(result.report);
+    } catch (err) {
+      failures.push({
+        address: childAddress,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      args.log.warn({ err, childAddress }, "Combined listing child report failed");
+    }
+  }
+
+  if (reports.length === 0) {
+    throw new Error("No child reports could be generated for the combined listing.");
+  }
+
+  const reportGroup = await buildCombinedReportGroup({
+    packageAddress: args.packageAddress,
+    childAddresses: args.childAddresses,
+    reports,
+    failures,
+    locale: args.locale,
+  });
+
+  let savedSearchId: string | null = null;
+  let savedSearchCreatedAt: string | null = null;
+  if (args.userId) {
+    await db.update(profiles).set({
+      reportsUsedThisMonth: sql`${profiles.reportsUsedThisMonth} + 1`,
+    }).where(eq(profiles.id, args.userId));
+
+    try {
+      const [row] = await db
+        .insert(searches)
+        .values({
+          userId: args.userId,
+          query: args.packageAddress,
+          address: args.packageAddress,
+          resultJson: reportGroup as unknown as Record<string, unknown>,
+        })
+        .returning({ id: searches.id, createdAt: searches.createdAt });
+      savedSearchId = row?.id ?? null;
+      savedSearchCreatedAt = row?.createdAt ? new Date(row.createdAt as unknown as string).toISOString() : null;
+      reportGroup.historyId = savedSearchId;
+      reportGroup.historyCreatedAt = savedSearchCreatedAt;
+      reportGroup.reports = reportGroup.reports.map((report) => ({
+        ...report,
+        historyId: savedSearchId,
+        historyCreatedAt: savedSearchCreatedAt,
+      }));
+    } catch (err) {
+      args.log.error({ err }, "Failed to save combined listing report group to history");
+    }
+  }
+
+  return { reportGroup, savedSearchId, savedSearchCreatedAt };
+}
+
 async function processFeasibilityJob(jobId: string, log: FeasibilityLog): Promise<void> {
   const rows = await withDbRetry(() =>
     db.select().from(feasibilityJobs).where(eq(feasibilityJobs.id, jobId)).limit(1),
@@ -1503,15 +1805,26 @@ async function processFeasibilityJob(jobId: string, log: FeasibilityLog): Promis
   try {
     const conv = (job.conversationHistory as Array<{ role: "user" | "assistant"; content: string }> | null) ?? [];
     const locale = (job.locale === "zh" ? "zh" : "en") as ReturnType<typeof normaliseLocale>;
-    const result = await runFeasibilityAnalyseCore({
-      address: job.queryAddress,
-      analysisAddress: job.analysisAddress,
-      locale,
-      translateTitleSchool: Boolean(job.translateTitleSchool),
-      conversationHistory: conv,
-      userId: job.userId,
-      log,
-    });
+    const combinedPackage = resolveCombinedPackage(job.queryAddress) ?? resolveCombinedPackage(job.analysisAddress);
+    const result = combinedPackage
+      ? await runCombinedFeasibilityGroupCore({
+          packageAddress: combinedPackage.packageAddress,
+          childAddresses: combinedPackage.childAddresses,
+          locale,
+          translateTitleSchool: Boolean(job.translateTitleSchool),
+          conversationHistory: conv,
+          userId: job.userId,
+          log,
+        })
+      : await runFeasibilityAnalyseCore({
+          address: job.queryAddress,
+          analysisAddress: job.analysisAddress,
+          locale,
+          translateTitleSchool: Boolean(job.translateTitleSchool),
+          conversationHistory: conv,
+          userId: job.userId,
+          log,
+        });
     await withDbRetry(() =>
       db
         .update(feasibilityJobs)
@@ -1686,6 +1999,69 @@ router.post("/analyse", async (req, res) => {
   }
 
   try {
+    const combinedPackage = resolveCombinedPackage(address);
+    if (combinedPackage) {
+      const translateTitleSchool = translateTitleSchoolFromReq(
+        { headers: req.headers as Record<string, string | string[] | undefined> },
+        analyseLocale,
+      );
+      const wantAsync = Boolean(asyncFlag) && Boolean(userId);
+      if (wantAsync) {
+        const existing = await findReusableFeasibilityJob({
+          userId: userId!,
+          queryAddress: address,
+          analysisAddress: combinedPackage.packageAddress,
+        });
+        if (existing) {
+          if (existing.status === "pending") {
+            runAfterResponse(processFeasibilityJob(existing.id, req.log));
+          }
+          res.status(202).json({ type: "queued", jobId: existing.id, status: existing.status });
+          return;
+        }
+
+        const rows = await withDbRetry(() =>
+          db
+            .insert(feasibilityJobs)
+            .values({
+              userId: userId!,
+              status: "pending",
+              queryAddress: address,
+              analysisAddress: combinedPackage.packageAddress,
+              locale: analyseLocale,
+              translateTitleSchool,
+              conversationHistory: conversationHistory ?? null,
+            })
+            .returning({ id: feasibilityJobs.id }),
+        );
+        const inserted = rows[0];
+        if (!inserted?.id) {
+          res.status(500).json({ error: "Could not queue background analysis.", code: "JOB_QUEUE_FAILED" });
+          return;
+        }
+        runAfterResponse(processFeasibilityJob(inserted.id, req.log));
+        res.status(202).json({ type: "queued", jobId: inserted.id, status: "queued" });
+        return;
+      }
+
+      const result = await runCombinedFeasibilityGroupCore({
+        packageAddress: combinedPackage.packageAddress,
+        childAddresses: combinedPackage.childAddresses,
+        locale: analyseLocale,
+        translateTitleSchool,
+        conversationHistory: conversationHistory || [],
+        userId,
+        log: req.log,
+      });
+      res.json({
+        reportGroup: result.reportGroup,
+        type: "combined_listing_group",
+        searchId: result.savedSearchId,
+        historyCreatedAt: result.savedSearchCreatedAt,
+      });
+      return;
+    }
+
     const analysisInput = (await extractNZAddress(address).catch(() => null)) ?? address;
     // ── Subdivision pre-check ───────────────────────────────────────────────
     // If the user typed a parent street number that has been subdivided into
@@ -1832,11 +2208,13 @@ router.get("/analyse/jobs/:jobId", async (req, res) => {
       const historyCreatedAt = srows[0]?.createdAt
         ? new Date(srows[0].createdAt as unknown as string).toISOString()
         : null;
+      const isGroup = report?.kind === "combined_listing_group";
       res.json({
         status: job.status,
         searchId: job.searchId,
         historyCreatedAt,
-        report: report ?? null,
+        report: isGroup ? null : (report ?? null),
+        reportGroup: isGroup ? report : null,
       });
       return;
     }
@@ -1914,6 +2292,7 @@ router.post("/analyse/:searchId/refresh-photos", async (req, res) => {
     const { scrapeTradeMePropertyPhotos } = await import("../lib/scrapers/trademe-property");
     const { scrapeHougardenPhotos } = await import("../lib/scrapers/hougarden-photos");
     const { scrapeHomesPhotos } = await import("../lib/scrapers/homes-photos");
+    const { scrapeOneRoofPhotos } = await import("../lib/scrapers/oneroof-photos");
     const { findPropertyPhotosWithFallback } = await import("../lib/scrapers/web-image-search");
 
     const TIMEOUT_MS = 15_000;
@@ -1923,17 +2302,21 @@ router.post("/analyse/:searchId/refresh-photos", async (req, res) => {
         new Promise<T>((resolve) => setTimeout(() => resolve(fallback), TIMEOUT_MS)),
       ]).catch(() => fallback);
 
-    const [trademe, hougardenPhotos, homesPhotos] = await Promise.all([
+    const [trademe, hougardenPhotos, homesPhotos, oneroofPhotos] = await Promise.all([
       withTimeout(scrapeTradeMePropertyPhotos(reportAddress), { photo_urls: [] as string[], listing_url: null, data_source: "trademe" as const, scraped_at: "" }),
       withTimeout(scrapeHougardenPhotos(reportAddress), { photo_urls: [] as string[], listing_url: null, data_source: "hougarden_photos" as const, scraped_at: "" }),
       withTimeout(scrapeHomesPhotos(reportAddress), { photo_urls: [] as string[], listing_url: null, data_source: "homes_photos" as const, scraped_at: "" }),
+      withTimeout(scrapeOneRoofPhotos(reportAddress), { photo_urls: [] as string[], listing_url: null, data_source: "oneroof_photos" as const, scraped_at: "" }),
     ]);
 
     const existingPhotos: string[] = Array.isArray(report["photoUrls"])
       ? ((report["photoUrls"] as unknown[]).filter((u): u is string => typeof u === "string"))
       : [];
 
+    // OneRoof historical photos lead — they're typically higher quality than
+    // Trade Me/Hougarden archives and most likely to exist for sold listings.
     let combined = Array.from(new Set([
+      ...oneroofPhotos.photo_urls,
       ...trademe.photo_urls,
       ...hougardenPhotos.photo_urls,
       ...homesPhotos.photo_urls,
@@ -1973,6 +2356,7 @@ router.post("/analyse/:searchId/refresh-photos", async (req, res) => {
         trademe: trademe.photo_urls.length,
         hougardenPhotos: hougardenPhotos.photo_urls.length,
         homesPhotos: homesPhotos.photo_urls.length,
+        oneroofPhotos: oneroofPhotos.photo_urls.length,
       },
       totalAfter: combined.length,
       aiFallbackUsed,
@@ -2475,14 +2859,14 @@ router.post("/chat", async (req, res) => {
             const hasShownAny = getShownUrls(cacheKey).length > 0;
 
             if (isFollowUp && hasShownAny) {
-              let attempts = 0;
-              while (candidates.length === 0 && attempts < 3) {
-                const { listings: nextListings, remaining } = popNextListings(cacheKey, 8);
-                if (nextListings.length === 0) break;
-                req.log.info({ nextListings: nextListings.length, remaining, attempt: attempts + 1 }, "Follow-up: popping next listings from cache");
-                candidates = await prescreenPickRestoreBatch(cacheKey, nextListings, discoveryCriteria, discoverPreOpts, alreadyShownAddressKeys);
-                attempts++;
-              }
+              candidates = await topUpDiscoveryCandidates(
+                cacheKey,
+                [],
+                discoveryCriteria,
+                discoverPreOpts,
+                alreadyShownAddressKeys,
+                { nonStrictAttemptLimit: 3 },
+              );
             }
 
             // Fresh search when: first search, clarification answer, or cache exhausted.
@@ -2536,17 +2920,17 @@ router.post("/chat", async (req, res) => {
                 const pickedUrls = candidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u));
                 markShown(cacheKey, pickedUrls);
                 const { putAtFront, putAtBack } = partitionBatchAfterPrescreen(firstFiltered, screened, candidates, discoveryCriteria, alreadyShownAddressKeys);
-                restoreListingsAfterPop(cacheKey, putAtFront, putAtBack);
+                if (!strictStandardSubdivision) restoreListingsAfterPop(cacheKey, putAtFront, putAtBack);
                 prescreenedIntro = introFromPreScreen;
 
-                let drainAttempts = 0;
-                while (candidates.length === 0 && getRemainingCount(cacheKey) > 0 && drainAttempts < 6) {
-                  drainAttempts++;
-                  const { listings: nextListings } = popNextListings(cacheKey, 8);
-                  if (nextListings.length === 0) break;
-                  req.log.info({ nextListings: nextListings.length, drainAttempt: drainAttempts }, "Discovery: draining cache until prescreen hits");
-                  candidates = await prescreenPickRestoreBatch(cacheKey, nextListings, discoveryCriteria, discoverPreOpts, alreadyShownAddressKeys);
-                }
+                candidates = await topUpDiscoveryCandidates(
+                  cacheKey,
+                  candidates,
+                  discoveryCriteria,
+                  discoverPreOpts,
+                  alreadyShownAddressKeys,
+                  { nonStrictAttemptLimit: 6 },
+                );
               }
             }
 
@@ -2628,15 +3012,16 @@ router.post("/chat", async (req, res) => {
                       discoveryCriteria,
                       alreadyShownAddressKeys,
                     );
-                    restoreListingsAfterPop(fallbackCacheKey, fbFront, fbBack);
+                    if (!strictStandardSubdivision) restoreListingsAfterPop(fallbackCacheKey, fbFront, fbBack);
 
-                    let fbDrain = 0;
-                    while (candidates.length === 0 && getRemainingCount(fallbackCacheKey) > 0 && fbDrain < 6) {
-                      fbDrain++;
-                      const { listings: fbNext } = popNextListings(fallbackCacheKey, 8);
-                      if (fbNext.length === 0) break;
-                      candidates = await prescreenPickRestoreBatch(fallbackCacheKey, fbNext, discoveryCriteria, discoverPreOpts, alreadyShownAddressKeys);
-                    }
+                    candidates = await topUpDiscoveryCandidates(
+                      fallbackCacheKey,
+                      candidates,
+                      discoveryCriteria,
+                      discoverPreOpts,
+                      alreadyShownAddressKeys,
+                      { nonStrictAttemptLimit: 6 },
+                    );
 
                     if (candidates.length > 0) {
                       prescreenedIntro = introFallback;
@@ -3327,15 +3712,16 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                 safetyNetCriteria,
                 alreadyShownAddressKeys,
               );
-              restoreListingsAfterPop(cacheKey, snFront, snBack);
+              if (!discoverPreOptsSn.strictStandardSubdivision) restoreListingsAfterPop(cacheKey, snFront, snBack);
 
-              let snDrain = 0;
-              while (discoverCandidates.length === 0 && getRemainingCount(cacheKey) > 0 && snDrain < 6) {
-                snDrain++;
-                const { listings: snNext } = popNextListings(cacheKey, 8);
-                if (snNext.length === 0) break;
-                discoverCandidates = await prescreenPickRestoreBatch(cacheKey, snNext, safetyNetCriteria, discoverPreOptsSn, alreadyShownAddressKeys);
-              }
+              discoverCandidates = await topUpDiscoveryCandidates(
+                cacheKey,
+                discoverCandidates,
+                safetyNetCriteria,
+                discoverPreOptsSn,
+                alreadyShownAddressKeys,
+                { nonStrictAttemptLimit: 6 },
+              );
 
               if (discoverCandidates.length > 0) {
                 queueBackgroundScores(
