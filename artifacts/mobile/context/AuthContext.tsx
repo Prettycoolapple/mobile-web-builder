@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useCallback, useEffect, use
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useQueryClient } from "@tanstack/react-query";
 import * as FileSystem from "expo-file-system/legacy";
+import { AppState } from "react-native";
 import { loginRevenueCat, logoutRevenueCat, getSubscriptionSyncBody, IS_TEST_PAYMENT_MODE } from "@/lib/revenuecat";
 import { getApiBase } from "@/lib/api";
 import { getCurrentLocale, isOSChineseLocale } from "@/lib/i18n";
@@ -237,6 +238,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [resetSubscriptionCache]);
 
+  const clearLocalAuth = useCallback(async () => {
+    lastSubscriptionPeriodRepairAtRef.current = null;
+    setToken(null);
+    setUser(null);
+    await Promise.all([
+      AsyncStorage.removeItem(STORAGE_KEY_TOKEN),
+      AsyncStorage.removeItem(STORAGE_KEY_USER),
+    ]);
+    await switchRevenueCatIdentity(null);
+  }, [switchRevenueCatIdentity]);
+
   useEffect(() => {
     (async () => {
       try {
@@ -278,10 +290,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
         setUser(profile);
         await AsyncStorage.setItem(STORAGE_KEY_USER, JSON.stringify(profile));
+      } else if (resp.status === 401) {
+        await clearLocalAuth();
       }
     } catch {
     }
-  }, [token]);
+  }, [clearLocalAuth, token]);
+
+  useEffect(() => {
+    if (!token || isLoading) return;
+    void refreshProfile();
+  }, [isLoading, refreshProfile, token]);
+
+  useEffect(() => {
+    if (!token) return;
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") void refreshProfile();
+    });
+    return () => sub.remove();
+  }, [refreshProfile, token]);
+
+  useEffect(() => {
+    if (!token) return;
+    const interval = setInterval(() => {
+      void refreshProfile();
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, [refreshProfile, token]);
 
   useEffect(() => {
     if (!token || !user?.id || !isSubscriptionIdentityReady || IS_TEST_PAYMENT_MODE) return;
@@ -399,17 +434,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
-    lastSubscriptionPeriodRepairAtRef.current = null;
-    setToken(null);
-    setUser(null);
-    await Promise.all([
-      AsyncStorage.removeItem(STORAGE_KEY_TOKEN),
-      AsyncStorage.removeItem(STORAGE_KEY_USER),
-    ]);
     // Wipe cached subscription state and release the RevenueCat identity so
     // the next user starts with a completely clean slate.
-    await switchRevenueCatIdentity(null);
-  }, [switchRevenueCatIdentity]);
+    await clearLocalAuth();
+  }, [clearLocalAuth]);
 
   const getApiHeaders = useCallback((): Record<string, string> => {
     const headers: Record<string, string> = { "Content-Type": "application/json" };

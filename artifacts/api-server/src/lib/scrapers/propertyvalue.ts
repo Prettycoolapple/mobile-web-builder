@@ -10,6 +10,9 @@ export interface PropertyValueData {
   cv_year: number | null;
   property_type: string | null;
   property_sub_type: string | null;
+  legal_descriptions: string[];
+  land_use_primary: string | null;
+  property_improvements: string | null;
   land_area_sqm: number | null;
   floor_area_sqm: number | null;
   build_year: number | null;
@@ -62,6 +65,17 @@ type PropertyPayload = {
     }>;
   };
   ratingValuation?: RatingValuationPayload;
+  sales?: {
+    lastSale?: {
+      landUsePrimary?: unknown;
+    };
+  };
+  features?: {
+    featureAttributes?: Array<{
+      name?: unknown;
+      value?: unknown;
+    }>;
+  };
   isForSale?: boolean;
   address?: {
     fullAddress?: unknown;
@@ -73,6 +87,7 @@ type RatingValuationPayload = {
   landValue?: unknown;
   improvementValue?: unknown;
   valuationDate?: unknown;
+  legalDescriptions?: unknown;
 };
 
 function toNumber(raw: unknown): number | null {
@@ -232,6 +247,22 @@ function extractPhotos(payload: PropertyPayload): string[] {
   )).slice(0, 12);
 }
 
+function toStringArray(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return Array.from(new Set(
+    raw
+      .map((value) => toStringOrNull(value))
+      .filter((value): value is string => !!value),
+  ));
+}
+
+function featureValue(payload: PropertyPayload, featureName: RegExp): string | null {
+  const match = (payload.features?.featureAttributes ?? []).find((attr) =>
+    featureName.test(toStringOrNull(attr.name) ?? ""),
+  );
+  return toStringOrNull(match?.value);
+}
+
 function hasUsableData(data: PropertyValueData): boolean {
   return !!(
     data.cv_nzd ||
@@ -302,6 +333,9 @@ export async function scrapePropertyValue(address: string, ...alternateAddresses
     cv_year: cvYearFromDate(rv?.valuationDate),
     property_type: toStringOrNull(property.core?.propertyType),
     property_sub_type: toStringOrNull(property.core?.propertySubType ?? property.core?.propertySubTypeShort),
+    legal_descriptions: toStringArray(rv?.legalDescriptions ?? property.ratingValuation?.legalDescriptions),
+    land_use_primary: toStringOrNull(property.sales?.lastSale?.landUsePrimary),
+    property_improvements: featureValue(property, /property\s+improvements/i),
     land_area_sqm: toNumber(property.core?.landArea),
     floor_area_sqm: toNumber(property.additional?.floorArea),
     build_year: buildYear,

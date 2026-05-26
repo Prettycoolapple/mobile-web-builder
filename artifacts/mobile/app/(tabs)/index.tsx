@@ -113,6 +113,22 @@ function detectClientMode(text: string): "analyse" | "discover" | "followup" {
   return hasAddress ? "analyse" : "followup";
 }
 
+function isCombinedPackageAnalyseRequest(text: string): boolean {
+  const normalised = text.toLowerCase();
+  const hasPackageSignal =
+    /combined\s+(listing\s+)?package|full\s+package|package\s+analysis|analyse\s+.*package|analyze\s+.*package/i.test(text) ||
+    /组合|完整组合|打包|整包/.test(text);
+  const hasMultiAddressSignal =
+    /\b\d+[a-z]?\s+[^,&+]+(?:street|st|road|rd|avenue|ave|place|pl|drive|dr|terrace|tce|crescent|cres)\b[\s\S]{0,80}(?:&|\+| and | 和 |及)[\s\S]{0,80}\b\d+[a-z]?\s+[^,&+]+(?:street|st|road|rd|avenue|ave|place|pl|drive|dr|terrace|tce|crescent|cres)\b/i.test(text) ||
+    /\b\d+[a-z]?\s+[^,&+]+(?:street|st|road|rd|avenue|ave|place|pl|drive|dr|terrace|tce|crescent|cres)\b[\s\S]{0,80}(?:&|\+| and | 和 |及)\s*\d+[a-z]?\b/i.test(text);
+  return hasPackageSignal && (hasMultiAddressSignal || normalised.includes("package") || /组合|整包|打包/.test(text));
+}
+
+function isLongRunningSubdivisionDiscover(text: string, mode: "analyse" | "discover" | "followup"): boolean {
+  if (mode !== "discover") return false;
+  return /subdivi|sub[-\s]?divide|subdivision|分割|分地|细分|細分|可分割|可细分|可細分/i.test(text);
+}
+
 async function readBackgroundAnalyseJobs(): Promise<BackgroundAnalyseJob[]> {
   try {
     const raw = await AsyncStorage.getItem(BACKGROUND_ANALYSE_JOBS_KEY);
@@ -939,9 +955,11 @@ export default function SearchScreen() {
       [...(currentSession?.messages ?? [])].reverse().find((m) => m.type === "report" && m.report)?.report;
     const currentReportContext = currentSession?.currentReportGroup ?? currentReport;
     const agentAddress = resolveReportAddress(currentReport);
+    const isPackageAnalysisRequest = isCombinedPackageAnalyseRequest(text);
     const shouldLookupListingAgent =
       user?.role === "general" &&
-      !!agentAddress;
+      !!agentAddress &&
+      !isPackageAnalysisRequest;
 
     if (shouldLookupListingAgent) {
       try {
@@ -1019,11 +1037,18 @@ export default function SearchScreen() {
     }
 
     /** Chat-driven feasibility runs can exceed 3 minutes; OS may suspend the app in background. */
-    const isLongRunningAnalyseChat = detectedMode === "analyse";
+    const isLongRunningAnalyseChat =
+      detectedMode === "analyse" ||
+      isLongRunningSubdivisionDiscover(text, detectedMode);
     const MAX_RETRIES = 5;
     const CHAT_TIMEOUT_MS = 200_000;
     const ANALYSE_CHAT_TIMEOUT_MS = 420_000;
-    const TIMEOUT_MS = isLongRunningAnalyseChat ? ANALYSE_CHAT_TIMEOUT_MS : CHAT_TIMEOUT_MS;
+    const SUBDIVISION_DISCOVER_TIMEOUT_MS = 600_000;
+    const TIMEOUT_MS = isLongRunningSubdivisionDiscover(text, detectedMode)
+      ? SUBDIVISION_DISCOVER_TIMEOUT_MS
+      : isLongRunningAnalyseChat
+        ? ANALYSE_CHAT_TIMEOUT_MS
+        : CHAT_TIMEOUT_MS;
 
     const currentMessages = currentSession?.messages ?? [];
     const allMessages = [

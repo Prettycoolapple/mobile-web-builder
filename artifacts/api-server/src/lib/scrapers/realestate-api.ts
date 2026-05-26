@@ -61,7 +61,27 @@ function normaliseName(s: string): string {
     .trim();
 }
 
-async function fetchJsonWithTimeout<T>(url: string): Promise<T> {
+/**
+ * Exponential-backoff delays for transient failures (5xx, network errors, timeouts).
+ * Used by both the JSON API fetch and the per-listing pre-screen retry loop.
+ * Tuned so that 4 attempts fit inside the chat request budget while still riding
+ * out a brief upstream outage.
+ */
+const FETCH_RETRY_DELAYS_MS = [250, 750, 1800, 4000];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableFetchError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/HTTP 5\d\d/.test(msg)) return true;
+  if (/HTTP 429/.test(msg)) return true;
+  if (/abort|timeout|timed out|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|network/i.test(msg)) return true;
+  return false;
+}
+
+async function fetchJsonWithTimeoutOnce<T>(url: string): Promise<T> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -77,6 +97,30 @@ async function fetchJsonWithTimeout<T>(url: string): Promise<T> {
   } finally {
     clearTimeout(t);
   }
+}
+
+/**
+ * Fetch with retries on transient failures. The discovery flow asks "what's
+ * subdividable in <suburb>?" — a single failed listings page used to silently
+ * drop ~100 candidates from consideration, so we now retry up to four times
+ * with backoff before giving up.
+ */
+async function fetchJsonWithTimeout<T>(url: string): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= FETCH_RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      return await fetchJsonWithTimeoutOnce<T>(url);
+    } catch (err) {
+      lastErr = err;
+      if (!isRetryableFetchError(err) || attempt === FETCH_RETRY_DELAYS_MS.length) {
+        throw err;
+      }
+      const waitMs = FETCH_RETRY_DELAYS_MS[attempt];
+      logger.info({ url, attempt: attempt + 1, waitMs, err: (err as Error).message }, "realestate-api: transient fetch failure, retrying with backoff");
+      await sleep(waitMs);
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
 interface LocationsResponse {
@@ -315,7 +359,7 @@ interface RawListing {
 
 interface ListingsResponse {
   data?: RawListing[];
-  meta?: { totalResults?: number };
+  meta?: { totalResults?: number; offset?: number; limit?: number; resultsPerPage?: number };
   message?: string;
 }
 
@@ -403,6 +447,13 @@ function stringAttr(attrs: Record<string, unknown>, keys: string[]): string | nu
   return null;
 }
 
+function finiteNumber(raw: unknown): number | null {
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
 /**
  * Return up to `limit` high-res photo URLs from a listing's photo array.
  * Each photo uses the same 1280×720 crop path as the hero image.
@@ -449,6 +500,8 @@ function mapListing(raw: RawListing): ListingResult | null {
     zone: null,
     bedrooms: typeof a["bedroom-count"] === "number" ? a["bedroom-count"] : null,
     bathrooms: typeof a["bathrooms-total-count"] === "number" ? a["bathrooms-total-count"] : null,
+    lat: finiteNumber(a.address?.latitude),
+    lng: finiteNumber(a.address?.longitude),
     propertyType: stringAttr(rawAttrs, ["property-type", "propertyType", "property_type"]),
     listingCategory: stringAttr(rawAttrs, ["listing-category", "property-category"]),
     tenureText: stringAttr(rawAttrs, ["title-type", "tenure", "estate-type"]),
@@ -457,32 +510,61 @@ function mapListing(raw: RawListing): ListingResult | null {
 }
 
 /**
- * Fetch all active for-sale listings for a given suburb ID.
- * Returns up to `limit` listings (default 100, the API max per page).
+ * Fetch active for-sale listings for a given suburb ID.
+ * By default this returns one API page (100 listings). When `fetchAllPages` is
+ * true, it follows `page[offset]` until the suburb listing pool is exhausted.
  */
-async function fetchListingsForSuburbId(suburbId: string, limit = 100): Promise<ListingResult[]> {
-  const params = new URLSearchParams();
-  params.append("filter[category][]", "res_sale");
-  params.append("filter[suburb][]", suburbId);
-  params.append("page[limit]", String(Math.min(limit, 100)));
-  // Note: the public listings API does not accept `sort`; results come back in
-  // the API's default order (effectively most-recent-first for active listings).
+async function fetchListingsForSuburbId(
+  suburbId: string,
+  limit = 100,
+  options: { fetchAllPages?: boolean; maxListings?: number } = {},
+): Promise<ListingResult[]> {
+  const pageLimit = Math.min(limit, 100);
+  const all: ListingResult[] = [];
+  const seenIds = new Set<string>();
+  let offset = 0;
+  let totalResults: number | null = null;
 
-  const url = `${PLATFORM_BASE}/listings?${params.toString()}`;
-  const json = await fetchJsonWithTimeout<ListingsResponse>(url);
+  do {
+    const params = new URLSearchParams();
+    params.append("filter[category][]", "res_sale");
+    params.append("filter[suburb][]", suburbId);
+    params.append("page[limit]", String(pageLimit));
+    if (offset > 0) params.append("page[offset]", String(offset));
+    // Note: the public listings API does not accept `sort`; results come back in
+    // the API's default order (effectively most-recent-first for active listings).
 
-  if (json.message || !json.data) {
-    logger.warn({ err: json.message, url }, "realestate-api: listings request failed");
-    return [];
-  }
+    const url = `${PLATFORM_BASE}/listings?${params.toString()}`;
+    const json = await fetchJsonWithTimeout<ListingsResponse>(url);
 
-  const mapped = json.data
-    .filter((it) => it.attributes["listing-status"] !== "withdrawn")
-    .map(mapListing)
-    .filter((x): x is ListingResult => x !== null);
+    if (json.message || !json.data) {
+      logger.warn({ err: json.message, url }, "realestate-api: listings request failed");
+      break;
+    }
 
-  logger.info({ suburbId, total: json.meta?.totalResults, mapped: mapped.length }, "realestate-api: listings fetched");
-  return mapped;
+    const mapped = json.data
+      .filter((it) => it.attributes["listing-status"] !== "withdrawn")
+      .map(mapListing)
+      .filter((x): x is ListingResult => x !== null);
+
+    for (const listing of mapped) {
+      if (seenIds.has(listing.listingUrl)) continue;
+      seenIds.add(listing.listingUrl);
+      all.push(listing);
+      if (options.maxListings && all.length >= options.maxListings) break;
+    }
+
+    totalResults = typeof json.meta?.totalResults === "number" ? json.meta.totalResults : totalResults;
+    logger.info(
+      { suburbId, total: totalResults, offset, pageMapped: mapped.length, accumulated: all.length },
+      "realestate-api: listings page fetched",
+    );
+    if (!options.fetchAllPages || mapped.length === 0 || (options.maxListings && all.length >= options.maxListings)) break;
+    offset += pageLimit;
+  } while (totalResults == null || offset < totalResults);
+
+  logger.info({ suburbId, total: totalResults, mapped: all.length, fetchAllPages: !!options.fetchAllPages }, "realestate-api: listings fetched");
+  return all;
 }
 
 async function fetchRawListingsForSuburbId(suburbId: string, limit = 100): Promise<RawListing[]> {
@@ -1355,6 +1437,10 @@ export async function searchListingsByName(opts: {
   includeNegotiation?: boolean;
   /** Listing URLs to exclude (already-shown). */
   skipUrls?: string[];
+  /** For strict scans, fetch every listing page before declaring the suburb exhausted. */
+  fetchAllPages?: boolean;
+  /** Safety cap for all-page scans. */
+  maxListings?: number;
 }): Promise<ApiSearchResult> {
   const {
     suburbName,
@@ -1363,6 +1449,8 @@ export async function searchListingsByName(opts: {
     firstBatchSize = 6,
     includeNegotiation = true,
     skipUrls = [],
+    fetchAllPages = false,
+    maxListings,
   } = opts;
 
   const suburb = await findSuburbId(suburbName);
@@ -1378,7 +1466,7 @@ export async function searchListingsByName(opts: {
 
   let listings: ListingResult[];
   try {
-    listings = await fetchListingsForSuburbId(suburb.id);
+    listings = await fetchListingsForSuburbId(suburb.id, 100, { fetchAllPages, maxListings });
   } catch (err) {
     logger.warn({ err: (err as Error).message, suburbId: suburb.id }, "realestate-api: fetch failed");
     return {

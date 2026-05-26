@@ -695,8 +695,19 @@ export async function searchRealEstateListings(params: {
   skipUrls?: string[];
   firstBatchSize?: number;
   includeNegotiation?: boolean;
+  fetchAllPages?: boolean;
+  maxListings?: number;
 }): Promise<RealestateSearchResult> {
-  const { suburb, minPrice, maxPrice, skipUrls = [], firstBatchSize = 6, includeNegotiation = false } = params;
+  const {
+    suburb,
+    minPrice,
+    maxPrice,
+    skipUrls = [],
+    firstBatchSize = 6,
+    includeNegotiation = false,
+    fetchAllPages = false,
+    maxListings,
+  } = params;
   const priceMidpoint = Math.round((minPrice + maxPrice) / 2);
 
   // ── PRIMARY: Official JSON API ───────────────────────────────────────────
@@ -710,6 +721,8 @@ export async function searchRealEstateListings(params: {
       firstBatchSize,
       includeNegotiation: true, // include negotiation/POA so they're available; analyse.ts can choose
       skipUrls,
+      fetchAllPages,
+      maxListings,
     });
     if (apiResult.suburbResolved && (apiResult.firstBatch.length + apiResult.remainingListings.length) > 0) {
       logger.info(

@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { preScreenListingsFast } from "../pre-screen";
+import { preScreenListingsFast, preScreenListingsFastDetailed } from "../pre-screen";
 import { geocodeAddress } from "../geocode";
 import { fetchOverlays, fetchUnitaryPlanZone } from "../auckland-council";
 import { fetchLINZParcel } from "../linz";
 import { scrapeHomes } from "../scrapers/homes";
+import { scrapePropertyValue } from "../scrapers/propertyvalue";
 import { fetchPropertyHistory } from "../property-data";
 import type { ListingResult } from "../scrapers/oneroof";
 
@@ -14,6 +15,7 @@ vi.mock("../auckland-council", () => ({
 }));
 vi.mock("../linz", () => ({ fetchLINZParcel: vi.fn() }));
 vi.mock("../scrapers/homes", () => ({ scrapeHomes: vi.fn() }));
+vi.mock("../scrapers/propertyvalue", () => ({ scrapePropertyValue: vi.fn() }));
 vi.mock("../property-data", () => ({ fetchPropertyHistory: vi.fn() }));
 
 const mockedGeocode = vi.mocked(geocodeAddress);
@@ -21,6 +23,7 @@ const mockedZone = vi.mocked(fetchUnitaryPlanZone);
 const mockedOverlays = vi.mocked(fetchOverlays);
 const mockedLinz = vi.mocked(fetchLINZParcel);
 const mockedHomes = vi.mocked(scrapeHomes);
+const mockedPropertyValue = vi.mocked(scrapePropertyValue);
 const mockedPropertyHistory = vi.mocked(fetchPropertyHistory);
 
 function listing(overrides: Partial<ListingResult>): ListingResult {
@@ -55,6 +58,7 @@ describe("strict subdivision pre-screening", () => {
     mockedOverlays.mockResolvedValue([]);
     mockedLinz.mockResolvedValue(null);
     mockedHomes.mockResolvedValue(null);
+    mockedPropertyValue.mockResolvedValue(null);
     mockedPropertyHistory.mockResolvedValue({
       cv_nzd: null,
       cv_year: null,
@@ -200,6 +204,59 @@ describe("strict subdivision pre-screening", () => {
     expect(results).toEqual([]);
   });
 
+  it("keeps a non-strict under-budget unit card but suppresses parent parcel land area", async () => {
+    mockedLinz.mockResolvedValue({
+      parcel_id: "parent",
+      appellation: "Lot 1 Deposited Plan 91363",
+      area_sqm: 832,
+      survey_area_sqm: 832,
+      calc_area_sqm: 832,
+      title_no: null,
+      legal_description: "Lot 1 Deposited Plan 91363",
+      topology_type: null,
+      bbox: null,
+    });
+    mockedPropertyValue.mockResolvedValue({
+      cv_nzd: 1_200_000,
+      lv_nzd: 780_000,
+      iv_nzd: 420_000,
+      cv_year: 2024,
+      property_type: "RESIDENTIAL",
+      property_sub_type: "Ownership home units",
+      legal_descriptions: ["Unit A and Accessory Unit 1-2 Deposited Plan 91363"],
+      land_use_primary: "Single Unit excluding Bach",
+      property_improvements: "UNIT & CARPORT",
+      land_area_sqm: null,
+      floor_area_sqm: 115,
+      build_year: 1950,
+      build_year_range: null,
+      bedrooms: 2,
+      bathrooms: 1,
+      listing_active: true,
+      photo_urls: [],
+      address_confirmed: "1 Chesterfield Avenue, St Heliers, Auckland 1071",
+      property_id: 6100672,
+    });
+
+    const results = await preScreenListingsFast([
+      listing({
+        address: "1 Chesterfield Avenue, St Heliers, Auckland City, Auckland",
+        landArea: 832,
+        landAreaConfidence: "unverified",
+        propertyType: "Unit",
+        tenureText: "Freehold",
+        legalDescription: null,
+      }),
+    ], 1, null, { allowMissingListingPrice: true });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].landArea).toBeUndefined();
+    expect(results[0].landAreaConfidence).toBe("unverified");
+    expect(results[0].typology).toBe("unit_apartment");
+    expect(results[0].subdivisionEligible).toBe(false);
+    expect(results[0].subdivisionRejectReason).toBe("unit_or_crosslease_signal");
+  });
+
   it("excludes post-2000 standalone freehold sites from strict subdividable cards", async () => {
     mockedPropertyHistory.mockResolvedValue({
       cv_nzd: null,
@@ -217,5 +274,70 @@ describe("strict subdivision pre-screening", () => {
     ], 1, null, { allowMissingListingPrice: true, strictStandardSubdivision: true });
 
     expect(results).toEqual([]);
+  });
+
+  describe("indeterminate marking (outer retry pass)", () => {
+    it("reports a listing as indeterminate when the zone lookup keeps failing", async () => {
+      mockedZone.mockRejectedValue(new Error("zone API down"));
+      mockedPropertyHistory.mockResolvedValue({
+        cv_nzd: null,
+        cv_year: null,
+        build_year: 1950,
+        floor_area_sqm: 150,
+        land_area_sqm: 800,
+        property_type: "Residential Dwelling",
+        sources_confirmed: [],
+        sources_estimated: [],
+      });
+
+      const { candidates, indeterminate } = await preScreenListingsFastDetailed([
+        listing({ address: "124 Example Road, St Heliers, Auckland City, Auckland", landArea: 800 }),
+      ], 1, null, { allowMissingListingPrice: true, strictStandardSubdivision: true });
+
+      expect(candidates).toEqual([]);
+      expect(indeterminate).toHaveLength(1);
+      expect(indeterminate[0].address).toContain("124 Example Road");
+    }, 30_000);
+
+    it("reports a listing as indeterminate when build year cannot be resolved", async () => {
+      mockedPropertyHistory.mockResolvedValue({
+        cv_nzd: null,
+        cv_year: null,
+        build_year: null,
+        floor_area_sqm: 150,
+        land_area_sqm: 800,
+        property_type: "Residential Dwelling",
+        sources_confirmed: [],
+        sources_estimated: [],
+      });
+      mockedPropertyValue.mockResolvedValue(null);
+
+      const { candidates, indeterminate } = await preScreenListingsFastDetailed([
+        listing({ address: "127 Example Road, St Heliers, Auckland City, Auckland", landArea: 800 }),
+      ], 1, null, { allowMissingListingPrice: true, strictStandardSubdivision: true });
+
+      expect(candidates).toEqual([]);
+      expect(indeterminate).toHaveLength(1);
+    }, 30_000);
+
+    it("treats a post-2000 standalone freehold as a definitive reject, not indeterminate", async () => {
+      mockedPropertyHistory.mockResolvedValue({
+        cv_nzd: null,
+        cv_year: null,
+        build_year: 2010,
+        floor_area_sqm: 180,
+        land_area_sqm: 900,
+        property_type: "Residential Dwelling",
+        sources_confirmed: [],
+        sources_estimated: [],
+      });
+
+      const { candidates, indeterminate } = await preScreenListingsFastDetailed([
+        listing({ address: "26 Example Road, St Heliers, Auckland City, Auckland", landArea: 900 }),
+      ], 1, null, { allowMissingListingPrice: true, strictStandardSubdivision: true });
+
+      expect(candidates).toEqual([]);
+      expect(indeterminate).toEqual([]);
+    });
   });
 });

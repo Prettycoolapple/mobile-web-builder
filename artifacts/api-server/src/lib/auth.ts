@@ -1,12 +1,21 @@
-import { createHmac, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import jwt from "jsonwebtoken";
 import type { RequestHandler } from "express";
+import { eq } from "drizzle-orm";
+import { db, profiles } from "@workspace/db";
 
 const scryptAsync = promisify(scrypt);
 
 const JWT_SECRET = process.env.SESSION_SECRET || "devfeasible-dev-secret-change-in-prod";
 const JWT_EXPIRES = "30d";
+
+export interface AuthTokenPayload {
+  sub: string;
+  email: string;
+  role: string;
+  sid?: string;
+}
 
 export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16).toString("hex");
@@ -21,19 +30,44 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   return timingSafeEqual(buf, hashedBuf);
 }
 
-export function signToken(userId: string, email: string, role?: string): string {
-  return jwt.sign({ sub: userId, email, role: role ?? "general" }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
+export function createSessionId(): string {
+  return randomUUID();
 }
 
-export function verifyToken(token: string): { sub: string; email: string; role: string } | null {
+export function signToken(userId: string, email: string, role?: string, sessionId?: string): string {
+  const payload: AuthTokenPayload = { sub: userId, email, role: role ?? "general" };
+  if (sessionId) payload.sid = sessionId;
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES });
+}
+
+export function verifyToken(token: string): AuthTokenPayload | null {
   try {
-    return jwt.verify(token, JWT_SECRET) as { sub: string; email: string; role: string };
+    return jwt.verify(token, JWT_SECRET) as AuthTokenPayload;
   } catch {
     return null;
   }
 }
 
-export const requireAuth: RequestHandler = (req, res, next) => {
+export async function verifyActiveToken(token: string): Promise<AuthTokenPayload | null> {
+  const payload = verifyToken(token);
+  if (!payload) return null;
+
+  const [profile] = await db
+    .select({ activeSessionId: profiles.activeSessionId })
+    .from(profiles)
+    .where(eq(profiles.id, payload.sub))
+    .limit(1);
+
+  if (!profile) return null;
+
+  // Legacy tokens issued before single-device sessions did not include `sid`.
+  // Allow them only until the account receives its first new-session login.
+  if (!profile.activeSessionId && !payload.sid) return payload;
+  if (profile.activeSessionId && payload.sid === profile.activeSessionId) return payload;
+  return null;
+}
+
+export const requireAuth: RequestHandler = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) {
     res.status(401).json({ error: "Authentication required", code: "UNAUTHORIZED" });
@@ -41,9 +75,15 @@ export const requireAuth: RequestHandler = (req, res, next) => {
   }
 
   const token = authHeader.slice(7);
-  const payload = verifyToken(token);
+  let payload: AuthTokenPayload | null = null;
+  try {
+    payload = await verifyActiveToken(token);
+  } catch {
+    res.status(401).json({ error: "Could not validate session", code: "INVALID_TOKEN" });
+    return;
+  }
   if (!payload) {
-    res.status(401).json({ error: "Invalid or expired token", code: "INVALID_TOKEN" });
+    res.status(401).json({ error: "This account is now signed in on another device.", code: "SESSION_REPLACED" });
     return;
   }
 

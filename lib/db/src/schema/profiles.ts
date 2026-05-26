@@ -30,6 +30,11 @@ export const profiles = pgTable("profiles", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
   /**
+   * Server-side id for the only currently valid device session. New logins
+   * replace this value, which invalidates tokens issued to previous devices.
+   */
+  activeSessionId: text("active_session_id"),
+  /**
    * Admin-granted special status that overrides the normal plan report limit.
    * "supercharge"    → 60 reports/month, expires after 6 months (see specialStatusExpiresAt)
    * "friends_family" → 9999 reports/month, no expiry

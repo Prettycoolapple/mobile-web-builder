@@ -381,6 +381,7 @@ export function mergePropertyData(
   const realestateListing = realestateListingScopedToSubject(realestateListingRaw, extra?.analysed_address)
     ? realestateListingRaw
     : null;
+  const hasIgnoredCombinedListing = !!realestateListingRaw?.isCombinedListing && !realestateListing;
 
   // Land area: LINZ is the authoritative cadastral measurement — always wins.
   const land_area_sqm = first("land_area_sqm", sources,
@@ -467,7 +468,7 @@ export function mergePropertyData(
   // was chosen.
   const discrepancies: string[] = [];
   if (buildYearResult.note) discrepancies.push(buildYearResult.note);
-  if (realestateListingRaw?.isCombinedListing && !realestateListing) {
+  if (hasIgnoredCombinedListing) {
     discrepancies.push(
       `Active realestate.co.nz listing "${realestateListingRaw.address}" appears to package multiple addresses, so its bed/bath/floor/land figures were not used for this single-property report.`,
     );
@@ -696,7 +697,28 @@ export function mergePropertyData(
       }
     }
   }
-  const final_land_area_sqm = live_land_area_sqm ?? land_area_sqm;
+  let final_land_area_sqm = live_land_area_sqm ?? land_area_sqm;
+  if (hasIgnoredCombinedListing && propertyValue) {
+    if (propertyValue.land_area_sqm != null && final_land_area_sqm !== propertyValue.land_area_sqm) {
+      discrepancies.push(
+        `Land area: active package listing/parcel context indicated ${final_land_area_sqm ?? "unknown"}m², but PropertyValue resolved the analysed child address at ${propertyValue.land_area_sqm}m². Using the child-property value.`,
+      );
+      final_land_area_sqm = propertyValue.land_area_sqm;
+      sources["land_area_sqm"] = "propertyvalue (child address; combined listing excluded)";
+    }
+    if (propertyValue.floor_area_sqm != null && floor_area_sqm !== propertyValue.floor_area_sqm) {
+      floor_area_sqm = propertyValue.floor_area_sqm;
+      sources["floor_area_sqm"] = "propertyvalue (child address; combined listing excluded)";
+    }
+    if (propertyValue.bedrooms != null && bedrooms !== propertyValue.bedrooms) {
+      bedrooms = propertyValue.bedrooms;
+      sources["bedrooms"] = "propertyvalue (child address; combined listing excluded)";
+    }
+    if (propertyValue.bathrooms != null && bathrooms !== propertyValue.bathrooms) {
+      bathrooms = propertyValue.bathrooms;
+      sources["bathrooms"] = "propertyvalue (child address; combined listing excluded)";
+    }
+  }
 
   // OneRoof property page often shows the year agents use in marketing; prefer it when it
   // resolves ambiguity (newer build, or exact year vs a rounded decade elsewhere). Not gated

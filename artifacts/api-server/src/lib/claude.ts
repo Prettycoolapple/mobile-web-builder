@@ -106,6 +106,13 @@ export interface ChatIntent {
   reasoning: string;               // brief explanation for debugging / logging
 }
 
+export type DelegatedDiscoverSuburb = {
+  suburb: string;
+  candidates: string[];
+  reasoning: string;
+  source: "llm" | "history_suggestions";
+};
+
 const INTENT_SCHEMA = `{
   "mode": "analyse" | "discover" | "followup",
   "address": "<full NZ street address string> | null",
@@ -501,6 +508,120 @@ async function fallbackDetectIntent(
     wantsProviderRecommendation,
     suggestedDiscipline: null,
     reasoning: "regex fallback",
+  };
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const key = value.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(value.trim());
+  }
+  return out;
+}
+
+async function validateSuburbCandidates(candidates: string[]): Promise<string[]> {
+  const valid: string[] = [];
+  for (const candidate of uniqueStrings(candidates).slice(0, 12)) {
+    const hit = await findSuburbId(candidate).catch(() => null);
+    if (hit) valid.push(hit.title.toLowerCase());
+  }
+  return uniqueStrings(valid);
+}
+
+async function extractSuburbSuggestionsFromRecentAssistant(messages: Message[]): Promise<string[]> {
+  const assistantMessages = [...messages].reverse().filter((m) => m.role === "assistant").slice(0, 3);
+  const candidates: string[] = [];
+  for (const message of assistantMessages) {
+    const text = message.content ?? "";
+    const words = text.match(/[A-Za-z][A-Za-z'-]*/g) ?? [];
+    for (let start = 0; start < words.length; start++) {
+      for (let len = 1; len <= 3 && start + len <= words.length; len++) {
+        candidates.push(words.slice(start, start + len).join(" "));
+      }
+    }
+  }
+  return validateSuburbCandidates(candidates);
+}
+
+function looksLikeDelegatedChoiceFallback(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.length > 80) return false;
+  return /\b(any|anything|anywhere|either|whatever|whichever|you\s+(choose|pick|decide)|your\s+choice|no\s+preference|all\s+good|up\s+to\s+you)\b/i.test(trimmed)
+    || /(都可以|都行|随便|隨便|你(?:来|來)?决定|你(?:来|來)?选|你看着办|无所谓|無所謂|哪个都行|哪個都行)/u.test(trimmed);
+}
+
+/**
+ * Resolves replies like "any", "都可以", "you pick", or "whatever is best"
+ * after a suburb clarification. The decision is semantic and context-aware:
+ * an LLM reads the conversation and proposes concrete suburbs, then every
+ * candidate is validated against the live realestate.co.nz suburb directory.
+ */
+export async function resolveDelegatedDiscoverSuburb(
+  messages: Message[],
+  latestMessage: string,
+  locale: Locale = "en",
+): Promise<DelegatedDiscoverSuburb | null> {
+  const recent = messages.slice(-8).map((m) => `[${m.role.toUpperCase()}]: ${m.content.slice(0, 500)}`).join("\n");
+  const prompt = `You are resolving a property-search clarification in a New Zealand real estate app.
+
+Conversation:
+${recent}
+
+Latest user message:
+"${latestMessage}"
+
+Task:
+- Decide whether the latest user message means the user is delegating the suburb choice to the app, such as "any is fine", "you choose", "whatever", "都可以", "随便", or similar.
+- Also accept this when the user originally gave a broad region, e.g. North Shore, Auckland, and is clearly asking for any suitable suburb in that region.
+- If yes, return 3 to 6 concrete NZ suburb names that would be sensible to search for the user's property intent, preferring suburbs suggested by the assistant if any were offered.
+- If no, return acceptsChoice=false.
+
+Return ONLY JSON:
+{"acceptsChoice": boolean, "candidates": ["suburb name"], "reasoning": "short reason"}`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "deepseek-chat",
+      config: {
+        maxOutputTokens: 512,
+        temperature: 0.4,
+        thinkingConfig: { thinkingBudget: 0 },
+      },
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+    });
+    const raw = (response.text ?? "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error("No JSON object in delegated suburb response");
+    const parsed = JSON.parse(match[0]) as { acceptsChoice?: unknown; candidates?: unknown; reasoning?: unknown };
+    if (parsed.acceptsChoice !== true || !Array.isArray(parsed.candidates)) return null;
+    const valid = await validateSuburbCandidates(parsed.candidates.filter((x): x is string => typeof x === "string"));
+    if (valid.length > 0) {
+      const chosen = valid[Math.floor(Math.random() * valid.length)] ?? valid[0];
+      return {
+        suburb: chosen,
+        candidates: valid,
+        reasoning: typeof parsed.reasoning === "string" ? parsed.reasoning : "user delegated suburb choice",
+        source: "llm",
+      };
+    }
+  } catch (err) {
+    logger.warn({ err: (err as Error).message, latestMessage: latestMessage.slice(0, 80) }, "Delegated suburb resolver failed");
+  }
+
+  if (!looksLikeDelegatedChoiceFallback(latestMessage)) return null;
+
+  const fallbackCandidates = await extractSuburbSuggestionsFromRecentAssistant(messages);
+  if (fallbackCandidates.length === 0) return null;
+  const chosen = fallbackCandidates[Math.floor(Math.random() * fallbackCandidates.length)] ?? fallbackCandidates[0];
+  return {
+    suburb: chosen,
+    candidates: fallbackCandidates,
+    reasoning: "user delegated suburb choice; selected from prior assistant suggestions",
+    source: "history_suggestions",
   };
 }
 

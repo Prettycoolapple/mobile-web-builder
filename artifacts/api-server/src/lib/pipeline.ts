@@ -41,6 +41,7 @@ import {
   assessPropertyEligibility,
   eligibilityPlanningNote,
   shouldForceSingleLotForEligibility,
+  shouldSuppressParentLandAreaForEligibility,
 } from "./property-eligibility";
 
 const AC_PROP_MAPSERVER = "https://mapspublic.aucklandcouncil.govt.nz/arcgis3/rest/services/NonCouncil/PropertyValueInfo/MapServer";
@@ -919,6 +920,56 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     "Asbestos classification (post-merge)",
   );
 
+  const preliminaryEligibility = assessPropertyEligibility({
+    address: geocode.formatted ?? address,
+    estateType: merged.estate_type,
+    legalDescription: [
+      linzParcelData?.legal_description,
+      linzParcelData?.appellation,
+      realestateListingForFacts?.legalDescription,
+      ...(propertyValueData?.legal_descriptions ?? []),
+    ].filter(Boolean).join(" "),
+    propertyType: merged.property_type ?? propertyHistoryData?.property_type ?? propertyValueData?.property_type,
+    propertySubType: propertyValueData?.property_sub_type,
+    propertyValueLegalDescriptions: propertyValueData?.legal_descriptions,
+    landUsePrimary: propertyValueData?.land_use_primary,
+    propertyImprovements: propertyValueData?.property_improvements,
+    listingPropertyType: realestateListingForFacts?.propertyType,
+    listingCategory: realestateListingForFacts?.listingCategory,
+    listingTenureText: realestateListingForFacts?.tenureText,
+    listingLegalDescription: realestateListingForFacts?.legalDescription,
+    linzParcel: linzParcelData,
+    landAreaSqm: merged.land_area_sqm,
+    floorAreaSqm: merged.floor_area_sqm,
+    buildYear: merged.build_year,
+    buildYearRange: merged.build_year_range,
+    zoneCode: merged.zone_code,
+    potentialLots: null,
+    minLotSize: null,
+    isCombinedListingAggregate: !!realestateListing?.isCombinedListing && !realestateListingForFacts,
+  });
+  if (shouldSuppressParentLandAreaForEligibility(preliminaryEligibility)) {
+    if (propertyValueData?.land_area_sqm != null) {
+      if (merged.land_area_sqm !== propertyValueData.land_area_sqm) {
+        merged.discrepancies.push(
+          `PropertyValue/title signals indicate this is not a standalone freehold site, so parent parcel land area was replaced with the subject land area from PropertyValue (${propertyValueData.land_area_sqm}m²).`,
+        );
+      }
+      merged.land_area_sqm = propertyValueData.land_area_sqm;
+      merged.data_sources["land_area_sqm"] = "propertyvalue";
+    } else if (merged.land_area_sqm != null) {
+      merged.discrepancies.push(
+        "PropertyValue/title signals indicate this is a unit or non-standalone title, so parent parcel land area was excluded from the subject-property report.",
+      );
+      merged.land_area_sqm = null;
+      merged.data_sources["land_area_sqm"] = "unavailable_unit_or_non_standalone";
+    }
+    if (preliminaryEligibility.unitLikeSignal) {
+      merged.estate_type = "Unit title";
+      merged.data_sources["estate_type"] = "propertyvalue_legal_description";
+    }
+  }
+
   merged.missing_critical_fields = [
     ...(merged.cv_nzd === null ? ["cv_nzd"] : []),
     ...(merged.land_area_sqm === null ? ["land_area_sqm"] : []),
@@ -927,7 +978,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
 
   const easementAreaSqm = easementAnalysis?.total_burdening_area_sqm ?? 0;
   const rawLotResult = calculatePotentialLots(
-    merged.land_area_sqm ?? 400,
+    merged.land_area_sqm ?? 0,
     merged.zone_code,
     easementAreaSqm,
   );
@@ -938,8 +989,13 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       linzParcelData?.legal_description,
       linzParcelData?.appellation,
       realestateListingForFacts?.legalDescription,
+      ...(propertyValueData?.legal_descriptions ?? []),
     ].filter(Boolean).join(" "),
     propertyType: merged.property_type ?? propertyHistoryData?.property_type ?? propertyValueData?.property_type,
+    propertySubType: propertyValueData?.property_sub_type,
+    propertyValueLegalDescriptions: propertyValueData?.legal_descriptions,
+    landUsePrimary: propertyValueData?.land_use_primary,
+    propertyImprovements: propertyValueData?.property_improvements,
     listingPropertyType: realestateListingForFacts?.propertyType,
     listingCategory: realestateListingForFacts?.listingCategory,
     listingTenureText: realestateListingForFacts?.tenureText,

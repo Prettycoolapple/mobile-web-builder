@@ -1,6 +1,7 @@
 import { ai } from "@workspace/integrations-gemini-ai";
 import { logger } from "./logger";
 import type { Locale } from "./prompts";
+import { terrainSlopeText, type TerrainContour } from "./terrain-slope-copy";
 import { isIntensityProgrammeCopyEn } from "./intensity-programme-copy";
 import { formatTitleTypeForDisplay } from "./titleDisplay";
 import {
@@ -332,10 +333,16 @@ export async function translateReportNarrative(
     );
   }
 
-  // terrain.slope
+  // terrain.slope — deterministic zh copy when classification is known (no LLM)
   if (out.terrain && typeof out.terrain === "object") {
     const terrain = { ...(out.terrain as Record<string, unknown>) };
-    terrain.slope = await translateIfString(terrain.slope);
+    const cls = terrain.classification as TerrainContour | null | undefined;
+    const degrees = terrain.slope_degrees as number | null | undefined;
+    if (cls) {
+      terrain.slope = terrainSlopeText(cls, degrees, "zh");
+    } else {
+      terrain.slope = await translateIfString(terrain.slope);
+    }
     out.terrain = terrain;
   }
 

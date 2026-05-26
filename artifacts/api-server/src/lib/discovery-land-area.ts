@@ -3,7 +3,7 @@ import { calculatePotentialLots } from "./lot-calculator";
 import { parseStreetNumberSuffix } from "./subdivision";
 import { scrapeHomes } from "./scrapers/homes";
 
-export type DiscoveryLandAreaSource = "realestate_api" | "realestate_page" | "homes" | "linz" | "unknown";
+export type DiscoveryLandAreaSource = "realestate_api" | "realestate_page" | "homes" | "linz" | "propertyvalue" | "unknown";
 export type DiscoveryLandAreaConfidence = "verified" | "unverified";
 
 export interface DiscoveryLandAreaVerification {

@@ -11,7 +11,7 @@ import {
   userLoginEvents,
   userUploads,
 } from "@workspace/db";
-import { hashPassword, verifyPassword, signToken, requireAuth } from "../lib/auth";
+import { createSessionId, hashPassword, verifyPassword, signToken, requireAuth } from "../lib/auth";
 import { sendNewUserSignupNotification, sendPasswordResetCodeEmail } from "../lib/mailer";
 import { usagePeriodExpired } from "../lib/billingPeriod";
 import { verifyPhoneVerificationToken, consumePhoneVerification } from "./otp";
@@ -279,6 +279,7 @@ router.post("/signup", async (req, res) => {
 
     const passwordHash = await hashPassword(password);
 
+    const sessionId = createSessionId();
     const profile = await db.transaction(async (tx) => {
       const [newProfile] = await tx
         .insert(profiles)
@@ -292,6 +293,7 @@ router.post("/signup", async (req, res) => {
           reportsUsedThisMonth: 0,
           phoneNumber: phoneTrimmed,
           phoneVerifiedAt: new Date(),
+          activeSessionId: sessionId,
         })
         .returning({
           id: profiles.id,
@@ -360,7 +362,7 @@ router.post("/signup", async (req, res) => {
       return newProfile;
     });
 
-    const token = signToken(profile.id, profile.email, role);
+    const token = signToken(profile.id, profile.email, role, sessionId);
     res.status(201).json({ token, user: { ...profile, isVerified: false } });
     recordLoginEvent(profile.id);
 
@@ -525,7 +527,7 @@ router.post("/password-reset/confirm", async (req, res) => {
         const passwordHash = await hashPassword(parsed.data.password);
         await tx
           .update(profiles)
-          .set({ passwordHash })
+          .set({ passwordHash, activeSessionId: null })
           .where(eq(profiles.id, profile.id));
         await tx
           .update(passwordResetTokens)
@@ -639,7 +641,13 @@ router.post("/login", async (req, res) => {
       effectiveSpecialStatusExpiresAt = null;
     }
 
-    const token = signToken(profile.id, profile.email, profile.role);
+    const sessionId = createSessionId();
+    await db
+      .update(profiles)
+      .set({ activeSessionId: sessionId })
+      .where(eq(profiles.id, profile.id));
+
+    const token = signToken(profile.id, profile.email, profile.role, sessionId);
     recordLoginEvent(profile.id);
     res.json({
       token,

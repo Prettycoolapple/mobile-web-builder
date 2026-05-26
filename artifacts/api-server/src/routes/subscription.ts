@@ -1,25 +1,13 @@
 import { Router } from "express";
 import { eq } from "drizzle-orm";
 import { db, profiles } from "@workspace/db";
-import { verifyToken } from "../lib/auth";
+import { requireAuth } from "../lib/auth";
 import { logger } from "../lib/logger";
 
 const router = Router();
 
-router.post("/subscription/sync", async (req, res) => {
-  const authHeader = req.headers["authorization"];
-  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
-  if (!token) {
-    res.status(401).json({ error: "Unauthorized" });
-    return;
-  }
-
-  const payload = verifyToken(token);
-  if (!payload) {
-    res.status(401).json({ error: "Invalid token" });
-    return;
-  }
-
+router.post("/subscription/sync", requireAuth, async (req, res) => {
+  const userId = (req as any).userId as string;
   const { tier, subscriptionPeriodEndISO } = req.body as {
     tier?: string;
     subscriptionPeriodEndISO?: string;
@@ -44,7 +32,7 @@ router.post("/subscription/sync", async (req, res) => {
         subscriptionPeriodEndAt: profiles.subscriptionPeriodEndAt,
       })
       .from(profiles)
-      .where(eq(profiles.id, payload.sub))
+      .where(eq(profiles.id, userId))
       .limit(1);
 
     if (!row) {
@@ -58,7 +46,7 @@ router.post("/subscription/sync", async (req, res) => {
       await db
         .update(profiles)
         .set({ subscriptionTier: "free", subscriptionPeriodEndAt: null })
-        .where(eq(profiles.id, payload.sub));
+        .where(eq(profiles.id, userId));
       res.json({ success: true, tier });
       return;
     }
@@ -83,7 +71,7 @@ router.post("/subscription/sync", async (req, res) => {
           lastResetAt: new Date(),
           subscriptionPeriodEndAt: incomingEnd,
         })
-        .where(eq(profiles.id, payload.sub));
+        .where(eq(profiles.id, userId));
     } else {
       const patch: {
         subscriptionTier: string;
@@ -92,7 +80,7 @@ router.post("/subscription/sync", async (req, res) => {
       if (incomingEnd) {
         patch.subscriptionPeriodEndAt = incomingEnd;
       }
-      await db.update(profiles).set(patch).where(eq(profiles.id, payload.sub));
+      await db.update(profiles).set(patch).where(eq(profiles.id, userId));
     }
 
     res.json({ success: true, tier });

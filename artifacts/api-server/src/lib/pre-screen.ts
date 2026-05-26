@@ -1,13 +1,15 @@
 import { logger } from "./logger";
 import { geocodeAddress } from "./geocode";
 import { scrapeHougarden } from "./scrapers/hougarden";
-import { fetchUnitaryPlanZone, fetchOverlays } from "./auckland-council";
+import { fetchUnitaryPlanZone, fetchOverlays, type ZoneResult, type Overlay } from "./auckland-council";
 import type { ListingResult } from "./scrapers/oneroof";
 import { calculatePotentialLots } from "./lot-calculator";
 import { fetchLINZParcel } from "./linz";
 import { fetchPropertyHistory } from "./property-data";
+import { scrapePropertyValue } from "./scrapers/propertyvalue";
 import {
   assessPropertyEligibility,
+  shouldSuppressParentLandAreaForEligibility,
   type PropertyEligibilityConfidence,
   type PropertyTypology,
 } from "./property-eligibility";
@@ -51,6 +53,24 @@ export interface PropertyCandidate {
   subdivisionEligible?: boolean;
   subdivisionRejectReason?: string | null;
   buildYear?: number | null;
+}
+
+/**
+ * A strict-subdivision screen returns either a candidate (passed all rules) or
+ * a verdict describing why we couldn't pass it. "indeterminate" means an
+ * essential source (zone / build year / land area) failed transiently after
+ * retries — the outer discovery loop should re-screen these with longer waits
+ * before reporting "no listings".
+ */
+export type ScreenVerdict =
+  | { kind: "candidate"; candidate: PropertyCandidate }
+  | { kind: "rejected"; reason: string }
+  | { kind: "indeterminate"; reason: string };
+
+const SCREEN_SOURCE_RETRY_DELAYS_MS = [500, 1500, 4000];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const ZONE_EASE_SCORE: Record<string, number> = {
@@ -142,6 +162,115 @@ function isApartmentAddress(address: string): boolean {
     /^\d+[A-Za-z]+\/\d+/i.test(a);
 }
 
+function listingGeo(listing: ListingResult): { lat: number; lng: number; formatted: string; suburb: string | null } | null {
+  const lat = listing.lat;
+  const lng = listing.lng;
+  if (typeof lat !== "number" || typeof lng !== "number" || !Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return {
+    lat,
+    lng,
+    formatted: listing.address,
+    suburb: listing.address.split(",")[1]?.replace(/\b\d{4}\b/g, "").trim() || null,
+  };
+}
+
+/**
+ * Fetches the essential data sources for pre-screening a single listing. In
+ * strict-subdivision mode it loops with exponential backoff so a transiently
+ * failed zone/build-year/land-area source doesn't silently knock a listing out
+ * of consideration. Returns the resolved sources and a list of sources that
+ * stayed broken after all retries.
+ */
+async function fetchScreenSourcesWithRetry(
+  listing: ListingResult,
+  geo: { lat: number; lng: number; formatted: string },
+  opts: {
+    shouldVerifyLandArea: boolean;
+    shouldFetchPropertyValue: boolean;
+    strictStandardSubdivision: boolean;
+  },
+): Promise<{
+  zone: ZoneResult | null;
+  resolvedOverlays: Overlay[];
+  linzParcel: Awaited<ReturnType<typeof fetchLINZParcel>> | null;
+  propertyHistory: Awaited<ReturnType<typeof fetchPropertyHistory>> | null;
+  propertyValue: Awaited<ReturnType<typeof scrapePropertyValue>> | null;
+  failedSources: string[];
+}> {
+  let zone: ZoneResult | null = null;
+  let resolvedOverlays: Overlay[] = [];
+  let linzParcel: Awaited<ReturnType<typeof fetchLINZParcel>> | null = null;
+  let propertyHistory: Awaited<ReturnType<typeof fetchPropertyHistory>> | null = null;
+  let propertyValue: Awaited<ReturnType<typeof scrapePropertyValue>> | null = null;
+  let failedSources: string[] = [];
+
+  const maxAttempts = opts.strictStandardSubdivision ? SCREEN_SOURCE_RETRY_DELAYS_MS.length + 1 : 1;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) {
+      const waitMs = SCREEN_SOURCE_RETRY_DELAYS_MS[attempt - 1];
+      logger.info(
+        { address: listing.address, attempt, waitMs, failedSources },
+        "Pre-screen: retrying failed essential sources for strict subdivision screen",
+      );
+      await sleep(waitMs);
+    }
+
+    const needsZone: boolean = !zone;
+    const needsOverlays: boolean = resolvedOverlays.length === 0 && attempt === 0;
+    const needsLinz: boolean = opts.shouldVerifyLandArea && !linzParcel;
+    const needsPropertyHistory: boolean = opts.strictStandardSubdivision && !propertyHistory?.build_year;
+    const needsPropertyValue: boolean = opts.shouldFetchPropertyValue && !propertyValue;
+
+    const zonePromise: Promise<ZoneResult | null> = needsZone
+      ? fetchUnitaryPlanZone(geo.lat, geo.lng)
+      : Promise.resolve(zone);
+    const overlaysPromise: Promise<Overlay[]> = needsOverlays
+      ? fetchOverlays(geo.lat, geo.lng)
+      : Promise.resolve(resolvedOverlays);
+    const linzPromise: Promise<Awaited<ReturnType<typeof fetchLINZParcel>> | null> = needsLinz
+      ? fetchLINZParcel(geo.lat, geo.lng)
+      : Promise.resolve(linzParcel);
+    const propertyHistoryPromise: Promise<Awaited<ReturnType<typeof fetchPropertyHistory>> | null> = needsPropertyHistory
+      ? fetchPropertyHistory(listing.address, geo.lat, geo.lng)
+      : Promise.resolve(propertyHistory);
+    const propertyValuePromise: Promise<Awaited<ReturnType<typeof scrapePropertyValue>> | null> = needsPropertyValue
+      ? scrapePropertyValue(listing.address, geo.formatted)
+      : Promise.resolve(propertyValue);
+
+    const [zoneResult, overlaysResult, linzParcelResult, propertyHistoryResult, propertyValueResult] = await Promise.allSettled([
+      zonePromise,
+      overlaysPromise,
+      linzPromise,
+      propertyHistoryPromise,
+      propertyValuePromise,
+    ]);
+
+    if (zoneResult.status === "fulfilled" && zoneResult.value) zone = zoneResult.value;
+    if (overlaysResult.status === "fulfilled" && overlaysResult.value) resolvedOverlays = overlaysResult.value;
+    if (linzParcelResult.status === "fulfilled" && linzParcelResult.value) linzParcel = linzParcelResult.value;
+    if (propertyHistoryResult.status === "fulfilled" && propertyHistoryResult.value) propertyHistory = propertyHistoryResult.value;
+    if (propertyValueResult.status === "fulfilled" && propertyValueResult.value) propertyValue = propertyValueResult.value;
+
+    failedSources = [];
+    if (!zone) failedSources.push("zone");
+    if (opts.shouldVerifyLandArea && !linzParcel) failedSources.push("linz");
+    if (opts.strictStandardSubdivision && !propertyHistory?.build_year && !propertyValue?.build_year) failedSources.push("build_year");
+    if (opts.shouldFetchPropertyValue && !propertyValue) failedSources.push("propertyvalue");
+
+    if (!opts.strictStandardSubdivision) break;
+
+    // In strict mode, only the essentials need to succeed before we stop
+    // retrying. Zone + a build-year source are the two hard requirements; land
+    // area we can verify from listing/homes/propertyValue as well.
+    const haveBuildYear = !!(propertyHistory?.build_year || propertyValue?.build_year);
+    const haveLandSignal = !!(linzParcel || listing.landArea != null || propertyValue?.land_area_sqm);
+    if (zone && haveBuildYear && haveLandSignal) break;
+  }
+
+  return { zone, resolvedOverlays, linzParcel, propertyHistory, propertyValue, failedSources };
+}
+
 async function screenOneFast(
   listing: ListingResult,
   options?: {
@@ -149,39 +278,81 @@ async function screenOneFast(
     pricePlaceholderNzd?: number;
     strictStandardSubdivision?: boolean;
   },
-): Promise<PropertyCandidate | null> {
+): Promise<ScreenVerdict> {
   try {
     if (isApartmentAddress(listing.address)) {
       logger.debug({ address: listing.address }, "Pre-screen: skipping apartment/unit address");
-      return null;
+      return { kind: "rejected", reason: "apartment_or_unit_address" };
     }
 
-    const geo = await geocodeAddress(listing.address);
-    const shouldVerifyLandArea =
-      options?.strictStandardSubdivision ||
-      listing.landAreaApprox ||
+    const geo = listingGeo(listing) ?? await geocodeAddress(listing.address);
+    const shouldVerifyLandArea: boolean =
+      options?.strictStandardSubdivision === true ||
+      listing.landAreaApprox === true ||
       listing.landArea == null ||
       !hasVerifiedListingLandArea(listing);
-    const [zoneResult, overlays, linzParcelResult, propertyHistoryResult] = await Promise.allSettled([
-      fetchUnitaryPlanZone(geo.lat, geo.lng),
-      fetchOverlays(geo.lat, geo.lng),
-      shouldVerifyLandArea ? fetchLINZParcel(geo.lat, geo.lng) : Promise.resolve(null),
-      options?.strictStandardSubdivision ? fetchPropertyHistory(listing.address, geo.lat, geo.lng) : Promise.resolve(null),
-    ]);
+    const shouldFetchPropertyValue: boolean = shouldVerifyLandArea || options?.strictStandardSubdivision === true;
 
-    const zone = zoneResult.status === "fulfilled" ? zoneResult.value?.zone_code : null;
-    const resolvedOverlays = overlays.status === "fulfilled" ? overlays.value : [];
-    const linzParcel = linzParcelResult.status === "fulfilled" ? linzParcelResult.value : null;
-    const propertyHistory = propertyHistoryResult.status === "fulfilled" ? propertyHistoryResult.value : null;
+    const {
+      zone: zoneRecord,
+      resolvedOverlays,
+      linzParcel,
+      propertyHistory,
+      propertyValue,
+      failedSources,
+    } = await fetchScreenSourcesWithRetry(listing, geo, {
+      shouldVerifyLandArea,
+      shouldFetchPropertyValue,
+      strictStandardSubdivision: options?.strictStandardSubdivision === true,
+    });
+
+    const zone = zoneRecord?.zone_code ?? null;
+
+    const preliminaryEligibility = assessPropertyEligibility({
+      address: listing.address,
+      estateType: listing.tenureText,
+      legalDescription: [
+        listing.legalDescription,
+        ...(propertyValue?.legal_descriptions ?? []),
+      ].filter(Boolean).join(" "),
+      propertyType: propertyHistory?.property_type ?? propertyValue?.property_type,
+      propertySubType: propertyValue?.property_sub_type,
+      propertyValueLegalDescriptions: propertyValue?.legal_descriptions,
+      landUsePrimary: propertyValue?.land_use_primary,
+      propertyImprovements: propertyValue?.property_improvements,
+      listingPropertyType: listing.propertyType,
+      listingCategory: listing.listingCategory,
+      listingTenureText: listing.tenureText,
+      listingLegalDescription: listing.legalDescription,
+      linzParcel,
+      landAreaSqm: listing.landArea ?? propertyValue?.land_area_sqm ?? null,
+      floorAreaSqm: listing.floorArea ?? propertyHistory?.floor_area_sqm ?? propertyValue?.floor_area_sqm,
+      buildYear: propertyHistory?.build_year ?? propertyValue?.build_year ?? null,
+      zoneCode: zone,
+      potentialLots: null,
+      minLotSize: null,
+      isCombinedListingAggregate: listing.isCombinedListing,
+    });
+    const suppressParentLandArea = shouldSuppressParentLandAreaForEligibility(preliminaryEligibility);
+    const listingLandAreaForVerification =
+      suppressParentLandArea && listing.landAreaConfidence !== "verified"
+        ? propertyValue?.land_area_sqm ?? null
+        : listing.landArea ?? propertyValue?.land_area_sqm ?? null;
+    const landAreaFromPropertyValue =
+      propertyValue?.land_area_sqm != null && listing.landArea == null && listingLandAreaForVerification === propertyValue.land_area_sqm;
+    const listingLandAreaSource =
+      landAreaFromPropertyValue
+        ? "propertyvalue"
+        : listing.landAreaSource;
 
     const verifiedLand = await verifyDiscoveryLandArea({
       address: listing.address,
-      listingLandArea: listing.landArea,
-      listingLandAreaSource: listing.landAreaSource,
-      listingLandAreaConfidence: listing.landAreaConfidence,
-      linzParcel,
+      listingLandArea: listingLandAreaForVerification,
+      listingLandAreaSource,
+      listingLandAreaConfidence: landAreaFromPropertyValue ? "verified" : listing.landAreaConfidence,
+      linzParcel: suppressParentLandArea ? null : linzParcel,
       formattedAddress: geo.formatted,
-      strictStandardSubdivision: options?.strictStandardSubdivision,
+      strictStandardSubdivision: options?.strictStandardSubdivision && !suppressParentLandArea,
     });
     const land = verifiedLand.landArea;
     const landAreaApprox =
@@ -195,29 +366,34 @@ async function screenOneFast(
       price = options.pricePlaceholderNzd ?? 1_750_000;
       priceApprox = true;
     }
-    if (!price) return null;
+    if (!price) return { kind: "rejected", reason: "no_price" };
 
     const { lots, minLotSize } = estimateLotCapacity(zone, land ?? null);
-    const eligibility = options?.strictStandardSubdivision
-      ? assessPropertyEligibility({
+    const eligibility = assessPropertyEligibility({
           address: listing.address,
           estateType: listing.tenureText,
-          legalDescription: listing.legalDescription,
-          propertyType: propertyHistory?.property_type,
+          legalDescription: [
+            listing.legalDescription,
+            ...(propertyValue?.legal_descriptions ?? []),
+          ].filter(Boolean).join(" "),
+          propertyType: propertyHistory?.property_type ?? propertyValue?.property_type,
+          propertySubType: propertyValue?.property_sub_type,
+          propertyValueLegalDescriptions: propertyValue?.legal_descriptions,
+          landUsePrimary: propertyValue?.land_use_primary,
+          propertyImprovements: propertyValue?.property_improvements,
           listingPropertyType: listing.propertyType,
           listingCategory: listing.listingCategory,
           listingTenureText: listing.tenureText,
           listingLegalDescription: listing.legalDescription,
           linzParcel,
           landAreaSqm: land,
-          floorAreaSqm: listing.floorArea ?? propertyHistory?.floor_area_sqm,
-          buildYear: propertyHistory?.build_year ?? null,
+          floorAreaSqm: listing.floorArea ?? propertyHistory?.floor_area_sqm ?? propertyValue?.floor_area_sqm,
+          buildYear: propertyHistory?.build_year ?? propertyValue?.build_year ?? null,
           zoneCode: zone,
           potentialLots: lots,
           minLotSize,
           isCombinedListingAggregate: listing.isCombinedListing,
-        })
-      : null;
+        });
     if (options?.strictStandardSubdivision && !passesStrictStandardSubdivisionScreen({
       address: listing.address,
       landArea: land,
@@ -243,15 +419,38 @@ async function screenOneFast(
           typology: eligibility?.typology,
           titleConfidence: eligibility?.titleConfidence,
           subdivisionRejectReason: eligibility?.subdivisionRejectReason,
-          buildYear: propertyHistory?.build_year ?? null,
+          buildYear: propertyHistory?.build_year ?? propertyValue?.build_year ?? null,
+          failedSources,
         },
         "Pre-screen: rejected strict subdivision candidate",
       );
-      return null;
+      // Distinguish a confirmed reject (we know enough to say "no") from an
+      // indeterminate one (essential data still missing even after retries).
+      // The outer discovery loop re-screens indeterminate listings with longer
+      // waits before declaring "no listings". We base this on the actual
+      // decision inputs rather than which sources happened to fail — e.g. if
+      // build year is known but >= 2000 the listing is a real reject, even if
+      // some redundant source (LINZ / PropertyValue) was unavailable.
+      const haveAnyBuildYear = propertyHistory?.build_year != null || propertyValue?.build_year != null;
+      const isIndeterminate =
+        !haveAnyBuildYear ||
+        !zone ||
+        verifiedLand.landAreaConfidence !== "verified" ||
+        eligibility?.typology === "unknown" ||
+        eligibility?.titleConfidence === "unknown";
+      if (isIndeterminate) {
+        return {
+          kind: "indeterminate",
+          reason: failedSources.length > 0
+            ? `essential_sources_failed:${failedSources.join(",")}`
+            : "missing_data_after_retry",
+        };
+      }
+      return { kind: "rejected", reason: eligibility?.subdivisionRejectReason ?? "strict_screen_failed" };
     }
     const scores = quickScore(zone, resolvedOverlays, land ?? null, price);
 
-    return {
+    const candidate: PropertyCandidate = {
       address: listing.address,
       price,
       landArea: land ?? undefined,
@@ -279,12 +478,57 @@ async function screenOneFast(
       titleConfidence: eligibility?.titleConfidence,
       subdivisionEligible: eligibility?.subdivisionEligible,
       subdivisionRejectReason: eligibility?.subdivisionRejectReason,
-      buildYear: propertyHistory?.build_year ?? null,
+      buildYear: propertyHistory?.build_year ?? propertyValue?.build_year ?? null,
     };
+    return { kind: "candidate", candidate };
   } catch (err) {
     logger.warn({ err, address: listing.address }, "Pre-screen fast: failed for listing");
-    return null;
+    return { kind: "indeterminate", reason: `screen_error:${(err as Error).message}` };
   }
+}
+
+export interface PreScreenDetailedResult {
+  candidates: PropertyCandidate[];
+  /** Listings that couldn't be conclusively screened because an essential source failed after retries. Caller can re-screen these with longer waits. */
+  indeterminate: ListingResult[];
+}
+
+/**
+ * Same as preScreenListingsFast but also returns the listings that couldn't be
+ * conclusively screened. Use this from the discovery loop so the outer pass
+ * can re-screen indeterminate listings with extended backoff before reporting
+ * "no listings match" to the user.
+ */
+export async function preScreenListingsFastDetailed(
+  listings: ListingResult[],
+  maxConcurrent = 5,
+  resultCap: number | null = 3,
+  options?: {
+    allowMissingListingPrice?: boolean;
+    pricePlaceholderNzd?: number;
+    strictStandardSubdivision?: boolean;
+  },
+): Promise<PreScreenDetailedResult> {
+  const nonApartments = listings.filter((l) => !isApartmentAddress(l.address));
+  const results: PropertyCandidate[] = [];
+  const indeterminate: ListingResult[] = [];
+  const queue = [...nonApartments];
+  const queueListings = [...nonApartments];
+
+  while (queue.length > 0) {
+    const batch = queue.splice(0, maxConcurrent);
+    const batchOriginals = queueListings.splice(0, maxConcurrent);
+    const batchResults = await Promise.all(batch.map((listing) => screenOneFast(listing, options)));
+    for (let i = 0; i < batchResults.length; i++) {
+      const r = batchResults[i];
+      if (r.kind === "candidate") results.push(r.candidate);
+      else if (r.kind === "indeterminate") indeterminate.push(batchOriginals[i]);
+    }
+  }
+
+  const sorted = results.sort((a, b) => b.scores.composite - a.scores.composite);
+  const candidates = resultCap == null ? sorted : sorted.slice(0, resultCap);
+  return { candidates, indeterminate };
 }
 
 export async function preScreenListingsFast(
@@ -300,21 +544,8 @@ export async function preScreenListingsFast(
     strictStandardSubdivision?: boolean;
   },
 ): Promise<PropertyCandidate[]> {
-  const nonApartments = listings.filter((l) => !isApartmentAddress(l.address));
-  const results: PropertyCandidate[] = [];
-  const queue = [...nonApartments];
-
-  while (queue.length > 0) {
-    const batch = queue.splice(0, maxConcurrent);
-    const batchResults = await Promise.all(batch.map((listing) => screenOneFast(listing, options)));
-    for (const r of batchResults) {
-      if (r) results.push(r);
-    }
-  }
-
-  const sorted = results.sort((a, b) => b.scores.composite - a.scores.composite);
-  if (resultCap == null) return sorted;
-  return sorted.slice(0, resultCap);
+  const detailed = await preScreenListingsFastDetailed(listings, maxConcurrent, resultCap, options);
+  return detailed.candidates;
 }
 
 async function screenOne(listing: ListingResult): Promise<PropertyCandidate | null> {

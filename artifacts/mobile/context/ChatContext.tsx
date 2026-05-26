@@ -412,7 +412,7 @@ export interface PropertyCandidate {
   bathroomsApprox?: boolean;
   /** True when listing sources disagreed on land area / price — render as "~503 m²" / "~$1.25M". */
   landAreaApprox?: boolean;
-  landAreaSource?: "realestate_api" | "realestate_page" | "homes" | "linz" | "unknown";
+  landAreaSource?: "realestate_api" | "realestate_page" | "homes" | "linz" | "propertyvalue" | "unknown";
   landAreaConfidence?: "verified" | "unverified";
   isParentParcelSuspect?: boolean;
   isAlreadySubdividedChild?: boolean;

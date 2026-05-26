@@ -8,6 +8,10 @@ export interface PropertyEligibilityInput {
   estateType?: string | null;
   legalDescription?: string | null;
   propertyType?: string | null;
+  propertySubType?: string | null;
+  propertyValueLegalDescriptions?: string[] | null;
+  landUsePrimary?: string | null;
+  propertyImprovements?: string | null;
   listingPropertyType?: string | null;
   listingCategory?: string | null;
   listingTenureText?: string | null;
@@ -49,6 +53,10 @@ function corpus(input: PropertyEligibilityInput): string {
     input.estateType,
     input.legalDescription,
     input.propertyType,
+    input.propertySubType,
+    ...(input.propertyValueLegalDescriptions ?? []),
+    input.landUsePrimary,
+    input.propertyImprovements,
     input.listingPropertyType,
     input.listingCategory,
     input.listingTenureText,
@@ -66,9 +74,9 @@ function hasLotDpSignal(text: string): boolean {
 }
 
 function hasUnitLikeSignal(text: string): boolean {
-  return /\b(unit\s+title|stratum|body\s+corporate|body\s+corp|accessory\s+unit|apartment|flat)\b/i.test(text)
-    || /\bunit\s+[a-z]\b/i.test(text)
-    || /\bunit\b/i.test(text);
+  const normalized = text.replace(/\bsingle\s+unit\s+excluding\s+bach\b/gi, "single dwelling excluding bach");
+  return /\b(unit\s+title|stratum|body\s+corporate|body\s+corp|ownership\s+home\s+units?|home\s+unit|principal\s+unit|accessory\s+unit|apartment|flat)\b/i.test(normalized)
+    || /\bunit\s+[a-z0-9]\b/i.test(normalized);
 }
 
 function hasCrossLeaseSignal(text: string): boolean {
@@ -82,6 +90,7 @@ function hasTownhouseSignal(text: string): boolean {
 function hasStandaloneSignal(input: PropertyEligibilityInput, text: string): boolean {
   const propertyTypeText = [
     input.propertyType,
+    input.propertySubType,
     input.listingPropertyType,
     input.listingCategory,
   ].map(cleanText).join(" ").toLowerCase();
@@ -184,6 +193,14 @@ export function shouldForceSingleLotForEligibility(result: PropertyEligibilityRe
     || result.subdivisionRejectReason === "title_not_confirmed_freehold"
     || result.subdivisionRejectReason === "typology_not_confirmed_standalone"
     || result.subdivisionRejectReason === "land_area_parent_or_typology_suspect";
+}
+
+export function shouldSuppressParentLandAreaForEligibility(result: PropertyEligibilityResult): boolean {
+  return result.subdivisionRejectReason === "unit_or_crosslease_signal"
+    || result.subdivisionRejectReason === "land_area_parent_or_typology_suspect"
+    || result.unitLikeSignal
+    || result.crossLeaseSignal
+    || result.landAreaParentOrTypologySuspect;
 }
 
 export function eligibilityPlanningNote(result: PropertyEligibilityResult): string | null {

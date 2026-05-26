@@ -57,17 +57,28 @@ function OverallCompositeBadge({
 }) {
   const colors = useColors();
   const c = scoreColor(composite, colors);
+  const onPhoto = !plain;
   return (
     <View
       style={[
         plain ? styles.overallBadgePlain : styles.overallBadge,
-        { borderColor: c + "55", backgroundColor: c + "22" },
+        onPhoto
+          ? {
+              borderColor: c,
+              backgroundColor: "rgba(255,255,255,0.88)",
+              shadowColor: "#000",
+              shadowOffset: { width: 0, height: 1 },
+              shadowOpacity: 0.22,
+              shadowRadius: 4,
+              elevation: 3,
+            }
+          : { borderColor: c + "88", backgroundColor: c + "33" },
       ]}
     >
       <Text style={[styles.overallBadgeNumber, { color: c, fontFamily: "DM_Sans_700Bold" }]}>
         {formatCompositeScoreForDisplay(composite)}
       </Text>
-      <Text style={[styles.overallBadgeOutOf, { color: c + "CC", fontFamily: "DM_Sans_500Medium" }]}>/5</Text>
+      <Text style={[styles.overallBadgeOutOf, { color: c, fontFamily: "DM_Sans_500Medium", opacity: 0.85 }]}>/5</Text>
     </View>
   );
 }
@@ -95,6 +106,11 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
     typeof candidate.buildYear === "number" &&
     candidate.buildYear < 2000;
   const subdivisionRuleText = minLotSize ? t("search.subdivision_rule", { min: minLotSize }) : null;
+  const showLandUnavailable =
+    candidate.landArea == null &&
+    (candidate.typology === "unit_apartment" ||
+      candidate.subdivisionRejectReason === "unit_or_crosslease_signal" ||
+      candidate.isParentParcelSuspect === true);
 
   return (
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -134,6 +150,13 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
             <View style={[styles.tag, { backgroundColor: colors.muted }]}>
               <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
                 {candidate.landAreaApprox ? "~" : ""}{candidate.landArea}m²
+              </Text>
+            </View>
+          )}
+          {showLandUnavailable && (
+            <View style={[styles.tag, { backgroundColor: colors.muted }]}>
+              <Text style={[styles.tagText, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>
+                {t("search.land_unavailable_short")}
               </Text>
             </View>
           )}

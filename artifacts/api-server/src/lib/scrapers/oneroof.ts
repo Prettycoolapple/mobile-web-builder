@@ -32,6 +32,8 @@ export interface ListingResult {
   zone: string | null;
   bedrooms: number | null;
   bathrooms: number | null;
+  lat?: number | null;
+  lng?: number | null;
   /**
    * True when two listing-source readings of bedroom count for the same
    * listing disagreed (e.g. realestate.co.nz structured API says 4 but the

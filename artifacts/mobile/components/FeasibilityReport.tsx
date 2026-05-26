@@ -15,7 +15,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Feather } from "@expo/vector-icons";
 import { StarRating } from "@/components/StarRating";
 import { useColors } from "@/hooks/useColors";
-import { useT, translate, translateForOS } from "@/lib/i18n";
+import { useT, translate, translateForOS, isOSChineseLocale } from "@/lib/i18n";
 import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
 import {
   filterRiskSummaryRemoveIncompleteDataDisclaimerBullets,
@@ -852,6 +852,18 @@ const TERRAIN_CLS_KEY: Record<string, string> = {
   steep:    "report.terrain_cls_steep",
 };
 
+const TERRAIN_SLOPE_EXPLAIN_KEY: Record<NonNullable<NonNullable<Report["terrain"]>["classification"]>, string> = {
+  flat: "report.terrain_slope_explain_flat",
+  gentle: "report.terrain_slope_explain_gentle",
+  moderate: "report.terrain_slope_explain_moderate",
+  steep: "report.terrain_slope_explain_steep",
+};
+
+function terrainSlopeDegPhrase(deg: number | null | undefined, osChinese: boolean): string {
+  if (deg == null) return "";
+  return osChinese ? `（~${deg} 度）` : ` (~${deg} degrees)`;
+}
+
 function ContourCard({ terrain, colors }: { report: Report; terrain: NonNullable<Report["terrain"]>; colors: ReturnType<typeof useColors> }) {
   const { t } = useT();
   const cls = terrain.classification;
@@ -872,10 +884,26 @@ function ContourCard({ terrain, colors }: { report: Report; terrain: NonNullable
   const W = 120, H = 70;
   const slopeY = H - (steepness / 45) * H;
   const terrainColor = cls === "steep" ? colors.red : cls === "moderate" ? colors.amber : colors.success;
-  const slopeSummary = terrain.slope
-    ?.replace(/(?:数据来源|來源|source)\s*[:：].*/giu, "")
-    ?.replace(/\s*[—-]\s*(?:based on|calculated|estimate|derived|from|via).*/giu, "")
-    ?.trim();
+  const stripSlopeSourceSuffix = (text: string) =>
+    text
+      .replace(/(?:数据来源|來源|source)\s*[:：].*/giu, "")
+      .replace(/\s*[—-]\s*(?:based on|calculated|estimate|derived|from|via).*/giu, "")
+      .trim();
+
+  const slopeSummary = (() => {
+    if (isOSChineseLocale() && cls) {
+      const explainKey = TERRAIN_SLOPE_EXPLAIN_KEY[cls];
+      if (explainKey) {
+        return translateForOS(explainKey, { deg: terrainSlopeDegPhrase(terrain.slope_degrees, true) });
+      }
+    }
+    const raw = terrain.slope?.trim();
+    if (!raw) return null;
+    if (isOSChineseLocale() && /[\u3400-\u9FFF\uF900-\uFAFF]/.test(raw)) {
+      return stripSlopeSourceSuffix(raw);
+    }
+    return stripSlopeSourceSuffix(raw) || null;
+  })();
 
   const clsLabel = t(TERRAIN_CLS_KEY[cls] ?? "report.terrain_cls_gentle");
 

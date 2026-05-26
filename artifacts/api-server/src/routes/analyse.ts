@@ -15,9 +15,10 @@ import {
   hasUnnumberedStreetLine,
   isListingBrowseIntent,
   sanitizeAssistantProse,
+  resolveDelegatedDiscoverSuburb,
   Message,
 } from "../lib/claude";
-import { verifyToken } from "../lib/auth";
+import { verifyActiveToken } from "../lib/auth";
 import { extractNZAddress } from "../lib/address-parser";
 import {
   extractCombinedListingAddressParts,
@@ -39,7 +40,7 @@ import { ensureMinRiskSummaryBulletsFromReport, type RiskBackfillContext } from 
 import { detectSubdivision } from "../lib/subdivision";
 import { formatNZD } from "../lib/utils";
 import { searchRealEstateListings } from "../lib/scrapers/realestate-search";
-import { preScreenListingsFast, type PropertyCandidate } from "../lib/pre-screen";
+import { preScreenListingsFast, preScreenListingsFastDetailed, type PropertyCandidate } from "../lib/pre-screen";
 import {
   hasStandardSubdivisionYield,
   isDevelopmentDiscoveryIntent,
@@ -59,6 +60,7 @@ import {
 import type { ListingResult } from "../lib/scrapers/oneroof";
 import { queueBackgroundScores, getCardScores } from "../lib/analysis-cache";
 import { normaliseLocale } from "../lib/prompts";
+import { terrainSlopeText } from "../lib/terrain-slope-copy";
 import { translateChatContent, translateReportNarrative, ensureChinese } from "../lib/translation";
 import { resolveAddressForAnalysis } from "../lib/address-clarification";
 import {
@@ -298,13 +300,9 @@ function appendRuralTransferRightRiskIfNeeded(bullets: string[], costs: NonNulla
 function deterministicTerrainSlopeText(
   contour: "flat" | "gentle" | "moderate" | "steep" | null | undefined,
   slopeDegrees: number | null | undefined,
+  locale: ReturnType<typeof normaliseLocale> = "en",
 ): string | null {
-  if (!contour) return null;
-  const deg = typeof slopeDegrees === "number" ? ` (~${slopeDegrees} degrees)` : "";
-  if (contour === "flat") return `Flat terrain${deg} - no meaningful retaining expected from contour data.`;
-  if (contour === "gentle") return `Gentle slope${deg} - minor level changes only; standard site-specific survey still required before design.`;
-  if (contour === "moderate") return `Moderate slope${deg} - allow for benching, retaining, and geotechnical confirmation.`;
-  return `Steep terrain${deg} - significant retaining and geotechnical design likely required.`;
+  return terrainSlopeText(contour, slopeDegrees, locale);
 }
 
 function filterRiskSummaryRemoveContradictoryTerrainBullets(
@@ -382,6 +380,7 @@ function applyDeterministicPipelineOverrides(
   parsed: Record<string, unknown>,
   pipelineResult: PipelineResult,
   resolvedAddress: string,
+  locale: ReturnType<typeof normaliseLocale> = "en",
 ): void {
   const photoUrls = Array.from(new Set([
     ...(pipelineResult.merged?.photo_urls ?? []),
@@ -414,7 +413,7 @@ function applyDeterministicPipelineOverrides(
       slope_degrees: merged.contour_slope_degrees ?? null,
       official_label: merged.contour_text ?? null,
       source: merged.contour_source ?? null,
-      slope: deterministicTerrainSlopeText(merged.contour, merged.contour_slope_degrees),
+      slope: deterministicTerrainSlopeText(merged.contour, merged.contour_slope_degrees, locale),
       steep_area_ratio: merged.contour_steep_area_ratio ?? null,
       moderate_area_ratio: merged.contour_moderate_area_ratio ?? null,
       local_slope_p90_degrees: merged.contour_local_slope_p90_degrees ?? null,
@@ -1050,10 +1049,17 @@ async function prescreenPickRestoreBatch(
   shownAddressKeys: Set<string> = new Set(),
   n = 3,
   restoreUnpicked = true,
+  indeterminateAccumulator?: ListingResult[],
 ): Promise<PropertyCandidate[]> {
   const visibleBatch = filterAlreadyShownListings(batch, shownAddressKeys);
   if (visibleBatch.length === 0) return [];
-  const screened = await preScreenListingsFast(visibleBatch, 5, null, preScreenOpts).catch(() => [] as PropertyCandidate[]);
+  const detailed = await preScreenListingsFastDetailed(visibleBatch, 5, null, preScreenOpts).catch(
+    () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[] }),
+  );
+  const screened = detailed.candidates;
+  if (indeterminateAccumulator && detailed.indeterminate.length > 0) {
+    indeterminateAccumulator.push(...detailed.indeterminate);
+  }
   const candidates = pickDiscoveryCandidates(screened, criteria, shownAddressKeys, n);
   const pickedUrls = candidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u));
   markShown(cacheKey, pickedUrls);
@@ -1068,7 +1074,7 @@ async function topUpDiscoveryCandidates(
   criteria: string | null,
   preScreenOpts: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number; strictStandardSubdivision?: boolean },
   shownAddressKeys: Set<string>,
-  options: { batchSize?: number; nonStrictAttemptLimit?: number; targetCount?: number } = {},
+  options: { batchSize?: number; nonStrictAttemptLimit?: number; targetCount?: number; indeterminateAccumulator?: ListingResult[] } = {},
 ): Promise<PropertyCandidate[]> {
   const batchSize = options.batchSize ?? 8;
   const nonStrictAttemptLimit = options.nonStrictAttemptLimit ?? 6;
@@ -1096,11 +1102,62 @@ async function topUpDiscoveryCandidates(
       shownAddressKeys,
       Math.max(1, targetCount - out.length),
       !strictStandardSubdivision,
+      options.indeterminateAccumulator,
     );
     out.push(...next);
   }
 
   return out.slice(0, targetCount);
+}
+
+/**
+ * Outer "did we genuinely exhaust this suburb?" pass for strict-subdivision
+ * discovery. When the primary drain returned 0 candidates but some listings
+ * stayed indeterminate (zone / build year / land area couldn't be fetched
+ * after the inner per-listing retries), back off and re-screen them with
+ * progressively longer waits before reporting "no listings".
+ *
+ * Total cap ~4.5 minutes — the user's chat client can wait that long for the
+ * answer to "what's subdividable in <suburb>", and the alternative is wrongly
+ * telling them nothing matches when upstream APIs were just flaky.
+ */
+const INDETERMINATE_RETRY_DELAYS_MS = [4_000, 12_000, 30_000, 60_000, 120_000];
+
+async function reScreenIndeterminateListings(opts: {
+  indeterminate: ListingResult[];
+  criteria: string | null;
+  preScreenOpts: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number; strictStandardSubdivision?: boolean };
+  shownAddressKeys: Set<string>;
+  targetCount: number;
+  log: Logger;
+}): Promise<PropertyCandidate[]> {
+  const { criteria, preScreenOpts, shownAddressKeys, targetCount, log } = opts;
+  let queue = [...opts.indeterminate];
+  const found: PropertyCandidate[] = [];
+
+  for (let i = 0; i < INDETERMINATE_RETRY_DELAYS_MS.length && queue.length > 0 && found.length < targetCount; i++) {
+    const delayMs = INDETERMINATE_RETRY_DELAYS_MS[i];
+    log.info(
+      { attempt: i + 1, delayMs, queueSize: queue.length },
+      "Discovery: outer indeterminate-listing retry — waiting before re-screen",
+    );
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+    const detailed = await preScreenListingsFastDetailed(queue, 5, null, preScreenOpts).catch(
+      () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[] }),
+    );
+    const fresh = pickDiscoveryCandidates(detailed.candidates, criteria, shownAddressKeys, targetCount - found.length);
+    found.push(...fresh);
+    // Listings that resolved this round (either as candidates or confirmed
+    // rejects) drop out; only the ones still indeterminate go to the next loop.
+    queue = detailed.indeterminate;
+    log.info(
+      { attempt: i + 1, found: fresh.length, stillIndeterminate: queue.length, totalFound: found.length },
+      "Discovery: outer indeterminate-listing retry result",
+    );
+  }
+
+  return found.slice(0, targetCount);
 }
 
 function normaliseStreetHintKey(s: string): string {
@@ -1384,11 +1441,20 @@ async function parseDiscoverParams(text: string): Promise<{ suburb: string | nul
   return { suburb, minPrice: Math.max(0, minPrice), maxPrice };
 }
 
-function getUserIdFromHeader(req: any): string | null {
+const INVALID_AUTH_SESSION = Symbol("invalid_auth_session");
+
+function rejectInvalidAuthSession(res: any): void {
+  res.status(401).json({
+    error: "This account is now signed in on another device.",
+    code: "SESSION_REPLACED",
+  });
+}
+
+async function getUserIdFromHeader(req: any): Promise<string | null | typeof INVALID_AUTH_SESSION> {
   const authHeader = req.headers.authorization as string | undefined;
   if (!authHeader?.startsWith("Bearer ")) return null;
-  const payload = verifyToken(authHeader.slice(7));
-  return payload?.sub ?? null;
+  const payload = await verifyActiveToken(authHeader.slice(7)).catch(() => null);
+  return payload?.sub ?? INVALID_AUTH_SESSION;
 }
 
 /** Unwrap Drizzle-wrapped pg errors so logs show SQLSTATE, detail, and column (not only "Failed query"). */
@@ -1656,7 +1722,12 @@ async function runFeasibilityAnalyseCore(args: {
   }
 
   if (pipelineResult && report && typeof report === "object") {
-    applyDeterministicPipelineOverrides(report, pipelineResult, pipelineResult.geocode?.formatted ?? analysisAddress);
+    applyDeterministicPipelineOverrides(
+      report,
+      pipelineResult,
+      pipelineResult.geocode?.formatted ?? analysisAddress,
+      locale,
+    );
     await applyCombinedListingContextToReport(report, pipelineResult, locale);
   }
 
@@ -1864,7 +1935,11 @@ router.post("/analyse", async (req, res) => {
     return;
   }
 
-  const userId = getUserIdFromHeader(req);
+  const userId = await getUserIdFromHeader(req);
+  if (userId === INVALID_AUTH_SESSION) {
+    rejectInvalidAuthSession(res);
+    return;
+  }
 
   if (userId) {
     let profile:
@@ -2173,7 +2248,11 @@ router.post("/analyse", async (req, res) => {
 
 router.get("/analyse/jobs/:jobId", async (req, res) => {
   const jobId = (req.params as { jobId?: string }).jobId;
-  const uid = getUserIdFromHeader(req);
+  const uid = await getUserIdFromHeader(req);
+  if (uid === INVALID_AUTH_SESSION) {
+    rejectInvalidAuthSession(res);
+    return;
+  }
   if (!jobId) {
     res.status(400).json({ error: "jobId is required", code: "MISSING_JOB_ID" });
     return;
@@ -2241,7 +2320,11 @@ const REFRESH_PHOTOS_COOLDOWN_MS = 60_000;
 
 router.post("/analyse/:searchId/refresh-photos", async (req, res) => {
   const searchId = (req.params as { searchId?: string }).searchId;
-  const uid = getUserIdFromHeader(req);
+  const uid = await getUserIdFromHeader(req);
+  if (uid === INVALID_AUTH_SESSION) {
+    rejectInvalidAuthSession(res);
+    return;
+  }
   if (!searchId) {
     res.status(400).json({ error: "searchId is required", code: "MISSING_SEARCH_ID" });
     return;
@@ -2409,7 +2492,11 @@ router.post("/search", async (req, res) => {
     return;
   }
 
-  const userId = getUserIdFromHeader(req);
+  const userId = await getUserIdFromHeader(req);
+  if (userId === INVALID_AUTH_SESSION) {
+    rejectInvalidAuthSession(res);
+    return;
+  }
 
   try {
     const raw = await generateSearchResults(query, suburb, minPrice, maxPrice, localeFromReq({ headers: req.headers as Record<string, string | string[] | undefined> }));
@@ -2529,7 +2616,11 @@ router.post("/chat", async (req, res) => {
 
   // Rate limiting per authenticated user. Actual limits are tiered and live in
   // ../lib/quotas.ts (CHAT_LIMITS). Keep the mobile mirror in sync.
-  const chatUserId = getUserIdFromHeader(req);
+  const chatUserId = await getUserIdFromHeader(req);
+  if (chatUserId === INVALID_AUTH_SESSION) {
+    rejectInvalidAuthSession(res);
+    return;
+  }
   if (chatUserId) {
     try {
       const { allowed, messagesUsed, nearLimit, isFreeLimit, subscriptionRequired } = await checkAndIncrementChatMessages(chatUserId);
@@ -2656,8 +2747,30 @@ router.post("/chat", async (req, res) => {
       const providerSignal = intent.wantsProviderRecommendation
         ? { wantsProviderRecommendation: true, suggestedDiscipline: intent.suggestedDiscipline ?? null }
         : {};
+      const latestAssistantText = [...messages].reverse().find((m) => m.role === "assistant")?.content ?? "";
+      const recentAssistantAskedForSearchArea =
+        /(suburb|area|neighbou?rhood|where should|which.+search|区域|郊区|哪个区|哪個區|地方|哪里|哪裡)/i.test(latestAssistantText);
+      const shouldResolveDelegatedDiscover =
+        !intent.suburb && (mode === "discover" || intent.needsClarification || recentAssistantAskedForSearchArea);
+      const delegatedDiscoverSuburb = shouldResolveDelegatedDiscover
+        ? await resolveDelegatedDiscoverSuburb(messages, userText, chatLocale).catch((err) => {
+            req.log.warn({ err, sample: userText.slice(0, 80) }, "Delegated suburb resolution failed");
+            return null;
+          })
+        : null;
+      if (delegatedDiscoverSuburb) {
+        req.log.info(
+          {
+            suburb: delegatedDiscoverSuburb.suburb,
+            candidates: delegatedDiscoverSuburb.candidates,
+            source: delegatedDiscoverSuburb.source,
+            reasoning: delegatedDiscoverSuburb.reasoning,
+          },
+          "Discovery: user delegated suburb choice",
+        );
+      }
       const contextSuburb =
-        intent.suburb ?? reportCtx?.suburb ?? (await inferSuburbFromThread(messages, userText));
+        intent.suburb ?? delegatedDiscoverSuburb?.suburb ?? reportCtx?.suburb ?? (await inferSuburbFromThread(messages, userText));
       const contextualBareAddress = await inferAddressFromBareStreetNumber(
         messages,
         userText,
@@ -2717,6 +2830,9 @@ router.post("/chat", async (req, res) => {
         forcedAnalyseAddress && (mode === "discover" || (mode === "followup" && (contextualBareAddress || looksLikeStreetAddress(userText))))
           ? "analyse"
           : mode;
+      if (delegatedDiscoverSuburb && effectiveMode !== "analyse") {
+        effectiveMode = "discover";
+      }
       if (
         effectiveMode === "followup"
         && !hasNumberedStreetAddress(userText)
@@ -2772,7 +2888,7 @@ router.post("/chat", async (req, res) => {
       // for a discover search), return the clarification question immediately.
       // The next user reply will carry the answer in conversation history so the
       // intent extractor can resolve the suburb/price/address and proceed normally.
-      if (intent.needsClarification && intent.clarificationQuestion && effectiveMode !== "analyse") {
+      if (intent.needsClarification && intent.clarificationQuestion && effectiveMode !== "analyse" && !delegatedDiscoverSuburb) {
         req.log.info(
           { question: intent.clarificationQuestion, intent_reasoning: intent.reasoning },
           "Returning clarification question to user",
@@ -2793,7 +2909,7 @@ router.post("/chat", async (req, res) => {
           // All parameters come from the intent object. Suburb may have been
           // inferred from the current report context when absent from the message.
           const contextualAreaBrowse = isContextualAreaBrowseFollowup(userText);
-          let suburb = intent.suburb ?? (contextualAreaBrowse ? reportCtx?.suburb ?? null : null);
+          let suburb = intent.suburb ?? delegatedDiscoverSuburb?.suburb ?? (contextualAreaBrowse ? reportCtx?.suburb ?? null : null);
           const isFollowUp = intent.isFollowUp || contextualAreaBrowse || isDiscoverStreetContinuation(userText);
           const discoveryCriteria = buildDiscoveryCriteriaText(messages, userText, intent.criteria);
           const wantsDevelopmentDiscovery = isDevelopmentDiscoveryIntent(discoveryCriteria);
@@ -2841,6 +2957,13 @@ router.post("/chat", async (req, res) => {
           const criteriaLabel = intent.criteria || (wantsDevelopmentDiscovery ? "subdivision/development potential" : "");
           const strictStandardSubdivision = isStandardSubdivisionDiscoveryIntent(discoveryCriteria);
 
+          // Accumulator for listings that couldn't be conclusively screened
+          // (zone/build-year/land-area source still failing after the per-listing
+          // inner retries). After the primary + fallback search, if we ended
+          // with 0 candidates and strict mode was on, we re-screen these with
+          // longer waits before declaring "no listings".
+          const strictIndeterminate: ListingResult[] = [];
+
           if (suburb) {
             const streetHint = extractDiscoverStreetHintFromThread(messages, userText, isFollowUp);
             const cacheKey = makeCacheKey(suburb, effectiveMinPrice, effectiveMaxPrice, streetHint);
@@ -2865,7 +2988,7 @@ router.post("/chat", async (req, res) => {
                 discoveryCriteria,
                 discoverPreOpts,
                 alreadyShownAddressKeys,
-                { nonStrictAttemptLimit: 3 },
+                { nonStrictAttemptLimit: 3, indeterminateAccumulator: strictStandardSubdivision ? strictIndeterminate : undefined },
               );
             }
 
@@ -2886,6 +3009,8 @@ router.post("/chat", async (req, res) => {
                 skipUrls: shownUrls,
                 includeNegotiation,
                 firstBatchSize: wantsDevelopmentDiscovery ? 24 : undefined,
+                fetchAllPages: strictStandardSubdivision,
+                maxListings: strictStandardSubdivision ? 500 : undefined,
               }).catch((err) => { req.log.warn({ err }, "realestate.co.nz search failed"); return null; });
 
               if (searchResult && searchResult.firstBatch.length > 0) {
@@ -2912,10 +3037,14 @@ router.post("/chat", async (req, res) => {
                 // Run pre-screening and AI intro generation in parallel to save time
                 const criteriaContext = criteriaLabel ? ` matching criteria: ${criteriaLabel}` : "";
                 const introPromptPreScreen = `The user asked: "${userText}". You found some matching properties in ${suburb || "the area"} on realestate.co.nz${criteriaContext}. In 1 sentence, acknowledge this result conversationally (e.g. "I found a few development sites in St Heliers under $2M:"). Do NOT mention a specific number — say "a few", "some", or "a handful". Be natural and brief — no JSON.`;
-                const [screened, introFromPreScreen] = await Promise.all([
-                  preScreenListingsFast(firstFiltered, 5, null, discoverPreOpts).catch(() => []),
+                const [screenedDetailed, introFromPreScreen] = await Promise.all([
+                  preScreenListingsFastDetailed(firstFiltered, 5, null, discoverPreOpts).catch(
+                    () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[] }),
+                  ),
                   generateAnalysis(introPromptPreScreen, chatLocale).catch(() => ""),
                 ]);
+                const screened = screenedDetailed.candidates;
+                if (strictStandardSubdivision) strictIndeterminate.push(...screenedDetailed.indeterminate);
                 candidates = pickDiscoveryCandidates(screened, discoveryCriteria, alreadyShownAddressKeys, 3);
                 const pickedUrls = candidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u));
                 markShown(cacheKey, pickedUrls);
@@ -2929,7 +3058,7 @@ router.post("/chat", async (req, res) => {
                   discoveryCriteria,
                   discoverPreOpts,
                   alreadyShownAddressKeys,
-                  { nonStrictAttemptLimit: 6 },
+                  { nonStrictAttemptLimit: 6, indeterminateAccumulator: strictStandardSubdivision ? strictIndeterminate : undefined },
                 );
               }
             }
@@ -2942,15 +3071,41 @@ router.post("/chat", async (req, res) => {
               // Run nearby-suburb scrapes concurrently and return as soon as the first
               // one yields any listings — keeps tail latency bounded when the slow
               // Playwright fallback is in play.
-              req.log.info({ suburb, nearbyList }, "Discovery: primary suburb empty, racing nearby suburb searches");
+              req.log.info(
+                { suburb, nearbyList, strictStandardSubdivision },
+                strictStandardSubdivision
+                  ? "Discovery: primary suburb exhausted, screening nearby suburbs sequentially for strict subdivision"
+                  : "Discovery: primary suburb empty, racing nearby suburb searches",
+              );
               type FallbackHit = { nearbySuburb: string; fallbackResult: Awaited<ReturnType<typeof searchRealEstateListings>> };
-              const racers = nearbyList.map(
+              const strictFallbackResults: FallbackHit[] = [];
+              if (strictStandardSubdivision) {
+                for (const nb of nearbyList) {
+                  const res = await searchRealEstateListings({
+                    suburb: nb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
+                    skipUrls: alreadyShownUrlsFromHistory,
+                    includeNegotiation,
+                    firstBatchSize: wantsDevelopmentDiscovery ? 18 : undefined,
+                    fetchAllPages: true,
+                    maxListings: 500,
+                  }).catch((err) => {
+                    req.log.warn({ err, nearbySuburb: nb }, "Discovery: strict nearby suburb search failed");
+                    return null;
+                  });
+                  if (res && res.firstBatch.length > 0) {
+                    strictFallbackResults.push({ nearbySuburb: nb, fallbackResult: res });
+                  }
+                }
+              }
+              const racers = strictStandardSubdivision ? [] : nearbyList.map(
                 (nb): Promise<FallbackHit> =>
                   searchRealEstateListings({
                     suburb: nb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
                     skipUrls: alreadyShownUrlsFromHistory,
                     includeNegotiation,
                     firstBatchSize: wantsDevelopmentDiscovery ? 18 : undefined,
+                    fetchAllPages: strictStandardSubdivision,
+                    maxListings: strictStandardSubdivision ? 500 : undefined,
                   }).then((res) => {
                     if (!res || res.firstBatch.length === 0) {
                       // Reject so Promise.any moves on; if all reject we fall through to no-listings
@@ -2973,7 +3128,7 @@ router.post("/chat", async (req, res) => {
                     deadline,
                   ]);
 
-              const orderedResults: FallbackHit[] = winner ? [winner] : [];
+              const orderedResults: FallbackHit[] = strictStandardSubdivision ? strictFallbackResults : (winner ? [winner] : []);
 
               for (const { nearbySuburb, fallbackResult } of orderedResults) {
                 if (fallbackResult && fallbackResult.firstBatch.length > 0) {
@@ -2996,10 +3151,14 @@ router.post("/chat", async (req, res) => {
                     });
                     const criteriaContextFallback = criteriaLabel ? ` (${criteriaLabel})` : "";
                     const introPromptFallback = `The user asked about ${suburb}${criteriaContextFallback} but no listings were found there right now. You found some properties in nearby ${nearbySuburb}. In 1 sentence acknowledge this naturally (e.g. "I couldn't find anything in ${suburb} right now, but here are some nearby options in ${nearbySuburb}:"). Do NOT mention a specific number — say "a few", "some", or "a handful". Be brief — no JSON.`;
-                    const [screenedFallback, introFallback] = await Promise.all([
-                      preScreenListingsFast(filtered, 5, null, discoverPreOpts).catch(() => [] as PropertyCandidate[]),
+                    const [screenedFallbackDetailed, introFallback] = await Promise.all([
+                      preScreenListingsFastDetailed(filtered, 5, null, discoverPreOpts).catch(
+                        () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[] }),
+                      ),
                       generateAnalysis(introPromptFallback, chatLocale).catch(() => ""),
                     ]);
+                    const screenedFallback = screenedFallbackDetailed.candidates;
+                    if (strictStandardSubdivision) strictIndeterminate.push(...screenedFallbackDetailed.indeterminate);
                     candidates = pickDiscoveryCandidates(screenedFallback, discoveryCriteria, alreadyShownAddressKeys, 3);
                     markShown(
                       fallbackCacheKey,
@@ -3020,7 +3179,7 @@ router.post("/chat", async (req, res) => {
                       discoveryCriteria,
                       discoverPreOpts,
                       alreadyShownAddressKeys,
-                      { nonStrictAttemptLimit: 6 },
+                      { nonStrictAttemptLimit: 6, indeterminateAccumulator: strictStandardSubdivision ? strictIndeterminate : undefined },
                     );
 
                     if (candidates.length > 0) {
@@ -3031,6 +3190,55 @@ router.post("/chat", async (req, res) => {
                   }
                 }
               }
+            }
+          }
+
+          // ── Outer indeterminate re-screen ────────────────────────────────
+          // If the strict-subdivision discovery ended with 0 candidates but
+          // some listings stayed indeterminate (upstream sources kept failing
+          // even after the per-listing inner retries), wait with progressively
+          // longer backoffs and re-screen them before reporting "no listings".
+          // This honours the "keep retrying with increasing waiting time"
+          // guarantee — we don't tell the user nothing matches until every
+          // listing has actually been evaluated against the criteria.
+          if (
+            strictStandardSubdivision &&
+            candidates.length === 0 &&
+            strictIndeterminate.length > 0
+          ) {
+            // De-dupe indeterminate listings that piled up across the primary
+            // search and the nearby-suburb fallback.
+            const seen = new Set<string>();
+            const uniqueIndeterminate = strictIndeterminate.filter((l) => {
+              const key = l.listingUrl || l.address;
+              if (seen.has(key)) return false;
+              seen.add(key);
+              return true;
+            });
+            req.log.info(
+              { suburb, indeterminateCount: uniqueIndeterminate.length },
+              "Discovery: strict subdivision ended with 0 candidates — running outer indeterminate-listing retry pass",
+            );
+            const retried = await reScreenIndeterminateListings({
+              indeterminate: uniqueIndeterminate,
+              criteria: discoveryCriteria,
+              preScreenOpts: {
+                allowMissingListingPrice: true,
+                pricePlaceholderNzd: wantsDevelopmentDiscovery && !userTextHasPrice
+                  ? 3_500_000
+                  : Math.max(600_000, Math.round((effectiveMinPrice + effectiveMaxPrice) / 2)),
+                strictStandardSubdivision: true,
+              },
+              shownAddressKeys: alreadyShownAddressKeys,
+              targetCount: 3,
+              log: req.log,
+            });
+            if (retried.length > 0) {
+              candidates = retried;
+              req.log.info(
+                { suburb, recovered: retried.length },
+                "Discovery: outer retry recovered listings that were previously indeterminate",
+              );
             }
           }
 
@@ -3077,6 +3285,63 @@ router.post("/chat", async (req, res) => {
       }
 
       if (effectiveMode === "analyse") {
+        const explicitCombinedPackage = resolveCombinedPackage(userText);
+        if (explicitCombinedPackage) {
+          req.log.info(
+            { packageAddress: explicitCombinedPackage.packageAddress, childAddresses: explicitCombinedPackage.childAddresses },
+            "Chat analyse: running combined listing package analysis",
+          );
+          res.setHeader("Content-Type", "application/json");
+          res.setHeader("X-Accel-Buffering", "no");
+          let heartbeatFired = false;
+          const heartbeat = setInterval(() => {
+            try {
+              if (!res.writableEnded) { res.write(" "); heartbeatFired = true; }
+            } catch { /* ignore */ }
+          }, 8_000);
+          const sendCombinedAnalyseResponse = (data: object) => {
+            clearInterval(heartbeat);
+            if (res.writableEnded) return;
+            const payload = { ...data, ...providerSignal };
+            if (heartbeatFired) {
+              try { res.write(JSON.stringify(payload)); res.end(); } catch { /* ignore */ }
+            } else {
+              res.json(payload);
+            }
+          };
+
+          try {
+            const result = await runCombinedFeasibilityGroupCore({
+              packageAddress: explicitCombinedPackage.packageAddress,
+              childAddresses: explicitCombinedPackage.childAddresses,
+              locale: chatLocale,
+              translateTitleSchool: chatTranslateTitleSchool,
+              conversationHistory: messages,
+              userId: chatUserId,
+              log: req.log,
+            });
+            const translatedContent = await translateChatContent(
+              JSON.stringify(result.reportGroup),
+              "analyse",
+              chatLocale,
+              chatTranslateTitleSchool,
+            );
+            sendCombinedAnalyseResponse({
+              content: translatedContent,
+              mode: "analyse",
+              searchId: result.savedSearchId,
+              historyCreatedAt: result.savedSearchCreatedAt,
+            });
+          } catch (err) {
+            clearInterval(heartbeat);
+            req.log.error({ err }, "Chat combined listing package analysis failed");
+            if (!res.writableEnded) {
+              res.status(500).json({ error: "Combined listing package analysis failed" });
+            }
+          }
+          return;
+        }
+
         // Address priority:
         // 1. LLM extracted it directly from the current message (validated against hallucination)
         // 2. extractNZAddress regex on the current message
@@ -3570,7 +3835,12 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             let analyseResponseMode = "analyse";
             const parsed = tryParseReportJson(rawContent);
             if (parsed != null) {
-              applyDeterministicPipelineOverrides(parsed, pipelineResult, geocode?.formatted ?? analysisAddress);
+              applyDeterministicPipelineOverrides(
+                parsed,
+                pipelineResult,
+                geocode?.formatted ?? analysisAddress,
+                chatLocale,
+              );
               content = JSON.stringify(parsed);
             } else {
               const deterministicFallback = buildDeterministicFallbackReport(
@@ -3589,15 +3859,16 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             }
 
             // Persist to search history (non-blocking; invalid/truncated model JSON skips save)
-            const chatSaveUserId = getUserIdFromHeader(req);
+            const chatSaveUserId = await getUserIdFromHeader(req);
+            const activeChatSaveUserId = chatSaveUserId === INVALID_AUTH_SESSION ? null : chatSaveUserId;
             let savedSearchId: string | null = null;
             let savedSearchCreatedAt: string | null = null;
-            if (chatSaveUserId) {
+            if (activeChatSaveUserId) {
               const parsedForSave = tryParseReportJson(content);
               if (parsedForSave != null) {
                 try {
                   const [row] = await db.insert(searches).values({
-                    userId: chatSaveUserId,
+                    userId: activeChatSaveUserId,
                     query: extractedAddress,
                     address: geocode?.formatted ?? analysisAddress,
                     resultJson: parsedForSave as any,
@@ -3678,6 +3949,8 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             const searchResult = await searchRealEstateListings({
               suburb, minPrice, maxPrice, skipUrls: shownUrls, includeNegotiation,
               firstBatchSize: wantsDevelopmentSafetyNet ? 24 : undefined,
+              fetchAllPages: discoverPreOptsSn.strictStandardSubdivision,
+              maxListings: discoverPreOptsSn.strictStandardSubdivision ? 500 : undefined,
             }).catch(() => null);
 
             if (searchResult && searchResult.firstBatch.length > 0) {

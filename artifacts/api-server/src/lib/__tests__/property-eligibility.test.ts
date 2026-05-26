@@ -24,6 +24,29 @@ describe("property eligibility verifier", () => {
     expect(shouldForceSingleLotForEligibility(result)).toBe(true);
   });
 
+  it("rejects ownership home unit signals from PropertyValue even when listing tenure says freehold", () => {
+    const result = assessPropertyEligibility({
+      address: "1 Chesterfield Avenue, St Heliers, Auckland",
+      estateType: "Freehold",
+      propertyType: "RESIDENTIAL",
+      propertySubType: "Ownership home units",
+      propertyValueLegalDescriptions: ["Unit A and Accessory Unit 1-2 Deposited Plan 91363"],
+      landUsePrimary: "Single Unit excluding Bach",
+      propertyImprovements: "UNIT & CARPORT",
+      landAreaSqm: 832,
+      floorAreaSqm: 115,
+      buildYear: 1950,
+      zoneCode: "MHS",
+      potentialLots: 2,
+      minLotSize: 400,
+    });
+
+    expect(result.typology).toBe("unit_apartment");
+    expect(result.titleConfidence).toBe("verified");
+    expect(result.subdivisionEligible).toBe(false);
+    expect(result.subdivisionRejectReason).toBe("unit_or_crosslease_signal");
+  });
+
   it("allows a pre-2000 standalone freehold site with enough verified land", () => {
     const result = assessPropertyEligibility({
       address: "124 Example Road, St Heliers, Auckland",
@@ -42,6 +65,27 @@ describe("property eligibility verifier", () => {
     expect(result.titleConfidence).toBe("verified");
     expect(result.subdivisionEligible).toBe(true);
     expect(result.subdivisionRejectReason).toBeNull();
+  });
+
+  it("treats PropertyValue Dwelling subtype as standalone when title and land also qualify", () => {
+    const result = assessPropertyEligibility({
+      address: "88 Example Avenue, Albany, Auckland",
+      estateType: "Freehold",
+      propertyType: "RESIDENTIAL",
+      propertySubType: "Dwelling",
+      landUsePrimary: "Single Unit excluding Bach",
+      propertyImprovements: "DWG OI",
+      legalDescription: "Lot 124 Deposited Plan 331306",
+      landAreaSqm: 900,
+      floorAreaSqm: 160,
+      buildYear: 1980,
+      zoneCode: "MHS",
+      potentialLots: 2,
+      minLotSize: 400,
+    });
+
+    expect(result.typology).toBe("standalone");
+    expect(result.subdivisionEligible).toBe(true);
   });
 
   it("rejects cross-lease or unit title even when parent parcel math works", () => {

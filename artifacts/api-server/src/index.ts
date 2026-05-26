@@ -4,7 +4,7 @@ import { eq, or, and } from "drizzle-orm";
 import app from "./app";
 import { logger } from "./lib/logger";
 import { setIo } from "./lib/socket";
-import { verifyToken } from "./lib/auth";
+import { verifyActiveToken } from "./lib/auth";
 import { db, dmThreads } from "@workspace/db";
 
 const rawPort = process.env["PORT"];
@@ -39,7 +39,7 @@ if (enableSocketIo) {
 
   setIo(io);
 
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     const token =
       (socket.handshake.auth?.token as string | undefined) ||
       (socket.handshake.query?.token as string | undefined);
@@ -48,9 +48,9 @@ if (enableSocketIo) {
       return next(new Error("Authentication required"));
     }
 
-    const payload = verifyToken(token);
+    const payload = await verifyActiveToken(token).catch(() => null);
     if (!payload) {
-      return next(new Error("Invalid or expired token"));
+      return next(new Error("Invalid or replaced token"));
     }
 
     socket.data.userId = payload.sub;

@@ -113,7 +113,7 @@ describe("mergePropertyData", () => {
 
   it("does not apply aggregate facts from a combined active listing to one subject address", () => {
     const merged = mergePropertyData(
-      { area_sqm: 393 } as any,
+      { area_sqm: 786 } as any,
       null,
       null,
       { zone_code: "MHU", zone_description: "Mixed Housing Urban", min_lot_size_sqm: 300 } as any,
@@ -129,6 +129,9 @@ describe("mergePropertyData", () => {
           cv_year: 2024,
           property_type: "House",
           property_sub_type: null,
+          legal_descriptions: [],
+          land_use_primary: null,
+          property_improvements: null,
           land_area_sqm: 393,
           floor_area_sqm: 139,
           build_year: 1910,
