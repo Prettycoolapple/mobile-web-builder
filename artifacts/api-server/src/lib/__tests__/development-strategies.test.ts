@@ -340,4 +340,103 @@ describe("development strategies", () => {
     expect(rebuild?.assumptions.some((a) => /typology discount|terrace\/townhouse comparables|standalone-house/i.test(a))).toBe(false);
     expect(rebuild?.assumptions.some((a) => /buyer-perception risk/i.test(a))).toBe(true);
   });
+
+  describe("unit/apartment typology resale discount (0.53)", () => {
+    const unitData = merged({
+      build_year: 1950,
+      land_area_sqm: null,
+      floor_area_sqm: 115,
+      cv_nzd: 1_200_000,
+      typology: "unit_apartment",
+    });
+    const unitCosts = { ...baseCosts, land_cv_nzd: 1_200_000 };
+
+    it("applies a 0.53 factor to hold-existing GDV for unit_apartment typology", () => {
+      const assessment = buildFallbackDevelopmentStrategyAssessment(unitData, { ...lotResult, lots: 1 });
+      const strategies = calculateDevelopmentStrategies({
+        data: unitData,
+        baseCosts: unitCosts,
+        lotResult: { ...lotResult, lots: 1 },
+        avgSalePrice: 2_500_000,
+        avgPricePerSqm: 10_000,
+        interestRateOutlook: "falling",
+        assessment,
+      });
+
+      const hold = strategies.find((s) => s.id === "hold_existing");
+      const expectedDiscountedGdv = Math.round(2_500_000 * 0.53 / 1000) * 1000; // = 1_325_000
+      // GDV grows by organic 2% per year across exit horizons but the base (year-0) value
+      // used internally is ~1_325_000 — so the first scenario GDV should be >= 1_325_000.
+      expect(hold?.roiScenarios[0]?.gdv).toBeGreaterThanOrEqual(expectedDiscountedGdv);
+      // Must be significantly less than the undiscounted comparable ($2.5M)
+      expect(hold?.roiScenarios[0]?.gdv).toBeLessThan(2_000_000);
+    });
+
+    it("adds a discount assumption note for unit typology on hold_existing and refurbish", () => {
+      const assessment = buildFallbackDevelopmentStrategyAssessment(unitData, { ...lotResult, lots: 1 });
+      const strategies = calculateDevelopmentStrategies({
+        data: unitData,
+        baseCosts: unitCosts,
+        lotResult: { ...lotResult, lots: 1 },
+        avgSalePrice: 2_500_000,
+        avgPricePerSqm: 10_000,
+        interestRateOutlook: "stable",
+        assessment,
+      });
+
+      const hold = strategies.find((s) => s.id === "hold_existing");
+      const refurbish = strategies.find((s) => s.id === "refurbish");
+      const rebuild = strategies.find((s) => s.id === "demolish_rebuild");
+
+      expect(hold?.assumptions.some((a) => /0\.53|47%|unit.*resale|resale.*unit/i.test(a))).toBe(true);
+      expect(refurbish?.assumptions.some((a) => /0\.53|47%|unit.*resale|resale.*unit/i.test(a))).toBe(true);
+      // demolish_rebuild is NOT affected — it has its own exit typology multiplier
+      expect(rebuild?.assumptions.some((a) => /0\.53|47%|unit.*resale|resale.*unit/i.test(a))).toBe(false);
+    });
+
+    it("does NOT apply the unit discount for standalone typology", () => {
+      const standaloneData = merged({ build_year: 1970, typology: "standalone" });
+      const assessment = buildFallbackDevelopmentStrategyAssessment(standaloneData, lotResult);
+      const strategies = calculateDevelopmentStrategies({
+        data: standaloneData,
+        baseCosts,
+        lotResult,
+        avgSalePrice: 2_500_000,
+        avgPricePerSqm: 10_000,
+        interestRateOutlook: "stable",
+        assessment,
+      });
+
+      const hold = strategies.find((s) => s.id === "hold_existing");
+      // GDV for standalone should be ≥ 2_500_000 (floored at avgSalePrice)
+      expect(hold?.roiScenarios[0]?.gdv).toBeGreaterThanOrEqual(2_500_000);
+      expect(hold?.assumptions.some((a) => /0\.53|47%/i.test(a))).toBe(false);
+    });
+
+    it("uses STRATEGY_TITLES_ZH (no English) in rationale_zh when ROI recommends a different strategy", () => {
+      // Set up a scenario where the assessment says hold_existing but ROI says demolish_rebuild
+      const olderUnit = merged({ build_year: 1950, typology: "unit_apartment", cv_nzd: 1_200_000 });
+      const assessment = buildFallbackDevelopmentStrategyAssessment(olderUnit, { ...lotResult, lots: 2 });
+      // Inject a hold_existing recommended_strategy to trigger appendRoiSelectionReason
+      const biasedAssessment = { ...assessment, recommended_strategy: "hold_existing" as const };
+      const strategies = calculateDevelopmentStrategies({
+        data: olderUnit,
+        baseCosts: { ...baseCosts, land_cv_nzd: 1_200_000 },
+        lotResult: { ...lotResult, lots: 2 },
+        avgSalePrice: 2_500_000,
+        avgPricePerSqm: 10_000,
+        interestRateOutlook: "falling",
+        assessment: biasedAssessment,
+      });
+
+      // Find any strategy whose rationale_zh was augmented by appendRoiSelectionReason
+      const augmented = strategies.filter((s) => s.rationale_zh?.includes("当前 ROI 测算显示"));
+      for (const strategy of augmented) {
+        // Must not contain raw English strategy name
+        expect(strategy.rationale_zh).not.toMatch(/demolish and rebuild|refurbish existing|do nothing/i);
+        // Must contain a Chinese strategy name
+        expect(strategy.rationale_zh).toMatch(/保持现状|翻新|拆除重建/);
+      }
+    });
+  });
 });

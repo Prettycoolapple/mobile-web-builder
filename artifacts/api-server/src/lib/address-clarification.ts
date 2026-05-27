@@ -99,6 +99,43 @@ function streetKey(s: string): string | null {
   return tokens.slice(numberIdx, typeIdx + 1).join(" ");
 }
 
+export function isFullStreetAddressForAnalysis(s: string): boolean {
+  return streetKey(s) != null;
+}
+
+function looksLikePropertyAddressAttempt(s: string): boolean {
+  const tokens = tokenizeRough(s);
+  return leadingStreetNumber(s) != null && tokens.some((token) => /[a-z]/i.test(token));
+}
+
+export function filterAddressOptionsForAnalysis(input: string, options: AddressOption[]): AddressOption[] {
+  const inputNumber = leadingStreetNumber(input);
+
+  return options.filter((option) => {
+    if (!isFullStreetAddressForAnalysis(option.formatted)) return false;
+
+    const optionNumber = leadingStreetNumber(option.formatted);
+    if (inputNumber && optionNumber && inputNumber !== optionNumber) return false;
+
+    return true;
+  });
+}
+
+async function noPropertyAddressResolution(input: string, locale: Locale): Promise<AddressResolution> {
+  const questionEn =
+    `We could not confidently match "${input}" to a property address. ` +
+    `Please enter the full street address or check the spelling before running the feasibility analysis.`;
+
+  return {
+    resolvedAddress: input,
+    clarification: {
+      clarificationType: "address",
+      question: locale === "zh" ? await ensureChinese(questionEn) : questionEn,
+      options: [],
+    },
+  };
+}
+
 function distanceMetres(a: AddressOption, b: AddressOption): number | null {
   if (a.lat == null || a.lng == null || b.lat == null || b.lng == null) return null;
 
@@ -195,6 +232,7 @@ export async function resolveAddressForAnalysis(
 ): Promise<AddressResolution> {
   const trimmed = userTypedAddress.trim();
   if (trimmed.length < 10) return { resolvedAddress: trimmed, clarification: null };
+  if (!looksLikePropertyAddressAttempt(trimmed)) return noPropertyAddressResolution(trimmed, locale);
 
   let nominatim: Awaited<ReturnType<typeof nominatimSearchNz>> = [];
   try {
@@ -219,18 +257,20 @@ export async function resolveAddressForAnalysis(
   push(geoPrimary);
   for (const g of nominatim) push(g);
 
-  if (!opts.length) {
+  let deduped = filterAddressOptionsForAnalysis(trimmed, dedupeEquivalentAddressOptions(opts));
+
+  if (!deduped.length) {
     const llmAdds = await llmSuggestedAddresses(trimmed);
     for (const sug of llmAdds) {
       const gHit = await tryGeocodeAddress(sug);
       if (gHit?.formatted) push(gHit);
     }
+    deduped = filterAddressOptionsForAnalysis(trimmed, dedupeEquivalentAddressOptions(opts));
   }
 
-  const deduped = dedupeEquivalentAddressOptions(opts);
-  if (!deduped.length) return { resolvedAddress: trimmed, clarification: null };
+  if (!deduped.length) return noPropertyAddressResolution(trimmed, locale);
 
-  let resolvedBest = geoPrimary?.formatted ?? deduped[0]!.formatted;
+  let resolvedBest = deduped.find((option) => option.formatted === geoPrimary?.formatted)?.formatted ?? deduped[0]!.formatted;
   resolvedBest = resolvedBest.trim();
 
   const dice = diceSimilarityTokens(trimmed, resolvedBest);

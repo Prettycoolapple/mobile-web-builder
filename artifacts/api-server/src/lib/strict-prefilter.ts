@@ -16,7 +16,7 @@ export type PrefilterVerdict =
  */
 const STRICT_TWO_LOT_MIN_SQM = 500;
 
-const UNIT_PROPERTY_TYPE_RE = /\b(unit|apartment|flat|townhouse|villa|terrace|duplex|cabin|cottage)\b/i;
+const UNIT_PROPERTY_TYPE_RE = /\b(unit|apartment|flat|townhouse|terrace|terraced|duplex)\b/i;
 const SECTION_PROPERTY_TYPE_RE = /\b(section|lifestyle|farm|bare\s*land|vacant\s*land)\b/i;
 const NON_FREEHOLD_TENURE_RE = /(cross\s*lease|unit\s*title|leasehold|stratum\s*estate|company\s*share|licence\s*to\s*occupy|licence-to-occupy)/i;
 

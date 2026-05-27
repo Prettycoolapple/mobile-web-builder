@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { dedupeEquivalentAddressOptions } from "../address-clarification";
+import {
+  dedupeEquivalentAddressOptions,
+  filterAddressOptionsForAnalysis,
+  isFullStreetAddressForAnalysis,
+} from "../address-clarification";
 
 describe("address clarification candidate dedupe", () => {
   it("collapses equivalent formatted variants for the same mapped address", () => {
@@ -40,5 +44,43 @@ describe("address clarification candidate dedupe", () => {
     ]);
 
     expect(options).toHaveLength(2);
+  });
+
+  it("rejects suburb or district candidates for property analysis", () => {
+    const options = filterAddressOptionsForAnalysis("15 fishertown street, grey Lynn", [
+      {
+        formatted: "Grey Lynn, Auckland, New Zealand",
+        lat: -36.861,
+        lng: 174.731,
+      },
+    ]);
+
+    expect(options).toEqual([]);
+    expect(isFullStreetAddressForAnalysis("Grey Lynn, Auckland, New Zealand")).toBe(false);
+  });
+
+  it("keeps corrected full street address candidates with the same street number", () => {
+    const options = filterAddressOptionsForAnalysis("15 fishertown street, grey Lynn", [
+      {
+        formatted: "15 Fisherton Street, Grey Lynn, Auckland 1021, New Zealand",
+        lat: -36.858,
+        lng: 174.735,
+      },
+    ]);
+
+    expect(options).toHaveLength(1);
+    expect(isFullStreetAddressForAnalysis(options[0]!.formatted)).toBe(true);
+  });
+
+  it("rejects different street numbers when the user supplied a number", () => {
+    const options = filterAddressOptionsForAnalysis("15 fishertown street, grey Lynn", [
+      {
+        formatted: "51 Fisherton Street, Grey Lynn, Auckland 1021, New Zealand",
+        lat: -36.858,
+        lng: 174.735,
+      },
+    ]);
+
+    expect(options).toEqual([]);
   });
 });

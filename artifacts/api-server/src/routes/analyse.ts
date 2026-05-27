@@ -41,14 +41,16 @@ import { ensureMinRiskSummaryBulletsFromReport, type RiskBackfillContext } from 
 import { detectSubdivision } from "../lib/subdivision";
 import { formatNZD } from "../lib/utils";
 import { searchRealEstateListings, resolveDistrictToSuburbs } from "../lib/scrapers/realestate-search";
-import { preScreenListingsFast, preScreenListingsFastDetailed, type PropertyCandidate } from "../lib/pre-screen";
+import { preScreenListingsFastDetailed, type PropertyCandidate } from "../lib/pre-screen";
 import {
   hasStandardSubdivisionYield,
   isDevelopmentDiscoveryIntent,
   isStandardSubdivisionDiscoveryIntent,
   shouldContinueDiscoveryDrain,
 } from "../lib/discovery-intent";
-import { passesStrictStandardSubdivisionScreen } from "../lib/discovery-land-area";
+import {
+  passesPreliminaryStandardSubdivisionScreen,
+} from "../lib/discovery-land-area";
 import {
   makeCacheKey,
   setListingCache,
@@ -443,7 +445,7 @@ function applyDeterministicPipelineOverrides(
     const pathway =
       merged != null
         ? buildSubdivisionPathwayNote(
-            lots.net_area_sqm,
+            merged.land_area_sqm == null ? null : lots.net_area_sqm,
             merged.zone_code ?? null,
             lots.lots,
             lots.min_lot_size,
@@ -839,7 +841,18 @@ async function resolveNearbySuburbs(suburb: string, max = 5): Promise<string[]> 
 // so that properties best matching the user's intent surface to the top before
 // the final random pick.
 function passesStandardSubdivisionSizeScreen(candidate: PropertyCandidate): boolean {
-  return hasStandardSubdivisionYield(candidate) && passesStrictStandardSubdivisionScreen(candidate);
+  return hasStandardSubdivisionYield(candidate) && passesPreliminaryStandardSubdivisionScreen(candidate);
+}
+
+function rankListingsForStrictSubdivision(listings: ListingResult[]): ListingResult[] {
+  return [...listings].sort((a, b) => {
+    const verifiedA = a.landAreaConfidence === "verified" && a.landArea != null;
+    const verifiedB = b.landAreaConfidence === "verified" && b.landArea != null;
+    if (verifiedA !== verifiedB) return verifiedA ? -1 : 1;
+    const areaA = a.landArea ?? 0;
+    const areaB = b.landArea ?? 0;
+    return areaB - areaA;
+  });
 }
 
 function buildDiscoveryCriteriaText(
@@ -1046,7 +1059,7 @@ async function prescreenPickRestoreBatch(
   cacheKey: string,
   batch: ListingResult[],
   criteria: string | null,
-  preScreenOpts?: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number; strictStandardSubdivision?: boolean },
+  preScreenOpts?: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number; strictStandardSubdivision?: boolean; preliminarySubdivision?: boolean },
   shownAddressKeys: Set<string> = new Set(),
   n = 3,
   restoreUnpicked = true,
@@ -1190,7 +1203,7 @@ async function topUpDiscoveryCandidates(
   cacheKey: string,
   existing: PropertyCandidate[],
   criteria: string | null,
-  preScreenOpts: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number; strictStandardSubdivision?: boolean },
+  preScreenOpts: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number; strictStandardSubdivision?: boolean; preliminarySubdivision?: boolean },
   shownAddressKeys: Set<string>,
   options: { batchSize?: number; nonStrictAttemptLimit?: number; targetCount?: number; indeterminateAccumulator?: ListingResult[] } = {},
 ): Promise<PropertyCandidate[]> {
@@ -1244,7 +1257,7 @@ const INDETERMINATE_RETRY_DELAYS_MS = [4_000, 12_000, 30_000, 60_000, 120_000];
 async function reScreenIndeterminateListings(opts: {
   indeterminate: ListingResult[];
   criteria: string | null;
-  preScreenOpts: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number; strictStandardSubdivision?: boolean };
+  preScreenOpts: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number; strictStandardSubdivision?: boolean; preliminarySubdivision?: boolean };
   shownAddressKeys: Set<string>;
   targetCount: number;
   log: Logger;
@@ -3273,6 +3286,9 @@ router.post("/chat", async (req, res) => {
           let prescreenedIntro = "";
           const criteriaLabel = intent.criteria || (wantsDevelopmentDiscovery ? "subdivision/development potential" : "");
           const strictStandardSubdivision = isStandardSubdivisionDiscoveryIntent(discoveryCriteria);
+          const discoveryTargetCount = strictStandardSubdivision ? 1 : 3;
+          const discoveryScreenConcurrency = strictStandardSubdivision ? 1 : 5;
+          const discoveryBatchSize = strictStandardSubdivision ? 1 : 8;
 
           // Accumulator for listings that couldn't be conclusively screened
           // (zone/build-year/land-area source still failing after the per-listing
@@ -3290,6 +3306,7 @@ router.post("/chat", async (req, res) => {
                 ? 3_500_000
                 : Math.max(600_000, Math.round((effectiveMinPrice + effectiveMaxPrice) / 2)),
               strictStandardSubdivision,
+              preliminarySubdivision: strictStandardSubdivision,
             };
             req.log.info({ streetHint }, "Discovery: street hint for listing order");
 
@@ -3305,7 +3322,12 @@ router.post("/chat", async (req, res) => {
                 discoveryCriteria,
                 discoverPreOpts,
                 alreadyShownAddressKeys,
-                { nonStrictAttemptLimit: 3, indeterminateAccumulator: strictStandardSubdivision ? strictIndeterminate : undefined },
+                {
+                  batchSize: discoveryBatchSize,
+                  nonStrictAttemptLimit: 3,
+                  targetCount: discoveryTargetCount,
+                  indeterminateAccumulator: strictStandardSubdivision ? strictIndeterminate : undefined,
+                },
               );
             }
 
@@ -3338,12 +3360,14 @@ router.post("/chat", async (req, res) => {
                 const inRange = (l: { price: number | null }) =>
                   l.price == null || (l.price >= effectiveMinPrice && l.price <= effectiveMaxPrice * 1.1);
 
+                const firstRanked = strictStandardSubdivision ? rankListingsForStrictSubdivision(searchResult.firstBatch) : searchResult.firstBatch;
+                const remainingRanked = strictStandardSubdivision ? rankListingsForStrictSubdivision(searchResult.remainingListings) : searchResult.remainingListings;
                 const firstFiltered = filterAlreadyShownListings(rankListingsByStreetHint(
-                  filterListingsByStreetHint(searchResult.firstBatch.filter(inRange), streetHint),
+                  filterListingsByStreetHint(firstRanked.filter(inRange), streetHint),
                   streetHint,
                 ), alreadyShownAddressKeys);
                 const remainingFiltered = filterAlreadyShownListings(rankListingsByStreetHint(
-                  filterListingsByStreetHint(searchResult.remainingListings.filter(inRange), streetHint),
+                  filterListingsByStreetHint(remainingRanked.filter(inRange), streetHint),
                   streetHint,
                 ), alreadyShownAddressKeys);
 
@@ -3355,16 +3379,16 @@ router.post("/chat", async (req, res) => {
                 });
                 req.log.info({ fetched: firstFiltered.length, cached: remainingFiltered.length }, "realestate.co.nz: prescreening listings");
                 // Run pre-screening and AI intro generation in parallel to save time.
-                // In strict-subdivision mode we early-bail once 3 candidates surface
-                // and keep draining the rest in the background so the next "show
-                // more" is instant from the verdict cache.
+                // In strict-subdivision mode we early-bail once the first legally
+                // plausible candidate surfaces. Full practical feasibility waits
+                // until the user taps Start analysis.
                 const criteriaContext = criteriaLabel ? ` matching criteria: ${criteriaLabel}` : "";
                 const introPromptPreScreen = `The user asked: "${userText}". You found some matching properties in ${suburb || "the area"} on realestate.co.nz${criteriaContext}. In 1 sentence, acknowledge this result conversationally (e.g. "I found a few development sites in St Heliers under $2M:"). Do NOT mention a specific number — say "a few", "some", or "a handful". Be natural and brief — no JSON.`;
                 const preScreenOptsWithBail = strictStandardSubdivision
-                  ? { ...discoverPreOpts, earlyBailAt: 3 }
+                  ? { ...discoverPreOpts, earlyBailAt: discoveryTargetCount }
                   : discoverPreOpts;
                 const [screenedDetailed, introFromPreScreen] = await Promise.all([
-                  preScreenListingsFastDetailed(firstFiltered, 5, null, preScreenOptsWithBail).catch(
+                  preScreenListingsFastDetailed(firstFiltered, discoveryScreenConcurrency, null, preScreenOptsWithBail).catch(
                     () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], drainComplete: Promise.resolve() }),
                   ),
                   generateAnalysis(introPromptPreScreen, chatLocale).catch(() => ""),
@@ -3376,11 +3400,17 @@ router.post("/chat", async (req, res) => {
                   // background while we reply to the user.
                   runAfterResponse(screenedDetailed.drainComplete.catch(() => {}));
                 }
-                candidates = pickDiscoveryCandidates(screened, discoveryCriteria, alreadyShownAddressKeys, 3);
+                candidates = pickDiscoveryCandidates(screened, discoveryCriteria, alreadyShownAddressKeys, discoveryTargetCount);
                 const pickedUrls = candidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u));
                 markShown(cacheKey, pickedUrls);
                 const { putAtFront, putAtBack } = partitionBatchAfterPrescreen(firstFiltered, screened, candidates, discoveryCriteria, alreadyShownAddressKeys);
-                if (!strictStandardSubdivision) restoreListingsAfterPop(cacheKey, putAtFront, putAtBack);
+                if (strictStandardSubdivision) {
+                  // Keep the suburb queue intact for one-at-a-time "show more".
+                  // Cached verdicts make already-screened rejects cheap to skip.
+                  restoreListingsAfterPop(cacheKey, putAtFront, putAtBack);
+                } else {
+                  restoreListingsAfterPop(cacheKey, putAtFront, putAtBack);
+                }
                 prescreenedIntro = introFromPreScreen;
 
                 candidates = await topUpDiscoveryCandidates(
@@ -3389,7 +3419,12 @@ router.post("/chat", async (req, res) => {
                   discoveryCriteria,
                   discoverPreOpts,
                   alreadyShownAddressKeys,
-                  { nonStrictAttemptLimit: 6, indeterminateAccumulator: strictStandardSubdivision ? strictIndeterminate : undefined },
+                  {
+                    batchSize: discoveryBatchSize,
+                    nonStrictAttemptLimit: 6,
+                    targetCount: discoveryTargetCount,
+                    indeterminateAccumulator: strictStandardSubdivision ? strictIndeterminate : undefined,
+                  },
                 );
               }
             }
@@ -3483,14 +3518,20 @@ router.post("/chat", async (req, res) => {
                     const criteriaContextFallback = criteriaLabel ? ` (${criteriaLabel})` : "";
                     const introPromptFallback = `The user asked about ${suburb}${criteriaContextFallback} but no listings were found there right now. You found some properties in nearby ${nearbySuburb}. In 1 sentence acknowledge this naturally (e.g. "I couldn't find anything in ${suburb} right now, but here are some nearby options in ${nearbySuburb}:"). Do NOT mention a specific number — say "a few", "some", or "a handful". Be brief — no JSON.`;
                     const [screenedFallbackDetailed, introFallback] = await Promise.all([
-                      preScreenListingsFastDetailed(filtered, 5, null, discoverPreOpts).catch(
+                      preScreenListingsFastDetailed(filtered, discoveryScreenConcurrency, null, {
+                        ...discoverPreOpts,
+                        ...(strictStandardSubdivision ? { earlyBailAt: discoveryTargetCount } : {}),
+                      }).catch(
                         () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], drainComplete: Promise.resolve() }),
                       ),
                       generateAnalysis(introPromptFallback, chatLocale).catch(() => ""),
                     ]);
                     const screenedFallback = screenedFallbackDetailed.candidates;
                     if (strictStandardSubdivision) strictIndeterminate.push(...screenedFallbackDetailed.indeterminate);
-                    candidates = pickDiscoveryCandidates(screenedFallback, discoveryCriteria, alreadyShownAddressKeys, 3);
+                    if (strictStandardSubdivision) {
+                      runAfterResponse(screenedFallbackDetailed.drainComplete.catch(() => {}));
+                    }
+                    candidates = pickDiscoveryCandidates(screenedFallback, discoveryCriteria, alreadyShownAddressKeys, discoveryTargetCount);
                     markShown(
                       fallbackCacheKey,
                       candidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u)),
@@ -3502,7 +3543,12 @@ router.post("/chat", async (req, res) => {
                       discoveryCriteria,
                       alreadyShownAddressKeys,
                     );
-                    if (!strictStandardSubdivision) restoreListingsAfterPop(fallbackCacheKey, fbFront, fbBack);
+                    if (strictStandardSubdivision) {
+                      // Keep nearby fallback queues intact for one-at-a-time follow-up.
+                      restoreListingsAfterPop(fallbackCacheKey, fbFront, fbBack);
+                    } else {
+                      restoreListingsAfterPop(fallbackCacheKey, fbFront, fbBack);
+                    }
 
                     candidates = await topUpDiscoveryCandidates(
                       fallbackCacheKey,
@@ -3510,7 +3556,12 @@ router.post("/chat", async (req, res) => {
                       discoveryCriteria,
                       discoverPreOpts,
                       alreadyShownAddressKeys,
-                      { nonStrictAttemptLimit: 6, indeterminateAccumulator: strictStandardSubdivision ? strictIndeterminate : undefined },
+                      {
+                        batchSize: discoveryBatchSize,
+                        nonStrictAttemptLimit: 6,
+                        targetCount: discoveryTargetCount,
+                        indeterminateAccumulator: strictStandardSubdivision ? strictIndeterminate : undefined,
+                      },
                     );
 
                     if (candidates.length > 0) {
@@ -3559,9 +3610,10 @@ router.post("/chat", async (req, res) => {
                   ? 3_500_000
                   : Math.max(600_000, Math.round((effectiveMinPrice + effectiveMaxPrice) / 2)),
                 strictStandardSubdivision: true,
+                preliminarySubdivision: true,
               },
               shownAddressKeys: alreadyShownAddressKeys,
-              targetCount: 3,
+              targetCount: discoveryTargetCount,
               log: req.log,
             });
             if (retried.length > 0) {
@@ -3989,7 +4041,7 @@ Has burdening drainage easement: ${easements.drainage_burdening}
 Has burdening power easement: ${easements.power_burdening}
 Has building covenant: ${easements.building_covenant}
 Estimated burdening area: ${easements.total_burdening_area_sqm}m²
-Net subdividable area after easements: ${lots.net_area_sqm}m² (gross: ${lots.gross_area_sqm}m²)
+Net subdividable area after easements: ${merged.land_area_sqm != null ? `${lots.net_area_sqm}m² (gross: ${lots.gross_area_sqm}m²)` : "not available because the subject land area is unknown"}
 Lot impact: ${easements.lot_impact_note ?? "None identified"}
 Summary: ${easements.summary}
 Burdening easements detail:
@@ -4277,7 +4329,11 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                 ? 3_500_000
                 : Math.max(600_000, Math.round((minPrice + maxPrice) / 2)),
               strictStandardSubdivision: isStandardSubdivisionDiscoveryIntent(safetyNetCriteria),
+              preliminarySubdivision: isStandardSubdivisionDiscoveryIntent(safetyNetCriteria),
             };
+            const safetyNetTargetCount = discoverPreOptsSn.strictStandardSubdivision ? 1 : 3;
+            const safetyNetScreenConcurrency = discoverPreOptsSn.strictStandardSubdivision ? 1 : 5;
+            const safetyNetBatchSize = discoverPreOptsSn.strictStandardSubdivision ? 1 : 8;
             const searchResult = await searchRealEstateListings({
               suburb, minPrice, maxPrice, skipUrls: shownUrls, includeNegotiation,
               firstBatchSize: wantsDevelopmentSafetyNet ? 24 : undefined,
@@ -4288,12 +4344,14 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             if (searchResult && searchResult.firstBatch.length > 0) {
               const inRange = (l: { price: number | null }) =>
                 l.price == null || (l.price >= minPrice && l.price <= maxPrice * 1.1);
+              const firstRanked = discoverPreOptsSn.strictStandardSubdivision ? rankListingsForStrictSubdivision(searchResult.firstBatch) : searchResult.firstBatch;
+              const remainingRanked = discoverPreOptsSn.strictStandardSubdivision ? rankListingsForStrictSubdivision(searchResult.remainingListings) : searchResult.remainingListings;
               const firstFiltered = filterAlreadyShownListings(rankListingsByStreetHint(
-                filterListingsByStreetHint(searchResult.firstBatch.filter(inRange), streetHintSn),
+                filterListingsByStreetHint(firstRanked.filter(inRange), streetHintSn),
                 streetHintSn,
               ), alreadyShownAddressKeys);
               const remainingFiltered = filterAlreadyShownListings(rankListingsByStreetHint(
-                filterListingsByStreetHint(searchResult.remainingListings.filter(inRange), streetHintSn),
+                filterListingsByStreetHint(remainingRanked.filter(inRange), streetHintSn),
                 streetHintSn,
               ), alreadyShownAddressKeys);
               const priorShownSn = [...getShownUrls(cacheKey)];
@@ -4302,10 +4360,21 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                 shownUrls: priorShownSn,
                 suburb, minPrice, maxPrice,
               });
-              const screenedSn = await preScreenListingsFast(firstFiltered, 5, null, discoverPreOptsSn).catch(
-                () => [] as PropertyCandidate[],
+              const screenedSnDetailed = await preScreenListingsFastDetailed(
+                firstFiltered,
+                safetyNetScreenConcurrency,
+                null,
+                discoverPreOptsSn.strictStandardSubdivision
+                  ? { ...discoverPreOptsSn, earlyBailAt: safetyNetTargetCount }
+                  : discoverPreOptsSn,
+              ).catch(
+                () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], drainComplete: Promise.resolve() }),
               );
-              let discoverCandidates = pickDiscoveryCandidates(screenedSn, safetyNetCriteria, alreadyShownAddressKeys, 3);
+              if (discoverPreOptsSn.strictStandardSubdivision) {
+                runAfterResponse(screenedSnDetailed.drainComplete.catch(() => {}));
+              }
+              const screenedSn = screenedSnDetailed.candidates;
+              let discoverCandidates = pickDiscoveryCandidates(screenedSn, safetyNetCriteria, alreadyShownAddressKeys, safetyNetTargetCount);
               markShown(
                 cacheKey,
                 discoverCandidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u)),
@@ -4317,7 +4386,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                 safetyNetCriteria,
                 alreadyShownAddressKeys,
               );
-              if (!discoverPreOptsSn.strictStandardSubdivision) restoreListingsAfterPop(cacheKey, snFront, snBack);
+              restoreListingsAfterPop(cacheKey, snFront, snBack);
 
               discoverCandidates = await topUpDiscoveryCandidates(
                 cacheKey,
@@ -4325,7 +4394,11 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                 safetyNetCriteria,
                 discoverPreOptsSn,
                 alreadyShownAddressKeys,
-                { nonStrictAttemptLimit: 6 },
+                {
+                  batchSize: safetyNetBatchSize,
+                  nonStrictAttemptLimit: 6,
+                  targetCount: safetyNetTargetCount,
+                },
               );
 
               if (discoverCandidates.length > 0) {

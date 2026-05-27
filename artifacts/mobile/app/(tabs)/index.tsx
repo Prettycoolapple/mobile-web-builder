@@ -318,6 +318,9 @@ export default function SearchScreen() {
   const inputRef = useRef<TextInput>(null);
   const shownRecommendationReportIds = useRef<Set<string>>(new Set());
   const lastCheckedFollowUpCount = useRef<Map<string, number>>(new Map());
+  // Always-current mirror of currentSession?.messages — used in async timer
+  // callbacks where the closure would otherwise hold stale captured state.
+  const sessionMessagesRef = useRef<ChatMessage[]>([]);
   const checkedFollowupIds = useRef<Set<string>>(new Set());
   const lastReportIdRef = useRef<string | null>(null);
   const appRatingPromptOpenRef = useRef(false);
@@ -435,6 +438,12 @@ export default function SearchScreen() {
     }
   }, [currentSession?.messages, scrollToReportPropertyCard]);
 
+  // Keep sessionMessagesRef in sync so timer callbacks can read fresh message
+  // state without relying on stale closures.
+  useEffect(() => {
+    sessionMessagesRef.current = currentSession?.messages ?? [];
+  });
+
   useEffect(() => {
     if (user?.role !== "general") return;
     const msgs = currentSession?.messages ?? [];
@@ -467,9 +476,16 @@ export default function SearchScreen() {
     // Delay slightly so the UI settles before the recommendation bubble appears
     const timer = setTimeout(async () => {
       try {
+        // Re-read messages at fire time rather than relying on the closure-captured
+        // `msgs` — this prevents a race condition where the explicit /recommendations
+        // check (triggered from the finally block at +1200 ms) adds a provider card
+        // before this timer fires at +2500 ms and the stale guard misses it.
+        const freshMsgs = sessionMessagesRef.current;
+        if (freshMsgs.some((m) => m.type === "provider_recommendation")) return;
+
         const apiBase = resolveApiBase();
         const headers = getApiHeaders();
-        const conversationHistory = msgs
+        const conversationHistory = freshMsgs
           .filter((m) => m.type === "text" || m.type === "report")
           .map((m) => ({ role: m.role, content: m.type === "text" ? m.content : `[Report for ${m.report?.address ?? "property"}]` }));
 
@@ -480,7 +496,7 @@ export default function SearchScreen() {
             report: lastReport.report,
             conversationHistory,
             followUpCount,
-            excludeProviderIds: msgs
+            excludeProviderIds: freshMsgs
               .filter((m) => m.type === "provider_recommendation" && m.provider?.id)
               .map((m) => m.provider!.id),
           }),
@@ -608,11 +624,14 @@ export default function SearchScreen() {
           .slice(-6)
           .map((m) => ({ role: m.role, content: m.content }));
 
+        const agentCtrl = new AbortController();
+        const agentTimer = setTimeout(() => agentCtrl.abort(), 30_000);
         const resp = await fetch(`${apiBase}/agent-contact/lookup`, {
           method: "POST",
           headers,
           body: JSON.stringify({ address, messages: conversationHistory }),
-        });
+          signal: agentCtrl.signal,
+        }).finally(() => clearTimeout(agentTimer));
         if (!resp.ok) return;
 
         const data = await resp.json() as {
@@ -1018,11 +1037,14 @@ export default function SearchScreen() {
             .map((m) => ({ role: m.role, content: m.content })),
           { role: "user" as const, content: text },
         ];
+        const agentCtrl = new AbortController();
+        const agentTimer = setTimeout(() => agentCtrl.abort(), 30_000);
         const resp = await fetch(`${getApiBase()}/agent-contact/lookup`, {
           method: "POST",
           headers: getApiHeaders(),
           body: JSON.stringify({ address: agentAddress, messages: conversationHistory }),
-        });
+          signal: agentCtrl.signal,
+        }).finally(() => clearTimeout(agentTimer));
 
         if (resp.status === 402) {
           setShowPaywall(true);
@@ -1072,15 +1094,11 @@ export default function SearchScreen() {
           return;
         }
       } catch (err) {
-        console.log("Agent contact lookup failed:", err);
-        updateLastMessage({
-          type: "text",
-          content: "I couldn't fetch the listing agent details just now. Please try again.",
-          retryText: text,
-        }, sessionId);
-        setIsLoading(false);
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-        return;
+        // Network error on the pre-flight agent-contact check. We don't know
+        // whether the user wanted agent info or not, so don't short-circuit
+        // with an agent-specific error — fall through to the main chat call
+        // so the LLM can handle the question normally.
+        console.log("Agent contact lookup failed (falling through to chat):", err);
       }
     }
 
@@ -1101,7 +1119,7 @@ export default function SearchScreen() {
     const currentMessages = currentSession?.messages ?? [];
     const allMessages = [
       ...currentMessages
-        .filter((m) => m.type === "text" || m.type === "report" || m.type === "report_group" || m.type === "search")
+        .filter((m) => m.type === "text" || m.type === "report" || m.type === "report_group" || m.type === "search" || m.type === "agent_contact")
         .map((m) => ({
           role: m.role as "user" | "assistant",
           content: m.type === "text"
@@ -1110,7 +1128,12 @@ export default function SearchScreen() {
               ? `[Feasibility report for ${m.report?.address || "property"}]`
               : m.type === "report_group"
                 ? `[Combined listing reports shown: ${(m.reportGroup?.reports ?? []).map((r) => r.address).join("; ")}]`
-                : `[Search results shown: ${(m.searchResults ?? []).map((r) => `${r.address}||${r.listingUrl ?? ""}`).join("; ")}]`,
+                : m.type === "agent_contact"
+                  // Represent the completed agent lookup as a short assistant summary so the
+                  // LLM knows this topic is already resolved and doesn't re-answer it on the
+                  // next turn.
+                  ? `[Listing agent contact card shown for ${m.propertyAddress ?? "the property"}: ${m.agentName ?? "agent details"}]`
+                  : `[Search results shown: ${(m.searchResults ?? []).map((r) => `${r.address}||${r.listingUrl ?? ""}`).join("; ")}]`,
         })),
       { role: "user" as const, content: text },
     ];
@@ -1202,7 +1225,7 @@ export default function SearchScreen() {
             }, sessionId);
             return;
           }
-          if (data.type === "clarification" && data.clarificationType === "address" && Array.isArray(data.options) && data.options.length > 0) {
+          if (data.type === "clarification" && data.clarificationType === "address" && Array.isArray(data.options)) {
             updateLastMessage({
               type: "address_clarification",
               content: "",
@@ -1368,7 +1391,7 @@ export default function SearchScreen() {
                 }, sessionId);
                 return;
               }
-              if (parsed.clarificationType === "address" && Array.isArray(parsed.options) && parsed.options.length > 0) {
+              if (parsed.clarificationType === "address" && Array.isArray(parsed.options)) {
                 updateLastMessage({
                   type: "address_clarification",
                   content: "",
@@ -1701,7 +1724,7 @@ export default function SearchScreen() {
               return;
             }
 
-            if (data.type === "clarification" && data.clarificationType === "address" && Array.isArray(data.options) && data.options.length > 0) {
+            if (data.type === "clarification" && data.clarificationType === "address" && Array.isArray(data.options)) {
               updateLastMessage({
                 type: "address_clarification",
                 content: "",
@@ -1921,7 +1944,7 @@ export default function SearchScreen() {
                 <TextInput
                   ref={inputRef}
                   style={[styles.landingInput, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-                  placeholder=""
+                  placeholder={t("search.placeholder")}
                   placeholderTextColor={colors.mutedForeground}
                   value={inputText}
                   onChangeText={setInputText}
@@ -2047,7 +2070,7 @@ export default function SearchScreen() {
                     ? chatQuota?.isFree
                       ? t("profile.limit_reached_free")
                       : t("profile.limit_reached_standard")
-                    : ""
+                    : t("search.placeholder")
                 }
                 placeholderTextColor={colors.mutedForeground}
                 value={messageLimitReached ? "" : inputText}

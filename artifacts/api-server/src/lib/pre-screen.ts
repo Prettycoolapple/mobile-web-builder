@@ -14,6 +14,7 @@ import {
   type PropertyTypology,
 } from "./property-eligibility";
 import {
+  passesPreliminaryStandardSubdivisionScreen,
   passesStrictStandardSubdivisionScreen,
   verifyDiscoveryLandArea,
   type DiscoveryLandAreaConfidence,
@@ -55,6 +56,8 @@ export interface PropertyCandidate {
   subdivisionEligible?: boolean;
   subdivisionRejectReason?: string | null;
   buildYear?: number | null;
+  screeningStatus?: "preliminary" | "verified";
+  screeningNotes?: string[];
 }
 
 /**
@@ -190,6 +193,7 @@ async function fetchScreenSourcesWithRetry(
     shouldVerifyLandArea: boolean;
     shouldFetchPropertyValue: boolean;
     strictStandardSubdivision: boolean;
+    preliminarySubdivision: boolean;
   },
 ): Promise<{
   zone: ZoneResult | null;
@@ -221,7 +225,8 @@ async function fetchScreenSourcesWithRetry(
     const needsZone: boolean = !zone;
     const needsOverlays: boolean = resolvedOverlays.length === 0 && attempt === 0;
     const needsLinz: boolean = opts.shouldVerifyLandArea && !linzParcel;
-    const needsPropertyHistory: boolean = opts.strictStandardSubdivision && !propertyHistory?.build_year;
+    const needsPropertyHistory: boolean =
+      opts.strictStandardSubdivision && !opts.preliminarySubdivision && !propertyHistory?.build_year;
     const needsPropertyValue: boolean = opts.shouldFetchPropertyValue && !propertyValue;
 
     const zonePromise: Promise<ZoneResult | null> = needsZone
@@ -257,7 +262,7 @@ async function fetchScreenSourcesWithRetry(
     failedSources = [];
     if (!zone) failedSources.push("zone");
     if (opts.shouldVerifyLandArea && !linzParcel) failedSources.push("linz");
-    if (opts.strictStandardSubdivision && !propertyHistory?.build_year && !propertyValue?.build_year) failedSources.push("build_year");
+    if (opts.strictStandardSubdivision && !opts.preliminarySubdivision && !propertyHistory?.build_year && !propertyValue?.build_year) failedSources.push("build_year");
     if (opts.shouldFetchPropertyValue && !propertyValue) failedSources.push("propertyvalue");
 
     if (!opts.strictStandardSubdivision) break;
@@ -265,7 +270,7 @@ async function fetchScreenSourcesWithRetry(
     // In strict mode, only the essentials need to succeed before we stop
     // retrying. Zone + a build-year source are the two hard requirements; land
     // area we can verify from listing/homes/propertyValue as well.
-    const haveBuildYear = !!(propertyHistory?.build_year || propertyValue?.build_year);
+    const haveBuildYear = opts.preliminarySubdivision || !!(propertyHistory?.build_year || propertyValue?.build_year);
     const haveLandSignal = !!(linzParcel || listing.landArea != null || propertyValue?.land_area_sqm);
     if (zone && haveBuildYear && haveLandSignal) break;
   }
@@ -279,6 +284,7 @@ async function screenOneFast(
     allowMissingListingPrice?: boolean;
     pricePlaceholderNzd?: number;
     strictStandardSubdivision?: boolean;
+    preliminarySubdivision?: boolean;
   },
 ): Promise<ScreenVerdict> {
   try {
@@ -316,6 +322,7 @@ async function screenOneFast(
       shouldVerifyLandArea,
       shouldFetchPropertyValue,
       strictStandardSubdivision: options?.strictStandardSubdivision === true,
+      preliminarySubdivision: options?.preliminarySubdivision === true,
     });
 
     const zone = zoneRecord?.zone_code ?? null;
@@ -410,7 +417,21 @@ async function screenOneFast(
           minLotSize,
           isCombinedListingAggregate: listing.isCombinedListing,
         });
-    if (options?.strictStandardSubdivision && !passesStrictStandardSubdivisionScreen({
+    const standardSubdivisionPasses = options?.preliminarySubdivision
+      ? passesPreliminaryStandardSubdivisionScreen({
+          address: listing.address,
+          landArea: land,
+          zone,
+          potentialLots: lots,
+          minLotSize,
+          landAreaConfidence: verifiedLand.landAreaConfidence,
+          isAlreadySubdividedChild: verifiedLand.isAlreadySubdividedChild,
+          typology: eligibility?.typology,
+          titleConfidence: eligibility?.titleConfidence,
+          subdivisionRejectReason: eligibility?.subdivisionRejectReason,
+          buildYear: propertyHistory?.build_year ?? propertyValue?.build_year ?? null,
+        })
+      : passesStrictStandardSubdivisionScreen({
       address: listing.address,
       landArea: land,
       zone,
@@ -422,7 +443,8 @@ async function screenOneFast(
       titleConfidence: eligibility?.titleConfidence,
       subdivisionEligible: eligibility?.subdivisionEligible,
       buildYear: propertyHistory?.build_year ?? null,
-    })) {
+    });
+    if (options?.strictStandardSubdivision && !standardSubdivisionPasses) {
       logger.info(
         {
           address: listing.address,
@@ -449,7 +471,7 @@ async function screenOneFast(
       // some redundant source (LINZ / PropertyValue) was unavailable.
       const haveAnyBuildYear = propertyHistory?.build_year != null || propertyValue?.build_year != null;
       const isIndeterminate =
-        !haveAnyBuildYear ||
+        (!options?.preliminarySubdivision && !haveAnyBuildYear) ||
         !zone ||
         verifiedLand.landAreaConfidence !== "verified" ||
         eligibility?.typology === "unknown" ||
@@ -495,6 +517,10 @@ async function screenOneFast(
       subdivisionEligible: eligibility?.subdivisionEligible,
       subdivisionRejectReason: eligibility?.subdivisionRejectReason,
       buildYear: propertyHistory?.build_year ?? propertyValue?.build_year ?? null,
+      screeningStatus: options?.preliminarySubdivision ? "preliminary" : "verified",
+      screeningNotes: options?.preliminarySubdivision
+        ? ["Preliminary active-listing subdivision screen; build year is checked in the full analysis."]
+        : ["Verified pre-screen."],
     };
     return { kind: "candidate", candidate };
   } catch (err) {
@@ -557,6 +583,7 @@ export async function preScreenListingsFastDetailed(
     allowMissingListingPrice?: boolean;
     pricePlaceholderNzd?: number;
     strictStandardSubdivision?: boolean;
+    preliminarySubdivision?: boolean;
     /** Resolve once this many candidates have been collected; keep draining the rest in the background. */
     earlyBailAt?: number;
     /** Called each time a candidate is found, in order of completion (not score-sorted). */
@@ -633,6 +660,7 @@ export async function preScreenListingsFast(
     /** Mid-range estimate when allowing missing prices (defaults ~mid-market if omitted). */
     pricePlaceholderNzd?: number;
     strictStandardSubdivision?: boolean;
+    preliminarySubdivision?: boolean;
   },
 ): Promise<PropertyCandidate[]> {
   const detailed = await preScreenListingsFastDetailed(listings, maxConcurrent, resultCap, options);

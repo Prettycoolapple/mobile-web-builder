@@ -341,6 +341,10 @@ function realestateListingScopedToSubject(
   return !!listingScope && listingScope === subjectScope;
 }
 
+function isInactiveRealestateListing(listing: ListingResult | null): boolean {
+  return /sold|withdrawn|expired|archived|closed/i.test(listing?.listingStatus ?? "");
+}
+
 export function mergePropertyData(
   linz: LinzParcel | null,
   hougarden: HougardenData | null,
@@ -838,7 +842,7 @@ export function mergePropertyData(
     school_zones,
     last_sale_price,
     last_sale_date,
-    listing_active: (oneroof?.listing_active ?? false) || !!realestateListing,
+    listing_active: (oneroof?.listing_active ?? false) || (!!realestateListing && !isInactiveRealestateListing(realestateListing)),
     listing_price,
     main_photo_url,
     photo_urls,

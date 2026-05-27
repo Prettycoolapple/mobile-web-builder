@@ -15,6 +15,7 @@ export interface ListingResult {
   /** True when the listing advertises multiple street addresses as one package. */
   isCombinedListing?: boolean;
   combinedListingReason?: string | null;
+  listingStatus?: string | null;
   /** Floor (dwelling) area in m². Sourced opportunistically from og:description; null when not advertised. */
   floorArea?: number | null;
   /** Listing/category signal such as House, Unit, Apartment, or Townhouse. */

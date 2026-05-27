@@ -43,4 +43,14 @@ describe("lot calculator", () => {
     expect(note.standard_path_viable).toBe(false);
     expect(note.headline).toContain("Zone unavailable");
   });
+
+  it("explains zone minimums without inventing a site area when land area is unavailable", () => {
+    const note = buildSubdivisionPathwayNote(null, "MHS", 1, 400, "Mixed Housing Suburban");
+
+    expect(note.standard_path_viable).toBe(false);
+    expect(note.headline).toContain("Subject land area unavailable");
+    expect(note.headline).toContain("800m²");
+    expect(note.detail).toContain("does not compare this specific property");
+    expect(note.detail).not.toMatch(/(^|[^0-9])0m²/);
+  });
 });

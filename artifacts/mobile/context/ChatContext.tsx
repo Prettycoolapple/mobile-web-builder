@@ -439,6 +439,8 @@ export interface PropertyCandidate {
   subdivisionEligible?: boolean;
   subdivisionRejectReason?: string | null;
   buildYear?: number | null;
+  screeningStatus?: "preliminary" | "verified";
+  screeningNotes?: string[];
 }
 
 export interface Session {

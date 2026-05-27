@@ -72,7 +72,7 @@ export interface SubdivisionPathwayNote {
  * deterministic callout in the Planning section of the FeasibilityReport UI.
  */
 export function buildSubdivisionPathwayNote(
-  net_area_sqm: number,
+  net_area_sqm: number | null,
   zone_code: string | null,
   lots: number,
   min_lot_sqm: number,
@@ -96,6 +96,13 @@ export function buildSubdivisionPathwayNote(
 
   const vacantLotsNeeded = 2;
   const minForTwoVacantLots = vacantLotsNeeded * min_lot_sqm;
+  if (net_area_sqm == null || net_area_sqm <= 0) {
+    return {
+      headline: `${zone_label} - minimum lot size is ${min_lot_sqm}m²/lot (usually ${minForTwoVacantLots}m² for 2 vacant lots). Subject land area unavailable.`,
+      detail: `The subject land area is not available for this property, so the report does not compare this specific property against the lot-size threshold or infer extra subdivision yield. In ${zone_label}, standard vacant-lot subdivision generally requires at least ${min_lot_sqm}m² per lot; creating 2 vacant lots usually requires at least ${minForTwoVacantLots}m² before easements, access, infrastructure, and design controls are assessed.`,
+      standard_path_viable: false,
+    };
+  }
   const standard_path_viable = net_area_sqm >= minForTwoVacantLots;
   const supportsJointConsent = RESIDENTIAL_ZONES_WITH_JOINT_CONSENT.has(zone_code ?? "");
 

@@ -22,6 +22,8 @@ import { extractBedsBaths } from "./bed-bath-extractor";
 const PLATFORM_BASE = "https://platform.realestate.co.nz/search/v1";
 const MEDIA_BASE = "https://mediaserver.realestate.co.nz";
 const FETCH_TIMEOUT_MS = 12_000;
+const SEARCH_FALLBACK_TIMEOUT_MS = 6_000;
+const ADDRESS_MATCH_TIMEOUT_MS = 15_000;
 
 interface SuburbRecord {
   id: string;
@@ -121,6 +123,24 @@ async function fetchJsonWithTimeout<T>(url: string): Promise<T> {
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
+async function fetchJsonWithFixedTimeout<T>(url: string, timeoutMs: number): Promise<T> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      headers: {
+        "accept": "application/vnd.api+json,application/json",
+        "user-agent": "ProjectAlpha/1.0",
+      },
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
+    return (await res.json()) as T;
+  } finally {
+    clearTimeout(t);
+  }
 }
 
 interface LocationsResponse {
@@ -285,6 +305,7 @@ export async function findSuburbInTextViaIndex(text: string): Promise<SuburbReco
  * for a "nearby suburbs" fallback.
  */
 export async function getDistrictSiblings(suburbId: string, max = 8): Promise<SuburbRecord[]> {
+  if (max <= 0) return [];
   let index: SuburbIndex;
   try {
     index = await loadSuburbIndex();
@@ -494,6 +515,7 @@ function mapListing(raw: RawListing): ListingResult | null {
     landAreaConfidence: "unverified",
     isCombinedListing,
     combinedListingReason: isCombinedListing ? "multi_address_listing" : null,
+    listingStatus: a["listing-status"] ?? null,
     photoUrl: photoUrls[0] ?? null,
     photoUrls,
     listingUrl: url,
@@ -507,6 +529,75 @@ function mapListing(raw: RawListing): ListingResult | null {
     tenureText: stringAttr(rawAttrs, ["title-type", "tenure", "estate-type"]),
     legalDescription: stringAttr(rawAttrs, ["legal-description", "legalDescription"]),
   };
+}
+
+async function fetchRawListingById(id: string): Promise<RawListing | null> {
+  const json = await fetchJsonWithTimeout<{ data?: RawListing }>(`${PLATFORM_BASE}/listings/${encodeURIComponent(id)}`);
+  return json.data ?? null;
+}
+
+function listingIdsFromSearchHtml(html: string): string[] {
+  const decoded = decodeURIComponent(html);
+  return Array.from(
+    new Set(
+      [...decoded.matchAll(/realestate\.co\.nz\/(\d+)\/residential\/sale\//gi)]
+        .map((m) => m[1])
+        .filter((id): id is string => !!id),
+    ),
+  );
+}
+
+async function searchRealestateListingIds(query: string): Promise<string[]> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), SEARCH_FALLBACK_TIMEOUT_MS);
+  try {
+    const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const resp = await fetch(url, {
+      signal: ctrl.signal,
+      headers: {
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
+        "accept-language": "en-NZ,en;q=0.9",
+      },
+    });
+    if (!resp.ok) return [];
+    return listingIdsFromSearchHtml(await resp.text());
+  } catch (err) {
+    logger.debug({ err: (err as Error).message, query }, "realestate-api: listing web search failed");
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function suburbFromAddress(address: string): string | null {
+  const parts = address.split(",").map((p) => p.replace(/\b\d{4}\b/g, "").trim()).filter(Boolean);
+  return parts[1] ?? null;
+}
+
+async function fetchRealestateListingForAddressViaWebSearch(address: string): Promise<ListingResult | null> {
+  const street = (address.split(",")[0] ?? address).trim();
+  const suburb = suburbFromAddress(address);
+  if (!street || !suburb) return null;
+
+  const ids = await searchRealestateListingIds(`"${street}" "${suburb}" realestate.co.nz`);
+  for (const id of ids.slice(0, 5)) {
+    try {
+      const raw = await fetchRawListingById(id);
+      if (!raw) continue;
+      const listingAddress = rawListingAddress(raw) ?? "";
+      if (!addressesLikelyMatch(address, listingAddress)) continue;
+      const mapped = mapListing(raw);
+      if (!mapped) continue;
+      logger.info(
+        { address: address.slice(0, 80), listing: mapped.address, status: mapped.listingStatus, id },
+        "realestate-api: matched subject listing via web-search detail fallback",
+      );
+      return mapped;
+    } catch (err) {
+      logger.debug({ err: (err as Error).message, id }, "realestate-api: listing detail fallback failed");
+    }
+  }
+  return null;
 }
 
 /**
@@ -567,14 +658,20 @@ async function fetchListingsForSuburbId(
   return all;
 }
 
-async function fetchRawListingsForSuburbId(suburbId: string, limit = 100): Promise<RawListing[]> {
+async function fetchRawListingsForSuburbId(
+  suburbId: string,
+  limit = 100,
+  options: { fastAddressMatch?: boolean } = {},
+): Promise<RawListing[]> {
   const params = new URLSearchParams();
   params.append("filter[category][]", "res_sale");
   params.append("filter[suburb][]", suburbId);
   params.append("page[limit]", String(Math.min(limit, 100)));
 
   const url = `${PLATFORM_BASE}/listings?${params.toString()}`;
-  const json = await fetchJsonWithTimeout<ListingsResponse>(url);
+  const json = options.fastAddressMatch
+    ? await fetchJsonWithFixedTimeout<ListingsResponse>(url, ADDRESS_MATCH_TIMEOUT_MS)
+    : await fetchJsonWithTimeout<ListingsResponse>(url);
   if (json.message || !json.data) {
     logger.warn({ err: json.message, url }, "realestate-api: raw listings request failed");
     return [];
@@ -732,11 +829,11 @@ type RawListingMatch = {
 async function matchingRawListingInSuburb(
   address: string,
   suburb: SuburbRecord,
-  limit = 100,
+  limit = 20,
 ): Promise<RawListing | null> {
   let listings: RawListing[] = [];
   try {
-    listings = await fetchRawListingsForSuburbId(suburb.id, limit);
+    listings = await fetchRawListingsForSuburbId(suburb.id, limit, { fastAddressMatch: true });
   } catch (err) {
     logger.warn(
       { err: (err as Error).message, suburb: suburb.title },
@@ -754,14 +851,17 @@ async function matchingRawListingInSuburb(
 async function findRawListingAcrossNearbySuburbs(
   address: string,
   primarySuburb: SuburbRecord,
+  options: { skipPrimary?: boolean } = {},
 ): Promise<RawListingMatch | null> {
-  const primaryMatch = await matchingRawListingInSuburb(address, primarySuburb);
-  if (primaryMatch) return { listing: primaryMatch, suburb: primarySuburb };
+  if (!options.skipPrimary) {
+    const primaryMatch = await matchingRawListingInSuburb(address, primarySuburb);
+    if (primaryMatch) return { listing: primaryMatch, suburb: primarySuburb };
+  }
 
   // The geocoded suburb and portal suburb can disagree on boundary streets
   // (e.g. Glen Innes vs Glendowie). Search sister suburbs in the same
   // realestate.co.nz district before declaring the property off-market.
-  const siblings = await getDistrictSiblings(primarySuburb.id, 80);
+  const siblings = await getDistrictSiblings(primarySuburb.id, 0);
   for (const suburb of siblings) {
     const match = await matchingRawListingInSuburb(address, suburb);
     if (!match) continue;
@@ -777,6 +877,27 @@ async function findRawListingAcrossNearbySuburbs(
   }
 
   return null;
+}
+
+async function mapAndAnnotateListing(raw: RawListing, address: string, suburb: string): Promise<ListingResult | null> {
+  const mapped = mapListing(raw);
+  if (!mapped) return null;
+  const [annotated] = await annotateApproxFields([mapped]).catch(() => [mapped]);
+  const match = annotated ?? mapped;
+  logger.info(
+    {
+      suburb,
+      address: address.slice(0, 80),
+      listing: match.address,
+      status: match.listingStatus,
+      bedrooms: match.bedrooms,
+      bathrooms: match.bathrooms,
+      floorArea: match.floorArea,
+      landArea: match.landArea,
+    },
+    "realestate-api: matched subject listing",
+  );
+  return match;
 }
 
 function rawListingAddress(listing: RawListing): string | null {
@@ -845,26 +966,14 @@ export async function fetchRealestateListingForAddress(
     return null;
   }
 
-  const rawMatch = await findRawListingAcrossNearbySuburbs(trimmed, suburb);
-  if (rawMatch) {
-    const mapped = mapListing(rawMatch.listing);
-    if (!mapped) return null;
-    const [annotated] = await annotateApproxFields([mapped]).catch(() => [mapped]);
-    const match = annotated ?? mapped;
-    logger.info(
-      {
-        suburb: rawMatch.suburb.title,
-        address: trimmed.slice(0, 80),
-        listing: match.address,
-        bedrooms: match.bedrooms,
-        bathrooms: match.bathrooms,
-        floorArea: match.floorArea,
-        landArea: match.landArea,
-      },
-      "realestate-api: matched active subject listing",
-    );
-    return match;
-  }
+  const primaryMatch = await matchingRawListingInSuburb(trimmed, suburb);
+  if (primaryMatch) return mapAndAnnotateListing(primaryMatch, trimmed, suburb.title);
+
+  const webSearchMatch = await fetchRealestateListingForAddressViaWebSearch(trimmed);
+  if (webSearchMatch) return webSearchMatch;
+
+  const rawNearbyMatch = await findRawListingAcrossNearbySuburbs(trimmed, suburb, { skipPrimary: true });
+  if (rawNearbyMatch) return mapAndAnnotateListing(rawNearbyMatch.listing, trimmed, rawNearbyMatch.suburb.title);
 
   logger.info({ suburb: suburb.title, address: trimmed.slice(0, 80) }, "realestate-api: no active subject listing match");
   return null;

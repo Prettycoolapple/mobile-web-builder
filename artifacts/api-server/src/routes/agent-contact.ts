@@ -108,6 +108,21 @@ function allowsSameSuburbAgentFallback(messages: Message[]): boolean {
   return wasToldSubjectHasNoAgent && asksForFallback;
 }
 
+function agentLookupTimeoutResult() {
+  return {
+    found: false,
+    isListed: false,
+    matchType: null,
+    listingAddress: null,
+    agentName: null,
+    agentPhone: null,
+    agencyName: null,
+    agentAvatarUrl: null,
+    listingUrl: null,
+    source: "timeout",
+  };
+}
+
 router.post("/agent-contact/lookup", requireAuth, async (req: Request, res: Response) => {
   const userId = (req as any).userId as string;
 
@@ -139,8 +154,12 @@ router.post("/agent-contact/lookup", requireAuth, async (req: Request, res: Resp
       return;
     }
 
-    const allowSuburbFallback = allowsSameSuburbAgentFallback(messages ?? []);
-    const agentInfo = await scrapeListingAgent(address, { allowSuburbFallback });
+    const agentInfo = await Promise.race([
+      scrapeListingAgent(address),
+      new Promise<ReturnType<typeof agentLookupTimeoutResult>>((resolve) =>
+        setTimeout(() => resolve(agentLookupTimeoutResult()), 25_000),
+      ),
+    ]);
 
     res.json({
       wantsAgentContact: true,

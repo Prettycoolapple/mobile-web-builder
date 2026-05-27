@@ -46,6 +46,18 @@ function isImageExtension(url: string): boolean {
   return /\.(?:jpg|jpeg|png|webp)(?:\?|$|#)/i.test(url);
 }
 
+function isLikelyPropertyPhotoUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const path = `${parsed.hostname}${parsed.pathname}`.toLowerCase();
+    if (/(?:logo|icon|sprite|avatar|profile|agent|agency|placeholder|default|brand|badge)/i.test(path)) return false;
+    if (/trademe/i.test(path) && !/(?:property|photoserver|listing|image|photo|tmcdn)/i.test(path)) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function ddgImageSearchVqd(query: string): Promise<string | null> {
   // DuckDuckGo image-search requires a one-shot "vqd" token from an initial
   // request before image results can be fetched. Plain HTML scrape.
@@ -129,7 +141,8 @@ export async function findPropertyPhotosViaWebSearch(address: string): Promise<s
 
   const filtered = allUrls
     .filter(isImageExtension)
-    .filter(isWhitelistedImageHost);
+    .filter(isWhitelistedImageHost)
+    .filter(isLikelyPropertyPhotoUrl);
 
   const deduped = dedupeByPathStem(filtered).slice(0, 10);
   logger.info({ address, found: deduped.length, raw: allUrls.length }, "WebImageSearch: complete");

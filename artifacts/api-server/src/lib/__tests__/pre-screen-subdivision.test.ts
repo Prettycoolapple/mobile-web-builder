@@ -123,6 +123,132 @@ describe("strict subdivision pre-screening", () => {
     expect(results[0].subdivisionEligible).toBe(true);
   });
 
+  it("returns a preliminary strict subdivision candidate without waiting for build year", async () => {
+    mockedPropertyHistory.mockResolvedValue({
+      cv_nzd: null,
+      cv_year: null,
+      build_year: null,
+      floor_area_sqm: null,
+      land_area_sqm: null,
+      property_type: "Residential Dwelling",
+      sources_confirmed: [],
+      sources_estimated: [],
+    });
+
+    const results = await preScreenListingsFast([
+      listing({ address: "124 Example Road, St Heliers, Auckland City, Auckland", landArea: 800 }),
+    ], 1, null, {
+      allowMissingListingPrice: true,
+      strictStandardSubdivision: true,
+      preliminarySubdivision: true,
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].screeningStatus).toBe("preliminary");
+    expect(results[0].subdivisionRejectReason).toBe("build_year_unknown");
+    expect(results[0].potentialLots).toBeGreaterThanOrEqual(2);
+  });
+
+  it("checks trusted subject land when listing land is missing in preliminary strict subdivision", async () => {
+    mockedPropertyValue.mockResolvedValue({
+      cv_nzd: null,
+      lv_nzd: null,
+      iv_nzd: null,
+      cv_year: null,
+      property_type: "Residential Dwelling",
+      property_sub_type: null,
+      legal_descriptions: ["Lot 1 Deposited Plan 12345"],
+      land_use_primary: "Single Unit excluding Bach",
+      property_improvements: "DWELLING",
+      land_area_sqm: 800,
+      floor_area_sqm: 150,
+      build_year: null,
+      build_year_range: null,
+      bedrooms: null,
+      bathrooms: null,
+      listing_active: false,
+      photo_urls: [],
+      address_confirmed: "124 Example Road, St Heliers",
+      property_id: null,
+    });
+
+    const results = await preScreenListingsFast([
+      listing({
+        address: "124 Example Road, St Heliers, Auckland City, Auckland",
+        landArea: null,
+        landAreaConfidence: "unverified",
+      }),
+    ], 1, null, {
+      allowMissingListingPrice: true,
+      strictStandardSubdivision: true,
+      preliminarySubdivision: true,
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].landArea).toBe(800);
+    expect(results[0].landAreaSource).toBe("propertyvalue");
+    expect(results[0].screeningStatus).toBe("preliminary");
+  });
+
+  it("allows a preliminary candidate when title and typology are not confirmed but no unit signal exists", async () => {
+    mockedPropertyHistory.mockResolvedValue({
+      cv_nzd: null,
+      cv_year: null,
+      build_year: null,
+      floor_area_sqm: null,
+      land_area_sqm: null,
+      property_type: null,
+      sources_confirmed: [],
+      sources_estimated: [],
+    });
+
+    const results = await preScreenListingsFast([
+      listing({
+        address: "128 Example Road, St Heliers, Auckland City, Auckland",
+        landArea: 800,
+        propertyType: null,
+        tenureText: null,
+        legalDescription: null,
+      }),
+    ], 1, null, {
+      allowMissingListingPrice: true,
+      strictStandardSubdivision: true,
+      preliminarySubdivision: true,
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].typology).toBe("unknown");
+    expect(results[0].titleConfidence).toBe("unknown");
+    expect(results[0].subdivisionRejectReason).toBe("title_not_confirmed_freehold");
+    expect(results[0].screeningStatus).toBe("preliminary");
+  });
+
+  it("does not fetch or reject on build year during preliminary screening", async () => {
+    mockedPropertyHistory.mockResolvedValue({
+      cv_nzd: null,
+      cv_year: null,
+      build_year: 2015,
+      floor_area_sqm: 180,
+      land_area_sqm: 900,
+      property_type: "Residential Dwelling",
+      sources_confirmed: [],
+      sources_estimated: [],
+    });
+
+    const results = await preScreenListingsFast([
+      listing({ address: "130 Example Road, St Heliers, Auckland City, Auckland", landArea: 900 }),
+    ], 1, null, {
+      allowMissingListingPrice: true,
+      strictStandardSubdivision: true,
+      preliminarySubdivision: true,
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].buildYear).toBeNull();
+    expect(results[0].subdivisionRejectReason).toBe("build_year_unknown");
+    expect(results[0].screeningStatus).toBe("preliminary");
+  });
+
   it("excludes a Fisherton-style MHU single property below the 600sqm two-lot threshold", async () => {
     mockedPropertyHistory.mockResolvedValue({
       cv_nzd: null,
@@ -173,12 +299,36 @@ describe("strict subdivision pre-screening", () => {
     expect(results).toEqual([]);
   });
 
-  it("excludes an MHS site below the two-lot minimum area", async () => {
+  it("excludes an MHS site that cannot fit two compliant minimum lots", async () => {
     mockedZone.mockResolvedValue({ zone_code: "MHS", zone_description: "Mixed Housing Suburban", min_lot_size_sqm: 400 } as any);
 
     const results = await preScreenListingsFast([
-      listing({ address: "31 Example Street, St Heliers, Auckland City, Auckland", landArea: 300 }),
+      listing({ address: "31 Example Street, St Heliers, Auckland City, Auckland", landArea: 700 }),
     ], 1, null, { allowMissingListingPrice: true, strictStandardSubdivision: true });
+
+    expect(results).toEqual([]);
+  });
+
+  it("excludes a preliminary MHS site that cannot fit two compliant minimum lots", async () => {
+    mockedZone.mockResolvedValue({ zone_code: "MHS", zone_description: "Mixed Housing Suburban", min_lot_size_sqm: 400 } as any);
+    mockedPropertyHistory.mockResolvedValue({
+      cv_nzd: null,
+      cv_year: null,
+      build_year: null,
+      floor_area_sqm: null,
+      land_area_sqm: null,
+      property_type: "Residential Dwelling",
+      sources_confirmed: [],
+      sources_estimated: [],
+    });
+
+    const results = await preScreenListingsFast([
+      listing({ address: "33 Example Street, St Heliers, Auckland City, Auckland", landArea: 700 }),
+    ], 1, null, {
+      allowMissingListingPrice: true,
+      strictStandardSubdivision: true,
+      preliminarySubdivision: true,
+    });
 
     expect(results).toEqual([]);
   });

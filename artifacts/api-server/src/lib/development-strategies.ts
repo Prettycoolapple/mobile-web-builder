@@ -54,6 +54,23 @@ const STRATEGY_TITLES: Record<DevelopmentStrategyId, string> = {
   demolish_rebuild: "Demolish and rebuild",
 };
 
+const STRATEGY_TITLES_ZH: Record<DevelopmentStrategyId, string> = {
+  hold_existing: "保持现状",
+  refurbish: "翻新",
+  demolish_rebuild: "拆除重建",
+};
+
+/**
+ * Suburb comparable sales are typically for standalone dwellings.
+ * Units, apartments, and terrace/townhouse properties sell at a significant
+ * discount to those comparables — this factor is applied to the "hold existing"
+ * and "refurbish" GDV when the subject property's typology is unit or terrace.
+ *
+ * 0.53 ≈ median NZ unit/townhouse price as a fraction of equivalent-suburb
+ * standalone house prices (Auckland 2023–2025 data).
+ */
+const UNIT_RESALE_DISCOUNT = 0.53;
+
 const REFURB_RATES: Record<Exclude<RefurbishmentScope, "none">, { low: number; high: number; uplift: number }> = {
   light: { low: 600, high: 1000, uplift: 1.06 },
   moderate: { low: 1200, high: 1800, uplift: 1.12 },
@@ -374,7 +391,7 @@ function appendRoiSelectionReason(
     ...strategy,
     rationale: `${strategy.rationale} The computed ROI scenarios currently rank this option ahead of ${STRATEGY_TITLES[assessmentRecommendedId].toLowerCase()}.`,
     rationale_zh: strategy.rationale_zh
-      ? `${strategy.rationale_zh} 当前 ROI 测算显示，该方案优于${STRATEGY_TITLES[assessmentRecommendedId].toLowerCase()}。`
+      ? `${strategy.rationale_zh} 当前 ROI 测算显示，该方案优于${STRATEGY_TITLES_ZH[assessmentRecommendedId]}。`
       : strategy.rationale_zh,
   };
 }
@@ -420,6 +437,13 @@ function buildAssumptions(
   }
   if (marketGdvMultiplier != null && marketGdvMultiplier < 0.999 && neighbourhoodContext?.marketAdjustment.reason) {
     assumptions.push(neighbourhoodContext.marketAdjustment.reason);
+  }
+  // Unit / apartment / terrace resale discount note
+  if ((id === "hold_existing" || id === "refurbish") &&
+      (data.typology === "unit_apartment" || data.typology === "terrace_townhouse")) {
+    assumptions.push(
+      "Exit value discounted by 47% (×0.53) from standalone comparable sales to reflect the unit/apartment resale market — units typically sell at a significant premium discount to equivalent-suburb standalone dwellings.",
+    );
   }
   return assumptions;
 }
@@ -475,11 +499,19 @@ export function calculateDevelopmentStrategies(params: {
     ? Math.min(1, Math.max(0.9, params.marketGdvMultiplier ?? 1))
     : 1;
 
+  // Suburb comparable sales are almost always standalone dwellings. When the
+  // subject property is a unit, apartment, or terrace/townhouse, apply a
+  // discount so the "hold existing" and "refurbish" GDV reflects the actual
+  // unit-market exit price rather than the overstated standalone comparable.
+  const isUnitOrApartmentTypology =
+    data.typology === "unit_apartment" || data.typology === "terrace_townhouse";
+  const existingResaleMultiplier = isUnitOrApartmentTypology ? UNIT_RESALE_DISCOUNT : 1;
+
   const holdCosts = makeHoldExistingCostBreakdown(baseCosts, 1);
   const refurbCosts = makeRefurbishCostBreakdown(baseCosts, floorArea, refurbScope);
   const rebuildCosts = baseCosts;
 
-  const existingValue = r(existingDwellingValue(data, avgSalePrice, avgPricePerSqm) * marketGdvMultiplier);
+  const existingValue = r(existingDwellingValue(data, avgSalePrice, avgPricePerSqm) * marketGdvMultiplier * existingResaleMultiplier);
   const refurbValue = r(existingValue * REFURB_RATES[refurbScope].uplift);
   const rebuildGdvPerLot = hasComparablePricing
     ? r(estimateGdvPerLot(avgPricePerSqm, avgSalePrice, lotResult.sqm_per_lot) * exitTypologyMultiplier * marketGdvMultiplier)

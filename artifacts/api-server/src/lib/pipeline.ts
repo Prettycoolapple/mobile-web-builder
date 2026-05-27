@@ -1027,7 +1027,11 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     ? forceSingleLotResult(rawLotResult)
     : rawLotResult;
   const subdivisionPathway = buildSubdivisionPathwayNote(
-    lotResult.net_area_sqm,
+    // Treat both null and 0 as "area unavailable" — some data sources (e.g.
+    // propertyvalue.co.nz for units) return 0 rather than null when the land
+    // area is not meaningful.  Passing null ensures buildSubdivisionPathwayNote
+    // shows zone education text rather than "0m² site in …".
+    (merged.land_area_sqm == null || merged.land_area_sqm <= 0) ? null : lotResult.net_area_sqm,
     merged.zone_code,
     lotResult.lots,
     lotResult.min_lot_size,

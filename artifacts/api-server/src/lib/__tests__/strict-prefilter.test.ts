@@ -38,6 +38,11 @@ describe("strictAttributePrefilter", () => {
     expect(strictAttributePrefilter(listing({ propertyType: "Unit" })).kind).toBe("reject");
     expect(strictAttributePrefilter(listing({ propertyType: "Apartment" })).kind).toBe("reject");
     expect(strictAttributePrefilter(listing({ propertyType: "Townhouse" })).kind).toBe("reject");
+    expect(strictAttributePrefilter(listing({ propertyType: "Terrace" })).kind).toBe("reject");
+  });
+
+  it("does not reject standalone villa labels as unit typology", () => {
+    expect(strictAttributePrefilter(listing({ propertyType: "Villa" })).kind).toBe("pass");
   });
 
   it("rejects non-freehold tenure", () => {

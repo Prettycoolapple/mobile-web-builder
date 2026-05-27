@@ -115,5 +115,40 @@ export function passesStrictStandardSubdivisionScreen(input: {
   if (!input.zone) return false;
   const lotResult = calculatePotentialLots(input.landArea, input.zone);
   if (lotResult.min_lot_size <= 0) return false;
+  if (input.landArea < lotResult.min_lot_size * 2) return false;
+  return (input.potentialLots ?? lotResult.lots) >= 2 && lotResult.lots >= 2;
+}
+
+export function passesPreliminaryStandardSubdivisionScreen(input: {
+  address: string;
+  landArea?: number | null;
+  zone?: string | null;
+  potentialLots?: number | null;
+  minLotSize?: number | null;
+  landAreaConfidence?: DiscoveryLandAreaConfidence | null;
+  isAlreadySubdividedChild?: boolean | null;
+  typology?: "standalone" | "terrace_townhouse" | "unit_apartment" | "unknown" | null;
+  titleConfidence?: "verified" | "inferred" | "unknown" | null;
+  subdivisionRejectReason?: string | null;
+  buildYear?: number | null;
+}): boolean {
+  if (input.isAlreadySubdividedChild) return false;
+  if (input.typology === "unit_apartment" || input.typology === "terrace_townhouse") return false;
+  if (input.landAreaConfidence !== "verified") return false;
+  if (!input.landArea || input.landArea <= 0) return false;
+  if (!input.zone) return false;
+  if (
+    input.subdivisionRejectReason &&
+    ![
+      "build_year_unknown",
+      "post_2000_build",
+      "title_not_confirmed_freehold",
+      "typology_not_confirmed_standalone",
+    ].includes(input.subdivisionRejectReason)
+  ) return false;
+
+  const lotResult = calculatePotentialLots(input.landArea, input.zone);
+  if (lotResult.min_lot_size <= 0) return false;
+  if (input.landArea < lotResult.min_lot_size * 2) return false;
   return (input.potentialLots ?? lotResult.lots) >= 2 && lotResult.lots >= 2;
 }

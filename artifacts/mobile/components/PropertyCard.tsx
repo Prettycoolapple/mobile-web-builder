@@ -92,8 +92,7 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
   const composite = showOverall ? compositeRaw : 0;
   const potentialLots = candidate.potentialLots ?? 0;
   const minLotSize = candidate.minLotSize ?? null;
-  const showSubdivisionRecommendation =
-    candidate.subdivisionEligible === true &&
+  const passesCoreSubdivisionCardScreen =
     potentialLots >= 2 &&
     minLotSize != null &&
     minLotSize > 0 &&
@@ -102,10 +101,22 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
     candidate.landAreaConfidence === "verified" &&
     candidate.landAreaApprox !== true &&
     candidate.isParentParcelSuspect !== true &&
-    candidate.isAlreadySubdividedChild !== true &&
+    candidate.isAlreadySubdividedChild !== true;
+  const showVerifiedSubdivisionRecommendation =
+    candidate.subdivisionEligible === true &&
+    passesCoreSubdivisionCardScreen &&
     typeof candidate.buildYear === "number" &&
     candidate.buildYear < 2000;
+  const showPreliminarySubdivisionRecommendation =
+    candidate.screeningStatus === "preliminary" &&
+    passesCoreSubdivisionCardScreen &&
+    (candidate.buildYear == null || candidate.buildYear < 2000);
+  const showSubdivisionRecommendation =
+    showVerifiedSubdivisionRecommendation || showPreliminarySubdivisionRecommendation;
   const subdivisionRuleText = minLotSize ? t("search.subdivision_rule", { min: minLotSize }) : null;
+  const subdivisionScreeningText = showPreliminarySubdivisionRecommendation
+    ? t("search.subdivision_prescreen_preliminary")
+    : t("search.subdivision_prescreen");
   const showLandUnavailable =
     candidate.landArea == null &&
     (candidate.typology === "unit_apartment" ||
@@ -200,7 +211,7 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
                 {t("search.subdivision_candidate", { lots: potentialLots })}
               </Text>
               {subdivisionRuleText ? ` - ${subdivisionRuleText}` : ""}
-              {` - ${t("search.subdivision_prescreen")}`}
+              {` - ${subdivisionScreeningText}`}
             </Text>
           </View>
         ) : null}

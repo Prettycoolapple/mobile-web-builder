@@ -2,7 +2,7 @@
 import { logger } from "../logger";
 import { launchBrowser, newStealthPage, randomDelay, logScrapeAttempt, isVercelServerless } from "./browser";
 import { fetchWithScrapingBee } from "./scrapingbee";
-import { fetchRealestateAgentContactForAddress, fetchRealestateAgentContactForSuburbListing } from "./realestate-api";
+import { fetchRealestateAgentContactForAddress } from "./realestate-api";
 
 export interface AgentContactResult {
   found: boolean;
@@ -198,7 +198,7 @@ async function scrapeAgentViaBee(address: string): Promise<AgentContactResult | 
 
 export async function scrapeListingAgent(
   address: string,
-  options: { allowSuburbFallback?: boolean } = {},
+  _options: { allowSuburbFallback?: boolean } = {},
 ): Promise<AgentContactResult> {
   try {
     const realestateAgent = await fetchRealestateAgentContactForAddress(address);
@@ -221,59 +221,6 @@ export async function scrapeListingAgent(
     logScrapeAttempt("AgentContact", "realestate-api", false, String(err));
   }
 
-  if (options.allowSuburbFallback) {
-    try {
-      const suburbAgent = await fetchRealestateAgentContactForSuburbListing(address);
-      if (suburbAgent?.agentPhone) {
-        logScrapeAttempt("AgentContact", "realestate-api-suburb", true, `agent=${suburbAgent.agentName ?? "found"}`);
-        return {
-          found: true,
-          isListed: true,
-          matchType: "suburb",
-          listingAddress: suburbAgent.listingAddress,
-          agentName: suburbAgent.agentName,
-          agentPhone: suburbAgent.agentPhone,
-          agencyName: suburbAgent.agencyName,
-          agentAvatarUrl: suburbAgent.agentAvatarUrl,
-          listingUrl: suburbAgent.listingUrl,
-          source: "realestate-api-suburb",
-        };
-      }
-    } catch (err) {
-      logScrapeAttempt("AgentContact", "realestate-api-suburb", false, String(err));
-    }
-  }
-
-  if (isVercelServerless()) {
-    try {
-      const beeFirst = await scrapeAgentViaBee(address);
-      if (beeFirst && beeFirst.found) {
-        logScrapeAttempt("AgentContact", "scrapingbee", !!beeFirst.agentName, "Vercel: Playwright unavailable");
-        return beeFirst;
-      }
-    } catch (err) {
-      logScrapeAttempt("AgentContact", "scrapingbee", false, String(err));
-    }
-  }
-
-  try {
-    const result = await Promise.race([
-      scrapeAgentViaPlaywright(address),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Playwright timeout")), 20000)),
-    ]);
-    if (result.found) return result;
-    logScrapeAttempt("AgentContact", "playwright", false, "not found — trying ScrapingBee");
-  } catch (err) {
-    logScrapeAttempt("AgentContact", "playwright", false, String(err));
-  }
-
-  try {
-    const result = await scrapeAgentViaBee(address);
-    if (result) return result;
-  } catch (err) {
-    logScrapeAttempt("AgentContact", "scrapingbee", false, String(err));
-  }
-
-  logger.warn({ address }, "AgentContact: all scrape attempts failed");
-  return emptyResult();
+  logger.info({ address }, "AgentContact: no exact active realestate.co.nz listing match");
+  return { ...emptyResult(), found: true, isListed: false };
 }

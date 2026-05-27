@@ -2,6 +2,26 @@ import { describe, expect, it } from "vitest";
 import { shouldContinueDiscoveryDrain } from "../../lib/discovery-intent";
 
 describe("discovery drain control", () => {
+  it("continues strict subdivision scans one-at-a-time until the first card or exhaustion", () => {
+    expect(shouldContinueDiscoveryDrain({
+      currentCount: 0,
+      remainingCount: 8,
+      attempts: 12,
+      strictStandardSubdivision: true,
+      nonStrictAttemptLimit: 6,
+      targetCount: 1,
+    })).toBe(true);
+
+    expect(shouldContinueDiscoveryDrain({
+      currentCount: 1,
+      remainingCount: 8,
+      attempts: 12,
+      strictStandardSubdivision: true,
+      nonStrictAttemptLimit: 6,
+      targetCount: 1,
+    })).toBe(false);
+  });
+
   it("continues strict subdivision scans past the legacy batch cap until three cards or exhaustion", () => {
     expect(shouldContinueDiscoveryDrain({
       currentCount: 0,
