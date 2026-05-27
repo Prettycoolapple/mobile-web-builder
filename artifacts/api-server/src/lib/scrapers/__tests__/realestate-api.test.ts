@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { extractCombinedListingAddressParts, extractListingFactAreaSqm, looksLikeCombinedListingAddress, normaliseListingLandAreaSqm, reconcileListingLandArea } from "../realestate-api";
+import {
+  addressesLikelyMatch,
+  extractCombinedListingAddressParts,
+  extractListingFactAreaSqm,
+  looksLikeCombinedListingAddress,
+  normaliseListingLandAreaSqm,
+  reconcileListingLandArea,
+} from "../realestate-api";
 
 describe("realestate-api listing land-area reconciliation", () => {
   it("uses listing-page land area when the search API returns a large outlier", () => {
@@ -76,5 +83,16 @@ describe("realestate-api combined listing detection", () => {
         "7 Stanmore Road, Grey Lynn",
       ],
     });
+  });
+});
+
+describe("realestate-api address matching", () => {
+  it("matches geocoder comma-formatted street numbers to listing addresses", () => {
+    expect(
+      addressesLikelyMatch(
+        "1, Chesterfield Avenue, Saint Heliers, Orakei, Auckland, 1074",
+        "1 Chesterfield Avenue, Saint Heliers, Auckland City, Auckland",
+      ),
+    ).toBe(true);
   });
 });

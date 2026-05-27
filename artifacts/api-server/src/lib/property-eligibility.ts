@@ -40,6 +40,24 @@ export interface PropertyEligibilityResult {
   landAreaParentOrTypologySuspect: boolean;
 }
 
+export interface SubjectLandAreaInput {
+  eligibility: PropertyEligibilityResult;
+  currentLandAreaSqm: number | null | undefined;
+  currentLandAreaSource?: string | null;
+  propertyValueLandAreaSqm?: number | null;
+  listingLandAreaSqm?: number | null;
+  listingLandAreaSource?: string | null;
+  listingLandAreaConfidence?: "verified" | "unverified" | null;
+  listingLandAreaApprox?: boolean | null;
+}
+
+export interface SubjectLandAreaResult {
+  landAreaSqm: number | null;
+  source: string;
+  suppressedParentLandArea: boolean;
+  note: string | null;
+}
+
 const RESIDENTIAL_URBAN_ZONES = new Set(["MHS", "MHU", "MHU-H", "MHU-S", "THAB", "SHZ", "LDRZ", "LSZ"]);
 const RURAL_ZONES = new Set(["CLZ", "LLRZ", "RCSZ", "RUR"]);
 
@@ -201,6 +219,61 @@ export function shouldSuppressParentLandAreaForEligibility(result: PropertyEligi
     || result.unitLikeSignal
     || result.crossLeaseSignal
     || result.landAreaParentOrTypologySuspect;
+}
+
+function trustedVerifiedListingArea(input: SubjectLandAreaInput): number | null {
+  const area = input.listingLandAreaSqm ?? null;
+  if (area == null || area <= 0) return null;
+  if (input.listingLandAreaConfidence !== "verified") return null;
+  if (input.listingLandAreaApprox === true) return null;
+  const source = (input.listingLandAreaSource ?? "").toLowerCase();
+  if (source === "linz" || source.includes("council") || source.includes("gis")) return null;
+  return area;
+}
+
+export function resolveSubjectLandAreaForEligibility(input: SubjectLandAreaInput): SubjectLandAreaResult {
+  const current = input.currentLandAreaSqm ?? null;
+  if (!shouldSuppressParentLandAreaForEligibility(input.eligibility)) {
+    return {
+      landAreaSqm: current,
+      source: input.currentLandAreaSource ?? (current != null ? "unknown" : "unavailable"),
+      suppressedParentLandArea: false,
+      note: null,
+    };
+  }
+
+  const propertyValueArea = input.propertyValueLandAreaSqm ?? null;
+  if (propertyValueArea != null && propertyValueArea > 0) {
+    return {
+      landAreaSqm: propertyValueArea,
+      source: "propertyvalue",
+      suppressedParentLandArea: current != null && current !== propertyValueArea,
+      note: current != null && current !== propertyValueArea
+        ? `PropertyValue/title signals indicate this is not a standalone freehold site, so parent parcel land area was replaced with the subject land area from PropertyValue (${propertyValueArea}m²).`
+        : null,
+    };
+  }
+
+  const listingArea = trustedVerifiedListingArea(input);
+  if (listingArea != null) {
+    return {
+      landAreaSqm: listingArea,
+      source: "realestate.co.nz (verified subject listing)",
+      suppressedParentLandArea: current != null && current !== listingArea,
+      note: current != null && current !== listingArea
+        ? `Listing/title signals indicate this is not a standalone freehold site, so parent parcel land area was replaced with the verified subject listing land area (${listingArea}m²).`
+        : null,
+    };
+  }
+
+  return {
+    landAreaSqm: null,
+    source: "unavailable_unit_or_non_standalone",
+    suppressedParentLandArea: current != null,
+    note: current != null
+      ? "PropertyValue/title signals indicate this is a unit or non-standalone title, so parent parcel land area was excluded from the subject-property report."
+      : null,
+  };
 }
 
 export function eligibilityPlanningNote(result: PropertyEligibilityResult): string | null {

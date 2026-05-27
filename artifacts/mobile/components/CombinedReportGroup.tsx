@@ -32,18 +32,46 @@ export function CombinedReportGroupCard({
         </View>
       </View>
 
-      {group.reports.map((report, index) => (
-        <View key={`${report.address || index}-${index}`} style={styles.reportWrap}>
-          <Text style={[styles.childLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_600SemiBold" }]}>
-            {t("combined_report.property_label", { n: index + 1 })}
-          </Text>
-          <FeasibilityReportCard report={report} onFollowUp={onFollowUp} />
-        </View>
-      ))}
+      {group.reports.map((report, index) => {
+        const total = group.reports.length;
+        const address = report.address || `Property ${index + 1}`;
+        // Stable accent palette so each property keeps the same colour throughout the card.
+        const palette = [colors.accent, "#3B82F6", "#10B981", "#F97316"];
+        const tint = palette[index % palette.length];
+        return (
+          <View key={`${address}-${index}`} style={styles.reportWrap}>
+            <View style={[styles.childHeader, { backgroundColor: tint + "14", borderColor: tint + "55" }]}>
+              <View style={[styles.childHeaderBadge, { backgroundColor: tint }]}>
+                <Text style={[styles.childHeaderBadgeText, { fontFamily: "DM_Sans_700Bold" }]}>
+                  {index + 1}
+                </Text>
+              </View>
+              <View style={styles.childHeaderText}>
+                <Text style={[styles.childHeaderTitle, { color: tint, fontFamily: "DM_Sans_600SemiBold" }]}>
+                  {t("combined_report.property_header", { n: index + 1, total })}
+                </Text>
+                <Text
+                  style={[styles.childHeaderAddress, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}
+                  numberOfLines={2}
+                >
+                  {address}
+                </Text>
+                <Text style={[styles.childHeaderNote, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                  {t("combined_report.scoped_note")}
+                </Text>
+              </View>
+            </View>
+            <FeasibilityReportCard report={report} onFollowUp={onFollowUp} />
+          </View>
+        );
+      })}
 
       <View style={[styles.comparison, { backgroundColor: colors.card, borderColor: colors.border }]}>
         <Text style={[styles.comparisonTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
           {t("combined_report.comparison")}
+        </Text>
+        <Text style={[styles.comparisonSubtitle, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+          {t("combined_report.comparison_subtitle")}
         </Text>
         <Text style={[styles.summary, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}>
           {group.comparison.summary}
@@ -111,11 +139,45 @@ const styles = StyleSheet.create({
     lineHeight: 17,
   },
   reportWrap: {
-    gap: 6,
+    gap: 8,
   },
-  childLabel: {
-    fontSize: 12,
-    paddingHorizontal: 4,
+  childHeader: {
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  childHeaderBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  childHeaderBadgeText: {
+    color: "#ffffff",
+    fontSize: 13,
+  },
+  childHeaderText: {
+    flex: 1,
+    gap: 2,
+  },
+  childHeaderTitle: {
+    fontSize: 11,
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+  },
+  childHeaderAddress: {
+    fontSize: 14,
+    lineHeight: 18,
+  },
+  childHeaderNote: {
+    fontSize: 11,
+    lineHeight: 14,
+    marginTop: 2,
   },
   comparison: {
     borderWidth: 1,
@@ -125,6 +187,11 @@ const styles = StyleSheet.create({
   },
   comparisonTitle: {
     fontSize: 16,
+  },
+  comparisonSubtitle: {
+    fontSize: 12,
+    lineHeight: 16,
+    marginTop: -6,
   },
   summary: {
     fontSize: 13,

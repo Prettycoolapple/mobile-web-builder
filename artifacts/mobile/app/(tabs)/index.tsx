@@ -21,7 +21,7 @@ import * as Haptics from "expo-haptics";
 import * as StoreReview from "expo-store-review";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
-import { useChat, ChatMessage, FeasibilityReport, FeasibilityReportGroup, PropertyCandidate, ServiceProvider } from "@/context/ChatContext";
+import { useChat, ChatMessage, FeasibilityReport, FeasibilityReportGroup, LoadingHint, PropertyCandidate, ServiceProvider } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
 import { AppRatingPrompt } from "@/components/AppRatingPrompt";
 import { ChatBubble } from "@/components/ChatBubble";
@@ -297,6 +297,7 @@ export default function SearchScreen() {
     startNewChat,
     addMessage,
     updateLastMessage,
+    updateLastMessageIfType,
     replaceBackgroundAnalyseMessage,
     removeMessage,
     updateCandidateScores,
@@ -582,6 +583,16 @@ export default function SearchScreen() {
     const alreadyHasAgentBubble = msgs.some((m) => m.type === "agent_contact");
     if (alreadyHasAgentBubble) return;
 
+    // Hard guard: never fire the passive agent-contact lookup when the user is
+    // working with a combined listing package. The '分析完整组合' button sends a
+    // distinct package-analyse prompt and the result is a report_group — neither
+    // belongs in the agent-contact bubble.
+    const lastUserMessage = [...msgs].reverse().find((m) => m.role === "user" && m.type === "text");
+    if (lastUserMessage && isCombinedPackageAnalyseRequest(lastUserMessage.content)) return;
+    if (currentSession?.currentReportGroup) return;
+    const hasReportGroupInSession = msgs.some((m) => m.type === "report_group");
+    if (hasReportGroupInSession) return;
+
     if (![...msgs].reverse().some((m) => m.role === "user")) return;
 
     checkedFollowupIds.current.add(lastAssistantText.id);
@@ -636,7 +647,7 @@ export default function SearchScreen() {
     }, 800);
 
     return () => clearTimeout(timer);
-  }, [currentSession?.messages, currentSession?.currentReport, user?.role, getApiHeaders, addMessage, currentSessionId]);
+  }, [currentSession?.messages, currentSession?.currentReport, currentSession?.currentReportGroup, user?.role, getApiHeaders, addMessage, currentSessionId]);
 
   const handleAgentDismiss = useCallback((_messageId: string) => {}, []);
 
@@ -949,6 +960,43 @@ export default function SearchScreen() {
     let llmSuggestedDiscipline: string | null = null;
 
     addMessage({ role: "assistant", content: "", type: "loading", loadingMode: detectedMode as any }, sessionId);
+
+    // Fire-and-forget: classify whether this is an area-wide subdivision sweep
+    // ("what's subdividable in orakei", "找北岸有什么可分割的"). The LLM-driven
+    // endpoint returns in ~1-2 s, well before the heavy discovery work
+    // finishes, so the loading bubble can honestly tell the user this kind of
+    // search usually takes 1-5 min. Failures are silent — the bubble just
+    // shows the normal spinner if the classifier never responds.
+    if (detectedMode !== "analyse") {
+      (async () => {
+        try {
+          const hintHistory = [
+            ...(currentSession?.messages ?? [])
+              .filter((m) => m.type === "text")
+              .slice(-5)
+              .map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+            { role: "user" as const, content: text },
+          ];
+          const ctrl = new AbortController();
+          const timeout = setTimeout(() => ctrl.abort(), 10_000);
+          const resp = await fetch(`${getApiBase()}/loading-hint/check`, {
+            method: "POST",
+            headers: getApiHeaders(),
+            body: JSON.stringify({ messages: hintHistory }),
+            signal: ctrl.signal,
+          }).finally(() => clearTimeout(timeout));
+          if (!resp.ok) return;
+          const data = await resp.json() as { loadingHint?: LoadingHint | null };
+          if (!data?.loadingHint) return;
+          // Only attach the hint if the loading bubble is still showing — if
+          // the main response already replaced it, dropping the hint is the
+          // right call.
+          updateLastMessageIfType("loading", { loadingHint: data.loadingHint }, sessionId);
+        } catch {
+          // Silent — the hint is informational only.
+        }
+      })();
+    }
 
     const currentReport =
       currentSession?.currentReport ??
@@ -1873,7 +1921,7 @@ export default function SearchScreen() {
                 <TextInput
                   ref={inputRef}
                   style={[styles.landingInput, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
-                  placeholder={t("search.placeholder")}
+                  placeholder=""
                   placeholderTextColor={colors.mutedForeground}
                   value={inputText}
                   onChangeText={setInputText}
@@ -1999,7 +2047,7 @@ export default function SearchScreen() {
                     ? chatQuota?.isFree
                       ? t("profile.limit_reached_free")
                       : t("profile.limit_reached_standard")
-                    : t("search.placeholder")
+                    : ""
                 }
                 placeholderTextColor={colors.mutedForeground}
                 value={messageLimitReached ? "" : inputText}

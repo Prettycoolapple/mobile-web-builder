@@ -156,7 +156,7 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
           {showLandUnavailable && (
             <View style={[styles.tag, { backgroundColor: colors.muted }]}>
               <Text style={[styles.tagText, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>
-                {t("search.land_unavailable_short")}
+                {t("search.land_unavailable_contact")}
               </Text>
             </View>
           )}
@@ -302,9 +302,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 100,
+    maxWidth: "100%",
   },
   tagText: {
     fontSize: 11,
+    flexShrink: 1,
   },
   subdivisionBox: {
     flexDirection: "row",

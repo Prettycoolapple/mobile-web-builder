@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { assessPropertyEligibility, shouldForceSingleLotForEligibility } from "../property-eligibility";
+import {
+  assessPropertyEligibility,
+  resolveSubjectLandAreaForEligibility,
+  shouldForceSingleLotForEligibility,
+} from "../property-eligibility";
 
 describe("property eligibility verifier", () => {
   it("rejects 1 Chesterfield-style unit title signals with exact smaller land area", () => {
@@ -156,5 +160,121 @@ describe("property eligibility verifier", () => {
 
     expect(result.subdivisionEligible).toBe(false);
     expect(result.subdivisionRejectReason).toBe("post_2000_build");
+  });
+
+  it("suppresses a Chesterfield-style parent parcel area when unit land is unavailable", () => {
+    const eligibility = assessPropertyEligibility({
+      address: "1 Chesterfield Avenue, St Heliers, Auckland",
+      estateType: "Unit Title",
+      propertyType: "RESIDENTIAL",
+      propertySubType: "Ownership home units",
+      propertyValueLegalDescriptions: ["Unit A and Accessory Unit 1-2 Deposited Plan 91363"],
+      listingPropertyType: "Unit",
+      listingTenureText: "Unit Title",
+      landAreaSqm: 832,
+      floorAreaSqm: 115,
+      buildYear: 1950,
+      zoneCode: "MHS",
+      potentialLots: 2,
+      minLotSize: 400,
+    });
+
+    const result = resolveSubjectLandAreaForEligibility({
+      eligibility,
+      currentLandAreaSqm: 832,
+      currentLandAreaSource: "linz",
+      propertyValueLandAreaSqm: null,
+      listingLandAreaSqm: null,
+      listingLandAreaSource: "unknown",
+      listingLandAreaConfidence: "unverified",
+    });
+
+    expect(result.landAreaSqm).toBeNull();
+    expect(result.source).toBe("unavailable_unit_or_non_standalone");
+    expect(result.suppressedParentLandArea).toBe(true);
+  });
+
+  it("uses exact PropertyValue child land for a unit instead of a parent parcel", () => {
+    const eligibility = assessPropertyEligibility({
+      address: "2/15 Toru Street, Te Atatu Peninsula, Auckland",
+      propertyType: "RESIDENTIAL",
+      propertySubType: "Ownership home units",
+      propertyValueLegalDescriptions: ["Lot 1 Deposited Plan 607766", "Lot 9 Deposited Plan 607766"],
+      landUsePrimary: "Multi-unit",
+      propertyImprovements: "DUPLEX OI",
+      landAreaSqm: 600,
+      floorAreaSqm: 56,
+      buildYear: 2023,
+      zoneCode: "MHS",
+      potentialLots: 1,
+      minLotSize: 400,
+    });
+
+    const result = resolveSubjectLandAreaForEligibility({
+      eligibility,
+      currentLandAreaSqm: 600,
+      currentLandAreaSource: "linz",
+      propertyValueLandAreaSqm: 58,
+    });
+
+    expect(result.landAreaSqm).toBe(58);
+    expect(result.source).toBe("propertyvalue");
+    expect(result.suppressedParentLandArea).toBe(true);
+  });
+
+  it("uses verified subject listing land for a unit when PropertyValue has no land", () => {
+    const eligibility = assessPropertyEligibility({
+      address: "1/10 Example Street, Auckland",
+      estateType: "Unit Title",
+      legalDescription: "Unit A Deposited Plan 12345",
+      listingPropertyType: "Unit",
+      listingTenureText: "Unit Title",
+      landAreaSqm: 832,
+      floorAreaSqm: 115,
+      buildYear: 1970,
+      zoneCode: "MHS",
+      potentialLots: 2,
+      minLotSize: 400,
+    });
+
+    const result = resolveSubjectLandAreaForEligibility({
+      eligibility,
+      currentLandAreaSqm: 832,
+      currentLandAreaSource: "linz",
+      propertyValueLandAreaSqm: null,
+      listingLandAreaSqm: 342,
+      listingLandAreaSource: "realestate_page",
+      listingLandAreaConfidence: "verified",
+      listingLandAreaApprox: false,
+    });
+
+    expect(result.landAreaSqm).toBe(342);
+    expect(result.source).toContain("realestate.co.nz");
+  });
+
+  it("leaves standalone freehold land area untouched", () => {
+    const eligibility = assessPropertyEligibility({
+      address: "124 Example Road, St Heliers, Auckland",
+      estateType: "Fee Simple",
+      legalDescription: "Lot 1 Deposited Plan 12345",
+      propertyType: "Residential Dwelling",
+      landAreaSqm: 800,
+      floorAreaSqm: 160,
+      buildYear: 1950,
+      zoneCode: "MHS",
+      potentialLots: 2,
+      minLotSize: 400,
+    });
+
+    const result = resolveSubjectLandAreaForEligibility({
+      eligibility,
+      currentLandAreaSqm: 800,
+      currentLandAreaSource: "linz",
+      propertyValueLandAreaSqm: null,
+    });
+
+    expect(result.landAreaSqm).toBe(800);
+    expect(result.source).toBe("linz");
+    expect(result.suppressedParentLandArea).toBe(false);
   });
 });

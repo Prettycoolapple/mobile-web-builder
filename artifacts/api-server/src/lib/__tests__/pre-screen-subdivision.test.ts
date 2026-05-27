@@ -6,6 +6,7 @@ import { fetchLINZParcel } from "../linz";
 import { scrapeHomes } from "../scrapers/homes";
 import { scrapePropertyValue } from "../scrapers/propertyvalue";
 import { fetchPropertyHistory } from "../property-data";
+import { clearScreenVerdictCache } from "../listing-cache";
 import type { ListingResult } from "../scrapers/oneroof";
 
 vi.mock("../geocode", () => ({ geocodeAddress: vi.fn() }));
@@ -48,6 +49,9 @@ function listing(overrides: Partial<ListingResult>): ListingResult {
 
 describe("strict subdivision pre-screening", () => {
   beforeEach(() => {
+    // Verdict cache persists across calls — clear it between tests so each
+    // test's mocked sources actually take effect.
+    clearScreenVerdictCache();
     mockedGeocode.mockImplementation(async (address: string) => ({
       lat: -36.85,
       lng: 174.86,

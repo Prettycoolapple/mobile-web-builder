@@ -12,6 +12,67 @@ interface CacheEntry {
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const cache = new Map<string, CacheEntry>();
 
+// ── Per-listing screen-verdict cache ─────────────────────────────────────
+// Strict-subdivision discovery does a lot of redundant per-listing work:
+// the outer indeterminate-retry pass re-screens the same listings after a
+// wait, and "show more" follow-ups iterate over the same pool again. Caching
+// each verdict for the typical 60-minute browse session means the work runs
+// at most once.
+
+import type { PropertyCandidate, ScreenVerdict } from "./pre-screen";
+
+interface VerdictEntry {
+  verdict: ScreenVerdict;
+  expiresAt: number;
+}
+
+const VERDICT_TTL_CANDIDATE_MS = 60 * 60 * 1000;
+const VERDICT_TTL_REJECTED_MS = 60 * 60 * 1000;
+/** Indeterminate gets a short TTL so the outer retry pass can still succeed. */
+const VERDICT_TTL_INDETERMINATE_MS = 5 * 60 * 1000;
+const verdictCache = new Map<string, VerdictEntry>();
+
+function normaliseVerdictKey(listingUrl: string | null | undefined, address: string): string {
+  const fromUrl = listingUrl?.trim();
+  if (fromUrl) return fromUrl.toLowerCase();
+  return address.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+export function getScreenVerdict(
+  listing: { listingUrl?: string | null; address: string },
+): ScreenVerdict | null {
+  const key = normaliseVerdictKey(listing.listingUrl, listing.address);
+  if (!key) return null;
+  const entry = verdictCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    verdictCache.delete(key);
+    return null;
+  }
+  return entry.verdict;
+}
+
+export function setScreenVerdict(
+  listing: { listingUrl?: string | null; address: string },
+  verdict: ScreenVerdict,
+): void {
+  const key = normaliseVerdictKey(listing.listingUrl, listing.address);
+  if (!key) return;
+  const ttl = verdict.kind === "candidate"
+    ? VERDICT_TTL_CANDIDATE_MS
+    : verdict.kind === "rejected"
+      ? VERDICT_TTL_REJECTED_MS
+      : VERDICT_TTL_INDETERMINATE_MS;
+  verdictCache.set(key, { verdict, expiresAt: Date.now() + ttl });
+}
+
+/** Test-only: wipe the verdict cache. */
+export function clearScreenVerdictCache(): void {
+  verdictCache.clear();
+}
+
+export type { PropertyCandidate, ScreenVerdict };
+
 export function makeCacheKey(suburb: string, minPrice: number, maxPrice: number, streetHint?: string | null): string {
   const streetPart = streetHint?.trim()
     ? `-${streetHint.toLowerCase().replace(/[^a-z0-9]+/g, "")}`

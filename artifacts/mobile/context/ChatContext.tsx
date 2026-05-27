@@ -27,6 +27,18 @@ export interface ServiceProvider {
   secondaryLanguage?: string | null;
 }
 
+/**
+ * Honest expectation-setting hint shown under the loading spinner. Set by the
+ * /loading-hint/check endpoint when the LLM classifies the user's message as
+ * an area-wide subdivision sweep (e.g. "what's subdividable in orakei") so
+ * the user knows the wait is normal, not a hang.
+ */
+export interface LoadingHint {
+  kind: "wide_scan_subdivision";
+  etaSecondsMin: number;
+  etaSecondsMax: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
@@ -38,6 +50,7 @@ export interface ChatMessage {
     options: string[];
   };
   loadingMode?: "analyse" | "discover" | "followup";
+  loadingHint?: LoadingHint;
   retryLabel?: string;
   retryText?: string;
   report?: FeasibilityReport;
@@ -451,6 +464,7 @@ interface ChatContextValue {
   switchSession: (id: string) => void;
   addMessage: (msg: Omit<ChatMessage, "id" | "timestamp">, sessionId?: string) => void;
   updateLastMessage: (updates: Partial<ChatMessage>, sessionId?: string) => void;
+  updateLastMessageIfType: (expectedType: ChatMessage["type"], updates: Partial<ChatMessage>, sessionId?: string) => void;
   replaceBackgroundAnalyseMessage: (jobId: string, msg: Omit<ChatMessage, "id" | "timestamp">, sessionId?: string) => void;
   removeMessage: (messageId: string, sessionId?: string) => void;
   updateCandidateScores: (
@@ -654,6 +668,32 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           const messages = [...s.messages];
           const lastIdx = messages.length - 1;
           if (lastIdx >= 0) {
+            messages[lastIdx] = { ...messages[lastIdx], ...updates };
+          }
+          return { ...s, messages, updatedAt: Date.now() };
+        });
+        saveSessions(updated);
+        return updated;
+      });
+    },
+    [currentSessionId, saveSessions],
+  );
+
+  /**
+   * Like updateLastMessage but only writes if the last message is still of
+   * the expected `type`. Used by background hint requests that race the main
+   * chat response — once the loading bubble is replaced, attaching extra
+   * fields to the new bubble would be wrong.
+   */
+  const updateLastMessageIfType = useCallback(
+    (expectedType: ChatMessage["type"], updates: Partial<ChatMessage>, sessionId?: string) => {
+      setSessions((prev) => {
+        const targetId = sessionId ?? currentSessionId;
+        const updated = prev.map((s) => {
+          if (s.id !== targetId) return s;
+          const messages = [...s.messages];
+          const lastIdx = messages.length - 1;
+          if (lastIdx >= 0 && messages[lastIdx].type === expectedType) {
             messages[lastIdx] = { ...messages[lastIdx], ...updates };
           }
           return { ...s, messages, updatedAt: Date.now() };
@@ -1098,6 +1138,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         switchSession,
         addMessage,
         updateLastMessage,
+        updateLastMessageIfType,
         replaceBackgroundAnalyseMessage,
         removeMessage,
         updateCandidateScores,

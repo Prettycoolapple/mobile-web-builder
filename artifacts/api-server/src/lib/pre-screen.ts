@@ -19,6 +19,8 @@ import {
   type DiscoveryLandAreaConfidence,
   type DiscoveryLandAreaSource,
 } from "./discovery-land-area";
+import { strictAttributePrefilter } from "./strict-prefilter";
+import { getScreenVerdict, setScreenVerdict } from "./listing-cache";
 
 export interface PropertyCandidate {
   address: string;
@@ -285,6 +287,16 @@ async function screenOneFast(
       return { kind: "rejected", reason: "apartment_or_unit_address" };
     }
 
+    // Cheap listing-attribute prefilter — rejects ~40-60% of a suburb queue
+    // before any backend fetch when strict-subdivision discovery is on.
+    if (options?.strictStandardSubdivision) {
+      const prefilter = strictAttributePrefilter(listing);
+      if (prefilter.kind === "reject") {
+        logger.debug({ address: listing.address, reason: prefilter.reason }, "Pre-screen: strict attribute prefilter rejected listing");
+        return { kind: "rejected", reason: `prefilter:${prefilter.reason}` };
+      }
+    }
+
     const geo = listingGeo(listing) ?? await geocodeAddress(listing.address);
     const shouldVerifyLandArea: boolean =
       options?.strictStandardSubdivision === true ||
@@ -353,6 +365,10 @@ async function screenOneFast(
       linzParcel: suppressParentLandArea ? null : linzParcel,
       formattedAddress: geo.formatted,
       strictStandardSubdivision: options?.strictStandardSubdivision && !suppressParentLandArea,
+      // Never burn ScrapingBee quota in the strict-subdivision discovery loop.
+      // A listing the free sources can't verify becomes "indeterminate" and is
+      // re-screened by the outer retry pass after a longer wait.
+      disablePaidScrapers: options?.strictStandardSubdivision === true,
     });
     const land = verifiedLand.landArea;
     const landAreaApprox =
@@ -491,6 +507,35 @@ export interface PreScreenDetailedResult {
   candidates: PropertyCandidate[];
   /** Listings that couldn't be conclusively screened because an essential source failed after retries. Caller can re-screen these with longer waits. */
   indeterminate: ListingResult[];
+  /**
+   * When early-bail fires, this resolves once the entire pool finishes
+   * screening in the background — useful for warming the verdict cache so
+   * "show more" follow-ups are instant. Always present, even when no
+   * early-bail happened (resolves immediately in that case).
+   */
+  drainComplete: Promise<void>;
+}
+
+/**
+ * Cache-aware screen wrapper. Strict-subdivision discovery touches the same
+ * listings repeatedly (outer indeterminate-retry pass, "show more" follow-ups,
+ * district fan-out where one suburb's pool overlaps with another). Reading
+ * the verdict cache first avoids re-fetching LINZ + AC GIS + propertyValue.
+ */
+async function cachedScreenOneFast(
+  listing: ListingResult,
+  options?: Parameters<typeof screenOneFast>[1],
+): Promise<ScreenVerdict> {
+  if (options?.strictStandardSubdivision) {
+    const cached = getScreenVerdict(listing);
+    if (cached) {
+      logger.debug({ address: listing.address, verdict: cached.kind }, "Pre-screen: verdict cache hit");
+      return cached;
+    }
+  }
+  const verdict = await screenOneFast(listing, options);
+  if (options?.strictStandardSubdivision) setScreenVerdict(listing, verdict);
+  return verdict;
 }
 
 /**
@@ -498,6 +543,11 @@ export interface PreScreenDetailedResult {
  * conclusively screened. Use this from the discovery loop so the outer pass
  * can re-screen indeterminate listings with extended backoff before reporting
  * "no listings match" to the user.
+ *
+ * When `earlyBailAt` is set, resolves as soon as that many candidates are
+ * collected — the remaining batches continue draining in the background and
+ * write their verdicts into the screen-verdict cache so the next "show more"
+ * is instant. `drainComplete` on the result awaits that background work.
  */
 export async function preScreenListingsFastDetailed(
   listings: ListingResult[],
@@ -507,6 +557,10 @@ export async function preScreenListingsFastDetailed(
     allowMissingListingPrice?: boolean;
     pricePlaceholderNzd?: number;
     strictStandardSubdivision?: boolean;
+    /** Resolve once this many candidates have been collected; keep draining the rest in the background. */
+    earlyBailAt?: number;
+    /** Called each time a candidate is found, in order of completion (not score-sorted). */
+    onCandidate?: (candidate: PropertyCandidate) => void;
   },
 ): Promise<PreScreenDetailedResult> {
   const nonApartments = listings.filter((l) => !isApartmentAddress(l.address));
@@ -514,21 +568,58 @@ export async function preScreenListingsFastDetailed(
   const indeterminate: ListingResult[] = [];
   const queue = [...nonApartments];
   const queueListings = [...nonApartments];
+  const earlyBailAt = options?.earlyBailAt;
+
+  // Phase 1: drain batches up until either the queue is empty or earlyBail
+  // fires. When earlyBail fires we capture the rest of the queue and return
+  // a drainComplete promise that keeps screening in the background.
+  let drainComplete: Promise<void> = Promise.resolve();
 
   while (queue.length > 0) {
     const batch = queue.splice(0, maxConcurrent);
     const batchOriginals = queueListings.splice(0, maxConcurrent);
-    const batchResults = await Promise.all(batch.map((listing) => screenOneFast(listing, options)));
+    const batchResults = await Promise.all(batch.map((listing) => cachedScreenOneFast(listing, options)));
     for (let i = 0; i < batchResults.length; i++) {
       const r = batchResults[i];
-      if (r.kind === "candidate") results.push(r.candidate);
-      else if (r.kind === "indeterminate") indeterminate.push(batchOriginals[i]);
+      if (r.kind === "candidate") {
+        results.push(r.candidate);
+        options?.onCandidate?.(r.candidate);
+      } else if (r.kind === "indeterminate") {
+        indeterminate.push(batchOriginals[i]);
+      }
+    }
+    if (earlyBailAt != null && results.length >= earlyBailAt && queue.length > 0) {
+      // Continue draining the remaining queue in a detached chain — fills the
+      // verdict cache so the next "show more" doesn't re-fetch.
+      const remainingQueue = queue.splice(0);
+      const remainingOriginals = queueListings.splice(0);
+      drainComplete = (async () => {
+        try {
+          while (remainingQueue.length > 0) {
+            const bgBatch = remainingQueue.splice(0, maxConcurrent);
+            const bgOriginals = remainingOriginals.splice(0, maxConcurrent);
+            const bgResults = await Promise.all(bgBatch.map((listing) => cachedScreenOneFast(listing, options)));
+            for (let i = 0; i < bgResults.length; i++) {
+              const r = bgResults[i];
+              if (r.kind === "candidate") {
+                results.push(r.candidate);
+                options?.onCandidate?.(r.candidate);
+              } else if (r.kind === "indeterminate") {
+                indeterminate.push(bgOriginals[i]);
+              }
+            }
+          }
+        } catch (err) {
+          logger.warn({ err, marker: "BACKGROUND_DRAIN" }, "Pre-screen: background drain errored — verdict cache may be incomplete");
+        }
+      })();
+      break;
     }
   }
 
   const sorted = results.sort((a, b) => b.scores.composite - a.scores.composite);
   const candidates = resultCap == null ? sorted : sorted.slice(0, resultCap);
-  return { candidates, indeterminate };
+  return { candidates, indeterminate, drainComplete };
 }
 
 export async function preScreenListingsFast(

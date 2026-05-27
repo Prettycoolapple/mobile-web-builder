@@ -378,6 +378,64 @@ function lookupSuburb(suburb: string): { slug: string; district: string; region:
 }
 
 /**
+ * Some users type a Local-Board / district name where the slug map expects an
+ * actual suburb. "orakei" is the canonical example — it is a district that
+ * contains St Heliers, Kohimarama, Mission Bay, etc. Without this resolver the
+ * realestate.co.nz JSON API can't find "orakei" as a suburb, the legacy HTML
+ * scraper fires (burning ScrapingBee), and the nearby-suburb fallback runs
+ * full strict drains sequentially.
+ *
+ * Returns the list of child suburb names belonging to the typed district, or
+ * `null` if the input is not a district name. Built by inverting SUBURB_SLUG_MAP.
+ */
+let districtIndexCache: Map<string, string[]> | null = null;
+function getDistrictIndex(): Map<string, string[]> {
+  if (districtIndexCache) return districtIndexCache;
+  const idx = new Map<string, string[]>();
+  for (const [suburbKey, info] of Object.entries(SUBURB_SLUG_MAP)) {
+    const districtKey = info.district.toLowerCase().trim();
+    if (!districtKey || districtKey === suburbKey) continue;
+    const list = idx.get(districtKey) ?? [];
+    if (!list.includes(suburbKey)) list.push(suburbKey);
+    idx.set(districtKey, list);
+    // Also index with hyphens swapped for spaces — users type "north shore" not "north-shore".
+    const spaced = districtKey.replace(/-/g, " ");
+    if (spaced !== districtKey) {
+      const spacedList = idx.get(spaced) ?? [];
+      if (!spacedList.includes(suburbKey)) spacedList.push(suburbKey);
+      idx.set(spaced, spacedList);
+    }
+  }
+  districtIndexCache = idx;
+  return idx;
+}
+
+export function resolveDistrictToSuburbs(input: string): string[] | null {
+  const raw = input?.toLowerCase().trim();
+  if (!raw) return null;
+  // If the input is itself a leaf suburb, do not fan out — let the existing
+  // single-suburb path handle it.
+  if (SUBURB_SLUG_MAP[raw]) return null;
+  const idx = getDistrictIndex();
+  const direct = idx.get(raw);
+  if (direct && direct.length > 0) return [...direct];
+  // Try the same abbreviation expansion as suburbLookupKeys so "mt eden",
+  // "mount eden" both still resolve as suburbs (not districts) but variants
+  // like "north shore" / "north-shore" do.
+  for (const key of [raw.replace(/\s+/g, "-"), raw.replace(/-/g, " ")]) {
+    if (key === raw) continue;
+    const hit = idx.get(key);
+    if (hit && hit.length > 0) return [...hit];
+  }
+  return null;
+}
+
+/** Test-only: reset the cached district index so test mutations to the map take effect. */
+export function _resetDistrictIndexCacheForTests(): void {
+  districtIndexCache = null;
+}
+
+/**
  * Convert a suburb name to a URL slug: lowercase, spaces → hyphens, strip special chars.
  */
 function toSlug(name: string): string {

@@ -4,7 +4,7 @@ import { db, profiles } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { ai } from "@workspace/integrations-gemini-ai";
 import { scrapeListingAgent } from "../lib/scrapers/agent-contact";
-import { hasExplicitAgentContactSignal } from "../lib/agent-contact-intent";
+import { hasExplicitAgentContactSignal, isCombinedPackageAnalyseRequest } from "../lib/agent-contact-intent";
 
 const router: IRouter = Router();
 
@@ -16,6 +16,10 @@ interface Message {
 async function detectAgentContactIntent(messages: Message[]): Promise<boolean> {
   const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
   if (!lastUserMessage?.content?.trim()) return false;
+  // Hard-negative: '分析完整组合' / 'Analyse full package' prompts must never be
+  // classified as agent-contact, even if upstream heuristics or the LLM say
+  // otherwise. The button depends on this guarantee.
+  if (isCombinedPackageAnalyseRequest(lastUserMessage.content)) return false;
   if (hasExplicitAgentContactSignal(lastUserMessage.content)) return true;
 
   const recentText = messages

@@ -40,6 +40,7 @@ import { resolvePipelineSuburb } from "./suburb-resolver";
 import {
   assessPropertyEligibility,
   eligibilityPlanningNote,
+  resolveSubjectLandAreaForEligibility,
   shouldForceSingleLotForEligibility,
   shouldSuppressParentLandAreaForEligibility,
 } from "./property-eligibility";
@@ -749,7 +750,9 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   let realestateListing: ListingResult | null = null;
   const realestateListingResult = await timed(
     "realestate_listing",
-    () => fetchRealestateListingForAddress(geocode.formatted ?? address, suburb),
+    async () =>
+      await fetchRealestateListingForAddress(address, suburb)
+      ?? await fetchRealestateListingForAddress(geocode.formatted ?? address, suburb),
     timing,
   );
   if (!realestateListingResult.failed) {
@@ -949,21 +952,21 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     isCombinedListingAggregate: !!realestateListing?.isCombinedListing && !realestateListingForFacts,
   });
   if (shouldSuppressParentLandAreaForEligibility(preliminaryEligibility)) {
-    if (propertyValueData?.land_area_sqm != null) {
-      if (merged.land_area_sqm !== propertyValueData.land_area_sqm) {
-        merged.discrepancies.push(
-          `PropertyValue/title signals indicate this is not a standalone freehold site, so parent parcel land area was replaced with the subject land area from PropertyValue (${propertyValueData.land_area_sqm}m²).`,
-        );
-      }
-      merged.land_area_sqm = propertyValueData.land_area_sqm;
-      merged.data_sources["land_area_sqm"] = "propertyvalue";
-    } else if (merged.land_area_sqm != null) {
-      merged.discrepancies.push(
-        "PropertyValue/title signals indicate this is a unit or non-standalone title, so parent parcel land area was excluded from the subject-property report.",
-      );
-      merged.land_area_sqm = null;
-      merged.data_sources["land_area_sqm"] = "unavailable_unit_or_non_standalone";
+    const subjectLandArea = resolveSubjectLandAreaForEligibility({
+      eligibility: preliminaryEligibility,
+      currentLandAreaSqm: merged.land_area_sqm,
+      currentLandAreaSource: merged.data_sources["land_area_sqm"] ?? null,
+      propertyValueLandAreaSqm: propertyValueData?.land_area_sqm ?? null,
+      listingLandAreaSqm: realestateListingForFacts?.landArea ?? null,
+      listingLandAreaSource: realestateListingForFacts?.landAreaSource ?? null,
+      listingLandAreaConfidence: realestateListingForFacts?.landAreaConfidence ?? null,
+      listingLandAreaApprox: realestateListingForFacts?.landAreaApprox ?? null,
+    });
+    if (subjectLandArea.note) {
+      merged.discrepancies.push(subjectLandArea.note);
     }
+    merged.land_area_sqm = subjectLandArea.landAreaSqm;
+    merged.data_sources["land_area_sqm"] = subjectLandArea.source;
     if (preliminaryEligibility.unitLikeSignal) {
       merged.estate_type = "Unit title";
       merged.data_sources["estate_type"] = "propertyvalue_legal_description";

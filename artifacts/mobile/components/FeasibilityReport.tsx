@@ -1963,6 +1963,10 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
   const developmentStrategies = report.developmentStrategies ?? [];
   const hasDevelopmentStrategies = developmentStrategies.length > 0;
   const titleTypeDisplay = formatTitleTypeForDisplay(report.propertyOverview?.titleType);
+  const landAreaUnavailableContact =
+    !report.propertyOverview?.landArea &&
+    (report.propertyOverview?.typology === "unit_apartment" ||
+      report.propertyOverview?.subdivisionRejectReason === "unit_or_crosslease_signal");
   const riskSummaryForDisplay = useMemo(() => {
     const scrubbed = filterRiskSummaryRemoveIncompleteDataDisclaimerBullets(report.riskSummary ?? []);
     return ensureRiskSummaryMinForReport(report, scrubbed, 3);
@@ -2093,7 +2097,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
           />
           <InfoRow
             label={t("report.land_area")}
-            value={report.propertyOverview.landArea || t("report.unavailable")}
+            value={report.propertyOverview.landArea || (landAreaUnavailableContact ? t("report.land_unavailable_contact") : t("report.unavailable"))}
             valueColor={!report.propertyOverview.landArea ? colors.amber : undefined}
             colors={colors}
           />

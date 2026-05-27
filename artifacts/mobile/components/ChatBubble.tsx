@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, Component } from "react";
-import { View, Text, StyleSheet, Animated, Easing, TouchableOpacity, TouchableWithoutFeedback, Clipboard, Alert } from "react-native";
+import { View, Text, StyleSheet, Animated, Easing, TouchableOpacity, TouchableWithoutFeedback, Clipboard, Alert, Image } from "react-native";
 import Markdown from "react-native-markdown-display";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
@@ -134,6 +134,16 @@ const THINKING_KEYS = [
   "search.thinking_almost_there",
 ] as const;
 
+const APP_ICON = require("@/assets/images/icon.png");
+
+function AiAvatar() {
+  return (
+    <View style={styles.aiAvatar}>
+      <Image source={APP_ICON} style={styles.aiAvatarImage} resizeMode="cover" />
+    </View>
+  );
+}
+
 function TypingDots() {
   const colors = useColors();
   const { t } = useT();
@@ -217,9 +227,7 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
     const { question, options } = message.clarification;
     return (
       <View style={styles.aiRow}>
-        <View style={[styles.aiAvatar, { backgroundColor: colors.accent }]}>
-          <Text style={styles.aiAvatarText}>D</Text>
-        </View>
+        <AiAvatar />
         <View style={[styles.aiBubble, { backgroundColor: colors.card, borderColor: colors.border, flex: 1, gap: 10 }]}>
           <Text style={[styles.thinkingText, { color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 14, lineHeight: 20 }]}>
             {question}
@@ -280,12 +288,11 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
     if (isAnalysing) {
       return <AnalysisProgress retryLabel={message.retryLabel} />;
     }
+    const wideScanHint = message.loadingHint?.kind === "wide_scan_subdivision";
     return (
       <View style={styles.aiRow}>
-        <View style={[styles.aiAvatar, { backgroundColor: colors.accent }]}>
-          <Text style={styles.aiAvatarText}>D</Text>
-        </View>
-        <View style={[styles.loadingBubble, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <AiAvatar />
+        <View style={[styles.loadingBubble, { backgroundColor: colors.card, borderColor: colors.border, gap: wideScanHint ? 6 : 0 }]}>
           {message.retryLabel ? (
             <Text style={[styles.retryLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
               {message.retryLabel}
@@ -293,6 +300,16 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
           ) : (
             <TypingDots />
           )}
+          {wideScanHint ? (
+            <View style={{ gap: 2 }}>
+              <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", fontSize: 12 }}>
+                {t("loading.wide_scan_subdivision_title")}
+              </Text>
+              <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, lineHeight: 15 }}>
+                {t("loading.wide_scan_subdivision_subtitle")}
+              </Text>
+            </View>
+          ) : null}
         </View>
       </View>
     );
@@ -325,9 +342,7 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
       <View style={styles.searchContainer}>
         {aiIntro ? (
           <View style={styles.aiRow}>
-            <View style={[styles.aiAvatar, { backgroundColor: colors.accent }]}>
-              <Text style={styles.aiAvatarText}>D</Text>
-            </View>
+            <AiAvatar />
             <View style={[styles.aiBubble, { backgroundColor: colors.card, borderColor: colors.border, flex: 1 }]}>
               <Text style={[styles.noListingsText, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}>
                 {aiIntro}
@@ -441,9 +456,7 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
 
   return (
     <View style={styles.aiRow}>
-      <View style={[styles.aiAvatar, { backgroundColor: colors.accent }]}>
-        <Text style={styles.aiAvatarText}>D</Text>
-      </View>
+      <AiAvatar />
       <View style={[styles.aiBubble, { backgroundColor: colors.card, borderColor: colors.border }]}>
         <SafeMarkdown
           content={message.content ?? ""}
@@ -502,16 +515,14 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 7,
-    justifyContent: "center",
-    alignItems: "center",
+    overflow: "hidden",
     flexShrink: 0,
     alignSelf: "flex-start",
     marginTop: 4,
   },
-  aiAvatarText: {
-    fontSize: 13,
-    color: "#fff",
-    fontFamily: "DM_Sans_700Bold",
+  aiAvatarImage: {
+    width: 28,
+    height: 28,
   },
   aiBubble: {
     flex: 1,

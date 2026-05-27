@@ -630,8 +630,12 @@ async function fetchAgentById(agentId: string): Promise<RealestateAgentContact |
 }
 
 function firstAddressLine(s: string): string {
-  return s
-    .split(",")[0]
+  const parts = s.split(",").map((part) => part.trim()).filter(Boolean);
+  const first = parts[0] ?? s;
+  const line = /^\d+[a-z]?$/i.test(first) && parts[1]
+    ? `${first} ${parts[1]}`
+    : first;
+  return line
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
@@ -700,7 +704,7 @@ export function extractCombinedListingAddressParts(rawAddress: string | null | u
 }
 
 /** True when `candidate` looks like the same street address as `target` (first line). */
-function addressesLikelyMatch(target: string, candidate: string): boolean {
+export function addressesLikelyMatch(target: string, candidate: string): boolean {
   const fa = firstAddressLine(target);
   const fb = firstAddressLine(candidate);
   if (fa.length < 4 || fb.length < 4) return false;

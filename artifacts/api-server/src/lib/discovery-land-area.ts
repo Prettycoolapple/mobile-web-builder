@@ -40,6 +40,14 @@ export async function verifyDiscoveryLandArea(input: {
   linzParcel?: LinzParcel | null;
   formattedAddress?: string | null;
   strictStandardSubdivision?: boolean;
+  /**
+   * When true, skip the homes.co.nz ScrapingBee fallback even if listing land
+   * area is still unverified. The strict-subdivision discovery loop uses this
+   * to avoid burning paid quota across an entire suburb queue — listings the
+   * free sources can't verify become "indeterminate" and are re-screened by
+   * the outer retry pass instead of falling through to ScrapingBee.
+   */
+  disablePaidScrapers?: boolean;
 }): Promise<DiscoveryLandAreaVerification> {
   const isAlreadySubdividedChild = isLetterSuffixedStreetNumber(input.address);
   const listingArea = input.listingLandArea ?? null;
@@ -57,7 +65,7 @@ export async function verifyDiscoveryLandArea(input: {
     landAreaConfidence = "verified";
   }
 
-  if (input.strictStandardSubdivision && landAreaConfidence !== "verified") {
+  if (input.strictStandardSubdivision && landAreaConfidence !== "verified" && !input.disablePaidScrapers) {
     const formattedAddress = input.formattedAddress ?? input.address;
     const suburb = suburbFromFormattedAddress(formattedAddress, input.address);
     const homes = suburb

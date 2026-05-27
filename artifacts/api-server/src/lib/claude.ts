@@ -102,6 +102,9 @@ export interface ChatIntent {
   // Service provider recommendation
   wantsProviderRecommendation: boolean; // true when user (in any language) asks to be connected with a professional
   suggestedDiscipline: string | null;   // architect_designer | planner | engineer | quantity_surveyor | other
+  // Wide-scan signal — true when the user is asking for an area-wide subdivision sweep
+  // (district, large suburb, "anything subdividable") that legitimately needs minutes to run.
+  wideScanSubdivisionIntent: boolean;
   // Meta
   reasoning: string;               // brief explanation for debugging / logging
 }
@@ -126,6 +129,7 @@ const INTENT_SCHEMA = `{
   "clarificationQuestion": "<short conversational question to ask the user> | null",
   "wantsProviderRecommendation": <true when user asks to be connected with / referred to a professional service provider>,
   "suggestedDiscipline": "architect_designer" | "planner" | "engineer" | "quantity_surveyor" | "other" | null,
+  "wideScanSubdivisionIntent": <true when user is asking for an area-wide subdivision/development sweep — see WIDE SCAN below>,
   "reasoning": "<1 sentence explaining your classification>"
 }`;
 
@@ -282,7 +286,77 @@ Set suggestedDiscipline to the most relevant type based on context:
   "other"              — builder, project manager, or any other professional
   null                 — when the discipline is unclear
 
-Set wantsProviderRecommendation=false for all messages that are not about finding a professional.`;
+Set wantsProviderRecommendation=false for all messages that are not about finding a professional.
+
+## WIDE SCAN SUBDIVISION INTENT
+
+Set wideScanSubdivisionIntent=true when ALL of the following are true:
+  1. The user is asking what is subdividable / developable / splittable / can be split into multiple lots / has subdivision potential / 可分割 / 可以分割 / 可开发 / 可開發 / 可細分 / 可细分 / 分割潛力 / 分割潜力, in ANY language and ANY phrasing — formal or casual.
+  2. The scope of the question is an AREA — a suburb, a Local Board / district name (orakei, howick, north shore, eastern bays, the shore, west auckland, 东区, 北岸, 西区), a city, a region, or simply "around here" / "near me" / "this area" inferred from the report context. NOT a specific numbered street address.
+  3. The user is NOT asking about ONE named property.
+
+This signal tells the app the request will legitimately take 1-5 minutes to walk through every active listing in the area and check each one against the subdivision criteria — the UI will show a "this may take a while" hint.
+
+Set false when:
+  • The user named a single street address ("can 12 Foo Road be subdivided?" — analyse, not wide scan).
+  • The user is asking about non-subdivision criteria ("show me 3-bed houses under 1M" — discover, not wide-scan).
+  • The user is asking for general advice without an area scope ("how does subdivision work?" — followup).
+
+Wide-scan intent CAN be true alongside mode="discover" or mode="followup". It is independent of mode classification — it is purely a hint about how long the search will take. Set it whenever the trigger conditions above are met, regardless of which mode you pick.`;
+
+/**
+ * Tiny LLM classifier called by the mobile in parallel with the main chat
+ * request, so the loading bubble can show a "this may take 1-5 min" subtitle
+ * as soon as the user submits a wide-scan subdivision query — without having
+ * to wait for the slow discovery work to start.
+ *
+ * Kept narrow on purpose: one boolean, ~32 output tokens, no nested fields,
+ * so it returns in ~1-2 s. The authoritative classification still happens
+ * inside extractChatIntent during the main request; this helper exists only
+ * so the UI can update immediately.
+ */
+export async function classifyWideScanSubdivisionIntent(
+  messages: Message[],
+  locale: Locale = "en",
+): Promise<boolean> {
+  const last = [...messages].reverse().find((m) => m.role === "user");
+  if (!last?.content?.trim()) return false;
+  const recent = messages.slice(-6).map((m) => `[${m.role.toUpperCase()}]: ${m.content.slice(0, 240)}`).join("\n");
+  const localeNote = locale === "zh"
+    ? " The user may write in Simplified Chinese or English — understand both."
+    : "";
+  const prompt = `You are an intent classifier for a NZ property app.${localeNote}
+
+Recent conversation:
+${recent}
+
+Decide whether the user's LATEST message is asking the app to do a wide, area-wide sweep of "what is subdividable / developable / splittable into multiple lots" across an entire suburb, district, Local Board, city, region, or generic "around here" — in any language, any phrasing, formal or casual.
+
+Return true ONLY when ALL hold:
+  1. The user is asking about subdivision / development / splitting into multiple lots / 可分割 / 可以分割 / 可开发 / 可開發 / 可細分 / 可细分 / 分割潛力 / 分割潜力.
+  2. The scope is an AREA, not a single numbered street address.
+  3. No specific property is named.
+
+Return false otherwise.
+
+Reply with ONLY valid JSON, no markdown: {"wide": true|false}`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "deepseek-chat",
+      config: { maxOutputTokens: 32, temperature: 0, thinkingConfig: { thinkingBudget: 0 } },
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+    });
+    const raw = (response.text ?? "").trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "");
+    const match = raw.match(/\{[\s\S]*?\}/);
+    if (!match) return false;
+    const parsed = JSON.parse(match[0]) as { wide?: unknown };
+    return parsed.wide === true;
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "classifyWideScanSubdivisionIntent: LLM call failed");
+    return false;
+  }
+}
 
 export async function extractChatIntent(
   messages: Message[],
@@ -299,6 +373,7 @@ export async function extractChatIntent(
       criteria: null, isFollowUp: false, includeNegotiation: false,
       needsClarification: false, clarificationQuestion: null,
       wantsProviderRecommendation: false, suggestedDiscipline: null,
+      wideScanSubdivisionIntent: false,
       reasoning: "empty messages",
     };
   }
@@ -310,6 +385,7 @@ export async function extractChatIntent(
       criteria: null, isFollowUp: false, includeNegotiation: false,
       needsClarification: false, clarificationQuestion: null,
       wantsProviderRecommendation: false, suggestedDiscipline: null,
+      wideScanSubdivisionIntent: false,
       reasoning: "no user message",
     };
   }
@@ -391,6 +467,7 @@ ${INTENT_SCHEMA}`;
       clarificationQuestion: parsed.clarificationQuestion ?? null,
       wantsProviderRecommendation: Boolean(parsed.wantsProviderRecommendation),
       suggestedDiscipline: parsed.suggestedDiscipline && VALID_DISCIPLINES.includes(parsed.suggestedDiscipline as string) ? parsed.suggestedDiscipline : null,
+      wideScanSubdivisionIntent: Boolean(parsed.wideScanSubdivisionIntent),
       reasoning: parsed.reasoning ?? "",
     };
 
@@ -507,6 +584,7 @@ async function fallbackDetectIntent(
       : null,
     wantsProviderRecommendation,
     suggestedDiscipline: null,
+    wideScanSubdivisionIntent: false,
     reasoning: "regex fallback",
   };
 }

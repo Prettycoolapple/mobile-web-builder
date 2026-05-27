@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db, profiles, searches, feasibilityJobs, withDbRetry } from "@workspace/db";
+import { logger } from "../lib/logger";
 import {
   generateFeasibilityReport,
   generateSearchResults,
@@ -39,7 +40,7 @@ import {
 import { ensureMinRiskSummaryBulletsFromReport, type RiskBackfillContext } from "../lib/report-risk-backfill";
 import { detectSubdivision } from "../lib/subdivision";
 import { formatNZD } from "../lib/utils";
-import { searchRealEstateListings } from "../lib/scrapers/realestate-search";
+import { searchRealEstateListings, resolveDistrictToSuburbs } from "../lib/scrapers/realestate-search";
 import { preScreenListingsFast, preScreenListingsFastDetailed, type PropertyCandidate } from "../lib/pre-screen";
 import {
   hasStandardSubdivisionYield,
@@ -1054,7 +1055,7 @@ async function prescreenPickRestoreBatch(
   const visibleBatch = filterAlreadyShownListings(batch, shownAddressKeys);
   if (visibleBatch.length === 0) return [];
   const detailed = await preScreenListingsFastDetailed(visibleBatch, 5, null, preScreenOpts).catch(
-    () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[] }),
+    () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], drainComplete: Promise.resolve() }),
   );
   const screened = detailed.candidates;
   if (indeterminateAccumulator && detailed.indeterminate.length > 0) {
@@ -1066,6 +1067,123 @@ async function prescreenPickRestoreBatch(
   const { putAtFront, putAtBack } = partitionBatchAfterPrescreen(visibleBatch, screened, candidates, criteria, shownAddressKeys);
   if (restoreUnpicked) restoreListingsAfterPop(cacheKey, putAtFront, putAtBack);
   return candidates;
+}
+
+/**
+ * Run a discovery search across either a single suburb or, when the user typed
+ * a Local-Board / district name like "orakei", every child suburb in parallel.
+ *
+ * Without this, district queries fell through `searchListingsByName` (couldn't
+ * resolve "orakei" as a suburb), then through the HTML scraper fallback
+ * (ScrapingBee burn), then sequentially through nearby suburbs — burning quota
+ * and timing out. This composer fans out cheaply and shares the verdict cache
+ * across child searches.
+ *
+ * Returns the merged listing pool plus the actual suburb(s) searched so
+ * callers can log + cache key correctly. `isDistrictFanOut` is true when we
+ * fanned out (used to set the loading-hint for change #6 below).
+ */
+async function searchSuburbOrDistrict(args: {
+  suburb: string;
+  minPrice: number;
+  maxPrice: number;
+  skipUrls: string[];
+  includeNegotiation: boolean;
+  firstBatchSize?: number;
+  fetchAllPages: boolean;
+  maxListings?: number;
+  log: Logger;
+}): Promise<{
+  firstBatch: ListingResult[];
+  remainingListings: ListingResult[];
+  source: string;
+  suburbsSearched: string[];
+  isDistrictFanOut: boolean;
+}> {
+  const childSuburbs = resolveDistrictToSuburbs(args.suburb);
+  if (!childSuburbs || childSuburbs.length === 0) {
+    const result = await searchRealEstateListings({
+      suburb: args.suburb,
+      minPrice: args.minPrice,
+      maxPrice: args.maxPrice,
+      skipUrls: args.skipUrls,
+      includeNegotiation: args.includeNegotiation,
+      firstBatchSize: args.firstBatchSize,
+      fetchAllPages: args.fetchAllPages,
+      maxListings: args.maxListings,
+    });
+    return {
+      firstBatch: result.firstBatch,
+      remainingListings: result.remainingListings,
+      source: result.source,
+      suburbsSearched: [args.suburb],
+      isDistrictFanOut: false,
+    };
+  }
+
+  args.log.info(
+    { district: args.suburb, childSuburbs },
+    "Discovery: typed input resolves to a district — fanning out across child suburbs in parallel",
+  );
+
+  // Cap maxListings per child so a district fan-out doesn't pull 500 × N. The
+  // verdict cache + earlyBail downstream will short-circuit the heavy work
+  // once we have enough candidates.
+  const perChildMaxListings = args.maxListings != null
+    ? Math.max(50, Math.ceil(args.maxListings / Math.max(1, childSuburbs.length)))
+    : undefined;
+
+  const settled = await Promise.allSettled(
+    childSuburbs.map((nb) =>
+      searchRealEstateListings({
+        suburb: nb,
+        minPrice: args.minPrice,
+        maxPrice: args.maxPrice,
+        skipUrls: args.skipUrls,
+        includeNegotiation: args.includeNegotiation,
+        firstBatchSize: args.firstBatchSize,
+        fetchAllPages: args.fetchAllPages,
+        maxListings: perChildMaxListings,
+      }),
+    ),
+  );
+
+  const firstBatch: ListingResult[] = [];
+  const remainingListings: ListingResult[] = [];
+  const seen = new Set<string>();
+  let source = "realestate.co.nz";
+  const suburbsSearched: string[] = [];
+
+  for (let i = 0; i < settled.length; i++) {
+    const r = settled[i];
+    const childSuburb = childSuburbs[i];
+    if (r.status !== "fulfilled" || !r.value) continue;
+    source = r.value.source;
+    if (r.value.firstBatch.length + r.value.remainingListings.length > 0) {
+      suburbsSearched.push(childSuburb);
+    }
+    for (const l of r.value.firstBatch) {
+      const key = l.listingUrl || l.address;
+      if (!seen.has(key)) {
+        seen.add(key);
+        firstBatch.push(l);
+      }
+    }
+    for (const l of r.value.remainingListings) {
+      const key = l.listingUrl || l.address;
+      if (!seen.has(key)) {
+        seen.add(key);
+        remainingListings.push(l);
+      }
+    }
+  }
+
+  args.log.info(
+    { district: args.suburb, suburbsSearched, firstBatch: firstBatch.length, remaining: remainingListings.length },
+    "Discovery: district fan-out merged",
+  );
+
+  return { firstBatch, remainingListings, source, suburbsSearched, isDistrictFanOut: true };
 }
 
 async function topUpDiscoveryCandidates(
@@ -1144,7 +1262,7 @@ async function reScreenIndeterminateListings(opts: {
     await new Promise((resolve) => setTimeout(resolve, delayMs));
 
     const detailed = await preScreenListingsFastDetailed(queue, 5, null, preScreenOpts).catch(
-      () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[] }),
+      () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], drainComplete: Promise.resolve() }),
     );
     const fresh = pickDiscoveryCandidates(detailed.candidates, criteria, shownAddressKeys, targetCount - found.length);
     found.push(...fresh);
@@ -1606,6 +1724,176 @@ async function localiseCombinedComparison(
   };
 }
 
+/**
+ * Pull a compact, LLM-friendly snapshot of a child report — covers everything
+ * the combined-investment summary needs: zone, lots, CV, land/floor area,
+ * build year, scores, listed price, and the headline subdivision pathway.
+ */
+function summariseChildReportForLLM(report: Record<string, unknown>, fallbackAddress: string): {
+  address: string;
+  zone: string | null;
+  cv: string | null;
+  landArea: string | null;
+  floorArea: string | null;
+  buildYear: string | null;
+  bedrooms: string | null;
+  bathrooms: string | null;
+  potentialLots: number | null;
+  compositeScore: number | null;
+  roiScore: number | null;
+  costScore: number | null;
+  easeScore: number | null;
+  subdivisionPathway: string | null;
+  listingPrice: string | null;
+} {
+  const address = reportAddress(report, fallbackAddress);
+  const overview = (report.propertyOverview as Record<string, unknown> | undefined) ?? {};
+  const planning = (report.planning as Record<string, unknown> | undefined) ?? {};
+  const scoresObj = (report.scores as Record<string, unknown> | undefined) ?? {};
+  const subdivisionPathwayObj = (report.subdivisionPathway as Record<string, unknown> | undefined) ?? null;
+
+  const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const num = (v: unknown): number | null => {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string" && v.trim() && !Number.isNaN(Number(v))) return Number(v);
+    return null;
+  };
+  return {
+    address,
+    zone: str(overview.zone) ?? str(planning.zone),
+    cv: str(overview.cv),
+    landArea: str(overview.landArea),
+    floorArea: str(overview.floorArea),
+    buildYear: str(overview.buildYear),
+    bedrooms: str(overview.bedrooms) ?? (typeof overview.bedrooms === "number" ? String(overview.bedrooms) : null),
+    bathrooms: str(overview.bathrooms) ?? (typeof overview.bathrooms === "number" ? String(overview.bathrooms) : null),
+    potentialLots: potentialLots(report),
+    compositeScore: num(scoresObj.composite),
+    roiScore: num(scoresObj.roi),
+    costScore: num(scoresObj.cost),
+    easeScore: num(scoresObj.ease),
+    subdivisionPathway:
+      str(subdivisionPathwayObj?.headline) ?? str(subdivisionPathwayObj?.detail) ?? null,
+    listingPrice: str(report.listingPrice),
+  };
+}
+
+/**
+ * Render a child-report summary as a compact text block for the LLM prompt.
+ */
+function renderChildSummaryForPrompt(s: ReturnType<typeof summariseChildReportForLLM>): string {
+  const facts: string[] = [`Address: ${s.address}`];
+  if (s.zone) facts.push(`Zone: ${s.zone}`);
+  if (s.cv) facts.push(`Council valuation: ${s.cv}`);
+  if (s.landArea) facts.push(`Land area: ${s.landArea}`);
+  if (s.floorArea) facts.push(`Floor area: ${s.floorArea}`);
+  if (s.buildYear) facts.push(`Built: ${s.buildYear}`);
+  if (s.bedrooms) facts.push(`Bedrooms: ${s.bedrooms}`);
+  if (s.bathrooms) facts.push(`Bathrooms: ${s.bathrooms}`);
+  if (s.potentialLots != null) facts.push(`Potential lots: ${s.potentialLots}`);
+  if (s.compositeScore != null) facts.push(`Overall feasibility: ${s.compositeScore.toFixed(1)}/5`);
+  if (s.roiScore != null) facts.push(`ROI score: ${s.roiScore.toFixed(1)}/5`);
+  if (s.costScore != null) facts.push(`Cost score: ${s.costScore.toFixed(1)}/5`);
+  if (s.easeScore != null) facts.push(`Ease score: ${s.easeScore.toFixed(1)}/5`);
+  if (s.subdivisionPathway) facts.push(`Subdivision: ${s.subdivisionPathway}`);
+  if (s.listingPrice) facts.push(`Listing price: ${s.listingPrice}`);
+  return facts.join("\n  - ");
+}
+
+/**
+ * Ask the LLM to write a real combined-package investment narrative based on
+ * the actual child reports. Returns null on failure so the deterministic
+ * fallback stays in place.
+ */
+async function generateCombinedInvestmentSummary(
+  packageAddress: string,
+  childSummaries: ReturnType<typeof summariseChildReportForLLM>[],
+  failures: CombinedReportFailure[],
+  locale: ReturnType<typeof normaliseLocale>,
+): Promise<{
+  summary: string;
+  subdivisionView: string[];
+  investmentView: string[];
+  risks: string[];
+  recommendedNextStep: string;
+} | null> {
+  if (childSummaries.length < 2) return null;
+  const blocks = childSummaries
+    .map((s, i) => `Property ${i + 1}:\n  - ${renderChildSummaryForPrompt(s)}`)
+    .join("\n\n");
+  const failuresBlock = failures.length > 0
+    ? `\n\nReports that failed to generate (do not invent data for these — note the gap):\n${failures.map((f) => `- ${f.address}: ${f.error}`).join("\n")}`
+    : "";
+  const localeInstruction = locale === "zh"
+    ? "Write all string values in fluent simplified Chinese (zh-CN). Do not translate the property addresses — keep them in English exactly as provided."
+    : "Write all string values in clear professional English suited to a New Zealand property investor.";
+
+  const prompt = `You are a senior New Zealand property investment analyst writing the COMBINED-PACKAGE summary for an investor who is considering buying the following addresses TOGETHER as one transaction.
+
+PACKAGE ADDRESS (as listed):
+${packageAddress}
+
+PER-PROPERTY ANALYSIS (each address was analysed independently — values below are tied to the named address, NOT aggregated across the package):
+
+${blocks}${failuresBlock}
+
+Write a JSON object with these exact fields:
+
+{
+  "summary": "2-4 sentences. Explain the combined investment thesis: why these two titles together create (or do not create) a stronger play than either alone — think site assembly, joint subdivision, shared services, scale, holding cost. Reference each property by its actual street number. Be honest if the package is just two unrelated houses sold together.",
+  "subdivisionView": [
+    // One bullet per property, naming the property and stating its subdivision potential. Then one extra bullet covering whether COMBINING the titles unlocks more lots / a different pathway than the sum of the parts (e.g. boundary adjustment, joint resource consent, shared access lot).
+  ],
+  "investmentView": [
+    // One bullet per property covering its standalone investment story (CV vs likely price, ROI score, hold-vs-develop). Plus one final bullet on the package-level economics: price allocation, joint financing, exit options if one title is sold first.
+  ],
+  "risks": [
+    // 3-5 bullets. Always include: title/tenure verification, package price allocation, shared services/access. Add any property-specific risks (zoning, build year, slope) drawn from the actual data above.
+  ],
+  "recommendedNextStep": "1 sentence. The single most useful next action for the investor — which address to lead due diligence with, which professional to engage first, or which question to ask the agent."
+}
+
+Critical rules:
+- ${localeInstruction}
+- Never aggregate land area, bedrooms, bathrooms, or CV across properties — refer to them per-address.
+- If a value is missing for a property, say so explicitly (e.g. "build year not confirmed for 7 Stanmore Road").
+- Do not invent numbers. Use only what is in the per-property data above.
+- Reply with ONLY the JSON object — no markdown, no preamble.`;
+
+  try {
+    const raw = await generateAnalysis(prompt, locale);
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    const parsed = JSON.parse(match[0]) as {
+      summary?: unknown;
+      subdivisionView?: unknown;
+      investmentView?: unknown;
+      risks?: unknown;
+      recommendedNextStep?: unknown;
+    };
+    const stringArray = (v: unknown): string[] | null =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim().length > 0) : null;
+    const summary = typeof parsed.summary === "string" ? parsed.summary.trim() : null;
+    const subdivisionView = stringArray(parsed.subdivisionView);
+    const investmentView = stringArray(parsed.investmentView);
+    const risks = stringArray(parsed.risks);
+    const recommendedNextStep =
+      typeof parsed.recommendedNextStep === "string" ? parsed.recommendedNextStep.trim() : null;
+    if (!summary || !subdivisionView?.length || !investmentView?.length || !risks?.length || !recommendedNextStep) {
+      logger.warn(
+        { packageAddress, hasSummary: !!summary, sublen: subdivisionView?.length, invlen: investmentView?.length, risklen: risks?.length },
+        "Combined investment LLM summary returned incomplete JSON — falling back to deterministic",
+      );
+      return null;
+    }
+    return { summary, subdivisionView, investmentView, risks, recommendedNextStep };
+  } catch (err) {
+    logger.warn({ err: (err as Error).message, packageAddress }, "Combined investment LLM summary failed — falling back to deterministic");
+    return null;
+  }
+}
+
 async function buildCombinedReportGroup(args: {
   packageAddress: string;
   childAddresses: string[];
@@ -1613,15 +1901,15 @@ async function buildCombinedReportGroup(args: {
   failures: CombinedReportFailure[];
   locale: ReturnType<typeof normaliseLocale>;
 }): Promise<CombinedReportGroup> {
-  const reportSummaries = args.reports.map((report, idx) => {
-    const address = reportAddress(report, args.childAddresses[idx] ?? `Property ${idx + 1}`);
-    return {
-      address,
-      composite: numericScore(report, "composite"),
-      roi: numericScore(report, "roi"),
-      lots: potentialLots(report),
-    };
-  });
+  const childSummaries = args.reports.map((report, idx) =>
+    summariseChildReportForLLM(report, args.childAddresses[idx] ?? `Property ${idx + 1}`),
+  );
+  const reportSummaries = childSummaries.map((s) => ({
+    address: s.address,
+    composite: s.compositeScore,
+    roi: s.roiScore,
+    lots: s.potentialLots,
+  }));
   const bestByComposite = reportSummaries
     .filter((r) => r.composite != null)
     .sort((a, b) => (b.composite ?? 0) - (a.composite ?? 0))[0];
@@ -1629,7 +1917,14 @@ async function buildCombinedReportGroup(args: {
     .filter((r) => r.lots != null)
     .sort((a, b) => (b.lots ?? 0) - (a.lots ?? 0))[0];
 
-  const comparison: CombinedReportGroup["comparison"] = {
+  const llmSummary = await generateCombinedInvestmentSummary(
+    args.packageAddress,
+    childSummaries,
+    args.failures,
+    args.locale,
+  );
+
+  const deterministicComparison: CombinedReportGroup["comparison"] = {
     summary: `This appears to be a combined listing package. Each address has been analysed separately so land area, title, services, zoning and return assumptions stay tied to the correct property.`,
     subdivisionView: reportSummaries.map((r) =>
       `${r.address}: ${r.lots != null ? `${r.lots} potential lot${r.lots === 1 ? "" : "s"} indicated by the individual report` : "subdivision yield is not confirmed in the individual report"}.`,
@@ -1648,18 +1943,40 @@ async function buildCombinedReportGroup(args: {
         ? `Start commercial due diligence with ${bestByComposite.address}, then verify whether the package price fairly reflects both titles.`
         : "Verify title boundaries and package price allocation before relying on any combined-listing development assumptions.",
   };
+
+  // Prefer the LLM narrative when available; always append the per-property
+  // failure notes so they aren't lost.
+  const comparison: CombinedReportGroup["comparison"] = llmSummary
+    ? {
+        summary: llmSummary.summary,
+        subdivisionView: llmSummary.subdivisionView,
+        investmentView: llmSummary.investmentView,
+        risks: [
+          ...llmSummary.risks,
+          ...args.failures.map((f) => `${f.address}: report generation failed (${f.error}).`),
+        ],
+        recommendedNextStep: llmSummary.recommendedNextStep,
+      }
+    : deterministicComparison;
+
   const warnings = [
     "Combined listing facts are shown as listing context only. They are not used as verified facts for any one child property.",
   ];
-  const localised = await localiseCombinedComparison(comparison, warnings, args.locale);
+  // The LLM is already prompted to emit text in the target locale (and to
+  // preserve English addresses) so we only run the legacy translation step
+  // when we fell back to the deterministic English copy.
+  const finalComparison = llmSummary ? comparison : (await localiseCombinedComparison(comparison, warnings, args.locale)).comparison;
+  const finalWarnings = llmSummary
+    ? (args.locale === "zh" ? await Promise.all(warnings.map((w) => ensureChinese(w))) : warnings)
+    : (await localiseCombinedComparison(comparison, warnings, args.locale)).warnings;
   return {
     kind: "combined_listing_group",
     packageAddress: args.packageAddress,
     childAddresses: args.childAddresses,
     reports: args.reports,
     failures: args.failures,
-    comparison: localised.comparison,
-    warnings: localised.warnings,
+    comparison: finalComparison,
+    warnings: finalWarnings,
   };
 }
 
@@ -3004,13 +3321,16 @@ router.post("/chat", async (req, res) => {
                 { fromCache: getShownUrls(cacheKey).length, fromHistory: alreadyShownUrlsFromHistory.length, total: shownUrls.length },
                 "Discovery: dedupe skipUrls assembled",
               );
-              const searchResult = await searchRealEstateListings({
-                suburb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
+              const searchResult = await searchSuburbOrDistrict({
+                suburb,
+                minPrice: effectiveMinPrice,
+                maxPrice: effectiveMaxPrice,
                 skipUrls: shownUrls,
                 includeNegotiation,
                 firstBatchSize: wantsDevelopmentDiscovery ? 24 : undefined,
                 fetchAllPages: strictStandardSubdivision,
                 maxListings: strictStandardSubdivision ? 500 : undefined,
+                log: req.log,
               }).catch((err) => { req.log.warn({ err }, "realestate.co.nz search failed"); return null; });
 
               if (searchResult && searchResult.firstBatch.length > 0) {
@@ -3034,17 +3354,28 @@ router.post("/chat", async (req, res) => {
                   suburb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
                 });
                 req.log.info({ fetched: firstFiltered.length, cached: remainingFiltered.length }, "realestate.co.nz: prescreening listings");
-                // Run pre-screening and AI intro generation in parallel to save time
+                // Run pre-screening and AI intro generation in parallel to save time.
+                // In strict-subdivision mode we early-bail once 3 candidates surface
+                // and keep draining the rest in the background so the next "show
+                // more" is instant from the verdict cache.
                 const criteriaContext = criteriaLabel ? ` matching criteria: ${criteriaLabel}` : "";
                 const introPromptPreScreen = `The user asked: "${userText}". You found some matching properties in ${suburb || "the area"} on realestate.co.nz${criteriaContext}. In 1 sentence, acknowledge this result conversationally (e.g. "I found a few development sites in St Heliers under $2M:"). Do NOT mention a specific number — say "a few", "some", or "a handful". Be natural and brief — no JSON.`;
+                const preScreenOptsWithBail = strictStandardSubdivision
+                  ? { ...discoverPreOpts, earlyBailAt: 3 }
+                  : discoverPreOpts;
                 const [screenedDetailed, introFromPreScreen] = await Promise.all([
-                  preScreenListingsFastDetailed(firstFiltered, 5, null, discoverPreOpts).catch(
-                    () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[] }),
+                  preScreenListingsFastDetailed(firstFiltered, 5, null, preScreenOptsWithBail).catch(
+                    () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], drainComplete: Promise.resolve() }),
                   ),
                   generateAnalysis(introPromptPreScreen, chatLocale).catch(() => ""),
                 ]);
                 const screened = screenedDetailed.candidates;
                 if (strictStandardSubdivision) strictIndeterminate.push(...screenedDetailed.indeterminate);
+                if (strictStandardSubdivision) {
+                  // Detach the remaining drain so the verdict cache warms in the
+                  // background while we reply to the user.
+                  runAfterResponse(screenedDetailed.drainComplete.catch(() => {}));
+                }
                 candidates = pickDiscoveryCandidates(screened, discoveryCriteria, alreadyShownAddressKeys, 3);
                 const pickedUrls = candidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u));
                 markShown(cacheKey, pickedUrls);
@@ -3153,7 +3484,7 @@ router.post("/chat", async (req, res) => {
                     const introPromptFallback = `The user asked about ${suburb}${criteriaContextFallback} but no listings were found there right now. You found some properties in nearby ${nearbySuburb}. In 1 sentence acknowledge this naturally (e.g. "I couldn't find anything in ${suburb} right now, but here are some nearby options in ${nearbySuburb}:"). Do NOT mention a specific number — say "a few", "some", or "a handful". Be brief — no JSON.`;
                     const [screenedFallbackDetailed, introFallback] = await Promise.all([
                       preScreenListingsFastDetailed(filtered, 5, null, discoverPreOpts).catch(
-                        () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[] }),
+                        () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], drainComplete: Promise.resolve() }),
                       ),
                       generateAnalysis(introPromptFallback, chatLocale).catch(() => ""),
                     ]);
@@ -3623,6 +3954,7 @@ PRE-COMPUTED FINANCIALS — use verbatim:
   Potential lots: ${lots.lots}
   Zone: ${lots.zone_label} (${merged.zone_code ?? "unknown"})
   Land / CV: ${cvNote}
+  Land area: ${merged.land_area_sqm != null ? `${merged.land_area_sqm}m² (confirmed from ${landSource ?? "selected source"})` : "NOT AVAILABLE for the subject property. If this is a unit, do not use parent parcel/site area; set propertyOverview.landArea to null."}
   CV unavailable: ${costs.cv_unavailable}
   Missing critical fields: ${missingCritical.join(", ") || "none"}
 
@@ -3683,7 +4015,7 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
   "propertyOverview": {
     "address": "...",
     "cv": ${cvNzd > 0 ? `"$${formatNZD(cvNzd)}"` : "null"},
-    "landArea": "${merged.land_area_sqm != null ? `${merged.land_area_sqm}m²` : "null — check LINZ"}",
+    "landArea": ${merged.land_area_sqm != null ? `"${merged.land_area_sqm}m²"` : "null"},
     "floorArea": "${merged.floor_area_sqm != null ? `${merged.floor_area_sqm}m²` : "null"}",
     "buildYear": ${merged.build_year_range ? `"${merged.build_year_range}"` : (merged.build_year != null ? `"${merged.build_year}"` : "null")},
     "zone": "...",
