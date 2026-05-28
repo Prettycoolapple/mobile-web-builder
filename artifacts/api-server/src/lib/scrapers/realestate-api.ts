@@ -762,9 +762,7 @@ function streetNumberToken(line: string): string {
 }
 
 export function looksLikeCombinedListingAddress(address: string | null | undefined): boolean {
-  if (!address?.trim()) return false;
-  const firstLine = address.split(",")[0] ?? address;
-  return /\s(?:&|\+|\/|and)\s*\d+[a-z]?\b/i.test(firstLine);
+  return extractCombinedListingAddressParts(address) != null;
 }
 
 export type CombinedListingAddressParts = {
@@ -772,10 +770,59 @@ export type CombinedListingAddressParts = {
   childAddresses: string[];
 };
 
-const STREET_TYPE_RE = /\b(road|street|avenue|crescent|place|drive|way|lane|terrace|parade|close|grove|rise|view|heights|ridge|court|hill|mews|quay|boulevard|highway|motorway|esplanade|mall|row|walk|path|track|rd|st|ave|cres|pl|dr|ln|tce|pde|blvd|hwy)\b/i;
+const STREET_TYPE_RE = /\b(road|street|avenue|crescent|cresent|place|drive|way|lane|terrace|parade|close|grove|rise|view|heights|ridge|court|hill|mews|quay|boulevard|highway|motorway|esplanade|mall|row|walk|path|track|rd|st|ave|cres|pl|dr|ln|tce|pde|blvd|hwy)\b/i;
+const STREET_TYPE_GLOBAL_RE = /\b(road|street|avenue|crescent|cresent|place|drive|way|lane|terrace|parade|close|grove|rise|view|heights|ridge|court|hill|mews|quay|boulevard|highway|motorway|esplanade|mall|row|walk|path|track|rd|st|ave|cres|pl|dr|ln|tce|pde|blvd|hwy)\b/gi;
+const LEADING_CONNECTOR_RE = /^(?:,|\s|\b(?:and|&|\+|\/)\b)+/i;
 
 function normaliseAddressForDedupe(address: string): string {
   return address.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function normaliseStreetTypeTypos(value: string): string {
+  return value.replace(/\bCresent\b/gi, "Crescent");
+}
+
+function splitPackageStreetAndSuffix(rawAddress: string): { streetPart: string; suffix: string } | null {
+  const cleaned = normaliseStreetTypeTypos(rawAddress)
+    .replace(/^.*?(?=\d+[a-z]?\b)/i, "")
+    .trim();
+  if (!cleaned) return null;
+
+  const matches = [...cleaned.matchAll(STREET_TYPE_GLOBAL_RE)];
+  if (matches.length === 0) return null;
+  const last = matches[matches.length - 1];
+  const streetEnd = (last.index ?? 0) + last[0].length;
+  return {
+    streetPart: cleaned.slice(0, streetEnd).trim(),
+    suffix: cleaned.slice(streetEnd).trim(),
+  };
+}
+
+function streetSegments(streetPart: string): string[] {
+  const matches = [...streetPart.matchAll(STREET_TYPE_GLOBAL_RE)];
+  const segments: string[] = [];
+  let start = 0;
+  for (const match of matches) {
+    const end = (match.index ?? 0) + match[0].length;
+    const segment = streetPart.slice(start, end).replace(LEADING_CONNECTOR_RE, "").trim();
+    if (segment) segments.push(segment);
+    start = end;
+  }
+  return segments;
+}
+
+function expandStreetSegment(segment: string, suffix: string): string[] {
+  const lastNumber = [...segment.matchAll(/\b\d+[a-z]?\b/gi)].pop();
+  if (!lastNumber || lastNumber.index == null) return [];
+
+  const streetTail = segment.slice(lastNumber.index + lastNumber[0].length).trim();
+  if (!STREET_TYPE_RE.test(streetTail)) return [];
+
+  const numberPart = segment.slice(0, lastNumber.index + lastNumber[0].length);
+  const numbers = [...numberPart.matchAll(/\b\d+[a-z]?\b/gi)].map((m) => m[0]);
+  if (numbers.length === 0) return [];
+
+  return numbers.map((n) => `${n} ${streetTail}${suffix}`.replace(/\s+,/g, ",").trim());
 }
 
 /**
@@ -785,35 +832,19 @@ function normaliseAddressForDedupe(address: string): string {
  */
 export function extractCombinedListingAddressParts(rawAddress: string | null | undefined): CombinedListingAddressParts | null {
   const address = rawAddress?.trim();
-  if (!address || !looksLikeCombinedListingAddress(address)) return null;
+  if (!address) return null;
 
-  const commaParts = address.split(",").map((p) => p.trim()).filter(Boolean);
-  const firstLineRaw = commaParts[0] ?? address;
-  const firstLine = firstLineRaw.replace(/^.*?(?=\d+[a-z]?\b)/i, "").trim();
-  const suffix = commaParts.length > 1 ? `, ${commaParts.slice(1).join(", ")}` : "";
-  const pieces = firstLine.split(/\s+(?:&|\+|\/|and)\s+/i).map((p) => p.trim()).filter(Boolean);
-  if (pieces.length < 2) return null;
+  const split = splitPackageStreetAndSuffix(address);
+  if (!split) return null;
 
-  const lastStreetPiece = [...pieces].reverse().find((p) => STREET_TYPE_RE.test(p));
-  const sharedStreetTail = lastStreetPiece
-    ? lastStreetPiece.replace(/^\d+[a-z]?\s*/i, "").trim()
-    : "";
-
-  const childAddresses = pieces
-    .map((piece) => {
-      const hasStreetType = STREET_TYPE_RE.test(piece);
-      const firstToken = piece.match(/^\d+[a-z]?\b/i)?.[0] ?? null;
-      if (!hasStreetType && firstToken && sharedStreetTail) {
-        return `${firstToken} ${sharedStreetTail}${suffix}`.trim();
-      }
-      return `${piece}${suffix}`.trim();
-    })
-    .filter((child) => STREET_TYPE_RE.test(child));
+  const childAddresses = streetSegments(split.streetPart).flatMap((segment) =>
+    expandStreetSegment(segment, split.suffix),
+  );
 
   const unique = Array.from(
     new Map(childAddresses.map((child) => [normaliseAddressForDedupe(child), child])).values(),
   );
-  const packageAddress = `${firstLine}${suffix}`.trim();
+  const packageAddress = `${split.streetPart}${split.suffix}`.trim();
   return unique.length >= 2 ? { packageAddress, childAddresses: unique } : null;
 }
 

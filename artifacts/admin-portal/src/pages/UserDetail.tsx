@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { apiGet, apiPatch } from "@/lib/api";
 import { formatDate, relativeTime } from "@/lib/format";
 
-type Tab = "feedback" | "addresses" | "agent_calls";
+type Tab = "feedback" | "addresses" | "agent_calls" | "connections";
 
 interface UserDetailResponse {
   profile: {
@@ -28,6 +28,7 @@ interface UserDetailResponse {
     thumbsDown: number;
     callsPerReport: number;
     recommendationCount: number | null;
+    dmConnections: number;
   };
 }
 
@@ -53,6 +54,16 @@ interface AgentCallRow {
   agencyName: string | null;
   agentPhone: string | null;
   propertyAddress: string | null;
+}
+
+interface ConnectionRow {
+  threadId: string;
+  connectedAt: string;
+  lastMessageAt: string | null;
+  otherId: string;
+  otherEmail: string;
+  otherFullName: string | null;
+  otherRole: string;
 }
 
 interface ListResponse<T> {
@@ -119,6 +130,8 @@ export default function UserDetailPage() {
   const [addressOffset, setAddressOffset] = useState(0);
   const [callList, setCallList] = useState<ListResponse<AgentCallRow> | null>(null);
   const [callOffset, setCallOffset] = useState(0);
+  const [connectionList, setConnectionList] = useState<ListResponse<ConnectionRow> | null>(null);
+  const [connectionOffset, setConnectionOffset] = useState(0);
 
   useEffect(() => {
     if (!userId) return;
@@ -159,6 +172,14 @@ export default function UserDetailPage() {
       .catch(() => setCallList(null));
   }, [userId, callOffset]);
 
+  const loadConnections = useCallback(() => {
+    if (!userId) return;
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(connectionOffset) });
+    apiGet<ListResponse<ConnectionRow>>(`/admin/users/${userId}/connections?${params}`)
+      .then(setConnectionList)
+      .catch(() => setConnectionList(null));
+  }, [userId, connectionOffset]);
+
   useEffect(() => {
     if (tab === "feedback") loadFeedback();
   }, [tab, loadFeedback]);
@@ -168,6 +189,9 @@ export default function UserDetailPage() {
   useEffect(() => {
     if (tab === "agent_calls") loadCalls();
   }, [tab, loadCalls]);
+  useEffect(() => {
+    if (tab === "connections") loadConnections();
+  }, [tab, loadConnections]);
 
   if (loading) return <div className="empty">Loading…</div>;
   if (error) return <div className="empty">{error}</div>;
@@ -267,6 +291,9 @@ export default function UserDetailPage() {
         {counts.recommendationCount != null && (
           <StatTile label="Recommendations (thumbs-up)" value={String(counts.recommendationCount)} hint="Shown on provider card & profile" />
         )}
+        {profile.role === "service_provider" && (
+          <StatTile label="DM connections" value={String(counts.dmConnections)} hint="Unique users who messaged this provider" />
+        )}
       </div>
 
       {/* Recommendation count editor — service providers only */}
@@ -340,7 +367,7 @@ export default function UserDetailPage() {
       {/* Tabs */}
       <div className="panel">
         <div className="panel-header" style={{ gap: 8 }}>
-          <div style={{ display: "flex", gap: 6 }}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             <button
               className="btn ghost"
               onClick={() => setTab("feedback")}
@@ -371,6 +398,18 @@ export default function UserDetailPage() {
             >
               Agent calls{callList ? ` (${callList.total})` : ""}
             </button>
+            {profile.role === "service_provider" && (
+              <button
+                className="btn ghost"
+                onClick={() => setTab("connections")}
+                style={{
+                  fontWeight: tab === "connections" ? 600 : 400,
+                  borderColor: tab === "connections" ? "var(--accent, #2563eb)" : undefined,
+                }}
+              >
+                Connections{connectionList ? ` (${connectionList.total})` : ""}
+              </button>
+            )}
           </div>
         </div>
 
@@ -382,6 +421,9 @@ export default function UserDetailPage() {
         )}
         {tab === "agent_calls" && (
           <CallTable list={callList} offset={callOffset} setOffset={setCallOffset} />
+        )}
+        {tab === "connections" && (
+          <ConnectionsTable list={connectionList} offset={connectionOffset} setOffset={setConnectionOffset} />
         )}
       </div>
     </>
@@ -529,6 +571,57 @@ function CallTable({
                 <td>{r.agencyName ?? "—"}</td>
                 <td>{r.agentPhone ?? "—"}</td>
                 <td style={{ wordBreak: "break-word" }}>{r.propertyAddress ?? "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <Pagination total={list.total} offset={offset} setOffset={setOffset} />
+    </>
+  );
+}
+
+function ConnectionsTable({
+  list,
+  offset,
+  setOffset,
+}: {
+  list: ListResponse<ConnectionRow> | null;
+  offset: number;
+  setOffset: (n: number) => void;
+}) {
+  if (!list) return <div className="empty">Loading…</div>;
+  if (list.rows.length === 0) return <div className="empty">No connections yet.</div>;
+  return (
+    <>
+      <div style={{ overflowX: "auto" }}>
+        <table className="table">
+          <thead>
+            <tr>
+              <th>User</th>
+              <th style={{ width: 100 }}>Role</th>
+              <th style={{ width: 160 }}>Connected</th>
+              <th style={{ width: 160 }}>Last message</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.rows.map((r) => (
+              <tr key={r.threadId}>
+                <td>
+                  <div style={{ fontWeight: 500 }}>{r.otherFullName ?? "—"}</div>
+                  <div style={{ fontSize: 12, color: "var(--muted)" }}>{r.otherEmail}</div>
+                </td>
+                <td>
+                  <span className="badge role">{r.otherRole}</span>
+                </td>
+                <td title={formatDate(r.connectedAt)}>{relativeTime(r.connectedAt)}</td>
+                <td>
+                  {r.lastMessageAt ? (
+                    <span title={formatDate(r.lastMessageAt)}>{relativeTime(r.lastMessageAt)}</span>
+                  ) : (
+                    <span style={{ color: "var(--muted)" }}>—</span>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>

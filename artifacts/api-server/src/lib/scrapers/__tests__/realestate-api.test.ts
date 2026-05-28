@@ -75,6 +75,49 @@ describe("realestate-api combined listing detection", () => {
     });
   });
 
+  it("expands comma-separated shared-street package numbers", () => {
+    expect(extractCombinedListingAddressParts("3, 5, 7, 9 and 11 Rukutai Street, Orakei, Auckland")).toEqual({
+      packageAddress: "3, 5, 7, 9 and 11 Rukutai Street, Orakei, Auckland",
+      childAddresses: [
+        "3 Rukutai Street, Orakei, Auckland",
+        "5 Rukutai Street, Orakei, Auckland",
+        "7 Rukutai Street, Orakei, Auckland",
+        "9 Rukutai Street, Orakei, Auckland",
+        "11 Rukutai Street, Orakei, Auckland",
+      ],
+    });
+  });
+
+  it("expands package listings across multiple street groups", () => {
+    expect(extractCombinedListingAddressParts("3, 5, 7, 9 and 11 Rukutai Street and 12 Godden Crescent, Orakei")).toEqual({
+      packageAddress: "3, 5, 7, 9 and 11 Rukutai Street and 12 Godden Crescent, Orakei",
+      childAddresses: [
+        "3 Rukutai Street, Orakei",
+        "5 Rukutai Street, Orakei",
+        "7 Rukutai Street, Orakei",
+        "9 Rukutai Street, Orakei",
+        "11 Rukutai Street, Orakei",
+        "12 Godden Crescent, Orakei",
+      ],
+    });
+  });
+
+  it("normalises Cresent typo while detecting package listings", () => {
+    expect(extractCombinedListingAddressParts("11 Rukutai Street and 12 Godden Cresent, Orakei")).toEqual({
+      packageAddress: "11 Rukutai Street and 12 Godden Crescent, Orakei",
+      childAddresses: [
+        "11 Rukutai Street, Orakei",
+        "12 Godden Crescent, Orakei",
+      ],
+    });
+  });
+
+  it("keeps more than four package children", () => {
+    const parsed = extractCombinedListingAddressParts("1, 3, 5, 7, 9 and 11 Example Street, Orakei");
+    expect(parsed?.childAddresses).toHaveLength(6);
+    expect(parsed?.childAddresses.at(-1)).toBe("11 Example Street, Orakei");
+  });
+
   it("ignores prompt text before an embedded package address", () => {
     expect(extractCombinedListingAddressParts("Analyse the package 15 Fisherton Street & 7 Stanmore Road, Grey Lynn")).toEqual({
       packageAddress: "15 Fisherton Street & 7 Stanmore Road, Grey Lynn",

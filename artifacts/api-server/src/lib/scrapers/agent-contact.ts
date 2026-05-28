@@ -4,6 +4,7 @@ import { launchBrowser, newStealthPage, randomDelay, logScrapeAttempt, isVercelS
 import { fetchWithScrapingBee } from "./scrapingbee";
 import { fetchRealestateAgentContactForAddress } from "./realestate-api";
 import { type SelectedListingContext } from "../selected-listing-context";
+import { resolveActiveListingContext } from "../active-listing-context";
 
 export interface AgentContactResult {
   found: boolean;
@@ -164,6 +165,9 @@ async function scrapeAgentViaSelectedListingUrl(
         isListed: true,
         matchType: "subject",
         listingAddress: selectedListingContext.address ?? null,
+        agentName: selectedListingContext.agentName ?? null,
+        agentPhone: selectedListingContext.agentPhone ?? null,
+        agencyName: selectedListingContext.agencyName ?? null,
         listingUrl,
         source: inferAgentSourceFromUrl(listingUrl),
       };
@@ -290,6 +294,9 @@ export async function scrapeListingAgent(
   address: string,
   options: { allowSuburbFallback?: boolean; listingUrl?: string | null; selectedListingContext?: SelectedListingContext | null } = {},
 ): Promise<AgentContactResult> {
+  const lookupAddress = options.selectedListingContext?.isCombinedListing && options.selectedListingContext.packageAddress
+    ? options.selectedListingContext.packageAddress
+    : address;
   const selectedUrl = options.selectedListingContext?.listingUrl ?? options.listingUrl ?? null;
   if (selectedUrl && !/realestate\.co\.nz/i.test(selectedUrl)) {
     try {
@@ -301,7 +308,7 @@ export async function scrapeListingAgent(
   }
 
   try {
-    const realestateAgent = await fetchRealestateAgentContactForAddress(address);
+    const realestateAgent = await fetchRealestateAgentContactForAddress(lookupAddress);
     if (realestateAgent) {
       logScrapeAttempt("AgentContact", "realestate-api", !!realestateAgent.agentPhone, `agent=${realestateAgent.agentName ?? "found"}`);
       return {
@@ -331,6 +338,34 @@ export async function scrapeListingAgent(
       listingUrl: selectedUrl,
       source: options.selectedListingContext?.source ?? inferAgentSourceFromUrl(selectedUrl),
     };
+  }
+
+  try {
+    const resolved = await resolveActiveListingContext(lookupAddress, {
+      purpose: "agent_contact",
+      selectedListingContext: options.selectedListingContext ?? null,
+    });
+    const ctx = resolved.context;
+    if (ctx?.listingUrl || ctx?.agentName || ctx?.agencyName) {
+      if (ctx.listingUrl && !/realestate\.co\.nz/i.test(ctx.listingUrl)) {
+        const selected = await scrapeAgentViaSelectedListingUrl(ctx.listingUrl, ctx).catch(() => null);
+        if (selected?.isListed) return selected;
+      }
+      return {
+        ...emptyResult(),
+        found: true,
+        isListed: true,
+        matchType: "subject",
+        listingAddress: ctx.address ?? lookupAddress,
+        agentName: ctx.agentName ?? null,
+        agentPhone: ctx.agentPhone ?? null,
+        agencyName: ctx.agencyName ?? null,
+        listingUrl: ctx.listingUrl ?? null,
+        source: ctx.source ?? (ctx.listingUrl ? inferAgentSourceFromUrl(ctx.listingUrl) : "active-listing"),
+      };
+    }
+  } catch (err) {
+    logScrapeAttempt("AgentContact", "active-listing-resolver", false, String(err));
   }
 
   logger.info({ address }, "AgentContact: no exact active realestate.co.nz listing match");

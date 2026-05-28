@@ -273,7 +273,7 @@ describe("strict subdivision pre-screening", () => {
     expect(results).toEqual([]);
   });
 
-  it("excludes combined multi-address package listings from strict subdivision cards", async () => {
+  it("keeps combined multi-address package listings with package metadata and aggregate facts flagged", async () => {
     mockedPropertyHistory.mockResolvedValue({
       cv_nzd: null,
       cv_year: null,
@@ -296,7 +296,18 @@ describe("strict subdivision pre-screening", () => {
       }),
     ], 1, null, { allowMissingListingPrice: true, strictStandardSubdivision: true });
 
-    expect(results).toEqual([]);
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      address: "15 Fisherton Street & 7 Stanmore Road, Grey Lynn, Auckland City, Auckland",
+      isCombinedListing: true,
+      packageAddress: "15 Fisherton Street & 7 Stanmore Road, Grey Lynn, Auckland City, Auckland",
+      childAddresses: [
+        "15 Fisherton Street, Grey Lynn, Auckland City, Auckland",
+        "7 Stanmore Road, Grey Lynn, Auckland City, Auckland",
+      ],
+      aggregateFactsExcluded: true,
+      subdivisionRejectReason: "combined_listing_aggregate",
+    });
   });
 
   it("excludes an MHS site that cannot fit two compliant minimum lots", async () => {

@@ -7,6 +7,7 @@ import {
   feasibilityJobs,
   agentCallEvents,
   chatLlmFeedback,
+  dmThreads,
 } from "@workspace/db";
 import { requireAdmin } from "../lib/auth";
 import { createStorageReviewToken } from "../lib/storage-review-token";
@@ -653,12 +654,14 @@ router.get("/admin/users/:userId", requireAdmin, async (req, res) => {
       agent_calls: string;
       thumbs_down: string;
       recommendation_count: string | null;
+      dm_connections: string;
     }>(sql`
       SELECT
         (SELECT COUNT(*) FROM feasibility_jobs WHERE user_id = ${userId}) AS feasibility_reports,
         (SELECT COUNT(*) FROM agent_call_events WHERE user_id = ${userId}) AS agent_calls,
         (SELECT COUNT(*) FROM chat_llm_feedback WHERE user_id = ${userId} AND rating = 'down') AS thumbs_down,
-        (SELECT recommendation_count FROM service_provider_profiles WHERE user_id = ${userId}) AS recommendation_count
+        (SELECT recommendation_count FROM service_provider_profiles WHERE user_id = ${userId}) AS recommendation_count,
+        (SELECT COUNT(*) FROM dm_threads WHERE participant_a = ${userId} OR participant_b = ${userId}) AS dm_connections
     `);
     const countsRows = (countsResult as any).rows ?? countsResult;
     const c = (countsRows[0] ?? {}) as Record<string, string | null>;
@@ -667,6 +670,7 @@ router.get("/admin/users/:userId", requireAdmin, async (req, res) => {
     const thumbsDown = Number(c.thumbs_down ?? 0);
     const callsPerReport = feasibilityReports > 0 ? agentCalls / feasibilityReports : 0;
     const recommendationCount = c.recommendation_count != null ? Number(c.recommendation_count) : null;
+    const dmConnections = Number(c.dm_connections ?? 0);
 
     res.json({
       profile: {
@@ -679,6 +683,7 @@ router.get("/admin/users/:userId", requireAdmin, async (req, res) => {
         thumbsDown,
         callsPerReport,
         recommendationCount,
+        dmConnections,
       },
     });
   } catch (err) {
@@ -787,6 +792,67 @@ router.get("/admin/users/:userId/agent-calls", requireAdmin, async (req, res) =>
   } catch (err) {
     req.log.error({ err }, "admin user agent-calls list failed");
     res.status(500).json({ error: "Failed to load agent calls" });
+  }
+});
+
+// GET /admin/users/:userId/connections  → DM threads (service-provider connections)
+router.get("/admin/users/:userId/connections", requireAdmin, async (req, res) => {
+  const { userId } = req.params;
+  const limit = parseLimit(req.query.limit, 20, 100);
+  const offset = parseOffset(req.query.offset);
+
+  try {
+    // Fetch threads where this user is either participant, joined with the OTHER participant's profile.
+    const rows = await db.execute<{
+      thread_id: string;
+      connected_at: string;
+      last_message_at: string | null;
+      other_id: string;
+      other_email: string;
+      other_full_name: string | null;
+      other_role: string;
+    }>(sql`
+      SELECT
+        t.id                                                            AS thread_id,
+        t.created_at                                                    AS connected_at,
+        t.last_message_at                                               AS last_message_at,
+        p.id                                                            AS other_id,
+        p.email                                                         AS other_email,
+        p.full_name                                                     AS other_full_name,
+        p.role                                                          AS other_role
+      FROM dm_threads t
+      JOIN profiles p
+        ON p.id = CASE WHEN t.participant_a = ${userId} THEN t.participant_b ELSE t.participant_a END
+      WHERE t.participant_a = ${userId} OR t.participant_b = ${userId}
+      ORDER BY t.last_message_at DESC NULLS LAST, t.created_at DESC
+      LIMIT ${limit} OFFSET ${offset}
+    `);
+    const rawRows = (rows as any).rows ?? rows;
+
+    const totalResult = await db.execute<{ total: string }>(sql`
+      SELECT COUNT(*)::text AS total FROM dm_threads
+      WHERE participant_a = ${userId} OR participant_b = ${userId}
+    `);
+    const totalRows = (totalResult as any).rows ?? totalResult;
+    const total = Number((totalRows[0] as any)?.total ?? 0);
+
+    res.json({
+      total,
+      limit,
+      offset,
+      rows: rawRows.map((r: any) => ({
+        threadId: r.thread_id,
+        connectedAt: r.connected_at,
+        lastMessageAt: r.last_message_at ?? null,
+        otherId: r.other_id,
+        otherEmail: r.other_email,
+        otherFullName: r.other_full_name ?? null,
+        otherRole: r.other_role,
+      })),
+    });
+  } catch (err) {
+    req.log.error({ err }, "admin user connections list failed");
+    res.status(500).json({ error: "Failed to load connections" });
   }
 });
 

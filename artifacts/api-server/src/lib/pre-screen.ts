@@ -3,6 +3,7 @@ import { geocodeAddress } from "./geocode";
 import { scrapeHougarden } from "./scrapers/hougarden";
 import { fetchUnitaryPlanZone, fetchOverlays, type ZoneResult, type Overlay } from "./auckland-council";
 import type { ListingResult } from "./scrapers/oneroof";
+import { extractCombinedListingAddressParts } from "./scrapers/realestate-api";
 import { calculatePotentialLots } from "./lot-calculator";
 import { fetchLINZParcel } from "./linz";
 import { fetchPropertyHistory } from "./property-data";
@@ -58,6 +59,10 @@ export interface PropertyCandidate {
   buildYear?: number | null;
   screeningStatus?: "preliminary" | "verified";
   screeningNotes?: string[];
+  isCombinedListing?: boolean;
+  packageAddress?: string;
+  childAddresses?: string[];
+  aggregateFactsExcluded?: boolean;
 }
 
 /**
@@ -392,6 +397,7 @@ async function screenOneFast(
     if (!price) return { kind: "rejected", reason: "no_price" };
 
     const { lots, minLotSize } = estimateLotCapacity(zone, land ?? null);
+    const packageParts = extractCombinedListingAddressParts(listing.address);
     const eligibility = assessPropertyEligibility({
           address: listing.address,
           estateType: listing.tenureText,
@@ -444,7 +450,13 @@ async function screenOneFast(
       subdivisionEligible: eligibility?.subdivisionEligible,
       buildYear: propertyHistory?.build_year ?? null,
     });
-    if (options?.strictStandardSubdivision && !standardSubdivisionPasses) {
+    const packageSubdivisionPasses =
+      Boolean(packageParts) &&
+      lots >= 2 &&
+      minLotSize != null &&
+      verifiedLand.landAreaConfidence === "verified" &&
+      verifiedLand.isAlreadySubdividedChild !== true;
+    if (options?.strictStandardSubdivision && !standardSubdivisionPasses && !packageSubdivisionPasses) {
       logger.info(
         {
           address: listing.address,
@@ -511,16 +523,20 @@ async function screenOneFast(
       priceApprox: priceApprox || undefined,
       floorArea: listing.floorArea ?? undefined,
       floorAreaApprox: listing.floorAreaApprox || undefined,
-      typology: eligibility?.typology,
-      typologyConfidence: eligibility?.typologyConfidence,
-      titleConfidence: eligibility?.titleConfidence,
-      subdivisionEligible: eligibility?.subdivisionEligible,
-      subdivisionRejectReason: eligibility?.subdivisionRejectReason,
+      typology: packageParts ? "standalone" : eligibility?.typology,
+      typologyConfidence: packageParts ? "inferred" : eligibility?.typologyConfidence,
+      titleConfidence: packageParts ? "inferred" : eligibility?.titleConfidence,
+      subdivisionEligible: packageParts ? packageSubdivisionPasses : eligibility?.subdivisionEligible,
+      subdivisionRejectReason: packageParts ? "combined_listing_aggregate" : eligibility?.subdivisionRejectReason,
       buildYear: propertyHistory?.build_year ?? propertyValue?.build_year ?? null,
       screeningStatus: options?.preliminarySubdivision ? "preliminary" : "verified",
       screeningNotes: options?.preliminarySubdivision
         ? ["Preliminary active-listing subdivision screen; build year is checked in the full analysis."]
         : ["Verified pre-screen."],
+      isCombinedListing: Boolean(packageParts || listing.isCombinedListing),
+      packageAddress: packageParts?.packageAddress,
+      childAddresses: packageParts?.childAddresses,
+      aggregateFactsExcluded: Boolean(packageParts || listing.isCombinedListing),
     };
     return { kind: "candidate", candidate };
   } catch (err) {

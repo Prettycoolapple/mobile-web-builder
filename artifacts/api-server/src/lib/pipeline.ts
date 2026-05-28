@@ -28,13 +28,14 @@ import {
   calculateDevelopmentStrategies,
   type DevelopmentStrategyScenario,
 } from "./development-strategies";
-import { fetchRealestateListingByUrl, fetchRealestateListingForAddress, fetchSupplementListingComparables } from "./scrapers/realestate-api";
+import { fetchRealestateListingByUrl, fetchSupplementListingComparables } from "./scrapers/realestate-api";
 import { scrapeTradeMePropertyPhotos } from "./scrapers/trademe-property";
 import { scrapeHougardenPhotos } from "./scrapers/hougarden-photos";
 import { scrapeHomesPhotos } from "./scrapers/homes-photos";
 import { scrapeOneRoofPhotos } from "./scrapers/oneroof-photos";
 import { findPropertyPhotosWithFallback } from "./scrapers/web-image-search";
 import { selectedListingPhotoUrls, type SelectedListingContext } from "./selected-listing-context";
+import { resolveActiveListingContext } from "./active-listing-context";
 import { enrichSchoolZonesDetail, type SchoolZoneDetail } from "./school-directory";
 import { inferSchoolZonesFromLocation } from "./school-zones-llm";
 import { resolvePipelineSuburb } from "./suburb-resolver";
@@ -479,6 +480,7 @@ export async function runPropertyPipeline(
 
   const { lat, lng } = geocode;
   const suburb = await resolvePipelineSuburb(address, geocode);
+  let resolvedListingContext = options.selectedListingContext ?? null;
 
   // LINZ parcel is fetched first so its parcel polygon bbox can be passed to the contour
   // elevation fetch — this ensures we sample across the full parcel extent (not just a
@@ -788,22 +790,27 @@ export async function runPropertyPipeline(
     logger.info({ classification: scrapedContourText.classification, text: scrapedContourText.text }, "Contour: elevation API unavailable — using scraped text fallback");
   }
 
-  // Match the subject against active realestate.co.nz listings. This is a
-  // direct JSON API path, so it still works in Vercel where browser scrapers
-  // are disabled. The merge step can use it to override stale valuation fields.
+  // Resolve active listing context. This starts with the same realestate.co.nz
+  // JSON API used by property-card discovery, then falls back to
+  // ScrapingBee-backed Homes/OneRoof/Trade Me exact listing pages.
   let realestateListing: ListingResult | null = null;
-  const realestateListingResult = await timed(
-    "realestate_listing",
-    async () =>
-      preferredRealestateListing
-      ?? await fetchRealestateListingForAddress(address, suburb)
-      ?? await fetchRealestateListingForAddress(geocode.formatted ?? address, suburb),
+  const activeListingResult = await timed(
+    "active_listing_context",
+    async () => resolveActiveListingContext(address, {
+      purpose: "feasibility",
+      suburb,
+      formattedAddress: geocode.formatted ?? address,
+      preferredRealestateListingUrl: preferredRealestateListing?.listingUrl ?? options.preferredRealestateListingUrl ?? null,
+      selectedListingContext: options.selectedListingContext ?? null,
+    }),
     timing,
   );
-  if (!realestateListingResult.failed) {
-    realestateListing = realestateListingResult.value;
+  if (!activeListingResult.failed && activeListingResult.value) {
+    realestateListing = activeListingResult.value.realestateListing ?? preferredRealestateListing;
+    resolvedListingContext = activeListingResult.value.context ?? options.selectedListingContext ?? null;
   } else {
-    failedSources.push("realestate_listing");
+    failedSources.push("active_listing_context");
+    realestateListing = preferredRealestateListing;
   }
   const realestateListingForFacts = activeListingFactsMatchSubject(realestateListing, geocode!.formatted ?? address)
     ? realestateListing
@@ -845,7 +852,7 @@ export async function runPropertyPipeline(
       realestate_listing: realestateListing,
       preferred_realestate_listing_url: preferredRealestateListing?.listingUrl ?? null,
       realestate_photo_urls: [
-        ...selectedListingPhotoUrls(options.selectedListingContext),
+        ...selectedListingPhotoUrls(resolvedListingContext),
         ...realestatePhotoUrls,
       ],
     },
@@ -892,9 +899,10 @@ export async function runPropertyPipeline(
   // logo to appear as the carousel's main image. Requiring ≥2 photos discards
   // those garbage results and lets the AI fallback retrieve the real photos.
   const MIN_ENRICHMENT_PHOTOS = 2;
+  const verifiedListingPhotos = selectedListingPhotoUrls(resolvedListingContext);
   const beforeEnrichCount = merged.photo_urls.length;
   const enriched = Array.from(new Set([
-    ...selectedListingPhotoUrls(options.selectedListingContext),
+    ...verifiedListingPhotos,
     ...merged.photo_urls,
     ...(enrichment.oneroofPhotos.photo_urls.length >= MIN_ENRICHMENT_PHOTOS ? enrichment.oneroofPhotos.photo_urls : []),
     ...(enrichment.trademe.photo_urls.length >= MIN_ENRICHMENT_PHOTOS ? enrichment.trademe.photo_urls : []),
@@ -906,11 +914,10 @@ export async function runPropertyPipeline(
     merged.main_photo_url = merged.photo_urls[0];
   }
 
-  // If after deterministic enrichment we STILL have zero photos, fall back to
-  // DuckDuckGo image search restricted to NZ real-estate CDN hosts. Honours
-  // the DISABLE_AI_PHOTO_FALLBACK env-var kill switch.
+  // Broad image search is intentionally opt-in. Verified listing pages and
+  // maps/street-view are safer than unrelated CDN or marketing images.
   let aiFallbackUsed = false;
-  if (merged.photo_urls.length === 0) {
+  if (merged.photo_urls.length === 0 && process.env["ENABLE_UNVERIFIED_PHOTO_FALLBACK"] === "true") {
     try {
       const aiPhotos = await findPropertyPhotosWithFallback(address);
       if (aiPhotos.length > 0) {
@@ -936,6 +943,7 @@ export async function runPropertyPipeline(
       hougardenPhotos: enrichment.hougardenPhotos.photo_urls.length,
       homesPhotos: enrichment.homesPhotos.photo_urls.length,
       oneroofPhotos: enrichment.oneroofPhotos.photo_urls.length,
+      activeListing: verifiedListingPhotos.length,
     },
     beforeEnrichCount,
     totalUnique: merged.photo_urls.length,
@@ -1299,7 +1307,7 @@ export async function runPropertyPipeline(
     qv: qvData,
     propertyValue: propertyValueData,
     realestate_listing: realestateListing,
-    selectedListingContext: options.selectedListingContext ?? null,
+    selectedListingContext: resolvedListingContext ?? null,
     merged,
     lots: lotResult,
     subdivision_pathway: subdivisionPathway,

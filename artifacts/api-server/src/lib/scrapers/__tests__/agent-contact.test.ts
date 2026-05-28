@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { extractAgentContactFromListingHtml, scrapeListingAgent } from "../agent-contact";
 import { fetchRealestateAgentContactForAddress } from "../realestate-api";
 import { fetchWithScrapingBee } from "../scrapingbee";
+import { resolveActiveListingContext } from "../../active-listing-context";
 
 vi.mock("../realestate-api", () => ({
   fetchRealestateAgentContactForAddress: vi.fn(),
@@ -9,14 +10,20 @@ vi.mock("../realestate-api", () => ({
 vi.mock("../scrapingbee", () => ({
   fetchWithScrapingBee: vi.fn(),
 }));
+vi.mock("../../active-listing-context", () => ({
+  resolveActiveListingContext: vi.fn(),
+}));
 
 const mockedFetchAgent = vi.mocked(fetchRealestateAgentContactForAddress);
 const mockedFetchWithScrapingBee = vi.mocked(fetchWithScrapingBee);
+const mockedResolveActiveListingContext = vi.mocked(resolveActiveListingContext);
 
 describe("scrapeListingAgent", () => {
   beforeEach(() => {
     mockedFetchAgent.mockReset();
     mockedFetchWithScrapingBee.mockReset();
+    mockedResolveActiveListingContext.mockReset();
+    mockedResolveActiveListingContext.mockResolvedValue({ context: null, realestateListing: null });
   });
 
   it("returns exact active listing agent data from realestate.co.nz", async () => {
@@ -83,6 +90,70 @@ describe("scrapeListingAgent", () => {
       agencyName: "The Kings Of Real Estate",
       agentPhone: null,
       source: "trademe",
+    });
+  });
+
+  it("returns active Homes/OneRoof listing context before saying a property is not listed", async () => {
+    mockedFetchAgent.mockResolvedValue(null);
+    mockedResolveActiveListingContext.mockResolvedValue({
+      realestateListing: null,
+      context: {
+        address: "10 Allen Road, Grey Lynn",
+        listingUrl: "https://homes.co.nz/address/auckland/grey-lynn/10-allen-road/RXZ7y",
+        source: "homes",
+        agentName: "Jane Agent",
+        agencyName: "Ray White",
+        isActiveListing: true,
+      },
+    });
+    mockedFetchWithScrapingBee.mockResolvedValue("");
+
+    const result = await scrapeListingAgent("10 Allen Road, Grey Lynn");
+
+    expect(result).toMatchObject({
+      found: true,
+      isListed: true,
+      matchType: "subject",
+      agentName: "Jane Agent",
+      agencyName: "Ray White",
+      agentPhone: null,
+      listingUrl: "https://homes.co.nz/address/auckland/grey-lynn/10-allen-road/RXZ7y",
+      source: "homes",
+    });
+  });
+
+  it("uses package address context when child address is not separately listed", async () => {
+    mockedFetchAgent.mockResolvedValue(null);
+    mockedResolveActiveListingContext.mockResolvedValue({
+      realestateListing: null,
+      context: {
+        address: "3, 5, 7, 9 and 11 Rukutai Street and 12 Godden Crescent, Orakei",
+        listingUrl: "https://www.realestate.co.nz/package-rukutai",
+        source: "realestate.co.nz",
+        agentName: "Package Agent",
+        agencyName: "Example Realty",
+        isActiveListing: true,
+        isCombinedListing: true,
+      },
+    });
+
+    const result = await scrapeListingAgent("11 Rukutai Street, Orakei", {
+      selectedListingContext: {
+        isCombinedListing: true,
+        packageAddress: "3, 5, 7, 9 and 11 Rukutai Street and 12 Godden Crescent, Orakei",
+        childAddresses: ["11 Rukutai Street, Orakei", "12 Godden Crescent, Orakei"],
+        aggregateFactsExcluded: true,
+      },
+    });
+
+    expect(mockedFetchAgent).toHaveBeenCalledWith("3, 5, 7, 9 and 11 Rukutai Street and 12 Godden Crescent, Orakei");
+    expect(result).toMatchObject({
+      found: true,
+      isListed: true,
+      matchType: "subject",
+      agentName: "Package Agent",
+      agencyName: "Example Realty",
+      listingUrl: "https://www.realestate.co.nz/package-rukutai",
     });
   });
 });

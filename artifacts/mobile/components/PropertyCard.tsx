@@ -44,6 +44,10 @@ function selectedListingContextFromCandidate(candidate: PropertyCandidate): Sele
     floorAreaApprox: candidate.floorAreaApprox ?? null,
     priceApprox: candidate.priceApprox ?? null,
     source: inferListingSourceFromUrl(candidate.listingUrl),
+    isCombinedListing: candidate.isCombinedListing ?? null,
+    packageAddress: candidate.packageAddress ?? (candidate.isCombinedListing ? candidate.address : null),
+    childAddresses: candidate.childAddresses ?? null,
+    aggregateFactsExcluded: candidate.aggregateFactsExcluded ?? null,
   };
 }
 
@@ -158,6 +162,8 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
     (candidate.typology === "unit_apartment" ||
       candidate.subdivisionRejectReason === "unit_or_crosslease_signal" ||
       candidate.isParentParcelSuspect === true);
+  const isPackageListing = candidate.isCombinedListing === true || (candidate.childAddresses?.length ?? 0) > 1;
+  const packageChildCount = candidate.childAddresses?.length ?? 0;
 
   return (
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -189,14 +195,14 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
           {candidate.price > 0 && (
             <View style={[styles.tag, { backgroundColor: colors.muted }]}>
               <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                {candidate.priceApprox ? "~" : ""}${(candidate.price / 1_000_000).toFixed(2)}M
+                {isPackageListing ? t("search.package_price_prefix") : ""}{candidate.priceApprox ? "~" : ""}${(candidate.price / 1_000_000).toFixed(2)}M
               </Text>
             </View>
           )}
           {candidate.landArea != null && candidate.landArea > 0 && (
             <View style={[styles.tag, { backgroundColor: colors.muted }]}>
               <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                {candidate.landAreaApprox ? "~" : ""}{candidate.landArea}m²
+                {isPackageListing ? t("search.package_land_prefix") : ""}{candidate.landAreaApprox ? "~" : ""}{candidate.landArea}m²
               </Text>
             </View>
           )}
@@ -210,11 +216,11 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
           {typeof candidate.floorArea === "number" && candidate.floorArea > 0 && (
             <View style={[styles.tag, { backgroundColor: colors.muted }]}>
               <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                {candidate.floorAreaApprox ? "~" : ""}{candidate.floorArea}m² floor
+                {isPackageListing ? t("search.package_floor_prefix") : ""}{candidate.floorAreaApprox ? "~" : ""}{candidate.floorArea}m² floor
               </Text>
             </View>
           )}
-          {typeof candidate.bedrooms === "number" && candidate.bedrooms > 0 && (
+          {!isPackageListing && typeof candidate.bedrooms === "number" && candidate.bedrooms > 0 && (
             <View style={[styles.tag, { backgroundColor: colors.muted, flexDirection: "row", alignItems: "center", gap: 3 }]}>
               <Feather name="moon" size={10} color={colors.foreground} />
               <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
@@ -222,7 +228,7 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
               </Text>
             </View>
           )}
-          {typeof candidate.bathrooms === "number" && candidate.bathrooms > 0 && (
+          {!isPackageListing && typeof candidate.bathrooms === "number" && candidate.bathrooms > 0 && (
             <View style={[styles.tag, { backgroundColor: colors.muted, flexDirection: "row", alignItems: "center", gap: 3 }]}>
               <Feather name="droplet" size={10} color={colors.foreground} />
               <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
@@ -239,18 +245,19 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
           )}
         </View>
 
-        {showSubdivisionRecommendation && !isPreliminarySubdivisionScreen ? (
-          <View style={[styles.subdivisionBox, { backgroundColor: colors.success + "12", borderColor: colors.success + "44" }]}>
-            <Feather name="check-circle" size={13} color={colors.success} />
-            <Text style={[styles.subdivisionText, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}>
-              <Text style={{ color: colors.success, fontFamily: "DM_Sans_700Bold" }}>
-                {t("search.subdivision_candidate", { lots: potentialLots })}
+        {isPackageListing ? (
+          <View style={[styles.packageBox, { backgroundColor: colors.accent + "12", borderColor: colors.accent + "40" }]}>
+            <Feather name="layers" size={13} color={colors.accent} />
+            <Text style={[styles.packageText, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}>
+              <Text style={{ color: colors.accent, fontFamily: "DM_Sans_700Bold" }}>
+                {t("search.package_sale_title")}
               </Text>
-              {subdivisionRuleText ? ` - ${subdivisionRuleText}` : ""}
-              {` - ${subdivisionScreeningText}`}
+              {` ${t("search.package_sale_note", { count: packageChildCount || 2 })}`}
             </Text>
           </View>
         ) : null}
+
+        {/* Lot-count box suppressed — disclaimer below replaces it for all screened results */}
 
         <View style={[styles.scoresRow, { borderTopColor: colors.border }]}>
           <ScorePip score={candidate.scores.ease} label={t("report.ease")} loading={candidate.scoresLoading} />
@@ -260,7 +267,7 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
           <ScorePip score={candidate.scores.roi} label={t("report.roi")} loading={candidate.scoresLoading} />
         </View>
 
-        {isPreliminarySubdivisionScreen ? (
+        {candidate.screeningStatus != null ? (
           <View style={[styles.preliminaryNote, { borderTopColor: colors.border }]}>
             <Feather name="info" size={12} color={colors.mutedForeground} />
             <Text style={[styles.preliminaryNoteText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
@@ -281,7 +288,7 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
         activeOpacity={0.8}
       >
         <Text style={[styles.analyseBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>
-          {t("search.full_analysis")}
+          {isPackageListing ? t("report.combined_listing_analyse_both") : t("search.full_analysis")}
         </Text>
         <Feather name="arrow-right" size={14} color="#fff" />
       </TouchableOpacity>
@@ -379,6 +386,20 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
   },
   subdivisionText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  packageBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 7,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+  },
+  packageText: {
     flex: 1,
     fontSize: 12,
     lineHeight: 16,

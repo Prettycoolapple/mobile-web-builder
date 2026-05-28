@@ -55,4 +55,43 @@ describe("selected listing context", () => {
       source: "homes",
     });
   });
+
+  it("does not apply package aggregate facts as single-property overview facts", () => {
+    const report: Record<string, unknown> = {
+      propertyOverview: {
+        bedrooms: 2,
+        bathrooms: 1,
+        landArea: "393m²",
+      },
+      data_sources: {},
+    };
+
+    applySelectedListingContextToReport(report, {
+      address: "15 Fisherton Street & 7 Stanmore Road, Grey Lynn",
+      listingUrl: "https://www.realestate.co.nz/package",
+      price: 3_500_000,
+      landArea: 786,
+      bedrooms: 6,
+      bathrooms: 2,
+      source: "realestate.co.nz",
+      isCombinedListing: true,
+      packageAddress: "15 Fisherton Street & 7 Stanmore Road, Grey Lynn",
+      childAddresses: [
+        "15 Fisherton Street, Grey Lynn",
+        "7 Stanmore Road, Grey Lynn",
+      ],
+      aggregateFactsExcluded: true,
+    });
+
+    expect(report.propertyOverview).toMatchObject({
+      bedrooms: 2,
+      bathrooms: 1,
+      landArea: "393m²",
+      isOnMarket: true,
+      combinedListingContext: {
+        isCombinedListingMatch: true,
+        aggregateFactsExcluded: true,
+      },
+    });
+  });
 });

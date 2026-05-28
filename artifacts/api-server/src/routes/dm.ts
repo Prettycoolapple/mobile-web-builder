@@ -8,7 +8,6 @@ import {
   dmThreads,
   dmMessages,
   pushTokens,
-  recommendations,
   userBlocks,
   userReports,
 } from "@workspace/db";
@@ -212,15 +211,13 @@ router.get("/dm/threads", requireAuth, async (req: Request, res: Response) => {
             fullName: profiles.fullName,
             role: profiles.role,
             avatarUrl: profiles.avatarUrl,
+            // Use the denormalized column so admin overrides are reflected here too.
+            recommendationCount: serviceProviderProfiles.recommendationCount,
           })
           .from(profiles)
+          .leftJoin(serviceProviderProfiles, eq(serviceProviderProfiles.userId, profiles.id))
           .where(eq(profiles.id, otherId))
           .limit(1);
-
-        const [recRow] = await db
-          .select({ count: sql<number>`count(*)::int` })
-          .from(recommendations)
-          .where(eq(recommendations.toUserId, otherId));
 
         const [lastMessage] = await db
           .select()
@@ -245,7 +242,7 @@ router.get("/dm/threads", requireAuth, async (req: Request, res: Response) => {
         return {
           ...thread,
           otherParticipant: other
-            ? { ...other, recommendationCount: recRow?.count ?? 0 }
+            ? { ...other, recommendationCount: other.recommendationCount ?? 0 }
             : null,
           lastMessage: lastMessage ?? null,
           unreadCount: count,

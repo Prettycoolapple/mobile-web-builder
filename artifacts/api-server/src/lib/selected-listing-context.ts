@@ -14,6 +14,15 @@ export interface SelectedListingContext {
   floorAreaApprox?: boolean | null;
   priceApprox?: boolean | null;
   source?: string | null;
+  agentName?: string | null;
+  agentPhone?: string | null;
+  agencyName?: string | null;
+  matchConfidence?: "verified" | "likely" | "unverified" | null;
+  isActiveListing?: boolean | null;
+  isCombinedListing?: boolean | null;
+  packageAddress?: string | null;
+  childAddresses?: string[] | null;
+  aggregateFactsExcluded?: boolean | null;
 }
 
 const MARKER_PREFIX = "[Selected listing context for analysis:";
@@ -74,6 +83,17 @@ export function normaliseSelectedListingContext(raw: unknown): SelectedListingCo
     floorAreaApprox: cleanBool(input.floorAreaApprox),
     priceApprox: cleanBool(input.priceApprox),
     source: cleanString(input.source) ?? inferListingSourceFromUrl(listingUrl),
+    agentName: cleanString(input.agentName),
+    agentPhone: cleanString(input.agentPhone),
+    agencyName: cleanString(input.agencyName),
+    matchConfidence: cleanString(input.matchConfidence) as SelectedListingContext["matchConfidence"],
+    isActiveListing: cleanBool(input.isActiveListing),
+    isCombinedListing: cleanBool(input.isCombinedListing),
+    packageAddress: cleanString(input.packageAddress),
+    childAddresses: Array.isArray(input.childAddresses)
+      ? Array.from(new Set(input.childAddresses.map(cleanString).filter((u): u is string => !!u)))
+      : [],
+    aggregateFactsExcluded: cleanBool(input.aggregateFactsExcluded),
   };
 
   if (!ctx.listingUrl && !ctx.photoUrl && photoUrls.length === 0) return null;
@@ -122,6 +142,7 @@ export function applySelectedListingContextToReport(
   const existingOverview = (parsed.propertyOverview as Record<string, unknown> | undefined) ?? {};
   const existingSources = (parsed.data_sources as Record<string, string> | undefined) ?? {};
   const sourceLabel = selectedListingContext.source ?? "selected active listing";
+  const excludeAggregateFacts = selectedListingContext.aggregateFactsExcluded === true || selectedListingContext.isCombinedListing === true;
 
   const overview: Record<string, unknown> = {
     ...existingOverview,
@@ -129,37 +150,54 @@ export function applySelectedListingContextToReport(
     listingSource: sourceLabel,
     listingUrl: selectedListingContext.listingUrl ?? existingOverview.listingUrl ?? null,
     isOnMarket: true,
+    listingMatchConfidence: selectedListingContext.matchConfidence ?? existingOverview.listingMatchConfidence ?? null,
   };
+  if (selectedListingContext.isCombinedListing || selectedListingContext.packageAddress) {
+    const childAddresses = selectedListingContext.childAddresses ?? [];
+    const combinedListingContext = {
+      isCombinedListingMatch: true,
+      packageAddress: selectedListingContext.packageAddress ?? selectedListingContext.address ?? selectedListingContext.listingUrl ?? "Combined listing package",
+      childAddresses,
+      aggregateFactsExcluded: selectedListingContext.aggregateFactsExcluded ?? true,
+      note: "The active listing appears to package multiple addresses. Package land, bedroom and bathroom figures were excluded from this single-property report.",
+    };
+    parsed.combinedListingContext = (parsed.combinedListingContext as Record<string, unknown> | undefined) ?? combinedListingContext;
+    overview.combinedListingContext = (overview.combinedListingContext as Record<string, unknown> | undefined) ?? combinedListingContext;
+  }
 
-  if (selectedListingContext.price != null) {
+  if (selectedListingContext.agentName) overview.agentName = selectedListingContext.agentName;
+  if (selectedListingContext.agentPhone) overview.agentPhone = selectedListingContext.agentPhone;
+  if (selectedListingContext.agencyName) overview.agencyName = selectedListingContext.agencyName;
+
+  if (!excludeAggregateFacts && selectedListingContext.price != null) {
     overview.listingPrice = fmt(selectedListingContext.price);
     overview.listing_price_nzd = selectedListingContext.price;
     existingSources.listing_price = sourceLabel;
   }
-  if (selectedListingContext.landArea != null) {
+  if (!excludeAggregateFacts && selectedListingContext.landArea != null) {
     overview.landArea = area(selectedListingContext.landArea);
     overview.land_area_sqm = selectedListingContext.landArea;
     existingSources.landArea_display = sourceLabel;
   }
-  if (selectedListingContext.floorArea != null) {
+  if (!excludeAggregateFacts && selectedListingContext.floorArea != null) {
     overview.floorArea = area(selectedListingContext.floorArea);
     overview.floor_area_sqm = selectedListingContext.floorArea;
     existingSources.floorArea_display = sourceLabel;
   }
-  if (selectedListingContext.bedrooms != null) {
+  if (!excludeAggregateFacts && selectedListingContext.bedrooms != null) {
     overview.bedrooms = selectedListingContext.bedrooms;
     existingSources.bedrooms_display = sourceLabel;
   }
-  if (selectedListingContext.bathrooms != null) {
+  if (!excludeAggregateFacts && selectedListingContext.bathrooms != null) {
     overview.bathrooms = selectedListingContext.bathrooms;
     existingSources.bathrooms_display = sourceLabel;
   }
 
-  if (selectedListingContext.bedroomsApprox != null) overview.bedroomsApprox = selectedListingContext.bedroomsApprox;
-  if (selectedListingContext.bathroomsApprox != null) overview.bathroomsApprox = selectedListingContext.bathroomsApprox;
-  if (selectedListingContext.landAreaApprox != null) overview.landAreaApprox = selectedListingContext.landAreaApprox;
-  if (selectedListingContext.floorAreaApprox != null) overview.floorAreaApprox = selectedListingContext.floorAreaApprox;
-  if (selectedListingContext.priceApprox != null) overview.priceApprox = selectedListingContext.priceApprox;
+  if (!excludeAggregateFacts && selectedListingContext.bedroomsApprox != null) overview.bedroomsApprox = selectedListingContext.bedroomsApprox;
+  if (!excludeAggregateFacts && selectedListingContext.bathroomsApprox != null) overview.bathroomsApprox = selectedListingContext.bathroomsApprox;
+  if (!excludeAggregateFacts && selectedListingContext.landAreaApprox != null) overview.landAreaApprox = selectedListingContext.landAreaApprox;
+  if (!excludeAggregateFacts && selectedListingContext.floorAreaApprox != null) overview.floorAreaApprox = selectedListingContext.floorAreaApprox;
+  if (!excludeAggregateFacts && selectedListingContext.priceApprox != null) overview.priceApprox = selectedListingContext.priceApprox;
 
   parsed.propertyOverview = overview;
   parsed.selectedListingContext = selectedListingContext;

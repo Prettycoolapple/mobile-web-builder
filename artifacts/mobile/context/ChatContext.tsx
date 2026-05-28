@@ -445,6 +445,10 @@ export interface PropertyCandidate {
   buildYear?: number | null;
   screeningStatus?: "preliminary" | "verified";
   screeningNotes?: string[];
+  isCombinedListing?: boolean;
+  packageAddress?: string;
+  childAddresses?: string[];
+  aggregateFactsExcluded?: boolean;
 }
 
 export interface SelectedListingContext {
@@ -463,6 +467,10 @@ export interface SelectedListingContext {
   floorAreaApprox?: boolean | null;
   priceApprox?: boolean | null;
   source?: string | null;
+  isCombinedListing?: boolean | null;
+  packageAddress?: string | null;
+  childAddresses?: string[] | null;
+  aggregateFactsExcluded?: boolean | null;
 }
 
 export interface Session {

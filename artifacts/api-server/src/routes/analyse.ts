@@ -73,6 +73,7 @@ import {
   selectedListingPhotoUrls,
   type SelectedListingContext,
 } from "../lib/selected-listing-context";
+import { resolveActiveListingContext } from "../lib/active-listing-context";
 import { resolveAddressForAnalysis } from "../lib/address-clarification";
 import {
   CHAT_LIMITS,
@@ -1714,9 +1715,16 @@ function selectedListingUrlFromHistory(
 function resolveCombinedPackage(raw: string): { packageAddress: string; childAddresses: string[] } | null {
   const parsed = extractCombinedListingAddressParts(raw);
   if (!parsed) return null;
+  const maxChildren = 10;
+  if (parsed.childAddresses.length > maxChildren) {
+    logger.warn(
+      { packageAddress: parsed.packageAddress, detectedChildren: parsed.childAddresses.length, maxChildren },
+      "Combined package child address count capped",
+    );
+  }
   return {
     packageAddress: parsed.packageAddress,
-    childAddresses: parsed.childAddresses.slice(0, 4),
+    childAddresses: parsed.childAddresses.slice(0, maxChildren),
   };
 }
 
@@ -2060,6 +2068,42 @@ async function applyCombinedListingContextToReport(
   };
 }
 
+async function applyExplicitCombinedListingContextToReport(
+  report: Record<string, unknown>,
+  args: {
+    packageAddress: string;
+    childAddresses: string[];
+    locale: ReturnType<typeof normaliseLocale>;
+    listingUrl?: string | null;
+  },
+): Promise<void> {
+  const note = "This property belongs to a combined listing package. Package land, bedroom, bathroom and price figures are excluded from this single-property report.";
+  const localisedNote = args.locale === "zh" ? await ensureChinese(note) : note;
+  const context = {
+    isCombinedListingMatch: true,
+    packageAddress: args.packageAddress,
+    childAddresses: args.childAddresses,
+    aggregateFactsExcluded: true,
+    note: localisedNote,
+  };
+  report.combinedListingContext = context;
+  const overview = (report.propertyOverview as Record<string, unknown> | undefined) ?? {};
+  report.propertyOverview = {
+    ...overview,
+    combinedListingContext: context,
+    listingUrl: args.listingUrl ?? overview.listingUrl ?? null,
+  };
+  report.selectedListingContext = {
+    ...(report.selectedListingContext as Record<string, unknown> | undefined),
+    address: args.packageAddress,
+    listingUrl: args.listingUrl ?? null,
+    isCombinedListing: true,
+    packageAddress: args.packageAddress,
+    childAddresses: args.childAddresses,
+    aggregateFactsExcluded: true,
+  };
+}
+
 async function runFeasibilityAnalyseCore(args: {
   address: string;
   analysisAddress: string;
@@ -2170,6 +2214,7 @@ async function runCombinedFeasibilityGroupCore(args: {
   conversationHistory: Array<{ role: "user" | "assistant"; content: string }>;
   userId: string | null;
   log: FeasibilityLog;
+  selectedListingUrl?: string | null;
 }): Promise<{
   reportGroup: CombinedReportGroup;
   savedSearchId: string | null;
@@ -2178,16 +2223,46 @@ async function runCombinedFeasibilityGroupCore(args: {
   const reports: Record<string, unknown>[] = [];
   const failures: CombinedReportFailure[] = [];
 
+  const childRetryDelaysMs = [0, 1500, 5000];
   for (const childAddress of args.childAddresses) {
     try {
-      const result = await runFeasibilityAnalyseCore({
-        address: args.packageAddress,
-        analysisAddress: childAddress,
+      let result: Awaited<ReturnType<typeof runFeasibilityAnalyseCore>> | null = null;
+      let lastErr: unknown;
+      for (let attempt = 0; attempt < childRetryDelaysMs.length; attempt++) {
+        if (childRetryDelaysMs[attempt] > 0) {
+          await new Promise((resolve) => setTimeout(resolve, childRetryDelaysMs[attempt]));
+        }
+        try {
+          result = await runFeasibilityAnalyseCore({
+            address: args.packageAddress,
+            analysisAddress: childAddress,
+            locale: args.locale,
+            translateTitleSchool: args.translateTitleSchool,
+            conversationHistory: args.conversationHistory,
+            selectedListingUrl: args.selectedListingUrl ?? null,
+            selectedListingContext: {
+              address: args.packageAddress,
+              listingUrl: args.selectedListingUrl ?? null,
+              isCombinedListing: true,
+              packageAddress: args.packageAddress,
+              childAddresses: args.childAddresses,
+              aggregateFactsExcluded: true,
+            },
+            userId: null,
+            log: args.log,
+          });
+          break;
+        } catch (err) {
+          lastErr = err;
+          args.log.warn({ err, childAddress, attempt: attempt + 1 }, "Combined listing child report attempt failed");
+        }
+      }
+      if (!result) throw lastErr instanceof Error ? lastErr : new Error(String(lastErr ?? "child analysis failed"));
+      await applyExplicitCombinedListingContextToReport(result.report, {
+        packageAddress: args.packageAddress,
+        childAddresses: args.childAddresses,
         locale: args.locale,
-        translateTitleSchool: args.translateTitleSchool,
-        conversationHistory: args.conversationHistory,
-        userId: null,
-        log: args.log,
+        listingUrl: args.selectedListingUrl ?? null,
       });
       reports.push(result.report);
     } catch (err) {
@@ -2517,6 +2592,7 @@ router.post("/analyse", async (req, res) => {
         conversationHistory: conversationHistory || [],
         userId,
         log: req.log,
+        selectedListingUrl: normalisedSelectedListingContext?.listingUrl ?? selectedListingUrl ?? null,
       });
       res.json({
         reportGroup: result.reportGroup,
@@ -2780,7 +2856,6 @@ router.post("/analyse/:searchId/refresh-photos", async (req, res) => {
     const { scrapeHougardenPhotos } = await import("../lib/scrapers/hougarden-photos");
     const { scrapeHomesPhotos } = await import("../lib/scrapers/homes-photos");
     const { scrapeOneRoofPhotos } = await import("../lib/scrapers/oneroof-photos");
-    const { findPropertyPhotosWithFallback } = await import("../lib/scrapers/web-image-search");
 
     const TIMEOUT_MS = 15_000;
     const withTimeout = <T>(p: Promise<T>, fallback: T): Promise<T> =>
@@ -2801,11 +2876,18 @@ router.post("/analyse/:searchId/refresh-photos", async (req, res) => {
       : [];
     const selectedListingContext = normaliseSelectedListingContext(report["selectedListingContext"])
       ?? normaliseSelectedListingContext((report["propertyOverview"] as Record<string, unknown> | undefined)?.["selectedListingContext"]);
-    const selectedPhotos = selectedListingPhotoUrls(selectedListingContext);
+    const resolvedActiveListing = await withTimeout(
+      resolveActiveListingContext(reportAddress, {
+        purpose: "feasibility",
+        selectedListingContext,
+      }),
+      { context: selectedListingContext, realestateListing: null },
+    );
+    const selectedPhotos = selectedListingPhotoUrls(resolvedActiveListing.context ?? selectedListingContext);
 
     // OneRoof historical photos lead — they're typically higher quality than
     // Trade Me/Hougarden archives and most likely to exist for sold listings.
-    let combined = Array.from(new Set([
+    const combined = Array.from(new Set([
       ...selectedPhotos,
       ...oneroofPhotos.photo_urls,
       ...trademe.photo_urls,
@@ -2814,24 +2896,14 @@ router.post("/analyse/:searchId/refresh-photos", async (req, res) => {
       ...existingPhotos,
     ].filter(Boolean)));
 
-    let aiFallbackUsed = false;
-    if (combined.length === 0) {
-      try {
-        const aiPhotos = await findPropertyPhotosWithFallback(reportAddress);
-        if (aiPhotos.length > 0) {
-          combined = aiPhotos;
-          aiFallbackUsed = true;
-        }
-      } catch (err) {
-        req.log.warn({ err: String(err), reportAddress }, "Refresh photos AI fallback errored");
-      }
-    }
-
     const newPhotoUrl = combined[0] ?? (typeof report["photoUrl"] === "string" ? (report["photoUrl"] as string) : null);
 
     // Merge into resultJson WITHOUT overwriting any other field
     report["photoUrls"] = combined;
     report["photoUrl"] = newPhotoUrl;
+    if (resolvedActiveListing.context) {
+      applySelectedListingContextToReport(report, resolvedActiveListing.context);
+    }
 
     await withDbRetry(() =>
       db
@@ -2844,20 +2916,20 @@ router.post("/analyse/:searchId/refresh-photos", async (req, res) => {
       searchId,
       address: reportAddress,
       photoSources: {
+        activeListing: selectedPhotos.length,
         trademe: trademe.photo_urls.length,
         hougardenPhotos: hougardenPhotos.photo_urls.length,
         homesPhotos: homesPhotos.photo_urls.length,
         oneroofPhotos: oneroofPhotos.photo_urls.length,
       },
       totalAfter: combined.length,
-      aiFallbackUsed,
     }, "Refresh photos: complete");
 
     res.json({
       ok: true,
       photoUrls: combined,
       photoUrl: newPhotoUrl,
-      aiFallbackUsed,
+      aiFallbackUsed: false,
     });
   } catch (err) {
     req.log.error({ err, searchId }, "POST /analyse/:searchId/refresh-photos failed");
