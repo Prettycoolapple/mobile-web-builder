@@ -96,7 +96,10 @@ export interface PropertyOverview {
   subdivisionEligible?: boolean | null;
   subdivisionRejectReason?: string | null;
   listingPrice?: string;
+  listingUrl?: string | null;
+  listingSource?: string | null;
   isOnMarket?: boolean;
+  selectedListingContext?: SelectedListingContext;
   combinedListingContext?: CombinedListingContext;
 }
 
@@ -385,6 +388,7 @@ export interface FeasibilityReport {
   cachedPhotoUris?: string[];
   /** Signature of the remote report photo sources used to populate cachedPhotoUris. */
   cachedPhotoSignature?: string;
+  selectedListingContext?: SelectedListingContext;
   combinedListingContext?: CombinedListingContext;
 }
 
@@ -441,6 +445,24 @@ export interface PropertyCandidate {
   buildYear?: number | null;
   screeningStatus?: "preliminary" | "verified";
   screeningNotes?: string[];
+}
+
+export interface SelectedListingContext {
+  address?: string | null;
+  listingUrl?: string | null;
+  photoUrl?: string | null;
+  photoUrls?: string[] | null;
+  price?: number | null;
+  landArea?: number | null;
+  floorArea?: number | null;
+  bedrooms?: number | null;
+  bathrooms?: number | null;
+  bedroomsApprox?: boolean | null;
+  bathroomsApprox?: boolean | null;
+  landAreaApprox?: boolean | null;
+  floorAreaApprox?: boolean | null;
+  priceApprox?: boolean | null;
+  source?: string | null;
 }
 
 export interface Session {

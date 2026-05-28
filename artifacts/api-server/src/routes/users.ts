@@ -34,13 +34,6 @@ router.get("/users/:userId", requireAuth, async (req: Request, res: Response) =>
       return;
     }
 
-    const [countRow] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(recommendations)
-      .where(eq(recommendations.toUserId, userId));
-
-    const recommendationCount = countRow?.count ?? 0;
-
     let hasRecommended = false;
     if (viewerId !== userId) {
       const [existing] = await db
@@ -53,6 +46,7 @@ router.get("/users/:userId", requireAuth, async (req: Request, res: Response) =>
       hasRecommended = !!existing;
     }
 
+    let recommendationCount = 0;
     let roleData: Record<string, unknown> | null = null;
 
     if (profile.role === "sales_agent") {
@@ -72,19 +66,26 @@ router.get("/users/:userId", requireAuth, async (req: Request, res: Response) =>
           bio: agent.bio,
         };
       }
+      const [countRow] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(recommendations)
+        .where(eq(recommendations.toUserId, userId));
+      recommendationCount = countRow?.count ?? 0;
     } else if (profile.role === "service_provider") {
+      // Use the denormalized column so admin overrides are reflected immediately.
       const [provider] = await db
         .select()
         .from(serviceProviderProfiles)
         .where(eq(serviceProviderProfiles.userId, userId))
         .limit(1);
       if (provider) {
+        recommendationCount = provider.recommendationCount;
         roleData = {
           companyName: provider.companyName,
           nzCompanyRegisterNumber: provider.nzCompanyRegisterNumber,
           discipline: provider.discipline,
           otherDiscipline: provider.otherDiscipline,
-          addressStreet: (provider as any).addressStreet ?? null,
+          addressStreet: provider.addressStreet ?? null,
           addressSuburb: provider.addressSuburb,
           addressCity: provider.addressCity,
           contactNumber: provider.contactNumber,
@@ -92,6 +93,12 @@ router.get("/users/:userId", requireAuth, async (req: Request, res: Response) =>
           secondaryLanguage: provider.secondaryLanguage,
         };
       }
+    } else {
+      const [countRow] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(recommendations)
+        .where(eq(recommendations.toUserId, userId));
+      recommendationCount = countRow?.count ?? 0;
     }
 
     res.json({
@@ -146,27 +153,23 @@ router.post("/users/:userId/recommend", requireAuth, async (req: Request, res: R
         .where(
           sql`${recommendations.fromUserId} = ${fromUserId} AND ${recommendations.toUserId} = ${toUserId}`,
         );
-      const [countRow] = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(recommendations)
-        .where(eq(recommendations.toUserId, toUserId));
-      const recommendationCount = countRow?.count ?? 0;
-      await db
+      // Decrement atomically so admin-set base values are preserved.
+      const [updated] = await db
         .update(serviceProviderProfiles)
-        .set({ recommendationCount })
-        .where(eq(serviceProviderProfiles.userId, toUserId));
+        .set({ recommendationCount: sql`GREATEST(recommendation_count - 1, 0)` })
+        .where(eq(serviceProviderProfiles.userId, toUserId))
+        .returning({ recommendationCount: serviceProviderProfiles.recommendationCount });
+      const recommendationCount = updated?.recommendationCount ?? 0;
       res.json({ hasRecommended: false, recommendationCount });
     } else {
       await db.insert(recommendations).values({ fromUserId, toUserId });
-      const [countRow] = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(recommendations)
-        .where(eq(recommendations.toUserId, toUserId));
-      const recommendationCount = countRow?.count ?? 0;
-      await db
+      // Increment atomically so admin-set base values are preserved.
+      const [updated] = await db
         .update(serviceProviderProfiles)
-        .set({ recommendationCount })
-        .where(eq(serviceProviderProfiles.userId, toUserId));
+        .set({ recommendationCount: sql`recommendation_count + 1` })
+        .where(eq(serviceProviderProfiles.userId, toUserId))
+        .returning({ recommendationCount: serviceProviderProfiles.recommendationCount });
+      const recommendationCount = updated?.recommendationCount ?? 0;
       res.json({ hasRecommended: true, recommendationCount });
     }
   } catch (err) {

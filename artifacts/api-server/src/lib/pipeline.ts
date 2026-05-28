@@ -28,12 +28,13 @@ import {
   calculateDevelopmentStrategies,
   type DevelopmentStrategyScenario,
 } from "./development-strategies";
-import { fetchRealestateListingForAddress, fetchSupplementListingComparables } from "./scrapers/realestate-api";
+import { fetchRealestateListingByUrl, fetchRealestateListingForAddress, fetchSupplementListingComparables } from "./scrapers/realestate-api";
 import { scrapeTradeMePropertyPhotos } from "./scrapers/trademe-property";
 import { scrapeHougardenPhotos } from "./scrapers/hougarden-photos";
 import { scrapeHomesPhotos } from "./scrapers/homes-photos";
 import { scrapeOneRoofPhotos } from "./scrapers/oneroof-photos";
 import { findPropertyPhotosWithFallback } from "./scrapers/web-image-search";
+import { selectedListingPhotoUrls, type SelectedListingContext } from "./selected-listing-context";
 import { enrichSchoolZonesDetail, type SchoolZoneDetail } from "./school-directory";
 import { inferSchoolZonesFromLocation } from "./school-zones-llm";
 import { resolvePipelineSuburb } from "./suburb-resolver";
@@ -329,6 +330,7 @@ export interface PipelineResult {
   qv: QVData | null;
   propertyValue: PropertyValueData | null;
   realestate_listing: ListingResult | null;
+  selectedListingContext?: SelectedListingContext | null;
   merged: MergedPropertyData | null;
   lots: LotResult | null;
   subdivision_pathway: SubdivisionPathwayNote | null;
@@ -369,12 +371,29 @@ async function timed<T>(
   }
 }
 
-export async function runPropertyPipeline(address: string): Promise<PipelineResult> {
+export async function runPropertyPipeline(
+  address: string,
+  options: { preferredRealestateListingUrl?: string | null; selectedListingContext?: SelectedListingContext | null } = {},
+): Promise<PipelineResult> {
   const timing: Record<string, number> = {};
   const failedSources: string[] = [];
   const pipelineStart = Date.now();
+  let preferredRealestateListing: ListingResult | null = null;
 
   logger.info({ address }, "Pipeline starting");
+
+  if (options.preferredRealestateListingUrl) {
+    const preferredListingResult = await timed(
+      "preferred_realestate_listing",
+      () => fetchRealestateListingByUrl(options.preferredRealestateListingUrl!),
+      timing,
+    );
+    if (!preferredListingResult.failed) {
+      preferredRealestateListing = preferredListingResult.value;
+    } else {
+      failedSources.push("preferred_realestate_listing");
+    }
+  }
 
   let geocode: GeoResult | null = null;
   const geoResult = await timed("geocode", () => geocodeAddress(address), timing);
@@ -414,6 +433,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       qv: null,
       propertyValue: null,
       realestate_listing: null,
+      selectedListingContext: options.selectedListingContext ?? null,
       merged: null,
       lots: null,
       subdivision_pathway: null,
@@ -431,6 +451,30 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       timing_ms: { ...timing, total: Date.now() - pipelineStart },
       completed_at: new Date().toISOString(),
     };
+  }
+
+  if (
+    preferredRealestateListing?.lat != null &&
+    preferredRealestateListing.lng != null &&
+    Number.isFinite(preferredRealestateListing.lat) &&
+    Number.isFinite(preferredRealestateListing.lng)
+  ) {
+    geocode = {
+      ...geocode,
+      lat: preferredRealestateListing.lat,
+      lng: preferredRealestateListing.lng,
+      formatted: preferredRealestateListing.address || geocode.formatted,
+      suburb: preferredRealestateListing.address.split(",")[1]?.replace(/\b\d{4}\b/g, "").trim() || geocode.suburb,
+    };
+    logger.info(
+      {
+        address,
+        listing: preferredRealestateListing.address,
+        lat: preferredRealestateListing.lat,
+        lng: preferredRealestateListing.lng,
+      },
+      "Pipeline: using selected active listing coordinates as the subject anchor",
+    );
   }
 
   const { lat, lng } = geocode;
@@ -751,7 +795,8 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   const realestateListingResult = await timed(
     "realestate_listing",
     async () =>
-      await fetchRealestateListingForAddress(address, suburb)
+      preferredRealestateListing
+      ?? await fetchRealestateListingForAddress(address, suburb)
       ?? await fetchRealestateListingForAddress(geocode.formatted ?? address, suburb),
     timing,
   );
@@ -798,7 +843,11 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
       propertyValue: propertyValueData,
       analysed_address: geocode!.formatted ?? address,
       realestate_listing: realestateListing,
-      realestate_photo_urls: realestatePhotoUrls,
+      preferred_realestate_listing_url: preferredRealestateListing?.listingUrl ?? null,
+      realestate_photo_urls: [
+        ...selectedListingPhotoUrls(options.selectedListingContext),
+        ...realestatePhotoUrls,
+      ],
     },
   );
 
@@ -832,13 +881,25 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
   // complete than Trade Me/Hougarden archives — prepend them so the carousel's
   // leading image (`main_photo_url`) is the strongest available when no
   // active-listing photos exist yet.
+  //
+  // MINIMUM PHOTO COUNT GUARD: each address-based enrichment scraper must
+  // return at least 2 photos before we include ANY of its photos. A real
+  // property listing always has multiple photos; a wrong/dead listing page
+  // (error, redirect, or wrong address match) typically yields exactly 1 URL
+  // via the page's og:image Open Graph tag — which is the site logo or a
+  // marketing banner. Accepting that single URL blocks the DuckDuckGo AI
+  // fallback (which only fires when photo_urls.length === 0) and causes the
+  // logo to appear as the carousel's main image. Requiring ≥2 photos discards
+  // those garbage results and lets the AI fallback retrieve the real photos.
+  const MIN_ENRICHMENT_PHOTOS = 2;
   const beforeEnrichCount = merged.photo_urls.length;
   const enriched = Array.from(new Set([
+    ...selectedListingPhotoUrls(options.selectedListingContext),
     ...merged.photo_urls,
-    ...enrichment.oneroofPhotos.photo_urls,
-    ...enrichment.trademe.photo_urls,
-    ...enrichment.hougardenPhotos.photo_urls,
-    ...enrichment.homesPhotos.photo_urls,
+    ...(enrichment.oneroofPhotos.photo_urls.length >= MIN_ENRICHMENT_PHOTOS ? enrichment.oneroofPhotos.photo_urls : []),
+    ...(enrichment.trademe.photo_urls.length >= MIN_ENRICHMENT_PHOTOS ? enrichment.trademe.photo_urls : []),
+    ...(enrichment.hougardenPhotos.photo_urls.length >= MIN_ENRICHMENT_PHOTOS ? enrichment.hougardenPhotos.photo_urls : []),
+    ...(enrichment.homesPhotos.photo_urls.length >= MIN_ENRICHMENT_PHOTOS ? enrichment.homesPhotos.photo_urls : []),
   ].filter(Boolean)));
   merged.photo_urls = enriched;
   if (!merged.main_photo_url && merged.photo_urls.length > 0) {
@@ -1238,6 +1299,7 @@ export async function runPropertyPipeline(address: string): Promise<PipelineResu
     qv: qvData,
     propertyValue: propertyValueData,
     realestate_listing: realestateListing,
+    selectedListingContext: options.selectedListingContext ?? null,
     merged,
     lots: lotResult,
     subdivision_pathway: subdivisionPathway,

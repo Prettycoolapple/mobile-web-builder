@@ -3,6 +3,7 @@ import { logger } from "../logger";
 import { launchBrowser, newStealthPage, randomDelay, logScrapeAttempt, isVercelServerless } from "./browser";
 import { fetchWithScrapingBee } from "./scrapingbee";
 import { fetchRealestateAgentContactForAddress } from "./realestate-api";
+import { type SelectedListingContext } from "../selected-listing-context";
 
 export interface AgentContactResult {
   found: boolean;
@@ -32,6 +33,7 @@ function parseAgent(text: string): Pick<AgentContactResult, "agentName" | "agent
   let agentName: string | null = null;
   let agentPhone: string | null = null;
   let agencyName: string | null = null;
+  const blockedNameCandidate = /make an enquiry|contact details|request viewing|open home|asking price/i;
 
   // ── Phone extraction ────────────────────────────────────────────────────────
   // NZ formats: 021 xxx xxxx, 022 xxx xxxx, 027 xxx xxxx, +64 21 xxx xxxx,
@@ -52,7 +54,7 @@ function parseAgent(text: string): Pick<AgentContactResult, "agentName" | "agent
   let nm: RegExpExecArray | null;
   while ((nm = nameRe.exec(text)) !== null) {
     const candidate = nm[1].trim();
-    if (candidate.split(" ").length >= 2) {
+    if (candidate.split(" ").length >= 2 && !blockedNameCandidate.test(candidate)) {
       agentName = candidate;
       break;
     }
@@ -74,7 +76,7 @@ function parseAgent(text: string): Pick<AgentContactResult, "agentName" | "agent
       "Ray White", "Harcourts", "Barfoot & Thompson", "Barfoot and Thompson",
       "LJ Hooker", "Century 21", "RE/MAX", "Bayleys", "Colliers",
       "Tommy's", "Lodge", "Property Brokers", "Tall Poppy", "First National",
-      "Professionals", "EVES", "Mike Pero",
+      "Professionals", "EVES", "Mike Pero", "The Kings Of Real Estate", "The Kings of Real Estate",
     ];
     for (const agency of knownAgencies) {
       if (text.toLowerCase().includes(agency.toLowerCase())) {
@@ -84,7 +86,95 @@ function parseAgent(text: string): Pick<AgentContactResult, "agentName" | "agent
     }
   }
 
+  if (!agentName) {
+    const lines = text
+      .split(/\r?\n/)
+      .map((line) => line.replace(/^#+\s*/, "").trim())
+      .filter(Boolean);
+    const blocked = /property|listing|details|contact|agency|licensed|real estate|watchlist|gallery|description|schools|advertisement|home loan|asking price|open home|enquire|enquiry|make|premium/i;
+    const nameLine = lines.find((line, idx) => {
+      if (blocked.test(line)) return false;
+      if (!/^[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2}$/.test(line)) return false;
+      const nearby = lines.slice(Math.max(0, idx - 3), idx + 4).join(" ");
+      return /agent|agency|contact|enquire|premium|licensed|real estate|ray white|harcourts|barfoot|bayleys|the kings/i.test(nearby);
+    });
+    if (nameLine) agentName = nameLine;
+  }
+
   return { agentName, agentPhone, agencyName };
+}
+
+function listingUrlLikelyActive(url: string): boolean {
+  return /\/sale\/|for-sale|\/find\/buy|\/property\/|homes\.co\.nz\/address/i.test(url);
+}
+
+export function extractAgentContactFromListingHtml(
+  html: string,
+  listingUrl: string,
+): AgentContactResult {
+  const text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, "\n")
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/&amp;/gi, "&");
+  const isListed =
+    listingUrlLikelyActive(listingUrl) ||
+    /for[\s-]?sale|asking price|enquire|make an enquiry|request a viewing|open home|contact details|listed:/i.test(text);
+  const parsed = parseAgent(text);
+  return {
+    found: true,
+    isListed,
+    matchType: isListed ? "subject" : null,
+    listingAddress: null,
+    agentName: parsed.agentName,
+    agentPhone: parsed.agentPhone,
+    agencyName: parsed.agencyName,
+    agentAvatarUrl: null,
+    listingUrl,
+    source: inferAgentSourceFromUrl(listingUrl),
+  };
+}
+
+function inferAgentSourceFromUrl(url: string): string {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    if (host.includes("trademe.co.nz")) return "trademe";
+    if (host.includes("homes.co.nz")) return "homes";
+    if (host.includes("oneroof.co.nz")) return "oneroof";
+    if (host.includes("realestate.co.nz")) return "realestate.co.nz";
+    return host.replace(/^www\./, "");
+  } catch {
+    return "listing-page";
+  }
+}
+
+async function scrapeAgentViaSelectedListingUrl(
+  listingUrl: string,
+  selectedListingContext?: SelectedListingContext | null,
+): Promise<AgentContactResult | null> {
+  if (!/^https?:\/\//i.test(listingUrl)) return null;
+  if (/realestate\.co\.nz/i.test(listingUrl)) return null;
+  const html = await fetchWithScrapingBee(listingUrl, { render_js: true, premium_proxy: false, wait: 3000 });
+  if (!html || html.length < 500) {
+    if (selectedListingContext?.listingUrl) {
+      return {
+        ...emptyResult(),
+        found: true,
+        isListed: true,
+        matchType: "subject",
+        listingAddress: selectedListingContext.address ?? null,
+        listingUrl,
+        source: inferAgentSourceFromUrl(listingUrl),
+      };
+    }
+    return null;
+  }
+  const result = extractAgentContactFromListingHtml(html, listingUrl);
+  result.listingAddress = selectedListingContext?.address ?? result.listingAddress;
+  if (!result.agentName && selectedListingContext?.source) result.source = selectedListingContext.source;
+  logScrapeAttempt("AgentContact", result.source ?? "listing-page", result.isListed, `agent=${result.agentName ?? "not found"}`);
+  return result;
 }
 
 async function scrapeAgentViaPlaywright(address: string): Promise<AgentContactResult> {
@@ -198,8 +288,18 @@ async function scrapeAgentViaBee(address: string): Promise<AgentContactResult | 
 
 export async function scrapeListingAgent(
   address: string,
-  _options: { allowSuburbFallback?: boolean } = {},
+  options: { allowSuburbFallback?: boolean; listingUrl?: string | null; selectedListingContext?: SelectedListingContext | null } = {},
 ): Promise<AgentContactResult> {
+  const selectedUrl = options.selectedListingContext?.listingUrl ?? options.listingUrl ?? null;
+  if (selectedUrl && !/realestate\.co\.nz/i.test(selectedUrl)) {
+    try {
+      const selected = await scrapeAgentViaSelectedListingUrl(selectedUrl, options.selectedListingContext);
+      if (selected?.isListed) return selected;
+    } catch (err) {
+      logScrapeAttempt("AgentContact", "selected-listing-url", false, String(err));
+    }
+  }
+
   try {
     const realestateAgent = await fetchRealestateAgentContactForAddress(address);
     if (realestateAgent) {
@@ -219,6 +319,18 @@ export async function scrapeListingAgent(
     }
   } catch (err) {
     logScrapeAttempt("AgentContact", "realestate-api", false, String(err));
+  }
+
+  if (selectedUrl) {
+    return {
+      ...emptyResult(),
+      found: true,
+      isListed: true,
+      matchType: "subject",
+      listingAddress: options.selectedListingContext?.address ?? address,
+      listingUrl: selectedUrl,
+      source: options.selectedListingContext?.source ?? inferAgentSourceFromUrl(selectedUrl),
+    };
   }
 
   logger.info({ address }, "AgentContact: no exact active realestate.co.nz listing match");

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPatch } from "@/lib/api";
 import { formatDate, relativeTime } from "@/lib/format";
 
 type Tab = "feedback" | "addresses" | "agent_calls";
@@ -27,6 +27,7 @@ interface UserDetailResponse {
     agentCalls: number;
     thumbsDown: number;
     callsPerReport: number;
+    recommendationCount: number | null;
   };
 }
 
@@ -107,6 +108,10 @@ export default function UserDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("feedback");
 
+  const [recCountInput, setRecCountInput] = useState<string>("");
+  const [recCountSaving, setRecCountSaving] = useState(false);
+  const [recCountError, setRecCountError] = useState<string | null>(null);
+
   // Sub-list state — each tab has its own pagination
   const [feedbackList, setFeedbackList] = useState<ListResponse<FeedbackRow> | null>(null);
   const [feedbackOffset, setFeedbackOffset] = useState(0);
@@ -122,6 +127,9 @@ export default function UserDetailPage() {
       .then((d) => {
         setData(d);
         setError(null);
+        if (d.counts.recommendationCount != null) {
+          setRecCountInput(String(d.counts.recommendationCount));
+        }
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load user"))
       .finally(() => setLoading(false));
@@ -256,7 +264,78 @@ export default function UserDetailPage() {
           value={counts.callsPerReport.toFixed(2)}
           hint="Higher = more likely to call after analysing"
         />
+        {counts.recommendationCount != null && (
+          <StatTile label="Recommendations (thumbs-up)" value={String(counts.recommendationCount)} hint="Shown on provider card & profile" />
+        )}
       </div>
+
+      {/* Recommendation count editor — service providers only */}
+      {profile.role === "service_provider" && counts.recommendationCount != null && (
+        <div className="panel" style={{ marginBottom: 24 }}>
+          <div className="panel-header">
+            <span style={{ fontWeight: 600 }}>Adjust recommendation count</span>
+          </div>
+          <div style={{ padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+            <p style={{ margin: 0, fontSize: 13, color: "var(--muted)" }}>
+              Sets the thumbs-up count visible on the provider card and profile for all users.
+              Real user recommendations are still tracked; this value overrides the display.
+            </p>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input
+                type="number"
+                min={0}
+                step={1}
+                value={recCountInput}
+                onChange={(e) => setRecCountInput(e.target.value)}
+                style={{
+                  width: 100,
+                  padding: "6px 10px",
+                  border: "1px solid var(--border, #d1d5db)",
+                  borderRadius: 6,
+                  fontSize: 14,
+                }}
+              />
+              <button
+                className="btn"
+                disabled={recCountSaving}
+                onClick={async () => {
+                  const n = parseInt(recCountInput, 10);
+                  if (!Number.isFinite(n) || n < 0) {
+                    setRecCountError("Must be a non-negative whole number.");
+                    return;
+                  }
+                  setRecCountSaving(true);
+                  setRecCountError(null);
+                  try {
+                    const res = await apiPatch<{ ok: boolean; recommendationCount: number }>(
+                      `/admin/users/${userId}/recommendation-count`,
+                      { count: n },
+                    );
+                    setData((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            counts: { ...prev.counts, recommendationCount: res.recommendationCount },
+                          }
+                        : prev,
+                    );
+                    setRecCountInput(String(res.recommendationCount));
+                  } catch (err) {
+                    setRecCountError(err instanceof Error ? err.message : "Save failed.");
+                  } finally {
+                    setRecCountSaving(false);
+                  }
+                }}
+              >
+                {recCountSaving ? "Saving…" : "Save"}
+              </button>
+            </div>
+            {recCountError && (
+              <div style={{ fontSize: 13, color: "var(--danger, #dc2626)" }}>{recCountError}</div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="panel">

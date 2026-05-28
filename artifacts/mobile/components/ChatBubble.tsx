@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, Animated, Easing, TouchableOpacity, TouchableWi
 import Markdown from "react-native-markdown-display";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
-import { ChatMessage } from "@/context/ChatContext";
+import { ChatMessage, SelectedListingContext } from "@/context/ChatContext";
 import { useT } from "@/lib/i18n";
 import { FeasibilityReportCard } from "./FeasibilityReport";
 import { CombinedReportGroupCard } from "./CombinedReportGroup";
@@ -116,7 +116,7 @@ function SafeMarkdown({
 interface Props {
   message: ChatMessage;
   onFollowUp: (question: string) => void;
-  onAnalyse: (address: string, photoUrl?: string | null) => void;
+  onAnalyse: (address: string, photoUrl?: string | null, listingUrl?: string | null, selectedListingContext?: SelectedListingContext | null) => void;
   onRetry?: (text: string) => void;
   onConnect?: (providerId: string) => Promise<void>;
   onDismiss?: (messageId: string) => void;

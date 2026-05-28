@@ -2,14 +2,8 @@ import { describe, expect, it } from "vitest";
 import { resolveDistrictToSuburbs } from "../scrapers/realestate-search";
 
 describe("resolveDistrictToSuburbs", () => {
-  it("expands 'orakei' (a Local Board) to its child suburbs", () => {
-    const suburbs = resolveDistrictToSuburbs("orakei");
-    expect(suburbs).not.toBeNull();
-    expect(suburbs!.length).toBeGreaterThanOrEqual(6);
-    expect(suburbs).toContain("kohimarama");
-    expect(suburbs).toContain("mission bay");
-    expect(suburbs).toContain("st heliers");
-    expect(suburbs).toContain("meadowbank");
+  it("treats 'orakei' as the exact Orakei suburb before widening to the Local Board", () => {
+    expect(resolveDistrictToSuburbs("orakei")).toBeNull();
   });
 
   it("expands 'howick' (also both a district and a suburb name) — district wins because the leaf-suburb case returns null", () => {
@@ -44,7 +38,7 @@ describe("resolveDistrictToSuburbs", () => {
   });
 
   it("is case-insensitive and trims whitespace", () => {
-    expect(resolveDistrictToSuburbs("  ORAKEI  ")).not.toBeNull();
-    expect(resolveDistrictToSuburbs("Orakei")).not.toBeNull();
+    expect(resolveDistrictToSuburbs("  ORAKEI  ")).toBeNull();
+    expect(resolveDistrictToSuburbs("Orakei")).toBeNull();
   });
 });

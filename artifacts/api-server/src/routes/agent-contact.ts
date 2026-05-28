@@ -5,6 +5,7 @@ import { requireAuth } from "../lib/auth";
 import { ai } from "@workspace/integrations-gemini-ai";
 import { scrapeListingAgent } from "../lib/scrapers/agent-contact";
 import { hasExplicitAgentContactSignal, isCombinedPackageAnalyseRequest } from "../lib/agent-contact-intent";
+import { normaliseSelectedListingContext, type SelectedListingContext } from "../lib/selected-listing-context";
 
 const router: IRouter = Router();
 
@@ -138,9 +139,11 @@ router.post("/agent-contact/lookup", requireAuth, async (req: Request, res: Resp
       return;
     }
 
-    const { address, messages } = req.body as {
+    const { address, messages, listingUrl, selectedListingContext } = req.body as {
       address?: string;
       messages?: Message[];
+      listingUrl?: string | null;
+      selectedListingContext?: SelectedListingContext | null;
     };
 
     if (!address) {
@@ -154,8 +157,12 @@ router.post("/agent-contact/lookup", requireAuth, async (req: Request, res: Resp
       return;
     }
 
+    const normalisedSelectedListingContext = normaliseSelectedListingContext(selectedListingContext);
     const agentInfo = await Promise.race([
-      scrapeListingAgent(address),
+      scrapeListingAgent(address, {
+        listingUrl: normalisedSelectedListingContext?.listingUrl ?? listingUrl ?? null,
+        selectedListingContext: normalisedSelectedListingContext,
+      }),
       new Promise<ReturnType<typeof agentLookupTimeoutResult>>((resolve) =>
         setTimeout(() => resolve(agentLookupTimeoutResult()), 25_000),
       ),

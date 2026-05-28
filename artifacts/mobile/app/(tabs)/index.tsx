@@ -21,7 +21,7 @@ import * as Haptics from "expo-haptics";
 import * as StoreReview from "expo-store-review";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
-import { useChat, ChatMessage, FeasibilityReport, FeasibilityReportGroup, LoadingHint, PropertyCandidate, ServiceProvider } from "@/context/ChatContext";
+import { useChat, ChatMessage, FeasibilityReport, FeasibilityReportGroup, LoadingHint, PropertyCandidate, SelectedListingContext, ServiceProvider } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
 import { AppRatingPrompt } from "@/components/AppRatingPrompt";
 import { ChatBubble } from "@/components/ChatBubble";
@@ -91,7 +91,7 @@ function getAnalyseDisclaimerDismissedKey(userId?: string | null): string {
 
 type PendingAnalyseAction =
   | { type: "send"; text: string }
-  | { type: "analyse"; address: string; selectedPhotoUrl?: string | null };
+  | { type: "analyse"; address: string; selectedPhotoUrl?: string | null; selectedListingUrl?: string | null; selectedListingContext?: SelectedListingContext | null };
 
 function detectClientMode(text: string): "analyse" | "discover" | "followup" {
   const lowerText = text.toLowerCase();
@@ -318,6 +318,7 @@ export default function SearchScreen() {
   const inputRef = useRef<TextInput>(null);
   const shownRecommendationReportIds = useRef<Set<string>>(new Set());
   const lastCheckedFollowUpCount = useRef<Map<string, number>>(new Map());
+  const providerRecommendationKeysRef = useRef<Set<string>>(new Set());
   // Always-current mirror of currentSession?.messages — used in async timer
   // callbacks where the closure would otherwise hold stale captured state.
   const sessionMessagesRef = useRef<ChatMessage[]>([]);
@@ -326,7 +327,7 @@ export default function SearchScreen() {
   const appRatingPromptOpenRef = useRef(false);
   const reportMessageHeightsRef = useRef<Map<string, number>>(new Map());
   const cardScorePollRef = useRef<{ addresses: string[]; sessionId: string; intervalId: ReturnType<typeof setInterval> | null }>({ addresses: [], sessionId: "", intervalId: null });
-  const handleAnalyseRef = useRef<((address: string, selectedPhotoUrl?: string | null, skipAnalyseDisclaimer?: boolean) => Promise<void>) | null>(null);
+  const handleAnalyseRef = useRef<((address: string, selectedPhotoUrl?: string | null, selectedListingUrl?: string | null, selectedListingContext?: SelectedListingContext | null, skipAnalyseDisclaimer?: boolean) => Promise<void>) | null>(null);
   const [listViewportHeight, setListViewportHeight] = useState(0);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [analyseDisclaimerVisible, setAnalyseDisclaimerVisible] = useState(false);
@@ -338,6 +339,31 @@ export default function SearchScreen() {
     setMessageLimitReached(false);
     refreshProfile().catch(() => {});
   }, [refreshProfile]);
+
+  const addProviderRecommendationOnce = useCallback((args: {
+    sessionId: string;
+    provider: ServiceProvider;
+    intentType: string;
+    propertyAddress: string;
+  }): boolean => {
+    const key = `${args.sessionId}:${args.provider.id}`;
+    const freshMsgs = sessionMessagesRef.current;
+    const alreadyVisible = freshMsgs.some(
+      (m) => m.type === "provider_recommendation" && m.provider?.id === args.provider.id,
+    );
+    if (alreadyVisible || providerRecommendationKeysRef.current.has(key)) return false;
+
+    providerRecommendationKeysRef.current.add(key);
+    addMessage({
+      role: "assistant",
+      content: "",
+      type: "provider_recommendation",
+      provider: args.provider,
+      intentType: args.intentType,
+      propertyAddress: args.propertyAddress,
+    }, args.sessionId);
+    return true;
+  }, [addMessage]);
 
   useEffect(() => {
     const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
@@ -512,16 +538,14 @@ export default function SearchScreen() {
           intentType: string;
           upgradeRequired?: boolean;
         };
-        if (data.shouldRecommend && data.provider) {
+        if (data.shouldRecommend && data.provider && currentSessionId) {
           shownRecommendationReportIds.current.add(lastReport.id);
-          addMessage({
-            role: "assistant",
-            content: "",
-            type: "provider_recommendation",
+          addProviderRecommendationOnce({
+            sessionId: currentSessionId,
             provider: data.provider,
             intentType: data.intentType,
             propertyAddress: resolveReportAddress(lastReport.report),
-          }, currentSessionId ?? undefined);
+          });
         }
       } catch (err) {
         console.log("Recommendation check failed:", err);
@@ -529,7 +553,7 @@ export default function SearchScreen() {
     }, 2500);
 
     return () => clearTimeout(timer);
-  }, [currentSession?.messages, user?.role, getApiHeaders, addMessage, currentSessionId]);
+  }, [currentSession?.messages, user?.role, getApiHeaders, addProviderRecommendationOnce, currentSessionId]);
 
   const handleConnect = useCallback(async (providerId: string, propertyAddress: string) => {
     try {
@@ -619,6 +643,10 @@ export default function SearchScreen() {
         const headers = getApiHeaders();
         const address = resolveReportAddress(reportForAgentLookup);
         if (!address) return;
+        const selectedListingContext =
+          reportForAgentLookup.selectedListingContext ??
+          ((reportForAgentLookup.propertyOverview as any)?.selectedListingContext as SelectedListingContext | undefined) ??
+          null;
         const conversationHistory = msgs
           .filter((m) => m.type === "text")
           .slice(-6)
@@ -629,7 +657,12 @@ export default function SearchScreen() {
         const resp = await fetch(`${apiBase}/agent-contact/lookup`, {
           method: "POST",
           headers,
-          body: JSON.stringify({ address, messages: conversationHistory }),
+          body: JSON.stringify({
+            address,
+            messages: conversationHistory,
+            listingUrl: selectedListingContext?.listingUrl ?? (reportForAgentLookup.propertyOverview as any)?.listingUrl ?? null,
+            selectedListingContext,
+          }),
           signal: agentCtrl.signal,
         }).finally(() => clearTimeout(agentTimer));
         if (!resp.ok) return;
@@ -1022,6 +1055,10 @@ export default function SearchScreen() {
       [...(currentSession?.messages ?? [])].reverse().find((m) => m.type === "report" && m.report)?.report;
     const currentReportContext = currentSession?.currentReportGroup ?? currentReport;
     const agentAddress = resolveReportAddress(currentReport);
+    const selectedListingContext =
+      currentReport?.selectedListingContext ??
+      ((currentReport?.propertyOverview as any)?.selectedListingContext as SelectedListingContext | undefined) ??
+      null;
     const isPackageAnalysisRequest = isCombinedPackageAnalyseRequest(text);
     const shouldLookupListingAgent =
       user?.role === "general" &&
@@ -1042,7 +1079,12 @@ export default function SearchScreen() {
         const resp = await fetch(`${getApiBase()}/agent-contact/lookup`, {
           method: "POST",
           headers: getApiHeaders(),
-          body: JSON.stringify({ address: agentAddress, messages: conversationHistory }),
+          body: JSON.stringify({
+            address: agentAddress,
+            messages: conversationHistory,
+            listingUrl: selectedListingContext?.listingUrl ?? ((currentReport?.propertyOverview as any)?.listingUrl as string | undefined) ?? null,
+            selectedListingContext,
+          }),
           signal: agentCtrl.signal,
         }).finally(() => clearTimeout(agentTimer));
 
@@ -1539,6 +1581,7 @@ export default function SearchScreen() {
         setTimeout(async () => {
           try {
             const apiBase = getApiBase();
+            const freshMsgs = sessionMessagesRef.current;
             const resp = await fetch(`${apiBase}/recommendations/check`, {
               method: "POST",
               headers: capturedHeaders,
@@ -1548,7 +1591,7 @@ export default function SearchScreen() {
                 explicitRequest: true,
                 askForOthers: asksForOthers(capturedText),
                 preferredDiscipline,
-                excludeProviderIds: (currentSession?.messages ?? [])
+                excludeProviderIds: freshMsgs
                   .filter((m) => m.type === "provider_recommendation" && m.provider?.id)
                   .map((m) => m.provider!.id),
               }),
@@ -1579,14 +1622,12 @@ export default function SearchScreen() {
               return;
             }
             if (data.shouldRecommend && data.provider) {
-              addMessage({
-                role: "assistant",
-                content: "",
-                type: "provider_recommendation",
+              addProviderRecommendationOnce({
+                sessionId: capturedSessionId,
                 provider: data.provider,
                 intentType: data.intentType,
                 propertyAddress: resolveReportAddress(reportSnapshot as FeasibilityReport | undefined),
-              }, capturedSessionId);
+              });
             }
           } catch {}
         }, 1200);
@@ -1608,6 +1649,7 @@ export default function SearchScreen() {
     refreshProfile,
     bumpSearchHistory,
     trackBackgroundAnalyseJob,
+    addProviderRecommendationOnce,
     shouldShowAnalyseDisclaimer,
     openAnalyseDisclaimer,
     user?.role,
@@ -1624,10 +1666,16 @@ export default function SearchScreen() {
   );
 
   const handleAnalyse = useCallback(
-    async (address: string, selectedPhotoUrl?: string | null, skipAnalyseDisclaimer = false) => {
+    async (
+      address: string,
+      selectedPhotoUrl?: string | null,
+      selectedListingUrl?: string | null,
+      selectedListingContext?: SelectedListingContext | null,
+      skipAnalyseDisclaimer = false,
+    ) => {
       if (isLoading) return;
       if (!skipAnalyseDisclaimer && shouldShowAnalyseDisclaimer()) {
-        openAnalyseDisclaimer({ type: "analyse", address, selectedPhotoUrl });
+        openAnalyseDisclaimer({ type: "analyse", address, selectedPhotoUrl, selectedListingUrl, selectedListingContext });
         return;
       }
       setInputText("");
@@ -1669,6 +1717,8 @@ export default function SearchScreen() {
               body: JSON.stringify({
                 address,
                 conversationHistory,
+                selectedListingUrl,
+                selectedListingContext,
                 async: Platform.OS !== "web",
               }),
               signal: controller.signal,
@@ -1816,7 +1866,7 @@ export default function SearchScreen() {
     if (action.type === "send") {
       await handleSend(action.text, true);
     } else {
-      await handleAnalyse(action.address, action.selectedPhotoUrl, true);
+      await handleAnalyse(action.address, action.selectedPhotoUrl, action.selectedListingUrl, action.selectedListingContext, true);
     }
   }, [analyseDisclaimerDontRemind, handleAnalyse, handleSend, user?.id]);
 

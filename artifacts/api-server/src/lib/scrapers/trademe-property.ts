@@ -39,7 +39,12 @@ function normaliseImageUrl(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const trimmed = raw.trim();
   if (!trimmed || trimmed.startsWith("data:") || trimmed.includes(".svg")) return null;
-  if (/logo|icon|placeholder|sprite|loading|missing/i.test(trimmed)) return null;
+  // Block non-photo assets: site chrome, brand images, street view
+  if (/logo|icon|placeholder|sprite|loading|missing|avatar|agent|profile|streetview/i.test(trimmed)) return null;
+  // Block site-level marketing / banner images that appear on error pages
+  if (/banner|hero|promo|marketing|\bad[-_]|background|splash|brand|og-default|app-store|iphone|android|phone-mock/i.test(trimmed)) return null;
+  // Block TradeMe site-level asset paths
+  if (/trademe\.co\.nz\/(?:images|assets|content)\/(?!property|listing|photo)/i.test(trimmed)) return null;
   try {
     if (trimmed.startsWith("//")) return `https:${trimmed}`;
     if (trimmed.startsWith("/")) return new URL(trimmed, "https://www.trademe.co.nz").toString();
@@ -51,8 +56,20 @@ function normaliseImageUrl(raw: string | null | undefined): string | null {
 
 function isTradeMeImageHost(url: string): boolean {
   try {
-    const host = new URL(url).hostname.toLowerCase();
-    return host.endsWith("trademe.co.nz") || host.includes("trademe") || host.includes("tmcdn");
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    const path = parsed.pathname.toLowerCase();
+    // Accepted: Trade Me's primary image CDN subdomains
+    if (host === "photos.trademe.co.nz" || host.startsWith("photos.trademe") || host.includes("tmcdn")) return true;
+    // Accept photos served from the main domain only when path looks like property images
+    if (host.endsWith("trademe.co.nz")) {
+      return /\/(photos?|listing|property|image|media)\/|\.(jpg|jpeg|png|webp)(\?|$)/i.test(path);
+    }
+    // CDN pass-through — require path-level signal
+    if (host.includes("trademe") || host.includes("tmcdn")) {
+      return /\.(jpg|jpeg|png|webp)(\?|$)/i.test(path);
+    }
+    return false;
   } catch {
     return false;
   }
@@ -93,18 +110,20 @@ function dedupeImageVariants(urls: string[]): string[] {
   return [...bestByPath.values()];
 }
 
-async function extractPhotosFromListingHtml(html: string): Promise<string[]> {
+export async function extractTradeMePhotosFromListingHtml(html: string): Promise<string[]> {
   const { load } = await import("cheerio");
   const $ = load(html);
 
   const raw: Array<string | null | undefined> = [];
 
-  // og:image / twitter:image
-  $('meta[property="og:image"], meta[name="og:image"], meta[name="twitter:image"], meta[property="twitter:image"]')
-    .each((_, el) => {
-      const v = $(el).attr("content");
-      if (v) raw.push(v);
-    });
+  // NOTE: og:image / twitter:image are intentionally NOT extracted here.
+  // On a live property listing page the og:image IS a property photo, but it
+  // is also present in the listing's img/srcset elements (no info lost by
+  // skipping it). On a wrong/dead/error page (wrong address match, sold
+  // listing redirect) the og:image is the TradeMe kiwi-bird site logo —
+  // accepting that single URL would block the AI photo fallback and show the
+  // logo as the carousel's main image. Property photos on TradeMe come from
+  // their photo CDN and are reliably available in srcset and img[src] tags.
 
   // <picture><source srcset="..."> and <img srcset="...">
   $("picture source[srcset], img[srcset]").each((_, el) => {
@@ -161,7 +180,7 @@ async function viaDirectSearch(address: string): Promise<TradeMePropertyData | n
   const listingHtml = await fetchWithScrapingBee(listingUrl, { render_js: true, wait: 2000 });
   if (!listingHtml || listingHtml.length < 500) return null;
 
-  const photos = await extractPhotosFromListingHtml(listingHtml);
+  const photos = await extractTradeMePhotosFromListingHtml(listingHtml);
   if (photos.length === 0) return null;
   return {
     photo_urls: photos,
@@ -211,7 +230,7 @@ async function viaDuckDuckGo(address: string): Promise<TradeMePropertyData | nul
   const listingHtml = await fetchWithScrapingBee(listingUrl, { render_js: true, wait: 2000 });
   if (!listingHtml || listingHtml.length < 500) return null;
 
-  const photos = await extractPhotosFromListingHtml(listingHtml);
+  const photos = await extractTradeMePhotosFromListingHtml(listingHtml);
   if (photos.length === 0) return null;
   return {
     photo_urls: photos,

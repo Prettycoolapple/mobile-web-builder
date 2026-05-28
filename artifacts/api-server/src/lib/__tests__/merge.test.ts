@@ -45,6 +45,55 @@ describe("mergePropertyData", () => {
     expect(merged.data_sources.floor_area_sqm).toContain("auckland_council_gis");
   });
 
+  it("uses the selected active listing subject land when a tapped discovery card disagrees with parcel/GIS area", () => {
+    const selectedUrl = "https://www.realestate.co.nz/43000000/residential/sale/18-peacock-street-glendowie";
+    const merged = mergePropertyData(
+      { area_sqm: 283 } as any,
+      null,
+      null,
+      { zone_code: "SHZ", zone_description: "Single House Zone", min_lot_size_sqm: 600 } as any,
+      [],
+      {
+        contour: null,
+        asbestos_risk: "unknown",
+        infrastructure: [],
+        property_history: {
+          cv_nzd: 5_950_000,
+          cv_year: 2024,
+          build_year: 1960,
+          floor_area_sqm: 296,
+          land_area_sqm: 283,
+          property_type: "House",
+          sources_confirmed: [],
+          sources_estimated: [],
+        },
+        realestate_listing: {
+          address: "18 Peacock Street, Glendowie, Auckland City, Auckland",
+          price: 3_500_000,
+          priceText: "$3,500,000",
+          landArea: 2694,
+          landAreaSource: "realestate_page",
+          landAreaConfidence: "verified",
+          landAreaApprox: true,
+          listingUrl: selectedUrl,
+          photoUrl: null,
+          photoUrls: [],
+          zone: null,
+          bedrooms: 4,
+          bathrooms: 3,
+          floorArea: 296,
+          propertyType: "House",
+          tenureText: "Freehold",
+          legalDescription: "Lot 1 Deposited Plan 12345",
+        },
+        preferred_realestate_listing_url: selectedUrl,
+      },
+    );
+
+    expect(merged.land_area_sqm).toBe(2694);
+    expect(merged.data_sources.land_area_sqm).toBe("realestate.co.nz (selected active listing)");
+  });
+
   it("passes optional terrain distribution metrics through the merged payload", () => {
     const merged = mergePropertyData(
       { area_sqm: 32_113 } as any,

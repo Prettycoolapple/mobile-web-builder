@@ -65,6 +65,14 @@ import { queueBackgroundScores, getCardScores } from "../lib/analysis-cache";
 import { normaliseLocale } from "../lib/prompts";
 import { terrainSlopeText } from "../lib/terrain-slope-copy";
 import { translateChatContent, translateReportNarrative, ensureChinese } from "../lib/translation";
+import {
+  normaliseSelectedListingContext,
+  applySelectedListingContextToReport,
+  selectedListingContextFromHistory,
+  selectedListingContextToHistoryMarker,
+  selectedListingPhotoUrls,
+  type SelectedListingContext,
+} from "../lib/selected-listing-context";
 import { resolveAddressForAnalysis } from "../lib/address-clarification";
 import {
   CHAT_LIMITS,
@@ -1670,6 +1678,39 @@ type CombinedReportGroup = {
   historyCreatedAt?: string | null;
 };
 
+function normaliseAnalysisAddressKey(value: string | null | undefined): string {
+  return (value ?? "")
+    .toLowerCase()
+    .replace(/\b(new zealand|nz|auckland city|auckland)\b/g, "")
+    .replace(/\b\d{4}\b/g, "")
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function selectedListingUrlFromHistory(
+  history: Array<{ role: "user" | "assistant"; content: string }> | null | undefined,
+  address: string,
+): string | null {
+  const selectedContext = selectedListingContextFromHistory(history);
+  if (selectedContext?.listingUrl) return selectedContext.listingUrl;
+
+  const target = normaliseAnalysisAddressKey(address);
+  if (!target) return null;
+  for (const item of [...(history ?? [])].reverse()) {
+    const content = item.content ?? "";
+    const matches = content.matchAll(/([^;\]\n|]+?)\|\|(https?:\/\/[^\s;\]]+)/gi);
+    for (const match of matches) {
+      const candidateAddress = match[1]?.replace(/^\[Search results shown:\s*/i, "").trim() ?? "";
+      const listingUrl = match[2]?.trim() ?? "";
+      if (!listingUrl) continue;
+      const candidateKey = normaliseAnalysisAddressKey(candidateAddress);
+      if (candidateKey && (candidateKey === target || candidateKey.includes(target) || target.includes(candidateKey))) {
+        return listingUrl;
+      }
+    }
+  }
+  return null;
+}
+
 function resolveCombinedPackage(raw: string): { packageAddress: string; childAddresses: string[] } | null {
   const parsed = extractCombinedListingAddressParts(raw);
   if (!parsed) return null;
@@ -2025,6 +2066,8 @@ async function runFeasibilityAnalyseCore(args: {
   locale: ReturnType<typeof normaliseLocale>;
   translateTitleSchool: boolean;
   conversationHistory: Array<{ role: "user" | "assistant"; content: string }>;
+  selectedListingUrl?: string | null;
+  selectedListingContext?: SelectedListingContext | null;
   userId: string | null;
   log: FeasibilityLog;
 }): Promise<{
@@ -2032,9 +2075,19 @@ async function runFeasibilityAnalyseCore(args: {
   savedSearchId: string | null;
   savedSearchCreatedAt: string | null;
 }> {
-  const { address, analysisAddress, locale, translateTitleSchool, conversationHistory, userId, log } = args;
+  const { address, analysisAddress, locale, translateTitleSchool, conversationHistory, selectedListingUrl, selectedListingContext, userId, log } = args;
+  const selectedContext =
+    normaliseSelectedListingContext(selectedListingContext) ??
+    selectedListingContextFromHistory(conversationHistory);
+  const preferredListingUrl =
+    selectedContext?.listingUrl ?? selectedListingUrl ?? selectedListingUrlFromHistory(conversationHistory, analysisAddress);
+  const preferredRealestateListingUrl =
+    preferredListingUrl && /realestate\.co\.nz/i.test(preferredListingUrl) ? preferredListingUrl : null;
 
-  const pipelineResult = await runPropertyPipeline(analysisAddress).catch((err) => {
+  const pipelineResult = await runPropertyPipeline(analysisAddress, {
+    preferredRealestateListingUrl,
+    selectedListingContext: selectedContext,
+  }).catch((err) => {
     log.warn({ err }, "Pipeline failed during feasibility core — falling back to LLM-only report");
     return null;
   });
@@ -2058,7 +2111,11 @@ async function runFeasibilityAnalyseCore(args: {
       pipelineResult.geocode?.formatted ?? analysisAddress,
       locale,
     );
+    applySelectedListingContextToReport(report, selectedContext ?? pipelineResult.selectedListingContext);
     await applyCombinedListingContextToReport(report, pipelineResult, locale);
+  }
+  if (!pipelineResult && selectedContext) {
+    applySelectedListingContextToReport(report, selectedContext);
   }
 
   if (locale === "zh") {
@@ -2252,11 +2309,14 @@ async function processFeasibilityJob(jobId: string, log: FeasibilityLog): Promis
 }
 
 router.post("/analyse", async (req, res) => {
-  const { address, conversationHistory, async: asyncFlag } = req.body as {
+  const { address, conversationHistory, async: asyncFlag, selectedListingUrl, selectedListingContext } = req.body as {
     address: string;
     conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
     async?: boolean;
+    selectedListingUrl?: string | null;
+    selectedListingContext?: SelectedListingContext | null;
   };
+  const normalisedSelectedListingContext = normaliseSelectedListingContext(selectedListingContext);
 
   const analyseLocale = localeFromReq({ headers: req.headers as Record<string, string | string[] | undefined> });
 
@@ -2496,6 +2556,18 @@ router.post("/analyse", async (req, res) => {
       return;
     }
     const analysisAddress = addressResolution.resolvedAddress || analysisInput;
+    const selectedListingMarker = normalisedSelectedListingContext
+      ? selectedListingContextToHistoryMarker(normalisedSelectedListingContext)
+      : selectedListingUrl
+        ? `[Selected listing for analysis: ${analysisAddress}||${selectedListingUrl}]`
+        : null;
+    const analysisConversationHistory =
+      selectedListingMarker
+        ? [
+            ...(conversationHistory ?? []),
+            { role: "assistant" as const, content: selectedListingMarker },
+          ]
+        : (conversationHistory ?? []);
 
     const wantAsync = Boolean(asyncFlag) && Boolean(userId);
     if (wantAsync) {
@@ -2529,7 +2601,7 @@ router.post("/analyse", async (req, res) => {
               analysisAddress,
               locale: analyseLocale,
               translateTitleSchool,
-              conversationHistory: conversationHistory ?? null,
+              conversationHistory: analysisConversationHistory,
             })
             .returning({ id: feasibilityJobs.id }),
         );
@@ -2557,7 +2629,9 @@ router.post("/analyse", async (req, res) => {
       analysisAddress,
       locale: analyseLocale,
       translateTitleSchool,
-      conversationHistory: conversationHistory || [],
+      conversationHistory: analysisConversationHistory,
+      selectedListingUrl,
+      selectedListingContext: normalisedSelectedListingContext,
       userId,
       log: req.log,
     });
@@ -2725,10 +2799,14 @@ router.post("/analyse/:searchId/refresh-photos", async (req, res) => {
     const existingPhotos: string[] = Array.isArray(report["photoUrls"])
       ? ((report["photoUrls"] as unknown[]).filter((u): u is string => typeof u === "string"))
       : [];
+    const selectedListingContext = normaliseSelectedListingContext(report["selectedListingContext"])
+      ?? normaliseSelectedListingContext((report["propertyOverview"] as Record<string, unknown> | undefined)?.["selectedListingContext"]);
+    const selectedPhotos = selectedListingPhotoUrls(selectedListingContext);
 
     // OneRoof historical photos lead — they're typically higher quality than
     // Trade Me/Hougarden archives and most likely to exist for sold listings.
     let combined = Array.from(new Set([
+      ...selectedPhotos,
       ...oneroofPhotos.photo_urls,
       ...trademe.photo_urls,
       ...hougardenPhotos.photo_urls,
@@ -3863,7 +3941,9 @@ router.post("/chat", async (req, res) => {
             }
           };
 
-          const pipelineResult = await runPropertyPipeline(analysisAddress).catch((err) => {
+          const pipelineResult = await runPropertyPipeline(analysisAddress, {
+            preferredRealestateListingUrl: selectedListingUrlFromHistory(conversationHistory, analysisAddress),
+          }).catch((err) => {
             req.log.warn({ err }, "Pipeline failed — falling back to AI-only analysis");
             return null;
           });

@@ -515,6 +515,52 @@ router.post("/admin/providers/:userId/verify", requireAdmin, async (req, res) =>
   }
 });
 
+// PATCH /admin/users/:userId/recommendation-count
+// Body: { count: number }  — sets the recommendation count for a service_provider
+router.patch("/admin/users/:userId/recommendation-count", requireAdmin, async (req, res) => {
+  const { userId } = req.params;
+  const { count } = req.body as { count?: unknown };
+
+  if (typeof count !== "number" || !Number.isInteger(count) || count < 0) {
+    res.status(400).json({ error: "count must be a non-negative integer" });
+    return;
+  }
+
+  try {
+    const [profile] = await db
+      .select({ role: profiles.role })
+      .from(profiles)
+      .where(eq(profiles.id, userId))
+      .limit(1);
+
+    if (!profile) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    if (profile.role !== "service_provider") {
+      res.status(400).json({ error: "User is not a service provider" });
+      return;
+    }
+
+    const updated = await db
+      .update(serviceProviderProfiles)
+      .set({ recommendationCount: count })
+      .where(eq(serviceProviderProfiles.userId, userId))
+      .returning({ recommendationCount: serviceProviderProfiles.recommendationCount });
+
+    if (updated.length === 0) {
+      res.status(404).json({ error: "Service provider profile not found" });
+      return;
+    }
+
+    res.json({ ok: true, recommendationCount: updated[0].recommendationCount });
+  } catch (err) {
+    req.log.error({ err }, "admin set recommendation count failed");
+    res.status(500).json({ error: "Failed to update recommendation count" });
+  }
+});
+
 // PATCH /admin/users/:userId/status
 // Body: { status: "free" | "supercharge" | "friends_family" }
 // "supercharge"    → 60 reports/month, expires 6 months from now
@@ -606,18 +652,21 @@ router.get("/admin/users/:userId", requireAdmin, async (req, res) => {
       feasibility_reports: string;
       agent_calls: string;
       thumbs_down: string;
+      recommendation_count: string | null;
     }>(sql`
       SELECT
         (SELECT COUNT(*) FROM feasibility_jobs WHERE user_id = ${userId}) AS feasibility_reports,
         (SELECT COUNT(*) FROM agent_call_events WHERE user_id = ${userId}) AS agent_calls,
-        (SELECT COUNT(*) FROM chat_llm_feedback WHERE user_id = ${userId} AND rating = 'down') AS thumbs_down
+        (SELECT COUNT(*) FROM chat_llm_feedback WHERE user_id = ${userId} AND rating = 'down') AS thumbs_down,
+        (SELECT recommendation_count FROM service_provider_profiles WHERE user_id = ${userId}) AS recommendation_count
     `);
     const countsRows = (countsResult as any).rows ?? countsResult;
-    const c = (countsRows[0] ?? {}) as Record<string, string>;
+    const c = (countsRows[0] ?? {}) as Record<string, string | null>;
     const feasibilityReports = Number(c.feasibility_reports ?? 0);
     const agentCalls = Number(c.agent_calls ?? 0);
     const thumbsDown = Number(c.thumbs_down ?? 0);
     const callsPerReport = feasibilityReports > 0 ? agentCalls / feasibilityReports : 0;
+    const recommendationCount = c.recommendation_count != null ? Number(c.recommendation_count) : null;
 
     res.json({
       profile: {
@@ -629,6 +678,7 @@ router.get("/admin/users/:userId", requireAdmin, async (req, res) => {
         agentCalls,
         thumbsDown,
         callsPerReport,
+        recommendationCount,
       },
     });
   } catch (err) {

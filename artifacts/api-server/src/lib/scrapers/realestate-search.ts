@@ -55,6 +55,7 @@ const SUBURB_SLUG_MAP: Record<string, { slug: string; district: string; region: 
   "saint heliers":     { slug: "st-heliers",        district: "orakei",                 region: "auckland" },
   "kohimarama":        { slug: "kohimarama",        district: "orakei",                 region: "auckland" },
   "mission bay":       { slug: "mission-bay",       district: "orakei",                 region: "auckland" },
+  "orakei":            { slug: "orakei",            district: "orakei",                 region: "auckland", altDistricts: ["auckland-city"] },
   "glendowie":         { slug: "glendowie",         district: "orakei",                 region: "auckland" },
   "meadowbank":        { slug: "meadowbank",        district: "orakei",                 region: "auckland" },
   "st johns":          { slug: "saint-johns",       district: "orakei",                 region: "auckland" },

@@ -2,14 +2,49 @@ import React, { useEffect, useRef } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, Image, Animated } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
-import { PropertyCandidate } from "@/context/ChatContext";
+import { PropertyCandidate, SelectedListingContext } from "@/context/ChatContext";
 import { StarRating } from "@/components/StarRating";
 import { useT } from "@/lib/i18n";
 import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
 
 interface Props {
   candidate: PropertyCandidate;
-  onAnalyse: (address: string, photoUrl?: string | null) => void;
+  onAnalyse: (address: string, photoUrl?: string | null, listingUrl?: string | null, selectedListingContext?: SelectedListingContext | null) => void;
+}
+
+function inferListingSourceFromUrl(url?: string | null): string | null {
+  if (!url) return null;
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    if (host.includes("trademe.co.nz")) return "trademe";
+    if (host.includes("homes.co.nz")) return "homes";
+    if (host.includes("oneroof.co.nz")) return "oneroof";
+    if (host.includes("realestate.co.nz")) return "realestate.co.nz";
+    if (host.includes("hougarden.com")) return "hougarden";
+    return host.replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+}
+
+function selectedListingContextFromCandidate(candidate: PropertyCandidate): SelectedListingContext {
+  return {
+    address: candidate.address,
+    listingUrl: candidate.listingUrl ?? null,
+    photoUrl: candidate.photoUrl ?? null,
+    photoUrls: candidate.photoUrl ? [candidate.photoUrl] : [],
+    price: candidate.price > 0 ? candidate.price : null,
+    landArea: candidate.landArea ?? null,
+    floorArea: candidate.floorArea ?? null,
+    bedrooms: candidate.bedrooms ?? null,
+    bathrooms: candidate.bathrooms ?? null,
+    bedroomsApprox: candidate.bedroomsApprox ?? null,
+    bathroomsApprox: candidate.bathroomsApprox ?? null,
+    landAreaApprox: candidate.landAreaApprox ?? null,
+    floorAreaApprox: candidate.floorAreaApprox ?? null,
+    priceApprox: candidate.priceApprox ?? null,
+    source: inferListingSourceFromUrl(candidate.listingUrl),
+  };
 }
 
 function scoreColor(score: number, colors: ReturnType<typeof useColors>): string {
@@ -87,6 +122,7 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
   const colors = useColors();
   const { t } = useT();
   const compositeRaw = candidate.scores.composite;
+  const isPreliminarySubdivisionScreen = candidate.screeningStatus === "preliminary";
   const showOverall =
     !candidate.scoresLoading && typeof compositeRaw === "number" && compositeRaw > 0;
   const composite = showOverall ? compositeRaw : 0;
@@ -108,7 +144,7 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
     typeof candidate.buildYear === "number" &&
     candidate.buildYear < 2000;
   const showPreliminarySubdivisionRecommendation =
-    candidate.screeningStatus === "preliminary" &&
+    isPreliminarySubdivisionScreen &&
     passesCoreSubdivisionCardScreen &&
     (candidate.buildYear == null || candidate.buildYear < 2000);
   const showSubdivisionRecommendation =
@@ -203,7 +239,7 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
           )}
         </View>
 
-        {showSubdivisionRecommendation ? (
+        {showSubdivisionRecommendation && !isPreliminarySubdivisionScreen ? (
           <View style={[styles.subdivisionBox, { backgroundColor: colors.success + "12", borderColor: colors.success + "44" }]}>
             <Feather name="check-circle" size={13} color={colors.success} />
             <Text style={[styles.subdivisionText, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}>
@@ -223,11 +259,25 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
           <View style={[styles.scoreDivider, { backgroundColor: colors.border }]} />
           <ScorePip score={candidate.scores.roi} label={t("report.roi")} loading={candidate.scoresLoading} />
         </View>
+
+        {isPreliminarySubdivisionScreen ? (
+          <View style={[styles.preliminaryNote, { borderTopColor: colors.border }]}>
+            <Feather name="info" size={12} color={colors.mutedForeground} />
+            <Text style={[styles.preliminaryNoteText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+              {t("search.preliminary_subdivision_note")}
+            </Text>
+          </View>
+        ) : null}
       </View>
 
       <TouchableOpacity
         style={[styles.analyseBtn, { backgroundColor: colors.accent }]}
-        onPress={() => onAnalyse(candidate.address, candidate.photoUrl ?? null)}
+        onPress={() => onAnalyse(
+          candidate.address,
+          candidate.photoUrl ?? null,
+          candidate.listingUrl ?? null,
+          selectedListingContextFromCandidate(candidate),
+        )}
         activeOpacity={0.8}
       >
         <Text style={[styles.analyseBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>
@@ -339,6 +389,18 @@ const styles = StyleSheet.create({
     paddingTop: 11,
     justifyContent: "space-around",
     alignItems: "center",
+  },
+  preliminaryNote: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: 9,
+    flexDirection: "row",
+    gap: 6,
+    alignItems: "flex-start",
+  },
+  preliminaryNoteText: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 15,
   },
   pip: {
     alignItems: "center",

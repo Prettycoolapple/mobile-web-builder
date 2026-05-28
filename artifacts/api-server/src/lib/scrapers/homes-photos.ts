@@ -29,7 +29,13 @@ function normaliseImageUrl(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const trimmed = raw.trim();
   if (!trimmed || trimmed.startsWith("data:") || trimmed.includes(".svg")) return null;
-  if (/logo|icon|placeholder|sprite|loading|missing|avatar|streetview/i.test(trimmed)) return null;
+  // Block non-photo assets: site chrome, marketing images, street view
+  if (/logo|icon|placeholder|sprite|loading|missing|avatar|agent|profile|streetview/i.test(trimmed)) return null;
+  // Block banner/hero/marketing images that show up on homes.co.nz og:image / site-wide assets
+  if (/banner|hero|promo|marketing|\bad[-_]|\/home[-_/]|\/general[-_/]|background|splash|brand|site-image|og-default|app-store|iphone|android|phone-mock|consumer/i.test(trimmed)) return null;
+  // Block homes.co.nz site-level asset paths (not property CDN paths)
+  if (/homes\.co\.nz\/images\/(?!property|listing|photo)/i.test(trimmed)) return null;
+  if (/homes\.co\.nz\/assets\//i.test(trimmed)) return null;
   try {
     if (trimmed.startsWith("//")) return `https:${trimmed}`;
     if (trimmed.startsWith("/")) return new URL(trimmed, "https://homes.co.nz").toString();
@@ -41,30 +47,35 @@ function normaliseImageUrl(raw: string | null | undefined): string | null {
 
 function isHomesImageHost(url: string): boolean {
   try {
-    const host = new URL(url).hostname.toLowerCase();
-    return (
-      host.endsWith("homes.co.nz") ||
-      host.includes("homes-images") ||
-      host.includes("homescdn") ||
-      host.endsWith("cloudfront.net") || // homes uses CloudFront
-      host.endsWith("amazonaws.com")
-    );
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    const path = parsed.pathname.toLowerCase();
+    // Direct homes.co.nz subdomains
+    if (host.endsWith("homes.co.nz")) return true;
+    if (host.includes("homes-images") || host.includes("homescdn")) return true;
+    // CloudFront/S3 — only accept if the URL path looks like a property image
+    // (not a site-wide asset or marketing banner). homes.co.nz CDN property
+    // images have paths under /photos/, /listing/, /property/, /images/property/,
+    // or are bare UUID/hash image filenames with a known extension.
+    if (host.endsWith("cloudfront.net") || host.endsWith("amazonaws.com")) {
+      return /\/(photos?|listing|property|image)\//i.test(path);
+    }
+    return false;
   } catch {
     return false;
   }
 }
 
-async function extractPhotosFromHtml(html: string): Promise<string[]> {
+export async function extractHomesPhotosFromHtml(html: string): Promise<string[]> {
   const { load } = await import("cheerio");
   const $ = load(html);
 
   const raw: Array<string | null | undefined> = [];
 
-  $('meta[property="og:image"], meta[property="twitter:image"], meta[name="twitter:image"]')
-    .each((_, el) => {
-      const v = $(el).attr("content");
-      if (v) raw.push(v);
-    });
+  // NOTE: og:image / twitter:image are intentionally NOT extracted here —
+  // on homes.co.nz those meta tags always contain the site-level branding
+  // banner ("Free property information…"), not the individual property's
+  // listing photos. Property images come from the photo-strip and script blobs.
 
   $('[data-test="photo-strip-image"], [data-testid*="photo"]').each((_, el) => {
     const a = $(el).attr("src");
@@ -126,7 +137,7 @@ async function viaDirectUrls(address: string): Promise<HomesPhotoData | null> {
   for (const url of buildAddressSlugVariants(address).slice(0, 2)) {
     const html = await fetchWithScrapingBee(url, { render_js: true, wait: 2500 });
     if (!html || html.length < 500) continue;
-    const photos = await extractPhotosFromHtml(html);
+    const photos = await extractHomesPhotosFromHtml(html);
     if (photos.length > 0) {
       return {
         photo_urls: photos,
@@ -177,7 +188,7 @@ async function viaDuckDuckGo(address: string): Promise<HomesPhotoData | null> {
   const html = await fetchWithScrapingBee(listingUrl, { render_js: true, wait: 2500 });
   if (!html || html.length < 500) return null;
 
-  const photos = await extractPhotosFromHtml(html);
+  const photos = await extractHomesPhotosFromHtml(html);
   if (photos.length === 0) return null;
   return {
     photo_urls: photos,

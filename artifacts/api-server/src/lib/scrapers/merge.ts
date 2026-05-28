@@ -372,6 +372,8 @@ export function mergePropertyData(
     analysed_address?: string | null;
     /** Active address-matched listing from realestate.co.nz. */
     realestate_listing?: ListingResult | null;
+    /** Exact active listing the user tapped from a discovery card. */
+    preferred_realestate_listing_url?: string | null;
     /** Active listing images from realestate.co.nz when OneRoof has none. */
     realestate_photo_urls?: string[] | null;
   },
@@ -385,6 +387,10 @@ export function mergePropertyData(
   const realestateListing = realestateListingScopedToSubject(realestateListingRaw, extra?.analysed_address)
     ? realestateListingRaw
     : null;
+  const selectedRealestateListing =
+    !!extra?.preferred_realestate_listing_url &&
+    !!realestateListing?.listingUrl &&
+    realestateListing.listingUrl === extra.preferred_realestate_listing_url;
   const hasIgnoredCombinedListing = !!realestateListingRaw?.isCombinedListing && !realestateListing;
 
   // Land area: LINZ is the authoritative cadastral measurement — always wins.
@@ -669,6 +675,11 @@ export function mergePropertyData(
         realestateListing.landAreaConfidence === "verified" &&
         !realestateListing.landAreaApprox &&
         realestateListing.landArea < land_area_sqm;
+      const selectedListingSubjectArea =
+        selectedRealestateListing &&
+        !realestateListing.isCombinedListing &&
+        !hasUnitOrCrossLeaseListingSignal(realestateListing) &&
+        realestateListing.landAreaConfidence === "verified";
       const override = shouldUseLiveAreaOverride(
         land_area_sqm,
         realestateListing.landArea,
@@ -683,16 +694,20 @@ export function mergePropertyData(
         ],
         0.1,
       );
-      if (delta > 0.1 && (override.use || exactUnitChildArea)) {
+      if (delta > 0.1 && (override.use || exactUnitChildArea || selectedListingSubjectArea)) {
         logger.info(
-          { previous: land_area_sqm, listing: realestateListing.landArea, delta, exactUnitChildArea },
+          { previous: land_area_sqm, listing: realestateListing.landArea, delta, exactUnitChildArea, selectedListingSubjectArea },
           "Merge: active realestate.co.nz listing overrides land area (>10% disagreement)",
         );
         discrepancies.push(
-          `Land area: active realestate.co.nz listing reports ${realestateListing.landArea}m² vs LINZ cadastre ${land_area_sqm}m² (${(delta * 100).toFixed(0)}% difference). Using the active listing.`,
+          selectedListingSubjectArea
+            ? `Land area: selected active realestate.co.nz listing reports ${realestateListing.landArea}m² vs parcel/GIS record ${land_area_sqm}m² (${(delta * 100).toFixed(0)}% difference). Using the selected listing's subject land area for this report.`
+            : `Land area: active realestate.co.nz listing reports ${realestateListing.landArea}m² vs LINZ cadastre ${land_area_sqm}m² (${(delta * 100).toFixed(0)}% difference). Using the active listing.`,
         );
         live_land_area_sqm = realestateListing.landArea;
-        sources["land_area_sqm"] = "realestate.co.nz (active listing)";
+        sources["land_area_sqm"] = selectedListingSubjectArea
+          ? "realestate.co.nz (selected active listing)"
+          : "realestate.co.nz (active listing)";
       } else if (delta > 0.1) {
         logger.warn(
           { cadastral: land_area_sqm, listing: realestateListing.landArea, delta, approximate: realestateListing.landAreaApprox },
@@ -721,6 +736,46 @@ export function mergePropertyData(
     if (propertyValue.bathrooms != null && bathrooms !== propertyValue.bathrooms) {
       bathrooms = propertyValue.bathrooms;
       sources["bathrooms"] = "propertyvalue (child address; combined listing excluded)";
+    }
+  }
+
+  // Cross-source bedroom consensus check.
+  // Individual scrapers (OneRoof, Homes) derive bedroom counts via text-parsing which
+  // can occasionally misfire (e.g. OCR/layout shift on a 6-bedroom page returns 5).
+  // When ≥3 sources report a non-null count AND the modal value differs from what we
+  // selected above, correct to the consensus. Ties (equal vote counts) break in favour
+  // of the HIGHER count — agents almost never overstate bedrooms, but text parsers can
+  // clip one off.
+  if (bedrooms != null) {
+    const bedroomVotes = [
+      oneroof?.bedrooms,
+      realestateListing?.bedrooms,
+      propertyValue?.bedrooms,
+      homes?.bedrooms,
+      qv?.bedrooms,
+    ].filter((v): v is number => v != null && v > 0);
+
+    if (bedroomVotes.length >= 2) {
+      const tally = new Map<number, number>();
+      for (const v of bedroomVotes) tally.set(v, (tally.get(v) ?? 0) + 1);
+      // Sort: primary by count desc, secondary by value desc (tie-break to higher)
+      const sorted = [...tally.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0]);
+      const [consensusValue, consensusCount] = sorted[0];
+      const currentCount = tally.get(bedrooms) ?? 0;
+      if (
+        consensusValue !== bedrooms &&
+        (consensusCount > currentCount || (consensusCount === currentCount && consensusValue > bedrooms))
+      ) {
+        logger.info(
+          { current: bedrooms, corrected: consensusValue, consensusCount, currentCount, total: bedroomVotes.length },
+          "Merge: cross-source consensus corrects bedroom count",
+        );
+        discrepancies.push(
+          `Bedrooms: ${consensusCount}/${bedroomVotes.length} sources report ${consensusValue} (initial pick was ${bedrooms} from ${sources["bedrooms"] ?? "unknown"}). Corrected to consensus.`,
+        );
+        bedrooms = consensusValue;
+        sources["bedrooms"] = "consensus";
+      }
     }
   }
 

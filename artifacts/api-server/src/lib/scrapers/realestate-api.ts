@@ -536,6 +536,23 @@ async function fetchRawListingById(id: string): Promise<RawListing | null> {
   return json.data ?? null;
 }
 
+function listingIdFromUrl(url: string | null | undefined): string | null {
+  if (!url?.trim()) return null;
+  const match = url.match(/realestate\.co\.nz\/(\d+)\//i) ?? url.match(/\/listings\/(\d+)(?:\b|\/|\?)/i);
+  return match?.[1] ?? null;
+}
+
+export async function fetchRealestateListingByUrl(url: string): Promise<ListingResult | null> {
+  const id = listingIdFromUrl(url);
+  if (!id) return null;
+  const raw = await fetchRawListingById(id);
+  if (!raw) return null;
+  const mapped = mapListing(raw);
+  if (!mapped) return null;
+  const [annotated] = await annotateApproxFields([mapped]).catch(() => [mapped]);
+  return annotated ?? mapped;
+}
+
 function listingIdsFromSearchHtml(html: string): string[] {
   const decoded = decodeURIComponent(html);
   return Array.from(

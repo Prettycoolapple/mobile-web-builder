@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { eq, desc, asc, and, sql } from "drizzle-orm";
+import { eq, desc, asc, and } from "drizzle-orm";
 import {
   db,
   profiles,
@@ -7,7 +7,6 @@ import {
   dmThreads,
   dmMessages,
   pushTokens,
-  recommendations,
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { ai } from "@workspace/integrations-gemini-ai";
@@ -199,11 +198,6 @@ async function selectServiceProvider(options?: {
   const exclude = new Set((options?.excludeProviderIds ?? []).filter(Boolean));
   const strictDiscipline = options?.strictDiscipline ?? true;
 
-  /** Same source as GET /users/:id — count of profile "recommend" rows, not the denormalised column. */
-  const recommendationCountExpr = sql<number>`coalesce((
-    select count(*)::int from ${recommendations} where ${eq(recommendations.toUserId, profiles.id)}
-  ), 0)`;
-
   const baseQuery = db
     .select({
       id: profiles.id,
@@ -213,7 +207,7 @@ async function selectServiceProvider(options?: {
       companyName: serviceProviderProfiles.companyName,
       discipline: serviceProviderProfiles.discipline,
       bio: serviceProviderProfiles.bio,
-      recommendationCount: recommendationCountExpr.mapWith(Number),
+      recommendationCount: serviceProviderProfiles.recommendationCount,
       contactNumber: serviceProviderProfiles.contactNumber,
       addressSuburb: serviceProviderProfiles.addressSuburb,
       addressCity: serviceProviderProfiles.addressCity,
@@ -224,7 +218,7 @@ async function selectServiceProvider(options?: {
     .innerJoin(serviceProviderProfiles, eq(serviceProviderProfiles.userId, profiles.id))
     .where(eq(profiles.role, "service_provider"))
     // Promote less-exposed providers while still preferring verified accounts.
-    .orderBy(desc(profiles.isVerified), asc(recommendationCountExpr))
+    .orderBy(desc(profiles.isVerified), asc(serviceProviderProfiles.recommendationCount))
     .limit(80);
 
   const rows = await baseQuery;
