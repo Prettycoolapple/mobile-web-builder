@@ -24,8 +24,14 @@ export const FREE_REPORT_LIMIT = 6;
 export const STANDARD_REPORT_LIMIT = 60;
 export const SERVICE_PROVIDER_FREE_REPORT_LIMIT = 0;
 
-export function resolveChatLimitKey(role: string | null | undefined, tier: string | null | undefined): ChatLimitKey {
+export function resolveChatLimitKey(
+  role: string | null | undefined,
+  tier: string | null | undefined,
+  specialStatus?: string | null | undefined,
+): ChatLimitKey {
   if (role === "service_provider") return "service_provider";
+  // Admin-granted special statuses inherit at least the standard chat quota
+  if (specialStatus === "supercharge" || specialStatus === "friends_family") return "general_standard";
   if (role === "general" && (tier === "standard" || tier === "pro")) return "general_standard";
   return "general_free";
 }

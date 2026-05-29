@@ -26,8 +26,11 @@ export const FRIENDS_FAMILY_REPORT_LIMIT = 9999;
 export function resolveChatLimitKey(
   role: string | null | undefined,
   tier: string | null | undefined,
+  specialStatus?: string | null | undefined,
 ): ChatLimitKey {
   if (role === "service_provider") return "service_provider";
+  // Admin-granted special statuses inherit at least the standard chat quota
+  if (specialStatus === "supercharge" || specialStatus === "friends_family") return "general_standard";
   if (role === "general" && (tier === "standard" || tier === "pro")) return "general_standard";
   return "general_free";
 }
@@ -35,8 +38,9 @@ export function resolveChatLimitKey(
 export function resolveChatQuota(
   role: string | null | undefined,
   tier: string | null | undefined,
+  specialStatus?: string | null | undefined,
 ): QuotaTier & { key: ChatLimitKey; isFree: boolean } {
-  const key = resolveChatLimitKey(role, tier);
+  const key = resolveChatLimitKey(role, tier, specialStatus);
   const quota = CHAT_LIMITS[key];
   return { ...quota, key, isFree: key === "general_free" };
 }

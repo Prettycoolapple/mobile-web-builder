@@ -3020,6 +3020,7 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
       subscriptionPeriodEndAt: profiles.subscriptionPeriodEndAt,
       role: profiles.role,
       subscriptionTier: profiles.subscriptionTier,
+      specialStatus: profiles.specialStatus,
     })
     .from(profiles)
     .where(eq(profiles.id, userId))
@@ -3032,7 +3033,7 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
   if (role === "service_provider" && tier !== "standard" && tier !== "pro") {
     return { allowed: false, messagesUsed: profile.messagesUsedThisMonth, nearLimit: true, isFreeLimit: false, subscriptionRequired: true };
   }
-  const limitKey = resolveChatLimitKey(role, tier);
+  const limitKey = resolveChatLimitKey(role, tier, profile.specialStatus);
   const { limit, warnAt } = CHAT_LIMITS[limitKey] ?? CHAT_LIMITS.default;
   const isFreeLimit = limitKey === "general_free";
 

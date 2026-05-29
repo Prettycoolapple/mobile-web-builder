@@ -190,56 +190,6 @@ async function viaDirectSearch(address: string): Promise<TradeMePropertyData | n
   };
 }
 
-async function viaDuckDuckGo(address: string): Promise<TradeMePropertyData | null> {
-  const street = (address.split(",")[0] ?? address).trim();
-  const suburb = address.split(",")[1]?.replace(/\b\d{4}\b/g, "").trim();
-  const query = suburb
-    ? `site:trademe.co.nz/a/property "${street}" "${suburb}"`
-    : `site:trademe.co.nz/a/property "${street}"`;
-  const searchUrl = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-  const headers = {
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
-    "accept-language": "en-NZ,en;q=0.9",
-  };
-
-  const searchHtml = await fetch(searchUrl, { headers }).then((r) => r.ok ? r.text() : "").catch(() => "");
-  if (!searchHtml || searchHtml.length < 500) return null;
-
-  // Extract first trademe.co.nz property link
-  const { load } = await import("cheerio");
-  const $ = load(searchHtml);
-  let listingUrl: string | null = null;
-  $('a[href*="trademe.co.nz/a/property"], a[href*="trademe.co.nz/property"]').each((_, el) => {
-    if (listingUrl) return;
-    let href = $(el).attr("href") ?? "";
-    href = href.replace(/&amp;/g, "&");
-    try {
-      const parsed = new URL(href.startsWith("//") ? `https:${href}` : href);
-      const encoded = parsed.searchParams.get("uddg");
-      if (encoded) href = decodeURIComponent(encoded);
-      const cleaned = new URL(href);
-      if (cleaned.hostname.endsWith("trademe.co.nz") && cleaned.pathname.includes("/property/")) {
-        listingUrl = cleaned.toString();
-      }
-    } catch {
-      // ignore
-    }
-  });
-  if (!listingUrl) return null;
-
-  const listingHtml = await fetchWithScrapingBee(listingUrl, { render_js: true, wait: 2000 });
-  if (!listingHtml || listingHtml.length < 500) return null;
-
-  const photos = await extractTradeMePhotosFromListingHtml(listingHtml);
-  if (photos.length === 0) return null;
-  return {
-    photo_urls: photos,
-    listing_url: listingUrl,
-    data_source: "trademe",
-    scraped_at: new Date().toISOString(),
-  };
-}
-
 export async function scrapeTradeMePropertyPhotos(address: string): Promise<TradeMePropertyData> {
   try {
     const direct = await viaDirectSearch(address);
@@ -249,16 +199,6 @@ export async function scrapeTradeMePropertyPhotos(address: string): Promise<Trad
     }
   } catch (err) {
     logger.debug({ err: String(err) }, "TradeMe photos: direct search failed");
-  }
-
-  try {
-    const ddg = await viaDuckDuckGo(address);
-    if (ddg) {
-      logger.info({ address, photoCount: ddg.photo_urls.length, listing: ddg.listing_url }, "TradeMe photos: DuckDuckGo fallback");
-      return ddg;
-    }
-  } catch (err) {
-    logger.debug({ err: String(err) }, "TradeMe photos: DuckDuckGo failed");
   }
 
   logger.debug({ address }, "TradeMe photos: no results");

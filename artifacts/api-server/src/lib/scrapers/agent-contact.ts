@@ -2,7 +2,11 @@
 import { logger } from "../logger";
 import { launchBrowser, newStealthPage, randomDelay, logScrapeAttempt, isVercelServerless } from "./browser";
 import { fetchWithScrapingBee } from "./scrapingbee";
-import { fetchRealestateAgentContactForAddress } from "./realestate-api";
+import {
+  fetchRealestateAgentContactForAddress,
+  fetchRealestateAgentContactByListingUrl,
+} from "./realestate-api";
+import { oneRoofPathnameMatchesAddress } from "./oneroof";
 import { type SelectedListingContext } from "../selected-listing-context";
 import { resolveActiveListingContext } from "../active-listing-context";
 
@@ -195,27 +199,34 @@ async function scrapeAgentViaPlaywright(address: string): Promise<AgentContactRe
     await page.evaluate(() => window.scrollBy(0, 300));
     await randomDelay(500, 1000);
 
-    // Find the first listing link
-    const firstResult = page
-      .locator('a[href*="/residential/"], a[href*="/property/"], [class*="result-card"] a, [class*="listing-card"] a')
-      .first();
-    const hasResult = await firstResult.count();
-    if (!hasResult) {
-      logger.debug({ address }, "AgentContact: no listing found on OneRoof search");
+    // Iterate through OneRoof search results and pick the FIRST link whose
+    // pathname matches the queried address slug. Prevents "8 Hampton Drive"
+    // queries from landing on "18 Hampton Drive" by mistake.
+    const candidates = page.locator('a[href*="/property/"], a[href*="/residential/"]');
+    const count = await candidates.count();
+    let propertyUrl: string | null = null;
+    for (let i = 0; i < Math.min(count, 12); i++) {
+      const href = await candidates.nth(i).getAttribute("href").catch(() => null);
+      if (!href) continue;
+      const full = href.startsWith("http") ? href : `https://www.oneroof.co.nz${href}`;
+      try {
+        if (oneRoofPathnameMatchesAddress(new URL(full).pathname, address)) {
+          propertyUrl = full;
+          break;
+        }
+      } catch { /* skip malformed */ }
+    }
+    if (!propertyUrl) {
+      logger.debug({ address, candidatesChecked: Math.min(count, 12) }, "AgentContact: no OneRoof result matched address slug");
       await context.close().catch(() => {});
       return result;
     }
 
-    const href = await firstResult.getAttribute("href").catch(() => null);
-    let propertyUrl: string | null = null;
-    if (href) {
-      propertyUrl = href.startsWith("http") ? href : `https://www.oneroof.co.nz${href}`;
-      await randomDelay(600, 1000);
-      await page.goto(propertyUrl, { timeout: 14000, waitUntil: "domcontentloaded" });
-      await randomDelay(1500, 2000);
-      await page.evaluate(() => window.scrollBy(0, 600));
-      await randomDelay(500, 800);
-    }
+    await randomDelay(600, 1000);
+    await page.goto(propertyUrl, { timeout: 14000, waitUntil: "domcontentloaded" });
+    await randomDelay(1500, 2000);
+    await page.evaluate(() => window.scrollBy(0, 600));
+    await randomDelay(500, 800);
 
     const pageText = await page.evaluate(() => document.body.innerText ?? "");
 
@@ -258,10 +269,27 @@ async function scrapeAgentViaBee(address: string): Promise<AgentContactResult | 
   const { load } = await import("cheerio");
   const $ = load(html);
 
-  const firstLink = $('a[href*="/residential/for-sale"], a[href*="/residential/"][href*="-for-sale"], a[href*="/property/"]').first().attr("href");
-  if (!firstLink) return null;
+  // Iterate through candidate property/residential links and pick the FIRST
+  // one whose pathname matches the queried address slug. Prevents the
+  // "first-result-wins" bug where OneRoof lists a neighbour first.
+  const links = $('a[href*="/residential/for-sale"], a[href*="/residential/"][href*="-for-sale"], a[href*="/property/"]').toArray();
+  let propertyUrl: string | null = null;
+  for (const el of links.slice(0, 12)) {
+    const href = $(el).attr("href");
+    if (!href) continue;
+    const full = href.startsWith("http") ? href : `https://www.oneroof.co.nz${href}`;
+    try {
+      if (oneRoofPathnameMatchesAddress(new URL(full).pathname, address)) {
+        propertyUrl = full;
+        break;
+      }
+    } catch { /* skip malformed */ }
+  }
+  if (!propertyUrl) {
+    logger.debug({ address, candidatesChecked: Math.min(links.length, 12) }, "AgentContact ScrapingBee: no OneRoof result matched address slug");
+    return null;
+  }
 
-  const propertyUrl = firstLink.startsWith("http") ? firstLink : `https://www.oneroof.co.nz${firstLink}`;
   const propHtml = await fetchWithScrapingBee(propertyUrl, { render_js: true, premium_proxy: false, wait: 3500 });
   if (!propHtml || propHtml.length < 500) return null;
 
@@ -290,6 +318,103 @@ async function scrapeAgentViaBee(address: string): Promise<AgentContactResult | 
   };
 }
 
+type AgentPartial = Pick<AgentContactResult, "agentName" | "agentPhone" | "agencyName" | "agentAvatarUrl">;
+
+async function scrapeRealestateListingPageViaPlaywright(listingUrl: string): Promise<AgentPartial | null> {
+  let browser;
+  try {
+    browser = await launchBrowser();
+    const { context, page } = await newStealthPage(browser);
+    await page.goto(listingUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+    await randomDelay(2000, 3000);
+    await page.evaluate(() => window.scrollBy(0, 600));
+    await randomDelay(1000, 1500);
+
+    // Try to click the phone reveal button
+    const phoneButtonSelectors = [
+      'button:has-text("Call")',
+      'button:has-text("Reveal")',
+      'a[href^="tel:"]',
+      '[data-testid*="phone"]',
+    ];
+    for (const sel of phoneButtonSelectors) {
+      try {
+        const btn = page.locator(sel).first();
+        if ((await btn.count()) > 0) {
+          await btn.click({ timeout: 3000 });
+          await randomDelay(1500, 2000);
+          break;
+        }
+      } catch { /* selector not found, try next */ }
+    }
+
+    const pageText = await page.evaluate(() => (document as any).body?.innerText ?? "");
+    const parsed = parseAgent(pageText);
+
+    // Extract agent avatar from img element near agent card
+    const agentAvatarUrl = await page.evaluate(() => {
+      const img = document.querySelector(
+        'img[class*="agent" i], img[class*="Agent"], [class*="agent-card" i] img, [class*="AgentCard"] img, [class*="agent-photo" i] img',
+      ) as HTMLImageElement | null;
+      return img?.src ?? null;
+    });
+
+    await context.close().catch(() => {});
+    logScrapeAttempt("AgentContact", "realestate-listing-playwright", !!parsed.agentPhone, `phone=${parsed.agentPhone ?? "not found"}`);
+    return { agentName: parsed.agentName, agentPhone: parsed.agentPhone, agencyName: parsed.agencyName, agentAvatarUrl };
+  } catch (err) {
+    logger.warn({ err: (err as Error).message, listingUrl }, "AgentContact: realestate listing playwright failed");
+    return null;
+  } finally {
+    await browser?.close().catch(() => {});
+  }
+}
+
+async function scrapeRealestateListingPageViaBee(listingUrl: string): Promise<AgentPartial | null> {
+  // Target the phone-reveal button precisely. Earlier this used `click: "button"`
+  // which clicked the FIRST button on the page — typically a cookie banner or
+  // nav menu, not the reveal-phone control. The `evaluate` step searches all
+  // buttons/links for text matching /^(call|reveal|show phone|show number)/i
+  // and clicks the first match, which is the phone reveal on realestate.co.nz.
+  const html = await fetchWithScrapingBee(listingUrl, {
+    render_js: true,
+    premium_proxy: false,
+    wait: 4000,
+    js_scenario: {
+      instructions: [
+        { scroll_y: 600 },
+        { wait: 1500 },
+        {
+          evaluate: `const btn = Array.from(document.querySelectorAll('button, a')).find((el) => /^(call|reveal|show phone|show number)/i.test((el.textContent || '').trim())); if (btn) btn.click();`,
+        },
+        { wait: 2500 },
+        { scroll_y: 800 },
+        { wait: 1000 },
+      ],
+    },
+  });
+  if (!html || html.length < 500) return null;
+
+  const { load } = await import("cheerio");
+  const $ = load(html);
+  const pageText = $("body").text();
+  const parsed = parseAgent(pageText);
+
+  let agentAvatarUrl: string | null = null;
+  for (const sel of ['img[class*="agent" i]', '[class*="agent-card" i] img', '[class*="AgentCard"] img']) {
+    const src = $(sel).first().attr("src");
+    if (src?.startsWith("http")) { agentAvatarUrl = src; break; }
+  }
+
+  logScrapeAttempt("AgentContact", "realestate-listing-bee", !!parsed.agentPhone, `phone=${parsed.agentPhone ?? "not found"}`);
+  return { agentName: parsed.agentName, agentPhone: parsed.agentPhone, agencyName: parsed.agencyName, agentAvatarUrl };
+}
+
+async function scrapeRealestateListingPageForAgent(listingUrl: string): Promise<AgentPartial | null> {
+  if (isVercelServerless()) return scrapeRealestateListingPageViaBee(listingUrl);
+  return scrapeRealestateListingPageViaPlaywright(listingUrl);
+}
+
 export async function scrapeListingAgent(
   address: string,
   options: { allowSuburbFallback?: boolean; listingUrl?: string | null; selectedListingContext?: SelectedListingContext | null } = {},
@@ -298,34 +423,170 @@ export async function scrapeListingAgent(
     ? options.selectedListingContext.packageAddress
     : address;
   const selectedUrl = options.selectedListingContext?.listingUrl ?? options.listingUrl ?? null;
+
+  // Capture agent fields the discovery card already gave us (from
+  // SelectedListingContext). Used as defaults whenever a downstream lookup
+  // returns null for the same field, so the user always sees the strongest
+  // available info instead of "房源中介" / "房地产公司" placeholders.
+  const ctxAgentName = options.selectedListingContext?.agentName ?? null;
+  const ctxAgentPhone = options.selectedListingContext?.agentPhone ?? null;
+  const ctxAgencyName = options.selectedListingContext?.agencyName ?? null;
+
+  // 1. Non-realestate.co.nz selectedUrl (e.g. OneRoof/TradeMe from a discovery card)
   if (selectedUrl && !/realestate\.co\.nz/i.test(selectedUrl)) {
     try {
       const selected = await scrapeAgentViaSelectedListingUrl(selectedUrl, options.selectedListingContext);
-      if (selected?.isListed) return selected;
+      if (selected?.isListed) {
+        // Backfill null fields from the discovery card if present
+        selected.agentName = selected.agentName ?? ctxAgentName;
+        selected.agentPhone = selected.agentPhone ?? ctxAgentPhone;
+        selected.agencyName = selected.agencyName ?? ctxAgencyName;
+        return selected;
+      }
     } catch (err) {
       logScrapeAttempt("AgentContact", "selected-listing-url", false, String(err));
     }
   }
 
-  try {
-    const realestateAgent = await fetchRealestateAgentContactForAddress(lookupAddress);
-    if (realestateAgent) {
-      logScrapeAttempt("AgentContact", "realestate-api", !!realestateAgent.agentPhone, `agent=${realestateAgent.agentName ?? "found"}`);
+  // 2. Direct realestate.co.nz listing lookup by URL (discovery route, exact match)
+  //    — bypasses fragile address matching when we already have the listing URL.
+  let realestateAgent: Awaited<ReturnType<typeof fetchRealestateAgentContactForAddress>> | null = null;
+  if (selectedUrl && /realestate\.co\.nz/i.test(selectedUrl)) {
+    try {
+      realestateAgent = await fetchRealestateAgentContactByListingUrl(selectedUrl);
+      logScrapeAttempt("AgentContact", "realestate-listing-by-url", !!realestateAgent?.agentPhone, `agent=${realestateAgent?.agentName ?? "not found"}`);
+    } catch (err) {
+      logScrapeAttempt("AgentContact", "realestate-listing-by-url", false, String(err));
+    }
+  }
+
+  // 3. Address-matched realestate.co.nz Platform API (fallback for direct address search)
+  if (!realestateAgent) {
+    try {
+      realestateAgent = await fetchRealestateAgentContactForAddress(lookupAddress);
+      logScrapeAttempt("AgentContact", "realestate-api", !!realestateAgent?.agentPhone, `agent=${realestateAgent?.agentName ?? "not found"}`);
+    } catch (err) {
+      logScrapeAttempt("AgentContact", "realestate-api", false, String(err));
+    }
+  }
+
+  if (realestateAgent) {
+    if (realestateAgent.agentPhone) {
       return {
         found: true,
         isListed: true,
         matchType: "subject",
         listingAddress: realestateAgent.listingAddress,
-        agentName: realestateAgent.agentName,
+        agentName: realestateAgent.agentName ?? ctxAgentName,
         agentPhone: realestateAgent.agentPhone,
-        agencyName: realestateAgent.agencyName,
+        agencyName: realestateAgent.agencyName ?? ctxAgencyName,
         agentAvatarUrl: realestateAgent.agentAvatarUrl,
-        listingUrl: realestateAgent.listingUrl,
+        listingUrl: realestateAgent.listingUrl ?? selectedUrl,
         source: "realestate-api",
       };
     }
+    // 4. Phone gated behind reveal button — scrape the listing page directly
+    const pageUrl = realestateAgent.listingUrl ?? (selectedUrl && /realestate\.co\.nz/i.test(selectedUrl) ? selectedUrl : null);
+    if (pageUrl) {
+      try {
+        const scraped = await scrapeRealestateListingPageForAgent(pageUrl);
+        if (scraped?.agentPhone) {
+          return {
+            found: true,
+            isListed: true,
+            matchType: "subject",
+            listingAddress: realestateAgent.listingAddress,
+            agentName: scraped.agentName ?? realestateAgent.agentName ?? ctxAgentName,
+            agentPhone: scraped.agentPhone,
+            agencyName: scraped.agencyName ?? realestateAgent.agencyName ?? ctxAgencyName,
+            agentAvatarUrl: scraped.agentAvatarUrl ?? realestateAgent.agentAvatarUrl,
+            listingUrl: pageUrl,
+            source: "realestate-listing-page",
+          };
+        }
+      } catch (err) {
+        logScrapeAttempt("AgentContact", "realestate-listing-page", false, String(err));
+      }
+    }
+
+    // 5. OneRoof fallback (the proven path from a week ago). Public listing
+    //    pages embed agent name/phone/agency in rendered text that parseAgent
+    //    can extract — works even when realestate's Reveal button is gated.
+    try {
+      const oneRoofAgent = await scrapeAgentViaBee(lookupAddress);
+      if (oneRoofAgent?.found && (oneRoofAgent.agentPhone || oneRoofAgent.agentName)) {
+        return {
+          found: true,
+          isListed: true,
+          matchType: "subject",
+          listingAddress: realestateAgent.listingAddress ?? oneRoofAgent.listingAddress,
+          agentName: oneRoofAgent.agentName ?? realestateAgent.agentName ?? ctxAgentName,
+          agentPhone: oneRoofAgent.agentPhone ?? ctxAgentPhone,
+          agencyName: oneRoofAgent.agencyName ?? realestateAgent.agencyName ?? ctxAgencyName,
+          agentAvatarUrl: realestateAgent.agentAvatarUrl,
+          listingUrl: realestateAgent.listingUrl ?? oneRoofAgent.listingUrl ?? selectedUrl,
+          source: "oneroof",
+        };
+      }
+    } catch (err) {
+      logScrapeAttempt("AgentContact", "oneroof-bee-fallback", false, String(err));
+    }
+
+    // 6. Local-dev Playwright fallback (no-op on Vercel where Playwright fails fast)
+    if (!isVercelServerless()) {
+      try {
+        const playwrightAgent = await Promise.race([
+          scrapeAgentViaPlaywright(lookupAddress),
+          new Promise<AgentContactResult>((_, reject) => setTimeout(() => reject(new Error("Playwright timeout")), 20000)),
+        ]);
+        if (playwrightAgent?.found && (playwrightAgent.agentPhone || playwrightAgent.agentName)) {
+          return {
+            found: true,
+            isListed: true,
+            matchType: "subject",
+            listingAddress: realestateAgent.listingAddress ?? playwrightAgent.listingUrl,
+            agentName: playwrightAgent.agentName ?? realestateAgent.agentName ?? ctxAgentName,
+            agentPhone: playwrightAgent.agentPhone ?? ctxAgentPhone,
+            agencyName: playwrightAgent.agencyName ?? realestateAgent.agencyName ?? ctxAgencyName,
+            agentAvatarUrl: realestateAgent.agentAvatarUrl,
+            listingUrl: realestateAgent.listingUrl ?? playwrightAgent.listingUrl ?? selectedUrl,
+            source: "oneroof",
+          };
+        }
+      } catch (err) {
+        logScrapeAttempt("AgentContact", "oneroof-playwright-fallback", false, String(err));
+      }
+    }
+
+    // 7. Return partial — realestate found the listing but no agent details.
+    //    Backfill with discovery card defaults so the bubble still shows
+    //    something useful instead of placeholders.
+    return {
+      found: true,
+      isListed: true,
+      matchType: "subject",
+      listingAddress: realestateAgent.listingAddress,
+      agentName: realestateAgent.agentName ?? ctxAgentName,
+      agentPhone: ctxAgentPhone,
+      agencyName: realestateAgent.agencyName ?? ctxAgencyName,
+      agentAvatarUrl: realestateAgent.agentAvatarUrl,
+      listingUrl: realestateAgent.listingUrl ?? selectedUrl,
+      source: "realestate-api",
+    };
+  }
+
+  // 8. No realestate.co.nz match — try OneRoof directly. Some listings only
+  //    surface there (e.g. boutique agencies, rural).
+  try {
+    const oneRoofAgent = await scrapeAgentViaBee(lookupAddress);
+    if (oneRoofAgent?.isListed) {
+      oneRoofAgent.agentName = oneRoofAgent.agentName ?? ctxAgentName;
+      oneRoofAgent.agentPhone = oneRoofAgent.agentPhone ?? ctxAgentPhone;
+      oneRoofAgent.agencyName = oneRoofAgent.agencyName ?? ctxAgencyName;
+      return oneRoofAgent;
+    }
   } catch (err) {
-    logScrapeAttempt("AgentContact", "realestate-api", false, String(err));
+    logScrapeAttempt("AgentContact", "oneroof-bee-standalone", false, String(err));
   }
 
   if (selectedUrl) {
@@ -335,6 +596,9 @@ export async function scrapeListingAgent(
       isListed: true,
       matchType: "subject",
       listingAddress: options.selectedListingContext?.address ?? address,
+      agentName: ctxAgentName,
+      agentPhone: ctxAgentPhone,
+      agencyName: ctxAgencyName,
       listingUrl: selectedUrl,
       source: options.selectedListingContext?.source ?? inferAgentSourceFromUrl(selectedUrl),
     };
@@ -357,9 +621,9 @@ export async function scrapeListingAgent(
         isListed: true,
         matchType: "subject",
         listingAddress: ctx.address ?? lookupAddress,
-        agentName: ctx.agentName ?? null,
-        agentPhone: ctx.agentPhone ?? null,
-        agencyName: ctx.agencyName ?? null,
+        agentName: ctx.agentName ?? ctxAgentName,
+        agentPhone: ctx.agentPhone ?? ctxAgentPhone,
+        agencyName: ctx.agencyName ?? ctxAgencyName,
         listingUrl: ctx.listingUrl ?? null,
         source: ctx.source ?? (ctx.listingUrl ? inferAgentSourceFromUrl(ctx.listingUrl) : "active-listing"),
       };

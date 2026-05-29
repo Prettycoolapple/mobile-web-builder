@@ -150,54 +150,6 @@ async function viaDirectUrls(address: string): Promise<HomesPhotoData | null> {
   return null;
 }
 
-async function viaDuckDuckGo(address: string): Promise<HomesPhotoData | null> {
-  const street = (address.split(",")[0] ?? address).trim();
-  const suburb = address.split(",")[1]?.replace(/\b\d{4}\b/g, "").trim();
-  const query = suburb
-    ? `site:homes.co.nz "${street}" "${suburb}"`
-    : `site:homes.co.nz "${street}"`;
-  const searchUrl = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-  const headers = {
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
-    "accept-language": "en-NZ,en;q=0.9",
-  };
-  const searchHtml = await fetch(searchUrl, { headers }).then((r) => r.ok ? r.text() : "").catch(() => "");
-  if (!searchHtml || searchHtml.length < 500) return null;
-
-  const { load } = await import("cheerio");
-  const $ = load(searchHtml);
-  let listingUrl: string | null = null;
-  $('a[href*="homes.co.nz"]').each((_, el) => {
-    if (listingUrl) return;
-    let href = $(el).attr("href") ?? "";
-    href = href.replace(/&amp;/g, "&");
-    try {
-      const parsed = new URL(href.startsWith("//") ? `https:${href}` : href);
-      const encoded = parsed.searchParams.get("uddg");
-      if (encoded) href = decodeURIComponent(encoded);
-      const cleaned = new URL(href);
-      if (cleaned.hostname.endsWith("homes.co.nz") && cleaned.pathname.includes("/address/")) {
-        listingUrl = cleaned.toString();
-      }
-    } catch {
-      // ignore
-    }
-  });
-  if (!listingUrl) return null;
-
-  const html = await fetchWithScrapingBee(listingUrl, { render_js: true, wait: 2500 });
-  if (!html || html.length < 500) return null;
-
-  const photos = await extractHomesPhotosFromHtml(html);
-  if (photos.length === 0) return null;
-  return {
-    photo_urls: photos,
-    listing_url: listingUrl,
-    data_source: "homes_photos",
-    scraped_at: new Date().toISOString(),
-  };
-}
-
 export async function scrapeHomesPhotos(address: string): Promise<HomesPhotoData> {
   try {
     const direct = await viaDirectUrls(address);
@@ -207,16 +159,6 @@ export async function scrapeHomesPhotos(address: string): Promise<HomesPhotoData
     }
   } catch (err) {
     logger.debug({ err: String(err) }, "Homes photos: direct URL failed");
-  }
-
-  try {
-    const ddg = await viaDuckDuckGo(address);
-    if (ddg) {
-      logger.info({ address, photoCount: ddg.photo_urls.length, listing: ddg.listing_url }, "Homes photos: DuckDuckGo fallback");
-      return ddg;
-    }
-  } catch (err) {
-    logger.debug({ err: String(err) }, "Homes photos: DuckDuckGo failed");
   }
 
   logger.debug({ address }, "Homes photos: no results");

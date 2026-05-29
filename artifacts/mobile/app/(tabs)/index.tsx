@@ -390,7 +390,7 @@ export default function SearchScreen() {
     setAnalyseDisclaimerVisible(true);
   }, []);
 
-  const chatQuota = user ? resolveChatQuota(user.role, user.subscriptionTier) : null;
+  const chatQuota = user ? resolveChatQuota(user.role, user.subscriptionTier, user.specialStatus) : null;
 
   useEffect(() => {
     if (!user || !chatQuota) return;
@@ -678,19 +678,21 @@ export default function SearchScreen() {
           propertyAddress?: string;
           matchType?: "subject" | "suburb" | null;
           listingAddress?: string | null;
+          listingUrl?: string | null;
         };
 
-        if (data.wantsAgentContact && data.found && data.isListed && data.agentPhone) {
+        if (data.wantsAgentContact && data.found && data.isListed && (data.agentPhone || data.listingUrl)) {
           addMessage({
             role: "assistant",
             content: "",
             type: "agent_contact",
             agentName: data.agentName ?? null,
-            agentPhone: data.agentPhone,
+            agentPhone: data.agentPhone ?? null,
             agencyName: data.agencyName ?? null,
             agentAvatarUrl: data.agentAvatarUrl ?? null,
             propertyAddress: data.listingAddress ?? address,
             agentMatchType: data.matchType ?? "subject",
+            agentListingUrl: data.listingUrl ?? null,
           }, currentSessionId ?? undefined);
         }
       } catch (err) {
@@ -1105,21 +1107,23 @@ export default function SearchScreen() {
           agentAvatarUrl?: string | null;
           matchType?: "subject" | "suburb" | null;
           listingAddress?: string | null;
+          listingUrl?: string | null;
         };
 
         if (!data.wantsAgentContact) {
           // Not an agent-contact request; keep the normal chat flow running.
-        } else if (data.found && data.isListed && data.agentPhone) {
+        } else if (data.found && data.isListed && (data.agentPhone || data.listingUrl)) {
           updateLastMessage({
             role: "assistant",
             content: "",
             type: "agent_contact",
             agentName: data.agentName ?? null,
-            agentPhone: data.agentPhone,
+            agentPhone: data.agentPhone ?? null,
             agencyName: data.agencyName ?? null,
             agentAvatarUrl: data.agentAvatarUrl ?? null,
             propertyAddress: data.listingAddress ?? agentAddress,
             agentMatchType: data.matchType ?? "subject",
+            agentListingUrl: data.listingUrl ?? null,
           }, sessionId);
           setIsLoading(false);
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);

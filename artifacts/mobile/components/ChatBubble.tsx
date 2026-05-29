@@ -207,13 +207,14 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
   const { t } = useT();
   const isUser = message.role === "user";
 
-  if (message.type === "agent_contact" && message.agentPhone) {
+  if (message.type === "agent_contact" && (message.agentPhone || message.agentListingUrl)) {
     return (
       <AgentCallBubble
         agentName={message.agentName ?? null}
         agencyName={message.agencyName ?? null}
         agentAvatarUrl={message.agentAvatarUrl ?? null}
-        agentPhone={message.agentPhone}
+        agentPhone={message.agentPhone ?? null}
+        listingUrl={message.agentListingUrl ?? null}
         propertyAddress={message.propertyAddress ?? ""}
         matchType={message.agentMatchType}
         onDismiss={() => onAgentDismiss?.(message.id)}
@@ -356,7 +357,7 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
             : t("search.opportunity_other", { n: results.length })}
         </Text>
         {results.map((candidate, i) => (
-          <PropertyCard key={i} candidate={candidate} onAnalyse={onAnalyse} />
+          <PropertyCard key={i} candidate={candidate} onAnalyse={onAnalyse} showSubdivisionDisclaimer={results.length === 1} />
         ))}
         {results.length > 0 ? (
           <TouchableOpacity

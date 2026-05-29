@@ -7,7 +7,7 @@
  * Hougarden is a Chinese-targeted NZ real-estate portal — useful for our
  * bilingual user base and often retains sold listings longer than competitors.
  *
- * Vercel-safe: ScrapingBee for listing pages, plain fetch for DuckDuckGo.
+ * Vercel-safe: ScrapingBee for listing pages.
  */
 import { logger } from "../logger";
 import { fetchWithScrapingBee } from "./scrapingbee";
@@ -95,58 +95,6 @@ async function extractPhotosFromHtml(html: string): Promise<string[]> {
   return [...seen.values()].slice(0, 12);
 }
 
-async function viaDuckDuckGo(address: string): Promise<HougardenPhotoData | null> {
-  const street = (address.split(",")[0] ?? address).trim();
-  const suburb = address.split(",")[1]?.replace(/\b\d{4}\b/g, "").trim();
-  const query = suburb
-    ? `site:hougarden.com "${street}" "${suburb}"`
-    : `site:hougarden.com "${street}"`;
-  const searchUrl = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-  const headers = {
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
-    "accept-language": "en-NZ,en;q=0.9",
-  };
-  const searchHtml = await fetch(searchUrl, { headers }).then((r) => r.ok ? r.text() : "").catch(() => "");
-  if (!searchHtml || searchHtml.length < 500) return null;
-
-  const { load } = await import("cheerio");
-  const $ = load(searchHtml);
-  let listingUrl: string | null = null;
-  $('a[href*="hougarden.com"]').each((_, el) => {
-    if (listingUrl) return;
-    let href = $(el).attr("href") ?? "";
-    href = href.replace(/&amp;/g, "&");
-    try {
-      const parsed = new URL(href.startsWith("//") ? `https:${href}` : href);
-      const encoded = parsed.searchParams.get("uddg");
-      if (encoded) href = decodeURIComponent(encoded);
-      const cleaned = new URL(href);
-      // Accept property listing pages (sold and active)
-      if (
-        cleaned.hostname.endsWith("hougarden.com") &&
-        (cleaned.pathname.includes("/property/") || cleaned.pathname.includes("/sold/") || cleaned.pathname.includes("/listing/"))
-      ) {
-        listingUrl = cleaned.toString();
-      }
-    } catch {
-      // ignore
-    }
-  });
-  if (!listingUrl) return null;
-
-  const listingHtml = await fetchWithScrapingBee(listingUrl, { render_js: true, wait: 2000 });
-  if (!listingHtml || listingHtml.length < 500) return null;
-
-  const photos = await extractPhotosFromHtml(listingHtml);
-  if (photos.length === 0) return null;
-  return {
-    photo_urls: photos,
-    listing_url: listingUrl,
-    data_source: "hougarden_photos",
-    scraped_at: new Date().toISOString(),
-  };
-}
-
 async function viaDirectSearch(address: string): Promise<HougardenPhotoData | null> {
   const street = (address.split(",")[0] ?? address).trim();
   const searchUrl = `https://www.hougarden.com/search/sold?keywords=${encodeURIComponent(street)}`;
@@ -181,16 +129,6 @@ export async function scrapeHougardenPhotos(address: string): Promise<HougardenP
     }
   } catch (err) {
     logger.debug({ err: String(err) }, "Hougarden photos: direct search failed");
-  }
-
-  try {
-    const ddg = await viaDuckDuckGo(address);
-    if (ddg) {
-      logger.info({ address, photoCount: ddg.photo_urls.length, listing: ddg.listing_url }, "Hougarden photos: DuckDuckGo fallback");
-      return ddg;
-    }
-  } catch (err) {
-    logger.debug({ err: String(err) }, "Hougarden photos: DuckDuckGo failed");
   }
 
   logger.debug({ address }, "Hougarden photos: no results");

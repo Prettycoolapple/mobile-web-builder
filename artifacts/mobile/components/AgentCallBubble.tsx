@@ -17,7 +17,8 @@ interface Props {
   agentName: string | null;
   agencyName: string | null;
   agentAvatarUrl?: string | null;
-  agentPhone: string;
+  agentPhone?: string | null;
+  listingUrl?: string | null;
   propertyAddress: string;
   matchType?: "subject" | "suburb";
   onDismiss: () => void;
@@ -28,6 +29,7 @@ export function AgentCallBubble({
   agencyName,
   agentAvatarUrl,
   agentPhone,
+  listingUrl,
   propertyAddress,
   matchType,
   onDismiss,
@@ -39,17 +41,11 @@ export function AgentCallBubble({
   if (dismissed) return null;
 
   const logAgentCallEvent = () => {
-    // Fire-and-forget — the dialer must NEVER be blocked by this network call.
     try {
       void fetch(`${getApiBase()}/agent-call-event`, {
         method: "POST",
         headers: { ...getApiHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify({
-          agentPhone,
-          agentName,
-          agencyName,
-          propertyAddress,
-        }),
+        body: JSON.stringify({ agentPhone, agentName, agencyName, propertyAddress }),
       }).catch(() => {});
     } catch {
       // swallow — logging failure must not affect the call
@@ -57,6 +53,7 @@ export function AgentCallBubble({
   };
 
   const handleCall = async () => {
+    if (!agentPhone) return;
     logAgentCallEvent();
     const dialNumber = agentPhone.replace(/[^\d+]/g, "");
     const telUrl = `tel:${dialNumber}`;
@@ -69,6 +66,12 @@ export function AgentCallBubble({
         t("bubble.agent.cant_call_body"),
       );
     }
+  };
+
+  const handleViewListing = async () => {
+    if (!listingUrl) return;
+    const canOpen = await Linking.canOpenURL(listingUrl);
+    if (canOpen) await Linking.openURL(listingUrl);
   };
 
   const handleDismiss = () => {
@@ -113,14 +116,25 @@ export function AgentCallBubble({
         </View>
       </View>
 
-      <TouchableOpacity
-        style={styles.callBtn}
-        onPress={handleCall}
-        activeOpacity={0.8}
-      >
-        <Feather name="phone" size={16} color="#fff" />
-        <Text style={styles.callBtnText}>{t("bubble.agent.call_cta")}</Text>
-      </TouchableOpacity>
+      {agentPhone ? (
+        <TouchableOpacity
+          style={styles.callBtn}
+          onPress={handleCall}
+          activeOpacity={0.8}
+        >
+          <Feather name="phone" size={16} color="#fff" />
+          <Text style={styles.callBtnText}>{t("bubble.agent.call_cta")}</Text>
+        </TouchableOpacity>
+      ) : listingUrl ? (
+        <TouchableOpacity
+          style={styles.callBtn}
+          onPress={handleViewListing}
+          activeOpacity={0.8}
+        >
+          <Feather name="external-link" size={16} color="#fff" />
+          <Text style={styles.callBtnText}>{t("bubble.agent.view_listing")}</Text>
+        </TouchableOpacity>
+      ) : null}
 
       <TouchableOpacity
         style={styles.dismissBtn}

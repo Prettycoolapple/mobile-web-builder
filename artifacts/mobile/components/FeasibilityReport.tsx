@@ -2001,17 +2001,6 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
                   </Text>
                 </View>
               ) : null}
-              {titleTypeDisplay ? (
-                <View style={[styles.zoneBadge, { backgroundColor: "rgba(250,250,249,0.12)" }]}>
-                  <Text
-                    style={{ color: "rgba(250,250,249,0.85)", fontFamily: "DM_Sans_500Medium", fontSize: 11 }}
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                  >
-                    {titleTypeDisplay}
-                  </Text>
-                </View>
-              ) : null}
               {typeof bedrooms === "number" && bedrooms > 0 && (
                 <View style={styles.headerStatChip}>
                   <Feather name="moon" size={10} color="rgba(250,250,249,0.85)" />
@@ -2120,9 +2109,6 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
           />
           <InfoRow label={t("report.build_year")} value={report.propertyOverview.buildYear || t("report.na")} colors={colors} />
           <InfoRow label={t("report.zone")} value={report.propertyOverview.zone || t("report.na")} colors={colors} />
-          {titleTypeDisplay ? (
-            <InfoRow label={translateForOS("report.title_type")} value={titleTypeDisplay} colors={colors} />
-          ) : null}
           {report.planning?.potentialLots != null && (
             <InfoRow label={t("report.potential_lots")} value={String(report.planning.potentialLots)} valueColor={colors.success} colors={colors} />
           )}

@@ -10,6 +10,9 @@ import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
 interface Props {
   candidate: PropertyCandidate;
   onAnalyse: (address: string, photoUrl?: string | null, listingUrl?: string | null, selectedListingContext?: SelectedListingContext | null) => void;
+  /** When true, the subdivision disclaimer note is rendered. Pass true only for
+   *  subdivision-intent screenings (single property card). */
+  showSubdivisionDisclaimer?: boolean;
 }
 
 function inferListingSourceFromUrl(url?: string | null): string | null {
@@ -122,7 +125,7 @@ function OverallCompositeBadge({
   );
 }
 
-export function PropertyCard({ candidate, onAnalyse }: Props) {
+export function PropertyCard({ candidate, onAnalyse, showSubdivisionDisclaimer = false }: Props) {
   const colors = useColors();
   const { t } = useT();
   const compositeRaw = candidate.scores.composite;
@@ -267,7 +270,7 @@ export function PropertyCard({ candidate, onAnalyse }: Props) {
           <ScorePip score={candidate.scores.roi} label={t("report.roi")} loading={candidate.scoresLoading} />
         </View>
 
-        {candidate.screeningStatus != null ? (
+        {showSubdivisionDisclaimer && candidate.screeningStatus != null ? (
           <View style={[styles.preliminaryNote, { borderTopColor: colors.border }]}>
             <Feather name="info" size={12} color={colors.mutedForeground} />
             <Text style={[styles.preliminaryNoteText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>

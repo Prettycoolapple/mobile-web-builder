@@ -33,7 +33,6 @@ import { scrapeTradeMePropertyPhotos } from "./scrapers/trademe-property";
 import { scrapeHougardenPhotos } from "./scrapers/hougarden-photos";
 import { scrapeHomesPhotos } from "./scrapers/homes-photos";
 import { scrapeOneRoofPhotos } from "./scrapers/oneroof-photos";
-import { findPropertyPhotosWithFallback } from "./scrapers/web-image-search";
 import { selectedListingPhotoUrls, type SelectedListingContext } from "./selected-listing-context";
 import { resolveActiveListingContext } from "./active-listing-context";
 import { enrichSchoolZonesDetail, type SchoolZoneDetail } from "./school-directory";
@@ -894,10 +893,8 @@ export async function runPropertyPipeline(
   // property listing always has multiple photos; a wrong/dead listing page
   // (error, redirect, or wrong address match) typically yields exactly 1 URL
   // via the page's og:image Open Graph tag — which is the site logo or a
-  // marketing banner. Accepting that single URL blocks the DuckDuckGo AI
-  // fallback (which only fires when photo_urls.length === 0) and causes the
-  // logo to appear as the carousel's main image. Requiring ≥2 photos discards
-  // those garbage results and lets the AI fallback retrieve the real photos.
+  // marketing banner. Requiring ≥2 photos discards those garbage results so
+  // photo_urls stays empty and the mobile shows Google Street View instead.
   const MIN_ENRICHMENT_PHOTOS = 2;
   const verifiedListingPhotos = selectedListingPhotoUrls(resolvedListingContext);
   const beforeEnrichCount = merged.photo_urls.length;
@@ -914,21 +911,11 @@ export async function runPropertyPipeline(
     merged.main_photo_url = merged.photo_urls[0];
   }
 
-  // Broad image search is intentionally opt-in. Verified listing pages and
-  // maps/street-view are safer than unrelated CDN or marketing images.
-  let aiFallbackUsed = false;
-  if (merged.photo_urls.length === 0 && process.env["ENABLE_UNVERIFIED_PHOTO_FALLBACK"] === "true") {
-    try {
-      const aiPhotos = await findPropertyPhotosWithFallback(address);
-      if (aiPhotos.length > 0) {
-        merged.photo_urls = aiPhotos;
-        merged.main_photo_url = aiPhotos[0];
-        aiFallbackUsed = true;
-      }
-    } catch (err) {
-      logger.warn({ err: String(err), address }, "Photo AI fallback errored");
-    }
-  }
+  // When all scrapers return zero photos (e.g. unlisted property), photo_urls
+  // stays empty here. The mobile's getReportPhotoUrls (in FeasibilityReport.tsx)
+  // appends Google Street View / Static Map proxy URLs via withFallbacks when
+  // urls.length < FALLBACK_PHOTO_TARGET (4), so the user sees Google Maps
+  // imagery instead of nothing. No backend image-search fallback is used.
 
   // ── PhotoScrape diagnostic — observability for triage ──
   logger.info({
@@ -947,8 +934,6 @@ export async function runPropertyPipeline(
     },
     beforeEnrichCount,
     totalUnique: merged.photo_urls.length,
-    aiFallbackUsed,
-    aiPhotoCount: aiFallbackUsed ? merged.photo_urls.length : 0,
     realestateListingFound: !!realestateListing,
   }, "PhotoScrape: summary");
 

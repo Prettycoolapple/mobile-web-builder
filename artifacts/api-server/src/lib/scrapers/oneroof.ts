@@ -300,6 +300,18 @@ function addressSuburbSlug(address: string): string | null {
     .replace(/^-+|-+$/g, "") || null;
 }
 
+/**
+ * Word-boundary match for a OneRoof property pathname against the queried
+ * address. Prevents "/property/18-hampton-drive-..." from matching the slug
+ * "8-hampton-drive", and "/property/66-marine-parade-..." from matching
+ * "66a-marine-parade".
+ */
+export function oneRoofPathnameMatchesAddress(pathname: string, address: string): boolean {
+  const streetSlug = addressStreetSlug(address);
+  if (!streetSlug) return false;
+  return new RegExp(`(?:^|/)${streetSlug}(?:/|$)`).test(pathname.toLowerCase());
+}
+
 export function extractOneRoofPropertyUrlsFromSearchHtml(html: string, address: string): string[] {
   const streetSlug = addressStreetSlug(address);
   const suburbSlug = addressSuburbSlug(address);
@@ -321,8 +333,8 @@ export function extractOneRoofPropertyUrlsFromSearchHtml(html: string, address: 
       if (parsed.hostname !== "www.oneroof.co.nz") continue;
       if (!parsed.pathname.startsWith("/property/")) continue;
       const pathname = parsed.pathname.toLowerCase();
-      if (!pathname.includes(streetSlug)) continue;
-      if (suburbSlug && !pathname.includes(suburbSlug)) continue;
+      if (!new RegExp(`(?:^|/)${streetSlug}(?:/|$)`).test(pathname)) continue;
+      if (suburbSlug && !new RegExp(`(?:^|/)${suburbSlug}(?:/|$)`).test(pathname)) continue;
       candidates.add(parsed.toString());
     } catch {
       // Ignore malformed search links.
@@ -515,26 +527,35 @@ async function scrapeOneRoofPlaywright(address: string): Promise<OneRoofData> {
     await page.evaluate(() => window.scrollBy(0, 300));
     await randomDelay(500, 1000);
 
-    const firstResult = page.locator('[data-testid*="result"], [class*="result-card"], [class*="property-card"], a[href*="/property/"]').first();
-    const hasResults = await firstResult.count();
-    if (hasResults === 0) {
-      logger.debug("OneRoof: no search results found");
+    // Iterate through candidate /property/* links and pick the FIRST one whose
+    // pathname slug matches the queried address. OneRoof's search often lists
+    // a wrong property first (e.g. "18 Hampton Drive" before "8 Hampton Drive"),
+    // so taking `.first()` blindly returns wrong bed/bath data.
+    const candidates = page.locator('a[href*="/property/"]');
+    const count = await candidates.count();
+    let targetHref: string | null = null;
+    for (let i = 0; i < Math.min(count, 12); i++) {
+      const href = await candidates.nth(i).getAttribute("href").catch(() => null);
+      if (!href) continue;
+      const full = href.startsWith("http") ? href : `https://www.oneroof.co.nz${href}`;
+      try {
+        if (oneRoofPathnameMatchesAddress(new URL(full).pathname, address)) {
+          targetHref = full;
+          break;
+        }
+      } catch { /* skip malformed */ }
+    }
+    if (!targetHref) {
+      logger.debug({ address, candidatesChecked: Math.min(count, 12) }, "OneRoof Playwright: no result matched address slug");
       await context.close().catch(() => {});
       return result;
     }
 
-    const href = await firstResult.getAttribute("href").catch(() => null);
-    if (href) {
-      const targetUrl = href.startsWith("http") ? href : `https://www.oneroof.co.nz${href}`;
-      await randomDelay(800, 1500);
-      await page.goto(targetUrl, { timeout: 12000, waitUntil: "domcontentloaded" });
-      await randomDelay(1500, 2000);
-      await page.evaluate(() => window.scrollBy(0, 400));
-      await randomDelay(500, 800);
-    } else {
-      await firstResult.click().catch(() => {});
-      await randomDelay(2000, 3000);
-    }
+    await randomDelay(800, 1500);
+    await page.goto(targetHref, { timeout: 12000, waitUntil: "domcontentloaded" });
+    await randomDelay(1500, 2000);
+    await page.evaluate(() => window.scrollBy(0, 400));
+    await randomDelay(500, 800);
 
     const extracted = await extractOneRoofDataFromHtml(await page.content(), page.url());
     Object.assign(result, extracted);
@@ -554,51 +575,33 @@ async function scrapeOneRoofViaBee(address: string): Promise<OneRoofData | null>
   const { load } = await import("cheerio");
   const $ = load(html);
 
-  const firstLink = $('a[href*="/property/"], a[href*="/residential/"]').first().attr("href");
-  if (!firstLink) {
-    logger.debug("OneRoof ScrapingBee: no property link found in search results");
+  // Iterate through candidate links and pick the FIRST one whose pathname slug
+  // matches the queried address. OneRoof's search often lists a wrong property
+  // first (e.g. "/property/18-hampton-drive-..." for the query "8 Hampton Drive"),
+  // so taking `.first()` blindly returns wrong bed/bath data.
+  const links = $('a[href*="/property/"], a[href*="/residential/"]').toArray();
+  let propertyUrl: string | null = null;
+  for (const el of links.slice(0, 12)) {
+    const href = $(el).attr("href");
+    if (!href) continue;
+    const full = href.startsWith("http") ? href : `https://www.oneroof.co.nz${href}`;
+    try {
+      if (oneRoofPathnameMatchesAddress(new URL(full).pathname, address)) {
+        propertyUrl = full;
+        break;
+      }
+    } catch { /* skip malformed */ }
+  }
+  if (!propertyUrl) {
+    logger.debug({ address, candidatesChecked: Math.min(links.length, 12) }, "OneRoof ScrapingBee: no result matched address slug");
     return null;
   }
 
-  const propertyUrl = firstLink.startsWith("http") ? firstLink : `https://www.oneroof.co.nz${firstLink}`;
   const propHtml = await fetchWithScrapingBee(propertyUrl, { render_js: true, premium_proxy: false, wait: 3000 });
   if (!propHtml || propHtml.length < 500) return null;
 
   const extracted = await extractOneRoofDataFromHtml(propHtml, propertyUrl);
   return hasUsefulData(extracted) || extracted.photo_urls.length > 0 ? extracted : null;
-}
-
-async function scrapeOneRoofViaPublicSearch(address: string): Promise<OneRoofData | null> {
-  const street = address.split(",")[0]?.trim() || address;
-  const suburb = address.split(",")[1]?.replace(/\b\d{4}\b/g, "").trim();
-  const headers = {
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
-    "accept-language": "en-NZ,en;q=0.9",
-  };
-
-  // Try multiple queries — second one is site-restricted to OneRoof so archived/
-  // sold listings (e.g. `/property/auckland/coatesville/70-screen-road/GfkeQ`)
-  // surface even when DuckDuckGo's default ranking favours active listings.
-  const queries: string[] = [];
-  queries.push(suburb ? `"${street}" "${suburb}" "OneRoof"` : `"${street}" "OneRoof"`);
-  queries.push(suburb ? `site:oneroof.co.nz/property "${street}" "${suburb}"` : `site:oneroof.co.nz/property "${street}"`);
-
-  for (const query of queries) {
-    const searchUrl = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-    const searchHtml = await fetch(searchUrl, { headers }).then((r) => r.ok ? r.text() : "").catch(() => "");
-    if (!searchHtml || searchHtml.length < 500) continue;
-
-    const propertyUrl = extractOneRoofPropertyUrlsFromSearchHtml(searchHtml, address)[0];
-    if (!propertyUrl) continue;
-
-    const propertyHtml = await fetch(propertyUrl, { headers }).then((r) => r.ok ? r.text() : "").catch(() => "");
-    if (!propertyHtml || propertyHtml.length < 500) continue;
-
-    const extracted = await extractOneRoofDataFromHtml(propertyHtml, propertyUrl);
-    if (hasUsefulData(extracted) || extracted.photo_urls.length > 0) return extracted;
-  }
-
-  return null;
 }
 
 export async function scrapeOneRoof(address: string): Promise<OneRoofData> {
@@ -642,17 +645,6 @@ export async function scrapeOneRoof(address: string): Promise<OneRoofData> {
     }
   } catch (err) {
     logScrapeAttempt("OneRoof", "scrapingbee", false, String(err));
-  }
-
-  try {
-    const result = await scrapeOneRoofViaPublicSearch(address);
-    if (result) {
-      logScrapeAttempt("OneRoof", "public-search", true, `photos=${result.photo_urls.length}, cv=${result.cv_nzd}`);
-      return result;
-    }
-    logScrapeAttempt("OneRoof", "public-search", false, "no matching OneRoof property page");
-  } catch (err) {
-    logScrapeAttempt("OneRoof", "public-search", false, String(err));
   }
 
   logger.warn("OneRoof: all attempts failed — returning empty data");

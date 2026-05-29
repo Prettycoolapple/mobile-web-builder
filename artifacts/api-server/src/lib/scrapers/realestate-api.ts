@@ -22,7 +22,6 @@ import { extractBedsBaths } from "./bed-bath-extractor";
 const PLATFORM_BASE = "https://platform.realestate.co.nz/search/v1";
 const MEDIA_BASE = "https://mediaserver.realestate.co.nz";
 const FETCH_TIMEOUT_MS = 12_000;
-const SEARCH_FALLBACK_TIMEOUT_MS = 6_000;
 const ADDRESS_MATCH_TIMEOUT_MS = 15_000;
 
 interface SuburbRecord {
@@ -553,68 +552,9 @@ export async function fetchRealestateListingByUrl(url: string): Promise<ListingR
   return annotated ?? mapped;
 }
 
-function listingIdsFromSearchHtml(html: string): string[] {
-  const decoded = decodeURIComponent(html);
-  return Array.from(
-    new Set(
-      [...decoded.matchAll(/realestate\.co\.nz\/(\d+)\/residential\/sale\//gi)]
-        .map((m) => m[1])
-        .filter((id): id is string => !!id),
-    ),
-  );
-}
-
-async function searchRealestateListingIds(query: string): Promise<string[]> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), SEARCH_FALLBACK_TIMEOUT_MS);
-  try {
-    const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-    const resp = await fetch(url, {
-      signal: ctrl.signal,
-      headers: {
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
-        "accept-language": "en-NZ,en;q=0.9",
-      },
-    });
-    if (!resp.ok) return [];
-    return listingIdsFromSearchHtml(await resp.text());
-  } catch (err) {
-    logger.debug({ err: (err as Error).message, query }, "realestate-api: listing web search failed");
-    return [];
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 function suburbFromAddress(address: string): string | null {
   const parts = address.split(",").map((p) => p.replace(/\b\d{4}\b/g, "").trim()).filter(Boolean);
   return parts[1] ?? null;
-}
-
-async function fetchRealestateListingForAddressViaWebSearch(address: string): Promise<ListingResult | null> {
-  const street = (address.split(",")[0] ?? address).trim();
-  const suburb = suburbFromAddress(address);
-  if (!street || !suburb) return null;
-
-  const ids = await searchRealestateListingIds(`"${street}" "${suburb}" realestate.co.nz`);
-  for (const id of ids.slice(0, 5)) {
-    try {
-      const raw = await fetchRawListingById(id);
-      if (!raw) continue;
-      const listingAddress = rawListingAddress(raw) ?? "";
-      if (!addressesLikelyMatch(address, listingAddress)) continue;
-      const mapped = mapListing(raw);
-      if (!mapped) continue;
-      logger.info(
-        { address: address.slice(0, 80), listing: mapped.address, status: mapped.listingStatus, id },
-        "realestate-api: matched subject listing via web-search detail fallback",
-      );
-      return mapped;
-    } catch (err) {
-      logger.debug({ err: (err as Error).message, id }, "realestate-api: listing detail fallback failed");
-    }
-  }
-  return null;
 }
 
 /**
@@ -972,21 +912,24 @@ async function fetchCallableAgentForListing(
     }
   }
 
+  let firstAgentPartial: RealestateAgentContact | null = null;
+
   for (const agentId of agentIds) {
     try {
       const agent = await fetchAgentById(agentId);
-      if (!agent?.agentPhone) continue;
-      return {
-        ...agent,
-        listingUrl,
-        listingAddress,
-      };
+      if (!agent) continue;
+      if (agent.agentPhone) {
+        return { ...agent, listingUrl, listingAddress };
+      }
+      if (!firstAgentPartial && (agent.agentName || agent.agentAvatarUrl)) {
+        firstAgentPartial = { ...agent, listingUrl, listingAddress };
+      }
     } catch (err) {
       logger.warn({ err: (err as Error).message, agentId }, "realestate-api: agent contact - agent fetch failed");
     }
   }
 
-  return {
+  return firstAgentPartial ?? {
     agentName: null,
     agentPhone: null,
     agencyName: null,
@@ -1016,9 +959,6 @@ export async function fetchRealestateListingForAddress(
 
   const primaryMatch = await matchingRawListingInSuburb(trimmed, suburb);
   if (primaryMatch) return mapAndAnnotateListing(primaryMatch, trimmed, suburb.title);
-
-  const webSearchMatch = await fetchRealestateListingForAddressViaWebSearch(trimmed);
-  if (webSearchMatch) return webSearchMatch;
 
   const rawNearbyMatch = await findRawListingAcrossNearbySuburbs(trimmed, suburb, { skipPrimary: true });
   if (rawNearbyMatch) return mapAndAnnotateListing(rawNearbyMatch.listing, trimmed, rawNearbyMatch.suburb.title);
@@ -1056,6 +996,24 @@ export async function fetchRealestateAgentContactForAddress(
 
   logger.info({ listingId: match.listing.id, address: trimmed.slice(0, 80) }, "realestate-api: agent contact - no callable agent");
   return agent;
+}
+
+/**
+ * Look up the callable agent for a realestate.co.nz listing directly by URL,
+ * bypassing the suburb-then-address-match path used by
+ * fetchRealestateAgentContactForAddress. Useful when the caller already has
+ * a verified listing URL (e.g. from `selectedListingContext` after the user
+ * tapped a discovery card) — avoids the fragile address matching that can
+ * fail or land on the wrong listing when the address casing differs.
+ */
+export async function fetchRealestateAgentContactByListingUrl(
+  url: string,
+): Promise<RealestateAgentContact | null> {
+  const id = listingIdFromUrl(url);
+  if (!id) return null;
+  const raw = await fetchRawListingById(id);
+  if (!raw) return null;
+  return fetchCallableAgentForListing(raw);
 }
 
 /**

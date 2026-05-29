@@ -62,10 +62,11 @@ export interface ChatMessage {
   intentType?: string;
   propertyAddress?: string;
   agentName?: string | null;
-  agentPhone?: string;
+  agentPhone?: string | null;
   agencyName?: string | null;
   agentAvatarUrl?: string | null;
   agentMatchType?: "subject" | "suburb";
+  agentListingUrl?: string | null;
   backgroundJobId?: string;
 }
 
