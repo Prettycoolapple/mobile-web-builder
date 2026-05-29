@@ -1171,7 +1171,9 @@ function ROIScenarioCards({ scenarios, interestRateOutlook, comparablesQuality, 
 
   return (
     <View style={{ gap: 10 }}>
-      <InterestRateBanner outlook={outlook} colors={colors} />
+      {selectedCase === "bull" && (
+        <InterestRateBanner outlook={outlook} colors={colors} />
+      )}
 
       <View style={{ flexDirection: "row", gap: 6 }}>
         {availableCases.map((c) => {

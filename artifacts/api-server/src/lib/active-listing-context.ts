@@ -247,6 +247,21 @@ async function resolveFromPhotoSource(
     }
   }
 
+  // Guard against thin/banner results: dead listing pages still pass the
+  // URL-slug address check (the address is in the URL) but yield no real facts
+  // and only a single og:image "ad" banner. Accepting those produced the wrong
+  // photo + a dead "查看房源" link. Require either real facts or a genuine photo
+  // gallery (>= 2 photos); otherwise fall through to the next source / Street View.
+  const hasRealFacts =
+    facts != null && (facts.bedrooms != null || facts.bathrooms != null || facts.price != null);
+  if (!hasRealFacts && data.photo_urls.length < 2) {
+    logger.info(
+      { address, listingUrl: data.listing_url, source, photoCount: data.photo_urls.length },
+      "Active listing resolver: rejected thin/banner result",
+    );
+    return null;
+  }
+
   return contextFromPhotoSource({
     address,
     source,

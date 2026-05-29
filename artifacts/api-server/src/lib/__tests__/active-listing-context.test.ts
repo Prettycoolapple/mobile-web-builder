@@ -116,6 +116,43 @@ describe("resolveActiveListingContext", () => {
     });
   });
 
+  it("rejects a thin banner page (no facts + single og:image) and falls through", async () => {
+    mockedFetchRealestateListingForAddress.mockResolvedValue(null);
+    // Dead/banner page: the address is in the URL slug (so the slug check
+    // passes) but the page yields no real facts and only a single banner image.
+    mockedScrapeHomesPhotos.mockResolvedValue({
+      photo_urls: ["https://images.homes.co.nz/og-banner.jpg"],
+      listing_url: "https://homes.co.nz/address/auckland/mellons-bay/66a-marine-parade/AbCdE",
+      data_source: "homes_photos",
+      scraped_at: "2026-05-28T00:00:00.000Z",
+    });
+    mockedFetchWithScrapingBee.mockResolvedValue(`
+      <html><body>
+        <h1>66A Marine Parade, Mellons Bay</h1>
+        <p>${"Generic marketing copy with the matching address. ".repeat(20)}</p>
+      </body></html>
+    `);
+    mockedScrapeOneRoofPhotos.mockResolvedValue({
+      photo_urls: [],
+      listing_url: null,
+      data_source: "oneroof_photos",
+      scraped_at: "2026-05-28T00:00:00.000Z",
+    });
+    mockedScrapeTradeMePropertyPhotos.mockResolvedValue({
+      photo_urls: [],
+      listing_url: null,
+      data_source: "trademe",
+      scraped_at: "2026-05-28T00:00:00.000Z",
+    });
+
+    const resolved = await resolveActiveListingContext("66A Marine Parade, Mellons Bay", {
+      suburb: "Mellons Bay",
+      purpose: "feasibility",
+    });
+
+    expect(resolved.context).toBeNull();
+  });
+
   it("does not run paid fallback sources for subdivision screening purpose", async () => {
     mockedFetchRealestateListingForAddress.mockResolvedValue(null);
 

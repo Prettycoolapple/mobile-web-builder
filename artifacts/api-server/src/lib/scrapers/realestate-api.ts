@@ -817,7 +817,12 @@ type RawListingMatch = {
 async function matchingRawListingInSuburb(
   address: string,
   suburb: SuburbRecord,
-  limit = 20,
+  // Single-page fetch (fastAddressMatch), so a wider window is essentially
+  // free and matches the coverage the discovery route already gets. A small
+  // cap (e.g. 20) silently misses subject listings in busy suburbs — that was
+  // why direct analysis of e.g. "66A Marine Parade, Mellons Bay" fell through
+  // to a homes.co.nz banner instead of the real realestate.co.nz listing.
+  limit = 100,
 ): Promise<RawListing | null> {
   let listings: RawListing[] = [];
   try {
