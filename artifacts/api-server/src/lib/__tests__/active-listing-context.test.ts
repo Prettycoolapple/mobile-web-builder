@@ -153,6 +153,21 @@ describe("resolveActiveListingContext", () => {
     expect(resolved.context).toBeNull();
   });
 
+  it("suppresses speculative photo sources for combined-listing children (uses Street View fallback)", async () => {
+    mockedFetchRealestateListingForAddress.mockResolvedValue(null);
+
+    const resolved = await resolveActiveListingContext("38A Te Arawa Street, Orakei", {
+      suburb: "Orakei",
+      purpose: "feasibility",
+      suppressSpeculativePhotoSources: true,
+    });
+
+    expect(resolved.context).toBeNull();
+    expect(mockedScrapeHomesPhotos).not.toHaveBeenCalled();
+    expect(mockedScrapeOneRoofPhotos).not.toHaveBeenCalled();
+    expect(mockedScrapeTradeMePropertyPhotos).not.toHaveBeenCalled();
+  });
+
   it("does not run paid fallback sources for subdivision screening purpose", async () => {
     mockedFetchRealestateListingForAddress.mockResolvedValue(null);
 

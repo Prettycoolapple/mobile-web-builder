@@ -104,6 +104,13 @@ export interface PropertyOverview {
   combinedListingContext?: CombinedListingContext;
 }
 
+export interface TitleInsight {
+  titleType: string;
+  isCrossLease: boolean;
+  opportunity: string | null;
+  risks: string[];
+}
+
 export interface CombinedListingContext {
   isCombinedListingMatch: boolean;
   packageAddress: string;
@@ -349,6 +356,8 @@ export interface FeasibilityReport {
   historyCreatedAt?: string | null;
   scores: Score;
   propertyOverview?: PropertyOverview;
+  /** Deterministic "Land title" insight — present only for cross-lease/stratum titles. */
+  titleInsight?: TitleInsight | null;
   planning?: PlanningInfo;
   potential_lots?: number;
   zone_label?: string;

@@ -256,6 +256,7 @@ function SectionCard({
   icon,
   status,
   defaultOpen = false,
+  alert = false,
   children,
   colors,
 }: {
@@ -263,6 +264,8 @@ function SectionCard({
   icon?: string;
   status?: "good" | "warning" | "risk" | "neutral";
   defaultOpen?: boolean;
+  /** Surfaces a red exclamation badge while collapsed — flags a low-scoring item that needs attention. */
+  alert?: boolean;
   children: React.ReactNode;
   colors: ReturnType<typeof useColors>;
 }) {
@@ -281,6 +284,9 @@ function SectionCard({
         <Text style={[styles.sectionTitle, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", flex: 1 }]}>
           {title}
         </Text>
+        {alert && !open ? (
+          <Feather name="alert-circle" size={15} color={colors.red} style={{ marginRight: 4 }} />
+        ) : null}
         <Feather name={open ? "chevron-up" : "chevron-down"} size={15} color={colors.mutedForeground} />
       </TouchableOpacity>
       {open && <View style={[styles.sectionBody, { borderTopColor: colors.border }]}>{renderSectionChildren(children, colors)}</View>}
@@ -386,6 +392,50 @@ function localizeScoreReason(reason: string, locale: string): string {
   return cleaned;
 }
 
+/**
+ * Succinct, deterministic investment verdict for the score card. Gives an
+ * overall stance and explains the three sub-scores (feasibility / cost / ROI)
+ * in plain language, plus a short recommendation tied to the weakest dimension.
+ * Kept to ~2 short sentences for UI density, and derives purely from the scores
+ * so it works on every report including cached/historical ones.
+ */
+function buildInvestmentVerdict(
+  ease: number,
+  cost: number,
+  roi: number,
+  composite: number,
+  locale: string,
+): string {
+  const isZh = locale === "zh";
+  const band = (s: number): "high" | "mid" | "low" => (s >= 4 ? "high" : s >= 2.5 ? "mid" : "low");
+
+  const stance =
+    composite >= 3.5 ? (isZh ? "整体值得认真考虑" : "Worth a serious look")
+    : composite >= 2.5 ? (isZh ? "机会喜忧参半" : "A mixed opportunity")
+    : (isZh ? "按目前数据较难成立" : "Hard to justify as-is");
+
+  const easeClause = { high: isZh ? "开发可行性良好" : "feasibility is favourable", mid: isZh ? "可行性尚可但有一定限制" : "feasibility is workable but constrained", low: isZh ? "可行性受到较大限制" : "feasibility is heavily constrained" }[band(ease)];
+  const costClause = { high: isZh ? "单位建造成本高效" : "build costs are efficient", mid: isZh ? "建造成本中等" : "build costs are moderate", low: isZh ? "单位建造成本偏高" : "build cost per unit is very high" }[band(cost)];
+  const roiClause = { high: isZh ? "预期回报强劲" : "projected returns are strong", mid: isZh ? "预期回报合理" : "projected returns are reasonable", low: isZh ? "预期回报偏弱" : "projected returns are weak" }[band(roi)];
+
+  // Recommendation keyed to the weakest dimension when it is in the red band.
+  const dims = [{ kind: "ease", score: ease }, { kind: "cost", score: cost }, { kind: "roi", score: roi }] as const;
+  const weakest = dims.reduce((a, b) => (b.score < a.score ? b : a));
+  const tail = weakest.score < 2.5
+    ? {
+        ease: isZh ? "规划限制可能拖慢或限制开发，宜先确认许可路径。" : "Planning constraints could stall or limit the build — confirm the consent path first.",
+        cost: isZh ? "利润空间偏薄，需压低建造成本或低于市场价买入才更具吸引力。" : "Margins are thin, so it stacks up only if construction cost can be cut or you buy below market.",
+        roi: isZh ? "回报缓冲有限，对成本超支较为敏感。" : "Returns leave little buffer for cost overruns.",
+      }[weakest.kind]
+    : "";
+
+  const body = isZh
+    ? `${stance}：${easeClause}，${costClause}，${roiClause}。`
+    : `${stance} — ${easeClause}, ${costClause}, and ${roiClause}.`;
+
+  return tail ? `${body} ${tail}` : body;
+}
+
 function ScoreSummaryRow({ report, colors, hideOverall }: { report: Report; colors: ReturnType<typeof useColors>; hideOverall?: boolean }) {
   const { t, locale } = useT();
   const raw = report.scores ?? {};
@@ -398,6 +448,7 @@ function ScoreSummaryRow({ report, colors, hideOverall }: { report: Report; colo
   const overallColor = scoreColor(composite, colors);
   const overallDisplay = formatCompositeScoreForDisplay(composite);
   const showReasons = ease_reasons.length > 0 || roi_reasons.length > 0;
+  const verdict = buildInvestmentVerdict(ease, cost, roi, composite, locale);
 
   return (
     <View style={[styles.scoresSection, { backgroundColor: (colors as any).scoreCardBg }]}>
@@ -420,6 +471,13 @@ function ScoreSummaryRow({ report, colors, hideOverall }: { report: Report; colo
         <View style={[styles.scoreDivider, { backgroundColor: "rgba(250,250,249,0.1)" }]} />
         <ScoreStarBlock score={roi} label={t("report.roi")} colors={colors} />
       </View>
+
+      {/* AI verdict — succinct worthwhile-to-pursue summary explaining the scores. */}
+      {verdict ? (
+        <View style={[styles.verdictRow, { borderTopColor: "rgba(250,250,249,0.1)" }]}>
+          <Text style={styles.verdictText}>{verdict}</Text>
+        </View>
+      ) : null}
 
       {/* Reasons — omit data-source / comparables disclaimer lines (server also sanitizes). */}
       {showReasons && (
@@ -1965,6 +2023,8 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
   const developmentStrategies = report.developmentStrategies ?? [];
   const hasDevelopmentStrategies = developmentStrategies.length > 0;
   const titleTypeDisplay = formatTitleTypeForDisplay(report.propertyOverview?.titleType);
+  // Freehold renders neutral; Cross Lease / Leasehold / Stratum get a warning accent.
+  const isNonFreeholdTenure = !!titleTypeDisplay && !/free\s*hold/i.test(titleTypeDisplay);
   const landAreaUnavailableContact =
     !report.propertyOverview?.landArea &&
     (report.propertyOverview?.typology === "unit_apartment" ||
@@ -2015,6 +2075,24 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
                   <Text style={styles.headerStatText}>{t("report.header_ba", { n: bathrooms })}</Text>
                 </View>
               )}
+              {titleTypeDisplay ? (
+                <View
+                  style={[
+                    styles.zoneBadge,
+                    { backgroundColor: isNonFreeholdTenure ? "rgba(202,138,4,0.30)" : "rgba(250,250,249,0.15)" },
+                  ]}
+                >
+                  <Text
+                    style={{
+                      color: isNonFreeholdTenure ? "#FDE68A" : "rgba(250,250,249,0.85)",
+                      fontFamily: "DM_Sans_500Medium",
+                      fontSize: 11,
+                    }}
+                  >
+                    {titleTypeDisplay}
+                  </Text>
+                </View>
+              ) : null}
             </View>
           </View>
         </View>
@@ -2052,31 +2130,10 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
         </View>
       )}
 
-      {report.combinedListingContext?.isCombinedListingMatch && (
-        <View style={[styles.warningBox, { backgroundColor: colors.accent + "12", borderColor: colors.accent + "35", borderRadius: 12, padding: 12 }]}>
-          <Feather name="git-branch" size={14} color={colors.accent} />
-          <View style={{ flex: 1, gap: 6 }}>
-            <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", fontSize: 13 }}>
-              {t("report.combined_listing_title")}
-            </Text>
-            <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 17 }}>
-              {report.combinedListingContext.note}
-            </Text>
-            {report.combinedListingContext.childAddresses.length > 1 ? (
-              <TouchableOpacity
-                activeOpacity={0.78}
-                onPress={() => onFollowUp(t("report.combined_listing_analyse_prompt", { address: report.combinedListingContext!.packageAddress }))}
-                style={[styles.combinedAction, { borderColor: colors.accent + "45", backgroundColor: colors.accent + "10" }]}
-              >
-                <Feather name="layers" size={13} color={colors.accent} />
-                <Text style={{ color: colors.accent, fontFamily: "DM_Sans_600SemiBold", fontSize: 12 }}>
-                  {t("report.combined_listing_analyse_both")}
-                </Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
-        </View>
-      )}
+      {/* Combined-listing disclaimer + "analyse full package" button intentionally
+          hidden: a packaged listing is already expanded into one report per child
+          address automatically, so the per-report disclaimer and re-analyse button
+          are redundant. See runCombinedFeasibilityGroupCore on the API. */}
 
       {report.propertyOverview && (
         <SectionCard title={t("report.overview")} icon="📍" defaultOpen={false} colors={colors}>
@@ -2110,6 +2167,14 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
             colors={colors}
           />
           <InfoRow label={t("report.build_year")} value={report.propertyOverview.buildYear || t("report.na")} colors={colors} />
+          {titleTypeDisplay ? (
+            <InfoRow
+              label={t("report.title_type")}
+              value={titleTypeDisplay}
+              valueColor={isNonFreeholdTenure ? colors.amber : undefined}
+              colors={colors}
+            />
+          ) : null}
           <InfoRow label={t("report.zone")} value={report.propertyOverview.zone || t("report.na")} colors={colors} />
           {report.planning?.potentialLots != null && (
             <InfoRow label={t("report.potential_lots")} value={String(report.planning.potentialLots)} valueColor={colors.success} colors={colors} />
@@ -2120,6 +2185,32 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
         </SectionCard>
       )}
 
+      {report.titleInsight?.isCrossLease && (
+        <SectionCard title={t("report.title_insight_title")} icon="📜" status="warning" colors={colors}>
+          {!!report.titleInsight.opportunity?.trim() && (
+            <Text
+              style={{
+                color: colors.foreground,
+                fontFamily: "DM_Sans_400Regular",
+                fontSize: 13,
+                lineHeight: 20,
+                marginBottom: (report.titleInsight.risks?.length ?? 0) > 0 ? 12 : 0,
+              }}
+            >
+              {report.titleInsight.opportunity}
+            </Text>
+          )}
+          {(report.titleInsight.risks ?? []).map((risk, idx) => (
+            <View key={idx} style={{ flexDirection: "row", marginBottom: 8 }}>
+              <Text style={{ color: colors.amber, fontFamily: "DM_Sans_600SemiBold", fontSize: 13, marginRight: 8 }}>•</Text>
+              <Text style={{ flex: 1, color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 13, lineHeight: 20 }}>
+                {risk}
+              </Text>
+            </View>
+          ))}
+        </SectionCard>
+      )}
+
       {report.schoolZones && report.schoolZones.length > 0 && (
         <SectionCard title={translateForOS("report.school_zones")} icon="🎓" status="neutral" colors={colors}>
           <SchoolZonesPanel zones={report.schoolZones} colors={colors} />
@@ -2127,7 +2218,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
       )}
 
       {report.planning?.overlays && (
-        <SectionCard title={t("report.planning_overlays")} icon="🏛" status={planningSection} colors={colors}>
+        <SectionCard title={t("report.planning_overlays")} icon="🏛" status={planningSection} alert={safeNum(report.scores?.ease) < 2.5} colors={colors}>
           {!!report.planning.subdivisionSummary?.trim() && (
             <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 13, lineHeight: 20, marginBottom: 10 }}>
               {report.planning.subdivisionSummary}
@@ -2169,7 +2260,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
       )}
 
       {report.costItems && report.costItems.length > 0 && (
-        <SectionCard title={t("report.dev_cost_estimate")} icon="💰" status="neutral" colors={colors}>
+        <SectionCard title={t("report.dev_cost_estimate")} icon="💰" status="neutral" alert={safeNum(report.scores?.cost) < 2.5} colors={colors}>
           <CostBreakdownChart
             costItems={report.costItems}
             totalCostLow={report.totalCostLow}
@@ -2194,7 +2285,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
       </SectionCard>
 
       {hasDevelopmentStrategies && (
-        <SectionCard title={t("report.development_strategy_scenarios")} icon="🧭" status={strategyStatus(developmentStrategies)} colors={colors}>
+        <SectionCard title={t("report.development_strategy_scenarios")} icon="🧭" status={strategyStatus(developmentStrategies)} alert={safeNum(report.scores?.roi) < 2.5} colors={colors}>
           <DevelopmentStrategyPanel
             strategies={developmentStrategies}
             interestRateOutlook={report.interest_rate_outlook}
@@ -2223,7 +2314,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
       )}
 
       {!hasDevelopmentStrategies && report.roiScenarios && report.roiScenarios.length > 0 && (
-        <SectionCard title={t("report.roi_scenarios")} icon="📈" status={roiStatus(safeNum(report.scores?.roi))} colors={colors}>
+        <SectionCard title={t("report.roi_scenarios")} icon="📈" status={roiStatus(safeNum(report.scores?.roi))} alert={safeNum(report.scores?.roi) < 2.5} colors={colors}>
           {(report.cv_unavailable || report.roiScenarios[0]?.cv_unavailable) && (
             <View style={[styles.warningBox, { backgroundColor: colors.amber + "12", borderColor: colors.amber + "30", marginBottom: 10 }]}>
               <Feather name="alert-triangle" size={13} color={colors.amber} />
@@ -2308,6 +2399,8 @@ const styles = StyleSheet.create({
   overallSubLabel: { fontFamily: "DM_Sans_500Medium", fontSize: 16, lineHeight: 22, marginBottom: 2 },
   scoresRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-around", borderTopWidth: StyleSheet.hairlineWidth, paddingVertical: 14, paddingHorizontal: 12 },
   scoreDivider: { width: StyleSheet.hairlineWidth, height: 36 },
+  verdictRow: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 12, paddingHorizontal: 16 },
+  verdictText: { fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 18, color: "rgba(250,250,249,0.82)" },
   reasonsRow: { flexDirection: "row", borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 12, paddingHorizontal: 16, gap: 16 },
   reasonBlock: { flex: 1, gap: 3 },
   reasonTitle: { fontFamily: "DM_Sans_600SemiBold", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.7 },

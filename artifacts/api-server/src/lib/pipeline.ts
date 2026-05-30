@@ -331,6 +331,10 @@ export interface PipelineResult {
   propertyValue: PropertyValueData | null;
   realestate_listing: ListingResult | null;
   selectedListingContext?: SelectedListingContext | null;
+  // True when this report is one child of a combined/packaged listing. Photo
+  // assembly downstream must NOT append address-fuzzy galleries (oneroof etc.)
+  // for these — only child-scope-matched listing photos are trustworthy.
+  suppressNonSubjectPhotos?: boolean;
   merged: MergedPropertyData | null;
   lots: LotResult | null;
   subdivision_pathway: SubdivisionPathwayNote | null;
@@ -792,6 +796,12 @@ export async function runPropertyPipeline(
   // Resolve active listing context. This starts with the same realestate.co.nz
   // JSON API used by property-card discovery, then falls back to
   // ScrapingBee-backed Homes/OneRoof/Trade Me exact listing pages.
+  // A combined/packaged listing is expanded into one report per child address.
+  // Those sub-addresses are not separately listed, so speculative photo pages
+  // resolve to a neighbour/parent gallery. Suppress them and only trust photos
+  // from a listing whose scope matches this exact child.
+  const isCombinedListingChild = options.selectedListingContext?.isCombinedListing === true;
+
   let realestateListing: ListingResult | null = null;
   const activeListingResult = await timed(
     "active_listing_context",
@@ -801,6 +811,7 @@ export async function runPropertyPipeline(
       formattedAddress: geocode.formatted ?? address,
       preferredRealestateListingUrl: preferredRealestateListing?.listingUrl ?? options.preferredRealestateListingUrl ?? null,
       selectedListingContext: options.selectedListingContext ?? null,
+      suppressSpeculativePhotoSources: isCombinedListingChild,
     }),
     timing,
   );
@@ -909,6 +920,24 @@ export async function runPropertyPipeline(
   merged.photo_urls = enriched;
   if (!merged.main_photo_url && merged.photo_urls.length > 0) {
     merged.main_photo_url = merged.photo_urls[0];
+  }
+
+  // Combined-listing child: the package's marketing photos are not specific to
+  // any single sub-address, and address-fuzzy scrapers routinely return a
+  // neighbouring/parent listing's gallery. Show ONLY photos from a listing
+  // whose scope matches this exact child (realestateListingForFacts); otherwise
+  // leave photos empty so the mobile falls back to Google Street View / aerial
+  // imagery instead of an unrelated gallery. Mirrored in the route's photo
+  // override via PipelineResult.suppressNonSubjectPhotos.
+  if (isCombinedListingChild) {
+    const childMatchedPhotos = realestateListingForFacts
+      ? Array.from(new Set([
+          ...(realestateListingForFacts.photoUrls ?? []),
+          ...(realestateListingForFacts.photoUrl ? [realestateListingForFacts.photoUrl] : []),
+        ].filter(Boolean)))
+      : [];
+    merged.photo_urls = childMatchedPhotos;
+    merged.main_photo_url = childMatchedPhotos[0] ?? null;
   }
 
   // When all scrapers return zero photos (e.g. unlisted property), photo_urls
@@ -1293,6 +1322,7 @@ export async function runPropertyPipeline(
     propertyValue: propertyValueData,
     realestate_listing: realestateListing,
     selectedListingContext: resolvedListingContext ?? null,
+    suppressNonSubjectPhotos: isCombinedListingChild,
     merged,
     lots: lotResult,
     subdivision_pathway: subdivisionPathway,

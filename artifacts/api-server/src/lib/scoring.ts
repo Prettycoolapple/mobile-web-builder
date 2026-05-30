@@ -32,7 +32,23 @@ export function scoreProperty(
   scenarios: ROIScenario[],
   lots: number,
 ): ScoringResult {
+  const estateType = (merged.estate_type ?? "").trim();
+  const isCrossLeaseTenure = /cross\s*lease|stratum/i.test(estateType);
+  const isFreeholdTenure = /free\s*hold|fee\s*simple/i.test(estateType);
+  const isLeaseholdTenure =
+    /lease(hold)?\b/i.test(estateType) && !isCrossLeaseTenure && !isFreeholdTenure;
+
   const easeDeductions: Array<{ condition: boolean; points: number; reason: string }> = [
+    {
+      condition: isCrossLeaseTenure,
+      points: 1.5,
+      reason: "Cross-lease title — co-owner consent constrains development",
+    },
+    {
+      condition: isLeaseholdTenure,
+      points: 1.0,
+      reason: "Leasehold title — limited development rights vs freehold",
+    },
     {
       condition: merged.zone_code === "SHZ",
       points: 1.5,

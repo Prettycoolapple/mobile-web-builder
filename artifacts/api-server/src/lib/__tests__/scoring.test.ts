@@ -1,0 +1,118 @@
+import { describe, expect, it } from "vitest";
+import { scoreProperty } from "../scoring";
+import type { MergedPropertyData } from "../scrapers/merge";
+import type { CostBreakdown } from "../cost-estimator";
+import type { ROIScenario } from "../roi-calculator";
+
+function merged(overrides: Partial<MergedPropertyData> = {}): MergedPropertyData {
+  return {
+    cv_nzd: 1_500_000,
+    cv_year: 2024,
+    land_area_sqm: 700,
+    floor_area_sqm: 180,
+    build_year: 2015,
+    build_year_range: null,
+    bedrooms: 3,
+    bathrooms: 2,
+    // MHS is not penalised by zone deductions, so the only ease movement comes from tenure.
+    zone_code: "MHS",
+    zone_description: "Mixed Housing Suburban",
+    min_lot_size_sqm: 400,
+    overlays: [],
+    school_zones: { primary: null, intermediate: null, secondary: null },
+    last_sale_price: null,
+    last_sale_date: null,
+    listing_active: false,
+    listing_price: null,
+    main_photo_url: null,
+    photo_urls: [],
+    overlay_map_image_base64: null,
+    comparables: [],
+    data_sources: {},
+    discrepancies: [],
+    contour: "gentle",
+    contour_slope_degrees: 4,
+    contour_source: null,
+    contour_text: null,
+    asbestos_risk: "low",
+    infrastructure: [],
+    missing_critical_fields: [],
+    estate_type: null,
+    ...overrides,
+  };
+}
+
+const baseCosts: CostBreakdown = {
+  land_cv_nzd: 1_500_000,
+  cv_unavailable: false,
+  demo_low: 15_000,
+  demo_high: 30_000,
+  demo_vacant: false,
+  retaining_low: 10_000,
+  retaining_high: 30_000,
+  retaining_unknown: false,
+  tdr_ttr_low: 0,
+  tdr_ttr_high: 0,
+  tdr_ttr_required: false,
+  tdr_ttr_note: null,
+  services_low: 0,
+  services_high: 0,
+  construction_low: 336_000,
+  construction_high: 420_000,
+  consents_low: 44_000,
+  consents_high: 67_000,
+  finance_low: 150_000,
+  finance_high: 300_000,
+  contingency_low: 44_000,
+  contingency_high: 102_000,
+  total_low: 600_000,
+  total_high: 700_000,
+  total_excludes_land: false,
+  units: 2,
+  cost_per_unit_avg: 500_000,
+  has_existing_dwelling: true,
+};
+
+// Empty scenarios keep ROI fixed at 0.5 so the test isolates the ease score.
+const scenarios: ROIScenario[] = [];
+// lots = 2 so the single-dwelling ease deduction does not fire.
+const LOTS = 2;
+
+const CROSS_LEASE_REASON = "Cross-lease title — co-owner consent constrains development";
+const LEASEHOLD_REASON = "Leasehold title — limited development rights vs freehold";
+
+describe("scoreProperty — tenure", () => {
+  const freehold = scoreProperty(merged({ estate_type: "Fee Simple" }), baseCosts, scenarios, LOTS);
+  const unknown = scoreProperty(merged({ estate_type: null }), baseCosts, scenarios, LOTS);
+
+  it("does not penalise freehold / fee simple", () => {
+    expect(freehold.ease_reasons).not.toContain(CROSS_LEASE_REASON);
+    expect(freehold.ease_reasons).not.toContain(LEASEHOLD_REASON);
+  });
+
+  it("does not penalise unknown tenure", () => {
+    expect(unknown.ease_reasons).not.toContain(CROSS_LEASE_REASON);
+    expect(unknown.ease_reasons).not.toContain(LEASEHOLD_REASON);
+    expect(unknown.ease).toBe(freehold.ease);
+  });
+
+  it("lowers ease for a cross-lease title with the expected reason", () => {
+    const crossLease = scoreProperty(merged({ estate_type: "Cross Lease" }), baseCosts, scenarios, LOTS);
+    expect(crossLease.ease).toBeLessThan(freehold.ease);
+    expect(crossLease.ease_reasons).toContain(CROSS_LEASE_REASON);
+    expect(crossLease.ease_reasons).not.toContain(LEASEHOLD_REASON);
+  });
+
+  it("treats stratum like cross lease", () => {
+    const stratum = scoreProperty(merged({ estate_type: "Stratum in Freehold" }), baseCosts, scenarios, LOTS);
+    expect(stratum.ease).toBeLessThan(freehold.ease);
+    expect(stratum.ease_reasons).toContain(CROSS_LEASE_REASON);
+  });
+
+  it("lowers ease for a leasehold title with the expected reason", () => {
+    const leasehold = scoreProperty(merged({ estate_type: "Leasehold" }), baseCosts, scenarios, LOTS);
+    expect(leasehold.ease).toBeLessThan(freehold.ease);
+    expect(leasehold.ease_reasons).toContain(LEASEHOLD_REASON);
+    expect(leasehold.ease_reasons).not.toContain(CROSS_LEASE_REASON);
+  });
+});

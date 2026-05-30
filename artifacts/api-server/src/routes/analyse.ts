@@ -37,7 +37,7 @@ import {
   filterRiskSummaryRemoveIncompleteDataDisclaimerBullets,
   sanitizeReportScoresReasons,
 } from "../lib/risk-summary";
-import { ensureMinRiskSummaryBulletsFromReport, type RiskBackfillContext } from "../lib/report-risk-backfill";
+import { ensureMinRiskSummaryBulletsFromReport, buildCrossLeaseRiskBullets, buildTitleInsight, isCrossLeaseEstate, type RiskBackfillContext } from "../lib/report-risk-backfill";
 import { detectSubdivision } from "../lib/subdivision";
 import { formatNZD } from "../lib/utils";
 import { searchRealEstateListings, resolveDistrictToSuburbs } from "../lib/scrapers/realestate-search";
@@ -394,10 +394,18 @@ function applyDeterministicPipelineOverrides(
   resolvedAddress: string,
   locale: ReturnType<typeof normaliseLocale> = "en",
 ): void {
+  // For combined-listing children the pipeline has already restricted
+  // merged.photo_urls to child-scope-matched listing photos (or none). Do NOT
+  // re-add the address-fuzzy OneRoof gallery here — that would reintroduce the
+  // unrelated photos we are deliberately suppressing in favour of Street View.
   const photoUrls = Array.from(new Set([
     ...(pipelineResult.merged?.photo_urls ?? []),
-    ...(pipelineResult.oneroof?.photo_urls ?? []),
-    ...(pipelineResult.oneroof?.main_photo_url ? [pipelineResult.oneroof.main_photo_url] : []),
+    ...(pipelineResult.suppressNonSubjectPhotos
+      ? []
+      : [
+          ...(pipelineResult.oneroof?.photo_urls ?? []),
+          ...(pipelineResult.oneroof?.main_photo_url ? [pipelineResult.oneroof.main_photo_url] : []),
+        ]),
   ].filter(Boolean)));
   const photoUrl = photoUrls[0] ?? null;
   parsed.photoUrl = photoUrl;
@@ -652,7 +660,34 @@ function applyDeterministicPipelineOverrides(
     estateType: merged?.estate_type ?? null,
   };
   rs = ensureMinRiskSummaryBulletsFromReport(rs, 3, backfillCtx);
+
+  // Always surface cross-lease guidance when the title is cross-lease/stratum,
+  // regardless of how many other risk bullets exist. Prepend (highest priority)
+  // and drop any near-duplicate the LLM/backfill already emitted.
+  if (isCrossLeaseEstate(merged?.estate_type ?? null)) {
+    const crossLeaseBullets = buildCrossLeaseRiskBullets(merged?.estate_type ?? null, isZhRisks);
+    if (crossLeaseBullets.length > 0) {
+      const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
+      const crossLeaseHeads = new Set(crossLeaseBullets.map((b) => norm(b).slice(0, 36)));
+      const remaining = rs.filter((b) => !crossLeaseHeads.has(norm(b).slice(0, 36)));
+      rs = [...crossLeaseBullets, ...remaining];
+    }
+  }
+
   parsed.riskSummary = rs;
+
+  // Deterministic "Land title" insight (cross-lease opportunity + risks). Source
+  // of truth for the dedicated UI section; null for freehold/unknown so nothing renders.
+  const titleInsight = buildTitleInsight(
+    merged?.estate_type ?? null,
+    formatTitleTypeForDisplay(merged?.estate_type?.trim() || null),
+    isZhRisks,
+  );
+  if (titleInsight) {
+    parsed.titleInsight = titleInsight;
+  } else {
+    delete parsed.titleInsight;
+  }
 
   if (pipelineResult.school_zones_detail.length > 0) {
     parsed.schoolZones = pipelineResult.school_zones_detail;

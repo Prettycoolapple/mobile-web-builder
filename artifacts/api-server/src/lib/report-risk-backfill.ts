@@ -139,12 +139,66 @@ function infrastructureSentence(ctx: RiskBackfillContext): string | null {
     : "Major council services hugging the boundary or sitting on adjoining land can add tie-in, diversion, or co-build coordination — budget and programme should allow for that in early design.";
 }
 
+export function isCrossLeaseEstate(estateType: string | null | undefined): boolean {
+  const et = (estateType ?? "").toLowerCase();
+  return et.includes("cross") || et.includes("stratum");
+}
+
+/**
+ * Cross-lease specific risk bullets (en/zh). Returns an ordered list of 2–3
+ * bullets when the title is cross-lease/stratum, otherwise an empty array.
+ * Used both as backfill candidates and as always-present risk bullets.
+ */
+export function buildCrossLeaseRiskBullets(estateType: string | null | undefined, isZh: boolean): string[] {
+  if (!isCrossLeaseEstate(estateType)) return [];
+  if (isZh) {
+    return [
+      "交叉租赁（Cross Lease）产权下，任何重建、加建或外墙改动通常都需要其他交叉租赁产权方书面同意——这会直接限制开发自由度，是相较 Freehold 的核心劣势。",
+      "若考虑将交叉租赁转换为独立产权（Freehold），通常需要规划师、建筑/设计师、测量与法律共同参与，涉及时间与费用成本，且需所有相关方配合。",
+      "若计划合并（例如收购邻近交叉租赁物业一并转换），其可行性、价值释放与风险须由专业人士做正式可行性评估后再决策。",
+    ];
+  }
+  return [
+    "Cross-lease title means any rebuild, extension, or exterior change typically needs the written consent of the other cross-lease owners — that directly limits development freedom and is the key disadvantage versus freehold.",
+    "Converting a cross lease to freehold usually requires a planner, architect/designer, survey, and legal work — there is real cost and time involved, and it needs all parties to cooperate.",
+    "Any amalgamation play (e.g. buying a neighbouring cross-lease lot to convert both) should be confirmed by professional feasibility input before committing — value release and risk depend on it.",
+  ];
+}
+
 function crossLeaseSentence(ctx: RiskBackfillContext): string | null {
-  const et = (ctx.estateType ?? "").toLowerCase();
-  if (!et.includes("cross") && !et.includes("stratum")) return null;
-  return ctx.isZh
-    ? "交叉租赁或分层产权下，改建与外墙维护常需与其他产权方协商，可能限制拆除与加建位置。"
-    : "Cross-lease or stratum titles often need co-owner agreement for rebuilds and façades — that can constrain where and how you extend.";
+  const bullets = buildCrossLeaseRiskBullets(ctx.estateType, ctx.isZh);
+  return bullets[0] ?? null;
+}
+
+export interface TitleInsight {
+  titleType: string;
+  isCrossLease: boolean;
+  opportunity: string | null;
+  risks: string[];
+}
+
+/**
+ * Deterministic "Land title" insight emitted on the report. For cross-lease /
+ * stratum titles it returns the buy-neighbour → convert-to-freehold opportunity
+ * framing plus the consent/cost/time risk bullets. Returns null when there is no
+ * meaningful tenure signal (e.g. freehold or unknown), so the UI shows nothing.
+ */
+export function buildTitleInsight(
+  estateType: string | null | undefined,
+  titleTypeDisplay: string | null | undefined,
+  isZh: boolean,
+): TitleInsight | null {
+  if (!isCrossLeaseEstate(estateType)) return null;
+  const titleType = (titleTypeDisplay ?? "Cross Lease").trim() || "Cross Lease";
+  const opportunity = isZh
+    ? "交叉租赁（Cross Lease）物业通常比同区 Freehold 便宜。若你有足够资金，可考虑收购相邻的交叉租赁物业，将两者一并转换为独立 Freehold 产权——这往往能释放可观的价值。这类转换需要规划师、建筑/设计师等专业人士评估所需工作与投资规模，建议先获取专业意见再决策。"
+    : "Cross-lease properties are typically cheaper than freehold in the same area. With sufficient capital, one option is to buy the neighbouring cross-lease property and convert both into standalone freehold titles — this can release significant value. Such a conversion needs a planner plus architect/designer to scope the work and investment, so get professional input before committing.";
+  return {
+    titleType,
+    isCrossLease: true,
+    opportunity,
+    risks: buildCrossLeaseRiskBullets(estateType, isZh),
+  };
 }
 
 function netAreaZoneSentence(ctx: RiskBackfillContext): string | null {

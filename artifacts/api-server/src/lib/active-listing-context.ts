@@ -30,6 +30,12 @@ interface ResolveOptions {
   formattedAddress?: string | null;
   preferredRealestateListingUrl?: string | null;
   selectedListingContext?: SelectedListingContext | null;
+  // When true, only the realestate.co.nz exact match is allowed; the
+  // speculative homes/oneroof/trademe photo-page sources are skipped. Used for
+  // combined-listing children, whose individual sub-addresses are not
+  // separately listed — fuzzy photo pages there return a neighbouring/parent
+  // gallery, so we'd rather return null and let the caller use Street View.
+  suppressSpeculativePhotoSources?: boolean;
 }
 
 interface ListingPageFacts {
@@ -306,7 +312,7 @@ export async function resolveActiveListingContext(
     return { context: contextFromRealestateListing(realestateListing), realestateListing };
   }
 
-  if (options.purpose === "subdivision_screen") {
+  if (options.purpose === "subdivision_screen" || options.suppressSpeculativePhotoSources) {
     return { context: null, realestateListing: null };
   }
 

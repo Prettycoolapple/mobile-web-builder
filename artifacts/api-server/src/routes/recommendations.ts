@@ -55,6 +55,34 @@ interface FeasibilityReport {
   potential_lots?: number;
   /** Matches mobile `DevelopmentStrategyId`: ROI / strategy panel recommendation */
   recommendedDevelopmentStrategy?: string | null;
+  propertyOverview?: { titleType?: string | null };
+  titleInsight?: { isCrossLease?: boolean } | null;
+}
+
+/** True when the report's title/tenure is cross-lease or stratum. */
+function reportIsCrossLease(report: FeasibilityReport): boolean {
+  if (report.titleInsight?.isCrossLease === true) return true;
+  const titleType = report.propertyOverview?.titleType ?? "";
+  return /cross\s*lease|stratum/i.test(titleType);
+}
+
+/**
+ * Planner-priority with architect/designer fallback. Returns a planner when one
+ * exists, otherwise an architect/designer, otherwise null. Never signals to the
+ * caller which tier matched — the caller just gets a provider or null.
+ */
+async function selectPlannerOrArchitect(excludeProviderIds: string[]): Promise<ServiceProvider | null> {
+  const planner = await selectServiceProvider({
+    preferredDiscipline: "planner",
+    strictDiscipline: true,
+    excludeProviderIds,
+  });
+  if (planner) return planner;
+  return selectServiceProvider({
+    preferredDiscipline: "architect_designer",
+    strictDiscipline: true,
+    excludeProviderIds,
+  });
 }
 
 interface Message {
@@ -357,6 +385,27 @@ router.post("/recommendations/check", requireAuth, async (req: Request, res: Res
 
     if (!report) {
       res.status(400).json({ error: "report is required for non-explicit checks" });
+      return;
+    }
+
+    // Auto cross-lease promotion: every cross-lease report proactively surfaces a
+    // planner (architect/designer fallback). If no internal provider exists we
+    // return shouldRecommend:false silently — the bubble simply does not appear,
+    // and we never tell the user that none was found.
+    if (reportIsCrossLease(report)) {
+      const provider = await selectPlannerOrArchitect(excludeProviderIds);
+      if (!provider) {
+        res.json({ shouldRecommend: false, provider: null, intentType: "cross_lease", upgradeRequired });
+        return;
+      }
+      res.json({
+        shouldRecommend: true,
+        provider,
+        intentType: "cross_lease",
+        reason: "Cross-lease title — a planner or architect/designer can scope a freehold conversion and its feasibility",
+        allowExternalSearch: false,
+        upgradeRequired,
+      });
       return;
     }
 

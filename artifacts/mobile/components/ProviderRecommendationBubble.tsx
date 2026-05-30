@@ -55,6 +55,7 @@ function intentLabel(
     case "subdivision": return t("bubble.recommend.subdivision");
     case "newbuild": return t("bubble.recommend.newbuild");
     case "renovation": return t("bubble.recommend.renovation");
+    case "cross_lease": return t("bubble.recommend.cross_lease");
     default: return t("bubble.recommend.default_label");
   }
 }
