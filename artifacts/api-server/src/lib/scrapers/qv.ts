@@ -1,6 +1,7 @@
 /// <reference lib="dom" />
 import { logger } from "../logger";
 import { hasRemoteBrowserEndpoint, isVercelServerless, launchBrowser, logScrapeAttempt, newStealthPage, randomDelay } from "./browser";
+import { addressLineAppearsInText } from "./realestate-api";
 import { fetchWithScrapingBee } from "./scrapingbee";
 import type { Browser } from "playwright";
 
@@ -55,7 +56,18 @@ function htmlToText(html: string): string {
     .trim();
 }
 
-function extractQvDataFromText(allText: string, addressConfirmed: string): QVData | null {
+function extractQvDataFromText(allText: string, addressConfirmed: string, requestedAddress?: string): QVData | null {
+  const exactAddressConfirmed = requestedAddress
+    ? addressLineAppearsInText(requestedAddress, allText)
+    : false;
+  if (requestedAddress && !exactAddressConfirmed && !addressLineAppearsInText(requestedAddress, addressConfirmed)) {
+    logger.info(
+      { requestedAddress, addressConfirmed, preview: allText.slice(0, 220) },
+      "QV.co.nz: rejecting page because visible text did not confirm exact address",
+    );
+    return null;
+  }
+
   const data: Partial<QVData> = {};
 
   const cvMatch = allText.match(/capital\s*value\s*\$?([\d,]+)/i);
@@ -130,7 +142,7 @@ function extractQvDataFromText(allText: string, addressConfirmed: string): QVDat
     build_year_range: data.build_year_range ?? null,
     bedrooms: data.bedrooms ?? null,
     bathrooms: data.bathrooms ?? null,
-    address_confirmed: addressConfirmed,
+    address_confirmed: exactAddressConfirmed && requestedAddress ? requestedAddress : addressConfirmed,
     contour_text: contourText,
     contour_classification: contourClass,
   };
@@ -193,12 +205,12 @@ async function scrapeQvViaBee(address: string): Promise<QVData | null> {
     const propertyUrl = propertyLink.startsWith("http") ? propertyLink : `https://www.qv.co.nz${propertyLink}`;
     const detailHtml = await fetchWithScrapingBee(propertyUrl, { render_js: false, premium_proxy: false, wait: 500 });
     if (detailHtml) {
-      const parsedDetail = extractQvDataFromText(htmlToText(detailHtml), propertyUrl);
+      const parsedDetail = extractQvDataFromText(htmlToText(detailHtml), propertyUrl, address);
       if (parsedDetail) return parsedDetail;
     }
   }
 
-  return extractQvDataFromText(htmlToText(html), "https://www.qv.co.nz/property-search/");
+  return extractQvDataFromText(htmlToText(html), "https://www.qv.co.nz/property-search/", address);
 }
 
 export async function scrapeQV(address: string): Promise<QVData | null> {
@@ -332,6 +344,7 @@ export async function scrapeQV(address: string): Promise<QVData | null> {
 
     const allText = await page.evaluate(() => document.body.innerText ?? "").catch(() => "");
     const currentUrl = page.url();
+    const exactAddressConfirmed = addressLineAppearsInText(address, allText);
 
     logger.info(
       { textLen: allText.length, url: currentUrl, preview: allText.slice(0, 500) },
@@ -340,6 +353,10 @@ export async function scrapeQV(address: string): Promise<QVData | null> {
 
     if (allText.length < 200) {
       logger.warn("QV.co.nz: page too short");
+      return null;
+    }
+    if (!exactAddressConfirmed) {
+      logger.warn({ address, currentUrl, preview: allText.slice(0, 300) }, "QV.co.nz: page did not confirm exact address");
       return null;
     }
 
@@ -426,7 +443,7 @@ export async function scrapeQV(address: string): Promise<QVData | null> {
       build_year_range: data.build_year_range ?? null,
       bedrooms: data.bedrooms ?? null,
       bathrooms: data.bathrooms ?? null,
-      address_confirmed: currentUrl,
+      address_confirmed: address,
       contour_text: contourText,
       contour_classification: contourClass,
     };

@@ -10,6 +10,7 @@
  * Vercel-safe: ScrapingBee for listing pages.
  */
 import { logger } from "../logger";
+import { addressLineAppearsInText } from "./realestate-api";
 import { fetchWithScrapingBee } from "./scrapingbee";
 
 export interface HougardenPhotoData {
@@ -95,6 +96,17 @@ async function extractPhotosFromHtml(html: string): Promise<string[]> {
   return [...seen.values()].slice(0, 12);
 }
 
+function stripHtmlToText(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 async function viaDirectSearch(address: string): Promise<HougardenPhotoData | null> {
   const street = (address.split(",")[0] ?? address).trim();
   const searchUrl = `https://www.hougarden.com/search/sold?keywords=${encodeURIComponent(street)}`;
@@ -109,6 +121,10 @@ async function viaDirectSearch(address: string): Promise<HougardenPhotoData | nu
 
   const listingHtml = await fetchWithScrapingBee(listingUrl, { render_js: true, wait: 2000 });
   if (!listingHtml || listingHtml.length < 500) return null;
+  if (!addressLineAppearsInText(address, stripHtmlToText(listingHtml))) {
+    logger.info({ address, listingUrl }, "Hougarden photos: rejected page without exact address text");
+    return null;
+  }
 
   const photos = await extractPhotosFromHtml(listingHtml);
   if (photos.length === 0) return null;

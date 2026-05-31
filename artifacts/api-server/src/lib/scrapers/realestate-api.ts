@@ -788,7 +788,64 @@ export function extractCombinedListingAddressParts(rawAddress: string | null | u
   return unique.length >= 2 ? { packageAddress, childAddresses: unique } : null;
 }
 
-/** True when `candidate` looks like the same street address as `target` (first line). */
+/** Canonicalises common NZ street-type abbreviations so "Rd"/"Road", "Ave"/"Avenue" compare equal. */
+const STREET_TYPE_ALIAS: Record<string, string> = {
+  rd: "road", st: "street", ave: "avenue", av: "avenue", cres: "crescent",
+  cresent: "crescent", pl: "place", dr: "drive", ln: "lane", tce: "terrace",
+  pde: "parade", blvd: "boulevard", hwy: "highway", cl: "close", gr: "grove",
+};
+
+/** Street-name words (everything after the number), abbreviation-normalised, len>2. */
+function streetNameWords(line: string, numberToken: string): string[] {
+  return line
+    .split(" ")
+    .map((w) => STREET_TYPE_ALIAS[w] ?? w)
+    .filter((w) => w.length > 2 && w !== numberToken);
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function streetWordPattern(word: string): string {
+  const canonical = STREET_TYPE_ALIAS[word] ?? word;
+  const aliases = new Set<string>([canonical]);
+  for (const [alias, expanded] of Object.entries(STREET_TYPE_ALIAS)) {
+    if (expanded === canonical) aliases.add(alias);
+  }
+  return `(?:${[...aliases].map(escapeRegex).join("|")})`;
+}
+
+/**
+ * Strict free-text/URL containment check for a street line. This is deliberately
+ * stronger than `includes`: `8 Hampton Drive` must not match `8A Hampton Drive`,
+ * while URL slug separators (`8-hampton-drive`) and street-type aliases still
+ * work.
+ */
+export function addressLineAppearsInText(target: string, haystack: string | null | undefined): boolean {
+  const line = firstAddressLine(target);
+  const number = streetNumberToken(line);
+  if (!number || !haystack) return false;
+  const words = streetNameWords(line, number);
+  if (words.length === 0) return false;
+  const pattern = [
+    `(?:^|[^a-z0-9])${escapeRegex(number)}(?=[^a-z0-9])`,
+    ...words.map(streetWordPattern),
+  ].join("[^a-z0-9]+");
+  return new RegExp(`${pattern}(?=$|[^a-z0-9])`, "i").test(haystack);
+}
+
+/**
+ * True when `candidate` looks like the same street address as `target` (first
+ * line). Requires the street NUMBER to match, then — when neither line contains
+ * the other — requires the shorter address's street-NAME words (abbreviation-
+ * normalised) to be a subset of the longer's. This accepts formatting and
+ * suburb-suffix variants ("8 Hampton Drive" vs "8 Hampton Drive, St Heliers";
+ * "8 Hampton Rd" vs "8 Hampton Road") while rejecting a different street with
+ * the same number ("8 Hampton Drive" vs "8 Hampton Street") and different
+ * numbers ("8 Hampton Drive" vs "12 Hampton Drive"). Replaces the old, far too
+ * permissive `overlap >= 2` / shared-prefix heuristics.
+ */
 export function addressesLikelyMatch(target: string, candidate: string): boolean {
   const fa = firstAddressLine(target);
   const fb = firstAddressLine(candidate);
@@ -798,15 +855,12 @@ export function addressesLikelyMatch(target: string, candidate: string): boolean
   const nb = streetNumberToken(fb);
   if (!na || !nb || na !== nb) return false;
   if (fa.includes(fb) || fb.includes(fa)) return true;
-  const n = Math.min(24, fa.length, fb.length);
-  if (n >= 10 && fa.slice(0, n) === fb.slice(0, n)) return true;
-  const wordsA = fa.split(" ").filter((w) => w.length > 2);
-  const wordsB = new Set(fb.split(" ").filter((w) => w.length > 2));
-  let overlap = 0;
-  for (const w of wordsA) {
-    if (wordsB.has(w)) overlap++;
-  }
-  return overlap >= 2;
+  const wa = streetNameWords(fa, na);
+  const wb = streetNameWords(fb, nb);
+  if (wa.length === 0 || wb.length === 0) return false;
+  const [shorter, longer] = wa.length <= wb.length ? [wa, wb] : [wb, wa];
+  const longerSet = new Set(longer);
+  return shorter.every((w) => longerSet.has(w));
 }
 
 type RawListingMatch = {
@@ -1389,6 +1443,49 @@ export function reconcileListingLandArea(
   return { landArea: apiLandArea ?? null, landAreaApprox: false };
 }
 
+/**
+ * Reconcile the structured API's bed/bath counts against the listing PAGE's own
+ * counts (parsed from og:description). The page value is what users see on the
+ * portal, so it wins whenever the two disagree — the API's
+ * `bathrooms-total-count` can be an aggregate that tallies every WC/ensuite/
+ * fixture (e.g. 66A Marine Parade returns 9 vs the page's displayed 5).
+ *
+ * When the page gives us no bathroom value to compare, an implausibility guard
+ * drops a count that exceeds bedrooms + 1 (a near-certain aggregate-count smell)
+ * rather than surfacing an obviously wrong number.
+ */
+export function reconcileListingBedBath(
+  apiBedrooms: number | null | undefined,
+  apiBathrooms: number | null | undefined,
+  pageBedrooms: number | null | undefined,
+  pageBathrooms: number | null | undefined,
+): { bedrooms: number | null; bathrooms: number | null } {
+  let bedrooms = apiBedrooms ?? null;
+  if (pageBedrooms != null && pageBedrooms !== apiBedrooms) bedrooms = pageBedrooms;
+
+  let bathrooms = apiBathrooms ?? null;
+  if (pageBathrooms != null && pageBathrooms !== apiBathrooms) bathrooms = pageBathrooms;
+
+  // Implausibility guard: bathrooms-total-count is an aggregate field that
+  // can include every WC/ensuite/fixture across multiple units. Drop the
+  // suspicious count when:
+  //   (a) the listing page gave us no bathroom count at all (og fetch failed), OR
+  //   (b) the listing page confirms the SAME suspicious count (the og:description
+  //       pulls from the same aggregate field, so both sources are wrong together).
+  // Only skip the guard when the page independently disagrees — in that case the
+  // first override above already set bathrooms = pageBathrooms.
+  if (
+    bathrooms != null &&
+    bedrooms != null &&
+    bathrooms > bedrooms + 1 &&
+    (pageBathrooms == null || pageBathrooms === apiBathrooms)
+  ) {
+    bathrooms = null;
+  }
+
+  return { bedrooms, bathrooms };
+}
+
 async function fetchOgMeta(url: string): Promise<OgMeta | null> {
   try {
     const ctrl = new AbortController();
@@ -1466,6 +1563,13 @@ async function annotateApproxFields(listings: ListingResult[]): Promise<ListingR
       const bathroomsApprox =
         l.bathrooms != null && og.bathrooms != null && og.bathrooms !== l.bathrooms;
 
+      // Prefer the listing PAGE's own bed/bath (parsed from og:description) over
+      // the platform API's counts, with an implausibility guard. See
+      // reconcileListingBedBath for the rationale (66A Marine Parade: API 9 vs
+      // page 5 bathrooms).
+      const { bedrooms: resolvedBedrooms, bathrooms: resolvedBathrooms } =
+        reconcileListingBedBath(l.bedrooms, l.bathrooms, og.bedrooms, og.bathrooms);
+
       // The public search API can occasionally attach an aggregate or
       // neighbouring parcel area to a listing card. The listing page's own
       // metadata is closer to what users see on property portals, so prefer it
@@ -1511,6 +1615,8 @@ async function annotateApproxFields(listings: ListingResult[]): Promise<ListingR
       }
       return {
         ...l,
+        bedrooms: resolvedBedrooms,
+        bathrooms: resolvedBathrooms,
         landArea,
         landAreaSource,
         landAreaConfidence,

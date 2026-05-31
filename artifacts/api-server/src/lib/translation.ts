@@ -73,6 +73,50 @@ export async function ensureChinese(text: string): Promise<string> {
   return translateToChinese(text);
 }
 
+/**
+ * Deterministic mapping for NZ land-title statuses. The LLM translator
+ * preserves short enum-like tokens (e.g. "Freehold") as-is per its system
+ * prompt, so we'd get untranslated English in the title pill on Chinese-OS
+ * devices. The pill is a small, high-confidence field, so we resolve it from
+ * a fixed table rather than burn an LLM call.
+ *
+ * Format: "<Chinese> (<English>)" — keeps the universally recognised English
+ * legal term alongside the Chinese translation. NZ settlement/contract
+ * paperwork uses the English label.
+ *
+ * Returns null for unknown variants so the caller can fall back to the
+ * generic LLM-translation path.
+ */
+export function localiseTitleTypeForZh(raw: string | null | undefined): string | null {
+  if (raw == null || typeof raw !== "string") return null;
+  const key = raw.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!key) return null;
+  // Normalise common variants before lookup. "Fee Simple" is already mapped to
+  // "Freehold" by formatTitleTypeForDisplay upstream; this handles defence in
+  // depth in case the raw LINZ string slips through.
+  //
+  // Priority order: more-specific tenures first so compound phrases like
+  // "Stratum in Freehold" or "Cross Lease over Fee Simple" pick up the
+  // specific tenure (Stratum / Cross Lease) rather than the generic Freehold
+  // catch-all.
+  const normalised =
+    /\bstratum\b/.test(key) ? "stratum"
+    : /\bcross\s*lease\b/.test(key) ? "cross lease"
+    : /\bunit\s+title\b/.test(key) ? "unit title"
+    : /\bleasehold\b/.test(key) ? "leasehold"
+    : /\bfee\s*simple\b/.test(key) || /\bfreehold\b/.test(key) ? "freehold"
+    : null;
+  if (!normalised) return null;
+  const TITLE_TYPE_ZH: Record<string, string> = {
+    freehold: "永久产权 (Freehold)",
+    leasehold: "租赁产权 (Leasehold)",
+    "cross lease": "交叉租赁产权 (Cross Lease)",
+    "unit title": "单元产权 (Unit Title)",
+    stratum: "层级产权 (Stratum)",
+  };
+  return TITLE_TYPE_ZH[normalised] ?? null;
+}
+
 export async function ensureChineseForLocale(text: string, locale: Locale): Promise<string> {
   if (locale !== "zh") return text;
   return ensureChinese(text);
@@ -233,13 +277,19 @@ export async function translateReportNarrative(
     out.scores = scores;
   }
 
-  // propertyOverview.titleType — LINZ English tenure phrase → Chinese (OS-gated)
+  // propertyOverview.titleType — LINZ English tenure phrase → Chinese (OS-gated).
+  // For the small enumerated set of NZ land-title statuses we use a
+  // deterministic mapping (Freehold/Leasehold/Cross Lease/Unit Title/Stratum →
+  // Chinese with English in parens). The DeepSeek translator preserves these
+  // short enum-like tokens as English by design, so the pill would otherwise
+  // render "Freehold" untranslated on Chinese-OS devices.
   if (out.propertyOverview && typeof out.propertyOverview === "object") {
     const po = { ...(out.propertyOverview as Record<string, unknown>) };
     if (translateTitleSchool) {
       const rawTitle =
         typeof po.titleType === "string" ? formatTitleTypeForDisplay(po.titleType) ?? po.titleType : po.titleType;
-      po.titleType = await translateIfString(rawTitle);
+      const mapped = typeof rawTitle === "string" ? localiseTitleTypeForZh(rawTitle) : null;
+      po.titleType = mapped ?? (await translateIfString(rawTitle));
     } else {
       po.titleType =
         typeof po.titleType === "string" ? formatTitleTypeForDisplay(po.titleType) ?? po.titleType : po.titleType;

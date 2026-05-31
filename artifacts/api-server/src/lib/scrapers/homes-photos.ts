@@ -7,6 +7,7 @@
  * Vercel-safe: uses ScrapingBee for listing pages.
  */
 import { logger } from "../logger";
+import { addressLineAppearsInText } from "./realestate-api";
 import { fetchWithScrapingBee } from "./scrapingbee";
 
 export interface HomesPhotoData {
@@ -118,6 +119,17 @@ export async function extractHomesPhotosFromHtml(html: string): Promise<string[]
   return [...seen.values()].slice(0, 12);
 }
 
+function stripHtmlToText(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function buildAddressSlugVariants(address: string): string[] {
   const parts = address.split(",").map((p) => p.replace(/\b\d{4}\b/g, "").trim()).filter(Boolean);
   if (parts.length === 0) return [];
@@ -137,6 +149,10 @@ async function viaDirectUrls(address: string): Promise<HomesPhotoData | null> {
   for (const url of buildAddressSlugVariants(address).slice(0, 2)) {
     const html = await fetchWithScrapingBee(url, { render_js: true, wait: 2500 });
     if (!html || html.length < 500) continue;
+    if (!addressLineAppearsInText(address, stripHtmlToText(html))) {
+      logger.info({ address, url }, "Homes photos: rejected page without exact address text");
+      continue;
+    }
     const photos = await extractHomesPhotosFromHtml(html);
     if (photos.length > 0) {
       return {

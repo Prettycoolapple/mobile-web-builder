@@ -7,6 +7,7 @@ import type { OneRoofData, ComparableSale, ListingResult } from "./oneroof";
 import type { QVData } from "./qv";
 import type { HomesData } from "./homes";
 import type { PropertyValueData } from "./propertyvalue";
+import { addressLineAppearsInText, addressesLikelyMatch } from "./realestate-api";
 import type { PropertyHistory } from "../property-data";
 import type { PropertyEligibilityConfidence, PropertyTypology } from "../property-eligibility";
 
@@ -345,6 +346,15 @@ function isInactiveRealestateListing(listing: ListingResult | null): boolean {
   return /sold|withdrawn|expired|archived|closed/i.test(listing?.listingStatus ?? "");
 }
 
+function sourceAddressMatchesSubject(
+  analysedAddress: string | null | undefined,
+  confirmedAddress: string | null | undefined,
+): boolean {
+  if (!confirmedAddress) return true;
+  const target = analysedAddress ?? "";
+  return addressesLikelyMatch(target, confirmedAddress) || addressLineAppearsInText(target, confirmedAddress);
+}
+
 export function mergePropertyData(
   linz: LinzParcel | null,
   hougarden: HougardenData | null,
@@ -392,6 +402,35 @@ export function mergePropertyData(
     !!realestateListing?.listingUrl &&
     realestateListing.listingUrl === extra.preferred_realestate_listing_url;
   const hasIgnoredCombinedListing = !!realestateListingRaw?.isCombinedListing && !realestateListing;
+
+  // PropertyValue resolves an address via a FUZZY suggestion match, so for an
+  // unlisted property it can lock onto a neighbour. Only trust its
+  // subject-specific facts (bed/bath) when the address it confirmed plausibly
+  // matches the address we analysed. When it confirmed a *different* address,
+  // prefer "unavailable" (null) over a wrong number. (A null confirmation is
+  // left as-is — we can't prove it's wrong, and OneRoof/realestate take
+  // precedence in the `first()` order anyway.)
+  const propertyValueMatchesSubject =
+    !propertyValue ||
+    sourceAddressMatchesSubject(extra?.analysed_address, propertyValue.address_confirmed);
+  const homesMatchesSubject =
+    !homes ||
+    sourceAddressMatchesSubject(extra?.analysed_address, homes.address_confirmed);
+  const qvMatchesSubject =
+    !qv ||
+    sourceAddressMatchesSubject(extra?.analysed_address, qv.address_confirmed);
+  const propertyValueBeds = propertyValueMatchesSubject ? propertyValue?.bedrooms : null;
+  const propertyValueBaths = propertyValueMatchesSubject ? propertyValue?.bathrooms : null;
+  const homesBeds = homesMatchesSubject ? homes?.bedrooms : null;
+  const homesBaths = homesMatchesSubject ? homes?.bathrooms : null;
+  const qvBeds = qvMatchesSubject ? qv?.bedrooms : null;
+  const qvBaths = qvMatchesSubject ? qv?.bathrooms : null;
+  if (propertyValue && !propertyValueMatchesSubject) {
+    logger.info(
+      { analysed: extra?.analysed_address, confirmed: propertyValue.address_confirmed },
+      "Merge: PropertyValue confirmed a different address — ignoring its bed/bath",
+    );
+  }
 
   // Land area: LINZ is the authoritative cadastral measurement — always wins.
   const land_area_sqm = first("land_area_sqm", sources,
@@ -455,16 +494,16 @@ export function mergePropertyData(
   let bedrooms = first("bedrooms", sources,
     ["oneroof", oneroof?.bedrooms],
     ["realestate.co.nz", realestateListing?.bedrooms],
-    ["propertyvalue", propertyValue?.bedrooms],
-    ["homes",   homes?.bedrooms],
-    ["qv",      qv?.bedrooms],
+    ["propertyvalue", propertyValueBeds],
+    ["homes",   homesBeds],
+    ["qv",      qvBeds],
   );
   let bathrooms = first("bathrooms", sources,
     ["oneroof", oneroof?.bathrooms],
     ["realestate.co.nz", realestateListing?.bathrooms],
-    ["propertyvalue", propertyValue?.bathrooms],
-    ["homes",   homes?.bathrooms],
-    ["qv",      qv?.bathrooms],
+    ["propertyvalue", propertyValueBaths],
+    ["homes",   homesBaths],
+    ["qv",      qvBaths],
   );
   const property_type = first("property_type", sources,
     ["realestate.co.nz", realestateListing?.propertyType],
@@ -750,9 +789,9 @@ export function mergePropertyData(
     const bedroomVotes = [
       oneroof?.bedrooms,
       realestateListing?.bedrooms,
-      propertyValue?.bedrooms,
-      homes?.bedrooms,
-      qv?.bedrooms,
+      propertyValueBeds,
+      homesBeds,
+      qvBeds,
     ].filter((v): v is number => v != null && v > 0);
 
     if (bedroomVotes.length >= 2) {
@@ -775,6 +814,40 @@ export function mergePropertyData(
         );
         bedrooms = consensusValue;
         sources["bedrooms"] = "consensus";
+      }
+    }
+  }
+
+  // Cross-source bathroom consensus check.
+  // Bathroom counts are just as prone to stale record drift as bedroom counts
+  // on public property pages. Unlike bedrooms, ties do not break upward:
+  // an inflated bathroom count is more common when a scraper lands on a nearby
+  // unit/renovated record, so require a strictly stronger vote before changing.
+  if (bathrooms != null) {
+    const bathroomVotes = [
+      oneroof?.bathrooms,
+      realestateListing?.bathrooms,
+      propertyValueBaths,
+      homesBaths,
+      qvBaths,
+    ].filter((v): v is number => v != null && v > 0);
+
+    if (bathroomVotes.length >= 2) {
+      const tally = new Map<number, number>();
+      for (const v of bathroomVotes) tally.set(v, (tally.get(v) ?? 0) + 1);
+      const sorted = [...tally.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0]);
+      const [consensusValue, consensusCount] = sorted[0];
+      const currentCount = tally.get(bathrooms) ?? 0;
+      if (consensusValue !== bathrooms && consensusCount > currentCount) {
+        logger.info(
+          { current: bathrooms, corrected: consensusValue, consensusCount, currentCount, total: bathroomVotes.length },
+          "Merge: cross-source consensus corrects bathroom count",
+        );
+        discrepancies.push(
+          `Bathrooms: ${consensusCount}/${bathroomVotes.length} sources report ${consensusValue} (initial pick was ${bathrooms} from ${sources["bathrooms"] ?? "unknown"}). Corrected to consensus.`,
+        );
+        bathrooms = consensusValue;
+        sources["bathrooms"] = "consensus";
       }
     }
   }
@@ -859,14 +932,15 @@ export function mergePropertyData(
       : first("listing_price", sources, ["oneroof", oneroof?.listing_price]);
 
   const school_zones          = hougarden?.school_zones ?? { primary: null, intermediate: null, secondary: null };
-  // Listing hero photos: OneRoof first, then realestate.co.nz address-matched fallbacks.
+  // Listing hero photos only. Do not carry generic property-record galleries
+  // into feasibility reports; if no listing photos exist, mobile falls back to
+  // Google Street View / satellite.
   const photo_urls = Array.from(new Set([
-    ...(oneroof?.photo_urls ?? []),
-    ...(oneroof?.main_photo_url ? [oneroof.main_photo_url] : []),
+    ...(oneroof?.listing_active ? (oneroof.photo_urls ?? []) : []),
+    ...(oneroof?.listing_active && oneroof.main_photo_url ? [oneroof.main_photo_url] : []),
     ...(realestateListing?.photoUrls ?? []),
     ...(realestateListing?.photoUrl ? [realestateListing.photoUrl] : []),
     ...(extra?.realestate_photo_urls ?? []),
-    ...(propertyValue?.photo_urls ?? []),
   ].filter(Boolean)));
   const main_photo_url        = photo_urls[0] ?? null;
   const overlay_map_image_base64 = hougarden?.overlay_map_image_base64 ?? null;

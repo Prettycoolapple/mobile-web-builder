@@ -3,6 +3,7 @@ import { logger } from "../logger";
 import { hasRemoteBrowserEndpoint, isVercelServerless, launchBrowser, newStealthPage, randomDelay } from "./browser";
 import { fetchWithScrapingBee } from "./scrapingbee";
 import { extractBedsBaths } from "./bed-bath-extractor";
+import { addressLineAppearsInText } from "./realestate-api";
 import type { Browser } from "playwright";
 
 /** Paths we must never mint as suburb slugs (`/address/auckland/{slug}/`). */
@@ -131,6 +132,7 @@ function buildPropertyUrls(address: string, suburb: string, formattedAddress: st
 
 async function tryScrapingBee(address: string, suburb: string, formattedAddress: string): Promise<HomesData | null> {
   const urls = buildPropertyUrls(address, suburb, formattedAddress);
+  const addressNeedle = formattedAddress || address;
 
   for (const url of urls) {
     logger.info({ url }, "homes.co.nz: trying ScrapingBee with URL");
@@ -155,6 +157,10 @@ async function tryScrapingBee(address: string, suburb: string, formattedAddress:
       || textLower.includes("page not found")
       || textLower.includes("404")) {
       logger.info({ url }, "homes.co.nz: ScrapingBee got error page (Angular error)");
+      continue;
+    }
+    if (!addressLineAppearsInText(addressNeedle, textContent)) {
+      logger.info({ url, address: addressNeedle }, "homes.co.nz: ScrapingBee page did not confirm exact address");
       continue;
     }
 
@@ -258,6 +264,10 @@ async function tryPlaywrightSearch(address: string, formattedAddress: string): P
 
     const allText = await page.evaluate(() => document.body.innerText ?? "").catch(() => "");
     logger.info({ textLen: allText.length, url: finalUrl, preview: allText.slice(0, 400) }, "homes.co.nz: Playwright page text");
+    if (!addressLineAppearsInText(formattedAddress || address, allText)) {
+      logger.warn({ finalUrl, address: formattedAddress || address }, "homes.co.nz: Playwright page did not confirm exact address");
+      return null;
+    }
 
     const data = extractFromText(allText);
     if (!hasUsableData(data)) {
@@ -275,7 +285,7 @@ async function tryPlaywrightSearch(address: string, formattedAddress: string): P
       bathrooms: data.bathrooms ?? null,
       last_sale_price: data.last_sale_price ?? null,
       last_sale_date: null,
-      address_confirmed: finalUrl,
+      address_confirmed: formattedAddress || address,
     };
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "homes.co.nz: Playwright search failed");

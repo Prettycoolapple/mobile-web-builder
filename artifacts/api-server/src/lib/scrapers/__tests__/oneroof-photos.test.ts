@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { extractOneRoofDataFromHtml, extractOneRoofPropertyUrlsFromSearchHtml } from "../oneroof";
+import {
+  extractOneRoofDataFromHtml,
+  extractOneRoofPropertyUrlsFromSearchHtml,
+  oneRoofPathnameMatchesAddress,
+} from "../oneroof";
 
 describe("OneRoof photo extraction", () => {
   it("keeps gallery photos even when the page has no valuation fields", async () => {
@@ -28,6 +32,29 @@ describe("OneRoof photo extraction", () => {
     expect(data.main_photo_url).toBe(data.photo_urls[0]);
   });
 
+  it("extracts cross-lease title text from exact property page snippets", async () => {
+    const data = await extractOneRoofDataFromHtml(
+      `
+        <html>
+          <head>
+            <meta property="og:title" content="38 Te Arawa Street, Orakei, Auckland" />
+          </head>
+          <body>
+            <h1>38 Te Arawa Street, Orakei</h1>
+            <dl>
+              <dt>Title</dt><dd>Cross-Lease</dd>
+              <dt>Floor area</dt><dd>84m2</dd>
+            </dl>
+          </body>
+        </html>
+      `,
+      "https://www.oneroof.co.nz/property/auckland/orakei/38-te-arawa-street/example",
+    );
+
+    expect(data.tenureText).toBe("Cross Lease");
+    expect(data.found).toBe(true);
+  });
+
   it("discovers a matching OneRoof property URL from public search markup", () => {
     const html = `
       <a href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.oneroof.co.nz%2Fproperty%2Fauckland%2Fcoatesville%2F70%2Dscreen%2Droad%2FGfkeQ&amp;rut=abc">
@@ -41,5 +68,43 @@ describe("OneRoof photo extraction", () => {
     expect(extractOneRoofPropertyUrlsFromSearchHtml(html, "70 Screen Road, Coatesville 0793, New Zealand")).toEqual([
       "https://www.oneroof.co.nz/property/auckland/coatesville/70-screen-road/GfkeQ",
     ]);
+  });
+});
+
+describe("oneRoofPathnameMatchesAddress", () => {
+  it("accepts a suburb-suffixed street segment", () => {
+    expect(
+      oneRoofPathnameMatchesAddress(
+        "/property/auckland/saint-heliers/8-hampton-drive-saint-heliers/AbCdE",
+        "8 Hampton Drive, St Heliers",
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts a plain full-segment street slug", () => {
+    expect(
+      oneRoofPathnameMatchesAddress(
+        "/property/auckland/coatesville/70-screen-road/GfkeQ",
+        "70 Screen Road, Coatesville",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects a different street number sharing the street name", () => {
+    expect(
+      oneRoofPathnameMatchesAddress(
+        "/property/auckland/saint-heliers/18-hampton-drive/AbCdE",
+        "8 Hampton Drive, St Heliers",
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects a missing unit-letter variant (66 vs 66a)", () => {
+    expect(
+      oneRoofPathnameMatchesAddress(
+        "/property/auckland/mellons-bay/66-marine-parade/AbCdE",
+        "66a Marine Parade, Mellons Bay",
+      ),
+    ).toBe(false);
   });
 });

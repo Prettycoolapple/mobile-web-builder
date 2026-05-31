@@ -88,6 +88,13 @@ export function exitHorizonYearsForUnitCount(units: number): number[] {
  * Estimate total finished floor area for a new-build house on the given lot size.
  * Starts with a plausible ground-floor footprint, then allows upper-floor area
  * on smaller infill lots where two-storey homes are common.
+ *
+ * The GFA cap scales with lot size: small infill lots (<600 sqm) cap at 320
+ * sqm — typical for 3-4 bed townhouse/terrace product. Larger lots (>=600 sqm)
+ * allow up to 450 sqm — executive-home GFA seen in premium suburbs like
+ * Mellons Bay / Remuera / St Heliers on 800-1000 sqm freehold sites. A flat
+ * 320 sqm cap was understating new-build GDV in those markets because
+ * comparable $/sqm × 320 sqm landed below the existing home's CV.
  */
 export function estimateNewBuildFloorSqm(sqm_per_lot: number): number {
   // Smaller lots often use two storeys, so total GFA can exceed the footprint
@@ -100,7 +107,8 @@ export function estimateNewBuildFloorSqm(sqm_per_lot: number): number {
     sqm_per_lot < 650 ? 1.15 :
     1.00;
   const raw = footprint * storeyMultiplier;
-  return Math.round(Math.min(320, Math.max(90, raw)));
+  const cap = sqm_per_lot >= 600 ? 450 : 320;
+  return Math.round(Math.min(cap, Math.max(90, raw)));
 }
 
 /**
@@ -180,6 +188,17 @@ export function calculateBearBaseBullScenarios(
   );
 }
 
+export interface CalculateScenariosOptions {
+  /**
+   * When true, skip the organic-growth multiplier applied at each exit
+   * horizon. Used for "hold existing" where no work is done — the exit
+   * price should reflect *current* market, not market × (1 + g)^years.
+   * Without this the hold scenario was credited with appreciation it didn't
+   * earn.
+   */
+  suppressOrganicGrowth?: boolean;
+}
+
 export function calculateScenariosFromGdv(
   costs: CostBreakdown,
   base_gdv: number,
@@ -187,6 +206,7 @@ export function calculateScenariosFromGdv(
   sqm_per_lot: number,
   gdv_per_lot: number,
   interest_rate_outlook: InterestRateOutlook,
+  options: CalculateScenariosOptions = {},
 ): ROIScenario[] {
   const safeUnits = Math.max(1, lots);
   const total_cost_mid = roundToNearest((costs.total_low + costs.total_high) / 2, 1000);
@@ -195,7 +215,9 @@ export function calculateScenariosFromGdv(
   const horizonYears = exitHorizonYearsForUnitCount(safeUnits);
 
   return horizonYears.map((years) => {
-    const organicGrowthMultiplier = Math.pow(1 + ORGANIC_ANNUAL_GROWTH_RATE, years);
+    const organicGrowthMultiplier = options.suppressOrganicGrowth
+      ? 1
+      : Math.pow(1 + ORGANIC_ANNUAL_GROWTH_RATE, years);
     const horizonBaseGdv = roundToNearest(base_gdv * organicGrowthMultiplier, 1000);
     const horizonGdvPerLot = roundToNearest(gdv_per_lot * organicGrowthMultiplier, 1000);
     const bearGdv = roundToNearest(horizonBaseGdv * 0.80, 1000);

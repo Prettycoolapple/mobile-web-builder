@@ -126,12 +126,23 @@ describe("development strategies", () => {
     const hold = strategies.find((strategy) => strategy.id === "hold_existing");
     const rebuild = strategies.find((strategy) => strategy.id === "demolish_rebuild");
 
+    // Hold-existing has no demolition, no construction, no consents — just
+    // acquisition + light holding allowances. Rebuild carries the full dev
+    // stack (demo, construction, consents, finance, larger contingency).
     expect(hold?.costItems.some((item) => item.label === "Demolition")).toBe(false);
-    expect(hold?.totalCostLow).toBeLessThan(rebuild?.totalCostLow ?? 0);
+    expect(hold?.costItems.some((item) => item.label === "Construction")).toBe(false);
     expect(hold?.roiScenarios.length).toBeGreaterThan(0);
     expect(hold?.costItems.find((item) => item.label === "Contingency")?.high ?? 0).toBeLessThan(
       rebuild?.costItems.find((item) => item.label === "Contingency")?.low ?? 0,
     );
+    // Hold's totalCost is roughly the market-value acquisition + ~1-2.5%
+    // holding allowance — it should NOT include the full rebuild dev stack.
+    // (We no longer assert hold < rebuild because hold's acquisition basis is
+    // now market value, which can exceed rebuild's CV-anchored baseCosts when
+    // market > CV. The substantive property is exclusion of dev costs above.)
+    const holdRange = (hold?.totalCostHigh ?? 0) - (hold?.totalCostLow ?? 0);
+    const rebuildRange = (rebuild?.totalCostHigh ?? 0) - (rebuild?.totalCostLow ?? 0);
+    expect(holdRange).toBeLessThan(rebuildRange);
   });
 
   it("moves the recommended badge to the strongest calculated ROI strategy", () => {
@@ -179,15 +190,113 @@ describe("development strategies", () => {
     const scenario = hold?.roiScenarios[0];
     const baseCase = scenario?.cases.find((c) => c.case === "base");
 
-    expect(scenario?.gdv).toBe(4_110_000);
-    expect(baseCase?.gdv).toBe(4_110_000);
-    expect(hold?.roiScenarios.map((s) => s.gdv)).toEqual([4_110_000, 4_192_000, 4_276_000]);
+    // "Hold existing" no longer applies the ORGANIC_ANNUAL_GROWTH_RATE
+    // multiplier to its exit horizons — see calculateScenariosFromGdv's
+    // suppressOrganicGrowth option. "Do nothing for N years" exits at current
+    // market, not market × (1.02)^N, so GDV stays flat across the 3 horizons
+    // at the CV-floored existing value (CV $3.95M > comparable-based $1.32M).
+    expect(scenario?.gdv).toBe(3_950_000);
+    expect(baseCase?.gdv).toBe(3_950_000);
+    expect(hold?.roiScenarios.map((s) => s.gdv)).toEqual([3_950_000, 3_950_000, 3_950_000]);
     expect(hold?.totalCostLow).toBe(3_990_000);
     expect(hold?.totalCostHigh).toBe(4_069_000);
     expect(hold?.costItems.find((item) => item.label === "Contingency")?.high).toBe(20_000);
   });
 
-  it("applies organic annual growth across hold, refurbish, and rebuild horizons", () => {
+  it("does not let broad suburb comparables create a free-lunch hold-existing ROI", () => {
+    const data = merged({
+      cv_nzd: 1_900_000,
+      land_area_sqm: 833,
+      floor_area_sqm: 160,
+      build_year: 1964,
+      bedrooms: 3,
+      bathrooms: 1,
+      zone_code: "MHS",
+      typology: "standalone",
+      listing_active: false,
+      listing_price: null,
+    });
+    const assessment = buildFallbackDevelopmentStrategyAssessment(data, lotResult);
+    const strategies = calculateDevelopmentStrategies({
+      data,
+      baseCosts: { ...baseCosts, land_cv_nzd: 1_900_000 },
+      lotResult: { ...lotResult, zone_label: "Mixed Housing Suburban" },
+      avgSalePrice: 3_380_000,
+      avgPricePerSqm: 21_000,
+      interestRateOutlook: "stable",
+      assessment,
+    });
+
+    const hold = strategies.find((strategy) => strategy.id === "hold_existing");
+    const scenario = hold?.roiScenarios[0];
+    const baseCase = scenario?.cases.find((c) => c.case === "base");
+
+    expect(scenario?.gdv).toBe(1_900_000);
+    expect(baseCase?.gross_profit).toBeLessThanOrEqual(0);
+    expect(baseCase?.roi_percent).toBeLessThanOrEqual(0);
+    expect(scenario?.total_cost_mid).toBeGreaterThan(1_900_000);
+    expect(scenario?.total_cost_mid).toBeLessThan(2_000_000);
+  });
+
+  it("floors single-lot rebuild GDV at CV × 1.10 for premium-suburb sites", () => {
+    // Mirrors 66A Marine Parade, Mellons Bay: CV $3.85M, 900 sqm SHZ lot,
+    // comparable $/sqm ≈ $6,000. Pre-fix the comparable-based GDV landed at
+    // ~$1.82M (below current CV), which is nonsense in a $3M+ suburb.
+    const data = merged({ cv_nzd: 3_850_000, land_area_sqm: 900, floor_area_sqm: 220, build_year: 1980 });
+    const costs = { ...baseCosts, land_cv_nzd: 3_850_000 };
+    const premiumLot: LotResult = { ...lotResult, lots: 1, sqm_per_lot: 900, gross_area_sqm: 900, net_area_sqm: 900 };
+    const assessment = buildFallbackDevelopmentStrategyAssessment(data, premiumLot);
+    const strategies = calculateDevelopmentStrategies({
+      data,
+      baseCosts: costs,
+      lotResult: premiumLot,
+      avgSalePrice: 3_500_000,
+      avgPricePerSqm: 6_000,
+      interestRateOutlook: "stable",
+      assessment,
+    });
+
+    const rebuild = strategies.find((s) => s.id === "demolish_rebuild");
+    const cvFloor = 3_850_000 * 1.10;
+    // Rebuild GDV must clear the CV × 1.10 floor — a new build on a high-CV
+    // freehold site is always worth at least the existing dated home's CV.
+    // The first roiScenario's gdv is base GDV × organic growth for that
+    // horizon; rebuild legitimately rides growth so this only makes the GDV
+    // higher than the floor, never lower.
+    const year2Gdv = rebuild?.roiScenarios[0]?.gdv ?? 0;
+    expect(year2Gdv).toBeGreaterThanOrEqual(cvFloor);
+  });
+
+  it("does NOT apply the rebuild CV floor when multi-lot subdivision is the exit", () => {
+    // Subdividing into 3 terraces intentionally trades typology and is
+    // already handled by exitGdvTypologyDiscountFactor — the CV floor would
+    // mask legitimate downside in multi-unit schemes.
+    const data = merged({ cv_nzd: 3_850_000, land_area_sqm: 1500 });
+    const costs = { ...baseCosts, land_cv_nzd: 3_850_000 };
+    const multiLot: LotResult = { ...lotResult, lots: 3, sqm_per_lot: 500, gross_area_sqm: 1500, net_area_sqm: 1500, zone_label: "Mixed Housing Urban" };
+    const assessment = buildFallbackDevelopmentStrategyAssessment(data, multiLot);
+    const strategies = calculateDevelopmentStrategies({
+      data,
+      baseCosts: costs,
+      lotResult: multiLot,
+      avgSalePrice: 1_200_000,
+      avgPricePerSqm: 5_000,
+      interestRateOutlook: "stable",
+      assessment,
+    });
+
+    const rebuild = strategies.find((s) => s.id === "demolish_rebuild");
+    // No floor — the result reflects estimateGdvPerLot × 3 lots (possibly
+    // below CV × 1.10 for terrace product). We assert the floor is *not*
+    // mechanically applied by checking the base-year GDV (before organic
+    // growth) sits below CV × 1.10. Year-2 GDV ≈ base × 1.0404, so undo that
+    // multiplier for a clean comparison.
+    const year2Gdv = rebuild?.roiScenarios[0]?.gdv ?? 0;
+    const baseGdv = year2Gdv / Math.pow(1.02, 2);
+    expect(baseGdv).toBeLessThan(3_850_000 * 1.10);
+  });
+
+  it("applies organic annual growth to refurbish and rebuild horizons but not to hold-existing", () => {
     const assessment = buildFallbackDevelopmentStrategyAssessment(merged(), lotResult);
     const strategies = calculateDevelopmentStrategies({
       data: merged(),
@@ -199,11 +308,21 @@ describe("development strategies", () => {
       assessment,
     });
 
-    for (const strategy of strategies) {
-      expect(strategy.roiScenarios.map((scenario) => scenario.years)).toEqual([2, 3, 4]);
-      expect(strategy.roiScenarios[1].gdv).toBeGreaterThan(strategy.roiScenarios[0].gdv);
-      expect(strategy.roiScenarios[2].gdv).toBeGreaterThan(strategy.roiScenarios[1].gdv);
+    const hold = strategies.find((s) => s.id === "hold_existing");
+    const refurbish = strategies.find((s) => s.id === "refurbish");
+    const rebuild = strategies.find((s) => s.id === "demolish_rebuild");
+
+    // Refurbish + rebuild legitimately ride market growth during the dev cycle.
+    for (const strategy of [refurbish, rebuild]) {
+      expect(strategy?.roiScenarios.map((scenario) => scenario.years)).toEqual([2, 3, 4]);
+      expect((strategy?.roiScenarios[1].gdv ?? 0)).toBeGreaterThan(strategy?.roiScenarios[0].gdv ?? 0);
+      expect((strategy?.roiScenarios[2].gdv ?? 0)).toBeGreaterThan(strategy?.roiScenarios[1].gdv ?? 0);
     }
+    // Hold-existing exits at current market — GDV is flat across horizons.
+    expect(hold?.roiScenarios.map((scenario) => scenario.years)).toEqual([2, 3, 4]);
+    const holdGdvs = hold?.roiScenarios.map((scenario) => scenario.gdv) ?? [];
+    expect(holdGdvs[0]).toBe(holdGdvs[1]);
+    expect(holdGdvs[1]).toBe(holdGdvs[2]);
   });
 
   it("uses the multi-unit rebuild cost stack when calculating subdivision ROI", () => {
@@ -409,7 +528,7 @@ describe("development strategies", () => {
 
       const hold = strategies.find((s) => s.id === "hold_existing");
       // GDV for standalone should be ≥ 2_500_000 (floored at avgSalePrice)
-      expect(hold?.roiScenarios[0]?.gdv).toBeGreaterThanOrEqual(2_500_000);
+      expect(hold?.roiScenarios[0]?.gdv).toBe(1_800_000);
       expect(hold?.assumptions.some((a) => /0\.53|47%/i.test(a))).toBe(false);
     });
 

@@ -7,7 +7,16 @@ import {
   TouchableOpacity,
   Image,
   ActivityIndicator,
+  Modal,
+  useWindowDimensions,
 } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import Animated, {
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
 import { useAuth } from "@/context/AuthContext";
 import { getApiBase } from "@/lib/api";
 import Svg, { Polygon } from "react-native-svg";
@@ -22,7 +31,7 @@ import {
   filterScoreReasonStrings,
 } from "@/lib/riskSummaryIncompleteDataFilter";
 import { ensureRiskSummaryMinForReport } from "@/lib/reportRiskBackfill";
-import { formatTitleTypeForDisplay } from "@/lib/titleDisplay";
+import { formatTitleTypeForDisplay, localiseTitleTypeZh } from "@/lib/titleDisplay";
 import { viaImageProxy, streetViewUrlFor, staticMapUrlFor } from "@/lib/reportPhotoCache";
 import {
   FeasibilityReport as Report,
@@ -393,11 +402,20 @@ function localizeScoreReason(reason: string, locale: string): string {
 }
 
 /**
- * Succinct, deterministic investment verdict for the score card. Gives an
- * overall stance and explains the three sub-scores (feasibility / cost / ROI)
- * in plain language, plus a short recommendation tied to the weakest dimension.
- * Kept to ~2 short sentences for UI density, and derives purely from the scores
- * so it works on every report including cached/historical ones.
+ * Succinct investment verdict for the score card. Gives an overall stance and
+ * explains the three sub-scores (feasibility / cost / ROI) in plain language,
+ * plus a short recommendation tied to the weakest dimension.
+ *
+ * When per-dimension reasons are available (from the backend `scores.*_reasons`
+ * arrays), the verdict weaves the top reason into each non-healthy clause so
+ * that two properties with the same band tuple but different drivers (SHZ
+ * vs Cross Lease ease, $400k vs $1.2M cost-per-unit, +25% vs -68% ROI) read
+ * visibly differently. The user previously saw identical text across very
+ * different addresses; the reasons are exactly the property-specific signal
+ * they're already shown as bullets below this summary.
+ *
+ * Falls back to a generic clause when reasons are absent (legacy/cached
+ * reports), so the verdict still renders on every report.
  */
 function buildInvestmentVerdict(
   ease: number,
@@ -405,6 +423,7 @@ function buildInvestmentVerdict(
   roi: number,
   composite: number,
   locale: string,
+  reasons?: { ease: string[]; cost: string[]; roi: string[] },
 ): string {
   const isZh = locale === "zh";
   const band = (s: number): "high" | "mid" | "low" => (s >= 4 ? "high" : s >= 2.5 ? "mid" : "low");
@@ -414,9 +433,37 @@ function buildInvestmentVerdict(
     : composite >= 2.5 ? (isZh ? "机会喜忧参半" : "A mixed opportunity")
     : (isZh ? "按目前数据较难成立" : "Hard to justify as-is");
 
-  const easeClause = { high: isZh ? "开发可行性良好" : "feasibility is favourable", mid: isZh ? "可行性尚可但有一定限制" : "feasibility is workable but constrained", low: isZh ? "可行性受到较大限制" : "feasibility is heavily constrained" }[band(ease)];
-  const costClause = { high: isZh ? "单位建造成本高效" : "build costs are efficient", mid: isZh ? "建造成本中等" : "build costs are moderate", low: isZh ? "单位建造成本偏高" : "build cost per unit is very high" }[band(cost)];
-  const roiClause = { high: isZh ? "预期回报强劲" : "projected returns are strong", mid: isZh ? "预期回报合理" : "projected returns are reasonable", low: isZh ? "预期回报偏弱" : "projected returns are weak" }[band(roi)];
+  const easeBand = band(ease);
+  const costBand = band(cost);
+  const roiBand = band(roi);
+
+  const easeClauseBase = { high: isZh ? "开发可行性良好" : "feasibility is favourable", mid: isZh ? "可行性尚可但有一定限制" : "feasibility is workable but constrained", low: isZh ? "可行性受到较大限制" : "feasibility is heavily constrained" }[easeBand];
+  const costClauseBase = { high: isZh ? "单位建造成本高效" : "build costs are efficient", mid: isZh ? "建造成本中等" : "build costs are moderate", low: isZh ? "单位建造成本偏高" : "build cost per unit is very high" }[costBand];
+  const roiClauseBase = { high: isZh ? "预期回报强劲" : "projected returns are strong", mid: isZh ? "预期回报合理" : "projected returns are reasonable", low: isZh ? "预期回报偏弱" : "projected returns are weak" }[roiBand];
+
+  // For ease, prefer the most-impactful deduction (item [0]) — the backend
+  // appends deductions in descending impact order. For cost and roi, prefer
+  // the concrete-number reason at index [1] ("Cost per unit: $X" / "Best
+  // case: X% ROI over N years") since those are property-specific figures;
+  // fall back to [0] (the bracket label) when only it exists.
+  const topReason = (arr: string[] | undefined, preferIndex: number): string | null => {
+    if (!arr || arr.length === 0) return null;
+    const primary = arr[preferIndex];
+    if (typeof primary === "string" && primary.trim()) return primary.trim();
+    const fallback = arr[0];
+    return typeof fallback === "string" && fallback.trim() ? fallback.trim() : null;
+  };
+  const topEaseReason = easeBand !== "high" ? topReason(reasons?.ease, 0) : null;
+  const topCostReason = costBand !== "high" ? topReason(reasons?.cost, 1) : null;
+  const topRoiReason = roiBand !== "high" ? topReason(reasons?.roi, 1) : null;
+
+  const withReason = (clause: string, reason: string | null): string => {
+    if (!reason) return clause;
+    return isZh ? `${clause}（${reason}）` : `${clause} (${reason})`;
+  };
+  const easeClause = withReason(easeClauseBase, topEaseReason);
+  const costClause = withReason(costClauseBase, topCostReason);
+  const roiClause = withReason(roiClauseBase, topRoiReason);
 
   // Recommendation keyed to the weakest dimension when it is in the red band.
   const dims = [{ kind: "ease", score: ease }, { kind: "cost", score: cost }, { kind: "roi", score: roi }] as const;
@@ -445,10 +492,18 @@ function ScoreSummaryRow({ report, colors, hideOverall }: { report: Report; colo
   const composite = safeNum(raw.composite);
   const ease_reasons = filterScoreReasonStrings(raw.ease_reasons).map((reason) => localizeScoreReason(reason, locale));
   const roi_reasons = filterScoreReasonStrings(raw.roi_reasons).map((reason) => localizeScoreReason(reason, locale));
+  // cost_reasons feeds the verdict (concrete cost-per-unit figure) but is not
+  // rendered as a separate bullet list in the existing UI — the cost is
+  // already visible in the scenario card cost figures.
+  const cost_reasons = filterScoreReasonStrings(raw.cost_reasons).map((reason) => localizeScoreReason(reason, locale));
   const overallColor = scoreColor(composite, colors);
   const overallDisplay = formatCompositeScoreForDisplay(composite);
   const showReasons = ease_reasons.length > 0 || roi_reasons.length > 0;
-  const verdict = buildInvestmentVerdict(ease, cost, roi, composite, locale);
+  const verdict = buildInvestmentVerdict(ease, cost, roi, composite, locale, {
+    ease: ease_reasons,
+    cost: cost_reasons,
+    roi: roi_reasons,
+  });
 
   return (
     <View style={[styles.scoresSection, { backgroundColor: (colors as any).scoreCardBg }]}>
@@ -504,6 +559,150 @@ function ScoreSummaryRow({ report, colors, hideOverall }: { report: Report; colo
   );
 }
 
+const AnimatedImage = Animated.createAnimatedComponent(Image);
+
+function FullscreenPhotoViewer({
+  visible,
+  urls,
+  initialIndex,
+  onClose,
+}: {
+  visible: boolean;
+  urls: string[];
+  initialIndex: number;
+  onClose: () => void;
+}) {
+  const { width, height } = useWindowDimensions();
+  const [index, setIndex] = useState(initialIndex);
+  const scale = useSharedValue(1);
+  const savedScale = useSharedValue(1);
+  const translateX = useSharedValue(0);
+  const translateY = useSharedValue(0);
+  const savedTranslateX = useSharedValue(0);
+  const savedTranslateY = useSharedValue(0);
+
+  React.useEffect(() => {
+    if (!visible) return;
+    setIndex(Math.min(Math.max(initialIndex, 0), Math.max(urls.length - 1, 0)));
+    scale.value = 1;
+    savedScale.value = 1;
+    translateX.value = 0;
+    translateY.value = 0;
+    savedTranslateX.value = 0;
+    savedTranslateY.value = 0;
+  }, [initialIndex, savedScale, savedTranslateX, savedTranslateY, scale, translateX, translateY, urls.length, visible]);
+
+  const resetZoom = useCallback(() => {
+    scale.value = withTiming(1, { duration: 160 });
+    savedScale.value = 1;
+    translateX.value = withTiming(0, { duration: 160 });
+    translateY.value = withTiming(0, { duration: 160 });
+    savedTranslateX.value = 0;
+    savedTranslateY.value = 0;
+  }, [savedScale, savedTranslateX, savedTranslateY, scale, translateX, translateY]);
+
+  const pinch = Gesture.Pinch()
+    .onUpdate((event) => {
+      scale.value = Math.min(Math.max(savedScale.value * event.scale, 1), 5);
+    })
+    .onEnd(() => {
+      savedScale.value = scale.value;
+      if (scale.value <= 1.02) {
+        scale.value = withTiming(1, { duration: 160 });
+        savedScale.value = 1;
+        translateX.value = withTiming(0, { duration: 160 });
+        translateY.value = withTiming(0, { duration: 160 });
+        savedTranslateX.value = 0;
+        savedTranslateY.value = 0;
+      }
+    });
+
+  const pan = Gesture.Pan()
+    .onUpdate((event) => {
+      if (scale.value <= 1) return;
+      translateX.value = savedTranslateX.value + event.translationX;
+      translateY.value = savedTranslateY.value + event.translationY;
+    })
+    .onEnd(() => {
+      savedTranslateX.value = translateX.value;
+      savedTranslateY.value = translateY.value;
+    });
+
+  const tap = Gesture.Tap()
+    .maxDuration(220)
+    .onEnd(() => {
+      runOnJS(onClose)();
+    });
+
+  const imageStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: translateX.value },
+      { translateY: translateY.value },
+      { scale: scale.value },
+    ],
+  }));
+
+  const displayUrls = urls.filter(Boolean);
+  const currentUrl = displayUrls[index] ?? displayUrls[0];
+  if (!currentUrl) return null;
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.fullscreenPhotoRoot}>
+        <GestureDetector gesture={Gesture.Simultaneous(pinch, pan, tap)}>
+          <Animated.View style={styles.fullscreenPhotoStage}>
+            <AnimatedImage
+              source={{ uri: currentUrl }}
+              style={[
+                styles.fullscreenPhotoImage,
+                { width, height: Math.min(height, Math.round(width * 1.35)) },
+                imageStyle,
+              ]}
+              resizeMode="contain"
+            />
+          </Animated.View>
+        </GestureDetector>
+
+        <View style={styles.fullscreenPhotoTopBar} pointerEvents="box-none">
+          <TouchableOpacity style={styles.fullscreenPhotoClose} onPress={onClose} activeOpacity={0.8}>
+            <Feather name="x" size={20} color="#fff" />
+          </TouchableOpacity>
+        </View>
+
+        {displayUrls.length > 1 && (
+          <View style={styles.fullscreenPhotoFooter} pointerEvents="box-none">
+            <TouchableOpacity
+              style={[styles.fullscreenPhotoNav, index <= 0 && styles.fullscreenPhotoNavDisabled]}
+              onPress={() => {
+                if (index <= 0) return;
+                setIndex(index - 1);
+                resetZoom();
+              }}
+              activeOpacity={0.8}
+              disabled={index <= 0}
+            >
+              <Feather name="chevron-left" size={20} color="#fff" />
+            </TouchableOpacity>
+            <Text style={styles.fullscreenPhotoCounter}>{index + 1} / {displayUrls.length}</Text>
+            <TouchableOpacity
+              style={[styles.fullscreenPhotoNav, index >= displayUrls.length - 1 && styles.fullscreenPhotoNavDisabled]}
+              onPress={() => {
+                if (index >= displayUrls.length - 1) return;
+                setIndex(index + 1);
+                resetZoom();
+              }}
+              activeOpacity={0.8}
+              disabled={index >= displayUrls.length - 1}
+            >
+              <Feather name="chevron-right" size={20} color="#fff" />
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+    </Modal>
+  );
+}
+
 function ReportPhotoCarousel({
   report,
   photoUrls,
@@ -520,6 +719,8 @@ function ReportPhotoCarousel({
   const [width, setWidth] = useState(0);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [failed, setFailed] = useState<Set<string>>(new Set());
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerIndex, setViewerIndex] = useState(0);
   const composite = safeNum(report.scores?.composite);
   const overallColor = scoreColor(composite, colors);
   const overallDisplay = formatCompositeScoreForDisplay(composite);
@@ -559,11 +760,23 @@ function ReportPhotoCarousel({
     setCurrentIndex(Math.min(Math.max(newIndex, 0), total - 1));
   }, [width, total]);
 
+  const openViewer = useCallback((index: number) => {
+    setViewerIndex(index);
+    setViewerOpen(true);
+  }, []);
+
   return (
     <View
       style={styles.reportPhotoWrapper}
       onLayout={(e) => setWidth(Math.round(e.nativeEvent.layout.width))}
     >
+      <FullscreenPhotoViewer
+        visible={viewerOpen}
+        urls={displayUrls}
+        initialIndex={viewerIndex}
+        onClose={() => setViewerOpen(false)}
+      />
+
       {displayUrls.length > 0 ? (
         <ScrollView
           horizontal
@@ -574,13 +787,19 @@ function ReportPhotoCarousel({
           scrollEventThrottle={16}
         >
           {displayUrls.map((url, index) => (
-            <Image
+            <TouchableOpacity
               key={`${url}-${index}`}
-              source={{ uri: url }}
               style={[styles.reportPhoto, width > 0 ? { width } : undefined]}
-              resizeMode="cover"
-              onError={() => handleError(url)}
-            />
+              activeOpacity={0.92}
+              onPress={() => openViewer(index)}
+            >
+              <Image
+                source={{ uri: url }}
+                style={styles.reportPhoto}
+                resizeMode="cover"
+                onError={() => handleError(url)}
+              />
+            </TouchableOpacity>
           ))}
         </ScrollView>
       ) : (
@@ -1968,7 +2187,7 @@ function SchoolZonesPanel({ zones, colors }: { zones: SchoolZoneDetail[]; colors
 
 export function FeasibilityReportCard({ report, onFollowUp }: Props) {
   const colors = useColors();
-  const { t } = useT();
+  const { t, locale } = useT();
   const { getApiHeaders } = useAuth();
 
   const planningSection = overlayStatus(report);
@@ -2022,7 +2241,14 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
   const hasLiveComparableSales = realComparableSales.length > 0;
   const developmentStrategies = report.developmentStrategies ?? [];
   const hasDevelopmentStrategies = developmentStrategies.length > 0;
-  const titleTypeDisplay = formatTitleTypeForDisplay(report.propertyOverview?.titleType);
+  const titleTypeRaw = formatTitleTypeForDisplay(report.propertyOverview?.titleType);
+  // Defence in depth: when the backend translation step didn't run (e.g. cached
+  // legacy reports), localise the title token on the client for zh users so
+  // the pill never shows untranslated "Freehold"/"Leasehold". The
+  // /freehold/i check below still works because the English word remains in
+  // the parens, e.g. "永久产权 (Freehold)".
+  const titleTypeDisplay =
+    locale === "zh" && titleTypeRaw ? localiseTitleTypeZh(titleTypeRaw) ?? titleTypeRaw : titleTypeRaw;
   // Freehold renders neutral; Cross Lease / Leasehold / Stratum get a warning accent.
   const isNonFreeholdTenure = !!titleTypeDisplay && !/free\s*hold/i.test(titleTypeDisplay);
   const landAreaUnavailableContact =
@@ -2391,6 +2617,15 @@ const styles = StyleSheet.create({
   photoDotInactive: { width: 6, height: 4, backgroundColor: "rgba(255,255,255,0.40)" },
   refreshPhotosPill: { position: "absolute", bottom: 10, right: 12, flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 100, backgroundColor: "rgba(0,0,0,0.65)", borderWidth: StyleSheet.hairlineWidth, borderColor: "rgba(255,255,255,0.25)" },
   refreshPhotosPillText: { color: "#fff", fontFamily: "DM_Sans_500Medium", fontSize: 11 },
+  fullscreenPhotoRoot: { flex: 1, backgroundColor: "rgba(0,0,0,0.96)", alignItems: "center", justifyContent: "center" },
+  fullscreenPhotoStage: { flex: 1, width: "100%", alignItems: "center", justifyContent: "center", overflow: "hidden" },
+  fullscreenPhotoImage: { alignSelf: "center" },
+  fullscreenPhotoTopBar: { position: "absolute", top: 0, left: 0, right: 0, paddingTop: 54, paddingHorizontal: 18, alignItems: "flex-end" },
+  fullscreenPhotoClose: { width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.16)", borderWidth: StyleSheet.hairlineWidth, borderColor: "rgba(255,255,255,0.25)" },
+  fullscreenPhotoFooter: { position: "absolute", bottom: 34, left: 0, right: 0, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 18 },
+  fullscreenPhotoNav: { width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.16)", borderWidth: StyleSheet.hairlineWidth, borderColor: "rgba(255,255,255,0.25)" },
+  fullscreenPhotoNavDisabled: { opacity: 0.35 },
+  fullscreenPhotoCounter: { minWidth: 52, textAlign: "center", color: "rgba(255,255,255,0.9)", fontFamily: "DM_Sans_600SemiBold", fontSize: 12, fontVariant: ["tabular-nums"] },
   scoresSection: { paddingBottom: 16 },
   overallRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", paddingHorizontal: 18, paddingTop: 16, paddingBottom: 10, gap: 8 },
   overallLabel: { fontFamily: "DM_Sans_400Regular", fontSize: 10, textTransform: "uppercase", letterSpacing: 1.2 },

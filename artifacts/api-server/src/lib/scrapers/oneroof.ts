@@ -222,6 +222,7 @@ export interface OneRoofData {
   build_year: number | null;
   bedrooms: number | null;
   bathrooms: number | null;
+  tenureText: string | null;
   main_photo_url: string | null;
   photo_urls: string[];
   comparables: ComparableSale[];
@@ -233,7 +234,7 @@ export function emptyOneRoofData(): OneRoofData {
   return {
     found: false, cv_nzd: null, cv_year: null, last_sale_price: null, last_sale_date: null,
     listing_price: null, listing_active: false, floor_area_sqm: null, land_area_sqm: null,
-    build_year: null, bedrooms: null, bathrooms: null, main_photo_url: null, photo_urls: [], comparables: [],
+    build_year: null, bedrooms: null, bathrooms: null, tenureText: null, main_photo_url: null, photo_urls: [], comparables: [],
     data_source: "oneroof", scraped_at: new Date().toISOString(),
   };
 }
@@ -301,15 +302,29 @@ function addressSuburbSlug(address: string): string | null {
 }
 
 /**
+ * Builds the path-segment regex for a street slug. The slug must appear as a
+ * full path segment (`/8-hampton-drive/`) OR as the leading part of a longer
+ * segment that continues with a hyphen — OneRoof sometimes folds the suburb
+ * into the street segment, e.g. `/property/auckland/.../8-hampton-drive-saint-heliers/…`.
+ *
+ * The leading boundary `(?:^|/)` still guards the street NUMBER, so
+ * "18-hampton-drive" never matches "8-hampton-drive" and "66-marine-parade"
+ * never matches "66a-marine-parade".
+ */
+function streetSlugSegmentRegex(streetSlug: string): RegExp {
+  return new RegExp(`(?:^|/)${streetSlug}(?:-[a-z]|/|$)`);
+}
+
+/**
  * Word-boundary match for a OneRoof property pathname against the queried
  * address. Prevents "/property/18-hampton-drive-..." from matching the slug
  * "8-hampton-drive", and "/property/66-marine-parade-..." from matching
- * "66a-marine-parade".
+ * "66a-marine-parade", while still accepting suburb-suffixed street segments.
  */
 export function oneRoofPathnameMatchesAddress(pathname: string, address: string): boolean {
   const streetSlug = addressStreetSlug(address);
   if (!streetSlug) return false;
-  return new RegExp(`(?:^|/)${streetSlug}(?:/|$)`).test(pathname.toLowerCase());
+  return streetSlugSegmentRegex(streetSlug).test(pathname.toLowerCase());
 }
 
 export function extractOneRoofPropertyUrlsFromSearchHtml(html: string, address: string): string[] {
@@ -333,8 +348,8 @@ export function extractOneRoofPropertyUrlsFromSearchHtml(html: string, address: 
       if (parsed.hostname !== "www.oneroof.co.nz") continue;
       if (!parsed.pathname.startsWith("/property/")) continue;
       const pathname = parsed.pathname.toLowerCase();
-      if (!new RegExp(`(?:^|/)${streetSlug}(?:/|$)`).test(pathname)) continue;
-      if (suburbSlug && !new RegExp(`(?:^|/)${suburbSlug}(?:/|$)`).test(pathname)) continue;
+      if (!streetSlugSegmentRegex(streetSlug).test(pathname)) continue;
+      if (suburbSlug && !new RegExp(`(?:^|/)${suburbSlug}(?:-[a-z]|/|$)`).test(pathname)) continue;
       candidates.add(parsed.toString());
     } catch {
       // Ignore malformed search links.
@@ -475,6 +490,15 @@ function extractDataFromText(pageText: string): Partial<OneRoofData> {
   if (eb != null) result.bedrooms = eb;
   if (bb != null) result.bathrooms = bb;
 
+  const tenureM = pageText.match(/(cross[-\s]*lease|crosslease|unit\s+title|freehold|fee\s+simple|leasehold|stratum(?:\s+in\s+freehold)?)/i);
+  if (tenureM) {
+    const raw = tenureM[1].toLowerCase().replace(/\s+/g, " ").trim();
+    if (/cross/.test(raw)) result.tenureText = "Cross Lease";
+    else if (/unit\s+title|stratum/.test(raw)) result.tenureText = "Unit Title";
+    else if (/fee\s+simple|freehold/.test(raw)) result.tenureText = "Freehold";
+    else if (/leasehold/.test(raw)) result.tenureText = "Leasehold";
+  }
+
   const comparablesSection = pageText.split(/[Nn]earby [Ss]ales|[Rr]ecently [Ss]old|[Cc]omparable/i)[1];
   if (comparablesSection) {
     const sales: ComparableSale[] = [];
@@ -508,7 +532,7 @@ function extractDataFromText(pageText: string): Partial<OneRoofData> {
 }
 
 function hasUsefulData(data: OneRoofData | Partial<OneRoofData>): boolean {
-  return !!(data.cv_nzd || data.last_sale_price || data.floor_area_sqm);
+  return !!(data.cv_nzd || data.last_sale_price || data.floor_area_sqm || data.tenureText);
 }
 
 const PLAYWRIGHT_TIMEOUT_MS = 16000;

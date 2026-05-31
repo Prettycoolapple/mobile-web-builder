@@ -222,4 +222,279 @@ describe("mergePropertyData", () => {
     expect(merged.bathrooms).toBe(1);
     expect(merged.data_sources.realestate_listing).toBe("ignored combined listing");
   });
+
+  it("ignores PropertyValue bed/bath when it fuzzy-matched a different address", () => {
+    const merged = mergePropertyData(
+      { area_sqm: 400 } as any,
+      null,
+      null,
+      { zone_code: "MHS", zone_description: "Mixed Housing Suburban", min_lot_size_sqm: 400 } as any,
+      [],
+      {
+        contour: null,
+        asbestos_risk: "unknown",
+        infrastructure: [],
+        propertyValue: {
+          cv_nzd: 1_800_000,
+          lv_nzd: null,
+          iv_nzd: null,
+          cv_year: 2024,
+          property_type: "House",
+          property_sub_type: null,
+          legal_descriptions: [],
+          land_use_primary: null,
+          property_improvements: null,
+          land_area_sqm: 405,
+          floor_area_sqm: 160,
+          build_year: 1965,
+          build_year_range: null,
+          bedrooms: 5,
+          bathrooms: 2,
+          listing_active: false,
+          photo_urls: [],
+          address_confirmed: "12 Hampton Drive, St Heliers",
+          property_id: 456,
+        },
+        analysed_address: "8 Hampton Drive, St Heliers",
+      },
+    );
+
+    expect(merged.bedrooms).toBeNull();
+    expect(merged.bathrooms).toBeNull();
+  });
+
+  it("ignores neighbour bed/bath when a source resolved 8A Hampton Drive for 8 Hampton Drive", () => {
+    const merged = mergePropertyData(
+      { area_sqm: 400 } as any,
+      null,
+      null,
+      { zone_code: "MHS", zone_description: "Mixed Housing Suburban", min_lot_size_sqm: 400 } as any,
+      [],
+      {
+        contour: null,
+        asbestos_risk: "unknown",
+        infrastructure: [],
+        propertyValue: {
+          cv_nzd: 1_800_000,
+          lv_nzd: null,
+          iv_nzd: null,
+          cv_year: 2024,
+          property_type: "House",
+          property_sub_type: null,
+          legal_descriptions: [],
+          land_use_primary: null,
+          property_improvements: null,
+          land_area_sqm: 405,
+          floor_area_sqm: 160,
+          build_year: 1965,
+          build_year_range: null,
+          bedrooms: 5,
+          bathrooms: 2,
+          listing_active: false,
+          photo_urls: [],
+          address_confirmed: "8A Hampton Drive, St Heliers",
+          property_id: 456,
+        },
+        homes: {
+          cv_nzd: null,
+          cv_year: null,
+          land_area_sqm: null,
+          floor_area_sqm: null,
+          build_year: null,
+          bedrooms: 5,
+          bathrooms: 2,
+          last_sale_price: null,
+          last_sale_date: null,
+          address_confirmed: "https://homes.co.nz/address/auckland/st-heliers/8a-hampton-drive",
+        },
+        qv: {
+          cv_nzd: null,
+          lv_nzd: null,
+          iv_nzd: null,
+          cv_year: null,
+          land_area_sqm: null,
+          floor_area_sqm: null,
+          build_year: null,
+          build_year_range: null,
+          bedrooms: 5,
+          bathrooms: 2,
+          address_confirmed: "https://www.qv.co.nz/property/auckland/st-heliers/8a-hampton-drive",
+          contour_text: null,
+          contour_classification: null,
+        },
+        analysed_address: "8 Hampton Drive, St Heliers",
+      },
+    );
+
+    expect(merged.bedrooms).toBeNull();
+    expect(merged.bathrooms).toBeNull();
+  });
+
+  it("keeps PropertyValue bed/bath when its confirmed address matches the subject", () => {
+    const merged = mergePropertyData(
+      { area_sqm: 400 } as any,
+      null,
+      null,
+      { zone_code: "MHS", zone_description: "Mixed Housing Suburban", min_lot_size_sqm: 400 } as any,
+      [],
+      {
+        contour: null,
+        asbestos_risk: "unknown",
+        infrastructure: [],
+        propertyValue: {
+          cv_nzd: 1_800_000,
+          lv_nzd: null,
+          iv_nzd: null,
+          cv_year: 2024,
+          property_type: "House",
+          property_sub_type: null,
+          legal_descriptions: [],
+          land_use_primary: null,
+          property_improvements: null,
+          land_area_sqm: 405,
+          floor_area_sqm: 160,
+          build_year: 1965,
+          build_year_range: null,
+          bedrooms: 3,
+          bathrooms: 1,
+          listing_active: false,
+          photo_urls: [],
+          address_confirmed: "8 Hampton Drive, St Heliers, Auckland",
+          property_id: 456,
+        },
+        analysed_address: "8 Hampton Drive, St Heliers",
+      },
+    );
+
+    expect(merged.bedrooms).toBe(3);
+    expect(merged.bathrooms).toBe(1);
+  });
+
+  it("lets exact Homes/QV consensus correct conflicting PropertyValue bed and bath counts", () => {
+    const merged = mergePropertyData(
+      { area_sqm: 437 } as any,
+      null,
+      null,
+      { zone_code: "MHU", zone_description: "Mixed Housing Urban", min_lot_size_sqm: 300 } as any,
+      [],
+      {
+        contour: null,
+        asbestos_risk: "unknown",
+        infrastructure: [],
+        analysed_address: "38 Te Arawa Street, Orakei, Auckland",
+        propertyValue: {
+          cv_nzd: 1_350_000,
+          lv_nzd: null,
+          iv_nzd: null,
+          cv_year: 2024,
+          property_type: "House",
+          property_sub_type: null,
+          legal_descriptions: [],
+          land_use_primary: null,
+          property_improvements: null,
+          land_area_sqm: 437,
+          floor_area_sqm: 84,
+          build_year: 1930,
+          build_year_range: null,
+          bedrooms: 3,
+          bathrooms: 3,
+          listing_active: false,
+          photo_urls: [],
+          address_confirmed: "38 Te Arawa Street, Orakei, Auckland",
+          property_id: 789,
+        },
+        homes: {
+          cv_nzd: null,
+          cv_year: null,
+          land_area_sqm: null,
+          floor_area_sqm: 84,
+          build_year: null,
+          bedrooms: 2,
+          bathrooms: 1,
+          last_sale_price: null,
+          last_sale_date: null,
+          address_confirmed: "38 Te Arawa Street, Orakei, Auckland",
+        },
+        qv: {
+          cv_nzd: null,
+          lv_nzd: null,
+          iv_nzd: null,
+          cv_year: null,
+          land_area_sqm: null,
+          floor_area_sqm: null,
+          build_year: null,
+          build_year_range: null,
+          bedrooms: 2,
+          bathrooms: 1,
+          address_confirmed: "38 Te Arawa Street, Orakei, Auckland",
+          contour_text: null,
+          contour_classification: null,
+        },
+      },
+    );
+
+    expect(merged.bedrooms).toBe(2);
+    expect(merged.bathrooms).toBe(1);
+    expect(merged.data_sources.bedrooms).toBe("consensus");
+    expect(merged.data_sources.bathrooms).toBe("consensus");
+  });
+
+  it("does not use non-listing property-record photos as feasibility report fallbacks", () => {
+    const merged = mergePropertyData(
+      { area_sqm: 500 } as any,
+      null,
+      {
+        found: true,
+        cv_nzd: null,
+        cv_year: null,
+        last_sale_price: null,
+        last_sale_date: null,
+        listing_price: null,
+        listing_active: false,
+        floor_area_sqm: null,
+        land_area_sqm: null,
+        build_year: null,
+        bedrooms: null,
+        bathrooms: null,
+        tenureText: null,
+        main_photo_url: "https://s.oneroof.co.nz/image/old.jpg",
+        photo_urls: ["https://s.oneroof.co.nz/image/old.jpg"],
+        comparables: [],
+        data_source: "oneroof",
+        scraped_at: "2026-05-31T00:00:00.000Z",
+      },
+      { zone_code: "MHS", zone_description: "Mixed Housing Suburban", min_lot_size_sqm: 400 } as any,
+      [],
+      {
+        contour: null,
+        asbestos_risk: "unknown",
+        infrastructure: [],
+        propertyValue: {
+          cv_nzd: null,
+          lv_nzd: null,
+          iv_nzd: null,
+          cv_year: null,
+          property_type: "House",
+          property_sub_type: null,
+          legal_descriptions: [],
+          land_use_primary: null,
+          property_improvements: null,
+          land_area_sqm: null,
+          floor_area_sqm: null,
+          build_year: null,
+          build_year_range: null,
+          bedrooms: null,
+          bathrooms: null,
+          listing_active: false,
+          photo_urls: ["https://example.com/propertyvalue-neighbour.jpg"],
+          address_confirmed: "8 Hampton Drive, St Heliers",
+          property_id: 456,
+        },
+        analysed_address: "8 Hampton Drive, St Heliers",
+      },
+    );
+
+    expect(merged.photo_urls).toEqual([]);
+    expect(merged.main_photo_url).toBeNull();
+  });
 });

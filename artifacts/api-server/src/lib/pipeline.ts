@@ -29,10 +29,6 @@ import {
   type DevelopmentStrategyScenario,
 } from "./development-strategies";
 import { fetchRealestateListingByUrl, fetchSupplementListingComparables } from "./scrapers/realestate-api";
-import { scrapeTradeMePropertyPhotos } from "./scrapers/trademe-property";
-import { scrapeHougardenPhotos } from "./scrapers/hougarden-photos";
-import { scrapeHomesPhotos } from "./scrapers/homes-photos";
-import { scrapeOneRoofPhotos } from "./scrapers/oneroof-photos";
 import { selectedListingPhotoUrls, type SelectedListingContext } from "./selected-listing-context";
 import { resolveActiveListingContext } from "./active-listing-context";
 import { enrichSchoolZonesDetail, type SchoolZoneDetail } from "./school-directory";
@@ -106,6 +102,26 @@ function inferEstateTypeFromParcel(parcel: LinzParcel | null): string | null {
     return "Fee Simple";
   }
   return null;
+}
+
+function hasCrossLeaseSignal(value: string | null | undefined): boolean {
+  return /\bcross[-\s]*lease|crosslease\b/i.test(value ?? "");
+}
+
+function estateTypeSource(
+  estateType: string,
+  signals: {
+    oneRoofTenure: string | null;
+    realestateTenure: string | null;
+    titleEstate: string | null;
+    parcelEstate: string | null;
+  },
+): string {
+  if (estateType === signals.oneRoofTenure) return "oneroof";
+  if (estateType === signals.realestateTenure) return "realestate.co.nz";
+  if (estateType === signals.titleEstate) return "linz_title";
+  if (estateType === signals.parcelEstate) return "linz_parcel_inferred";
+  return "unknown";
 }
 
 function forceSingleLotResult(lotResult: LotResult): LotResult {
@@ -869,58 +885,25 @@ export async function runPropertyPipeline(
   );
 
   // ── Photo enrichment ───────────────────────────────────────────────────
-  // Run additional photo-only scrapers in parallel. These are Vercel-safe
-  // (ScrapingBee + plain fetch) and add coverage for archived/sold listings
-  // that the main scrapers (OneRoof, realestate.co.nz) commonly miss.
-  // Best-effort: any scraper that fails or times out simply contributes [].
-  const PHOTO_ENRICHMENT_TIMEOUT_MS = 12_000;
-  const photoEnrichmentPromise = (async () => {
-    const withTimeout = <T>(p: Promise<T>, fallback: T): Promise<T> =>
-      Promise.race([
-        p,
-        new Promise<T>((resolve) => setTimeout(() => resolve(fallback), PHOTO_ENRICHMENT_TIMEOUT_MS)),
-      ]).catch(() => fallback);
-
-    const [trademe, hougardenPhotos, homesPhotos, oneroofPhotos] = await Promise.all([
-      withTimeout(scrapeTradeMePropertyPhotos(address), { photo_urls: [] as string[], listing_url: null as string | null, data_source: "trademe" as const, scraped_at: "" }),
-      withTimeout(scrapeHougardenPhotos(address), { photo_urls: [] as string[], listing_url: null as string | null, data_source: "hougarden_photos" as const, scraped_at: "" }),
-      withTimeout(scrapeHomesPhotos(address), { photo_urls: [] as string[], listing_url: null as string | null, data_source: "homes_photos" as const, scraped_at: "" }),
-      withTimeout(scrapeOneRoofPhotos(address), { photo_urls: [] as string[], listing_url: null as string | null, data_source: "oneroof_photos" as const, scraped_at: "" }),
-    ]);
-    return { trademe, hougardenPhotos, homesPhotos, oneroofPhotos };
-  })();
-
-  const enrichment = await photoEnrichmentPromise;
-
-  // Append new photo sources into merged.photo_urls (deduped). Keep existing
-  // first-priority sources up front; new sources only fill gaps. OneRoof's
-  // historical-listing photos are typically higher resolution and more
-  // complete than Trade Me/Hougarden archives — prepend them so the carousel's
-  // leading image (`main_photo_url`) is the strongest available when no
-  // active-listing photos exist yet.
-  //
-  // MINIMUM PHOTO COUNT GUARD: each address-based enrichment scraper must
-  // return at least 2 photos before we include ANY of its photos. A real
-  // property listing always has multiple photos; a wrong/dead listing page
-  // (error, redirect, or wrong address match) typically yields exactly 1 URL
-  // via the page's og:image Open Graph tag — which is the site logo or a
-  // marketing banner. Requiring ≥2 photos discards those garbage results so
-  // photo_urls stays empty and the mobile shows Google Street View instead.
-  const MIN_ENRICHMENT_PHOTOS = 2;
+  // Feasibility report photos must be either selected/current active-listing
+  // photos or exact live listing photos. Do not use Homes/TradeMe/Hougarden
+  // photo-only fallback scrapers here: when there is no listing gallery, the
+  // mobile should fall back to Google Street View / satellite imagery.
   const verifiedListingPhotos = selectedListingPhotoUrls(resolvedListingContext);
   const beforeEnrichCount = merged.photo_urls.length;
-  const enriched = Array.from(new Set([
+
+  // ── Subject-verified vs speculative photos ─────────────────────────────────
+  // Subject-verified listing photos only. OneRoof is included only when it
+  // confirms the page is a live listing; otherwise the app should show Google
+  // Street View / satellite rather than old or unrelated listing images.
+  const verifiedSubjectPhotos = Array.from(new Set([
     ...verifiedListingPhotos,
-    ...merged.photo_urls,
-    ...(enrichment.oneroofPhotos.photo_urls.length >= MIN_ENRICHMENT_PHOTOS ? enrichment.oneroofPhotos.photo_urls : []),
-    ...(enrichment.trademe.photo_urls.length >= MIN_ENRICHMENT_PHOTOS ? enrichment.trademe.photo_urls : []),
-    ...(enrichment.hougardenPhotos.photo_urls.length >= MIN_ENRICHMENT_PHOTOS ? enrichment.hougardenPhotos.photo_urls : []),
-    ...(enrichment.homesPhotos.photo_urls.length >= MIN_ENRICHMENT_PHOTOS ? enrichment.homesPhotos.photo_urls : []),
+    ...(oneRoofData?.listing_active ? (oneRoofData.photo_urls ?? []) : []),
+    ...(oneRoofData?.listing_active && oneRoofData.main_photo_url ? [oneRoofData.main_photo_url] : []),
+    ...realestatePhotoUrls,
   ].filter(Boolean)));
-  merged.photo_urls = enriched;
-  if (!merged.main_photo_url && merged.photo_urls.length > 0) {
-    merged.main_photo_url = merged.photo_urls[0];
-  }
+  merged.photo_urls = verifiedSubjectPhotos;
+  merged.main_photo_url = merged.photo_urls[0] ?? null;
 
   // Combined-listing child: the package's marketing photos are not specific to
   // any single sub-address, and address-fuzzy scrapers routinely return a
@@ -955,10 +938,10 @@ export async function runPropertyPipeline(
       realestate: realestateListing?.photoUrls?.length ?? 0,
       realestateExtra: realestatePhotoUrls.length,
       propertyValue: propertyValueData?.photo_urls?.length ?? 0,
-      trademe: enrichment.trademe.photo_urls.length,
-      hougardenPhotos: enrichment.hougardenPhotos.photo_urls.length,
-      homesPhotos: enrichment.homesPhotos.photo_urls.length,
-      oneroofPhotos: enrichment.oneroofPhotos.photo_urls.length,
+      trademeFallback: "disabled",
+      hougardenFallback: "disabled",
+      homesFallback: "disabled",
+      oneroofPhotoFallback: "disabled",
       activeListing: verifiedListingPhotos.length,
     },
     beforeEnrichCount,
@@ -968,14 +951,18 @@ export async function runPropertyPipeline(
 
   const titleEstate = linzTitle?.estate_type?.trim() ?? null;
   const parcelEstate = inferEstateTypeFromParcel(linzParcelData);
-  const estateFromTitle = titleEstate ?? parcelEstate ?? realestateListingForFacts?.tenureText?.trim() ?? null;
+  const realestateTenure = realestateListingForFacts?.tenureText?.trim() ?? null;
+  const oneRoofTenure = oneRoofData?.tenureText?.trim() ?? null;
+  const crossLeaseOverride = [oneRoofTenure, realestateTenure, titleEstate, parcelEstate].find(hasCrossLeaseSignal) ?? null;
+  const estateFromTitle = crossLeaseOverride ?? titleEstate ?? parcelEstate ?? realestateTenure ?? oneRoofTenure ?? null;
   merged.estate_type = estateFromTitle;
   if (estateFromTitle) {
-    merged.data_sources["estate_type"] = titleEstate
-      ? "linz_title"
-      : parcelEstate
-        ? "linz_parcel_inferred"
-        : "realestate.co.nz";
+    merged.data_sources["estate_type"] = estateTypeSource(estateFromTitle, {
+      oneRoofTenure,
+      realestateTenure,
+      titleEstate,
+      parcelEstate,
+    });
   }
 
   // Cross-validate land area between LINZ and scrapers — log warning if they diverge >10%.
@@ -1050,10 +1037,17 @@ export async function runPropertyPipeline(
     }
     merged.land_area_sqm = subjectLandArea.landAreaSqm;
     merged.data_sources["land_area_sqm"] = subjectLandArea.source;
-    if (preliminaryEligibility.unitLikeSignal) {
-      merged.estate_type = "Unit title";
-      merged.data_sources["estate_type"] = "propertyvalue_legal_description";
-    }
+    // NOTE: do NOT derive `estate_type` from `unitLikeSignal` here. That signal
+    // matches building-TYPOLOGY phrases ("apartment", "flat", "home unit",
+    // "unit X") that are NOT land titles. Many Cross Lease dwellings (e.g.
+    // 38/38A Te Arawa Street) carry those phrases in PropertyValue's legal
+    // description while the LINZ title is "Cross Lease". Overwriting LINZ here
+    // surfaced "Unit title" (→ 单元产权) for cross-lease properties. The
+    // authoritative title comes from LINZ / parcel-inference / listing tenure
+    // at lines 994-1004; if none of those produced a value, leave it null
+    // rather than guess from typology. Subdivision gating uses
+    // `unitLikeSignal` directly (property-eligibility.ts:185), so this does
+    // not change the subdivision verdict.
   }
 
   merged.missing_critical_fields = [

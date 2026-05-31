@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  addressLineAppearsInText,
   addressesLikelyMatch,
   extractCombinedListingAddressParts,
   extractListingFactAreaSqm,
   looksLikeCombinedListingAddress,
   normaliseListingLandAreaSqm,
+  reconcileListingBedBath,
   reconcileListingLandArea,
 } from "../realestate-api";
 
@@ -39,6 +41,26 @@ describe("realestate-api listing fact extraction", () => {
 
     expect(extractListingFactAreaSqm(text, "floor")).toBe(79);
     expect(extractListingFactAreaSqm(text, "land")).toBe(1199);
+  });
+});
+
+describe("realestate-api listing bed/bath reconciliation", () => {
+  it("prefers the listing-page bathroom count over the API aggregate", () => {
+    // 66A Marine Parade: API bathrooms-total-count 9, page shows 5.
+    expect(reconcileListingBedBath(6, 9, 6, 5)).toEqual({ bedrooms: 6, bathrooms: 5 });
+  });
+
+  it("drops an implausible bathroom aggregate when the page has no count", () => {
+    // API says 9 baths / 6 beds and the page gave us no bathroom value.
+    expect(reconcileListingBedBath(6, 9, 6, null)).toEqual({ bedrooms: 6, bathrooms: null });
+  });
+
+  it("keeps the API count when it is plausible and the page agrees", () => {
+    expect(reconcileListingBedBath(3, 1, 3, 1)).toEqual({ bedrooms: 3, bathrooms: 1 });
+  });
+
+  it("keeps the API count when the page offers no comparison and it is plausible", () => {
+    expect(reconcileListingBedBath(4, 3, null, null)).toEqual({ bedrooms: 4, bathrooms: 3 });
   });
 });
 
@@ -136,6 +158,60 @@ describe("realestate-api address matching", () => {
         "1, Chesterfield Avenue, Saint Heliers, Orakei, Auckland, 1074",
         "1 Chesterfield Avenue, Saint Heliers, Auckland City, Auckland",
       ),
+    ).toBe(true);
+  });
+
+  it("rejects a different street number on the same street", () => {
+    expect(
+      addressesLikelyMatch("8 Hampton Drive, St Heliers", "12 Hampton Drive, St Heliers"),
+    ).toBe(false);
+  });
+
+  it("rejects letter-suffix neighbours in free text and URL slugs", () => {
+    expect(
+      addressLineAppearsInText(
+        "8 Hampton Drive, St Heliers",
+        "https://homes.co.nz/address/auckland/st-heliers/8a-hampton-drive",
+      ),
+    ).toBe(false);
+    expect(
+      addressLineAppearsInText(
+        "8 Hampton Drive, St Heliers",
+        "<h1>8A Hampton Drive, St Heliers</h1><p>5 bedrooms 2 bathrooms</p>",
+      ),
+    ).toBe(false);
+  });
+
+  it("accepts exact street lines in text and URL slugs", () => {
+    expect(
+      addressLineAppearsInText(
+        "8 Hampton Drive, St Heliers",
+        "https://homes.co.nz/address/auckland/st-heliers/8-hampton-drive",
+      ),
+    ).toBe(true);
+    expect(
+      addressLineAppearsInText(
+        "8 Hampton Drive, St Heliers",
+        "<h1>8 Hampton Dr, Saint Heliers</h1><p>3 bedrooms 1 bathroom</p>",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects the same number on a different street type", () => {
+    expect(
+      addressesLikelyMatch("8 Hampton Drive, St Heliers", "8 Hampton Street, St Heliers"),
+    ).toBe(false);
+  });
+
+  it("accepts street-type abbreviation variants (Rd vs Road)", () => {
+    expect(
+      addressesLikelyMatch("8 Hampton Road, St Heliers", "8 Hampton Rd, St Heliers"),
+    ).toBe(true);
+  });
+
+  it("accepts a unit/suffix variant via containment", () => {
+    expect(
+      addressesLikelyMatch("8 Hampton Drive", "8 Hampton Drive Flat 2"),
     ).toBe(true);
   });
 });

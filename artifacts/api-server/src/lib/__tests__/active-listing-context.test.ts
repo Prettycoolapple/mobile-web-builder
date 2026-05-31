@@ -153,6 +153,45 @@ describe("resolveActiveListingContext", () => {
     expect(resolved.context).toBeNull();
   });
 
+  it("rejects a neighbour listing whose letter suffix does not exactly match the requested address", async () => {
+    mockedFetchRealestateListingForAddress.mockResolvedValue(null);
+    mockedScrapeHomesPhotos.mockResolvedValue({
+      photo_urls: [
+        "https://images.homes.co.nz/property/8a-hampton-drive/front.jpg",
+        "https://images.homes.co.nz/property/8a-hampton-drive/lounge.jpg",
+      ],
+      listing_url: "https://homes.co.nz/address/auckland/st-heliers/8a-hampton-drive/WRONG",
+      data_source: "homes_photos",
+      scraped_at: "2026-05-31T00:00:00.000Z",
+    });
+    mockedFetchWithScrapingBee.mockResolvedValue(`
+      <html><body>
+        <h1>8A Hampton Drive, St Heliers</h1>
+        <p>5 bedrooms 2 bathrooms</p>
+        <p>${"Neighbour listing content. ".repeat(30)}</p>
+      </body></html>
+    `);
+    mockedScrapeOneRoofPhotos.mockResolvedValue({
+      photo_urls: [],
+      listing_url: null,
+      data_source: "oneroof_photos",
+      scraped_at: "2026-05-31T00:00:00.000Z",
+    });
+    mockedScrapeTradeMePropertyPhotos.mockResolvedValue({
+      photo_urls: [],
+      listing_url: null,
+      data_source: "trademe",
+      scraped_at: "2026-05-31T00:00:00.000Z",
+    });
+
+    const resolved = await resolveActiveListingContext("8 Hampton Drive, St Heliers", {
+      suburb: "St Heliers",
+      purpose: "feasibility",
+    });
+
+    expect(resolved.context).toBeNull();
+  });
+
   it("suppresses speculative photo sources for combined-listing children (uses Street View fallback)", async () => {
     mockedFetchRealestateListingForAddress.mockResolvedValue(null);
 

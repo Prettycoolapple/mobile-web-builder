@@ -205,17 +205,29 @@ function fallbackRationaleZh(strategy: DevelopmentStrategyId, data: MergedProper
   return "翻新方案在较低资本支出与提升转售价值之间取得平衡，建议与保留现状及重建方案进行比较。";
 }
 
-function makeHoldExistingCostBreakdown(base: CostBreakdown, units: number): CostBreakdown {
+function makeHoldExistingCostBreakdown(
+  base: CostBreakdown,
+  units: number,
+  acquisitionCostOverride?: number,
+): CostBreakdown {
   const cv = base.land_cv_nzd ?? 0;
+  // CV is council-set and often 1-2 years stale — a buyer typically pays
+  // market value (= the comparable-based estimate the GDV side uses), not CV.
+  // When the caller can supply a market-value acquisition basis, use it so
+  // the ROI denominator reflects the true capital outlay. Without this the
+  // "hold existing" ROI compared a market-value GDV against a stale-CV cost
+  // basis and looked like a free lunch (e.g. 8 Hampton Drive showed 74% 2y
+  // ROI for "do nothing").
+  const acquisitionCost = Math.max(cv, acquisitionCostOverride ?? 0);
   const safeUnits = Math.max(1, units);
   // Holding the existing dwelling should not inherit the development finance /
   // contingency stack used for subdivision or rebuild work.
-  const holdingLow = cv * 0.01;
-  const holdingHigh = cv * 0.025;
+  const holdingLow = acquisitionCost * 0.01;
+  const holdingHigh = acquisitionCost * 0.025;
   const contingencyLow = 0;
-  const contingencyHigh = cv * 0.005;
-  const totalLow = cv + holdingLow + contingencyLow;
-  const totalHigh = cv + holdingHigh + contingencyHigh;
+  const contingencyHigh = acquisitionCost * 0.005;
+  const totalLow = acquisitionCost + holdingLow + contingencyLow;
+  const totalHigh = acquisitionCost + holdingHigh + contingencyHigh;
   return {
     land_cv_nzd: base.land_cv_nzd,
     cv_unavailable: base.cv_unavailable,
@@ -252,22 +264,27 @@ function makeRefurbishCostBreakdown(
   base: CostBreakdown,
   floorAreaSqm: number,
   scope: RefurbishmentScope,
+  acquisitionCostOverride?: number,
 ): CostBreakdown {
   const cv = base.land_cv_nzd ?? 0;
+  // Use the market-value acquisition basis (max of CV and the caller-supplied
+  // market estimate) so the ROI denominator reflects real outlay — see
+  // makeHoldExistingCostBreakdown rationale.
+  const acquisitionCost = Math.max(cv, acquisitionCostOverride ?? 0);
   const effectiveScope = scope === "none" ? "light" : scope;
   const rates = REFURB_RATES[effectiveScope];
   const refurbLow = floorAreaSqm * rates.low;
   const refurbHigh = floorAreaSqm * rates.high;
   const consentsLow = refurbLow * 0.05;
   const consentsHigh = refurbHigh * 0.10;
-  const financeLow = (cv + refurbLow * 0.5) * 0.075;
-  const financeHigh = (cv + refurbHigh * 0.5) * 0.075 * 2;
+  const financeLow = (acquisitionCost + refurbLow * 0.5) * 0.075;
+  const financeHigh = (acquisitionCost + refurbHigh * 0.5) * 0.075 * 2;
   const subtotalLow = refurbLow + consentsLow + financeLow;
   const subtotalHigh = refurbHigh + consentsHigh + financeHigh;
   const contingencyLow = subtotalLow * 0.08;
   const contingencyHigh = subtotalHigh * 0.12;
-  const totalLow = cv + subtotalLow + contingencyLow;
-  const totalHigh = cv + subtotalHigh + contingencyHigh;
+  const totalLow = acquisitionCost + subtotalLow + contingencyLow;
+  const totalHigh = acquisitionCost + subtotalHigh + contingencyHigh;
 
   return {
     land_cv_nzd: base.land_cv_nzd,
@@ -326,10 +343,18 @@ function costItemsForStrategy(id: DevelopmentStrategyId, costs: CostBreakdown): 
 }
 
 function existingDwellingValue(data: MergedPropertyData, avgSalePrice: number, avgPricePerSqm: number): number {
+  if (data.listing_active && data.listing_price != null && data.listing_price > 0) {
+    return r(Math.max(data.listing_price, data.cv_nzd ?? 0));
+  }
+  if (data.cv_nzd != null && data.cv_nzd > 0) {
+    if (data.typology === "unit_apartment" || data.typology === "terrace_townhouse") {
+      return r(Math.max(data.cv_nzd, avgSalePrice));
+    }
+    return r(data.cv_nzd);
+  }
   const floorArea = data.floor_area_sqm ?? 0;
   const floorBased = avgPricePerSqm > 0 && floorArea > 0 ? avgPricePerSqm * floorArea : 0;
-  const cvFloor = data.cv_nzd ?? 0;
-  return r(Math.max(cvFloor, avgSalePrice, floorBased));
+  return r(Math.max(floorBased, avgSalePrice));
 }
 
 function hasViableReturn(scenarios: ROIScenario[]): boolean {
@@ -507,16 +532,37 @@ export function calculateDevelopmentStrategies(params: {
     data.typology === "unit_apartment" || data.typology === "terrace_townhouse";
   const existingResaleMultiplier = isUnitOrApartmentTypology ? UNIT_RESALE_DISCOUNT : 1;
 
-  const holdCosts = makeHoldExistingCostBreakdown(baseCosts, 1);
-  const refurbCosts = makeRefurbishCostBreakdown(baseCosts, floorArea, refurbScope);
-  const rebuildCosts = baseCosts;
-
   const existingValue = r(existingDwellingValue(data, avgSalePrice, avgPricePerSqm) * marketGdvMultiplier * existingResaleMultiplier);
   const refurbValue = r(existingValue * REFURB_RATES[refurbScope].uplift);
-  const rebuildGdvPerLot = hasComparablePricing
+  // For hold/refurbish, acquisition basis is the market-value estimate (not
+  // CV), so ROI compares like-for-like against the same market value. Without
+  // this the denominator was just CV, and any market-vs-CV gap (typical, since
+  // CV lags) looked like investment return.
+  const holdCosts = makeHoldExistingCostBreakdown(baseCosts, 1, existingValue);
+  const refurbCosts = makeRefurbishCostBreakdown(baseCosts, floorArea, refurbScope, existingValue);
+  const rebuildCosts = baseCosts;
+  const rebuildGdvPerLotBeforeFloor = hasComparablePricing
     ? r(estimateGdvPerLot(avgPricePerSqm, avgSalePrice, lotResult.sqm_per_lot) * exitTypologyMultiplier * marketGdvMultiplier)
     : 0;
-  const rebuildValue = r(rebuildGdvPerLot * Math.max(1, lotResult.lots));
+  const rebuildValueBeforeFloor = r(rebuildGdvPerLotBeforeFloor * Math.max(1, lotResult.lots));
+
+  // Single-lot CV floor: a new build on a high-CV freehold site is essentially
+  // always worth at least the current dated dwelling's CV (typically more —
+  // the +10% accounts for the new-build premium). Comparable $/sqm × estimated
+  // GFA can understate this in premium suburbs (e.g. 66A Marine Parade,
+  // Mellons Bay: CV $3.85M, calc landed at $1.82M). Only applies when there's
+  // exactly one resulting lot — multi-lot subdivisions intentionally trade
+  // typology and are already discounted via exitGdvTypologyDiscountFactor.
+  const isSingleLotRebuild = Math.max(1, lotResult.lots) === 1;
+  const cvFloorForRebuild =
+    isSingleLotRebuild && data.cv_nzd != null && data.cv_nzd > 0 && hasComparablePricing
+      ? r(data.cv_nzd * 1.10)
+      : 0;
+  const rebuildValue = r(Math.max(rebuildValueBeforeFloor, cvFloorForRebuild));
+  const rebuildGdvPerLot =
+    isSingleLotRebuild && rebuildValue !== rebuildValueBeforeFloor
+      ? rebuildValue
+      : rebuildGdvPerLotBeforeFloor;
 
   const rows: Array<{ id: DevelopmentStrategyId; costs: CostBreakdown; gdv: number; units: number; sqmPerLot: number; gdvPerLot: number }> = [
     { id: "hold_existing", costs: holdCosts, gdv: existingValue, units: 1, sqmPerLot: data.land_area_sqm ?? lotResult.sqm_per_lot, gdvPerLot: existingValue },
@@ -525,8 +571,11 @@ export function calculateDevelopmentStrategies(params: {
   ];
 
   const strategies = rows.map((row) => {
+    // "Hold existing" exits at current market — applying organic growth would
+    // credit the do-nothing path with appreciation it didn't earn.
+    const suppressOrganicGrowth = row.id === "hold_existing";
     const roiScenarios = hasComparablePricing && row.gdv > 0
-      ? calculateScenariosFromGdv(row.costs, row.gdv, row.units, row.sqmPerLot, row.gdvPerLot, interestRateOutlook)
+      ? calculateScenariosFromGdv(row.costs, row.gdv, row.units, row.sqmPerLot, row.gdvPerLot, interestRateOutlook, { suppressOrganicGrowth })
       : [];
     const baseConf =
       row.id === effectiveAssessment.recommended_strategy ? effectiveAssessment.confidence : Math.max(0.35, effectiveAssessment.confidence - 0.15);

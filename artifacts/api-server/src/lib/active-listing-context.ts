@@ -5,6 +5,7 @@ import {
   type SelectedListingContext,
 } from "./selected-listing-context";
 import {
+  addressLineAppearsInText,
   fetchRealestateListingByUrl,
   fetchRealestateListingForAddress,
   extractCombinedListingAddressParts,
@@ -99,21 +100,12 @@ function stripHtmlToText(html: string): string {
     .trim();
 }
 
-function addressNeedles(address: string): string[] {
-  const parts = address.split(",").map((p) => p.replace(/\b\d{4}\b/g, "").trim()).filter(Boolean);
-  const street = parts[0] ?? address;
-  const suburb = parts[1] ?? "";
-  const streetWords = street.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-  const suburbWords = suburb.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-  return [streetWords, suburbWords].filter((s) => s.length >= 3);
-}
-
 function addressMatchesListing(address: string, url: string, text: string): boolean {
+  const parts = address.split(",").map((p) => p.replace(/\b\d{4}\b/g, "").trim()).filter(Boolean);
+  const suburb = parts[1]?.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() ?? "";
   const haystack = `${url} ${text}`.toLowerCase().replace(/[^a-z0-9]+/g, " ");
-  const needles = addressNeedles(address);
-  if (needles.length === 0) return false;
-  const streetOk = haystack.includes(needles[0]);
-  const suburbOk = needles.length < 2 || haystack.includes(needles[1]);
+  const streetOk = addressLineAppearsInText(address, text);
+  const suburbOk = !suburb || haystack.includes(suburb);
   return streetOk && suburbOk;
 }
 

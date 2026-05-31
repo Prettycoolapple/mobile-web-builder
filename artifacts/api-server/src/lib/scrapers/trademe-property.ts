@@ -10,6 +10,7 @@
  * Best-effort: returns empty `photo_urls` on any failure — never throws.
  */
 import { logger } from "../logger";
+import { addressLineAppearsInText } from "./realestate-api";
 import { fetchWithScrapingBee } from "./scrapingbee";
 
 export interface TradeMePropertyData {
@@ -156,6 +157,17 @@ export async function extractTradeMePhotosFromListingHtml(html: string): Promise
   return dedupeImageVariants(normalized).slice(0, 12);
 }
 
+function stripHtmlToText(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 async function findFirstListingUrl(searchHtml: string): Promise<string | null> {
   const { load } = await import("cheerio");
   const $ = load(searchHtml);
@@ -179,6 +191,10 @@ async function viaDirectSearch(address: string): Promise<TradeMePropertyData | n
 
   const listingHtml = await fetchWithScrapingBee(listingUrl, { render_js: true, wait: 2000 });
   if (!listingHtml || listingHtml.length < 500) return null;
+  if (!addressLineAppearsInText(address, stripHtmlToText(listingHtml))) {
+    logger.info({ address, listingUrl }, "TradeMe photos: rejected page without exact address text");
+    return null;
+  }
 
   const photos = await extractTradeMePhotosFromListingHtml(listingHtml);
   if (photos.length === 0) return null;
