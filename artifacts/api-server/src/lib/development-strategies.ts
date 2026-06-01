@@ -571,11 +571,8 @@ export function calculateDevelopmentStrategies(params: {
   ];
 
   const strategies = rows.map((row) => {
-    // "Hold existing" exits at current market — applying organic growth would
-    // credit the do-nothing path with appreciation it didn't earn.
-    const suppressOrganicGrowth = row.id === "hold_existing";
     const roiScenarios = hasComparablePricing && row.gdv > 0
-      ? calculateScenariosFromGdv(row.costs, row.gdv, row.units, row.sqmPerLot, row.gdvPerLot, interestRateOutlook, { suppressOrganicGrowth })
+      ? calculateScenariosFromGdv(row.costs, row.gdv, row.units, row.sqmPerLot, row.gdvPerLot, interestRateOutlook)
       : [];
     const baseConf =
       row.id === effectiveAssessment.recommended_strategy ? effectiveAssessment.confidence : Math.max(0.35, effectiveAssessment.confidence - 0.15);

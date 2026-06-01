@@ -1,7 +1,7 @@
 import type { MergedPropertyData } from "./scrapers/merge";
 import type { CostBreakdown } from "./cost-estimator";
 import type { ROIScenario } from "./roi-calculator";
-import { formatNZD, roundToHalf } from "./utils";
+import { roundToHalf } from "./utils";
 
 export interface ScoringResult {
   ease: number;
@@ -24,6 +24,83 @@ function hasOverlay(merged: MergedPropertyData, keyword: string): boolean {
 
 function hasNeighbourInfrastructure(merged: MergedPropertyData): boolean {
   return (merged.infrastructure ?? []).some((i) => i.location === "neighbour");
+}
+
+function clampScore(score: number): number {
+  return Math.min(5, Math.max(0.5, score));
+}
+
+function bestRoiScenario(scenarios: ROIScenario[]): ROIScenario | null {
+  if (scenarios.length === 0) return null;
+  return scenarios.reduce((best, scenario) =>
+    scenario.roi_percent > best.roi_percent ? scenario : best,
+  );
+}
+
+function scoreCostPosition(costs: CostBreakdown, scenarios: ROIScenario[]): { score: number; reasons: string[] } {
+  const scenario = bestRoiScenario(scenarios);
+
+  if (!scenario || !Number.isFinite(scenario.gdv) || !Number.isFinite(scenario.total_cost_mid) || scenario.gdv <= 0 || scenario.total_cost_mid <= 0) {
+    const landValue = Number(costs.land_cv_nzd);
+    const totalMid = (Number(costs.total_low) + Number(costs.total_high)) / 2;
+    if (Number.isFinite(landValue) && landValue > 0 && Number.isFinite(totalMid) && totalMid > 0) {
+      const valueCover = landValue / totalMid;
+      const score = roundToHalf(clampScore(2.5 + (valueCover - 0.75) * 4));
+      return {
+        score,
+        reasons: [
+          score >= 4
+            ? "Cost position looks attractive relative to the current property value"
+            : score >= 2.5
+              ? "Cost position appears workable relative to the current property value"
+              : "Cost position is tight relative to the current property value",
+          "Cost rating uses relative value pressure, not a fixed per-unit threshold",
+        ],
+      };
+    }
+
+    return {
+      score: 2.5,
+      reasons: [
+        "Cost position needs market validation against real exit evidence",
+        "Cost rating uses relative value pressure, not a fixed per-unit threshold",
+      ],
+    };
+  }
+
+  const valueCover = scenario.gdv / scenario.total_cost_mid;
+  const capitalPressure = scenario.total_cost_mid / scenario.gdv;
+
+  let rawScore: number;
+  if (valueCover < 0.90) {
+    // Hard-cap below 1.5 — value cover too weak
+    rawScore = 1.0 + (valueCover - 0.90) * 5;
+  } else if (valueCover < 1.07) {
+    // 2.0 at vc=0.90 → 3.0 at vc=1.07
+    rawScore = 2.0 + ((valueCover - 0.90) / 0.17);
+  } else if (valueCover < 1.29) {
+    // 3.0 at vc=1.07 → 4.5 at vc=1.29
+    rawScore = 3.0 + ((valueCover - 1.07) / 0.22) * 1.5;
+  } else {
+    // ≥ 4.5 at vc=1.29, continues upward
+    rawScore = 4.5 + (valueCover - 1.29) * 5;
+  }
+  const score = roundToHalf(clampScore(rawScore));
+
+  const primary =
+    score >= 4
+      ? "Cost position looks efficient relative to the estimated end value"
+      : score >= 2.5
+        ? "Cost position appears workable relative to the estimated end value"
+        : "Cost position is tight relative to the estimated end value";
+  const secondary =
+    capitalPressure <= 0.8
+      ? "Modelled value gives a useful buffer over acquisition and delivery costs"
+      : capitalPressure <= 1
+        ? "Modelled value only modestly covers acquisition and delivery costs"
+        : "Modelled value does not cover acquisition and delivery costs";
+
+  return { score, reasons: [primary, secondary] };
 }
 
 export function scoreProperty(
@@ -121,19 +198,9 @@ export function scoreProperty(
   }
   const ease = roundToHalf(Math.max(0.5, 5.0 - easeDeducted));
 
-  const costPerUnit = costs.cost_per_unit_avg;
-  const costBrackets = [
-    { max: 400000,   score: 5.0, reason: "Excellent cost efficiency per unit" },
-    { max: 550000,   score: 4.0, reason: "Good cost per unit for NZ market" },
-    { max: 700000,   score: 3.0, reason: "Moderate cost — market viable" },
-    { max: 900000,   score: 2.0, reason: "High cost per unit — margin is thin" },
-    { max: 1200000,  score: 1.0, reason: "Very high cost — ROI challenging" },
-    { max: Infinity, score: 0.5, reason: "Extreme cost — feasibility doubtful" },
-  ];
-
-  const costBracket = costBrackets.find((b) => costPerUnit <= b.max) ?? costBrackets[costBrackets.length - 1];
-  const cost = costBracket.score;
-  const cost_reasons = [costBracket.reason, `Cost per unit: $${formatNZD(costPerUnit)}`];
+  const costPosition = scoreCostPosition(costs, scenarios);
+  const cost = costPosition.score;
+  const cost_reasons = costPosition.reasons;
 
   if (scenarios.length === 0) {
     const roi = 0.5;
@@ -145,9 +212,7 @@ export function scoreProperty(
     return { ease, cost, roi, composite, ease_reasons, cost_reasons, roi_reasons };
   }
 
-  const bestScenario = scenarios.reduce((best, s) =>
-    s.roi_percent > best.roi_percent ? s : best,
-  );
+  const bestScenario = bestRoiScenario(scenarios)!;
 
   const roiBrackets = [
     { min: 35,        score: 5.0, reason: "Exceptional return — strong development opportunity" },
@@ -162,7 +227,7 @@ export function scoreProperty(
   let roi = roiBracket.score;
   const roi_reasons = [
     roiBracket.reason,
-    `Best case: ${bestScenario.roi_percent.toFixed(1)}% ROI over ${bestScenario.years} years`,
+    `Best case: ~${bestScenario.roi_percent.toFixed(0)}% ROI over ~${bestScenario.years} years`,
   ];
   if (lots >= 5) {
     roi = Math.max(0.5, roi - 0.5);

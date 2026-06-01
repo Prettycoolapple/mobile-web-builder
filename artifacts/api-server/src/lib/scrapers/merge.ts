@@ -491,19 +491,26 @@ export function mergePropertyData(
     { src: "homes",              floor_area_sqm: homes?.floor_area_sqm },
   ]);
 
+  const oneroofLiveBeds = oneroof?.listing_active ? oneroof?.bedrooms : null;
+  const oneroofProfileBeds = oneroof?.listing_active ? null : oneroof?.bedrooms;
+  const oneroofLiveBaths = oneroof?.listing_active ? oneroof?.bathrooms : null;
+  const oneroofProfileBaths = oneroof?.listing_active ? null : oneroof?.bathrooms;
+
   let bedrooms = first("bedrooms", sources,
-    ["oneroof", oneroof?.bedrooms],
     ["realestate.co.nz", realestateListing?.bedrooms],
-    ["propertyvalue", propertyValueBeds],
+    ["oneroof (live listing)", oneroofLiveBeds],
     ["homes",   homesBeds],
     ["qv",      qvBeds],
+    ["oneroof", oneroofProfileBeds],
+    ["propertyvalue", propertyValueBeds],
   );
   let bathrooms = first("bathrooms", sources,
-    ["oneroof", oneroof?.bathrooms],
     ["realestate.co.nz", realestateListing?.bathrooms],
-    ["propertyvalue", propertyValueBaths],
+    ["oneroof (live listing)", oneroofLiveBaths],
     ["homes",   homesBaths],
     ["qv",      qvBaths],
+    ["oneroof", oneroofProfileBaths],
+    ["propertyvalue", propertyValueBaths],
   );
   const property_type = first("property_type", sources,
     ["realestate.co.nz", realestateListing?.propertyType],
@@ -797,13 +804,13 @@ export function mergePropertyData(
     if (bedroomVotes.length >= 2) {
       const tally = new Map<number, number>();
       for (const v of bedroomVotes) tally.set(v, (tally.get(v) ?? 0) + 1);
-      // Sort: primary by count desc, secondary by value desc (tie-break to higher)
-      const sorted = [...tally.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0]);
+      const sorted = [...tally.entries()].sort((a, b) => b[1] - a[1]);
       const [consensusValue, consensusCount] = sorted[0];
       const currentCount = tally.get(bedrooms) ?? 0;
       if (
         consensusValue !== bedrooms &&
-        (consensusCount > currentCount || (consensusCount === currentCount && consensusValue > bedrooms))
+        consensusCount > currentCount &&
+        !["homes", "qv"].includes(sources["bedrooms"] ?? "")
       ) {
         logger.info(
           { current: bedrooms, corrected: consensusValue, consensusCount, currentCount, total: bedroomVotes.length },
@@ -838,7 +845,11 @@ export function mergePropertyData(
       const sorted = [...tally.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0]);
       const [consensusValue, consensusCount] = sorted[0];
       const currentCount = tally.get(bathrooms) ?? 0;
-      if (consensusValue !== bathrooms && consensusCount > currentCount) {
+      if (
+        consensusValue !== bathrooms &&
+        consensusCount > currentCount &&
+        !["homes", "qv"].includes(sources["bathrooms"] ?? "")
+      ) {
         logger.info(
           { current: bathrooms, corrected: consensusValue, consensusCount, currentCount, total: bathroomVotes.length },
           "Merge: cross-source consensus corrects bathroom count",

@@ -361,6 +361,8 @@ const SCORE_REASON_ZH: Record<string, string> = {
   "moderate slope - some retaining wall work expected": "中等坡度 — 预计需要一定挡土墙工程",
   "probable asbestos - specialist demolition required": "可能存在石棉 — 需要专业拆除处理",
   "service infrastructure on neighbouring land - easement needed": "基础设施位于邻地 — 可能需要地役权",
+  "cross-lease title - co-owner consent constrains development": "Cross-lease 产权 — 开发须获共同业主同意",
+  "leasehold title - limited development rights vs freehold": "租赁地权 — 开发权利较永久产权受限",
   "land area limits subdivision to single dwelling": "土地面积限制分割 — 可能仅适合单一住宅",
   "excellent cost efficiency per unit": "单元成本效率优秀",
   "good cost per unit for nz market": "单元成本在新西兰市场中较好",
@@ -368,6 +370,17 @@ const SCORE_REASON_ZH: Record<string, string> = {
   "high cost per unit - margin is thin": "单元成本较高 — 利润空间偏薄",
   "very high cost - roi challenging": "成本很高 — 投资回报具挑战",
   "extreme cost - feasibility doubtful": "成本极高 — 可行性存疑",
+  "cost position looks attractive relative to the current property value": "成本位置相对当前物业价值较有吸引力",
+  "cost position appears workable relative to the current property value": "成本位置相对当前物业价值基本可行",
+  "cost position is tight relative to the current property value": "成本位置相对当前物业价值偏紧",
+  "cost rating uses relative value pressure, not a fixed per-unit threshold": "成本评分按相对价值压力评估，而不是固定单元成本门槛",
+  "cost position needs market validation against real exit evidence": "成本位置需要用真实销售退出证据进一步验证",
+  "cost position looks efficient relative to the estimated end value": "成本位置相对预估完工价值较高效",
+  "cost position appears workable relative to the estimated end value": "成本位置相对预估完工价值基本可行",
+  "cost position is tight relative to the estimated end value": "成本位置相对预估完工价值偏紧",
+  "modelled value gives a useful buffer over acquisition and delivery costs": "模型价值相对买入与交付成本有一定缓冲",
+  "modelled value only modestly covers acquisition and delivery costs": "模型价值仅小幅覆盖买入与交付成本",
+  "modelled value does not cover acquisition and delivery costs": "模型价值暂未覆盖买入与交付成本",
   "exceptional return - strong development opportunity": "卓越回报 — 开发机会强",
   "strong return - well above typical nz threshold": "强劲回报 — 明显高于新西兰常见门槛",
   "solid return - meets typical developer hurdle rate": "稳健回报 — 符合常见开发门槛",
@@ -390,97 +403,141 @@ function localizeScoreReason(reason: string, locale: string): string {
   if (translated) return translated;
 
   const costPerUnit = cleaned.match(/^Cost per unit:\s*(.+)$/i);
-  if (costPerUnit) return `单元成本：${costPerUnit[1]}`;
+  if (costPerUnit) return `单元成本：约${costPerUnit[1].replace(/^~\s*/, "")}`;
 
   const bestCase = cleaned.match(/^Best case:\s*(.+?)\s+ROI over\s+(.+?)\s+years?$/i);
-  if (bestCase) return `最佳情况：${bestCase[1]} ROI，周期 ${bestCase[2]} 年`;
+  if (bestCase) return `最佳情况：约${bestCase[1].replace(/^~\s*/, "")} ROI，周期约 ${bestCase[2].replace(/^~\s*/, "")} 年`;
 
   const baseCase = cleaned.match(/^Base case:\s*(.+?)\s+ROI over\s+(.+?)\s+years?$/i);
-  if (baseCase) return `基准情况：${baseCase[1]} ROI，周期 ${baseCase[2]} 年`;
+  if (baseCase) return `基准情况：约${baseCase[1].replace(/^~\s*/, "")} ROI，周期约 ${baseCase[2].replace(/^~\s*/, "")} 年`;
 
   return cleaned;
 }
 
 /**
- * Succinct investment verdict for the score card. Gives an overall stance and
- * explains the three sub-scores (feasibility / cost / ROI) in plain language,
- * plus a short recommendation tied to the weakest dimension.
- *
- * When per-dimension reasons are available (from the backend `scores.*_reasons`
- * arrays), the verdict weaves the top reason into each non-healthy clause so
- * that two properties with the same band tuple but different drivers (SHZ
- * vs Cross Lease ease, $400k vs $1.2M cost-per-unit, +25% vs -68% ROI) read
- * visibly differently. The user previously saw identical text across very
- * different addresses; the reasons are exactly the property-specific signal
- * they're already shown as bullets below this summary.
- *
- * Falls back to a generic clause when reasons are absent (legacy/cached
- * reports), so the verdict still renders on every report.
+ * Succinct investment verdict for the score card. Builds a 2-sentence summary
+ * from the actual scoring reasons rather than canned text, so every property
+ * gets a specific explanation of its ease/cost/ROI signals.
  */
 function buildInvestmentVerdict(
   ease: number,
   cost: number,
   roi: number,
-  composite: number,
+  _composite: number,
   locale: string,
   reasons?: { ease: string[]; cost: string[]; roi: string[] },
 ): string {
   const isZh = locale === "zh";
   const band = (s: number): "high" | "mid" | "low" => (s >= 4 ? "high" : s >= 2.5 ? "mid" : "low");
-
-  const stance =
-    composite >= 3.5 ? (isZh ? "整体值得认真考虑" : "Worth a serious look")
-    : composite >= 2.5 ? (isZh ? "机会喜忧参半" : "A mixed opportunity")
-    : (isZh ? "按目前数据较难成立" : "Hard to justify as-is");
-
   const easeBand = band(ease);
   const costBand = band(cost);
   const roiBand = band(roi);
 
-  const easeClauseBase = { high: isZh ? "开发可行性良好" : "feasibility is favourable", mid: isZh ? "可行性尚可但有一定限制" : "feasibility is workable but constrained", low: isZh ? "可行性受到较大限制" : "feasibility is heavily constrained" }[easeBand];
-  const costClauseBase = { high: isZh ? "单位建造成本高效" : "build costs are efficient", mid: isZh ? "建造成本中等" : "build costs are moderate", low: isZh ? "单位建造成本偏高" : "build cost per unit is very high" }[costBand];
-  const roiClauseBase = { high: isZh ? "预期回报强劲" : "projected returns are strong", mid: isZh ? "预期回报合理" : "projected returns are reasonable", low: isZh ? "预期回报偏弱" : "projected returns are weak" }[roiBand];
-
-  // For ease, prefer the most-impactful deduction (item [0]) — the backend
-  // appends deductions in descending impact order. For cost and roi, prefer
-  // the concrete-number reason at index [1] ("Cost per unit: $X" / "Best
-  // case: X% ROI over N years") since those are property-specific figures;
-  // fall back to [0] (the bracket label) when only it exists.
-  const topReason = (arr: string[] | undefined, preferIndex: number): string | null => {
-    if (!arr || arr.length === 0) return null;
-    const primary = arr[preferIndex];
-    if (typeof primary === "string" && primary.trim()) return primary.trim();
-    const fallback = arr[0];
-    return typeof fallback === "string" && fallback.trim() ? fallback.trim() : null;
+  // First descriptive (non-numeric) reason from a dimension
+  const qualLabel = (arr: string[] | undefined): string | null => {
+    if (!arr?.length) return null;
+    const s = arr.find((r) => typeof r === "string" && r.trim() && !/best case|base case|\d+(?:\.\d+)?\s*%|\$[\d,.]+/i.test(r));
+    return (s ?? arr[0] ?? "").trim() || null;
   };
-  const topEaseReason = easeBand !== "high" ? topReason(reasons?.ease, 0) : null;
-  const topCostReason = costBand !== "high" ? topReason(reasons?.cost, 1) : null;
-  const topRoiReason = roiBand !== "high" ? topReason(reasons?.roi, 1) : null;
-
-  const withReason = (clause: string, reason: string | null): string => {
-    if (!reason) return clause;
-    return isZh ? `${clause}（${reason}）` : `${clause} (${reason})`;
+  // Specific numeric line, e.g. "Best case: ~24.8% ROI over ~4 years"
+  const numericLine = (arr: string[] | undefined): string | null => {
+    if (!arr?.length) return null;
+    const s = arr.find((r) => typeof r === "string" && /best case|base case|\d+(?:\.\d+)?\s*%/i.test(r));
+    return (s ?? "").trim() || null;
   };
-  const easeClause = withReason(easeClauseBase, topEaseReason);
-  const costClause = withReason(costClauseBase, topCostReason);
-  const roiClause = withReason(roiClauseBase, topRoiReason);
+  // Up to 2 ease labels joined
+  const easeConstraints = (reasons?.ease ?? [])
+    .map((r) => (typeof r === "string" ? r.trim() : ""))
+    .filter((r) => r && !/\d+(?:\.\d+)?\s*%|\$[\d,.]+/.test(r))
+    .slice(0, 2)
+    .join(isZh ? "，且" : "; ");
 
-  // Recommendation keyed to the weakest dimension when it is in the red band.
-  const dims = [{ kind: "ease", score: ease }, { kind: "cost", score: cost }, { kind: "roi", score: roi }] as const;
-  const weakest = dims.reduce((a, b) => (b.score < a.score ? b : a));
-  const tail = weakest.score < 2.5
-    ? {
-        ease: isZh ? "规划限制可能拖慢或限制开发，宜先确认许可路径。" : "Planning constraints could stall or limit the build — confirm the consent path first.",
-        cost: isZh ? "利润空间偏薄，需压低建造成本或低于市场价买入才更具吸引力。" : "Margins are thin, so it stacks up only if construction cost can be cut or you buy below market.",
-        roi: isZh ? "回报缓冲有限，对成本超支较为敏感。" : "Returns leave little buffer for cost overruns.",
-      }[weakest.kind]
-    : "";
+  const easeLabel = qualLabel(reasons?.ease);
+  const costLabel = qualLabel(reasons?.cost);
+  const costDetail = (reasons?.cost ?? []).find((r, i) => i > 0 && typeof r === "string" && r.trim())?.trim() ?? null;
+  const roiLabel = qualLabel(reasons?.roi);
+  const roiNumber = numericLine(reasons?.roi);
 
-  const body = isZh
-    ? `${stance}：${easeClause}，${costClause}，${roiClause}。`
-    : `${stance} — ${easeClause}, ${costClause}, and ${roiClause}.`;
+  const lc = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
+  const uc = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-  return tail ? `${body} ${tail}` : body;
+  // ── ALL GREEN: high ROI, workable cost, clear ease ───────────────────────────
+  if (roiBand === "high" && costBand !== "low" && easeBand !== "low") {
+    if (isZh) {
+      const roiNote = roiNumber ?? roiLabel ?? "回报强劲";
+      const costNote = costLabel ?? "成本位置可控";
+      return `${roiNote}；${costNote}，规划路径顺畅。整体信号一致，可尽快联系规划师或建筑师验证方案。`;
+    }
+    const roiNote = roiNumber ?? roiLabel ?? "returns are strong";
+    const costNote = costLabel ?? "cost position is workable";
+    return `${uc(roiNote)}. ${uc(costNote)}, and the planning path is clear. Consistent signals — get a planner or architect to validate the scheme quickly.`;
+  }
+
+  // ── HIGH RETURN BUT COST GATED ───────────────────────────────────────────────
+  if (roiBand === "high" && costBand === "low") {
+    if (isZh) {
+      const roiNote = roiNumber ?? roiLabel ?? "回报上行空间存在";
+      const costConstraint = costLabel ?? "成本覆盖偏紧";
+      return `${roiNote}，但${costConstraint}是关键门槛。买入价折让或方案精简是解锁回报的核心变量，先拿专业报价再决定。`;
+    }
+    const roiNote = roiNumber ?? roiLabel ?? "return upside exists";
+    const costConstraint = costLabel ?? "value coverage is tight";
+    return `${uc(roiNote)}, but ${lc(costConstraint)} is the gatekeeper. Entry price or scheme efficiency is the lever — get a build quote before committing.`;
+  }
+
+  // ── PLANNING / TITLE BLOCKS FIRST ───────────────────────────────────────────
+  if (easeBand === "low") {
+    if (isZh) {
+      const constraint = easeConstraints || easeLabel || "审批或产权存在限制";
+      const roiNote = roiBand !== "low" && roiNumber ? `若规划路径确认，${roiNumber}。` : "";
+      return `首要门槛是规划和产权可行性：${constraint}。${roiNote}建议先找规划师或律师确认可行性，再深入测算回报。`;
+    }
+    const constraint = easeConstraints || easeLabel || "consent or title constraints apply";
+    const roiNote = roiBand !== "low" && roiNumber ? ` If planning clears, ${lc(roiNumber)}.` : "";
+    return `The first hurdle is planning and title: ${constraint}.${roiNote} Confirm viability before deeper financial modelling.`;
+  }
+
+  // ── WEAK ROI ─────────────────────────────────────────────────────────────────
+  if (roiBand === "low") {
+    if (isZh) {
+      const roiConstraint = roiLabel ?? "回报偏低";
+      const easeNote = easeLabel ? `${easeLabel}；` : (easeBand === "high" ? "规划路径较顺畅，但" : "");
+      const costNote = costBand === "low" ? `${costLabel ?? "成本覆盖偏紧"}，加之` : "";
+      return `${easeNote}${costNote}${roiConstraint}，当前缓冲不足。重点放在压价、优化方案或等待市场条件改善。`;
+    }
+    const roiConstraint = roiLabel ?? "returns are low";
+    const easeNote = easeLabel ? `${easeLabel}; ` : (easeBand === "high" ? "Planning path is clear, but " : "");
+    const costNote = costBand === "low" ? `${costLabel ? `${lc(costLabel)}, and ` : ""}` : "";
+    return `${uc(easeNote)}${costNote}${lc(roiConstraint)} on current assumptions. Focus on price reduction or scheme change before proceeding.`;
+  }
+
+  // ── TIGHT COST, MODERATE RETURN (e.g. cross-lease single-dwelling) ───────────
+  if (costBand === "low") {
+    if (isZh) {
+      const easeNote = easeConstraints || easeLabel || (easeBand === "mid" ? "开发受一定限制" : "规划路径基本可行");
+      const costConstraint = costLabel ?? "成本位置偏紧";
+      const extra = costDetail ? `（${costDetail}）` : "";
+      const roiNote = roiNumber ?? roiLabel ?? "回报有限";
+      return `${easeNote}；${costConstraint}${extra}。${roiNote}，买入价控制是实现回报的主要杠杆。`;
+    }
+    const easeNote = easeConstraints || easeLabel || (easeBand === "mid" ? "development has some constraints" : "planning path is workable");
+    const costConstraint = costLabel ?? "cost position is tight";
+    const extra = costDetail ? ` (${lc(costDetail)})` : "";
+    const roiNote = roiNumber ?? roiLabel ?? "returns are moderate";
+    return `${uc(easeNote)}. ${uc(costConstraint)}${extra}. ${uc(roiNote)} — entry price is the key lever.`;
+  }
+
+  // ── MID / MID / MID FALLTHROUGH — use actual facts ───────────────────────────
+  {
+    if (isZh) {
+      const driver = roiNumber ?? roiLabel ?? "回报处于中间区间";
+      const concern = easeConstraints || easeLabel || costLabel || "存在需要核实的不确定性";
+      return `${driver}；但${concern}。建议针对最大风险点做专项核查再决策。`;
+    }
+    const driver = roiNumber ?? roiLabel ?? "returns are in the mid range";
+    const concern = easeConstraints || easeLabel || costLabel || "key uncertainties remain";
+    return `${uc(driver)}. However, ${lc(concern)}. Verify the biggest risk point before committing.`;
+  }
 }
 
 function ScoreSummaryRow({ report, colors, hideOverall }: { report: Report; colors: ReturnType<typeof useColors>; hideOverall?: boolean }) {
@@ -492,9 +549,8 @@ function ScoreSummaryRow({ report, colors, hideOverall }: { report: Report; colo
   const composite = safeNum(raw.composite);
   const ease_reasons = filterScoreReasonStrings(raw.ease_reasons).map((reason) => localizeScoreReason(reason, locale));
   const roi_reasons = filterScoreReasonStrings(raw.roi_reasons).map((reason) => localizeScoreReason(reason, locale));
-  // cost_reasons feeds the verdict (concrete cost-per-unit figure) but is not
-  // rendered as a separate bullet list in the existing UI — the cost is
-  // already visible in the scenario card cost figures.
+  // cost_reasons feeds the integrated verdict but is not rendered as a separate
+  // bullet list; the detailed scenario cards already carry the numeric cost context.
   const cost_reasons = filterScoreReasonStrings(raw.cost_reasons).map((reason) => localizeScoreReason(reason, locale));
   const overallColor = scoreColor(composite, colors);
   const overallDisplay = formatCompositeScoreForDisplay(composite);
@@ -580,6 +636,7 @@ function FullscreenPhotoViewer({
   const translateY = useSharedValue(0);
   const savedTranslateX = useSharedValue(0);
   const savedTranslateY = useSharedValue(0);
+  const displayUrls = urls.filter(Boolean);
 
   React.useEffect(() => {
     if (!visible) return;
@@ -601,6 +658,19 @@ function FullscreenPhotoViewer({
     savedTranslateY.value = 0;
   }, [savedScale, savedTranslateX, savedTranslateY, scale, translateX, translateY]);
 
+  const handleSwipePhoto = useCallback((direction: 1 | -1) => {
+    setIndex((current) => {
+      const next = Math.min(Math.max(current + direction, 0), Math.max(displayUrls.length - 1, 0));
+      return next;
+    });
+    resetZoom();
+  }, [displayUrls.length, resetZoom]);
+
+  const goToPhoto = useCallback((nextIndex: number) => {
+    setIndex(Math.min(Math.max(nextIndex, 0), Math.max(displayUrls.length - 1, 0)));
+    resetZoom();
+  }, [displayUrls.length, resetZoom]);
+
   const pinch = Gesture.Pinch()
     .onUpdate((event) => {
       scale.value = Math.min(Math.max(savedScale.value * event.scale, 1), 5);
@@ -619,17 +689,37 @@ function FullscreenPhotoViewer({
 
   const pan = Gesture.Pan()
     .onUpdate((event) => {
-      if (scale.value <= 1) return;
+      if (scale.value <= 1.05) return;
       translateX.value = savedTranslateX.value + event.translationX;
       translateY.value = savedTranslateY.value + event.translationY;
     })
-    .onEnd(() => {
+    .onEnd((event) => {
+      if (scale.value <= 1.05) {
+        const horizontalDistance = Math.abs(event.translationX);
+        const verticalDistance = Math.abs(event.translationY);
+        const swipeThreshold = Math.max(48, width * 0.14);
+        const velocityThreshold = 650;
+        const isHorizontalSwipe =
+          horizontalDistance > verticalDistance * 1.25 &&
+          (horizontalDistance >= swipeThreshold || Math.abs(event.velocityX) >= velocityThreshold);
+
+        translateX.value = withTiming(0, { duration: 120 });
+        translateY.value = withTiming(0, { duration: 120 });
+        savedTranslateX.value = 0;
+        savedTranslateY.value = 0;
+
+        if (isHorizontalSwipe) {
+          runOnJS(handleSwipePhoto)(event.translationX < 0 ? 1 : -1);
+        }
+        return;
+      }
       savedTranslateX.value = translateX.value;
       savedTranslateY.value = translateY.value;
     });
 
   const tap = Gesture.Tap()
     .maxDuration(220)
+    .maxDistance(10)
     .onEnd(() => {
       runOnJS(onClose)();
     });
@@ -642,7 +732,6 @@ function FullscreenPhotoViewer({
     ],
   }));
 
-  const displayUrls = urls.filter(Boolean);
   const currentUrl = displayUrls[index] ?? displayUrls[0];
   if (!currentUrl) return null;
 
@@ -674,9 +763,7 @@ function FullscreenPhotoViewer({
             <TouchableOpacity
               style={[styles.fullscreenPhotoNav, index <= 0 && styles.fullscreenPhotoNavDisabled]}
               onPress={() => {
-                if (index <= 0) return;
-                setIndex(index - 1);
-                resetZoom();
+                goToPhoto(index - 1);
               }}
               activeOpacity={0.8}
               disabled={index <= 0}
@@ -687,9 +774,7 @@ function FullscreenPhotoViewer({
             <TouchableOpacity
               style={[styles.fullscreenPhotoNav, index >= displayUrls.length - 1 && styles.fullscreenPhotoNavDisabled]}
               onPress={() => {
-                if (index >= displayUrls.length - 1) return;
-                setIndex(index + 1);
-                resetZoom();
+                goToPhoto(index + 1);
               }}
               activeOpacity={0.8}
               disabled={index >= displayUrls.length - 1}

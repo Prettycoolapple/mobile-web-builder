@@ -435,8 +435,81 @@ describe("mergePropertyData", () => {
 
     expect(merged.bedrooms).toBe(2);
     expect(merged.bathrooms).toBe(1);
-    expect(merged.data_sources.bedrooms).toBe("consensus");
-    expect(merged.data_sources.bathrooms).toBe("consensus");
+    expect(merged.data_sources.bedrooms).toBe("homes");
+    expect(merged.data_sources.bathrooms).toBe("homes");
+  });
+
+  it("keeps exact Homes profile bed/bath ahead of stale unlisted records", () => {
+    const merged = mergePropertyData(
+      { area_sqm: 500 } as any,
+      null,
+      {
+        found: true,
+        cv_nzd: null,
+        cv_year: null,
+        last_sale_price: null,
+        last_sale_date: null,
+        listing_price: null,
+        listing_active: false,
+        floor_area_sqm: null,
+        land_area_sqm: null,
+        build_year: null,
+        bedrooms: 3,
+        bathrooms: 2,
+        tenureText: null,
+        main_photo_url: null,
+        photo_urls: [],
+        comparables: [],
+        data_source: "oneroof",
+        scraped_at: "2026-06-01T00:00:00.000Z",
+      },
+      { zone_code: "MHS", zone_description: "Mixed Housing Suburban", min_lot_size_sqm: 400 } as any,
+      [],
+      {
+        contour: null,
+        asbestos_risk: "unknown",
+        infrastructure: [],
+        analysed_address: "8 Hampton Drive, St Heliers, Auckland",
+        propertyValue: {
+          cv_nzd: 1_900_000,
+          lv_nzd: null,
+          iv_nzd: null,
+          cv_year: 2024,
+          property_type: "House",
+          property_sub_type: null,
+          legal_descriptions: [],
+          land_use_primary: null,
+          property_improvements: null,
+          land_area_sqm: 500,
+          floor_area_sqm: 126,
+          build_year: 1964,
+          build_year_range: null,
+          bedrooms: 5,
+          bathrooms: 2,
+          listing_active: false,
+          photo_urls: [],
+          address_confirmed: "8 Hampton Drive, St Heliers, Auckland",
+          property_id: 456,
+        },
+        homes: {
+          cv_nzd: null,
+          cv_year: null,
+          land_area_sqm: null,
+          floor_area_sqm: null,
+          build_year: null,
+          bedrooms: 3,
+          bathrooms: 1,
+          last_sale_price: null,
+          last_sale_date: null,
+          address_confirmed: "8 Hampton Drive, St Heliers, Auckland",
+        },
+      },
+    );
+
+    expect(merged.bedrooms).toBe(3);
+    expect(merged.bathrooms).toBe(1);
+    expect(merged.data_sources.bedrooms).toBe("homes");
+    expect(merged.data_sources.bathrooms).toBe("homes");
   });
 
   it("does not use non-listing property-record photos as feasibility report fallbacks", () => {

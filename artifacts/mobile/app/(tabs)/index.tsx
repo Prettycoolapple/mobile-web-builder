@@ -203,7 +203,7 @@ const RECOMMENDATION_KEYWORDS = [
   "professional", "consultant", "expert", "connect me", "get someone",
   "hire someone", "need a builder", "need an architect", "need a planner",
   "need an engineer", "do you have anyone", "have anyone",
-  "anyone to recommend", "anyone good",
+  "anyone to recommend", "anyone good", "who else", "anyone else",
 ];
 
 function asksForOthers(textLower: string): boolean {
@@ -999,18 +999,18 @@ export default function SearchScreen() {
     setIsLoading(true);
 
     const lowerText = text.toLowerCase();
-
-    // Client-side keyword gate: catches unambiguous English phrases before the
-    // LLM response arrives. The LLM-derived signal (wantsProviderRecommendation)
-    // covers nuanced and Chinese messages and will supplement this in the finally block.
+    // Client-side keyword gate for first-time "find me a professional" requests.
+    // The "change the current provider" case is handled purely by the LLM signal
+    // (llmWantsAnotherProvider) so no trigger words are hardcoded for that path.
     const isExplicitRecommendationRequest =
       user?.role === "general" &&
       RECOMMENDATION_KEYWORDS.some((kw) => lowerText.includes(kw));
 
-    // Captures the LLM-derived recommendation signal from the /chat response so
+    // Captures the LLM-derived recommendation signals from the /chat response so
     // the finally block can trigger /recommendations/check even when the keyword
     // list above doesn't match (e.g. Chinese, nuanced phrasing).
     let llmWantsRecommendation = false;
+    let llmWantsAnotherProvider = false;
     let llmSuggestedDiscipline: string | null = null;
 
     addMessage({ role: "assistant", content: "", type: "loading", loadingMode: detectedMode as any }, sessionId);
@@ -1392,6 +1392,7 @@ export default function SearchScreen() {
             searchId?: string | null;
             historyCreatedAt?: string | null;
             wantsProviderRecommendation?: boolean;
+            wantsAnotherProvider?: boolean;
             suggestedDiscipline?: string | null;
           };
           try {
@@ -1402,10 +1403,20 @@ export default function SearchScreen() {
             data = { content: fallback?.content ?? responseText, mode: fallback?.mode ?? "" };
           }
 
-          // Capture LLM-derived provider recommendation signal for use in finally.
+          // Capture LLM-derived provider recommendation signals for use in finally.
           if (data.wantsProviderRecommendation && user?.role === "general") {
             llmWantsRecommendation = true;
             llmSuggestedDiscipline = data.suggestedDiscipline ?? null;
+          }
+          if (data.wantsAnotherProvider && user?.role === "general") {
+            llmWantsAnotherProvider = true;
+            llmWantsRecommendation = true;
+          }
+          // Both first-time recommendation and "change provider" suppress LLM text —
+          // the finally block shows the provider card directly.
+          if ((data.wantsProviderRecommendation || data.wantsAnotherProvider) && user?.role === "general") {
+            updateLastMessage({ type: "text", content: "" }, sessionId);
+            return;
           }
 
           // Helper: check if a parsed object looks like a feasibility report
@@ -1581,6 +1592,8 @@ export default function SearchScreen() {
         const keywordDiscipline =
           disciplineMap.find(([kw]) => capturedText.includes(kw))?.[1] ?? null;
         const preferredDiscipline = llmSuggestedDiscipline ?? keywordDiscipline;
+        // For "change provider" the loading bubble is already cleared; no need to wait for animation.
+        const providerCheckDelay = llmWantsAnotherProvider ? 200 : 1200;
 
         setTimeout(async () => {
           try {
@@ -1593,7 +1606,7 @@ export default function SearchScreen() {
                 report: reportSnapshot ?? {},
                 conversationHistory: [],
                 explicitRequest: true,
-                askForOthers: asksForOthers(capturedText),
+                askForOthers: llmWantsAnotherProvider,
                 preferredDiscipline,
                 excludeProviderIds: freshMsgs
                   .filter((m) => m.type === "provider_recommendation" && m.provider?.id)
@@ -1615,6 +1628,7 @@ export default function SearchScreen() {
               provider: ServiceProvider | null;
               intentType: string;
               upgradeRequired?: boolean;
+              providersExhausted?: boolean;
             };
             if (data.shouldRecommend && data.provider && data.upgradeRequired) {
               addMessage({
@@ -1632,9 +1646,15 @@ export default function SearchScreen() {
                 intentType: data.intentType,
                 propertyAddress: resolveReportAddress(reportSnapshot as FeasibilityReport | undefined),
               });
+            } else if (data.providersExhausted || (!data.shouldRecommend && !data.provider)) {
+              addMessage({
+                role: "assistant",
+                content: t("recommendations.providers_busy"),
+                type: "text",
+              }, capturedSessionId);
             }
           } catch {}
-        }, 1200);
+        }, providerCheckDelay);
       }
     }
   }, [

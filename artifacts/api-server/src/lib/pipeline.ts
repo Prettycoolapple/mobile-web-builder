@@ -1,7 +1,7 @@
 import { logger } from "./logger";
 import { ai } from "@workspace/integrations-gemini-ai";
 import { geocodeAddress, type GeoResult } from "./geocode";
-import { fetchLINZParcel, fetchLINZTitle, fetchLINZMemorials, type LinzParcel, type LinzTitle } from "./linz";
+import { fetchLINZParcel, fetchLINZTitle, fetchLINZMemorials, fetchLINZTitlesByAddress, estateTypeFromLrsTitles, type LinzParcel, type LinzTitle, type LinzLrsAddressTitlePreview } from "./linz";
 import { fetchUnitaryPlanZone, fetchOverlaysWithConsensus, fetchContour, type ZoneResult, type Overlay, type ContourResult } from "./auckland-council";
 import { fetchPropertyHistory, checkAsbestosRisk, type PropertyHistory, type AsbestosRisk } from "./property-data";
 import { fetchInfrastructure, type InfrastructureItem } from "./infrastructure";
@@ -113,10 +113,12 @@ function estateTypeSource(
   signals: {
     oneRoofTenure: string | null;
     realestateTenure: string | null;
+    lrsTenure: string | null;
     titleEstate: string | null;
     parcelEstate: string | null;
   },
 ): string {
+  if (estateType === signals.lrsTenure) return "linz_lrs_title_preview";
   if (estateType === signals.oneRoofTenure) return "oneroof";
   if (estateType === signals.realestateTenure) return "realestate.co.nz";
   if (estateType === signals.titleEstate) return "linz_title";
@@ -545,7 +547,9 @@ export async function runPropertyPipeline(
     timed("oneroof",          () => useBrowserScrapers ? withBrowserSlot(() => scrapeOneRoof(address)) : Promise.resolve(null), timing),
     timed("propertyvalue",    () => scrapePropertyValue(address, geocode!.formatted ?? address),                  timing),
     timed("qv",               () => useBrowserScrapers ? withBrowserSlot(() => scrapeQV(address)) : Promise.resolve(null), timing),
-    timed("homes",            () => useBrowserScrapers ? withBrowserSlot(() => scrapeHomes(address, suburb, geocode!.formatted ?? address)) : Promise.resolve(null), timing),
+    timed("homes",            () => useBrowserScrapers
+      ? withBrowserSlot(() => scrapeHomes(address, suburb, geocode!.formatted ?? address, { allowBrowserFallback: true }))
+      : scrapeHomes(address, suburb, geocode!.formatted ?? address, { allowBrowserFallback: false }), timing),
   ]);
 
   const zoneData            = zoneResult.status            === "fulfilled" ? zoneResult.value.value            : null;
@@ -597,7 +601,16 @@ export async function runPropertyPipeline(
 
   // ─── LINZ title, memorials ────────────────────────────────────────────────
   let linzTitle: LinzTitle | null = null;
+  let linzLrsTitlePreview: LinzLrsAddressTitlePreview | null = null;
   let easementAnalysis: EasementAnalysis = NO_TITLE; // default: could not resolve title
+  const lrsTitlePreviewResult = await timed(
+    "linz_lrs_title_preview",
+    () => fetchLINZTitlesByAddress(geocode.formatted ?? address),
+    timing,
+  );
+  if (!lrsTitlePreviewResult.failed) {
+    linzLrsTitlePreview = lrsTitlePreviewResult.value;
+  }
   if (linzParcelData?.title_no) {
     const [titleResult, memorialsResult] = await Promise.allSettled([
       timed("linz_title", () => fetchLINZTitle(linzParcelData.title_no!), timing),
@@ -748,7 +761,13 @@ export async function runPropertyPipeline(
     }
     if (useBrowserScrapers && wave1HomesFailed) {
       retryPromises.push(
-        timed("homes_retry", () => withBrowserSlot(() => scrapeHomes(address, suburb, geocode!.formatted ?? address)), timing)
+        timed("homes_retry", () => withBrowserSlot(() => scrapeHomes(address, suburb, geocode!.formatted ?? address, { allowBrowserFallback: true })), timing)
+          .then((r) => { if (!r.failed && r.value) homesData = r.value; })
+          .catch(() => {}),
+      );
+    } else if (!useBrowserScrapers && wave1HomesFailed) {
+      retryPromises.push(
+        timed("homes_retry", () => scrapeHomes(address, suburb, geocode!.formatted ?? address, { allowBrowserFallback: false }), timing)
           .then((r) => { if (!r.failed && r.value) homesData = r.value; })
           .catch(() => {}),
       );
@@ -950,16 +969,18 @@ export async function runPropertyPipeline(
   }, "PhotoScrape: summary");
 
   const titleEstate = linzTitle?.estate_type?.trim() ?? null;
+  const lrsTenure = estateTypeFromLrsTitles(linzLrsTitlePreview?.titles ?? []);
   const parcelEstate = inferEstateTypeFromParcel(linzParcelData);
   const realestateTenure = realestateListingForFacts?.tenureText?.trim() ?? null;
   const oneRoofTenure = oneRoofData?.tenureText?.trim() ?? null;
-  const crossLeaseOverride = [oneRoofTenure, realestateTenure, titleEstate, parcelEstate].find(hasCrossLeaseSignal) ?? null;
-  const estateFromTitle = crossLeaseOverride ?? titleEstate ?? parcelEstate ?? realestateTenure ?? oneRoofTenure ?? null;
+  const crossLeaseOverride = [lrsTenure, oneRoofTenure, realestateTenure, titleEstate, parcelEstate].find(hasCrossLeaseSignal) ?? null;
+  const estateFromTitle = crossLeaseOverride ?? lrsTenure ?? titleEstate ?? parcelEstate ?? realestateTenure ?? oneRoofTenure ?? null;
   merged.estate_type = estateFromTitle;
   if (estateFromTitle) {
     merged.data_sources["estate_type"] = estateTypeSource(estateFromTitle, {
       oneRoofTenure,
       realestateTenure,
+      lrsTenure,
       titleEstate,
       parcelEstate,
     });

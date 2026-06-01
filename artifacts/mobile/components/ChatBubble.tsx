@@ -375,6 +375,12 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
     );
   }
 
+  // Empty text messages are used to silently clear the loading bubble (e.g. after
+  // a semantic "change provider" intent is detected). Render nothing for them.
+  if (!isUser && message.type === "text" && !message.content?.trim() && !message.retryText) {
+    return null;
+  }
+
   if (isUser) {
     const handleLongPress = () => {
       Clipboard.setString(message.content);

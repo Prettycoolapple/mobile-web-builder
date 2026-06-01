@@ -1,6 +1,7 @@
 import { logger } from "./logger";
 
 const LINZ_BASE = "https://data.linz.govt.nz/services/api/v1";
+const LINZ_LRS_PUBLIC_BASE = "https://public.api.landonline.govt.nz/v1";
 
 const LAYER_PRIMARY_PARCELS = 50772;
 const LAYER_NZ_TITLES = 50804;
@@ -66,6 +67,22 @@ export interface LinzTitle {
   issue_date: string | null;
 }
 
+export interface LinzLrsTitlePreview {
+  title_no: string;
+  title_type: string | null;
+  title_status: string | null;
+  legal_descriptions: string[];
+  land_district: string | null;
+  issue_date: string | null;
+  indicative_area_sqm: number | null;
+}
+
+export interface LinzLrsAddressTitlePreview {
+  address_id: string;
+  address: string;
+  titles: LinzLrsTitlePreview[];
+}
+
 export interface LinzMemorial {
   title_no: string;
   memorial_text: string;
@@ -75,6 +92,178 @@ export interface LinzMemorial {
 
 function getKey(): string | null {
   return process.env["LINZ_API_KEY"] ?? null;
+}
+
+function normaliseLrsAddress(value: string | null | undefined): string {
+  return (value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\b(new zealand|nz|auckland city|auckland)\b/g, "")
+    .replace(/\b\d{4}\b/g, "")
+    .replace(/\bsaint\b/g, "st")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function lrsAddressLooksExact(requested: string, candidate: string): boolean {
+  const req = normaliseLrsAddress(requested);
+  const cand = normaliseLrsAddress(candidate);
+  if (!req || !cand) return false;
+  if (req === cand || req.startsWith(cand) || cand.startsWith(req)) return true;
+
+  const reqParts = req.split(" ");
+  const candParts = cand.split(" ");
+  const reqNumber = reqParts[0] ?? "";
+  const candNumber = candParts[0] ?? "";
+  if (reqNumber !== candNumber) return false;
+
+  const reqTokens = new Set(reqParts.slice(1));
+  const candTokens = candParts.slice(1).filter((token) => !["street", "road", "drive", "avenue", "place", "lane", "crescent", "parade"].includes(token));
+  return candTokens.length > 0 && candTokens.every((token) => reqTokens.has(token));
+}
+
+function lrsAddressQueryVariants(address: string): string[] {
+  const raw = address.trim();
+  const noCountry = raw
+    .replace(/\b(new zealand|nz)\b/gi, "")
+    .replace(/\s*,\s*$/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  const noPostcode = noCountry
+    .replace(/\b\d{4}\b/g, "")
+    .replace(/\s+,/g, ",")
+    .replace(/,\s*,/g, ",")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s*,\s*$/g, "")
+    .trim();
+  const parts = noPostcode.split(",").map((part) => part.trim()).filter(Boolean);
+  const streetSuburbCity = parts.slice(0, 3).join(", ");
+  const streetSuburb = parts.slice(0, 2).join(", ");
+  const streetOnly = parts[0] ?? noPostcode;
+
+  return [...new Set([raw, noCountry, noPostcode, streetSuburbCity, streetSuburb, streetOnly].filter(Boolean))];
+}
+
+function normaliseLrsTitleType(value: string | null | undefined): string | null {
+  const raw = (value ?? "").trim();
+  if (!raw) return null;
+  if (/cross[-\s]*lease|crosslease/i.test(raw)) return "Cross Lease";
+  if (/unit\s*title/i.test(raw)) return "Unit Title";
+  if (/stratum/i.test(raw)) return "Stratum";
+  if (/leasehold/i.test(raw)) return "Leasehold";
+  if (/fee\s*simple|freehold/i.test(raw)) return "Fee Simple";
+  return raw;
+}
+
+export function estateTypeFromLrsTitles(titles: LinzLrsTitlePreview[]): string | null {
+  const liveTitles = titles.filter((title) => !title.title_status || /^live$/i.test(title.title_status));
+  const candidates = (liveTitles.length > 0 ? liveTitles : titles)
+    .map((title) => normaliseLrsTitleType(title.title_type))
+    .filter((title): title is string => !!title);
+
+  const crossLease = candidates.find((title) => /cross[-\s]*lease|crosslease/i.test(title));
+  if (crossLease) return "Cross Lease";
+  const unitTitle = candidates.find((title) => /unit\s*title/i.test(title));
+  if (unitTitle) return "Unit Title";
+  const stratum = candidates.find((title) => /stratum/i.test(title));
+  if (stratum) return "Stratum";
+  const leasehold = candidates.find((title) => /leasehold/i.test(title));
+  if (leasehold) return "Leasehold";
+  return candidates[0] ?? null;
+}
+
+export async function fetchLINZTitlesByAddress(address: string): Promise<LinzLrsAddressTitlePreview | null> {
+  const initialQuery = address.trim();
+  if (!initialQuery) return null;
+
+  try {
+    let selected: { id?: string | number; address?: string; source?: string; rank?: number } | null = null;
+    let selectedQuery = initialQuery;
+
+    for (const query of lrsAddressQueryVariants(initialQuery)) {
+      const addressUrl = new URL(`${LINZ_LRS_PUBLIC_BASE}/public-search-caches/addresses`);
+      addressUrl.searchParams.set("q", query);
+      const addressResp = await fetch(addressUrl.toString(), {
+        headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!addressResp.ok) {
+        logger.warn({ status: addressResp.status, query }, "LINZ LRS address search failed");
+        continue;
+      }
+
+      const addressJson = await addressResp.json() as {
+        data?: Array<{ id?: string | number; address?: string; source?: string; rank?: number }>;
+      };
+      const addressCandidates = (addressJson.data ?? [])
+        .filter((item) => String(item.source ?? "").toLowerCase() === "address" && item.id != null && item.address)
+        .sort((a, b) => (b.rank ?? 0) - (a.rank ?? 0));
+      const exact = addressCandidates.find((item) => lrsAddressLooksExact(query, item.address ?? ""));
+      if (exact?.id && exact.address) {
+        selected = exact;
+        selectedQuery = query;
+        break;
+      }
+    }
+    if (!selected?.id || !selected.address) return null;
+    if (!lrsAddressLooksExact(selectedQuery, selected.address)) {
+      logger.warn({ requested: initialQuery, selected: selected.address }, "LINZ LRS address search did not produce an exact-looking address");
+      return null;
+    }
+
+    const titlesUrl = new URL(`${LINZ_LRS_PUBLIC_BASE}/public-searches/lws/titles`);
+    titlesUrl.searchParams.set("addressId", String(selected.id).replaceAll("/", "$"));
+    const titlesResp = await fetch(titlesUrl.toString(), {
+      headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!titlesResp.ok) {
+      logger.warn({ status: titlesResp.status, addressId: selected.id }, "LINZ LRS title preview failed");
+      return null;
+    }
+
+    const titlesJson = await titlesResp.json() as {
+      titles?: {
+        items?: Array<{
+          titleNo?: string;
+          issueDate?: string | null;
+          type?: { desc?: string | null; code?: string | null } | null;
+          status?: { desc?: string | null; code?: string | null } | null;
+          landDistrict?: string | null;
+          legalDescriptions?: string[];
+          indicativeArea?: number | null;
+        }>;
+      };
+      address?: { id?: string | number; string?: string };
+    };
+    const titles = (titlesJson.titles?.items ?? [])
+      .map((item): LinzLrsTitlePreview | null => {
+        const titleNo = String(item.titleNo ?? "").trim();
+        if (!titleNo) return null;
+        return {
+          title_no: titleNo,
+          title_type: normaliseLrsTitleType(item.type?.desc ?? item.type?.code ?? null),
+          title_status: item.status?.desc ?? item.status?.code ?? null,
+          legal_descriptions: Array.isArray(item.legalDescriptions) ? item.legalDescriptions.filter(Boolean) : [],
+          land_district: item.landDistrict ?? null,
+          issue_date: item.issueDate ?? null,
+          indicative_area_sqm: typeof item.indicativeArea === "number" ? Math.round(item.indicativeArea) : null,
+        };
+      })
+      .filter((item): item is LinzLrsTitlePreview => !!item);
+
+    if (titles.length === 0) return null;
+    return {
+      address_id: String(titlesJson.address?.id ?? selected.id),
+      address: titlesJson.address?.string ?? selected.address,
+      titles,
+    };
+  } catch (err) {
+    logger.warn({ err: (err as Error).message, address: initialQuery }, "LINZ LRS title preview lookup failed");
+    return null;
+  }
 }
 
 async function queryLinzLayer(

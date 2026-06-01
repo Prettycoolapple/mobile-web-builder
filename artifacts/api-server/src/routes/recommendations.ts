@@ -332,12 +332,14 @@ router.post("/recommendations/check", requireAuth, async (req: Request, res: Res
       report,
       conversationHistory,
       explicitRequest = false,
+      askForOthers = false,
       preferredDiscipline,
       excludeProviderIds = [],
     } = req.body as {
       report?: FeasibilityReport;
       conversationHistory?: Message[];
       explicitRequest?: boolean;
+      askForOthers?: boolean;
       preferredDiscipline?: string;
       excludeProviderIds?: string[];
     };
@@ -366,7 +368,10 @@ router.post("/recommendations/check", requireAuth, async (req: Request, res: Res
           intentType: "referral",
           reason: requestedDiscipline
             ? "No matching internal service provider is available for the requested discipline"
-            : "No matching internal service provider is available right now",
+            : askForOthers || excludeProviderIds.length > 0
+              ? "Other internal service providers are currently occupied"
+              : "No matching internal service provider is available right now",
+          providersExhausted: true,
           allowExternalSearch: false,
           upgradeRequired,
         });

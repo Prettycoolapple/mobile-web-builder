@@ -59,8 +59,8 @@ const baseHoldCosts: CostBreakdown = {
   has_existing_dwelling: true,
 };
 
-describe("calculateScenariosFromGdv suppressOrganicGrowth option", () => {
-  it("keeps GDV flat across exit horizons when suppressOrganicGrowth is true", () => {
+describe("calculateScenariosFromGdv organic growth", () => {
+  it("applies organic growth across every exit horizon", () => {
     const scenarios = calculateScenariosFromGdv(
       baseHoldCosts,
       3_000_000,
@@ -68,14 +68,13 @@ describe("calculateScenariosFromGdv suppressOrganicGrowth option", () => {
       833,
       3_000_000,
       "stable",
-      { suppressOrganicGrowth: true },
     );
 
     expect(scenarios).toHaveLength(3);
     const gdvs = scenarios.map((s) => s.gdv);
-    expect(gdvs[0]).toBe(3_000_000);
-    expect(gdvs[1]).toBe(3_000_000);
-    expect(gdvs[2]).toBe(3_000_000);
+    expect(gdvs[0]).toBeGreaterThan(3_000_000);
+    expect(gdvs[1]).toBeGreaterThan(gdvs[0]);
+    expect(gdvs[2]).toBeGreaterThan(gdvs[1]);
   });
 
   it("applies organic growth across exit horizons by default", () => {

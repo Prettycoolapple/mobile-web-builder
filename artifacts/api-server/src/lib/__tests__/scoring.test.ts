@@ -78,6 +78,28 @@ const scenarios: ROIScenario[] = [];
 // lots = 2 so the single-dwelling ease deduction does not fire.
 const LOTS = 2;
 
+function scenario(overrides: Partial<ROIScenario>): ROIScenario {
+  const gdv = overrides.gdv ?? 7_500_000;
+  const totalCost = overrides.total_cost_mid ?? 6_000_000;
+  const grossProfit = overrides.gross_profit ?? gdv - totalCost;
+  const roiPercent = overrides.roi_percent ?? (grossProfit / totalCost) * 100;
+  return {
+    years: 3,
+    gdv,
+    total_cost_mid: totalCost,
+    gross_profit: grossProfit,
+    roi_percent: roiPercent,
+    annualised_roi_percent: roiPercent / 3,
+    viable: roiPercent > 0,
+    cases: [],
+    lots: LOTS,
+    sqm_per_lot: 350,
+    gdv_per_lot: gdv / LOTS,
+    interest_rate_outlook: "stable",
+    ...overrides,
+  };
+}
+
 const CROSS_LEASE_REASON = "Cross-lease title — co-owner consent constrains development";
 const LEASEHOLD_REASON = "Leasehold title — limited development rights vs freehold";
 
@@ -114,5 +136,33 @@ describe("scoreProperty — tenure", () => {
     expect(leasehold.ease).toBeLessThan(freehold.ease);
     expect(leasehold.ease_reasons).toContain(LEASEHOLD_REASON);
     expect(leasehold.ease_reasons).not.toContain(CROSS_LEASE_REASON);
+  });
+});
+
+describe("scoreProperty — cost position", () => {
+  it("does not punish prime-location projects solely because the per-unit dollar cost is high", () => {
+    const costs = { ...baseCosts, land_cv_nzd: 5_000_000, total_low: 5_800_000, total_high: 6_200_000, cost_per_unit_avg: 2_250_000 };
+    const result = scoreProperty(
+      merged({ cv_nzd: 5_000_000 }),
+      costs,
+      [scenario({ gdv: 8_000_000, total_cost_mid: 6_000_000, roi_percent: 33.3 })],
+      LOTS,
+    );
+
+    expect(result.cost).toBeGreaterThanOrEqual(4);
+    expect(result.cost_reasons.join(" ")).not.toContain("Cost per unit");
+  });
+
+  it("marks cost pressure when modelled end value barely covers acquisition and delivery", () => {
+    const costs = { ...baseCosts, land_cv_nzd: 5_000_000, total_low: 5_900_000, total_high: 6_100_000, cost_per_unit_avg: 2_250_000 };
+    const result = scoreProperty(
+      merged({ cv_nzd: 5_000_000 }),
+      costs,
+      [scenario({ gdv: 5_800_000, total_cost_mid: 6_000_000, gross_profit: -200_000, roi_percent: -3.3 })],
+      LOTS,
+    );
+
+    expect(result.cost).toBeLessThanOrEqual(2.5);
+    expect(result.cost_reasons.join(" ")).toContain("relative to the estimated end value");
   });
 });

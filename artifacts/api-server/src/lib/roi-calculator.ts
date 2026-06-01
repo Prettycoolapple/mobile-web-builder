@@ -188,17 +188,6 @@ export function calculateBearBaseBullScenarios(
   );
 }
 
-export interface CalculateScenariosOptions {
-  /**
-   * When true, skip the organic-growth multiplier applied at each exit
-   * horizon. Used for "hold existing" where no work is done — the exit
-   * price should reflect *current* market, not market × (1 + g)^years.
-   * Without this the hold scenario was credited with appreciation it didn't
-   * earn.
-   */
-  suppressOrganicGrowth?: boolean;
-}
-
 export function calculateScenariosFromGdv(
   costs: CostBreakdown,
   base_gdv: number,
@@ -206,7 +195,6 @@ export function calculateScenariosFromGdv(
   sqm_per_lot: number,
   gdv_per_lot: number,
   interest_rate_outlook: InterestRateOutlook,
-  options: CalculateScenariosOptions = {},
 ): ROIScenario[] {
   const safeUnits = Math.max(1, lots);
   const total_cost_mid = roundToNearest((costs.total_low + costs.total_high) / 2, 1000);
@@ -215,9 +203,7 @@ export function calculateScenariosFromGdv(
   const horizonYears = exitHorizonYearsForUnitCount(safeUnits);
 
   return horizonYears.map((years) => {
-    const organicGrowthMultiplier = options.suppressOrganicGrowth
-      ? 1
-      : Math.pow(1 + ORGANIC_ANNUAL_GROWTH_RATE, years);
+    const organicGrowthMultiplier = Math.pow(1 + ORGANIC_ANNUAL_GROWTH_RATE, years);
     const horizonBaseGdv = roundToNearest(base_gdv * organicGrowthMultiplier, 1000);
     const horizonGdvPerLot = roundToNearest(gdv_per_lot * organicGrowthMultiplier, 1000);
     const bearGdv = roundToNearest(horizonBaseGdv * 0.80, 1000);

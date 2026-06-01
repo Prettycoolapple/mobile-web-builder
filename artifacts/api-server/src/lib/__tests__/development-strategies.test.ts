@@ -190,14 +190,11 @@ describe("development strategies", () => {
     const scenario = hold?.roiScenarios[0];
     const baseCase = scenario?.cases.find((c) => c.case === "base");
 
-    // "Hold existing" no longer applies the ORGANIC_ANNUAL_GROWTH_RATE
-    // multiplier to its exit horizons — see calculateScenariosFromGdv's
-    // suppressOrganicGrowth option. "Do nothing for N years" exits at current
-    // market, not market × (1.02)^N, so GDV stays flat across the 3 horizons
-    // at the CV-floored existing value (CV $3.95M > comparable-based $1.32M).
-    expect(scenario?.gdv).toBe(3_950_000);
-    expect(baseCase?.gdv).toBe(3_950_000);
-    expect(hold?.roiScenarios.map((s) => s.gdv)).toEqual([3_950_000, 3_950_000, 3_950_000]);
+    // Hold-existing uses the same organic 2% annual appreciation as the other
+    // strategies, applied over each exit horizon.
+    expect(scenario?.gdv).toBe(4_110_000);
+    expect(baseCase?.gdv).toBe(4_110_000);
+    expect(hold?.roiScenarios.map((s) => s.gdv)).toEqual([4_110_000, 4_192_000, 4_276_000]);
     expect(hold?.totalCostLow).toBe(3_990_000);
     expect(hold?.totalCostHigh).toBe(4_069_000);
     expect(hold?.costItems.find((item) => item.label === "Contingency")?.high).toBe(20_000);
@@ -231,9 +228,9 @@ describe("development strategies", () => {
     const scenario = hold?.roiScenarios[0];
     const baseCase = scenario?.cases.find((c) => c.case === "base");
 
-    expect(scenario?.gdv).toBe(1_900_000);
-    expect(baseCase?.gross_profit).toBeLessThanOrEqual(0);
-    expect(baseCase?.roi_percent).toBeLessThanOrEqual(0);
+    expect(scenario?.gdv).toBe(1_977_000);
+    expect(baseCase?.gross_profit).toBeLessThan(100_000);
+    expect(baseCase?.roi_percent).toBeLessThan(5);
     expect(scenario?.total_cost_mid).toBeGreaterThan(1_900_000);
     expect(scenario?.total_cost_mid).toBeLessThan(2_000_000);
   });
@@ -296,7 +293,7 @@ describe("development strategies", () => {
     expect(baseGdv).toBeLessThan(3_850_000 * 1.10);
   });
 
-  it("applies organic annual growth to refurbish and rebuild horizons but not to hold-existing", () => {
+  it("applies organic annual growth to hold, refurbish, and rebuild horizons", () => {
     const assessment = buildFallbackDevelopmentStrategyAssessment(merged(), lotResult);
     const strategies = calculateDevelopmentStrategies({
       data: merged(),
@@ -312,17 +309,11 @@ describe("development strategies", () => {
     const refurbish = strategies.find((s) => s.id === "refurbish");
     const rebuild = strategies.find((s) => s.id === "demolish_rebuild");
 
-    // Refurbish + rebuild legitimately ride market growth during the dev cycle.
-    for (const strategy of [refurbish, rebuild]) {
+    for (const strategy of [hold, refurbish, rebuild]) {
       expect(strategy?.roiScenarios.map((scenario) => scenario.years)).toEqual([2, 3, 4]);
       expect((strategy?.roiScenarios[1].gdv ?? 0)).toBeGreaterThan(strategy?.roiScenarios[0].gdv ?? 0);
       expect((strategy?.roiScenarios[2].gdv ?? 0)).toBeGreaterThan(strategy?.roiScenarios[1].gdv ?? 0);
     }
-    // Hold-existing exits at current market — GDV is flat across horizons.
-    expect(hold?.roiScenarios.map((scenario) => scenario.years)).toEqual([2, 3, 4]);
-    const holdGdvs = hold?.roiScenarios.map((scenario) => scenario.gdv) ?? [];
-    expect(holdGdvs[0]).toBe(holdGdvs[1]);
-    expect(holdGdvs[1]).toBe(holdGdvs[2]);
   });
 
   it("uses the multi-unit rebuild cost stack when calculating subdivision ROI", () => {
@@ -527,8 +518,8 @@ describe("development strategies", () => {
       });
 
       const hold = strategies.find((s) => s.id === "hold_existing");
-      // GDV for standalone should be ≥ 2_500_000 (floored at avgSalePrice)
-      expect(hold?.roiScenarios[0]?.gdv).toBe(1_800_000);
+      // Base hold value is CV-floored at $1.8M, then year-2 exit applies 2% organic growth.
+      expect(hold?.roiScenarios[0]?.gdv).toBe(1_873_000);
       expect(hold?.assumptions.some((a) => /0\.53|47%/i.test(a))).toBe(false);
     });
 

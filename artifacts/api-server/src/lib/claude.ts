@@ -101,6 +101,7 @@ export interface ChatIntent {
   clarificationQuestion: string | null; // the natural-language question to ask the user
   // Service provider recommendation
   wantsProviderRecommendation: boolean; // true when user (in any language) asks to be connected with a professional
+  wantsAnotherProvider: boolean;        // true when user wants to SWAP/REPLACE the CURRENTLY shown provider card
   suggestedDiscipline: string | null;   // architect_designer | planner | engineer | quantity_surveyor | other
   // Wide-scan signal — true when the user is asking for an area-wide subdivision sweep
   // (district, large suburb, "anything subdividable") that legitimately needs minutes to run.
@@ -128,6 +129,7 @@ const INTENT_SCHEMA = `{
   "needsClarification": <true ONLY when required info is missing AND you cannot infer it — see rules>,
   "clarificationQuestion": "<short conversational question to ask the user> | null",
   "wantsProviderRecommendation": <true when user asks to be connected with / referred to a professional service provider>,
+  "wantsAnotherProvider": <true when user already has a provider shown and wants to swap/replace/change it for a different one>,
   "suggestedDiscipline": "architect_designer" | "planner" | "engineer" | "quantity_surveyor" | "other" | null,
   "wideScanSubdivisionIntent": <true when user is asking for an area-wide subdivision/development sweep — see WIDE SCAN below>,
   "reasoning": "<1 sentence explaining your classification>"
@@ -287,6 +289,21 @@ Set suggestedDiscipline to the most relevant type based on context:
   null                 — when the discipline is unclear
 
 Set wantsProviderRecommendation=false for all messages that are not about finding a professional.
+
+## SWAP/REPLACE PROVIDER (wantsAnotherProvider)
+
+wantsAnotherProvider is DISTINCT from wantsProviderRecommendation:
+- wantsProviderRecommendation=true: user is asking to be connected with a professional for the FIRST TIME
+- wantsAnotherProvider=true: a provider card is ALREADY SHOWN and the user wants a DIFFERENT one
+
+Set wantsAnotherProvider=true when the user's intent is to replace, skip, or swap the currently
+recommended provider — regardless of how they phrase it. Common expressions (any language):
+  - Explicit swap: "别的", "换一个", "换人", "other one", "different person", "another specialist"
+  - Dissatisfaction: "不合适", "不喜欢这个", "this doesn't work", "not quite right", "not a good fit"
+  - Skip/pass: "next", "pass", "不感兴趣", "skip this one", "try someone else"
+  - Any paraphrase meaning "I want a different provider than the one shown"
+
+Set wantsAnotherProvider=false when there is no existing provider card being replaced.
 
 ## WIDE SCAN SUBDIVISION INTENT
 
@@ -466,6 +483,7 @@ ${INTENT_SCHEMA}`;
       needsClarification: Boolean(parsed.needsClarification),
       clarificationQuestion: parsed.clarificationQuestion ?? null,
       wantsProviderRecommendation: Boolean(parsed.wantsProviderRecommendation),
+      wantsAnotherProvider: Boolean(parsed.wantsAnotherProvider),
       suggestedDiscipline: parsed.suggestedDiscipline && VALID_DISCIPLINES.includes(parsed.suggestedDiscipline as string) ? parsed.suggestedDiscipline : null,
       wideScanSubdivisionIntent: Boolean(parsed.wideScanSubdivisionIntent),
       reasoning: parsed.reasoning ?? "",
@@ -583,6 +601,7 @@ async function fallbackDetectIntent(
       ? (locale === "zh" ? "您有特别想看的郊区吗?" : "Any particular suburb in mind?")
       : null,
     wantsProviderRecommendation,
+    wantsAnotherProvider: false,
     suggestedDiscipline: null,
     wideScanSubdivisionIntent: false,
     reasoning: "regex fallback",

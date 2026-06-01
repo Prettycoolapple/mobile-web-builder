@@ -3260,9 +3260,10 @@ router.post("/chat", async (req, res) => {
       // Provider recommendation signal derived by the LLM from the user's message.
       // Included in every response so the client can trigger the explicit check
       // without relying on client-side keyword matching.
-      const providerSignal = intent.wantsProviderRecommendation
-        ? { wantsProviderRecommendation: true, suggestedDiscipline: intent.suggestedDiscipline ?? null }
-        : {};
+      const providerSignal = {
+        ...(intent.wantsProviderRecommendation ? { wantsProviderRecommendation: true, suggestedDiscipline: intent.suggestedDiscipline ?? null } : {}),
+        ...(intent.wantsAnotherProvider ? { wantsAnotherProvider: true } : {}),
+      };
       const latestAssistantText = [...messages].reverse().find((m) => m.role === "assistant")?.content ?? "";
       const recentAssistantAskedForSearchArea =
         /(suburb|area|neighbou?rhood|where should|which.+search|区域|郊区|哪个区|哪個區|地方|哪里|哪裡)/i.test(latestAssistantText);
