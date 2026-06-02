@@ -1988,11 +1988,15 @@ export default function SearchScreen() {
             <Text style={[styles.contextAddress, { color: "rgba(250,249,246,0.75)", fontFamily: "DM_Sans_500Medium" }]} numberOfLines={1}>
               {currentSession.currentReport.address || currentSession.currentReport.propertyOverview?.address || t("search.property_loaded")}
             </Text>
-            <View style={[styles.contextBadge, { backgroundColor: colors.accent + "22" }]}>
-              <Text style={[styles.contextBadgeText, { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" }]}>
-                {formatCompositeScoreForDisplay(Number(currentSession.currentReport.scores?.composite ?? 0))}/5
-              </Text>
-            </View>
+            {/* Hide the composite badge when land area is unknown — the score is
+                unreliable, so the report shows a contact-the-agent prompt instead. */}
+            {String(currentSession.currentReport.propertyOverview?.landArea ?? "").trim() ? (
+              <View style={[styles.contextBadge, { backgroundColor: colors.accent + "22" }]}>
+                <Text style={[styles.contextBadgeText, { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" }]}>
+                  {formatCompositeScoreForDisplay(Number(currentSession.currentReport.scores?.composite ?? 0))}/5
+                </Text>
+              </View>
+            ) : null}
           </View>
         )}
       </View>

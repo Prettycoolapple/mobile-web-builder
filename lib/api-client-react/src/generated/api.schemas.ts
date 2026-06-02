@@ -196,6 +196,7 @@ export interface PropertyOverview {
   zone?: string;
   /** LINZ estate / tenure label when available */
   titleType?: string | null;
+  titleResolutionSource?: "lrs" | "lrs_cache" | "listing" | "scraped_page" | "ai_snippet" | "unknown";
   listingPrice?: string;
   isOnMarket?: boolean;
 }

@@ -217,7 +217,12 @@ export default function HistoryScreen() {
         serverHistoryId = g.historyId ?? undefined;
       } else if (latestReport?.report) {
         address = reportAddress(latestReport.report) || session.title;
-        composite = typeof latestReport.report.scores?.composite === "number" ? latestReport.report.scores.composite : null;
+        // Suppress the score when land area is unknown — it would be unreliable,
+        // matching the report view which hides the score and prompts to contact the agent.
+        const hasLandArea = !!String(latestReport.report.propertyOverview?.landArea ?? "").trim();
+        composite = hasLandArea && typeof latestReport.report.scores?.composite === "number"
+          ? latestReport.report.scores.composite
+          : null;
         zone = reportZone(latestReport.report);
         kind = "report";
         icon = "file-text";

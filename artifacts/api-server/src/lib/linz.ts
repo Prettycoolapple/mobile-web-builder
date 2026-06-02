@@ -83,6 +83,15 @@ export interface LinzLrsAddressTitlePreview {
   titles: LinzLrsTitlePreview[];
 }
 
+export type LinzLrsTitlePreviewStatus = "resolved" | "unavailable" | "mismatch" | "no_result" | "failed";
+export type LinzLrsTitlePreviewSource = "live" | "cache" | null;
+
+export interface LinzLrsTitlePreviewLookup {
+  preview: LinzLrsAddressTitlePreview | null;
+  status: LinzLrsTitlePreviewStatus;
+  source: LinzLrsTitlePreviewSource;
+}
+
 export interface LinzMemorial {
   title_no: string;
   memorial_text: string;
@@ -92,6 +101,30 @@ export interface LinzMemorial {
 
 function getKey(): string | null {
   return process.env["LINZ_API_KEY"] ?? null;
+}
+
+const LRS_TITLE_PREVIEW_CACHE = new Map<string, LinzLrsAddressTitlePreview>();
+
+function lrsCacheKeys(...values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.map(normaliseLrsAddress).filter(Boolean))];
+}
+
+function cacheLrsTitlePreview(preview: LinzLrsAddressTitlePreview, ...aliases: Array<string | null | undefined>): void {
+  for (const key of lrsCacheKeys(preview.address, preview.address_id, ...aliases)) {
+    LRS_TITLE_PREVIEW_CACHE.set(key, preview);
+  }
+}
+
+function getCachedLrsTitlePreview(...aliases: Array<string | null | undefined>): LinzLrsAddressTitlePreview | null {
+  for (const key of lrsCacheKeys(...aliases)) {
+    const cached = LRS_TITLE_PREVIEW_CACHE.get(key);
+    if (cached) return cached;
+  }
+  return null;
+}
+
+export function clearLrsTitlePreviewCacheForTests(): void {
+  LRS_TITLE_PREVIEW_CACHE.clear();
 }
 
 function normaliseLrsAddress(value: string | null | undefined): string {
@@ -175,8 +208,18 @@ export function estateTypeFromLrsTitles(titles: LinzLrsTitlePreview[]): string |
 }
 
 export async function fetchLINZTitlesByAddress(address: string): Promise<LinzLrsAddressTitlePreview | null> {
+  return (await fetchLINZTitlesByAddressDetailed(address)).preview;
+}
+
+function lrsUnavailableStatus(status: number): LinzLrsTitlePreviewStatus {
+  return status === 408 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504
+    ? "unavailable"
+    : "failed";
+}
+
+export async function fetchLINZTitlesByAddressDetailed(address: string): Promise<LinzLrsTitlePreviewLookup> {
   const initialQuery = address.trim();
-  if (!initialQuery) return null;
+  if (!initialQuery) return { preview: null, status: "no_result", source: null };
 
   try {
     let selected: { id?: string | number; address?: string; source?: string; rank?: number } | null = null;
@@ -207,10 +250,15 @@ export async function fetchLINZTitlesByAddress(address: string): Promise<LinzLrs
         break;
       }
     }
-    if (!selected?.id || !selected.address) return null;
+    if (!selected?.id || !selected.address) {
+      const cached = getCachedLrsTitlePreview(initialQuery);
+      return cached
+        ? { preview: cached, status: "unavailable", source: "cache" }
+        : { preview: null, status: "no_result", source: null };
+    }
     if (!lrsAddressLooksExact(selectedQuery, selected.address)) {
       logger.warn({ requested: initialQuery, selected: selected.address }, "LINZ LRS address search did not produce an exact-looking address");
-      return null;
+      return { preview: null, status: "mismatch", source: null };
     }
 
     const titlesUrl = new URL(`${LINZ_LRS_PUBLIC_BASE}/public-searches/lws/titles`);
@@ -221,7 +269,11 @@ export async function fetchLINZTitlesByAddress(address: string): Promise<LinzLrs
     });
     if (!titlesResp.ok) {
       logger.warn({ status: titlesResp.status, addressId: selected.id }, "LINZ LRS title preview failed");
-      return null;
+      const status = lrsUnavailableStatus(titlesResp.status);
+      const cached = getCachedLrsTitlePreview(initialQuery, selected.address, String(selected.id));
+      return cached && status === "unavailable"
+        ? { preview: cached, status, source: "cache" }
+        : { preview: null, status, source: null };
     }
 
     const titlesJson = await titlesResp.json() as {
@@ -254,15 +306,20 @@ export async function fetchLINZTitlesByAddress(address: string): Promise<LinzLrs
       })
       .filter((item): item is LinzLrsTitlePreview => !!item);
 
-    if (titles.length === 0) return null;
-    return {
+    if (titles.length === 0) return { preview: null, status: "no_result", source: null };
+    const preview = {
       address_id: String(titlesJson.address?.id ?? selected.id),
       address: titlesJson.address?.string ?? selected.address,
       titles,
     };
+    cacheLrsTitlePreview(preview, initialQuery, selectedQuery, selected.address, String(selected.id));
+    return { preview, status: "resolved", source: "live" };
   } catch (err) {
     logger.warn({ err: (err as Error).message, address: initialQuery }, "LINZ LRS title preview lookup failed");
-    return null;
+    const cached = getCachedLrsTitlePreview(initialQuery);
+    return cached
+      ? { preview: cached, status: "unavailable", source: "cache" }
+      : { preview: null, status: "unavailable", source: null };
   }
 }
 

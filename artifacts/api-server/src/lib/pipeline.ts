@@ -1,7 +1,7 @@
 import { logger } from "./logger";
 import { ai } from "@workspace/integrations-gemini-ai";
 import { geocodeAddress, type GeoResult } from "./geocode";
-import { fetchLINZParcel, fetchLINZTitle, fetchLINZMemorials, fetchLINZTitlesByAddress, estateTypeFromLrsTitles, type LinzParcel, type LinzTitle, type LinzLrsAddressTitlePreview } from "./linz";
+import { fetchLINZParcel, fetchLINZTitle, fetchLINZMemorials, fetchLINZTitlesByAddressDetailed, estateTypeFromLrsTitles, type LinzParcel, type LinzTitle, type LinzLrsAddressTitlePreview, type LinzLrsTitlePreviewStatus, type LinzLrsTitlePreviewSource } from "./linz";
 import { fetchUnitaryPlanZone, fetchOverlaysWithConsensus, fetchContour, type ZoneResult, type Overlay, type ContourResult } from "./auckland-council";
 import { fetchPropertyHistory, checkAsbestosRisk, type PropertyHistory, type AsbestosRisk } from "./property-data";
 import { fetchInfrastructure, type InfrastructureItem } from "./infrastructure";
@@ -11,6 +11,8 @@ import { scrapeHomes, type HomesData } from "./scrapers/homes";
 import { scrapeQV, type QVData } from "./scrapers/qv";
 import { scrapePropertyValue, type PropertyValueData } from "./scrapers/propertyvalue";
 import { mergePropertyData, type MergedPropertyData } from "./scrapers/merge";
+import { sanitizeTenureField } from "./titleDisplay";
+import { resolveTitleStatus } from "./title-resolution";
 import { withBrowserSlot } from "./scrapers/browser";
 import { classifyAsbestos, type AsbestosClassification } from "./asbestos";
 import { calculatePotentialLots, buildSubdivisionPathwayNote, type LotResult, type SubdivisionPathwayNote } from "./lot-calculator";
@@ -102,28 +104,6 @@ function inferEstateTypeFromParcel(parcel: LinzParcel | null): string | null {
     return "Fee Simple";
   }
   return null;
-}
-
-function hasCrossLeaseSignal(value: string | null | undefined): boolean {
-  return /\bcross[-\s]*lease|crosslease\b/i.test(value ?? "");
-}
-
-function estateTypeSource(
-  estateType: string,
-  signals: {
-    oneRoofTenure: string | null;
-    realestateTenure: string | null;
-    lrsTenure: string | null;
-    titleEstate: string | null;
-    parcelEstate: string | null;
-  },
-): string {
-  if (estateType === signals.lrsTenure) return "linz_lrs_title_preview";
-  if (estateType === signals.oneRoofTenure) return "oneroof";
-  if (estateType === signals.realestateTenure) return "realestate.co.nz";
-  if (estateType === signals.titleEstate) return "linz_title";
-  if (estateType === signals.parcelEstate) return "linz_parcel_inferred";
-  return "unknown";
 }
 
 function forceSingleLotResult(lotResult: LotResult): LotResult {
@@ -602,14 +582,18 @@ export async function runPropertyPipeline(
   // ─── LINZ title, memorials ────────────────────────────────────────────────
   let linzTitle: LinzTitle | null = null;
   let linzLrsTitlePreview: LinzLrsAddressTitlePreview | null = null;
+  let linzLrsStatus: LinzLrsTitlePreviewStatus = "failed";
+  let linzLrsPreviewSource: LinzLrsTitlePreviewSource = null;
   let easementAnalysis: EasementAnalysis = NO_TITLE; // default: could not resolve title
   const lrsTitlePreviewResult = await timed(
     "linz_lrs_title_preview",
-    () => fetchLINZTitlesByAddress(geocode.formatted ?? address),
+    () => fetchLINZTitlesByAddressDetailed(geocode.formatted ?? address),
     timing,
   );
-  if (!lrsTitlePreviewResult.failed) {
-    linzLrsTitlePreview = lrsTitlePreviewResult.value;
+  if (!lrsTitlePreviewResult.failed && lrsTitlePreviewResult.value) {
+    linzLrsTitlePreview = lrsTitlePreviewResult.value.preview;
+    linzLrsStatus = lrsTitlePreviewResult.value.status;
+    linzLrsPreviewSource = lrsTitlePreviewResult.value.source;
   }
   if (linzParcelData?.title_no) {
     const [titleResult, memorialsResult] = await Promise.allSettled([
@@ -971,19 +955,29 @@ export async function runPropertyPipeline(
   const titleEstate = linzTitle?.estate_type?.trim() ?? null;
   const lrsTenure = estateTypeFromLrsTitles(linzLrsTitlePreview?.titles ?? []);
   const parcelEstate = inferEstateTypeFromParcel(linzParcelData);
-  const realestateTenure = realestateListingForFacts?.tenureText?.trim() ?? null;
-  const oneRoofTenure = oneRoofData?.tenureText?.trim() ?? null;
-  const crossLeaseOverride = [lrsTenure, oneRoofTenure, realestateTenure, titleEstate, parcelEstate].find(hasCrossLeaseSignal) ?? null;
-  const estateFromTitle = crossLeaseOverride ?? lrsTenure ?? titleEstate ?? parcelEstate ?? realestateTenure ?? oneRoofTenure ?? null;
-  merged.estate_type = estateFromTitle;
-  if (estateFromTitle) {
-    merged.data_sources["estate_type"] = estateTypeSource(estateFromTitle, {
-      oneRoofTenure,
-      realestateTenure,
-      lrsTenure,
-      titleEstate,
-      parcelEstate,
-    });
+  // Sanitize scraped tenure text at the source: scrapers occasionally capture
+  // page navigation/menu chrome instead of a tenure, which previously leaked all
+  // the way to the property card as a bogus title badge. Only keep values that
+  // are a recognisable NZ tenure; otherwise drop to null and fall back to the
+  // authoritative LINZ-derived estate type.
+  const realestateTenure = sanitizeTenureField(realestateListingForFacts?.tenureText);
+  const oneRoofTenure = sanitizeTenureField(oneRoofData?.tenureText);
+  const titleResolution = resolveTitleStatus({
+    lrsTenure,
+    lrsPreviewSource: linzLrsPreviewSource,
+    lrsStatus: linzLrsStatus,
+    listingTenures: [realestateTenure],
+    scrapedTenures: [oneRoofTenure],
+    titleEstate,
+    parcelEstate,
+  });
+  merged.estate_type = titleResolution.titleType;
+  merged.titleResolutionSource = titleResolution.titleResolutionSource;
+  merged.lrsStatus = titleResolution.lrsStatus;
+  merged.data_sources["title_resolution_source"] = titleResolution.titleResolutionSource;
+  merged.data_sources["linz_lrs_status"] = titleResolution.lrsStatus;
+  if (titleResolution.titleType) {
+    merged.data_sources["estate_type"] = titleResolution.titleResolutionSource;
   }
 
   // Cross-validate land area between LINZ and scrapers — log warning if they diverge >10%.

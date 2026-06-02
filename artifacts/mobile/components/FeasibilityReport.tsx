@@ -615,6 +615,27 @@ function ScoreSummaryRow({ report, colors, hideOverall }: { report: Report; colo
   );
 }
 
+/** Shown in place of the score row when land area is unknown — the score would
+ *  be unreliable, so we prompt the user to confirm it with the listing agent. */
+function ScoreHiddenNotice({ colors }: { colors: ReturnType<typeof useColors> }) {
+  const { t } = useT();
+  return (
+    <View style={[styles.scoresSection, { backgroundColor: (colors as any).scoreCardBg }]}>
+      <View style={{ flexDirection: "row", gap: 10, alignItems: "flex-start", paddingVertical: 4 }}>
+        <Feather name="alert-circle" size={18} color="#FDE68A" style={{ marginTop: 1 }} />
+        <View style={{ flex: 1 }}>
+          <Text style={{ color: "#FDE68A", fontFamily: "DM_Sans_600SemiBold", fontSize: 13, marginBottom: 4 }}>
+            {t("report.score_hidden_title")}
+          </Text>
+          <Text style={{ color: "rgba(250,250,249,0.75)", fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 18 }}>
+            {t("report.score_hidden_body")}
+          </Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
 const AnimatedImage = Animated.createAnimatedComponent(Image);
 
 function FullscreenPhotoViewer({
@@ -794,12 +815,15 @@ function ReportPhotoCarousel({
   colors,
   onRefreshPhotos,
   isRefreshingPhotos,
+  hideScore,
 }: {
   report: Report;
   photoUrls: string[];
   colors: ReturnType<typeof useColors>;
   onRefreshPhotos?: () => void;
   isRefreshingPhotos?: boolean;
+  /** Suppress the hero score badge when the score is unreliable (e.g. land area unknown). */
+  hideScore?: boolean;
 }) {
   const [width, setWidth] = useState(0);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -902,14 +926,16 @@ function ReportPhotoCarousel({
         pointerEvents="none"
       />
 
-      {/* Overall score badge */}
-      <View style={styles.heroOverallBadge}>
-        <Text style={[styles.heroOverallLabel, { color: "rgba(255,255,255,0.85)" }]}>{translate("report.score_overall")}</Text>
-        <View style={[styles.heroOverallPill, { backgroundColor: overallColor + "EE", borderColor: "rgba(255,255,255,0.35)" }]}>
-          <Text style={styles.heroOverallNumber}>{overallDisplay}</Text>
-          <Text style={styles.heroOverallSub}>/ 5</Text>
+      {/* Overall score badge — hidden when the score is unreliable (e.g. land area unknown). */}
+      {!hideScore && (
+        <View style={styles.heroOverallBadge}>
+          <Text style={[styles.heroOverallLabel, { color: "rgba(255,255,255,0.85)" }]}>{translate("report.score_overall")}</Text>
+          <View style={[styles.heroOverallPill, { backgroundColor: overallColor + "EE", borderColor: "rgba(255,255,255,0.35)" }]}>
+            <Text style={styles.heroOverallNumber}>{overallDisplay}</Text>
+            <Text style={styles.heroOverallSub}>/ 5</Text>
+          </View>
         </View>
-      </View>
+      )}
 
       {/* Page-indicator dots — visible only when there are multiple photos */}
       {total > 1 && (
@@ -2333,19 +2359,32 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
   const developmentStrategies = report.developmentStrategies ?? [];
   const hasDevelopmentStrategies = developmentStrategies.length > 0;
   const titleTypeRaw = formatTitleTypeForDisplay(report.propertyOverview?.titleType);
+  const titleResolutionSource = report.propertyOverview?.titleResolutionSource ?? "unknown";
+  const titleNeedsAgentCheck =
+    !!titleTypeRaw && titleResolutionSource !== "lrs" && titleResolutionSource !== "lrs_cache";
   // Defence in depth: when the backend translation step didn't run (e.g. cached
   // legacy reports), localise the title token on the client for zh users so
   // the pill never shows untranslated "Freehold"/"Leasehold". The
   // /freehold/i check below still works because the English word remains in
   // the parens, e.g. "永久产权 (Freehold)".
-  const titleTypeDisplay =
+  const titleTypeDisplayBase =
     locale === "zh" && titleTypeRaw ? localiseTitleTypeZh(titleTypeRaw) ?? titleTypeRaw : titleTypeRaw;
+  const titleTypeDisplay =
+    titleTypeDisplayBase && titleNeedsAgentCheck
+      ? `${titleTypeDisplayBase} ${t("report.title_check_with_agent")}`
+      : titleTypeDisplayBase;
   // Freehold renders neutral; Cross Lease / Leasehold / Stratum get a warning accent.
   const isNonFreeholdTenure = !!titleTypeDisplay && !/free\s*hold/i.test(titleTypeDisplay);
   const landAreaUnavailableContact =
     !report.propertyOverview?.landArea &&
     (report.propertyOverview?.typology === "unit_apartment" ||
       report.propertyOverview?.subdivisionRejectReason === "unit_or_crosslease_signal");
+  // Land area is the single most critical input for development feasibility:
+  // without it, ease / cost / ROI scores are guesses. When it's missing we hide
+  // the score displays entirely and prompt the user to confirm it with the
+  // listing agent, rather than showing a misleadingly confident rating.
+  const landAreaMissing =
+    !report.propertyOverview?.landArea || !String(report.propertyOverview.landArea).trim();
   const riskSummaryForDisplay = useMemo(() => {
     const scrubbed = filterRiskSummaryRemoveIncompleteDataDisclaimerBullets(report.riskSummary ?? []);
     return ensureRiskSummaryMinForReport(report, scrubbed, 3);
@@ -2362,6 +2401,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
           colors={colors}
           onRefreshPhotos={report.historyId ? handleRefreshPhotos : undefined}
           isRefreshingPhotos={isRefreshingPhotos}
+          hideScore={landAreaMissing}
         />
 
         <View style={[styles.reportHeaderTop, { paddingTop: 12 }]}>
@@ -2430,7 +2470,11 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
           </View>
         )}
 
-        <ScoreSummaryRow report={report} colors={colors} hideOverall />
+        {landAreaMissing ? (
+          <ScoreHiddenNotice colors={colors} />
+        ) : (
+          <ScoreSummaryRow report={report} colors={colors} hideOverall />
+        )}
       </View>
 
       {(report.cv_unavailable || (report.missing_critical_fields && report.missing_critical_fields.length > 0)) && (

@@ -51,6 +51,7 @@ export const AnalysePropertyResponse = zod.object({
         buildYear: zod.string().optional(),
         zone: zod.string().optional(),
         titleType: zod.string().optional().nullable(),
+        titleResolutionSource: zod.enum(["lrs", "lrs_cache", "listing", "scraped_page", "ai_snippet", "unknown"]).optional(),
         listingPrice: zod.string().optional(),
         isOnMarket: zod.boolean().optional(),
       })

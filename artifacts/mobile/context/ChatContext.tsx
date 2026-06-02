@@ -92,6 +92,7 @@ export interface PropertyOverview {
   zone?: string;
   /** LINZ estate description / tenure (e.g. Fee Simple, Cross lease). */
   titleType?: string | null;
+  titleResolutionSource?: "lrs" | "lrs_cache" | "listing" | "scraped_page" | "ai_snippet" | "unknown";
   typology?: "standalone" | "terrace_townhouse" | "unit_apartment" | "unknown";
   typologyConfidence?: "verified" | "inferred" | "unknown";
   titleConfidence?: "verified" | "inferred" | "unknown";

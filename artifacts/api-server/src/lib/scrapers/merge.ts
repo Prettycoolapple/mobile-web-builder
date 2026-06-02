@@ -10,6 +10,7 @@ import type { PropertyValueData } from "./propertyvalue";
 import { addressLineAppearsInText, addressesLikelyMatch } from "./realestate-api";
 import type { PropertyHistory } from "../property-data";
 import type { PropertyEligibilityConfidence, PropertyTypology } from "../property-eligibility";
+import type { TitleResolutionSource } from "../title-resolution";
 
 export interface MergedPropertyData {
   cv_nzd: number | null;
@@ -57,6 +58,8 @@ export interface MergedPropertyData {
   missing_critical_fields: string[];
   /** LINZ title estate description when resolved (e.g. Fee Simple / cross lease). */
   estate_type: string | null;
+  titleResolutionSource?: TitleResolutionSource;
+  lrsStatus?: string | null;
   property_type?: string | null;
   typology?: PropertyTypology;
   typologyConfidence?: PropertyEligibilityConfidence;
@@ -1005,6 +1008,8 @@ export function mergePropertyData(
     infrastructure: extra?.infrastructure ?? [],
     missing_critical_fields,
     estate_type: null,
+    titleResolutionSource: "unknown",
+    lrsStatus: null,
     property_type,
     typology: "unknown",
     typologyConfidence: "unknown",

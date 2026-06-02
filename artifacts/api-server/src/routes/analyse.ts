@@ -40,7 +40,7 @@ import {
 import { ensureMinRiskSummaryBulletsFromReport, buildCrossLeaseRiskBullets, buildTitleInsight, isCrossLeaseEstate, type RiskBackfillContext } from "../lib/report-risk-backfill";
 import { detectSubdivision } from "../lib/subdivision";
 import { formatNZD } from "../lib/utils";
-import { searchRealEstateListings, resolveDistrictToSuburbs } from "../lib/scrapers/realestate-search";
+import { searchRealEstateListings, resolveDistrictToSuburbs, detectDirectionalAreaTerm } from "../lib/scrapers/realestate-search";
 import { preScreenListingsFastDetailed, type PropertyCandidate } from "../lib/pre-screen";
 import {
   hasStandardSubdivisionYield,
@@ -211,6 +211,7 @@ export function applyOverviewSnapshot(
     zone: merged.zone_description ?? merged.zone_code ?? null,
     zone_code: merged.zone_code ?? null,
     titleType: formatTitleTypeForDisplay(merged.estate_type?.trim() || null),
+    titleResolutionSource: merged.titleResolutionSource ?? "unknown",
     typology: merged.typology ?? "unknown",
     typologyConfidence: merged.typologyConfidence ?? "unknown",
     titleConfidence: merged.titleConfidence ?? "unknown",
@@ -242,6 +243,7 @@ export function applyOverviewSnapshot(
     titleType: formatTitleTypeForDisplay(
       (snapshot.titleType ?? existingOverview.titleType) as string | null | undefined,
     ),
+    titleResolutionSource: snapshot.titleResolutionSource ?? existingOverview.titleResolutionSource ?? "unknown",
     typology: snapshot.typology,
     typologyConfidence: snapshot.typologyConfidence,
     titleConfidence: snapshot.titleConfidence,
@@ -1143,6 +1145,51 @@ async function prescreenPickRestoreBatch(
  * callers can log + cache key correctly. `isDistrictFanOut` is true when we
  * fanned out (used to set the loading-hint for change #6 below).
  */
+// ─── Discovery candidate display sanity ─────────────────────────────────────
+// Scrapers occasionally emit a malformed listing — e.g. an address of "Https:"
+// (a URL fragment parsed as the street) or an absurd land area (34,844,385 m²).
+// These must never reach a property card. Validate at the final step so junk
+// from ANY source is dropped regardless of which scraper produced it.
+const STREET_SUFFIX_RE =
+  /\b(road|rd|street|st|avenue|ave|drive|dr|lane|ln|place|pl|crescent|cres|terrace|tce|way|close|grove|parade|pde|highway|hwy|court|ct|quay|esplanade|rise|mews|boulevard|blvd|loop|crest|heights|view|valley|bay|beach|point|pt|ridge|park|gardens)\b/i;
+
+function isPlausibleStreetAddress(address: string | null | undefined): boolean {
+  if (!address || typeof address !== "string") return false;
+  const a = address.trim();
+  if (a.length < 6) return false;
+  // URL fragments / web chrome leaked into the address field.
+  if (/^https?:?$/i.test(a)) return false;
+  if (/https?:\/\//i.test(a) || /\bwww\.|\.co\.nz|\.com\b|\.net\b/i.test(a)) return false;
+  // Must contain a letter (Latin or CJK).
+  if (!/[a-z一-鿿]/i.test(a)) return false;
+  // Address-like shape: a comma (street, suburb, region), OR a street number +
+  // word, OR a recognised street-type suffix.
+  return a.includes(",") || /\d+\s+\S+/.test(a) || STREET_SUFFIX_RE.test(a);
+}
+
+// Generous upper bound — legit lifestyle blocks can be large, but anything over
+// ~200 ha in a residential discovery search is corrupt scraped data.
+const MAX_SANE_LAND_AREA_SQM = 2_000_000;
+
+function isSaneLandArea(landArea: number | null | undefined): boolean {
+  if (landArea == null) return true; // unknown is allowed
+  return Number.isFinite(landArea) && landArea >= 10 && landArea <= MAX_SANE_LAND_AREA_SQM;
+}
+
+/** Drop candidates with an implausible address; null out an insane land area so
+ *  a single bad field doesn't discard an otherwise valid listing. */
+function sanitizeDiscoveryCandidates(
+  candidates: import("../lib/pre-screen").PropertyCandidate[],
+): import("../lib/pre-screen").PropertyCandidate[] {
+  return candidates
+    .filter((c) => isPlausibleStreetAddress(c.address))
+    .map((c) =>
+      isSaneLandArea(c.landArea)
+        ? c
+        : { ...c, landArea: undefined, landAreaApprox: false, landAreaConfidence: undefined },
+    );
+}
+
 async function searchSuburbOrDistrict(args: {
   suburb: string;
   minPrice: number;
@@ -3461,6 +3508,16 @@ router.post("/chat", async (req, res) => {
             const hit = await findSuburbInTextViaIndex(userText);
             if (hit) suburb = hit.title.toLowerCase();
           }
+          // Directional / "central" area terms (EN + zh) are Auckland-context by
+          // default. Resolve them to Auckland districts so we never fall back to
+          // a NZ-wide keyword search (which surfaced Te Puke / Tawa for "central").
+          if (!suburb) {
+            const directional = detectDirectionalAreaTerm(userText);
+            if (directional) {
+              suburb = directional;
+              req.log.info({ directional }, "Discovery: resolved directional area term to Auckland context");
+            }
+          }
           if (!suburb && isFollowUp && reportCtx?.suburb) {
             suburb = reportCtx.suburb.toLowerCase().trim();
           }
@@ -3835,6 +3892,10 @@ router.post("/chat", async (req, res) => {
               );
             }
           }
+
+          // Final display guard: never let a malformed listing (URL-fragment
+          // address, absurd land area) reach a property card.
+          candidates = sanitizeDiscoveryCandidates(candidates);
 
           const noListings = candidates.length === 0;
 
@@ -4301,6 +4362,7 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
     "buildYear": ${merged.build_year_range ? `"${merged.build_year_range}"` : (merged.build_year != null ? `"${merged.build_year}"` : "null")},
     "zone": "...",
     "titleType": ${merged.estate_type ? JSON.stringify(formatTitleTypeForDisplay(merged.estate_type) ?? merged.estate_type) : "null"},
+    "titleResolutionSource": ${JSON.stringify(merged.titleResolutionSource ?? "unknown")},
     "typology": ${JSON.stringify(merged.typology ?? "unknown")},
     "typologyConfidence": ${JSON.stringify(merged.typologyConfidence ?? "unknown")},
     "titleConfidence": ${JSON.stringify(merged.titleConfidence ?? "unknown")},
@@ -4629,6 +4691,9 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                   targetCount: safetyNetTargetCount,
                 },
               );
+
+              // Final display guard (same as the main discovery path).
+              discoverCandidates = sanitizeDiscoveryCandidates(discoverCandidates);
 
               if (discoverCandidates.length > 0) {
                 queueBackgroundScores(

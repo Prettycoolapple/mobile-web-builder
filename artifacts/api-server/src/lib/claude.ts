@@ -972,7 +972,6 @@ export async function generateUnifiedResponse(
     const titleType = fmt(overview?.["titleType"]);
     const typology = fmt(overview?.["typology"]);
     const typologyConfidence = fmt(overview?.["typologyConfidence"]);
-    const titleConfidence = fmt(overview?.["titleConfidence"]);
     const subdivisionEligible = overview?.["subdivisionEligible"];
     const subdivisionRejectReason = fmt(overview?.["subdivisionRejectReason"]);
     const listingPrice = fmt(overview?.["listingPrice"]);
@@ -1053,7 +1052,7 @@ export async function generateUnifiedResponse(
     if (buildYear)    sections.push(`  Build year: ${buildYear}`);
     if (bedrooms)     sections.push(`  Bedrooms: ${bedrooms}`);
     if (bathrooms)    sections.push(`  Bathrooms: ${bathrooms}`);
-    if (titleType)    sections.push(`  Title type: ${titleType}${titleConfidence ? ` (confidence: ${titleConfidence})` : ""}`);
+    if (titleType)    sections.push(`  Title type: ${titleType}`);
     if (typology)     sections.push(`  Typology: ${typology}${typologyConfidence ? ` (confidence: ${typologyConfidence})` : ""}`);
     if (subdivisionEligible != null) {
       sections.push(`  Strict subdivision eligibility: ${subdivisionEligible ? "eligible" : "not eligible"}${subdivisionRejectReason ? ` (${subdivisionRejectReason})` : ""}`);

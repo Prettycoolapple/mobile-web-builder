@@ -411,9 +411,93 @@ function getDistrictIndex(): Map<string, string[]> {
   return idx;
 }
 
+// Colloquial directional / "central" area terms are Auckland-context by default:
+// NZ users saying "central / east / south / west / north" (and the zh
+// 中区/东区/南区/西区/北区) almost always mean Auckland. Each maps to the
+// realestate.co.nz Auckland district keys it covers; we expand those to their
+// child suburbs so the search stays INSIDE Auckland rather than falling back to
+// a NZ-wide keyword search (which previously surfaced Te Puke / Tawa for
+// "central"). Districts must match keys used in SUBURB_SLUG_MAP.
+const AUCKLAND_DIRECTIONAL_DISTRICTS: Record<"central" | "east" | "south" | "west" | "north", string[]> = {
+  central: ["auckland-city", "albert-eden", "maungakiekie-tamaki", "orakei"],
+  east:    ["howick", "orakei"],
+  south:   ["manurewa-papakura", "mangere-otahuhu", "franklin"],
+  west:    ["henderson-massey"],
+  north:   ["devonport-takapuna", "kaipatiki", "hibiscus-and-bays", "upper-harbour"],
+};
+
+const DIRECTIONAL_AREA_ALIASES: Record<string, keyof typeof AUCKLAND_DIRECTIONAL_DISTRICTS> = {
+  "central": "central", "central auckland": "central", "central akl": "central",
+  "central suburbs": "central", "auckland central area": "central", "central area": "central",
+  "中区": "central", "中區": "central", "中央区": "central", "中央區": "central",
+  "奥克兰中区": "central", "奧克蘭中區": "central",
+  "east": "east", "east auckland": "east", "eastern auckland": "east", "eastern suburbs": "east",
+  "东区": "east", "東區": "east", "奥克兰东区": "east", "奧克蘭東區": "east",
+  "south": "south", "south auckland": "south", "southern auckland": "south", "southern suburbs": "south",
+  "南区": "south", "南區": "south", "奥克兰南区": "south", "奧克蘭南區": "south",
+  "west": "west", "west auckland": "west", "western auckland": "west", "western suburbs": "west",
+  "西区": "west", "西區": "west", "奥克兰西区": "west", "奧克蘭西區": "west",
+  "north": "north", "north auckland": "north", "north shore": "north", "northshore": "north",
+  "the shore": "north", "northern suburbs": "north",
+  "北区": "north", "北區": "north", "北岸": "north", "奥克兰北区": "north", "奧克蘭北區": "north", "奥克兰北岸": "north",
+};
+
+const DIRECTIONAL_FANOUT_CAP = 12;
+
+/** Resolve a directional / central area term to a capped, district-spread list
+ *  of Auckland child suburbs. Returns null when the term is not directional. */
+function resolveDirectionalAreaToSuburbs(raw: string): string[] | null {
+  const dir = DIRECTIONAL_AREA_ALIASES[raw];
+  if (!dir) return null;
+  const idx = getDistrictIndex();
+  const perDistrict = AUCKLAND_DIRECTIONAL_DISTRICTS[dir].map((d) => idx.get(d) ?? []);
+  // Round-robin across the direction's districts so the capped list spreads
+  // across the whole direction instead of exhausting one district alphabetically.
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; out.length < DIRECTIONAL_FANOUT_CAP; i++) {
+    let advanced = false;
+    for (const list of perDistrict) {
+      const s = list[i];
+      if (s && !seen.has(s)) {
+        seen.add(s);
+        out.push(s);
+        advanced = true;
+        if (out.length >= DIRECTIONAL_FANOUT_CAP) break;
+      }
+    }
+    if (!advanced) break;
+  }
+  return out.length > 0 ? out : null;
+}
+
+/** Detect a directional / central area term anywhere in free text (EN + zh) and
+ *  return the canonical Auckland direction key. Used as a discovery fallback so
+ *  "中区有什么…" / "what's on sale in central" resolves to Auckland even when the
+ *  upstream intent parser didn't extract a suburb. Returns null if none present. */
+export function detectDirectionalAreaTerm(text: string): "central" | "east" | "south" | "west" | "north" | null {
+  if (!text) return null;
+  const lower = text.toLowerCase();
+  // Multi-word English aliases and all zh aliases are safe as direct substrings.
+  for (const [alias, dir] of Object.entries(DIRECTIONAL_AREA_ALIASES)) {
+    if ((alias.includes(" ") || /[一-鿿]/.test(alias)) && lower.includes(alias)) {
+      return dir;
+    }
+  }
+  // Bare English direction word — require a word boundary so we don't match
+  // "east tamaki" (a real suburb) or "north-facing".
+  const m = lower.match(/\b(central|east|south|west|north)\b/);
+  if (m && DIRECTIONAL_AREA_ALIASES[m[1]]) return DIRECTIONAL_AREA_ALIASES[m[1]];
+  return null;
+}
+
 export function resolveDistrictToSuburbs(input: string): string[] | null {
   const raw = input?.toLowerCase().trim();
   if (!raw) return null;
+  // Directional / central area terms resolve to Auckland districts. Must run
+  // before the leaf-suburb short-circuit (these are not leaf suburbs anyway).
+  const directional = resolveDirectionalAreaToSuburbs(raw);
+  if (directional) return directional;
   // If the input is itself a leaf suburb, do not fan out — let the existing
   // single-suburb path handle it.
   if (SUBURB_SLUG_MAP[raw]) return null;

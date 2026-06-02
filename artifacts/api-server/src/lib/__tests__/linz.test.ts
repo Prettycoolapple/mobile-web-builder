@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { estateTypeFromLrsTitles, fetchLINZTitlesByAddress, mapLinzParcelFeature } from "../linz";
+import {
+  clearLrsTitlePreviewCacheForTests,
+  estateTypeFromLrsTitles,
+  fetchLINZTitlesByAddress,
+  fetchLINZTitlesByAddressDetailed,
+  mapLinzParcelFeature,
+} from "../linz";
 
 describe("LINZ parcel area mapping", () => {
   it("uses survey area for report facts while preserving calculated polygon area", () => {
@@ -20,6 +26,7 @@ describe("LINZ parcel area mapping", () => {
 describe("LINZ LRS public title preview", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    clearLrsTitlePreviewCacheForTests();
   });
 
   it("resolves cross lease tenure from the public address title preview", async () => {
@@ -65,6 +72,62 @@ describe("LINZ LRS public title preview", () => {
     expect(preview?.titles).toHaveLength(2);
     expect(estateTypeFromLrsTitles(preview?.titles ?? [])).toBe("Cross Lease");
     expect(fetchMock.mock.calls[1][0].toString()).toContain("/public-searches/lws/titles?addressId=1666137");
+  });
+
+  it("reports live LRS source when title preview resolves", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: [{ id: "1666137", address: "38 Te Arawa Street, Orakei, Auckland", source: "address", rank: 0.64 }],
+      }), { status: 200, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        titles: {
+          items: [{
+            titleNo: "NA60C/140",
+            type: { code: "CRLE", desc: "Cross lease" },
+            status: { code: "LIVE", desc: "Live" },
+          }],
+        },
+        address: { id: 1666137, string: "38 Te Arawa Street, Orakei, Auckland" },
+      }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const lookup = await fetchLINZTitlesByAddressDetailed("38 Te Arawa Street, Orakei, Auckland");
+
+    expect(lookup.status).toBe("resolved");
+    expect(lookup.source).toBe("live");
+    expect(estateTypeFromLrsTitles(lookup.preview?.titles ?? [])).toBe("Cross Lease");
+  });
+
+  it("uses an exact cached LRS title when title rows are temporarily unavailable", async () => {
+    const liveFetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: [{ id: "1666137", address: "38 Te Arawa Street, Orakei, Auckland", source: "address", rank: 0.64 }],
+      }), { status: 200, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        titles: {
+          items: [{
+            titleNo: "NA60C/140",
+            type: { code: "CRLE", desc: "Cross lease" },
+            status: { code: "LIVE", desc: "Live" },
+          }],
+        },
+        address: { id: 1666137, string: "38 Te Arawa Street, Orakei, Auckland" },
+      }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", liveFetch);
+    await fetchLINZTitlesByAddressDetailed("38 Te Arawa Street, Orakei, Auckland");
+
+    const unavailableFetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: [{ id: "1666137", address: "38 Te Arawa Street, Orakei, Auckland", source: "address", rank: 0.64 }],
+      }), { status: 200, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response("unavailable", { status: 503 }));
+    vi.stubGlobal("fetch", unavailableFetch);
+
+    const lookup = await fetchLINZTitlesByAddressDetailed("38 Te Arawa Street, Orakei, Auckland");
+
+    expect(lookup.status).toBe("unavailable");
+    expect(lookup.source).toBe("cache");
+    expect(estateTypeFromLrsTitles(lookup.preview?.titles ?? [])).toBe("Cross Lease");
   });
 
   it("retries with a LINZ-style address when Google-formatted address includes postcode and country", async () => {

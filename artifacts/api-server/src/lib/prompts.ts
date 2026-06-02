@@ -98,6 +98,7 @@ The JSON must follow this exact structure:
     "buildYear": "year as string e.g. 1965",
     "zone": "zone code + name e.g. MHS – Mixed Housing Suburban",
     "titleType": "land title / tenure from authoritative records — use plain \"Freehold\" for fee-simple freehold (never write \"Fee Simple\"); or Cross lease, Stratum, etc. Or null if unknown",
+    "titleResolutionSource": "lrs|lrs_cache|listing|scraped_page|ai_snippet|unknown",
     "listingPrice": "NZD amount or null",
     "isOnMarket": false
   },
