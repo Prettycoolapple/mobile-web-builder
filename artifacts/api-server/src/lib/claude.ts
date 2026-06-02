@@ -390,6 +390,7 @@ export async function extractChatIntent(
       criteria: null, isFollowUp: false, includeNegotiation: false,
       needsClarification: false, clarificationQuestion: null,
       wantsProviderRecommendation: false, suggestedDiscipline: null,
+      wantsAnotherProvider: false,
       wideScanSubdivisionIntent: false,
       reasoning: "empty messages",
     };
@@ -402,6 +403,7 @@ export async function extractChatIntent(
       criteria: null, isFollowUp: false, includeNegotiation: false,
       needsClarification: false, clarificationQuestion: null,
       wantsProviderRecommendation: false, suggestedDiscipline: null,
+      wantsAnotherProvider: false,
       wideScanSubdivisionIntent: false,
       reasoning: "no user message",
     };

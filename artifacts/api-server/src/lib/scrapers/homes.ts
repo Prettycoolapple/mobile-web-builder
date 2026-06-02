@@ -3,7 +3,7 @@ import { logger } from "../logger";
 import { hasRemoteBrowserEndpoint, isVercelServerless, launchBrowser, newStealthPage, randomDelay } from "./browser";
 import { fetchWithScrapingBee } from "./scrapingbee";
 import { extractBedsBaths } from "./bed-bath-extractor";
-import { addressLineAppearsInText } from "./realestate-api";
+import { addressLineAppearsInText, addressesLikelyMatch } from "./realestate-api";
 import type { Browser } from "playwright";
 
 /** Paths we must never mint as suburb slugs (`/address/auckland/{slug}/`). */
@@ -17,6 +17,8 @@ const HOMES_SUBURB_DENYLIST = new Set([
 
 /** ScrapingBee is slow (~10s/page); cap blind URL guesses per address. */
 const HOMES_SCRAPING_MAX_URL_VARIANTS = 6;
+const HOMES_GATEWAY_BASE = "https://gateway.homes.co.nz";
+const HOMES_DIRECT_FETCH_TIMEOUT_MS = 12_000;
 
 export interface HomesData {
   cv_nzd: number | null;
@@ -30,6 +32,28 @@ export interface HomesData {
   last_sale_date: string | null;
   address_confirmed: string | null;
 }
+
+type HomesGatewayPropertyCard = {
+  property_id?: unknown;
+  url?: unknown;
+  property_details?: {
+    address?: unknown;
+    display_address?: unknown;
+    capital_value?: unknown;
+    current_revision_date?: unknown;
+    floor_area?: unknown;
+    land_area?: unknown;
+    decade_built?: unknown;
+    num_bedrooms?: unknown;
+    num_bathrooms?: unknown;
+    latest_bedrooms?: unknown;
+    latest_bathrooms?: unknown;
+  };
+};
+
+type HomesGatewayPropertiesPayload = {
+  cards?: HomesGatewayPropertyCard[];
+};
 
 function parseNZD(raw: string): number | null {
   const n = parseInt(raw.replace(/[$,\s]/g, ""), 10);
@@ -46,6 +70,26 @@ function parseYear(raw: string): number | null {
   if (!m) return null;
   const y = parseInt(m[0], 10);
   return y >= 1900 && y <= new Date().getFullYear() + 1 ? y : null;
+}
+
+function toNumber(raw: unknown): number | null {
+  if (raw == null || raw === "") return null;
+  const n = typeof raw === "number" ? raw : Number(String(raw).replace(/[$,\s]/g, ""));
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+}
+
+function toPositiveSmallInt(raw: unknown): number | null {
+  const n = toNumber(raw);
+  return n != null && n > 0 && n < 20 ? n : null;
+}
+
+function textOrNull(raw: unknown): string | null {
+  return typeof raw === "string" && raw.trim() ? raw.trim() : null;
+}
+
+function addressMatchesSubject(addressNeedle: string, candidate: string | null | undefined): boolean {
+  if (!candidate) return false;
+  return addressesLikelyMatch(addressNeedle, candidate) || addressLineAppearsInText(addressNeedle, candidate);
 }
 
 function extractFromText(allText: string): Partial<HomesData> {
@@ -114,6 +158,146 @@ function extractFromEmbeddedHomesJson(html: string, address: string): Partial<Ho
   return data;
 }
 
+function findHomesAppState(html: string): unknown | null {
+  const match = html.match(/<script[^>]+id=["']homes-app-state["'][^>]*>([\s\S]*?)<\/script>/i);
+  if (!match) return null;
+  try {
+    return JSON.parse(match[1]);
+  } catch {
+    return null;
+  }
+}
+
+function collectHomesCards(value: unknown, cards: HomesGatewayPropertyCard[] = []): HomesGatewayPropertyCard[] {
+  if (!value || typeof value !== "object") return cards;
+  if (Array.isArray(value)) {
+    for (const item of value) collectHomesCards(item, cards);
+    return cards;
+  }
+
+  const obj = value as Record<string, unknown>;
+  if (Array.isArray(obj["cards"])) {
+    for (const card of obj["cards"]) {
+      if (card && typeof card === "object") cards.push(card as HomesGatewayPropertyCard);
+    }
+  }
+  for (const item of Object.values(obj)) collectHomesCards(item, cards);
+  return cards;
+}
+
+function cardToHomesData(card: HomesGatewayPropertyCard, addressNeedle: string): HomesData | null {
+  const details = card.property_details;
+  if (!details) return null;
+
+  const confirmedAddress = textOrNull(details.address) ?? textOrNull(details.display_address);
+  const url = textOrNull(card.url);
+  const urlAddress = url ? `https://homes.co.nz/address${url.startsWith("/") ? url : `/${url}`}` : null;
+  if (!addressMatchesSubject(addressNeedle, confirmedAddress) && !addressMatchesSubject(addressNeedle, urlAddress)) {
+    return null;
+  }
+
+  const bedrooms = toPositiveSmallInt(details.latest_bedrooms) ?? toPositiveSmallInt(details.num_bedrooms);
+  const bathrooms = toPositiveSmallInt(details.latest_bathrooms) ?? toPositiveSmallInt(details.num_bathrooms);
+  const landArea = toNumber(details.land_area);
+  const floorArea = toNumber(details.floor_area);
+  const cv = toNumber(details.capital_value);
+  const cvYear = parseYear(String(details.current_revision_date ?? ""));
+  const buildYear = parseYear(String(details.decade_built ?? ""));
+
+  if (!cv && !landArea && !floorArea && !buildYear && !bedrooms && !bathrooms) return null;
+
+  return {
+    cv_nzd: cv,
+    cv_year: cvYear,
+    land_area_sqm: landArea,
+    floor_area_sqm: floorArea,
+    build_year: buildYear,
+    bedrooms,
+    bathrooms,
+    last_sale_price: null,
+    last_sale_date: null,
+    address_confirmed: confirmedAddress ?? urlAddress ?? addressNeedle,
+  };
+}
+
+export function extractHomesDataFromGatewayPayload(payload: unknown, addressNeedle: string): HomesData | null {
+  for (const card of collectHomesCards(payload)) {
+    const data = cardToHomesData(card, addressNeedle);
+    if (data) return data;
+  }
+  return null;
+}
+
+function extractHomesDataFromAppState(html: string, addressNeedle: string): HomesData | null {
+  const state = findHomesAppState(html);
+  return state ? extractHomesDataFromGatewayPayload(state, addressNeedle) : null;
+}
+
+async function fetchDirectText(url: string): Promise<string | null> {
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: "text/html,application/json",
+        "User-Agent": "ProjectAlphaNZ/1.0 (Homes property enrichment)",
+      },
+      signal: AbortSignal.timeout(HOMES_DIRECT_FETCH_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      logger.info({ url, status: response.status }, "homes.co.nz: direct fetch HTTP error");
+      return null;
+    }
+    return await response.text();
+  } catch (err) {
+    logger.info({ url, err: err instanceof Error ? err.message : String(err) }, "homes.co.nz: direct fetch failed");
+    return null;
+  }
+}
+
+async function fetchGatewayJson<T>(url: string): Promise<T | null> {
+  const text = await fetchDirectText(url);
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+}
+
+function buildGatewayAddressQueries(address: string, formattedAddress: string): string[] {
+  const values = [formattedAddress, address]
+    .map((v) => v.replace(/\bnew zealand\b/ig, "").replace(/\b\d{4}\b/g, "").replace(/\s+/g, " ").replace(/,\s*$/g, "").trim())
+    .filter(Boolean);
+  return [...new Set(values)];
+}
+
+async function tryHomesGateway(address: string, formattedAddress: string): Promise<HomesData | null> {
+  const addressNeedle = formattedAddress || address;
+  for (const query of buildGatewayAddressQueries(address, formattedAddress)) {
+    const resolveUrl = new URL(`${HOMES_GATEWAY_BASE}/property/resolve`);
+    resolveUrl.searchParams.set("address", query);
+    logger.info({ query }, "homes.co.nz: resolving exact property via Homes gateway");
+    const resolved = await fetchGatewayJson<{ property_id?: string | null; error?: string }>(resolveUrl.toString());
+    const propertyId = typeof resolved?.property_id === "string" && resolved.property_id.trim()
+      ? resolved.property_id.trim()
+      : null;
+    if (!propertyId) continue;
+
+    const propertiesUrl = new URL(`${HOMES_GATEWAY_BASE}/properties`);
+    propertiesUrl.searchParams.set("property_ids", propertyId);
+    const payload = await fetchGatewayJson<HomesGatewayPropertiesPayload>(propertiesUrl.toString());
+    const data = extractHomesDataFromGatewayPayload(payload, addressNeedle);
+    if (data) {
+      logger.info(
+        { query, propertyId, bedrooms: data.bedrooms, bathrooms: data.bathrooms, confirmed: data.address_confirmed },
+        "homes.co.nz: exact gateway success",
+      );
+      return data;
+    }
+    logger.info({ query, propertyId, address: addressNeedle }, "homes.co.nz: gateway property did not match analysed address");
+  }
+  return null;
+}
+
 /**
  * Scan the raw HTML of a homes.co.nz map/neighbourhood page for direct
  * property-page links that include the opaque hash suffix homes.co.nz uses
@@ -137,6 +321,16 @@ export function extractHashUrlsFromMapPage(html: string, addressNeedle: string):
     const path = m[0];
     if (addressLineAppearsInText(addressNeedle, path)) {
       found.push(`https://homes.co.nz${path}`);
+    }
+  }
+
+  // homes-app-state often stores canonical property URLs without the
+  // leading /address segment, e.g. "/auckland/orakei/38-te-arawa-street/yPZ5e".
+  const shortRe = /\/auckland\/[a-z0-9-]+\/[a-z0-9][a-z0-9-]+\/([a-z0-9]{3,12})(?=[^a-z0-9/]|$)/gi;
+  while ((m = shortRe.exec(html)) !== null) {
+    const path = m[0];
+    if (addressLineAppearsInText(addressNeedle, path)) {
+      found.push(`https://homes.co.nz/address${path}`);
     }
   }
   return [...new Set(found)];
@@ -250,6 +444,31 @@ async function fetchAndExtract(
   addressNeedle: string,
   waitMs: number,
 ): Promise<{ data: HomesData | null; html: string | null; addressConfirmed: boolean }> {
+  logger.info({ url }, "homes.co.nz: trying direct Homes HTML/app-state fetch");
+  const directHtml = await fetchDirectText(url);
+  if (directHtml) {
+    const appStateData = extractHomesDataFromAppState(directHtml, addressNeedle);
+    if (appStateData) {
+      logger.info({ url, cv_nzd: appStateData.cv_nzd, beds: appStateData.bedrooms }, "homes.co.nz: direct app-state success");
+      return { data: appStateData, html: directHtml, addressConfirmed: true };
+    }
+
+    const directText = directHtml
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ")
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ");
+
+    if (!isErrorPage(directText) && addressLineAppearsInText(addressNeedle, directText)) {
+      const extracted = extractHomesDataFromHtml(directHtml, addressNeedle);
+      if (hasUsableData(extracted)) {
+        logger.info({ url, cv_nzd: extracted.cv_nzd, beds: extracted.bedrooms }, "homes.co.nz: direct HTML success");
+        return { data: toHomesData(extracted, addressNeedle), html: directHtml, addressConfirmed: true };
+      }
+      return { data: null, html: directHtml, addressConfirmed: true };
+    }
+  }
+
   logger.info({ url }, "homes.co.nz: trying ScrapingBee with URL");
   const html = await fetchWithScrapingBee(url, { render_js: true, premium_proxy: true, wait: waitMs });
   if (!html) return { data: null, html: null, addressConfirmed: false };
@@ -261,6 +480,12 @@ async function fetchAndExtract(
     .replace(/\s+/g, " ");
 
   logger.info({ url, preview: textContent.slice(0, 300) }, "homes.co.nz: ScrapingBee content preview");
+
+  const appStateData = extractHomesDataFromAppState(html, addressNeedle);
+  if (appStateData) {
+    logger.info({ url, cv_nzd: appStateData.cv_nzd, beds: appStateData.bedrooms }, "homes.co.nz: ScrapingBee app-state success");
+    return { data: appStateData, html, addressConfirmed: true };
+  }
 
   if (isErrorPage(textContent)) {
     logger.info({ url }, "homes.co.nz: ScrapingBee got error page");
@@ -301,6 +526,9 @@ async function fetchAndExtract(
  * All phases are sequential to avoid parallel ScrapingBee quota exhaustion.
  */
 async function tryScrapingBee(address: string, suburb: string, formattedAddress: string): Promise<HomesData | null> {
+  const gateway = await tryHomesGateway(address, formattedAddress);
+  if (gateway) return gateway;
+
   const allUrls = buildHomesPropertyUrls(address, suburb, formattedAddress);
   const addressNeedle = formattedAddress || address;
 

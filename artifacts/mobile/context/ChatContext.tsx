@@ -8,6 +8,7 @@ import {
 } from "@/lib/reportPhotoCache";
 import { getCurrentLocale } from "@/lib/i18n";
 import { translateReportViaApi } from "@/lib/translateReport";
+import { getApiBase } from "@/lib/api";
 
 export type MessageRole = "user" | "assistant";
 
@@ -121,7 +122,9 @@ export interface CombinedListingContext {
 
 export interface PlanningOverlay {
   name: string;
-  status: "clear" | "moderate" | "restricted";
+  // "control" = an AUP development Control (e.g. Height/Subdivision Variation),
+  // surfaced for information; can be value-positive and is score-neutral.
+  status: "clear" | "moderate" | "restricted" | "control";
   detail: string;
 }
 
@@ -164,7 +167,7 @@ export interface AsbestosInfo {
 }
 
 export interface TerrainInfo {
-  classification: "flat" | "gentle" | "moderate" | "steep" | null;
+  classification: "flat" | "subtle" | "gentle" | "moderate" | "steep" | "very_steep" | null;
   slope?: string;
   slope_degrees?: number | null;
   retainingCostLow?: number;
@@ -538,6 +541,69 @@ function generateId(): string {
   return Date.now().toString() + Math.random().toString(36).substr(2, 9);
 }
 
+/** A session worth persisting/syncing: has at least one real (non-loading) message. */
+function sessionHasContent(s: Session): boolean {
+  return s.messages.some((m) => m.type !== "loading" && m.content.length > 0);
+}
+
+/** Strip on-device-only fields (file URIs invalid on other devices) before syncing. */
+function stripReportForSync<T extends FeasibilityReport | undefined>(report: T): T {
+  if (!report) return report;
+  const { cachedPhotoUris, cachedPhotoSignature, ...rest } = report;
+  return rest as T;
+}
+
+function stripGroupForSync(group?: FeasibilityReportGroup): FeasibilityReportGroup | undefined {
+  if (!group) return group;
+  return { ...group, reports: group.reports.map((r) => stripReportForSync(r)) };
+}
+
+/**
+ * Serialisable copy of a session for cross-device sync: drops transient loading
+ * bubbles and on-device photo cache paths. The full conversation (every text,
+ * report, search result and provider card) is otherwise preserved verbatim.
+ */
+function stripSessionForSync(s: Session): Session {
+  return {
+    ...s,
+    currentReport: stripReportForSync(s.currentReport),
+    currentReportGroup: stripGroupForSync(s.currentReportGroup),
+    messages: s.messages
+      .filter((m) => m.type !== "loading")
+      .map((m) => {
+        if (m.type === "report" && m.report) return { ...m, report: stripReportForSync(m.report) };
+        if (m.type === "report_group" && m.reportGroup) return { ...m, reportGroup: stripGroupForSync(m.reportGroup)! };
+        return m;
+      }),
+  };
+}
+
+type RemoteConversation = {
+  id: string;
+  title?: string;
+  data?: Partial<Session>;
+  updatedAt?: number | null;
+  createdAt?: number | null;
+};
+
+/** Rebuild a Session from a server-synced conversation row. */
+function hydrateRemoteSession(rc: RemoteConversation): Session {
+  const data = (rc.data && typeof rc.data === "object" ? rc.data : {}) as Partial<Session>;
+  const messages = Array.isArray(data.messages) ? data.messages : [];
+  const updatedAt =
+    typeof data.updatedAt === "number" ? data.updatedAt : typeof rc.updatedAt === "number" ? rc.updatedAt : Date.now();
+  const createdAt =
+    typeof data.createdAt === "number" ? data.createdAt : typeof rc.createdAt === "number" ? rc.createdAt : updatedAt;
+  return {
+    ...data,
+    id: rc.id,
+    title: (typeof data.title === "string" && data.title) || rc.title || "",
+    messages,
+    createdAt,
+    updatedAt,
+  } as Session;
+}
+
 function normaliseAddressKey(address: string): string {
   return address.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
@@ -602,7 +668,7 @@ function reportHasEnglishNarrative(report: FeasibilityReport): boolean {
 }
 
 export function ChatProvider({ children }: { children: React.ReactNode }) {
-  const { user } = useAuth();
+  const { user, getApiHeaders } = useAuth();
   const userId = user?.id ?? null;
 
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -610,35 +676,21 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(false);
   const [searchHistoryTick, setSearchHistoryTick] = useState(0);
 
+  // Cross-device conversation sync bookkeeping.
+  // syncedUpdatedAtRef: last updatedAt we successfully pushed (or pulled) per
+  // session id, so we only push genuinely-changed conversations.
+  const syncedUpdatedAtRef = useRef<Map<string, number>>(new Map());
+  // pullDone: gates pushes until the initial server pull has merged, so a
+  // fresh-install device doesn't overwrite server state before reading it.
+  // State (not a ref) so the push effect re-runs and flushes the moment the
+  // pull completes, even for conversations started during the pull window.
+  const [pullDone, setPullDone] = useState(false);
+  const getApiHeadersRef = useRef(getApiHeaders);
+  getApiHeadersRef.current = getApiHeaders;
+
   const bumpSearchHistory = useCallback(() => {
     setSearchHistoryTick((n) => n + 1);
   }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    const storageKey = getStorageKey(userId);
-    setSessions([]);
-    setCurrentSessionId(null);
-    // Different user → re-evaluate every report's photo cache once.
-    photoCacheAttemptsRef.current = new Set();
-    AsyncStorage.getItem(storageKey).then((raw) => {
-      if (cancelled) return;
-      if (raw) {
-        try {
-          const parsed = JSON.parse(raw) as Session[];
-          const withMessages = parsed.filter(
-            (s) => s.messages.some((m) => m.type !== "loading" && m.content.length > 0),
-          );
-          setSessions(withMessages);
-          if (withMessages.length > 0) {
-            setCurrentSessionId(withMessages[0].id);
-          }
-        } catch {
-        }
-      }
-    });
-    return () => { cancelled = true; };
-  }, [userId]);
 
   const saveSessions = useCallback((newSessions: Session[]) => {
     const storageKey = getStorageKey(userId);
@@ -647,6 +699,124 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     );
     AsyncStorage.setItem(storageKey, JSON.stringify(withMessages));
   }, [userId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const storageKey = getStorageKey(userId);
+    setSessions([]);
+    setCurrentSessionId(null);
+    // Different user → re-evaluate every report's photo cache once and reset
+    // the cross-device sync bookkeeping.
+    photoCacheAttemptsRef.current = new Set();
+    syncedUpdatedAtRef.current = new Map();
+    setPullDone(false);
+
+    (async () => {
+      // 1) Load this device's locally-cached conversations first for instant UI.
+      let localSessions: Session[] = [];
+      try {
+        const raw = await AsyncStorage.getItem(storageKey);
+        if (raw) {
+          const parsed = JSON.parse(raw) as Session[];
+          localSessions = parsed.filter(sessionHasContent);
+        }
+      } catch {}
+      if (cancelled) return;
+      setSessions(localSessions);
+      if (localSessions.length > 0) setCurrentSessionId(localSessions[0].id);
+
+      // 2) Pull conversations saved from any device and merge (last-write-wins).
+      if (userId) {
+        try {
+          const resp = await fetch(`${getApiBase()}/conversations`, { headers: getApiHeadersRef.current() });
+          if (resp.ok) {
+            const data = (await resp.json()) as { conversations?: RemoteConversation[] };
+            if (!cancelled && Array.isArray(data.conversations) && data.conversations.length > 0) {
+              const remote = data.conversations;
+              setSessions((prev) => {
+                const byId = new Map(prev.map((s) => [s.id, s]));
+                let changed = false;
+                for (const rc of remote) {
+                  if (!rc || typeof rc.id !== "string") continue;
+                  const remoteUpdated = typeof rc.updatedAt === "number" ? rc.updatedAt : 0;
+                  const local = byId.get(rc.id);
+                  if (!local) {
+                    const hydrated = hydrateRemoteSession(rc);
+                    if (!sessionHasContent(hydrated)) continue;
+                    byId.set(rc.id, hydrated);
+                    syncedUpdatedAtRef.current.set(rc.id, hydrated.updatedAt);
+                    changed = true;
+                  } else if (remoteUpdated > (local.updatedAt ?? 0)) {
+                    const hydrated = hydrateRemoteSession(rc);
+                    byId.set(rc.id, hydrated);
+                    syncedUpdatedAtRef.current.set(rc.id, hydrated.updatedAt);
+                    changed = true;
+                  } else if (remoteUpdated === (local.updatedAt ?? 0)) {
+                    // Already in sync — record so we don't redundantly re-push.
+                    syncedUpdatedAtRef.current.set(rc.id, local.updatedAt ?? 0);
+                  }
+                  // else: local copy is newer → leave it for the push effect.
+                }
+                if (!changed) return prev;
+                const merged = Array.from(byId.values()).sort(
+                  (a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt),
+                );
+                saveSessions(merged);
+                return merged;
+              });
+              // Open the most recent conversation if the device had none locally.
+              setCurrentSessionId((prev) => {
+                if (prev) return prev;
+                const newest = [...remote]
+                  .filter((rc) => rc && typeof rc.id === "string")
+                  .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0];
+                return newest?.id ?? null;
+              });
+            }
+          }
+        } catch {}
+      }
+      if (!cancelled) setPullDone(true);
+    })();
+
+    return () => { cancelled = true; };
+  }, [userId, saveSessions]);
+
+  // Push locally-changed conversations to the server (debounced) so they're
+  // available on the user's other devices. Runs only after the initial pull so
+  // a fresh device can't clobber server state before reading it.
+  useEffect(() => {
+    if (!userId || !pullDone) return;
+    const changed = sessions.filter(
+      (s) => sessionHasContent(s) && syncedUpdatedAtRef.current.get(s.id) !== s.updatedAt,
+    );
+    if (changed.length === 0) return;
+
+    const handle = setTimeout(async () => {
+      const snapshot = changed.map((s) => ({ id: s.id, updatedAt: s.updatedAt }));
+      try {
+        const resp = await fetch(`${getApiBase()}/conversations`, {
+          method: "POST",
+          headers: { ...getApiHeadersRef.current(), "Content-Type": "application/json" },
+          body: JSON.stringify({
+            conversations: changed.map((s) => ({
+              id: s.id,
+              title: s.title,
+              updatedAt: s.updatedAt,
+              createdAt: s.createdAt,
+              messageCount: s.messages.filter((m) => m.type !== "loading").length,
+              data: stripSessionForSync(s),
+            })),
+          }),
+        });
+        if (resp.ok) {
+          for (const snap of snapshot) syncedUpdatedAtRef.current.set(snap.id, snap.updatedAt);
+        }
+      } catch {}
+    }, 1500);
+
+    return () => clearTimeout(handle);
+  }, [sessions, userId, pullDone]);
 
   const currentSession = sessions.find((s) => s.id === currentSessionId) || null;
 
@@ -901,8 +1071,17 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // Drop on-device property photos owned by this session so they don't
       // linger after the user deletes the report.
       deleteReportPhotos(id).catch(() => {});
+      // Remove the synced copy so the conversation doesn't return on the next
+      // cross-device pull.
+      syncedUpdatedAtRef.current.delete(id);
+      if (userId) {
+        fetch(`${getApiBase()}/conversations/${encodeURIComponent(id)}`, {
+          method: "DELETE",
+          headers: getApiHeadersRef.current(),
+        }).catch(() => {});
+      }
     },
-    [currentSessionId, saveSessions],
+    [currentSessionId, saveSessions, userId],
   );
 
   // Tracks reports we've already attempted to cache photos for, keyed by
@@ -1044,7 +1223,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   // When the device locale is zh, back-translate any cached report messages
   // whose narrative fields are still in English (generated before translation
   // was active). Runs once per session change; skips reports already translated.
-  const { getApiHeaders } = useAuth();
   const translatedReportIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (getCurrentLocale() !== "zh") return;

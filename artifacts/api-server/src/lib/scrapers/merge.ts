@@ -41,7 +41,7 @@ export interface MergedPropertyData {
    * follow-up chat can stay consistent about *why* a value was chosen.
    */
   discrepancies: string[];
-  contour: "flat" | "gentle" | "moderate" | "steep" | null;
+  contour: "flat" | "subtle" | "gentle" | "moderate" | "steep" | "very_steep" | null;
   contour_slope_degrees: number | null;
   contour_source: string | null;
   contour_text: string | null;
@@ -362,7 +362,7 @@ export function mergePropertyData(
   councilZone: ZoneResult | null,
   councilOverlays: Overlay[],
   extra?: {
-    contour: "flat" | "gentle" | "moderate" | "steep" | null;
+    contour: "flat" | "subtle" | "gentle" | "moderate" | "steep" | "very_steep" | null;
     contour_slope_degrees?: number | null;
     contour_source?: string | null;
     contour_text?: string | null;

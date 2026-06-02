@@ -2,9 +2,15 @@ import { describe, expect, it } from "vitest";
 import { classifySlope, summarizeTerrainSlopeDistribution, zoneResultFromRawCode } from "../auckland-council";
 
 describe("terrain slope classification", () => {
-  it("keeps borderline parcel DEM readings gentle until 12 degrees", () => {
-    expect(classifySlope(11.9, "test").classification).toBe("gentle");
-    expect(classifySlope(12, "test").classification).toBe("moderate");
+  it("classifies terrain using perception-based slope bands", () => {
+    expect(classifySlope(1.9, "test").classification).toBe("flat");
+    expect(classifySlope(2, "test").classification).toBe("subtle");
+    expect(classifySlope(5.9, "test").classification).toBe("subtle");
+    expect(classifySlope(6, "test").classification).toBe("moderate");
+    expect(classifySlope(11.9, "test").classification).toBe("moderate");
+    expect(classifySlope(12, "test").classification).toBe("steep");
+    expect(classifySlope(17.9, "test").classification).toBe("steep");
+    expect(classifySlope(18, "test").classification).toBe("very_steep");
   });
 
   it("rounds displayed slope degrees without changing the source label", () => {
@@ -19,8 +25,8 @@ describe("terrain slope classification", () => {
       16,
     );
 
-    expect(profile?.moderate_area_ratio).toBeCloseTo(0.333, 3);
-    expect(profile?.steep_area_ratio).toBeCloseTo(0.333, 3);
+    expect(profile?.moderate_area_ratio).toBeCloseTo(0.25, 3);
+    expect(profile?.steep_area_ratio).toBeCloseTo(0.667, 3);
     expect(profile?.local_slope_p90_degrees).toBe(27);
     expect(profile?.sample_count).toBe(16);
   });

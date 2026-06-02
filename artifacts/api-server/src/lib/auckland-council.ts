@@ -15,13 +15,20 @@ export interface ZoneResult {
 
 export interface Overlay {
   name: string;
-  status: "clear" | "moderate" | "restricted" | "unknown";
+  // "control" denotes an Auckland Unitary Plan *Control* (a development control
+  // such as Height/Subdivision/Parking Variation, frontage or access controls)
+  // rather than a protective overlay. Controls are surfaced for the LLM to
+  // comment on — they can be value-positive (e.g. a Height Variation lifting the
+  // permitted height) as well as constraining — and are deliberately
+  // score-neutral: both scoring.ts (hasOverlay) and pre-screen.ts (overlayPenalty)
+  // act only on "restricted"/"moderate", so "control" never moves a score.
+  status: "clear" | "moderate" | "restricted" | "control" | "unknown";
   detail: string;
 }
 
 export interface ContourResult {
   slope_degrees: number | null;
-  classification: "flat" | "gentle" | "moderate" | "steep" | null;
+  classification: "flat" | "subtle" | "gentle" | "moderate" | "steep" | "very_steep" | null;
   retaining_cost_low: number;
   retaining_cost_high: number;
   source: string;
@@ -216,12 +223,28 @@ export function zoneResultFromRawCode(rawZoneCode: number | null): ZoneResult {
   };
 }
 
+// Pull a human-readable label off an AUP Control feature. The Controls layers
+// all share the same schema (NAME / TYPE / SUBTYPE / SCHEDULE); for the
+// "Variation" controls the schedule/name usually carries the specific variation
+// reference (e.g. a height or lot-size override), which lets the LLM state
+// whether the control raises or lowers the underlying zone standard.
+function controlLabel(attrs: Record<string, unknown>): string {
+  const parts: string[] = [];
+  const name = String(attrs["NAME"] ?? "").trim();
+  const schedule = String(attrs["SCHEDULE"] ?? "").trim();
+  const subtype = String(attrs["SUBTYPE"] ?? "").trim();
+  if (name && name.toLowerCase() !== "null") parts.push(name);
+  if (subtype && subtype.toLowerCase() !== "null" && !parts.includes(subtype)) parts.push(subtype);
+  if (schedule && schedule.toLowerCase() !== "null") parts.push(`Schedule ${schedule}`);
+  return parts.join(" — ");
+}
+
 export async function fetchOverlays(lat: number, lng: number, parcelBbox?: ParcelBbox | null): Promise<Overlay[]> {
   const OVERLAY_LAYERS: Array<{
     name: string;
     layerId: number;
     distanceM?: number;
-    mapStatus: (attrs: Record<string, unknown>) => "clear" | "moderate" | "restricted";
+    mapStatus: (attrs: Record<string, unknown>) => "clear" | "moderate" | "restricted" | "control";
     mapDetail: (attrs: Record<string, unknown>) => string;
   }> = [
     {
@@ -281,6 +304,221 @@ export async function fetchOverlays(lat: number, lng: number, parcelBbox?: Parce
       mapStatus: () => "moderate",
       mapDetail: () =>
         "Ridgeline Protection Overlay — skyline development controls apply. Building bulk and location may be restricted.",
+    },
+    // ── Mana Whenua ────────────────────────────────────────────────────────
+    {
+      name: "Sites and Places of Significance to Mana Whenua",
+      layerId: 40,
+      mapStatus: () => "restricted",
+      mapDetail: () =>
+        "Site/Place of Significance to Mana Whenua Overlay applies — a cultural values assessment and engagement with the relevant iwi/hapū is required at Resource Consent, and accidental-discovery protocols apply to earthworks. Adds time, cost and consent uncertainty.",
+    },
+    // ── Natural Resources ──────────────────────────────────────────────────
+    {
+      name: "Significant Ecological Area",
+      layerId: 10,
+      mapStatus: () => "restricted",
+      mapDetail: () =>
+        "Significant Ecological Area (SEA) Overlay — vegetation clearance and earthworks are tightly controlled and generally require Resource Consent. Part of the site may be undevelopable, reducing yield.",
+    },
+    {
+      name: "Wetland Management Area",
+      layerId: 15,
+      mapStatus: () => "restricted",
+      mapDetail: () =>
+        "Wetland Management Area Overlay — works in or near a natural wetland are restricted under the NES-Freshwater. Setbacks and consent are likely; developable area may be reduced.",
+    },
+    {
+      name: "Natural Stream Management Area",
+      layerId: 12,
+      mapStatus: () => "moderate",
+      mapDetail: () =>
+        "Natural Stream Management Area Overlay — riparian setbacks and stream-works controls apply; piping or diversion requires Resource Consent.",
+    },
+    {
+      name: "High-Use Stream Management Area",
+      layerId: 13,
+      mapStatus: () => "moderate",
+      mapDetail: () =>
+        "High-Use Stream Management Area Overlay — stormwater and stream-works controls apply to protect stream health.",
+    },
+    {
+      name: "Lake Management Area",
+      layerId: 14,
+      mapStatus: () => "moderate",
+      mapDetail: () =>
+        "Lake Management Area Overlay — lake-edge setbacks and water-quality controls apply.",
+    },
+    {
+      name: "Water Supply Management Area",
+      layerId: 11,
+      mapStatus: () => "moderate",
+      mapDetail: () =>
+        "Water Supply Management Area Overlay — activities are managed to protect a water-supply catchment; additional controls on earthworks and discharges may apply.",
+    },
+    {
+      name: "High-Use Aquifer Management Area",
+      layerId: 16,
+      mapStatus: () => "moderate",
+      mapDetail: () =>
+        "High-Use Aquifer Management Area Overlay — bores, earthworks and discharges affecting groundwater are controlled.",
+    },
+    {
+      name: "Quality-Sensitive Aquifer Management Area",
+      layerId: 17,
+      mapStatus: () => "moderate",
+      mapDetail: () =>
+        "Quality-Sensitive Aquifer Management Area Overlay — groundwater-protection controls apply to earthworks and discharges.",
+    },
+    // ── Built Heritage & Character / Natural Heritage ──────────────────────
+    {
+      name: "Special Character Area",
+      layerId: 34,
+      mapStatus: () => "restricted",
+      mapDetail: (attrs) => {
+        const n = String(attrs["NAME"] ?? attrs["SCA_NAME"] ?? attrs["AREA_NAME"] ?? "").trim();
+        return `Special Character Area Overlay${n ? ` — ${n}` : ""}. Demolition and external alterations face strict design controls and usually require Resource Consent; full-site redevelopment is significantly constrained.`;
+      },
+    },
+    {
+      name: "Outstanding Natural Feature",
+      layerId: 20,
+      mapStatus: () => "restricted",
+      mapDetail: () =>
+        "Outstanding Natural Feature (ONF) Overlay — protection of the feature constrains earthworks, buildings and vegetation works; Resource Consent required.",
+    },
+    {
+      name: "Outstanding Natural Landscape",
+      layerId: 21,
+      mapStatus: () => "restricted",
+      mapDetail: () =>
+        "Outstanding Natural Landscape (ONL) Overlay — development must protect landscape values; building location and bulk are constrained.",
+    },
+    {
+      name: "Outstanding Natural Character",
+      layerId: 22,
+      mapStatus: () => "restricted",
+      mapDetail: () =>
+        "Outstanding Natural Character Overlay (coastal) — strict controls on subdivision, use and development to preserve natural character.",
+    },
+    {
+      name: "High Natural Character",
+      layerId: 23,
+      mapStatus: () => "moderate",
+      mapDetail: () =>
+        "High Natural Character Overlay (coastal) — development controls apply to preserve natural character.",
+    },
+    {
+      name: "Local Public Views",
+      layerId: 30,
+      mapStatus: () => "moderate",
+      mapDetail: () =>
+        "Local Public Views Overlay — building height and location may be controlled to protect an identified public view.",
+    },
+    // ══ AUP CONTROLS (development controls, not protective overlays) ══════════
+    // Surfaced as status "control" so the LLM comments on them but no score
+    // moves. Some Controls can be value-POSITIVE; detail text flags direction.
+    // ── High-impact development controls ─────────────────────────────────────
+    {
+      name: "Height Variation Control",
+      layerId: 55,
+      mapStatus: () => "control",
+      mapDetail: (attrs) => {
+        const label = controlLabel(attrs);
+        return `Height Variation Control applies${label ? ` (${label})` : ""}. This Control overrides the underlying zone height standard — it may RAISE the permitted height (a value POSITIVE that can unlock extra storeys/yield) or LOWER it (a constraint). Check the scheduled height before assuming zone defaults.`;
+      },
+    },
+    {
+      name: "Subdivision Variation Control",
+      layerId: 64,
+      mapStatus: () => "control",
+      mapDetail: (attrs) => {
+        const label = controlLabel(attrs);
+        return `Subdivision Variation Control applies${label ? ` (${label})` : ""}. This Control varies the standard subdivision/minimum-lot rules — it may REDUCE the minimum lot size (a value POSITIVE enabling more lots) or impose a larger minimum (a constraint). Confirm the scheduled lot standard before estimating yield.`;
+      },
+    },
+    {
+      name: "Parking Variation Control",
+      layerId: 62,
+      mapStatus: () => "control",
+      mapDetail: (attrs) => {
+        const label = controlLabel(attrs);
+        return `Parking Variation Control applies${label ? ` (${label})` : ""}. This Control varies on-site parking requirements — typically a value POSITIVE where it reduces required parking (lower build cost, more developable area), occasionally a constraint where it sets minimums.`;
+      },
+    },
+    {
+      name: "Stormwater Management Area Control",
+      layerId: 63,
+      mapStatus: () => "control",
+      mapDetail: (attrs) => {
+        const label = controlLabel(attrs);
+        return `Stormwater Management Area Control applies${label ? ` (${label})` : ""}. On-site stormwater management/hydraulic-neutrality and impervious-area controls apply; can add engineering cost and detention/treatment requirements at consent.`;
+      },
+    },
+    // ── Access & frontage controls ───────────────────────────────────────────
+    {
+      name: "Arterial Roads Control",
+      layerId: 51,
+      // Polyline (road centreline) — buffer so a parcel fronting the arterial,
+      // whose boundary sits ~10m off the centreline, still registers.
+      distanceM: 20,
+      mapStatus: () => "control",
+      mapDetail: (attrs) => {
+        const label = controlLabel(attrs);
+        return `Arterial Road frontage Control applies${label ? ` (${label})` : ""}. Vehicle access onto the arterial is typically restricted and access/road-widening or setback controls may apply — can constrain driveway location and reduce net developable frontage.`;
+      },
+    },
+    {
+      name: "Building Frontage Control",
+      layerId: 52,
+      // Polyline drawn along the controlled frontage — small buffer for sites
+      // whose front boundary sits just off the mapped line.
+      distanceM: 12,
+      mapStatus: () => "control",
+      mapDetail: (attrs) => {
+        const label = controlLabel(attrs);
+        return `Building Frontage Control applies${label ? ` (${label})` : ""}. Built-frontage, glazing or verandah controls shape the street edge — chiefly a design/built-form requirement rather than a yield constraint.`;
+      },
+    },
+    {
+      name: "Vehicle Access Restriction Control",
+      layerId: 53,
+      // Polyline along the frontage where vehicle crossings are restricted —
+      // small buffer for sites whose front boundary sits just off the line.
+      distanceM: 12,
+      mapStatus: () => "control",
+      mapDetail: (attrs) => {
+        const label = controlLabel(attrs);
+        return `Vehicle Access Restriction Control applies${label ? ` (${label})` : ""}. New vehicle crossings/driveways onto the controlled frontage are restricted — may force access off a secondary road or rear lane and complicate subdivision access.`;
+      },
+    },
+    {
+      name: "Level Crossings With Sightlines Control",
+      layerId: 60,
+      mapStatus: () => "control",
+      mapDetail: (attrs) => {
+        const label = controlLabel(attrs);
+        return `Level Crossing Sightlines Control applies${label ? ` (${label})` : ""}. Building, planting and earthworks within rail level-crossing sightlines are controlled to protect visibility — can constrain building location near the frontage.`;
+      },
+    },
+    // ── Hazard & infrastructure controls ─────────────────────────────────────
+    {
+      name: "Emergency Management Area Control",
+      layerId: 59,
+      mapStatus: () => "control",
+      mapDetail: (attrs) => {
+        const label = controlLabel(attrs);
+        return `Emergency Management Area Control applies${label ? ` (${label})` : ""}. Additional risk/evacuation or hazard-management controls apply (e.g. near major-hazard facilities) — can add consent assessment and design constraints.`;
+      },
+    },
+    {
+      name: "Cable Protection Areas Control",
+      layerId: 56,
+      mapStatus: () => "control",
+      mapDetail: (attrs) => {
+        const label = controlLabel(attrs);
+        return `Cable Protection Area Control applies${label ? ` (${label})` : ""}. Works near a protected submarine/strategic cable corridor are controlled — anchoring, dredging and certain earthworks are restricted; relevant mainly to coastal/foreshore sites.`;
+      },
     },
   ];
 
@@ -757,8 +995,8 @@ function percentile(values: number[], p: number): number | null {
 export function summarizeTerrainSlopeDistribution(slopesDeg: number[], sampleCount: number): TerrainProfile | null {
   const slopes = slopesDeg.filter((s) => Number.isFinite(s) && s >= 0);
   if (slopes.length < 5 || sampleCount < 8) return null;
-  const steepCount = slopes.filter((s) => s >= 20).length;
-  const moderateCount = slopes.filter((s) => s >= 12 && s < 20).length;
+  const steepCount = slopes.filter((s) => s >= 12).length;
+  const moderateCount = slopes.filter((s) => s >= 6 && s < 12).length;
   const p90 = percentile(slopes, 0.9);
   const p95 = percentile(slopes, 0.95);
   return {
@@ -1682,13 +1920,11 @@ function robustElevationSpreadM(elevs: number[]): number {
 
 export function classifySlope(slopeDeg: number, source: string, elevationCenter?: number): ContourResult {
   const rounded = Math.round(slopeDeg * 10) / 10;
-  // Thresholds calibrated for NZ residential development feasibility:
-  // <3°  = effectively flat, no meaningful retaining needed
-  // 3-12° = gentle slope (keeps borderline DEM noise out of moderate)
-  // 12-20° = moderate, significant retaining and earthworks budget needed
-  // >20°  = steep, major geotechnical and retaining cost implications
-  if (slopeDeg < 3)  return { slope_degrees: rounded, classification: "flat",     retaining_cost_low: 0,      retaining_cost_high: 5000,   source, elevation_center: elevationCenter ?? null };
-  if (slopeDeg < 12) return { slope_degrees: rounded, classification: "gentle",   retaining_cost_low: 15000,  retaining_cost_high: 60000,  source, elevation_center: elevationCenter ?? null };
-  if (slopeDeg < 20) return { slope_degrees: rounded, classification: "moderate", retaining_cost_low: 60000,  retaining_cost_high: 200000, source, elevation_center: elevationCenter ?? null };
-  return { slope_degrees: rounded, classification: "steep",    retaining_cost_low: 200000, retaining_cost_high: 500000, source, elevation_center: elevationCenter ?? null };
+  // Thresholds calibrated to how slope feels on-site and how quickly build complexity rises.
+  // 0-2 deg flat, 2-6 deg subtle, 6-12 deg moderate, 12-18 deg steep, 18+ deg very steep.
+  if (slopeDeg < 2)  return { slope_degrees: rounded, classification: "flat",       retaining_cost_low: 0,       retaining_cost_high: 5000,   source, elevation_center: elevationCenter ?? null };
+  if (slopeDeg < 6)  return { slope_degrees: rounded, classification: "subtle",     retaining_cost_low: 5000,    retaining_cost_high: 25000,  source, elevation_center: elevationCenter ?? null };
+  if (slopeDeg < 12) return { slope_degrees: rounded, classification: "moderate",   retaining_cost_low: 30000,   retaining_cost_high: 100000, source, elevation_center: elevationCenter ?? null };
+  if (slopeDeg < 18) return { slope_degrees: rounded, classification: "steep",      retaining_cost_low: 100000,  retaining_cost_high: 250000, source, elevation_center: elevationCenter ?? null };
+  return { slope_degrees: rounded, classification: "very_steep", retaining_cost_low: 250000,  retaining_cost_high: 600000, source, elevation_center: elevationCenter ?? null };
 }

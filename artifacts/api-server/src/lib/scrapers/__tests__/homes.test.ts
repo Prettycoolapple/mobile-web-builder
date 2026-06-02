@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildHomesPropertyUrls, extractHomesDataFromHtml, extractHashUrlsFromMapPage } from "../homes";
+import { buildHomesPropertyUrls, extractHomesDataFromGatewayPayload, extractHomesDataFromHtml, extractHashUrlsFromMapPage } from "../homes";
 
 describe("Homes scraper", () => {
   it("extracts exact bed/bath from Homes map profile state when opaque property URL is unavailable", () => {
@@ -31,6 +31,64 @@ describe("Homes scraper", () => {
     expect(data.bathrooms).toBe(1);
   });
 
+  it("extracts exact facts from Homes gateway property cards for 8 Hampton Drive", () => {
+    const payload = {
+      cards: [{
+        property_id: "9feefcc9-8275-4ff0-bce8-2f7ef185e689",
+        url: "/auckland/st-heliers/8-hampton-drive/r9aag",
+        property_details: {
+          address: "8 Hampton Drive, St Heliers, Auckland",
+          display_address: "8 Hampton Drive, St Heliers, Auckland",
+          num_bathrooms: 1,
+          num_bedrooms: 3,
+          latest_bedrooms: "3",
+          latest_bathrooms: "1",
+          capital_value: 1900000,
+          current_revision_date: "2024-05-01",
+          floor_area: 178,
+          land_area: 1082,
+          decade_built: "1960",
+        },
+      }],
+    };
+
+    const data = extractHomesDataFromGatewayPayload(payload, "8 Hampton Drive, St Heliers, Auckland 1071, New Zealand");
+
+    expect(data?.bedrooms).toBe(3);
+    expect(data?.bathrooms).toBe(1);
+    expect(data?.cv_nzd).toBe(1900000);
+    expect(data?.land_area_sqm).toBe(1082);
+    expect(data?.address_confirmed).toBe("8 Hampton Drive, St Heliers, Auckland");
+  });
+
+  it("extracts exact facts from Homes gateway property cards for 38 Te Arawa Street", () => {
+    const payload = {
+      cards: [{
+        property_id: "f40662e7-2e36-46be-b7a8-0662a500acb6",
+        url: "/auckland/orakei/38-te-arawa-street/yPZ5e",
+        property_details: {
+          address: "38 Te Arawa Street, Orakei, Auckland City, Auckland",
+          num_bathrooms: 1,
+          num_bedrooms: 2,
+          latest_bedrooms: "2",
+          latest_bathrooms: "1",
+          capital_value: 1350000,
+          current_revision_date: "2024-05-01",
+          floor_area: 84,
+          land_area: 437,
+          decade_built: "1930",
+        },
+      }],
+    };
+
+    const data = extractHomesDataFromGatewayPayload(payload, "38 Te Arawa Street, Orakei, Auckland 1071, New Zealand");
+
+    expect(data?.bedrooms).toBe(2);
+    expect(data?.bathrooms).toBe(1);
+    expect(data?.floor_area_sqm).toBe(84);
+    expect(data?.land_area_sqm).toBe(437);
+  });
+
   it("does not extract a neighbouring suffix address from embedded Homes state", () => {
     const html = `
       <script>
@@ -54,6 +112,23 @@ describe("Homes scraper", () => {
     expect(data.bedrooms).toBe(3);
     expect(data.bathrooms).toBe(1);
   });
+
+  it("does not accept a Homes gateway card for 8A when the subject is 8 Hampton Drive", () => {
+    const payload = {
+      cards: [{
+        url: "/auckland/st-heliers/8a-hampton-drive/BDABY",
+        property_details: {
+          address: "8A Hampton Drive, St Heliers, Auckland",
+          num_bathrooms: 2,
+          num_bedrooms: 5,
+        },
+      }],
+    };
+
+    const data = extractHomesDataFromGatewayPayload(payload, "8 Hampton Drive, St Heliers, Auckland");
+
+    expect(data).toBeNull();
+  });
 });
 
 describe("extractHashUrlsFromMapPage", () => {
@@ -71,6 +146,16 @@ describe("extractHashUrlsFromMapPage", () => {
     const html = `
       <script>
         {"url":"/address/auckland/saint-heliers/8-hampton-drive/r9aag","beds":3}
+      </script>
+    `;
+    const urls = extractHashUrlsFromMapPage(html, ADDRESS);
+    expect(urls).toContain("https://homes.co.nz/address/auckland/saint-heliers/8-hampton-drive/r9aag");
+  });
+
+  it("extracts hash URL from short Homes app-state paths without /address", () => {
+    const html = `
+      <script>
+        {"url":"/auckland/saint-heliers/8-hampton-drive/r9aag","beds":3}
       </script>
     `;
     const urls = extractHashUrlsFromMapPage(html, ADDRESS);

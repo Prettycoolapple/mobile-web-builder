@@ -18,15 +18,16 @@ export interface QVData {
   bathrooms: number | null;
   address_confirmed: string | null;
   contour_text: string | null;
-  contour_classification: "flat" | "gentle" | "moderate" | "steep" | null;
+  contour_classification: "flat" | "subtle" | "gentle" | "moderate" | "steep" | "very_steep" | null;
 }
 
-export function mapNZContour(raw: string): "flat" | "gentle" | "moderate" | "steep" | null {
+export function mapNZContour(raw: string): "flat" | "subtle" | "gentle" | "moderate" | "steep" | "very_steep" | null {
   const lower = raw.toLowerCase().trim();
   if (lower.includes("level") || lower.includes("flat")) return "flat";
-  if (lower.includes("easy") || lower.includes("gentle")) return "gentle";
+  if (lower.includes("easy") || lower.includes("gentle")) return "subtle";
   if (lower.includes("moderate")) return "moderate";
-  if (lower.includes("steep") || lower.includes("very steep") || lower.includes("extreme")) return "steep";
+  if (lower.includes("very steep") || lower.includes("extreme")) return "very_steep";
+  if (lower.includes("steep")) return "steep";
   return null;
 }
 
@@ -123,7 +124,7 @@ function extractQvDataFromText(allText: string, addressConfirmed: string, reques
   const contourMatch = allText.match(/\bcontour[:\s\n]+([A-Za-z][A-Za-z /]{1,30}?)(?:\n|\r|$)/im)
     ?? allText.match(/\bproperty\s*contour\s+([A-Za-z][A-Za-z /]{1,30}?)(?=\s+(?:Position|View|Deck|Buy|Image|$))/i);
   let contourText: string | null = null;
-  let contourClass: "flat" | "gentle" | "moderate" | "steep" | null = null;
+  let contourClass: QVData["contour_classification"] = null;
   if (contourMatch) {
     contourText = contourMatch[1].trim().replace(/\s+/g, " ");
     contourClass = mapNZContour(contourText);
@@ -418,7 +419,7 @@ export async function scrapeQV(address: string): Promise<QVData | null> {
 
     const contourMatch = allText.match(/\bcontour[:\s\n]+([A-Za-z][A-Za-z /]{1,30}?)(?:\n|\r|$)/im);
     let contourText: string | null = null;
-    let contourClass: "flat" | "gentle" | "moderate" | "steep" | null = null;
+    let contourClass: QVData["contour_classification"] = null;
     if (contourMatch) {
       const trimmed = contourMatch[1].trim().replace(/\s+/g, " ");
       contourText = trimmed;

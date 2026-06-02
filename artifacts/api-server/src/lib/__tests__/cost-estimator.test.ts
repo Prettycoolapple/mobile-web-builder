@@ -92,10 +92,10 @@ describe("estimateCosts — existing dwelling / demolition", () => {
     expect(twoDwellings.total_low).toBeGreaterThan(oneDwelling.total_low);
   });
 
-  it("keeps the existing moderate retaining bucket for small urban sites", () => {
+  it("uses the perception-based moderate retaining bucket for small urban sites", () => {
     const c = estimateCosts(minimal({ contour: "moderate", land_area_sqm: 600, zone_code: "MHS" }), 1);
-    expect(c.retaining_low).toBe(50_000);
-    expect(c.retaining_high).toBe(150_000);
+    expect(c.retaining_low).toBe(30_000);
+    expect(c.retaining_high).toBe(100_000);
     expect(c.large_site_terrain_adjusted).toBe(false);
   });
 
@@ -121,23 +121,23 @@ describe("estimateCosts — existing dwelling / demolition", () => {
     expect(c.large_site_terrain_adjusted).toBe(true);
   });
 
-  it("does not overstate mostly gentle large rural sites", () => {
+  it("does not overstate mostly subtle large rural sites", () => {
     const c = estimateCosts(
       minimal({
-        contour: "gentle",
+        contour: "subtle",
         land_area_sqm: 28_000,
         zone_code: "CLZ",
         contour_steep_area_ratio: 0,
         contour_moderate_area_ratio: 0.04,
-        contour_local_slope_p90_degrees: 8,
-        contour_local_slope_p95_degrees: 10,
+        contour_local_slope_p90_degrees: 5.8,
+        contour_local_slope_p95_degrees: 9,
         contour_sample_count: 360,
       }),
       1,
     );
 
-    expect(c.retaining_low).toBe(10_000);
-    expect(c.retaining_high).toBe(30_000);
+    expect(c.retaining_low).toBe(5_000);
+    expect(c.retaining_high).toBe(25_000);
     expect(c.large_site_terrain_adjusted).toBe(false);
   });
 

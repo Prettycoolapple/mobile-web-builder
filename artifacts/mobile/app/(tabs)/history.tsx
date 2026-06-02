@@ -14,7 +14,7 @@ import { Feather } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
 import { useColors } from "@/hooks/useColors";
-import { useChat, FeasibilityReport, FeasibilityReportGroup } from "@/context/ChatContext";
+import { useChat, ChatMessage, FeasibilityReport, FeasibilityReportGroup } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
 import { useFocusEffect, useRouter } from "expo-router";
 import { getApiBase } from "@/lib/api";
@@ -27,10 +27,14 @@ type SearchSummary = {
   created_at: string;
   composite_score: number | null;
   zone: string | null;
-  localReport?: FeasibilityReport;
-  localReportGroup?: FeasibilityReportGroup;
-  kind?: "report" | "combined_listing_group";
+  kind?: "report" | "combined_listing_group" | "conversation";
   package_count?: number;
+  /** Set when this row is a locally-saved conversation that can be resumed in place. */
+  sessionId?: string;
+  /** Icon hint based on conversation type (report / discover search / plain chat). */
+  icon?: "file-text" | "search" | "message-circle";
+  /** Server search-history id this conversation maps to, if any (for deletion). */
+  serverHistoryId?: string;
 };
 
 function useFormatDate() {
@@ -82,7 +86,7 @@ function HistoryItem({ item, onTap, onDelete, isOpening }: HistoryItemProps) {
       disabled={isOpening}
     >
       <View style={[styles.itemIcon, { backgroundColor: colors.accent + "15" }]}>
-        <Feather name="file-text" size={17} color={colors.accent} />
+        <Feather name={item.icon ?? "file-text"} size={17} color={colors.accent} />
       </View>
 
       <View style={styles.itemContent}>
@@ -149,7 +153,7 @@ function withGroupHistoryMetadata(group: FeasibilityReportGroup, id: string, cre
 export default function HistoryScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { sessions, openHistoryReport, openHistoryReportGroup, startNewChat, searchHistoryTick } = useChat();
+  const { sessions, openHistoryReport, openHistoryReportGroup, switchSession, deleteSession, startNewChat, searchHistoryTick } = useChat();
   const { getApiHeaders } = useAuth();
   const router = useRouter();
   const { t } = useT();
@@ -163,49 +167,106 @@ export default function HistoryScreen() {
   const [openingId, setOpeningId] = useState<string | null>(null);
   const hasLoadedRef = useRef(false);
 
-  const localSearches = useMemo<SearchSummary[]>(() => {
+  // One row per locally-saved conversation (session). Every conversation is
+  // resumable — not just feasibility reports but also discover/search threads
+  // ("what's subdividable in St Heliers" → property cards) and plain chats.
+  // A report still surfaces its composite score + zone for quick scanning.
+  const localConversations = useMemo<SearchSummary[]>(() => {
     const rows: SearchSummary[] = [];
+    const seenServerIds = new Set<string>();
     for (const session of sessions) {
-      if (session.skipFirstTurnRating) continue;
-      for (const msg of session.messages) {
-        if (msg.type === "report" && msg.report) {
-          const address = reportAddress(msg.report);
-          if (!address) continue;
-          rows.push({
-            id: msg.report.historyId ?? `local:${session.id}:${msg.id}`,
-            address,
-            created_at: msg.report.historyCreatedAt ?? new Date(msg.timestamp).toISOString(),
-            composite_score: typeof msg.report.scores?.composite === "number" ? msg.report.scores.composite : null,
-            zone: reportZone(msg.report),
-            localReport: msg.report,
-            kind: "report",
-          });
-        }
-        if (msg.type === "report_group" && msg.reportGroup) {
-          const scores = msg.reportGroup.reports.map((r) => r.scores?.composite).filter((n): n is number => typeof n === "number");
-          rows.push({
-            id: msg.reportGroup.historyId ?? `local:${session.id}:${msg.id}`,
-            address: `${msg.reportGroup.packageAddress} · ${msg.reportGroup.reports.length}-property package`,
-            created_at: msg.reportGroup.historyCreatedAt ?? new Date(msg.timestamp).toISOString(),
-            composite_score: scores.length ? scores.reduce((sum, n) => sum + n, 0) / scores.length : null,
-            zone: `${msg.reportGroup.reports.length} reports`,
-            localReportGroup: msg.reportGroup,
-            kind: "combined_listing_group",
-            package_count: msg.reportGroup.reports.length,
-          });
-        }
+      // Skip placeholder sessions with no real content yet.
+      const hasContent = session.messages.some(
+        (m) =>
+          m.type !== "loading" &&
+          (m.content.trim().length > 0 ||
+            m.type === "report" ||
+            m.type === "report_group" ||
+            m.type === "search"),
+      );
+      if (!hasContent) continue;
+
+      // Find the conversation's most recent report / report group, and whether
+      // it contains a discover (search) result, to drive label + icon.
+      let latestReport: ChatMessage | null = null;
+      let latestGroup: ChatMessage | null = null;
+      let hasSearch = false;
+      for (const m of session.messages) {
+        if (m.type === "report" && m.report) latestReport = m;
+        else if (m.type === "report_group" && m.reportGroup) latestGroup = m;
+        else if (m.type === "search") hasSearch = true;
       }
+
+      let address: string;
+      let composite: number | null = null;
+      let zone: string | null = null;
+      let kind: SearchSummary["kind"] = "conversation";
+      let icon: SearchSummary["icon"] = "message-circle";
+      let packageCount: number | undefined;
+      let serverHistoryId: string | undefined;
+
+      if (latestGroup?.reportGroup) {
+        const g = latestGroup.reportGroup;
+        const scores = g.reports.map((r) => r.scores?.composite).filter((n): n is number => typeof n === "number");
+        address = `${g.packageAddress} · ${g.reports.length}-property package`;
+        composite = scores.length ? scores.reduce((sum, n) => sum + n, 0) / scores.length : null;
+        zone = `${g.reports.length} reports`;
+        kind = "combined_listing_group";
+        icon = "file-text";
+        packageCount = g.reports.length;
+        serverHistoryId = g.historyId ?? undefined;
+      } else if (latestReport?.report) {
+        address = reportAddress(latestReport.report) || session.title;
+        composite = typeof latestReport.report.scores?.composite === "number" ? latestReport.report.scores.composite : null;
+        zone = reportZone(latestReport.report);
+        kind = "report";
+        icon = "file-text";
+        serverHistoryId = latestReport.report.historyId ?? undefined;
+      } else {
+        address = session.title;
+        kind = "conversation";
+        icon = hasSearch ? "search" : "message-circle";
+      }
+
+      // Collapse repeated "open from history" re-views of the same server
+      // report (each tap currently spawns a fresh session) into one row.
+      if (serverHistoryId) {
+        if (seenServerIds.has(serverHistoryId)) continue;
+        seenServerIds.add(serverHistoryId);
+      }
+
+      rows.push({
+        id: `session:${session.id}`,
+        sessionId: session.id,
+        address,
+        created_at: new Date(session.updatedAt || session.createdAt).toISOString(),
+        composite_score: composite,
+        zone,
+        kind,
+        icon,
+        package_count: packageCount,
+        serverHistoryId,
+      });
     }
     return rows.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   }, [sessions]);
 
+  // Server search-history ids already represented by a local conversation, so we
+  // don't show a duplicate server row for a report the user already has locally.
+  const coveredServerIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const row of localConversations) {
+      if (row.serverHistoryId) ids.add(row.serverHistoryId);
+    }
+    return ids;
+  }, [localConversations]);
+
   const visibleSearches = useMemo(() => {
-    const serverIds = new Set(searches.map((s) => s.id));
-    const localOnly = localSearches.filter((s) => !serverIds.has(s.id));
-    return [...localOnly, ...searches].sort(
+    const serverOnly = searches.filter((s) => !coveredServerIds.has(s.id));
+    return [...localConversations, ...serverOnly].sort(
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
     );
-  }, [localSearches, searches]);
+  }, [localConversations, searches, coveredServerIds]);
 
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -239,13 +300,11 @@ export default function HistoryScreen() {
   }, [searchHistoryTick, load]);
 
   const handleTap = useCallback(async (item: SearchSummary) => {
-    if (item.localReport) {
-      openHistoryReport(item.address, item.localReport);
-      router.push("/");
-      return;
-    }
-    if (item.localReportGroup) {
-      openHistoryReportGroup(item.localReportGroup.packageAddress, item.localReportGroup);
+    // Locally-saved conversation → resume the exact thread in place, preserving
+    // every message (discover results, "show more", chat, reports) so the user
+    // picks up right where they left off.
+    if (item.sessionId) {
+      switchSession(item.sessionId);
       router.push("/");
       return;
     }
@@ -280,7 +339,7 @@ export default function HistoryScreen() {
     } finally {
       setOpeningId(null);
     }
-  }, [getApiHeaders, openHistoryReport, openHistoryReportGroup, router, t]);
+  }, [getApiHeaders, openHistoryReport, openHistoryReportGroup, switchSession, router, t]);
 
   const handleDelete = useCallback((item: SearchSummary) => {
     Alert.alert(
@@ -292,6 +351,20 @@ export default function HistoryScreen() {
           text: t("history.delete"),
           style: "destructive",
           onPress: async () => {
+            // Local conversation → drop the saved session, plus its server-side
+            // report copy (if any) so it doesn't reappear on the next refresh.
+            if (item.sessionId) {
+              deleteSession(item.sessionId);
+              if (item.serverHistoryId) {
+                const serverId = item.serverHistoryId;
+                setSearches((prev) => prev.filter((s) => s.id !== serverId));
+                fetch(`${getApiBase()}/searches/${serverId}`, {
+                  method: "DELETE",
+                  headers: getApiHeaders(),
+                }).catch(() => {});
+              }
+              return;
+            }
             try {
               await fetch(`${getApiBase()}/searches/${item.id}`, {
                 method: "DELETE",
@@ -305,7 +378,7 @@ export default function HistoryScreen() {
         },
       ],
     );
-  }, [getApiHeaders]);
+  }, [getApiHeaders, deleteSession, t]);
 
   const handleNew = () => {
     startNewChat();

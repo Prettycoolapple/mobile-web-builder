@@ -98,7 +98,10 @@ function constructionRatesPerSqm(
     rateHigh = anchor * 1.1;
   }
 
-  if (contour === "steep") {
+  if (contour === "very_steep") {
+    rateLow *= 1.28;
+    rateHigh *= 1.28;
+  } else if (contour === "steep") {
     rateLow *= 1.18;
     rateHigh *= 1.18;
   } else if (contour === "moderate") {
@@ -139,9 +142,10 @@ function retainingBucketForContour(contour: MergedPropertyData["contour"]): {
   low: number;
   high: number;
 } {
-  if (contour === "gentle") return { low: 10_000, high: 30_000 };
-  if (contour === "moderate") return { low: 50_000, high: 150_000 };
-  if (contour === "steep") return { low: 200_000, high: 400_000 };
+  if (contour === "subtle" || contour === "gentle") return { low: 5_000, high: 25_000 };
+  if (contour === "moderate") return { low: 30_000, high: 100_000 };
+  if (contour === "steep") return { low: 100_000, high: 250_000 };
+  if (contour === "very_steep") return { low: 250_000, high: 600_000 };
   return { low: 0, high: 0 };
 }
 
@@ -163,8 +167,8 @@ function estimateLargeSiteRetaining(data: MergedPropertyData): {
   const p95 = data.contour_local_slope_p95_degrees ?? 0;
   const sampleCount = data.contour_sample_count ?? 0;
   const hasDistribution = sampleCount >= 8 && (steepRatio > 0 || moderateRatio > 0 || p90 > 0 || p95 > 0);
-  const steepSignal = contour === "steep" || steepRatio >= 0.08 || p90 >= 20 || p95 >= 24;
-  const moderateSignal = contour === "moderate" || steepSignal || steepRatio + moderateRatio >= 0.2 || p90 >= 12;
+  const steepSignal = contour === "steep" || contour === "very_steep" || steepRatio >= 0.08 || p90 >= 18 || p95 >= 21;
+  const moderateSignal = contour === "moderate" || steepSignal || steepRatio + moderateRatio >= 0.2 || p90 >= 6;
 
   if (!steepSignal && !moderateSignal) return null;
   if (!hasDistribution && contour !== "steep") return null;
@@ -177,13 +181,14 @@ function estimateLargeSiteRetaining(data: MergedPropertyData): {
   const minEnvelope = steepSignal ? 900 : 350;
   const affectedAreaSqm = Math.round(Math.max(minEnvelope, Math.min(maxEnvelope, effectiveLand * pressureRatio)));
 
-  const lowRate = steepSignal ? 180 : 90;
-  const highRate = steepSignal ? 420 : 240;
+  const verySteepSignal = contour === "very_steep" || p90 >= 18 || p95 >= 21;
+  const lowRate = verySteepSignal ? 240 : steepSignal ? 180 : 90;
+  const highRate = verySteepSignal ? 520 : steepSignal ? 420 : 240;
   const ruralMultiplier = RURAL_LIFESTYLE_ZONES.has((data.zone_code ?? "").toUpperCase()) ? 1.15 : 1;
   const calculatedLow = affectedAreaSqm * lowRate * ruralMultiplier;
   const calculatedHigh = affectedAreaSqm * highRate * ruralMultiplier;
-  const floorLow = steepSignal ? 250_000 : 120_000;
-  const floorHigh = steepSignal ? 750_000 : 350_000;
+  const floorLow = verySteepSignal ? 350_000 : steepSignal ? 250_000 : 120_000;
+  const floorHigh = verySteepSignal ? 950_000 : steepSignal ? 750_000 : 350_000;
 
   return {
     low: Math.max(floorLow, calculatedLow),

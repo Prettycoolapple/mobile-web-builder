@@ -18,7 +18,7 @@ export interface HougardenData {
   data_source: "hougarden";
   scraped_at: string;
   contour_text: string | null;
-  contour_classification: "flat" | "gentle" | "moderate" | "steep" | null;
+  contour_classification: "flat" | "subtle" | "gentle" | "moderate" | "steep" | "very_steep" | null;
 }
 
 export function emptyHougardenData(): HougardenData {

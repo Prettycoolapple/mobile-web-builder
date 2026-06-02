@@ -122,7 +122,7 @@ function overlayStatus(report: Report): "good" | "warning" | "risk" | "neutral" 
 
 function contourStatus(terrain: Report["terrain"]): "good" | "warning" | "risk" | "neutral" {
   if (!terrain || terrain.classification === null) return "neutral";
-  if (terrain.classification === "steep") return "risk";
+  if (terrain.classification === "steep" || terrain.classification === "very_steep") return "risk";
   if (terrain.classification === "moderate") return "warning";
   return "good";
 }
@@ -976,8 +976,8 @@ function OverlayChecklist({ overlays, colors }: { overlays: PlanningOverlay[]; c
   return (
     <View style={{ gap: 8 }}>
       {overlays.map((o, i) => {
-        const indicator = o.status === "restricted" ? "🔴" : o.status === "moderate" ? "🟡" : "🟢";
-        const textColor = o.status === "restricted" ? colors.red : o.status === "moderate" ? colors.amber : colors.success;
+        const indicator = o.status === "restricted" ? "🔴" : o.status === "moderate" ? "🟡" : o.status === "control" ? "🔵" : "🟢";
+        const textColor = o.status === "restricted" ? colors.red : o.status === "moderate" ? colors.amber : o.status === "control" ? colors.mutedForeground : colors.success;
         return (
           <View key={i} style={[styles.overlayRow, { backgroundColor: colors.muted, borderRadius: 10 }]}>
             <Text style={{ fontSize: 15 }}>{indicator}</Text>
@@ -1209,16 +1209,20 @@ function AsbestosPanel({ asbestos, colors }: { asbestos: AsbestosInfo; colors: R
 
 const TERRAIN_CLS_KEY: Record<string, string> = {
   flat:     "report.terrain_cls_flat",
+  subtle:   "report.terrain_cls_subtle",
   gentle:   "report.terrain_cls_gentle",
   moderate: "report.terrain_cls_moderate",
   steep:    "report.terrain_cls_steep",
+  very_steep: "report.terrain_cls_very_steep",
 };
 
 const TERRAIN_SLOPE_EXPLAIN_KEY: Record<NonNullable<NonNullable<Report["terrain"]>["classification"]>, string> = {
   flat: "report.terrain_slope_explain_flat",
+  subtle: "report.terrain_slope_explain_subtle",
   gentle: "report.terrain_slope_explain_gentle",
   moderate: "report.terrain_slope_explain_moderate",
   steep: "report.terrain_slope_explain_steep",
+  very_steep: "report.terrain_slope_explain_very_steep",
 };
 
 function terrainSlopeDegPhrase(deg: number | null | undefined, osChinese: boolean): string {
@@ -1242,10 +1246,10 @@ function ContourCard({ terrain, colors }: { report: Report; terrain: NonNullable
     );
   }
 
-  const steepness = cls === "steep" ? 40 : cls === "moderate" ? 22 : cls === "gentle" ? 10 : 3;
+  const steepness = cls === "very_steep" ? 50 : cls === "steep" ? 36 : cls === "moderate" ? 22 : (cls === "subtle" || cls === "gentle") ? 10 : 3;
   const W = 120, H = 70;
-  const slopeY = H - (steepness / 45) * H;
-  const terrainColor = cls === "steep" ? colors.red : cls === "moderate" ? colors.amber : colors.success;
+  const slopeY = Math.max(4, H - (steepness / 50) * H);
+  const terrainColor = cls === "very_steep" || cls === "steep" ? colors.red : cls === "moderate" ? colors.amber : colors.success;
   const stripSlopeSourceSuffix = (text: string) =>
     text
       .replace(/(?:数据来源|來源|source)\s*[:：].*/giu, "")
@@ -1267,7 +1271,7 @@ function ContourCard({ terrain, colors }: { report: Report; terrain: NonNullable
     return stripSlopeSourceSuffix(raw) || null;
   })();
 
-  const clsLabel = t(TERRAIN_CLS_KEY[cls] ?? "report.terrain_cls_gentle");
+  const clsLabel = t(TERRAIN_CLS_KEY[cls] ?? "report.terrain_cls_subtle");
 
   return (
     <View style={{ gap: 10 }}>
@@ -1312,11 +1316,13 @@ function ContourCard({ terrain, colors }: { report: Report; terrain: NonNullable
           </Text>
         </View>
       )}
-      {(cls === "steep" || cls === "moderate") && (
+      {(cls === "very_steep" || cls === "steep" || cls === "moderate") && (
         <View style={[styles.warningBox, { backgroundColor: terrainColor + "12", borderColor: terrainColor + "30" }]}>
           <Feather name="alert-triangle" size={13} color={terrainColor} />
           <Text style={{ color: terrainColor, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1, lineHeight: 17 }}>
-            {cls === "steep"
+            {cls === "very_steep"
+              ? t("report.terrain_warning_very_steep")
+              : cls === "steep"
               ? t("report.terrain_warning_steep")
               : t("report.terrain_warning_moderate")}
           </Text>

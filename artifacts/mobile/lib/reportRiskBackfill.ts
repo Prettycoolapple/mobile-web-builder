@@ -13,7 +13,7 @@ export interface RiskBackfillContext {
   netAreaSqm: number | null;
   minLotSqm: number | null;
   overlays: Array<{ name: string; status: string }>;
-  contour: "flat" | "gentle" | "moderate" | "steep" | null;
+  contour: "flat" | "subtle" | "gentle" | "moderate" | "steep" | "very_steep" | null;
   infrastructure: Array<{ name: string; location: string; risk: string }>;
   estateType: string | null;
 }
@@ -116,6 +116,11 @@ function zoneSentence(ctx: RiskBackfillContext): string | null {
 
 function terrainSentence(ctx: RiskBackfillContext): string | null {
   const { isZh, contour } = ctx;
+  if (contour === "very_steep") {
+    return isZh
+      ? "极陡地形通常意味着高成本地基、挡土墙和岩土工程风险；在确认开发布局前，应先完成地形测量和岩土工程复核。"
+      : "Very steep terrain usually means high-cost foundations, retaining, and geotechnical risk; confirm survey and geotech advice before relying on a development layout.";
+  }
   if (contour === "steep") {
     return isZh
       ? "场地坡度较陡时挡土墙与平整工程量显著，岩土勘察与雨水径流路径应尽早纳入总图。"

@@ -63,7 +63,7 @@ import {
 import type { ListingResult } from "../lib/scrapers/oneroof";
 import { queueBackgroundScores, getCardScores } from "../lib/analysis-cache";
 import { normaliseLocale } from "../lib/prompts";
-import { terrainSlopeText } from "../lib/terrain-slope-copy";
+import { terrainSlopeText, type TerrainContour } from "../lib/terrain-slope-copy";
 import { translateChatContent, translateReportNarrative, ensureChinese } from "../lib/translation";
 import {
   normaliseSelectedListingContext,
@@ -87,6 +87,7 @@ import { usagePeriodExpired } from "../lib/billingPeriod";
 import { formatTitleTypeForDisplay } from "../lib/titleDisplay";
 import { sendPushToUser } from "../lib/expo-push";
 import { runAfterResponse } from "../lib/vercel-wait-until";
+import { getRecentShownForUser, recordShownForUser } from "../lib/discovery-shown-memory";
 import type { Logger } from "pino";
 
 type ReqLike = { headers: Record<string, string | string[] | undefined> };
@@ -310,7 +311,7 @@ function appendRuralTransferRightRiskIfNeeded(bullets: string[], costs: NonNulla
 }
 
 function deterministicTerrainSlopeText(
-  contour: "flat" | "gentle" | "moderate" | "steep" | null | undefined,
+  contour: TerrainContour | null | undefined,
   slopeDegrees: number | null | undefined,
   locale: ReturnType<typeof normaliseLocale> = "en",
 ): string | null {
@@ -319,10 +320,12 @@ function deterministicTerrainSlopeText(
 
 function filterRiskSummaryRemoveContradictoryTerrainBullets(
   bullets: string[],
-  contour: "flat" | "gentle" | "moderate" | "steep" | null | undefined,
+  contour: TerrainContour | null | undefined,
 ): string[] {
   return bullets.filter((b) => {
     if (typeof b !== "string") return false;
+    if (contour === "very_steep" && /steep\s+(slope|terrain|site)|very\s+steep|severe\s+terrain|extreme\s+(?:build|terrain|engineering)|极陡|高成本地形/i.test(b)) return true;
+    if (contour !== "very_steep" && /very\s+steep|severe\s+terrain|extreme\s+(?:build|terrain|engineering)|极陡|高成本地形/i.test(b)) return false;
     if (contour !== "moderate" && /(moderate|medium)\s+(slope|terrain)|10\s*[-–]\s*15|中等坡|中坡/i.test(b)) return false;
     if (contour !== "steep" && /steep\s+(slope|terrain|site)|陡坡|地形陡峭/i.test(b)) return false;
     return true;
@@ -3422,6 +3425,27 @@ router.post("/chat", async (req, res) => {
 
       if (effectiveMode === "discover") {
         try {
+          // ─── Account-level shown memory (30-day) ─────────────────────────
+          // Seed the per-conversation dedup set with everything this account has
+          // already been shown in the last 30 days, so a brand-new conversation
+          // asking the same thing ("subdivision in St Heliers") continues with
+          // unshown listings instead of restarting from property #1.
+          if (chatUserId) {
+            try {
+              const persisted = await getRecentShownForUser(chatUserId);
+              for (const k of persisted.addressKeys) alreadyShownAddressKeys.add(k);
+              for (const u of persisted.urls) alreadyShownUrlsFromHistory.push(u);
+              if (persisted.addressKeys.length || persisted.urls.length) {
+                req.log.info(
+                  { keys: persisted.addressKeys.length, urls: persisted.urls.length },
+                  "Discovery: seeded dedup set from account-level shown memory",
+                );
+              }
+            } catch (err) {
+              req.log.warn({ err }, "Discovery: failed to load account-level shown memory");
+            }
+          }
+
           // ─── DISCOVER FLOW — using LLM-extracted intent ──────────────────
           // All parameters come from the intent object. Suburb may have been
           // inferred from the current report context when absent from the message.
@@ -3842,6 +3866,22 @@ router.post("/chat", async (req, res) => {
                 subdivisionEligible: c.subdivisionEligible,
                 subdivisionRejectReason: c.subdivisionRejectReason,
               })),
+            );
+          }
+
+          // Persist these cards to the account-level 30-day shown memory so the
+          // next conversation (any device) continues with unshown listings.
+          if (chatUserId && candidates.length > 0) {
+            const shownItems = candidates.map((c) => ({
+              addressKey: normaliseDiscoveryAddressKey(c.address),
+              listingUrl: c.listingUrl ?? null,
+              address: c.address ?? null,
+              suburb: suburb ?? null,
+            }));
+            runAfterResponse(
+              recordShownForUser(chatUserId, shownItems).catch((err) =>
+                req.log.warn({ err }, "Discovery: failed to record account-level shown memory"),
+              ),
             );
           }
 
@@ -4607,6 +4647,19 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                     subdivisionRejectReason: c.subdivisionRejectReason,
                   })),
                 );
+                if (chatUserId) {
+                  const shownItems = discoverCandidates.map((c) => ({
+                    addressKey: normaliseDiscoveryAddressKey(c.address),
+                    listingUrl: c.listingUrl ?? null,
+                    address: c.address ?? null,
+                    suburb: suburb ?? null,
+                  }));
+                  runAfterResponse(
+                    recordShownForUser(chatUserId, shownItems).catch((err) =>
+                      req.log.warn({ err }, "Discovery: failed to record account-level shown memory (safety net)"),
+                    ),
+                  );
+                }
                 const aiIntro = content;
                 const payload = JSON.stringify({ candidates: discoverCandidates, isMockData: false, suburb, dataSource: "realestate.co.nz", noListings: false, aiIntro });
                 const translatedPayload = await translateChatContent(payload, "discover", chatLocale, chatTranslateTitleSchool);

@@ -3,6 +3,8 @@ export * from "./searches";
 export * from "./feasibility_jobs";
 export * from "./conversations";
 export * from "./messages";
+export * from "./conversation_syncs";
+export * from "./discovery_shown_listings";
 export * from "./sales_agent_profiles";
 export * from "./service_provider_profiles";
 export * from "./user_uploads";

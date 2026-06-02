@@ -162,6 +162,56 @@ export function scoreProperty(
       reason: "Coastal protection overlay — additional consenting required",
     },
     {
+      condition: hasOverlay(merged, "mana whenua"),
+      points: 1.2,
+      reason: "Site of Significance to Mana Whenua — cultural assessment, iwi engagement and accidental-discovery protocols required",
+    },
+    {
+      condition: hasOverlay(merged, "ecological"),
+      points: 1.5,
+      reason: "Significant Ecological Area — vegetation clearance and earthworks tightly restricted; developable area may be reduced",
+    },
+    {
+      condition: hasOverlay(merged, "special character"),
+      points: 1.5,
+      reason: "Special Character Area — strict demolition and design controls; redevelopment significantly constrained",
+    },
+    {
+      condition: hasOverlay(merged, "outstanding natural"),
+      points: 1.2,
+      reason: "Outstanding Natural Feature/Landscape/Character — building location, bulk and earthworks heavily controlled",
+    },
+    {
+      condition: hasOverlay(merged, "wetland"),
+      points: 1.2,
+      reason: "Wetland Management Area — NES-Freshwater setbacks and consent likely; reduces usable yield",
+    },
+    {
+      condition: hasOverlay(merged, "stream"),
+      points: 0.8,
+      reason: "Stream Management Area — riparian setbacks and stream-works controls apply",
+    },
+    {
+      condition: hasOverlay(merged, "aquifer") || hasOverlay(merged, "lake") || hasOverlay(merged, "water supply"),
+      points: 0.5,
+      reason: "Water/aquifer management area — groundwater and discharge controls apply",
+    },
+    {
+      condition: hasOverlay(merged, "high natural character"),
+      points: 0.6,
+      reason: "High Natural Character Overlay — coastal development controls apply",
+    },
+    {
+      condition: hasOverlay(merged, "public view"),
+      points: 0.4,
+      reason: "Local Public Views Overlay — height and location controls to protect an identified view",
+    },
+    {
+      condition: merged.contour === "very_steep",
+      points: 1.1,
+      reason: "Very steep terrain - severe earthworks and geotechnical complexity",
+    },
+    {
       condition: merged.contour === "steep",
       points: 0.8,
       reason: "Steep terrain — significant earthworks required",
