@@ -20,6 +20,25 @@ describe("discovery intent", () => {
     expect(isStandardSubdivisionDiscoveryIntent(query)).toBe(false);
   });
 
+  it("does not treat plain Chinese for-sale price searches as development intent", () => {
+    const query = "\u4e2d\u533a\u6709\u4ec0\u4e48150\u4e07\u5230200\u4e07\u5728\u5356\u7684";
+
+    expect(isDevelopmentDiscoveryIntent(query)).toBe(false);
+    expect(isStandardSubdivisionDiscoveryIntent(query)).toBe(false);
+  });
+
+  it("still treats explicit Chinese development wording as development intent", () => {
+    const query = "\u4e2d\u533a\u6709\u4ec0\u4e48\u53ef\u4ee5\u5f00\u53d1\u7684\u5730\u5728150-200\u4e07\u4e4b\u95f4";
+
+    expect(isDevelopmentDiscoveryIntent(query)).toBe(true);
+    expect(isStandardSubdivisionDiscoveryIntent(query)).toBe(false);
+  });
+
+  it("keeps generic English land or section sale searches neutral", () => {
+    expect(isDevelopmentDiscoveryIntent("central auckland homes for sale between 1.5m and 2m")).toBe(false);
+    expect(isDevelopmentDiscoveryIntent("sections for sale in central auckland")).toBe(false);
+  });
+
   it("requires at least two computed lots for standard subdivision cards", () => {
     expect(hasStandardSubdivisionYield({ potentialLots: 1 })).toBe(false);
     expect(hasStandardSubdivisionYield({ potentialLots: 2 })).toBe(true);

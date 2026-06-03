@@ -302,6 +302,24 @@ export async function translateReportNarrative(
     out.schoolZones = await translateSchoolZoneDetails(out.schoolZones);
   }
 
+  // titleInsight: body copy for the dedicated land-title section. This is
+  // generated after the LLM report, so translate it explicitly with the rest of
+  // the report narrative for Chinese-OS users.
+  if (translateTitleSchool && out.titleInsight && typeof out.titleInsight === "object") {
+    const insight = { ...(out.titleInsight as Record<string, unknown>) };
+    const rawInsightTitle =
+      typeof insight.titleType === "string"
+        ? formatTitleTypeForDisplay(insight.titleType) ?? insight.titleType
+        : insight.titleType;
+    const mappedInsightTitle = typeof rawInsightTitle === "string" ? localiseTitleTypeForZh(rawInsightTitle) : null;
+    insight.titleType = mappedInsightTitle ?? (await translateIfString(rawInsightTitle));
+    insight.opportunity = await translateIfString(insight.opportunity);
+    if (Array.isArray(insight.risks)) {
+      insight.risks = await translateReportZhStringArray(insight.risks, true);
+    }
+    out.titleInsight = insight;
+  }
+
   // planning.overlays[].detail, planning.subdivisionSummary, planning.easement_summary,
   // planning.lot_impact_note
   if (out.planning && typeof out.planning === "object") {

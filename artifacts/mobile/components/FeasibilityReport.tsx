@@ -48,6 +48,7 @@ import {
   SchoolZoneDetail,
   NeighbourhoodContext,
   TransportContext,
+  TitleInsight,
 } from "@/context/ChatContext";
 
 /** Comparable sale address cards are hidden for now; `comparableSales` remains on the report for ROI logic. Set to true to show cards again. */
@@ -81,6 +82,27 @@ function safeNum(v: unknown, fallback = 0): number {
 function capitalize(s: string | undefined): string {
   if (!s) return "—";
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function hasCjk(text: string | null | undefined): boolean {
+  return typeof text === "string" && /[\u3400-\u9fff]/.test(text);
+}
+
+function localiseTitleInsightZh(insight: TitleInsight | null | undefined): TitleInsight | null | undefined {
+  if (!insight?.isCrossLease) return insight;
+  const zhRisks = [
+    "交叉租赁（Cross Lease）产权下，任何重建、加建或外墙改动通常都需要其他交叉租赁产权方书面同意，这会直接限制开发自由度，也是相较 Freehold 的核心劣势。",
+    "若考虑将交叉租赁转换为独立产权（Freehold），通常需要规划师、建筑/设计师、测量与法律共同参与，涉及时间与费用成本，且需要所有相关方配合。",
+    "若计划合并，例如收购邻近交叉租赁物业并一并转换，其可行性、价值释放与风险都应先由专业人士正式评估后再决策。",
+  ];
+  return {
+    ...insight,
+    titleType: localiseTitleTypeZh(insight.titleType) ?? insight.titleType,
+    opportunity: hasCjk(insight.opportunity)
+      ? insight.opportunity
+      : "交叉租赁（Cross Lease）物业通常比同区 Freehold 便宜。若你有足够资金，可考虑收购相邻的交叉租赁物业，将两者一并转换为独立 Freehold 产权，这往往能释放可观价值。这类转换需要规划师、建筑/设计师等专业人士评估所需工作与投资规模，建议先获取专业意见再决策。",
+    risks: (insight.risks ?? []).map((risk, idx) => (hasCjk(risk) ? risk : zhRisks[idx] ?? risk)),
+  };
 }
 
 function scoreColor(score: number, colors: ReturnType<typeof useColors>): string {
@@ -2358,6 +2380,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
   const hasLiveComparableSales = realComparableSales.length > 0;
   const developmentStrategies = report.developmentStrategies ?? [];
   const hasDevelopmentStrategies = developmentStrategies.length > 0;
+  const osChinese = isOSChineseLocale();
   const titleTypeRaw = formatTitleTypeForDisplay(report.propertyOverview?.titleType);
   const titleResolutionSource = report.propertyOverview?.titleResolutionSource ?? "unknown";
   const titleNeedsAgentCheck =
@@ -2368,11 +2391,13 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
   // /freehold/i check below still works because the English word remains in
   // the parens, e.g. "永久产权 (Freehold)".
   const titleTypeDisplayBase =
-    locale === "zh" && titleTypeRaw ? localiseTitleTypeZh(titleTypeRaw) ?? titleTypeRaw : titleTypeRaw;
+    osChinese && titleTypeRaw ? localiseTitleTypeZh(titleTypeRaw) ?? titleTypeRaw : titleTypeRaw;
   const titleTypeDisplay =
     titleTypeDisplayBase && titleNeedsAgentCheck
-      ? `${titleTypeDisplayBase} ${t("report.title_check_with_agent")}`
+      ? `${titleTypeDisplayBase} ${translateForOS("report.title_check_with_agent")}`
       : titleTypeDisplayBase;
+  const titleInsightForDisplay =
+    osChinese ? localiseTitleInsightZh(report.titleInsight) : report.titleInsight;
   // Freehold renders neutral; Cross Lease / Leasehold / Stratum get a warning accent.
   const isNonFreeholdTenure = !!titleTypeDisplay && !/free\s*hold/i.test(titleTypeDisplay);
   const landAreaUnavailableContact =
@@ -2530,7 +2555,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
           <InfoRow label={t("report.build_year")} value={report.propertyOverview.buildYear || t("report.na")} colors={colors} />
           {titleTypeDisplay ? (
             <InfoRow
-              label={t("report.title_type")}
+              label={translateForOS("report.title_type")}
               value={titleTypeDisplay}
               valueColor={isNonFreeholdTenure ? colors.amber : undefined}
               colors={colors}
@@ -2546,22 +2571,22 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
         </SectionCard>
       )}
 
-      {report.titleInsight?.isCrossLease && (
-        <SectionCard title={t("report.title_insight_title")} icon="📜" status="warning" colors={colors}>
-          {!!report.titleInsight.opportunity?.trim() && (
+      {titleInsightForDisplay?.isCrossLease && (
+        <SectionCard title={translateForOS("report.title_insight_title")} icon="📜" status="warning" colors={colors}>
+          {!!titleInsightForDisplay.opportunity?.trim() && (
             <Text
               style={{
                 color: colors.foreground,
                 fontFamily: "DM_Sans_400Regular",
                 fontSize: 13,
                 lineHeight: 20,
-                marginBottom: (report.titleInsight.risks?.length ?? 0) > 0 ? 12 : 0,
+                marginBottom: (titleInsightForDisplay.risks?.length ?? 0) > 0 ? 12 : 0,
               }}
             >
-              {report.titleInsight.opportunity}
+              {titleInsightForDisplay.opportunity}
             </Text>
           )}
-          {(report.titleInsight.risks ?? []).map((risk, idx) => (
+          {(titleInsightForDisplay.risks ?? []).map((risk, idx) => (
             <View key={idx} style={{ flexDirection: "row", marginBottom: 8 }}>
               <Text style={{ color: colors.amber, fontFamily: "DM_Sans_600SemiBold", fontSize: 13, marginRight: 8 }}>•</Text>
               <Text style={{ flex: 1, color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 13, lineHeight: 20 }}>
@@ -2620,7 +2645,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
         </SectionCard>
       )}
 
-      {report.costItems && report.costItems.length > 0 && (
+      {report.costItems && report.costItems.length > 0 && !landAreaMissing && (
         <SectionCard title={t("report.dev_cost_estimate")} icon="💰" status="neutral" alert={safeNum(report.scores?.cost) < 2.5} colors={colors}>
           <CostBreakdownChart
             costItems={report.costItems}
@@ -2645,7 +2670,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
         />
       </SectionCard>
 
-      {hasDevelopmentStrategies && (
+      {hasDevelopmentStrategies && !landAreaMissing && (
         <SectionCard title={t("report.development_strategy_scenarios")} icon="🧭" status={strategyStatus(developmentStrategies)} alert={safeNum(report.scores?.roi) < 2.5} colors={colors}>
           <DevelopmentStrategyPanel
             strategies={developmentStrategies}

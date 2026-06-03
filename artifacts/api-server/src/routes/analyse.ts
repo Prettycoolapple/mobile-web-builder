@@ -916,6 +916,12 @@ function buildDiscoveryCriteriaText(
   return [...recentUserTurns, currentUserText, intentCriteria ?? ""].filter(Boolean).join(" ");
 }
 
+function isPlainListingBrowseWithoutDevelopment(userText: string): boolean {
+  return isListingBrowseIntent(userText)
+    && !isDevelopmentDiscoveryIntent(userText)
+    && !isStandardSubdivisionDiscoveryIntent(userText);
+}
+
 function rankByCriteria(candidates: PropertyCandidate[], criteria: string | null): PropertyCandidate[] {
   if (!criteria || candidates.length === 0) return candidates;
   const c = criteria.toLowerCase();
@@ -3500,7 +3506,8 @@ router.post("/chat", async (req, res) => {
           let suburb = intent.suburb ?? delegatedDiscoverSuburb?.suburb ?? (contextualAreaBrowse ? reportCtx?.suburb ?? null : null);
           const isFollowUp = intent.isFollowUp || contextualAreaBrowse || isDiscoverStreetContinuation(userText);
           const discoveryCriteria = buildDiscoveryCriteriaText(messages, userText, intent.criteria);
-          const wantsDevelopmentDiscovery = isDevelopmentDiscoveryIntent(discoveryCriteria);
+          const plainListingBrowse = isPlainListingBrowseWithoutDevelopment(userText);
+          const wantsDevelopmentDiscovery = !plainListingBrowse && isDevelopmentDiscoveryIntent(discoveryCriteria);
           const includeNegotiation = intent.includeNegotiation || wantsDevelopmentDiscovery;
           const userTextHasPrice = intent.minPrice !== null || intent.maxPrice !== null;
 
@@ -3552,8 +3559,8 @@ router.post("/chat", async (req, res) => {
           let isMockData = false;
           let dataSource = "realestate.co.nz";
           let prescreenedIntro = "";
-          const criteriaLabel = intent.criteria || (wantsDevelopmentDiscovery ? "subdivision/development potential" : "");
-          const strictStandardSubdivision = isStandardSubdivisionDiscoveryIntent(discoveryCriteria);
+          const criteriaLabel = plainListingBrowse ? "" : (intent.criteria || (wantsDevelopmentDiscovery ? "subdivision/development potential" : ""));
+          const strictStandardSubdivision = !plainListingBrowse && isStandardSubdivisionDiscoveryIntent(discoveryCriteria);
           const discoveryTargetCount = strictStandardSubdivision ? 1 : 3;
           const discoveryScreenConcurrency = strictStandardSubdivision ? 1 : 5;
           const discoveryBatchSize = strictStandardSubdivision ? 1 : 8;
@@ -3651,7 +3658,8 @@ router.post("/chat", async (req, res) => {
                 // plausible candidate surfaces. Full practical feasibility waits
                 // until the user taps Start analysis.
                 const criteriaContext = criteriaLabel ? ` matching criteria: ${criteriaLabel}` : "";
-                const introPromptPreScreen = `The user asked: "${userText}". You found some matching properties in ${suburb || "the area"} on realestate.co.nz${criteriaContext}. In 1 sentence, acknowledge this result conversationally (e.g. "I found a few development sites in St Heliers under $2M:"). Do NOT mention a specific number — say "a few", "some", or "a handful". Be natural and brief — no JSON.`;
+                const resultKind = wantsDevelopmentDiscovery ? "development-focused listings" : "listings";
+                const introPromptPreScreen = `The user asked: "${userText}". You found some matching ${resultKind} in ${suburb || "the area"} on realestate.co.nz${criteriaContext}. In 1 sentence, acknowledge this result conversationally. Do NOT mention a specific number; say "a few", "some", or "a handful". If the user's exact request did not explicitly ask for development, subdivision, yield, or redevelopment, call them listings/properties only; do not call them development sites or development land. Be natural and brief; no JSON.`;
                 const preScreenOptsWithBail = strictStandardSubdivision
                   ? { ...discoverPreOpts, earlyBailAt: discoveryTargetCount }
                   : discoverPreOpts;
@@ -3784,7 +3792,7 @@ router.post("/chat", async (req, res) => {
                       suburb: nearbySuburb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
                     });
                     const criteriaContextFallback = criteriaLabel ? ` (${criteriaLabel})` : "";
-                    const introPromptFallback = `The user asked about ${suburb}${criteriaContextFallback} but no listings were found there right now. You found some properties in nearby ${nearbySuburb}. In 1 sentence acknowledge this naturally (e.g. "I couldn't find anything in ${suburb} right now, but here are some nearby options in ${nearbySuburb}:"). Do NOT mention a specific number — say "a few", "some", or "a handful". Be brief — no JSON.`;
+                    const introPromptFallback = `The user asked about ${suburb}${criteriaContextFallback} but no listings were found there right now. You found some properties in nearby ${nearbySuburb}. In 1 sentence acknowledge this naturally (e.g. "I couldn't find anything in ${suburb} right now, but here are some nearby options in ${nearbySuburb}:"). Do NOT mention a specific number; say "a few", "some", or "a handful". If the user's exact request did not explicitly ask for development, subdivision, yield, or redevelopment, call them listings/properties only; do not call them development sites or development land. Be brief; no JSON.`;
                     const [screenedFallbackDetailed, introFallback] = await Promise.all([
                       preScreenListingsFastDetailed(filtered, discoveryScreenConcurrency, null, {
                         ...discoverPreOpts,
@@ -3906,7 +3914,7 @@ router.post("/chat", async (req, res) => {
               const criteriaContextGeneral = criteriaLabel ? ` (${criteriaLabel})` : "";
               const introPrompt = noListings
                 ? `The user asked: "${userText}". No matching listings were found on realestate.co.nz right now for ${suburb || "this area"}${criteriaContextGeneral}. In 1-2 sentences, acknowledge this warmly and suggest they try a different suburb, adjust their budget, or check back soon. Do NOT output any JSON.`
-                : `The user asked: "${userText}". You found some matching properties in ${suburb || "the area"} on realestate.co.nz${criteriaContextGeneral}. In 1 sentence, acknowledge the results conversationally. Do NOT mention a specific number — say "a few", "some", or "a handful". Be natural and brief — no JSON.`;
+                : `The user asked: "${userText}". You found some matching properties in ${suburb || "the area"} on realestate.co.nz${criteriaContextGeneral}. In 1 sentence, acknowledge the results conversationally. Do NOT mention a specific number; say "a few", "some", or "a handful". If the user's exact request did not explicitly ask for development, subdivision, yield, or redevelopment, call them listings/properties only; do not call them development sites or development land. Be natural and brief; no JSON.`;
               aiIntro = await generateAnalysis(introPrompt, chatLocale).catch(() => "");
             } catch { /* silent */ }
           }
@@ -4598,7 +4606,9 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
         const aiHit = userSuburb == null ? await findSuburbInTextViaIndex(content) : null;
         const suburb = userSuburb ?? (aiHit ? aiHit.title.toLowerCase() : null);
         const safetyNetCriteria = buildDiscoveryCriteriaText(messages, userText, null);
-        const wantsDevelopmentSafetyNet = isDevelopmentDiscoveryIntent(safetyNetCriteria);
+        const plainListingBrowseSafetyNet = isPlainListingBrowseWithoutDevelopment(userText);
+        const wantsDevelopmentSafetyNet = !plainListingBrowseSafetyNet && isDevelopmentDiscoveryIntent(safetyNetCriteria);
+        const strictStandardSubdivisionSafetyNet = !plainListingBrowseSafetyNet && isStandardSubdivisionDiscoveryIntent(safetyNetCriteria);
         const includeNegotiation = wantsDevelopmentSafetyNet || /negotiat|without\s+price|no\s+price|poa|tender|auction/i.test(userText);
 
         if (suburb) {
@@ -4619,8 +4629,8 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
               pricePlaceholderNzd: wantsDevelopmentSafetyNet
                 ? 3_500_000
                 : Math.max(600_000, Math.round((minPrice + maxPrice) / 2)),
-              strictStandardSubdivision: isStandardSubdivisionDiscoveryIntent(safetyNetCriteria),
-              preliminarySubdivision: isStandardSubdivisionDiscoveryIntent(safetyNetCriteria),
+              strictStandardSubdivision: strictStandardSubdivisionSafetyNet,
+              preliminarySubdivision: strictStandardSubdivisionSafetyNet,
             };
             const safetyNetTargetCount = discoverPreOptsSn.strictStandardSubdivision ? 1 : 3;
             const safetyNetScreenConcurrency = discoverPreOptsSn.strictStandardSubdivision ? 1 : 5;
