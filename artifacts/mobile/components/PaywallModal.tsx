@@ -10,6 +10,7 @@ import {
   Alert,
   ActivityIndicator,
 } from "react-native";
+import * as WebBrowser from "expo-web-browser";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
@@ -17,6 +18,9 @@ import { getApiBase } from "@/lib/api";
 import { useSubscription, getSubscriptionSyncBody } from "@/lib/revenuecat";
 import { useT } from "@/lib/i18n";
 import { STANDARD_REPORT_LIMIT } from "@/lib/quotas";
+
+const TERMS_URL = "https://www.projectalpha.app/terms/";
+const PRIVACY_URL = "https://www.projectalpha.app/privacy/";
 
 interface Props {
   visible: boolean;
@@ -121,6 +125,14 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
     }
   };
 
+  const openLegalLink = async (url: string) => {
+    try {
+      await WebBrowser.openBrowserAsync(url);
+    } catch {
+      Alert.alert(t("common.error"), t("paywall.legal_open_failed"));
+    }
+  };
+
   const priceString = getPriceForRole("general");
 
   if (!visible) return null;
@@ -203,6 +215,19 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
           <Text style={[styles.legalText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
             {t("paywall.legal", { store: Platform.OS === "ios" ? "Apple ID" : "Google Play" })}
           </Text>
+          <View style={styles.legalLinksRow}>
+            <TouchableOpacity onPress={() => openLegalLink(TERMS_URL)} activeOpacity={0.7} hitSlop={8}>
+              <Text style={[styles.legalLink, { color: colors.accent, fontFamily: "DM_Sans_500Medium" }]}>
+                {t("paywall.terms")}
+              </Text>
+            </TouchableOpacity>
+            <Text style={[styles.legalSeparator, { color: colors.mutedForeground }]}>•</Text>
+            <TouchableOpacity onPress={() => openLegalLink(PRIVACY_URL)} activeOpacity={0.7} hitSlop={8}>
+              <Text style={[styles.legalLink, { color: colors.accent, fontFamily: "DM_Sans_500Medium" }]}>
+                {t("paywall.privacy")}
+              </Text>
+            </TouchableOpacity>
+          </View>
         </Animated.View>
       </Animated.View>
     </Modal>
@@ -345,5 +370,20 @@ const styles = StyleSheet.create({
     textAlign: "center",
     lineHeight: 15,
     opacity: 0.7,
+  },
+  legalLinksRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    marginTop: -4,
+  },
+  legalLink: {
+    fontSize: 11,
+    textDecorationLine: "underline",
+  },
+  legalSeparator: {
+    fontSize: 11,
+    opacity: 0.6,
   },
 });

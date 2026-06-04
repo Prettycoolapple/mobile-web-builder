@@ -253,11 +253,6 @@ export default function ProfileScreen() {
   }, [editFirst, editLast, editLanguage, getApiHeaders, refreshProfile]);
 
   const handlePickAvatar = useCallback(async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== "granted") {
-      Alert.alert(t("profile.permission_required"), t("profile.photo_permission"));
-      return;
-    }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
       allowsEditing: true,

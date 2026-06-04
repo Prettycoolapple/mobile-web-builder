@@ -206,11 +206,6 @@ export default function AddListingScreen() {
   );
 
   const handlePickImages = useCallback(async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== "granted") {
-      Alert.alert(t("add_listing.permission_title"), t("add_listing.permission_body"));
-      return;
-    }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
       allowsMultipleSelection: true,

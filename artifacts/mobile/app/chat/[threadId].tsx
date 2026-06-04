@@ -449,11 +449,6 @@ export default function ChatScreen() {
         allowsEditing: true,
       });
     } else {
-      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm.granted) {
-        Alert.alert(t("profile.permission_required"), t("dm.permission.photo"));
-        return;
-      }
       result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ["images"],
         quality: 0.55,

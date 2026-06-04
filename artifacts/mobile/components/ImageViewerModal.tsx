@@ -56,10 +56,12 @@ export function ImageViewerModal({ visible, uri, authToken, onClose }: Props) {
     if (!uri || busy) return;
     setBusy("save");
     try {
-      const perm = await MediaLibrary.requestPermissionsAsync();
-      if (!perm.granted) {
-        Alert.alert("Permission needed", "Allow access to your photo library to save images.");
-        return;
+      if (Platform.OS !== "android") {
+        const perm = await MediaLibrary.requestPermissionsAsync();
+        if (!perm.granted) {
+          Alert.alert("Permission needed", "Allow access to your photo library to save images.");
+          return;
+        }
       }
       const localUri = await downloadToCache(uri, authToken);
       await MediaLibrary.saveToLibraryAsync(localUri);
