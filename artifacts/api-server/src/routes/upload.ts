@@ -88,12 +88,26 @@ const ALLOWED_IMAGE_MIME_TYPES = new Set([
   "image/heif",
 ]);
 
+const ALLOWED_LISTING_DOCUMENT_MIME_TYPES = new Set([
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/webp",
+  "image/heic",
+  "image/heif",
+]);
+
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGE_FILE_SIZE_BYTES = 20 * 1024 * 1024;
 const MAX_CERT_FILE_SIZE_BYTES = 30 * 1024 * 1024;
 const MAX_DM_INLINE_IMAGE_BYTES = 2 * 1024 * 1024;
 const CERTIFICATE_NAMESPACE = "provider-certificates";
 const DM_IMAGE_NAMESPACE = "dm-images";
+const LISTING_IMAGE_NAMESPACE = "listing-images";
+const LISTING_DOCUMENT_NAMESPACE = "listing-documents";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -127,6 +141,18 @@ const uploadImageOnly = multer({
       cb(null, true);
     } else {
       cb(new Error("Only image files are accepted"));
+    }
+  },
+});
+
+const uploadListingDocument = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_CERT_FILE_SIZE_BYTES },
+  fileFilter: (_req, file, cb) => {
+    if (ALLOWED_LISTING_DOCUMENT_MIME_TYPES.has(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only PDF, Word, and image files are accepted"));
     }
   },
 });
@@ -530,7 +556,7 @@ router.post(
 router.post(
   "/upload/listing-image",
   requireAuth,
-  upload.single("file"),
+  uploadImageOnly.single("file"),
   async (req: Request, res: Response) => {
     if (!req.file) {
       res.status(400).json({ error: "No file provided", code: "MISSING_FILE" });
@@ -538,11 +564,58 @@ router.post(
     }
 
     try {
-      const { buffer, mimetype, size } = req.file;
-      const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size);
+      const { buffer, mimetype, originalname, size } = req.file;
+      const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size, LISTING_IMAGE_NAMESPACE);
       const fileUrl = `/api/storage${objectPath}`;
-      res.status(201).json({ fileUrl, objectPath });
+      res.status(201).json({
+        fileUrl,
+        objectPath,
+        metadata: { name: originalname, size, contentType: mimetype },
+      });
     } catch (error) {
+      res.status(500).json({ error: "Upload failed. Please try again.", code: "UPLOAD_FAILED" });
+    }
+  },
+);
+
+router.post(
+  "/upload/listing-document",
+  requireAuth,
+  uploadListingDocument.single("file"),
+  async (req: Request, res: Response) => {
+    const category = String(req.body?.category || "").trim();
+    if (!["title", "lim", "other"].includes(category)) {
+      res.status(400).json({ error: "Select a valid document category.", code: "INVALID_CATEGORY" });
+      return;
+    }
+    if (!req.file) {
+      res.status(400).json({ error: "No file provided", code: "MISSING_FILE" });
+      return;
+    }
+    if ((category === "title" || category === "lim") && req.file.mimetype !== "application/pdf") {
+      res.status(400).json({ error: "Property Title and LIM files must be PDFs.", code: "INVALID_FILE_TYPE" });
+      return;
+    }
+
+    try {
+      const { buffer, mimetype, originalname, size } = req.file;
+      const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size, LISTING_DOCUMENT_NAMESPACE);
+      const fileUrl = `/api/storage${objectPath}`;
+      res.status(201).json({
+        fileUrl,
+        objectPath,
+        document: {
+          category,
+          fileName: originalname,
+          fileUrl,
+          objectPath,
+          mimeType: mimetype,
+          size,
+          uploadedAt: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      req.log.error({ err: error }, "Listing document upload failed");
       res.status(500).json({ error: "Upload failed. Please try again.", code: "UPLOAD_FAILED" });
     }
   },

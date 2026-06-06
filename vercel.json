@@ -11,7 +11,8 @@
   },
   "redirects": [
     { "source": "/support", "destination": "/contact", "permanent": true },
-    { "source": "/support/", "destination": "/contact", "permanent": true }
+    { "source": "/support/", "destination": "/contact", "permanent": true },
+    { "source": "/sales-portal", "destination": "/sales-portal/", "permanent": true }
   ],
   "rewrites": [
     { "source": "/api/healthz", "destination": "/api/healthz" },

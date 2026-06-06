@@ -501,6 +501,22 @@ export default function ProfileScreen() {
                   {primaryLanguage ?? "—"}
                 </Text>
               </View>
+              {user?.phoneNumber && (
+                <View style={[styles.detailRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
+                  <Text style={[styles.detailLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{t("profile.contact")}</Text>
+                  <Text style={[styles.detailValue, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
+                    {user.phoneNumber}
+                  </Text>
+                </View>
+              )}
+              {user?.agencyName && (
+                <View style={[styles.detailRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
+                  <Text style={[styles.detailLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{t("profile.agency")}</Text>
+                  <Text style={[styles.detailValue, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
+                    {user.agencyName}
+                  </Text>
+                </View>
+              )}
               {role === "service_provider" && user?.discipline && (
                 <View style={[styles.detailRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
                   <Text style={[styles.detailLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{t("profile.discipline")}</Text>

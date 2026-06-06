@@ -4,6 +4,7 @@ const dictionaries = {
     navFeatures: "功能",
     navWorkflow: "流程",
     navProfessionals: "专业人士",
+    navSalesPortal: "销售门户",
     navContact: "联系",
     navHome: "首页",
     navPrivacy: "隐私政策",
@@ -21,6 +22,7 @@ const dictionaries = {
     heroCopy:
       "Project Alpha 整合理事会、产权与公开房源数据，并由 AI 生成面向开发决策的初步可行性视图——适用于奥克兰、惠灵顿、基督城及新西兰各区域中心。了解分区背景、成本与回报信号、风险提示及下一步可联系的专业人士。输出为指示性内容，交易前请务必咨询独立专业人士。",
     heroCtaFeatures: "了解功能",
+    heroCtaSalesPortal: "销售门户",
     heroCtaSupport: "联系我们",
     heroStoreLabel: "获取应用",
     statTime: "5 分钟",
@@ -79,6 +81,7 @@ const dictionaries = {
     ctaCopy:
       "发邮件至 admin@projectalpha.app 或访问联系页面，咨询媒体合作、商务合作或新西兰境内的应用支持。",
     ctaButton: "联系我们",
+    ctaSalesPortal: "销售门户",
   },
   contact: {
     title: "联系 | Project Alpha",
@@ -111,6 +114,7 @@ const dictionaries = {
     pageTitle: "条款与条件",
     pageCopy: "Project Alpha · 由 KNH Group Ltd 运营 · 2026 年 5 月 4 日生效 · 最后更新 2026 年 5 月 4 日",
   },
+};
 
 function isChinesePreferred() {
   const langs = navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language];

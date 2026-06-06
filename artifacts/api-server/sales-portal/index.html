@@ -1,0 +1,564 @@
+<!doctype html>
+<html lang="en-NZ">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sales Portal | Project Alpha</title>
+    <meta
+      name="description"
+      content="Project Alpha sales-agent portal for signup, login, password reset, and future property database uploads."
+    />
+    <link rel="icon" href="/alpha-icon.svg" type="image/svg+xml" sizes="any" />
+    <link rel="icon" href="/favicon.png" type="image/png" sizes="512x512" />
+    <link rel="apple-touch-icon" href="/favicon.png" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script defer src="/site.js"></script>
+    <script defer src="/sales-portal/portal.js"></script>
+  </head>
+  <body data-page="salesPortal">
+    <div class="site-shell">
+      <header class="topbar topbar--solid">
+        <a class="brand" href="/" aria-label="Project Alpha home">
+          <img class="brand-mark" src="/alpha-icon.svg" alt="" width="34" height="34" decoding="async" />
+          <span data-i18n="brand">Project Alpha</span>
+        </a>
+        <nav class="nav" aria-label="Primary navigation">
+          <a href="/" data-i18n="navHome">Home</a>
+          <a href="/#professionals" data-i18n="navProfessionals">Professionals</a>
+          <a href="/contact/" data-i18n="navContact">Contact</a>
+        </nav>
+      </header>
+
+      <main class="portal-page">
+        <section class="portal-hero">
+          <div class="portal-hero-copy">
+            <p class="eyebrow">Sales agent access</p>
+            <h1>Sales Portal</h1>
+            <p>
+              Sign in or create a sales-agent account. This is the foundation for the agent dashboard,
+              including a private property database for future listing uploads.
+            </p>
+          </div>
+          <aside class="portal-status-panel" aria-label="Portal foundation status">
+            <div class="portal-status-row">
+              <span>Role gated</span>
+              <strong>Sales agents only</strong>
+            </div>
+            <div class="portal-status-row">
+              <span>Property data</span>
+              <strong>Listing API ready</strong>
+            </div>
+            <div class="portal-status-row">
+              <span>Recovery</span>
+              <strong>Email reset codes</strong>
+            </div>
+          </aside>
+        </section>
+
+        <section class="portal-shell" id="portal-auth">
+          <div class="portal-tabs" role="tablist" aria-label="Sales portal mode">
+            <button class="portal-tab is-active" type="button" data-tab-target="login" role="tab" aria-selected="true">
+              Sign in
+            </button>
+            <button class="portal-tab" type="button" data-tab-target="signup" role="tab" aria-selected="false">
+              Create account
+            </button>
+          </div>
+
+          <div class="portal-auth-grid">
+            <section class="portal-card portal-panel is-active" data-tab-panel="login" role="tabpanel">
+              <div class="portal-panel-header">
+                <p class="section-kicker">Existing agents</p>
+                <h2>Welcome back</h2>
+                <p>Use the same account credentials as Project Alpha. Only sales-agent accounts can enter.</p>
+              </div>
+
+              <form id="sales-login-form" class="portal-form">
+                <label class="field">
+                  Email address
+                  <input name="email" type="email" autocomplete="email" placeholder="you@example.com" required />
+                </label>
+                <label class="field">
+                  Password
+                  <input name="password" type="password" autocomplete="current-password" placeholder="Your password" required />
+                </label>
+                <div class="portal-form-row">
+                  <button class="button button-primary" type="submit">Sign in</button>
+                  <button class="link-button" type="button" data-reset-open>Forgot password?</button>
+                </div>
+                <p class="form-status" id="login-status" aria-live="polite"></p>
+              </form>
+            </section>
+
+            <section class="portal-card portal-panel" data-tab-panel="signup" role="tabpanel" hidden>
+              <div class="portal-panel-header">
+                <p class="section-kicker">New web account</p>
+                <h2>Create your sales-agent account</h2>
+                <p>This web account also works in the Project Alpha app as a free-tier account.</p>
+              </div>
+
+              <form id="sales-signup-form" class="portal-form">
+                <label class="field">
+                  Full name
+                  <input name="fullName" autocomplete="name" placeholder="Jane Smith" required />
+                </label>
+                <label class="field">
+                  Email address
+                  <input name="email" type="email" autocomplete="email" placeholder="you@example.com" required />
+                </label>
+                <label class="field">
+                  Password
+                  <input
+                    name="password"
+                    type="password"
+                    autocomplete="new-password"
+                    minlength="8"
+                    placeholder="At least 8 characters"
+                    required
+                  />
+                </label>
+
+                <div class="portal-divider"></div>
+
+                <label class="field">
+                  +64 NZ contact number
+                  <input name="phone" type="tel" autocomplete="tel" inputmode="tel" placeholder="+64211234567" required />
+                </label>
+                <div class="portal-form-row">
+                  <button class="button button-quiet" type="button" id="send-otp-button">Send code</button>
+                  <button class="link-button" type="button" id="resend-otp-button" disabled>Resend code</button>
+                </div>
+                <label class="field">
+                  Verification code
+                  <input name="otpCode" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" />
+                </label>
+                <div class="portal-form-row">
+                  <button class="button button-quiet" type="button" id="verify-otp-button">Verify phone</button>
+                  <span class="portal-inline-note" id="otp-state">Phone not verified yet</span>
+                </div>
+                <label class="field">
+                  Primary language
+                  <select name="primaryLanguage" required>
+                    <option value="">Select primary language</option>
+                    <option value="English">English</option>
+                    <option value="Chinese (Mandarin)">Chinese (Mandarin)</option>
+                    <option value="Chinese (Cantonese)">Chinese (Cantonese)</option>
+                    <option value="Korean">Korean</option>
+                    <option value="Japanese">Japanese</option>
+                    <option value="Hindi">Hindi</option>
+                    <option value="Tagalog">Tagalog</option>
+                    <option value="Samoan">Samoan</option>
+                    <option value="Māori">Māori</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </label>
+
+                <label class="field">
+                  Profile picture
+                  <input name="profilePicture" type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif" />
+                  <span class="field-help">This will appear on your app Account page and public sales-agent profile.</span>
+                </label>
+
+                <label class="field">
+                  Agency
+                  <select name="agencySelect" id="agency-select" autocomplete="organization" required>
+                    <option value="">Select agency</option>
+                    <option value="Ray White">Ray White</option>
+                    <option value="Bayleys">Bayleys</option>
+                    <option value="Barfoot & Thompson">Barfoot &amp; Thompson</option>
+                    <option value="Harcourts">Harcourts</option>
+                    <option value="LJ Hooker">LJ Hooker</option>
+                    <option value="Others">Others</option>
+                  </select>
+                </label>
+                <label class="field portal-agency-other" id="agency-other-field" hidden>
+                  Agency name
+                  <input name="agencyOther" autocomplete="organization" placeholder="Enter agency name" />
+                </label>
+
+                <button class="button button-primary portal-submit" type="submit">Create account</button>
+                <p class="form-status" id="signup-status" aria-live="polite"></p>
+              </form>
+            </section>
+
+            <aside class="portal-aside">
+              <h2>What this unlocks next</h2>
+              <p>
+                The dashboard can later sit on top of the protected listings database, where each sales
+                agent can manage their own property records.
+              </p>
+              <ul class="portal-checklist">
+                <li>Private sales-agent login</li>
+                <li>Web signup for sales agents</li>
+                <li>OTP-backed signup with resend</li>
+                <li>Forgot-password reset codes</li>
+                <li>App login as a free-tier user</li>
+              </ul>
+            </aside>
+          </div>
+        </section>
+
+        <section class="portal-shell portal-dashboard" id="portal-dashboard" hidden>
+          <div class="portal-dashboard-header">
+            <div>
+              <p class="section-kicker">Sales dashboard</p>
+              <h2 id="dashboard-title">My listings</h2>
+            </div>
+            <button class="button button-quiet" type="button" id="signout-button">Sign out</button>
+          </div>
+
+          <div class="portal-dashboard-nav" role="tablist" aria-label="Sales dashboard tabs">
+            <button class="portal-dashboard-tab is-active" type="button" data-dashboard-target="listings" role="tab" aria-selected="true">
+              My listings
+            </button>
+            <button class="portal-dashboard-tab" type="button" data-dashboard-target="profile" role="tab" aria-selected="false">
+              Profile
+            </button>
+            <button class="portal-dashboard-tab" type="button" data-dashboard-target="account" role="tab" aria-selected="false">
+              Account
+            </button>
+          </div>
+
+          <section class="portal-dashboard-panel is-active" data-dashboard-panel="listings" role="tabpanel">
+            <div class="portal-card">
+              <div class="portal-listings-head">
+                <div>
+                  <h3>Current listings</h3>
+                  <p>Your saved property records for the future sales-agent dashboard.</p>
+                </div>
+                <button class="button button-primary" type="button" id="new-listing-button">+ New listing</button>
+              </div>
+              <div class="portal-dashboard-grid">
+                <div class="portal-metric">
+                  <span>Saved property records</span>
+                  <strong id="listing-count">-</strong>
+                </div>
+                <div class="portal-metric">
+                  <span>Listing intake</span>
+                  <strong>Draft</strong>
+                </div>
+                <div class="portal-metric">
+                  <span>Access level</span>
+                  <strong>Sales agent</strong>
+                </div>
+              </div>
+              <div class="portal-new-listing" id="new-listing-panel" hidden>
+                <form id="new-listing-form" class="portal-form portal-listing-wizard" novalidate>
+                  <div class="portal-wizard-head">
+                    <div>
+                      <p class="section-kicker">New property record</p>
+                      <h3 id="listing-step-title">Photos</h3>
+                    </div>
+                    <span class="portal-step-count" id="listing-step-count">Step 1 of 6</span>
+                  </div>
+                  <div class="portal-step-track" aria-label="Listing creation progress">
+                    <button class="portal-step-dot is-active" type="button" data-step-jump="0">Photos</button>
+                    <button class="portal-step-dot" type="button" data-step-jump="1">Address</button>
+                    <button class="portal-step-dot" type="button" data-step-jump="2">Details</button>
+                    <button class="portal-step-dot" type="button" data-step-jump="3">Pricing</button>
+                    <button class="portal-step-dot" type="button" data-step-jump="4">Files</button>
+                    <button class="portal-step-dot" type="button" data-step-jump="5">Copy</button>
+                  </div>
+
+                  <fieldset class="portal-listing-step is-active" data-listing-step="0">
+                    <legend>Property photos</legend>
+                    <label class="portal-dropzone" id="listing-photo-dropzone">
+                      <input
+                        id="listing-photo-input"
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,image/heic,image/heif"
+                        multiple
+                      />
+                      <strong>Drag photos here or choose files</strong>
+                      <span>Upload 1 to 20 property photos. You can remove photos before creating the listing.</span>
+                    </label>
+                    <div class="portal-photo-grid" id="listing-photo-preview" aria-live="polite"></div>
+                    <p class="field-error" data-error-for="imageUrls"></p>
+                  </fieldset>
+
+                  <fieldset class="portal-listing-step" data-listing-step="1" hidden>
+                    <legend>Exact street address</legend>
+                    <label class="field portal-address-field">
+                      Full physical address
+                      <input
+                        name="address"
+                        autocomplete="street-address"
+                        placeholder="123 Example Road, Auckland"
+                        required
+                      />
+                      <span class="field-help">Use the full address that matches council and LINZ records. Google Maps details are saved when available.</span>
+                    </label>
+                    <div class="portal-address-results" id="listing-address-results" hidden></div>
+                    <input name="addressStreet" type="hidden" />
+                    <input name="addressSuburb" type="hidden" />
+                    <input name="addressCity" type="hidden" />
+                    <input name="addressPostcode" type="hidden" />
+                    <input name="lat" type="hidden" />
+                    <input name="lng" type="hidden" />
+                    <input name="googlePlaceId" type="hidden" />
+                    <p class="field-error" data-error-for="address"></p>
+                  </fieldset>
+
+                  <fieldset class="portal-listing-step" data-listing-step="2" hidden>
+                    <legend>Property details</legend>
+                    <div class="field">
+                      Property type and subtype
+                      <div class="portal-tag-grid" role="group" aria-label="Property type and subtype">
+                        <label><input type="radio" name="propertyTag" value="house|Residential House" /> Residential House</label>
+                        <label><input type="radio" name="propertyTag" value="rural|Lifestyle Block" /> Lifestyle Block</label>
+                        <label><input type="radio" name="propertyTag" value="apartment|Apartment" /> Apartment</label>
+                        <label><input type="radio" name="propertyTag" value="unit|Unit" /> Unit</label>
+                        <label><input type="radio" name="propertyTag" value="townhouse|Terrace housing" /> Terrace housing</label>
+                        <label><input type="radio" name="propertyTag" value="commercial|Commercial" /> Commercial</label>
+                      </div>
+                      <p class="field-error" data-error-for="propertyTag"></p>
+                    </div>
+                    <div class="portal-field-grid">
+                      <label class="field">Garages <input name="garages" type="number" min="0" step="1" required /></label>
+                      <label class="field">Bedrooms <input name="bedrooms" type="number" min="0" step="1" required /></label>
+                      <label class="field">Bathrooms <input name="bathrooms" type="number" min="0" step="1" required /></label>
+                      <label class="field">Toilets <input name="toilets" type="number" min="0" step="1" required /></label>
+                      <label class="field">Floor area sqm <input name="floorAreaSqm" type="number" min="1" step="1" required /></label>
+                      <label class="field">Land area sqm <input name="landAreaSqm" type="number" min="1" step="1" required /></label>
+                    </div>
+                    <label class="field">
+                      Title status
+                      <select name="titleStatus" required>
+                        <option value="">Select title status</option>
+                        <option value="freehold">Freehold</option>
+                        <option value="crosslease">Crosslease</option>
+                        <option value="unit_title">Unit title</option>
+                        <option value="leasehold">Leasehold</option>
+                        <option value="other">Other</option>
+                      </select>
+                    </label>
+                    <p class="field-error" data-error-for="details"></p>
+                  </fieldset>
+
+                  <fieldset class="portal-listing-step" data-listing-step="3" hidden>
+                    <legend>Sale and pricing</legend>
+                    <label class="field">
+                      Method of sale
+                      <select name="methodOfSale" required>
+                        <option value="">Select method</option>
+                        <option value="auction">Auction</option>
+                        <option value="tender">Tender</option>
+                        <option value="asking_price">Asking Price</option>
+                        <option value="deadline_sale">Deadline Sale</option>
+                        <option value="price_by_negotiation">Price by Negotiation</option>
+                      </select>
+                    </label>
+                    <div class="portal-field-grid">
+                      <label class="field">
+                        Backend search price min
+                        <input name="backendSearchPriceMin" type="number" min="1" step="1000" required />
+                        <span class="field-help">Private value used later for buyer price filters.</span>
+                      </label>
+                      <label class="field">
+                        Backend search price max
+                        <input name="backendSearchPriceMax" type="number" min="1" step="1000" required />
+                        <span class="field-help">For an exact price, enter the same number in both fields.</span>
+                      </label>
+                    </div>
+                    <div class="portal-field-grid">
+                      <label class="field">
+                        Buyer price range min
+                        <input name="buyerPriceRangeMin" type="number" min="1" step="1000" />
+                      </label>
+                      <label class="field">
+                        Buyer price range max
+                        <input name="buyerPriceRangeMax" type="number" min="1" step="1000" />
+                      </label>
+                    </div>
+                    <label class="portal-checkbox">
+                      <input name="buyerPriceRangeConfirmed" type="checkbox" />
+                      <span>If I quote this range to buyers, the lowest figure is an amount the vendor would seriously consider accepting.</span>
+                    </label>
+                    <p class="field-error" data-error-for="pricing"></p>
+                  </fieldset>
+
+                  <fieldset class="portal-listing-step" data-listing-step="4" hidden>
+                    <legend>Listing files</legend>
+                    <div class="portal-document-grid">
+                      <label class="field">
+                        Property Title PDF
+                        <input name="titleDocument" type="file" accept="application/pdf" data-document-category="title" />
+                      </label>
+                      <label class="field">
+                        LIM Report
+                        <input name="limDocument" type="file" accept="application/pdf" data-document-category="lim" />
+                      </label>
+                      <label class="field">
+                        Others
+                        <input
+                          name="otherDocuments"
+                          type="file"
+                          accept="application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/png,image/jpeg,image/webp,image/heic,image/heif"
+                          data-document-category="other"
+                          multiple
+                        />
+                      </label>
+                    </div>
+                    <div class="portal-document-list" id="listing-document-list" aria-live="polite"></div>
+                    <p class="field-help">Title and LIM are PDF-only. Other files can be PDF, Word, or images.</p>
+                    <p class="field-error" data-error-for="documents"></p>
+                  </fieldset>
+
+                  <fieldset class="portal-listing-step" data-listing-step="5" hidden>
+                    <legend>Listing copy</legend>
+                    <label class="field">
+                      Listing title
+                      <input name="listingTitle" maxlength="180" placeholder="Sunny family home near the village" required />
+                    </label>
+                    <label class="field">
+                      Body copy
+                      <textarea
+                        name="description"
+                        rows="7"
+                        placeholder="Describe the key selling points, standout features, and location highlights."
+                        required
+                      ></textarea>
+                    </label>
+                    <p class="portal-friendly-note">
+                      Other information, such as school zones, traffic, and public transport, will be handled by our AI agent.
+                    </p>
+                    <p class="field-error" data-error-for="copy"></p>
+                  </fieldset>
+
+                  <div class="portal-form-row portal-wizard-actions">
+                    <button class="button button-quiet" type="button" id="listing-prev-button">Back</button>
+                    <button class="button button-primary" type="button" id="listing-next-button">Next</button>
+                    <button class="button button-primary" type="submit" id="listing-create-button" hidden disabled>Create</button>
+                    <button class="button button-quiet" type="button" id="cancel-new-listing-button">Cancel</button>
+                  </div>
+                </form>
+              </div>
+              <div class="portal-listings-list" id="listings-list" aria-live="polite"></div>
+              <p class="form-status" id="dashboard-status" aria-live="polite"></p>
+            </div>
+          </section>
+
+          <section class="portal-dashboard-panel" data-dashboard-panel="profile" role="tabpanel" hidden>
+            <div class="portal-card">
+              <div class="portal-panel-header">
+                <p class="section-kicker">Profile</p>
+                <h2>Agent details</h2>
+                <p>Update the details that appear in the web portal and app Account page.</p>
+              </div>
+              <form id="portal-profile-form" class="portal-form">
+                <label class="field">
+                  Full name
+                  <input name="fullName" autocomplete="name" required />
+                </label>
+                <label class="field">
+                  +64 NZ contact number
+                  <input name="phone" type="tel" autocomplete="tel" inputmode="tel" required />
+                </label>
+                <label class="field">
+                  Primary language
+                  <select name="primaryLanguage" required>
+                    <option value="">Select primary language</option>
+                    <option value="English">English</option>
+                    <option value="Chinese (Mandarin)">Chinese (Mandarin)</option>
+                    <option value="Chinese (Cantonese)">Chinese (Cantonese)</option>
+                    <option value="Korean">Korean</option>
+                    <option value="Japanese">Japanese</option>
+                    <option value="Hindi">Hindi</option>
+                    <option value="Tagalog">Tagalog</option>
+                    <option value="Samoan">Samoan</option>
+                    <option value="Māori">Māori</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </label>
+                <label class="field">
+                  Agency
+                  <select name="agencySelect" id="profile-agency-select" autocomplete="organization" required>
+                    <option value="">Select agency</option>
+                    <option value="Ray White">Ray White</option>
+                    <option value="Bayleys">Bayleys</option>
+                    <option value="Barfoot & Thompson">Barfoot &amp; Thompson</option>
+                    <option value="Harcourts">Harcourts</option>
+                    <option value="LJ Hooker">LJ Hooker</option>
+                    <option value="Others">Others</option>
+                  </select>
+                </label>
+                <label class="field portal-agency-other" id="profile-agency-other-field" hidden>
+                  Agency name
+                  <input name="agencyOther" autocomplete="organization" placeholder="Enter agency name" />
+                </label>
+                <label class="field">
+                  Profile picture
+                  <input name="profilePicture" type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif" />
+                  <span class="field-help">Leave blank to keep the current picture.</span>
+                </label>
+                <div class="portal-form-row">
+                  <button class="button button-primary" type="submit">Save profile</button>
+                </div>
+                <p class="form-status" id="profile-status" aria-live="polite"></p>
+              </form>
+            </div>
+          </section>
+
+          <section class="portal-dashboard-panel" data-dashboard-panel="account" role="tabpanel" hidden>
+            <div class="portal-card">
+              <div class="portal-panel-header">
+                <p class="section-kicker">Account</p>
+                <h2>Access and recovery</h2>
+                <p id="account-summary">Your sales portal account also works in the Project Alpha app.</p>
+              </div>
+              <div class="portal-form-row">
+                <button class="button button-primary" type="button" data-reset-open>Reset password</button>
+                <button class="button button-quiet" type="button" id="account-signout-button">Sign out</button>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section class="portal-reset" id="reset-panel" hidden>
+          <div class="portal-card portal-reset-card">
+            <button class="portal-close" type="button" data-reset-close aria-label="Close password reset">x</button>
+            <div class="portal-panel-header">
+              <p class="section-kicker">Account recovery</p>
+              <h2>Reset your password</h2>
+              <p>Request a reset code by email, then choose a new password.</p>
+            </div>
+            <form id="password-reset-form" class="portal-form">
+              <label class="field">
+                Email address
+                <input name="email" type="email" autocomplete="email" placeholder="you@example.com" required />
+              </label>
+              <div class="portal-form-row">
+                <button class="button button-quiet" type="button" id="request-reset-button">Send reset code</button>
+                <button class="link-button" type="button" id="resend-reset-button" disabled>Resend code</button>
+              </div>
+              <label class="field">
+                Reset code
+                <input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" />
+              </label>
+              <label class="field">
+                New password
+                <input name="password" type="password" autocomplete="new-password" minlength="8" placeholder="At least 8 characters" />
+              </label>
+              <button class="button button-primary portal-submit" type="submit">Update password</button>
+              <p class="form-status" id="reset-status" aria-live="polite"></p>
+            </form>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <div class="footer-inner">
+          <a class="brand" href="/">
+            <img class="brand-mark" src="/alpha-icon.svg" alt="" width="34" height="34" decoding="async" />
+            <span data-i18n="brand">Project Alpha</span>
+          </a>
+          <div class="footer-links">
+            <a class="footer-support" href="/contact/" data-i18n="footerContact">Contact</a>
+            <a href="/privacy/" data-i18n="footerPrivacy">Privacy</a>
+            <a href="/terms/" data-i18n="footerTerms">Terms and conditions</a>
+          </div>
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>

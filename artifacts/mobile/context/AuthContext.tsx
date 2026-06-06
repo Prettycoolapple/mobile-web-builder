@@ -36,6 +36,8 @@ export interface UserProfile {
   reportsUsedThisMonth: number;
   messagesUsedThisMonth?: number;
   avatarUrl?: string | null;
+  phoneNumber?: string | null;
+  agencyName?: string | null;
   isVerified?: boolean;
   discipline?: string | null;
   /** Admin-granted override: "supercharge" (60/mo, 6mo) | "friends_family" (9999/mo) | null. */

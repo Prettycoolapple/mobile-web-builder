@@ -122,6 +122,45 @@ const resetPasswordSchema = z.object({
   password: z.string().min(8),
 });
 
+const salesAgentWebSignupSchema = z
+  .object({
+    email: z.string().email(),
+    password: z.string().min(8),
+    fullName: z.string().min(2),
+    phoneNumber: z.string().min(1),
+    phoneVerificationToken: z.string().min(1),
+    primaryLanguage: z.string().min(1),
+    agencyName: z.string().min(1),
+  })
+  .superRefine((data, ctx) => {
+    const phone = data.phoneNumber.replace(/[\s\-()]/g, "").trim();
+    if (!/^\+64\d{7,10}$/.test(phone)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Enter a valid New Zealand mobile or contact number starting with +64.",
+        path: ["phoneNumber"],
+      });
+    }
+  });
+
+const salesAgentWebProfileSchema = z
+  .object({
+    fullName: z.string().min(2),
+    phoneNumber: z.string().min(1),
+    primaryLanguage: z.string().min(1),
+    agencyName: z.string().min(1),
+  })
+  .superRefine((data, ctx) => {
+    const phone = data.phoneNumber.replace(/[\s\-()]/g, "").trim();
+    if (!/^\+64\d{7,10}$/.test(phone)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Enter a valid New Zealand mobile or contact number starting with +64.",
+        path: ["phoneNumber"],
+      });
+    }
+  });
+
 function resolvePasswordResetSecret(): string {
   const secret = process.env.PASSWORD_RESET_SECRET || process.env.SESSION_SECRET;
   if (!secret) {
@@ -403,6 +442,200 @@ router.post("/signup", async (req, res) => {
   }
 });
 
+router.post("/sales-agent-web-signup", async (req, res) => {
+  const parsed = salesAgentWebSignupSchema.safeParse(req.body);
+  if (!parsed.success) {
+    const firstError = parsed.error.issues[0];
+    res.status(400).json({
+      error: firstError?.message || "Invalid signup data",
+      code: "VALIDATION_ERROR",
+      details: parsed.error.issues,
+    });
+    return;
+  }
+
+  const emailLower = normalizeEmail(parsed.data.email);
+  const phoneTrimmed = parsed.data.phoneNumber.replace(/[\s\-()]/g, "").trim();
+  const verifiedPhone = verifyPhoneVerificationToken(parsed.data.phoneVerificationToken, phoneTrimmed);
+  if (!verifiedPhone) {
+    res.status(400).json({
+      error: "Phone verification token is invalid or expired. Please re-verify your number.",
+      code: "PHONE_NOT_VERIFIED",
+    });
+    return;
+  }
+  const fullName = parsed.data.fullName.trim();
+  const primaryLanguage = parsed.data.primaryLanguage.trim();
+  const agencyName = parsed.data.agencyName.trim();
+
+  try {
+    const existing = await db
+      .select({ id: profiles.id })
+      .from(profiles)
+      .where(eq(profiles.email, emailLower))
+      .limit(1);
+
+    if (existing.length > 0) {
+      res.status(409).json({
+        error: "An account with this email already exists",
+        code: "EMAIL_TAKEN",
+      });
+      return;
+    }
+
+    const passwordHash = await hashPassword(parsed.data.password);
+    const sessionId = createSessionId();
+    const languages = [primaryLanguage];
+
+    const profile = await db.transaction(async (tx) => {
+      const consumed = await consumePhoneVerification(verifiedPhone.vid, phoneTrimmed);
+      if (!consumed) {
+        throw new Error("PHONE_VERIFICATION_CONSUMED");
+      }
+
+      const [newProfile] = await tx
+        .insert(profiles)
+        .values({
+          email: emailLower,
+          fullName,
+          passwordHash,
+          role: "general",
+          languages,
+          subscriptionTier: "free",
+          reportsUsedThisMonth: 0,
+          phoneNumber: phoneTrimmed,
+          activeSessionId: sessionId,
+        })
+        .returning({
+          id: profiles.id,
+          email: profiles.email,
+          fullName: profiles.fullName,
+          role: profiles.role,
+          languages: profiles.languages,
+          subscriptionTier: profiles.subscriptionTier,
+          reportsUsedThisMonth: profiles.reportsUsedThisMonth,
+          messagesUsedThisMonth: profiles.messagesUsedThisMonth,
+          avatarUrl: profiles.avatarUrl,
+          phoneNumber: profiles.phoneNumber,
+        });
+
+      await tx.insert(salesAgentProfiles).values({
+        userId: newProfile.id,
+        agencyName,
+        languages,
+        regionsCovered: [],
+        propertyTypes: [],
+      });
+
+      return newProfile;
+    });
+
+    const token = signToken(profile.id, profile.email, profile.role, sessionId);
+    recordLoginEvent(profile.id);
+    res.status(201).json({
+      token,
+      user: {
+        ...profile,
+        agencyName,
+        primaryLanguage,
+        isVerified: false,
+      },
+    });
+
+    sendNewUserSignupNotification({
+      role: "sales_agent",
+      profileId: profile.id,
+      email: profile.email,
+      fullName: profile.fullName,
+      phone: phoneTrimmed,
+      languages,
+      agentData: {
+        agencyName,
+      },
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "PHONE_VERIFICATION_CONSUMED") {
+      res.status(400).json({
+        error: "Phone verification has already been used. Please re-verify your number.",
+        code: "PHONE_VERIFICATION_CONSUMED",
+      });
+      return;
+    }
+    req.log.error({ error }, "Sales-agent web signup failed");
+    res.status(500).json({ error: "Signup failed. Please try again.", code: "SIGNUP_FAILED" });
+  }
+});
+
+router.patch("/sales-agent-web-profile", requireAuth, async (req, res) => {
+  const userId = (req as any).userId as string;
+  const parsed = salesAgentWebProfileSchema.safeParse(req.body);
+  if (!parsed.success) {
+    const firstError = parsed.error.issues[0];
+    res.status(400).json({
+      error: firstError?.message || "Invalid profile data",
+      code: "VALIDATION_ERROR",
+      details: parsed.error.issues,
+    });
+    return;
+  }
+
+  const fullName = parsed.data.fullName.trim();
+  const phoneNumber = parsed.data.phoneNumber.replace(/[\s\-()]/g, "").trim();
+  const primaryLanguage = parsed.data.primaryLanguage.trim();
+  const agencyName = parsed.data.agencyName.trim();
+  const languages = [primaryLanguage];
+
+  try {
+    const [agentProfile] = await db
+      .select({ id: salesAgentProfiles.id })
+      .from(salesAgentProfiles)
+      .where(eq(salesAgentProfiles.userId, userId))
+      .limit(1);
+
+    if (!agentProfile) {
+      res.status(403).json({ error: "This portal is only for sales agents.", code: "SALES_AGENT_REQUIRED" });
+      return;
+    }
+
+    const updated = await db.transaction(async (tx) => {
+      const [profile] = await tx
+        .update(profiles)
+        .set({ fullName, phoneNumber, languages })
+        .where(eq(profiles.id, userId))
+        .returning({
+          id: profiles.id,
+          email: profiles.email,
+          fullName: profiles.fullName,
+          role: profiles.role,
+          languages: profiles.languages,
+          subscriptionTier: profiles.subscriptionTier,
+          reportsUsedThisMonth: profiles.reportsUsedThisMonth,
+          messagesUsedThisMonth: profiles.messagesUsedThisMonth,
+          avatarUrl: profiles.avatarUrl,
+          phoneNumber: profiles.phoneNumber,
+        });
+
+      await tx
+        .update(salesAgentProfiles)
+        .set({ agencyName, languages })
+        .where(eq(salesAgentProfiles.userId, userId));
+
+      return profile;
+    });
+
+    res.json({
+      user: {
+        ...updated,
+        agencyName,
+        primaryLanguage,
+      },
+    });
+  } catch (error) {
+    req.log.error({ error }, "Sales-agent web profile update failed");
+    res.status(500).json({ error: "Profile update failed. Please try again.", code: "PROFILE_UPDATE_FAILED" });
+  }
+});
+
 router.post("/password-reset/request", async (req, res) => {
   const parsed = requestPasswordResetSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -641,6 +874,12 @@ router.post("/login", async (req, res) => {
       effectiveSpecialStatusExpiresAt = null;
     }
 
+    const [agentProfile] = await db
+      .select({ agencyName: salesAgentProfiles.agencyName })
+      .from(salesAgentProfiles)
+      .where(eq(salesAgentProfiles.userId, profile.id))
+      .limit(1);
+
     const sessionId = createSessionId();
     await db
       .update(profiles)
@@ -662,6 +901,8 @@ router.post("/login", async (req, res) => {
         reportsUsedThisMonth: profile.reportsUsedThisMonth,
         messagesUsedThisMonth: profile.messagesUsedThisMonth,
         avatarUrl: profile.avatarUrl,
+        phoneNumber: profile.phoneNumber,
+        agencyName: agentProfile?.agencyName ?? null,
         isVerified: profile.isVerified,
         specialStatus: effectiveSpecialStatus,
         specialStatusExpiresAt: effectiveSpecialStatusExpiresAt,
@@ -669,6 +910,117 @@ router.post("/login", async (req, res) => {
     });
   } catch (error) {
     req.log.error({ error }, "Login failed");
+    res.status(500).json({ error: "Login failed. Please try again.", code: "LOGIN_FAILED" });
+  }
+});
+
+router.post("/sales-agent-login", async (req, res) => {
+  const { email, password } = req.body as { email?: string; password?: string };
+
+  if (!email || !password) {
+    res.status(400).json({ error: "Email and password are required", code: "MISSING_FIELDS" });
+    return;
+  }
+
+  const emailLower = email.toLowerCase().trim();
+
+  try {
+    const [profile] = await db
+      .select()
+      .from(profiles)
+      .where(eq(profiles.email, emailLower))
+      .limit(1);
+
+    if (!profile) {
+      res.status(401).json({ error: "Invalid email or password", code: "INVALID_CREDENTIALS" });
+      return;
+    }
+
+    const valid = await verifyPassword(password, profile.passwordHash);
+    if (!valid) {
+      res.status(401).json({ error: "Invalid email or password", code: "INVALID_CREDENTIALS" });
+      return;
+    }
+
+    const [agentProfile] = await db
+      .select({ agencyName: salesAgentProfiles.agencyName })
+      .from(salesAgentProfiles)
+      .where(eq(salesAgentProfiles.userId, profile.id))
+      .limit(1);
+
+    if (profile.role !== "sales_agent" && !agentProfile) {
+      res.status(403).json({ error: "This portal is only for sales agents.", code: "SALES_AGENT_REQUIRED" });
+      return;
+    }
+
+    const now = new Date();
+    const lastReset = new Date(profile.lastResetAt);
+    const periodEnd = profile.subscriptionPeriodEndAt ? new Date(profile.subscriptionPeriodEndAt) : null;
+    if (usagePeriodExpired(now, lastReset, profile.subscriptionTier, periodEnd)) {
+      await db
+        .update(profiles)
+        .set({
+          reportsUsedThisMonth: 0,
+          messagesUsedThisMonth: 0,
+          lastResetAt: now,
+          subscriptionPeriodEndAt: null,
+        })
+        .where(eq(profiles.id, profile.id));
+      profile.reportsUsedThisMonth = 0;
+      profile.messagesUsedThisMonth = 0;
+    }
+
+    let effectiveSpecialStatus = profile.specialStatus;
+    let effectiveSpecialStatusExpiresAt = profile.specialStatusExpiresAt;
+    if (
+      effectiveSpecialStatus === "supercharge" &&
+      effectiveSpecialStatusExpiresAt &&
+      now >= effectiveSpecialStatusExpiresAt
+    ) {
+      void (async () => {
+        try {
+          await db
+            .update(profiles)
+            .set({ specialStatus: null, specialStatusExpiresAt: null })
+            .where(eq(profiles.id, profile.id));
+        } catch {
+          // non-critical; next /me request will retry
+        }
+      })();
+      effectiveSpecialStatus = null;
+      effectiveSpecialStatusExpiresAt = null;
+    }
+
+    const sessionId = createSessionId();
+    await db
+      .update(profiles)
+      .set({ activeSessionId: sessionId })
+      .where(eq(profiles.id, profile.id));
+
+    const token = signToken(profile.id, profile.email, profile.role, sessionId);
+    recordLoginEvent(profile.id);
+    res.json({
+      token,
+      user: {
+        id: profile.id,
+        email: profile.email,
+        fullName: profile.fullName,
+        role: profile.role,
+        languages: profile.languages,
+        subscriptionTier: profile.subscriptionTier,
+        subscriptionPeriodEndAt: profile.subscriptionPeriodEndAt,
+        reportsUsedThisMonth: profile.reportsUsedThisMonth,
+        messagesUsedThisMonth: profile.messagesUsedThisMonth,
+        avatarUrl: profile.avatarUrl,
+        phoneNumber: profile.phoneNumber,
+        agencyName: agentProfile?.agencyName ?? null,
+        isVerified: profile.isVerified,
+        specialStatus: effectiveSpecialStatus,
+        specialStatusExpiresAt: effectiveSpecialStatusExpiresAt,
+      },
+    });
+  } catch (error) {
+    req.log.error({ error }, "Sales-agent portal login failed");
     res.status(500).json({ error: "Login failed. Please try again.", code: "LOGIN_FAILED" });
   }
 });
@@ -691,12 +1043,15 @@ router.get("/me", requireAuth, async (req, res) => {
         subscriptionPeriodEndAt: profiles.subscriptionPeriodEndAt,
         createdAt: profiles.createdAt,
         avatarUrl: profiles.avatarUrl,
+        phoneNumber: profiles.phoneNumber,
         isVerified: profiles.isVerified,
         specialStatus: profiles.specialStatus,
         specialStatusExpiresAt: profiles.specialStatusExpiresAt,
         discipline: serviceProviderProfiles.discipline,
+        agencyName: salesAgentProfiles.agencyName,
       })
       .from(profiles)
+      .leftJoin(salesAgentProfiles, eq(salesAgentProfiles.userId, profiles.id))
       .leftJoin(serviceProviderProfiles, eq(serviceProviderProfiles.userId, profiles.id))
       .where(eq(profiles.id, userId))
       .limit(1);

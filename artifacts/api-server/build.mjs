@@ -204,7 +204,7 @@ async function buildAll() {
   }
   const mobileAppIconPng = path.resolve(artifactDir, "..", "mobile", "assets", "images", "icon.png");
   await copyFile(mobileAppIconPng, path.join(deployDir, "favicon.png")).catch(() => {});
-  for (const dir of ["privacy", "terms", "support", "contact"]) {
+  for (const dir of ["privacy", "terms", "support", "contact", "sales-portal"]) {
     await cp(path.join(artifactDir, dir), path.join(deployDir, dir), { recursive: true });
   }
 

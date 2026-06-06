@@ -1,34 +1,117 @@
 import { Router } from "express";
-import { eq, desc } from "drizzle-orm";
+import { and, eq, desc, isNull } from "drizzle-orm";
 import { z } from "zod";
-import { db, listings } from "@workspace/db";
+import { db, listings, salesAgentProfiles } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 
 const router = Router();
 
-const createListingSchema = z.object({
-  address: z.string().min(3),
+const propertyTypes = ["house", "apartment", "townhouse", "unit", "section", "commercial", "industrial", "rural", "other"] as const;
+const listingStatuses = ["draft", "active", "paused", "sold", "withdrawn"] as const;
+const methodsOfSale = ["auction", "tender", "asking_price", "deadline_sale", "price_by_negotiation"] as const;
+const titleStatuses = ["freehold", "crosslease", "unit_title", "leasehold", "other"] as const;
+const documentCategories = ["title", "lim", "other"] as const;
+
+const listingDocumentSchema = z.object({
+  category: z.enum(documentCategories),
+  fileName: z.string().min(1).max(240),
+  fileUrl: z.string().min(1),
+  objectPath: z.string().nullable().optional(),
+  mimeType: z.string().min(1),
+  size: z.number().int().positive(),
+  uploadedAt: z.string().min(1),
+});
+
+const listingPayloadSchema = z.object({
+  listingTitle: z.string().trim().min(3).max(180),
+  address: z.string().trim().min(3),
   addressStreet: z.string().optional(),
   addressSuburb: z.string().optional(),
   addressCity: z.string().optional(),
   addressPostcode: z.string().optional(),
   lat: z.string().optional(),
   lng: z.string().optional(),
+  googlePlaceId: z.string().optional(),
+  status: z.enum(listingStatuses).default("active"),
   listingType: z.enum(["for_sale", "for_rent"]).default("for_sale"),
-  propertyType: z
-    .enum(["house", "apartment", "townhouse", "unit", "section", "commercial", "industrial", "rural", "other"])
-    .default("house"),
-  bedrooms: z.number().int().min(0).optional(),
-  bathrooms: z.number().int().min(0).optional(),
-  garages: z.number().int().min(0).optional(),
-  landAreaSqm: z.number().int().min(0).optional(),
-  floorAreaSqm: z.number().int().min(0).optional(),
+  propertyType: z.enum(propertyTypes),
+  propertySubtype: z.string().trim().min(1).max(120),
+  bedrooms: z.number().int().min(0),
+  bathrooms: z.number().int().min(0),
+  toilets: z.number().int().min(0),
+  garages: z.number().int().min(0),
+  landAreaSqm: z.number().int().positive(),
+  floorAreaSqm: z.number().int().positive(),
+  titleStatus: z.enum(titleStatuses),
+  methodOfSale: z.enum(methodsOfSale),
+  backendSearchPriceMin: z.number().int().positive(),
+  backendSearchPriceMax: z.number().int().positive(),
+  buyerPriceRangeMin: z.number().int().positive().optional(),
+  buyerPriceRangeMax: z.number().int().positive().optional(),
+  buyerPriceRangeConfirmed: z.boolean().default(false),
   priceNzd: z.number().int().min(0).optional(),
   priceDisplay: z.string().optional(),
-  description: z.string().optional(),
-  imageUrls: z.array(z.string()).default([]),
+  description: z.string().trim().min(20),
+  imageUrls: z.array(z.string().min(1)).min(1).max(20),
+  documentUrls: z.array(listingDocumentSchema).default([]),
   features: z.array(z.string()).default([]),
 });
+
+function validateListingRules(
+  data: Partial<z.infer<typeof listingPayloadSchema>>,
+  ctx: z.RefinementCtx,
+) {
+  if (
+    data.backendSearchPriceMin !== undefined &&
+    data.backendSearchPriceMax !== undefined &&
+    data.backendSearchPriceMax < data.backendSearchPriceMin
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["backendSearchPriceMax"],
+      message: "Backend search price maximum must be greater than or equal to the minimum.",
+    });
+  }
+
+  const hasBuyerMin = data.buyerPriceRangeMin !== undefined;
+  const hasBuyerMax = data.buyerPriceRangeMax !== undefined;
+  if (hasBuyerMin !== hasBuyerMax) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["buyerPriceRangeMin"],
+      message: "Enter both ends of the buyer-facing price range, or leave both blank.",
+    });
+  }
+  if (hasBuyerMin && hasBuyerMax) {
+    if ((data.buyerPriceRangeMax ?? 0) < (data.buyerPriceRangeMin ?? 0)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["buyerPriceRangeMax"],
+        message: "Buyer-facing price range maximum must be greater than or equal to the minimum.",
+      });
+    }
+    if (!data.buyerPriceRangeConfirmed) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["buyerPriceRangeConfirmed"],
+        message: "Confirm the lowest quoted figure is an amount the vendor would seriously consider.",
+      });
+    }
+  }
+
+  for (const [index, document] of (data.documentUrls ?? []).entries()) {
+    const mime = document.mimeType.toLowerCase();
+    if ((document.category === "title" || document.category === "lim") && mime !== "application/pdf") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["documentUrls", index, "mimeType"],
+        message: "Property Title and LIM files must be PDFs.",
+      });
+    }
+  }
+}
+
+const createListingSchema = listingPayloadSchema.superRefine(validateListingRules);
 
 router.get("/listings/address-autocomplete", requireAuth, async (req, res) => {
   const q = (req.query.q as string) ?? "";
@@ -72,7 +155,15 @@ router.post("/listings", requireAuth, async (req, res) => {
   const userId = (req as any).userId as string;
   const role = (req as any).role as string;
 
-  if (role !== "sales_agent") {
+  const [agentProfile] = role === "sales_agent"
+    ? [{ userId }]
+    : await db
+        .select({ userId: salesAgentProfiles.userId })
+        .from(salesAgentProfiles)
+        .where(eq(salesAgentProfiles.userId, userId))
+        .limit(1);
+
+  if (role !== "sales_agent" && !agentProfile) {
     res.status(403).json({ error: "Only sales agents can create listings", code: "FORBIDDEN" });
     return;
   }
@@ -95,17 +186,30 @@ router.post("/listings", requireAuth, async (req, res) => {
       addressPostcode: data.addressPostcode,
       lat: data.lat,
       lng: data.lng,
+      googlePlaceId: data.googlePlaceId,
+      status: data.status,
       listingType: data.listingType,
       propertyType: data.propertyType,
+      propertySubtype: data.propertySubtype,
       bedrooms: data.bedrooms,
       bathrooms: data.bathrooms,
+      toilets: data.toilets,
       garages: data.garages,
       landAreaSqm: data.landAreaSqm,
       floorAreaSqm: data.floorAreaSqm,
+      titleStatus: data.titleStatus,
+      methodOfSale: data.methodOfSale,
+      backendSearchPriceMin: data.backendSearchPriceMin,
+      backendSearchPriceMax: data.backendSearchPriceMax,
+      buyerPriceRangeMin: data.buyerPriceRangeMin,
+      buyerPriceRangeMax: data.buyerPriceRangeMax,
+      buyerPriceRangeConfirmed: data.buyerPriceRangeConfirmed,
       priceNzd: data.priceNzd,
       priceDisplay: data.priceDisplay,
+      listingTitle: data.listingTitle,
       description: data.description,
       imageUrls: data.imageUrls,
+      documentUrls: data.documentUrls,
       features: data.features,
     })
     .returning();
@@ -118,24 +222,29 @@ router.get("/listings/my", requireAuth, async (req, res) => {
   const myListings = await db
     .select()
     .from(listings)
-    .where(eq(listings.userId, userId))
+    .where(and(eq(listings.userId, userId), isNull(listings.removedAt)))
     .orderBy(desc(listings.createdAt));
   res.json({ listings: myListings });
 });
 
 router.get("/listings/:id", requireAuth, async (req, res) => {
+  const userId = (req as any).userId as string;
   const { id } = req.params;
   const [listing] = await db.select().from(listings).where(eq(listings.id, id));
   if (!listing) {
     res.status(404).json({ error: "Listing not found", code: "NOT_FOUND" });
     return;
   }
+  if (listing.userId !== userId) {
+    res.status(403).json({ error: "You can only view your own listings", code: "FORBIDDEN" });
+    return;
+  }
   res.json({ listing });
 });
 
-const updateListingSchema = createListingSchema.extend({
-  status: z.enum(["draft", "active", "sold", "withdrawn"]).optional(),
-}).partial();
+const updateListingSchema = listingPayloadSchema.partial().extend({
+  status: z.enum(listingStatuses).optional(),
+}).superRefine(validateListingRules);
 
 router.patch("/listings/:id", requireAuth, async (req, res) => {
   const userId = (req as any).userId as string;
@@ -168,17 +277,29 @@ router.patch("/listings/:id", requireAuth, async (req, res) => {
       ...(data.addressPostcode !== undefined && { addressPostcode: data.addressPostcode }),
       ...(data.lat !== undefined && { lat: data.lat }),
       ...(data.lng !== undefined && { lng: data.lng }),
+      ...(data.googlePlaceId !== undefined && { googlePlaceId: data.googlePlaceId }),
       ...(data.listingType !== undefined && { listingType: data.listingType }),
       ...(data.propertyType !== undefined && { propertyType: data.propertyType }),
+      ...(data.propertySubtype !== undefined && { propertySubtype: data.propertySubtype }),
       ...(data.bedrooms !== undefined && { bedrooms: data.bedrooms }),
       ...(data.bathrooms !== undefined && { bathrooms: data.bathrooms }),
+      ...(data.toilets !== undefined && { toilets: data.toilets }),
       ...(data.garages !== undefined && { garages: data.garages }),
       ...(data.landAreaSqm !== undefined && { landAreaSqm: data.landAreaSqm }),
       ...(data.floorAreaSqm !== undefined && { floorAreaSqm: data.floorAreaSqm }),
+      ...(data.titleStatus !== undefined && { titleStatus: data.titleStatus }),
+      ...(data.methodOfSale !== undefined && { methodOfSale: data.methodOfSale }),
+      ...(data.backendSearchPriceMin !== undefined && { backendSearchPriceMin: data.backendSearchPriceMin }),
+      ...(data.backendSearchPriceMax !== undefined && { backendSearchPriceMax: data.backendSearchPriceMax }),
+      ...(data.buyerPriceRangeMin !== undefined && { buyerPriceRangeMin: data.buyerPriceRangeMin }),
+      ...(data.buyerPriceRangeMax !== undefined && { buyerPriceRangeMax: data.buyerPriceRangeMax }),
+      ...(data.buyerPriceRangeConfirmed !== undefined && { buyerPriceRangeConfirmed: data.buyerPriceRangeConfirmed }),
       ...(data.priceNzd !== undefined && { priceNzd: data.priceNzd }),
       ...(data.priceDisplay !== undefined && { priceDisplay: data.priceDisplay }),
+      ...(data.listingTitle !== undefined && { listingTitle: data.listingTitle }),
       ...(data.description !== undefined && { description: data.description }),
       ...(data.imageUrls !== undefined && { imageUrls: data.imageUrls }),
+      ...(data.documentUrls !== undefined && { documentUrls: data.documentUrls }),
       ...(data.features !== undefined && { features: data.features }),
       ...(data.status !== undefined && { status: data.status }),
       updatedAt: new Date(),
@@ -203,7 +324,10 @@ router.delete("/listings/:id", requireAuth, async (req, res) => {
     return;
   }
 
-  await db.delete(listings).where(eq(listings.id, id));
+  await db
+    .update(listings)
+    .set({ status: "paused", removedAt: new Date(), updatedAt: new Date() })
+    .where(eq(listings.id, id));
   res.json({ success: true });
 });
 
