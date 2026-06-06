@@ -1402,8 +1402,19 @@ textarea:focus {
   cursor: pointer;
 }
 
-.portal-address-results button:hover {
+.portal-address-results button:hover,
+.portal-address-results button:focus {
   border-color: var(--forest);
+  background: #f5faf6;
+  outline: none;
+}
+
+.portal-address-hint {
+  display: block;
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 13px;
+  font-style: italic;
 }
 
 .portal-tag-grid {

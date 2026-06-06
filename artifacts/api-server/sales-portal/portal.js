@@ -174,7 +174,13 @@
       state.listings = [];
       updateListingMetrics([]);
       renderListings([]);
-      setStatus(status, getErrorMessage(error, "We couldn't load your listings. Please try again."), "error");
+      // Session replaced on another device — sign out cleanly
+      if (error && error.code === "SESSION_REPLACED") {
+        clearSession();
+        showAuth();
+        return;
+      }
+      setStatus(status, getErrorMessage(error, "We couldn't load your listings. Please refresh the page."), "error");
     }
   }
 
@@ -490,37 +496,69 @@
     return LISTING_STEPS.findIndex((_, index) => !validateListingStep(index, false));
   }
 
+  // Build an OSM address label from the raw address object returned by Nominatim
+  function osmAddressLabel(addr) {
+    if (!addr || typeof addr !== "object") return "";
+    const parts = [];
+    const houseNumber = addr.house_number || "";
+    const road = addr.road || addr.pedestrian || addr.footway || "";
+    if (houseNumber && road) parts.push(`${houseNumber} ${road}`);
+    else if (road) parts.push(road);
+    else if (houseNumber) parts.push(houseNumber);
+    if (addr.suburb || addr.neighbourhood) parts.push(addr.suburb || addr.neighbourhood);
+    if (addr.city || addr.town || addr.village) parts.push(addr.city || addr.town || addr.village);
+    if (addr.postcode) parts.push(addr.postcode);
+    return parts.join(", ");
+  }
+
   async function searchAddress(query) {
     const session = getSession();
     const results = $("#listing-address-results");
+    const field = $("#new-listing-form")?.elements?.address;
     if (!session || !results) return;
-    if (query.trim().length < 3) {
+    const trimmed = query.trim();
+    if (trimmed.length < 3) {
       results.hidden = true;
       results.innerHTML = "";
       return;
     }
+    // Show a "Searching…" hint so the agent knows it's working
+    results.innerHTML = `<span class="portal-address-hint">Searching addresses…</span>`;
+    results.hidden = false;
     try {
-      const data = await api(`/listings/address-autocomplete?q=${encodeURIComponent(query.trim())}`, {
+      const data = await api(`/listings/address-autocomplete?q=${encodeURIComponent(trimmed)}`, {
         method: "GET",
         token: session.token,
       });
       const predictions = Array.isArray(data.predictions) ? data.predictions : [];
       if (!predictions.length) {
-        results.hidden = true;
-        results.innerHTML = "";
+        results.innerHTML = `<span class="portal-address-hint">No addresses found. Try a more specific street address.</span>`;
         return;
       }
       results.innerHTML = predictions
-        .slice(0, 5)
+        .slice(0, 7)
         .map((item) => {
           const description = item.description || item.structured_formatting?.main_text || "";
           const placeId = item.place_id || "";
-          return `<button type="button" data-place-id="${escapeHtml(placeId)}" data-place-description="${escapeHtml(description)}">${escapeHtml(description)}</button>`;
+          // For OSM results, embed address parts as data attributes so we don't
+          // need a second round-trip to the place-details endpoint.
+          const isOsm = placeId.startsWith("osm:");
+          const addr = item._address || {};
+          const extraAttrs = isOsm
+            ? ` data-osm="1"
+                data-lat="${escapeHtml(String(item._lat || ""))}"
+                data-lon="${escapeHtml(String(item._lon || ""))}"
+                data-street="${escapeHtml([addr.house_number, addr.road || addr.pedestrian || ""].filter(Boolean).join(" "))}"
+                data-suburb="${escapeHtml(addr.suburb || addr.neighbourhood || "")}"
+                data-city="${escapeHtml(addr.city || addr.town || addr.village || "")}"
+                data-postcode="${escapeHtml(addr.postcode || "")}"
+              `
+            : "";
+          return `<button type="button" data-place-id="${escapeHtml(placeId)}" data-place-description="${escapeHtml(description)}" ${extraAttrs}>${escapeHtml(description)}</button>`;
         })
         .join("");
-      results.hidden = false;
     } catch {
-      results.hidden = true;
+      results.innerHTML = `<span class="portal-address-hint">Address search is unavailable. You can type the address manually.</span>`;
     }
   }
 
@@ -530,14 +568,27 @@
     return found?.long_name || "";
   }
 
-  async function chooseAddress(placeId, description) {
+  async function chooseAddress(placeId, description, osmData) {
     const session = getSession();
     const form = $("#new-listing-form");
     const results = $("#listing-address-results");
     if (!session || !form) return;
     form.elements.address.value = description;
-    form.elements.googlePlaceId.value = placeId;
+    form.elements.googlePlaceId.value = placeId.startsWith("osm:") ? "" : placeId;
     if (results) results.hidden = true;
+
+    // OSM results: all data was embedded in the button, no second request needed
+    if (osmData) {
+      form.elements.addressStreet.value = osmData.street || "";
+      form.elements.addressSuburb.value = osmData.suburb || "";
+      form.elements.addressCity.value = osmData.city || "";
+      form.elements.addressPostcode.value = osmData.postcode || "";
+      form.elements.lat.value = osmData.lat || "";
+      form.elements.lng.value = osmData.lon || "";
+      return;
+    }
+
+    // Google Places: fetch full details for structured address components
     try {
       const data = await api(`/listings/place-details/${encodeURIComponent(placeId)}`, { method: "GET", token: session.token });
       const result = data.result || {};
@@ -1150,7 +1201,18 @@
     });
     $("#listing-address-results").addEventListener("click", (event) => {
       const button = event.target.closest("[data-place-id]");
-      if (button) void chooseAddress(button.dataset.placeId, button.dataset.placeDescription);
+      if (!button) return;
+      const osmData = button.dataset.osm === "1"
+        ? {
+            lat: button.dataset.lat,
+            lon: button.dataset.lon,
+            street: button.dataset.street,
+            suburb: button.dataset.suburb,
+            city: button.dataset.city,
+            postcode: button.dataset.postcode,
+          }
+        : null;
+      void chooseAddress(button.dataset.placeId, button.dataset.placeDescription, osmData);
     });
 
     form.addEventListener("change", (event) => {

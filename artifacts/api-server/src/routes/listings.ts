@@ -113,39 +113,114 @@ function validateListingRules(
 
 const createListingSchema = listingPayloadSchema.superRefine(validateListingRules);
 
+/** Normalise an OSM Nominatim result into the same shape as a Google Places prediction. */
+function nominatimToPrediction(item: Record<string, unknown>) {
+  const displayName = String(item.display_name ?? "");
+  // Strip the country suffix "New Zealand" to keep labels concise
+  const label = displayName.replace(/,\s*New Zealand$/, "").trim();
+  return {
+    place_id: `osm:${item.osm_type ?? ""}:${item.osm_id ?? ""}`,
+    description: label,
+    structured_formatting: { main_text: label },
+    _source: "osm",
+    _lat: item.lat,
+    _lon: item.lon,
+    _address: item.address,
+  };
+}
+
 router.get("/listings/address-autocomplete", requireAuth, async (req, res) => {
   const q = (req.query.q as string) ?? "";
   if (!q.trim() || q.trim().length < 2) {
     res.json({ predictions: [] });
     return;
   }
-  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
-  if (!apiKey) {
-    res.json({ predictions: [], noKey: true });
-    return;
+
+  const googleApiKey = process.env.GOOGLE_PLACES_API_KEY;
+
+  // --- Primary: Google Places API (richer data, used when key is configured) ---
+  if (googleApiKey) {
+    try {
+      const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(q)}&components=country:nz&types=address&key=${googleApiKey}`;
+      const r = await fetch(url, { signal: AbortSignal.timeout(4000) });
+      const data = (await r.json()) as { predictions?: unknown[]; status?: string };
+      if (data.status === "OK" && Array.isArray(data.predictions) && data.predictions.length > 0) {
+        res.json({ predictions: data.predictions, source: "google" });
+        return;
+      }
+    } catch {
+      // Fall through to Nominatim if Google fails
+    }
   }
+
+  // --- Fallback: OpenStreetMap Nominatim (free, NZ government-sourced data, no key required) ---
   try {
-    const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(q)}&components=country:nz&types=address&key=${apiKey}`;
-    const r = await fetch(url);
-    const data = (await r.json()) as { predictions?: unknown[] };
-    res.json({ predictions: data.predictions ?? [] });
+    const params = new URLSearchParams({
+      q: q.trim(),
+      format: "json",
+      countrycodes: "nz",
+      addressdetails: "1",
+      limit: "7",
+      "accept-language": "en",
+    });
+    const nominatimUrl = `https://nominatim.openstreetmap.org/search?${params.toString()}`;
+    const r = await fetch(nominatimUrl, {
+      signal: AbortSignal.timeout(5000),
+      headers: {
+        "User-Agent": "ProjectAlpha/1.0 (https://www.projectalpha.app; contact@projectalpha.app)",
+        "Accept": "application/json",
+      },
+    });
+    const items = (await r.json()) as Record<string, unknown>[];
+    const predictions = Array.isArray(items) ? items.map(nominatimToPrediction) : [];
+    res.json({ predictions, source: "osm" });
   } catch {
-    res.json({ predictions: [] });
+    res.json({ predictions: [], source: "none" });
   }
 });
 
 router.get("/listings/place-details/:placeId", requireAuth, async (req, res) => {
   const { placeId } = req.params;
+
+  // OSM-sourced result: the frontend already embedded lat/lon/address in the prediction,
+  // so we return a normalised result object directly from query params.
+  if (placeId.startsWith("osm:")) {
+    const lat = req.query.lat as string | undefined;
+    const lon = req.query.lon as string | undefined;
+    const street = req.query.street as string | undefined;
+    const suburb = req.query.suburb as string | undefined;
+    const city = req.query.city as string | undefined;
+    const postcode = req.query.postcode as string | undefined;
+    const label = req.query.label as string | undefined;
+
+    const addressComponents: { long_name: string; types: string[] }[] = [];
+    if (street) addressComponents.push({ long_name: street, types: ["route"] });
+    if (suburb) addressComponents.push({ long_name: suburb, types: ["sublocality", "neighborhood"] });
+    if (city) addressComponents.push({ long_name: city, types: ["locality"] });
+    if (postcode) addressComponents.push({ long_name: postcode, types: ["postal_code"] });
+
+    res.json({
+      result: {
+        formatted_address: label ?? "",
+        address_components: addressComponents,
+        geometry: lat && lon ? { location: { lat: parseFloat(lat), lng: parseFloat(lon) } } : undefined,
+      },
+      source: "osm",
+    });
+    return;
+  }
+
+  // Google Places API
   const apiKey = process.env.GOOGLE_PLACES_API_KEY;
   if (!apiKey) {
     res.json({ result: null });
     return;
   }
   try {
-    const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${placeId}&fields=formatted_address,address_components,geometry&key=${apiKey}`;
-    const r = await fetch(url);
+    const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${encodeURIComponent(placeId)}&fields=formatted_address,address_components,geometry&key=${apiKey}`;
+    const r = await fetch(url, { signal: AbortSignal.timeout(4000) });
     const data = (await r.json()) as { result?: unknown };
-    res.json({ result: data.result ?? null });
+    res.json({ result: data.result ?? null, source: "google" });
   } catch {
     res.json({ result: null });
   }
@@ -155,91 +230,106 @@ router.post("/listings", requireAuth, async (req, res) => {
   const userId = (req as any).userId as string;
   const role = (req as any).role as string;
 
-  const [agentProfile] = role === "sales_agent"
-    ? [{ userId }]
-    : await db
-        .select({ userId: salesAgentProfiles.userId })
-        .from(salesAgentProfiles)
-        .where(eq(salesAgentProfiles.userId, userId))
-        .limit(1);
+  try {
+    const [agentProfile] = role === "sales_agent"
+      ? [{ userId }]
+      : await db
+          .select({ userId: salesAgentProfiles.userId })
+          .from(salesAgentProfiles)
+          .where(eq(salesAgentProfiles.userId, userId))
+          .limit(1);
 
-  if (role !== "sales_agent" && !agentProfile) {
-    res.status(403).json({ error: "Only sales agents can create listings", code: "FORBIDDEN" });
-    return;
+    if (role !== "sales_agent" && !agentProfile) {
+      res.status(403).json({ error: "Only sales agents can create listings.", code: "FORBIDDEN" });
+      return;
+    }
+
+    const parsed = createListingSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Some listing details are missing or invalid. Please check each step and try again.", details: parsed.error.issues });
+      return;
+    }
+
+    const data = parsed.data;
+    const [listing] = await db
+      .insert(listings)
+      .values({
+        userId,
+        address: data.address,
+        addressStreet: data.addressStreet,
+        addressSuburb: data.addressSuburb,
+        addressCity: data.addressCity,
+        addressPostcode: data.addressPostcode,
+        lat: data.lat,
+        lng: data.lng,
+        googlePlaceId: data.googlePlaceId,
+        status: data.status,
+        listingType: data.listingType,
+        propertyType: data.propertyType,
+        propertySubtype: data.propertySubtype,
+        bedrooms: data.bedrooms,
+        bathrooms: data.bathrooms,
+        toilets: data.toilets,
+        garages: data.garages,
+        landAreaSqm: data.landAreaSqm,
+        floorAreaSqm: data.floorAreaSqm,
+        titleStatus: data.titleStatus,
+        methodOfSale: data.methodOfSale,
+        backendSearchPriceMin: data.backendSearchPriceMin,
+        backendSearchPriceMax: data.backendSearchPriceMax,
+        buyerPriceRangeMin: data.buyerPriceRangeMin,
+        buyerPriceRangeMax: data.buyerPriceRangeMax,
+        buyerPriceRangeConfirmed: data.buyerPriceRangeConfirmed,
+        priceNzd: data.priceNzd,
+        priceDisplay: data.priceDisplay,
+        listingTitle: data.listingTitle,
+        description: data.description,
+        imageUrls: data.imageUrls,
+        documentUrls: data.documentUrls,
+        features: data.features,
+      })
+      .returning();
+
+    res.status(201).json({ listing });
+  } catch (error) {
+    req.log?.error({ error }, "Failed to create listing");
+    res.status(500).json({ error: "We couldn't save your listing. Please try again.", code: "CREATE_FAILED" });
   }
-
-  const parsed = createListingSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Invalid listing data", details: parsed.error.issues });
-    return;
-  }
-
-  const data = parsed.data;
-  const [listing] = await db
-    .insert(listings)
-    .values({
-      userId,
-      address: data.address,
-      addressStreet: data.addressStreet,
-      addressSuburb: data.addressSuburb,
-      addressCity: data.addressCity,
-      addressPostcode: data.addressPostcode,
-      lat: data.lat,
-      lng: data.lng,
-      googlePlaceId: data.googlePlaceId,
-      status: data.status,
-      listingType: data.listingType,
-      propertyType: data.propertyType,
-      propertySubtype: data.propertySubtype,
-      bedrooms: data.bedrooms,
-      bathrooms: data.bathrooms,
-      toilets: data.toilets,
-      garages: data.garages,
-      landAreaSqm: data.landAreaSqm,
-      floorAreaSqm: data.floorAreaSqm,
-      titleStatus: data.titleStatus,
-      methodOfSale: data.methodOfSale,
-      backendSearchPriceMin: data.backendSearchPriceMin,
-      backendSearchPriceMax: data.backendSearchPriceMax,
-      buyerPriceRangeMin: data.buyerPriceRangeMin,
-      buyerPriceRangeMax: data.buyerPriceRangeMax,
-      buyerPriceRangeConfirmed: data.buyerPriceRangeConfirmed,
-      priceNzd: data.priceNzd,
-      priceDisplay: data.priceDisplay,
-      listingTitle: data.listingTitle,
-      description: data.description,
-      imageUrls: data.imageUrls,
-      documentUrls: data.documentUrls,
-      features: data.features,
-    })
-    .returning();
-
-  res.status(201).json({ listing });
 });
 
 router.get("/listings/my", requireAuth, async (req, res) => {
   const userId = (req as any).userId as string;
-  const myListings = await db
-    .select()
-    .from(listings)
-    .where(and(eq(listings.userId, userId), isNull(listings.removedAt)))
-    .orderBy(desc(listings.createdAt));
-  res.json({ listings: myListings });
+  try {
+    const myListings = await db
+      .select()
+      .from(listings)
+      .where(and(eq(listings.userId, userId), isNull(listings.removedAt)))
+      .orderBy(desc(listings.createdAt));
+    res.json({ listings: myListings });
+  } catch (error) {
+    req.log?.error({ error }, "Failed to fetch listings");
+    res.status(500).json({ error: "We couldn't load your listings. Please refresh the page.", code: "FETCH_FAILED" });
+  }
 });
 
 router.get("/listings/:id", requireAuth, async (req, res) => {
   const userId = (req as any).userId as string;
   const { id } = req.params;
-  const [listing] = await db.select().from(listings).where(eq(listings.id, id));
-  if (!listing) {
-    res.status(404).json({ error: "Listing not found", code: "NOT_FOUND" });
-    return;
+  try {
+    const [listing] = await db.select().from(listings).where(eq(listings.id, id));
+    if (!listing) {
+      res.status(404).json({ error: "Listing not found.", code: "NOT_FOUND" });
+      return;
+    }
+    if (listing.userId !== userId) {
+      res.status(403).json({ error: "You can only view your own listings.", code: "FORBIDDEN" });
+      return;
+    }
+    res.json({ listing });
+  } catch (error) {
+    req.log?.error({ error }, "Failed to fetch listing");
+    res.status(500).json({ error: "We couldn't load this listing. Please try again.", code: "FETCH_FAILED" });
   }
-  if (listing.userId !== userId) {
-    res.status(403).json({ error: "You can only view your own listings", code: "FORBIDDEN" });
-    return;
-  }
-  res.json({ listing });
 });
 
 const updateListingSchema = listingPayloadSchema.partial().extend({
@@ -250,85 +340,95 @@ router.patch("/listings/:id", requireAuth, async (req, res) => {
   const userId = (req as any).userId as string;
   const { id } = req.params;
 
-  const [existing] = await db.select().from(listings).where(eq(listings.id, id));
-  if (!existing) {
-    res.status(404).json({ error: "Listing not found", code: "NOT_FOUND" });
-    return;
-  }
-  if (existing.userId !== userId) {
-    res.status(403).json({ error: "You can only edit your own listings", code: "FORBIDDEN" });
-    return;
-  }
+  try {
+    const [existing] = await db.select().from(listings).where(eq(listings.id, id));
+    if (!existing) {
+      res.status(404).json({ error: "Listing not found.", code: "NOT_FOUND" });
+      return;
+    }
+    if (existing.userId !== userId) {
+      res.status(403).json({ error: "You can only edit your own listings.", code: "FORBIDDEN" });
+      return;
+    }
 
-  const parsed = updateListingSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Invalid listing data", details: parsed.error.issues });
-    return;
+    const parsed = updateListingSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid listing data.", details: parsed.error.issues });
+      return;
+    }
+
+    const data = parsed.data;
+    const [updated] = await db
+      .update(listings)
+      .set({
+        ...(data.address !== undefined && { address: data.address }),
+        ...(data.addressStreet !== undefined && { addressStreet: data.addressStreet }),
+        ...(data.addressSuburb !== undefined && { addressSuburb: data.addressSuburb }),
+        ...(data.addressCity !== undefined && { addressCity: data.addressCity }),
+        ...(data.addressPostcode !== undefined && { addressPostcode: data.addressPostcode }),
+        ...(data.lat !== undefined && { lat: data.lat }),
+        ...(data.lng !== undefined && { lng: data.lng }),
+        ...(data.googlePlaceId !== undefined && { googlePlaceId: data.googlePlaceId }),
+        ...(data.listingType !== undefined && { listingType: data.listingType }),
+        ...(data.propertyType !== undefined && { propertyType: data.propertyType }),
+        ...(data.propertySubtype !== undefined && { propertySubtype: data.propertySubtype }),
+        ...(data.bedrooms !== undefined && { bedrooms: data.bedrooms }),
+        ...(data.bathrooms !== undefined && { bathrooms: data.bathrooms }),
+        ...(data.toilets !== undefined && { toilets: data.toilets }),
+        ...(data.garages !== undefined && { garages: data.garages }),
+        ...(data.landAreaSqm !== undefined && { landAreaSqm: data.landAreaSqm }),
+        ...(data.floorAreaSqm !== undefined && { floorAreaSqm: data.floorAreaSqm }),
+        ...(data.titleStatus !== undefined && { titleStatus: data.titleStatus }),
+        ...(data.methodOfSale !== undefined && { methodOfSale: data.methodOfSale }),
+        ...(data.backendSearchPriceMin !== undefined && { backendSearchPriceMin: data.backendSearchPriceMin }),
+        ...(data.backendSearchPriceMax !== undefined && { backendSearchPriceMax: data.backendSearchPriceMax }),
+        ...(data.buyerPriceRangeMin !== undefined && { buyerPriceRangeMin: data.buyerPriceRangeMin }),
+        ...(data.buyerPriceRangeMax !== undefined && { buyerPriceRangeMax: data.buyerPriceRangeMax }),
+        ...(data.buyerPriceRangeConfirmed !== undefined && { buyerPriceRangeConfirmed: data.buyerPriceRangeConfirmed }),
+        ...(data.priceNzd !== undefined && { priceNzd: data.priceNzd }),
+        ...(data.priceDisplay !== undefined && { priceDisplay: data.priceDisplay }),
+        ...(data.listingTitle !== undefined && { listingTitle: data.listingTitle }),
+        ...(data.description !== undefined && { description: data.description }),
+        ...(data.imageUrls !== undefined && { imageUrls: data.imageUrls }),
+        ...(data.documentUrls !== undefined && { documentUrls: data.documentUrls }),
+        ...(data.features !== undefined && { features: data.features }),
+        ...(data.status !== undefined && { status: data.status }),
+        updatedAt: new Date(),
+      })
+      .where(eq(listings.id, id))
+      .returning();
+
+    res.json({ listing: updated });
+  } catch (error) {
+    req.log?.error({ error }, "Failed to update listing");
+    res.status(500).json({ error: "We couldn't update your listing. Please try again.", code: "UPDATE_FAILED" });
   }
-
-  const data = parsed.data;
-  const [updated] = await db
-    .update(listings)
-    .set({
-      ...(data.address !== undefined && { address: data.address }),
-      ...(data.addressStreet !== undefined && { addressStreet: data.addressStreet }),
-      ...(data.addressSuburb !== undefined && { addressSuburb: data.addressSuburb }),
-      ...(data.addressCity !== undefined && { addressCity: data.addressCity }),
-      ...(data.addressPostcode !== undefined && { addressPostcode: data.addressPostcode }),
-      ...(data.lat !== undefined && { lat: data.lat }),
-      ...(data.lng !== undefined && { lng: data.lng }),
-      ...(data.googlePlaceId !== undefined && { googlePlaceId: data.googlePlaceId }),
-      ...(data.listingType !== undefined && { listingType: data.listingType }),
-      ...(data.propertyType !== undefined && { propertyType: data.propertyType }),
-      ...(data.propertySubtype !== undefined && { propertySubtype: data.propertySubtype }),
-      ...(data.bedrooms !== undefined && { bedrooms: data.bedrooms }),
-      ...(data.bathrooms !== undefined && { bathrooms: data.bathrooms }),
-      ...(data.toilets !== undefined && { toilets: data.toilets }),
-      ...(data.garages !== undefined && { garages: data.garages }),
-      ...(data.landAreaSqm !== undefined && { landAreaSqm: data.landAreaSqm }),
-      ...(data.floorAreaSqm !== undefined && { floorAreaSqm: data.floorAreaSqm }),
-      ...(data.titleStatus !== undefined && { titleStatus: data.titleStatus }),
-      ...(data.methodOfSale !== undefined && { methodOfSale: data.methodOfSale }),
-      ...(data.backendSearchPriceMin !== undefined && { backendSearchPriceMin: data.backendSearchPriceMin }),
-      ...(data.backendSearchPriceMax !== undefined && { backendSearchPriceMax: data.backendSearchPriceMax }),
-      ...(data.buyerPriceRangeMin !== undefined && { buyerPriceRangeMin: data.buyerPriceRangeMin }),
-      ...(data.buyerPriceRangeMax !== undefined && { buyerPriceRangeMax: data.buyerPriceRangeMax }),
-      ...(data.buyerPriceRangeConfirmed !== undefined && { buyerPriceRangeConfirmed: data.buyerPriceRangeConfirmed }),
-      ...(data.priceNzd !== undefined && { priceNzd: data.priceNzd }),
-      ...(data.priceDisplay !== undefined && { priceDisplay: data.priceDisplay }),
-      ...(data.listingTitle !== undefined && { listingTitle: data.listingTitle }),
-      ...(data.description !== undefined && { description: data.description }),
-      ...(data.imageUrls !== undefined && { imageUrls: data.imageUrls }),
-      ...(data.documentUrls !== undefined && { documentUrls: data.documentUrls }),
-      ...(data.features !== undefined && { features: data.features }),
-      ...(data.status !== undefined && { status: data.status }),
-      updatedAt: new Date(),
-    })
-    .where(eq(listings.id, id))
-    .returning();
-
-  res.json({ listing: updated });
 });
 
 router.delete("/listings/:id", requireAuth, async (req, res) => {
   const userId = (req as any).userId as string;
   const { id } = req.params;
 
-  const [existing] = await db.select().from(listings).where(eq(listings.id, id));
-  if (!existing) {
-    res.status(404).json({ error: "Listing not found", code: "NOT_FOUND" });
-    return;
-  }
-  if (existing.userId !== userId) {
-    res.status(403).json({ error: "You can only delete your own listings", code: "FORBIDDEN" });
-    return;
-  }
+  try {
+    const [existing] = await db.select().from(listings).where(eq(listings.id, id));
+    if (!existing) {
+      res.status(404).json({ error: "Listing not found.", code: "NOT_FOUND" });
+      return;
+    }
+    if (existing.userId !== userId) {
+      res.status(403).json({ error: "You can only remove your own listings.", code: "FORBIDDEN" });
+      return;
+    }
 
-  await db
-    .update(listings)
-    .set({ status: "paused", removedAt: new Date(), updatedAt: new Date() })
-    .where(eq(listings.id, id));
-  res.json({ success: true });
+    await db
+      .update(listings)
+      .set({ status: "paused", removedAt: new Date(), updatedAt: new Date() })
+      .where(eq(listings.id, id));
+    res.json({ success: true });
+  } catch (error) {
+    req.log?.error({ error }, "Failed to delete listing");
+    res.status(500).json({ error: "We couldn't remove your listing. Please try again.", code: "DELETE_FAILED" });
+  }
 });
 
 export default router;
