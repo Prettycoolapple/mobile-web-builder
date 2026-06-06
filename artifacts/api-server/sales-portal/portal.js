@@ -93,7 +93,9 @@
     }
     if (!response.ok) {
       const message = payload && payload.error ? payload.error : "Upload failed. Please try again.";
-      throw new Error(message);
+      const error = new Error(message);
+      if (payload && payload.code) error.code = payload.code;
+      throw error;
     }
     return payload;
   }
@@ -606,24 +608,47 @@
     }
   }
 
-  async function uploadListingPhotos(token) {
+  async function uploadListingPhotos(token, statusElement) {
     const urls = [];
-    for (const item of state.listingPhotos) {
-      const uploaded = await uploadFile("/upload/listing-image", token, item.file);
-      urls.push(uploaded.fileUrl);
+    const total = state.listingPhotos.length;
+    for (let index = 0; index < total; index += 1) {
+      const item = state.listingPhotos[index];
+      if (statusElement) setStatus(statusElement, `Uploading photo ${index + 1} of ${total}...`, null);
+      try {
+        const uploaded = await uploadFile("/upload/listing-image", token, item.file);
+        urls.push(uploaded.fileUrl);
+      } catch (error) {
+        const fileName = item.file?.name || `photo ${index + 1}`;
+        const reason = getErrorMessage(error, "the file may be too large");
+        throw new Error(`Couldn't upload "${fileName}" — ${reason}`);
+      }
     }
     return urls;
   }
 
-  async function uploadListingDocuments(token) {
+  async function uploadListingDocuments(token, statusElement) {
     const form = $("#new-listing-form");
     const documents = [];
     const inputs = Array.from(form.querySelectorAll("[data-document-category]"));
+    // Flatten so we can show "1 of N" progress across all categories
+    const queue = [];
     for (const input of inputs) {
       const category = input.dataset.documentCategory;
       for (const file of Array.from(input.files || [])) {
+        queue.push({ category, file });
+      }
+    }
+    const total = queue.length;
+    for (let index = 0; index < total; index += 1) {
+      const { category, file } = queue[index];
+      if (statusElement) setStatus(statusElement, `Uploading document ${index + 1} of ${total}...`, null);
+      try {
         const uploaded = await uploadFile("/upload/listing-document", token, file, { category });
         documents.push(uploaded.document);
+      } catch (error) {
+        const fileName = file?.name || `document ${index + 1}`;
+        const reason = getErrorMessage(error, "the file may be too large");
+        throw new Error(`Couldn't upload "${fileName}" — ${reason}`);
       }
     }
     return documents;
@@ -685,11 +710,11 @@
       setStatus(status, "Please finish the highlighted details before publishing.", "error");
       return;
     }
-    setStatus(status, "Uploading photos...", null);
+    const publishButton = $("#listing-create-button");
+    if (publishButton) publishButton.disabled = true;
     try {
-      const imageUrls = await uploadListingPhotos(session.token);
-      setStatus(status, "Uploading documents...", null);
-      const documentUrls = await uploadListingDocuments(session.token);
+      const imageUrls = await uploadListingPhotos(session.token, status);
+      const documentUrls = await uploadListingDocuments(session.token, status);
       setStatus(status, "Publishing your listing...", null);
       await api("/listings", {
         method: "POST",
@@ -702,6 +727,8 @@
       setStatus(status, "Your listing is now live for buyers.", "success");
     } catch (error) {
       setStatus(status, getErrorMessage(error, "We couldn't publish your listing. Please try again."), "error");
+    } finally {
+      if (publishButton) publishButton.disabled = false;
     }
   }
 

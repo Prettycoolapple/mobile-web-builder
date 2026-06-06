@@ -104,6 +104,10 @@ const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGE_FILE_SIZE_BYTES = 20 * 1024 * 1024;
 const MAX_CERT_FILE_SIZE_BYTES = 30 * 1024 * 1024;
 const MAX_DM_INLINE_IMAGE_BYTES = 2 * 1024 * 1024;
+// Listing photos can be larger than DM images (property shots are often 3-5MB).
+// We still cap inline fallback to keep DB rows manageable.
+const MAX_LISTING_INLINE_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_LISTING_INLINE_DOCUMENT_BYTES = 6 * 1024 * 1024;
 const CERTIFICATE_NAMESPACE = "provider-certificates";
 const DM_IMAGE_NAMESPACE = "dm-images";
 const LISTING_IMAGE_NAMESPACE = "listing-images";
@@ -559,21 +563,71 @@ router.post(
   uploadImageOnly.single("file"),
   async (req: Request, res: Response) => {
     if (!req.file) {
-      res.status(400).json({ error: "No file provided", code: "MISSING_FILE" });
+      res.status(400).json({ error: "No file provided.", code: "MISSING_FILE" });
       return;
     }
 
+    const { buffer, mimetype, originalname, size } = req.file;
+
+    // --- Primary: cloud / configured storage ---
     try {
-      const { buffer, mimetype, originalname, size } = req.file;
-      const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size, LISTING_IMAGE_NAMESPACE);
+      const { objectPath } = await uploadToStorage(
+        objectStorageService,
+        buffer,
+        mimetype,
+        size,
+        LISTING_IMAGE_NAMESPACE,
+      );
       const fileUrl = `/api/storage${objectPath}`;
       res.status(201).json({
         fileUrl,
         objectPath,
         metadata: { name: originalname, size, contentType: mimetype },
       });
+      return;
     } catch (error) {
-      res.status(500).json({ error: "Upload failed. Please try again.", code: "UPLOAD_FAILED" });
+      req.log.error(
+        { err: error, name: originalname, size, mimetype, isLocal: objectStorageService.isLocal },
+        "Listing image cloud upload failed — attempting fallback",
+      );
+
+      // --- Fallback 1: inline data URL for small enough images. This keeps
+      // the listing flow working even when GCS isn't configured (e.g. on a
+      // bare Vercel deployment) so agents can still publish their property. ---
+      if (size <= MAX_LISTING_INLINE_IMAGE_BYTES) {
+        res.status(201).json({
+          fileUrl: imageDataUrl(buffer, mimetype),
+          objectPath: null,
+          fallback: "inline",
+          metadata: { name: originalname, size, contentType: mimetype },
+        });
+        return;
+      }
+
+      // --- Fallback 2: try local-mode write (works in long-lived processes) ---
+      try {
+        const { objectPath } = await objectStorageService.saveLocal(buffer, mimetype, LISTING_IMAGE_NAMESPACE);
+        res.status(201).json({
+          fileUrl: `/api/storage${objectPath}`,
+          objectPath,
+          fallback: "local",
+          metadata: { name: originalname, size, contentType: mimetype },
+        });
+        return;
+      } catch (localError) {
+        req.log.error({ err: localError }, "Listing image local fallback failed");
+      }
+
+      // --- Last resort: classified error so the user knows it's a server config issue ---
+      const classified = classifyStorageUploadError(error);
+      if (classified) {
+        res.status(classified.status).json({ error: classified.error, code: classified.code });
+        return;
+      }
+      res.status(500).json({
+        error: "We couldn't upload that photo. It may be too large — try a smaller file.",
+        code: "UPLOAD_FAILED",
+      });
     }
   },
 );
@@ -585,21 +639,29 @@ router.post(
   async (req: Request, res: Response) => {
     const category = String(req.body?.category || "").trim();
     if (!["title", "lim", "other"].includes(category)) {
-      res.status(400).json({ error: "Select a valid document category.", code: "INVALID_CATEGORY" });
+      res.status(400).json({ error: "Please choose a valid document type.", code: "INVALID_CATEGORY" });
       return;
     }
     if (!req.file) {
-      res.status(400).json({ error: "No file provided", code: "MISSING_FILE" });
+      res.status(400).json({ error: "No file provided.", code: "MISSING_FILE" });
       return;
     }
     if ((category === "title" || category === "lim") && req.file.mimetype !== "application/pdf") {
-      res.status(400).json({ error: "Property Title and LIM files must be PDFs.", code: "INVALID_FILE_TYPE" });
+      res.status(400).json({ error: "Record of title and LIM report files must be PDFs.", code: "INVALID_FILE_TYPE" });
       return;
     }
 
+    const { buffer, mimetype, originalname, size } = req.file;
+
+    // --- Primary: cloud / configured storage ---
     try {
-      const { buffer, mimetype, originalname, size } = req.file;
-      const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size, LISTING_DOCUMENT_NAMESPACE);
+      const { objectPath } = await uploadToStorage(
+        objectStorageService,
+        buffer,
+        mimetype,
+        size,
+        LISTING_DOCUMENT_NAMESPACE,
+      );
       const fileUrl = `/api/storage${objectPath}`;
       res.status(201).json({
         fileUrl,
@@ -614,9 +676,65 @@ router.post(
           uploadedAt: new Date().toISOString(),
         },
       });
+      return;
     } catch (error) {
-      req.log.error({ err: error }, "Listing document upload failed");
-      res.status(500).json({ error: "Upload failed. Please try again.", code: "UPLOAD_FAILED" });
+      req.log.error(
+        { err: error, name: originalname, size, mimetype, category, isLocal: objectStorageService.isLocal },
+        "Listing document cloud upload failed — attempting fallback",
+      );
+
+      // --- Fallback 1: inline data URL for small enough documents ---
+      if (size <= MAX_LISTING_INLINE_DOCUMENT_BYTES) {
+        const fileUrl = `data:${mimetype};base64,${Buffer.from(buffer).toString("base64")}`;
+        res.status(201).json({
+          fileUrl,
+          objectPath: null,
+          fallback: "inline",
+          document: {
+            category,
+            fileName: originalname,
+            fileUrl,
+            objectPath: null,
+            mimeType: mimetype,
+            size,
+            uploadedAt: new Date().toISOString(),
+          },
+        });
+        return;
+      }
+
+      // --- Fallback 2: local-mode write ---
+      try {
+        const { objectPath } = await objectStorageService.saveLocal(buffer, mimetype, LISTING_DOCUMENT_NAMESPACE);
+        const fileUrl = `/api/storage${objectPath}`;
+        res.status(201).json({
+          fileUrl,
+          objectPath,
+          fallback: "local",
+          document: {
+            category,
+            fileName: originalname,
+            fileUrl,
+            objectPath,
+            mimeType: mimetype,
+            size,
+            uploadedAt: new Date().toISOString(),
+          },
+        });
+        return;
+      } catch (localError) {
+        req.log.error({ err: localError }, "Listing document local fallback failed");
+      }
+
+      const classified = classifyStorageUploadError(error);
+      if (classified) {
+        res.status(classified.status).json({ error: classified.error, code: classified.code });
+        return;
+      }
+      res.status(500).json({
+        error: "We couldn't upload that document. It may be too large — try a smaller file.",
+        code: "UPLOAD_FAILED",
+      });
     }
   },
 );
