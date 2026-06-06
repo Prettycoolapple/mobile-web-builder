@@ -128,6 +128,17 @@ a {
   background: #fff;
 }
 
+.button:disabled,
+.button[disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
+  box-shadow: none;
+}
+
+.button[hidden] {
+  display: none;
+}
+
 .hero {
   position: relative;
   min-height: 86vh;
@@ -900,11 +911,12 @@ textarea:focus {
 }
 
 .portal-hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
-  gap: clamp(24px, 5vw, 64px);
-  align-items: end;
+  display: block;
   padding: clamp(42px, 7vw, 86px) 0 clamp(24px, 4vw, 42px);
+}
+
+.portal-hero[hidden] {
+  display: none;
 }
 
 .portal-hero h1 {
@@ -920,38 +932,10 @@ textarea:focus {
   font-size: 18px;
 }
 
-.portal-status-panel {
-  display: grid;
-  gap: 10px;
-  padding: 18px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  box-shadow: var(--shadow);
-}
-
-.portal-status-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--line);
-}
-
-.portal-status-row:last-child {
-  border-bottom: 0;
-}
-
-.portal-status-row span,
 .portal-inline-note,
 .portal-metric span {
   color: var(--muted);
   font-size: 13px;
-}
-
-.portal-status-row strong {
-  text-align: right;
-  color: var(--forest);
 }
 
 .portal-shell {
@@ -986,14 +970,14 @@ textarea:focus {
 
 .portal-auth-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
+  grid-template-columns: minmax(0, 780px);
   gap: 20px;
   align-items: start;
+  justify-content: start;
   margin-top: 18px;
 }
 
-.portal-card,
-.portal-aside {
+.portal-card {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
@@ -1001,42 +985,6 @@ textarea:focus {
 
 .portal-card {
   padding: clamp(22px, 4vw, 34px);
-}
-
-.portal-aside {
-  padding: 26px;
-  color: #fffaf3;
-  background:
-    linear-gradient(180deg, rgba(23, 63, 46, 0.78), rgba(23, 63, 46, 0.96)),
-    url("https://images.unsplash.com/photo-1560518883-ce09059eeffa?w=1000&q=80");
-  background-size: cover;
-  background-position: center;
-}
-
-.portal-aside h2 {
-  margin-bottom: 12px;
-  font-size: 28px;
-  letter-spacing: -0.03em;
-}
-
-.portal-aside p,
-.portal-checklist {
-  color: rgba(255, 250, 243, 0.8);
-}
-
-.portal-checklist {
-  display: grid;
-  gap: 10px;
-  margin: 22px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.portal-checklist li {
-  padding: 10px 12px;
-  border: 1px solid rgba(255, 250, 243, 0.16);
-  border-radius: 8px;
-  background: rgba(255, 250, 243, 0.09);
 }
 
 .portal-panel-header {
@@ -1083,19 +1031,66 @@ textarea:focus {
   align-items: center;
 }
 
+.portal-form-row--center {
+  justify-content: center;
+}
+
+/* Native checkboxes/radios must not inherit the full-width, 48px-tall
+   sizing applied to text inputs on this page. */
+.portal-tag-grid input[type="radio"],
+.portal-checkbox input[type="checkbox"] {
+  width: auto;
+  min-height: 0;
+  accent-color: var(--forest);
+}
+
+.portal-otp-state {
+  font-size: 13px;
+  font-weight: 760;
+  color: var(--muted);
+}
+
+.portal-otp-state.is-verified {
+  color: var(--moss);
+}
+
+.portal-otp-state.is-verified::before {
+  content: "✓ ";
+  font-weight: 900;
+}
+
+.portal-verify-block {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffaf3;
+}
+
+.portal-verify-block[hidden] {
+  display: none;
+}
+
 .portal-submit {
   margin-top: 4px;
 }
 
 .link-button {
-  min-height: 40px;
+  min-height: 44px;
   padding: 0;
   border: 0;
   background: transparent;
   color: var(--forest);
   font: inherit;
   font-weight: 760;
+  text-decoration: underline;
+  text-underline-offset: 3px;
   cursor: pointer;
+}
+
+.link-button[hidden] {
+  display: none;
 }
 
 .link-button:disabled {
@@ -1486,6 +1481,27 @@ textarea:focus {
   font-weight: 740;
 }
 
+.portal-friendly-note--soft {
+  background: #fffaf3;
+  color: var(--muted);
+  font-weight: 650;
+}
+
+.portal-wizard-actions {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.portal-wizard-nav {
+  display: flex;
+  gap: 12px;
+}
+
+.portal-wizard-nav .button {
+  min-width: 120px;
+}
+
 .field-error {
   min-height: 20px;
   margin: 6px 0 0;
@@ -1583,8 +1599,11 @@ textarea:focus {
 }
 
 .portal-switch input {
+  flex: none;
   width: 44px;
   height: 24px;
+  min-height: 0;
+  padding: 0;
   appearance: none;
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -1739,6 +1758,22 @@ textarea:focus {
   .button {
     padding-left: 14px;
     padding-right: 14px;
+  }
+
+  /* Keep the wizard's Back / Next (or Publish) side by side, and let
+     Cancel sit on its own full-width row. */
+  .portal-wizard-actions {
+    flex-wrap: wrap;
+  }
+
+  .portal-wizard-nav {
+    width: 100%;
+  }
+
+  .portal-wizard-nav .button {
+    flex: 1;
+    width: auto;
+    min-width: 0;
   }
 
   .section {

@@ -4,7 +4,8 @@
   const USER_KEY = "projectAlphaSalesPortalUser";
   const MAX_LISTING_PHOTOS = 20;
 
-  const LISTING_STEPS = ["Photos", "Address", "Property details", "Sale and pricing", "Files", "Marketing copy"];
+  const LISTING_STEPS = ["Photos", "Address", "Property details", "Price & sale", "Documents", "Description"];
+  const STEP_ERROR_KEYS = [["imageUrls"], ["address"], ["propertyTag", "details"], ["pricing"], ["documents"], ["copy"]];
   const PROPERTY_TAGS = {
     house: "Residential House",
     rural: "Lifestyle Block",
@@ -32,6 +33,7 @@
     listingPhotos: [],
     listingDocuments: [],
     addressTimer: null,
+    otpCooldownTimer: null,
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -66,7 +68,10 @@
     }
     if (!response.ok) {
       const message = payload && payload.error ? payload.error : "Request failed. Please try again.";
-      throw new Error(message);
+      const error = new Error(message);
+      if (payload && payload.retryAfterSeconds) error.retryAfterSeconds = payload.retryAfterSeconds;
+      if (payload && payload.code) error.code = payload.code;
+      throw error;
     }
     return payload;
   }
@@ -120,6 +125,8 @@
 
   function showDashboard(user) {
     state.currentUser = user || null;
+    const hero = $(".portal-hero");
+    if (hero) hero.hidden = true;
     $("#portal-auth").hidden = true;
     $("#portal-dashboard").hidden = false;
     fillProfileForm(user || {});
@@ -129,29 +136,45 @@
   }
 
   function showAuth() {
+    const hero = $(".portal-hero");
+    if (hero) hero.hidden = false;
     $("#portal-auth").hidden = false;
     $("#portal-dashboard").hidden = true;
+  }
+
+  function updateListingMetrics(listings) {
+    const total = listings.length;
+    const active = listings.filter((listing) => listing.status !== "paused").length;
+    const paused = total - active;
+    const set = (selector, value) => {
+      const element = $(selector);
+      if (element) element.textContent = String(value);
+    };
+    set("#metric-total", total);
+    set("#metric-active", active);
+    set("#metric-paused", paused);
   }
 
   async function refreshListings() {
     const session = getSession();
     const status = $("#dashboard-status");
-    const count = $("#listing-count");
     if (!session) {
       showAuth();
       return;
     }
-    setStatus(status, "Checking property records...", null);
+    setStatus(status, "Loading your listings...", null);
     try {
       const data = await api("/listings/my", { method: "GET", token: session.token });
       const listings = Array.isArray(data.listings) ? data.listings : [];
       state.listings = listings;
-      if (count) count.textContent = String(listings.length);
+      updateListingMetrics(listings);
       renderListings(listings);
-      setStatus(status, "Property database connection is working.", "success");
+      setStatus(status, "", null);
     } catch (error) {
+      state.listings = [];
+      updateListingMetrics([]);
       renderListings([]);
-      setStatus(status, getErrorMessage(error, "Could not load property records."), "error");
+      setStatus(status, getErrorMessage(error, "We couldn't load your listings. Please try again."), "error");
     }
   }
 
@@ -197,7 +220,7 @@
     if (listing.methodOfSale) bits.push(METHOD_LABELS[listing.methodOfSale] || listing.methodOfSale);
     const price = formatPriceRange(listing);
     if (price) bits.push(price);
-    return bits.join(" | ") || "Property record";
+    return bits.join(" | ") || "Property";
   }
 
   function renderListings(listings) {
@@ -207,7 +230,7 @@
       root.innerHTML = `
         <div class="portal-empty">
           <h3>No listings yet</h3>
-          <p>Add your first property record. Photos, documents, and property details will stay stored for future analysis.</p>
+          <p>Add your first property to start marketing it to Project Alpha buyers.</p>
         </div>
       `;
       return;
@@ -279,10 +302,10 @@
     const count = $("#listing-step-count");
     if (title) title.textContent = LISTING_STEPS[state.listingStep];
     if (count) count.textContent = `Step ${state.listingStep + 1} of ${LISTING_STEPS.length}`;
-    $("#listing-prev-button").disabled = state.listingStep === 0;
-    $("#listing-next-button").hidden = state.listingStep === LISTING_STEPS.length - 1;
-    $("#listing-create-button").hidden = state.listingStep !== LISTING_STEPS.length - 1;
-    updateCreateButton();
+    const isLastStep = state.listingStep === LISTING_STEPS.length - 1;
+    $("#listing-prev-button").hidden = state.listingStep === 0;
+    $("#listing-next-button").hidden = isLastStep;
+    $("#listing-create-button").hidden = !isLastStep;
   }
 
   function resetListingWizard() {
@@ -303,12 +326,12 @@
     const status = $("#dashboard-status");
     const accepted = Array.from(files || []).filter((file) => file.type.startsWith("image/"));
     if (!accepted.length) {
-      setStatus(status, "Choose image files for property photos.", "error");
+      setStatus(status, "Please choose image files for your photos.", "error");
       return;
     }
     const room = MAX_LISTING_PHOTOS - state.listingPhotos.length;
     if (room <= 0) {
-      setFieldError("imageUrls", "You can upload a maximum of 20 photos.");
+      setFieldError("imageUrls", "You can add up to 20 photos.");
       return;
     }
     accepted.slice(0, room).forEach((file) => {
@@ -321,7 +344,6 @@
     if (accepted.length > room) setFieldError("imageUrls", "Only the first 20 photos were added.");
     else setFieldError("imageUrls", "");
     renderPhotoPreview();
-    updateCreateButton();
   }
 
   function renderPhotoPreview() {
@@ -363,8 +385,8 @@
   }
 
   function documentCategoryLabel(category) {
-    if (category === "title") return "Property Title";
-    if (category === "lim") return "LIM Report";
+    if (category === "title") return "Record of title";
+    if (category === "lim") return "LIM report";
     return "Other";
   }
 
@@ -383,16 +405,16 @@
   function validateListingStep(step, showErrors) {
     const form = $("#new-listing-form");
     if (!form) return false;
-    if (showErrors) clearListingErrors();
+    if (showErrors) (STEP_ERROR_KEYS[step] || []).forEach((key) => setFieldError(key, ""));
 
     if (step === 0) {
       const ok = state.listingPhotos.length >= 1 && state.listingPhotos.length <= MAX_LISTING_PHOTOS;
-      if (!ok && showErrors) setFieldError("imageUrls", "Upload at least 1 photo and no more than 20 photos.");
+      if (!ok && showErrors) setFieldError("imageUrls", "Add at least 1 photo (up to 20).");
       return ok;
     }
     if (step === 1) {
       const ok = String(form.elements.address.value || "").trim().length >= 3;
-      if (!ok && showErrors) setFieldError("address", "Enter the full physical street address.");
+      if (!ok && showErrors) setFieldError("address", "Enter the property's street address.");
       return ok;
     }
     if (step === 2) {
@@ -406,8 +428,8 @@
         return Number.isInteger(value) && value > 0;
       });
       const title = Boolean(form.elements.titleStatus.value);
-      if (!tag && showErrors) setFieldError("propertyTag", "Select a property type.");
-      if ((!metrics || !areas || !title) && showErrors) setFieldError("details", "Complete all metrics, areas, and title status.");
+      if (!tag && showErrors) setFieldError("propertyTag", "Choose a property type.");
+      if ((!metrics || !areas || !title) && showErrors) setFieldError("details", "Fill in the room counts, floor and land area, and title type.");
       return Boolean(tag && metrics && areas && title);
     }
     if (step === 3) {
@@ -432,7 +454,7 @@
       if ((!method || !backendOk || !buyerOk) && showErrors) {
         setFieldError(
           "pricing",
-          "Choose the sale method, enter a valid private search price, and confirm any buyer-facing range you add.",
+          "Choose a method of sale, enter a valid private search price, and tick the box to confirm any buyer price guide you add.",
         );
       }
       return method && backendOk && buyerOk;
@@ -442,27 +464,30 @@
       const limInput = form.elements.limDocument;
       const titleOk = !titleInput.files.length || titleInput.files[0].type === "application/pdf";
       const limOk = !limInput.files.length || limInput.files[0].type === "application/pdf";
-      if ((!titleOk || !limOk) && showErrors) setFieldError("documents", "Property Title and LIM uploads must be PDF files.");
+      if ((!titleOk || !limOk) && showErrors) setFieldError("documents", "The record of title and LIM report must be PDF files.");
       return titleOk && limOk;
     }
     if (step === 5) {
       const title = String(form.elements.listingTitle.value || "").trim();
       const description = String(form.elements.description.value || "").trim();
       const ok = title.length >= 3 && description.length >= 20;
-      if (!ok && showErrors) setFieldError("copy", "Enter a listing title and at least 20 characters of body copy.");
+      if (!ok && showErrors) setFieldError("copy", "Add a headline and a description of at least 20 characters.");
       return ok;
     }
     return true;
   }
 
   function validateEntireListing(showErrors) {
-    return LISTING_STEPS.every((_, index) => validateListingStep(index, showErrors));
+    if (showErrors) clearListingErrors();
+    let allOk = true;
+    LISTING_STEPS.forEach((_, index) => {
+      if (!validateListingStep(index, showErrors)) allOk = false;
+    });
+    return allOk;
   }
 
-  function updateCreateButton() {
-    const button = $("#listing-create-button");
-    if (!button) return;
-    button.disabled = !validateEntireListing(false);
+  function firstInvalidStep() {
+    return LISTING_STEPS.findIndex((_, index) => !validateListingStep(index, false));
   }
 
   async function searchAddress(query) {
@@ -525,9 +550,8 @@
       form.elements.addressPostcode.value = addressComponent(result, ["postal_code"]);
       form.elements.lat.value = result.geometry?.location?.lat ? String(result.geometry.location.lat) : "";
       form.elements.lng.value = result.geometry?.location?.lng ? String(result.geometry.location.lng) : "";
-      updateCreateButton();
     } catch {
-      updateCreateButton();
+      /* keep the typed address even if place details fail */
     }
   }
 
@@ -605,16 +629,17 @@
     }
     const form = event.currentTarget;
     if (!validateEntireListing(true)) {
-      setStatus(status, "Complete the required listing details before creating.", "error");
-      updateCreateButton();
+      const badStep = firstInvalidStep();
+      if (badStep >= 0) switchListingStep(badStep);
+      setStatus(status, "Please finish the highlighted details before publishing.", "error");
       return;
     }
     setStatus(status, "Uploading photos...", null);
     try {
       const imageUrls = await uploadListingPhotos(session.token);
-      setStatus(status, "Uploading files...", null);
+      setStatus(status, "Uploading documents...", null);
       const documentUrls = await uploadListingDocuments(session.token);
-      setStatus(status, "Creating listing...", null);
+      setStatus(status, "Publishing your listing...", null);
       await api("/listings", {
         method: "POST",
         token: session.token,
@@ -623,9 +648,9 @@
       resetListingWizard();
       $("#new-listing-panel").hidden = true;
       await refreshListings();
-      setStatus(status, "Listing created.", "success");
+      setStatus(status, "Your listing is now live for buyers.", "success");
     } catch (error) {
-      setStatus(status, getErrorMessage(error, "Could not create listing."), "error");
+      setStatus(status, getErrorMessage(error, "We couldn't publish your listing. Please try again."), "error");
     }
   }
 
@@ -638,14 +663,14 @@
     }
     const listing = state.listings.find((item) => item.id === listingId);
     const label = listing ? listingTitle(listing) : "this listing";
-    if (!window.confirm(`Remove ${label}? It will be hidden from this dashboard, but the stored property data stays in the backend.`)) return;
+    if (!window.confirm(`Remove ${label}? It will no longer be shown to buyers.`)) return;
     setStatus(status, "Removing listing...", null);
     try {
       await api(`/listings/${encodeURIComponent(listingId)}`, { method: "DELETE", token: session.token });
       await refreshListings();
-      setStatus(status, "Listing removed. Stored property data is retained.", "success");
+      setStatus(status, "Listing removed.", "success");
     } catch (error) {
-      setStatus(status, getErrorMessage(error, "Could not remove listing."), "error");
+      setStatus(status, getErrorMessage(error, "We couldn't remove this listing. Please try again."), "error");
     }
   }
 
@@ -656,7 +681,7 @@
       showAuth();
       return;
     }
-    setStatus(status, isActive ? "Activating listing..." : "Pausing listing...", null);
+    setStatus(status, isActive ? "Making listing live..." : "Pausing listing...", null);
     try {
       await api(`/listings/${encodeURIComponent(listingId)}`, {
         method: "PATCH",
@@ -664,9 +689,9 @@
         body: { status: isActive ? "active" : "paused" },
       });
       await refreshListings();
-      setStatus(status, isActive ? "Listing marked active." : "Listing paused.", "success");
+      setStatus(status, isActive ? "Your listing is live for buyers." : "Your listing is paused and hidden from buyers.", "success");
     } catch (error) {
-      setStatus(status, getErrorMessage(error, "Could not update listing status."), "error");
+      setStatus(status, getErrorMessage(error, "We couldn't update your listing. Please try again."), "error");
       await refreshListings();
     }
   }
@@ -685,10 +710,16 @@
   }
 
   function openReset() {
+    const form = $("#password-reset-form");
     const loginEmail = $("#sales-login-form input[name='email']");
-    const resetEmail = $("#password-reset-form input[name='email']");
+    const resetEmail = form ? form.elements.email : null;
     if (loginEmail && resetEmail && loginEmail.value.trim()) resetEmail.value = loginEmail.value.trim();
+    const verifyBlock = $("#reset-verify-block");
+    if (verifyBlock) verifyBlock.hidden = true;
+    state.resetCodeRequested = false;
+    setStatus($("#reset-status"), "", null);
     $("#reset-panel").hidden = false;
+    if (resetEmail && !resetEmail.value) resetEmail.focus();
   }
 
   function closeReset() {
@@ -703,10 +734,56 @@
     state.verificationId = null;
     state.verifiedPhone = null;
     state.phoneVerificationToken = null;
-    const resendButton = $("#resend-otp-button");
+    window.clearInterval(state.otpCooldownTimer);
+    state.otpCooldownTimer = null;
+    const sendButton = $("#send-otp-button");
+    const verifyBlock = $("#otp-verify-block");
+    const cooldown = $("#otp-cooldown");
     const otpState = $("#otp-state");
-    if (resendButton) resendButton.disabled = true;
-    if (otpState) otpState.textContent = "Phone not verified yet";
+    if (sendButton) {
+      sendButton.hidden = false;
+      sendButton.disabled = false;
+    }
+    if (verifyBlock) verifyBlock.hidden = true;
+    if (cooldown) cooldown.textContent = "";
+    if (otpState) {
+      otpState.textContent = "Not verified yet";
+      otpState.classList.remove("is-verified");
+    }
+  }
+
+  function setOtpButtonsDisabled(disabled) {
+    const sendButton = $("#send-otp-button");
+    const resendButton = $("#resend-otp-button");
+    if (sendButton) sendButton.disabled = disabled;
+    if (resendButton) resendButton.disabled = disabled || !state.verificationId;
+  }
+
+  function startOtpCooldown(seconds) {
+    const totalSeconds = Number(seconds || 0);
+    const cooldown = $("#otp-cooldown");
+    window.clearInterval(state.otpCooldownTimer);
+    if (!cooldown || totalSeconds <= 0) {
+      if (cooldown) cooldown.textContent = "";
+      setOtpButtonsDisabled(false);
+      return;
+    }
+
+    const endsAt = Date.now() + totalSeconds * 1000;
+    setOtpButtonsDisabled(true);
+    const tick = () => {
+      const remaining = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
+      if (remaining <= 0) {
+        window.clearInterval(state.otpCooldownTimer);
+        state.otpCooldownTimer = null;
+        cooldown.textContent = "You can request another code now.";
+        setOtpButtonsDisabled(false);
+        return;
+      }
+      cooldown.textContent = `You can request another code in ${remaining} second${remaining === 1 ? "" : "s"}.`;
+    };
+    tick();
+    state.otpCooldownTimer = window.setInterval(tick, 1000);
   }
 
   function resolveAgencyName(values) {
@@ -756,8 +833,8 @@
   function updateAccountSummary(user) {
     const summary = $("#account-summary");
     if (!summary) return;
-    const email = user.email ? ` Signed in as ${user.email}.` : "";
-    summary.textContent = `Your sales portal account also works in the Project Alpha app as a free-tier user.${email}`;
+    const email = user.email ? `You're signed in as ${user.email}. ` : "";
+    summary.textContent = `${email}You can use the same email and password to sign in to the Project Alpha app.`;
   }
 
   function selectedProfilePicture(form) {
@@ -775,21 +852,31 @@
     const status = $("#signup-status");
     const phoneNumber = normalizeNzPhone(signupForm.elements.phone.value);
     if (!/^\+64\d{7,10}$/.test(phoneNumber)) {
-      setStatus(status, "Enter a valid New Zealand contact number starting with +64.", "error");
+      setStatus(status, "Enter a valid New Zealand mobile number starting with +64.", "error");
       return;
     }
 
-    setStatus(status, isResend ? "Resending verification code..." : "Sending verification code...", null);
+    setStatus(status, isResend ? "Sending a new code..." : "Sending your code...", null);
     try {
       const data = await api("/auth/send-otp", { method: "POST", body: { phone: phoneNumber } });
       state.verificationId = data.verificationId;
       state.verifiedPhone = null;
       state.phoneVerificationToken = null;
-      $("#resend-otp-button").disabled = false;
-      $("#otp-state").textContent = "Code sent. Check your phone.";
-      setStatus(status, "Verification code sent.", "success");
+      const sendButton = $("#send-otp-button");
+      const verifyBlock = $("#otp-verify-block");
+      const otpState = $("#otp-state");
+      if (sendButton) sendButton.hidden = true;
+      if (verifyBlock) verifyBlock.hidden = false;
+      if (otpState) {
+        otpState.textContent = `Code sent to ${phoneNumber}`;
+        otpState.classList.remove("is-verified");
+      }
+      if (signupForm.elements.otpCode) signupForm.elements.otpCode.focus();
+      startOtpCooldown(data.retryAfterSeconds || 60);
+      setStatus(status, "Code sent. Check your text messages.", "success");
     } catch (error) {
-      setStatus(status, getErrorMessage(error, "Could not send verification code."), "error");
+      if (error && Number(error.retryAfterSeconds) > 0) startOtpCooldown(error.retryAfterSeconds);
+      setStatus(status, getErrorMessage(error, "We couldn't send the code. Please try again."), "error");
     }
   }
 
@@ -798,11 +885,11 @@
     const phoneNumber = normalizeNzPhone(signupForm.elements.phone.value);
     const code = String(signupForm.elements.otpCode.value || "").trim();
     if (!state.verificationId || !phoneNumber || !code) {
-      setStatus(status, "Enter your phone number and verification code first.", "error");
+      setStatus(status, "Enter the code we texted you first.", "error");
       return;
     }
 
-    setStatus(status, "Verifying phone...", null);
+    setStatus(status, "Checking your code...", null);
     try {
       const data = await api("/auth/verify-otp", {
         method: "POST",
@@ -810,10 +897,20 @@
       });
       state.phoneVerificationToken = data.token;
       state.verifiedPhone = data.phone;
-      $("#otp-state").textContent = `Verified ${data.phone}`;
-      setStatus(status, "Phone verified. You can create the account now.", "success");
+      window.clearInterval(state.otpCooldownTimer);
+      state.otpCooldownTimer = null;
+      const verifyBlock = $("#otp-verify-block");
+      const cooldown = $("#otp-cooldown");
+      const otpState = $("#otp-state");
+      if (verifyBlock) verifyBlock.hidden = true;
+      if (cooldown) cooldown.textContent = "";
+      if (otpState) {
+        otpState.textContent = `Verified ${data.phone}`;
+        otpState.classList.add("is-verified");
+      }
+      setStatus(status, "Mobile verified. You're ready to create your account.", "success");
     } catch (error) {
-      setStatus(status, getErrorMessage(error, "Could not verify code."), "error");
+      setStatus(status, getErrorMessage(error, "That code didn't match. Please try again."), "error");
     }
   }
 
@@ -825,17 +922,17 @@
 
     const phoneNumber = normalizeNzPhone(values.phone);
     if (!/^\+64\d{7,10}$/.test(phoneNumber)) {
-      setStatus(status, "Enter a valid New Zealand contact number starting with +64.", "error");
+      setStatus(status, "Enter a valid New Zealand mobile number starting with +64.", "error");
       return;
     }
     if (!state.phoneVerificationToken || state.verifiedPhone !== phoneNumber) {
-      setStatus(status, "Please verify your phone number before creating the account.", "error");
+      setStatus(status, "Please verify your mobile number before creating your account.", "error");
       return;
     }
 
     const agencyName = resolveAgencyName(values);
     if (!agencyName) {
-      setStatus(status, "Select an agency, or enter the agency name if you choose Others.", "error");
+      setStatus(status, "Choose your agency, or enter its name if you selected Other.", "error");
       return;
     }
 
@@ -849,29 +946,29 @@
       agencyName,
     };
 
-    setStatus(status, "Creating sales-agent account...", null);
+    setStatus(status, "Creating your account...", null);
     try {
       const data = await api("/auth/sales-agent-web-signup", { method: "POST", body: payload });
       let user = data.user;
       const picture = selectedProfilePicture(form);
       if (picture) {
-        setStatus(status, "Account created. Uploading profile picture...", null);
+        setStatus(status, "Account created. Adding your photo...", null);
         try {
           const uploaded = await uploadProfilePicture(data.token, picture);
           user = { ...user, avatarUrl: uploaded.fileUrl };
         } catch (uploadError) {
           setStatus(
             status,
-            `Account created, but the profile picture could not upload: ${getErrorMessage(uploadError, "Upload failed.")}`,
+            `Your account is ready, but we couldn't add your photo: ${getErrorMessage(uploadError, "Please try again from your profile.")}`,
             "error",
           );
         }
       }
       saveSession(data.token, user);
-      if (!picture) setStatus(status, "Account created. Opening portal foundation...", "success");
+      if (!picture) setStatus(status, "Welcome aboard! Setting up your dashboard...", "success");
       showDashboard(user);
     } catch (error) {
-      setStatus(status, getErrorMessage(error, "Signup failed. Please try again."), "error");
+      setStatus(status, getErrorMessage(error, "We couldn't create your account. Please try again."), "error");
     }
   }
 
@@ -880,7 +977,7 @@
     const form = event.currentTarget;
     const status = $("#login-status");
     const values = formValues(form);
-    setStatus(status, "Signing in...", null);
+    setStatus(status, "Signing you in...", null);
     try {
       const data = await api("/auth/sales-agent-login", {
         method: "POST",
@@ -890,10 +987,10 @@
         },
       });
       saveSession(data.token, data.user);
-      setStatus(status, "Signed in.", "success");
+      setStatus(status, "Welcome back!", "success");
       showDashboard(data.user);
     } catch (error) {
-      setStatus(status, getErrorMessage(error, "Login failed. Please try again."), "error");
+      setStatus(status, getErrorMessage(error, "We couldn't sign you in. Check your email and password."), "error");
     }
   }
 
@@ -909,15 +1006,15 @@
     const values = formValues(form);
     const phoneNumber = normalizeNzPhone(values.phone);
     if (!/^\+64\d{7,10}$/.test(phoneNumber)) {
-      setStatus(status, "Enter a valid New Zealand contact number starting with +64.", "error");
+      setStatus(status, "Enter a valid New Zealand mobile number starting with +64.", "error");
       return;
     }
     const agencyName = resolveAgencyName(values);
     if (!agencyName) {
-      setStatus(status, "Select an agency, or enter the agency name if you choose Others.", "error");
+      setStatus(status, "Choose your agency, or enter its name if you selected Other.", "error");
       return;
     }
-    setStatus(status, "Saving profile...", null);
+    setStatus(status, "Saving your changes...", null);
     try {
       const data = await api("/auth/sales-agent-web-profile", {
         method: "PATCH",
@@ -932,16 +1029,16 @@
       let user = data.user;
       const picture = selectedProfilePicture(form);
       if (picture) {
-        setStatus(status, "Profile saved. Uploading profile picture...", null);
+        setStatus(status, "Changes saved. Updating your photo...", null);
         const uploaded = await uploadProfilePicture(session.token, picture);
         user = { ...user, avatarUrl: uploaded.fileUrl };
       }
       saveSession(session.token, user);
       fillProfileForm(user);
       updateAccountSummary(user);
-      setStatus(status, "Profile saved.", "success");
+      setStatus(status, "Your details have been saved.", "success");
     } catch (error) {
-      setStatus(status, getErrorMessage(error, "Could not save profile."), "error");
+      setStatus(status, getErrorMessage(error, "We couldn't save your changes. Please try again."), "error");
     }
   }
 
@@ -953,14 +1050,16 @@
       setStatus(status, "Enter your email address first.", "error");
       return;
     }
-    setStatus(status, isResend ? "Resending reset code..." : "Sending reset code...", null);
+    setStatus(status, isResend ? "Sending a new code..." : "Sending your reset code...", null);
     try {
       await api("/auth/password-reset/request", { method: "POST", body: { email } });
       state.resetCodeRequested = true;
-      $("#resend-reset-button").disabled = false;
-      setStatus(status, "If that email has an account, a reset code has been sent.", "success");
+      const verifyBlock = $("#reset-verify-block");
+      if (verifyBlock) verifyBlock.hidden = false;
+      if (form.elements.code) form.elements.code.focus();
+      setStatus(status, "If that email has an account, we've sent a reset code. Check your inbox.", "success");
     } catch (error) {
-      setStatus(status, getErrorMessage(error, "Could not send reset code."), "error");
+      setStatus(status, getErrorMessage(error, "We couldn't send a reset code. Please try again."), "error");
     }
   }
 
@@ -976,15 +1075,21 @@
       setStatus(status, "Enter your email, reset code, and new password.", "error");
       return;
     }
-    setStatus(status, "Updating password...", null);
+    setStatus(status, "Updating your password...", null);
     try {
       await api("/auth/password-reset/confirm", {
         method: "POST",
         body: { email, code, password },
       });
-      setStatus(status, "Password updated. You can sign in now.", "success");
+      setStatus(status, "Password updated. You can sign in with your new password.", "success");
+      const loginEmail = $("#sales-login-form input[name='email']");
+      if (loginEmail) loginEmail.value = email;
+      window.setTimeout(() => {
+        closeReset();
+        switchTab("login");
+      }, 1400);
     } catch (error) {
-      setStatus(status, getErrorMessage(error, "Could not reset password."), "error");
+      setStatus(status, getErrorMessage(error, "We couldn't reset your password. Please try again."), "error");
     }
   }
 
@@ -1035,7 +1140,6 @@
         URL.revokeObjectURL(state.listingPhotos[index].previewUrl);
         state.listingPhotos.splice(index, 1);
         renderPhotoPreview();
-        updateCreateButton();
       }
     });
 
@@ -1043,17 +1147,14 @@
       form.elements.googlePlaceId.value = "";
       window.clearTimeout(state.addressTimer);
       state.addressTimer = window.setTimeout(() => searchAddress(event.currentTarget.value), 250);
-      updateCreateButton();
     });
     $("#listing-address-results").addEventListener("click", (event) => {
       const button = event.target.closest("[data-place-id]");
       if (button) void chooseAddress(button.dataset.placeId, button.dataset.placeDescription);
     });
 
-    form.addEventListener("input", updateCreateButton);
     form.addEventListener("change", (event) => {
       if (event.target.matches("[data-document-category]")) renderDocumentList();
-      updateCreateButton();
     });
     form.addEventListener("submit", handleNewListing);
     renderDocumentList();
