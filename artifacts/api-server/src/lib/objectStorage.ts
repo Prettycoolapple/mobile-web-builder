@@ -1,4 +1,5 @@
 import { Storage, File } from "@google-cloud/storage";
+import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 import { Readable } from "stream";
 import { randomUUID } from "crypto";
 import * as os from "os";
@@ -296,3 +297,123 @@ async function signObjectURL({
 
   return signedURL;
 }
+
+// ── S3-compatible storage (Cloudflare R2, AWS S3, etc.) ──────────────────────
+//
+// Configure via these environment variables:
+//   S3_ENDPOINT          e.g. https://<account-id>.r2.cloudflarestorage.com
+//   S3_ACCESS_KEY_ID     R2 / AWS access key ID
+//   S3_SECRET_ACCESS_KEY R2 / AWS secret access key
+//   S3_BUCKET_NAME       Bucket name
+//   S3_PUBLIC_URL        Optional — public CDN base URL (e.g. https://pub-xxx.r2.dev)
+//                        When set, listing images and profile pictures are served
+//                        directly from R2 without proxying through the API.
+//
+// If any of the first four vars are missing the service is disabled and the
+// existing GCS / inline fallback chain takes over.
+
+export class S3StorageService {
+  private client: S3Client | null = null;
+  private bucket: string = "";
+  private publicUrl: string = "";
+
+  constructor() {
+    const endpoint = process.env.S3_ENDPOINT?.trim();
+    const accessKeyId = process.env.S3_ACCESS_KEY_ID?.trim();
+    const secretAccessKey = process.env.S3_SECRET_ACCESS_KEY?.trim();
+    const bucketName = process.env.S3_BUCKET_NAME?.trim();
+
+    if (endpoint && accessKeyId && secretAccessKey && bucketName) {
+      this.client = new S3Client({
+        region: "auto",
+        endpoint,
+        credentials: { accessKeyId, secretAccessKey },
+      });
+      this.bucket = bucketName;
+      this.publicUrl = process.env.S3_PUBLIC_URL?.trim().replace(/\/$/, "") ?? "";
+      console.log(`[storage] S3-compatible storage configured (bucket: ${bucketName}, public URL: ${this.publicUrl || "none — using API proxy"})`);
+    } else {
+      console.log("[storage] S3-compatible storage not configured — set S3_ENDPOINT, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET_NAME to enable");
+    }
+  }
+
+  get isConfigured(): boolean {
+    return this.client !== null;
+  }
+
+  /**
+   * Upload a file buffer to S3/R2.
+   *
+   * Returns:
+   *   objectPath  — internal path used for API-proxied serving: /s3/<key>
+   *   fileUrl     — where clients should load the file from:
+   *                 • If S3_PUBLIC_URL is set: direct R2 public URL (no proxy)
+   *                 • Otherwise: /api/storage/s3/<key> (proxied through API)
+   */
+  async upload(
+    buffer: Buffer | Uint8Array,
+    mimetype: string,
+    namespace: string,
+  ): Promise<{ objectPath: string; fileUrl: string }> {
+    if (!this.client) throw new Error("S3 storage is not configured");
+
+    const ext = mimetype.split("/")[1]?.split(";")[0]?.replace("jpeg", "jpg") || "bin";
+    const key = `${namespace}/${randomUUID()}.${ext}`;
+
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: Buffer.from(buffer),
+        ContentType: mimetype,
+        ContentLength: buffer.length,
+      }),
+    );
+
+    const objectPath = `/s3/${key}`;
+    const fileUrl = this.publicUrl
+      ? `${this.publicUrl}/${key}`
+      : `/api/storage/s3/${key}`;
+
+    return { objectPath, fileUrl };
+  }
+
+  /**
+   * Download a file from S3/R2 for API-proxied serving.
+   * Returns a Response that can be piped back to the client.
+   */
+  async download(key: string, cacheTtlSec = 3600): Promise<Response> {
+    if (!this.client) throw new Error("S3 storage is not configured");
+
+    const cmd = new GetObjectCommand({ Bucket: this.bucket, Key: key });
+    const result = await this.client.send(cmd);
+
+    const contentType = result.ContentType ?? "application/octet-stream";
+    const contentLength = result.ContentLength;
+
+    // AWS SDK returns a web-streams-compatible body
+    const body = result.Body as ReadableStream | undefined;
+    if (!body) throw new ObjectNotFoundError();
+
+    const headers: Record<string, string> = {
+      "Content-Type": contentType,
+      "Cache-Control": `private, max-age=${cacheTtlSec}`,
+    };
+    if (contentLength) headers["Content-Length"] = String(contentLength);
+
+    return new Response(body, { headers });
+  }
+
+  /** Check if a key exists without downloading it. */
+  async exists(key: string): Promise<boolean> {
+    if (!this.client) return false;
+    try {
+      await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+export const s3StorageService = new S3StorageService();

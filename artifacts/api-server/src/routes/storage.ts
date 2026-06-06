@@ -4,7 +4,7 @@ import type { ReadableStream as NodeReadableStream } from "stream/web";
 import { and, eq, isNotNull, or } from "drizzle-orm";
 import { db, userUploads, profiles, dmMessages, dmThreads } from "@workspace/db";
 import { RequestUploadUrlBody, RequestUploadUrlResponse } from "@workspace/api-zod";
-import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage";
+import { ObjectStorageService, ObjectNotFoundError, s3StorageService } from "../lib/objectStorage";
 import { requireAuth } from "../lib/auth";
 import { verifyStorageReviewToken } from "../lib/storage-review-token";
 
@@ -144,6 +144,38 @@ router.get("/storage/objects/*path", requireAuth, async (req: Request, res: Resp
     }
     req.log.error({ err: error }, "Error serving object");
     res.status(500).json({ error: "Failed to serve object" });
+  }
+});
+
+// Authenticated proxy for S3/R2 private objects (documents etc.)
+// Public listing images served via S3_PUBLIC_URL never hit this route.
+router.get("/storage/s3/*key", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const raw = req.params.key;
+    const key = Array.isArray(raw) ? raw.join("/") : raw;
+
+    if (!s3StorageService.isConfigured) {
+      res.status(503).json({ error: "S3 storage is not configured.", code: "STORAGE_NOT_CONFIGURED" });
+      return;
+    }
+
+    const response = await s3StorageService.download(key);
+    res.status(response.status);
+    response.headers.forEach((value, name) => res.setHeader(name, value));
+
+    if (response.body) {
+      const nodeStream = Readable.fromWeb(response.body as import("stream/web").ReadableStream<Uint8Array>);
+      nodeStream.pipe(res);
+    } else {
+      res.end();
+    }
+  } catch (error) {
+    if (error instanceof ObjectNotFoundError) {
+      res.status(404).json({ error: "File not found.", code: "NOT_FOUND" });
+      return;
+    }
+    req.log.error({ err: error }, "Error serving S3 object");
+    res.status(500).json({ error: "Failed to serve file.", code: "SERVE_FAILED" });
   }
 });
 

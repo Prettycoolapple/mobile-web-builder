@@ -3,7 +3,7 @@ import multer, { MulterError } from "multer";
 import { eq } from "drizzle-orm";
 import { db, userUploads, profiles } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
-import { ObjectNotFoundError, ObjectStorageService } from "../lib/objectStorage";
+import { ObjectNotFoundError, ObjectStorageService, s3StorageService } from "../lib/objectStorage";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
@@ -569,66 +569,56 @@ router.post(
 
     const { buffer, mimetype, originalname, size } = req.file;
 
-    // --- Primary: cloud / configured storage ---
-    try {
-      const { objectPath } = await uploadToStorage(
-        objectStorageService,
-        buffer,
-        mimetype,
-        size,
-        LISTING_IMAGE_NAMESPACE,
-      );
-      const fileUrl = `/api/storage${objectPath}`;
+    // --- Primary: S3-compatible storage (R2, AWS S3, etc.) ---
+    if (s3StorageService.isConfigured) {
+      try {
+        const { objectPath, fileUrl } = await s3StorageService.upload(buffer, mimetype, LISTING_IMAGE_NAMESPACE);
+        req.log.info({ name: originalname, size, objectPath }, "Listing image uploaded to S3");
+        res.status(201).json({ fileUrl, objectPath, metadata: { name: originalname, size, contentType: mimetype } });
+        return;
+      } catch (s3Err) {
+        req.log.error({ err: s3Err, name: originalname, size }, "S3 listing image upload failed — trying GCS");
+      }
+    }
+
+    // --- Secondary: GCS ---
+    if (!objectStorageService.isLocal) {
+      try {
+        const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size, LISTING_IMAGE_NAMESPACE);
+        const fileUrl = `/api/storage${objectPath}`;
+        req.log.info({ name: originalname, size, objectPath }, "Listing image uploaded to GCS");
+        res.status(201).json({ fileUrl, objectPath, metadata: { name: originalname, size, contentType: mimetype } });
+        return;
+      } catch (gcsErr) {
+        req.log.error({ err: gcsErr, name: originalname, size }, "GCS listing image upload failed — trying inline fallback");
+      }
+    }
+
+    // --- Fallback: inline base64 data URL (small files) ---
+    if (size <= MAX_LISTING_INLINE_IMAGE_BYTES) {
+      req.log.warn({ name: originalname, size }, "Listing image stored inline (no cloud storage configured)");
       res.status(201).json({
-        fileUrl,
-        objectPath,
+        fileUrl: imageDataUrl(buffer, mimetype),
+        objectPath: null,
+        fallback: "inline",
         metadata: { name: originalname, size, contentType: mimetype },
       });
       return;
-    } catch (error) {
-      req.log.error(
-        { err: error, name: originalname, size, mimetype, isLocal: objectStorageService.isLocal },
-        "Listing image cloud upload failed — attempting fallback",
-      );
-
-      // --- Fallback 1: inline data URL for small enough images. This keeps
-      // the listing flow working even when GCS isn't configured (e.g. on a
-      // bare Vercel deployment) so agents can still publish their property. ---
-      if (size <= MAX_LISTING_INLINE_IMAGE_BYTES) {
-        res.status(201).json({
-          fileUrl: imageDataUrl(buffer, mimetype),
-          objectPath: null,
-          fallback: "inline",
-          metadata: { name: originalname, size, contentType: mimetype },
-        });
-        return;
-      }
-
-      // --- Fallback 2: try local-mode write (works in long-lived processes) ---
-      try {
-        const { objectPath } = await objectStorageService.saveLocal(buffer, mimetype, LISTING_IMAGE_NAMESPACE);
-        res.status(201).json({
-          fileUrl: `/api/storage${objectPath}`,
-          objectPath,
-          fallback: "local",
-          metadata: { name: originalname, size, contentType: mimetype },
-        });
-        return;
-      } catch (localError) {
-        req.log.error({ err: localError }, "Listing image local fallback failed");
-      }
-
-      // --- Last resort: classified error so the user knows it's a server config issue ---
-      const classified = classifyStorageUploadError(error);
-      if (classified) {
-        res.status(classified.status).json({ error: classified.error, code: classified.code });
-        return;
-      }
-      res.status(500).json({
-        error: "We couldn't upload that photo. It may be too large — try a smaller file.",
-        code: "UPLOAD_FAILED",
-      });
     }
+
+    // --- Last resort: local filesystem (dev / long-lived process only) ---
+    try {
+      const { objectPath } = await objectStorageService.saveLocal(buffer, mimetype, LISTING_IMAGE_NAMESPACE);
+      res.status(201).json({ fileUrl: `/api/storage${objectPath}`, objectPath, fallback: "local", metadata: { name: originalname, size, contentType: mimetype } });
+      return;
+    } catch (localErr) {
+      req.log.error({ err: localErr }, "All listing image upload paths failed");
+    }
+
+    res.status(503).json({
+      error: "File storage is not configured. Please contact support.",
+      code: "STORAGE_NOT_CONFIGURED",
+    });
   },
 );
 
@@ -653,89 +643,60 @@ router.post(
 
     const { buffer, mimetype, originalname, size } = req.file;
 
-    // --- Primary: cloud / configured storage ---
-    try {
-      const { objectPath } = await uploadToStorage(
-        objectStorageService,
-        buffer,
-        mimetype,
-        size,
-        LISTING_DOCUMENT_NAMESPACE,
-      );
-      const fileUrl = `/api/storage${objectPath}`;
-      res.status(201).json({
-        fileUrl,
-        objectPath,
-        document: {
-          category,
-          fileName: originalname,
-          fileUrl,
-          objectPath,
-          mimeType: mimetype,
-          size,
-          uploadedAt: new Date().toISOString(),
-        },
-      });
-      return;
-    } catch (error) {
-      req.log.error(
-        { err: error, name: originalname, size, mimetype, category, isLocal: objectStorageService.isLocal },
-        "Listing document cloud upload failed — attempting fallback",
-      );
+    const makeDocPayload = (fileUrl: string, objectPath: string | null, extra?: object) => ({
+      fileUrl,
+      objectPath,
+      ...extra,
+      document: { category, fileName: originalname, fileUrl, objectPath, mimeType: mimetype, size, uploadedAt: new Date().toISOString() },
+    });
 
-      // --- Fallback 1: inline data URL for small enough documents ---
-      if (size <= MAX_LISTING_INLINE_DOCUMENT_BYTES) {
-        const fileUrl = `data:${mimetype};base64,${Buffer.from(buffer).toString("base64")}`;
-        res.status(201).json({
-          fileUrl,
-          objectPath: null,
-          fallback: "inline",
-          document: {
-            category,
-            fileName: originalname,
-            fileUrl,
-            objectPath: null,
-            mimeType: mimetype,
-            size,
-            uploadedAt: new Date().toISOString(),
-          },
-        });
-        return;
-      }
-
-      // --- Fallback 2: local-mode write ---
+    // --- Primary: S3-compatible storage ---
+    if (s3StorageService.isConfigured) {
       try {
-        const { objectPath } = await objectStorageService.saveLocal(buffer, mimetype, LISTING_DOCUMENT_NAMESPACE);
-        const fileUrl = `/api/storage${objectPath}`;
-        res.status(201).json({
-          fileUrl,
-          objectPath,
-          fallback: "local",
-          document: {
-            category,
-            fileName: originalname,
-            fileUrl,
-            objectPath,
-            mimeType: mimetype,
-            size,
-            uploadedAt: new Date().toISOString(),
-          },
-        });
+        const { objectPath, fileUrl } = await s3StorageService.upload(buffer, mimetype, LISTING_DOCUMENT_NAMESPACE);
+        req.log.info({ name: originalname, size, category, objectPath }, "Listing document uploaded to S3");
+        res.status(201).json(makeDocPayload(fileUrl, objectPath));
         return;
-      } catch (localError) {
-        req.log.error({ err: localError }, "Listing document local fallback failed");
+      } catch (s3Err) {
+        req.log.error({ err: s3Err, name: originalname, size, category }, "S3 listing document upload failed — trying GCS");
       }
-
-      const classified = classifyStorageUploadError(error);
-      if (classified) {
-        res.status(classified.status).json({ error: classified.error, code: classified.code });
-        return;
-      }
-      res.status(500).json({
-        error: "We couldn't upload that document. It may be too large — try a smaller file.",
-        code: "UPLOAD_FAILED",
-      });
     }
+
+    // --- Secondary: GCS ---
+    if (!objectStorageService.isLocal) {
+      try {
+        const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size, LISTING_DOCUMENT_NAMESPACE);
+        const fileUrl = `/api/storage${objectPath}`;
+        req.log.info({ name: originalname, size, category, objectPath }, "Listing document uploaded to GCS");
+        res.status(201).json(makeDocPayload(fileUrl, objectPath));
+        return;
+      } catch (gcsErr) {
+        req.log.error({ err: gcsErr, name: originalname, size, category }, "GCS listing document upload failed — trying inline fallback");
+      }
+    }
+
+    // --- Fallback: inline base64 (small files) ---
+    if (size <= MAX_LISTING_INLINE_DOCUMENT_BYTES) {
+      const fileUrl = `data:${mimetype};base64,${Buffer.from(buffer).toString("base64")}`;
+      req.log.warn({ name: originalname, size, category }, "Listing document stored inline (no cloud storage configured)");
+      res.status(201).json(makeDocPayload(fileUrl, null, { fallback: "inline" }));
+      return;
+    }
+
+    // --- Last resort: local filesystem ---
+    try {
+      const { objectPath } = await objectStorageService.saveLocal(buffer, mimetype, LISTING_DOCUMENT_NAMESPACE);
+      const fileUrl = `/api/storage${objectPath}`;
+      res.status(201).json(makeDocPayload(fileUrl, objectPath, { fallback: "local" }));
+      return;
+    } catch (localErr) {
+      req.log.error({ err: localErr }, "All listing document upload paths failed");
+    }
+
+    res.status(503).json({
+      error: "File storage is not configured. Please contact support.",
+      code: "STORAGE_NOT_CONFIGURED",
+    });
   },
 );
 
@@ -745,50 +706,54 @@ router.post(
   uploadImageOnly.single("file"),
   async (req: Request, res: Response) => {
     const userId = (req as any).userId as string;
-
     if (!req.file) {
       res.status(400).json({ error: "No file provided", code: "MISSING_FILE" });
       return;
     }
 
-    try {
-      const { buffer, mimetype, size } = req.file;
-      const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size, DM_IMAGE_NAMESPACE);
-      await db.insert(userUploads).values({ userId, objectPath }).onConflictDoNothing();
-      const fileUrl = `/api/storage${objectPath}`;
-      res.status(201).json({ fileUrl, objectPath });
-    } catch (error) {
-      req.log.error({ err: error }, "DM image upload failed");
-      const { buffer, mimetype, size } = req.file;
-      if (size <= MAX_DM_INLINE_IMAGE_BYTES) {
-        res.status(201).json({
-          fileUrl: imageDataUrl(buffer, mimetype),
-          objectPath: null,
-          fallback: "inline",
-        });
-        return;
-      }
+    const { buffer, mimetype, size } = req.file;
 
+    // --- Primary: S3 ---
+    if (s3StorageService.isConfigured) {
       try {
-        const { objectPath } = await objectStorageService.saveLocal(buffer, mimetype, DM_IMAGE_NAMESPACE);
+        const { objectPath, fileUrl } = await s3StorageService.upload(buffer, mimetype, DM_IMAGE_NAMESPACE);
         await db.insert(userUploads).values({ userId, objectPath }).onConflictDoNothing();
-        res.status(201).json({
-          fileUrl: `/api/storage${objectPath}`,
-          objectPath,
-          fallback: "local",
-        });
+        res.status(201).json({ fileUrl, objectPath });
         return;
-      } catch (localError) {
-        req.log.error({ err: localError }, "DM image local fallback failed");
+      } catch (s3Err) {
+        req.log.error({ err: s3Err }, "S3 DM image upload failed — trying GCS");
       }
-
-      const classified = classifyStorageUploadError(error);
-      if (classified) {
-        res.status(classified.status).json({ error: classified.error, code: classified.code });
-        return;
-      }
-      res.status(500).json({ error: "Upload failed. Please try again.", code: "UPLOAD_FAILED" });
     }
+
+    // --- Secondary: GCS ---
+    if (!objectStorageService.isLocal) {
+      try {
+        const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size, DM_IMAGE_NAMESPACE);
+        await db.insert(userUploads).values({ userId, objectPath }).onConflictDoNothing();
+        res.status(201).json({ fileUrl: `/api/storage${objectPath}`, objectPath });
+        return;
+      } catch (gcsErr) {
+        req.log.error({ err: gcsErr }, "GCS DM image upload failed — trying fallback");
+      }
+    }
+
+    // --- Fallback: inline ---
+    if (size <= MAX_DM_INLINE_IMAGE_BYTES) {
+      res.status(201).json({ fileUrl: imageDataUrl(buffer, mimetype), objectPath: null, fallback: "inline" });
+      return;
+    }
+
+    // --- Last resort: local ---
+    try {
+      const { objectPath } = await objectStorageService.saveLocal(buffer, mimetype, DM_IMAGE_NAMESPACE);
+      await db.insert(userUploads).values({ userId, objectPath }).onConflictDoNothing();
+      res.status(201).json({ fileUrl: `/api/storage${objectPath}`, objectPath, fallback: "local" });
+      return;
+    } catch (localErr) {
+      req.log.error({ err: localErr }, "All DM image upload paths failed");
+    }
+
+    res.status(503).json({ error: "File storage is not configured. Please contact support.", code: "STORAGE_NOT_CONFIGURED" });
   },
 );
 
@@ -798,42 +763,50 @@ router.post(
   uploadImageOnly.single("file"),
   async (req: Request, res: Response) => {
     const userId = (req as any).userId as string;
-
     if (!req.file) {
       res.status(400).json({ error: "No file provided", code: "MISSING_FILE" });
       return;
     }
 
-    try {
-      const { buffer, mimetype, size } = req.file;
-      if (objectStorageService.isLocal) {
-        const inline = await saveInlineProfilePicture(userId, buffer, mimetype);
-        res.status(201).json({ ...inline, objectPath: null });
-        return;
-      }
-      const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size, "avatars");
+    const { buffer, mimetype, size } = req.file;
 
-      const fileUrl = `/api/storage${objectPath}`;
-      await Promise.all([
-        db.insert(userUploads).values({ userId, objectPath }),
-        db.update(profiles).set({ avatarUrl: fileUrl }).where(eq(profiles.id, userId)),
-      ]);
-
-      res.status(201).json({ fileUrl, objectPath });
-    } catch (error) {
-      req.log.error({ err: error }, "Profile picture upload failed");
+    // --- Primary: S3 ---
+    if (s3StorageService.isConfigured) {
       try {
-        const inline = await saveInlineProfilePicture(userId, req.file.buffer, req.file.mimetype);
-        res.status(201).json({ ...inline, objectPath: null });
+        const { objectPath, fileUrl } = await s3StorageService.upload(buffer, mimetype, "avatars");
+        await Promise.all([
+          db.insert(userUploads).values({ userId, objectPath }).onConflictDoNothing(),
+          db.update(profiles).set({ avatarUrl: fileUrl }).where(eq(profiles.id, userId)),
+        ]);
+        res.status(201).json({ fileUrl, objectPath });
         return;
-      } catch (inlineError) {
-        req.log.error({ err: inlineError }, "Inline profile picture fallback failed");
+      } catch (s3Err) {
+        req.log.error({ err: s3Err }, "S3 profile picture upload failed — trying GCS");
       }
-      const classified = classifyStorageUploadError(error);
-      if (classified) {
-        res.status(classified.status).json({ error: classified.error, code: classified.code });
+    }
+
+    // --- Secondary: GCS ---
+    if (!objectStorageService.isLocal) {
+      try {
+        const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size, "avatars");
+        const fileUrl = `/api/storage${objectPath}`;
+        await Promise.all([
+          db.insert(userUploads).values({ userId, objectPath }),
+          db.update(profiles).set({ avatarUrl: fileUrl }).where(eq(profiles.id, userId)),
+        ]);
+        res.status(201).json({ fileUrl, objectPath });
         return;
+      } catch (gcsErr) {
+        req.log.error({ err: gcsErr }, "GCS profile picture upload failed — falling back to inline");
       }
+    }
+
+    // --- Fallback: inline data URL saved to profile (always works) ---
+    try {
+      const inline = await saveInlineProfilePicture(userId, buffer, mimetype);
+      res.status(201).json({ ...inline, objectPath: null });
+    } catch (inlineErr) {
+      req.log.error({ err: inlineErr }, "All profile picture upload paths failed");
       res.status(500).json({ error: "Upload failed. Please try again.", code: "UPLOAD_FAILED" });
     }
   },
