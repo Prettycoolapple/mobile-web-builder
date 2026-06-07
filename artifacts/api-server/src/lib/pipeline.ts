@@ -15,7 +15,13 @@ import { sanitizeTenureField } from "./titleDisplay";
 import { resolveTitleStatus } from "./title-resolution";
 import { withBrowserSlot } from "./scrapers/browser";
 import { classifyAsbestos, type AsbestosClassification } from "./asbestos";
-import { calculatePotentialLots, buildSubdivisionPathwayNote, type LotResult, type SubdivisionPathwayNote } from "./lot-calculator";
+import {
+  assessSubdivisionPathways,
+  calculatePotentialLots,
+  buildSubdivisionPathwayNote,
+  type LotResult,
+  type SubdivisionPathwayNote,
+} from "./lot-calculator";
 import { estimateCosts, type CostBreakdown } from "./cost-estimator";
 import { getComparables, type ComparableSale, type ComparablesResult } from "./comparables";
 import { calculateBearBaseBullScenarios, type ROIScenario } from "./roi-calculator";
@@ -1118,6 +1124,21 @@ export async function runPropertyPipeline(
   const lotResult = shouldForceSingleLotForEligibility(eligibility)
     ? forceSingleLotResult(rawLotResult)
     : rawLotResult;
+  const subdivisionAssessment = assessSubdivisionPathways({
+    netAreaSqm: (merged.land_area_sqm == null || merged.land_area_sqm <= 0) ? null : lotResult.net_area_sqm,
+    zoneCode: merged.zone_code,
+    zoneLabel: lotResult.zone_label,
+    standardVacantLots: lotResult.lots,
+    minLotSqm: lotResult.min_lot_size,
+    typology: eligibility.typology,
+    titleConfidence: eligibility.titleConfidence,
+    landAreaConfidence: merged.land_area_sqm != null && merged.land_area_sqm > 0 ? "verified" : "unverified",
+    isAlreadySubdividedChild: false,
+    buildYear: merged.build_year,
+    parcelBbox: linzParcelData?.bbox ?? null,
+    overlays: merged.overlays,
+    slopeClass: merged.contour,
+  });
   const subdivisionPathway = buildSubdivisionPathwayNote(
     // Treat both null and 0 as "area unavailable" — some data sources (e.g.
     // propertyvalue.co.nz for units) return 0 rather than null when the land
@@ -1128,6 +1149,7 @@ export async function runPropertyPipeline(
     lotResult.lots,
     lotResult.min_lot_size,
     lotResult.zone_label,
+    subdivisionAssessment,
   );
   const eligibilityNote = eligibilityPlanningNote(eligibility);
   if (eligibilityNote) {
@@ -1269,6 +1291,7 @@ export async function runPropertyPipeline(
     marketGdvMultiplier: neighbourhoodGdvMultiplier,
     typologyMatchedComparables: false,
     neighbourhoodContext,
+    subdivisionAssessment,
   });
 
   const scores = scoreProperty(merged, costs, scenarios, lotResult.lots);

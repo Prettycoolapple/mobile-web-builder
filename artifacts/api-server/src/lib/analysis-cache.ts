@@ -1,5 +1,6 @@
 import { logger } from "./logger";
 import { computeLightScore, type LightScoreInput } from "./light-score";
+import type { DesignLedConfidence, DesignLedYieldRange } from "./lot-calculator";
 
 export interface CardScoreEntry {
   status: "pending" | "ready" | "failed";
@@ -16,6 +17,16 @@ export interface CardScoreEntry {
   zone?: string | null;
   potentialLots?: number;
   minLotSize?: number | null;
+  standardVacantLots?: number;
+  standardPathViable?: boolean;
+  standardMinLotSize?: number | null;
+  designLedEligible?: boolean;
+  designLedYieldRange?: DesignLedYieldRange | null;
+  designLedConfidence?: DesignLedConfidence;
+  designLedReasons?: string[];
+  designLedBlockers?: string[];
+  designLedSummary?: string | null;
+  designLedDetail?: string | null;
   listingUrl?: string;
   updatedAt: number;
 }
@@ -74,6 +85,16 @@ export function queueBackgroundScores(candidates: LightScoreInput[]): void {
           zone: result.zone,
           potentialLots: result.potentialLots,
           minLotSize: result.minLotSize,
+          standardVacantLots: result.standardVacantLots,
+          standardPathViable: result.standardPathViable,
+          standardMinLotSize: result.standardMinLotSize,
+          designLedEligible: result.designLedEligible,
+          designLedYieldRange: result.designLedYieldRange,
+          designLedConfidence: result.designLedConfidence,
+          designLedReasons: result.designLedReasons,
+          designLedBlockers: result.designLedBlockers,
+          designLedSummary: result.designLedSummary,
+          designLedDetail: result.designLedDetail,
           listingUrl: c.listingUrl,
           updatedAt: Date.now(),
         });
@@ -91,7 +112,7 @@ export function queueBackgroundScores(candidates: LightScoreInput[]): void {
 
 export function getCardScores(
   entries: Array<string | { address: string; listingUrl?: string | null }>,
-): Array<{ address: string; listingUrl?: string | null; status: string; scores?: CardScoreEntry["scores"]; landArea?: number; zone?: string | null; potentialLots?: number; minLotSize?: number | null }> {
+): Array<{ address: string; listingUrl?: string | null; status: string; scores?: CardScoreEntry["scores"]; landArea?: number; zone?: string | null; potentialLots?: number; minLotSize?: number | null; standardVacantLots?: number; standardPathViable?: boolean; standardMinLotSize?: number | null; designLedEligible?: boolean; designLedYieldRange?: DesignLedYieldRange | null; designLedConfidence?: DesignLedConfidence; designLedReasons?: string[]; designLedBlockers?: string[]; designLedSummary?: string | null; designLedDetail?: string | null }> {
   evictStale();
   return entries.map((requested) => {
     const addr = typeof requested === "string" ? requested : requested.address;
@@ -107,6 +128,16 @@ export function getCardScores(
       zone: cached.zone,
       potentialLots: cached.potentialLots,
       minLotSize: cached.minLotSize,
+      standardVacantLots: cached.standardVacantLots,
+      standardPathViable: cached.standardPathViable,
+      standardMinLotSize: cached.standardMinLotSize,
+      designLedEligible: cached.designLedEligible,
+      designLedYieldRange: cached.designLedYieldRange,
+      designLedConfidence: cached.designLedConfidence,
+      designLedReasons: cached.designLedReasons,
+      designLedBlockers: cached.designLedBlockers,
+      designLedSummary: cached.designLedSummary,
+      designLedDetail: cached.designLedDetail,
     };
   });
 }

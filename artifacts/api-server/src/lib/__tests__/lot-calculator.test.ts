@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSubdivisionPathwayNote, calculatePotentialLots } from "../lot-calculator";
+import { assessSubdivisionPathways, buildSubdivisionPathwayNote, calculatePotentialLots } from "../lot-calculator";
 
 describe("lot calculator", () => {
   it("does not default unknown zoning to Mixed Housing Suburban", () => {
@@ -52,5 +52,64 @@ describe("lot calculator", () => {
     expect(note.headline).toContain("800m²");
     expect(note.detail).toContain("does not compare this specific property");
     expect(note.detail).not.toMatch(/(^|[^0-9])0m²/);
+  });
+  it("flags MHS 600sqm standalone sites as design-led opportunities without inflating standard yield", () => {
+    const standard = calculatePotentialLots(600, "MHS");
+    const assessment = assessSubdivisionPathways({
+      netAreaSqm: standard.net_area_sqm,
+      zoneCode: "MHS",
+      zoneLabel: standard.zone_label,
+      standardVacantLots: standard.lots,
+      minLotSqm: standard.min_lot_size,
+      typology: "standalone",
+      titleConfidence: "verified",
+      landAreaConfidence: "verified",
+      isAlreadySubdividedChild: false,
+      buildYear: 1965,
+    });
+
+    expect(standard.lots).toBe(1);
+    expect(assessment.standardVacantLots).toBe(1);
+    expect(assessment.designLedEligible).toBe(true);
+    expect(assessment.designLedYieldRange).toEqual({ min: 2, max: 4 });
+  });
+
+  it("keeps MHS 800sqm standard yield and may still flag higher-density upside", () => {
+    const standard = calculatePotentialLots(800, "MHS");
+    const assessment = assessSubdivisionPathways({
+      netAreaSqm: standard.net_area_sqm,
+      zoneCode: "MHS",
+      zoneLabel: standard.zone_label,
+      standardVacantLots: standard.lots,
+      minLotSqm: standard.min_lot_size,
+      typology: "standalone",
+      titleConfidence: "verified",
+      landAreaConfidence: "verified",
+      isAlreadySubdividedChild: false,
+      buildYear: 1965,
+    });
+
+    expect(standard.lots).toBe(2);
+    expect(assessment.standardVacantLots).toBe(2);
+    expect(assessment.designLedEligible).toBe(true);
+    expect(assessment.designLedYieldRange).toEqual({ min: 3, max: 4 });
+  });
+
+  it("does not flag design-led upside for unit/apartment, child-title, or unverified-land cases", () => {
+    const base = {
+      netAreaSqm: 620,
+      zoneCode: "MHS",
+      zoneLabel: "Mixed Housing Suburban",
+      standardVacantLots: 1,
+      minLotSqm: 400,
+      titleConfidence: "verified" as const,
+      landAreaConfidence: "verified" as const,
+      isAlreadySubdividedChild: false,
+      buildYear: 1965,
+    };
+
+    expect(assessSubdivisionPathways({ ...base, typology: "unit_apartment" }).designLedEligible).toBe(false);
+    expect(assessSubdivisionPathways({ ...base, typology: "standalone", isAlreadySubdividedChild: true }).designLedEligible).toBe(false);
+    expect(assessSubdivisionPathways({ ...base, typology: "standalone", landAreaConfidence: "unverified" }).designLedEligible).toBe(false);
   });
 });

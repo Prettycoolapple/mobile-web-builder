@@ -21,7 +21,7 @@ import * as Haptics from "expo-haptics";
 import * as StoreReview from "expo-store-review";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
-import { useChat, ChatMessage, FeasibilityReport, FeasibilityReportGroup, LoadingHint, PropertyCandidate, SelectedListingContext, ServiceProvider } from "@/context/ChatContext";
+import { useChat, ChatMessage, FeasibilityReport, FeasibilityReportGroup, LoadingHint, PropertyCandidate, SelectedListingContext, ServiceProvider, type CandidateScoreUpdate } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
 import { AppRatingPrompt } from "@/components/AppRatingPrompt";
 import { ChatBubble } from "@/components/ChatBubble";
@@ -742,9 +742,19 @@ export default function SearchScreen() {
             zone?: string | null;
             potentialLots?: number;
             minLotSize?: number | null;
+            standardVacantLots?: number;
+            standardPathViable?: boolean;
+            standardMinLotSize?: number | null;
+            designLedEligible?: boolean;
+            designLedYieldRange?: { min: number; max: number } | null;
+            designLedConfidence?: "none" | "low" | "medium";
+            designLedReasons?: string[];
+            designLedBlockers?: string[];
+            designLedSummary?: string | null;
+            designLedDetail?: string | null;
           }>;
 
-          const readyScores: Record<string, { ease: number; cost: number; roi: number; composite: number; landArea?: number; zone?: string | null; potentialLots?: number; minLotSize?: number | null }> = {};
+          const readyScores: Record<string, CandidateScoreUpdate> = {};
           let allDone = results.length > 0;
           for (const r of results) {
             if (r.status === "pending") { allDone = false; continue; }
@@ -755,6 +765,16 @@ export default function SearchScreen() {
                 ...(r.zone !== undefined ? { zone: r.zone } : {}),
                 ...(r.potentialLots != null ? { potentialLots: r.potentialLots } : {}),
                 ...(r.minLotSize !== undefined ? { minLotSize: r.minLotSize } : {}),
+                ...(r.standardVacantLots != null ? { standardVacantLots: r.standardVacantLots } : {}),
+                ...(r.standardPathViable !== undefined ? { standardPathViable: r.standardPathViable } : {}),
+                ...(r.standardMinLotSize !== undefined ? { standardMinLotSize: r.standardMinLotSize } : {}),
+                ...(r.designLedEligible !== undefined ? { designLedEligible: r.designLedEligible } : {}),
+                ...(r.designLedYieldRange !== undefined ? { designLedYieldRange: r.designLedYieldRange } : {}),
+                ...(r.designLedConfidence !== undefined ? { designLedConfidence: r.designLedConfidence } : {}),
+                ...(r.designLedReasons !== undefined ? { designLedReasons: r.designLedReasons } : {}),
+                ...(r.designLedBlockers !== undefined ? { designLedBlockers: r.designLedBlockers } : {}),
+                ...(r.designLedSummary !== undefined ? { designLedSummary: r.designLedSummary } : {}),
+                ...(r.designLedDetail !== undefined ? { designLedDetail: r.designLedDetail } : {}),
               };
             }
           }

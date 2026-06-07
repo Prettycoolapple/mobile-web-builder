@@ -138,10 +138,27 @@ export interface EasementEntry {
   severity?: "minor" | "moderate" | "significant";
 }
 
+export type DesignLedConfidence = "none" | "low" | "medium";
+
+export interface DesignLedYieldRange {
+  min: number;
+  max: number;
+}
+
 export interface PlanningInfo {
   zone?: string;
   minLotSize?: string;
   potentialLots?: number;
+  standardVacantLots?: number;
+  standardPathViable?: boolean;
+  standardMinLotSize?: number | null;
+  designLedEligible?: boolean;
+  designLedYieldRange?: DesignLedYieldRange | null;
+  designLedConfidence?: DesignLedConfidence;
+  designLedReasons?: string[];
+  designLedBlockers?: string[];
+  designLedSummary?: string | null;
+  designLedDetail?: string | null;
   grossAreaSqm?: number;
   netAreaSqm?: number;
   easementAreaSqm?: number;
@@ -233,7 +250,7 @@ export interface ROIScenario {
   cv_unavailable?: boolean;
 }
 
-export type DevelopmentStrategyId = "hold_existing" | "refurbish" | "demolish_rebuild";
+export type DevelopmentStrategyId = "hold_existing" | "refurbish" | "demolish_rebuild" | "integrated_consent";
 export type DevelopmentStrategyRecommendation = "recommended" | "viable" | "not_recommended";
 export type RefurbishmentScope = "none" | "light" | "moderate" | "heavy";
 
@@ -434,6 +451,16 @@ export interface PropertyCandidate {
   briefSummary?: string;
   potentialLots?: number;
   minLotSize?: number;
+  standardVacantLots?: number;
+  standardPathViable?: boolean;
+  standardMinLotSize?: number | null;
+  designLedEligible?: boolean;
+  designLedYieldRange?: DesignLedYieldRange | null;
+  designLedConfidence?: DesignLedConfidence;
+  designLedReasons?: string[];
+  designLedBlockers?: string[];
+  designLedSummary?: string | null;
+  designLedDetail?: string | null;
   photoUrl?: string;
   listingUrl?: string;
   bedrooms?: number;
@@ -487,6 +514,27 @@ export interface SelectedListingContext {
   aggregateFactsExcluded?: boolean | null;
 }
 
+export interface CandidateScoreUpdate {
+  ease: number;
+  cost: number;
+  roi: number;
+  composite: number;
+  landArea?: number;
+  zone?: string | null;
+  potentialLots?: number;
+  minLotSize?: number | null;
+  standardVacantLots?: number;
+  standardPathViable?: boolean;
+  standardMinLotSize?: number | null;
+  designLedEligible?: boolean;
+  designLedYieldRange?: DesignLedYieldRange | null;
+  designLedConfidence?: DesignLedConfidence;
+  designLedReasons?: string[];
+  designLedBlockers?: string[];
+  designLedSummary?: string | null;
+  designLedDetail?: string | null;
+}
+
 export interface Session {
   id: string;
   title: string;
@@ -514,7 +562,7 @@ interface ChatContextValue {
   replaceBackgroundAnalyseMessage: (jobId: string, msg: Omit<ChatMessage, "id" | "timestamp">, sessionId?: string) => void;
   removeMessage: (messageId: string, sessionId?: string) => void;
   updateCandidateScores: (
-    scoreMap: Record<string, { ease: number; cost: number; roi: number; composite: number; landArea?: number; zone?: string | null; potentialLots?: number; minLotSize?: number | null }>,
+    scoreMap: Record<string, CandidateScoreUpdate>,
     sessionId?: string,
   ) => void;
   setCurrentReport: (report: FeasibilityReport) => void;
@@ -635,6 +683,10 @@ function reportHasEnglishNarrative(report: FeasibilityReport): boolean {
   if (planning) {
     if (isEnglishText(planning.subdivisionPathwayNote)) return true;
     if (isEnglishText(planning.subdivisionSummary)) return true;
+    if (isEnglishText(planning.designLedSummary)) return true;
+    if (isEnglishText(planning.designLedDetail)) return true;
+    if (Array.isArray(planning.designLedReasons) && planning.designLedReasons.some((x) => isEnglishText(x))) return true;
+    if (Array.isArray(planning.designLedBlockers) && planning.designLedBlockers.some((x) => isEnglishText(x))) return true;
     if (isEnglishText(planning.easement_summary)) return true;
     if (Array.isArray(planning.overlays)) {
       for (const o of planning.overlays) {
@@ -974,10 +1026,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const updateCandidateScores = useCallback(
     (
-      scoreMap: Record<string, { ease: number; cost: number; roi: number; composite: number; landArea?: number; zone?: string | null; potentialLots?: number; minLotSize?: number | null }>,
+      scoreMap: Record<string, CandidateScoreUpdate>,
       sessionId?: string,
     ) => {
-      const normMap: Record<string, { ease: number; cost: number; roi: number; composite: number; landArea?: number; zone?: string | null; potentialLots?: number; minLotSize?: number | null }> = {};
+      const normMap: Record<string, CandidateScoreUpdate> = {};
       for (const [addr, data] of Object.entries(scoreMap)) {
         for (const key of addressMatchKeys(addr)) {
           normMap[key] = data;
@@ -992,7 +1044,23 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             const updatedResults = m.searchResults.map((c) => {
               const update = addressMatchKeys(c.address).map((key) => normMap[key]).find(Boolean);
               if (!update) return c;
-              const { landArea, zone, potentialLots, minLotSize, ...scoreFields } = update;
+              const {
+                landArea,
+                zone,
+                potentialLots,
+                minLotSize,
+                standardVacantLots,
+                standardPathViable,
+                standardMinLotSize,
+                designLedEligible,
+                designLedYieldRange,
+                designLedConfidence,
+                designLedReasons,
+                designLedBlockers,
+                designLedSummary,
+                designLedDetail,
+                ...scoreFields
+              } = update;
               return {
                 ...c,
                 scores: { ...c.scores, ...scoreFields },
@@ -1001,6 +1069,16 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 ...(zone != null ? { zone } : {}),
                 ...(potentialLots != null ? { potentialLots } : {}),
                 ...(minLotSize !== undefined ? { minLotSize: minLotSize ?? undefined } : {}),
+                ...(standardVacantLots != null ? { standardVacantLots } : {}),
+                ...(standardPathViable !== undefined ? { standardPathViable } : {}),
+                ...(standardMinLotSize !== undefined ? { standardMinLotSize } : {}),
+                ...(designLedEligible !== undefined ? { designLedEligible } : {}),
+                ...(designLedYieldRange !== undefined ? { designLedYieldRange } : {}),
+                ...(designLedConfidence !== undefined ? { designLedConfidence } : {}),
+                ...(designLedReasons !== undefined ? { designLedReasons } : {}),
+                ...(designLedBlockers !== undefined ? { designLedBlockers } : {}),
+                ...(designLedSummary !== undefined ? { designLedSummary } : {}),
+                ...(designLedDetail !== undefined ? { designLedDetail } : {}),
               };
             });
             return { ...m, searchResults: updatedResults };

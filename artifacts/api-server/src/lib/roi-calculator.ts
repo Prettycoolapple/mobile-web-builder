@@ -2,7 +2,7 @@ import type { CostBreakdown } from "./cost-estimator";
 import { roundToNearest } from "./utils";
 
 export type PriceCase = "bear" | "base" | "bull";
-export type DevelopmentStrategyId = "hold_existing" | "refurbish" | "demolish_rebuild";
+export type DevelopmentStrategyId = "hold_existing" | "refurbish" | "demolish_rebuild" | "integrated_consent";
 export type RefurbishmentScope = "none" | "light" | "moderate" | "heavy";
 
 export interface ROICaseResult {

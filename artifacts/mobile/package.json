@@ -73,7 +73,9 @@
     "expo-notifications": "^0.32.16",
     "expo-sharing": "~14.0.8",
     "expo-store-review": "~9.0.9",
+    "expo-tracking-transparency": "^56.0.5",
     "expo-video": "^3.0.16",
+    "react-native-fbsdk-next": "^13.4.3",
     "react-native-markdown-display": "^7.0.2",
     "react-native-purchases": "^9.15.2",
     "socket.io-client": "^4.8.3"

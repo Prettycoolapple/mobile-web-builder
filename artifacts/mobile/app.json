@@ -2,7 +2,7 @@
   "expo": {
     "name": "Project Alpha",
     "slug": "workspace",
-    "version": "1.4.3",
+    "version": "1.4.4",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "devfeasible",
@@ -16,14 +16,14 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "nz.devfeasible.app",
-      "buildNumber": "9",
+      "buildNumber": "10",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
       "package": "nz.devfeasible.app",
-      "versionCode": 8,
+      "versionCode": 9,
       "edgeToEdgeEnabled": true,
       "blockedPermissions": [
         "android.permission.READ_MEDIA_IMAGES",
@@ -60,7 +60,20 @@
         }
       ],
       "expo-video",
-      "expo-asset"
+      "expo-asset",
+      [
+        "react-native-fbsdk-next",
+        {
+          "appID": "2265538447515304",
+          "clientToken": "02dfcb5788c6a9dfab5c4634a395abdc",
+          "displayName": "projectalpha.app",
+          "scheme": "fb2265538447515304",
+          "advertiserIDCollectionEnabled": true,
+          "autoLogAppEventsEnabled": true,
+          "isAutoInitEnabled": true,
+          "iosUserTrackingPermission": "Project Alpha uses this identifier to measure app installs and improve ad performance."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

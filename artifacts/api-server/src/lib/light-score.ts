@@ -1,7 +1,12 @@
 import { geocodeAddress } from "./geocode";
 import { fetchUnitaryPlanZone, fetchOverlays, fetchContour, type Overlay } from "./auckland-council";
 import { fetchLINZParcel } from "./linz";
-import { calculatePotentialLots } from "./lot-calculator";
+import {
+  assessSubdivisionPathways,
+  calculatePotentialLots,
+  type DesignLedConfidence,
+  type DesignLedYieldRange,
+} from "./lot-calculator";
 import { estimateCosts } from "./cost-estimator";
 import { calculateBearBaseBullScenarios } from "./roi-calculator";
 import { scoreProperty, type ScoringResult } from "./scoring";
@@ -29,6 +34,16 @@ export interface LightScoreResult {
   zone: string | null;
   potentialLots: number;
   minLotSize: number | null;
+  standardVacantLots: number;
+  standardPathViable: boolean;
+  standardMinLotSize: number | null;
+  designLedEligible: boolean;
+  designLedYieldRange: DesignLedYieldRange | null;
+  designLedConfidence: DesignLedConfidence;
+  designLedReasons: string[];
+  designLedBlockers: string[];
+  designLedSummary: string | null;
+  designLedDetail: string | null;
 }
 
 /**
@@ -76,6 +91,21 @@ export async function computeLightScore(input: LightScoreInput): Promise<LightSc
     || (input.titleConfidence != null && input.titleConfidence !== "verified")
     || (input.buildYear != null && input.buildYear >= 2000);
   const lots = forceSingleLot ? 1 : lotResult.lots;
+  const subdivisionAssessment = assessSubdivisionPathways({
+    netAreaSqm: land > 0 ? land : null,
+    zoneCode,
+    zoneLabel: lotResult.zone_label,
+    standardVacantLots: lots,
+    minLotSqm: lotResult.min_lot_size,
+    typology: input.typology,
+    titleConfidence: input.titleConfidence,
+    landAreaConfidence: hasVerifiedListingArea || linzParcel?.area_sqm != null ? "verified" : landAreaConfidence,
+    isAlreadySubdividedChild: input.isAlreadySubdividedChild,
+    buildYear: input.buildYear ?? null,
+    parcelBbox: linzParcel?.bbox ?? null,
+    overlays,
+    slopeClass: contourData?.classification ?? null,
+  });
 
   const minimalMerged: MergedPropertyData = {
     cv_nzd: price,
@@ -138,5 +168,15 @@ export async function computeLightScore(input: LightScoreInput): Promise<LightSc
     zone: zoneCode,
     potentialLots: lots,
     minLotSize: lotResult.min_lot_size > 0 ? lotResult.min_lot_size : null,
+    standardVacantLots: subdivisionAssessment.standardVacantLots,
+    standardPathViable: subdivisionAssessment.standardPathViable,
+    standardMinLotSize: subdivisionAssessment.standardMinLotSize,
+    designLedEligible: subdivisionAssessment.designLedEligible,
+    designLedYieldRange: subdivisionAssessment.designLedYieldRange,
+    designLedConfidence: subdivisionAssessment.designLedConfidence,
+    designLedReasons: subdivisionAssessment.designLedReasons,
+    designLedBlockers: subdivisionAssessment.designLedBlockers,
+    designLedSummary: subdivisionAssessment.designLedSummary,
+    designLedDetail: subdivisionAssessment.designLedDetail,
   };
 }

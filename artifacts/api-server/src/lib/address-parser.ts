@@ -25,11 +25,24 @@ function cleanAddress(raw: string): string {
     .replace(/[.;!?，。]+$/g, "");
 }
 
+function streetLineText(raw: string): string {
+  const parts = raw.split(",").map((part) => part.trim()).filter(Boolean);
+  if (parts.length >= 2 && /^\d+[a-z]?$/i.test(parts[0]!)) {
+    return `${parts[0]} ${parts[1]}`;
+  }
+  return parts[0] ?? raw;
+}
+
+function hasNumberedStreetLine(raw: string): boolean {
+  return /^\d+[a-z]?\s+.*[\p{L}]/iu.test(streetLineText(raw));
+}
+
 function isPlausibleAddress(raw: string): boolean {
   if (!/\d+/.test(raw) || (!STREET_TYPE_REGEX.test(raw) && !raw.includes(","))) return false;
   // Must look like a numbered street lot (rejects whole-road / suburb-only strings from the AI path).
   if (NZ_ADDRESS_REGEX.test(raw)) return true;
   if (/\b(?:unit|apt|apartment)\s*\d+[a-z]?,?\s*\d+[a-zA-Z]?\s+/i.test(raw)) return true;
+  if (raw.includes(",") && hasNumberedStreetLine(raw)) return true;
   return false;
 }
 

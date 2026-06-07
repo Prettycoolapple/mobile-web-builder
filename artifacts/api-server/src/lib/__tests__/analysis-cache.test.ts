@@ -13,6 +13,28 @@ async function flushPromises(): Promise<void> {
   await Promise.resolve();
 }
 
+function lightScoreResult(overrides: {
+  scores: { ease: number; cost: number; roi: number; composite: number; ease_reasons: string[]; cost_reasons: string[]; roi_reasons: string[] };
+  landArea: number;
+  zone: string;
+  potentialLots: number;
+  minLotSize: number;
+}) {
+  return {
+    ...overrides,
+    standardVacantLots: overrides.potentialLots,
+    standardPathViable: overrides.potentialLots >= 2,
+    standardMinLotSize: overrides.minLotSize,
+    designLedEligible: false,
+    designLedYieldRange: null,
+    designLedConfidence: "none" as const,
+    designLedReasons: [],
+    designLedBlockers: [],
+    designLedSummary: null,
+    designLedDetail: null,
+  };
+}
+
 describe("card score cache", () => {
   beforeEach(() => {
     clearCardScoreCacheForTests();
@@ -21,20 +43,20 @@ describe("card score cache", () => {
 
   it("keeps separate cache entries for the same address with different listing URLs", async () => {
     mockedComputeLightScore
-      .mockResolvedValueOnce({
+      .mockResolvedValueOnce(lightScoreResult({
         scores: { ease: 2, cost: 2, roi: 2, composite: 2, ease_reasons: [], cost_reasons: [], roi_reasons: [] },
         landArea: 290,
         zone: "MHU",
         potentialLots: 1,
         minLotSize: 300,
-      })
-      .mockResolvedValueOnce({
+      }))
+      .mockResolvedValueOnce(lightScoreResult({
         scores: { ease: 4, cost: 4, roi: 4, composite: 4, ease_reasons: [], cost_reasons: [], roi_reasons: [] },
         landArea: 900,
         zone: "MHU",
         potentialLots: 6,
         minLotSize: 300,
-      });
+      }));
 
     queueBackgroundScores([
       { address: "352F Kohimarama Road, St Heliers", listingUrl: "https://example.test/a", price: 1_270_000, landArea: 290 },
@@ -52,13 +74,13 @@ describe("card score cache", () => {
   });
 
   it("falls back to an address-only lookup for older clients without listing URLs", async () => {
-    mockedComputeLightScore.mockResolvedValueOnce({
+    mockedComputeLightScore.mockResolvedValueOnce(lightScoreResult({
       scores: { ease: 2, cost: 2, roi: 2, composite: 2, ease_reasons: [], cost_reasons: [], roi_reasons: [] },
       landArea: 290,
       zone: "MHU",
       potentialLots: 1,
       minLotSize: 300,
-    });
+    }));
 
     queueBackgroundScores([
       { address: "352F Kohimarama Road, St Heliers", listingUrl: "https://example.test/a", price: 1_270_000, landArea: 290 },

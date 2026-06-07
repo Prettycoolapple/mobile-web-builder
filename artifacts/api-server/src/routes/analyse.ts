@@ -465,7 +465,8 @@ function applyDeterministicPipelineOverrides(
     // Recompute from lot-calculator + merged GIS zone so summary/callout always match
     // propertyOverview (avoids stale or LLM-only subdivision prose with wrong m² or zone).
     const pathway =
-      merged != null
+      pipelineResult.subdivision_pathway ??
+      (merged != null
         ? buildSubdivisionPathwayNote(
             merged.land_area_sqm == null ? null : lots.net_area_sqm,
             merged.zone_code ?? null,
@@ -473,7 +474,7 @@ function applyDeterministicPipelineOverrides(
             lots.min_lot_size,
             lots.zone_label,
           )
-        : pipelineResult.subdivision_pathway;
+        : null);
     parsed.planning = {
       ...existingPlanning,
       // Always use the deterministic zone_label — never let the LLM's guess win here.
@@ -482,6 +483,16 @@ function applyDeterministicPipelineOverrides(
       // property overview and the deterministic subdivision pathway note.
       zone: lots.zone_label,
       potentialLots: lots.lots,
+      standardVacantLots: pathway?.standardVacantLots ?? lots.lots,
+      standardPathViable: pathway?.standardPathViable ?? pathway?.standard_path_viable ?? false,
+      standardMinLotSize: pathway?.standardMinLotSize ?? (lots.min_lot_size > 0 ? lots.min_lot_size : null),
+      designLedEligible: pathway?.designLedEligible ?? false,
+      designLedYieldRange: pathway?.designLedYieldRange ?? null,
+      designLedConfidence: pathway?.designLedConfidence ?? "none",
+      designLedReasons: pathway?.designLedReasons ?? [],
+      designLedBlockers: pathway?.designLedBlockers ?? [],
+      designLedSummary: pathway?.designLedSummary ?? null,
+      designLedDetail: pathway?.designLedDetail ?? null,
       grossAreaSqm: lots.gross_area_sqm,
       netAreaSqm: lots.net_area_sqm,
       easementAreaSqm: lots.easement_area_sqm,
@@ -741,6 +752,16 @@ function buildDeterministicFallbackReport(
       zone: zoneLabel,
       minLotSize,
       potentialLots: lots.lots,
+      standardVacantLots: pipelineResult.subdivision_pathway?.standardVacantLots ?? lots.lots,
+      standardPathViable: pipelineResult.subdivision_pathway?.standardPathViable ?? pipelineResult.subdivision_pathway?.standard_path_viable ?? false,
+      standardMinLotSize: pipelineResult.subdivision_pathway?.standardMinLotSize ?? (lots.min_lot_size > 0 ? lots.min_lot_size : null),
+      designLedEligible: pipelineResult.subdivision_pathway?.designLedEligible ?? false,
+      designLedYieldRange: pipelineResult.subdivision_pathway?.designLedYieldRange ?? null,
+      designLedConfidence: pipelineResult.subdivision_pathway?.designLedConfidence ?? "none",
+      designLedReasons: pipelineResult.subdivision_pathway?.designLedReasons ?? [],
+      designLedBlockers: pipelineResult.subdivision_pathway?.designLedBlockers ?? [],
+      designLedSummary: pipelineResult.subdivision_pathway?.designLedSummary ?? null,
+      designLedDetail: pipelineResult.subdivision_pathway?.designLedDetail ?? null,
       grossAreaSqm: lots.gross_area_sqm,
       netAreaSqm: lots.net_area_sqm,
       easementAreaSqm: lots.easement_area_sqm,
@@ -893,6 +914,10 @@ function passesStandardSubdivisionSizeScreen(candidate: PropertyCandidate): bool
   return hasStandardSubdivisionYield(candidate) && passesPreliminaryStandardSubdivisionScreen(candidate);
 }
 
+function passesSubdivisionDiscoveryScreen(candidate: PropertyCandidate): boolean {
+  return passesStandardSubdivisionSizeScreen(candidate) || candidate.designLedEligible === true;
+}
+
 function rankListingsForStrictSubdivision(listings: ListingResult[]): ListingResult[] {
   return [...listings].sort((a, b) => {
     const verifiedA = a.landAreaConfidence === "verified" && a.landArea != null;
@@ -952,9 +977,11 @@ function rankByCriteria(candidates: PropertyCandidate[], criteria: string | null
 
     if (wantsDevelopment) {
       const potentialLots = p.potentialLots ?? 1;
+      const designLedMax = p.designLedYieldRange?.max ?? 0;
       if (potentialLots >= 4) boost += 4;
       else if (potentialLots >= 3) boost += 3;
       else if (potentialLots >= 2) boost += 2.4;
+      else if (p.designLedEligible && designLedMax >= 2) boost += 1.2;
       else boost -= 2.5;
 
       if (DEVELOPMENT_ZONES.has(zone)) boost += 2;
@@ -1020,7 +1047,7 @@ function shufflePick<T>(arr: T[], n: number): T[] {
 function pickRankedCandidates(candidates: PropertyCandidate[], criteria: string | null, n = 3): PropertyCandidate[] {
   const ranked = rankByCriteria(candidates, criteria);
   if (isStandardSubdivisionDiscoveryIntent(criteria)) {
-    return ranked.filter(passesStandardSubdivisionSizeScreen).slice(0, n);
+    return ranked.filter(passesSubdivisionDiscoveryScreen).slice(0, n);
   }
   if (isDevelopmentDiscoveryIntent(criteria)) return ranked.slice(0, n);
   return shufflePick(ranked.slice(0, Math.max(n, 6)), n);
@@ -1092,7 +1119,7 @@ function partitionBatchAfterPrescreen(
   const subdivisionHardScreen = isStandardSubdivisionDiscoveryIntent(criteria);
   const subdivisionViableUrls = new Set(
     screened
-      .filter(passesStandardSubdivisionSizeScreen)
+      .filter(passesSubdivisionDiscoveryScreen)
       .map((s) => s.listingUrl)
       .filter(Boolean),
   );
@@ -3311,7 +3338,13 @@ router.post("/chat", async (req, res) => {
       );
 
       const intent = await extractChatIntent(messages, reportCtx, alreadyShownFromHistory, chatLocale);
-      const mode = intent.mode;
+      const semanticWantsDiscovery = intent.execution === "show_listing_cards" || intent.intentCategory === "property_discovery";
+      const semanticWantsAnalysis = intent.execution === "run_feasibility_report" || intent.intentCategory === "single_property_analysis";
+      const mode =
+        semanticWantsDiscovery ? "discover"
+        : semanticWantsAnalysis ? "analyse"
+        : intent.execution === "answer_in_chat" ? "followup"
+        : intent.mode;
 
       // Provider recommendation signal derived by the LLM from the user's message.
       // Included in every response so the client can trigger the explicit check
@@ -3324,7 +3357,7 @@ router.post("/chat", async (req, res) => {
       const recentAssistantAskedForSearchArea =
         /(suburb|area|neighbou?rhood|where should|which.+search|区域|郊区|哪个区|哪個區|地方|哪里|哪裡)/i.test(latestAssistantText);
       const shouldResolveDelegatedDiscover =
-        !intent.suburb && (mode === "discover" || intent.needsClarification || recentAssistantAskedForSearchArea);
+        !intent.suburb && (semanticWantsDiscovery || (intent.needsClarification && mode === "discover") || (recentAssistantAskedForSearchArea && semanticWantsDiscovery));
       const delegatedDiscoverSuburb = shouldResolveDelegatedDiscover
         ? await resolveDelegatedDiscoverSuburb(messages, userText, chatLocale).catch((err) => {
             req.log.warn({ err, sample: userText.slice(0, 80) }, "Delegated suburb resolution failed");
@@ -3400,7 +3433,7 @@ router.post("/chat", async (req, res) => {
       const forcedAnalyseAddress = suppressPromoteToAnalyse ? null : forcedAnalyseAddressRaw;
 
       let effectiveMode =
-        forcedAnalyseAddress && (mode === "discover" || (mode === "followup" && (contextualBareAddress || looksLikeStreetAddress(userText))))
+        forcedAnalyseAddress && semanticWantsAnalysis && (mode === "discover" || (mode === "followup" && (contextualBareAddress || looksLikeStreetAddress(userText))))
           ? "analyse"
           : mode;
       if (delegatedDiscoverSuburb && effectiveMode !== "analyse") {
@@ -3408,6 +3441,7 @@ router.post("/chat", async (req, res) => {
       }
       if (
         effectiveMode === "followup"
+        && semanticWantsDiscovery
         && !hasNumberedStreetAddress(userText)
         && (
           detectMode(userText) === "discover" ||
@@ -4302,6 +4336,13 @@ PRE-COMPUTED SCORES — copy these numbers exactly, do not recalculate or second
 
 SUBDIVISION PATHWAY (pre-computed — copy into subdivisionSummary verbatim, do NOT invent different lot counts):
   Standard vacant-lot path viable: ${subdivision_pathway?.standard_path_viable ?? false}
+  Standard vacant lots: ${subdivision_pathway?.standardVacantLots ?? lots.lots}
+  Standard minimum lot size: ${subdivision_pathway?.standardMinLotSize ?? lots.min_lot_size}
+  Design-led eligible: ${subdivision_pathway?.designLedEligible ?? false}
+  Design-led yield range: ${subdivision_pathway?.designLedYieldRange ? `${subdivision_pathway.designLedYieldRange.min}-${subdivision_pathway.designLedYieldRange.max}` : "none"}
+  Design-led confidence: ${subdivision_pathway?.designLedConfidence ?? "none"}
+  Design-led reasons: ${(subdivision_pathway?.designLedReasons ?? []).join("; ") || "none"}
+  Design-led blockers: ${(subdivision_pathway?.designLedBlockers ?? []).join("; ") || "none"}
   Headline: ${subdivision_pathway?.headline ?? "unknown"}
   Detail: ${subdivision_pathway?.detail ?? "See zone rules."}
 
@@ -4387,6 +4428,16 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
     "zone": "...",
     "minLotSize": "Xm²",
     "potentialLots": ${lots.lots},
+    "standardVacantLots": ${subdivision_pathway?.standardVacantLots ?? lots.lots},
+    "standardPathViable": ${subdivision_pathway?.standardPathViable ?? subdivision_pathway?.standard_path_viable ?? false},
+    "standardMinLotSize": ${subdivision_pathway?.standardMinLotSize ?? (lots.min_lot_size > 0 ? lots.min_lot_size : "null")},
+    "designLedEligible": ${subdivision_pathway?.designLedEligible ?? false},
+    "designLedYieldRange": ${subdivision_pathway?.designLedYieldRange ? JSON.stringify(subdivision_pathway.designLedYieldRange) : "null"},
+    "designLedConfidence": "${subdivision_pathway?.designLedConfidence ?? "none"}",
+    "designLedReasons": ${JSON.stringify(subdivision_pathway?.designLedReasons ?? [])},
+    "designLedBlockers": ${JSON.stringify(subdivision_pathway?.designLedBlockers ?? [])},
+    "designLedSummary": ${JSON.stringify(subdivision_pathway?.designLedSummary ?? null)},
+    "designLedDetail": ${JSON.stringify(subdivision_pathway?.designLedDetail ?? null)},
     "grossAreaSqm": ${lots.gross_area_sqm},
     "netAreaSqm": ${lots.net_area_sqm},
     "easementAreaSqm": ${lots.easement_area_sqm},
@@ -4481,6 +4532,7 @@ CRITICAL RULES:
 - NEVER include riskSummary bullets that reference comparable sales, market data availability, exit-price uncertainty, GDV reliability, or any data-source gaps — directly or indirectly. NEVER say that key facts (land area, zoning, planning data) were missing or not obtained, or that site-specific risks cannot be identified because data was incomplete — such bullets are stripped. Any such bullet (e.g. "comparable data is limited", "exit price is hard to predict", "market sales data is scarce") is stripped server-side and degrades the response. riskSummary must describe physical, planning, terrain, flood, coastal, heritage, OR (when potentialLots >= 4) programme/capital intensity — staged construction and sales, long tie-up of capital, absorption risk — without blaming data quality or report completeness. If build year is after 2000, do NOT mention asbestos in riskSummary (server strips these); the asbestos JSON block is sufficient.
 - The same rule applies to scores.ease_reasons, scores.cost_reasons, and scores.roi_reasons: never cite missing database matches, unavailable real-time sources, inability to confirm zoning/land area, assumptions about location ("assuming this site…"), missing comparables, or exit-price quantification difficulty — such lines are stripped from the property card.
 - When potentialLots from the pipeline is 4 or more: roiScenarios MUST remain exactly as provided in the injected strategies; the modelled timelines already use longer exit horizons for multi-unit schemes. Keep scores.roi_reasons honest about multi-year delivery where relevant (do not imply a quick flip).
+- When designLedEligible is true: clearly separate the conservative standard vacant-lot yield from the design-led land-use + subdivision consent opportunity. Use cautious wording like "may be worth testing" and "subject to consent and site layout"; never use "guaranteed", "bypass", or "automatically approved".
 - Return ONLY valid JSON, no markdown fences, no other text.`;
             } else {
               const dataSummary = {

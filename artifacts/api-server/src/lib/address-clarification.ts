@@ -78,8 +78,16 @@ function exactAddressKey(s: string): string {
   return tokenizeRough(s).join(" ");
 }
 
+function streetLineText(s: string): string {
+  const parts = s.split(",").map((part) => part.trim()).filter(Boolean);
+  if (parts.length >= 2 && /^\d+[a-z]?$/i.test(parts[0]!)) {
+    return `${parts[0]} ${parts[1]}`;
+  }
+  return parts[0] ?? s;
+}
+
 function streetKey(s: string): string | null {
-  const tokens = tokenizeRough(s);
+  const tokens = tokenizeRough(streetLineText(s));
   let numberIdx = -1;
   for (let i = 0; i < tokens.length; i++) {
     if (/^\d+[a-z]?$/.test(tokens[i]!)) {
@@ -89,12 +97,31 @@ function streetKey(s: string): string | null {
   }
   if (numberIdx < 0) return null;
 
-  const streetTypes = new Set(["rd", "st", "ave", "crescent", "place", "pl", "dr", "way", "lane", "tce", "close", "parade"]);
+  const streetTypes = new Set([
+    "rd",
+    "st",
+    "ave",
+    "crescent",
+    "place",
+    "pl",
+    "dr",
+    "way",
+    "lane",
+    "tce",
+    "close",
+    "parade",
+    "highway",
+    "hwy",
+    "motorway",
+  ]);
   let typeIdx = -1;
   for (let i = numberIdx + 1; i < tokens.length; i++) {
     if (streetTypes.has(tokens[i]!)) typeIdx = i;
   }
-  if (typeIdx < numberIdx + 1) return null;
+  if (typeIdx < numberIdx + 1) {
+    const hasStreetLineName = tokens.slice(numberIdx + 1).some((token) => /[a-z]/i.test(token));
+    return hasStreetLineName ? tokens.slice(numberIdx).join(" ") : null;
+  }
 
   return tokens.slice(numberIdx, typeIdx + 1).join(" ");
 }
@@ -279,6 +306,10 @@ export async function resolveAddressForAnalysis(
   const numMismatch = !!(nu && nr && nu !== nr);
 
   if (!numMismatch && dice >= DICE_THRESHOLD_AUTO) {
+    return { resolvedAddress: resolvedBest, clarification: null };
+  }
+
+  if (!numMismatch && deduped.length === 1 && streetKey(trimmed) === streetKey(resolvedBest)) {
     return { resolvedAddress: resolvedBest, clarification: null };
   }
 

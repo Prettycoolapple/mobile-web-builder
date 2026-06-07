@@ -4,7 +4,12 @@ import { scrapeHougarden } from "./scrapers/hougarden";
 import { fetchUnitaryPlanZone, fetchOverlays, type ZoneResult, type Overlay } from "./auckland-council";
 import type { ListingResult } from "./scrapers/oneroof";
 import { extractCombinedListingAddressParts } from "./scrapers/realestate-api";
-import { calculatePotentialLots } from "./lot-calculator";
+import {
+  assessSubdivisionPathways,
+  calculatePotentialLots,
+  type DesignLedConfidence,
+  type DesignLedYieldRange,
+} from "./lot-calculator";
 import { fetchLINZParcel } from "./linz";
 import { fetchPropertyHistory } from "./property-data";
 import { scrapePropertyValue } from "./scrapers/propertyvalue";
@@ -33,6 +38,16 @@ export interface PropertyCandidate {
   briefSummary?: string;
   potentialLots?: number;
   minLotSize?: number;
+  standardVacantLots?: number;
+  standardPathViable?: boolean;
+  standardMinLotSize?: number | null;
+  designLedEligible?: boolean;
+  designLedYieldRange?: DesignLedYieldRange | null;
+  designLedConfidence?: DesignLedConfidence;
+  designLedReasons?: string[];
+  designLedBlockers?: string[];
+  designLedSummary?: string | null;
+  designLedDetail?: string | null;
   listingUrl?: string;
   photoUrl?: string;
   bedrooms?: number;
@@ -154,9 +169,15 @@ function makeSummary(
   minLotSize: number | null,
   overlays: Array<{ status: string; name: string }>,
   land: number | null,
+  designLed?: { designLedEligible?: boolean; designLedYieldRange?: DesignLedYieldRange | null } | null,
 ): string {
   const zonePart = zone ? `${zone} zoned` : "Zoning TBC";
-  const lotPart = lots > 1 ? `${lots} lots potentially feasible before site constraints` : "Single dwelling only on raw lot-size screen";
+  const designRange = designLed?.designLedYieldRange;
+  const lotPart = designLed?.designLedEligible && designRange
+    ? `Standard path: ${lots} lot${lots === 1 ? "" : "s"}; design-led consent may unlock ${designRange.min}-${designRange.max} to test`
+    : lots > 1
+      ? `${lots} lots potentially feasible before site constraints`
+      : "Single dwelling only on raw lot-size screen";
   const overlayNames = overlays.filter(o => o.status !== "clear").map(o => o.name).slice(0, 2);
   const overlayPart = overlayNames.length > 0 ? `Overlays: ${overlayNames.join(", ")}.` : "No major overlays.";
   const sizePart = land ? `${land}sqm site.` : "";
@@ -450,13 +471,27 @@ async function screenOneFast(
       subdivisionEligible: eligibility?.subdivisionEligible,
       buildYear: propertyHistory?.build_year ?? null,
     });
+    const designLedAssessment = assessSubdivisionPathways({
+      netAreaSqm: land ?? null,
+      zoneCode: normaliseZoneForLotCapacity(zone),
+      standardVacantLots: lots,
+      minLotSqm: minLotSize,
+      typology: eligibility?.typology,
+      titleConfidence: eligibility?.titleConfidence,
+      landAreaConfidence: verifiedLand.landAreaConfidence,
+      isAlreadySubdividedChild: verifiedLand.isAlreadySubdividedChild,
+      buildYear: propertyHistory?.build_year ?? propertyValue?.build_year ?? null,
+      parcelBbox: linzParcel?.bbox ?? null,
+      overlays: resolvedOverlays,
+    });
     const packageSubdivisionPasses =
       Boolean(packageParts) &&
       lots >= 2 &&
       minLotSize != null &&
       verifiedLand.landAreaConfidence === "verified" &&
       verifiedLand.isAlreadySubdividedChild !== true;
-    if (options?.strictStandardSubdivision && !standardSubdivisionPasses && !packageSubdivisionPasses) {
+    const designLedPasses = designLedAssessment.designLedEligible;
+    if (options?.strictStandardSubdivision && !standardSubdivisionPasses && !packageSubdivisionPasses && !designLedPasses) {
       logger.info(
         {
           address: listing.address,
@@ -506,9 +541,19 @@ async function screenOneFast(
       landArea: land ?? undefined,
       zone: zone ?? undefined,
       scores,
-      briefSummary: makeSummary(zone, lots, minLotSize, resolvedOverlays, land ?? null),
+      briefSummary: makeSummary(zone, lots, minLotSize, resolvedOverlays, land ?? null, designLedAssessment),
       potentialLots: lots,
       minLotSize: minLotSize ?? undefined,
+      standardVacantLots: designLedAssessment.standardVacantLots,
+      standardPathViable: standardSubdivisionPasses || packageSubdivisionPasses,
+      standardMinLotSize: designLedAssessment.standardMinLotSize,
+      designLedEligible: designLedAssessment.designLedEligible,
+      designLedYieldRange: designLedAssessment.designLedYieldRange,
+      designLedConfidence: designLedAssessment.designLedConfidence,
+      designLedReasons: designLedAssessment.designLedReasons,
+      designLedBlockers: designLedAssessment.designLedBlockers,
+      designLedSummary: designLedAssessment.designLedSummary,
+      designLedDetail: designLedAssessment.designLedDetail,
       listingUrl: listing.listingUrl,
       photoUrl: listing.photoUrl ?? undefined,
       bedrooms: listing.bedrooms ?? undefined,
@@ -530,9 +575,11 @@ async function screenOneFast(
       subdivisionRejectReason: packageParts ? "combined_listing_aggregate" : eligibility?.subdivisionRejectReason,
       buildYear: propertyHistory?.build_year ?? propertyValue?.build_year ?? null,
       screeningStatus: options?.preliminarySubdivision ? "preliminary" : "verified",
-      screeningNotes: options?.preliminarySubdivision
-        ? ["Preliminary active-listing subdivision screen; build year is checked in the full analysis."]
-        : ["Verified pre-screen."],
+      screeningNotes: designLedPasses && !standardSubdivisionPasses && !packageSubdivisionPasses
+        ? ["Design-led consent opportunity; standard vacant-lot screen remains conservative."]
+        : options?.preliminarySubdivision
+          ? ["Preliminary active-listing subdivision screen; build year is checked in the full analysis."]
+          : ["Verified pre-screen."],
       isCombinedListing: Boolean(packageParts || listing.isCombinedListing),
       packageAddress: packageParts?.packageAddress,
       childAddresses: packageParts?.childAddresses,
@@ -660,7 +707,17 @@ export async function preScreenListingsFastDetailed(
     }
   }
 
-  const sorted = results.sort((a, b) => b.scores.composite - a.scores.composite);
+  const sorted = results.sort((a, b) => {
+    const rank = (candidate: PropertyCandidate): number => {
+      if ((candidate.standardPathViable === true || (candidate.potentialLots ?? 1) >= 2) && candidate.designLedEligible !== true) return 0;
+      if (candidate.standardPathViable === true || (candidate.potentialLots ?? 1) >= 2) return 0;
+      if (candidate.designLedEligible === true) return 1;
+      return 2;
+    };
+    const rankDiff = rank(a) - rank(b);
+    if (rankDiff !== 0) return rankDiff;
+    return b.scores.composite - a.scores.composite;
+  });
   const candidates = resultCap == null ? sorted : sorted.slice(0, resultCap);
   return { candidates, indeterminate, drainComplete };
 }

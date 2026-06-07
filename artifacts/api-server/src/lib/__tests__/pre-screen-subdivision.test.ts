@@ -123,6 +123,35 @@ describe("strict subdivision pre-screening", () => {
     expect(results[0].subdivisionEligible).toBe(true);
   });
 
+  it("keeps a Downsview-style MHS site as a design-led opportunity when the standard path is one lot", async () => {
+    mockedZone.mockResolvedValue({ zone_code: "MHS", zone_description: "Mixed Housing Suburban", min_lot_size_sqm: 400 } as any);
+    mockedPropertyHistory.mockResolvedValue({
+      cv_nzd: null,
+      cv_year: null,
+      build_year: 1960,
+      floor_area_sqm: 130,
+      land_area_sqm: 620,
+      property_type: "Residential Dwelling",
+      sources_confirmed: [],
+      sources_estimated: [],
+    });
+
+    const results = await preScreenListingsFast([
+      listing({
+        address: "27 Downsview Road, Pakuranga Heights, Auckland",
+        landArea: 620,
+        zone: "MHS",
+      }),
+    ], 1, null, { allowMissingListingPrice: true, strictStandardSubdivision: true });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].potentialLots).toBe(1);
+    expect(results[0].standardPathViable).toBe(false);
+    expect(results[0].designLedEligible).toBe(true);
+    expect(results[0].designLedYieldRange).toEqual({ min: 2, max: 4 });
+    expect(results[0].screeningNotes?.[0]).toContain("Design-led consent opportunity");
+  });
+
   it("returns a preliminary strict subdivision candidate without waiting for build year", async () => {
     mockedPropertyHistory.mockResolvedValue({
       cv_nzd: null,
@@ -310,11 +339,11 @@ describe("strict subdivision pre-screening", () => {
     });
   });
 
-  it("excludes an MHS site that cannot fit two compliant minimum lots", async () => {
+  it("excludes an MHS site below both the standard and design-led first-pass thresholds", async () => {
     mockedZone.mockResolvedValue({ zone_code: "MHS", zone_description: "Mixed Housing Suburban", min_lot_size_sqm: 400 } as any);
 
     const results = await preScreenListingsFast([
-      listing({ address: "31 Example Street, St Heliers, Auckland City, Auckland", landArea: 700 }),
+      listing({ address: "31 Example Street, St Heliers, Auckland City, Auckland", landArea: 450 }),
     ], 1, null, { allowMissingListingPrice: true, strictStandardSubdivision: true });
 
     expect(results).toEqual([]);

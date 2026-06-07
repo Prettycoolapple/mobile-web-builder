@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   hasStandardSubdivisionYield,
   isDevelopmentDiscoveryIntent,
+  isSubdivisionRulesInformationIntent,
   isStandardSubdivisionDiscoveryIntent,
 } from "../discovery-intent";
+import { detectMode } from "../claude";
 
 describe("discovery intent", () => {
   it("treats Chinese subdivision searches as strict standard subdivision intent", () => {
@@ -42,5 +44,32 @@ describe("discovery intent", () => {
   it("requires at least two computed lots for standard subdivision cards", () => {
     expect(hasStandardSubdivisionYield({ potentialLots: 1 })).toBe(false);
     expect(hasStandardSubdivisionYield({ potentialLots: 2 })).toBe(true);
+  });
+
+  it("keeps subdivision rules questions out of discovery search", () => {
+    const query = "what is the subdivision rules in coatesville";
+
+    expect(isSubdivisionRulesInformationIntent(query)).toBe(true);
+    expect(isDevelopmentDiscoveryIntent(query)).toBe(false);
+    expect(isStandardSubdivisionDiscoveryIntent(query)).toBe(false);
+    expect(detectMode(query)).toBe("followup");
+  });
+
+  it("still treats explicit subdivision listing searches as discovery intent", () => {
+    const query = "show me properties in Coatesville that meet subdivision rules";
+
+    expect(isSubdivisionRulesInformationIntent(query)).toBe(false);
+    expect(isDevelopmentDiscoveryIntent(query)).toBe(true);
+    expect(isStandardSubdivisionDiscoveryIntent(query)).toBe(true);
+    expect(detectMode(query)).toBe("discover");
+  });
+
+  it("still treats area-wide subdividable searches as discovery intent", () => {
+    const query = "what's subdividable in Glendowie?";
+
+    expect(isSubdivisionRulesInformationIntent(query)).toBe(false);
+    expect(isDevelopmentDiscoveryIntent(query)).toBe(true);
+    expect(isStandardSubdivisionDiscoveryIntent(query)).toBe(true);
+    expect(detectMode(query)).toBe("discover");
   });
 });

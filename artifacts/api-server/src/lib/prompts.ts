@@ -161,7 +161,7 @@ The JSON must follow this exact structure:
   ],
   "developmentStrategies": [
     {
-      "id": "hold_existing|refurbish|demolish_rebuild",
+      "id": "hold_existing|refurbish|demolish_rebuild|integrated_consent",
       "title": "strategy title",
       "recommendation": "recommended|viable|not_recommended",
       "confidence": <number 0-1>,
@@ -175,7 +175,7 @@ The JSON must follow this exact structure:
       "roiScenarios": []
     }
   ],
-  "recommendedDevelopmentStrategy": "hold_existing|refurbish|demolish_rebuild|null",
+  "recommendedDevelopmentStrategy": "hold_existing|refurbish|demolish_rebuild|integrated_consent|null",
   "comparableSales": [
     {
       "address": "street address only",

@@ -10,6 +10,9 @@ const router: IRouter = Router();
 const OTP_TTL_MINUTES = 10;
 const MAX_ATTEMPTS = 5;
 const PHONE_TOKEN_TTL_SECONDS = 30 * 60;
+const OTP_PHONE_LIMIT_PER_HOUR = 3;
+const OTP_IP_LIMIT_PER_HOUR = 10;
+const OTP_PHONE_BACKOFF_SECONDS = [60, 120, 300];
 
 function resolvePhoneSecret(): string {
   const secret = process.env.PHONE_VERIFICATION_SECRET || process.env.SESSION_SECRET;
@@ -34,17 +37,34 @@ const PHONE_VERIFICATION_SECRET = resolvePhoneSecret();
 // API instance we run today; if we ever scale horizontally this needs to move
 // to Redis or a DB-backed counter.
 const rateBuckets = new Map<string, number[]>();
-function rateLimit(key: string, limit: number, windowMs: number): boolean {
+function rateLimit(key: string, limit: number, windowMs: number): { allowed: boolean; retryAfterSeconds: number } {
   const now = Date.now();
   const cutoff = now - windowMs;
   const arr = (rateBuckets.get(key) ?? []).filter((t) => t > cutoff);
   if (arr.length >= limit) {
     rateBuckets.set(key, arr);
-    return false;
+    const retryAfterSeconds = Math.max(1, Math.ceil((arr[0] + windowMs - now) / 1000));
+    return { allowed: false, retryAfterSeconds };
   }
   arr.push(now);
   rateBuckets.set(key, arr);
-  return true;
+  return { allowed: true, retryAfterSeconds: 0 };
+}
+
+function otpBackoff(key: string, windowMs: number): { allowed: boolean; retryAfterSeconds: number } {
+  const now = Date.now();
+  const cutoff = now - windowMs;
+  const arr = (rateBuckets.get(key) ?? []).filter((t) => t > cutoff);
+  const previousSends = arr.length;
+  if (previousSends > 0) {
+    const waitSeconds = OTP_PHONE_BACKOFF_SECONDS[Math.min(previousSends - 1, OTP_PHONE_BACKOFF_SECONDS.length - 1)];
+    const retryAfterSeconds = Math.ceil((arr[arr.length - 1] + waitSeconds * 1000 - now) / 1000);
+    if (retryAfterSeconds > 0) {
+      rateBuckets.set(key, arr);
+      return { allowed: false, retryAfterSeconds };
+    }
+  }
+  return { allowed: true, retryAfterSeconds: 0 };
 }
 function clientIp(req: Request): string {
   // Relies on `app.set("trust proxy", 1)` in app.ts so req.ip is taken from
@@ -141,19 +161,33 @@ router.post("/auth/send-otp", async (req: Request, res: Response) => {
     return;
   }
 
-  // Anti-abuse: per-phone (3/hour) and per-IP (10/hour) sliding window limits
-  // to deter SMS flooding and toll-fraud.
-  if (!rateLimit(`otp:phone:${normalized}`, 3, 60 * 60 * 1000)) {
+  const phoneKey = `otp:phone:${normalized}`;
+  const ipKey = `otp:ip:${clientIp(req)}`;
+  const hourlyWindowMs = 60 * 60 * 1000;
+  const backoff = otpBackoff(phoneKey, hourlyWindowMs);
+  if (!backoff.allowed) {
     res.status(429).json({
-      error: "Too many codes requested for this number. Please try again later.",
+      error: `Please wait ${backoff.retryAfterSeconds} seconds before requesting another code.`,
       code: "RATE_LIMITED",
+      retryAfterSeconds: backoff.retryAfterSeconds,
     });
     return;
   }
-  if (!rateLimit(`otp:ip:${clientIp(req)}`, 10, 60 * 60 * 1000)) {
+  const phoneLimit = rateLimit(phoneKey, OTP_PHONE_LIMIT_PER_HOUR, hourlyWindowMs);
+  if (!phoneLimit.allowed) {
+    res.status(429).json({
+      error: "Too many codes requested for this number. Please try again later.",
+      code: "RATE_LIMITED",
+      retryAfterSeconds: phoneLimit.retryAfterSeconds,
+    });
+    return;
+  }
+  const ipLimit = rateLimit(ipKey, OTP_IP_LIMIT_PER_HOUR, hourlyWindowMs);
+  if (!ipLimit.allowed) {
     res.status(429).json({
       error: "Too many requests. Please try again later.",
       code: "RATE_LIMITED",
+      retryAfterSeconds: ipLimit.retryAfterSeconds,
     });
     return;
   }
@@ -207,7 +241,14 @@ router.post("/auth/send-otp", async (req: Request, res: Response) => {
       return;
     }
 
-    res.json({ verificationId: row.id, expiresInSeconds: OTP_TTL_MINUTES * 60 });
+    const sendCount = (rateBuckets.get(phoneKey) ?? []).filter((t) => t > Date.now() - hourlyWindowMs).length;
+    const nextBackoffSeconds = OTP_PHONE_BACKOFF_SECONDS[Math.min(sendCount - 1, OTP_PHONE_BACKOFF_SECONDS.length - 1)] ?? 60;
+    res.json({
+      verificationId: row.id,
+      expiresInSeconds: OTP_TTL_MINUTES * 60,
+      retryAfterSeconds: nextBackoffSeconds,
+      remainingRequestsThisHour: Math.max(0, OTP_PHONE_LIMIT_PER_HOUR - sendCount),
+    });
   } catch (err) {
     req.log.error({ err }, "POST /auth/send-otp failed");
     res.status(500).json({ error: "Failed to send code", code: "OTP_SEND_FAILED" });

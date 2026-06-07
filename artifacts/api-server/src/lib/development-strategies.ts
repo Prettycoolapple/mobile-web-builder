@@ -1,5 +1,5 @@
 import type { CostBreakdown } from "./cost-estimator";
-import type { LotResult } from "./lot-calculator";
+import type { LotResult, SubdivisionPathwayAssessment } from "./lot-calculator";
 import type { MergedPropertyData } from "./scrapers/merge";
 import {
   calculateScenariosFromGdv,
@@ -52,12 +52,14 @@ const STRATEGY_TITLES: Record<DevelopmentStrategyId, string> = {
   hold_existing: "Do nothing / hold existing dwelling",
   refurbish: "Refurbish existing dwelling",
   demolish_rebuild: "Demolish and rebuild",
+  integrated_consent: "Integrated consent concept",
 };
 
 const STRATEGY_TITLES_ZH: Record<DevelopmentStrategyId, string> = {
   hold_existing: "保持现状",
   refurbish: "翻新",
   demolish_rebuild: "拆除重建",
+  integrated_consent: "综合许可概念方案",
 };
 
 /**
@@ -159,6 +161,7 @@ export function buildFallbackDevelopmentStrategyAssessment(
         : hasMultipleLotPotential
         ? "Rebuild may unlock land value if planning, services, and comparable-sale evidence support new dwellings."
         : "Full rebuild carries high capital cost and may not be justified without clear planning or resale upside.",
+      integrated_consent: "A higher-density integrated land-use and subdivision concept may be tested only where site layout, servicing, and consent risk justify further design work.",
     },
     strategy_rationales_zh: {
       hold_existing: data.build_year && data.build_year >= 2010
@@ -188,6 +191,9 @@ function fallbackRationale(strategy: DevelopmentStrategyId, data: MergedProperty
     }
     return `The site has ${lots.lots} potential lot${lots.lots === 1 ? "" : "s"} and the existing dwelling appears old enough that redevelopment may unlock more value.`;
   }
+  if (strategy === "integrated_consent") {
+    return "This concept tests whether a design-led land-use and subdivision consent could support more dwellings/lots than the standard vacant-lot test, with higher consent and layout sensitivity.";
+  }
   return hasDwelling
     ? "A refurbishment path balances lower capital cost against improved resale value and should be compared with holding and rebuilding."
     : "Refurbishment is not applicable because no existing dwelling was identified.";
@@ -201,6 +207,9 @@ function fallbackRationaleZh(strategy: DevelopmentStrategyId, data: MergedProper
   }
   if (strategy === "demolish_rebuild") {
     return `该地块具有 ${lots.lots} 个潜在地块，现有住宅年代已久，重建可能释放更高价值。`;
+  }
+  if (strategy === "integrated_consent") {
+    return "综合许可概念方案用于测试设计导向的更高密度开发可能性，但对许可、布局与市政配套更敏感。";
   }
   return "翻新方案在较低资本支出与提升转售价值之间取得平衡，建议与保留现状及重建方案进行比较。";
 }
@@ -323,7 +332,7 @@ function costItemsForStrategy(id: DevelopmentStrategyId, costs: CostBreakdown): 
   const items: DevelopmentStrategyCostItem[] = [
     { label: landLabel, low: costs.land_cv_nzd ?? 0, high: costs.land_cv_nzd ?? 0 },
   ];
-  if (id === "demolish_rebuild") {
+  if (id === "demolish_rebuild" || id === "integrated_consent") {
     items.push(
       { label: "Demolition", low: costs.demo_low, high: costs.demo_high },
       { label: "Construction", low: costs.construction_low, high: costs.construction_high },
@@ -435,7 +444,7 @@ function buildAssumptions(
 ): string[] {
   const assumptions: string[] = [];
   const n = lotResult.lots;
-  const intensiveMultiLot = id === "demolish_rebuild" && n >= 4;
+  const intensiveMultiLot = (id === "demolish_rebuild" || id === "integrated_consent") && n >= 4;
   // "No demolition cost included" is only relevant when there is no real pricing context
   // (comparable data present → the hold-existing cost model already reflects market realities)
   if (id === "hold_existing" && !hasComparablePricing) {
@@ -444,7 +453,7 @@ function buildAssumptions(
   if (id === "refurbish") {
     assumptions.push(`${scope[0].toUpperCase()}${scope.slice(1)} refurbishment scope applied to existing floor area.`);
   }
-  if (id === "demolish_rebuild") {
+  if (id === "demolish_rebuild" || id === "integrated_consent") {
     assumptions.push(
       `${n} potential lot${n === 1 ? "" : "s"} / new dwelling${n === 1 ? "" : "s"} modelled; construction, consents, finance, and contingency scale with the dwelling count.`,
     );
@@ -486,6 +495,7 @@ export function calculateDevelopmentStrategies(params: {
   marketGdvMultiplier?: number;
   typologyMatchedComparables?: boolean;
   neighbourhoodContext?: NeighbourhoodContext | null;
+  subdivisionAssessment?: SubdivisionPathwayAssessment | null;
 }): DevelopmentStrategyScenario[] {
   const {
     data,
@@ -498,6 +508,7 @@ export function calculateDevelopmentStrategies(params: {
     comparablesQuality,
     typologyMatchedComparables,
     neighbourhoodContext,
+    subdivisionAssessment,
   } = params;
   const hasDwelling = hasExistingDwelling(data);
   const effectiveAssessment: DevelopmentStrategyAssessment = !hasDwelling && assessment.recommended_strategy !== "demolish_rebuild"
@@ -569,6 +580,17 @@ export function calculateDevelopmentStrategies(params: {
     { id: "refurbish", costs: refurbCosts, gdv: refurbValue, units: 1, sqmPerLot: data.land_area_sqm ?? lotResult.sqm_per_lot, gdvPerLot: refurbValue },
     { id: "demolish_rebuild", costs: rebuildCosts, gdv: rebuildValue, units: lotResult.lots, sqmPerLot: lotResult.sqm_per_lot, gdvPerLot: rebuildGdvPerLot },
   ];
+  if (subdivisionAssessment?.designLedEligible && subdivisionAssessment.designLedYieldRange) {
+    const designUnits = subdivisionAssessment.designLedYieldRange.max;
+    rows.push({
+      id: "integrated_consent",
+      costs: rebuildCosts,
+      gdv: 0,
+      units: designUnits,
+      sqmPerLot: Math.max(1, Math.round((lotResult.net_area_sqm || data.land_area_sqm || lotResult.sqm_per_lot) / designUnits)),
+      gdvPerLot: 0,
+    });
+  }
 
   const strategies = rows.map((row) => {
     const roiScenarios = hasComparablePricing && row.gdv > 0
@@ -585,7 +607,13 @@ export function calculateDevelopmentStrategies(params: {
       confidence,
       rationale: effectiveAssessment.strategy_rationales[row.id] ?? fallbackRationale(row.id, data, lotResult),
       rationale_zh: effectiveAssessment.strategy_rationales_zh?.[row.id] ?? fallbackRationaleZh(row.id, data, lotResult),
-      assumptions: buildAssumptions(
+      assumptions: row.id === "integrated_consent"
+        ? [
+            `Indicative design-led yield range: ${subdivisionAssessment?.designLedYieldRange?.min}-${subdivisionAssessment?.designLedYieldRange?.max} dwellings/lots to test.`,
+            "Higher-risk consent pathway: requires integrated land-use and subdivision design before subdivision approval can be relied on.",
+            "ROI is not modelled for this concept yet; use it as an architect/planner test brief rather than a priced feasibility case.",
+          ]
+        : buildAssumptions(
         row.id,
         data,
         lotResult,

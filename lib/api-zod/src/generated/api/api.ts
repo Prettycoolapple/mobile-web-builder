@@ -61,6 +61,16 @@ export const AnalysePropertyResponse = zod.object({
         zone: zod.string().optional(),
         minLotSize: zod.string().optional(),
         potentialLots: zod.number().optional(),
+        standardVacantLots: zod.number().optional(),
+        standardPathViable: zod.boolean().optional(),
+        standardMinLotSize: zod.number().nullable().optional(),
+        designLedEligible: zod.boolean().optional(),
+        designLedYieldRange: zod.object({ min: zod.number(), max: zod.number() }).nullable().optional(),
+        designLedConfidence: zod.enum(["none", "low", "medium"]).optional(),
+        designLedReasons: zod.array(zod.string()).optional(),
+        designLedBlockers: zod.array(zod.string()).optional(),
+        designLedSummary: zod.string().nullable().optional(),
+        designLedDetail: zod.string().nullable().optional(),
         overlays: zod
           .array(
             zod.object({

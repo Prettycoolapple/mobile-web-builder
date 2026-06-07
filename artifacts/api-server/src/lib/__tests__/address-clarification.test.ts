@@ -72,6 +72,38 @@ describe("address clarification candidate dedupe", () => {
     expect(isFullStreetAddressForAnalysis(options[0]!.formatted)).toBe(true);
   });
 
+  it("keeps numbered highway address candidates", () => {
+    const options = filterAddressOptionsForAnalysis("527A Coatesville-Riverhead Highway", [
+      {
+        formatted: "527A, Coatesville-Riverhead Highway, Coatesville, Riverhead, Rodney, Auckland, 0793",
+        lat: -36.7326907,
+        lng: 174.6298135,
+      },
+    ]);
+
+    expect(options).toHaveLength(1);
+    expect(isFullStreetAddressForAnalysis("534, Coatesville-Riverhead Highway, Coatesville, Riverhead, Rodney, Auckland, 0793")).toBe(true);
+  });
+
+  it("keeps numbered geocoder street-line candidates without conventional suffixes", () => {
+    const options = filterAddressOptionsForAnalysis("1 Broadway Newmarket", [
+      {
+        formatted: "1, Broadway, Newmarket, Auckland, 1023",
+        lat: -36.869,
+        lng: 174.779,
+      },
+      {
+        formatted: "12, The Anchorage, Auckland, 2012",
+        lat: -36.887,
+        lng: 174.912,
+      },
+    ]);
+
+    expect(options).toHaveLength(1);
+    expect(options[0]!.formatted).toBe("1, Broadway, Newmarket, Auckland, 1023");
+    expect(isFullStreetAddressForAnalysis("12, The Anchorage, Auckland, 2012")).toBe(true);
+  });
+
   it("rejects different street numbers when the user supplied a number", () => {
     const options = filterAddressOptionsForAnalysis("15 fishertown street, grey Lynn", [
       {

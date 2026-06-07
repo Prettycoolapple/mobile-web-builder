@@ -42,6 +42,7 @@ import {
   ComparableSale,
   AsbestosInfo,
   PlanningOverlay,
+  PlanningInfo,
   EasementEntry,
   DevelopmentStrategyScenario,
   DevelopmentStrategyId,
@@ -1016,6 +1017,43 @@ function SubdivisionPathwayCallout({ note, colors }: { note: string; colors: Ret
   );
 }
 
+function SubdivisionPathwayComparison({ planning, colors }: { planning?: PlanningInfo; colors: ReturnType<typeof useColors> }) {
+  const { t } = useT();
+  if (!planning) return null;
+  const standardLots = planning.standardVacantLots ?? planning.potentialLots;
+  const designRange = planning.designLedYieldRange;
+  if (standardLots == null && !designRange) return null;
+
+  return (
+    <View style={{ flexDirection: "row", gap: 8, marginBottom: 10 }}>
+      <View style={{ flex: 1, backgroundColor: colors.success + "10", borderColor: colors.success + "35", borderWidth: 1, borderRadius: 10, padding: 10, gap: 4 }}>
+        <Text style={{ color: colors.success, fontFamily: "DM_Sans_700Bold", fontSize: 12 }}>
+          {t("report.standard_vacant_pathway")}
+        </Text>
+        <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", fontSize: 13 }}>
+          {standardLots != null ? `${standardLots} lot(s)` : t("report.na")}
+        </Text>
+        <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, lineHeight: 15 }}>
+          {planning.standardMinLotSize ? `${planning.standardMinLotSize}sqm minimum lot-size test` : t("report.na")}
+        </Text>
+      </View>
+      {planning.designLedEligible && designRange ? (
+        <View style={{ flex: 1, backgroundColor: colors.amber + "12", borderColor: colors.amber + "35", borderWidth: 1, borderRadius: 10, padding: 10, gap: 4 }}>
+          <Text style={{ color: colors.amber, fontFamily: "DM_Sans_700Bold", fontSize: 12 }}>
+            {t("report.design_led_pathway")}
+          </Text>
+          <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", fontSize: 13 }}>
+            {t("report.design_led_range_value", { min: designRange.min, max: designRange.max })}
+          </Text>
+          <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, lineHeight: 15 }}>
+            {t("search.subdivision_design_led_note")}
+          </Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 function OverlayChecklist({ overlays, colors }: { overlays: PlanningOverlay[]; colors: ReturnType<typeof useColors> }) {
   const { t } = useT();
   if (!overlays || overlays.length === 0) {
@@ -1700,6 +1738,7 @@ function strategyTitle(id: DevelopmentStrategyId, fallback: string, t: (key: str
     case "hold_existing": return t("report.strategy_hold");
     case "refurbish": return t("report.strategy_refurbish");
     case "demolish_rebuild": return (potentialLots ?? 0) > 1 ? t("report.strategy_subdivide_rebuild") : t("report.strategy_rebuild");
+    case "integrated_consent": return t("report.strategy_integrated_consent");
     default: return fallback;
   }
 }
@@ -2563,8 +2602,24 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
           ) : null}
           <InfoRow label={t("report.zone")} value={report.propertyOverview.zone || t("report.na")} colors={colors} />
           {report.planning?.potentialLots != null && (
-            <InfoRow label={t("report.potential_lots")} value={String(report.planning.potentialLots)} valueColor={colors.success} colors={colors} />
+            <InfoRow
+              label={t("report.standard_lots")}
+              value={String(report.planning.standardVacantLots ?? report.planning.potentialLots)}
+              valueColor={colors.success}
+              colors={colors}
+            />
           )}
+          {report.planning?.designLedEligible && report.planning.designLedYieldRange ? (
+            <InfoRow
+              label={t("report.design_led_upside")}
+              value={t("report.design_led_range_value", {
+                min: report.planning.designLedYieldRange.min,
+                max: report.planning.designLedYieldRange.max,
+              })}
+              valueColor={colors.amber}
+              colors={colors}
+            />
+          ) : null}
           {report.propertyOverview.isOnMarket && report.propertyOverview.listingPrice && (
             <InfoRow label={t("report.listing_price")} value={report.propertyOverview.listingPrice} valueColor={colors.success} colors={colors} />
           )}
@@ -2605,6 +2660,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
 
       {report.planning?.overlays && (
         <SectionCard title={t("report.planning_overlays")} icon="🏛" status={planningSection} alert={safeNum(report.scores?.ease) < 2.5} colors={colors}>
+          <SubdivisionPathwayComparison planning={report.planning} colors={colors} />
           {!!report.planning.subdivisionSummary?.trim() && (
             <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 13, lineHeight: 20, marginBottom: 10 }}>
               {report.planning.subdivisionSummary}

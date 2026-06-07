@@ -16,11 +16,13 @@ import {
   Fraunces_700Bold,
 } from "@expo-google-fonts/fraunces";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { requestTrackingPermissionsAsync } from "expo-tracking-transparency";
 import { Stack, useRouter } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 import React, { useEffect, useRef } from "react";
+import { Settings } from "react-native-fbsdk-next";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -47,6 +49,36 @@ Notifications.setNotificationHandler({
 });
 
 const queryClient = new QueryClient();
+
+function MetaSdkSetup() {
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+
+    let mounted = true;
+
+    async function initializeMetaSdk() {
+      try {
+        const { granted } = await requestTrackingPermissionsAsync();
+        if (!mounted) return;
+
+        Settings.initializeSDK();
+        if (Platform.OS === "ios") {
+          await Settings.setAdvertiserTrackingEnabled(granted);
+        }
+      } catch {
+        // Keep startup resilient if the native SDK is unavailable in a dev shell.
+      }
+    }
+
+    void initializeMetaSdk();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  return null;
+}
 
 function SubscriptionGate({ children }: { children: React.ReactNode }) {
   const { isSubscriptionIdentityReady } = useAuth();
@@ -207,6 +239,7 @@ export default function RootLayout() {
                   <ChatProvider>
                     <GestureHandlerRootView style={{ flex: 1 }}>
                       <KeyboardProvider>
+                        <MetaSdkSetup />
                         <NotificationSetup />
                         <RootLayoutNav />
                       </KeyboardProvider>

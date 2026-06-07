@@ -167,6 +167,24 @@ export function PropertyCard({ candidate, onAnalyse, showSubdivisionDisclaimer =
       candidate.isParentParcelSuspect === true);
   const isPackageListing = candidate.isCombinedListing === true || (candidate.childAddresses?.length ?? 0) > 1;
   const packageChildCount = candidate.childAddresses?.length ?? 0;
+  const designLedRange = candidate.designLedYieldRange;
+  const hasDesignLedUpside =
+    candidate.designLedEligible === true &&
+    !!designLedRange &&
+    typeof designLedRange.min === "number" &&
+    typeof designLedRange.max === "number";
+  const standardLots = candidate.standardVacantLots ?? potentialLots;
+  const hasStandardPath = showSubdivisionRecommendation || candidate.standardPathViable === true || potentialLots >= 2;
+  const showPathwayCallout = hasStandardPath || hasDesignLedUpside;
+  const pathwayColor = hasStandardPath ? colors.success : colors.amber;
+  const pathwayIcon = hasStandardPath ? "check-circle" : "alert-circle";
+  const pathwayTitle = t("search.subdivision_standard_path", { lots: standardLots || potentialLots || 1 });
+  const pathwaySubtitle = hasDesignLedUpside
+    ? t(hasStandardPath ? "search.subdivision_design_led_test" : "search.subdivision_design_led_range", {
+        min: designLedRange?.min ?? 2,
+        max: designLedRange?.max ?? 4,
+      })
+    : subdivisionRuleText;
 
   return (
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -260,7 +278,26 @@ export function PropertyCard({ candidate, onAnalyse, showSubdivisionDisclaimer =
           </View>
         ) : null}
 
-        {/* Lot-count box suppressed — disclaimer below replaces it for all screened results */}
+        {showPathwayCallout ? (
+          <View style={[styles.subdivisionBox, { backgroundColor: pathwayColor + "12", borderColor: pathwayColor + "45" }]}>
+            <Feather name={pathwayIcon as any} size={14} color={pathwayColor} />
+            <View style={styles.subdivisionCopy}>
+              <Text style={[styles.subdivisionTitle, { color: pathwayColor, fontFamily: "DM_Sans_700Bold" }]}>
+                {pathwayTitle}
+              </Text>
+              {!!pathwaySubtitle && (
+                <Text style={[styles.subdivisionText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
+                  {pathwaySubtitle}
+                </Text>
+              )}
+              {hasDesignLedUpside ? (
+                <Text style={[styles.subdivisionNote, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                  {t("search.subdivision_design_led_note")}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
 
         <View style={[styles.scoresRow, { borderTopColor: colors.border }]}>
           <ScorePip score={candidate.scores.ease} label={t("report.ease")} loading={candidate.scoresLoading} />
@@ -381,17 +418,28 @@ const styles = StyleSheet.create({
   },
   subdivisionBox: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     gap: 6,
     borderWidth: 1,
     borderRadius: 10,
     paddingHorizontal: 9,
     paddingVertical: 7,
   },
-  subdivisionText: {
+  subdivisionCopy: {
     flex: 1,
+    gap: 2,
+  },
+  subdivisionTitle: {
     fontSize: 12,
     lineHeight: 16,
+  },
+  subdivisionText: {
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  subdivisionNote: {
+    fontSize: 11,
+    lineHeight: 15,
   },
   packageBox: {
     flexDirection: "row",

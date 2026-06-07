@@ -4,6 +4,7 @@ import { SYSTEM_PROMPT, ANALYSE_AUGMENTATION, DISCOVER_AUGMENTATION, languageIns
 import { findSuburbId, findSuburbInTextViaIndex } from "./scrapers/realestate-api";
 import type { DevelopmentStrategyAssessment, DevelopmentStrategyId, RefurbishmentScope } from "./development-strategies";
 import { hasNumberedStreetAddress, hasUnnumberedStreetLine } from "./street-address-detect";
+import { isSubdivisionRulesInformationIntent } from "./discovery-intent";
 
 export { hasNumberedStreetAddress, hasNonStandardSalePropertyReference, hasUnnumberedStreetLine } from "./street-address-detect";
 
@@ -20,6 +21,25 @@ export interface Message {
 }
 
 export type ChatMode = "analyse" | "discover" | "followup";
+export type ChatIntentCategory =
+  | "property_discovery"
+  | "single_property_analysis"
+  | "rules_explanation"
+  | "general_property_advice"
+  | "followup";
+export type ChatIntentSubject =
+  | "subdivision"
+  | "zoning"
+  | "market"
+  | "cost"
+  | "schools"
+  | "provider"
+  | "unknown";
+export type ChatIntentExecution =
+  | "show_listing_cards"
+  | "run_feasibility_report"
+  | "answer_in_chat"
+  | "ask_clarifying_question";
 
 export function sanitizeAssistantProse(content: string, locale: Locale = "en"): string {
   let out = content;
@@ -86,6 +106,10 @@ export function isListingBrowseIntent(message: string): boolean {
 // phrasing, context references ("it", "this area", "currently"), and implicit
 // suburb resolution from the currently open report.
 export interface ChatIntent {
+  intentCategory: ChatIntentCategory;
+  subject: ChatIntentSubject;
+  execution: ChatIntentExecution;
+  confidence: number | null;
   mode: ChatMode;
   // Analyse
   address: string | null;
@@ -118,6 +142,10 @@ export type DelegatedDiscoverSuburb = {
 };
 
 const INTENT_SCHEMA = `{
+  "intentCategory": "property_discovery" | "single_property_analysis" | "rules_explanation" | "general_property_advice" | "followup",
+  "subject": "subdivision" | "zoning" | "market" | "cost" | "schools" | "provider" | "unknown",
+  "execution": "show_listing_cards" | "run_feasibility_report" | "answer_in_chat" | "ask_clarifying_question",
+  "confidence": <number from 0 to 1> | null,
   "mode": "analyse" | "discover" | "followup",
   "address": "<full NZ street address string> | null",
   "suburb": "<suburb name, lowercase, normalised> | null",
@@ -135,7 +163,41 @@ const INTENT_SCHEMA = `{
   "reasoning": "<1 sentence explaining your classification>"
 }`;
 
-const INTENT_RULES = `## MODE CLASSIFICATION
+const INTENT_RULES = `## SEMANTIC INTENT AND EXECUTION
+
+First classify the user's goal semantically, then choose the execution.
+
+intentCategory:
+  property_discovery      = user wants to find/show/browse/list currently available properties or listings.
+  single_property_analysis = user wants a feasibility report for one specific numbered property.
+  rules_explanation       = user asks about rules, requirements, process, policy, zoning, consent, or how something works.
+  general_property_advice = user wants conversational property advice without listing cards or a single report.
+  followup                = user is continuing discussion about the current answer/report/results.
+
+subject:
+  Choose the primary topic: subdivision, zoning, market, cost, schools, provider, or unknown.
+
+execution:
+  show_listing_cards      = run property discovery and return listing cards. Use ONLY when the user's goal is to find/show/browse/list available properties.
+  run_feasibility_report  = run one-property analysis. Use ONLY for a specific numbered property.
+  answer_in_chat          = answer conversationally. Use for rules_explanation and general_property_advice.
+  ask_clarifying_question = ask one short question because required information is missing for discovery or analysis.
+
+Critical distinction:
+  The word "subdivision" alone does NOT mean show_listing_cards.
+  "what are the subdivision rules in Coatesville?" => rules_explanation, subject=subdivision, execution=answer_in_chat, mode=followup.
+  "how does subdivision consent work in Auckland?" => rules_explanation, subject=subdivision, execution=answer_in_chat, mode=followup.
+  "show me subdividable properties in Coatesville" => property_discovery, subject=subdivision, execution=show_listing_cards, mode=discover.
+  "which listings in Coatesville can be subdivided?" => property_discovery, subject=subdivision, execution=show_listing_cards, mode=discover.
+  "can 12 Smith Road be subdivided?" => single_property_analysis, subject=subdivision, execution=run_feasibility_report, mode=analyse.
+
+The legacy mode field must agree with execution:
+  show_listing_cards -> mode="discover"
+  run_feasibility_report -> mode="analyse"
+  answer_in_chat -> mode="followup"
+  ask_clarifying_question -> mode stays as the intended next action ("discover" or "analyse")
+
+## MODE CLASSIFICATION
 
 mode="analyse"
   Trigger: user wants a feasibility report for ONE specific titled property, identified by
@@ -180,6 +242,13 @@ mode="discover"
     "what should I look at?", "help me find something", "show me what's around"
   → Even if the user gives NO suburb and NO price, still classify as discover.
   → Do NOT classify buy/invest/search intent as "followup" — that kills the search flow.
+
+  NOT discover — use mode="followup" for informational questions about rules,
+  policy, requirements, or process, even when a suburb/area is named.
+  Examples: "what are the subdivision rules in Coatesville?", "how does subdivision
+  consent work in Auckland?", "explain minimum lot size rules". These are
+  conversation/advice questions, not listing searches, unless the user also asks
+  to find/show/search/list currently available properties.
 
 mode="followup"
   Trigger: questions or comments about a current analysis, general property advice,
@@ -254,6 +323,9 @@ Set needsClarification=false for mode="followup" always.
 
 - Extract the address EXACTLY as the user typed it. Do NOT correct, normalise, or
   "improve" suburb names, street names, or any part of the address.
+- Treat numbered NZ property addresses as valid even when the street line has an
+  uncommon ending or no ordinary suffix (e.g. Broadway, The Anchorage, a named
+  highway, private road, or rural lane). Downstream geocoding will validate it.
 - If the user writes "melons bay", put "melons bay" in the address field — do NOT
   change it to "Mission Bay" or any other suburb.
 - If the user writes "66 marine parade melons bay", extract "66 Marine Parade, Melons Bay"
@@ -321,6 +393,49 @@ Set false when:
 
 Wide-scan intent CAN be true alongside mode="discover" or mode="followup". It is independent of mode classification — it is purely a hint about how long the search will take. Set it whenever the trigger conditions above are met, regardless of which mode you pick.`;
 
+const VALID_INTENT_CATEGORIES: ChatIntentCategory[] = [
+  "property_discovery",
+  "single_property_analysis",
+  "rules_explanation",
+  "general_property_advice",
+  "followup",
+];
+const VALID_INTENT_SUBJECTS: ChatIntentSubject[] = [
+  "subdivision",
+  "zoning",
+  "market",
+  "cost",
+  "schools",
+  "provider",
+  "unknown",
+];
+const VALID_INTENT_EXECUTIONS: ChatIntentExecution[] = [
+  "show_listing_cards",
+  "run_feasibility_report",
+  "answer_in_chat",
+  "ask_clarifying_question",
+];
+
+function legacyModeFromExecution(execution: ChatIntentExecution, fallback: ChatMode): ChatMode {
+  if (execution === "show_listing_cards") return "discover";
+  if (execution === "run_feasibility_report") return "analyse";
+  if (execution === "answer_in_chat") return "followup";
+  return fallback;
+}
+
+function executionFromLegacyMode(mode: ChatMode, needsClarification = false): ChatIntentExecution {
+  if (needsClarification) return "ask_clarifying_question";
+  if (mode === "discover") return "show_listing_cards";
+  if (mode === "analyse") return "run_feasibility_report";
+  return "answer_in_chat";
+}
+
+function intentCategoryFromLegacyMode(mode: ChatMode): ChatIntentCategory {
+  if (mode === "discover") return "property_discovery";
+  if (mode === "analyse") return "single_property_analysis";
+  return "followup";
+}
+
 /**
  * Tiny LLM classifier called by the mobile in parallel with the main chat
  * request, so the loading bubble can show a "this may take 1-5 min" subtitle
@@ -338,6 +453,7 @@ export async function classifyWideScanSubdivisionIntent(
 ): Promise<boolean> {
   const last = [...messages].reverse().find((m) => m.role === "user");
   if (!last?.content?.trim()) return false;
+  if (isSubdivisionRulesInformationIntent(last.content)) return false;
   const recent = messages.slice(-6).map((m) => `[${m.role.toUpperCase()}]: ${m.content.slice(0, 240)}`).join("\n");
   const localeNote = locale === "zh"
     ? " The user may write in Simplified Chinese or English — understand both."
@@ -386,6 +502,10 @@ export async function extractChatIntent(
 ): Promise<ChatIntent> {
   if (messages.length === 0) {
     return {
+      intentCategory: "followup",
+      subject: "unknown",
+      execution: "answer_in_chat",
+      confidence: null,
       mode: "followup", address: null, suburb: null, minPrice: null, maxPrice: null,
       criteria: null, isFollowUp: false, includeNegotiation: false,
       needsClarification: false, clarificationQuestion: null,
@@ -399,6 +519,10 @@ export async function extractChatIntent(
   const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
   if (!lastUserMessage) {
     return {
+      intentCategory: "followup",
+      subject: "unknown",
+      execution: "answer_in_chat",
+      confidence: null,
       mode: "followup", address: null, suburb: null, minPrice: null, maxPrice: null,
       criteria: null, isFollowUp: false, includeNegotiation: false,
       needsClarification: false, clarificationQuestion: null,
@@ -472,9 +596,25 @@ ${INTENT_SCHEMA}`;
 
     const VALID_DISCIPLINES = ["architect_designer", "planner", "engineer", "quantity_surveyor", "other"];
 
+    const parsedMode = (["analyse", "discover", "followup"] as ChatMode[]).includes(parsed.mode) ? parsed.mode : "followup";
+    const parsedExecution = VALID_INTENT_EXECUTIONS.includes(parsed.execution)
+      ? parsed.execution
+      : executionFromLegacyMode(parsedMode, Boolean(parsed.needsClarification));
+    const parsedIntentCategory = VALID_INTENT_CATEGORIES.includes(parsed.intentCategory)
+      ? parsed.intentCategory
+      : intentCategoryFromLegacyMode(legacyModeFromExecution(parsedExecution, parsedMode));
+    const parsedSubject = VALID_INTENT_SUBJECTS.includes(parsed.subject) ? parsed.subject : "unknown";
+    const parsedConfidence = typeof parsed.confidence === "number" && parsed.confidence >= 0 && parsed.confidence <= 1
+      ? parsed.confidence
+      : null;
+
     // Sanitise fields
     let intent: ChatIntent = {
-      mode: (["analyse", "discover", "followup"] as ChatMode[]).includes(parsed.mode) ? parsed.mode : "followup",
+      intentCategory: parsedIntentCategory,
+      subject: parsedSubject,
+      execution: parsedExecution,
+      confidence: parsedConfidence,
+      mode: legacyModeFromExecution(parsedExecution, parsedMode),
       address: parsed.address ?? null,
       suburb: parsed.suburb ? parsed.suburb.toLowerCase().trim() : null,
       minPrice: typeof parsed.minPrice === "number" && parsed.minPrice > 0 ? parsed.minPrice : null,
@@ -491,6 +631,24 @@ ${INTENT_SCHEMA}`;
       reasoning: parsed.reasoning ?? "",
     };
 
+    if (isSubdivisionRulesInformationIntent(lastUserMessage.content)) {
+      intent = {
+        ...intent,
+        intentCategory: "rules_explanation",
+        subject: "subdivision",
+        execution: "answer_in_chat",
+        confidence: intent.confidence ?? 1,
+        mode: "followup",
+        address: null,
+        isFollowUp: false,
+        includeNegotiation: false,
+        needsClarification: false,
+        clarificationQuestion: null,
+        wideScanSubdivisionIntent: false,
+        reasoning: intent.reasoning || "informational subdivision rules question",
+      };
+    }
+
     // If the model chose analyse for a road/area listing query, route to discover instead.
     const reAnalyseTrigger = /\b(re-?analy[sz]e|redo|run again|analy[sz]e again|new analysis|re-?run|fresh analysis)\b/i;
     const userMsg = lastUserMessage.content;
@@ -506,6 +664,8 @@ ${INTENT_SCHEMA}`;
       }
       intent = {
         ...intent,
+        intentCategory: "property_discovery",
+        execution: !suburb ? "ask_clarifying_question" : "show_listing_cards",
         mode: "discover",
         address: null,
         suburb,
@@ -518,6 +678,7 @@ ${INTENT_SCHEMA}`;
 
     // Safety: if needsClarification=true but no question was generated, supply a fallback
     if (intent.needsClarification && !intent.clarificationQuestion) {
+      intent.execution = "ask_clarifying_question";
       if (intent.mode === "discover") {
         intent.clarificationQuestion = locale === "zh"
           ? "您有特别想看的郊区吗?"
@@ -534,6 +695,7 @@ ${INTENT_SCHEMA}`;
     if (intent.mode === "followup") {
       intent.needsClarification = false;
       intent.clarificationQuestion = null;
+      intent.execution = "answer_in_chat";
     }
 
     logger.info({ intent, userMessage: lastUserMessage.content.slice(0, 80) }, "LLM intent extraction");
@@ -580,6 +742,13 @@ async function fallbackDetectIntent(
   const isFollowUp = /any\s*(others?|more)|show\s*(me\s*)?more|more\s*(properties|options|results|sites)|what\s*else|other\s*properties|more\s*results|few\s*more|find\s*more/i.test(lastMessage);
 
   const needsClarification = mode === "discover" && !suburb;
+  const execution = executionFromLegacyMode(mode, needsClarification);
+  const intentCategory = isSubdivisionRulesInformationIntent(lastMessage)
+    ? "rules_explanation"
+    : intentCategoryFromLegacyMode(mode);
+  const subject: ChatIntentSubject = /subdivi|sub[-\s]?divide|分割|分地|细分|細分/i.test(lastMessage)
+    ? "subdivision"
+    : "unknown";
 
   const lowerFallback = lastMessage.toLowerCase();
   const providerKeywordsFallback = [
@@ -590,6 +759,10 @@ async function fallbackDetectIntent(
   const wantsProviderRecommendation = providerKeywordsFallback.some((kw) => lowerFallback.includes(kw));
 
   return {
+    intentCategory,
+    subject,
+    execution,
+    confidence: null,
     mode,
     address: null,
     suburb,
@@ -726,6 +899,7 @@ Return ONLY JSON:
 
 export function detectMode(lastMessage: string): ChatMode {
   const lower = lastMessage.toLowerCase().trim();
+  if (isSubdivisionRulesInformationIntent(lastMessage)) return "followup";
   const numbered = hasNumberedStreetAddress(lastMessage);
   const browse = isListingBrowseIntent(lastMessage);
   const hasAnalyseVerbEn = /\b(analyse|analyze|analysis|feasibility|assess|evaluate)\b/i.test(lower);
@@ -1324,7 +1498,7 @@ export interface DevelopmentStrategyAssessmentFacts {
 }
 
 function cleanStrategyId(value: unknown): DevelopmentStrategyId | null {
-  if (value === "hold_existing" || value === "refurbish" || value === "demolish_rebuild") return value;
+  if (value === "hold_existing" || value === "refurbish" || value === "demolish_rebuild" || value === "integrated_consent") return value;
   return null;
 }
 
@@ -1350,7 +1524,8 @@ export async function assessDevelopmentStrategy(
   "strategy_rationales": {
     "hold_existing": "<one concise sentence>",
     "refurbish": "<one concise sentence>",
-    "demolish_rebuild": "<one concise sentence>"
+    "demolish_rebuild": "<one concise sentence>",
+    "integrated_consent": "<one concise sentence>"
   },
   "key_factors": ["<short factual factor>", "..."]
 }`;
@@ -1412,6 +1587,7 @@ ${JSON.stringify(facts, null, 2)}`;
       hold_existing: typeof strategyRationales.hold_existing === "string" ? strategyRationales.hold_existing : "Holding avoids major capital works.",
       refurbish: typeof strategyRationales.refurbish === "string" ? strategyRationales.refurbish : "Refurbishment may improve value with lower capex than rebuilding.",
       demolish_rebuild: typeof strategyRationales.demolish_rebuild === "string" ? strategyRationales.demolish_rebuild : "Rebuild may unlock value where planning and comparables support it.",
+      integrated_consent: typeof strategyRationales.integrated_consent === "string" ? strategyRationales.integrated_consent : "A design-led integrated consent concept may be tested separately where the standard vacant-lot yield understates site potential.",
     },
     key_factors: Array.isArray(parsed.key_factors)
       ? parsed.key_factors.filter((factor): factor is string => typeof factor === "string").slice(0, 5)
