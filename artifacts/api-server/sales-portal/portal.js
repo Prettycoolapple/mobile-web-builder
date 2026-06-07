@@ -498,19 +498,25 @@
     return LISTING_STEPS.findIndex((_, index) => !validateListingStep(index, false));
   }
 
-  // Build an OSM address label from the raw address object returned by Nominatim
-  function osmAddressLabel(addr) {
-    if (!addr || typeof addr !== "object") return "";
-    const parts = [];
-    const houseNumber = addr.house_number || "";
-    const road = addr.road || addr.pedestrian || addr.footway || "";
-    if (houseNumber && road) parts.push(`${houseNumber} ${road}`);
-    else if (road) parts.push(road);
-    else if (houseNumber) parts.push(houseNumber);
-    if (addr.suburb || addr.neighbourhood) parts.push(addr.suburb || addr.neighbourhood);
-    if (addr.city || addr.town || addr.village) parts.push(addr.city || addr.town || addr.village);
-    if (addr.postcode) parts.push(addr.postcode);
-    return parts.join(", ");
+  function normalisedPredictionAddress(item) {
+    const address = item && typeof item.address === "object" ? item.address : null;
+    if (address) {
+      return {
+        street: address.street || "",
+        suburb: address.suburb || "",
+        city: address.city || "",
+        postcode: address.postcode || "",
+        label: address.label || item.description || "",
+      };
+    }
+    const legacy = item?._address || {};
+    return {
+      street: [legacy.house_number, legacy.road || legacy.pedestrian || legacy.footway || ""].filter(Boolean).join(" "),
+      suburb: legacy.suburb || legacy.neighbourhood || legacy.city_district || "",
+      city: legacy.city || legacy.town || legacy.village || legacy.county || "",
+      postcode: legacy.postcode || "",
+      label: item?.description || "",
+    };
   }
 
   async function searchAddress(query) {
@@ -540,20 +546,20 @@
       results.innerHTML = predictions
         .slice(0, 7)
         .map((item) => {
-          const description = item.description || item.structured_formatting?.main_text || "";
+          const predictionAddress = normalisedPredictionAddress(item);
+          const description = predictionAddress.label || item.description || item.structured_formatting?.main_text || "";
           const placeId = item.place_id || "";
-          // For OSM results, embed address parts as data attributes so we don't
-          // need a second round-trip to the place-details endpoint.
-          const isOsm = placeId.startsWith("osm:");
-          const addr = item._address || {};
+          const isOsm = item.source === "osm" || placeId.startsWith("osm:");
+          const lat = item.lat || item._lat || "";
+          const lon = item.lng || item._lon || "";
           const extraAttrs = isOsm
             ? ` data-osm="1"
-                data-lat="${escapeHtml(String(item._lat || ""))}"
-                data-lon="${escapeHtml(String(item._lon || ""))}"
-                data-street="${escapeHtml([addr.house_number, addr.road || addr.pedestrian || ""].filter(Boolean).join(" "))}"
-                data-suburb="${escapeHtml(addr.suburb || addr.neighbourhood || "")}"
-                data-city="${escapeHtml(addr.city || addr.town || addr.village || "")}"
-                data-postcode="${escapeHtml(addr.postcode || "")}"
+                data-lat="${escapeHtml(String(lat))}"
+                data-lon="${escapeHtml(String(lon))}"
+                data-street="${escapeHtml(predictionAddress.street)}"
+                data-suburb="${escapeHtml(predictionAddress.suburb)}"
+                data-city="${escapeHtml(predictionAddress.city)}"
+                data-postcode="${escapeHtml(predictionAddress.postcode)}"
               `
             : "";
           return `<button type="button" data-place-id="${escapeHtml(placeId)}" data-place-description="${escapeHtml(description)}" ${extraAttrs}>${escapeHtml(description)}</button>`;

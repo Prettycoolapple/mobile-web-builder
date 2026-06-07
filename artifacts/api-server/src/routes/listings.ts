@@ -113,20 +113,111 @@ function validateListingRules(
 
 const createListingSchema = listingPayloadSchema.superRefine(validateListingRules);
 
+type NominatimAddress = Record<string, string | undefined>;
+
+type NormalisedAddressParts = {
+  street: string;
+  suburb: string;
+  city: string;
+  postcode: string;
+  label: string;
+  mainText: string;
+  secondaryText: string;
+};
+
+function cleanAddressText(value: unknown): string {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+}
+
+function firstAddressValue(address: NominatimAddress, keys: string[]): string {
+  for (const key of keys) {
+    const value = cleanAddressText(address[key]);
+    if (value) return value;
+  }
+  return "";
+}
+
+function compactUnique(parts: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const part of parts.map((value) => cleanAddressText(value)).filter(Boolean)) {
+    const key = part.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(part);
+  }
+  return result;
+}
+
+function normaliseNominatimAddress(item: Record<string, unknown>): NormalisedAddressParts {
+  const address = (item.address && typeof item.address === "object" ? item.address : {}) as NominatimAddress;
+  const displayParts = cleanAddressText(item.display_name)
+    .replace(/,\s*New Zealand$/i, "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const houseNumber = firstAddressValue(address, ["house_number"]);
+  const road = firstAddressValue(address, ["road", "pedestrian", "footway", "path", "residential", "service"]);
+  const displayStreet = displayParts.find((part) => /^\d+[a-z]?(?:\s*[/.-]\s*\d+[a-z]?)?\s+\S+/i.test(part)) ?? "";
+  const street = houseNumber && road ? `${houseNumber} ${road}` : road || displayStreet || displayParts[0] || "";
+  const suburb = firstAddressValue(address, ["suburb", "neighbourhood", "quarter", "city_district", "hamlet"]);
+  const city = firstAddressValue(address, ["city", "town", "village", "municipality", "county", "state_district", "state"]);
+  const postcode = firstAddressValue(address, ["postcode"]);
+
+  const label = compactUnique([street, suburb, city, postcode]).join(", ") || displayParts.join(", ");
+  const mainText = street || displayParts[0] || label;
+  const secondaryText = compactUnique([suburb, city, postcode]).join(", ");
+
+  return { street, suburb, city, postcode, label, mainText, secondaryText };
+}
+
 /** Normalise an OSM Nominatim result into the same shape as a Google Places prediction. */
 function nominatimToPrediction(item: Record<string, unknown>) {
-  const displayName = String(item.display_name ?? "");
-  // Strip the country suffix "New Zealand" to keep labels concise
-  const label = displayName.replace(/,\s*New Zealand$/, "").trim();
+  const parts = normaliseNominatimAddress(item);
+  const placeId = `osm:${item.osm_type ?? ""}:${item.osm_id ?? ""}`;
   return {
-    place_id: `osm:${item.osm_type ?? ""}:${item.osm_id ?? ""}`,
-    description: label,
-    structured_formatting: { main_text: label },
+    place_id: placeId,
+    description: parts.label,
+    structured_formatting: {
+      main_text: parts.mainText,
+      secondary_text: parts.secondaryText,
+    },
+    source: "osm",
+    lat: cleanAddressText(item.lat),
+    lng: cleanAddressText(item.lon),
+    address: {
+      street: parts.street,
+      suburb: parts.suburb,
+      city: parts.city,
+      postcode: parts.postcode,
+      label: parts.label,
+    },
+    // Backwards-compatible fields for the existing sales portal bundle.
     _source: "osm",
     _lat: item.lat,
     _lon: item.lon,
     _address: item.address,
   };
+}
+
+async function fetchNominatim(endpoint: "search" | "lookup", params: URLSearchParams): Promise<Record<string, unknown>[]> {
+  const nominatimUrl = `https://nominatim.openstreetmap.org/${endpoint}?${params.toString()}`;
+  const response = await fetch(nominatimUrl, {
+    signal: AbortSignal.timeout(5000),
+    headers: {
+      "User-Agent": "ProjectAlpha/1.0 (https://www.projectalpha.app; contact@projectalpha.app)",
+      "Accept": "application/json",
+    },
+  });
+  const items = (await response.json()) as unknown;
+  return Array.isArray(items) ? (items as Record<string, unknown>[]) : [];
+}
+
+function osmLookupCode(placeId: string): string | null {
+  const [, type, id] = placeId.split(":");
+  const prefix = type === "node" ? "N" : type === "way" ? "W" : type === "relation" ? "R" : "";
+  return prefix && id ? `${prefix}${id}` : null;
 }
 
 router.get("/listings/address-autocomplete", requireAuth, async (req, res) => {
@@ -153,26 +244,33 @@ router.get("/listings/address-autocomplete", requireAuth, async (req, res) => {
     }
   }
 
-  // --- Fallback: OpenStreetMap Nominatim (free, NZ government-sourced data, no key required) ---
+  // --- Fallback: OpenStreetMap Nominatim (free NZ address fallback, no key required) ---
   try {
-    const params = new URLSearchParams({
-      q: q.trim(),
+    const trimmed = q.trim();
+    const baseParams = {
       format: "json",
       countrycodes: "nz",
       addressdetails: "1",
       limit: "7",
       "accept-language": "en",
-    });
-    const nominatimUrl = `https://nominatim.openstreetmap.org/search?${params.toString()}`;
-    const r = await fetch(nominatimUrl, {
-      signal: AbortSignal.timeout(5000),
-      headers: {
-        "User-Agent": "ProjectAlpha/1.0 (https://www.projectalpha.app; contact@projectalpha.app)",
-        "Accept": "application/json",
-      },
-    });
-    const items = (await r.json()) as Record<string, unknown>[];
-    const predictions = Array.isArray(items) ? items.map(nominatimToPrediction) : [];
+    };
+    const queries = [
+      new URLSearchParams({ ...baseParams, q: trimmed }),
+      new URLSearchParams({ ...baseParams, street: trimmed, country: "New Zealand" }),
+    ];
+    const rows: Record<string, unknown>[] = [];
+    const seen = new Set<string>();
+    for (const params of queries) {
+      const items = await fetchNominatim("search", params);
+      for (const item of items) {
+        const key = `${item.osm_type ?? ""}:${item.osm_id ?? ""}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push(item);
+      }
+      if (rows.length >= 7) break;
+    }
+    const predictions = rows.slice(0, 7).map(nominatimToPrediction);
     res.json({ predictions, source: "osm" });
   } catch {
     res.json({ predictions: [], source: "none" });
@@ -182,16 +280,43 @@ router.get("/listings/address-autocomplete", requireAuth, async (req, res) => {
 router.get("/listings/place-details/:placeId", requireAuth, async (req, res) => {
   const { placeId } = req.params;
 
-  // OSM-sourced result: the frontend already embedded lat/lon/address in the prediction,
-  // so we return a normalised result object directly from query params.
+  // OSM-sourced result: the frontend usually embeds lat/lon/address in the prediction.
+  // If an older client only sends the place id, fall back to Nominatim lookup.
   if (placeId.startsWith("osm:")) {
-    const lat = req.query.lat as string | undefined;
-    const lon = req.query.lon as string | undefined;
-    const street = req.query.street as string | undefined;
-    const suburb = req.query.suburb as string | undefined;
-    const city = req.query.city as string | undefined;
-    const postcode = req.query.postcode as string | undefined;
-    const label = req.query.label as string | undefined;
+    let lat = req.query.lat as string | undefined;
+    let lon = req.query.lon as string | undefined;
+    let street = req.query.street as string | undefined;
+    let suburb = req.query.suburb as string | undefined;
+    let city = req.query.city as string | undefined;
+    let postcode = req.query.postcode as string | undefined;
+    let label = req.query.label as string | undefined;
+
+    if (!street && !suburb && !city && !postcode) {
+      const lookupCode = osmLookupCode(placeId);
+      if (lookupCode) {
+        try {
+          const params = new URLSearchParams({
+            osm_ids: lookupCode,
+            format: "json",
+            addressdetails: "1",
+            "accept-language": "en",
+          });
+          const rows = await fetchNominatim("lookup", params);
+          const parts = rows[0] ? normaliseNominatimAddress(rows[0]) : null;
+          if (parts) {
+            lat = cleanAddressText(rows[0]?.lat);
+            lon = cleanAddressText(rows[0]?.lon);
+            street = parts.street;
+            suburb = parts.suburb;
+            city = parts.city;
+            postcode = parts.postcode;
+            label = parts.label;
+          }
+        } catch {
+          // Return the partial details below.
+        }
+      }
+    }
 
     const addressComponents: { long_name: string; types: string[] }[] = [];
     if (street) addressComponents.push({ long_name: street, types: ["route"] });

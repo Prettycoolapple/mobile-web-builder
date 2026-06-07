@@ -51,9 +51,64 @@ type Prediction = {
   description: string;
   structured_formatting?: {
     main_text: string;
-    secondary_text: string;
+    secondary_text?: string;
+  };
+  source?: string;
+  lat?: string;
+  lng?: string;
+  address?: {
+    street?: string;
+    suburb?: string;
+    city?: string;
+    postcode?: string;
+    label?: string;
+  };
+  _source?: string;
+  _lat?: string;
+  _lon?: string;
+  _address?: {
+    house_number?: string;
+    road?: string;
+    pedestrian?: string;
+    footway?: string;
+    suburb?: string;
+    neighbourhood?: string;
+    city_district?: string;
+    city?: string;
+    town?: string;
+    village?: string;
+    county?: string;
+    postcode?: string;
   };
 };
+
+function predictionAddressMeta(prediction: Prediction) {
+  if (prediction.address) {
+    return {
+      street: prediction.address.street ?? "",
+      suburb: prediction.address.suburb ?? "",
+      city: prediction.address.city ?? "",
+      postcode: prediction.address.postcode ?? "",
+      lat: prediction.lat ?? "",
+      lng: prediction.lng ?? "",
+    };
+  }
+  const legacy = prediction._address;
+  if (!legacy) return null;
+  return {
+    street: [legacy.house_number, legacy.road || legacy.pedestrian || legacy.footway || ""].filter(Boolean).join(" "),
+    suburb: legacy.suburb || legacy.neighbourhood || legacy.city_district || "",
+    city: legacy.city || legacy.town || legacy.village || legacy.county || "",
+    postcode: legacy.postcode || "",
+    lat: prediction._lat ?? "",
+    lng: prediction._lon ?? "",
+  };
+}
+
+function positiveIntFromText(value: string) {
+  const parsed = parseInt(value.replace(/[^0-9]/g, ""), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
 
 export default function AddListingScreen() {
   const insets = useSafeAreaInsets();
@@ -182,9 +237,15 @@ export default function AddListingScreen() {
       setShowPredictions(false);
       setPredictions([]);
       Keyboard.dismiss();
+      const isOsm = prediction.source === "osm" || prediction._source === "osm" || prediction.place_id.startsWith("osm:");
+      const osmMeta = isOsm ? predictionAddressMeta(prediction) : null;
+      if (osmMeta) {
+        setAddressMeta(osmMeta);
+        return;
+      }
       try {
         const resp = await fetch(
-          `${getApiBase()}/listings/place-details/${prediction.place_id}`,
+          `${getApiBase()}/listings/place-details/${encodeURIComponent(prediction.place_id)}`,
           { headers: getApiHeaders() }
         );
         const data = (await resp.json()) as { result?: { geometry?: { location?: { lat: number; lng: number } }; address_components?: { types: string[]; long_name: string }[] } };
@@ -259,12 +320,27 @@ export default function AddListingScreen() {
       Alert.alert(t("add_listing.address_required_title"), t("add_listing.address_required_body"));
       return;
     }
+    if (existingImageUrls.length + images.length < 1) {
+      Alert.alert(t("common.error"), "Please add at least one property photo before publishing.");
+      return;
+    }
+    const landAreaSqm = positiveIntFromText(landArea);
+    const floorAreaSqm = positiveIntFromText(floorArea);
+    if (!landAreaSqm || !floorAreaSqm) {
+      Alert.alert(t("common.error"), "Please enter both land area and floor area before publishing.");
+      return;
+    }
+    if (description.trim().length < 20) {
+      Alert.alert(t("common.error"), "Please enter a property description of at least 20 characters.");
+      return;
+    }
     setSubmitting(true);
     try {
       const newlyUploadedUrls: string[] = [];
       for (const img of images) {
         const url = await uploadImage(img);
-        if (url) newlyUploadedUrls.push(url);
+        if (!url) throw new Error("Photo upload failed. Please try again or choose a smaller image.");
+        newlyUploadedUrls.push(url);
       }
       const allImageUrls = [...existingImageUrls, ...newlyUploadedUrls];
 
@@ -279,8 +355,16 @@ export default function AddListingScreen() {
       } else if (priceMode === "poa") {
         priceDisplay = "Price on Application";
       }
+      const backendSearchPriceMin = priceNzd && priceNzd > 0 ? priceNzd : 1;
+      const backendSearchPriceMax = priceNzd && priceNzd > 0 ? priceNzd : 20000000;
+      const propertySubtype = PROPERTY_TYPES.find((item) => item.key === propertyType)?.label ?? propertyType;
+      const methodOfSale =
+        priceMode === "set"
+          ? "asking_price"
+          : "price_by_negotiation";
 
       const payload = {
+        listingTitle: address.trim().split(",")[0]?.trim() || address.trim(),
         address: address.trim(),
         addressStreet: addressMeta.street,
         addressSuburb: addressMeta.suburb,
@@ -290,11 +374,17 @@ export default function AddListingScreen() {
         lng: addressMeta.lng,
         listingType,
         propertyType,
-        bedrooms: bedrooms || undefined,
-        bathrooms: bathrooms || undefined,
-        garages: garages || undefined,
-        landAreaSqm: landArea ? parseInt(landArea.replace(/[^0-9]/g, ""), 10) || undefined : undefined,
-        floorAreaSqm: floorArea ? parseInt(floorArea.replace(/[^0-9]/g, ""), 10) || undefined : undefined,
+        propertySubtype,
+        bedrooms,
+        bathrooms,
+        toilets: bathrooms || 0,
+        garages,
+        landAreaSqm,
+        floorAreaSqm,
+        titleStatus: "other",
+        methodOfSale,
+        backendSearchPriceMin,
+        backendSearchPriceMax,
         priceNzd,
         priceDisplay,
         description: description.trim() || undefined,
@@ -319,8 +409,8 @@ export default function AddListingScreen() {
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setSuccessVisible(true);
-    } catch {
-      Alert.alert(t("common.error"), t("common.try_again_later"));
+    } catch (error) {
+      Alert.alert(t("common.error"), error instanceof Error ? error.message : t("common.try_again_later"));
     } finally {
       setSubmitting(false);
     }
@@ -328,7 +418,7 @@ export default function AddListingScreen() {
     address, addressMeta, listingType, propertyType,
     bedrooms, bathrooms, garages, landArea, floorArea,
     priceMode, priceInput, description, images, existingImageUrls, selectedAmenities,
-    uploadImage, getApiBase, getApiHeaders, isEditMode, editId,
+    uploadImage, getApiBase, getApiHeaders, isEditMode, editId, t,
   ]);
 
   const handleSuccessDismiss = useCallback(() => {
