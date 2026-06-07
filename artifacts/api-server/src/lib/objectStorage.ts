@@ -312,9 +312,28 @@ async function signObjectURL({
 // If any of the first four vars are missing the service is disabled and the
 // existing GCS / inline fallback chain takes over.
 
+// Namespaces that must go into the private bucket (sensitive documents).
+// Everything else (listing-images, avatars, dm-images) uses the public bucket.
+const PRIVATE_NAMESPACES = new Set(["listing-documents", "provider-certificates"]);
+
+/** Extract a bucket name from a Supabase/S3 object URL (last path segment). */
+function bucketFromUrl(url: string): string {
+  try {
+    const parts = new URL(url).pathname.split("/").filter(Boolean);
+    return parts[parts.length - 1] ?? "";
+  } catch {
+    return "";
+  }
+}
+
 export class S3StorageService {
   private client: S3Client | null = null;
-  private bucket: string = "";
+  /** Public bucket — listing photos, avatars, DM images. */
+  private publicBucket: string = "";
+  /** Private bucket — LIM reports, title documents, provider certificates.
+   *  Falls back to publicBucket when not configured. */
+  private privateBucket: string = "";
+  /** Optional CDN / public-access base URL for the public bucket. */
   private publicUrl: string = "";
 
   constructor() {
@@ -335,9 +354,23 @@ export class S3StorageService {
         // rather than virtual-hosted style (https://bucket.host/key).
         forcePathStyle: true,
       });
-      this.bucket = bucketName;
+      this.publicBucket = bucketName;
       this.publicUrl = process.env.S3_PUBLIC_URL?.trim().replace(/\/$/, "") ?? "";
-      console.log(`[storage] S3-compatible storage configured (bucket: ${bucketName}, region: ${region}, public URL: ${this.publicUrl || "none — using API proxy"})`);
+
+      // Private bucket: use S3_PRIVATE_BUCKET_NAME if set; otherwise parse the
+      // bucket name from S3_PRIVATE_URL (last path segment, e.g. "documents").
+      this.privateBucket =
+        process.env.S3_PRIVATE_BUCKET_NAME?.trim() ||
+        bucketFromUrl(process.env.S3_PRIVATE_URL?.trim() ?? "") ||
+        "";
+
+      console.log(
+        `[storage] S3-compatible storage configured` +
+        ` (public bucket: ${this.publicBucket}` +
+        `, private bucket: ${this.privateBucket || `none — using "${this.publicBucket}"`}` +
+        `, region: ${region}` +
+        `, public URL: ${this.publicUrl || "none — using API proxy"})`,
+      );
     } else {
       console.log("[storage] S3-compatible storage not configured — set S3_ENDPOINT, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET_NAME to enable");
     }
@@ -347,14 +380,25 @@ export class S3StorageService {
     return this.client !== null;
   }
 
+  /** Resolve which bucket a given namespace should use. */
+  private resolveBucket(namespace: string): string {
+    return PRIVATE_NAMESPACES.has(namespace) && this.privateBucket
+      ? this.privateBucket
+      : this.publicBucket;
+  }
+
   /**
    * Upload a file buffer to S3/R2.
    *
+   * Automatically routes to the private bucket for sensitive namespaces
+   * (listing-documents, provider-certificates) and to the public bucket for
+   * everything else (listing-images, avatars, dm-images).
+   *
    * Returns:
-   *   objectPath  — internal path used for API-proxied serving: /s3/<key>
-   *   fileUrl     — where clients should load the file from:
-   *                 • If S3_PUBLIC_URL is set: direct R2 public URL (no proxy)
-   *                 • Otherwise: /api/storage/s3/<key> (proxied through API)
+   *   objectPath  — internal path for API-proxied serving: /s3/<namespace>/<key>
+   *   fileUrl     — where clients load the file from:
+   *                 • Public namespace + S3_PUBLIC_URL set → direct CDN URL
+   *                 • Otherwise → /api/storage/s3/<namespace>/<key> (API proxy)
    */
   async upload(
     buffer: Buffer | Uint8Array,
@@ -363,12 +407,14 @@ export class S3StorageService {
   ): Promise<{ objectPath: string; fileUrl: string }> {
     if (!this.client) throw new Error("S3 storage is not configured");
 
+    const bucket = this.resolveBucket(namespace);
+    const isPrivate = PRIVATE_NAMESPACES.has(namespace);
     const ext = mimetype.split("/")[1]?.split(";")[0]?.replace("jpeg", "jpg") || "bin";
     const key = `${namespace}/${randomUUID()}.${ext}`;
 
     await this.client.send(
       new PutObjectCommand({
-        Bucket: this.bucket,
+        Bucket: bucket,
         Key: key,
         Body: Buffer.from(buffer),
         ContentType: mimetype,
@@ -377,27 +423,32 @@ export class S3StorageService {
     );
 
     const objectPath = `/s3/${key}`;
-    const fileUrl = this.publicUrl
-      ? `${this.publicUrl}/${key}`
-      : `/api/storage/s3/${key}`;
+    // Private files always go through the authenticated API proxy.
+    // Public files use the CDN URL when S3_PUBLIC_URL is set.
+    const fileUrl =
+      !isPrivate && this.publicUrl
+        ? `${this.publicUrl}/${key}`
+        : `/api/storage/s3/${key}`;
 
     return { objectPath, fileUrl };
   }
 
   /**
-   * Download a file from S3/R2 for API-proxied serving.
-   * Returns a Response that can be piped back to the client.
+   * Download a file for API-proxied serving.
+   * Automatically selects the correct bucket based on the namespace prefix in the key.
    */
   async download(key: string, cacheTtlSec = 3600): Promise<Response> {
     if (!this.client) throw new Error("S3 storage is not configured");
 
-    const cmd = new GetObjectCommand({ Bucket: this.bucket, Key: key });
-    const result = await this.client.send(cmd);
+    // Key format: <namespace>/<uuid>.<ext> — extract namespace to pick bucket.
+    const namespace = key.split("/")[0] ?? "";
+    const bucket = this.resolveBucket(namespace);
+
+    const result = await this.client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
 
     const contentType = result.ContentType ?? "application/octet-stream";
     const contentLength = result.ContentLength;
 
-    // AWS SDK returns a web-streams-compatible body
     const body = result.Body as ReadableStream | undefined;
     if (!body) throw new ObjectNotFoundError();
 
@@ -413,8 +464,10 @@ export class S3StorageService {
   /** Check if a key exists without downloading it. */
   async exists(key: string): Promise<boolean> {
     if (!this.client) return false;
+    const namespace = key.split("/")[0] ?? "";
+    const bucket = this.resolveBucket(namespace);
     try {
-      await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
+      await this.client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
       return true;
     } catch {
       return false;
