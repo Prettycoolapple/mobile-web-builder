@@ -16,7 +16,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "nz.devfeasible.app",
-      "buildNumber": "10",
+      "buildNumber": "11",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -61,6 +61,12 @@
       ],
       "expo-video",
       "expo-asset",
+      [
+        "expo-tracking-transparency",
+        {
+          "userTrackingPermission": "Project Alpha uses this identifier to measure app installs and improve ad performance."
+        }
+      ],
       [
         "react-native-fbsdk-next",
         {

@@ -16,13 +16,11 @@ import {
   Fraunces_700Bold,
 } from "@expo-google-fonts/fraunces";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { requestTrackingPermissionsAsync } from "expo-tracking-transparency";
 import { Stack, useRouter } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 import React, { useEffect, useRef } from "react";
-import { Settings } from "react-native-fbsdk-next";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -58,6 +56,10 @@ function MetaSdkSetup() {
 
     async function initializeMetaSdk() {
       try {
+        const [{ requestTrackingPermissionsAsync }, { Settings }] = await Promise.all([
+          import("expo-tracking-transparency"),
+          import("react-native-fbsdk-next"),
+        ]);
         const { granted } = await requestTrackingPermissionsAsync();
         if (!mounted) return;
 
