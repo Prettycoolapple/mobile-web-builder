@@ -3561,9 +3561,14 @@ router.post("/chat", async (req, res) => {
           let prescreenedIntro = "";
           const criteriaLabel = plainListingBrowse ? "" : (intent.criteria || (wantsDevelopmentDiscovery ? "subdivision/development potential" : ""));
           const strictStandardSubdivision = !plainListingBrowse && isStandardSubdivisionDiscoveryIntent(discoveryCriteria);
-          const discoveryTargetCount = strictStandardSubdivision ? 1 : 3;
-          const discoveryScreenConcurrency = strictStandardSubdivision ? 1 : 5;
-          const discoveryBatchSize = strictStandardSubdivision ? 1 : 8;
+          // Return up to 3 cards for every discovery intent, including strict
+          // subdivision. Strict subdivision used to early-bail at the first card
+          // to save on its expensive per-listing screening; we now target 3 and
+          // bump the strict-path concurrency/batch (1 -> 3) so finding 3 rare
+          // matches stays close to the previous latency instead of tripling it.
+          const discoveryTargetCount = 3;
+          const discoveryScreenConcurrency = strictStandardSubdivision ? 3 : 5;
+          const discoveryBatchSize = strictStandardSubdivision ? 3 : 8;
 
           // Accumulator for listings that couldn't be conclusively screened
           // (zone/build-year/land-area source still failing after the per-listing
