@@ -324,14 +324,20 @@ export class S3StorageService {
     const bucketName = process.env.S3_BUCKET_NAME?.trim();
 
     if (endpoint && accessKeyId && secretAccessKey && bucketName) {
+      // S3_REGION defaults to "auto" (works for Cloudflare R2).
+      // Supabase and AWS require an explicit region such as "ap-southeast-2".
+      const region = process.env.S3_REGION?.trim() || "auto";
       this.client = new S3Client({
-        region: "auto",
+        region,
         endpoint,
         credentials: { accessKeyId, secretAccessKey },
+        // Supabase Storage requires path-style URLs (https://host/bucket/key)
+        // rather than virtual-hosted style (https://bucket.host/key).
+        forcePathStyle: true,
       });
       this.bucket = bucketName;
       this.publicUrl = process.env.S3_PUBLIC_URL?.trim().replace(/\/$/, "") ?? "";
-      console.log(`[storage] S3-compatible storage configured (bucket: ${bucketName}, public URL: ${this.publicUrl || "none — using API proxy"})`);
+      console.log(`[storage] S3-compatible storage configured (bucket: ${bucketName}, region: ${region}, public URL: ${this.publicUrl || "none — using API proxy"})`);
     } else {
       console.log("[storage] S3-compatible storage not configured — set S3_ENDPOINT, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET_NAME to enable");
     }
