@@ -98,6 +98,48 @@
         margin: 0 0 16px;
         color: var(--muted, #7a766f);
       }
+      .agent-welcome-card {
+        max-width: 620px;
+      }
+      .agent-welcome-copy {
+        display: grid;
+        gap: 12px;
+        margin: 0 0 20px;
+        color: var(--muted, #7a766f);
+        line-height: 1.55;
+      }
+      .agent-welcome-copy strong {
+        color: var(--ink, #1d1a17);
+      }
+      .app-download-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .app-download-button {
+        display: flex;
+        min-height: 54px;
+        align-items: center;
+        justify-content: center;
+        padding: 12px 14px;
+        border-radius: 12px;
+        background: var(--ink, #1d1a17);
+        color: #fff;
+        text-decoration: none;
+        font-weight: 800;
+        text-align: center;
+      }
+      .app-download-button:hover {
+        transform: translateY(-1px);
+      }
+      .app-download-button--android {
+        background: #1d6f4b;
+      }
+      @media (max-width: 640px) {
+        .app-download-actions {
+          grid-template-columns: 1fr;
+        }
+      }
     </style>
     <script defer src="/site.js"></script>
     <script defer src="/sales-portal/portal.js"></script>
@@ -639,6 +681,44 @@
             </div>
 
             <p class="form-status" id="paywall-status" aria-live="polite"></p>
+          </div>
+        </section>
+
+        <section class="portal-reset" id="agent-welcome-panel" hidden>
+          <div class="portal-card portal-reset-card agent-welcome-card">
+            <button class="portal-close" type="button" data-agent-welcome-close aria-label="Close">&times;</button>
+            <div class="portal-panel-header">
+              <p class="section-kicker">Account ready</p>
+              <h2>Welcome to Project Alpha</h2>
+              <p>Your agent account is set up. Use this portal for listing management, then move into the app for the live Project Alpha experience.</p>
+            </div>
+            <div class="agent-welcome-copy">
+              <p><strong>The website portal is for managing your property listings.</strong></p>
+              <p>
+                The Project Alpha app is where everything else happens: property search and analysis,
+                conversations with potential leads, and access to verified consultants such as
+                architects, project managers, and planners when questions come up.
+              </p>
+              <p>Download the app and sign in with the same email and password you just created.</p>
+            </div>
+            <div class="app-download-actions">
+              <a
+                class="app-download-button"
+                href="https://apps.apple.com/nz/app/project-alpha/id6762080292"
+                target="_blank"
+                rel="noopener"
+              >
+                iOS App Store
+              </a>
+              <a
+                class="app-download-button app-download-button--android"
+                href="https://play.google.com/store/apps/details?id=nz.devfeasible.app"
+                target="_blank"
+                rel="noopener"
+              >
+                Android Play Store
+              </a>
+            </div>
           </div>
         </section>
 

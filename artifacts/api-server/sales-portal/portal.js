@@ -1058,6 +1058,7 @@
     }
     saveSession(data.token, user);
     showDashboard(user);
+    openAgentWelcome();
   }
 
   // ── Paywall (final signup step) ──────────────────────────────────────────
@@ -1072,6 +1073,16 @@
     const panel = $("#paywall-panel");
     if (panel) panel.hidden = true;
     setStatus($("#paywall-status"), "", null);
+  }
+
+  function openAgentWelcome() {
+    const panel = $("#agent-welcome-panel");
+    if (panel) panel.hidden = false;
+  }
+
+  function closeAgentWelcome() {
+    const panel = $("#agent-welcome-panel");
+    if (panel) panel.hidden = true;
   }
 
   function switchPaywallMode(mode) {
@@ -1569,6 +1580,7 @@
     });
 
     $$("[data-paywall-close]").forEach((button) => button.addEventListener("click", closePaywall));
+    $$("[data-agent-welcome-close]").forEach((button) => button.addEventListener("click", closeAgentWelcome));
     $$(".paywall-toggle-btn").forEach((button) =>
       button.addEventListener("click", () => switchPaywallMode(button.dataset.paywallMode)),
     );
@@ -1580,6 +1592,7 @@
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && !$("#reset-panel").hidden) closeReset();
       if (event.key === "Escape" && !$("#paywall-panel").hidden) closePaywall();
+      if (event.key === "Escape" && !$("#agent-welcome-panel").hidden) closeAgentWelcome();
     });
 
     // Handle the redirect back from Stripe before resuming any stored session.
