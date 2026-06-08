@@ -6,6 +6,7 @@ export * from "./messages";
 export * from "./conversation_syncs";
 export * from "./discovery_shown_listings";
 export * from "./property_cache";
+export * from "./property_shares";
 export * from "./pending_agent_signups";
 export * from "./sales_agent_profiles";
 export * from "./service_provider_profiles";

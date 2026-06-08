@@ -2,10 +2,12 @@ import React, { useEffect, useRef } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, Image, Animated } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
+import { useAuth } from "@/context/AuthContext";
 import { PropertyCandidate, SelectedListingContext } from "@/context/ChatContext";
 import { StarRating } from "@/components/StarRating";
 import { useT } from "@/lib/i18n";
 import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
+import { shareCandidate } from "@/lib/propertyShares";
 
 interface Props {
   candidate: PropertyCandidate;
@@ -127,6 +129,7 @@ function OverallCompositeBadge({
 
 export function PropertyCard({ candidate, onAnalyse, showSubdivisionDisclaimer = false }: Props) {
   const colors = useColors();
+  const { getApiHeaders } = useAuth();
   const { t } = useT();
   const compositeRaw = candidate.scores.composite;
   const isPreliminarySubdivisionScreen = candidate.screeningStatus === "preliminary";
@@ -185,6 +188,13 @@ export function PropertyCard({ candidate, onAnalyse, showSubdivisionDisclaimer =
         max: designLedRange?.max ?? 4,
       })
     : subdivisionRuleText;
+  const handleShare = async () => {
+    try {
+      await shareCandidate(candidate, getApiHeaders());
+    } catch {
+      // Best-effort: leave the card flow uninterrupted if sharing fails.
+    }
+  };
 
   return (
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -196,11 +206,29 @@ export function PropertyCard({ candidate, onAnalyse, showSubdivisionDisclaimer =
             resizeMode="cover"
           />
           {showOverall ? <OverallCompositeBadge composite={composite} plain={false} /> : null}
+          <TouchableOpacity
+            style={[styles.shareBtn, { backgroundColor: "rgba(255,255,255,0.92)", borderColor: colors.border }]}
+            onPress={handleShare}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel="Share property"
+          >
+            <Feather name="share-2" size={15} color={colors.foreground} />
+          </TouchableOpacity>
         </View>
       ) : (
         <View style={[styles.photoPlaceholder, { backgroundColor: colors.muted }]}>
           <Feather name="home" size={28} color={colors.mutedForeground} style={{ opacity: 0.4 }} />
           {showOverall ? <OverallCompositeBadge composite={composite} plain /> : null}
+          <TouchableOpacity
+            style={[styles.shareBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+            onPress={handleShare}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel="Share property"
+          >
+            <Feather name="share-2" size={15} color={colors.foreground} />
+          </TouchableOpacity>
         </View>
       )}
 
@@ -372,6 +400,17 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     position: "relative",
+  },
+  shareBtn: {
+    position: "absolute",
+    top: 10,
+    left: 10,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
   },
   overallBadgePlain: {
     position: "absolute",

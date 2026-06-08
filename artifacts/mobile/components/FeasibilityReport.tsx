@@ -26,6 +26,7 @@ import { StarRating } from "@/components/StarRating";
 import { useColors } from "@/hooks/useColors";
 import { useT, translate, translateForOS, isOSChineseLocale } from "@/lib/i18n";
 import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
+import { shareReport } from "@/lib/propertyShares";
 import {
   filterRiskSummaryRemoveIncompleteDataDisclaimerBullets,
   filterScoreReasonStrings,
@@ -2386,6 +2387,14 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
 
   const photoUrls = getReportPhotoUrls(effectiveReport);
 
+  const handleShare = useCallback(async () => {
+    try {
+      await shareReport(effectiveReport, getApiHeaders());
+    } catch {
+      // Best-effort: sharing should not interrupt report reading.
+    }
+  }, [effectiveReport, getApiHeaders]);
+
   const handleRefreshPhotos = useCallback(async () => {
     const searchId = report.historyId ?? null;
     if (!searchId || isRefreshingPhotos) return;
@@ -2516,6 +2525,15 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
               ) : null}
             </View>
           </View>
+          <TouchableOpacity
+            style={[styles.reportShareBtn, { backgroundColor: "rgba(250,250,249,0.15)", borderColor: "rgba(250,250,249,0.24)" }]}
+            onPress={handleShare}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel="Share report"
+          >
+            <Feather name="share-2" size={16} color="rgba(250,250,249,0.92)" />
+          </TouchableOpacity>
         </View>
 
         {report.overlay_map_image_base64 && (
@@ -2820,6 +2838,7 @@ const styles = StyleSheet.create({
   heroOverallNumber: { fontFamily: "DM_Sans_700Bold", fontSize: 28, lineHeight: 32, color: "#FFFFFF" },
   heroOverallSub: { fontFamily: "DM_Sans_500Medium", fontSize: 12, lineHeight: 16, color: "rgba(255,255,255,0.85)" },
   reportIcon: { width: 32, height: 32, borderRadius: 8, justifyContent: "center", alignItems: "center", flexShrink: 0, marginTop: 2 },
+  reportShareBtn: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, alignItems: "center", justifyContent: "center", flexShrink: 0 },
   address: { fontSize: 16, lineHeight: 22, letterSpacing: -0.2 },
   headerMeta: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 5, flexWrap: "wrap" },
   zoneBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 100 },

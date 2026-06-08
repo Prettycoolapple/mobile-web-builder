@@ -24,6 +24,7 @@ import feedbackRouter from "./feedback";
 import agentCallEventRouter from "./agent-call-event";
 import adminRouter from "./admin";
 import stripeRouter from "./stripe";
+import sharesRouter from "./shares";
 
 const router: IRouter = Router();
 
@@ -52,5 +53,6 @@ router.use(feedbackRouter);
 router.use(agentCallEventRouter);
 router.use(adminRouter);
 router.use(stripeRouter);
+router.use(sharesRouter);
 
 export default router;

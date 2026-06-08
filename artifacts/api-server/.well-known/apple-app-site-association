@@ -1,0 +1,21 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appIDs": [
+          "YR5JZ7RG79.nz.devfeasible.app"
+        ],
+        "components": [
+          {
+            "/": "/share/*",
+            "comment": "Project Alpha property share links"
+          }
+        ],
+        "paths": [
+          "/share/*"
+        ]
+      }
+    ]
+  }
+}

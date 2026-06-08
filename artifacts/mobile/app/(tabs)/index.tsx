@@ -32,6 +32,7 @@ import { getApiBase as resolveApiBase, getApiOrigin } from "@/lib/api";
 import { useT, isOSChineseLocale } from "@/lib/i18n";
 import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
 import { resolveChatQuota } from "@/lib/quotas";
+import { consumePendingShareToken, openShareToken } from "@/lib/propertyShares";
 
 setBaseUrl(getApiOrigin() || null);
 
@@ -328,6 +329,7 @@ export default function SearchScreen() {
   const reportMessageHeightsRef = useRef<Map<string, number>>(new Map());
   const cardScorePollRef = useRef<{ addresses: string[]; sessionId: string; intervalId: ReturnType<typeof setInterval> | null }>({ addresses: [], sessionId: "", intervalId: null });
   const handleAnalyseRef = useRef<((address: string, selectedPhotoUrl?: string | null, selectedListingUrl?: string | null, selectedListingContext?: SelectedListingContext | null, skipAnalyseDisclaimer?: boolean) => Promise<void>) | null>(null);
+  const processedShareTokenRef = useRef<string | null>(null);
   const [listViewportHeight, setListViewportHeight] = useState(0);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [analyseDisclaimerVisible, setAnalyseDisclaimerVisible] = useState(false);
@@ -1895,6 +1897,59 @@ export default function SearchScreen() {
   useLayoutEffect(() => {
     handleAnalyseRef.current = handleAnalyse;
   }, [handleAnalyse]);
+
+  useEffect(() => {
+    if (!user || isLoading) return;
+
+    let cancelled = false;
+
+    async function openPendingShare() {
+      const token = await consumePendingShareToken();
+      if (!token || processedShareTokenRef.current === token) return;
+      processedShareTokenRef.current = token;
+
+      try {
+        const share = await openShareToken(token, getApiHeaders());
+        if (cancelled) return;
+
+        if (share.kind === "candidate") {
+          const rawCandidate = share.payload.candidate as PropertyCandidate;
+          const candidate: PropertyCandidate = {
+            ...rawCandidate,
+            address: rawCandidate.address || share.address,
+            scores: rawCandidate.scores ?? { ease: 0, cost: 0, roi: 0, composite: 0 },
+          };
+          const sessionId = createSession();
+          addMessage({ role: "user", content: `Shared property: ${candidate.address}`, type: "text" }, sessionId);
+          addMessage({ role: "assistant", content: "", type: "search", searchResults: [candidate] }, sessionId);
+          return;
+        }
+
+        const rerun = share.payload.rerun;
+        await handleAnalyse(
+          rerun.address || share.address,
+          rerun.selectedPhotoUrl ?? null,
+          rerun.selectedListingUrl ?? null,
+          rerun.selectedListingContext ?? null,
+          true,
+        );
+      } catch {
+        if (cancelled) return;
+        const sessionId = currentSessionId ?? createSession();
+        addMessage({
+          role: "assistant",
+          content: "This shared property link could not be opened. It may have expired.",
+          type: "text",
+        }, sessionId);
+      }
+    }
+
+    void openPendingShare();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [addMessage, createSession, currentSessionId, getApiHeaders, handleAnalyse, isLoading, user]);
 
   const confirmAnalyseDisclaimer = useCallback(async () => {
     const action = pendingAnalyseActionRef.current;

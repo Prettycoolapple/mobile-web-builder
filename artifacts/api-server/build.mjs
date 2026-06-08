@@ -207,6 +207,7 @@ async function buildAll() {
   for (const dir of ["privacy", "terms", "support", "contact", "sales-portal"]) {
     await cp(path.join(artifactDir, dir), path.join(deployDir, dir), { recursive: true });
   }
+  await cp(path.join(artifactDir, ".well-known"), path.join(deployDir, ".well-known"), { recursive: true });
 
   await buildAdminPortal(deployDir);
 }

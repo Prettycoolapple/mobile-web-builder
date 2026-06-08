@@ -17,6 +17,10 @@
       "supportsTablet": false,
       "bundleIdentifier": "nz.devfeasible.app",
       "buildNumber": "12",
+      "associatedDomains": [
+        "applinks:projectalpha.app",
+        "applinks:www.projectalpha.app"
+      ],
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -28,6 +32,28 @@
       "blockedPermissions": [
         "android.permission.READ_MEDIA_IMAGES",
         "android.permission.READ_MEDIA_VIDEO"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "projectalpha.app",
+              "pathPrefix": "/share"
+            },
+            {
+              "scheme": "https",
+              "host": "www.projectalpha.app",
+              "pathPrefix": "/share"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
       ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/icon.png",

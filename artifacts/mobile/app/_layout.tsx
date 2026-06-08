@@ -18,11 +18,12 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { requestTrackingPermissionsAsync } from "expo-tracking-transparency";
 import { Stack, useRouter } from "expo-router";
+import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 import { Settings } from "react-native-fbsdk-next";
-import React, { useEffect, useRef } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -32,6 +33,7 @@ import { ChatProvider } from "@/context/ChatContext";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { DmProvider } from "@/context/DmContext";
 import { getApiBase } from "@/lib/api";
+import { parseShareTokenFromUrl, storePendingShareToken } from "@/lib/propertyShares";
 import { initializeRevenueCat, SubscriptionProvider } from "@/lib/revenuecat";
 import { LocaleProvider, LocaleSync } from "@/lib/i18n";
 
@@ -188,6 +190,50 @@ function NotificationSetup() {
   return null;
 }
 
+function ShareLinkSetup() {
+  const { isLoading, user } = useAuth();
+  const router = useRouter();
+  const checkedInitialUrlRef = useRef(false);
+  const [pendingRouteToken, setPendingRouteToken] = useState<string | null>(null);
+
+  const routeToShareEntry = useCallback(() => {
+    router.replace((user ? "/(tabs)" : "/(auth)/welcome") as never);
+  }, [router, user]);
+
+  const handleShareUrl = useCallback(async (url: string | null | undefined) => {
+    const token = parseShareTokenFromUrl(url);
+    if (!token) return;
+    try {
+      await storePendingShareToken(token);
+      setPendingRouteToken(token);
+      if (!isLoading) routeToShareEntry();
+    } catch {
+      // A bad link should not block normal app startup.
+    }
+  }, [isLoading, routeToShareEntry]);
+
+  useEffect(() => {
+    const sub = Linking.addEventListener("url", (event) => {
+      void handleShareUrl(event.url);
+    });
+    return () => sub.remove();
+  }, [handleShareUrl]);
+
+  useEffect(() => {
+    if (isLoading || checkedInitialUrlRef.current) return;
+    checkedInitialUrlRef.current = true;
+    Linking.getInitialURL().then(handleShareUrl).catch(() => {});
+  }, [handleShareUrl, isLoading]);
+
+  useEffect(() => {
+    if (!pendingRouteToken || isLoading) return;
+    routeToShareEntry();
+    setPendingRouteToken(null);
+  }, [isLoading, pendingRouteToken, routeToShareEntry]);
+
+  return null;
+}
+
 function RootLayoutNav() {
   return (
     <Stack screenOptions={{ headerShown: false }}>
@@ -241,6 +287,7 @@ export default function RootLayout() {
                       <KeyboardProvider>
                         <MetaSdkSetup />
                         <NotificationSetup />
+                        <ShareLinkSetup />
                         <RootLayoutNav />
                       </KeyboardProvider>
                     </GestureHandlerRootView>
