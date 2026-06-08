@@ -226,8 +226,8 @@ export function assessSubdivisionPathways(input: DesignLedAssessmentInput): Subd
     designLedEligible: true,
     designLedYieldRange: range,
     designLedConfidence: confidence,
-    designLedSummary: `Standard path: ${pluralLot(standardVacantLots)}. Design-led consent may unlock ${yieldText} dwellings/lots to test.`,
-    designLedDetail: `The conservative vacant-lot test supports ${pluralLot(standardVacantLots)}. A design-led land-use + subdivision consent may be worth testing for ${yieldText} dwellings/lots, subject to access, outlook, outdoor living space, HIRB, servicing, stormwater, overlays, and site layout. This is an opportunity flag, not an approval prediction.`,
+    designLedSummary: `Standard path: ${pluralLot(standardVacantLots)}. Design-led consent may unlock ${yieldText} subdivided lots.`,
+    designLedDetail: `The conservative vacant-lot test supports ${pluralLot(standardVacantLots)}. A design-led land-use + subdivision consent may be worth testing for ${yieldText} subdivided lots, subject to access, outlook, outdoor living space, HIRB, servicing, stormwater, overlays, and site layout. This is an opportunity flag, not an approval prediction.`,
   };
 }
 

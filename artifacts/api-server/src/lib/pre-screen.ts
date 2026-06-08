@@ -174,7 +174,7 @@ function makeSummary(
   const zonePart = zone ? `${zone} zoned` : "Zoning TBC";
   const designRange = designLed?.designLedYieldRange;
   const lotPart = designLed?.designLedEligible && designRange
-    ? `Standard path: ${lots} lot${lots === 1 ? "" : "s"}; design-led consent may unlock ${designRange.min}-${designRange.max} to test`
+    ? `Standard path: ${lots} lot${lots === 1 ? "" : "s"}; design-led consent may unlock ${designRange.min}-${designRange.max} subdivided lots`
     : lots > 1
       ? `${lots} lots potentially feasible before site constraints`
       : "Single dwelling only on raw lot-size screen";

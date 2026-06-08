@@ -21,6 +21,7 @@ import {
   buildSubdivisionPathwayNote,
   type LotResult,
   type SubdivisionPathwayNote,
+  type SubdivisionPathwayAssessment,
 } from "./lot-calculator";
 import { estimateCosts, type CostBreakdown } from "./cost-estimator";
 import { getComparables, type ComparableSale, type ComparablesResult } from "./comparables";
@@ -117,6 +118,24 @@ function forceSingleLotResult(lotResult: LotResult): LotResult {
     ...lotResult,
     lots: 1,
     sqm_per_lot: Math.round(lotResult.net_area_sqm || lotResult.gross_area_sqm || 0),
+  };
+}
+
+function applyDesignLedMaximumLotCount(
+  lotResult: LotResult,
+  assessment: SubdivisionPathwayAssessment,
+): LotResult {
+  const designMax = assessment.designLedEligible
+    ? assessment.designLedYieldRange?.max ?? 0
+    : 0;
+
+  if (designMax <= lotResult.lots) return lotResult;
+
+  const netArea = lotResult.net_area_sqm || lotResult.gross_area_sqm || 0;
+  return {
+    ...lotResult,
+    lots: designMax,
+    sqm_per_lot: Math.max(1, Math.round(netArea / designMax)),
   };
 }
 
@@ -1158,6 +1177,7 @@ export async function runPropertyPipeline(
       ? `${subdivisionPathway.headline} Title/typology verification required.`
       : subdivisionPathway.headline;
   }
+  const modelledLotResult = applyDesignLedMaximumLotCount(lotResult, subdivisionAssessment);
 
   const neighbourhoodContextResult = await timed(
     "neighbourhood_context",
@@ -1220,8 +1240,8 @@ export async function runPropertyPipeline(
   // not generic standalone suburb sales.
   const comparableSelection = selectComparableSalesForExit({
     comparables: comparablesResult.comparables,
-    lots: lotResult.lots,
-    sqmPerLot: lotResult.sqm_per_lot,
+    lots: modelledLotResult.lots,
+    sqmPerLot: modelledLotResult.sqm_per_lot,
     subjectLandSqm: merged.land_area_sqm,
     maxSelect: 3,
   });
@@ -1230,9 +1250,9 @@ export async function runPropertyPipeline(
   }
 
   const marketPsm = comparablesResult.avg_price_per_sqm > 0 ? comparablesResult.avg_price_per_sqm : null;
-  const costs = estimateCosts(merged, lotResult.lots, {
+  const costs = estimateCosts(merged, modelledLotResult.lots, {
     market_floor_price_per_sqm: marketPsm,
-    sqm_per_lot: lotResult.sqm_per_lot,
+    sqm_per_lot: modelledLotResult.sqm_per_lot,
   });
 
   const strategyAssessmentPromise = assessDevelopmentStrategy({
@@ -1245,7 +1265,7 @@ export async function runPropertyPipeline(
     bathrooms: merged.bathrooms,
     zone_code: merged.zone_code,
     zone_description: merged.zone_description,
-    potential_lots: lotResult.lots,
+    potential_lots: modelledLotResult.lots,
     contour: merged.contour,
     asbestos_risk: merged.asbestos_risk,
     cv_nzd: merged.cv_nzd,
@@ -1254,7 +1274,7 @@ export async function runPropertyPipeline(
     comparable_sales_count: comparablesResult.comparables.length,
   }).catch((err) => {
     logger.warn({ err: err instanceof Error ? err.message : String(err) }, "Development strategy LLM assessment failed — using deterministic fallback");
-    return buildFallbackDevelopmentStrategyAssessment(merged, lotResult);
+    return buildFallbackDevelopmentStrategyAssessment(merged, modelledLotResult);
   });
 
   const [interestRateOutlook, strategyAssessment] = await Promise.all([
@@ -1271,8 +1291,8 @@ export async function runPropertyPipeline(
         costs,
         comparablesResult.avg_price_per_sqm,
         comparablesResult.avg_sale_price,
-        lotResult.lots,
-        lotResult.sqm_per_lot,
+        modelledLotResult.lots,
+        modelledLotResult.sqm_per_lot,
         interestRateOutlook,
         combinedGdvMultiplier,
       )
@@ -1281,7 +1301,7 @@ export async function runPropertyPipeline(
   const developmentStrategies = calculateDevelopmentStrategies({
     data: merged,
     baseCosts: costs,
-    lotResult,
+    lotResult: modelledLotResult,
     avgSalePrice: comparablesResult.avg_sale_price,
     avgPricePerSqm: comparablesResult.avg_price_per_sqm,
     interestRateOutlook,
@@ -1294,7 +1314,7 @@ export async function runPropertyPipeline(
     subdivisionAssessment,
   });
 
-  const scores = scoreProperty(merged, costs, scenarios, lotResult.lots);
+  const scores = scoreProperty(merged, costs, scenarios, modelledLotResult.lots);
   if (neighbourhoodContext?.marketAdjustment.reason && !scores.roi_reasons.includes(neighbourhoodContext.marketAdjustment.reason)) {
     scores.roi_reasons.push(neighbourhoodContext.marketAdjustment.reason);
   }
@@ -1356,7 +1376,7 @@ export async function runPropertyPipeline(
     selectedListingContext: resolvedListingContext ?? null,
     suppressNonSubjectPhotos: isCombinedListingChild,
     merged,
-    lots: lotResult,
+    lots: modelledLotResult,
     subdivision_pathway: subdivisionPathway,
     costs,
     comparables: comparablesResult.comparables,

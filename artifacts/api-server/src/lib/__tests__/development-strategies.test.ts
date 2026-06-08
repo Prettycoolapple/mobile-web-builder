@@ -5,7 +5,7 @@ import {
 } from "../development-strategies";
 import { estimateGdvPerLot } from "../roi-calculator";
 import type { CostBreakdown } from "../cost-estimator";
-import type { LotResult } from "../lot-calculator";
+import type { LotResult, SubdivisionPathwayAssessment } from "../lot-calculator";
 import type { MergedPropertyData } from "../scrapers/merge";
 import type { NeighbourhoodContext } from "../neighbourhood-context";
 
@@ -170,6 +170,42 @@ describe("development strategies", () => {
     expect(bestAnnualised(hold)).toBeGreaterThan(bestAnnualised(rebuild));
     expect(hold?.recommendation).toBe("recommended");
     expect(rebuild?.recommendation).not.toBe("recommended");
+  });
+
+  it("frames hold/do-nothing ROI ranking as a low-capital benchmark when redevelopment is still preferred by assessment", () => {
+    const olderHighRiskHouse = merged({
+      build_year: 1976,
+      asbestos_risk: "high",
+      cv_nzd: 1_550_000,
+      floor_area_sqm: 207,
+      zone_code: "MHS",
+      min_lot_size_sqm: 400,
+    });
+    const staleAssessment = buildFallbackDevelopmentStrategyAssessment(olderHighRiskHouse, lotResult);
+    const strategies = calculateDevelopmentStrategies({
+      data: olderHighRiskHouse,
+      baseCosts: { ...baseCosts, land_cv_nzd: 1_550_000 },
+      lotResult,
+      avgSalePrice: 1_550_000,
+      avgPricePerSqm: 5_500,
+      interestRateOutlook: "falling",
+      assessment: {
+        ...staleAssessment,
+        recommended_strategy: "demolish_rebuild",
+        strategy_rationales: {
+          ...staleAssessment.strategy_rationales,
+          hold_existing: "The dwelling is a poor candidate for long-term hold without major capital outlay.",
+        },
+      },
+    });
+
+    const hold = strategies.find((strategy) => strategy.id === "hold_existing");
+
+    expect(hold?.recommendation).toBe("recommended");
+    expect(hold?.rationale).toMatch(/low-capital benchmark/i);
+    expect(hold?.rationale).toMatch(/redevelopment should be professionally tested/i);
+    expect(hold?.rationale).not.toMatch(/poor candidate/i);
+    expect(hold?.rationale).not.toMatch(/rank this option/i);
   });
 
   it("floors hold-existing exit value at CV and uses light holding allowances", () => {
@@ -356,6 +392,60 @@ describe("development strategies", () => {
     expect(rebuild?.totalCostHigh).toBe(twoUnitCosts.total_high);
     expect(scenario?.lots).toBe(2);
     expect(scenario?.total_cost_mid).toBe(3_274_000);
+  });
+
+  it("models design-led max yield integrated consent costs and ROI", () => {
+    const downsviewLikeData = merged({
+      build_year: 1976,
+      asbestos_risk: "high",
+      land_area_sqm: 600,
+      zone_code: "MHS",
+      zone_description: "Mixed Housing Suburban",
+      min_lot_size_sqm: 400,
+    });
+    const standardLotResult: LotResult = {
+      ...lotResult,
+      lots: 1,
+      min_lot_size: 400,
+      zone_label: "Mixed Housing Suburban",
+      gross_area_sqm: 600,
+      net_area_sqm: 600,
+      sqm_per_lot: 600,
+    };
+    const subdivisionAssessment: SubdivisionPathwayAssessment = {
+      standardVacantLots: 1,
+      standardPathViable: false,
+      standardMinLotSize: 400,
+      designLedEligible: true,
+      designLedYieldRange: { min: 2, max: 4 },
+      designLedConfidence: "medium",
+      designLedReasons: ["MHS design-led land-use and subdivision pathway."],
+      designLedBlockers: [],
+      designLedSummary: "Standard path: 1 lot. Design-led consent may unlock 2-4 subdivided lots.",
+      designLedDetail: "A design-led land-use + subdivision consent may be worth testing for 2-4 subdivided lots.",
+    };
+    const assessment = buildFallbackDevelopmentStrategyAssessment(downsviewLikeData, standardLotResult);
+    const strategies = calculateDevelopmentStrategies({
+      data: downsviewLikeData,
+      baseCosts,
+      lotResult: standardLotResult,
+      avgSalePrice: 1_250_000,
+      avgPricePerSqm: 9_000,
+      interestRateOutlook: "stable",
+      assessment,
+      subdivisionAssessment,
+    });
+
+    const integrated = strategies.find((strategy) => strategy.id === "integrated_consent");
+    const construction = integrated?.costItems.find((item) => item.label === "Construction");
+
+    expect(integrated).toBeDefined();
+    expect(integrated?.totalCostLow).toBeGreaterThan(baseCosts.total_low);
+    expect(construction?.low).toBeGreaterThan(baseCosts.construction_low);
+    expect(integrated?.roiScenarios.length).toBeGreaterThan(0);
+    expect(integrated?.roiScenarios[0]?.lots).toBe(4);
+    expect(integrated?.assumptions.some((a) => /maximum 4-lot design-led case/i.test(a))).toBe(true);
+    expect(integrated?.assumptions.some((a) => /ROI is not modelled/i.test(a))).toBe(false);
   });
 
   it("treats vacant land as a new-build scenario even if assessment recommends holding", () => {

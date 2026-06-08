@@ -1,4 +1,4 @@
-import type { CostBreakdown } from "./cost-estimator";
+import { estimateCosts, type CostBreakdown } from "./cost-estimator";
 import type { LotResult, SubdivisionPathwayAssessment } from "./lot-calculator";
 import type { MergedPropertyData } from "./scrapers/merge";
 import {
@@ -421,6 +421,16 @@ function appendRoiSelectionReason(
 ): DevelopmentStrategyScenario {
   if (strategy.id !== roiRecommendedId || roiRecommendedId === assessmentRecommendedId) return strategy;
 
+  if (strategy.id === "hold_existing") {
+    return {
+      ...strategy,
+      rationale: "Holding/do nothing is ranked first by ROI only because it avoids near-term capital works; treat it as a low-capital benchmark, not a positive long-term recommendation. The planning and condition assessment still indicates redevelopment should be professionally tested.",
+      rationale_zh: strategy.rationale_zh
+        ? "当前 ROI 测算将保持现状排在第一，主要是因为它避免了近期资本支出；请把它视为低资本投入基准，而不是积极的长期持有建议。规划和房屋状况评估仍显示，应由专业人士测试重开发方案。"
+        : strategy.rationale_zh,
+    };
+  }
+
   return {
     ...strategy,
     rationale: `${strategy.rationale} The computed ROI scenarios currently rank this option ahead of ${STRATEGY_TITLES[assessmentRecommendedId].toLowerCase()}.`,
@@ -582,13 +592,22 @@ export function calculateDevelopmentStrategies(params: {
   ];
   if (subdivisionAssessment?.designLedEligible && subdivisionAssessment.designLedYieldRange) {
     const designUnits = subdivisionAssessment.designLedYieldRange.max;
+    const designSqmPerLot = Math.max(1, Math.round((lotResult.net_area_sqm || data.land_area_sqm || lotResult.sqm_per_lot) / designUnits));
+    const designCosts = estimateCosts(data, designUnits, {
+      market_floor_price_per_sqm: avgPricePerSqm > 0 ? avgPricePerSqm : null,
+      sqm_per_lot: designSqmPerLot,
+    });
+    const designGdvPerLot = hasComparablePricing
+      ? r(estimateGdvPerLot(avgPricePerSqm, avgSalePrice, designSqmPerLot) * exitTypologyMultiplier * marketGdvMultiplier)
+      : 0;
+    const designValue = r(designGdvPerLot * designUnits);
     rows.push({
       id: "integrated_consent",
-      costs: rebuildCosts,
-      gdv: 0,
+      costs: designCosts,
+      gdv: designValue,
       units: designUnits,
-      sqmPerLot: Math.max(1, Math.round((lotResult.net_area_sqm || data.land_area_sqm || lotResult.sqm_per_lot) / designUnits)),
-      gdvPerLot: 0,
+      sqmPerLot: designSqmPerLot,
+      gdvPerLot: designGdvPerLot,
     });
   }
 
@@ -609,9 +628,9 @@ export function calculateDevelopmentStrategies(params: {
       rationale_zh: effectiveAssessment.strategy_rationales_zh?.[row.id] ?? fallbackRationaleZh(row.id, data, lotResult),
       assumptions: row.id === "integrated_consent"
         ? [
-            `Indicative design-led yield range: ${subdivisionAssessment?.designLedYieldRange?.min}-${subdivisionAssessment?.designLedYieldRange?.max} dwellings/lots to test.`,
-            "Higher-risk consent pathway: requires integrated land-use and subdivision design before subdivision approval can be relied on.",
-            "ROI is not modelled for this concept yet; use it as an architect/planner test brief rather than a priced feasibility case.",
+            `Indicative design-led yield range: ${subdivisionAssessment?.designLedYieldRange?.min}-${subdivisionAssessment?.designLedYieldRange?.max} subdivided lots.`,
+            `ROI and costs use the maximum ${row.units}-lot design-led case, including subdivision, new dwellings, construction, consents, finance, and contingency.`,
+            "Higher-risk consent/design pathway: access, servicing, stormwater, HIRB, outdoor living space, outlook, overlays, and final site layout must be tested by architects and planners.",
           ]
         : buildAssumptions(
         row.id,
