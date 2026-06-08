@@ -8,10 +8,15 @@ import {
   agentCallEvents,
   chatLlmFeedback,
   dmThreads,
+  propertyCache,
+  withDbRetry,
 } from "@workspace/db";
 import { requireAdmin } from "../lib/auth";
 import { createStorageReviewToken } from "../lib/storage-review-token";
 import { getPublicAppUrl } from "../lib/env";
+import { logger } from "../lib/logger";
+import { runPropertyPipeline, hasCacheableCore } from "../lib/pipeline";
+import { listForRescan, upsertCachedRaw, countCached } from "../lib/property-cache";
 
 const router = Router();
 
@@ -928,6 +933,194 @@ router.get("/admin/stats/top-addresses", requireAdmin, async (req, res) => {
     req.log.error({ err }, "admin top addresses failed");
     res.status(500).json({ error: "Failed to load top addresses" });
   }
+});
+
+// ── Global property cache — list ─────────────────────────────────────────────
+// GET /admin/property-cache?limit=50&offset=0&search=
+router.get("/admin/property-cache", requireAdmin, async (req, res) => {
+  const limit = parseLimit(req.query.limit, 50, 200);
+  const offset = parseOffset(req.query.offset);
+  const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+
+  try {
+    const where = search
+      ? and(
+          ilike(propertyCache.formattedAddress, `%${search}%`),
+        )
+      : undefined;
+
+    const [rows, totalRows] = await Promise.all([
+      withDbRetry(() =>
+        db
+          .select({
+            id: propertyCache.id,
+            addressKey: propertyCache.addressKey,
+            formattedAddress: propertyCache.formattedAddress,
+            suburb: propertyCache.suburb,
+            canonicalParcelId: propertyCache.canonicalParcelId,
+            pipelineVersion: propertyCache.pipelineVersion,
+            hitCount: propertyCache.hitCount,
+            refreshCount: propertyCache.refreshCount,
+            firstAnalysedAt: propertyCache.firstAnalysedAt,
+            lastRefreshedAt: propertyCache.lastRefreshedAt,
+            sourceUserId: propertyCache.sourceUserId,
+          })
+          .from(propertyCache)
+          .where(where)
+          .orderBy(desc(propertyCache.lastRefreshedAt))
+          .limit(limit)
+          .offset(offset),
+      ),
+      withDbRetry(() =>
+        db
+          .select({ n: sql<number>`count(*)::int` })
+          .from(propertyCache)
+          .where(where),
+      ),
+    ]);
+
+    const total = totalRows[0]?.n ?? 0;
+    res.json({ total, limit, offset, rows });
+  } catch (err) {
+    req.log.error({ err }, "admin property-cache list failed");
+    res.status(500).json({ error: "Failed to load property cache" });
+  }
+});
+
+// ── Global property cache rescan ─────────────────────────────────────────────
+// Operator-triggered refresh of stored raw property data against live sources.
+// Retention is indefinite, so this is the primary freshness mechanism (run it
+// every few months). It snapshots the oldest rows first, re-runs the live
+// pipeline for each, and upserts the result. A failed/empty re-acquisition is
+// skipped so it never overwrites good cached data with nothing. Idempotent and
+// safe to run repeatedly — successful refreshes advance lastRefreshedAt, so the
+// next run naturally picks up the next-oldest rows.
+
+interface RescanStatus {
+  running: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
+  total: number;
+  processed: number;
+  updated: number;
+  failed: number;
+  lastError: string | null;
+}
+
+let rescanStatus: RescanStatus = {
+  running: false,
+  startedAt: null,
+  finishedAt: null,
+  total: 0,
+  processed: 0,
+  updated: 0,
+  failed: 0,
+  lastError: null,
+};
+
+async function runPropertyCacheRescan(opts: {
+  concurrency: number;
+  maxRows: number;
+  olderThanDays: number | null;
+}): Promise<void> {
+  const cutoff =
+    opts.olderThanDays && opts.olderThanDays > 0
+      ? new Date(Date.now() - opts.olderThanDays * 24 * 60 * 60 * 1000)
+      : null;
+  rescanStatus = {
+    running: true,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    total: 0,
+    processed: 0,
+    updated: 0,
+    failed: 0,
+    lastError: null,
+  };
+  try {
+    // Snapshot the batch up front (oldest-first) so persistently-failing rows —
+    // which keep their old lastRefreshedAt — can't be re-selected into an
+    // infinite loop within a single run.
+    const rows = await listForRescan(opts.maxRows, cutoff);
+    rescanStatus.total = rows.length;
+    logger.info({ marker: "CACHE_RESCAN_START", total: rows.length, cutoff }, "Property cache rescan started");
+
+    for (let i = 0; i < rows.length; i += opts.concurrency) {
+      const slice = rows.slice(i, i + opts.concurrency);
+      await Promise.all(
+        slice.map(async (row) => {
+          try {
+            const address = row.formattedAddress ?? null;
+            if (!address) {
+              rescanStatus.failed++;
+              return;
+            }
+            const result = await runPropertyPipeline(address, {});
+            if (hasCacheableCore(result) && result.raw_property) {
+              await upsertCachedRaw({
+                addressKey: row.addressKey,
+                rawData: result.raw_property,
+                canonicalParcelId: result.linz_parcel?.parcel_id ?? row.canonicalParcelId,
+                canonicalTitleId:
+                  result.linz_parcel?.title_no ?? result.linz_title?.title_no ?? row.canonicalTitleId,
+                formattedAddress: result.geocode?.formatted ?? row.formattedAddress,
+                lat: result.geocode?.lat ?? row.lat,
+                lng: result.geocode?.lng ?? row.lng,
+                suburb: result.suburb ?? row.suburb,
+                sourceUserId: row.sourceUserId,
+              });
+              rescanStatus.updated++;
+            } else {
+              // Re-acquisition came back empty — keep the existing cached data.
+              rescanStatus.failed++;
+            }
+          } catch (err) {
+            rescanStatus.failed++;
+            rescanStatus.lastError = (err as Error).message;
+            logger.warn({ err: (err as Error).message, addressKey: row.addressKey }, "Property cache rescan row failed");
+          } finally {
+            rescanStatus.processed++;
+          }
+        }),
+      );
+      logger.info(
+        {
+          marker: "CACHE_RESCAN_PROGRESS",
+          processed: rescanStatus.processed,
+          updated: rescanStatus.updated,
+          failed: rescanStatus.failed,
+          total: rescanStatus.total,
+        },
+        "Property cache rescan progress",
+      );
+    }
+  } catch (err) {
+    rescanStatus.lastError = (err as Error).message;
+    logger.error({ err }, "Property cache rescan crashed");
+  } finally {
+    rescanStatus.running = false;
+    rescanStatus.finishedAt = new Date().toISOString();
+    logger.info({ marker: "CACHE_RESCAN_DONE", ...rescanStatus }, "Property cache rescan complete");
+  }
+}
+
+// POST /admin/property-cache/rescan  body: { concurrency?, maxRows?, olderThanDays? }
+router.post("/admin/property-cache/rescan", requireAdmin, async (req, res) => {
+  if (rescanStatus.running) {
+    res.status(409).json({ error: "Rescan already running", status: rescanStatus });
+    return;
+  }
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const concurrency = Math.min(Math.max(Math.floor(Number(body.concurrency) || 2), 1), 4);
+  const maxRows = Number(body.maxRows) > 0 ? Math.floor(Number(body.maxRows)) : 500;
+  const olderThanDays = Number(body.olderThanDays) > 0 ? Math.floor(Number(body.olderThanDays)) : null;
+  void runPropertyCacheRescan({ concurrency, maxRows, olderThanDays });
+  res.status(202).json({ ok: true, started: true, params: { concurrency, maxRows, olderThanDays } });
+});
+
+// GET /admin/property-cache/rescan/status
+router.get("/admin/property-cache/rescan/status", requireAdmin, (_req, res) => {
+  res.json(rescanStatus);
 });
 
 export default router;

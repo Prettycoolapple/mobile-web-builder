@@ -334,6 +334,47 @@ Return ONLY a JSON array of ${maxSelect} zero-based indices, e.g. [0, 3, 5]. No 
   return pool.slice(0, maxSelect);
 }
 
+/**
+ * The raw, externally-acquired data behind an analysis — everything that costs a
+ * network call to a scraper, LINZ, Auckland Council GIS, or a geocoder. This is
+ * what the global property cache stores (see lib/property-cache.ts). Volatile
+ * listing/photo fields are stripped before caching and refetched live on serve.
+ *
+ * When supplied back via `runPropertyPipeline(address, { cachedRaw })`, every
+ * external fetch short-circuits to the cached value while the derived/financial
+ * computation (merge, lots, costs, ROI, scores) still runs fresh.
+ *
+ * `schema_version` pairs with PIPELINE_VERSION in lib/property-cache.ts; bump
+ * both when the SHAPE of this bundle changes so stale rows are treated as misses.
+ */
+export interface RawPropertyData {
+  schema_version: number;
+  geocode: GeoResult;
+  suburb: string;
+  linz_parcel: LinzParcel | null;
+  linz_title: LinzTitle | null;
+  linz_memorials: Awaited<ReturnType<typeof fetchLINZMemorials>>;
+  linz_lrs_preview_result: {
+    preview: LinzLrsAddressTitlePreview | null;
+    status: LinzLrsTitlePreviewStatus;
+    source: LinzLrsTitlePreviewSource;
+  } | null;
+  zone: ZoneResult | null;
+  overlays: Overlay[];
+  contour: ContourResult | null;
+  infrastructure: InfrastructureItem[];
+  property_history: PropertyHistory | null;
+  hougarden: HougardenData | null;
+  oneroof: OneRoofData | null;
+  qv: QVData | null;
+  homes: HomesData | null;
+  propertyValue: PropertyValueData | null;
+  neighbourhood_context: NeighbourhoodContext | null;
+  transport_context: TransportContext | null;
+}
+
+export const RAW_PROPERTY_SCHEMA_VERSION = 1;
+
 export interface PipelineResult {
   address_input: string;
   suburb: string;
@@ -375,6 +416,55 @@ export interface PipelineResult {
   failed_sources: string[];
   timing_ms: Record<string, number>;
   completed_at: string;
+  /** The raw acquired data, suitable for caching. Present whenever geocoding
+   * succeeded (i.e. not on the geocode-failure early return). */
+  raw_property?: RawPropertyData | null;
+  /** True when external fetches were served from a supplied `cachedRaw` bundle
+   * rather than hit live. The derived numbers are still freshly computed. */
+  served_from_cache?: boolean;
+}
+
+/**
+ * Whether a pipeline result holds enough resolved property data to be worth
+ * caching globally. Geocode is mandatory (location anchors every source); beyond
+ * that we require either a LINZ parcel id (stable identity) or at least one core
+ * fact (CV or land area) so we never persist an essentially-empty shell.
+ */
+export function hasCacheableCore(r: PipelineResult): boolean {
+  if (!r.geocode || !r.raw_property) return false;
+  // Require at least one ScrapingBee-backed scraper to have returned data.
+  // hougarden, oneroof, qv, and homes are all browser/ScrapingBee-dependent.
+  // If all four are null, ScrapingBee credits are likely depleted — don't
+  // cache a shell that's missing the scraper layer entirely, since it will
+  // be served stale to every future user of the same address.
+  const hasScraperData = !!(r.raw_property.hougarden || r.raw_property.oneroof || r.raw_property.qv || r.raw_property.homes);
+  if (!hasScraperData) return false;
+  if (r.linz_parcel?.parcel_id) return true;
+  const m = r.merged;
+  return !!(m && (m.cv_nzd != null || m.land_area_sqm != null));
+}
+
+/** Drop bulky, volatile photo fields before caching — photos are refetched live
+ * from the active listing on every serve, never served stale. */
+function stripScraperPhotos<T>(d: T | null): T | null {
+  if (!d) return d;
+  const clone: Record<string, unknown> = { ...(d as unknown as Record<string, unknown>) };
+  if ("photo_urls" in clone) clone.photo_urls = [];
+  if ("main_photo_url" in clone) clone.main_photo_url = null;
+  return clone as unknown as T;
+}
+
+/** OneRoof drives merged.listing_active / listing_price / photos (see
+ * scrapers/merge.ts), so neutralise its volatile listing state before caching.
+ * The live active-listing fetch remains the sole authority on serve. */
+function stripOneRoofVolatile(d: OneRoofData | null): OneRoofData | null {
+  if (!d) return d;
+  const clone: Record<string, unknown> = { ...(d as unknown as Record<string, unknown>) };
+  if ("photo_urls" in clone) clone.photo_urls = [];
+  if ("main_photo_url" in clone) clone.main_photo_url = null;
+  if ("listing_active" in clone) clone.listing_active = false;
+  if ("listing_price" in clone) clone.listing_price = null;
+  return clone as unknown as OneRoofData;
 }
 
 async function timed<T>(
@@ -400,14 +490,26 @@ async function timed<T>(
 
 export async function runPropertyPipeline(
   address: string,
-  options: { preferredRealestateListingUrl?: string | null; selectedListingContext?: SelectedListingContext | null } = {},
+  options: {
+    preferredRealestateListingUrl?: string | null;
+    selectedListingContext?: SelectedListingContext | null;
+    /** When supplied (a global-cache HIT), every external fetch short-circuits to
+     * this bundle's value instead of hitting the network, while the derived
+     * computation and the live listing/photo fetches still run fresh. */
+    cachedRaw?: RawPropertyData | null;
+  } = {},
 ): Promise<PipelineResult> {
   const timing: Record<string, number> = {};
   const failedSources: string[] = [];
   const pipelineStart = Date.now();
   let preferredRealestateListing: ListingResult | null = null;
 
-  logger.info({ address }, "Pipeline starting");
+  // Global property cache: when present, leaf external fetches below resolve from
+  // `cr` instead of the network. The derived/financial layer is untouched and
+  // recomputes every serve, and the active-listing/photo fetches still run live.
+  const cr = options.cachedRaw ?? null;
+
+  logger.info({ address, served_from_cache: !!cr }, "Pipeline starting");
 
   if (options.preferredRealestateListingUrl) {
     const preferredListingResult = await timed(
@@ -423,7 +525,7 @@ export async function runPropertyPipeline(
   }
 
   let geocode: GeoResult | null = null;
-  const geoResult = await timed("geocode", () => geocodeAddress(address), timing);
+  const geoResult = await timed("geocode", () => (cr ? Promise.resolve(cr.geocode) : geocodeAddress(address)), timing);
   geocode = geoResult.value;
 
   if (geoResult.failed || !geocode) {
@@ -505,13 +607,13 @@ export async function runPropertyPipeline(
   }
 
   const { lat, lng } = geocode;
-  const suburb = await resolvePipelineSuburb(address, geocode);
+  const suburb = cr ? cr.suburb : await resolvePipelineSuburb(address, geocode);
   let resolvedListingContext = options.selectedListingContext ?? null;
 
   // LINZ parcel is fetched first so its parcel polygon bbox can be passed to the contour
   // elevation fetch — this ensures we sample across the full parcel extent (not just a
   // fixed box centred on the street address, which misses the downhill portion of a property).
-  const linzParcelResult = await timed("linz_parcel", () => fetchLINZParcel(lat, lng), timing);
+  const linzParcelResult = await timed("linz_parcel", () => (cr ? Promise.resolve(cr.linz_parcel) : fetchLINZParcel(lat, lng)), timing);
   const linzParcelData = linzParcelResult.value;
   if (linzParcelResult.failed) failedSources.push("linz_parcel");
 
@@ -543,18 +645,18 @@ export async function runPropertyPipeline(
     qvResult,
     homesResult,
   ] = await Promise.allSettled([
-    timed("zone",             () => fetchUnitaryPlanZone(lat, lng),                                               timing),
-    timed("overlays",         () => fetchOverlaysWithConsensus(lat, lng, linzParcelData?.bbox ?? null),            timing),
-    timed("contour",          () => fetchContour(lat, lng, linzParcelData?.bbox ?? null, { landAreaSqm: linzParcelData?.area_sqm ?? null }), timing),
-    timed("property_history", () => fetchPropertyHistory(address, lat, lng),                                      timing),
-    timed("infrastructure",   () => fetchInfrastructure(lat, lng, linzParcelData?.bbox ?? null, linzParcelData?.parcel_id ?? null, { landAreaSqm: linzParcelData?.area_sqm ?? null }), timing),
-    timed("hougarden",        () => useBrowserScrapers ? withBrowserSlot(() => scrapeHougarden(lat, lng, address)) : Promise.resolve(null), timing),
-    timed("oneroof",          () => useBrowserScrapers ? withBrowserSlot(() => scrapeOneRoof(address)) : Promise.resolve(null), timing),
-    timed("propertyvalue",    () => scrapePropertyValue(address, geocode!.formatted ?? address),                  timing),
-    timed("qv",               () => useBrowserScrapers ? withBrowserSlot(() => scrapeQV(address)) : Promise.resolve(null), timing),
-    timed("homes",            () => useBrowserScrapers
+    timed("zone",             () => cr ? Promise.resolve(cr.zone)             : fetchUnitaryPlanZone(lat, lng),                                               timing),
+    timed("overlays",         () => cr ? Promise.resolve(cr.overlays)         : fetchOverlaysWithConsensus(lat, lng, linzParcelData?.bbox ?? null),            timing),
+    timed("contour",          () => cr ? Promise.resolve(cr.contour)          : fetchContour(lat, lng, linzParcelData?.bbox ?? null, { landAreaSqm: linzParcelData?.area_sqm ?? null }), timing),
+    timed("property_history", () => cr ? Promise.resolve(cr.property_history) : fetchPropertyHistory(address, lat, lng),                                      timing),
+    timed("infrastructure",   () => cr ? Promise.resolve(cr.infrastructure)   : fetchInfrastructure(lat, lng, linzParcelData?.bbox ?? null, linzParcelData?.parcel_id ?? null, { landAreaSqm: linzParcelData?.area_sqm ?? null }), timing),
+    timed("hougarden",        () => cr ? Promise.resolve(cr.hougarden)        : (useBrowserScrapers ? withBrowserSlot(() => scrapeHougarden(lat, lng, address)) : Promise.resolve(null)), timing),
+    timed("oneroof",          () => cr ? Promise.resolve(cr.oneroof)          : (useBrowserScrapers ? withBrowserSlot(() => scrapeOneRoof(address)) : Promise.resolve(null)), timing),
+    timed("propertyvalue",    () => cr ? Promise.resolve(cr.propertyValue)    : scrapePropertyValue(address, geocode!.formatted ?? address),                  timing),
+    timed("qv",               () => cr ? Promise.resolve(cr.qv)               : (useBrowserScrapers ? withBrowserSlot(() => scrapeQV(address)) : Promise.resolve(null)), timing),
+    timed("homes",            () => cr ? Promise.resolve(cr.homes)            : (useBrowserScrapers
       ? withBrowserSlot(() => scrapeHomes(address, suburb, geocode!.formatted ?? address, { allowBrowserFallback: true }))
-      : scrapeHomes(address, suburb, geocode!.formatted ?? address, { allowBrowserFallback: false }), timing),
+      : scrapeHomes(address, suburb, geocode!.formatted ?? address, { allowBrowserFallback: false })), timing),
   ]);
 
   const zoneData            = zoneResult.status            === "fulfilled" ? zoneResult.value.value            : null;
@@ -587,6 +689,7 @@ export async function runPropertyPipeline(
 
   const zoneCodeForInfrastructure = zoneData?.zone_code?.trim().toUpperCase() ?? null;
   const needsZoneBasedRuralInfrastructure =
+    !cr &&
     zoneCodeForInfrastructure != null &&
     ["CLZ", "LLRZ", "RCSZ", "RUR"].includes(zoneCodeForInfrastructure) &&
     !infrastructureData.some((item) => item.rural_infrastructure_adjusted);
@@ -610,9 +713,11 @@ export async function runPropertyPipeline(
   let linzLrsStatus: LinzLrsTitlePreviewStatus = "failed";
   let linzLrsPreviewSource: LinzLrsTitlePreviewSource = null;
   let easementAnalysis: EasementAnalysis = NO_TITLE; // default: could not resolve title
+  // Retained raw for the cache bundle; easementAnalysis is always recomputed from it.
+  let linzMemorialsRaw: Awaited<ReturnType<typeof fetchLINZMemorials>> = null;
   const lrsTitlePreviewResult = await timed(
     "linz_lrs_title_preview",
-    () => fetchLINZTitlesByAddressDetailed(geocode.formatted ?? address),
+    () => (cr ? Promise.resolve(cr.linz_lrs_preview_result) : fetchLINZTitlesByAddressDetailed(geocode.formatted ?? address)),
     timing,
   );
   if (!lrsTitlePreviewResult.failed && lrsTitlePreviewResult.value) {
@@ -622,8 +727,8 @@ export async function runPropertyPipeline(
   }
   if (linzParcelData?.title_no) {
     const [titleResult, memorialsResult] = await Promise.allSettled([
-      timed("linz_title", () => fetchLINZTitle(linzParcelData.title_no!), timing),
-      timed("linz_memorials", () => fetchLINZMemorials(linzParcelData.title_no!), timing),
+      timed("linz_title", () => (cr ? Promise.resolve(cr.linz_title) : fetchLINZTitle(linzParcelData.title_no!)), timing),
+      timed("linz_memorials", () => (cr ? Promise.resolve(cr.linz_memorials) : fetchLINZMemorials(linzParcelData.title_no!)), timing),
     ]);
     if (titleResult.status === "fulfilled") {
       linzTitle = titleResult.value.value;
@@ -632,6 +737,7 @@ export async function runPropertyPipeline(
     if (memorialsResult.status === "fulfilled" && !memorialsResult.value.failed) {
       // fetchLINZMemorials returns null on API error, [] on genuine "no memorials"
       const memorials = memorialsResult.value.value;
+      linzMemorialsRaw = memorials;
       if (memorials === null) {
         easementAnalysis = API_ERROR;
         failedSources.push("linz_memorials");
@@ -1181,7 +1287,7 @@ export async function runPropertyPipeline(
 
   const neighbourhoodContextResult = await timed(
     "neighbourhood_context",
-    () => fetchNeighbourhoodContext({ lat, lng, subjectParcelId: linzParcelData?.parcel_id ?? null }),
+    () => (cr ? Promise.resolve(cr.neighbourhood_context) : fetchNeighbourhoodContext({ lat, lng, subjectParcelId: linzParcelData?.parcel_id ?? null })),
     timing,
   );
   if (neighbourhoodContextResult.failed) failedSources.push("neighbourhood_context");
@@ -1189,7 +1295,7 @@ export async function runPropertyPipeline(
 
   const transportContextResult = await timed(
     "transport_context",
-    () => fetchTransportContext(lat, lng),
+    () => (cr ? Promise.resolve(cr.transport_context) : fetchTransportContext(lat, lng)),
     timing,
   );
   if (transportContextResult.failed) failedSources.push("transport_context");
@@ -1352,7 +1458,35 @@ export async function runPropertyPipeline(
   const school_zones_detail = await enrichSchoolZonesDetail(schoolZonesForEnrichment, timing);
 
   timing["total"] = Date.now() - pipelineStart;
-  logger.info({ timing, failedSources, cv_nzd: merged.cv_nzd, land_area_sqm: merged.land_area_sqm }, "Pipeline complete");
+  logger.info({ timing, failedSources, served_from_cache: !!cr, cv_nzd: merged.cv_nzd, land_area_sqm: merged.land_area_sqm }, "Pipeline complete");
+
+  // Raw acquired data, suitable for the global cache. Volatile listing/photo
+  // fields are stripped here; they are always refetched live on serve.
+  const rawProperty: RawPropertyData = {
+    schema_version: RAW_PROPERTY_SCHEMA_VERSION,
+    geocode: geocode!,
+    suburb,
+    linz_parcel: linzParcelData,
+    linz_title: linzTitle,
+    linz_memorials: linzMemorialsRaw,
+    linz_lrs_preview_result: {
+      preview: linzLrsTitlePreview,
+      status: linzLrsStatus,
+      source: linzLrsPreviewSource,
+    },
+    zone: zoneData,
+    overlays: overlaysData,
+    contour: contourData,
+    infrastructure: infrastructureData,
+    property_history: propertyHistoryData,
+    hougarden: stripScraperPhotos(hougardenData),
+    oneroof: stripOneRoofVolatile(oneRoofData),
+    qv: stripScraperPhotos(qvData),
+    homes: stripScraperPhotos(homesData),
+    propertyValue: stripScraperPhotos(propertyValueData),
+    neighbourhood_context: neighbourhoodContext,
+    transport_context: transportContext,
+  };
 
   return {
     address_input: address,
@@ -1391,5 +1525,7 @@ export async function runPropertyPipeline(
     failed_sources: failedSources,
     timing_ms: timing,
     completed_at: new Date().toISOString(),
+    raw_property: rawProperty,
+    served_from_cache: !!cr,
   };
 }

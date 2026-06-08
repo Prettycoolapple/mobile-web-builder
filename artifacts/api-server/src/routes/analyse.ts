@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { and, desc, eq, sql } from "drizzle-orm";
-import { db, profiles, searches, feasibilityJobs, withDbRetry } from "@workspace/db";
+import { db, profiles, searches, feasibilityJobs, salesAgentProfiles, withDbRetry } from "@workspace/db";
+import { agentAiUnlimited } from "../lib/agent-entitlements";
 import { logger } from "../lib/logger";
 import {
   generateFeasibilityReport,
@@ -28,7 +29,9 @@ import {
   findSuburbId,
 } from "../lib/scrapers/realestate-api";
 import { suggestNearbySuburbs } from "../lib/claude";
-import { runPropertyPipeline, type PipelineResult } from "../lib/pipeline";
+import { runPropertyPipeline, hasCacheableCore, type PipelineResult } from "../lib/pipeline";
+import { normaliseDiscoveryAddressKey } from "../lib/address-key";
+import { getCachedRaw, upsertCachedRaw, bumpHitCount } from "../lib/property-cache";
 import { buildSubdivisionPathwayNote } from "../lib/lot-calculator";
 import {
   canonicalBuildYearFromReport,
@@ -1051,28 +1054,6 @@ function pickRankedCandidates(candidates: PropertyCandidate[], criteria: string 
   }
   if (isDevelopmentDiscoveryIntent(criteria)) return ranked.slice(0, n);
   return shufflePick(ranked.slice(0, Math.max(n, 6)), n);
-}
-
-function normaliseDiscoveryAddressKey(address: string | null | undefined): string {
-  if (!address?.trim()) return "";
-  return address
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/\b(new zealand|nz|auckland city|auckland)\b/g, "")
-    .replace(/\b\d{4}\b/g, "")
-    .replace(/\b(street|st)\b/g, "street")
-    .replace(/\b(road|rd)\b/g, "road")
-    .replace(/\b(avenue|ave)\b/g, "avenue")
-    .replace(/\b(crescent|cres)\b/g, "crescent")
-    .replace(/\b(place|pl)\b/g, "place")
-    .replace(/\b(drive|dr)\b/g, "drive")
-    .replace(/\b(lane|ln)\b/g, "lane")
-    .replace(/\b(terrace|tce)\b/g, "terrace")
-    .replace(/\b(parade|pde)\b/g, "parade")
-    .replace(/\b(boulevard|blvd)\b/g, "boulevard")
-    .replace(/\b(highway|hwy)\b/g, "highway")
-    .replace(/[^a-z0-9]+/g, "");
 }
 
 function isAlreadyShownAddress(address: string | null | undefined, shownKeys: Set<string>): boolean {
@@ -2246,13 +2227,43 @@ async function runFeasibilityAnalyseCore(args: {
   const preferredRealestateListingUrl =
     preferredListingUrl && /realestate\.co\.nz/i.test(preferredListingUrl) ? preferredListingUrl : null;
 
+  // Global property cache: reuse the raw acquired data for this address if any
+  // user has analysed it before. The derived/financial numbers still recompute
+  // and the listing/photo fields still refetch live (see runPropertyPipeline).
+  const addressKey = normaliseDiscoveryAddressKey(analysisAddress);
+  const cachedEntry = addressKey ? await getCachedRaw(addressKey) : null;
+  if (cachedEntry) {
+    log.info({ addressKey, marker: "PROPERTY_CACHE_HIT", refreshedAt: cachedEntry.row.lastRefreshedAt }, "Property cache hit — skipping external acquisition");
+  }
+
   const pipelineResult = await runPropertyPipeline(analysisAddress, {
     preferredRealestateListingUrl,
     selectedListingContext: selectedContext,
+    cachedRaw: cachedEntry?.rawData ?? null,
   }).catch((err) => {
     log.warn({ err }, "Pipeline failed during feasibility core — falling back to LLM-only report");
     return null;
   });
+
+  // Persist the raw acquired data globally (or refresh hit stats). Best-effort:
+  // never let a cache write affect the user-facing result.
+  if (pipelineResult && addressKey) {
+    if (cachedEntry) {
+      void bumpHitCount(addressKey);
+    } else if (hasCacheableCore(pipelineResult) && pipelineResult.raw_property) {
+      void upsertCachedRaw({
+        addressKey,
+        rawData: pipelineResult.raw_property,
+        canonicalParcelId: pipelineResult.linz_parcel?.parcel_id ?? null,
+        canonicalTitleId: pipelineResult.linz_parcel?.title_no ?? pipelineResult.linz_title?.title_no ?? null,
+        formattedAddress: pipelineResult.geocode?.formatted ?? analysisAddress,
+        lat: pipelineResult.geocode?.lat ?? null,
+        lng: pipelineResult.geocode?.lng ?? null,
+        suburb: pipelineResult.suburb ?? null,
+        sourceUserId: userId,
+      });
+    }
+  }
 
   let report: Record<string, unknown>;
   const deterministicReport = pipelineResult
@@ -2533,6 +2544,7 @@ router.post("/analyse", async (req, res) => {
           reportsUsedThisMonth: number;
           lastResetAt: Date;
           subscriptionPeriodEndAt: Date | null;
+          subscriptionStatus: string | null;
           specialStatus: string | null;
           specialStatusExpiresAt: Date | null;
         }
@@ -2547,6 +2559,7 @@ router.post("/analyse", async (req, res) => {
             reportsUsedThisMonth: profiles.reportsUsedThisMonth,
             lastResetAt: profiles.lastResetAt,
             subscriptionPeriodEndAt: profiles.subscriptionPeriodEndAt,
+            subscriptionStatus: profiles.subscriptionStatus,
             specialStatus: profiles.specialStatus,
             specialStatusExpiresAt: profiles.specialStatusExpiresAt,
           })
@@ -2638,7 +2651,26 @@ router.post("/analyse", async (req, res) => {
         });
         return;
       }
-      if (usedCount >= limit) {
+      // Sales agents with an active plan (invite/lifetime within their AI-boost
+      // window, or an active paid subscription) get unlimited AI search/analysis.
+      let agentUnlimitedReports = false;
+      {
+        const [agentRow] = await withDbRetry(() =>
+          db
+            .select({ listingPlan: salesAgentProfiles.listingPlan, aiBoostExpiresAt: salesAgentProfiles.aiBoostExpiresAt })
+            .from(salesAgentProfiles)
+            .where(eq(salesAgentProfiles.userId, userId))
+            .limit(1),
+        );
+        if (agentRow) {
+          agentUnlimitedReports = agentAiUnlimited(
+            { subscriptionStatus: profile.subscriptionStatus, subscriptionPeriodEndAt: profile.subscriptionPeriodEndAt },
+            agentRow,
+          );
+        }
+      }
+
+      if (!agentUnlimitedReports && usedCount >= limit) {
         const baseMsg = specialLimit !== null
           ? `You've used all ${limit} reports in your current billing period. Your limit refreshes next month.`
           : isStandard
@@ -3136,6 +3168,7 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
       messagesUsedThisMonth: profiles.messagesUsedThisMonth,
       lastResetAt: profiles.lastResetAt,
       subscriptionPeriodEndAt: profiles.subscriptionPeriodEndAt,
+      subscriptionStatus: profiles.subscriptionStatus,
       role: profiles.role,
       subscriptionTier: profiles.subscriptionTier,
       specialStatus: profiles.specialStatus,
@@ -3145,6 +3178,22 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
     .limit(1);
 
   if (!profile) return { allowed: true, messagesUsed: 0, nearLimit: false, isFreeLimit: false };
+
+  // Sales agents with an active plan get unlimited AI chat — bypass the limit.
+  const [chatAgentRow] = await db
+    .select({ listingPlan: salesAgentProfiles.listingPlan, aiBoostExpiresAt: salesAgentProfiles.aiBoostExpiresAt })
+    .from(salesAgentProfiles)
+    .where(eq(salesAgentProfiles.userId, userId))
+    .limit(1);
+  if (
+    chatAgentRow &&
+    agentAiUnlimited(
+      { subscriptionStatus: profile.subscriptionStatus, subscriptionPeriodEndAt: profile.subscriptionPeriodEndAt },
+      chatAgentRow,
+    )
+  ) {
+    return { allowed: true, messagesUsed: profile.messagesUsedThisMonth, nearLimit: false, isFreeLimit: false };
+  }
 
   const tier = profile.subscriptionTier ?? "free";
   const role = profile.role ?? "general";
@@ -4198,12 +4247,37 @@ router.post("/chat", async (req, res) => {
             }
           };
 
+          const chatAddressKey = normaliseDiscoveryAddressKey(analysisAddress);
+          const chatCachedEntry = chatAddressKey ? await getCachedRaw(chatAddressKey) : null;
+          if (chatCachedEntry) {
+            req.log.info({ addressKey: chatAddressKey, marker: "PROPERTY_CACHE_HIT" }, "Property cache hit — skipping external acquisition");
+          }
+
           const pipelineResult = await runPropertyPipeline(analysisAddress, {
             preferredRealestateListingUrl: selectedListingUrlFromHistory(conversationHistory, analysisAddress),
+            cachedRaw: chatCachedEntry?.rawData ?? null,
           }).catch((err) => {
             req.log.warn({ err }, "Pipeline failed — falling back to AI-only analysis");
             return null;
           });
+
+          if (pipelineResult && chatAddressKey) {
+            if (chatCachedEntry) {
+              void bumpHitCount(chatAddressKey);
+            } else if (hasCacheableCore(pipelineResult) && pipelineResult.raw_property) {
+              void upsertCachedRaw({
+                addressKey: chatAddressKey,
+                rawData: pipelineResult.raw_property,
+                canonicalParcelId: pipelineResult.linz_parcel?.parcel_id ?? null,
+                canonicalTitleId: pipelineResult.linz_parcel?.title_no ?? pipelineResult.linz_title?.title_no ?? null,
+                formattedAddress: pipelineResult.geocode?.formatted ?? analysisAddress,
+                lat: pipelineResult.geocode?.lat ?? null,
+                lng: pipelineResult.geocode?.lng ?? null,
+                suburb: pipelineResult.suburb ?? null,
+                sourceUserId: chatUserId,
+              });
+            }
+          }
 
           if (pipelineResult) {
             const deterministicReport = buildDeterministicFallbackReport(

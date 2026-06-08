@@ -48,6 +48,9 @@ export default function Layout() {
         <NavLink to="/inquiries" className={({ isActive }) => (isActive ? "active" : "")}>
           Inquiries
         </NavLink>
+        <NavLink to="/property-cache" className={({ isActive }) => (isActive ? "active" : "")}>
+          Property reports
+        </NavLink>
         <button className="sidebar-logout" onClick={logout}>
           Log out
         </button>
