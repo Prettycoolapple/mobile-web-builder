@@ -34,6 +34,8 @@
     listingDocuments: [],
     addressTimer: null,
     otpCooldownTimer: null,
+    pendingSignupPayload: null,
+    pendingSignupForm: null,
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -191,6 +193,7 @@
       listings: "My listings",
       profile: "Profile",
       account: "Account",
+      subscription: "Manage subscription",
     };
     $$(".portal-dashboard-tab").forEach((tab) => {
       const active = tab.dataset.dashboardTarget === target;
@@ -204,6 +207,7 @@
     });
     const title = $("#dashboard-title");
     if (title) title.textContent = labels[target] || "Sales dashboard";
+    if (target === "subscription") void loadSubscription();
   }
 
   function listingTitle(listing) {
@@ -1030,29 +1034,277 @@
       agencyName,
     };
 
-    setStatus(status, "Creating your account...", null);
+    // Details are valid — defer account creation to the paywall step, where the
+    // agent either enters an invitation code or subscribes via Stripe.
+    state.pendingSignupPayload = payload;
+    state.pendingSignupForm = form;
+    setStatus(status, "", null);
+    openPaywall();
+  }
+
+  // Shared success handler for both the invitation-code path and the post-Stripe
+  // claim. `form` carries the optional profile photo (invite path only — a File
+  // can't survive the redirect to Stripe, so subscribe agents add it later).
+  async function completeAgentSignupSuccess(data, form) {
+    let user = data.user;
+    const picture = form ? selectedProfilePicture(form) : null;
+    if (picture) {
+      try {
+        const uploaded = await uploadProfilePicture(data.token, picture);
+        user = { ...user, avatarUrl: uploaded.fileUrl };
+      } catch (uploadError) {
+        // Non-fatal: the account exists; the photo can be added from Profile.
+      }
+    }
+    saveSession(data.token, user);
+    showDashboard(user);
+  }
+
+  // ── Paywall (final signup step) ──────────────────────────────────────────
+  function openPaywall() {
+    const panel = $("#paywall-panel");
+    if (panel) panel.hidden = false;
+    switchPaywallMode("subscribe");
+    setStatus($("#paywall-status"), "", null);
+  }
+
+  function closePaywall() {
+    const panel = $("#paywall-panel");
+    if (panel) panel.hidden = true;
+    setStatus($("#paywall-status"), "", null);
+  }
+
+  function switchPaywallMode(mode) {
+    $$(".paywall-toggle-btn").forEach((b) =>
+      b.classList.toggle("is-active", b.dataset.paywallMode === mode),
+    );
+    $$("[data-paywall-pane]").forEach((p) => {
+      p.hidden = p.dataset.paywallPane !== mode;
+    });
+  }
+
+  async function submitPaywallInvite() {
+    const status = $("#paywall-status");
+    const codeInput = $("#paywall-invite-code");
+    const code = String((codeInput && codeInput.value) || "").trim();
+    if (!code) {
+      setStatus(status, "Enter your invitation code.", "error");
+      return;
+    }
+    if (!state.pendingSignupPayload) {
+      setStatus(status, "Please restart your signup.", "error");
+      return;
+    }
+    const payload = { ...state.pendingSignupPayload, invitationCode: code };
+    setStatus(status, "Creating your account…", null);
     try {
       const data = await api("/auth/sales-agent-web-signup", { method: "POST", body: payload });
-      let user = data.user;
-      const picture = selectedProfilePicture(form);
-      if (picture) {
-        setStatus(status, "Account created. Adding your photo...", null);
+      closePaywall();
+      await completeAgentSignupSuccess(data, state.pendingSignupForm);
+    } catch (error) {
+      setStatus(
+        status,
+        getErrorMessage(error, "That invitation code didn't work. Please check it and try again."),
+        "error",
+      );
+    }
+  }
+
+  async function submitPaywallSubscribe() {
+    const status = $("#paywall-status");
+    if (!state.pendingSignupPayload) {
+      setStatus(status, "Please restart your signup.", "error");
+      return;
+    }
+    setStatus(status, "Starting secure checkout…", null);
+    try {
+      const data = await api("/auth/sales-agent-web-signup/checkout", {
+        method: "POST",
+        body: state.pendingSignupPayload,
+      });
+      if (data && data.checkoutUrl) {
+        window.location.assign(data.checkoutUrl);
+      } else {
+        setStatus(status, "Could not start checkout. Please try again.", "error");
+      }
+    } catch (error) {
+      setStatus(status, getErrorMessage(error, "Could not start checkout. Please try again."), "error");
+    }
+  }
+
+  // Handle the redirect back from Stripe Checkout. Returns true if it consumed
+  // the page load (so the normal session-resume should be skipped).
+  async function handleStripeReturn() {
+    const params = new URLSearchParams(window.location.search);
+    const result = params.get("agentSignup");
+    if (!result) return false;
+    const sessionId = params.get("session_id");
+    window.history.replaceState({}, document.title, window.location.pathname);
+
+    if (result === "cancelled") {
+      showAuth();
+      const status = $("#signup-status");
+      if (status) {
+        setStatus(status, "Checkout was cancelled. You can try again or use an invitation code.", "error");
+      }
+      return true;
+    }
+
+    if (result === "success" && sessionId) {
+      const status = $("#signup-status");
+      if (status) setStatus(status, "Finishing your registration…", null);
+      // The account is created by the Stripe webhook; retry a few times in case
+      // it's still processing when we land back here.
+      for (let attempt = 0; attempt < 6; attempt += 1) {
         try {
-          const uploaded = await uploadProfilePicture(data.token, picture);
-          user = { ...user, avatarUrl: uploaded.fileUrl };
-        } catch (uploadError) {
-          setStatus(
-            status,
-            `Your account is ready, but we couldn't add your photo: ${getErrorMessage(uploadError, "Please try again from your profile.")}`,
-            "error",
-          );
+          const data = await api("/auth/sales-agent-web-signup/claim", {
+            method: "POST",
+            body: { checkoutSessionId: sessionId },
+          });
+          await completeAgentSignupSuccess(data, null);
+          return true;
+        } catch (error) {
+          if (error && error.code === "PAYMENT_PENDING") {
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            continue;
+          }
+          showAuth();
+          if (status) {
+            setStatus(status, getErrorMessage(error, "We couldn't finish your registration. Please contact support."), "error");
+          }
+          return true;
         }
       }
-      saveSession(data.token, user);
-      if (!picture) setStatus(status, "Welcome aboard! Setting up your dashboard...", "success");
-      showDashboard(user);
+      showAuth();
+      if (status) {
+        setStatus(status, "Your payment is processing. Please refresh in a moment to finish signing in.", null);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  // ── Manage subscription tab ──────────────────────────────────────────────
+  function subscriptionFeatureList(isInvite) {
+    const ul = document.createElement("ul");
+    ul.className = "paywall-features";
+    const aiText = isInvite
+      ? "Unlimited In-app AI Property search & analysis (3 months)"
+      : "Unlimited In-app AI Property search & analysis";
+    const items = [
+      "Lifetime free property listing",
+      aiText,
+      "Connect with verified consultants",
+      "In-app live translation calls — 80+ languages (coming soon)",
+      "Potential leads (coming soon)",
+    ];
+    for (const t of items) {
+      const li = document.createElement("li");
+      li.textContent = t;
+      ul.appendChild(li);
+    }
+    return ul;
+  }
+
+  function formatDateLong(value) {
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+  }
+
+  async function loadSubscription() {
+    const summary = $("#subscription-summary");
+    const body = $("#subscription-body");
+    setStatus($("#subscription-status"), "", null);
+    if (summary) summary.textContent = "Loading your plan…";
+    if (body) body.innerHTML = "";
+    const session = getSession();
+    if (!session) return;
+    try {
+      const data = await api("/subscription/agent-status", { method: "GET", token: session.token });
+      renderSubscription(data);
     } catch (error) {
-      setStatus(status, getErrorMessage(error, "We couldn't create your account. Please try again."), "error");
+      if (summary) summary.textContent = "Could not load your subscription.";
+    }
+  }
+
+  function renderSubscription(data) {
+    const summary = $("#subscription-summary");
+    const body = $("#subscription-body");
+    if (!body) return;
+    body.innerHTML = "";
+
+    if (data.listingPlan === "subscription") {
+      const status = data.subscriptionStatus || "inactive";
+      const active = status === "active" || status === "trialing";
+      const periodLabel = data.subscriptionPeriodEndAt ? formatDateLong(data.subscriptionPeriodEndAt) : null;
+      if (summary) {
+        if (data.cancelAtPeriodEnd && periodLabel) {
+          summary.textContent = `Your subscription is active and will end on ${periodLabel}.`;
+        } else if (active && periodLabel) {
+          summary.textContent = `Your subscription is active. Renews ${periodLabel}.`;
+        } else if (active) {
+          summary.textContent = "Your subscription is active.";
+        } else {
+          summary.textContent = "Your subscription is inactive. Resubscribe to list properties.";
+        }
+      }
+      body.appendChild(subscriptionFeatureList(false));
+
+      const row = document.createElement("div");
+      row.className = "portal-form-row";
+      if (active && !data.cancelAtPeriodEnd) {
+        const btn = document.createElement("button");
+        btn.className = "button button-quiet";
+        btn.type = "button";
+        btn.textContent = "Cancel subscription";
+        btn.addEventListener("click", () => changeSubscription("cancel"));
+        row.appendChild(btn);
+      } else if (data.cancelAtPeriodEnd) {
+        const btn = document.createElement("button");
+        btn.className = "button button-primary";
+        btn.type = "button";
+        btn.textContent = "Resume subscription";
+        btn.addEventListener("click", () => changeSubscription("resume"));
+        row.appendChild(btn);
+      }
+      if (row.childNodes.length) body.appendChild(row);
+    } else {
+      if (summary) summary.textContent = "Property listing & promotion — Lifetime unlimited";
+      const badge = document.createElement("p");
+      badge.className = "subscription-lifetime-badge";
+      badge.textContent = "✓ Lifetime unlimited";
+      body.appendChild(badge);
+      if (data.aiBoostExpiresAt) {
+        const label = formatDateLong(data.aiBoostExpiresAt);
+        if (label && new Date(data.aiBoostExpiresAt).getTime() > Date.now()) {
+          const note = document.createElement("p");
+          note.className = "subscription-note";
+          note.textContent = `Unlimited AI search & analysis until ${label}.`;
+          body.appendChild(note);
+        }
+      }
+      body.appendChild(subscriptionFeatureList(true));
+    }
+  }
+
+  async function changeSubscription(action) {
+    const status = $("#subscription-status");
+    const session = getSession();
+    if (!session) return;
+    setStatus(status, action === "cancel" ? "Cancelling…" : "Resuming…", null);
+    try {
+      await api(`/subscription/${action}`, { method: "POST", token: session.token });
+      setStatus(
+        status,
+        action === "cancel"
+          ? "Your subscription will end at the end of the current period."
+          : "Your subscription has been resumed.",
+        "success",
+      );
+      await loadSubscription();
+    } catch (error) {
+      setStatus(status, getErrorMessage(error, "Could not update your subscription. Please try again."), "error");
     }
   }
 
@@ -1316,12 +1568,25 @@
       showAuth();
     });
 
+    $$("[data-paywall-close]").forEach((button) => button.addEventListener("click", closePaywall));
+    $$(".paywall-toggle-btn").forEach((button) =>
+      button.addEventListener("click", () => switchPaywallMode(button.dataset.paywallMode)),
+    );
+    const paywallSubscribeBtn = $("#paywall-subscribe-button");
+    if (paywallSubscribeBtn) paywallSubscribeBtn.addEventListener("click", submitPaywallSubscribe);
+    const paywallInviteBtn = $("#paywall-invite-button");
+    if (paywallInviteBtn) paywallInviteBtn.addEventListener("click", submitPaywallInvite);
+
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && !$("#reset-panel").hidden) closeReset();
+      if (event.key === "Escape" && !$("#paywall-panel").hidden) closePaywall();
     });
 
-    const session = getSession();
-    if (session) {
+    // Handle the redirect back from Stripe before resuming any stored session.
+    handleStripeReturn().then((handled) => {
+      if (handled) return;
+      const session = getSession();
+      if (!session) return;
       api("/auth/me", { method: "GET", token: session.token })
         .then((data) => {
           if (data.user && (data.user.role === "sales_agent" || data.user.agencyName)) {
@@ -1336,7 +1601,7 @@
           clearSession();
           showAuth();
         });
-    }
+    });
   }
 
   if (document.readyState === "loading") {

@@ -31,6 +31,11 @@ app.use(
 );
 app.use(cors());
 
+// Stripe webhooks need the raw body for signature verification, so the raw
+// parser must run for this path BEFORE the global JSON parser. body-parser marks
+// req._body once it parses, so express.json() then no-ops for this request.
+app.use("/api/stripe/webhook", express.raw({ type: "application/json" }));
+
 app.use(express.json({ limit: "8mb" }));
 app.use(express.urlencoded({ extended: true, limit: "8mb" }));
 

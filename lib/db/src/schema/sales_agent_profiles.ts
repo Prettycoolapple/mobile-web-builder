@@ -18,6 +18,18 @@ export const salesAgentProfiles = pgTable("sales_agent_profiles", {
   languages: text("languages").array().default(sql`'{}'`).notNull(),
   websiteUrl: text("website_url"),
   bio: text("bio"),
+  /**
+   * How the agent's listing entitlement was obtained:
+   * "lifetime"     → invitation-code (or grandfathered legacy) agent; can always list.
+   * "subscription" → paid via Stripe; can list only while the subscription is active.
+   * null           → legacy row not yet backfilled (treated as lifetime by agentCanList).
+   */
+  listingPlan: text("listing_plan"),
+  /**
+   * For invitation-code agents: end of the 3-month unlimited AI search/analysis
+   * window. After this, AI quotas fall back to normal free limits. Null = no boost.
+   */
+  aiBoostExpiresAt: timestamp("ai_boost_expires_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

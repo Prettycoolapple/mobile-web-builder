@@ -23,6 +23,20 @@ export const profiles = pgTable("profiles", {
    */
   subscriptionPeriodEndAt: timestamp("subscription_period_end_at", { withTimezone: true }),
   stripeCustomerId: text("stripe_customer_id"),
+  /**
+   * Stripe subscription id for web agent subscriptions ($199/mo). Null for
+   * mobile IAP / invite-code / free accounts.
+   */
+  stripeSubscriptionId: text("stripe_subscription_id"),
+  /**
+   * Latest Stripe subscription status, kept in sync by the Stripe webhook:
+   * active | trialing | past_due | canceled | unpaid | incomplete | null.
+   */
+  subscriptionStatus: text("subscription_status"),
+  /** True when the agent has cancelled but the paid period hasn't ended yet. */
+  subscriptionCancelAtPeriodEnd: boolean("subscription_cancel_at_period_end")
+    .default(false)
+    .notNull(),
   avatarUrl: text("avatar_url"),
   isVerified: boolean("is_verified").default(false).notNull(),
   phoneNumber: text("phone_number"),

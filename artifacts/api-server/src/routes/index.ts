@@ -23,6 +23,7 @@ import supportRouter from "./support";
 import feedbackRouter from "./feedback";
 import agentCallEventRouter from "./agent-call-event";
 import adminRouter from "./admin";
+import stripeRouter from "./stripe";
 
 const router: IRouter = Router();
 
@@ -50,5 +51,6 @@ router.use(supportRouter);
 router.use(feedbackRouter);
 router.use(agentCallEventRouter);
 router.use(adminRouter);
+router.use(stripeRouter);
 
 export default router;

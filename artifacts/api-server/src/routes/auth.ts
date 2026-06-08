@@ -10,12 +10,17 @@ import {
   serviceProviderProfiles,
   userLoginEvents,
   userUploads,
+  pendingAgentSignups,
 } from "@workspace/db";
 import { createSessionId, hashPassword, verifyPassword, signToken, requireAuth } from "../lib/auth";
 import { sendNewUserSignupNotification, sendPasswordResetCodeEmail } from "../lib/mailer";
 import { usagePeriodExpired } from "../lib/billingPeriod";
 import { verifyPhoneVerificationToken, consumePhoneVerification } from "./otp";
-import { getPublicAppUrl } from "../lib/env";
+import { getPublicAppUrl, getSalesPortalUrl, getStripeAgentPriceId } from "../lib/env";
+import { getStripe, subscriptionInfoFromStripe } from "../lib/stripe";
+import { isValidInvitationCode } from "../lib/agent-entitlements";
+import { createAgentAccountFromPending, type AgentSubscriptionInfo } from "../lib/agent-account";
+import type Stripe from "stripe";
 import { ObjectNotFoundError, ObjectStorageService } from "../lib/objectStorage";
 import { createStorageReviewToken } from "../lib/storage-review-token";
 
@@ -131,6 +136,8 @@ const salesAgentWebSignupSchema = z
     phoneVerificationToken: z.string().min(1),
     primaryLanguage: z.string().min(1),
     agencyName: z.string().min(1),
+    // Present on the invitation-code path; absent on the subscribe path.
+    invitationCode: z.string().optional(),
   })
   .superRefine((data, ctx) => {
     const phone = data.phoneNumber.replace(/[\s\-()]/g, "").trim();
@@ -468,6 +475,16 @@ router.post("/sales-agent-web-signup", async (req, res) => {
   const primaryLanguage = parsed.data.primaryLanguage.trim();
   const agencyName = parsed.data.agencyName.trim();
 
+  // This endpoint is the INVITATION-code path. Agents without a valid code must
+  // complete registration via the Stripe subscribe flow (checkout/claim).
+  if (!isValidInvitationCode(parsed.data.invitationCode)) {
+    res.status(402).json({
+      error: "A valid invitation code is required, or subscribe to complete registration.",
+      code: "INVITATION_OR_SUBSCRIPTION_REQUIRED",
+    });
+    return;
+  }
+
   try {
     const existing = await db
       .select({ id: profiles.id })
@@ -486,6 +503,8 @@ router.post("/sales-agent-web-signup", async (req, res) => {
     const passwordHash = await hashPassword(parsed.data.password);
     const sessionId = createSessionId();
     const languages = [primaryLanguage];
+    // Invitation agents get lifetime listing + 3 months of unlimited AI search.
+    const aiBoostExpiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
 
     const profile = await db.transaction(async (tx) => {
       const consumed = await consumePhoneVerification(verifiedPhone.vid, phoneTrimmed);
@@ -525,6 +544,8 @@ router.post("/sales-agent-web-signup", async (req, res) => {
         languages,
         regionsCovered: [],
         propertyTypes: [],
+        listingPlan: "lifetime",
+        aiBoostExpiresAt,
       });
 
       return newProfile;
@@ -563,6 +584,186 @@ router.post("/sales-agent-web-signup", async (req, res) => {
     }
     req.log.error({ error }, "Sales-agent web signup failed");
     res.status(500).json({ error: "Signup failed. Please try again.", code: "SIGNUP_FAILED" });
+  }
+});
+
+// ── Subscribe path, step 1: create a Stripe Checkout session ─────────────────
+// The account is NOT created here — signup data is stashed in pending_agent_signups
+// and the account is created only after payment succeeds (webhook / claim).
+router.post("/sales-agent-web-signup/checkout", async (req, res) => {
+  const parsed = salesAgentWebSignupSchema.safeParse(req.body);
+  if (!parsed.success) {
+    const firstError = parsed.error.issues[0];
+    res.status(400).json({
+      error: firstError?.message || "Invalid signup data",
+      code: "VALIDATION_ERROR",
+      details: parsed.error.issues,
+    });
+    return;
+  }
+
+  const emailLower = normalizeEmail(parsed.data.email);
+  const phoneTrimmed = parsed.data.phoneNumber.replace(/[\s\-()]/g, "").trim();
+  const verifiedPhone = verifyPhoneVerificationToken(parsed.data.phoneVerificationToken, phoneTrimmed);
+  if (!verifiedPhone) {
+    res.status(400).json({
+      error: "Phone verification token is invalid or expired. Please re-verify your number.",
+      code: "PHONE_NOT_VERIFIED",
+    });
+    return;
+  }
+  const fullName = parsed.data.fullName.trim();
+  const primaryLanguage = parsed.data.primaryLanguage.trim();
+  const agencyName = parsed.data.agencyName.trim();
+
+  try {
+    const existing = await db
+      .select({ id: profiles.id })
+      .from(profiles)
+      .where(eq(profiles.email, emailLower))
+      .limit(1);
+    if (existing.length > 0) {
+      res.status(409).json({ error: "An account with this email already exists", code: "EMAIL_TAKEN" });
+      return;
+    }
+
+    const passwordHash = await hashPassword(parsed.data.password);
+    const stripe = getStripe();
+
+    // Reuse a customer for this email if one exists, else create one.
+    let customerId: string;
+    const found = await stripe.customers.list({ email: emailLower, limit: 1 });
+    if (found.data[0]) {
+      customerId = found.data[0].id;
+    } else {
+      const customer = await stripe.customers.create({ email: emailLower, name: fullName, phone: phoneTrimmed });
+      customerId = customer.id;
+    }
+
+    const [pending] = await db
+      .insert(pendingAgentSignups)
+      .values({
+        email: emailLower,
+        passwordHash,
+        fullName,
+        phoneNumber: phoneTrimmed,
+        phoneVid: verifiedPhone.vid,
+        primaryLanguage,
+        agencyName,
+        stripeCustomerId: customerId,
+        status: "pending",
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      })
+      .returning({ id: pendingAgentSignups.id });
+
+    const portal = getSalesPortalUrl();
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      customer: customerId,
+      line_items: [{ price: getStripeAgentPriceId(), quantity: 1 }],
+      success_url: `${portal}?agentSignup=success&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${portal}?agentSignup=cancelled`,
+      metadata: { pendingSignupId: pending.id },
+      subscription_data: { metadata: { pendingSignupId: pending.id } },
+    });
+
+    await db
+      .update(pendingAgentSignups)
+      .set({ stripeCheckoutSessionId: session.id })
+      .where(eq(pendingAgentSignups.id, pending.id));
+
+    res.json({ checkoutUrl: session.url });
+  } catch (error) {
+    req.log.error({ error }, "Agent checkout creation failed");
+    res.status(500).json({ error: "Could not start checkout. Please try again.", code: "CHECKOUT_FAILED" });
+  }
+});
+
+// ── Subscribe path, step 2: claim a completed checkout → create account + login ─
+router.post("/sales-agent-web-signup/claim", async (req, res) => {
+  const checkoutSessionId =
+    typeof req.body?.checkoutSessionId === "string" ? req.body.checkoutSessionId.trim() : "";
+  if (!checkoutSessionId) {
+    res.status(400).json({ error: "checkoutSessionId is required", code: "MISSING_SESSION_ID" });
+    return;
+  }
+
+  try {
+    const stripe = getStripe();
+    const session = await stripe.checkout.sessions.retrieve(checkoutSessionId, {
+      expand: ["subscription"],
+    });
+
+    const paid = session.payment_status === "paid" || session.status === "complete";
+    if (!paid) {
+      res.status(409).json({ error: "Payment not completed yet.", code: "PAYMENT_PENDING" });
+      return;
+    }
+
+    const pendingId = session.metadata?.pendingSignupId;
+    if (!pendingId) {
+      res.status(400).json({ error: "Invalid checkout session.", code: "INVALID_SESSION" });
+      return;
+    }
+
+    const [pending] = await db
+      .select()
+      .from(pendingAgentSignups)
+      .where(eq(pendingAgentSignups.id, pendingId))
+      .limit(1);
+    if (!pending) {
+      res.status(404).json({ error: "Signup session not found.", code: "PENDING_NOT_FOUND" });
+      return;
+    }
+
+    const customerId = typeof session.customer === "string" ? session.customer : session.customer?.id ?? null;
+    const subscription = (session.subscription as Stripe.Subscription | null) ?? null;
+    const subInfo: AgentSubscriptionInfo = subscription
+      ? subscriptionInfoFromStripe(subscription, customerId)
+      : {
+          stripeCustomerId: customerId,
+          stripeSubscriptionId: null,
+          subscriptionStatus: "active",
+          subscriptionPeriodEndAt: null,
+          subscriptionCancelAtPeriodEnd: false,
+        };
+
+    const ensured = await createAgentAccountFromPending(pending, subInfo);
+
+    // Issue a fresh device session (auto-login on return from Stripe).
+    const sessionId = createSessionId();
+    await db.update(profiles).set({ activeSessionId: sessionId }).where(eq(profiles.id, ensured.profileId));
+
+    const [profile] = await db.select().from(profiles).where(eq(profiles.id, ensured.profileId)).limit(1);
+    const [agentProfile] = await db
+      .select({ agencyName: salesAgentProfiles.agencyName })
+      .from(salesAgentProfiles)
+      .where(eq(salesAgentProfiles.userId, ensured.profileId))
+      .limit(1);
+
+    const token = signToken(profile.id, profile.email, profile.role, sessionId);
+    recordLoginEvent(profile.id);
+    res.json({
+      token,
+      user: {
+        id: profile.id,
+        email: profile.email,
+        fullName: profile.fullName,
+        role: profile.role,
+        languages: profile.languages,
+        subscriptionTier: profile.subscriptionTier,
+        subscriptionPeriodEndAt: profile.subscriptionPeriodEndAt,
+        reportsUsedThisMonth: profile.reportsUsedThisMonth,
+        messagesUsedThisMonth: profile.messagesUsedThisMonth,
+        avatarUrl: profile.avatarUrl,
+        phoneNumber: profile.phoneNumber,
+        agencyName: agentProfile?.agencyName ?? null,
+        isVerified: profile.isVerified,
+      },
+    });
+  } catch (error) {
+    req.log.error({ error }, "Agent signup claim failed");
+    res.status(500).json({ error: "Could not finish registration. Please try again.", code: "CLAIM_FAILED" });
   }
 });
 

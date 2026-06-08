@@ -55,3 +55,26 @@ export function getTwilioPhoneNumber(): string {
 export function getGoogleCloudProjectId(): string | undefined {
   return readOptional("GOOGLE_CLOUD_PROJECT_ID") ?? undefined;
 }
+
+/** Public URL of the static sales portal (used for Stripe Checkout return URLs). */
+export function getSalesPortalUrl(): string {
+  return `${getPublicAppUrl()}/sales-portal/`;
+}
+
+export function getStripeSecretKey(): string {
+  return readRequired("STRIPE_SECRET_KEY");
+}
+
+export function getStripeWebhookSecret(): string {
+  return readRequired("STRIPE_WEBHOOK_SECRET");
+}
+
+/** The $199/month recurring Price id configured in the Stripe dashboard. */
+export function getStripeAgentPriceId(): string {
+  return readRequired("STRIPE_AGENT_PRICE_ID");
+}
+
+/** Shared invitation code agents can enter to bypass the subscription. */
+export function getAgentInvitationCode(): string {
+  return readOptional("AGENT_INVITATION_CODE") ?? "projectalpha26";
+}

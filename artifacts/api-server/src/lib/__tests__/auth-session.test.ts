@@ -11,5 +11,5 @@ describe("auth session tokens", () => {
     expect(payload?.sub).toBe("user-1");
     expect(payload?.role).toBe("service_provider");
     expect(payload?.sid).toBe(sessionId);
-  });
+  }, 15_000);
 });

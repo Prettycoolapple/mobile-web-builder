@@ -12,6 +12,93 @@
     <link rel="icon" href="/favicon.png" type="image/png" sizes="512x512" />
     <link rel="apple-touch-icon" href="/favicon.png" />
     <link rel="stylesheet" href="/styles.css" />
+    <style>
+      .paywall-toggle {
+        display: flex;
+        gap: 6px;
+        padding: 4px;
+        margin: 8px 0 18px;
+        background: rgba(32, 25, 21, 0.06);
+        border-radius: 12px;
+      }
+      .paywall-toggle-btn {
+        flex: 1;
+        padding: 9px 12px;
+        border: 0;
+        border-radius: 9px;
+        background: transparent;
+        color: var(--muted, #7a766f);
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .paywall-toggle-btn.is-active {
+        background: #fffaf3;
+        color: var(--ink, #1d1a17);
+        box-shadow: 0 1px 3px rgba(32, 25, 21, 0.12);
+      }
+      .paywall-mode[hidden] { display: none; }
+      .paywall-price {
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+        margin-bottom: 14px;
+      }
+      .paywall-amount { font-size: 36px; font-weight: 800; letter-spacing: -0.02em; }
+      .paywall-period { color: var(--muted, #7a766f); font-weight: 600; }
+      .paywall-features {
+        list-style: none;
+        margin: 0 0 18px;
+        padding: 0;
+        display: grid;
+        gap: 10px;
+      }
+      .paywall-features li {
+        position: relative;
+        padding-left: 26px;
+        line-height: 1.4;
+      }
+      .paywall-features li::before {
+        content: "✓";
+        position: absolute;
+        left: 0;
+        top: 0;
+        color: var(--green, #2f9e6b);
+        font-weight: 800;
+      }
+      .paywall-soon {
+        display: inline-block;
+        margin-left: 6px;
+        padding: 1px 8px;
+        border-radius: 999px;
+        background: rgba(32, 25, 21, 0.08);
+        color: var(--muted, #7a766f);
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        vertical-align: middle;
+      }
+      .paywall-fineprint {
+        margin: 10px 0 0;
+        color: var(--muted, #7a766f);
+        font-size: 12px;
+        text-align: center;
+      }
+      .subscription-lifetime-badge {
+        display: inline-block;
+        margin: 0 0 12px;
+        padding: 6px 14px;
+        border-radius: 999px;
+        background: rgba(47, 158, 107, 0.12);
+        color: #1d6f4b;
+        font-weight: 700;
+      }
+      .subscription-note {
+        margin: 0 0 16px;
+        color: var(--muted, #7a766f);
+      }
+    </style>
     <script defer src="/site.js"></script>
     <script defer src="/sales-portal/portal.js"></script>
   </head>
@@ -193,6 +280,9 @@
             </button>
             <button class="portal-dashboard-tab" type="button" data-dashboard-target="account" role="tab" aria-selected="false">
               Account
+            </button>
+            <button class="portal-dashboard-tab" type="button" data-dashboard-target="subscription" role="tab" aria-selected="false">
+              Manage subscription
             </button>
           </div>
 
@@ -492,6 +582,64 @@
               </div>
             </div>
           </section>
+
+          <section class="portal-dashboard-panel" data-dashboard-panel="subscription" role="tabpanel" hidden>
+            <div class="portal-card">
+              <div class="portal-panel-header">
+                <p class="section-kicker">Subscription</p>
+                <h2>Property listing &amp; promotion</h2>
+                <p id="subscription-summary">Loading your plan…</p>
+              </div>
+              <div id="subscription-body"></div>
+              <p class="form-status" id="subscription-status" aria-live="polite"></p>
+            </div>
+          </section>
+        </section>
+
+        <section class="portal-reset" id="paywall-panel" hidden>
+          <div class="portal-card portal-reset-card portal-paywall-card">
+            <button class="portal-close" type="button" data-paywall-close aria-label="Close">&times;</button>
+            <div class="portal-panel-header">
+              <p class="section-kicker">Final step</p>
+              <h2>Activate your agent account</h2>
+              <p>Choose how to complete your registration.</p>
+            </div>
+
+            <div class="paywall-toggle" role="tablist" aria-label="Registration method">
+              <button type="button" class="paywall-toggle-btn is-active" data-paywall-mode="subscribe">Subscribe</button>
+              <button type="button" class="paywall-toggle-btn" data-paywall-mode="invite">I have an invitation code</button>
+            </div>
+
+            <div class="paywall-mode" data-paywall-pane="subscribe">
+              <div class="paywall-price"><span class="paywall-amount">$199</span><span class="paywall-period">/ month</span></div>
+              <ul class="paywall-features">
+                <li>Lifetime free property listing</li>
+                <li>Unlimited In-app AI Property search &amp; analysis</li>
+                <li>Connect with verified consultants</li>
+                <li>In-app live translation calls — 80+ languages <span class="paywall-soon">coming soon</span></li>
+                <li>Potential leads <span class="paywall-soon">coming soon</span></li>
+              </ul>
+              <button class="button button-primary portal-submit" type="button" id="paywall-subscribe-button">Subscribe with card</button>
+              <p class="paywall-fineprint">You'll be redirected to our secure payment provider (Stripe) to enter your card.</p>
+            </div>
+
+            <div class="paywall-mode" data-paywall-pane="invite" hidden>
+              <ul class="paywall-features">
+                <li>Lifetime free property listing</li>
+                <li>Unlimited In-app AI Property search &amp; analysis <span class="paywall-soon">3 months</span></li>
+                <li>Connect with verified consultants</li>
+                <li>In-app live translation calls — 80+ languages <span class="paywall-soon">coming soon</span></li>
+                <li>Potential leads <span class="paywall-soon">coming soon</span></li>
+              </ul>
+              <label class="field">
+                Invitation code
+                <input id="paywall-invite-code" type="text" placeholder="Enter your invitation code" autocomplete="off" />
+              </label>
+              <button class="button button-primary portal-submit" type="button" id="paywall-invite-button">Complete registration</button>
+            </div>
+
+            <p class="form-status" id="paywall-status" aria-live="polite"></p>
+          </div>
         </section>
 
         <section class="portal-reset" id="reset-panel" hidden>

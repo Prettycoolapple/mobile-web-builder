@@ -1,10 +1,35 @@
 import { Router } from "express";
 import { and, eq, desc, isNull } from "drizzle-orm";
 import { z } from "zod";
-import { db, listings, salesAgentProfiles } from "@workspace/db";
+import { db, listings, salesAgentProfiles, profiles } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
+import { agentCanList } from "../lib/agent-entitlements";
 
 const router = Router();
+
+/**
+ * Whether the agent's plan currently allows publishing listings. Lifetime
+ * (invite-code / grandfathered) agents always can; subscription agents only
+ * while their Stripe subscription is active. Returns true when the user has no
+ * sales-agent profile (the role check elsewhere handles non-agents).
+ */
+async function agentListingAllowed(userId: string): Promise<boolean> {
+  const [profile] = await db
+    .select({
+      subscriptionStatus: profiles.subscriptionStatus,
+      subscriptionPeriodEndAt: profiles.subscriptionPeriodEndAt,
+    })
+    .from(profiles)
+    .where(eq(profiles.id, userId))
+    .limit(1);
+  const [agent] = await db
+    .select({ listingPlan: salesAgentProfiles.listingPlan })
+    .from(salesAgentProfiles)
+    .where(eq(salesAgentProfiles.userId, userId))
+    .limit(1);
+  if (!agent) return true;
+  return agentCanList(profile ?? {}, agent);
+}
 
 const propertyTypes = ["house", "apartment", "townhouse", "unit", "section", "commercial", "industrial", "rural", "other"] as const;
 const listingStatuses = ["draft", "active", "paused", "sold", "withdrawn"] as const;
@@ -369,6 +394,14 @@ router.post("/listings", requireAuth, async (req, res) => {
       return;
     }
 
+    if (!(await agentListingAllowed(userId))) {
+      res.status(403).json({
+        error: "Your subscription is inactive. Resubscribe to list properties.",
+        code: "SUBSCRIPTION_REQUIRED",
+      });
+      return;
+    }
+
     const parsed = createListingSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "Some listing details are missing or invalid. Please check each step and try again.", details: parsed.error.issues });
@@ -483,6 +516,18 @@ router.patch("/listings/:id", requireAuth, async (req, res) => {
     }
 
     const data = parsed.data;
+
+    // Publishing/resuming a listing requires an active plan; editing a
+    // non-status field or pausing/withdrawing is always allowed.
+    if (data.status === "active" && existing.status !== "active") {
+      if (!(await agentListingAllowed(userId))) {
+        res.status(403).json({
+          error: "Your subscription is inactive. Resubscribe to publish listings.",
+          code: "SUBSCRIPTION_REQUIRED",
+        });
+        return;
+      }
+    }
     const [updated] = await db
       .update(listings)
       .set({
