@@ -2,7 +2,7 @@
   "expo": {
     "name": "Project Alpha",
     "slug": "workspace",
-    "version": "1.4.4",
+    "version": "1.4.5",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "devfeasible",
@@ -16,7 +16,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "nz.devfeasible.app",
-      "buildNumber": "11",
+      "buildNumber": "12",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -64,7 +64,7 @@
       [
         "expo-tracking-transparency",
         {
-          "userTrackingPermission": "Project Alpha uses this identifier to measure app installs and improve ad performance."
+          "userTrackingPermission": "This identifier will be used to deliver personalized ads to you."
         }
       ],
       [
@@ -76,8 +76,8 @@
           "scheme": "fb2265538447515304",
           "advertiserIDCollectionEnabled": true,
           "autoLogAppEventsEnabled": true,
-          "isAutoInitEnabled": true,
-          "iosUserTrackingPermission": "Project Alpha uses this identifier to measure app installs and improve ad performance."
+          "isAutoInitEnabled": false,
+          "iosUserTrackingPermission": "This identifier will be used to deliver personalized ads to you."
         }
       ]
     ],

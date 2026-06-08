@@ -16,10 +16,12 @@ import {
   Fraunces_700Bold,
 } from "@expo-google-fonts/fraunces";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { requestTrackingPermissionsAsync } from "expo-tracking-transparency";
 import { Stack, useRouter } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
+import { Settings } from "react-native-fbsdk-next";
 import React, { useEffect, useRef } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
@@ -56,16 +58,12 @@ function MetaSdkSetup() {
 
     async function initializeMetaSdk() {
       try {
-        const [{ requestTrackingPermissionsAsync }, { Settings }] = await Promise.all([
-          import("expo-tracking-transparency"),
-          import("react-native-fbsdk-next"),
-        ]);
-        const { granted } = await requestTrackingPermissionsAsync();
+        const { status } = await requestTrackingPermissionsAsync();
         if (!mounted) return;
 
         Settings.initializeSDK();
-        if (Platform.OS === "ios") {
-          await Settings.setAdvertiserTrackingEnabled(granted);
+        if (status === "granted") {
+          await Settings.setAdvertiserTrackingEnabled(true);
         }
       } catch {
         // Keep startup resilient if the native SDK is unavailable in a dev shell.
