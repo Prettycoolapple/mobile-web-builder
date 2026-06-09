@@ -1615,8 +1615,13 @@
 
     form.elements.address.addEventListener("input", (event) => {
       clearSelectedAddress(form);
+      // Capture the value synchronously: `event.currentTarget` is null by the
+      // time the debounced setTimeout fires, which previously made the as-you-type
+      // search throw and silently never run (the dropdown only appeared after a
+      // re-focus). Reading it now fixes live autocomplete while typing.
+      const value = String(event.currentTarget.value || "");
       window.clearTimeout(state.addressTimer);
-      state.addressTimer = window.setTimeout(() => searchAddress(event.currentTarget.value), 250);
+      state.addressTimer = window.setTimeout(() => searchAddress(value), 250);
     });
     form.elements.address.addEventListener("focus", (event) => {
       const value = String(event.currentTarget.value || "");
