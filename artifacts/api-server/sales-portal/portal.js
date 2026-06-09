@@ -3,6 +3,10 @@
   const TOKEN_KEY = "projectAlphaSalesPortalToken";
   const USER_KEY = "projectAlphaSalesPortalUser";
   const MAX_LISTING_PHOTOS = 20;
+  // Every listing photo is normalised to a uniform 4:3 landscape frame so cards
+  // and the detail gallery render consistently across scraped and agent uploads.
+  const LISTING_IMAGE_TARGET_WIDTH = 1600;
+  const LISTING_IMAGE_TARGET_HEIGHT = 1200;
 
   const LISTING_STEPS = ["Photos", "Address", "Property details", "Price & sale", "Documents", "Description"];
   const STEP_ERROR_KEYS = [["imageUrls"], ["address"], ["propertyTag", "details"], ["pricing"], ["documents"], ["copy"]];
@@ -674,6 +678,37 @@
     }
   }
 
+  // Standardize a chosen photo to a uniform 4:3 landscape frame in the browser
+  // before upload: honour EXIF orientation, center-crop ("cover") and re-encode
+  // as JPEG. Runs client-side so it works regardless of the server runtime (the
+  // serverless API can't run the native image pipeline). Falls back to the
+  // original file on any failure so a photo always uploads.
+  async function standardizeListingPhoto(file) {
+    try {
+      if (!file || !file.type || !file.type.startsWith("image/")) return file;
+      if (typeof createImageBitmap !== "function" || typeof document === "undefined") return file;
+      const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" }).catch(() => createImageBitmap(file));
+      const targetW = LISTING_IMAGE_TARGET_WIDTH;
+      const targetH = LISTING_IMAGE_TARGET_HEIGHT;
+      const canvas = document.createElement("canvas");
+      canvas.width = targetW;
+      canvas.height = targetH;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { if (bitmap.close) bitmap.close(); return file; }
+      const scale = Math.max(targetW / bitmap.width, targetH / bitmap.height);
+      const drawW = bitmap.width * scale;
+      const drawH = bitmap.height * scale;
+      ctx.drawImage(bitmap, (targetW - drawW) / 2, (targetH - drawH) / 2, drawW, drawH);
+      if (bitmap.close) bitmap.close();
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.82));
+      if (!blob) return file;
+      const baseName = (file.name || "photo").replace(/\.[^.]+$/, "");
+      return new File([blob], `${baseName}.jpg`, { type: "image/jpeg" });
+    } catch {
+      return file;
+    }
+  }
+
   async function uploadListingPhotos(token, statusElement) {
     const urls = [];
     const total = state.listingPhotos.length;
@@ -681,7 +716,8 @@
       const item = state.listingPhotos[index];
       if (statusElement) setStatus(statusElement, `Uploading photo ${index + 1} of ${total}...`, null);
       try {
-        const uploaded = await uploadFile("/upload/listing-image", token, item.file);
+        const standardized = await standardizeListingPhoto(item.file);
+        const uploaded = await uploadFile("/upload/listing-image", token, standardized);
         urls.push(uploaded.fileUrl);
       } catch (error) {
         const fileName = item.file?.name || `photo ${index + 1}`;

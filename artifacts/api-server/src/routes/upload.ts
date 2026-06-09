@@ -1,9 +1,9 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import multer, { MulterError } from "multer";
 import { eq } from "drizzle-orm";
-import sharp from "sharp";
 import { db, userUploads, profiles } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
+import { logger } from "../lib/logger";
 import { ObjectNotFoundError, ObjectStorageService, s3StorageService } from "../lib/objectStorage";
 
 const router: IRouter = Router();
@@ -15,16 +15,45 @@ const objectStorageService = new ObjectStorageService();
 const LISTING_IMAGE_TARGET_WIDTH = 1600;
 const LISTING_IMAGE_TARGET_HEIGHT = 1200;
 
+// `sharp` is a native module. On the Vercel serverless target it is marked
+// external (see build.mjs) and the lambda ships no node_modules tree for bare
+// imports, so a top-level `import sharp from "sharp"` crashes the WHOLE function
+// at cold start (FUNCTION_INVOCATION_FAILED on every route, including login).
+// We therefore load it lazily and cache the result: when it resolves (the
+// long-running Node server) we standardize; when it can't (Vercel) we degrade
+// gracefully and store the original bytes. Clients also pre-resize before upload,
+// so the server step is a best-effort backstop, never a hard dependency.
+type SharpFactory = typeof import("sharp");
+let sharpModulePromise: Promise<SharpFactory | null> | undefined;
+
+async function loadSharp(): Promise<SharpFactory | null> {
+  if (sharpModulePromise === undefined) {
+    // `sharp` is CJS (`export =`); Node's dynamic import exposes the factory on
+    // `.default`. Marked external for the Vercel lambda (build.mjs), so this
+    // rejects there — caught below so the function never crashes at cold start.
+    sharpModulePromise = import("sharp")
+      .then((mod) => mod.default)
+      .catch((err) => {
+        logger.warn({ err: (err as Error).message }, "sharp unavailable — listing images stored without server-side standardization");
+        return null;
+      });
+  }
+  return sharpModulePromise;
+}
+
 /**
  * Normalise an uploaded listing photo: honour EXIF orientation, center-crop to a
  * consistent 4:3 landscape frame, and re-encode as JPEG. Falls back to the
- * original bytes if the source format can't be decoded (e.g. HEIC on a libvips
- * build without libheif), so an upload never fails purely on image processing.
+ * original bytes if sharp is unavailable or the source format can't be decoded
+ * (e.g. HEIC on a libvips build without libheif), so an upload never fails purely
+ * on image processing.
  */
 async function standardizeListingImage(
   buffer: Buffer,
   mimetype: string,
 ): Promise<{ buffer: Buffer; mimetype: string }> {
+  const sharp = await loadSharp();
+  if (!sharp) return { buffer, mimetype };
   try {
     const out = await sharp(buffer, { failOn: "none" })
       .rotate()
