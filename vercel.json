@@ -18,7 +18,7 @@
     { "source": "/api/healthz", "destination": "/api/healthz" },
     { "source": "/api/(.*)", "destination": "/api" },
     { "source": "/api", "destination": "/api" },
-    { "source": "/share/(.*)", "destination": "/api/share/$1/page" },
+    { "source": "/share/(.*)", "destination": "/api/share/$1" },
     { "source": "/admin", "destination": "/admin/index.html" },
     { "source": "/admin/(.*)", "destination": "/admin/index.html" }
   ],

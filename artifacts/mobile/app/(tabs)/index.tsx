@@ -9,6 +9,8 @@ import {
   FlatList,
   ScrollView,
   TouchableOpacity,
+  ActivityIndicator,
+  RefreshControl,
   Platform,
   Pressable,
   Keyboard,
@@ -19,7 +21,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import * as StoreReview from "expo-store-review";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useChat, ChatMessage, FeasibilityReport, FeasibilityReportGroup, LoadingHint, PropertyCandidate, SelectedListingContext, ServiceProvider, type CandidateScoreUpdate } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
@@ -27,12 +29,15 @@ import { AppRatingPrompt } from "@/components/AppRatingPrompt";
 import { ChatBubble } from "@/components/ChatBubble";
 import { ResponseRatingBar } from "@/components/ResponseRatingBar";
 import { PaywallModal } from "@/components/PaywallModal";
+import { BrowseFilters } from "@/components/BrowseFilters";
+import { BrowseListingCard } from "@/components/BrowseListingCard";
 import { setBaseUrl } from "@workspace/api-client-react";
 import { getApiBase as resolveApiBase, getApiOrigin } from "@/lib/api";
 import { useT, isOSChineseLocale } from "@/lib/i18n";
 import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
 import { resolveChatQuota } from "@/lib/quotas";
 import { consumePendingShareToken, openShareToken } from "@/lib/propertyShares";
+import { BrowseListing, BrowseListingFilters, fetchBrowseListings } from "@/lib/browseListings";
 
 setBaseUrl(getApiOrigin() || null);
 
@@ -83,6 +88,7 @@ type BackgroundAnalyseJob = {
 const BACKGROUND_ANALYSE_JOBS_KEY = "@devfeasible/background-analyse-jobs";
 const APP_RATING_STATE_KEY = "@devfeasible/app-rating-state";
 const ANALYSE_DISCLAIMER_DISMISSED_KEY = "@devfeasible/analyse-disclaimer-dismissed";
+const HOME_MODE_KEY = "@devfeasible/home-mode";
 const APP_RATING_CHAT_THRESHOLD = 3;
 const APP_RATING_SNOOZE_MS = 14 * 24 * 60 * 60 * 1000;
 
@@ -290,6 +296,13 @@ export default function SearchScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const routeParams = useLocalSearchParams<{
+    analyseListingId?: string;
+    analyseAddress?: string;
+    analysePhotoUrl?: string;
+    analyseListingUrl?: string;
+    analyseListingContext?: string;
+  }>();
   const { getApiHeaders, refreshProfile, user } = useAuth();
   const {
     currentSession,
@@ -311,6 +324,14 @@ export default function SearchScreen() {
   } = useChat();
 
   const [inputText, setInputText] = useState("");
+  const [homeMode, setHomeMode] = useState<"ask" | "browse">("ask");
+  const [browseFilters, setBrowseFilters] = useState<BrowseListingFilters>({ listingType: "for_sale", limit: 12 });
+  const [browseListings, setBrowseListings] = useState<BrowseListing[]>([]);
+  const [browseNextCursor, setBrowseNextCursor] = useState<string | null>(null);
+  const [browseLoading, setBrowseLoading] = useState(false);
+  const [browseRefreshing, setBrowseRefreshing] = useState(false);
+  const [browseLoadingMore, setBrowseLoadingMore] = useState(false);
+  const [browseError, setBrowseError] = useState<string | null>(null);
   const [showPaywall, setShowPaywall] = useState(false);
   const [showAppRatingPrompt, setShowAppRatingPrompt] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
@@ -329,6 +350,7 @@ export default function SearchScreen() {
   const reportMessageHeightsRef = useRef<Map<string, number>>(new Map());
   const cardScorePollRef = useRef<{ addresses: string[]; sessionId: string; intervalId: ReturnType<typeof setInterval> | null }>({ addresses: [], sessionId: "", intervalId: null });
   const handleAnalyseRef = useRef<((address: string, selectedPhotoUrl?: string | null, selectedListingUrl?: string | null, selectedListingContext?: SelectedListingContext | null, skipAnalyseDisclaimer?: boolean) => Promise<void>) | null>(null);
+  const processedRouteAnalyseRef = useRef<string | null>(null);
   const processedShareTokenRef = useRef<string | null>(null);
   const [listViewportHeight, setListViewportHeight] = useState(0);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
@@ -381,6 +403,18 @@ export default function SearchScreen() {
       .catch(() => {});
   }, [user?.id]);
 
+  useEffect(() => {
+    AsyncStorage.getItem(HOME_MODE_KEY)
+      .then((value) => {
+        if (value === "ask" || value === "browse") setHomeMode(value);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    AsyncStorage.setItem(HOME_MODE_KEY, homeMode).catch(() => {});
+  }, [homeMode]);
+
   const shouldShowAnalyseDisclaimer = useCallback(
     () => !analyseDisclaimerDismissed,
     [analyseDisclaimerDismissed],
@@ -399,6 +433,37 @@ export default function SearchScreen() {
     const used = user.messagesUsedThisMonth ?? 0;
     setMessageLimitReached(used >= chatQuota.limit);
   }, [user, chatQuota]);
+
+  const loadBrowseListings = useCallback(async (options?: { refresh?: boolean; append?: boolean; cursor?: string | null }) => {
+    const append = options?.append === true;
+    const cursor = options?.cursor ?? null;
+    if (append && !cursor) return;
+    if (append) setBrowseLoadingMore(true);
+    else if (options?.refresh) setBrowseRefreshing(true);
+    else setBrowseLoading(true);
+    setBrowseError(null);
+    try {
+      const result = await fetchBrowseListings(getApiHeaders(), {
+        ...browseFilters,
+        cursor: append ? cursor : null,
+        limit: browseFilters.limit ?? 12,
+      });
+      setBrowseListings((prev) => append ? [...prev, ...result.listings] : result.listings);
+      setBrowseNextCursor(result.nextCursor);
+    } catch (error) {
+      setBrowseError(error instanceof Error ? error.message : "Could not load listings.");
+    } finally {
+      setBrowseLoading(false);
+      setBrowseRefreshing(false);
+      setBrowseLoadingMore(false);
+    }
+  }, [browseFilters, getApiHeaders]);
+
+  useEffect(() => {
+    if (homeMode !== "browse") return;
+    void loadBrowseListings();
+    // Reload when the user changes filters or switches into Browse.
+  }, [homeMode, browseFilters, loadBrowseListings]);
 
   const messages = currentSession?.messages || [];
 
@@ -1899,6 +1964,37 @@ export default function SearchScreen() {
   }, [handleAnalyse]);
 
   useEffect(() => {
+    const address = typeof routeParams.analyseAddress === "string" ? routeParams.analyseAddress.trim() : "";
+    const key = typeof routeParams.analyseListingId === "string"
+      ? routeParams.analyseListingId
+      : address;
+    if (!address || !key || processedRouteAnalyseRef.current === key) return;
+    processedRouteAnalyseRef.current = key;
+    setHomeMode("ask");
+    let selectedListingContext: SelectedListingContext | null = null;
+    if (typeof routeParams.analyseListingContext === "string" && routeParams.analyseListingContext.trim()) {
+      try {
+        selectedListingContext = JSON.parse(routeParams.analyseListingContext) as SelectedListingContext;
+      } catch {
+        selectedListingContext = null;
+      }
+    }
+    void handleAnalyse(
+      address,
+      typeof routeParams.analysePhotoUrl === "string" ? routeParams.analysePhotoUrl || null : null,
+      typeof routeParams.analyseListingUrl === "string" ? routeParams.analyseListingUrl || null : null,
+      selectedListingContext,
+    );
+  }, [
+    handleAnalyse,
+    routeParams.analyseAddress,
+    routeParams.analyseListingContext,
+    routeParams.analyseListingId,
+    routeParams.analyseListingUrl,
+    routeParams.analysePhotoUrl,
+  ]);
+
+  useEffect(() => {
     if (!user || isLoading) return;
 
     let cancelled = false;
@@ -2057,6 +2153,25 @@ export default function SearchScreen() {
           </View>
         </View>
 
+        <View style={[styles.modeSwitch, { backgroundColor: "rgba(250,249,246,0.08)", borderColor: "rgba(250,249,246,0.12)" }]}>
+          {(["ask", "browse"] as const).map((mode) => {
+            const active = homeMode === mode;
+            return (
+              <TouchableOpacity
+                key={mode}
+                style={[styles.modeOption, active && { backgroundColor: colors.accent }]}
+                onPress={() => setHomeMode(mode)}
+                activeOpacity={0.8}
+              >
+                <Feather name={mode === "ask" ? "message-circle" : "home"} size={13} color={active ? "#fff" : "rgba(250,249,246,0.72)"} />
+                <Text style={[styles.modeText, { color: active ? "#fff" : "rgba(250,249,246,0.72)", fontFamily: "DM_Sans_600SemiBold" }]}>
+                  {mode === "ask" ? "Ask" : "Browse"}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
         {currentSession?.currentReport && (
           <View style={[styles.contextBanner, { borderTopColor: "rgba(250,249,246,0.08)" }]}>
             <Feather name="map-pin" size={12} color={colors.accent} />
@@ -2077,7 +2192,76 @@ export default function SearchScreen() {
       </View>
 
       {/* Empty / Search state */}
-      {isEmpty ? (
+      {homeMode === "browse" ? (
+        <View style={[styles.browseRoot, { paddingBottom: tabBarOffset }]}>
+          <BrowseFilters
+            filters={browseFilters}
+            onChange={setBrowseFilters}
+            onSubmit={() => loadBrowseListings()}
+          />
+          {browseLoading && browseListings.length === 0 ? (
+            <View style={styles.browseCenter}>
+              <ActivityIndicator color={colors.accent} size="large" />
+            </View>
+          ) : browseError && browseListings.length === 0 ? (
+            <View style={styles.browseCenter}>
+              <Feather name="alert-circle" size={28} color={colors.mutedForeground} />
+              <Text style={[styles.browseEmptyTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>Listings unavailable</Text>
+              <Text style={[styles.browseEmptyText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{browseError}</Text>
+              <TouchableOpacity style={[styles.browseRetry, { borderColor: colors.border }]} onPress={() => loadBrowseListings()}>
+                <Text style={[styles.browseRetryText, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>Try again</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <FlatList
+              data={browseListings}
+              keyExtractor={(item) => item.id}
+              renderItem={({ item }) => (
+                <BrowseListingCard
+                  listing={item}
+                  onPress={() => router.push({
+                    pathname: "/listing/[id]",
+                    params: { id: item.id, preview: JSON.stringify(item) },
+                  } as never)}
+                />
+              )}
+              contentContainerStyle={styles.browseList}
+              showsVerticalScrollIndicator={false}
+              refreshControl={
+                <RefreshControl
+                  refreshing={browseRefreshing}
+                  onRefresh={() => loadBrowseListings({ refresh: true })}
+                  tintColor={colors.accent}
+                />
+              }
+              onEndReached={() => {
+                if (browseNextCursor && !browseLoadingMore) {
+                  void loadBrowseListings({ append: true, cursor: browseNextCursor });
+                }
+              }}
+              onEndReachedThreshold={0.6}
+              ListHeaderComponent={
+                <View style={styles.browseHeaderCopy}>
+                  <Text style={[styles.browseTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>Browse listings</Text>
+                  <Text style={[styles.browseSubtitle, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                    Project Alpha agent listings appear first, with curated marketplace listings filling the feed.
+                  </Text>
+                </View>
+              }
+              ListEmptyComponent={
+                <View style={styles.browseCenter}>
+                  <Feather name="search" size={30} color={colors.mutedForeground} />
+                  <Text style={[styles.browseEmptyTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>No listings found</Text>
+                  <Text style={[styles.browseEmptyText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                    Try another suburb or loosen your filters.
+                  </Text>
+                </View>
+              }
+              ListFooterComponent={browseLoadingMore ? <ActivityIndicator color={colors.accent} style={{ paddingVertical: 16 }} /> : null}
+            />
+          )}
+        </View>
+      ) : isEmpty ? (
         <Pressable style={{ flex: 1 }} onPress={Keyboard.dismiss}>
           <View style={[styles.landingContainer, { paddingBottom: tabBarOffset }]}>
             <View style={styles.landingContent}>
@@ -2375,6 +2559,26 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "rgba(250,249,246,0.65)",
   },
+  modeSwitch: {
+    flexDirection: "row",
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 3,
+    marginTop: 12,
+    gap: 3,
+  },
+  modeOption: {
+    flex: 1,
+    minHeight: 34,
+    borderRadius: 11,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  modeText: {
+    fontSize: 13,
+  },
   contextBanner: {
     flexDirection: "row",
     alignItems: "center",
@@ -2463,6 +2667,55 @@ const styles = StyleSheet.create({
     lineHeight: 17,
   },
   // ── Chat state ─────────────────────────────────────────────────────
+  browseRoot: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    gap: 10,
+  },
+  browseList: {
+    gap: 13,
+    paddingTop: 12,
+    paddingBottom: 20,
+  },
+  browseHeaderCopy: {
+    gap: 3,
+    paddingBottom: 2,
+  },
+  browseTitle: {
+    fontSize: 22,
+    lineHeight: 28,
+  },
+  browseSubtitle: {
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  browseCenter: {
+    flex: 1,
+    minHeight: 260,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+    gap: 10,
+  },
+  browseEmptyTitle: {
+    fontSize: 17,
+    textAlign: "center",
+  },
+  browseEmptyText: {
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: "center",
+  },
+  browseRetry: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  browseRetryText: {
+    fontSize: 13,
+  },
   messageList: {
     gap: 4,
     paddingTop: 16,

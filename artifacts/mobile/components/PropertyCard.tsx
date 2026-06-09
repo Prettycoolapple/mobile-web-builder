@@ -213,7 +213,7 @@ export function PropertyCard({ candidate, onAnalyse, showSubdivisionDisclaimer =
             accessibilityRole="button"
             accessibilityLabel="Share property"
           >
-            <Feather name="share-2" size={15} color={colors.foreground} />
+            <Feather name="log-out" size={15} color={colors.foreground} />
           </TouchableOpacity>
         </View>
       ) : (
@@ -227,7 +227,7 @@ export function PropertyCard({ candidate, onAnalyse, showSubdivisionDisclaimer =
             accessibilityRole="button"
             accessibilityLabel="Share property"
           >
-            <Feather name="share-2" size={15} color={colors.foreground} />
+            <Feather name="log-out" size={15} color={colors.foreground} />
           </TouchableOpacity>
         </View>
       )}

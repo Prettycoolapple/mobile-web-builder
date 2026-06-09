@@ -1,11 +1,287 @@
 import { Router } from "express";
-import { and, eq, desc, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, gte, ilike, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { db, listings, salesAgentProfiles, profiles } from "@workspace/db";
+import { browseListingCache, db, listings, profiles, salesAgentProfiles, withDbRetry } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { agentCanList } from "../lib/agent-entitlements";
+import { getMockListings } from "../lib/mock-data";
+import { searchRealEstateListings } from "../lib/scrapers/realestate-search";
+import type { ListingResult } from "../lib/scrapers/oneroof";
 
 const router = Router();
+
+type BrowseListing = {
+  id: string;
+  source: "internal" | "curated";
+  externalUrl?: string | null;
+  listingTitle: string | null;
+  address: string;
+  addressSuburb?: string | null;
+  addressCity?: string | null;
+  listingType: "for_sale" | "for_rent";
+  propertyType: string | null;
+  bedrooms?: number | null;
+  bathrooms?: number | null;
+  garages?: number | null;
+  landAreaSqm?: number | null;
+  floorAreaSqm?: number | null;
+  priceNzd?: number | null;
+  priceDisplay?: string | null;
+  description?: string | null;
+  imageUrls: string[];
+  features: string[];
+  createdAt?: Date | string | null;
+  agent: {
+    id?: string | null;
+    fullName?: string | null;
+    avatarUrl?: string | null;
+    agencyName?: string | null;
+    isVerified?: boolean | null;
+  } | null;
+};
+
+const BROWSE_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+const MAX_CURATED_TOP_UP = 8;
+
+function cleanQuery(value: unknown): string {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+}
+
+function parsePositiveInt(value: unknown): number | null {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
+}
+
+function publicListingFromInternal(row: {
+  id: string;
+  userId: string;
+  address: string;
+  addressSuburb: string | null;
+  addressCity: string | null;
+  listingType: "for_sale" | "for_rent";
+  propertyType: string;
+  bedrooms: number | null;
+  bathrooms: number | null;
+  garages: number | null;
+  landAreaSqm: number | null;
+  floorAreaSqm: number | null;
+  priceNzd: number | null;
+  priceDisplay: string | null;
+  listingTitle: string | null;
+  description: string | null;
+  imageUrls: string[];
+  features: string[];
+  createdAt: Date;
+  agentName: string | null;
+  agentAvatarUrl: string | null;
+  agentVerified: boolean | null;
+  agencyName: string | null;
+}): BrowseListing {
+  return {
+    id: row.id,
+    source: "internal",
+    externalUrl: null,
+    listingTitle: row.listingTitle,
+    address: row.address,
+    addressSuburb: row.addressSuburb,
+    addressCity: row.addressCity,
+    listingType: row.listingType,
+    propertyType: row.propertyType,
+    bedrooms: row.bedrooms,
+    bathrooms: row.bathrooms,
+    garages: row.garages,
+    landAreaSqm: row.landAreaSqm,
+    floorAreaSqm: row.floorAreaSqm,
+    priceNzd: row.priceNzd,
+    priceDisplay: row.priceDisplay,
+    description: row.description,
+    imageUrls: row.imageUrls,
+    features: row.features,
+    createdAt: row.createdAt,
+    agent: {
+      id: row.userId,
+      fullName: row.agentName,
+      avatarUrl: row.agentAvatarUrl,
+      agencyName: row.agencyName,
+      isVerified: row.agentVerified,
+    },
+  };
+}
+
+function publicListingFromCurated(listing: ListingResult): BrowseListing {
+  return {
+    id: `curated_${Buffer.from(listing.listingUrl).toString("base64url").slice(0, 140)}`,
+    source: "curated",
+    externalUrl: listing.listingUrl,
+    listingTitle: listing.address.split(",")[0]?.trim() || listing.address,
+    address: listing.address,
+    listingType: "for_sale",
+    propertyType: listing.propertyType ?? listing.listingCategory ?? "house",
+    bedrooms: listing.bedrooms,
+    bathrooms: listing.bathrooms,
+    garages: null,
+    landAreaSqm: listing.landArea,
+    floorAreaSqm: listing.floorArea ?? null,
+    priceNzd: listing.price,
+    priceDisplay: listing.priceText,
+    description: "Curated from live NZ marketplace listings. Analyse this property in Project Alpha for feasibility context.",
+    imageUrls: listing.photoUrls?.length ? listing.photoUrls : listing.photoUrl ? [listing.photoUrl] : [],
+    features: [],
+    agent: {
+      fullName: "Listing agent",
+      agencyName: "External marketplace",
+      isVerified: false,
+    },
+  };
+}
+
+function publicListingFromCache(row: typeof browseListingCache.$inferSelect): BrowseListing {
+  return {
+    id: row.id,
+    source: "curated",
+    externalUrl: row.externalUrl,
+    listingTitle: row.listingTitle,
+    address: row.address,
+    addressSuburb: row.addressSuburb,
+    addressCity: row.addressCity,
+    listingType: row.listingType === "for_rent" ? "for_rent" : "for_sale",
+    propertyType: row.propertyType,
+    bedrooms: row.bedrooms,
+    bathrooms: row.bathrooms,
+    garages: row.garages,
+    landAreaSqm: row.landAreaSqm,
+    floorAreaSqm: row.floorAreaSqm,
+    priceNzd: row.priceNzd,
+    priceDisplay: row.priceDisplay,
+    description: row.description,
+    imageUrls: row.imageUrls,
+    features: row.features,
+    createdAt: row.firstSeenAt,
+    agent: {
+      fullName: row.agent?.fullName ?? "Listing agent",
+      avatarUrl: row.agent?.avatarUrl ?? null,
+      agencyName: row.agent?.agencyName ?? "External marketplace",
+      isVerified: false,
+    },
+  };
+}
+
+function suburbFromAddress(address: string): string | null {
+  const parts = address.split(",").map((part) => part.trim()).filter(Boolean);
+  return parts.length >= 2 ? parts[parts.length - 2] ?? null : null;
+}
+
+async function upsertCuratedBrowseListings(listingsToCache: ListingResult[]): Promise<BrowseListing[]> {
+  if (listingsToCache.length === 0) return [];
+  const now = new Date();
+  const values = listingsToCache.map((listing) => ({
+    source: "realestate.co.nz",
+    externalUrl: listing.listingUrl,
+    externalId: listing.listingUrl.match(/realestate\.co\.nz\/(\d+)/)?.[1] ?? null,
+    address: listing.address,
+    addressSuburb: suburbFromAddress(listing.address),
+    addressCity: null,
+    listingType: "for_sale",
+    propertyType: listing.propertyType ?? listing.listingCategory ?? "house",
+    listingStatus: listing.listingStatus ?? "active",
+    isActive: true,
+    bedrooms: listing.bedrooms,
+    bathrooms: listing.bathrooms,
+    garages: null,
+    landAreaSqm: listing.landArea,
+    floorAreaSqm: listing.floorArea ?? null,
+    priceNzd: listing.price,
+    priceDisplay: listing.priceText,
+    listingTitle: listing.address.split(",")[0]?.trim() || listing.address,
+    description: "Curated from live NZ marketplace listings. Analyse this property in Project Alpha for feasibility context.",
+    imageUrls: listing.photoUrls?.length ? listing.photoUrls : listing.photoUrl ? [listing.photoUrl] : [],
+    features: [],
+    agent: { fullName: "Listing agent", agencyName: "External marketplace" },
+    lastSeenAt: now,
+    lastRefreshedAt: now,
+  }));
+
+  const rows = await withDbRetry(() =>
+    db
+      .insert(browseListingCache)
+      .values(values)
+      .onConflictDoUpdate({
+        target: [browseListingCache.source, browseListingCache.externalUrl],
+        set: {
+          externalId: sql`coalesce(excluded.external_id, ${browseListingCache.externalId})`,
+          address: sql`excluded.address`,
+          addressSuburb: sql`coalesce(excluded.address_suburb, ${browseListingCache.addressSuburb})`,
+          propertyType: sql`coalesce(excluded.property_type, ${browseListingCache.propertyType})`,
+          listingStatus: sql`excluded.listing_status`,
+          isActive: true,
+          bedrooms: sql`coalesce(excluded.bedrooms, ${browseListingCache.bedrooms})`,
+          bathrooms: sql`coalesce(excluded.bathrooms, ${browseListingCache.bathrooms})`,
+          landAreaSqm: sql`coalesce(excluded.land_area_sqm, ${browseListingCache.landAreaSqm})`,
+          floorAreaSqm: sql`coalesce(excluded.floor_area_sqm, ${browseListingCache.floorAreaSqm})`,
+          priceNzd: sql`coalesce(excluded.price_nzd, ${browseListingCache.priceNzd})`,
+          priceDisplay: sql`coalesce(excluded.price_display, ${browseListingCache.priceDisplay})`,
+          listingTitle: sql`coalesce(excluded.listing_title, ${browseListingCache.listingTitle})`,
+          description: sql`coalesce(excluded.description, ${browseListingCache.description})`,
+          imageUrls: sql`case when cardinality(excluded.image_urls) > 0 then excluded.image_urls else ${browseListingCache.imageUrls} end`,
+          agent: sql`excluded.agent`,
+          lastSeenAt: now,
+          lastRefreshedAt: now,
+          refreshCount: sql`${browseListingCache.refreshCount} + 1`,
+        },
+      })
+      .returning(),
+  );
+  return rows.map(publicListingFromCache);
+}
+
+function publicListingFromMock(candidate: ReturnType<typeof getMockListings>[number]): BrowseListing {
+  const id = `sample_${Buffer.from(candidate.address).toString("base64url").slice(0, 100)}`;
+  return {
+    id,
+    source: "curated",
+    externalUrl: null,
+    listingTitle: candidate.address.split(",")[0]?.trim() || candidate.address,
+    address: candidate.address,
+    listingType: "for_sale",
+    propertyType: "house",
+    bedrooms: null,
+    bathrooms: null,
+    garages: null,
+    landAreaSqm: candidate.landArea ?? null,
+    floorAreaSqm: null,
+    priceNzd: candidate.price,
+    priceDisplay: candidate.price ? `$${candidate.price.toLocaleString("en-NZ")}` : "Price on application",
+    description: "Sample marketplace-style listing for browsing while Project Alpha agent inventory grows.",
+    imageUrls: [],
+    features: [],
+    agent: {
+      fullName: "Project Alpha sample",
+      agencyName: "Curated listing",
+      isVerified: false,
+    },
+  };
+}
+
+async function fetchCuratedBrowseListings(query: string, needed: number, minPrice: number | null, maxPrice: number | null): Promise<BrowseListing[]> {
+  const suburb = query || "remuera";
+  try {
+    const result = await searchRealEstateListings({
+      suburb,
+      minPrice: minPrice ?? 1,
+      maxPrice: maxPrice ?? 20_000_000,
+      firstBatchSize: needed,
+      includeNegotiation: true,
+      fetchAllPages: false,
+      maxListings: needed,
+    });
+    const scraped = [...result.firstBatch, ...result.remainingListings].slice(0, needed);
+    const cached = await upsertCuratedBrowseListings(scraped);
+    return cached.length ? cached : scraped.map(publicListingFromCurated);
+  } catch {
+    return [];
+  }
+}
 
 /**
  * Whether the agent's plan currently allows publishing listings. Lifetime
@@ -376,6 +652,126 @@ router.get("/listings/place-details/:placeId", requireAuth, async (req, res) => 
   }
 });
 
+router.get("/listings", requireAuth, async (req, res) => {
+  const query = cleanQuery(req.query.q);
+  const limit = Math.min(parsePositiveInt(req.query.limit) ?? 12, 30);
+  const offset = Math.max(parsePositiveInt(req.query.cursor) ?? 0, 0);
+  const minPrice = parsePositiveInt(req.query.minPrice);
+  const maxPrice = parsePositiveInt(req.query.maxPrice);
+  const bedroomsMin = parsePositiveInt(req.query.bedrooms);
+  const listingType = cleanQuery(req.query.listingType);
+  const propertyType = cleanQuery(req.query.propertyType);
+
+  try {
+    const filters = [
+      eq(listings.status, "active" as const),
+      isNull(listings.removedAt),
+    ];
+    if (query) {
+      filters.push(or(
+        ilike(listings.address, `%${query}%`),
+        ilike(listings.addressSuburb, `%${query}%`),
+        ilike(listings.addressCity, `%${query}%`),
+        ilike(listings.listingTitle, `%${query}%`),
+      )!);
+    }
+    if (listingType === "for_sale" || listingType === "for_rent") {
+      filters.push(eq(listings.listingType, listingType));
+    }
+    if (propertyTypes.includes(propertyType as (typeof propertyTypes)[number])) {
+      filters.push(eq(listings.propertyType, propertyType as (typeof propertyTypes)[number]));
+    }
+    if (minPrice) filters.push(gte(listings.priceNzd, minPrice));
+    if (maxPrice) filters.push(lte(listings.priceNzd, maxPrice));
+    if (bedroomsMin) filters.push(gte(listings.bedrooms, bedroomsMin));
+
+    const internalRows = await db
+      .select({
+        id: listings.id,
+        userId: listings.userId,
+        address: listings.address,
+        addressSuburb: listings.addressSuburb,
+        addressCity: listings.addressCity,
+        listingType: listings.listingType,
+        propertyType: listings.propertyType,
+        bedrooms: listings.bedrooms,
+        bathrooms: listings.bathrooms,
+        garages: listings.garages,
+        landAreaSqm: listings.landAreaSqm,
+        floorAreaSqm: listings.floorAreaSqm,
+        priceNzd: listings.priceNzd,
+        priceDisplay: listings.priceDisplay,
+        listingTitle: listings.listingTitle,
+        description: listings.description,
+        imageUrls: listings.imageUrls,
+        features: listings.features,
+        createdAt: listings.createdAt,
+        agentName: profiles.fullName,
+        agentAvatarUrl: profiles.avatarUrl,
+        agentVerified: profiles.isVerified,
+        agencyName: salesAgentProfiles.agencyName,
+      })
+      .from(listings)
+      .innerJoin(profiles, eq(profiles.id, listings.userId))
+      .leftJoin(salesAgentProfiles, eq(salesAgentProfiles.userId, listings.userId))
+      .where(and(...filters))
+      .orderBy(desc(listings.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    const internal = internalRows.map(publicListingFromInternal);
+    const cacheNeeded = Math.max(0, limit - internal.length);
+    const freshCutoff = new Date(Date.now() - BROWSE_CACHE_TTL_MS);
+    const cachedRows = cacheNeeded > 0
+      ? await db
+          .select()
+          .from(browseListingCache)
+          .where(and(
+            eq(browseListingCache.isActive, true),
+            gt(browseListingCache.lastRefreshedAt, freshCutoff),
+            query ? or(
+              ilike(browseListingCache.address, `%${query}%`),
+              ilike(browseListingCache.addressSuburb, `%${query}%`),
+              ilike(browseListingCache.addressCity, `%${query}%`),
+              ilike(browseListingCache.listingTitle, `%${query}%`),
+            )! : undefined,
+            listingType === "for_sale" || listingType === "for_rent" ? eq(browseListingCache.listingType, listingType) : undefined,
+            propertyType ? ilike(browseListingCache.propertyType, `%${propertyType}%`) : undefined,
+            minPrice ? gte(browseListingCache.priceNzd, minPrice) : undefined,
+            maxPrice ? lte(browseListingCache.priceNzd, maxPrice) : undefined,
+            bedroomsMin ? gte(browseListingCache.bedrooms, bedroomsMin) : undefined,
+          ))
+          .orderBy(desc(browseListingCache.lastSeenAt))
+          .limit(cacheNeeded)
+      : [];
+    const cached = cachedRows.map(publicListingFromCache);
+
+    const scrapeNeeded = Math.min(MAX_CURATED_TOP_UP, Math.max(0, limit - internal.length - cached.length));
+    const curated = scrapeNeeded > 0
+      ? await fetchCuratedBrowseListings(query, scrapeNeeded, minPrice, maxPrice)
+      : [];
+    const samples = internal.length + cached.length + curated.length < limit
+      ? getMockListings(query || undefined)
+          .slice(0, limit - internal.length - cached.length - curated.length)
+          .map(publicListingFromMock)
+      : [];
+
+    const items = [...internal, ...cached, ...curated, ...samples].slice(0, limit);
+    res.json({
+      listings: items,
+      nextCursor: internalRows.length === limit ? String(offset + internalRows.length) : null,
+      sourceCounts: {
+        internal: internal.length,
+        cached: cached.length,
+        curated: curated.length + samples.length,
+      },
+    });
+  } catch (error) {
+    req.log?.error({ error }, "Failed to browse listings");
+    res.status(500).json({ error: "We couldn't load listings. Please try again.", code: "BROWSE_FAILED" });
+  }
+});
+
 router.post("/listings", requireAuth, async (req, res) => {
   const userId = (req as any).userId as string;
   const role = (req as any).role as string;
@@ -467,6 +863,78 @@ router.get("/listings/my", requireAuth, async (req, res) => {
   } catch (error) {
     req.log?.error({ error }, "Failed to fetch listings");
     res.status(500).json({ error: "We couldn't load your listings. Please refresh the page.", code: "FETCH_FAILED" });
+  }
+});
+
+router.get("/listings/public/:id", requireAuth, async (req, res) => {
+  const { id } = req.params;
+  try {
+    if (id.startsWith("sample_")) {
+      const listing = getMockListings()
+        .map(publicListingFromMock)
+        .find((item) => item.id === id);
+      if (!listing) {
+        res.status(404).json({ error: "Listing not found.", code: "NOT_FOUND" });
+        return;
+      }
+      res.json({ listing });
+      return;
+    }
+
+    const [cachedExternal] = await db
+      .select()
+      .from(browseListingCache)
+      .where(and(eq(browseListingCache.id, id), eq(browseListingCache.isActive, true)))
+      .limit(1);
+    if (cachedExternal) {
+      await db
+        .update(browseListingCache)
+        .set({ hitCount: sql`${browseListingCache.hitCount} + 1` })
+        .where(eq(browseListingCache.id, id));
+      res.json({ listing: publicListingFromCache(cachedExternal) });
+      return;
+    }
+
+    const [row] = await db
+      .select({
+        id: listings.id,
+        userId: listings.userId,
+        address: listings.address,
+        addressSuburb: listings.addressSuburb,
+        addressCity: listings.addressCity,
+        listingType: listings.listingType,
+        propertyType: listings.propertyType,
+        bedrooms: listings.bedrooms,
+        bathrooms: listings.bathrooms,
+        garages: listings.garages,
+        landAreaSqm: listings.landAreaSqm,
+        floorAreaSqm: listings.floorAreaSqm,
+        priceNzd: listings.priceNzd,
+        priceDisplay: listings.priceDisplay,
+        listingTitle: listings.listingTitle,
+        description: listings.description,
+        imageUrls: listings.imageUrls,
+        features: listings.features,
+        createdAt: listings.createdAt,
+        agentName: profiles.fullName,
+        agentAvatarUrl: profiles.avatarUrl,
+        agentVerified: profiles.isVerified,
+        agencyName: salesAgentProfiles.agencyName,
+      })
+      .from(listings)
+      .innerJoin(profiles, eq(profiles.id, listings.userId))
+      .leftJoin(salesAgentProfiles, eq(salesAgentProfiles.userId, listings.userId))
+      .where(and(eq(listings.id, id), eq(listings.status, "active" as const), isNull(listings.removedAt)))
+      .limit(1);
+
+    if (!row) {
+      res.status(404).json({ error: "Listing not found.", code: "NOT_FOUND" });
+      return;
+    }
+    res.json({ listing: publicListingFromInternal(row) });
+  } catch (error) {
+    req.log?.error({ error }, "Failed to fetch public listing");
+    res.status(500).json({ error: "We couldn't load this listing. Please try again.", code: "FETCH_FAILED" });
   }
 });
 

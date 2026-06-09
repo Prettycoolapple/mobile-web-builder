@@ -21,7 +21,7 @@ import { Stack, useRouter } from "expo-router";
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
 import * as Notifications from "expo-notifications";
-import { Platform } from "react-native";
+import { Alert, AppState, Platform, type AppStateStatus } from "react-native";
 import { Settings } from "react-native-fbsdk-next";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -57,25 +57,53 @@ function MetaSdkSetup() {
     if (Platform.OS === "web") return;
 
     let mounted = true;
+    let initialized = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    function showSdkError(error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      Alert.alert("SDK Error", message);
+    }
 
     async function initializeMetaSdk() {
+      if (!mounted || initialized) return;
+      initialized = true;
+
       try {
+        Settings.initializeSDK();
+
         const { status } = await requestTrackingPermissionsAsync();
         if (!mounted) return;
 
-        Settings.initializeSDK();
         if (status === "granted") {
           await Settings.setAdvertiserTrackingEnabled(true);
         }
-      } catch {
-        // Keep startup resilient if the native SDK is unavailable in a dev shell.
+      } catch (error) {
+        if (mounted) showSdkError(error);
       }
     }
 
-    void initializeMetaSdk();
+    function scheduleInitialize() {
+      if (timer || initialized) return;
+      timer = setTimeout(() => {
+        timer = null;
+        void initializeMetaSdk();
+      }, 1000);
+    }
+
+    function handleAppStateChange(state: AppStateStatus) {
+      if (state === "active") scheduleInitialize();
+    }
+
+    if (AppState.currentState === "active") {
+      scheduleInitialize();
+    }
+    const appStateSub = AppState.addEventListener("change", handleAppStateChange);
 
     return () => {
       mounted = false;
+      if (timer) clearTimeout(timer);
+      appStateSub.remove();
     };
   }, []);
 
@@ -244,6 +272,7 @@ function RootLayoutNav() {
       <Stack.Screen name="add-listing" options={{ headerShown: false, presentation: "modal" }} />
       <Stack.Screen name="support" options={{ headerShown: false }} />
       <Stack.Screen name="my-listings" options={{ headerShown: false }} />
+      <Stack.Screen name="listing/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="chat/contacts" options={{ headerShown: false, presentation: "modal" }} />
       <Stack.Screen name="chat/[threadId]" options={{ headerShown: false }} />
       <Stack.Screen name="profile/[userId]" options={{ headerShown: false }} />

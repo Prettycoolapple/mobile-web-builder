@@ -2,7 +2,7 @@
   "expo": {
     "name": "Project Alpha",
     "slug": "workspace",
-    "version": "1.4.7",
+    "version": "1.4.8",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "devfeasible",
@@ -16,18 +16,24 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "nz.devfeasible.app",
-      "buildNumber": "15",
+      "buildNumber": "16",
       "associatedDomains": [
         "applinks:projectalpha.app",
         "applinks:www.projectalpha.app"
       ],
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSUserTrackingUsageDescription": "This identifier will be used to deliver personalized ads to you.",
+        "FacebookAppID": "2265538447515304",
+        "FacebookClientToken": "02dfcb5788c6a9dfab5c4634a395abdc",
+        "FacebookDisplayName": "projectalpha.app",
+        "FacebookAutoLogAppEventsEnabled": true,
+        "FacebookAdvertiserIDCollectionEnabled": true
       }
     },
     "android": {
       "package": "nz.devfeasible.app",
-      "versionCode": 11,
+      "versionCode": 12,
       "edgeToEdgeEnabled": true,
       "blockedPermissions": [
         "android.permission.READ_MEDIA_IMAGES",

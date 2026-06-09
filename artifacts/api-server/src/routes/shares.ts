@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
 import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
 import crypto from "node:crypto";
 import { z } from "zod";
@@ -388,11 +388,15 @@ router.get("/share/:token/preview", async (req, res) => {
   res.json({ preview });
 });
 
-router.get("/share/:token/page", async (req, res) => {
+async function sendSharePage(req: Request, res: Response) {
   const token = cleanText(req.params.token);
   const row = token ? await getPublicShare(token).catch(() => null) : null;
   const preview = publicPreview(row);
   res.status(preview ? 200 : 404).type("html").send(sharePreviewHtml(preview));
-});
+}
+
+router.get("/share/:token", sendSharePage);
+
+router.get("/share/:token/page", sendSharePage);
 
 export default router;
