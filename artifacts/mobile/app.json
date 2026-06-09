@@ -16,7 +16,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "nz.devfeasible.app",
-      "buildNumber": "18",
+      "buildNumber": "19",
       "associatedDomains": [
         "applinks:projectalpha.app",
         "applinks:www.projectalpha.app"
