@@ -1090,11 +1090,42 @@
       agencyName,
     };
 
-    // Details are valid — defer account creation to the paywall step, where the
-    // agent either enters an invitation code or subscribes via Stripe.
+    // Details are valid — show T&C consent before the paywall step.
     state.pendingSignupPayload = payload;
     state.pendingSignupForm = form;
     setStatus(status, "", null);
+    openConsentModal();
+  }
+
+  // ── T&C consent modal ────────────────────────────────────────────────────
+  function openConsentModal() {
+    const panel = $("#consent-panel");
+    if (!panel) { openPaywall(); return; }
+    const checkbox = /** @type {HTMLInputElement|null} */ ($("#consent-checkbox"));
+    const btn = $("#consent-confirm-button");
+    if (checkbox) checkbox.checked = false;
+    if (btn) btn.disabled = true;
+    setStatus($("#consent-status"), "", null);
+    panel.hidden = false;
+    // Scroll the card into view and focus it for accessibility
+    const card = panel.querySelector(".portal-consent-card");
+    if (card) card.scrollTop = 0;
+    if (btn) setTimeout(() => btn.focus(), 50);
+  }
+
+  function closeConsentModal() {
+    const panel = $("#consent-panel");
+    if (panel) panel.hidden = true;
+    setStatus($("#consent-status"), "", null);
+  }
+
+  function consentAndProceed() {
+    const checkbox = /** @type {HTMLInputElement|null} */ ($("#consent-checkbox"));
+    if (!checkbox || !checkbox.checked) {
+      setStatus($("#consent-status"), "Please tick the checkbox to confirm you have read and agreed.", "error");
+      return;
+    }
+    closeConsentModal();
     openPaywall();
   }
 
@@ -1647,6 +1678,17 @@
       showAuth();
     });
 
+    $$("[data-consent-close]").forEach((button) => button.addEventListener("click", closeConsentModal));
+    const consentCheckbox = /** @type {HTMLInputElement|null} */ ($("#consent-checkbox"));
+    if (consentCheckbox) {
+      consentCheckbox.addEventListener("change", () => {
+        const btn = $("#consent-confirm-button");
+        if (btn) btn.disabled = !consentCheckbox.checked;
+      });
+    }
+    const consentConfirmBtn = $("#consent-confirm-button");
+    if (consentConfirmBtn) consentConfirmBtn.addEventListener("click", consentAndProceed);
+
     $$("[data-paywall-close]").forEach((button) => button.addEventListener("click", closePaywall));
     $$("[data-agent-welcome-close]").forEach((button) => button.addEventListener("click", closeAgentWelcome));
     $$(".paywall-toggle-btn").forEach((button) =>
@@ -1659,6 +1701,7 @@
 
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && !$("#reset-panel").hidden) closeReset();
+      if (event.key === "Escape" && !$("#consent-panel")?.hidden) closeConsentModal();
       if (event.key === "Escape" && !$("#paywall-panel").hidden) closePaywall();
       if (event.key === "Escape" && !$("#agent-welcome-panel").hidden) closeAgentWelcome();
     });

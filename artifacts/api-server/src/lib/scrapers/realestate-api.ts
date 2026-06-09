@@ -373,6 +373,10 @@ interface RawListing {
     "title-type"?: string;
     tenure?: string;
     "legal-description"?: string;
+    description?: string;
+    "listing-description"?: string;
+    "marketing-description"?: string;
+    "description-html"?: string;
     photos?: Array<{ "base-url"?: string; large?: string; medium?: string }>;
   };
 }
@@ -467,6 +471,29 @@ function stringAttr(attrs: Record<string, unknown>, keys: string[]): string | nu
   return null;
 }
 
+function decodeHtmlEntities(s: string): string {
+  return s
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&#(\d+);/g, (_, code) => {
+      const n = Number(code);
+      return Number.isFinite(n) ? String.fromCharCode(n) : "";
+    })
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanListingDescription(value: string | null | undefined): string | null {
+  if (!value?.trim()) return null;
+  const text = decodeHtmlEntities(value.replace(/<[^>]+>/g, " "));
+  if (text.length < 24) return null;
+  return text.slice(0, 2500);
+}
+
 function finiteNumber(raw: unknown): number | null {
   if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
   if (typeof raw !== "string" || !raw.trim()) return null;
@@ -553,6 +580,56 @@ export async function fetchRealestateListingByUrl(url: string): Promise<ListingR
   if (!mapped) return null;
   const [annotated] = await annotateApproxFields([mapped]).catch(() => [mapped]);
   return annotated ?? mapped;
+}
+
+export async function fetchRealestateListingDetailsByUrl(url: string): Promise<{
+  listingTitle: string | null;
+  description: string | null;
+  features: string[];
+  imageUrls: string[];
+  propertyType: string | null;
+  bedrooms: number | null;
+  bathrooms: number | null;
+  landAreaSqm: number | null;
+  floorAreaSqm: number | null;
+  priceNzd: number | null;
+  priceDisplay: string | null;
+  agentName: string | null;
+  agentPhone: string | null;
+  agencyName: string | null;
+  agentAvatarUrl: string | null;
+} | null> {
+  const id = listingIdFromUrl(url);
+  if (!id) return null;
+  const raw = await fetchRawListingById(id);
+  if (!raw) return null;
+  const mapped = mapListing(raw);
+  const attrs = raw.attributes as Record<string, unknown>;
+  const og = await fetchOgMeta(url).catch(() => null);
+  const agent = await fetchCallableAgentForListing(raw).catch(() => null);
+  const description =
+    cleanListingDescription(stringAttr(attrs, ["description", "listing-description", "marketing-description", "description-html"]))
+    ?? og?.description
+    ?? mapped?.description
+    ?? null;
+  const imageUrls = mapped?.photoUrls?.length ? mapped.photoUrls : mapped?.photoUrl ? [mapped.photoUrl] : [];
+  return {
+    listingTitle: og?.title ?? mapped?.listingTitle ?? null,
+    description,
+    features: mapped?.features ?? [],
+    imageUrls,
+    propertyType: og?.propertyType ?? mapped?.propertyType ?? mapped?.listingCategory ?? null,
+    bedrooms: og?.bedrooms ?? mapped?.bedrooms ?? null,
+    bathrooms: og?.bathrooms ?? mapped?.bathrooms ?? null,
+    landAreaSqm: og?.landAreaSqm ?? mapped?.landArea ?? null,
+    floorAreaSqm: og?.floorAreaSqm ?? mapped?.floorArea ?? null,
+    priceNzd: og?.price ?? mapped?.price ?? null,
+    priceDisplay: mapped?.priceText ?? null,
+    agentName: agent?.agentName ?? mapped?.agentName ?? null,
+    agentPhone: agent?.agentPhone ?? null,
+    agencyName: agent?.agencyName ?? mapped?.agencyName ?? null,
+    agentAvatarUrl: agent?.agentAvatarUrl ?? mapped?.agentAvatarUrl ?? null,
+  };
 }
 
 export async function fetchRealestateAgentForListingUrl(url: string): Promise<RealestateAgentContact | null> {
@@ -1380,7 +1457,8 @@ function extractPropertyTypeSignal(text: string): string | null {
   if (/\bapartment\b/i.test(source)) return "Apartment";
   if (/\btownhouse\b|\bterrace\b/i.test(source)) return "Townhouse";
   if (/\bhouse\b|\bdwelling\b|\bstandalone\b/i.test(source)) return "House";
-  return labelled;
+  // Don't return labelled — it may contain raw UI/page text when no type word matched
+  return null;
 }
 
 function extractTenureSignal(text: string): string | null {
@@ -1427,6 +1505,8 @@ function extractFloorSizeFromJsonLd(html: string): number | null {
 }
 
 interface OgMeta {
+  title: string | null;
+  description: string | null;
   bedrooms: number | null;
   bathrooms: number | null;
   landAreaSqm: number | null;
@@ -1516,13 +1596,17 @@ async function fetchOgMeta(url: string): Promise<OgMeta | null> {
     } finally {
       clearTimeout(t);
     }
-    const ogTitle = html.match(/<meta property="og:title" content="([^"]+)"/)?.[1] ?? "";
-    const ogDesc = html.match(/<meta property="og:description" content="([^"]+)"/)?.[1] ?? "";
+    const ogTitle = html.match(/<meta\s+(?:property|name)=["']og:title["']\s+content=["']([^"']+)["']/i)?.[1] ?? "";
+    const ogDesc = html.match(/<meta\s+(?:property|name)=["']og:description["']\s+content=["']([^"']+)["']/i)?.[1]
+      ?? html.match(/<meta\s+name=["']description["']\s+content=["']([^"']+)["']/i)?.[1]
+      ?? "";
     if (!ogTitle && !ogDesc) return null;
     const bodyText = htmlToSearchableText(html);
     const combined = `${ogTitle} ${ogDesc}`;
     const beds = extractBedsBaths(combined);
     return {
+      title: cleanListingDescription(ogTitle),
+      description: cleanListingDescription(ogDesc),
       bedrooms: beds.bedrooms,
       bathrooms: beds.bathrooms,
       landAreaSqm: extractListingFactAreaSqm(bodyText, "land") ?? extractLandAreaSqm(combined),

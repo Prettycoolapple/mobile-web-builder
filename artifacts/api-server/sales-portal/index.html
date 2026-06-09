@@ -640,6 +640,33 @@
           </section>
         </section>
 
+        <section class="portal-reset" id="consent-panel" hidden>
+          <div class="portal-card portal-reset-card portal-consent-card">
+            <button class="portal-close" type="button" data-consent-close aria-label="Close">&times;</button>
+            <div class="portal-panel-header">
+              <p class="section-kicker">One last step</p>
+              <h2>Review &amp; agree</h2>
+              <p>Before creating your account, please read and acknowledge the following.</p>
+            </div>
+            <ul class="consent-list">
+              <li>By registering you agree to Project Alpha's <a href="/terms/" target="_blank" rel="noopener">Terms and Conditions</a> governing how the platform may be used.</li>
+              <li>Your personal information will be collected, stored, and used in accordance with our <a href="/privacy/" target="_blank" rel="noopener">Privacy Policy</a>.</li>
+              <li>Your name, agency, and contact details may be displayed to buyers who view properties you list on Project Alpha.</li>
+              <li>You confirm that you are a licensed real estate agent or are acting on behalf of a licensed real estate agency.</li>
+              <li>Project Alpha may contact you about your listings, account, or relevant platform updates.</li>
+            </ul>
+            <label class="portal-consent-check">
+              <input type="checkbox" id="consent-checkbox" />
+              <span>I have read and agree to the Terms and Conditions and Privacy Policy</span>
+            </label>
+            <div class="portal-form-row portal-consent-actions">
+              <button class="button button-quiet" type="button" data-consent-close>Cancel</button>
+              <button class="button button-primary" type="button" id="consent-confirm-button" disabled>Continue &rarr;</button>
+            </div>
+            <p class="form-status" id="consent-status" aria-live="polite"></p>
+          </div>
+        </section>
+
         <section class="portal-reset" id="paywall-panel" hidden>
           <div class="portal-card portal-reset-card portal-paywall-card">
             <button class="portal-close" type="button" data-paywall-close aria-label="Close">&times;</button>

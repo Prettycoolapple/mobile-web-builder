@@ -6,6 +6,7 @@ import {
   StyleSheet,
   Linking,
   Alert,
+  Platform,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { Image } from "expo-image";
@@ -68,6 +69,25 @@ export function AgentCallBubble({
     }
   };
 
+  const handleMessage = async () => {
+    if (!agentPhone) return;
+    const digits = agentPhone.replace(/[^\d+]/g, "");
+    const body = encodeURIComponent(
+      `Hi, I saw ${propertyAddress} on Project Alpha app, I would like to know more about it. Can you send me the LIM report and property title? Thanks`,
+    );
+    const sep = Platform.OS === "ios" ? "&" : "?";
+    const smsUrl = `sms:${digits}${sep}body=${body}`;
+    const canOpen = await Linking.canOpenURL(smsUrl);
+    if (canOpen) {
+      await Linking.openURL(smsUrl);
+    } else {
+      Alert.alert(
+        t("bubble.agent.cant_message_title"),
+        t("bubble.agent.cant_message_body"),
+      );
+    }
+  };
+
   const handleViewListing = async () => {
     if (!listingUrl) return;
     const canOpen = await Linking.canOpenURL(listingUrl);
@@ -117,14 +137,24 @@ export function AgentCallBubble({
       </View>
 
       {agentPhone ? (
-        <TouchableOpacity
-          style={styles.callBtn}
-          onPress={handleCall}
-          activeOpacity={0.8}
-        >
-          <Feather name="phone" size={16} color="#fff" />
-          <Text style={styles.callBtnText}>{t("bubble.agent.call_cta")}</Text>
-        </TouchableOpacity>
+        <View style={styles.actions}>
+          <TouchableOpacity
+            style={styles.callBtn}
+            onPress={handleCall}
+            activeOpacity={0.8}
+          >
+            <Feather name="phone" size={16} color="#fff" />
+            <Text style={styles.callBtnText}>{t("bubble.agent.call_cta")}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.messageBtn}
+            onPress={handleMessage}
+            activeOpacity={0.8}
+          >
+            <Feather name="message-square" size={16} color="#16A34A" />
+            <Text style={styles.messageBtnText}>{t("bubble.agent.message_cta")}</Text>
+          </TouchableOpacity>
+        </View>
       ) : listingUrl ? (
         <TouchableOpacity
           style={styles.callBtn}
@@ -215,6 +245,9 @@ const styles = StyleSheet.create({
     color: "#6B7280",
     fontFamily: "DM_Sans_400Regular",
   },
+  actions: {
+    gap: 8,
+  },
   callBtn: {
     backgroundColor: "#16A34A",
     borderRadius: 8,
@@ -227,6 +260,22 @@ const styles = StyleSheet.create({
   },
   callBtnText: {
     color: "#fff",
+    fontSize: 15,
+    fontFamily: "DM_Sans_600SemiBold",
+  },
+  messageBtn: {
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: "#16A34A",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  messageBtnText: {
+    color: "#16A34A",
     fontSize: 15,
     fontFamily: "DM_Sans_600SemiBold",
   },

@@ -1,12 +1,44 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import multer, { MulterError } from "multer";
 import { eq } from "drizzle-orm";
+import sharp from "sharp";
 import { db, userUploads, profiles } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { ObjectNotFoundError, ObjectStorageService, s3StorageService } from "../lib/objectStorage";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
+
+// Listing photos are standardized to a single 4:3 landscape frame so every
+// listing — whether scraped or agent-entered via the sales portal/app — renders
+// uniformly in the generic screening cards and the detail-screen gallery.
+const LISTING_IMAGE_TARGET_WIDTH = 1600;
+const LISTING_IMAGE_TARGET_HEIGHT = 1200;
+
+/**
+ * Normalise an uploaded listing photo: honour EXIF orientation, center-crop to a
+ * consistent 4:3 landscape frame, and re-encode as JPEG. Falls back to the
+ * original bytes if the source format can't be decoded (e.g. HEIC on a libvips
+ * build without libheif), so an upload never fails purely on image processing.
+ */
+async function standardizeListingImage(
+  buffer: Buffer,
+  mimetype: string,
+): Promise<{ buffer: Buffer; mimetype: string }> {
+  try {
+    const out = await sharp(buffer, { failOn: "none" })
+      .rotate()
+      .resize(LISTING_IMAGE_TARGET_WIDTH, LISTING_IMAGE_TARGET_HEIGHT, {
+        fit: "cover",
+        position: "centre",
+      })
+      .jpeg({ quality: 82, mozjpeg: true })
+      .toBuffer();
+    return { buffer: out, mimetype: "image/jpeg" };
+  } catch {
+    return { buffer, mimetype };
+  }
+}
 
 function classifyStorageUploadError(error: unknown): { status: number; error: string; code: string } | null {
   const message = error instanceof Error ? error.message : "";
@@ -567,7 +599,10 @@ router.post(
       return;
     }
 
-    const { buffer, mimetype, originalname, size } = req.file;
+    const { originalname } = req.file;
+    // Standardize to a uniform 4:3 JPEG before storage so all listing photos match.
+    const { buffer, mimetype } = await standardizeListingImage(req.file.buffer, req.file.mimetype);
+    const size = buffer.length;
 
     // --- Primary: S3-compatible storage (R2, AWS S3, etc.) ---
     if (s3StorageService.isConfigured) {

@@ -2532,7 +2532,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
             accessibilityRole="button"
             accessibilityLabel="Share report"
           >
-            <Feather name="share-2" size={16} color="rgba(250,250,249,0.92)" />
+            <Feather name="log-out" size={16} color="rgba(250,250,249,0.92)" />
           </TouchableOpacity>
         </View>
 

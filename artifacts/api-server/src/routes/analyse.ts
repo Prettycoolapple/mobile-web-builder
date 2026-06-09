@@ -1167,6 +1167,8 @@ async function pickSponsoredGenericListingCandidate(args: {
           propertyType: listings.propertyType,
           bedrooms: listings.bedrooms,
           bathrooms: listings.bathrooms,
+          toilets: listings.toilets,
+          garages: listings.garages,
           landAreaSqm: listings.landAreaSqm,
           floorAreaSqm: listings.floorAreaSqm,
           priceNzd: listings.priceNzd,
@@ -1180,6 +1182,7 @@ async function pickSponsoredGenericListingCandidate(args: {
           agentName: profiles.fullName,
           agentAvatarUrl: profiles.avatarUrl,
           agentVerified: profiles.isVerified,
+          agentPhone: profiles.phoneNumber,
           agencyName: salesAgentProfiles.agencyName,
         })
         .from(listings)
@@ -1249,8 +1252,11 @@ async function pickSponsoredGenericListingCandidate(args: {
       agentName: row.agentName,
       agencyName: row.agencyName,
       agentAvatarUrl: row.agentAvatarUrl,
+      agentPhone: row.agentPhone,
       bedrooms: row.bedrooms ?? undefined,
       bathrooms: row.bathrooms ?? undefined,
+      toilets: row.toilets ?? null,
+      garages: row.garages ?? null,
       floorArea: row.floorAreaSqm ?? undefined,
       source: "internal",
       internalListingId: row.id,
@@ -1346,6 +1352,7 @@ async function hydrateGenericListingAgentDetails(
         agentName: agent.agentName,
         agencyName: agent.agencyName,
         agentAvatarUrl: agent.agentAvatarUrl,
+        agentPhone: agent.agentPhone,
       };
     } catch (err) {
       log.warn({ err, listingUrl: candidate.listingUrl }, "Discovery: failed to hydrate generic listing agent");
@@ -1613,6 +1620,81 @@ async function topUpDiscoveryCandidates(
     out.push(...next);
   }
 
+  return out.slice(0, targetCount);
+}
+
+function genericCandidateFromListing(listing: ListingResult): PropertyCandidate {
+  const photoUrls = listing.photoUrls?.length ? listing.photoUrls : listing.photoUrl ? [listing.photoUrl] : undefined;
+  return {
+    address: listing.address,
+    price: listing.price ?? 0,
+    landArea: listing.landArea ?? undefined,
+    scores: { ease: 0, cost: 0, roi: 0, composite: 0 },
+    briefSummary: listing.listingTitle ?? listing.description ?? undefined,
+    listingUrl: listing.listingUrl,
+    photoUrl: listing.photoUrl ?? undefined,
+    photoUrls,
+    priceDisplay: listing.priceText || undefined,
+    propertyType: listing.propertyType ?? listing.listingCategory ?? undefined,
+    listingTitle: listing.listingTitle ?? listing.address.split(",")[0]?.trim() ?? listing.address,
+    description: listing.description ?? undefined,
+    features: listing.features?.length ? listing.features : undefined,
+    agentName: listing.agentName ?? undefined,
+    agencyName: listing.agencyName ?? undefined,
+    agentAvatarUrl: listing.agentAvatarUrl ?? undefined,
+    bedrooms: listing.bedrooms ?? undefined,
+    bathrooms: listing.bathrooms ?? undefined,
+    bedroomsApprox: listing.bedroomsApprox || undefined,
+    bathroomsApprox: listing.bathroomsApprox || undefined,
+    landAreaApprox: listing.landAreaApprox || undefined,
+    landAreaSource: listing.landAreaSource,
+    landAreaConfidence: listing.landAreaConfidence,
+    isParentParcelSuspect: listing.isParentParcelSuspect || undefined,
+    isAlreadySubdividedChild: listing.isAlreadySubdividedChild || undefined,
+    priceApprox: listing.priceApprox || undefined,
+    floorArea: listing.floorArea ?? undefined,
+    floorAreaApprox: listing.floorAreaApprox || undefined,
+    typology: "unknown",
+    typologyConfidence: "unknown",
+    titleConfidence: "unknown",
+    screeningStatus: "preliminary",
+    source: "curated",
+  };
+}
+
+function pickGenericListingCandidates(
+  listings: ListingResult[],
+  shownAddressKeys: Set<string>,
+  targetCount: number,
+): PropertyCandidate[] {
+  const candidates: PropertyCandidate[] = [];
+  const seen = new Set<string>();
+  for (const listing of listings) {
+    if (isAlreadyShownAddress(listing.address, shownAddressKeys)) continue;
+    const key = normaliseDiscoveryAddressKey(listing.address) || listing.listingUrl;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push(genericCandidateFromListing(listing));
+    if (candidates.length >= targetCount) break;
+  }
+  return candidates;
+}
+
+function topUpGenericListingCandidates(
+  cacheKey: string,
+  existing: PropertyCandidate[],
+  shownAddressKeys: Set<string>,
+  targetCount = 3,
+  batchSize = 8,
+): PropertyCandidate[] {
+  let out = [...existing];
+  while (out.length < targetCount && getRemainingCount(cacheKey) > 0) {
+    const { listings: nextListings } = popNextListings(cacheKey, batchSize);
+    if (nextListings.length === 0) break;
+    const next = pickGenericListingCandidates(nextListings, shownAddressKeys, targetCount - out.length);
+    out = appendUniqueDiscoveryCandidates(out, next, targetCount);
+    markShown(cacheKey, next.map((candidate) => candidate.listingUrl).filter((url): url is string => Boolean(url)));
+  }
   return out.slice(0, targetCount);
 }
 
@@ -3946,19 +4028,27 @@ router.post("/chat", async (req, res) => {
             const hasShownAny = getShownUrls(cacheKey).length > 0;
 
             if (isFollowUp && hasShownAny) {
-              candidates = await topUpDiscoveryCandidates(
-                cacheKey,
-                [],
-                discoveryCriteria,
-                discoverPreOpts,
-                alreadyShownAddressKeys,
-                {
-                  batchSize: discoveryBatchSize,
-                  nonStrictAttemptLimit: 3,
-                  targetCount: discoveryTargetCount,
-                  indeterminateAccumulator: strictStandardSubdivision ? strictIndeterminate : undefined,
-                },
-              );
+              candidates = plainListingBrowse
+                ? topUpGenericListingCandidates(
+                    cacheKey,
+                    [],
+                    alreadyShownAddressKeys,
+                    discoveryTargetCount,
+                    discoveryBatchSize,
+                  )
+                : await topUpDiscoveryCandidates(
+                    cacheKey,
+                    [],
+                    discoveryCriteria,
+                    discoverPreOpts,
+                    alreadyShownAddressKeys,
+                    {
+                      batchSize: discoveryBatchSize,
+                      nonStrictAttemptLimit: 3,
+                      targetCount: discoveryTargetCount,
+                      indeterminateAccumulator: strictStandardSubdivision ? strictIndeterminate : undefined,
+                    },
+                  );
             }
 
             // Fresh search when: first search, clarification answer, or cache exhausted.
@@ -4007,6 +4097,24 @@ router.post("/chat", async (req, res) => {
                   shownUrls: priorShown,
                   suburb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
                 });
+                if (plainListingBrowse) {
+                  candidates = pickGenericListingCandidates(firstFiltered, alreadyShownAddressKeys, discoveryTargetCount);
+                  markShown(
+                    cacheKey,
+                    candidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u)),
+                  );
+                  candidates = topUpGenericListingCandidates(
+                    cacheKey,
+                    candidates,
+                    alreadyShownAddressKeys,
+                    discoveryTargetCount,
+                    discoveryBatchSize,
+                  );
+                  const criteriaContext = criteriaLabel ? ` matching criteria: ${criteriaLabel}` : "";
+                  const introPromptGeneric = `The user asked: "${userText}". You found some matching listings in ${suburb || "the area"} on realestate.co.nz${criteriaContext}. In 1 sentence, acknowledge this result conversationally. Do NOT mention a specific number; say "a few", "some", or "a handful". Call them listings/properties only; do not call them development sites or development land. Be natural and brief; no JSON.`;
+                  prescreenedIntro = await generateAnalysis(introPromptGeneric, chatLocale).catch(() => "");
+                  req.log.info({ fetched: firstFiltered.length, cached: remainingFiltered.length, picked: candidates.length }, "realestate.co.nz: selected generic listing cards");
+                } else {
                 req.log.info({ fetched: firstFiltered.length, cached: remainingFiltered.length }, "realestate.co.nz: prescreening listings");
                 // Run pre-screening and AI intro generation in parallel to save time.
                 // In strict-subdivision mode we early-bail once the first legally
@@ -4057,6 +4165,7 @@ router.post("/chat", async (req, res) => {
                     indeterminateAccumulator: strictStandardSubdivision ? strictIndeterminate : undefined,
                   },
                 );
+                }
               }
             }
 
@@ -4147,6 +4256,35 @@ router.post("/chat", async (req, res) => {
                       shownUrls: priorShownFallback,
                       suburb: nearbySuburb, minPrice: effectiveMinPrice, maxPrice: effectiveMaxPrice,
                     });
+                    if (plainListingBrowse) {
+                      const fallbackPicked = pickGenericListingCandidates(
+                        filtered,
+                        alreadyShownAddressKeys,
+                        Math.max(1, discoveryTargetCount - candidates.length),
+                      );
+                      candidates = appendUniqueDiscoveryCandidates(candidates, fallbackPicked, discoveryTargetCount);
+                      markShown(
+                        fallbackCacheKey,
+                        fallbackPicked.map((c) => c.listingUrl).filter((u): u is string => Boolean(u)),
+                      );
+                      candidates = topUpGenericListingCandidates(
+                        fallbackCacheKey,
+                        candidates,
+                        alreadyShownAddressKeys,
+                        discoveryTargetCount,
+                        discoveryBatchSize,
+                      );
+                      if (candidates.length > primaryCandidateCount) {
+                        const criteriaContextFallback = criteriaLabel ? ` (${criteriaLabel})` : "";
+                        const introPromptFallback = primaryCandidateCount === 0
+                          ? `The user asked about ${suburb}${criteriaContextFallback} but no listings were found there right now. You found some properties in nearby ${nearbySuburb}. In 1 sentence acknowledge this naturally. Do NOT mention a specific number; say "a few", "some", or "a handful". Call them listings/properties only; do not call them development sites or development land. Be brief; no JSON.`
+                          : `The user asked about ${suburb}${criteriaContextFallback}. You found some matching properties there and added nearby options from ${nearbySuburb} to round out the results. In 1 sentence acknowledge this naturally. Do NOT mention a specific number; say "a few", "some", or "a handful". Call them listings/properties only; do not call them development sites or development land. Be brief; no JSON.`;
+                        prescreenedIntro = await generateAnalysis(introPromptFallback, chatLocale).catch(() => "");
+                        req.log.info({ nearbySuburb, count: candidates.length }, "Discovery: nearby generic fallback succeeded");
+                        break;
+                      }
+                      continue;
+                    }
                     const criteriaContextFallback = criteriaLabel ? ` (${criteriaLabel})` : "";
                     const introPromptFallback = primaryCandidateCount === 0
                       ? `The user asked about ${suburb}${criteriaContextFallback} but no listings were found there right now. You found some properties in nearby ${nearbySuburb}. In 1 sentence acknowledge this naturally (e.g. "I couldn't find anything in ${suburb} right now, but here are some nearby options in ${nearbySuburb}:"). Do NOT mention a specific number; say "a few", "some", or "a handful". If the user's exact request did not explicitly ask for development, subdivision, yield, or redevelopment, call them listings/properties only; do not call them development sites or development land. Be brief; no JSON.`
@@ -5096,6 +5234,62 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                 shownUrls: priorShownSn,
                 suburb, minPrice, maxPrice,
               });
+              if (plainListingBrowseSafetyNet) {
+                let discoverCandidates = pickGenericListingCandidates(firstFiltered, alreadyShownAddressKeys, safetyNetTargetCount);
+                markShown(
+                  cacheKey,
+                  discoverCandidates.map((c) => c.listingUrl).filter((u): u is string => Boolean(u)),
+                );
+                discoverCandidates = topUpGenericListingCandidates(
+                  cacheKey,
+                  discoverCandidates,
+                  alreadyShownAddressKeys,
+                  safetyNetTargetCount,
+                  safetyNetBatchSize,
+                );
+
+                discoverCandidates = sanitizeDiscoveryCandidates(discoverCandidates);
+                discoverCandidates = await mergeSponsoredGenericListingCandidate({
+                  candidates: discoverCandidates,
+                  suburb,
+                  minPrice,
+                  maxPrice,
+                  isFollowUp: isDiscoverStreetContinuation(userText),
+                  shownAddressKeys: alreadyShownAddressKeys,
+                  userId: chatUserId,
+                  targetCount: safetyNetTargetCount,
+                  log: req.log,
+                });
+                discoverCandidates = await hydrateGenericListingAgentDetails(discoverCandidates, req.log);
+
+                if (discoverCandidates.length > 0) {
+                  if (chatUserId) {
+                    const shownItems = discoverCandidates.map((c) => ({
+                      addressKey: c.internalListingId ? internalSponsoredAddressKey(c.internalListingId) : normaliseDiscoveryAddressKey(c.address),
+                      listingUrl: c.listingUrl ?? null,
+                      address: c.address ?? null,
+                      suburb: suburb ?? null,
+                    }));
+                    runAfterResponse(
+                      recordShownForUser(chatUserId, shownItems).catch((err) =>
+                        req.log.warn({ err }, "Discovery: failed to record account-level shown memory (safety net generic)"),
+                      ),
+                    );
+                  }
+                  const payload = JSON.stringify({
+                    candidates: discoverCandidates,
+                    isMockData: false,
+                    suburb,
+                    dataSource: discoverCandidates.some((candidate) => candidate.isSponsored) ? "Project Alpha + realestate.co.nz" : "realestate.co.nz",
+                    noListings: false,
+                    aiIntro: content,
+                    searchPresentation: "generic_listing",
+                  });
+                  const translatedPayload = await translateChatContent(payload, "discover", chatLocale, chatTranslateTitleSchool);
+                  res.json({ content: translatedPayload, mode: "discover", ...providerSignal });
+                  return;
+                }
+              }
               const screenedSnDetailed = await preScreenListingsFastDetailed(
                 firstFiltered,
                 safetyNetScreenConcurrency,

@@ -187,4 +187,54 @@ router.post("/agent-contact/lookup", requireAuth, async (req: Request, res: Resp
   }
 });
 
+/**
+ * Direct agent-contact resolver for the listing detail screen. Unlike
+ * /agent-contact/lookup, there is no chat-intent gate or role restriction — the
+ * user has explicitly opened a property card and we always try to resolve a
+ * callable agent. Reuses the same multi-source scrape chain (realestate.co.nz
+ * API → reveal-button page scrape → OneRoof portal) so the phone number is
+ * unmasked wherever possible.
+ */
+router.post("/agent-contact/for-listing", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { address, listingUrl, selectedListingContext } = req.body as {
+      address?: string;
+      listingUrl?: string | null;
+      selectedListingContext?: SelectedListingContext | null;
+    };
+
+    if (!address?.trim()) {
+      res.status(400).json({ error: "address is required" });
+      return;
+    }
+
+    const normalisedSelectedListingContext = normaliseSelectedListingContext(selectedListingContext);
+    const agentInfo = await Promise.race([
+      scrapeListingAgent(address, {
+        listingUrl: normalisedSelectedListingContext?.listingUrl ?? listingUrl ?? null,
+        selectedListingContext: normalisedSelectedListingContext,
+      }),
+      new Promise<ReturnType<typeof agentLookupTimeoutResult>>((resolve) =>
+        setTimeout(() => resolve(agentLookupTimeoutResult()), 25_000),
+      ),
+    ]);
+
+    res.json({
+      found: agentInfo.found,
+      isListed: agentInfo.isListed,
+      matchType: agentInfo.matchType,
+      listingAddress: agentInfo.listingAddress,
+      agentName: agentInfo.agentName,
+      agentPhone: agentInfo.agentPhone,
+      agencyName: agentInfo.agencyName,
+      agentAvatarUrl: agentInfo.agentAvatarUrl,
+      listingUrl: agentInfo.listingUrl,
+      source: agentInfo.source,
+    });
+  } catch (err) {
+    req.log.error({ err }, "POST /agent-contact/for-listing failed");
+    res.status(500).json({ error: "Agent contact lookup failed" });
+  }
+});
+
 export default router;

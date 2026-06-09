@@ -73,6 +73,46 @@ export async function ensureChinese(text: string): Promise<string> {
   return translateToChinese(text);
 }
 
+// ─── Cached free-text translation (listing cards / detail prose) ──────────────
+// Listing descriptions and headlines repeat heavily (curated factual blurbs,
+// re-opened cards), so we memoise translations by exact source text. In-flight
+// requests are de-duplicated so N cards showing the same blurb share one call.
+const freeTextTranslationCache = new Map<string, string>();
+const freeTextTranslationInFlight = new Map<string, Promise<string>>();
+const FREE_TEXT_CACHE_MAX = 3000;
+
+export async function translateFreeTextToChinese(text: string): Promise<string> {
+  if (!text || !text.trim()) return text;
+  if (isPredominantlyChinese(text)) return text;
+  const cached = freeTextTranslationCache.get(text);
+  if (cached != null) return cached;
+  const pending = freeTextTranslationInFlight.get(text);
+  if (pending) return pending;
+
+  const promise = (async () => {
+    const out = await translateToChinese(text);
+    if (freeTextTranslationCache.size >= FREE_TEXT_CACHE_MAX) {
+      const drop = Math.ceil(FREE_TEXT_CACHE_MAX * 0.1);
+      let i = 0;
+      for (const k of freeTextTranslationCache.keys()) {
+        freeTextTranslationCache.delete(k);
+        if (++i >= drop) break;
+      }
+    }
+    freeTextTranslationCache.set(text, out);
+    return out;
+  })().finally(() => {
+    freeTextTranslationInFlight.delete(text);
+  });
+
+  freeTextTranslationInFlight.set(text, promise);
+  return promise;
+}
+
+export async function translateFreeTextBatchToChinese(texts: string[]): Promise<string[]> {
+  return Promise.all(texts.map((t) => translateFreeTextToChinese(t)));
+}
+
 /**
  * Deterministic mapping for NZ land-title statuses. The LLM translator
  * preserves short enum-like tokens (e.g. "Freehold") as-is per its system

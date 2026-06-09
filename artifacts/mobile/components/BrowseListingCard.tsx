@@ -2,19 +2,28 @@ import React from "react";
 import { Image, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
-import { BrowseListing, resolveListingImageUrl } from "@/lib/browseListings";
+import { useT } from "@/lib/i18n";
+import { useMaybeTranslated } from "@/hooks/useMaybeTranslated";
+import { BrowseListing, isListingSponsored, resolveListingImageUrl } from "@/lib/browseListings";
 
-function formatPropertyType(value: string | null | undefined): string {
-  if (!value) return "Property";
-  return value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+const PROPERTY_TYPE_KEYS = new Set([
+  "house", "apartment", "townhouse", "unit", "section", "commercial", "industrial", "rural", "other",
+]);
+
+function propertyTypeLabel(t: (k: string) => string, value: string | null | undefined): string {
+  const key = value?.trim().toLowerCase();
+  if (key && PROPERTY_TYPE_KEYS.has(key)) return t(`ptype.${key}`);
+  return t("ptype.property");
 }
 
 export function BrowseListingCard({ listing, onPress, onShare }: { listing: BrowseListing; onPress: () => void; onShare?: () => void }) {
   const colors = useColors();
+  const { t } = useT();
   const cover = resolveListingImageUrl(listing.imageUrls?.[0]);
-  const agentName = listing.agent?.fullName ?? "Listing agent";
-  const agency = listing.agent?.agencyName ?? (listing.source === "internal" ? "Project Alpha agent" : "Curated listing");
+  const agentName = listing.agent?.fullName ?? t("lcard.agent_fallback");
+  const agency = listing.agent?.agencyName ?? (listing.source === "internal" ? t("lcard.agency_internal") : t("lcard.agency_curated"));
   const agentAvatar = resolveListingImageUrl(listing.agent?.avatarUrl);
+  const description = useMaybeTranslated(listing.description);
 
   return (
     <TouchableOpacity
@@ -36,25 +45,32 @@ export function BrowseListingCard({ listing, onPress, onShare }: { listing: Brow
       <View style={styles.body}>
         <View style={styles.priceRow}>
           <Text style={[styles.price, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]} numberOfLines={1}>
-            {listing.priceDisplay || (listing.priceNzd ? `$${listing.priceNzd.toLocaleString("en-NZ")}` : "Price on application")}
+            {listing.priceDisplay || (listing.priceNzd ? `$${listing.priceNzd.toLocaleString("en-NZ")}` : t("common.price_on_application"))}
           </Text>
-          {listing.source === "internal" ? (
+          {isListingSponsored(listing) ? (
             <View style={[styles.badge, { backgroundColor: colors.accent + "16", borderColor: colors.accent + "44" }]}>
-              <Text style={[styles.badgeText, { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" }]}>Sponsored</Text>
+              <Text style={[styles.badgeText, { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" }]}>{t("lcard.sponsored")}</Text>
             </View>
           ) : null}
         </View>
         <Text style={[styles.address, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]} numberOfLines={2}>
           {listing.address}
         </Text>
-        <Text style={[styles.sub, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]} numberOfLines={1}>
-          {listing.listingType === "for_sale" ? "For sale" : "For rent"} · {formatPropertyType(listing.propertyType)}
-        </Text>
+        {description ? (
+          <Text style={[styles.sub, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]} numberOfLines={2}>
+            {description}
+          </Text>
+        ) : (
+          <Text style={[styles.sub, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]} numberOfLines={1}>
+            {listing.listingType === "for_sale" ? t("lcard.for_sale") : t("lcard.for_rent")} · {propertyTypeLabel(t, listing.propertyType)}
+          </Text>
+        )}
         <View style={styles.stats}>
-          {(listing.bedrooms ?? 0) > 0 ? <Stat icon="home" text={`${listing.bedrooms} bd`} /> : null}
-          {(listing.bathrooms ?? 0) > 0 ? <Stat icon="droplet" text={`${listing.bathrooms} ba`} /> : null}
-          {(listing.garages ?? 0) > 0 ? <Stat icon="truck" text={`${listing.garages} gar`} /> : null}
-          {(listing.landAreaSqm ?? 0) > 0 ? <Stat icon="maximize-2" text={`${listing.landAreaSqm?.toLocaleString()} sqm`} /> : null}
+          {(listing.bedrooms ?? 0) > 0 ? <Stat icon="home" text={t("lcard.stat_bd", { n: listing.bedrooms ?? 0 })} /> : null}
+          {(listing.bathrooms ?? 0) > 0 ? <Stat icon="droplet" text={t("lcard.stat_ba", { n: listing.bathrooms ?? 0 })} /> : null}
+          {(listing.toilets ?? 0) > 0 ? <Stat icon="circle" text={t("lcard.stat_wc", { n: listing.toilets ?? 0 })} /> : null}
+          {(listing.garages ?? 0) > 0 ? <Stat icon="truck" text={t("lcard.stat_gar", { n: listing.garages ?? 0 })} /> : null}
+          {(listing.landAreaSqm ?? 0) > 0 ? <Stat icon="maximize-2" text={t("lcard.stat_sqm", { n: listing.landAreaSqm?.toLocaleString() ?? "" })} /> : null}
         </View>
         <View style={[styles.agentRow, { borderTopColor: colors.border }]}>
           {agentAvatar ? (

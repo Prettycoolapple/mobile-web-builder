@@ -473,12 +473,15 @@ export interface PropertyCandidate {
   agentName?: string | null;
   agencyName?: string | null;
   agentAvatarUrl?: string | null;
+  agentPhone?: string | null;
   source?: "internal" | "curated";
   internalListingId?: string;
   isSponsored?: boolean;
   sponsoredLabel?: string;
   bedrooms?: number;
   bathrooms?: number;
+  toilets?: number | null;
+  garages?: number | null;
   /** True when listing sources disagreed on the count — render as "~3 bd". */
   bedroomsApprox?: boolean;
   bathroomsApprox?: boolean;

@@ -177,7 +177,8 @@ function browseListingFromCandidate(candidate: PropertyCandidate): BrowseListing
     propertyType: candidate.propertyType ?? "property",
     bedrooms: candidate.bedrooms ?? null,
     bathrooms: candidate.bathrooms ?? null,
-    garages: null,
+    toilets: candidate.toilets ?? null,
+    garages: candidate.garages ?? null,
     landAreaSqm: candidate.landArea ?? null,
     floorAreaSqm: candidate.floorArea ?? null,
     priceNzd,
@@ -189,6 +190,7 @@ function browseListingFromCandidate(candidate: PropertyCandidate): BrowseListing
       fullName: candidate.agentName ?? "Listing agent",
       avatarUrl: candidate.agentAvatarUrl ?? null,
       agencyName: candidate.agencyName ?? "External marketplace",
+      phone: candidate.agentPhone ?? null,
       isVerified: false,
     },
   };

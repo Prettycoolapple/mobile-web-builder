@@ -6,7 +6,10 @@ import { requireAuth } from "../lib/auth";
 import { agentCanList } from "../lib/agent-entitlements";
 import { getMockListings } from "../lib/mock-data";
 import { searchRealEstateListings } from "../lib/scrapers/realestate-search";
+import { fetchRealestateListingDetailsByUrl } from "../lib/scrapers/realestate-api";
 import type { ListingResult } from "../lib/scrapers/oneroof";
+import { ai } from "@workspace/integrations-gemini-ai";
+import { logger } from "../lib/logger";
 
 const router = Router();
 const BROWSE_MODE_ENABLED = false;
@@ -23,6 +26,7 @@ type BrowseListing = {
   propertyType: string | null;
   bedrooms?: number | null;
   bathrooms?: number | null;
+  toilets?: number | null;
   garages?: number | null;
   landAreaSqm?: number | null;
   floorAreaSqm?: number | null;
@@ -37,6 +41,7 @@ type BrowseListing = {
     fullName?: string | null;
     avatarUrl?: string | null;
     agencyName?: string | null;
+    phone?: string | null;
     isVerified?: boolean | null;
   } | null;
 };
@@ -64,6 +69,7 @@ function publicListingFromInternal(row: {
   propertyType: string;
   bedrooms: number | null;
   bathrooms: number | null;
+  toilets: number | null;
   garages: number | null;
   landAreaSqm: number | null;
   floorAreaSqm: number | null;
@@ -77,6 +83,7 @@ function publicListingFromInternal(row: {
   agentName: string | null;
   agentAvatarUrl: string | null;
   agentVerified: boolean | null;
+  agentPhone: string | null;
   agencyName: string | null;
 }): BrowseListing {
   return {
@@ -91,6 +98,7 @@ function publicListingFromInternal(row: {
     propertyType: row.propertyType,
     bedrooms: row.bedrooms,
     bathrooms: row.bathrooms,
+    toilets: row.toilets,
     garages: row.garages,
     landAreaSqm: row.landAreaSqm,
     floorAreaSqm: row.floorAreaSqm,
@@ -105,6 +113,7 @@ function publicListingFromInternal(row: {
       fullName: row.agentName,
       avatarUrl: row.agentAvatarUrl,
       agencyName: row.agencyName,
+      phone: row.agentPhone,
       isVerified: row.agentVerified,
     },
   };
@@ -118,7 +127,7 @@ function publicListingFromCurated(listing: ListingResult): BrowseListing {
     listingTitle: listing.address.split(",")[0]?.trim() || listing.address,
     address: listing.address,
     listingType: "for_sale",
-    propertyType: listing.propertyType ?? listing.listingCategory ?? "house",
+    propertyType: sanitisePropertyType(listing.propertyType ?? listing.listingCategory) ?? "house",
     bedrooms: listing.bedrooms,
     bathrooms: listing.bathrooms,
     garages: null,
@@ -126,12 +135,13 @@ function publicListingFromCurated(listing: ListingResult): BrowseListing {
     floorAreaSqm: listing.floorArea ?? null,
     priceNzd: listing.price,
     priceDisplay: listing.priceText,
-    description: "Curated from live NZ marketplace listings. Analyse this property in Project Alpha for feasibility context.",
+    description: buildFactualDescription(listing),
     imageUrls: listing.photoUrls?.length ? listing.photoUrls : listing.photoUrl ? [listing.photoUrl] : [],
     features: [],
     agent: {
       fullName: "Listing agent",
       agencyName: "External marketplace",
+      phone: null,
       isVerified: false,
     },
   };
@@ -163,6 +173,7 @@ function publicListingFromCache(row: typeof browseListingCache.$inferSelect): Br
       fullName: row.agent?.fullName ?? "Listing agent",
       avatarUrl: row.agent?.avatarUrl ?? null,
       agencyName: row.agent?.agencyName ?? "External marketplace",
+      phone: row.agent?.phone ?? null,
       isVerified: false,
     },
   };
@@ -171,6 +182,67 @@ function publicListingFromCache(row: typeof browseListingCache.$inferSelect): Br
 function suburbFromAddress(address: string): string | null {
   const parts = address.split(",").map((part) => part.trim()).filter(Boolean);
   return parts.length >= 2 ? parts[parts.length - 2] ?? null : null;
+}
+
+const VALID_PROPERTY_TYPES = new Set(["house", "apartment", "townhouse", "unit", "section", "commercial", "industrial", "rural", "other"]);
+
+function sanitisePropertyType(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const lower = raw.toLowerCase().trim();
+  if (VALID_PROPERTY_TYPES.has(lower)) return lower;
+  if (/\bunit\b/.test(lower)) return "unit";
+  if (/\bapartment\b/.test(lower)) return "apartment";
+  if (/\btownhouse\b|\bterrace\b/.test(lower)) return "townhouse";
+  if (/\bhouse\b|\bdwelling\b/.test(lower)) return "house";
+  if (/\bsection\b|\bland\b/.test(lower)) return "section";
+  return null;
+}
+
+function buildFactualDescription(listing: ListingResult): string {
+  const suburb = suburbFromAddress(listing.address);
+  const type = sanitisePropertyType(listing.propertyType ?? listing.listingCategory) ?? "property";
+  const parts: string[] = [];
+  if (listing.bedrooms) parts.push(`${listing.bedrooms}-bed`);
+  if (listing.bathrooms) parts.push(`${listing.bathrooms}-bath`);
+  parts.push(type.charAt(0).toUpperCase() + type.slice(1));
+  if (suburb) parts.push(`in ${suburb}`);
+  const stats: string[] = [];
+  if (listing.landArea) stats.push(`${listing.landArea.toLocaleString()} sqm land`);
+  if (listing.floorArea) stats.push(`${listing.floorArea.toLocaleString()} sqm floor`);
+  const base = parts.join(" ");
+  return stats.length ? `${base} — ${stats.join(", ")}.` : `${base}.`;
+}
+
+async function generateListingMarketingSummary(
+  address: string,
+  propertyType: string | null,
+  bedrooms: number | null,
+  bathrooms: number | null,
+  landAreaSqm: number | null,
+  rawDescription: string | null,
+): Promise<string | null> {
+  if (!rawDescription || rawDescription.length < 40) return null;
+  try {
+    const prompt = `Write one concise marketing sentence (max 25 words) for this NZ property listing. Focus on key selling points. Return ONLY the sentence, no quotes or punctuation changes.
+
+Address: ${address}
+Type: ${propertyType ?? "property"}
+Bedrooms: ${bedrooms ?? "unknown"}, Bathrooms: ${bathrooms ?? "unknown"}
+Land area: ${landAreaSqm ? `${landAreaSqm} sqm` : "unknown"}
+Agent's description: ${rawDescription.slice(0, 400)}`;
+    const response = await Promise.race([
+      ai.models.generateContent({
+        model: "deepseek-chat",
+        config: { maxOutputTokens: 60, temperature: 0.5, thinkingConfig: { thinkingBudget: 0 } },
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+      }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 4000)),
+    ]);
+    const text = (response.text ?? "").trim().replace(/^["']|["']$/g, "");
+    return text.length >= 10 ? text : null;
+  } catch {
+    return null;
+  }
 }
 
 async function upsertCuratedBrowseListings(listingsToCache: ListingResult[]): Promise<BrowseListing[]> {
@@ -184,7 +256,7 @@ async function upsertCuratedBrowseListings(listingsToCache: ListingResult[]): Pr
     addressSuburb: suburbFromAddress(listing.address),
     addressCity: null,
     listingType: "for_sale",
-    propertyType: listing.propertyType ?? listing.listingCategory ?? "house",
+    propertyType: sanitisePropertyType(listing.propertyType ?? listing.listingCategory) ?? "house",
     listingStatus: listing.listingStatus ?? "active",
     isActive: true,
     bedrooms: listing.bedrooms,
@@ -195,7 +267,7 @@ async function upsertCuratedBrowseListings(listingsToCache: ListingResult[]): Pr
     priceNzd: listing.price,
     priceDisplay: listing.priceText,
     listingTitle: listing.address.split(",")[0]?.trim() || listing.address,
-    description: "Curated from live NZ marketplace listings. Analyse this property in Project Alpha for feasibility context.",
+    description: buildFactualDescription(listing),
     imageUrls: listing.photoUrls?.length ? listing.photoUrls : listing.photoUrl ? [listing.photoUrl] : [],
     features: [],
     agent: { fullName: "Listing agent", agencyName: "External marketplace" },
@@ -259,6 +331,7 @@ function publicListingFromMock(candidate: ReturnType<typeof getMockListings>[num
     agent: {
       fullName: "Project Alpha sample",
       agencyName: "Curated listing",
+      phone: null,
       isVerified: false,
     },
   };
@@ -653,6 +726,48 @@ router.get("/listings/place-details/:placeId", requireAuth, async (req, res) => 
   }
 });
 
+router.get("/listings/enrich", requireAuth, async (req, res) => {
+  const url = cleanQuery(req.query.url);
+  if (!url || !/^https?:\/\//i.test(url)) {
+    res.status(400).json({ error: "A valid listing URL is required.", code: "INVALID_LISTING_URL" });
+    return;
+  }
+
+  try {
+    if (/realestate\.co\.nz/i.test(url)) {
+      const details = await fetchRealestateListingDetailsByUrl(url);
+      // Generate an AI marketing summary from the scraped description and
+      // write it back to the cache so subsequent card views show real copy.
+      if (details?.description && details.description.length >= 40) {
+        void generateListingMarketingSummary(
+          url,
+          sanitisePropertyType(details.propertyType ?? null),
+          details.bedrooms ?? null,
+          details.bathrooms ?? null,
+          details.landAreaSqm ?? null,
+          details.description,
+        ).then(async (summary) => {
+          if (!summary) return;
+          try {
+            await db
+              .update(browseListingCache)
+              .set({ description: summary })
+              .where(eq(browseListingCache.externalUrl, url));
+          } catch (err) {
+            logger.warn({ err, url }, "Failed to write AI summary to listing cache");
+          }
+        }).catch(() => {});
+      }
+      res.json({ details });
+      return;
+    }
+    res.json({ details: null });
+  } catch (error) {
+    req.log?.warn({ error, url }, "Failed to enrich public listing");
+    res.json({ details: null });
+  }
+});
+
 router.get("/listings", requireAuth, async (req, res) => {
   if (!BROWSE_MODE_ENABLED) {
     res.status(404).json({ error: "Browse listings are temporarily disabled.", code: "BROWSE_DISABLED" });
@@ -702,6 +817,7 @@ router.get("/listings", requireAuth, async (req, res) => {
         propertyType: listings.propertyType,
         bedrooms: listings.bedrooms,
         bathrooms: listings.bathrooms,
+        toilets: listings.toilets,
         garages: listings.garages,
         landAreaSqm: listings.landAreaSqm,
         floorAreaSqm: listings.floorAreaSqm,
@@ -715,6 +831,7 @@ router.get("/listings", requireAuth, async (req, res) => {
         agentName: profiles.fullName,
         agentAvatarUrl: profiles.avatarUrl,
         agentVerified: profiles.isVerified,
+        agentPhone: profiles.phoneNumber,
         agencyName: salesAgentProfiles.agencyName,
       })
       .from(listings)
@@ -917,6 +1034,7 @@ router.get("/listings/public/:id", requireAuth, async (req, res) => {
         propertyType: listings.propertyType,
         bedrooms: listings.bedrooms,
         bathrooms: listings.bathrooms,
+        toilets: listings.toilets,
         garages: listings.garages,
         landAreaSqm: listings.landAreaSqm,
         floorAreaSqm: listings.floorAreaSqm,
@@ -930,6 +1048,7 @@ router.get("/listings/public/:id", requireAuth, async (req, res) => {
         agentName: profiles.fullName,
         agentAvatarUrl: profiles.avatarUrl,
         agentVerified: profiles.isVerified,
+        agentPhone: profiles.phoneNumber,
         agencyName: salesAgentProfiles.agencyName,
       })
       .from(listings)
