@@ -6,6 +6,7 @@ import type {
   PropertyCandidate,
   SelectedListingContext,
 } from "@/context/ChatContext";
+import type { BrowseListing } from "@/lib/browseListings";
 
 export const PENDING_SHARE_TOKEN_KEY = "@devfeasible/pending-share-token";
 
@@ -25,6 +26,16 @@ export type OpenedPropertyShare =
         kind: "candidate";
         address: string;
         candidate: PropertyCandidate;
+      };
+    }
+  | {
+      token: string;
+      kind: "listing";
+      address: string;
+      payload: {
+        kind: "listing";
+        address: string;
+        listing: BrowseListing;
       };
     }
   | {
@@ -90,6 +101,17 @@ export async function shareCandidate(candidate: PropertyCandidate, headers: ApiH
   await Share.share({
     title: "Project Alpha property opportunity",
     message: `I found this Project Alpha property opportunity: ${address}. Open Project Alpha to view more: ${share.url}`,
+    url: share.url,
+  });
+}
+
+export async function shareListing(listing: BrowseListing, headers: ApiHeaders): Promise<void> {
+  const address = cleanAddress(listing.address);
+  if (!address) throw new Error("This listing cannot be shared yet.");
+  const share = await createShare({ kind: "listing", address, listing }, headers);
+  await Share.share({
+    title: "Project Alpha property listing",
+    message: `I found this property listing on Project Alpha: ${address}. Open it here: ${share.url}`,
     url: share.url,
   });
 }

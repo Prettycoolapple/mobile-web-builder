@@ -37,7 +37,7 @@ function selectedListingContextFromCandidate(candidate: PropertyCandidate): Sele
     address: candidate.address,
     listingUrl: candidate.listingUrl ?? null,
     photoUrl: candidate.photoUrl ?? null,
-    photoUrls: candidate.photoUrl ? [candidate.photoUrl] : [],
+    photoUrls: candidate.photoUrls?.length ? candidate.photoUrls : candidate.photoUrl ? [candidate.photoUrl] : [],
     price: candidate.price > 0 ? candidate.price : null,
     landArea: candidate.landArea ?? null,
     floorArea: candidate.floorArea ?? null,

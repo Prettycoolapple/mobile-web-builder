@@ -57,6 +57,7 @@ export interface ChatMessage {
   report?: FeasibilityReport;
   reportGroup?: FeasibilityReportGroup;
   searchResults?: PropertyCandidate[];
+  searchPresentation?: "generic_listing" | "scored_screening";
   isMockData?: boolean;
   aiIntro?: string;
   provider?: ServiceProvider;
@@ -462,7 +463,20 @@ export interface PropertyCandidate {
   designLedSummary?: string | null;
   designLedDetail?: string | null;
   photoUrl?: string;
+  photoUrls?: string[];
   listingUrl?: string;
+  priceDisplay?: string;
+  propertyType?: string | null;
+  listingTitle?: string | null;
+  description?: string | null;
+  features?: string[];
+  agentName?: string | null;
+  agencyName?: string | null;
+  agentAvatarUrl?: string | null;
+  source?: "internal" | "curated";
+  internalListingId?: string;
+  isSponsored?: boolean;
+  sponsoredLabel?: string;
   bedrooms?: number;
   bathrooms?: number;
   /** True when listing sources disagreed on the count — render as "~3 bd". */

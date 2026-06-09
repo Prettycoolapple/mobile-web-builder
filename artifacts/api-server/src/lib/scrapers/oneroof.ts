@@ -22,6 +22,12 @@ export interface ListingResult {
   propertyType?: string | null;
   /** Broader listing category signal from the source when available. */
   listingCategory?: string | null;
+  listingTitle?: string | null;
+  description?: string | null;
+  features?: string[];
+  agentName?: string | null;
+  agencyName?: string | null;
+  agentAvatarUrl?: string | null;
   /** Tenure/title text from a listing page, e.g. Freehold, Unit Title, Cross Lease. */
   tenureText?: string | null;
   /** Legal description text from a listing page when exposed. */

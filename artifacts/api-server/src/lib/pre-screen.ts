@@ -50,6 +50,19 @@ export interface PropertyCandidate {
   designLedDetail?: string | null;
   listingUrl?: string;
   photoUrl?: string;
+  photoUrls?: string[];
+  priceDisplay?: string;
+  propertyType?: string | null;
+  listingTitle?: string | null;
+  description?: string | null;
+  features?: string[];
+  agentName?: string | null;
+  agencyName?: string | null;
+  agentAvatarUrl?: string | null;
+  source?: "internal" | "curated";
+  internalListingId?: string;
+  isSponsored?: boolean;
+  sponsoredLabel?: string;
   bedrooms?: number;
   bathrooms?: number;
   /** True when listing sources disagreed on the count — UI can render "~3 bd". */
@@ -556,6 +569,15 @@ async function screenOneFast(
       designLedDetail: designLedAssessment.designLedDetail,
       listingUrl: listing.listingUrl,
       photoUrl: listing.photoUrl ?? undefined,
+      photoUrls: listing.photoUrls?.length ? listing.photoUrls : listing.photoUrl ? [listing.photoUrl] : undefined,
+      priceDisplay: listing.priceText || undefined,
+      propertyType: listing.propertyType ?? listing.listingCategory ?? undefined,
+      listingTitle: listing.listingTitle ?? listing.address.split(",")[0]?.trim() ?? listing.address,
+      description: listing.description ?? undefined,
+      features: listing.features?.length ? listing.features : undefined,
+      agentName: listing.agentName ?? undefined,
+      agencyName: listing.agencyName ?? undefined,
+      agentAvatarUrl: listing.agentAvatarUrl ?? undefined,
       bedrooms: listing.bedrooms ?? undefined,
       bathrooms: listing.bathrooms ?? undefined,
       bedroomsApprox: listing.bedroomsApprox || undefined,
@@ -765,7 +787,17 @@ async function screenOne(listing: ListingResult): Promise<PropertyCandidate | nu
       briefSummary: makeSummary(zone, lots, minLotSize, overlays, land),
       potentialLots: lots,
       minLotSize: minLotSize ?? undefined,
+      listingUrl: listing.listingUrl,
       photoUrl: listing.photoUrl ?? undefined,
+      photoUrls: listing.photoUrls?.length ? listing.photoUrls : listing.photoUrl ? [listing.photoUrl] : undefined,
+      priceDisplay: listing.priceText || undefined,
+      propertyType: listing.propertyType ?? listing.listingCategory ?? undefined,
+      listingTitle: listing.listingTitle ?? listing.address.split(",")[0]?.trim() ?? listing.address,
+      description: listing.description ?? undefined,
+      features: listing.features?.length ? listing.features : undefined,
+      agentName: listing.agentName ?? undefined,
+      agencyName: listing.agencyName ?? undefined,
+      agentAvatarUrl: listing.agentAvatarUrl ?? undefined,
       bedrooms: listing.bedrooms ?? undefined,
       bathrooms: listing.bathrooms ?? undefined,
       bedroomsApprox: listing.bedroomsApprox || undefined,

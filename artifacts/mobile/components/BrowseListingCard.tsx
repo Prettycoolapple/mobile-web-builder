@@ -9,11 +9,12 @@ function formatPropertyType(value: string | null | undefined): string {
   return value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-export function BrowseListingCard({ listing, onPress }: { listing: BrowseListing; onPress: () => void }) {
+export function BrowseListingCard({ listing, onPress, onShare }: { listing: BrowseListing; onPress: () => void; onShare?: () => void }) {
   const colors = useColors();
   const cover = resolveListingImageUrl(listing.imageUrls?.[0]);
   const agentName = listing.agent?.fullName ?? "Listing agent";
   const agency = listing.agent?.agencyName ?? (listing.source === "internal" ? "Project Alpha agent" : "Curated listing");
+  const agentAvatar = resolveListingImageUrl(listing.agent?.avatarUrl);
 
   return (
     <TouchableOpacity
@@ -22,10 +23,14 @@ export function BrowseListingCard({ listing, onPress }: { listing: BrowseListing
       activeOpacity={0.84}
     >
       {cover ? (
-        <Image source={{ uri: cover }} style={styles.cover} />
+        <View>
+          <Image source={{ uri: cover }} style={styles.cover} />
+          {onShare ? <ShareButton onPress={onShare} /> : null}
+        </View>
       ) : (
         <View style={[styles.coverPlaceholder, { backgroundColor: colors.muted }]}>
           <Feather name="home" size={30} color={colors.mutedForeground} />
+          {onShare ? <ShareButton onPress={onShare} /> : null}
         </View>
       )}
       <View style={styles.body}>
@@ -35,7 +40,7 @@ export function BrowseListingCard({ listing, onPress }: { listing: BrowseListing
           </Text>
           {listing.source === "internal" ? (
             <View style={[styles.badge, { backgroundColor: colors.accent + "16", borderColor: colors.accent + "44" }]}>
-              <Text style={[styles.badgeText, { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" }]}>Alpha</Text>
+              <Text style={[styles.badgeText, { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" }]}>Sponsored</Text>
             </View>
           ) : null}
         </View>
@@ -52,11 +57,15 @@ export function BrowseListingCard({ listing, onPress }: { listing: BrowseListing
           {(listing.landAreaSqm ?? 0) > 0 ? <Stat icon="maximize-2" text={`${listing.landAreaSqm?.toLocaleString()} sqm`} /> : null}
         </View>
         <View style={[styles.agentRow, { borderTopColor: colors.border }]}>
-          <View style={[styles.agentAvatar, { backgroundColor: colors.accent + "18" }]}>
-            <Text style={[styles.agentInitial, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
-              {agentName.trim().slice(0, 1).toUpperCase() || "A"}
-            </Text>
-          </View>
+          {agentAvatar ? (
+            <Image source={{ uri: agentAvatar }} style={styles.agentAvatarImage} />
+          ) : (
+            <View style={[styles.agentAvatar, { backgroundColor: colors.accent + "18" }]}>
+              <Text style={[styles.agentInitial, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
+                {agentName.trim().slice(0, 1).toUpperCase() || "A"}
+              </Text>
+            </View>
+          )}
           <View style={{ flex: 1 }}>
             <Text style={[styles.agentName, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]} numberOfLines={1}>
               {agentName}
@@ -68,6 +77,21 @@ export function BrowseListingCard({ listing, onPress }: { listing: BrowseListing
           <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
         </View>
       </View>
+    </TouchableOpacity>
+  );
+}
+
+function ShareButton({ onPress }: { onPress: () => void }) {
+  const colors = useColors();
+  return (
+    <TouchableOpacity
+      style={[styles.shareBtn, { backgroundColor: "rgba(255,255,255,0.92)", borderColor: colors.border }]}
+      onPress={onPress}
+      activeOpacity={0.82}
+      accessibilityRole="button"
+      accessibilityLabel="Share listing"
+    >
+      <Feather name="log-out" size={15} color={colors.foreground} />
     </TouchableOpacity>
   );
 }
@@ -93,7 +117,8 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   cover: { width: "100%", height: 176 },
-  coverPlaceholder: { width: "100%", height: 150, alignItems: "center", justifyContent: "center" },
+  coverPlaceholder: { width: "100%", height: 150, alignItems: "center", justifyContent: "center", position: "relative" },
+  shareBtn: { position: "absolute", top: 10, left: 10, width: 34, height: 34, borderRadius: 17, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   body: { padding: 13, gap: 6 },
   priceRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   price: { flex: 1, fontSize: 18 },
@@ -106,6 +131,7 @@ const styles = StyleSheet.create({
   statText: { fontSize: 12 },
   agentRow: { flexDirection: "row", alignItems: "center", gap: 9, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 10, marginTop: 4 },
   agentAvatar: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center" },
+  agentAvatarImage: { width: 30, height: 30, borderRadius: 15 },
   agentInitial: { fontSize: 13 },
   agentName: { fontSize: 13 },
   agency: { fontSize: 11, marginTop: 1 },

@@ -2,12 +2,17 @@ import React, { useEffect, useMemo, useRef, useState, Component } from "react";
 import { View, Text, StyleSheet, Animated, Easing, TouchableOpacity, TouchableWithoutFeedback, Clipboard, Alert, Image } from "react-native";
 import Markdown from "react-native-markdown-display";
 import { Feather } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
-import { ChatMessage, SelectedListingContext } from "@/context/ChatContext";
+import { useAuth } from "@/context/AuthContext";
+import { ChatMessage, PropertyCandidate, SelectedListingContext } from "@/context/ChatContext";
 import { useT } from "@/lib/i18n";
+import { BrowseListing } from "@/lib/browseListings";
+import { shareListing } from "@/lib/propertyShares";
 import { FeasibilityReportCard } from "./FeasibilityReport";
 import { CombinedReportGroupCard } from "./CombinedReportGroup";
 import { PropertyCard } from "./PropertyCard";
+import { BrowseListingCard } from "./BrowseListingCard";
 import { AnalysisProgress } from "./AnalysisProgress";
 import { ProviderRecommendationBubble } from "./ProviderRecommendationBubble";
 import { ProviderUpgradeGateBubble } from "./ProviderUpgradeGateBubble";
@@ -136,6 +141,59 @@ const THINKING_KEYS = [
 
 const APP_ICON = require("@/assets/images/icon.png");
 
+function genericListingId(candidate: PropertyCandidate): string {
+  const seed = candidate.listingUrl || candidate.address;
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = ((hash << 5) - hash + seed.charCodeAt(i)) | 0;
+  }
+  return `generic_${Math.abs(hash)}`;
+}
+
+function firstAddressLine(address: string): string {
+  return address.split(",")[0]?.trim() || address;
+}
+
+function genericDescription(candidate: PropertyCandidate): string {
+  return candidate.description?.trim()
+    || "Curated from live NZ marketplace listings. Analyse this property in Project Alpha for feasibility context.";
+}
+
+function browseListingFromCandidate(candidate: PropertyCandidate): BrowseListing {
+  const imageUrls = candidate.photoUrls?.length
+    ? candidate.photoUrls
+    : candidate.photoUrl
+      ? [candidate.photoUrl]
+      : [];
+  const priceNzd = candidate.price > 0 ? candidate.price : null;
+  const isInternal = candidate.source === "internal";
+  return {
+    id: candidate.internalListingId ?? genericListingId(candidate),
+    source: isInternal ? "internal" : "curated",
+    externalUrl: isInternal ? null : candidate.listingUrl ?? null,
+    listingTitle: candidate.listingTitle ?? firstAddressLine(candidate.address),
+    address: candidate.address,
+    listingType: "for_sale",
+    propertyType: candidate.propertyType ?? "property",
+    bedrooms: candidate.bedrooms ?? null,
+    bathrooms: candidate.bathrooms ?? null,
+    garages: null,
+    landAreaSqm: candidate.landArea ?? null,
+    floorAreaSqm: candidate.floorArea ?? null,
+    priceNzd,
+    priceDisplay: candidate.priceDisplay ?? (priceNzd ? `$${priceNzd.toLocaleString("en-NZ")}` : "Price on application"),
+    description: genericDescription(candidate),
+    imageUrls,
+    features: candidate.features ?? [],
+    agent: {
+      fullName: candidate.agentName ?? "Listing agent",
+      avatarUrl: candidate.agentAvatarUrl ?? null,
+      agencyName: candidate.agencyName ?? "External marketplace",
+      isVerified: false,
+    },
+  };
+}
+
 function AiAvatar() {
   return (
     <View style={styles.aiAvatar}>
@@ -205,6 +263,8 @@ function TypingDots() {
 export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect, onDismiss, onAgentDismiss, onUpgrade, onShowMore }: Props) {
   const colors = useColors();
   const { t } = useT();
+  const router = useRouter();
+  const { getApiHeaders } = useAuth();
   const isUser = message.role === "user";
 
   if (message.type === "agent_contact" && (message.agentPhone || message.agentListingUrl)) {
@@ -339,6 +399,7 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
   if (message.type === "search") {
     const results = message.searchResults ?? [];
     const aiIntro = message.aiIntro;
+    const showGenericListings = message.searchPresentation === "generic_listing";
     return (
       <View style={styles.searchContainer}>
         {aiIntro ? (
@@ -352,13 +413,33 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
           </View>
         ) : null}
         <Text style={[styles.searchHeader, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>
-          {results.length === 1
+          {showGenericListings
+            ? t(results.length === 1 ? "listing.count_one" : "listing.count_other", { n: results.length })
+            : results.length === 1
             ? t("search.opportunity_one", { n: results.length })
             : t("search.opportunity_other", { n: results.length })}
         </Text>
-        {results.map((candidate, i) => (
-          <PropertyCard key={i} candidate={candidate} onAnalyse={onAnalyse} showSubdivisionDisclaimer={results.length === 1} />
-        ))}
+        {results.map((candidate, i) => {
+          if (showGenericListings) {
+            const listing = browseListingFromCandidate(candidate);
+            return (
+              <BrowseListingCard
+                key={`${listing.id}-${i}`}
+                listing={listing}
+                onShare={() => {
+                  void shareListing(listing, getApiHeaders()).catch(() => {});
+                }}
+                onPress={() => router.push({
+                  pathname: "/listing/[id]",
+                  params: { id: listing.id, preview: JSON.stringify(listing) },
+                } as never)}
+              />
+            );
+          }
+          return (
+            <PropertyCard key={i} candidate={candidate} onAnalyse={onAnalyse} showSubdivisionDisclaimer={results.length === 1} />
+          );
+        })}
         {results.length > 0 ? (
           <TouchableOpacity
             style={[styles.showMoreButton, { backgroundColor: colors.card, borderColor: colors.border }]}

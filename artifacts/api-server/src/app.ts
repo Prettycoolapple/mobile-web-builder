@@ -39,6 +39,11 @@ app.use("/api/stripe/webhook", express.raw({ type: "application/json" }));
 app.use(express.json({ limit: "8mb" }));
 app.use(express.urlencoded({ extended: true, limit: "8mb" }));
 
+app.use("/share", (req, res, next) => {
+  req.url = `/share${req.url}`;
+  router(req, res, next);
+});
+
 app.use("/api", router);
 
 export default app;

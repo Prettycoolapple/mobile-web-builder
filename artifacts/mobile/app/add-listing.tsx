@@ -124,6 +124,8 @@ export default function AddListingScreen() {
   const [addressMeta, setAddressMeta] = useState<{
     street?: string; suburb?: string; city?: string; postcode?: string; lat?: string; lng?: string;
   }>({});
+  const [selectedPlaceId, setSelectedPlaceId] = useState("");
+  const [selectedAddressLabel, setSelectedAddressLabel] = useState("");
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [showPredictions, setShowPredictions] = useState(false);
   const [loadingPredictions, setLoadingPredictions] = useState(false);
@@ -169,6 +171,8 @@ export default function AddListingScreen() {
           lat: listing.lat ?? "",
           lng: listing.lng ?? "",
         });
+        setSelectedPlaceId(listing.googlePlaceId ?? (listing.addressSuburb || listing.lat ? "existing-address" : ""));
+        setSelectedAddressLabel(listing.address ?? "");
         setListingType(listing.listingType ?? "for_sale");
         setPropertyType(listing.propertyType ?? "house");
         setBedrooms(listing.bedrooms ?? 0);
@@ -225,6 +229,8 @@ export default function AddListingScreen() {
     (text: string) => {
       setAddress(text);
       setAddressMeta({});
+      setSelectedPlaceId("");
+      setSelectedAddressLabel("");
       if (debounceRef.current) clearTimeout(debounceRef.current);
       debounceRef.current = setTimeout(() => fetchPredictions(text), 320);
     },
@@ -234,6 +240,8 @@ export default function AddListingScreen() {
   const handleSelectPrediction = useCallback(
     async (prediction: Prediction) => {
       setAddress(prediction.description);
+      setSelectedPlaceId(prediction.place_id);
+      setSelectedAddressLabel(prediction.description);
       setShowPredictions(false);
       setPredictions([]);
       Keyboard.dismiss();
@@ -248,10 +256,21 @@ export default function AddListingScreen() {
           `${getApiBase()}/listings/place-details/${encodeURIComponent(prediction.place_id)}`,
           { headers: getApiHeaders() }
         );
-        const data = (await resp.json()) as { result?: { geometry?: { location?: { lat: number; lng: number } }; address_components?: { types: string[]; long_name: string }[] } };
+        const data = (await resp.json()) as {
+          result?: {
+            formatted_address?: string;
+            geometry?: { location?: { lat: number; lng: number } };
+            address_components?: { types: string[]; long_name: string }[];
+          };
+        };
         if (data.result) {
+          const formattedAddress = typeof data.result.formatted_address === "string"
+            ? data.result.formatted_address
+            : prediction.description;
           const comps = data.result.address_components ?? [];
           const get = (type: string) => comps.find((c) => c.types.includes(type))?.long_name ?? "";
+          setAddress(formattedAddress);
+          setSelectedAddressLabel(formattedAddress);
           setAddressMeta({
             street: `${get("street_number")} ${get("route")}`.trim(),
             suburb: get("sublocality") || get("locality"),
@@ -320,6 +339,10 @@ export default function AddListingScreen() {
       Alert.alert(t("add_listing.address_required_title"), t("add_listing.address_required_body"));
       return;
     }
+    if (!selectedPlaceId || (!addressMeta.suburb && !addressMeta.lat)) {
+      Alert.alert("Select address", "Please start typing and choose the formatted property address from the dropdown.");
+      return;
+    }
     if (existingImageUrls.length + images.length < 1) {
       Alert.alert(t("common.error"), "Please add at least one property photo before publishing.");
       return;
@@ -372,6 +395,9 @@ export default function AddListingScreen() {
         addressPostcode: addressMeta.postcode,
         lat: addressMeta.lat,
         lng: addressMeta.lng,
+        googlePlaceId: selectedPlaceId && !selectedPlaceId.startsWith("osm:") && selectedPlaceId !== "existing-address"
+          ? selectedPlaceId
+          : undefined,
         listingType,
         propertyType,
         propertySubtype,
@@ -415,7 +441,7 @@ export default function AddListingScreen() {
       setSubmitting(false);
     }
   }, [
-    address, addressMeta, listingType, propertyType,
+    address, addressMeta, selectedPlaceId, listingType, propertyType,
     bedrooms, bathrooms, garages, landArea, floorArea,
     priceMode, priceInput, description, images, existingImageUrls, selectedAmenities,
     uploadImage, getApiBase, getApiHeaders, isEditMode, editId, t,
@@ -473,6 +499,9 @@ export default function AddListingScreen() {
               placeholderTextColor={colors.mutedForeground}
               value={address}
               onChangeText={handleAddressChange}
+              onFocus={() => {
+                if (address.trim().length >= 3 && !selectedPlaceId) void fetchPredictions(address);
+              }}
               autoCorrect={false}
               autoCapitalize="words"
             />
@@ -499,6 +528,22 @@ export default function AddListingScreen() {
                   </View>
                 </TouchableOpacity>
               ))}
+            </View>
+          )}
+
+          {!!selectedPlaceId && (
+            <View style={[styles.selectedAddressBox, { backgroundColor: colors.accent + "10", borderColor: colors.accent + "38" }]}>
+              <View style={[styles.selectedAddressIcon, { backgroundColor: colors.accent }]}>
+                <Feather name="check" size={13} color="#fff" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.selectedAddressTitle, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>
+                  Selected formatted address
+                </Text>
+                <Text style={[styles.selectedAddressText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]} numberOfLines={2}>
+                  {selectedAddressLabel || address}
+                </Text>
+              </View>
             </View>
           )}
 
@@ -907,6 +952,25 @@ const styles = StyleSheet.create({
   predictionRow: { flexDirection: "row", alignItems: "flex-start", paddingHorizontal: 14, paddingVertical: 11 },
   predMainText: { fontSize: 14 },
   predSubText: { fontSize: 12, marginTop: 1 },
+  selectedAddressBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginTop: 8,
+  },
+  selectedAddressIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  selectedAddressTitle: { fontSize: 12 },
+  selectedAddressText: { fontSize: 12, marginTop: 1 },
 
   toggleRow: { flexDirection: "row", gap: 10 },
   togglePill: {

@@ -515,6 +515,9 @@ function mapListing(raw: RawListing): ListingResult | null {
     isCombinedListing,
     combinedListingReason: isCombinedListing ? "multi_address_listing" : null,
     listingStatus: a["listing-status"] ?? null,
+    listingTitle: address.split(",")[0]?.trim() || address,
+    description: null,
+    features: [],
     photoUrl: photoUrls[0] ?? null,
     photoUrls,
     listingUrl: url,
@@ -550,6 +553,14 @@ export async function fetchRealestateListingByUrl(url: string): Promise<ListingR
   if (!mapped) return null;
   const [annotated] = await annotateApproxFields([mapped]).catch(() => [mapped]);
   return annotated ?? mapped;
+}
+
+export async function fetchRealestateAgentForListingUrl(url: string): Promise<RealestateAgentContact | null> {
+  const id = listingIdFromUrl(url);
+  if (!id) return null;
+  const raw = await fetchRawListingById(id);
+  if (!raw) return null;
+  return fetchCallableAgentForListing(raw);
 }
 
 function suburbFromAddress(address: string): string | null {

@@ -33,6 +33,7 @@
     listingPhotos: [],
     listingDocuments: [],
     addressTimer: null,
+    lastAddressQuery: "",
     otpCooldownTimer: null,
     pendingSignupPayload: null,
     pendingSignupForm: null,
@@ -326,8 +327,10 @@
     state.listingPhotos.forEach((item) => URL.revokeObjectURL(item.previewUrl));
     state.listingPhotos = [];
     state.listingDocuments = [];
+    state.lastAddressQuery = "";
     $("#listing-address-results").hidden = true;
     $("#listing-address-results").innerHTML = "";
+    renderAddressConfirmation();
     renderPhotoPreview();
     renderDocumentList();
     clearListingErrors();
@@ -426,8 +429,12 @@
     }
     if (step === 1) {
       const ok = String(form.elements.address.value || "").trim().length >= 3;
-      if (!ok && showErrors) setFieldError("address", "Enter the property's street address.");
-      return ok;
+      const selected = Boolean(String(form.elements.addressSelectedPlaceId.value || "").trim());
+      const hasStructuredAddress = Boolean(String(form.elements.addressSuburb.value || "").trim() || String(form.elements.lat.value || "").trim());
+      if ((!ok || !selected || !hasStructuredAddress) && showErrors) {
+        setFieldError("address", "Start typing, then choose the formatted address from the dropdown.");
+      }
+      return ok && selected && hasStructuredAddress;
     }
     if (step === 2) {
       const tag = selectedPropertyTag(form);
@@ -489,6 +496,43 @@
     return true;
   }
 
+  function clearSelectedAddress(form) {
+    if (!form) return;
+    form.elements.googlePlaceId.value = "";
+    form.elements.addressSelectedPlaceId.value = "";
+    form.elements.addressStreet.value = "";
+    form.elements.addressSuburb.value = "";
+    form.elements.addressCity.value = "";
+    form.elements.addressPostcode.value = "";
+    form.elements.lat.value = "";
+    form.elements.lng.value = "";
+    renderAddressConfirmation();
+  }
+
+  function renderAddressConfirmation() {
+    const form = $("#new-listing-form");
+    const box = $("#listing-address-confirmation");
+    if (!form || !box) return;
+    const selectedPlaceId = String(form.elements.addressSelectedPlaceId.value || "").trim();
+    if (!selectedPlaceId) {
+      box.hidden = true;
+      box.innerHTML = "";
+      return;
+    }
+    const suburb = String(form.elements.addressSuburb.value || "").trim();
+    const city = String(form.elements.addressCity.value || "").trim();
+    const postcode = String(form.elements.addressPostcode.value || "").trim();
+    const meta = [suburb, city, postcode].filter(Boolean).join(" · ");
+    box.innerHTML = `
+      <span class="portal-address-confirmation-icon">✓</span>
+      <span>
+        <strong>Selected formatted address</strong>
+        ${meta ? `<small>${escapeHtml(meta)}</small>` : ""}
+      </span>
+    `;
+    box.hidden = false;
+  }
+
   function validateEntireListing(showErrors) {
     if (showErrors) clearListingErrors();
     let allOk = true;
@@ -526,7 +570,6 @@
   async function searchAddress(query) {
     const session = getSession();
     const results = $("#listing-address-results");
-    const field = $("#new-listing-form")?.elements?.address;
     if (!session || !results) return;
     const trimmed = query.trim();
     if (trimmed.length < 3) {
@@ -534,6 +577,7 @@
       results.innerHTML = "";
       return;
     }
+    state.lastAddressQuery = trimmed;
     // Show a "Searching…" hint so the agent knows it's working
     results.innerHTML = `<span class="portal-address-hint">Searching addresses…</span>`;
     results.hidden = false;
@@ -542,6 +586,7 @@
         method: "GET",
         token: session.token,
       });
+      if (state.lastAddressQuery !== trimmed) return;
       const predictions = Array.isArray(data.predictions) ? data.predictions : [];
       if (!predictions.length) {
         results.innerHTML = `<span class="portal-address-hint">No addresses found. Try a more specific street address.</span>`;
@@ -552,6 +597,8 @@
         .map((item) => {
           const predictionAddress = normalisedPredictionAddress(item);
           const description = predictionAddress.label || item.description || item.structured_formatting?.main_text || "";
+          const mainText = item.structured_formatting?.main_text || description.split(",")[0] || description;
+          const secondaryText = item.structured_formatting?.secondary_text || description.replace(mainText, "").replace(/^,\s*/, "");
           const placeId = item.place_id || "";
           const isOsm = item.source === "osm" || placeId.startsWith("osm:");
           const lat = item.lat || item._lat || "";
@@ -566,11 +613,16 @@
                 data-postcode="${escapeHtml(predictionAddress.postcode)}"
               `
             : "";
-          return `<button type="button" data-place-id="${escapeHtml(placeId)}" data-place-description="${escapeHtml(description)}" ${extraAttrs}>${escapeHtml(description)}</button>`;
+          return `
+            <button type="button" data-place-id="${escapeHtml(placeId)}" data-place-description="${escapeHtml(description)}" ${extraAttrs}>
+              <span class="portal-address-main">${escapeHtml(mainText)}</span>
+              ${secondaryText ? `<span class="portal-address-secondary">${escapeHtml(secondaryText)}</span>` : ""}
+            </button>
+          `;
         })
         .join("");
     } catch {
-      results.innerHTML = `<span class="portal-address-hint">Address search is unavailable. You can type the address manually.</span>`;
+      results.innerHTML = `<span class="portal-address-hint">Address search is unavailable. Please try again before publishing.</span>`;
     }
   }
 
@@ -586,6 +638,7 @@
     const results = $("#listing-address-results");
     if (!session || !form) return;
     form.elements.address.value = description;
+    form.elements.addressSelectedPlaceId.value = placeId;
     form.elements.googlePlaceId.value = placeId.startsWith("osm:") ? "" : placeId;
     if (results) results.hidden = true;
 
@@ -597,6 +650,7 @@
       form.elements.addressPostcode.value = osmData.postcode || "";
       form.elements.lat.value = osmData.lat || "";
       form.elements.lng.value = osmData.lon || "";
+      renderAddressConfirmation();
       return;
     }
 
@@ -613,8 +667,10 @@
       form.elements.addressPostcode.value = addressComponent(result, ["postal_code"]);
       form.elements.lat.value = result.geometry?.location?.lat ? String(result.geometry.location.lat) : "";
       form.elements.lng.value = result.geometry?.location?.lng ? String(result.geometry.location.lng) : "";
+      renderAddressConfirmation();
     } catch {
       /* keep the typed address even if place details fail */
+      renderAddressConfirmation();
     }
   }
 
@@ -1491,9 +1547,21 @@
     });
 
     form.elements.address.addEventListener("input", (event) => {
-      form.elements.googlePlaceId.value = "";
+      clearSelectedAddress(form);
       window.clearTimeout(state.addressTimer);
       state.addressTimer = window.setTimeout(() => searchAddress(event.currentTarget.value), 250);
+    });
+    form.elements.address.addEventListener("focus", (event) => {
+      const value = String(event.currentTarget.value || "");
+      if (value.trim().length >= 3 && !form.elements.addressSelectedPlaceId.value) {
+        void searchAddress(value);
+      }
+    });
+    form.elements.address.addEventListener("blur", () => {
+      window.setTimeout(() => {
+        const results = $("#listing-address-results");
+        if (results && !form.elements.addressSelectedPlaceId.value) results.hidden = true;
+      }, 180);
     });
     $("#listing-address-results").addEventListener("click", (event) => {
       const button = event.target.closest("[data-place-id]");

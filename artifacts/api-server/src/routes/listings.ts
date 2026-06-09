@@ -9,6 +9,7 @@ import { searchRealEstateListings } from "../lib/scrapers/realestate-search";
 import type { ListingResult } from "../lib/scrapers/oneroof";
 
 const router = Router();
+const BROWSE_MODE_ENABLED = false;
 
 type BrowseListing = {
   id: string;
@@ -653,6 +654,11 @@ router.get("/listings/place-details/:placeId", requireAuth, async (req, res) => 
 });
 
 router.get("/listings", requireAuth, async (req, res) => {
+  if (!BROWSE_MODE_ENABLED) {
+    res.status(404).json({ error: "Browse listings are temporarily disabled.", code: "BROWSE_DISABLED" });
+    return;
+  }
+
   const query = cleanQuery(req.query.q);
   const limit = Math.min(parsePositiveInt(req.query.limit) ?? 12, 30);
   const offset = Math.max(parsePositiveInt(req.query.cursor) ?? 0, 0);
@@ -867,6 +873,11 @@ router.get("/listings/my", requireAuth, async (req, res) => {
 });
 
 router.get("/listings/public/:id", requireAuth, async (req, res) => {
+  if (!BROWSE_MODE_ENABLED) {
+    res.status(404).json({ error: "Browse listings are temporarily disabled.", code: "BROWSE_DISABLED" });
+    return;
+  }
+
   const { id } = req.params;
   try {
     if (id.startsWith("sample_")) {

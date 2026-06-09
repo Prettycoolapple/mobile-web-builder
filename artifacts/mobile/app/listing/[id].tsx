@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Image,
   Linking,
   ScrollView,
@@ -16,7 +15,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import { useAuth } from "@/context/AuthContext";
 import { useColors } from "@/hooks/useColors";
-import { getApiBase } from "@/lib/api";
+import { shareListing } from "@/lib/propertyShares";
 import {
   BrowseListing,
   fetchPublicListing,
@@ -44,10 +43,13 @@ export default function ListingDetailScreen() {
   const initial = useMemo(() => parsePreview(preview), [preview]);
   const [listing, setListing] = useState<BrowseListing | null>(initial);
   const [loading, setLoading] = useState(!initial);
-  const [messaging, setMessaging] = useState(false);
 
   useEffect(() => {
     if (!id) return;
+    if (initial && (initial.source === "internal" || id.startsWith("generic_") || id.startsWith("shared_"))) {
+      setLoading(false);
+      return;
+    }
     let mounted = true;
     setLoading(!initial);
     fetchPublicListing(getApiHeaders(), id)
@@ -80,29 +82,14 @@ export default function ListingDetailScreen() {
     } as never);
   }, [listing, router]);
 
-  const handleMessageAgent = useCallback(async () => {
-    const agentId = listing?.agent?.id;
-    if (!agentId || messaging) return;
-    setMessaging(true);
-    try {
-      const resp = await fetch(`${getApiBase()}/dm/threads`, {
-        method: "POST",
-        headers: { ...getApiHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify({ targetUserId: agentId }),
-      });
-      const data = await resp.json().catch(() => null) as { thread?: { id: string } } | null;
-      if (!resp.ok || !data?.thread?.id) throw new Error("Could not start message.");
-      router.push(`/chat/${data.thread.id}` as never);
-    } catch (error) {
-      Alert.alert("Could not message agent", error instanceof Error ? error.message : "Please try again.");
-    } finally {
-      setMessaging(false);
-    }
-  }, [getApiHeaders, listing?.agent?.id, messaging, router]);
-
   const openExternal = useCallback(() => {
     if (listing?.externalUrl) void Linking.openURL(listing.externalUrl);
   }, [listing?.externalUrl]);
+
+  const handleShare = useCallback(() => {
+    if (!listing) return;
+    void shareListing(listing, getApiHeaders()).catch(() => {});
+  }, [getApiHeaders, listing]);
 
   if (loading && !listing) {
     return <View style={[styles.center, { backgroundColor: colors.background }]}><ActivityIndicator color={colors.accent} /></View>;
@@ -121,8 +108,9 @@ export default function ListingDetailScreen() {
   }
 
   const images = listing.imageUrls.map(resolveListingImageUrl).filter(Boolean) as string[];
-  const agentName = listing.agent?.fullName ?? "Listing agent";
+  const agentName = "Listing agent";
   const agency = listing.agent?.agencyName ?? (listing.source === "internal" ? "Project Alpha agent" : "External marketplace");
+  const agentAvatar = resolveListingImageUrl(listing.agent?.avatarUrl);
 
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
@@ -131,7 +119,9 @@ export default function ListingDetailScreen() {
           <Feather name="arrow-left" size={22} color="#FAFAF9" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Listing</Text>
-        <View style={styles.headerBtn} />
+        <TouchableOpacity onPress={handleShare} style={styles.headerBtn} accessibilityRole="button" accessibilityLabel="Share listing">
+          <Feather name="log-out" size={20} color="#FAFAF9" />
+        </TouchableOpacity>
       </View>
 
       <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 28 }} showsVerticalScrollIndicator={false}>
@@ -176,39 +166,46 @@ export default function ListingDetailScreen() {
             </View>
           ) : null}
 
-          <View style={[styles.agentCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <View style={[styles.agentAvatar, { backgroundColor: colors.accent + "18" }]}>
-              <Text style={[styles.agentInitial, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
-                {agentName.trim().slice(0, 1).toUpperCase() || "A"}
+          <View style={[styles.analysisCta, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={{ flex: 1, gap: 4 }}>
+              <Text style={[styles.analysisTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>Full analysis</Text>
+              <Text style={[styles.analysisCopy, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                Check whether this property is suitable for development, feasibility, costs, and ways to maximise return on investment.
               </Text>
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.agentName, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>{agentName}</Text>
-              <Text style={[styles.agency, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{agency}</Text>
-            </View>
-            {listing.agent?.id ? (
-              <TouchableOpacity onPress={() => router.push(`/profile/${listing.agent?.id}` as never)} style={styles.iconBtn}>
-                <Feather name="user" size={18} color={colors.accent} />
-              </TouchableOpacity>
-            ) : null}
+            <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: colors.accent }]} onPress={handleAnalyse} activeOpacity={0.86}>
+              <Feather name="cpu" size={17} color="#fff" />
+              <Text style={[styles.primaryText, { fontFamily: "DM_Sans_700Bold" }]}>Full analysis</Text>
+            </TouchableOpacity>
           </View>
 
-          <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: colors.accent }]} onPress={handleAnalyse} activeOpacity={0.86}>
-            <Feather name="cpu" size={17} color="#fff" />
-            <Text style={[styles.primaryText, { fontFamily: "DM_Sans_700Bold" }]}>Analyse this property</Text>
-          </TouchableOpacity>
-          {listing.agent?.id ? (
-            <TouchableOpacity style={[styles.secondaryBtn, { borderColor: colors.border }]} onPress={handleMessageAgent} disabled={messaging}>
-              {messaging ? <ActivityIndicator size="small" color={colors.accent} /> : <Feather name="message-circle" size={17} color={colors.accent} />}
-              <Text style={[styles.secondaryText, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>Message agent</Text>
-            </TouchableOpacity>
-          ) : null}
           {listing.externalUrl ? (
             <TouchableOpacity style={[styles.secondaryBtn, { borderColor: colors.border }]} onPress={openExternal}>
               <Feather name="external-link" size={17} color={colors.accent} />
               <Text style={[styles.secondaryText, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>View source listing</Text>
             </TouchableOpacity>
           ) : null}
+
+          <View style={[styles.agentCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            {agentAvatar ? (
+              <Image source={{ uri: agentAvatar }} style={styles.agentAvatarImage} />
+            ) : (
+              <View style={[styles.agentAvatar, { backgroundColor: colors.accent + "18" }]}>
+                <Text style={[styles.agentInitial, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
+                  {agentName.trim().slice(0, 1).toUpperCase() || "A"}
+                </Text>
+              </View>
+            )}
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.agentName, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>{agentName}</Text>
+              <Text style={[styles.agency, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{agency}</Text>
+            </View>
+          </View>
+
+          <TouchableOpacity style={[styles.secondaryBtn, { borderColor: colors.border }]} onPress={() => router.back()}>
+            <Feather name="arrow-left" size={17} color={colors.accent} />
+            <Text style={[styles.secondaryText, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>Back to results</Text>
+          </TouchableOpacity>
         </View>
       </ScrollView>
     </View>
@@ -245,8 +242,12 @@ const styles = StyleSheet.create({
   featureWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   feature: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 7 },
   featureText: { fontSize: 12 },
+  analysisCta: { borderWidth: 1, borderRadius: 14, padding: 14, gap: 12 },
+  analysisTitle: { fontSize: 16 },
+  analysisCopy: { fontSize: 13, lineHeight: 19 },
   agentCard: { flexDirection: "row", alignItems: "center", gap: 11, borderWidth: 1, borderRadius: 14, padding: 13 },
   agentAvatar: { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center" },
+  agentAvatarImage: { width: 42, height: 42, borderRadius: 21 },
   agentInitial: { fontSize: 17 },
   agentName: { fontSize: 15 },
   agency: { fontSize: 12, marginTop: 2 },

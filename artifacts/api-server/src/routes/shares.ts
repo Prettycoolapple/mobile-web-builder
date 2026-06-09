@@ -36,6 +36,12 @@ const candidatePayloadSchema = z.object({
   candidate: z.record(z.string(), z.unknown()),
 });
 
+const listingPayloadSchema = z.object({
+  kind: z.literal("listing"),
+  address: z.string().min(3),
+  listing: z.record(z.string(), z.unknown()),
+});
+
 const reportPayloadSchema = z.object({
   kind: z.literal("report"),
   address: z.string().min(3),
@@ -53,9 +59,9 @@ const reportPayloadSchema = z.object({
   }).optional().nullable(),
 });
 
-const createShareSchema = z.discriminatedUnion("kind", [candidatePayloadSchema, reportPayloadSchema]);
+const createShareSchema = z.discriminatedUnion("kind", [candidatePayloadSchema, listingPayloadSchema, reportPayloadSchema]);
 
-type ShareKind = "candidate" | "report";
+type ShareKind = "candidate" | "listing" | "report";
 
 function baseUrl(): string {
   const url = getPublicAppUrl().replace(/\/+$/, "");
@@ -63,7 +69,7 @@ function baseUrl(): string {
 }
 
 function shareUrl(token: string): string {
-  return `${baseUrl()}/share/${encodeURIComponent(token)}`;
+  return `${baseUrl()}/api/share/${encodeURIComponent(token)}`;
 }
 
 function appSchemeUrl(token: string): string {
@@ -107,6 +113,23 @@ function candidateDescription(candidate: Record<string, unknown>): string {
     : "Open Project Alpha to view this property opportunity.";
 }
 
+function listingDescription(listing: Record<string, unknown>): string {
+  const rawDescription = cleanText(listing.description, "");
+  if (rawDescription) return rawDescription.slice(0, 220);
+  const bits: string[] = [];
+  const priceDisplay = cleanText(listing.priceDisplay, "");
+  if (priceDisplay) bits.push(priceDisplay);
+  const propertyType = cleanText(listing.propertyType, "");
+  if (propertyType) bits.push(propertyType);
+  const landArea = typeof listing.landAreaSqm === "number" && listing.landAreaSqm > 0
+    ? `${listing.landAreaSqm.toLocaleString("en-NZ")} sqm land`
+    : null;
+  if (landArea) bits.push(landArea);
+  return bits.length
+    ? `${bits.join(" | ")}. Open Project Alpha to view this listing.`
+    : "Open Project Alpha to view this property listing.";
+}
+
 function reportDescription(summary: z.infer<typeof reportPayloadSchema>["summary"]): string {
   const bits: string[] = [];
   if (typeof summary?.score === "number" && summary.score > 0) bits.push(`Score ${summary.score.toFixed(1)}/5`);
@@ -135,6 +158,24 @@ function buildShare(input: z.infer<typeof createShareSchema>) {
         kind: "candidate",
         address: input.address,
         candidate,
+      },
+    };
+  }
+
+  if (input.kind === "listing") {
+    const listing = input.listing;
+    const imageUrls = Array.isArray(listing.imageUrls) ? listing.imageUrls : [];
+    const title = `${input.address} - Project Alpha property listing`;
+    return {
+      kind: input.kind,
+      address: input.address,
+      previewTitle: title,
+      previewDescription: listingDescription(listing),
+      previewImageUrl: cleanUrl(imageUrls[0]) ?? cleanUrl(listing.photoUrl),
+      payloadJson: {
+        kind: "listing",
+        address: input.address,
+        listing,
       },
     };
   }

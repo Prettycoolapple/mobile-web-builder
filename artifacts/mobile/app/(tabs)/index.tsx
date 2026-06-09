@@ -89,6 +89,7 @@ const BACKGROUND_ANALYSE_JOBS_KEY = "@devfeasible/background-analyse-jobs";
 const APP_RATING_STATE_KEY = "@devfeasible/app-rating-state";
 const ANALYSE_DISCLAIMER_DISMISSED_KEY = "@devfeasible/analyse-disclaimer-dismissed";
 const HOME_MODE_KEY = "@devfeasible/home-mode";
+const BROWSE_MODE_ENABLED = false;
 const APP_RATING_CHAT_THRESHOLD = 3;
 const APP_RATING_SNOOZE_MS = 14 * 24 * 60 * 60 * 1000;
 
@@ -404,14 +405,20 @@ export default function SearchScreen() {
   }, [user?.id]);
 
   useEffect(() => {
+    if (!BROWSE_MODE_ENABLED) {
+      setHomeMode("ask");
+      AsyncStorage.setItem(HOME_MODE_KEY, "ask").catch(() => {});
+      return;
+    }
     AsyncStorage.getItem(HOME_MODE_KEY)
       .then((value) => {
-        if (value === "ask" || value === "browse") setHomeMode(value);
+        if (value === "ask" || (BROWSE_MODE_ENABLED && value === "browse")) setHomeMode(value);
       })
       .catch(() => {});
   }, []);
 
   useEffect(() => {
+    if (!BROWSE_MODE_ENABLED) return;
     AsyncStorage.setItem(HOME_MODE_KEY, homeMode).catch(() => {});
   }, [homeMode]);
 
@@ -460,6 +467,7 @@ export default function SearchScreen() {
   }, [browseFilters, getApiHeaders]);
 
   useEffect(() => {
+    if (!BROWSE_MODE_ENABLED) return;
     if (homeMode !== "browse") return;
     void loadBrowseListings();
     // Reload when the user changes filters or switches into Browse.
@@ -1519,7 +1527,7 @@ export default function SearchScreen() {
           const hasJsonShape = /\{[\s\S]*\}|\[[\s\S]*\]/.test(trimmed);
           const maybeParsed = hasJsonShape
             ? (extractJSON(trimmed) as
-                | { candidates?: PropertyCandidate[]; isMockData?: boolean; noListings?: boolean; aiIntro?: string }
+                | { candidates?: PropertyCandidate[]; isMockData?: boolean; noListings?: boolean; aiIntro?: string; searchPresentation?: ChatMessage["searchPresentation"] }
                 | FeasibilityReportGroup
                 | null)
             : null;
@@ -1580,8 +1588,11 @@ export default function SearchScreen() {
             const searchPayload = !isFeasibilityReportGroup(maybeParsed) ? maybeParsed : null;
             const aiIntro = searchPayload?.aiIntro ?? "";
             if (searchPayload?.candidates && searchPayload.candidates.length > 0) {
-              updateLastMessage({ type: "search", searchResults: searchPayload.candidates, content: "", aiIntro }, sessionId);
-              startCardScorePoll(searchPayload.candidates.map((c: PropertyCandidate) => ({ address: c.address, listingUrl: c.listingUrl })), sessionId);
+              const searchPresentation = searchPayload.searchPresentation === "generic_listing" ? "generic_listing" : "scored_screening";
+              updateLastMessage({ type: "search", searchResults: searchPayload.candidates, content: "", aiIntro, searchPresentation }, sessionId);
+              if (searchPresentation !== "generic_listing") {
+                startCardScorePoll(searchPayload.candidates.map((c: PropertyCandidate) => ({ address: c.address, listingUrl: c.listingUrl })), sessionId);
+              }
             } else {
               const noResultMsg = aiIntro || t("search.no_listings_msg");
               updateLastMessage({ type: "text", content: noResultMsg }, sessionId);
@@ -1613,7 +1624,8 @@ export default function SearchScreen() {
             } else {
               const searchPayload = !isFeasibilityReportGroup(maybeParsed) ? maybeParsed : null;
               if (searchPayload?.candidates && searchPayload.candidates.length > 0) {
-                updateLastMessage({ type: "search", searchResults: searchPayload.candidates, content: "" }, sessionId);
+                const searchPresentation = searchPayload.searchPresentation === "generic_listing" ? "generic_listing" : "scored_screening";
+                updateLastMessage({ type: "search", searchResults: searchPayload.candidates, content: "", searchPresentation }, sessionId);
               } else if (hasJsonShape) {
                 updateLastMessage({ type: "text", content: sanitizeForDisplay(rawContent, t("search.format_error")) }, sessionId);
               } else {
@@ -2021,6 +2033,21 @@ export default function SearchScreen() {
           return;
         }
 
+        if (share.kind === "listing") {
+          const listing = {
+            ...share.payload.listing,
+            address: share.payload.listing.address || share.address,
+          };
+          router.push({
+            pathname: "/listing/[id]",
+            params: {
+              id: listing.id || `shared_${token}`,
+              preview: JSON.stringify(listing),
+            },
+          } as never);
+          return;
+        }
+
         const rerun = share.payload.rerun;
         await handleAnalyse(
           rerun.address || share.address,
@@ -2045,7 +2072,7 @@ export default function SearchScreen() {
     return () => {
       cancelled = true;
     };
-  }, [addMessage, createSession, currentSessionId, getApiHeaders, handleAnalyse, isLoading, user]);
+  }, [addMessage, createSession, currentSessionId, getApiHeaders, handleAnalyse, isLoading, router, user]);
 
   const confirmAnalyseDisclaimer = useCallback(async () => {
     const action = pendingAnalyseActionRef.current;
@@ -2153,24 +2180,26 @@ export default function SearchScreen() {
           </View>
         </View>
 
-        <View style={[styles.modeSwitch, { backgroundColor: "rgba(250,249,246,0.08)", borderColor: "rgba(250,249,246,0.12)" }]}>
-          {(["ask", "browse"] as const).map((mode) => {
-            const active = homeMode === mode;
-            return (
-              <TouchableOpacity
-                key={mode}
-                style={[styles.modeOption, active && { backgroundColor: colors.accent }]}
-                onPress={() => setHomeMode(mode)}
-                activeOpacity={0.8}
-              >
-                <Feather name={mode === "ask" ? "message-circle" : "home"} size={13} color={active ? "#fff" : "rgba(250,249,246,0.72)"} />
-                <Text style={[styles.modeText, { color: active ? "#fff" : "rgba(250,249,246,0.72)", fontFamily: "DM_Sans_600SemiBold" }]}>
-                  {mode === "ask" ? "Ask" : "Browse"}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
+        {BROWSE_MODE_ENABLED && (
+          <View style={[styles.modeSwitch, { backgroundColor: "rgba(250,249,246,0.08)", borderColor: "rgba(250,249,246,0.12)" }]}>
+            {(["ask", "browse"] as const).map((mode) => {
+              const active = homeMode === mode;
+              return (
+                <TouchableOpacity
+                  key={mode}
+                  style={[styles.modeOption, active && { backgroundColor: colors.accent }]}
+                  onPress={() => setHomeMode(mode)}
+                  activeOpacity={0.8}
+                >
+                  <Feather name={mode === "ask" ? "message-circle" : "home"} size={13} color={active ? "#fff" : "rgba(250,249,246,0.72)"} />
+                  <Text style={[styles.modeText, { color: active ? "#fff" : "rgba(250,249,246,0.72)", fontFamily: "DM_Sans_600SemiBold" }]}>
+                    {mode === "ask" ? "Ask" : "Browse"}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
 
         {currentSession?.currentReport && (
           <View style={[styles.contextBanner, { borderTopColor: "rgba(250,249,246,0.08)" }]}>
@@ -2192,7 +2221,7 @@ export default function SearchScreen() {
       </View>
 
       {/* Empty / Search state */}
-      {homeMode === "browse" ? (
+      {BROWSE_MODE_ENABLED && homeMode === "browse" ? (
         <View style={[styles.browseRoot, { paddingBottom: tabBarOffset }]}>
           <BrowseFilters
             filters={browseFilters}

@@ -16,7 +16,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "nz.devfeasible.app",
-      "buildNumber": "16",
+      "buildNumber": "17",
       "associatedDomains": [
         "applinks:projectalpha.app",
         "applinks:www.projectalpha.app"
@@ -24,7 +24,7 @@
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSUserTrackingUsageDescription": "This identifier will be used to deliver personalized ads to you.",
-        "FacebookAppID": "2265538447515304",
+        "FacebookAppID": "1686829092523282",
         "FacebookClientToken": "02dfcb5788c6a9dfab5c4634a395abdc",
         "FacebookDisplayName": "projectalpha.app",
         "FacebookAutoLogAppEventsEnabled": true,
@@ -102,10 +102,10 @@
       [
         "react-native-fbsdk-next",
         {
-          "appID": "2265538447515304",
+          "appID": "1686829092523282",
           "clientToken": "02dfcb5788c6a9dfab5c4634a395abdc",
           "displayName": "projectalpha.app",
-          "scheme": "fb2265538447515304",
+          "scheme": "fb1686829092523282",
           "advertiserIDCollectionEnabled": true,
           "autoLogAppEventsEnabled": true,
           "isAutoInitEnabled": false,
