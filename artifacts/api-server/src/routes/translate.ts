@@ -20,26 +20,28 @@ const MAX_TEXT_LENGTH = 4000;
  * LLM cost; results are cached server-side by exact source text.
  */
 router.post("/translate", requireAuth, async (req: Request, res: Response) => {
-  const { texts } = req.body as { texts?: unknown };
-  if (!Array.isArray(texts) || texts.some((t) => typeof t !== "string")) {
-    res.status(400).json({ error: "texts must be an array of strings", code: "INVALID_TEXTS" });
-    return;
-  }
-
-  const input = (texts as string[]).slice(0, MAX_TEXTS_PER_REQUEST).map((t) => t.slice(0, MAX_TEXT_LENGTH));
-  const locale = normaliseLocale(req.headers["x-locale"] ?? req.headers["accept-language"]);
-
-  if (locale !== "zh") {
-    res.json({ translations: input });
-    return;
-  }
-
   try {
+    const { texts } = req.body as { texts?: unknown };
+    if (!Array.isArray(texts) || texts.some((t) => typeof t !== "string")) {
+      res.status(400).json({ error: "texts must be an array of strings", code: "INVALID_TEXTS" });
+      return;
+    }
+
+    const input = (texts as string[]).slice(0, MAX_TEXTS_PER_REQUEST).map((t) => t.slice(0, MAX_TEXT_LENGTH));
+    const locale = normaliseLocale(req.headers["x-locale"] ?? req.headers["accept-language"]);
+
+    if (locale !== "zh") {
+      res.json({ translations: input });
+      return;
+    }
+
     const translations = await translateFreeTextBatchToChinese(input);
     res.json({ translations });
   } catch (err) {
-    req.log?.warn({ err }, "POST /translate failed — returning originals");
-    res.json({ translations: input });
+    req.log?.warn({ err }, "POST /translate failed — returning originals or error");
+    const { texts } = req.body as { texts?: unknown };
+    const input = Array.isArray(texts) ? (texts as string[]).slice(0, MAX_TEXTS_PER_REQUEST).map((t) => typeof t === "string" ? t.slice(0, MAX_TEXT_LENGTH) : "") : [];
+    res.status(500).json({ error: "Translation service unavailable", translations: input });
   }
 });
 
