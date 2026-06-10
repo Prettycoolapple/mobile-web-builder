@@ -518,7 +518,7 @@ router.post("/sales-agent-web-signup", async (req, res) => {
           email: emailLower,
           fullName,
           passwordHash,
-          role: "general",
+          role: "sales_agent",
           languages,
           subscriptionTier: "free",
           reportsUsedThisMonth: 0,

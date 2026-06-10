@@ -83,7 +83,7 @@ export async function createAgentAccountFromPending(
           email,
           fullName: pending.fullName,
           passwordHash: pending.passwordHash,
-          role: "general",
+          role: "sales_agent",
           languages,
           subscriptionTier: "free",
           reportsUsedThisMonth: 0,
