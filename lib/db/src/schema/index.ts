@@ -12,6 +12,7 @@ export * from "./sales_agent_profiles";
 export * from "./service_provider_profiles";
 export * from "./user_uploads";
 export * from "./listings";
+export * from "./listing_views";
 export * from "./browse_listing_cache";
 export * from "./dm_threads";
 export * from "./dm_messages";

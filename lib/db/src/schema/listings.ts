@@ -80,6 +80,12 @@ export const listings = pgTable("listings", {
   // clicks Approve in the admin dashboard.
   approvedAt: timestamp("approved_at", { withTimezone: true }),
 
+  // Real, de-duplicated buyer views (one per viewer; see listing_views table).
+  realViews: integer("real_views").default(0).notNull(),
+  // Random 4–29 seed set at creation; combined with a deterministic per-bucket
+  // increment to fabricate natural-looking early traffic (computed on read).
+  fakeViewSeed: integer("fake_view_seed"),
+
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });

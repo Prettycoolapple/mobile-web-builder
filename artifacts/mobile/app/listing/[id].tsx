@@ -15,6 +15,7 @@ import {
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
+import Markdown from "react-native-markdown-display";
 import { useAuth } from "@/context/AuthContext";
 import { useColors } from "@/hooks/useColors";
 import { useT } from "@/lib/i18n";
@@ -270,6 +271,25 @@ export default function ListingDetailScreen() {
     if (canOpen) await Linking.openURL(listing.externalUrl);
   };
 
+  const descriptionMarkdownStyles = {
+    body: {
+      color: colors.mutedForeground,
+      fontFamily: "DM_Sans_400Regular",
+      fontSize: 15,
+      lineHeight: 22,
+    },
+    strong: { fontFamily: "DM_Sans_700Bold", color: colors.foreground },
+    em: { fontFamily: "DM_Sans_400Regular", fontStyle: "italic" as const },
+    paragraph: { marginTop: 0, marginBottom: 8 },
+    bullet_list: { marginBottom: 8 },
+    ordered_list: { marginBottom: 8 },
+    bullet_list_icon: { color: colors.accent, marginTop: 8 },
+    heading1: { fontFamily: "DM_Sans_700Bold", fontSize: 17, color: colors.foreground, marginBottom: 6, marginTop: 4 },
+    heading2: { fontFamily: "DM_Sans_700Bold", fontSize: 16, color: colors.foreground, marginBottom: 6, marginTop: 4 },
+    heading3: { fontFamily: "DM_Sans_600SemiBold", fontSize: 15, color: colors.foreground, marginBottom: 4, marginTop: 4 },
+    link: { color: colors.accent },
+  };
+
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
       <View style={[styles.header, { paddingTop: insets.top + 8, backgroundColor: colors.headerBg }]}>
@@ -316,7 +336,7 @@ export default function ListingDetailScreen() {
           {showSourceDescription ? (
             <View style={styles.section}>
               <Text style={[styles.sectionTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>{t("pdp.about")}</Text>
-              <Text style={[styles.body, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{translatedDescription}</Text>
+              <Markdown style={descriptionMarkdownStyles as any}>{translatedDescription}</Markdown>
             </View>
           ) : enriching ? (
             <View style={styles.section}>

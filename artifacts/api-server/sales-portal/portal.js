@@ -255,12 +255,20 @@
     root.innerHTML = listings
       .map((listing) => {
         const isActive = listing.status !== "paused";
+        const pending = !listing.approvedAt;
         const image = Array.isArray(listing.imageUrls) && listing.imageUrls[0] ? listing.imageUrls[0] : "";
+        const views = Number(listing.totalViews || 0);
+        const statusPill = pending
+          ? `<span class="portal-pill portal-pill--pending">⏳ Pending approval</span>`
+          : `<span class="portal-pill portal-pill--live">✓ Live</span>`;
         return `
           <article class="portal-listing-card" data-listing-id="${escapeHtml(listing.id)}">
             <div class="portal-listing-thumb">${image ? `<img src="${escapeHtml(image)}" alt="" loading="lazy" />` : "<span>No photo</span>"}</div>
             <div class="portal-listing-body">
-              <h3>${escapeHtml(listingTitle(listing))}</h3>
+              <div class="portal-listing-titlerow">
+                <h3>${escapeHtml(listingTitle(listing))}</h3>
+                ${statusPill}
+              </div>
               <p>${escapeHtml(listing.address || "")}</p>
               <p>${escapeHtml(listingMeta(listing))}</p>
               <div class="portal-listing-stats">
@@ -268,13 +276,15 @@
                 <span>${Number(listing.bathrooms || 0)} bath</span>
                 <span>${Number(listing.toilets || 0)} toilet</span>
                 <span>${Number(listing.garages || 0)} garage</span>
+                <span class="portal-stat-views">👁 ${views.toLocaleString()} views</span>
               </div>
             </div>
             <div class="portal-listing-actions">
-              <label class="portal-switch">
-                <input type="checkbox" data-toggle-listing="${escapeHtml(listing.id)}" ${isActive ? "checked" : ""} />
-                <span>${formatStatus(listing.status)}</span>
+              <label class="portal-switch${pending ? " portal-switch--disabled" : ""}">
+                <input type="checkbox" data-toggle-listing="${escapeHtml(listing.id)}" ${isActive ? "checked" : ""} ${pending ? "disabled" : ""} />
+                <span>${pending ? "Awaiting review" : formatStatus(listing.status)}</span>
               </label>
+              ${pending ? `<p class="portal-listing-hint">Live once approved.</p>` : ""}
               <button class="link-button portal-danger" type="button" data-delete-listing="${escapeHtml(listing.id)}">Remove</button>
             </div>
           </article>
@@ -290,6 +300,189 @@
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#039;");
+  }
+
+  // ── Lightweight Markdown editor (no dependency) ────────────────────────────
+  const MD_EMOJIS = [
+    "😊", "😍", "🤩", "👍", "🔥", "✨", "🎉", "🏡", "🏠", "🛏️",
+    "🛁", "🚗", "🌳", "🌞", "🌊", "🏖️", "🏫", "🚆", "🛒", "☕",
+    "📍", "💰", "📐", "✅", "⭐", "❤️", "🔑", "🌿", "🐾", "👨‍👩‍👧‍👦",
+  ];
+
+  // Remove Markdown markers so we can measure real text length.
+  function stripMarkdown(text) {
+    return String(text || "")
+      .replace(/[*_#>`~-]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  // Minimal, XSS-safe Markdown → HTML (escape first, then add a small subset).
+  function renderMarkdownPreview(text) {
+    const lines = String(text || "").split(/\r?\n/);
+    const html = [];
+    let inList = false;
+    for (const raw of lines) {
+      let line = escapeHtml(raw);
+      // inline: bold, italic
+      line = line
+        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/(^|[^*])\*([^*]+)\*(?!\*)/g, "$1<em>$2</em>")
+        .replace(/_([^_]+)_/g, "<em>$1</em>");
+      const bulletMatch = raw.match(/^\s*[-*•]\s+(.*)$/);
+      const headingMatch = raw.match(/^\s*(#{1,3})\s+(.*)$/);
+      if (bulletMatch) {
+        if (!inList) {
+          html.push("<ul>");
+          inList = true;
+        }
+        const item = escapeHtml(bulletMatch[1]).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/_([^_]+)_/g, "<em>$1</em>");
+        html.push(`<li>${item}</li>`);
+        continue;
+      }
+      if (inList) {
+        html.push("</ul>");
+        inList = false;
+      }
+      if (headingMatch) {
+        const level = Math.min(3, headingMatch[1].length) + 2; // h3..h5
+        const inner = escapeHtml(headingMatch[2]).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+        html.push(`<h${level}>${inner}</h${level}>`);
+        continue;
+      }
+      if (raw.trim() === "") {
+        html.push("<br/>");
+        continue;
+      }
+      html.push(`<p>${line}</p>`);
+    }
+    if (inList) html.push("</ul>");
+    return html.join("");
+  }
+
+  // Apply a Markdown action to a text field around its current selection.
+  function applyMarkdownAction(field, action, payload) {
+    const value = field.value || "";
+    const start = field.selectionStart ?? value.length;
+    const end = field.selectionEnd ?? value.length;
+    const selected = value.slice(start, end);
+    let before = value.slice(0, start);
+    let after = value.slice(end);
+    let inner = selected;
+    let wrapBefore = "";
+    let wrapAfter = "";
+    let caretOffset = 0;
+
+    if (action === "bold") {
+      wrapBefore = "**";
+      wrapAfter = "**";
+      if (!inner) inner = "bold text";
+    } else if (action === "italic") {
+      wrapBefore = "_";
+      wrapAfter = "_";
+      if (!inner) inner = "italic text";
+    } else if (action === "heading") {
+      const needsNl = before && !before.endsWith("\n");
+      wrapBefore = (needsNl ? "\n" : "") + "## ";
+      if (!inner) inner = "Heading";
+    } else if (action === "bullet") {
+      const needsNl = before && !before.endsWith("\n");
+      const block = (inner || "List item").split(/\r?\n/).map((l) => `- ${l}`).join("\n");
+      const next = `${before}${needsNl ? "\n" : ""}${block}${after}`;
+      field.value = next;
+      const pos = (before + (needsNl ? "\n" : "") + block).length;
+      field.focus();
+      field.setSelectionRange(pos, pos);
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      return;
+    } else if (action === "emoji") {
+      inner = payload || "";
+      wrapBefore = "";
+      wrapAfter = "";
+      caretOffset = inner.length;
+    }
+
+    const next = `${before}${wrapBefore}${inner}${wrapAfter}${after}`;
+    field.value = next;
+    field.focus();
+    const selStart = before.length + wrapBefore.length;
+    const selEnd = selStart + inner.length;
+    if (action === "emoji") {
+      const pos = before.length + inner.length;
+      field.setSelectionRange(pos, pos);
+    } else {
+      field.setSelectionRange(selStart, selEnd);
+    }
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  function buildEmojiPopover(field) {
+    const pop = document.createElement("div");
+    pop.className = "md-emoji-pop";
+    pop.innerHTML = MD_EMOJIS.map(
+      (e) => `<button type="button" class="md-emoji" data-emoji="${e}">${e}</button>`,
+    ).join("");
+    pop.addEventListener("click", (event) => {
+      const btn = event.target.closest("[data-emoji]");
+      if (!btn) return;
+      applyMarkdownAction(field, "emoji", btn.dataset.emoji);
+      pop.remove();
+    });
+    document.addEventListener(
+      "click",
+      function onAway(e) {
+        if (!pop.contains(e.target)) {
+          pop.remove();
+          document.removeEventListener("click", onAway);
+        }
+      },
+      { capture: true },
+    );
+    return pop;
+  }
+
+  function setupMarkdownToolbars(form) {
+    form.querySelectorAll(".md-toolbar").forEach((toolbar) => {
+      const targetName = toolbar.dataset.mdTarget;
+      const field = form.elements[targetName];
+      if (!field) return;
+      const previewEl = form.querySelector(`[data-md-preview='${targetName}']`);
+
+      toolbar.addEventListener("click", (event) => {
+        const btn = event.target.closest(".md-btn");
+        if (!btn) return;
+        event.preventDefault();
+        const action = btn.dataset.md;
+        if (action === "preview") {
+          if (!previewEl) return;
+          const show = previewEl.hidden;
+          previewEl.hidden = !show;
+          field.hidden = show;
+          btn.classList.toggle("is-active", show);
+          if (show) previewEl.innerHTML = renderMarkdownPreview(field.value);
+          return;
+        }
+        if (action === "emoji") {
+          const existing = toolbar.querySelector(".md-emoji-pop");
+          if (existing) {
+            existing.remove();
+            return;
+          }
+          const pop = buildEmojiPopover(field);
+          btn.parentElement.style.position = "relative";
+          btn.insertAdjacentElement("afterend", pop);
+          return;
+        }
+        applyMarkdownAction(field, action);
+      });
+
+      // Keep an open preview in sync while typing.
+      if (previewEl) {
+        field.addEventListener("input", () => {
+          if (!previewEl.hidden) previewEl.innerHTML = renderMarkdownPreview(field.value);
+        });
+      }
+    });
   }
 
   function setFieldError(key, message) {
@@ -493,7 +686,10 @@
     if (step === 5) {
       const title = String(form.elements.listingTitle.value || "").trim();
       const description = String(form.elements.description.value || "").trim();
-      const ok = title.length >= 3 && description.length >= 20;
+      // Count real text length, ignoring Markdown markers so formatting doesn't
+      // game the minimum-length rule.
+      const plainLen = stripMarkdown(description).length;
+      const ok = title.length >= 3 && plainLen >= 20;
       if (!ok && showErrors) setFieldError("copy", "Add a headline and a description of at least 20 characters.");
       return ok;
     }
@@ -1588,6 +1784,8 @@
         if (canJump) switchListingStep(target);
       });
     });
+
+    setupMarkdownToolbars(form);
 
     const dropzone = $("#listing-photo-dropzone");
     const photoInput = $("#listing-photo-input");

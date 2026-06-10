@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { and, desc, eq, gt, gte, ilike, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { browseListingCache, db, listings, profiles, salesAgentProfiles, withDbRetry } from "@workspace/db";
+import { browseListingCache, db, listings, listingViews, profiles, salesAgentProfiles, withDbRetry } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { agentCanList } from "../lib/agent-entitlements";
 import { getMockListings } from "../lib/mock-data";
@@ -13,6 +13,35 @@ import { logger } from "../lib/logger";
 
 const router = Router();
 const BROWSE_MODE_ENABLED = false;
+
+// ── Total-views display helpers ──────────────────────────────────────────────
+// Fake growth is computed on read (no cron): a per-listing 4–29 seed plus a
+// deterministic 1–5 increment for each elapsed 3-hour bucket, capped at 8
+// buckets (24h). Real, de-duplicated views are added on top.
+function deterministicInc(listingId: string, bucket: number): number {
+  let h = 2166136261 >>> 0; // FNV-1a
+  const s = `${listingId}:${bucket}`;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return (h % 5) + 1; // 1..5
+}
+
+function computeDisplayViews(listing: {
+  id: string;
+  fakeViewSeed: number | null;
+  realViews: number;
+  createdAt: Date | string | null;
+}): number {
+  const seed = listing.fakeViewSeed ?? 0;
+  const createdMs = listing.createdAt ? new Date(listing.createdAt).getTime() : Date.now();
+  const hours = (Date.now() - createdMs) / 3_600_000;
+  const buckets = Math.max(0, Math.min(8, Math.floor(hours / 3)));
+  let fake = seed;
+  for (let b = 1; b <= buckets; b++) fake += deterministicInc(listing.id, b);
+  return fake + (listing.realViews ?? 0);
+}
 
 type BrowseListing = {
   id: string;
@@ -964,6 +993,8 @@ router.post("/listings", requireAuth, async (req, res) => {
         imageUrls: data.imageUrls,
         documentUrls: data.documentUrls,
         features: data.features,
+        // Seed natural-looking early traffic (4–29) for the views counter.
+        fakeViewSeed: Math.floor(Math.random() * 26) + 4,
       })
       .returning();
 
@@ -982,7 +1013,11 @@ router.get("/listings/my", requireAuth, async (req, res) => {
       .from(listings)
       .where(and(eq(listings.userId, userId), isNull(listings.removedAt)))
       .orderBy(desc(listings.createdAt));
-    res.json({ listings: myListings });
+    const withViews = myListings.map((listing) => ({
+      ...listing,
+      totalViews: computeDisplayViews(listing),
+    }));
+    res.json({ listings: withViews });
   } catch (error) {
     req.log?.error({ error }, "Failed to fetch listings");
     res.status(500).json({ error: "We couldn't load your listings. Please refresh the page.", code: "FETCH_FAILED" });
@@ -1061,6 +1096,29 @@ router.get("/listings/public/:id", requireAuth, async (req, res) => {
       res.status(404).json({ error: "Listing not found.", code: "NOT_FOUND" });
       return;
     }
+
+    // Record a real, de-duplicated view: count once per viewer, and never count
+    // the listing's own owner. The unique (listing_id, viewer_user_id) index makes
+    // the insert idempotent; we only bump real_views when a new row is created.
+    const viewerId = (req as any).userId as string | undefined;
+    if (viewerId && viewerId !== row.userId) {
+      try {
+        const inserted = await db
+          .insert(listingViews)
+          .values({ listingId: row.id, viewerUserId: viewerId })
+          .onConflictDoNothing({ target: [listingViews.listingId, listingViews.viewerUserId] })
+          .returning({ id: listingViews.id });
+        if (inserted.length > 0) {
+          await db
+            .update(listings)
+            .set({ realViews: sql`${listings.realViews} + 1` })
+            .where(eq(listings.id, row.id));
+        }
+      } catch (viewErr) {
+        req.log?.warn({ viewErr, listingId: row.id }, "Failed to record listing view (non-fatal)");
+      }
+    }
+
     res.json({ listing: publicListingFromInternal(row) });
   } catch (error) {
     req.log?.error({ error }, "Failed to fetch public listing");
