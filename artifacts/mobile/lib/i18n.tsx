@@ -710,7 +710,7 @@ const en: Catalog = {
 
   // Service Provider welcome (post-signup)
   "provider_welcome.popup_title": "You're on Project Alpha!",
-  "provider_welcome.popup_body": "Aofang AI will automatically recommend your profile to potential investors and homebuyers. Earn more likes to boost your visibility on the platform and gain more traffic. You've got this!",
+  "provider_welcome.popup_body": "Project Alpha AI will automatically recommend your profile to potential investors and home buyers. Earn more likes to boost your visibility on the platform and gain more traffic. You've got this!",
   "provider_welcome.popup_cta": "Got it",
   "provider_welcome.role_tag": "Service Provider",
   "provider_welcome.heading": "You're in,\n{name}!",
@@ -721,7 +721,7 @@ const en: Catalog = {
   "provider_welcome.subscription_note": "Billed monthly through {store} · Cancel anytime",
   "provider_welcome.verification": "Your Certificate of Incorporation is under review — verified within 1–2 business days.",
   "provider_welcome.whats_included": "What's included",
-  "provider_welcome.feature_investors": "Aofang AI automatically recommends your profile to potential investors and homebuyers",
+  "provider_welcome.feature_investors": "Project Alpha AI automatically recommends your profile to potential investors and home buyers",
   "provider_welcome.feature_search_reports": "More property & feasibility analysis reports",
   "provider_welcome.feature_encrypted_chat": "More AI chat enquiries",
   "provider_welcome.coming_soon_heading": "Coming soon",
