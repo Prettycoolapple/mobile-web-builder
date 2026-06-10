@@ -5,7 +5,30 @@ import {
   isSubdivisionRulesInformationIntent,
   isStandardSubdivisionDiscoveryIntent,
 } from "../discovery-intent";
-import { detectMode } from "../claude";
+import { detectMode, isListingBrowseIntent } from "../claude";
+
+describe("listing browse intent", () => {
+  it("treats explicit 'more properties/listings' continuations as plain browse", () => {
+    expect(isListingBrowseIntent("show more properties i mean")).toBe(true);
+    expect(isListingBrowseIntent("show more listings")).toBe(true);
+    expect(isListingBrowseIntent("find me more homes")).toBe(true);
+    expect(isListingBrowseIntent("any other houses")).toBe(true);
+    expect(isListingBrowseIntent("更多房源")).toBe(true);
+    expect(isListingBrowseIntent("再看几个房子")).toBe(true);
+  });
+
+  it("does not treat a bare 'show more' or unrelated phrases as browse", () => {
+    expect(isListingBrowseIntent("show more")).toBe(false);
+    expect(isListingBrowseIntent("show more detail")).toBe(false);
+    expect(isListingBrowseIntent("analyse 35 Maugham Drive, Bucklands Beach")).toBe(false);
+    expect(isListingBrowseIntent("tell me about the report")).toBe(false);
+  });
+
+  it("still flags classic availability questions", () => {
+    expect(isListingBrowseIntent("what is available in Bucklands Beach?")).toBe(true);
+    expect(isListingBrowseIntent("anything for sale in Remuera")).toBe(true);
+  });
+});
 
 describe("discovery intent", () => {
   it("treats Chinese subdivision searches as strict standard subdivision intent", () => {

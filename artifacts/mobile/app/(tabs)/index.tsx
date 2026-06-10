@@ -1067,7 +1067,7 @@ export default function SearchScreen() {
     };
   }, [pollBackgroundAnalyseJobs, user?.id]);
 
-  const handleSend = useCallback(async (overrideText?: string, skipAnalyseDisclaimer = false) => {
+  const handleSend = useCallback(async (overrideText?: string, skipAnalyseDisclaimer = false, continuePresentation?: "generic_listing" | "scored_screening") => {
     const text = (overrideText !== undefined ? overrideText : inputText).trim();
     if (!text || isLoading) return;
     const detectedMode = detectClientMode(text);
@@ -1454,7 +1454,7 @@ export default function SearchScreen() {
           const resp = await fetch(`${getApiBase()}/chat`, {
             method: "POST",
             headers,
-            body: JSON.stringify({ messages: allMessages, currentReport: currentReportContext }),
+            body: JSON.stringify({ messages: allMessages, currentReport: currentReportContext, continuePresentation }),
             signal: controller.signal,
           });
           clearTimeout(timeoutId);
@@ -2111,7 +2111,7 @@ export default function SearchScreen() {
             onDismiss={handleDismiss}
             onAgentDismiss={handleAgentDismiss}
             onUpgrade={() => setShowPaywall(true)}
-            onShowMore={handleSend}
+            onShowMore={(text, continuePresentation) => handleSend(text, false, continuePresentation)}
           />
         </View>
       );

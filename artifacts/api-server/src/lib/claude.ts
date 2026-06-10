@@ -97,6 +97,15 @@ export function isListingBrowseIntent(message: string): boolean {
     return true;
   }
   if (/(?:looking|search|searching)\s+for\s+.+\s+in\s+/i.test(lower)) return true;
+  // Explicit "show/see/find/get more properties/listings/homes/houses" — a generic
+  // listing-browse continuation. Distinguishes "show more properties" (plain browse)
+  // from "show more sites" (which stays development/subdivision-oriented).
+  if (/\b(?:show|see|find|get|give|more|other|another|additional)\b[\s\S]{0,40}\b(?:propert(?:y|ies)|listings?|homes?|houses?|places?|apartments?|townhouses?|units?)\b/i.test(lower)) {
+    return true;
+  }
+  if (/更多(?:的)?(?:房源|房子|房产|挂牌|公寓|单位|房屋)|(?:还有|再看|再来|给我).{0,6}(?:房源|房子|房产)/i.test(message)) {
+    return true;
+  }
   return false;
 }
 

@@ -3598,13 +3598,19 @@ router.post("/chat", async (req, res) => {
     { headers: req.headers as Record<string, string | string[] | undefined> },
     chatLocale,
   );
-  const { messages, currentReport, message, conversationHistory, reportContext } = req.body as {
+  const { messages, currentReport, message, conversationHistory, reportContext, continuePresentation } = req.body as {
     messages?: Message[];
     currentReport?: object;
     message?: string;
     conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
     reportContext?: string;
+    // Set by the mobile "Show more" button — carries the presentation type of the
+    // result block it belongs to so we continue that exact presentation regardless
+    // of any intervening single-property analyse drill-down.
+    continuePresentation?: "generic_listing" | "scored_screening";
   };
+  const continueGenericListing = continuePresentation === "generic_listing";
+  const continueScoredScreening = continuePresentation === "scored_screening";
   const translateSafeChatContent = async (content: string, mode: string | undefined): Promise<string> => {
     const proseMode = mode !== "analyse" && mode !== "discover" && mode !== "clarification";
     const preSanitized = proseMode ? sanitizeAssistantProse(content, chatLocale) : content;
@@ -3860,6 +3866,13 @@ router.post("/chat", async (req, res) => {
         req.log.info({ sample: userText.slice(0, 100) }, "Chat routing: area/listing query — using discover flow");
         effectiveMode = "discover";
       }
+      // Explicit "Show more" button continuation: always run the discover flow so a
+      // current report (from an analyse drill-down) can't capture it into followup
+      // mode and expand the report instead of showing more cards.
+      if (continuePresentation && effectiveMode !== "discover" && !hasNumberedStreetAddress(userText)) {
+        req.log.info({ continuePresentation }, "Chat routing: Show more button — forcing discover flow to continue presentation");
+        effectiveMode = "discover";
+      }
 
       if (effectiveMode === "analyse" && mode !== "analyse" && forcedAnalyseAddress) {
         req.log.info(
@@ -3941,18 +3954,26 @@ router.post("/chat", async (req, res) => {
           const discoveryCriteria = buildDiscoveryCriteriaText(messages, userText, intent.criteria);
           let plainListingBrowse = isPlainListingBrowseWithoutDevelopment(userText);
 
-          // "Show more" and other pure continuation signals don't contain listing-browse
-          // keywords so isPlainListingBrowseWithoutDevelopment returns false. Inherit the
-          // presentation type from the last substantive user search in history so that:
-          //   - "Show more" after a generic listing search → generic_listing cards
-          //   - "Show more" after a subdivision/development search → scored_screening cards
-          if (!plainListingBrowse && isFollowUp && isDiscoverStreetContinuation(userText)) {
+          if (continuePresentation) {
+            // Explicit signal from the "Show more" button — it knows the presentation
+            // type of the exact result block it belongs to. Honour it directly; this is
+            // ground truth and immune to intervening analyse drill-downs.
+            plainListingBrowse = continueGenericListing;
+          } else if (!plainListingBrowse && isFollowUp && isDiscoverStreetContinuation(userText)) {
+            // Typed continuation ("show more", "show more properties") with no button
+            // signal. Inherit the presentation type from the last substantive AREA
+            // search in history so that:
+            //   - continuation after a generic listing search → generic_listing cards
+            //   - continuation after a subdivision/development search → scored_screening cards
+            // Skip intervening single-property analyse drill-downs and prior continuations
+            // so a "Full Analysis" tap between searches doesn't flip the presentation.
             for (const msg of [...messages].reverse()) {
               if (msg.role !== "user" || !msg.content) continue;
               const prevText = msg.content;
-              if (prevText === userText) continue; // skip all messages with same text as current (prior Show mores)
+              if (prevText === userText) continue; // skip messages identical to current (prior Show mores)
               if (isDiscoverStreetContinuation(prevText) && !isListingBrowseIntent(prevText)) continue; // skip other prior continuations
-              // Found the last substantive search — inherit its presentation type
+              if (hasNumberedStreetAddress(prevText)) continue; // skip single-property analyse drill-downs
+              // Found the last substantive area search — inherit its presentation type
               if (isPlainListingBrowseWithoutDevelopment(prevText)) {
                 plainListingBrowse = true;
               }
@@ -4132,7 +4153,7 @@ router.post("/chat", async (req, res) => {
                     discoveryBatchSize,
                   );
                   const criteriaContext = criteriaLabel ? ` matching criteria: ${criteriaLabel}` : "";
-                  const introPromptGeneric = `The user asked: "${userText}". You found some matching listings in ${suburb || "the area"} on realestate.co.nz${criteriaContext}. In 1 sentence, acknowledge this result conversationally. Do NOT mention a specific number; say "a few", "some", or "a handful". Call them listings/properties only; do not call them development sites or development land. Be natural and brief; no JSON.`;
+                  const introPromptGeneric = `The user asked: "${userText}". You found some matching listings in ${suburb || "the area"}${criteriaContext}. In 1 sentence, acknowledge this result conversationally. Do NOT mention a specific number; say "a few", "some", or "a handful". Never mention any external website, data source, URL, or platform name. Call them listings/properties only; do not call them development sites or development land. Be natural and brief; no JSON.`;
                   prescreenedIntro = await generateAnalysis(introPromptGeneric, chatLocale).catch(() => "");
                   req.log.info({ fetched: firstFiltered.length, cached: remainingFiltered.length, picked: candidates.length }, "realestate.co.nz: selected generic listing cards");
                 } else {
@@ -4143,7 +4164,7 @@ router.post("/chat", async (req, res) => {
                 // until the user taps Start analysis.
                 const criteriaContext = criteriaLabel ? ` matching criteria: ${criteriaLabel}` : "";
                 const resultKind = wantsDevelopmentDiscovery ? "development-focused listings" : "listings";
-                const introPromptPreScreen = `The user asked: "${userText}". You found some matching ${resultKind} in ${suburb || "the area"} on realestate.co.nz${criteriaContext}. In 1 sentence, acknowledge this result conversationally. Do NOT mention a specific number; say "a few", "some", or "a handful". If the user's exact request did not explicitly ask for development, subdivision, yield, or redevelopment, call them listings/properties only; do not call them development sites or development land. Be natural and brief; no JSON.`;
+                const introPromptPreScreen = `The user asked: "${userText}". You found some matching ${resultKind} in ${suburb || "the area"}${criteriaContext}. In 1 sentence, acknowledge this result conversationally. Do NOT mention a specific number; say "a few", "some", or "a handful". Never mention any external website, data source, URL, or platform name. If the user's exact request did not explicitly ask for development, subdivision, yield, or redevelopment, call them listings/properties only; do not call them development sites or development land. Be natural and brief; no JSON.`;
                 const preScreenOptsWithBail = strictStandardSubdivision
                   ? { ...discoverPreOpts, earlyBailAt: discoveryTargetCount }
                   : discoverPreOpts;
@@ -4454,10 +4475,10 @@ router.post("/chat", async (req, res) => {
               const criteriaContextGeneral = criteriaLabel ? ` (${criteriaLabel})` : "";
               const genericListingSource = plainListingBrowse && candidates.some((candidate) => candidate.isSponsored)
                 ? "from available Project Alpha and marketplace listings"
-                : "on realestate.co.nz";
+                : "in the current market";
               const introPrompt = noListings
-                ? `The user asked: "${userText}". No matching listings were found on realestate.co.nz right now for ${suburb || "this area"}${criteriaContextGeneral}. In 1-2 sentences, acknowledge this warmly and suggest they try a different suburb, adjust their budget, or check back soon. Do NOT output any JSON.`
-                : `The user asked: "${userText}". You found some matching properties in ${suburb || "the area"} ${genericListingSource}${criteriaContextGeneral}. In 1 sentence, acknowledge the results conversationally. Do NOT mention a specific number; say "a few", "some", or "a handful". If the user's exact request did not explicitly ask for development, subdivision, yield, or redevelopment, call them listings/properties only; do not call them development sites or development land. Be natural and brief; no JSON.`;
+                ? `The user asked: "${userText}". No matching listings were found right now for ${suburb || "this area"}${criteriaContextGeneral}. In 1-2 sentences, acknowledge this warmly and suggest they try a different suburb, adjust their budget, or check back soon. Never mention any external website, data source, URL, or platform name. Do NOT output any JSON.`
+                : `The user asked: "${userText}". You found some matching properties in ${suburb || "the area"} ${genericListingSource}${criteriaContextGeneral}. In 1 sentence, acknowledge the results conversationally. Do NOT mention a specific number; say "a few", "some", or "a handful". Never mention any external website, data source, URL, or platform name. If the user's exact request did not explicitly ask for development, subdivision, yield, or redevelopment, call them listings/properties only; do not call them development sites or development land. Be natural and brief; no JSON.`;
               aiIntro = await generateAnalysis(introPrompt, chatLocale).catch(() => "");
             } catch { /* silent */ }
           }
@@ -5201,13 +5222,17 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
         const suburb = userSuburb ?? (aiHit ? aiHit.title.toLowerCase() : null);
         const safetyNetCriteria = buildDiscoveryCriteriaText(messages, userText, null);
         let plainListingBrowseSafetyNet = isPlainListingBrowseWithoutDevelopment(userText);
-        // Inherit presentation type from history on pure continuation signals (same logic as discover flow above)
-        if (!plainListingBrowseSafetyNet && isDiscoverStreetContinuation(userText)) {
+        if (continuePresentation) {
+          // Explicit "Show more" button signal — honour it directly (same as discover flow above)
+          plainListingBrowseSafetyNet = continueGenericListing;
+        } else if (!plainListingBrowseSafetyNet && isDiscoverStreetContinuation(userText)) {
+          // Inherit presentation type from history on typed continuation signals (same logic as discover flow above)
           for (const msg of [...messages].reverse()) {
             if (msg.role !== "user" || !msg.content) continue;
             const prevText = msg.content;
             if (prevText === userText) continue;
             if (isDiscoverStreetContinuation(prevText) && !isListingBrowseIntent(prevText)) continue;
+            if (hasNumberedStreetAddress(prevText)) continue; // skip single-property analyse drill-downs
             if (isPlainListingBrowseWithoutDevelopment(prevText)) plainListingBrowseSafetyNet = true;
             break;
           }
