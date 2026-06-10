@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { db, profiles, searches, feasibilityJobs, salesAgentProfiles, listings, withDbRetry } from "@workspace/db";
 import { agentAiUnlimited } from "../lib/agent-entitlements";
 import { logger } from "../lib/logger";
@@ -1192,6 +1192,7 @@ async function pickSponsoredGenericListingCandidate(args: {
           eq(listings.status, "active" as const),
           eq(listings.listingType, "for_sale" as const),
           isNull(listings.removedAt),
+          isNotNull(listings.approvedAt),
           sql`lower(coalesce(${listings.addressSuburb}, '')) = ${suburb}`,
           sql`(${listings.priceNzd} is null or (${listings.priceNzd} >= ${args.minPrice} and ${listings.priceNzd} <= ${Math.round(args.maxPrice * 1.1)}))`,
         ))

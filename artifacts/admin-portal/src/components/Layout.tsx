@@ -5,20 +5,18 @@ import { clearSession } from "@/lib/auth";
 
 export default function Layout() {
   const [pendingCount, setPendingCount] = useState<number | null>(null);
+  const [pendingListingsCount, setPendingListingsCount] = useState<number | null>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
     let cancelled = false;
     apiGet<{ total: number }>("/admin/providers/pending")
-      .then((data) => {
-        if (!cancelled) setPendingCount(data.total);
-      })
-      .catch(() => {
-        if (!cancelled) setPendingCount(null);
-      });
-    return () => {
-      cancelled = true;
-    };
+      .then((data) => { if (!cancelled) setPendingCount(data.total); })
+      .catch(() => { if (!cancelled) setPendingCount(null); });
+    apiGet<{ total: number }>("/admin/listings/pending-count")
+      .then((data) => { if (!cancelled) setPendingListingsCount(data.total); })
+      .catch(() => { if (!cancelled) setPendingListingsCount(null); });
+    return () => { cancelled = true; };
   }, []);
 
   function logout(): void {
@@ -36,10 +34,13 @@ export default function Layout() {
         <NavLink to="/users" className={({ isActive }) => (isActive ? "active" : "")}>
           Users
         </NavLink>
-        <NavLink
-          to="/pending-providers"
-          className={({ isActive }) => (isActive ? "active" : "")}
-        >
+        <NavLink to="/agents" className={({ isActive }) => (isActive ? "active" : "")}>
+          <span>Sales Agents</span>
+          {pendingListingsCount !== null && pendingListingsCount > 0 && (
+            <span className="sidebar-badge">{pendingListingsCount}</span>
+          )}
+        </NavLink>
+        <NavLink to="/pending-providers" className={({ isActive }) => (isActive ? "active" : "")}>
           <span>Pending verifications</span>
           {pendingCount !== null && pendingCount > 0 && (
             <span className="sidebar-badge">{pendingCount}</span>

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { and, desc, eq, gt, gte, ilike, isNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, ilike, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { browseListingCache, db, listings, profiles, salesAgentProfiles, withDbRetry } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
@@ -787,6 +787,7 @@ router.get("/listings", requireAuth, async (req, res) => {
     const filters = [
       eq(listings.status, "active" as const),
       isNull(listings.removedAt),
+      isNotNull(listings.approvedAt),
     ];
     if (query) {
       filters.push(or(
@@ -1054,7 +1055,7 @@ router.get("/listings/public/:id", requireAuth, async (req, res) => {
       .from(listings)
       .innerJoin(profiles, eq(profiles.id, listings.userId))
       .leftJoin(salesAgentProfiles, eq(salesAgentProfiles.userId, listings.userId))
-      .where(and(eq(listings.id, id), eq(listings.status, "active" as const), isNull(listings.removedAt)))
+      .where(and(eq(listings.id, id), eq(listings.status, "active" as const), isNull(listings.removedAt), isNotNull(listings.approvedAt)))
       .limit(1);
 
     if (!row) {

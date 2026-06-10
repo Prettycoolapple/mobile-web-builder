@@ -1,8 +1,10 @@
 import { Router } from "express";
-import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, isNotNull, isNull, or, sql } from "drizzle-orm";
 import {
   db,
   profiles,
+  salesAgentProfiles,
+  listings,
   serviceProviderProfiles,
   feasibilityJobs,
   agentCallEvents,
@@ -1121,6 +1123,292 @@ router.post("/admin/property-cache/rescan", requireAdmin, async (req, res) => {
 // GET /admin/property-cache/rescan/status
 router.get("/admin/property-cache/rescan/status", requireAdmin, (_req, res) => {
   res.json(rescanStatus);
+});
+
+// ─── Agent management ────────────────────────────────────────────────────────
+
+// GET /admin/agents?search=&limit=&offset=
+// List all sales agents with listing counts and approval stats.
+router.get("/admin/agents", requireAdmin, async (req, res) => {
+  const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+  const limit = parseLimit(req.query.limit, 50, 200);
+  const offset = parseOffset(req.query.offset);
+
+  try {
+    const searchPattern = `%${search}%`;
+    const whereClause = search
+      ? and(
+          sql`${profiles.role} = 'agent'`,
+          or(ilike(profiles.email, searchPattern), ilike(profiles.fullName, searchPattern)),
+        )
+      : sql`${profiles.role} = 'agent'`;
+
+    const rows = await db
+      .select({
+        id: profiles.id,
+        email: profiles.email,
+        fullName: profiles.fullName,
+        phoneNumber: profiles.phoneNumber,
+        isVerified: profiles.isVerified,
+        createdAt: profiles.createdAt,
+        agencyName: salesAgentProfiles.agencyName,
+        licenceNumber: salesAgentProfiles.reaaLicenceNumber,
+        totalListings: sql<number>`(select count(*) from listings l where l.user_id = ${profiles.id})::int`,
+        pendingListings: sql<number>`(select count(*) from listings l where l.user_id = ${profiles.id} and l.approved_at is null and l.removed_at is null)::int`,
+        approvedListings: sql<number>`(select count(*) from listings l where l.user_id = ${profiles.id} and l.approved_at is not null and l.removed_at is null)::int`,
+      })
+      .from(profiles)
+      .leftJoin(salesAgentProfiles, eq(salesAgentProfiles.userId, profiles.id))
+      .where(whereClause)
+      .orderBy(desc(profiles.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    const totalResult = await db.execute<{ total: string }>(sql`
+      SELECT COUNT(*)::text AS total FROM profiles
+      WHERE role = 'agent'
+        ${search ? sql`AND (email ILIKE ${searchPattern} OR full_name ILIKE ${searchPattern})` : sql``}
+    `);
+    const totalRows = (totalResult as any).rows ?? totalResult;
+    const total = Number((totalRows[0] as any)?.total ?? 0);
+
+    res.json({ total, limit, offset, rows });
+  } catch (err) {
+    req.log.error({ err }, "admin agents list failed");
+    res.status(500).json({ error: "Failed to load agents" });
+  }
+});
+
+// GET /admin/agents/:userId — agent profile + all their listings
+router.get("/admin/agents/:userId", requireAdmin, async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const [profile] = await db
+      .select({
+        id: profiles.id,
+        email: profiles.email,
+        fullName: profiles.fullName,
+        phoneNumber: profiles.phoneNumber,
+        isVerified: profiles.isVerified,
+        createdAt: profiles.createdAt,
+        lastLoginAt: profiles.lastLoginAt,
+        agencyName: salesAgentProfiles.agencyName,
+        licenceNumber: salesAgentProfiles.reaaLicenceNumber,
+        avatarUrl: profiles.avatarUrl,
+      })
+      .from(profiles)
+      .leftJoin(salesAgentProfiles, eq(salesAgentProfiles.userId, profiles.id))
+      .where(and(eq(profiles.id, userId), sql`${profiles.role} = 'agent'`));
+
+    if (!profile) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+
+    const agentListings = await db
+      .select({
+        id: listings.id,
+        status: listings.status,
+        approvedAt: listings.approvedAt,
+        address: listings.address,
+        listingType: listings.listingType,
+        propertyType: listings.propertyType,
+        priceDisplay: listings.priceDisplay,
+        priceNzd: listings.priceNzd,
+        bedrooms: listings.bedrooms,
+        bathrooms: listings.bathrooms,
+        imageUrls: listings.imageUrls,
+        createdAt: listings.createdAt,
+        removedAt: listings.removedAt,
+      })
+      .from(listings)
+      .where(eq(listings.userId, userId))
+      .orderBy(desc(listings.createdAt));
+
+    res.json({ profile, listings: agentListings });
+  } catch (err) {
+    req.log.error({ err }, "admin agent detail failed");
+    res.status(500).json({ error: "Failed to load agent" });
+  }
+});
+
+// GET /admin/listings?status=pending|approved|all&search=&limit=&offset=
+// All listings across all agents, with agent info.
+router.get("/admin/listings", requireAdmin, async (req, res) => {
+  const filter = req.query.status === "approved" ? "approved" : req.query.status === "all" ? "all" : "pending";
+  const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+  const limit = parseLimit(req.query.limit, 50, 200);
+  const offset = parseOffset(req.query.offset);
+
+  try {
+    const conditions: ReturnType<typeof and>[] = [isNull(listings.removedAt)];
+    if (filter === "pending") conditions.push(isNull(listings.approvedAt));
+    if (filter === "approved") conditions.push(isNotNull(listings.approvedAt));
+    if (search) {
+      const p = `%${search}%`;
+      conditions.push(
+        or(ilike(listings.address, p), ilike(profiles.email, p), ilike(profiles.fullName, p))!,
+      );
+    }
+
+    const rows = await db
+      .select({
+        id: listings.id,
+        status: listings.status,
+        approvedAt: listings.approvedAt,
+        address: listings.address,
+        listingType: listings.listingType,
+        propertyType: listings.propertyType,
+        priceDisplay: listings.priceDisplay,
+        priceNzd: listings.priceNzd,
+        bedrooms: listings.bedrooms,
+        bathrooms: listings.bathrooms,
+        imageUrls: listings.imageUrls,
+        createdAt: listings.createdAt,
+        agentId: profiles.id,
+        agentEmail: profiles.email,
+        agentName: profiles.fullName,
+        agencyName: salesAgentProfiles.agencyName,
+      })
+      .from(listings)
+      .innerJoin(profiles, eq(profiles.id, listings.userId))
+      .leftJoin(salesAgentProfiles, eq(salesAgentProfiles.userId, listings.userId))
+      .where(and(...conditions))
+      .orderBy(desc(listings.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    const totalResult = await db.execute<{ total: string }>(sql`
+      SELECT COUNT(*)::text AS total
+      FROM listings l
+      INNER JOIN profiles p ON p.id = l.user_id
+      WHERE l.removed_at IS NULL
+        ${filter === "pending" ? sql`AND l.approved_at IS NULL` : filter === "approved" ? sql`AND l.approved_at IS NOT NULL` : sql``}
+        ${search ? sql`AND (l.address ILIKE ${"%" + search + "%"} OR p.email ILIKE ${"%" + search + "%"})` : sql``}
+    `);
+    const totalRows = (totalResult as any).rows ?? totalResult;
+    const total = Number((totalRows[0] as any)?.total ?? 0);
+
+    res.json({ total, limit, offset, filter, rows });
+  } catch (err) {
+    req.log.error({ err }, "admin listings list failed");
+    res.status(500).json({ error: "Failed to load listings" });
+  }
+});
+
+// GET /admin/listings/:id — full listing detail with agent info
+router.get("/admin/listings/:id", requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const [row] = await db
+      .select({
+        id: listings.id,
+        status: listings.status,
+        approvedAt: listings.approvedAt,
+        listingType: listings.listingType,
+        address: listings.address,
+        addressStreet: listings.addressStreet,
+        addressSuburb: listings.addressSuburb,
+        addressCity: listings.addressCity,
+        addressPostcode: listings.addressPostcode,
+        lat: listings.lat,
+        lng: listings.lng,
+        propertyType: listings.propertyType,
+        bedrooms: listings.bedrooms,
+        bathrooms: listings.bathrooms,
+        toilets: listings.toilets,
+        garages: listings.garages,
+        landAreaSqm: listings.landAreaSqm,
+        floorAreaSqm: listings.floorAreaSqm,
+        titleStatus: listings.titleStatus,
+        priceNzd: listings.priceNzd,
+        priceDisplay: listings.priceDisplay,
+        methodOfSale: listings.methodOfSale,
+        listingTitle: listings.listingTitle,
+        description: listings.description,
+        imageUrls: listings.imageUrls,
+        documentUrls: listings.documentUrls,
+        features: listings.features,
+        createdAt: listings.createdAt,
+        updatedAt: listings.updatedAt,
+        removedAt: listings.removedAt,
+        agentId: profiles.id,
+        agentEmail: profiles.email,
+        agentName: profiles.fullName,
+        agentPhone: profiles.phoneNumber,
+        agentAvatarUrl: profiles.avatarUrl,
+        agencyName: salesAgentProfiles.agencyName,
+        licenceNumber: salesAgentProfiles.reaaLicenceNumber,
+      })
+      .from(listings)
+      .innerJoin(profiles, eq(profiles.id, listings.userId))
+      .leftJoin(salesAgentProfiles, eq(salesAgentProfiles.userId, listings.userId))
+      .where(eq(listings.id, id));
+
+    if (!row) {
+      res.status(404).json({ error: "Listing not found" });
+      return;
+    }
+
+    res.json({ listing: row });
+  } catch (err) {
+    req.log.error({ err }, "admin listing detail failed");
+    res.status(500).json({ error: "Failed to load listing" });
+  }
+});
+
+// POST /admin/listings/:id/approve
+router.post("/admin/listings/:id/approve", requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const [updated] = await db
+      .update(listings)
+      .set({ approvedAt: new Date() })
+      .where(eq(listings.id, id))
+      .returning({ id: listings.id, approvedAt: listings.approvedAt });
+    if (!updated) {
+      res.status(404).json({ error: "Listing not found" });
+      return;
+    }
+    res.json({ ok: true, id: updated.id, approvedAt: updated.approvedAt });
+  } catch (err) {
+    req.log.error({ err }, "admin listing approve failed");
+    res.status(500).json({ error: "Failed to approve listing" });
+  }
+});
+
+// POST /admin/listings/:id/unapprove
+router.post("/admin/listings/:id/unapprove", requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const [updated] = await db
+      .update(listings)
+      .set({ approvedAt: null })
+      .where(eq(listings.id, id))
+      .returning({ id: listings.id });
+    if (!updated) {
+      res.status(404).json({ error: "Listing not found" });
+      return;
+    }
+    res.json({ ok: true, id: updated.id, approvedAt: null });
+  } catch (err) {
+    req.log.error({ err }, "admin listing unapprove failed");
+    res.status(500).json({ error: "Failed to unapprove listing" });
+  }
+});
+
+// GET /admin/listings/pending-count — for sidebar badge
+router.get("/admin/listings/pending-count", requireAdmin, async (_req, res) => {
+  try {
+    const result = await db.execute<{ total: string }>(sql`
+      SELECT COUNT(*)::text AS total FROM listings
+      WHERE approved_at IS NULL AND removed_at IS NULL
+    `);
+    const rows = (result as any).rows ?? result;
+    res.json({ total: Number((rows[0] as any)?.total ?? 0) });
+  } catch {
+    res.json({ total: 0 });
+  }
 });
 
 export default router;

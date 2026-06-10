@@ -75,6 +75,10 @@ export const listings = pgTable("listings", {
   documentUrls: jsonb("document_urls").$type<ListingDocument[]>().default(sql`'[]'::jsonb`).notNull(),
   features: text("features").array().default(sql`'{}'`).notNull(),
   removedAt: timestamp("removed_at", { withTimezone: true }),
+  // null = pending admin review; non-null = approved and publicly visible.
+  // All agent-created listings start as null and are gated until an admin
+  // clicks Approve in the admin dashboard.
+  approvedAt: timestamp("approved_at", { withTimezone: true }),
 
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
