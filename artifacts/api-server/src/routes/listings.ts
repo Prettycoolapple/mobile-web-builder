@@ -138,16 +138,14 @@ function publicListingFromCurated(listing: ListingResult): BrowseListing {
     description: buildFactualDescription(listing),
     imageUrls: listing.photoUrls?.length ? listing.photoUrls : listing.photoUrl ? [listing.photoUrl] : [],
     features: [],
-    agent: {
-      fullName: "Listing agent",
-      agencyName: "External marketplace",
-      phone: null,
-      isVerified: false,
-    },
+    // No agent data available for real-time curated results — pass null so
+    // the mobile card hides the agent row rather than showing placeholder text.
+    agent: null,
   };
 }
 
 function publicListingFromCache(row: typeof browseListingCache.$inferSelect): BrowseListing {
+  const hasAgent = !!(row.agent?.fullName || row.agent?.agencyName || row.agent?.avatarUrl);
   return {
     id: row.id,
     source: "curated",
@@ -169,13 +167,14 @@ function publicListingFromCache(row: typeof browseListingCache.$inferSelect): Br
     imageUrls: row.imageUrls,
     features: row.features,
     createdAt: row.firstSeenAt,
-    agent: {
-      fullName: row.agent?.fullName ?? "Listing agent",
+    // Only set agent when we have real scraped data; null hides the row entirely.
+    agent: hasAgent ? {
+      fullName: row.agent?.fullName ?? null,
       avatarUrl: row.agent?.avatarUrl ?? null,
-      agencyName: row.agent?.agencyName ?? "External marketplace",
+      agencyName: row.agent?.agencyName ?? null,
       phone: row.agent?.phone ?? null,
       isVerified: false,
-    },
+    } : null,
   };
 }
 

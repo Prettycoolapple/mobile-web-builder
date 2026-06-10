@@ -20,6 +20,7 @@ export function BrowseListingCard({ listing, onPress, onShare }: { listing: Brow
   const colors = useColors();
   const { t } = useT();
   const cover = resolveListingImageUrl(listing.imageUrls?.[0]);
+  const hasAgent = !!(listing.agent?.fullName || listing.agent?.agencyName || listing.agent?.avatarUrl);
   const agentName = listing.agent?.fullName ?? t("lcard.agent_fallback");
   const agency = listing.agent?.agencyName ?? (listing.source === "internal" ? t("lcard.agency_internal") : t("lcard.agency_curated"));
   const agentAvatar = resolveListingImageUrl(listing.agent?.avatarUrl);
@@ -72,26 +73,32 @@ export function BrowseListingCard({ listing, onPress, onShare }: { listing: Brow
           {(listing.garages ?? 0) > 0 ? <Stat icon="truck" text={t("lcard.stat_gar", { n: listing.garages ?? 0 })} /> : null}
           {(listing.landAreaSqm ?? 0) > 0 ? <Stat icon="maximize-2" text={t("lcard.stat_sqm", { n: listing.landAreaSqm?.toLocaleString() ?? "" })} /> : null}
         </View>
-        <View style={[styles.agentRow, { borderTopColor: colors.border }]}>
-          {agentAvatar ? (
-            <Image source={{ uri: agentAvatar }} style={styles.agentAvatarImage} />
-          ) : (
-            <View style={[styles.agentAvatar, { backgroundColor: colors.accent + "18" }]}>
-              <Text style={[styles.agentInitial, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
-                {agentName.trim().slice(0, 1).toUpperCase() || "A"}
+        {hasAgent ? (
+          <View style={[styles.agentRow, { borderTopColor: colors.border }]}>
+            {agentAvatar ? (
+              <Image source={{ uri: agentAvatar }} style={styles.agentAvatarImage} />
+            ) : (
+              <View style={[styles.agentAvatar, { backgroundColor: colors.accent + "18" }]}>
+                <Text style={[styles.agentInitial, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
+                  {agentName.trim().slice(0, 1).toUpperCase() || "A"}
+                </Text>
+              </View>
+            )}
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.agentName, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]} numberOfLines={1}>
+                {agentName}
+              </Text>
+              <Text style={[styles.agency, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]} numberOfLines={1}>
+                {agency}
               </Text>
             </View>
-          )}
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.agentName, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]} numberOfLines={1}>
-              {agentName}
-            </Text>
-            <Text style={[styles.agency, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]} numberOfLines={1}>
-              {agency}
-            </Text>
+            <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
           </View>
-          <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
-        </View>
+        ) : (
+          <View style={[styles.agentRow, { borderTopColor: colors.border }]}>
+            <Feather name="chevron-right" size={18} color={colors.mutedForeground} style={{ marginLeft: "auto" }} />
+          </View>
+        )}
       </View>
     </TouchableOpacity>
   );

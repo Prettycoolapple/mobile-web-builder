@@ -186,13 +186,17 @@ function browseListingFromCandidate(candidate: PropertyCandidate): BrowseListing
     description: genericDescription(candidate),
     imageUrls,
     features: candidate.features ?? [],
-    agent: {
-      fullName: candidate.agentName ?? "Listing agent",
-      avatarUrl: candidate.agentAvatarUrl ?? null,
-      agencyName: candidate.agencyName ?? "External marketplace",
-      phone: candidate.agentPhone ?? null,
-      isVerified: false,
-    },
+    // Only set agent when we have real data; null hides the row on the card
+    // rather than showing misleading placeholder text.
+    agent: (candidate.agentName || candidate.agencyName || candidate.agentAvatarUrl)
+      ? {
+          fullName: candidate.agentName ?? null,
+          avatarUrl: candidate.agentAvatarUrl ?? null,
+          agencyName: candidate.agencyName ?? null,
+          phone: candidate.agentPhone ?? null,
+          isVerified: false,
+        }
+      : null,
   };
 }
 
