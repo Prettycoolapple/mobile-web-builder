@@ -3939,7 +3939,27 @@ router.post("/chat", async (req, res) => {
           let suburb = intent.suburb ?? delegatedDiscoverSuburb?.suburb ?? (contextualAreaBrowse ? reportCtx?.suburb ?? null : null);
           const isFollowUp = intent.isFollowUp || contextualAreaBrowse || isDiscoverStreetContinuation(userText);
           const discoveryCriteria = buildDiscoveryCriteriaText(messages, userText, intent.criteria);
-          const plainListingBrowse = isPlainListingBrowseWithoutDevelopment(userText);
+          let plainListingBrowse = isPlainListingBrowseWithoutDevelopment(userText);
+
+          // "Show more" and other pure continuation signals don't contain listing-browse
+          // keywords so isPlainListingBrowseWithoutDevelopment returns false. Inherit the
+          // presentation type from the last substantive user search in history so that:
+          //   - "Show more" after a generic listing search → generic_listing cards
+          //   - "Show more" after a subdivision/development search → scored_screening cards
+          if (!plainListingBrowse && isFollowUp && isDiscoverStreetContinuation(userText)) {
+            for (const msg of [...messages].reverse()) {
+              if (msg.role !== "user" || !msg.content) continue;
+              const prevText = msg.content;
+              if (prevText === userText) continue; // skip all messages with same text as current (prior Show mores)
+              if (isDiscoverStreetContinuation(prevText) && !isListingBrowseIntent(prevText)) continue; // skip other prior continuations
+              // Found the last substantive search — inherit its presentation type
+              if (isPlainListingBrowseWithoutDevelopment(prevText)) {
+                plainListingBrowse = true;
+              }
+              break;
+            }
+          }
+
           const wantsDevelopmentDiscovery = !plainListingBrowse && isDevelopmentDiscoveryIntent(discoveryCriteria);
           const includeNegotiation = intent.includeNegotiation || wantsDevelopmentDiscovery;
           const userTextHasPrice = intent.minPrice !== null || intent.maxPrice !== null;
@@ -5180,7 +5200,18 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
         const aiHit = userSuburb == null ? await findSuburbInTextViaIndex(content) : null;
         const suburb = userSuburb ?? (aiHit ? aiHit.title.toLowerCase() : null);
         const safetyNetCriteria = buildDiscoveryCriteriaText(messages, userText, null);
-        const plainListingBrowseSafetyNet = isPlainListingBrowseWithoutDevelopment(userText);
+        let plainListingBrowseSafetyNet = isPlainListingBrowseWithoutDevelopment(userText);
+        // Inherit presentation type from history on pure continuation signals (same logic as discover flow above)
+        if (!plainListingBrowseSafetyNet && isDiscoverStreetContinuation(userText)) {
+          for (const msg of [...messages].reverse()) {
+            if (msg.role !== "user" || !msg.content) continue;
+            const prevText = msg.content;
+            if (prevText === userText) continue;
+            if (isDiscoverStreetContinuation(prevText) && !isListingBrowseIntent(prevText)) continue;
+            if (isPlainListingBrowseWithoutDevelopment(prevText)) plainListingBrowseSafetyNet = true;
+            break;
+          }
+        }
         const wantsDevelopmentSafetyNet = !plainListingBrowseSafetyNet && isDevelopmentDiscoveryIntent(safetyNetCriteria);
         const strictStandardSubdivisionSafetyNet = !plainListingBrowseSafetyNet && isStandardSubdivisionDiscoveryIntent(safetyNetCriteria);
         const includeNegotiation = wantsDevelopmentSafetyNet || /negotiat|without\s+price|no\s+price|poa|tender|auction/i.test(userText);
