@@ -1138,10 +1138,10 @@ router.get("/admin/agents", requireAdmin, async (req, res) => {
     const searchPattern = `%${search}%`;
     const whereClause = search
       ? and(
-          sql`${profiles.role} = 'agent'`,
+          sql`${profiles.role} = 'sales_agent'`,
           or(ilike(profiles.email, searchPattern), ilike(profiles.fullName, searchPattern)),
         )
-      : sql`${profiles.role} = 'agent'`;
+      : sql`${profiles.role} = 'sales_agent'`;
 
     const rows = await db
       .select({
@@ -1166,7 +1166,7 @@ router.get("/admin/agents", requireAdmin, async (req, res) => {
 
     const totalResult = await db.execute<{ total: string }>(sql`
       SELECT COUNT(*)::text AS total FROM profiles
-      WHERE role = 'agent'
+      WHERE role = 'sales_agent'
         ${search ? sql`AND (email ILIKE ${searchPattern} OR full_name ILIKE ${searchPattern})` : sql``}
     `);
     const totalRows = (totalResult as any).rows ?? totalResult;
@@ -1198,7 +1198,7 @@ router.get("/admin/agents/:userId", requireAdmin, async (req, res) => {
       })
       .from(profiles)
       .leftJoin(salesAgentProfiles, eq(salesAgentProfiles.userId, profiles.id))
-      .where(and(eq(profiles.id, userId), sql`${profiles.role} = 'agent'`));
+      .where(and(eq(profiles.id, userId), sql`${profiles.role} = 'sales_agent'`));
 
     if (!profile) {
       res.status(404).json({ error: "Agent not found" });
