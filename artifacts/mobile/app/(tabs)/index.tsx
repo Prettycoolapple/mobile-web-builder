@@ -2386,9 +2386,21 @@ export default function SearchScreen() {
                 >
                   <Feather name="arrow-up" size={17} color={canSend ? "#fff" : colors.mutedForeground} />
                 </TouchableOpacity>
+                {!inputText.trim() && (
+                  <TouchableOpacity
+                    style={[styles.micBtn, { backgroundColor: isRecording ? "#ef4444" : "transparent" }]}
+                    onPressIn={startRecording}
+                    onPressOut={stopRecording}
+                    activeOpacity={0.7}
+                    accessibilityRole="button"
+                    accessibilityLabel="Press and hold to speak"
+                  >
+                    <Feather name="mic" size={18} color={isRecording ? "#fff" : colors.mutedForeground} />
+                  </TouchableOpacity>
+                )}
               </View>
 
-              {/* Suggestion chips — compact horizontal pills */}
+              {/* Suggestion chips — each chip must not shrink so text stays readable */}
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -2403,7 +2415,10 @@ export default function SearchScreen() {
                     activeOpacity={0.75}
                   >
                     <Feather name="search" size={11} color={colors.accent} />
-                    <Text style={[styles.suggestionText, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}>
+                    <Text
+                      style={[styles.suggestionText, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+                      numberOfLines={1}
+                    >
                       {q}
                     </Text>
                   </TouchableOpacity>
@@ -2757,18 +2772,22 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginLeft: 4,
   },
-  suggestionChips: {
+  suggestionChip: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
     borderWidth: 1,
     borderRadius: 20,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    // Critical: prevent the ScrollView from squashing individual chips
+    flexShrink: 0,
   },
   suggestionText: {
-    fontSize: 12,
-    lineHeight: 17,
+    fontSize: 13,
+    lineHeight: 18,
+    // Don't allow wrapping — the chip is sized to its content
+    flexShrink: 0,
   },
   // ── Chat state ─────────────────────────────────────────────────────
   browseRoot: {
