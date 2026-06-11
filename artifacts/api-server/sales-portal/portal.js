@@ -294,6 +294,201 @@
   }
 
   function escapeHtml(value) {
+const message = payload && payload.error ? payload.error : "Upload failed. Please try again.";
+      const error = new Error(message);
+      if (payload && payload.code) error.code = payload.code;
+      throw error;
+    }
+    return payload;
+  }
+
+  function formValues(form) {
+    return Object.fromEntries(new FormData(form).entries());
+  }
+
+  function saveSession(token, user) {
+    localStorage.setItem(TOKEN_KEY, token);
+    localStorage.setItem(USER_KEY, JSON.stringify(user || {}));
+    state.currentUser = user || null;
+  }
+
+  function clearSession() {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+  }
+
+  function getSession() {
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!token) return null;
+    try {
+      return { token, user: JSON.parse(localStorage.getItem(USER_KEY) || "{}") };
+    } catch {
+      return { token, user: {} };
+    }
+  }
+
+  function showDashboard(user) {
+    state.currentUser = user || null;
+    const hero = $(".portal-hero");
+    if (hero) hero.hidden = true;
+    $("#portal-auth").hidden = true;
+    $("#portal-dashboard").hidden = false;
+    fillProfileForm(user || {});
+    updateAccountSummary(user || {});
+    switchDashboardTab("listings");
+    void refreshListings();
+  }
+
+  function showAuth() {
+    const hero = $(".portal-hero");
+    if (hero) hero.hidden = false;
+    $("#portal-auth").hidden = false;
+    $("#portal-dashboard").hidden = true;
+  }
+
+  function updateListingMetrics(listings) {
+    const total = listings.length;
+    const active = listings.filter((listing) => listing.status !== "paused").length;
+    const paused = total - active;
+    const set = (selector, value) => {
+      const element = $(selector);
+      if (element) element.textContent = String(value);
+    };
+    set("#metric-total", total);
+    set("#metric-active", active);
+    set("#metric-paused", paused);
+  }
+
+  async function refreshListings() {
+    const session = getSession();
+    const status = $("#dashboard-status");
+    if (!session) {
+      showAuth();
+      return;
+    }
+    setStatus(status, "Loading your listings...", null);
+    try {
+      const data = await api("/listings/my", { method: "GET", token: session.token });
+      const listings = Array.isArray(data.listings) ? data.listings : [];
+      state.listings = listings;
+      updateListingMetrics(listings);
+      renderListings(listings);
+      setStatus(status, "", null);
+    } catch (error) {
+      state.listings = [];
+      updateListingMetrics([]);
+      renderListings([]);
+      // Session replaced on another device — sign out cleanly
+      if (error && error.code === "SESSION_REPLACED") {
+        clearSession();
+        showAuth();
+        return;
+      }
+      setStatus(status, getErrorMessage(error, "We couldn't load your listings. Please refresh the page."), "error");
+    }
+  }
+
+  function switchDashboardTab(target) {
+    const labels = {
+      listings: "My listings",
+      profile: "Profile",
+      account: "Account",
+      subscription: "Manage subscription",
+    };
+    $$(".portal-dashboard-tab").forEach((tab) => {
+      const active = tab.dataset.dashboardTarget === target;
+      tab.classList.toggle("is-active", active);
+      tab.setAttribute("aria-selected", active ? "true" : "false");
+    });
+    $$(".portal-dashboard-panel").forEach((panel) => {
+      const active = panel.dataset.dashboardPanel === target;
+      panel.classList.toggle("is-active", active);
+      panel.hidden = !active;
+    });
+    const title = $("#dashboard-title");
+    if (title) title.textContent = labels[target] || "Sales dashboard";
+    if (target === "subscription") void loadSubscription();
+  }
+
+  function listingTitle(listing) {
+    return listing.listingTitle || listing.address || "Untitled listing";
+  }
+
+  function formatStatus(status) {
+    return status === "paused" ? "Paused" : "Active";
+  }
+
+  function formatPriceRange(listing) {
+    const min = Number(listing.backendSearchPriceMin || 0);
+    const max = Number(listing.backendSearchPriceMax || 0);
+    if (!min || !max) return listing.priceDisplay || "";
+    const format = (value) => `$${value.toLocaleString("en-NZ")}`;
+    return min === max ? format(min) : `${format(min)}-${format(max)}`;
+  }
+
+  function listingMeta(listing) {
+    const bits = [];
+    if (listing.propertySubtype || listing.propertyType) bits.push(listing.propertySubtype || listing.propertyType);
+    if (listing.methodOfSale) bits.push(METHOD_LABELS[listing.methodOfSale] || listing.methodOfSale);
+    const price = formatPriceRange(listing);
+    if (price) bits.push(price);
+    return bits.join(" | ") || "Property";
+  }
+
+  function renderListings(listings) {
+    const root = $("#listings-list");
+    if (!root) return;
+    if (!listings.length) {
+      root.innerHTML = `
+        <div class="portal-empty">
+          <h3>No listings yet</h3>
+          <p>Add your first property to start marketing it to Project Alpha buyers.</p>
+        </div>
+      `;
+      return;
+    }
+    root.innerHTML = listings
+      .map((listing) => {
+        const isActive = listing.status !== "paused";
+        const pending = !listing.approvedAt;
+        const image = Array.isArray(listing.imageUrls) && listing.imageUrls[0] ? listing.imageUrls[0] : "";
+        const views = Number(listing.totalViews || 0);
+        const statusPill = pending
+          ? `<span class="portal-pill portal-pill--pending">⏳ Pending approval</span>`
+          : `<span class="portal-pill portal-pill--live">✓ Live</span>`;
+        return `
+          <article class="portal-listing-card" data-listing-id="${escapeHtml(listing.id)}">
+            <div class="portal-listing-thumb">${image ? `<img src="${escapeHtml(image)}" alt="" loading="lazy" />` : "<span>No photo</span>"}</div>
+            <div class="portal-listing-body">
+              <div class="portal-listing-titlerow">
+                <h3>${escapeHtml(listingTitle(listing))}</h3>
+                ${statusPill}
+              </div>
+              <p>${escapeHtml(listing.address || "")}</p>
+              <p>${escapeHtml(listingMeta(listing))}</p>
+              <div class="portal-listing-stats">
+                <span>${Number(listing.bedrooms || 0)} bed</span>
+                <span>${Number(listing.bathrooms || 0)} bath</span>
+                <span>${Number(listing.toilets || 0)} toilet</span>
+                <span>${Number(listing.garages || 0)} garage</span>
+                <span class="portal-stat-views">👁 ${views.toLocaleString()} views</span>
+              </div>
+            </div>
+            <div class="portal-listing-actions">
+              <label class="portal-switch${pending ? " portal-switch--disabled" : ""}">
+                <input type="checkbox" data-toggle-listing="${escapeHtml(listing.id)}" ${isActive ? "checked" : ""} ${pending ? "disabled" : ""} />
+                <span>${pending ? "Awaiting review" : formatStatus(listing.status)}</span>
+              </label>
+              ${pending ? `<p class="portal-listing-hint">Live once approved.</p>` : ""}
+              <button class="link-button portal-danger" type="button" data-delete-listing="${escapeHtml(listing.id)}">Remove</button>
+            </div>
+          </article>
+        `;
+      })
+      .join("");
+  }
+
+  function escapeHtml(value) {
     return String(value || "")
       .replaceAll("&", "&amp;")
       .replaceAll("<", "&lt;")
@@ -302,186 +497,40 @@
       .replaceAll("'", "&#039;");
   }
 
-  // ── Lightweight Markdown editor (no dependency) ────────────────────────────
-  const MD_EMOJIS = [
-    "😊", "😍", "🤩", "👍", "🔥", "✨", "🎉", "🏡", "🏠", "🛏️",
-    "🛁", "🚗", "🌳", "🌞", "🌊", "🏖️", "🏫", "🚆", "🛒", "☕",
-    "📍", "💰", "📐", "✅", "⭐", "❤️", "🔑", "🌿", "🐾", "👨‍👩‍👧‍👦",
-  ];
+  // ── WYSIWYG description editor (Quill + Turndown) ────────────────────────
+  // Quill renders rich text; Turndown converts the HTML back to Markdown so the
+  // backend and mobile app continue to receive clean Markdown.
+  let quillInstance = null;
 
-  // Remove Markdown markers so we can measure real text length.
-  function stripMarkdown(text) {
-    return String(text || "")
-      .replace(/[*_#>`~-]/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
-  }
-
-  // Minimal, XSS-safe Markdown → HTML (escape first, then add a small subset).
-  function renderMarkdownPreview(text) {
-    const lines = String(text || "").split(/\r?\n/);
-    const html = [];
-    let inList = false;
-    for (const raw of lines) {
-      let line = escapeHtml(raw);
-      // inline: bold, italic
-      line = line
-        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-        .replace(/(^|[^*])\*([^*]+)\*(?!\*)/g, "$1<em>$2</em>")
-        .replace(/_([^_]+)_/g, "<em>$1</em>");
-      const bulletMatch = raw.match(/^\s*[-*•]\s+(.*)$/);
-      const headingMatch = raw.match(/^\s*(#{1,3})\s+(.*)$/);
-      if (bulletMatch) {
-        if (!inList) {
-          html.push("<ul>");
-          inList = true;
-        }
-        const item = escapeHtml(bulletMatch[1]).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/_([^_]+)_/g, "<em>$1</em>");
-        html.push(`<li>${item}</li>`);
-        continue;
-      }
-      if (inList) {
-        html.push("</ul>");
-        inList = false;
-      }
-      if (headingMatch) {
-        const level = Math.min(3, headingMatch[1].length) + 2; // h3..h5
-        const inner = escapeHtml(headingMatch[2]).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-        html.push(`<h${level}>${inner}</h${level}>`);
-        continue;
-      }
-      if (raw.trim() === "") {
-        html.push("<br/>");
-        continue;
-      }
-      html.push(`<p>${line}</p>`);
-    }
-    if (inList) html.push("</ul>");
-    return html.join("");
-  }
-
-  // Apply a Markdown action to a text field around its current selection.
-  function applyMarkdownAction(field, action, payload) {
-    const value = field.value || "";
-    const start = field.selectionStart ?? value.length;
-    const end = field.selectionEnd ?? value.length;
-    const selected = value.slice(start, end);
-    let before = value.slice(0, start);
-    let after = value.slice(end);
-    let inner = selected;
-    let wrapBefore = "";
-    let wrapAfter = "";
-    let caretOffset = 0;
-
-    if (action === "bold") {
-      wrapBefore = "**";
-      wrapAfter = "**";
-      if (!inner) inner = "bold text";
-    } else if (action === "italic") {
-      wrapBefore = "_";
-      wrapAfter = "_";
-      if (!inner) inner = "italic text";
-    } else if (action === "heading") {
-      const needsNl = before && !before.endsWith("\n");
-      wrapBefore = (needsNl ? "\n" : "") + "## ";
-      if (!inner) inner = "Heading";
-    } else if (action === "bullet") {
-      const needsNl = before && !before.endsWith("\n");
-      const block = (inner || "List item").split(/\r?\n/).map((l) => `- ${l}`).join("\n");
-      const next = `${before}${needsNl ? "\n" : ""}${block}${after}`;
-      field.value = next;
-      const pos = (before + (needsNl ? "\n" : "") + block).length;
-      field.focus();
-      field.setSelectionRange(pos, pos);
-      field.dispatchEvent(new Event("input", { bubbles: true }));
+  function initQuillEditor(form) {
+    const editorEl = document.getElementById("quill-editor");
+    const hiddenTextarea = form.elements["description"];
+    if (!editorEl || !hiddenTextarea) return;
+    if (typeof Quill === "undefined" || typeof TurndownService === "undefined") {
+      // CDN scripts not yet loaded — retry after a short delay.
+      setTimeout(() => initQuillEditor(form), 200);
       return;
-    } else if (action === "emoji") {
-      inner = payload || "";
-      wrapBefore = "";
-      wrapAfter = "";
-      caretOffset = inner.length;
     }
+    const turndown = new TurndownService({ headingStyle: "atx", bulletListMarker: "-" });
 
-    const next = `${before}${wrapBefore}${inner}${wrapAfter}${after}`;
-    field.value = next;
-    field.focus();
-    const selStart = before.length + wrapBefore.length;
-    const selEnd = selStart + inner.length;
-    if (action === "emoji") {
-      const pos = before.length + inner.length;
-      field.setSelectionRange(pos, pos);
-    } else {
-      field.setSelectionRange(selStart, selEnd);
-    }
-    field.dispatchEvent(new Event("input", { bubbles: true }));
-  }
-
-  function buildEmojiPopover(field) {
-    const pop = document.createElement("div");
-    pop.className = "md-emoji-pop";
-    pop.innerHTML = MD_EMOJIS.map(
-      (e) => `<button type="button" class="md-emoji" data-emoji="${e}">${e}</button>`,
-    ).join("");
-    pop.addEventListener("click", (event) => {
-      const btn = event.target.closest("[data-emoji]");
-      if (!btn) return;
-      applyMarkdownAction(field, "emoji", btn.dataset.emoji);
-      pop.remove();
-    });
-    document.addEventListener(
-      "click",
-      function onAway(e) {
-        if (!pop.contains(e.target)) {
-          pop.remove();
-          document.removeEventListener("click", onAway);
-        }
+    quillInstance = new Quill(editorEl, {
+      theme: "snow",
+      placeholder: "Describe the key selling points, standout features, and location highlights.",
+      modules: {
+        toolbar: [
+          ["bold", "italic"],
+          [{ header: 2 }],
+          [{ list: "bullet" }],
+        ],
       },
-      { capture: true },
-    );
-    return pop;
-  }
+    });
 
-  function setupMarkdownToolbars(form) {
-    form.querySelectorAll(".md-toolbar").forEach((toolbar) => {
-      const targetName = toolbar.dataset.mdTarget;
-      const field = form.elements[targetName];
-      if (!field) return;
-      const previewEl = form.querySelector(`[data-md-preview='${targetName}']`);
-
-      toolbar.addEventListener("click", (event) => {
-        const btn = event.target.closest(".md-btn");
-        if (!btn) return;
-        event.preventDefault();
-        const action = btn.dataset.md;
-        if (action === "preview") {
-          if (!previewEl) return;
-          const show = previewEl.hidden;
-          previewEl.hidden = !show;
-          field.hidden = show;
-          btn.classList.toggle("is-active", show);
-          if (show) previewEl.innerHTML = renderMarkdownPreview(field.value);
-          return;
-        }
-        if (action === "emoji") {
-          const existing = toolbar.querySelector(".md-emoji-pop");
-          if (existing) {
-            existing.remove();
-            return;
-          }
-          const pop = buildEmojiPopover(field);
-          btn.parentElement.style.position = "relative";
-          btn.insertAdjacentElement("afterend", pop);
-          return;
-        }
-        applyMarkdownAction(field, action);
-      });
-
-      // Keep an open preview in sync while typing.
-      if (previewEl) {
-        field.addEventListener("input", () => {
-          if (!previewEl.hidden) previewEl.innerHTML = renderMarkdownPreview(field.value);
-        });
-      }
+    // Sync Quill HTML → Markdown → hidden textarea on every change.
+    quillInstance.on("text-change", () => {
+      const html = quillInstance.root.innerHTML;
+      // Quill blank state is just <p><br></p> — treat it as empty.
+      const isEmpty = quillInstance.getText().trim().length === 0;
+      hiddenTextarea.value = isEmpty ? "" : turndown.turndown(html);
     });
   }
 
@@ -685,10 +734,8 @@
     }
     if (step === 5) {
       const title = String(form.elements.listingTitle.value || "").trim();
-      const description = String(form.elements.description.value || "").trim();
-      // Count real text length, ignoring Markdown markers so formatting doesn't
-      // game the minimum-length rule.
-      const plainLen = stripMarkdown(description).length;
+      // Use Quill's plain text for accurate length (no HTML tags counted).
+      const plainLen = quillInstance ? quillInstance.getText().trim().length : String(form.elements.description.value || "").trim().length;
       const ok = title.length >= 3 && plainLen >= 20;
       if (!ok && showErrors) setFieldError("copy", "Add a headline and a description of at least 20 characters.");
       return ok;
@@ -1705,107 +1752,6 @@
           reaaLicenceNumber,
         },
       });
-      let user = data.user;
-      const picture = selectedProfilePicture(form);
-      if (picture) {
-        setStatus(status, "Changes saved. Updating your photo...", null);
-        const uploaded = await uploadProfilePicture(session.token, picture);
-        user = { ...user, avatarUrl: uploaded.fileUrl };
-      }
-      saveSession(session.token, user);
-      fillProfileForm(user);
-      updateAccountSummary(user);
-      setStatus(status, "Your details have been saved.", "success");
-    } catch (error) {
-      setStatus(status, getErrorMessage(error, "We couldn't save your changes. Please try again."), "error");
-    }
-  }
-
-  async function requestReset(isResend) {
-    const form = $("#password-reset-form");
-    const status = $("#reset-status");
-    const email = form.elements.email.value.trim();
-    if (!email) {
-      setStatus(status, "Enter your email address first.", "error");
-      return;
-    }
-    setStatus(status, isResend ? "Sending a new code..." : "Sending your reset code...", null);
-    try {
-      await api("/auth/password-reset/request", { method: "POST", body: { email } });
-      state.resetCodeRequested = true;
-      const verifyBlock = $("#reset-verify-block");
-      if (verifyBlock) verifyBlock.hidden = false;
-      if (form.elements.code) form.elements.code.focus();
-      setStatus(status, "If that email has an account, we've sent a reset code. Check your inbox.", "success");
-    } catch (error) {
-      setStatus(status, getErrorMessage(error, "We couldn't send a reset code. Please try again."), "error");
-    }
-  }
-
-  async function confirmReset(event) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const status = $("#reset-status");
-    const values = formValues(form);
-    const email = String(values.email || "").trim();
-    const code = String(values.code || "").trim();
-    const password = String(values.password || "");
-    if (!email || !code || !password) {
-      setStatus(status, "Enter your email, reset code, and new password.", "error");
-      return;
-    }
-    setStatus(status, "Updating your password...", null);
-    try {
-      await api("/auth/password-reset/confirm", {
-        method: "POST",
-        body: { email, code, password },
-      });
-      setStatus(status, "Password updated. You can sign in with your new password.", "success");
-      const loginEmail = $("#sales-login-form input[name='email']");
-      if (loginEmail) loginEmail.value = email;
-      window.setTimeout(() => {
-        closeReset();
-        switchTab("login");
-      }, 1400);
-    } catch (error) {
-      setStatus(status, getErrorMessage(error, "We couldn't reset your password. Please try again."), "error");
-    }
-  }
-
-  function initListingWizard() {
-    const form = $("#new-listing-form");
-    if (!form) return;
-
-    $("#new-listing-button").addEventListener("click", () => {
-      $("#new-listing-panel").hidden = false;
-      switchListingStep(0);
-      $("#listing-photo-input").focus();
-    });
-    $("#cancel-new-listing-button").addEventListener("click", () => {
-      $("#new-listing-panel").hidden = true;
-      resetListingWizard();
-    });
-    $("#listing-prev-button").addEventListener("click", () => switchListingStep(state.listingStep - 1));
-    $("#listing-next-button").addEventListener("click", () => {
-      if (!validateListingStep(state.listingStep, true)) return;
-      switchListingStep(state.listingStep + 1);
-    });
-    $$(".portal-step-dot").forEach((dot) => {
-      dot.addEventListener("click", () => {
-        const target = Number(dot.dataset.stepJump);
-        const canJump = target <= state.listingStep || Array.from({ length: target }).every((_, index) => validateListingStep(index, true));
-        if (canJump) switchListingStep(target);
-      });
-    });
-
-    setupMarkdownToolbars(form);
-
-    const dropzone = $("#listing-photo-dropzone");
-    const photoInput = $("#listing-photo-input");
-    photoInput.addEventListener("change", (event) => addListingPhotos(event.currentTarget.files));
-    dropzone.addEventListener("dragover", (event) => {
-      event.preventDefault();
-      dropzone.classList.add("is-dragging");
     });
     dropzone.addEventListener("dragleave", () => dropzone.classList.remove("is-dragging"));
     dropzone.addEventListener("drop", (event) => {

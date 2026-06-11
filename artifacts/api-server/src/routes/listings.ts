@@ -15,9 +15,13 @@ const router = Router();
 const BROWSE_MODE_ENABLED = false;
 
 // ── Total-views display helpers ──────────────────────────────────────────────
-// Fake growth is computed on read (no cron): a per-listing 4–29 seed plus a
+// Fake growth is computed on read (no cron): a per-listing seed plus a
 // deterministic 1–5 increment for each elapsed 3-hour bucket, capped at 8
 // buckets (24h). Real, de-duplicated views are added on top.
+//
+// Views are only shown AFTER the listing is approved AND after a deterministic
+// 7–30 min warm-up window, so newly-approved listings don't show view counts
+// immediately (they were pending and had no real exposure before approval).
 function deterministicInc(listingId: string, bucket: number): number {
   let h = 2166136261 >>> 0; // FNV-1a
   const s = `${listingId}:${bucket}`;
@@ -32,16 +36,34 @@ function computeDisplayViews(listing: {
   id: string;
   fakeViewSeed: number | null;
   realViews: number;
-  createdAt: Date | string | null;
+  approvedAt: Date | string | null;
 }): number {
-  const seed = listing.fakeViewSeed ?? 0;
-  const createdMs = listing.createdAt ? new Date(listing.createdAt).getTime() : Date.now();
-  const hours = (Date.now() - createdMs) / 3_600_000;
+  // Listing is still pending approval — no one can see it yet, so no views.
+  if (!listing.approvedAt) return 0;
+
+  // Deterministic 7–30 min delay after approval before the first fake view
+  // appears. Uses the listing ID as entropy so the delay is stable across reads.
+  let h = 2166136261 >>> 0; // FNV-1a
+  const seed = `warmup:${listing.id}`;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  const delayMs = (7 + (h % 24)) * 60_000; // 7..30 minutes in ms
+  const approvedMs = new Date(listing.approvedAt).getTime();
+  const viewsStartMs = approvedMs + delayMs;
+
+  // Still inside the warm-up window — show nothing yet.
+  if (Date.now() < viewsStartMs) return 0;
+
+  const fakeSeed = listing.fakeViewSeed ?? 0;
+  const hours = (Date.now() - viewsStartMs) / 3_600_000;
   const buckets = Math.max(0, Math.min(8, Math.floor(hours / 3)));
-  let fake = seed;
+  let fake = fakeSeed;
   for (let b = 1; b <= buckets; b++) fake += deterministicInc(listing.id, b);
   return fake + (listing.realViews ?? 0);
 }
+
 
 type BrowseListing = {
   id: string;

@@ -12,6 +12,142 @@
     <link rel="icon" href="/favicon.png" type="image/png" sizes="512x512" />
     <link rel="apple-touch-icon" href="/favicon.png" />
     <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css" />
+    <style>
+      .ql-container.ql-snow { border-radius: 0 0 8px 8px; border-color: var(--border, #e5e1db); font-family: inherit; font-size: 15px; min-height: 160px; }
+      .ql-toolbar.ql-snow { border-radius: 8px 8px 0 0; border-color: var(--border, #e5e1db); background: rgba(32,25,21,0.03); }
+      .ql-editor { min-height: 140px; line-height: 1.6; color: var(--ink, #1d1a17); }
+      .ql-editor.ql-blank::before { color: var(--muted, #7a766f); font-style: normal; }
+      .ql-snow .ql-stroke { stroke: var(--ink, #1d1a17); }
+      .ql-snow .ql-fill { fill: var(--ink, #1d1a17); }
+      .ql-snow .ql-picker { color: var(--ink, #1d1a17); }
+      .ql-snow.ql-toolbar button:hover .ql-stroke, .ql-snow .ql-toolbar button:hover .ql-stroke { stroke: var(--orange, #D97757); }
+      .ql-snow.ql-toolbar button.ql-active .ql-stroke { stroke: var(--orange, #D97757); }
+    </style>
+    <style>
+      .paywall-toggle {
+        display: flex;
+        gap: 6px;
+        padding: 4px;
+        margin: 8px 0 18px;
+        background: rgba(32, 25, 21, 0.06);
+        border-radius: 12px;
+      }
+      .paywall-toggle-btn {
+        flex: 1;
+        padding: 9px 12px;
+        border: 0;
+        border-radius: 9px;
+        background: transparent;
+        color: var(--muted, #7a766f);
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .paywall-toggle-btn.is-active {
+        background: #fffaf3;
+        color: var(--ink, #1d1a17);
+        box-shadow: 0 1px 3px rgba(32, 25, 21, 0.12);
+      }
+      .paywall-mode[hidden] { display: none; }
+      .paywall-price {
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+        margin-bottom: 14px;
+      }
+      .paywall-amount { font-size: 36px; font-weight: 800; letter-spacing: -0.02em; }
+      .paywall-period { color: var(--muted, #7a766f); font-weight: 600; }
+      .paywall-features {
+        list-style: none;
+        margin: 0 0 18px;
+        padding: 0;
+        display: grid;
+        gap: 10px;
+      }
+      .paywall-features li {
+        position: relative;
+        padding-left: 26px;
+        line-height: 1.4;
+      }
+      .paywall-features li::before {
+        content: "✓";
+        position: absolute;
+        left: 0;
+        top: 0;
+        color: var(--green, #2f9e6b);
+        font-weight: 800;
+      }
+      .paywall-soon {
+        display: inline-block;
+        margin-left: 6px;
+        padding: 1px 8px;
+        border-radius: 999px;
+        background: rgba(32, 25, 21, 0.08);
+        color: var(--muted, #7a766f);
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        vertical-align: middle;
+      }
+      .paywall-fineprint {
+        margin: 10px 0 0;
+        color: var(--muted, #7a766f);
+        font-size: 12px;
+        text-align: center;
+      }
+      .subscription-lifetime-badge {
+        display: inline-block;
+        margin: 0 0 12px;
+        padding: 6px 14px;
+        border-radius: 999px;
+        background: rgba(47, 158, 107, 0.12);
+        color: #1d6f4b;
+        font-weight: 700;
+      }
+      .subscription-note {
+        margin: 0 0 16px;
+        color: var(--muted, #7a766f);
+      }
+      .agent-welcome-card {
+        max-width: 620px;
+      }
+      .agent-welcome-copy {
+        display: grid;
+        gap: 12px;
+        margin: 0 0 20px;
+        color: var(--muted, #7a766f);
+        line-height: 1.55;
+      }
+      .agent-welcome-copy strong {
+        color: var(--ink, #1d1a17);
+      }
+      .app-download-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .app-download-button {
+        display: flex;
+        min-height: 54px;
+        align-items: center;
+        justify-content: center;
+        padding: 12px 14px;
+        border-radius: 12px;
+        background: var(--ink, #1d1a17);
+        color: #fff;
+        text-decoration: none;
+        font-weight: 800;
+        text-align: center;
+      }
+      .app-download-button:hover {
+        transform: translateY(-1px);
+      }
+      .app-download-button--android {
+        background: #1d6f4b;
+      }
+    </style>
     <style>
       .paywall-toggle {
         display: flex;
@@ -142,6 +278,8 @@
       }
     </style>
     <script defer src="/site.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/turndown@7.2.0/dist/turndown.js"></script>
     <script defer src="/sales-portal/portal.js"></script>
   </head>
   <body data-page="salesPortal">
@@ -305,277 +443,6 @@
 
                 <button class="button button-primary portal-submit" type="submit">Create account</button>
                 <p class="form-status" id="signup-status" aria-live="polite"></p>
-              </form>
-            </section>
-          </div>
-        </section>
-
-        <section class="portal-shell portal-dashboard" id="portal-dashboard" hidden>
-          <div class="portal-dashboard-header">
-            <div>
-              <p class="section-kicker">Your dashboard</p>
-              <h2 id="dashboard-title">My listings</h2>
-            </div>
-            <button class="button button-quiet" type="button" id="signout-button">Sign out</button>
-          </div>
-
-          <div class="portal-dashboard-nav" role="tablist" aria-label="Dashboard sections">
-            <button class="portal-dashboard-tab is-active" type="button" data-dashboard-target="listings" role="tab" aria-selected="true">
-              My listings
-            </button>
-            <button class="portal-dashboard-tab" type="button" data-dashboard-target="profile" role="tab" aria-selected="false">
-              Profile
-            </button>
-            <button class="portal-dashboard-tab" type="button" data-dashboard-target="account" role="tab" aria-selected="false">
-              Account
-            </button>
-            <button class="portal-dashboard-tab" type="button" data-dashboard-target="subscription" role="tab" aria-selected="false">
-              Manage subscription
-            </button>
-          </div>
-
-          <section class="portal-dashboard-panel is-active" data-dashboard-panel="listings" role="tabpanel">
-            <div class="portal-card">
-              <div class="portal-listings-head">
-                <div>
-                  <h3>Your listings</h3>
-                  <p>Add a property, pause it while it's under offer, or remove it once it's sold.</p>
-                </div>
-                <button class="button button-primary" type="button" id="new-listing-button">Add a listing</button>
-              </div>
-              <div class="portal-dashboard-grid">
-                <div class="portal-metric">
-                  <span>Total listings</span>
-                  <strong id="metric-total">-</strong>
-                </div>
-                <div class="portal-metric">
-                  <span>Live for buyers</span>
-                  <strong id="metric-active">-</strong>
-                </div>
-                <div class="portal-metric">
-                  <span>Paused</span>
-                  <strong id="metric-paused">-</strong>
-                </div>
-              </div>
-              <div class="portal-new-listing" id="new-listing-panel" hidden>
-                <form id="new-listing-form" class="portal-form portal-listing-wizard" novalidate>
-                  <div class="portal-wizard-head">
-                    <div>
-                      <p class="section-kicker">New listing</p>
-                      <h3 id="listing-step-title">Photos</h3>
-                    </div>
-                    <span class="portal-step-count" id="listing-step-count">Step 1 of 6</span>
-                  </div>
-                  <div class="portal-step-track" aria-label="Listing progress">
-                    <button class="portal-step-dot is-active" type="button" data-step-jump="0">Photos</button>
-                    <button class="portal-step-dot" type="button" data-step-jump="1">Address</button>
-                    <button class="portal-step-dot" type="button" data-step-jump="2">Details</button>
-                    <button class="portal-step-dot" type="button" data-step-jump="3">Price</button>
-                    <button class="portal-step-dot" type="button" data-step-jump="4">Documents</button>
-                    <button class="portal-step-dot" type="button" data-step-jump="5">Description</button>
-                  </div>
-
-                  <fieldset class="portal-listing-step is-active" data-listing-step="0">
-                    <legend>Add photos</legend>
-                    <label class="portal-dropzone" id="listing-photo-dropzone">
-                      <input
-                        id="listing-photo-input"
-                        type="file"
-                        accept="image/png,image/jpeg,image/webp,image/heic,image/heif"
-                        multiple
-                      />
-                      <strong>Drag photos here, or tap to choose</strong>
-                      <span>Add 1 to 20 photos. The first photo becomes the cover. You can remove any before you publish.</span>
-                    </label>
-                    <div class="portal-photo-grid" id="listing-photo-preview" aria-live="polite"></div>
-                    <p class="field-error" data-error-for="imageUrls"></p>
-                  </fieldset>
-
-                  <fieldset class="portal-listing-step" data-listing-step="1" hidden>
-                    <legend>Property address</legend>
-                    <label class="field portal-address-field">
-                      Street address
-                      <input
-                        name="address"
-                        autocomplete="street-address"
-                        placeholder="123 Example Road, Auckland"
-                        required
-                      />
-                      <span class="field-help">Start typing, then pick your address from the list.</span>
-                    </label>
-                    <div class="portal-address-results" id="listing-address-results" hidden></div>
-                    <div class="portal-address-confirmation" id="listing-address-confirmation" hidden></div>
-                    <input name="addressStreet" type="hidden" />
-                    <input name="addressSuburb" type="hidden" />
-                    <input name="addressCity" type="hidden" />
-                    <input name="addressPostcode" type="hidden" />
-                    <input name="lat" type="hidden" />
-                    <input name="lng" type="hidden" />
-                    <input name="googlePlaceId" type="hidden" />
-                    <input name="addressSelectedPlaceId" type="hidden" />
-                    <p class="field-error" data-error-for="address"></p>
-                  </fieldset>
-
-                  <fieldset class="portal-listing-step" data-listing-step="2" hidden>
-                    <legend>Property details</legend>
-                    <div class="field">
-                      Property type
-                      <div class="portal-tag-grid" role="group" aria-label="Property type">
-                        <label><input type="radio" name="propertyTag" value="house|Residential House" /> House</label>
-                        <label><input type="radio" name="propertyTag" value="rural|Lifestyle Block" /> Lifestyle block</label>
-                        <label><input type="radio" name="propertyTag" value="apartment|Apartment" /> Apartment</label>
-                        <label><input type="radio" name="propertyTag" value="unit|Unit" /> Unit</label>
-                        <label><input type="radio" name="propertyTag" value="townhouse|Terrace housing" /> Townhouse</label>
-                        <label><input type="radio" name="propertyTag" value="commercial|Commercial" /> Commercial</label>
-                      </div>
-                      <p class="field-error" data-error-for="propertyTag"></p>
-                    </div>
-                    <div class="portal-field-grid">
-                      <label class="field">Bedrooms <input name="bedrooms" type="number" min="0" step="1" required /></label>
-                      <label class="field">Bathrooms <input name="bathrooms" type="number" min="0" step="1" required /></label>
-                      <label class="field">Toilets <input name="toilets" type="number" min="0" step="1" required /></label>
-                      <label class="field">Garages <input name="garages" type="number" min="0" step="1" required /></label>
-                      <label class="field">Floor area (m²) <input name="floorAreaSqm" type="number" min="1" step="1" required /></label>
-                      <label class="field">Land area (m²) <input name="landAreaSqm" type="number" min="1" step="1" required /></label>
-                    </div>
-                    <label class="field">
-                      Title type
-                      <select name="titleStatus" required>
-                        <option value="">Choose a title type</option>
-                        <option value="freehold">Freehold</option>
-                        <option value="crosslease">Cross lease</option>
-                        <option value="unit_title">Unit title</option>
-                        <option value="leasehold">Leasehold</option>
-                        <option value="other">Other</option>
-                      </select>
-                    </label>
-                    <p class="field-error" data-error-for="details"></p>
-                  </fieldset>
-
-                  <fieldset class="portal-listing-step" data-listing-step="3" hidden>
-                    <legend>Price &amp; sale</legend>
-                    <label class="field">
-                      Method of sale
-                      <select name="methodOfSale" required>
-                        <option value="">Choose a method</option>
-                        <option value="auction">Auction</option>
-                        <option value="tender">Tender</option>
-                        <option value="asking_price">Asking price</option>
-                        <option value="deadline_sale">Deadline sale</option>
-                        <option value="price_by_negotiation">Price by negotiation</option>
-                      </select>
-                    </label>
-                    <div class="portal-field-grid">
-                      <label class="field">
-                        Private search price (from)
-                        <input name="backendSearchPriceMin" type="number" min="1" step="1000" required />
-                        <span class="field-help">Used only to match buyer searches. Buyers never see this.</span>
-                      </label>
-                      <label class="field">
-                        Private search price (to)
-                        <input name="backendSearchPriceMax" type="number" min="1" step="1000" required />
-                        <span class="field-help">For a set price, enter the same amount in both fields.</span>
-                      </label>
-                    </div>
-                    <div class="portal-field-grid">
-                      <label class="field">
-                        Buyer price guide (from)
-                        <input name="buyerPriceRangeMin" type="number" min="1" step="1000" />
-                      </label>
-                      <label class="field">
-                        Buyer price guide (to)
-                        <input name="buyerPriceRangeMax" type="number" min="1" step="1000" />
-                      </label>
-                    </div>
-                    <label class="portal-checkbox">
-                      <input name="buyerPriceRangeConfirmed" type="checkbox" />
-                      <span>If I quote this range to buyers, the lowest figure is an amount the vendor would seriously consider accepting.</span>
-                    </label>
-                    <p class="portal-friendly-note portal-friendly-note--soft">
-                      The buyer price guide is optional. Leave it blank if you're not quoting a range yet.
-                    </p>
-                    <p class="field-error" data-error-for="pricing"></p>
-                  </fieldset>
-
-                  <fieldset class="portal-listing-step" data-listing-step="4" hidden>
-                    <legend>Documents</legend>
-                    <div class="portal-document-grid">
-                      <label class="field">
-                        Record of title (PDF)
-                        <input name="titleDocument" type="file" accept="application/pdf" data-document-category="title" />
-                      </label>
-                      <label class="field">
-                        LIM report (PDF)
-                        <input name="limDocument" type="file" accept="application/pdf" data-document-category="lim" />
-                      </label>
-                      <label class="field">
-                        Other documents
-                        <input
-                          name="otherDocuments"
-                          type="file"
-                          accept="application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/png,image/jpeg,image/webp,image/heic,image/heif"
-                          data-document-category="other"
-                          multiple
-                        />
-                      </label>
-                    </div>
-                    <div class="portal-document-list" id="listing-document-list" aria-live="polite"></div>
-                    <p class="field-help">Documents are optional — add them now or later. Title and LIM must be PDFs; other files can be PDF, Word, or images.</p>
-                    <p class="field-error" data-error-for="documents"></p>
-                  </fieldset>
-
-                  <fieldset class="portal-listing-step" data-listing-step="5" hidden>
-                    <legend>Description</legend>
-                    <div class="field">
-                      <span class="field-label">Headline</span>
-                      <div class="md-toolbar" data-md-target="listingTitle">
-                        <button type="button" class="md-btn" data-md="emoji" title="Insert emoji">😊</button>
-                      </div>
-                      <input name="listingTitle" maxlength="180" placeholder="Sunny family home near the village ☀️" required />
-                    </div>
-                    <div class="field">
-                      <span class="field-label">Description</span>
-                      <div class="md-toolbar" data-md-target="description">
-                        <button type="button" class="md-btn" data-md="bold" title="Bold"><strong>B</strong></button>
-                        <button type="button" class="md-btn" data-md="italic" title="Italic"><em>I</em></button>
-                        <button type="button" class="md-btn" data-md="heading" title="Heading">H</button>
-                        <button type="button" class="md-btn" data-md="bullet" title="Bullet list">• List</button>
-                        <button type="button" class="md-btn" data-md="emoji" title="Insert emoji">😊</button>
-                        <button type="button" class="md-btn md-btn--toggle" data-md="preview" title="Toggle preview">👁 Preview</button>
-                      </div>
-                      <textarea
-                        name="description"
-                        rows="7"
-                        placeholder="Describe the key selling points, standout features, and location highlights.&#10;&#10;Tip: use **bold**, a heading, or a • bullet list to make it pop."
-                        required
-                      ></textarea>
-                      <div class="md-preview" data-md-preview="description" hidden></div>
-                    </div>
-                    <p class="portal-friendly-note">
-                      We'll automatically add nearby schools, public transport, and other local highlights for you.
-                    </p>
-                    <p class="field-error" data-error-for="copy"></p>
-                  </fieldset>
-
-                  <div class="portal-form-row portal-wizard-actions">
-                    <button class="button button-quiet" type="button" id="cancel-new-listing-button">Cancel</button>
-                    <div class="portal-wizard-nav">
-                      <button class="button button-quiet" type="button" id="listing-prev-button" hidden>Back</button>
-                      <button class="button button-primary" type="button" id="listing-next-button">Next</button>
-                      <button class="button button-primary" type="submit" id="listing-create-button" hidden>Publish listing</button>
-                    </div>
-                  </div>
-                </form>
-              </div>
-              <div class="portal-listings-list" id="listings-list" aria-live="polite"></div>
-              <p class="form-status" id="dashboard-status" aria-live="polite"></p>
-            </div>
-          </section>
-
-          <section class="portal-dashboard-panel" data-dashboard-panel="profile" role="tabpanel" hidden>
-            <div class="portal-card">
-              <div class="portal-panel-header">
-                <p class="section-kicker">Profile</p>
                 <h2>Your details</h2>
                 <p>Keep your details up to date. They appear on your profile and in the Project Alpha app.</p>
               </div>
