@@ -68,13 +68,35 @@ const createShareSchema = z.discriminatedUnion("kind", [candidatePayloadSchema, 
 
 type ShareKind = "candidate" | "listing" | "report";
 
-function baseUrl(): string {
+function explicitShareBaseUrl(): string | null {
+  const url = (process.env.PUBLIC_SHARE_URL ?? process.env.SHARE_BASE_URL ?? "").trim().replace(/\/+$/, "");
+  return /^https?:\/\//i.test(url) ? url : null;
+}
+
+function requestOrigin(req: Request | null | undefined): string | null {
+  if (!req) return null;
+  const forwardedHost = cleanText(req.headers["x-forwarded-host"], "");
+  const host = forwardedHost || cleanText(req.headers.host, "");
+  if (!host) return null;
+  const forwardedProto = cleanText(req.headers["x-forwarded-proto"], "");
+  const proto = forwardedProto.split(",")[0]?.trim() || req.protocol || "https";
+  const origin = `${proto}://${host}`.replace(/\/+$/, "");
+  return /^https?:\/\//i.test(origin) ? origin : null;
+}
+
+function baseUrl(req?: Request | null): string {
+  const explicit = explicitShareBaseUrl();
+  if (explicit) return explicit;
+
+  const requestUrl = requestOrigin(req);
+  if (requestUrl) return requestUrl;
+
   const url = getPublicAppUrl().replace(/\/+$/, "");
   return /^https?:\/\//i.test(url) ? url : "https://projectalpha.app";
 }
 
-function shareUrl(token: string): string {
-  return `${baseUrl()}/share/${encodeURIComponent(token)}`;
+function shareUrl(token: string, req?: Request | null): string {
+  return `${baseUrl(req)}/share/${encodeURIComponent(token)}`;
 }
 
 function randomToken(): string {
@@ -232,7 +254,7 @@ async function getPublicShare(token: string) {
 
 type PublicShareRow = NonNullable<Awaited<ReturnType<typeof getPublicShare>>>;
 
-function publicPreview(row: PublicShareRow | null) {
+function publicPreview(row: PublicShareRow | null, req?: Request | null) {
   if (!row) return null;
   return {
     token: row.token,
@@ -241,7 +263,7 @@ function publicPreview(row: PublicShareRow | null) {
     title: row.previewTitle,
     description: row.previewDescription,
     imageUrl: row.previewImageUrl,
-    url: shareUrl(row.token),
+    url: shareUrl(row.token, req),
     facts: propertyFacts(row.payloadJson),
   };
 }
@@ -303,12 +325,12 @@ function propertyFacts(payload: unknown): Fact[] {
   return facts;
 }
 
-function sharePreviewHtml(preview: ReturnType<typeof publicPreview>): string {
+function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?: Request | null): string {
   const found = !!preview;
   const title = preview?.title ?? "Project Alpha property share";
   const description = preview?.description ?? "This Project Alpha share link could not be found or has expired.";
-  const url = preview?.url ?? `${baseUrl()}/`;
-  const image = preview?.imageUrl ?? `${baseUrl()}/favicon.png`;
+  const url = preview?.url ?? `${baseUrl(req)}/`;
+  const image = preview?.imageUrl ?? `${baseUrl(req)}/favicon.png`;
   const safeTitle = htmlEscape(title);
   const safeDescription = htmlEscape(description);
   const safeImage = htmlEscape(image);
@@ -469,7 +491,7 @@ router.post("/shares", requireAuth, async (req, res) => {
           })
           .returning();
 
-    res.json({ token: row.token, url: shareUrl(row.token), preview: publicPreview(row) });
+    res.json({ token: row.token, url: shareUrl(row.token, req), preview: publicPreview(row, req) });
   } catch (error) {
     req.log.error({ err: error }, "Failed to create property share");
     res.status(500).json({ error: "Could not create share link", code: "SHARE_CREATE_FAILED" });
@@ -497,7 +519,7 @@ router.get("/shares/:token", requireAuth, async (req, res) => {
       token: row.token,
       kind: row.kind,
       address: row.address,
-      preview: publicPreview(row),
+      preview: publicPreview(row, req),
       payload: row.payloadJson,
     });
   } catch (error) {
@@ -509,7 +531,7 @@ router.get("/shares/:token", requireAuth, async (req, res) => {
 router.get("/share/:token/preview", async (req, res) => {
   const token = cleanText(req.params.token);
   const row = token ? await getPublicShare(token).catch(() => null) : null;
-  const preview = publicPreview(row);
+  const preview = publicPreview(row, req);
   if (!preview) {
     res.status(404).json({ error: "Share not found", code: "SHARE_NOT_FOUND" });
     return;
@@ -520,8 +542,8 @@ router.get("/share/:token/preview", async (req, res) => {
 async function sendSharePage(req: Request, res: Response) {
   const token = cleanText(req.params.token);
   const row = token ? await getPublicShare(token).catch(() => null) : null;
-  const preview = publicPreview(row);
-  res.status(preview ? 200 : 404).type("html").send(sharePreviewHtml(preview));
+  const preview = publicPreview(row, req);
+  res.status(preview ? 200 : 404).type("html").send(sharePreviewHtml(preview, req));
 }
 
 router.get("/share/:token", sendSharePage);

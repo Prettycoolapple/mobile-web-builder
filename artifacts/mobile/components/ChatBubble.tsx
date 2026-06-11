@@ -121,7 +121,8 @@ function SafeMarkdown({
 interface Props {
   message: ChatMessage;
   onFollowUp: (question: string) => void;
-  onAnalyse: (address: string, photoUrl?: string | null, listingUrl?: string | null, selectedListingContext?: SelectedListingContext | null) => void;
+  onAnalyse: (address: string, photoUrl?: string | null, listingUrl?: string | null, selectedListingContext?: SelectedListingContext | null, analysisKey?: string) => void;
+  analysingPropertyKey?: string | null;
   onRetry?: (text: string) => void;
   onConnect?: (providerId: string) => Promise<void>;
   onDismiss?: (messageId: string) => void;
@@ -159,6 +160,17 @@ function genericDescription(candidate: PropertyCandidate): string {
     || "Curated from live NZ marketplace listings. Analyse this property in Project Alpha for feasibility context.";
 }
 
+function genericTeaser(candidate: PropertyCandidate): string | null {
+  const text = candidate.briefSummary?.trim();
+  if (!text) return null;
+  const normalized = text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const address = candidate.address.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const title = (candidate.listingTitle ?? firstAddressLine(candidate.address)).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  if (normalized === title || normalized === address || address.includes(normalized)) return null;
+  if (/^(house|section|apartment|unit|townhouse|property)\s+for\s+(sale|rent)\s+at\b/i.test(text)) return null;
+  return text;
+}
+
 function browseListingFromCandidate(candidate: PropertyCandidate): BrowseListing {
   const imageUrls = candidate.photoUrls?.length
     ? candidate.photoUrls
@@ -184,6 +196,7 @@ function browseListingFromCandidate(candidate: PropertyCandidate): BrowseListing
     priceNzd,
     priceDisplay: candidate.priceDisplay ?? (priceNzd ? `$${priceNzd.toLocaleString("en-NZ")}` : "Price on application"),
     description: genericDescription(candidate),
+    teaser: genericTeaser(candidate),
     imageUrls,
     features: candidate.features ?? [],
     // Only set agent when we have real data; null hides the row on the card
@@ -266,7 +279,7 @@ function TypingDots() {
   );
 }
 
-export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect, onDismiss, onAgentDismiss, onUpgrade, onShowMore }: Props) {
+export function ChatBubble({ message, onFollowUp, onAnalyse, analysingPropertyKey, onRetry, onConnect, onDismiss, onAgentDismiss, onUpgrade, onShowMore }: Props) {
   const colors = useColors();
   const { t } = useT();
   const router = useRouter();
@@ -289,9 +302,10 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
   }
 
   const isInteractiveClarification =
-    (message.type === "subdivision_clarification" || message.type === "address_clarification") && message.clarification;
+    (message.type === "subdivision_clarification" || message.type === "address_clarification" || message.type === "discovery_exhausted_choice") && message.clarification;
   if (isInteractiveClarification && message.clarification) {
     const { question, options } = message.clarification;
+    const isDiscoveryChoice = message.type === "discovery_exhausted_choice";
     return (
       <View style={styles.aiRow}>
         <AiAvatar />
@@ -303,7 +317,7 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
             {options.map((opt, i) => (
               <TouchableOpacity
                 key={i}
-                onPress={() => onAnalyse(opt)}
+                onPress={() => isDiscoveryChoice ? onFollowUp(opt) : onAnalyse(opt)}
                 style={{
                   backgroundColor: colors.accent + "12",
                   borderColor: colors.accent + "55",
@@ -316,7 +330,7 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
                   gap: 8,
                 }}
               >
-                <Feather name="map-pin" size={13} color={colors.accent} />
+                <Feather name={isDiscoveryChoice ? "search" : "map-pin"} size={13} color={colors.accent} />
                 <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_500Medium", fontSize: 13, flex: 1 }} numberOfLines={2}>
                   {opt}
                 </Text>
@@ -443,7 +457,7 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, onRetry, onConnect,
             );
           }
           return (
-            <PropertyCard key={i} candidate={candidate} onAnalyse={onAnalyse} showSubdivisionDisclaimer={results.length === 1} />
+            <PropertyCard key={i} candidate={candidate} onAnalyse={onAnalyse} analysingPropertyKey={analysingPropertyKey} showSubdivisionDisclaimer={results.length === 1} />
           );
         })}
         {results.length > 0 ? (

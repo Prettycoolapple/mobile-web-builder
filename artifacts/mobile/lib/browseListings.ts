@@ -21,6 +21,7 @@ export type BrowseListing = {
   priceNzd?: number | null;
   priceDisplay?: string | null;
   description?: string | null;
+  teaser?: string | null;
   imageUrls: string[];
   features: string[];
   createdAt?: string | null;

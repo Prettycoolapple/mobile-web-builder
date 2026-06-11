@@ -566,9 +566,16 @@ export async function translateChatContent(
   if (mode === "clarification") {
     if (trimmed.startsWith("{")) {
       try {
-        const parsed = JSON.parse(trimmed) as { question?: unknown; [k: string]: unknown };
+        const parsed = JSON.parse(trimmed) as { clarificationType?: unknown; question?: unknown; options?: unknown; [k: string]: unknown };
         if (typeof parsed.question === "string") {
           parsed.question = await ensureChinese(parsed.question);
+        }
+        if (parsed.clarificationType === "discovery_exhausted" && Array.isArray(parsed.options)) {
+          parsed.options = await Promise.all(
+            parsed.options.map((option) =>
+              typeof option === "string" ? ensureChinese(option) : option,
+            ),
+          );
         }
         return JSON.stringify(parsed);
       } catch {

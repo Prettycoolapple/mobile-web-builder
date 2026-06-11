@@ -10,6 +10,7 @@ import { fetchRealestateListingDetailsByUrl } from "../lib/scrapers/realestate-a
 import type { ListingResult } from "../lib/scrapers/oneroof";
 import { ai } from "@workspace/integrations-gemini-ai";
 import { logger } from "../lib/logger";
+import { buildListingTeaser } from "../lib/listing-teaser";
 
 const router = Router();
 const BROWSE_MODE_ENABLED = false;
@@ -84,6 +85,7 @@ type BrowseListing = {
   priceNzd?: number | null;
   priceDisplay?: string | null;
   description?: string | null;
+  teaser?: string | null;
   imageUrls: string[];
   features: string[];
   createdAt?: Date | string | null;
@@ -156,6 +158,18 @@ function publicListingFromInternal(row: {
     priceNzd: row.priceNzd,
     priceDisplay: row.priceDisplay,
     description: row.description,
+    teaser: buildListingTeaser(row.description, {
+      address: row.address,
+      listingTitle: row.listingTitle,
+      propertyType: row.propertyType,
+      bedrooms: row.bedrooms,
+      bathrooms: row.bathrooms,
+      toilets: row.toilets,
+      garages: row.garages,
+      landAreaSqm: row.landAreaSqm,
+      floorAreaSqm: row.floorAreaSqm,
+      priceDisplay: row.priceDisplay,
+    }),
     imageUrls: row.imageUrls,
     features: row.features,
     createdAt: row.createdAt,
@@ -171,14 +185,16 @@ function publicListingFromInternal(row: {
 }
 
 function publicListingFromCurated(listing: ListingResult): BrowseListing {
+  const listingTitle = listing.listingTitle ?? listing.address.split(",")[0]?.trim() ?? listing.address;
+  const propertyType = sanitisePropertyType(listing.propertyType ?? listing.listingCategory) ?? "house";
   return {
     id: `curated_${Buffer.from(listing.listingUrl).toString("base64url").slice(0, 140)}`,
     source: "curated",
     externalUrl: listing.listingUrl,
-    listingTitle: listing.address.split(",")[0]?.trim() || listing.address,
+    listingTitle,
     address: listing.address,
     listingType: "for_sale",
-    propertyType: sanitisePropertyType(listing.propertyType ?? listing.listingCategory) ?? "house",
+    propertyType,
     bedrooms: listing.bedrooms,
     bathrooms: listing.bathrooms,
     garages: null,
@@ -186,7 +202,17 @@ function publicListingFromCurated(listing: ListingResult): BrowseListing {
     floorAreaSqm: listing.floorArea ?? null,
     priceNzd: listing.price,
     priceDisplay: listing.priceText,
-    description: buildFactualDescription(listing),
+    description: listing.description ?? buildFactualDescription(listing),
+    teaser: buildListingTeaser(listing.description, {
+      address: listing.address,
+      listingTitle,
+      propertyType,
+      bedrooms: listing.bedrooms,
+      bathrooms: listing.bathrooms,
+      landAreaSqm: listing.landArea,
+      floorAreaSqm: listing.floorArea,
+      priceDisplay: listing.priceText,
+    }),
     imageUrls: listing.photoUrls?.length ? listing.photoUrls : listing.photoUrl ? [listing.photoUrl] : [],
     features: [],
     // No agent data available for real-time curated results — pass null so
@@ -215,6 +241,17 @@ function publicListingFromCache(row: typeof browseListingCache.$inferSelect): Br
     priceNzd: row.priceNzd,
     priceDisplay: row.priceDisplay,
     description: row.description,
+    teaser: buildListingTeaser(row.description, {
+      address: row.address,
+      listingTitle: row.listingTitle,
+      propertyType: row.propertyType,
+      bedrooms: row.bedrooms,
+      bathrooms: row.bathrooms,
+      garages: row.garages,
+      landAreaSqm: row.landAreaSqm,
+      floorAreaSqm: row.floorAreaSqm,
+      priceDisplay: row.priceDisplay,
+    }),
     imageUrls: row.imageUrls,
     features: row.features,
     createdAt: row.firstSeenAt,
@@ -317,7 +354,7 @@ async function upsertCuratedBrowseListings(listingsToCache: ListingResult[]): Pr
     priceNzd: listing.price,
     priceDisplay: listing.priceText,
     listingTitle: listing.address.split(",")[0]?.trim() || listing.address,
-    description: buildFactualDescription(listing),
+    description: listing.description ?? buildFactualDescription(listing),
     imageUrls: listing.photoUrls?.length ? listing.photoUrls : listing.photoUrl ? [listing.photoUrl] : [],
     features: [],
     agent: { fullName: "Listing agent", agencyName: "External marketplace" },

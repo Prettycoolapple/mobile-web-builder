@@ -12,6 +12,12 @@ export interface ShownListingInput {
   suburb?: string | null;
 }
 
+export interface RecentShownListing {
+  addressKey: string;
+  listingUrl: string | null;
+  suburb: string | null;
+}
+
 /**
  * Fetch the address keys + listing URLs this user has already been shown within
  * the rolling window. Used to seed the discovery dedup set so a brand-new
@@ -19,13 +25,14 @@ export interface ShownListingInput {
  */
 export async function getRecentShownForUser(
   userId: string,
-): Promise<{ addressKeys: string[]; urls: string[] }> {
+): Promise<{ addressKeys: string[]; urls: string[]; entries: RecentShownListing[] }> {
   const cutoff = new Date(Date.now() - SHOWN_WINDOW_DAYS * 24 * 60 * 60 * 1000);
   const rows = await withDbRetry(() =>
     db
       .select({
         addressKey: discoveryShownListings.addressKey,
         listingUrl: discoveryShownListings.listingUrl,
+        suburb: discoveryShownListings.suburb,
       })
       .from(discoveryShownListings)
       .where(
@@ -39,11 +46,32 @@ export async function getRecentShownForUser(
 
   const addressKeys: string[] = [];
   const urls: string[] = [];
+  const entries: RecentShownListing[] = [];
   for (const r of rows) {
     if (r.addressKey) addressKeys.push(r.addressKey);
     if (r.listingUrl) urls.push(r.listingUrl);
+    entries.push({
+      addressKey: r.addressKey,
+      listingUrl: r.listingUrl,
+      suburb: r.suburb,
+    });
   }
-  return { addressKeys, urls };
+  return { addressKeys, urls, entries };
+}
+
+export async function clearRecentShownForUserSuburb(userId: string, suburb: string): Promise<void> {
+  const normalized = suburb.toLowerCase().trim();
+  if (!normalized) return;
+  await withDbRetry(() =>
+    db
+      .delete(discoveryShownListings)
+      .where(
+        and(
+          eq(discoveryShownListings.userId, userId),
+          sql`lower(coalesce(${discoveryShownListings.suburb}, '')) = ${normalized}`,
+        ),
+      ),
+  );
 }
 
 /**

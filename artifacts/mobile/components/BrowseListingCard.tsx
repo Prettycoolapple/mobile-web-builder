@@ -51,7 +51,7 @@ export function BrowseListingCard({ listing, onPress, onShare }: { listing: Brow
   const agentName = listing.agent?.fullName ?? t("lcard.agent_fallback");
   const agency = listing.agent?.agencyName ?? (listing.source === "internal" ? t("lcard.agency_internal") : t("lcard.agency_curated"));
   const agentAvatar = resolveListingImageUrl(listing.agent?.avatarUrl);
-  const teaserText = descriptionTeaser(listing.description);
+  const teaserText = listing.teaser?.trim() || descriptionTeaser(listing.description);
   const description = useMaybeTranslated(teaserText);
 
   return (

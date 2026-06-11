@@ -16,6 +16,7 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Modal,
+  type GestureResponderEvent,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
@@ -41,6 +42,8 @@ import { consumePendingShareToken, openShareToken } from "@/lib/propertyShares";
 import { BrowseListing, BrowseListingFilters, fetchBrowseListings } from "@/lib/browseListings";
 
 setBaseUrl(getApiOrigin() || null);
+
+const RECORDING_CANCEL_SWIPE_UP_PX = 56;
 
 /** Prefer top-level report address, then property overview (some API payloads only set the latter). */
 function resolveReportAddress(report: FeasibilityReport | null | undefined): string {
@@ -340,8 +343,14 @@ export default function SearchScreen() {
   const [messageLimitReached, setMessageLimitReached] = useState(false);
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
+  const [recordingCancelArmed, setRecordingCancelArmed] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
+  const recordingRef = useRef<Audio.Recording | null>(null);
+  const recordingStartYRef = useRef<number | null>(null);
+  const recordingCancelArmedRef = useRef(false);
+  const recordingStartInFlightRef = useRef(false);
+  const recordingPressActiveRef = useRef(false);
   const shownRecommendationReportIds = useRef<Set<string>>(new Set());
   const lastCheckedFollowUpCount = useRef<Map<string, number>>(new Map());
   const providerRecommendationKeysRef = useRef<Set<string>>(new Set());
@@ -1345,6 +1354,14 @@ export default function SearchScreen() {
             }, sessionId);
             return;
           }
+          if (data.type === "clarification" && data.clarificationType === "discovery_exhausted" && Array.isArray(data.options)) {
+            updateLastMessage({
+              type: "discovery_exhausted_choice",
+              content: "",
+              clarification: { question: data.question || t("search.no_listings_msg"), options: data.options },
+            }, sessionId);
+            return;
+          }
           if (data.reportGroup && isFeasibilityReportGroup(data.reportGroup)) {
             const groupWithHistory = withGroupHistoryMetadata(data.reportGroup, data.searchId, data.historyCreatedAt);
             setCurrentReportGroup(groupWithHistory);
@@ -1520,6 +1537,17 @@ export default function SearchScreen() {
                   content: "",
                   clarification: {
                     question: parsed.question || t("search.confirm_address_intro"),
+                    options: parsed.options,
+                  },
+                }, sessionId);
+                return;
+              }
+              if (parsed.clarificationType === "discovery_exhausted" && Array.isArray(parsed.options)) {
+                updateLastMessage({
+                  type: "discovery_exhausted_choice",
+                  content: "",
+                  clarification: {
+                    question: parsed.question || t("search.no_listings_msg"),
                     options: parsed.options,
                   },
                 }, sessionId);
@@ -1880,6 +1908,14 @@ export default function SearchScreen() {
               }, sessionId);
               return;
             }
+            if (data.type === "clarification" && data.clarificationType === "discovery_exhausted" && Array.isArray(data.options)) {
+              updateLastMessage({
+                type: "discovery_exhausted_choice",
+                content: "",
+                clarification: { question: data.question || t("search.no_listings_msg"), options: data.options },
+              }, sessionId);
+              return;
+            }
 
             if (data.reportGroup && isFeasibilityReportGroup(data.reportGroup)) {
               const groupWithHistory = withGroupHistoryMetadata(data.reportGroup, data.searchId, data.historyCreatedAt);
@@ -2119,11 +2155,42 @@ export default function SearchScreen() {
   const tabBarOffset = Platform.OS === "web" ? TAB_BAR_HEIGHT : TAB_BAR_HEIGHT + insets.bottom;
   const canSend = inputText.trim().length > 0 && !isLoading && !messageLimitReached;
 
-  const startRecording = useCallback(async () => {
+  const armRecordingCancel = useCallback((armed: boolean) => {
+    if (recordingCancelArmedRef.current === armed) return;
+    recordingCancelArmedRef.current = armed;
+    setRecordingCancelArmed(armed);
+    if (armed) {
+      void Haptics.selectionAsync();
+    }
+  }, []);
+
+  const handleRecordingPressMove = useCallback((event: GestureResponderEvent) => {
+    if (!isRecording && !recordingRef.current) return;
+    const startY = recordingStartYRef.current;
+    if (startY == null) return;
+    const currentY = event.nativeEvent.pageY;
+    armRecordingCancel(startY - currentY >= RECORDING_CANCEL_SWIPE_UP_PX);
+  }, [armRecordingCancel, isRecording]);
+
+  const startRecording = useCallback(async (event?: GestureResponderEvent) => {
     try {
-      if (messageLimitReached) return;
+      if (messageLimitReached || recordingRef.current || recordingStartInFlightRef.current) return;
+      recordingStartInFlightRef.current = true;
+      recordingPressActiveRef.current = true;
+      recordingStartYRef.current = event?.nativeEvent.pageY ?? null;
+      recordingCancelArmedRef.current = false;
+      setRecordingCancelArmed(false);
       const permission = await Audio.requestPermissionsAsync();
-      if (permission.status !== "granted") return;
+      if (permission.status !== "granted") {
+        recordingStartInFlightRef.current = false;
+        recordingPressActiveRef.current = false;
+        return;
+      }
+
+      if (!recordingPressActiveRef.current) {
+        recordingStartInFlightRef.current = false;
+        return;
+      }
 
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
@@ -2133,21 +2200,70 @@ export default function SearchScreen() {
       const { recording: newRecording } = await Audio.Recording.createAsync(
         Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
+      if (!recordingPressActiveRef.current) {
+        await newRecording.stopAndUnloadAsync().catch(() => {});
+        recordingStartInFlightRef.current = false;
+        return;
+      }
+      recordingRef.current = newRecording;
       setRecording(newRecording);
       setIsRecording(true);
+      recordingStartInFlightRef.current = false;
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     } catch (err) {
       console.log("Failed to start recording", err);
+      recordingRef.current = null;
+      recordingStartInFlightRef.current = false;
+      recordingPressActiveRef.current = false;
+      recordingStartYRef.current = null;
+      recordingCancelArmedRef.current = false;
+      setRecording(null);
+      setIsRecording(false);
+      setRecordingCancelArmed(false);
     }
   }, [messageLimitReached]);
 
+  const cancelRecording = useCallback(async () => {
+    const activeRecording = recordingRef.current ?? recording;
+    recordingRef.current = null;
+    recordingStartYRef.current = null;
+    recordingCancelArmedRef.current = false;
+    recordingStartInFlightRef.current = false;
+    recordingPressActiveRef.current = false;
+    setRecordingCancelArmed(false);
+    setRecording(null);
+    setIsRecording(false);
+    if (!activeRecording) return;
+    try {
+      await activeRecording.stopAndUnloadAsync();
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch (err) {
+      console.log("Failed to cancel recording", err);
+    }
+  }, [recording]);
+
   const stopRecording = useCallback(async () => {
-    if (!recording) return;
+    if (recordingCancelArmedRef.current) {
+      await cancelRecording();
+      return;
+    }
+    recordingPressActiveRef.current = false;
+    const activeRecording = recordingRef.current ?? recording;
+    if (!activeRecording) {
+      recordingStartInFlightRef.current = false;
+      return;
+    }
     try {
       setIsRecording(false);
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
+      await activeRecording.stopAndUnloadAsync();
+      const uri = activeRecording.getURI();
+      recordingRef.current = null;
+      recordingStartYRef.current = null;
+      recordingCancelArmedRef.current = false;
+      recordingStartInFlightRef.current = false;
+      recordingPressActiveRef.current = false;
       setRecording(null);
+      setRecordingCancelArmed(false);
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
       if (uri) {
@@ -2181,11 +2297,38 @@ export default function SearchScreen() {
       }
     } catch (err) {
       console.log("Failed to stop recording", err);
+      recordingRef.current = null;
+      recordingStartYRef.current = null;
+      recordingCancelArmedRef.current = false;
+      recordingStartInFlightRef.current = false;
+      recordingPressActiveRef.current = false;
       setRecording(null);
       setIsRecording(false);
+      setRecordingCancelArmed(false);
       setIsLoading(false);
     }
-  }, [recording, getApiHeaders, handleSend, setIsLoading]);
+  }, [cancelRecording, recording, getApiHeaders, handleSend, setIsLoading]);
+
+  const renderMicButton = useCallback(() => (
+    <View
+      style={[
+        styles.micBtn,
+        {
+          backgroundColor: isRecording ? (recordingCancelArmed ? "#991b1b" : "#ef4444") : "transparent",
+          opacity: isRecording ? 1 : 0.85,
+        },
+      ]}
+      onStartShouldSetResponder={() => true}
+      onResponderGrant={startRecording}
+      onResponderMove={handleRecordingPressMove}
+      onResponderRelease={stopRecording}
+      onResponderTerminate={cancelRecording}
+      accessibilityRole="button"
+      accessibilityLabel="Press and hold to speak"
+    >
+      <Feather name="mic" size={18} color={isRecording ? "#fff" : colors.mutedForeground} />
+    </View>
+  ), [cancelRecording, colors.mutedForeground, handleRecordingPressMove, isRecording, recordingCancelArmed, startRecording, stopRecording]);
 
   return (
     <KeyboardAvoidingView
@@ -2386,18 +2529,7 @@ export default function SearchScreen() {
                 >
                   <Feather name="arrow-up" size={17} color={canSend ? "#fff" : colors.mutedForeground} />
                 </TouchableOpacity>
-                {!inputText.trim() && (
-                  <TouchableOpacity
-                    style={[styles.micBtn, { backgroundColor: isRecording ? "#ef4444" : "transparent" }]}
-                    onPressIn={startRecording}
-                    onPressOut={stopRecording}
-                    activeOpacity={0.7}
-                    accessibilityRole="button"
-                    accessibilityLabel="Press and hold to speak"
-                  >
-                    <Feather name="mic" size={18} color={isRecording ? "#fff" : colors.mutedForeground} />
-                  </TouchableOpacity>
-                )}
+                {!inputText.trim() && renderMicButton()}
               </View>
 
               {/* Suggestion chips — each chip must not shrink so text stays readable */}
@@ -2530,21 +2662,20 @@ export default function SearchScreen() {
               >
                 <Feather name="arrow-up" size={17} color={canSend ? "#fff" : colors.mutedForeground} />
               </TouchableOpacity>
-              {!inputText.trim() && !messageLimitReached && (
-                <TouchableOpacity
-                  style={[styles.micBtn, { backgroundColor: isRecording ? "#ef4444" : "transparent" }]}
-                  onPressIn={startRecording}
-                  onPressOut={stopRecording}
-                  activeOpacity={0.7}
-                  accessibilityRole="button"
-                  accessibilityLabel="Press and hold to speak"
-                >
-                  <Feather name="mic" size={18} color={isRecording ? "#fff" : colors.mutedForeground} />
-                </TouchableOpacity>
-              )}
+              {!inputText.trim() && !messageLimitReached && renderMicButton()}
             </View>
           </View>
         </>
+      )}
+
+      {isRecording && (
+        <View style={styles.recordingOverlay} pointerEvents="none">
+          <View style={styles.recordingOverlayCenter}>
+            <Text style={styles.recordingOverlayText}>
+              {recordingCancelArmed ? t("search.voice_stop") : t("search.voice_listening")}
+            </Text>
+          </View>
+        </View>
       )}
 
       <PaywallModal
@@ -2771,6 +2902,29 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     marginLeft: 4,
+  },
+  recordingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(28,28,28,0.58)",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 80,
+    elevation: 80,
+  },
+  recordingOverlayCenter: {
+    minWidth: 188,
+    paddingHorizontal: 24,
+    paddingVertical: 18,
+    borderRadius: 18,
+    backgroundColor: "rgba(0,0,0,0.42)",
+    alignItems: "center",
+  },
+  recordingOverlayText: {
+    color: "#FFFFFF",
+    fontFamily: "DM_Sans_700Bold",
+    fontSize: 22,
+    lineHeight: 28,
+    textAlign: "center",
   },
   suggestionChip: {
     flexDirection: "row",

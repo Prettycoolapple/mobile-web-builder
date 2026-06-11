@@ -76,6 +76,8 @@ const en: Catalog = {
 
   // Search / chat input
   "search.placeholder": "Search…",
+  "search.voice_listening": "I'm listening...",
+  "search.voice_stop": "Stop",
   "search.suggestion_1": "What's on the market in Grey Lynn?",
   "search.suggestion_2": "What's subdividable in Glendowie?",
   "search.suggestion_3": "Analyse 44 Hakanoa Street, Grey Lynn",
@@ -1055,6 +1057,8 @@ const zh: Catalog = {
 
   // Search / chat input
   "search.placeholder": "请输入…",
+  "search.voice_listening": "我在听…",
+  "search.voice_stop": "停止",
   "search.suggestion_1": "Grey Lynn 现在有什么在售?",
   "search.suggestion_2": "Glendowie 有什么可以分割的?",
   "search.suggestion_3": "分析 44 Hakanoa Street, Grey Lynn",

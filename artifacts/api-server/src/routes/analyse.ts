@@ -68,6 +68,7 @@ import type { ListingResult } from "../lib/scrapers/oneroof";
 import { queueBackgroundScores, getCardScores } from "../lib/analysis-cache";
 import { normaliseLocale } from "../lib/prompts";
 import { terrainSlopeText, type TerrainContour } from "../lib/terrain-slope-copy";
+import { buildListingTeaser } from "../lib/listing-teaser";
 import { translateChatContent, translateReportNarrative, ensureChinese } from "../lib/translation";
 import {
   normaliseSelectedListingContext,
@@ -92,7 +93,7 @@ import { formatTitleTypeForDisplay } from "../lib/titleDisplay";
 import { classifySiteCondition, siteStatusLabel } from "../lib/site-condition";
 import { sendPushToUser } from "../lib/expo-push";
 import { runAfterResponse } from "../lib/vercel-wait-until";
-import { getRecentShownForUser, recordShownForUser } from "../lib/discovery-shown-memory";
+import { clearRecentShownForUserSuburb, getRecentShownForUser, recordShownForUser, type RecentShownListing } from "../lib/discovery-shown-memory";
 import type { Logger } from "pino";
 
 type ReqLike = { headers: Record<string, string | string[] | undefined> };
@@ -1285,7 +1286,18 @@ async function pickSponsoredGenericListingCandidate(args: {
       price: row.priceNzd ?? 0,
       landArea: row.landAreaSqm ?? undefined,
       scores: { ease: 0, cost: 0, roi: 0, composite: 0 },
-      briefSummary: row.listingTitle ?? row.description ?? undefined,
+      briefSummary: buildListingTeaser(row.description, {
+        address: row.address,
+        listingTitle: row.listingTitle,
+        propertyType: row.propertyType,
+        bedrooms: row.bedrooms,
+        bathrooms: row.bathrooms,
+        toilets: row.toilets,
+        garages: row.garages,
+        landAreaSqm: row.landAreaSqm,
+        floorAreaSqm: row.floorAreaSqm,
+        priceDisplay: row.priceDisplay,
+      }) ?? undefined,
       listingUrl: internalSponsoredListingUrl(row.id),
       photoUrl: row.imageUrls[0],
       photoUrls: row.imageUrls,
@@ -1670,18 +1682,28 @@ async function topUpDiscoveryCandidates(
 
 function genericCandidateFromListing(listing: ListingResult): PropertyCandidate {
   const photoUrls = listing.photoUrls?.length ? listing.photoUrls : listing.photoUrl ? [listing.photoUrl] : undefined;
+  const listingTitle = listing.listingTitle ?? listing.address.split(",")[0]?.trim() ?? listing.address;
   return {
     address: listing.address,
     price: listing.price ?? 0,
     landArea: listing.landArea ?? undefined,
     scores: { ease: 0, cost: 0, roi: 0, composite: 0 },
-    briefSummary: listing.listingTitle ?? listing.description ?? undefined,
+    briefSummary: buildListingTeaser(listing.description, {
+      address: listing.address,
+      listingTitle,
+      propertyType: listing.propertyType ?? listing.listingCategory,
+      bedrooms: listing.bedrooms,
+      bathrooms: listing.bathrooms,
+      landAreaSqm: listing.landArea,
+      floorAreaSqm: listing.floorArea,
+      priceDisplay: listing.priceText,
+    }) ?? undefined,
     listingUrl: listing.listingUrl,
     photoUrl: listing.photoUrl ?? undefined,
     photoUrls,
     priceDisplay: listing.priceText || undefined,
     propertyType: listing.propertyType ?? listing.listingCategory ?? undefined,
-    listingTitle: listing.listingTitle ?? listing.address.split(",")[0]?.trim() ?? listing.address,
+    listingTitle,
     description: listing.description ?? undefined,
     features: listing.features?.length ? listing.features : undefined,
     agentName: listing.agentName ?? undefined,
@@ -1925,6 +1947,39 @@ function isDiscoverStreetContinuation(text: string): boolean {
   if (/(?:\u663e\u793a|\u518d\u6765|\u7ed9\u6211|\u627e|\u770b).{0,6}\u66f4\u591a|\u8fd8\u6709(?:\u5417|\u6ca1\u6709)?|\u522b\u7684|\u5176\u4ed6|\u66f4\u591a(?:\u623f|\u5730|\u623f\u6e90|\u9009\u9879|\u7ed3\u679c)/.test(text)) return true;
   if (/^\d+[a-z]?\s*(?:号|號|number|no\.?|#)?\s*(?:呢|\?)?$/i.test(text.trim())) return true;
   return /any\s*(others?|more)|show\s*(me\s*)?more|more\s*(properties|options|results|sites)|what\s*else|other\s*properties|more\s*results|few\s*more|find\s*more|keep\s*looking|another\s*one|any\s*other|more\s*sites|other\s*options/i.test(lower);
+}
+
+function isRepeatShownAreaRequest(text: string): boolean {
+  const lower = text.toLowerCase().trim();
+  if (/(show|see|display|bring\s+up|remind).{0,40}\b(again|same|previous|earlier|already|available)\b/i.test(lower)) return true;
+  if (/\b(show|see)\s+(them|those|these|it)\s+again\b/i.test(lower)) return true;
+  if (/\bwhat\s+is\s+available\b.{0,40}\bagain\b/i.test(lower)) return true;
+  return /(?:再看|再给我|再給我|重新看|重新显示|重新顯示|看过的|看過的|之前的|已经看过|已經看過|再来一次|再來一次)/.test(text);
+}
+
+function isNearbyDiscoveryChoice(text: string): boolean {
+  const lower = text.toLowerCase().trim();
+  if (/\b(search|show|find|look|keep\s+looking).{0,25}\b(nearby|neighbouring|neighboring|surrounding|other\s+(suburbs|areas|neighbourhoods|neighborhoods))\b/i.test(lower)) return true;
+  if (/^(nearby|search nearby|nearby suburbs|other suburbs|surrounding areas)$/i.test(lower)) return true;
+  return /(?:附近|周边|周邊|邻近|鄰近|周围|周圍|其他区|其他區|附近郊区|附近郊區)/.test(text);
+}
+
+function hasRecentShownForSuburb(entries: RecentShownListing[], suburb: string | null | undefined): boolean {
+  const normalized = suburb?.toLowerCase().trim();
+  if (!normalized) return false;
+  return entries.some((entry) => entry.suburb?.toLowerCase().trim() === normalized);
+}
+
+function buildDiscoveryExhaustedChoicePayload(suburb: string | null | undefined): string {
+  const suburbLabel = suburb ? titleCaseSuburb(suburb) : "this area";
+  return JSON.stringify({
+    clarificationType: "discovery_exhausted",
+    question: "I've shown you all properties that met the criteria in this area, including some from previous chats. You can check History, see them again, or search nearby suburbs.",
+    options: [
+      `Show me ${suburbLabel} opportunities again`,
+      "Search nearby",
+    ],
+  });
 }
 
 function isContextualAreaBrowseFollowup(text: string): boolean {
@@ -3810,6 +3865,8 @@ router.post("/chat", async (req, res) => {
           .map((address) => normaliseDiscoveryAddressKey(address))
           .filter((key) => key.length > 0),
       );
+      const repeatShownAreaIntent = isRepeatShownAreaRequest(userText);
+      const forceNearbyDiscovery = isNearbyDiscoveryChoice(userText);
 
       const intent = await extractChatIntent(messages, reportCtx, alreadyShownFromHistory, chatLocale);
       const semanticWantsDiscovery = intent.execution === "show_listing_cards" || intent.intentCategory === "property_discovery";
@@ -3927,6 +3984,14 @@ router.post("/chat", async (req, res) => {
         req.log.info({ sample: userText.slice(0, 100) }, "Chat routing: listing browse follow-up — using discover flow");
         effectiveMode = "discover";
       }
+      if (
+        effectiveMode !== "analyse"
+        && !hasNumberedStreetAddress(userText)
+        && (repeatShownAreaIntent || forceNearbyDiscovery)
+      ) {
+        req.log.info({ repeatShownAreaIntent, forceNearbyDiscovery }, "Chat routing: exhausted discovery choice - using discover flow");
+        effectiveMode = "discover";
+      }
       const analysisIsLikelyAreaOnly =
         !hasNumberedStreetAddress(userText)
         && (isListingBrowseIntent(userText) || hasUnnumberedStreetLine(userText))
@@ -3993,14 +4058,16 @@ router.post("/chat", async (req, res) => {
 
       if (effectiveMode === "discover") {
         try {
+          let recentShownEntries: RecentShownListing[] = [];
           // ─── Account-level shown memory (30-day) ─────────────────────────
           // Seed the per-conversation dedup set with everything this account has
           // already been shown in the last 30 days, so a brand-new conversation
           // asking the same thing ("subdivision in St Heliers") continues with
           // unshown listings instead of restarting from property #1.
-          if (chatUserId) {
+          if (chatUserId && !repeatShownAreaIntent) {
             try {
               const persisted = await getRecentShownForUser(chatUserId);
+              recentShownEntries = persisted.entries;
               for (const k of persisted.addressKeys) alreadyShownAddressKeys.add(k);
               for (const u of persisted.urls) alreadyShownUrlsFromHistory.push(u);
               if (persisted.addressKeys.length || persisted.urls.length) {
@@ -4019,7 +4086,7 @@ router.post("/chat", async (req, res) => {
           // inferred from the current report context when absent from the message.
           const contextualAreaBrowse = isContextualAreaBrowseFollowup(userText);
           let suburb = intent.suburb ?? delegatedDiscoverSuburb?.suburb ?? (contextualAreaBrowse ? reportCtx?.suburb ?? null : null);
-          const isFollowUp = intent.isFollowUp || contextualAreaBrowse || isDiscoverStreetContinuation(userText);
+          const isFollowUp = intent.isFollowUp || contextualAreaBrowse || isDiscoverStreetContinuation(userText) || repeatShownAreaIntent || forceNearbyDiscovery;
           const discoveryCriteria = buildDiscoveryCriteriaText(messages, userText, intent.criteria);
           let plainListingBrowse = isPlainListingBrowseWithoutDevelopment(userText);
 
@@ -4028,6 +4095,18 @@ router.post("/chat", async (req, res) => {
             // type of the exact result block it belongs to. Honour it directly; this is
             // ground truth and immune to intervening analyse drill-downs.
             plainListingBrowse = continueGenericListing;
+          } else if (repeatShownAreaIntent || forceNearbyDiscovery) {
+            // Exhausted-result choices should inherit the presentation type from
+            // the last real area search, even if the choice text says "available".
+            for (const msg of [...messages].reverse()) {
+              if (msg.role !== "user" || !msg.content) continue;
+              const prevText = msg.content;
+              if (prevText === userText) continue;
+              if (isDiscoverStreetContinuation(prevText) && !isListingBrowseIntent(prevText)) continue;
+              if (hasNumberedStreetAddress(prevText)) continue;
+              plainListingBrowse = isPlainListingBrowseWithoutDevelopment(prevText);
+              break;
+            }
           } else if (!plainListingBrowse && isFollowUp && isDiscoverStreetContinuation(userText)) {
             // Typed continuation ("show more", "show more properties") with no button
             // signal. Inherit the presentation type from the last substantive AREA
@@ -4121,6 +4200,15 @@ router.post("/chat", async (req, res) => {
           const strictIndeterminate: ListingResult[] = [];
 
           if (suburb) {
+            if (repeatShownAreaIntent) {
+              alreadyShownAddressKeys.clear();
+              alreadyShownUrlsFromHistory.length = 0;
+              if (chatUserId) {
+                await clearRecentShownForUserSuburb(chatUserId, suburb).catch((err) =>
+                  req.log.warn({ err, suburb }, "Discovery: failed to clear shown memory for repeat request"),
+                );
+              }
+            }
             const streetHint = extractDiscoverStreetHintFromThread(messages, userText, isFollowUp);
             const cacheKey = makeCacheKey(suburb, effectiveMinPrice, effectiveMaxPrice, streetHint);
             const discoverPreOpts = {
@@ -4136,7 +4224,7 @@ router.post("/chat", async (req, res) => {
             // "Show more" follow-up: only try the cache if we've actually shown results before.
             // When isFollowUp=true because the user answered a clarification question (first search
             // for this suburb), hasShownAny=false so we skip straight to the fresh search below.
-            const hasShownAny = getShownUrls(cacheKey).length > 0;
+            const hasShownAny = !repeatShownAreaIntent && getShownUrls(cacheKey).length > 0;
 
             if (isFollowUp && hasShownAny) {
               candidates = plainListingBrowse
@@ -4162,13 +4250,23 @@ router.post("/chat", async (req, res) => {
                   );
             }
 
+            if (forceNearbyDiscovery && candidates.length === 0) {
+              setListingCache(cacheKey, {
+                remainingListings: [],
+                shownUrls: [],
+                suburb,
+                minPrice: effectiveMinPrice,
+                maxPrice: effectiveMaxPrice,
+              });
+            }
+
             // Fresh search when: first search, clarification answer, or cache exhausted.
             // Combine in-memory shown URLs with history-derived URLs so we still skip
             // previously-shown listings even after a server restart.
-            if (candidates.length === 0) {
+            if (candidates.length === 0 && !forceNearbyDiscovery) {
               const shownUrls = Array.from(new Set([
-                ...getShownUrls(cacheKey),
-                ...alreadyShownUrlsFromHistory,
+                ...(repeatShownAreaIntent ? [] : getShownUrls(cacheKey)),
+                ...(repeatShownAreaIntent ? [] : alreadyShownUrlsFromHistory),
               ]));
               req.log.info(
                 { fromCache: getShownUrls(cacheKey).length, fromHistory: alreadyShownUrlsFromHistory.length, total: shownUrls.length },
@@ -4202,7 +4300,7 @@ router.post("/chat", async (req, res) => {
                   streetHint,
                 ), alreadyShownAddressKeys);
 
-                const priorShown = [...getShownUrls(cacheKey)];
+                const priorShown = repeatShownAreaIntent ? [] : [...getShownUrls(cacheKey)];
                 setListingCache(cacheKey, {
                   remainingListings: [...remainingFiltered],
                   shownUrls: priorShown,
@@ -4281,6 +4379,25 @@ router.post("/chat", async (req, res) => {
             }
 
             // ── NEARBY SUBURB FALLBACK ─────────────────────────────────────────
+            const exhaustedByShownMemory =
+              !repeatShownAreaIntent
+              && !forceNearbyDiscovery
+              && isFollowUp
+              && candidates.length === 0
+              && !streetHint
+              && getRemainingCount(cacheKey) === 0
+              && (
+                getShownUrls(cacheKey).length > 0
+                || alreadyShownFromHistory.length > 0
+                || hasRecentShownForSuburb(recentShownEntries, suburb)
+              );
+            if (exhaustedByShownMemory) {
+              const exhaustedPayload = buildDiscoveryExhaustedChoicePayload(suburb);
+              const translatedExhausted = await translateChatContent(exhaustedPayload, "clarification", chatLocale, chatTranslateTitleSchool);
+              res.json({ content: translatedExhausted, mode: "clarification", ...providerSignal });
+              return;
+            }
+
             // Only after the primary suburb queue is empty: avoid jumping to neighbours
             // when we still have unscanned listings or prescreen returned no UI rows this round.
             if (candidates.length < discoveryTargetCount && suburb && !streetHint && getRemainingCount(cacheKey) === 0) {

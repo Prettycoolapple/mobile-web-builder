@@ -530,6 +530,9 @@ function mapListing(raw: RawListing): ListingResult | null {
   const price = parsePriceDisplay(priceText);
   const landArea = normaliseListingLandAreaSqm(a["land-area"], a["land-area-unit"] ?? null);
   const isCombinedListing = looksLikeCombinedListingAddress(address);
+  const sourceDescription = cleanListingDescription(
+    stringAttr(rawAttrs, ["listing-description", "marketing-description", "description-html", "description"]),
+  );
 
   const photoUrls = buildPhotoUrls(a.photos);
   return {
@@ -543,7 +546,7 @@ function mapListing(raw: RawListing): ListingResult | null {
     combinedListingReason: isCombinedListing ? "multi_address_listing" : null,
     listingStatus: a["listing-status"] ?? null,
     listingTitle: address.split(",")[0]?.trim() || address,
-    description: null,
+    description: sourceDescription,
     features: [],
     photoUrl: photoUrls[0] ?? null,
     photoUrls,
@@ -1726,7 +1729,7 @@ async function annotateApproxFields(listings: ListingResult[]): Promise<ListingR
         // Marketing copy feeds the listing-claims extractor (new-build /
         // townhouse / multi-unit signals) during discovery screening.
         listingTitle: og.title ?? l.listingTitle ?? null,
-        description: og.description ?? l.description ?? null,
+        description: l.description ?? og.description ?? null,
         bedroomsApprox,
         bathroomsApprox,
         landAreaApprox,
