@@ -1204,6 +1204,7 @@
     form.elements.phone.value = user.phoneNumber || "";
     form.elements.primaryLanguage.value = (user.languages && user.languages[0]) || user.primaryLanguage || "";
     setAgencyFields($("#profile-agency-select"), $("#profile-agency-other-field"), user.agencyName || "");
+    if (form.elements.reaaLicenceNumber) form.elements.reaaLicenceNumber.value = user.reaaLicenceNumber || "";
   }
 
   function updateAccountSummary(user) {
@@ -1311,6 +1312,11 @@
       setStatus(status, "Choose your agency, or enter its name if you selected Other.", "error");
       return;
     }
+    const reaaLicenceNumber = String(values.reaaLicenceNumber || "").trim();
+    if (!reaaLicenceNumber) {
+      setStatus(status, "Enter your REA licence number.", "error");
+      return;
+    }
 
     const payload = {
       fullName: String(values.fullName || "").trim(),
@@ -1320,6 +1326,7 @@
       phoneVerificationToken: state.phoneVerificationToken,
       primaryLanguage: String(values.primaryLanguage || "").trim(),
       agencyName,
+      reaaLicenceNumber,
     };
 
     // Details are valid — show T&C consent before the paywall step.
@@ -1680,6 +1687,11 @@
       setStatus(status, "Choose your agency, or enter its name if you selected Other.", "error");
       return;
     }
+    const reaaLicenceNumber = String(values.reaaLicenceNumber || "").trim();
+    if (!reaaLicenceNumber) {
+      setStatus(status, "Enter your REA licence number.", "error");
+      return;
+    }
     setStatus(status, "Saving your changes...", null);
     try {
       const data = await api("/auth/sales-agent-web-profile", {
@@ -1690,6 +1702,7 @@
           phoneNumber,
           primaryLanguage: String(values.primaryLanguage || "").trim(),
           agencyName,
+          reaaLicenceNumber,
         },
       });
       let user = data.user;

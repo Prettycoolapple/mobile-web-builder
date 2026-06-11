@@ -1,4 +1,5 @@
 import type { MergedPropertyData } from "./scrapers/merge";
+import { classifySiteCondition } from "./site-condition";
 import { roundToNearest } from "./utils";
 
 export interface CostBreakdown {
@@ -112,23 +113,6 @@ function constructionRatesPerSqm(
   return { low: rateLow, high: rateHigh };
 }
 
-/**
- * Whether to budget for clearing an existing structure before new build.
- * Build year alone is often missing (scrape gaps) even when a house is present—use
- * floor area, room counts, and sale/listing context so we do not show "vacant land"
- * incorrectly when `build_year` is null.
- */
-function inferHasExistingDwellingForDemolition(data: MergedPropertyData): boolean {
-  if (data.build_year != null) return true;
-  const floor = data.floor_area_sqm;
-  if (floor != null && Number.isFinite(floor) && floor >= 30) return true;
-  if (data.bedrooms != null && data.bedrooms > 0) return true;
-  if (data.bathrooms != null && data.bathrooms > 0) return true;
-  if (data.last_sale_price != null && data.last_sale_price >= 100_000) return true;
-  if (data.listing_price != null && data.listing_price >= 100_000) return true;
-  return false;
-}
-
 const RURAL_LIFESTYLE_ZONES = new Set(["CLZ", "LLRZ", "RCSZ", "RUR"]);
 const RURAL_TRANSFER_RIGHT_ZONES = new Set(["CLZ", "LLRZ", "RCSZ", "RUR"]);
 
@@ -228,7 +212,7 @@ export function estimateCosts(
   const cvUnavailable = cv === null;
   const contour = data.contour ?? null;
   const asbestos = data.asbestos_risk ?? "unknown";
-  const hasDwelling = inferHasExistingDwellingForDemolition(data);
+  const hasDwelling = classifySiteCondition(data).hasExistingDwelling;
 
   const safeUnits = Math.max(1, units);
 

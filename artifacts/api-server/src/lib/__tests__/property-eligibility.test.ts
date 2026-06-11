@@ -4,8 +4,65 @@ import {
   resolveSubjectLandAreaForEligibility,
   shouldForceSingleLotForEligibility,
 } from "../property-eligibility";
+import { extractListingClaims } from "../listing-claims";
 
 describe("property eligibility verifier", () => {
+  it("treats listing-claimed townhouse as verified terrace typology", () => {
+    const result = assessPropertyEligibility({
+      address: "6 Riddell Road, Glendowie, Auckland",
+      estateType: "Fee Simple",
+      legalDescription: "Lot 1 Deposited Plan 12345",
+      landAreaSqm: 842,
+      buildYear: 1935,
+      zoneCode: "MHU",
+      potentialLots: 2,
+      minLotSize: 400,
+      listingClaims: extractListingClaims({
+        description: "Introducing 10 brand new townhouses in the heart of Glendowie.",
+      }),
+    });
+    expect(result.typology).toBe("terrace_townhouse");
+    expect(result.typologyConfidence).toBe("verified");
+    expect(result.subdivisionEligible).toBe(false);
+    expect(result.subdivisionRejectReason).toBe("listing_claims_new_build");
+    expect(shouldForceSingleLotForEligibility(result)).toBe(true);
+  });
+
+  it("rejects multi-unit development claims without a new-build signal", () => {
+    const result = assessPropertyEligibility({
+      address: "10 Example Road, St Heliers, Auckland",
+      estateType: "Fee Simple",
+      legalDescription: "Lot 1 Deposited Plan 12345",
+      landAreaSqm: 900,
+      buildYear: 1985,
+      zoneCode: "MHU",
+      potentialLots: 2,
+      minLotSize: 400,
+      listingClaims: extractListingClaims({
+        description: "Rare investment: four freehold units returning solid rent, all tenanted.",
+      }),
+    });
+    expect(result.subdivisionEligible).toBe(false);
+    expect(result.subdivisionRejectReason).toBe("listing_claims_multi_unit_development");
+  });
+
+  it("leaves behaviour unchanged when claims are absent or all-false", () => {
+    const withNoClaims = assessPropertyEligibility({
+      address: "124 Example Road, St Heliers, Auckland",
+      estateType: "Fee Simple",
+      legalDescription: "Lot 1 Deposited Plan 12345",
+      propertyType: "Residential Dwelling",
+      landAreaSqm: 800,
+      buildYear: 1950,
+      zoneCode: "MHS",
+      potentialLots: 2,
+      minLotSize: 400,
+      listingClaims: extractListingClaims({
+        description: "Original weatherboard home, potential to build townhouses STCA.",
+      }),
+    });
+    expect(withNoClaims.subdivisionEligible).toBe(true);
+  });
   it("rejects 1 Chesterfield-style unit title signals with exact smaller land area", () => {
     const result = assessPropertyEligibility({
       address: "1 Chesterfield Avenue, St Heliers, Auckland",

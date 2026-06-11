@@ -297,6 +297,12 @@
                   <input name="agencyOther" autocomplete="organization" placeholder="Enter your agency name" />
                 </label>
 
+                <label class="field">
+                  REA licence number
+                  <input name="reaaLicenceNumber" autocomplete="off" placeholder="e.g. 20000000" required />
+                  <span class="field-help">Required for licensed real estate agent verification.</span>
+                </label>
+
                 <button class="button button-primary portal-submit" type="submit">Create account</button>
                 <p class="form-status" id="signup-status" aria-live="polite"></p>
               </form>
@@ -613,6 +619,11 @@
                 <label class="field portal-agency-other" id="profile-agency-other-field" hidden>
                   Agency name
                   <input name="agencyOther" autocomplete="organization" placeholder="Enter your agency name" />
+                </label>
+                <label class="field">
+                  REA licence number
+                  <input name="reaaLicenceNumber" autocomplete="off" required />
+                  <span class="field-help">Required for licensed real estate agent verification.</span>
                 </label>
                 <label class="field">
                   Profile photo

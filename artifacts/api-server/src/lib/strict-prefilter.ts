@@ -1,6 +1,7 @@
 import type { ListingResult } from "./scrapers/oneroof";
 import { isLetterSuffixedStreetNumber } from "./discovery-land-area";
 import { assessPropertyEligibility } from "./property-eligibility";
+import { extractListingClaims } from "./listing-claims";
 
 export type PrefilterVerdict =
   | { kind: "reject"; reason: string }
@@ -61,6 +62,23 @@ export function strictAttributePrefilter(listing: ListingResult): PrefilterVerdi
     return { kind: "reject", reason: `tenure:${listing.tenureText.trim()}` };
   }
 
+  // Structured claims from the listing's own marketing copy. A dwelling
+  // marketed as a brand-new build, a townhouse, or one unit of a multi-unit
+  // development can never be a standard knock-down subdivision candidate —
+  // no downstream LINZ/council fetch can change that, and those (lagging)
+  // sources are exactly what let redeveloped parcels slip through before.
+  const claims = extractListingClaims(listing);
+  const claimEvidence = claims.evidence[0] ?? "";
+  if (claims.isNewBuild || (claims.completionYear ?? 0) >= 2000) {
+    return { kind: "reject", reason: `listing_claims_new_build:${claimEvidence}` };
+  }
+  if (claims.multiUnitDevelopment) {
+    return { kind: "reject", reason: `listing_claims_multi_unit:${claimEvidence}` };
+  }
+  if (claims.dwellingIsTownhouse) {
+    return { kind: "reject", reason: `listing_claims_dwelling_is_townhouse:${claimEvidence}` };
+  }
+
   if (
     listing.landArea != null
     && listing.landAreaConfidence === "verified"
@@ -88,6 +106,7 @@ export function strictAttributePrefilter(listing: ListingResult): PrefilterVerdi
     listingLegalDescription: listing.legalDescription,
     landAreaSqm: listing.landArea ?? null,
     isCombinedListingAggregate: listing.isCombinedListing,
+    listingClaims: claims,
   });
   if (
     (eligibility.typology === "unit_apartment" || eligibility.typology === "terrace_townhouse")

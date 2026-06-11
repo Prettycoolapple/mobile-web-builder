@@ -61,6 +61,14 @@ export function getSalesPortalUrl(): string {
   return `${getPublicAppUrl()}/sales-portal/`;
 }
 
+export function getIosAppStoreUrl(): string {
+  return readOptional("IOS_APP_STORE_URL") ?? "https://apps.apple.com/nz/app/project-alpha/id6762080292";
+}
+
+export function getAndroidPlayStoreUrl(): string {
+  return readOptional("ANDROID_PLAY_STORE_URL") ?? "https://play.google.com/store/apps/details?id=nz.devfeasible.app";
+}
+
 export function getStripeSecretKey(): string {
   return readRequired("STRIPE_SECRET_KEY");
 }

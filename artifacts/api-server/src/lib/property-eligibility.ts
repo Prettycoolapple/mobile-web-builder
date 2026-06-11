@@ -1,4 +1,5 @@
 import type { LinzParcel } from "./linz";
+import type { ListingClaims } from "./listing-claims";
 
 export type PropertyTypology = "standalone" | "terrace_townhouse" | "unit_apartment" | "unknown";
 export type PropertyEligibilityConfidence = "verified" | "inferred" | "unknown";
@@ -25,6 +26,13 @@ export interface PropertyEligibilityInput {
   potentialLots?: number | null;
   minLotSize?: number | null;
   isCombinedListingAggregate?: boolean | null;
+  /**
+   * Structured claims extracted from the listing's own marketing copy
+   * (see listing-claims.ts). Deliberately NOT folded into corpus() — raw
+   * marketing text is full of "potential to build townhouses STCA" copy that
+   * would falsely flag genuine do-up sites.
+   */
+  listingClaims?: ListingClaims | null;
 }
 
 export interface PropertyEligibilityResult {
@@ -151,6 +159,12 @@ function inferTypology(input: PropertyEligibilityInput, text: string): {
   if (hasUnitLikeSignal(text) || hasCrossLeaseSignal(text)) {
     return { typology: "unit_apartment", typologyConfidence: "verified" };
   }
+  // The listing's own self-description of the dwelling ("brand new townhouses",
+  // propertyType: Townhouse) is as authoritative as a labelled property type —
+  // the IS-vs-COULD-BUILD disambiguation already happened in listing-claims.ts.
+  if (input.listingClaims?.dwellingIsTownhouse) {
+    return { typology: "terrace_townhouse", typologyConfidence: "verified" };
+  }
   if (hasTownhouseSignal(text)) {
     return { typology: "terrace_townhouse", typologyConfidence: "inferred" };
   }
@@ -181,8 +195,15 @@ export function assessPropertyEligibility(input: PropertyEligibilityInput): Prop
   const buildYearEligible = input.buildYear != null && input.buildYear < 2000;
   const landAreaParentOrTypologySuspect = hasSuspiciousUrbanLandFloorRatio(input);
 
+  const claims = input.listingClaims ?? null;
+  const claimsNewBuild = !!claims && (claims.isNewBuild || (claims.completionYear ?? 0) >= 2000);
+
   let subdivisionRejectReason: string | null = null;
   if (unitLikeSignal || crossLeaseSignal) subdivisionRejectReason = "unit_or_crosslease_signal";
+  // A dwelling marketed as a new build can never satisfy the pre-2000 build
+  // doctrine, regardless of what (lagging) council records say.
+  else if (claimsNewBuild) subdivisionRejectReason = "listing_claims_new_build";
+  else if (claims?.multiUnitDevelopment) subdivisionRejectReason = "listing_claims_multi_unit_development";
   else if (!titleIsFreehold || titleConfidence !== "verified") subdivisionRejectReason = "title_not_confirmed_freehold";
   else if (typology !== "standalone") subdivisionRejectReason = "typology_not_confirmed_standalone";
   else if (landAreaParentOrTypologySuspect) subdivisionRejectReason = "land_area_parent_or_typology_suspect";
@@ -210,7 +231,9 @@ export function shouldForceSingleLotForEligibility(result: PropertyEligibilityRe
   return result.subdivisionRejectReason === "unit_or_crosslease_signal"
     || result.subdivisionRejectReason === "title_not_confirmed_freehold"
     || result.subdivisionRejectReason === "typology_not_confirmed_standalone"
-    || result.subdivisionRejectReason === "land_area_parent_or_typology_suspect";
+    || result.subdivisionRejectReason === "land_area_parent_or_typology_suspect"
+    || result.subdivisionRejectReason === "listing_claims_new_build"
+    || result.subdivisionRejectReason === "listing_claims_multi_unit_development";
 }
 
 export function shouldSuppressParentLandAreaForEligibility(result: PropertyEligibilityResult): boolean {
@@ -283,6 +306,12 @@ export function eligibilityPlanningNote(result: PropertyEligibilityResult): stri
   }
   if (result.subdivisionRejectReason === "land_area_parent_or_typology_suspect") {
     return "The reported land/floor relationship or title signals suggest the land area may be a parent or aggregate parcel, so standard subdivision yield has been capped until exact standalone freehold title area is confirmed.";
+  }
+  if (result.subdivisionRejectReason === "listing_claims_new_build") {
+    return "The listing markets this dwelling as a new or near-new build, so it cannot satisfy the pre-2000 build criterion for a standard knock-down subdivision. Any recorded land area or build year may describe the pre-development parent site.";
+  }
+  if (result.subdivisionRejectReason === "listing_claims_multi_unit_development") {
+    return "The listing indicates this property is part of a multi-unit development, so the parcel has likely already been developed. Recorded land area and valuation data may describe the pre-development parent site.";
   }
   return "Standalone freehold title and typology were not confirmed, so this report caps standard subdivision yield until title, legal description, and property type are verified.";
 }

@@ -16,6 +16,21 @@ function propertyTypeLabel(t: (k: string) => string, value: string | null | unde
   return t("ptype.property");
 }
 
+function descriptionTeaser(desc: string | null | undefined): string | null {
+  if (!desc) return null;
+  const clean = desc.trim();
+  if (!clean) return null;
+  const sentences = clean.match(/[^.?!。？！]+[.?!。？！]+(?=\s|$)/g);
+  let teaser = clean;
+  if (sentences && sentences.length > 0) {
+    teaser = sentences.slice(0, 2).join(" ").trim();
+  }
+  if (teaser.length > 120) {
+    teaser = teaser.slice(0, 117).trim() + "...";
+  }
+  return teaser;
+}
+
 export function BrowseListingCard({ listing, onPress, onShare }: { listing: BrowseListing; onPress: () => void; onShare?: () => void }) {
   const colors = useColors();
   const { t } = useT();
@@ -24,7 +39,8 @@ export function BrowseListingCard({ listing, onPress, onShare }: { listing: Brow
   const agentName = listing.agent?.fullName ?? t("lcard.agent_fallback");
   const agency = listing.agent?.agencyName ?? (listing.source === "internal" ? t("lcard.agency_internal") : t("lcard.agency_curated"));
   const agentAvatar = resolveListingImageUrl(listing.agent?.avatarUrl);
-  const description = useMaybeTranslated(listing.description);
+  const teaserText = descriptionTeaser(listing.description);
+  const description = useMaybeTranslated(teaserText);
 
   return (
     <TouchableOpacity

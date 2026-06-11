@@ -61,6 +61,8 @@ export interface MergedPropertyData {
   titleResolutionSource?: TitleResolutionSource;
   lrsStatus?: string | null;
   property_type?: string | null;
+  listing_title?: string | null;
+  listing_url?: string | null;
   typology?: PropertyTypology;
   typologyConfidence?: PropertyEligibilityConfidence;
   titleConfidence?: PropertyEligibilityConfidence;
@@ -389,6 +391,7 @@ export function mergePropertyData(
     preferred_realestate_listing_url?: string | null;
     /** Active listing images from realestate.co.nz when OneRoof has none. */
     realestate_photo_urls?: string[] | null;
+    selected_listing_context?: { propertyType?: string | null; listingTitle?: string | null; listingUrl?: string | null } | null;
   },
 ): MergedPropertyData {
   const sources: Record<string, string> = {};
@@ -517,9 +520,12 @@ export function mergePropertyData(
   );
   const property_type = first("property_type", sources,
     ["realestate.co.nz", realestateListing?.propertyType],
+    ["selected_listing", extra?.selected_listing_context?.propertyType],
     ["propertyvalue", propertyValue?.property_type],
     ["auckland_council_gis", ph?.property_type],
   );
+  const listing_title = realestateListing?.listingTitle ?? extra?.selected_listing_context?.listingTitle ?? null;
+  const listing_url = realestateListing?.listingUrl ?? extra?.selected_listing_context?.listingUrl ?? null;
 
   // Track human-readable discrepancy notes for everything the live-listing
   // reconciliation rewrites. Surfaced via MergedPropertyData.discrepancies so
@@ -1011,6 +1017,8 @@ export function mergePropertyData(
     titleResolutionSource: "unknown",
     lrsStatus: null,
     property_type,
+    listing_title,
+    listing_url,
     typology: "unknown",
     typologyConfidence: "unknown",
     titleConfidence: "unknown",

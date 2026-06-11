@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import { z } from "zod";
 import { db, propertyShares } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
-import { getPublicAppUrl } from "../lib/env";
+import { getAndroidPlayStoreUrl, getIosAppStoreUrl, getPublicAppUrl } from "../lib/env";
 
 const router = Router();
 
@@ -52,9 +52,14 @@ const reportPayloadSchema = z.object({
   summary: z.object({
     score: z.number().optional().nullable(),
     zone: z.string().optional().nullable(),
+    bedrooms: z.number().optional().nullable(),
+    bathrooms: z.number().optional().nullable(),
+    titleStatus: z.string().optional().nullable(),
+    titleType: z.string().optional().nullable(),
     potentialLots: z.number().optional().nullable(),
     designLedRange: z.object({ min: z.number(), max: z.number() }).optional().nullable(),
     landArea: z.string().optional().nullable(),
+    floorArea: z.string().optional().nullable(),
     listingPrice: z.string().optional().nullable(),
   }).optional().nullable(),
 });
@@ -69,11 +74,7 @@ function baseUrl(): string {
 }
 
 function shareUrl(token: string): string {
-  return `${baseUrl()}/api/share/${encodeURIComponent(token)}`;
-}
-
-function appSchemeUrl(token: string): string {
-  return `devfeasible://share/${encodeURIComponent(token)}`;
+  return `${baseUrl()}/share/${encodeURIComponent(token)}`;
 }
 
 function randomToken(): string {
@@ -220,6 +221,7 @@ async function getPublicShare(token: string) {
       previewTitle: propertyShares.previewTitle,
       previewDescription: propertyShares.previewDescription,
       previewImageUrl: propertyShares.previewImageUrl,
+      payloadJson: propertyShares.payloadJson,
       createdAt: propertyShares.createdAt,
     })
     .from(propertyShares)
@@ -240,7 +242,7 @@ function publicPreview(row: PublicShareRow | null) {
     description: row.previewDescription,
     imageUrl: row.previewImageUrl,
     url: shareUrl(row.token),
-    appUrl: appSchemeUrl(row.token),
+    facts: propertyFacts(row.payloadJson),
   };
 }
 
@@ -253,19 +255,72 @@ function htmlEscape(value: unknown): string {
     .replaceAll("'", "&#039;");
 }
 
+type Fact = { label: string; value: string };
+
+function recordValue(source: unknown, key: string): unknown {
+  if (!source || typeof source !== "object") return undefined;
+  return (source as Record<string, unknown>)[key];
+}
+
+function firstValue(source: unknown, keys: string[]): unknown {
+  for (const key of keys) {
+    const value = recordValue(source, key);
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return undefined;
+}
+
+function numberFact(value: unknown, suffix = ""): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
+  return `${value.toLocaleString("en-NZ")}${suffix}`;
+}
+
+function textFact(value: unknown): string | null {
+  const cleaned = cleanText(value, "");
+  return cleaned || null;
+}
+
+function propertyFacts(payload: unknown): Fact[] {
+  const kind = textFact(recordValue(payload, "kind"));
+  const source =
+    kind === "candidate"
+      ? recordValue(payload, "candidate")
+      : kind === "listing"
+        ? recordValue(payload, "listing")
+        : recordValue(recordValue(payload, "preview"), "summary");
+  const facts: Fact[] = [];
+  const push = (label: string, value: string | null) => {
+    if (value && !facts.some((fact) => fact.label === label)) facts.push({ label, value });
+  };
+
+  push("Bedrooms", numberFact(firstValue(source, ["bedrooms", "bedroomCount"])));
+  push("Bathrooms", numberFact(firstValue(source, ["bathrooms", "bathroomCount"])));
+  push("Zoning", textFact(firstValue(source, ["zone", "zoning"])));
+  push("Title status", textFact(firstValue(source, ["titleStatus", "titleType", "tenure"])));
+  push("Land area", numberFact(firstValue(source, ["landArea", "landAreaSqm"]), "m²") ?? textFact(firstValue(source, ["landAreaDisplay", "landArea"])));
+  push("Floor area", numberFact(firstValue(source, ["floorArea", "floorAreaSqm"]), "m²") ?? textFact(firstValue(source, ["floorAreaDisplay", "floorArea"])));
+
+  return facts;
+}
+
 function sharePreviewHtml(preview: ReturnType<typeof publicPreview>): string {
   const found = !!preview;
   const title = preview?.title ?? "Project Alpha property share";
   const description = preview?.description ?? "This Project Alpha share link could not be found or has expired.";
   const url = preview?.url ?? `${baseUrl()}/`;
   const image = preview?.imageUrl ?? `${baseUrl()}/favicon.png`;
-  const appUrl = preview?.appUrl ?? "devfeasible://";
   const safeTitle = htmlEscape(title);
   const safeDescription = htmlEscape(description);
   const safeImage = htmlEscape(image);
   const safeUrl = htmlEscape(url);
-  const safeAppUrl = htmlEscape(appUrl);
+  const safeIosStoreUrl = htmlEscape(getIosAppStoreUrl());
+  const safeAndroidStoreUrl = htmlEscape(getAndroidPlayStoreUrl());
+  const safeSalesPortalUrl = htmlEscape("https://www.projectalpha.app/sales-portal/");
   const safeAddress = htmlEscape(preview?.address ?? "Shared property");
+  const facts = preview?.facts ?? [];
+  const factsHtml = facts.length
+    ? `<dl class="facts">${facts.map((fact) => `<div><dt>${htmlEscape(fact.label)}</dt><dd>${htmlEscape(fact.value)}</dd></div>`).join("")}</dl>`
+    : "";
   const cta = found ? "Open Project Alpha to view more" : "Get Project Alpha";
 
   return `<!doctype html>
@@ -298,13 +353,16 @@ function sharePreviewHtml(preview: ReturnType<typeof publicPreview>): string {
       .eyebrow { margin: 0; color: #d97757; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
       h1 { margin: 0; font-size: clamp(25px, 6vw, 38px); line-height: 1.05; letter-spacing: -.02em; }
       p { margin: 0; color: #6f675c; line-height: 1.55; }
+      .facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0; }
+      .facts div { padding: 12px; border: 1px solid rgba(29,26,23,.10); border-radius: 10px; background: rgba(29,26,23,.035); }
+      .facts dt { margin: 0 0 4px; color: #8a8176; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
+      .facts dd { margin: 0; color: #1d1a17; font-size: 15px; font-weight: 800; line-height: 1.25; }
       .actions { display: grid; grid-template-columns: 1fr; gap: 10px; margin-top: 4px; }
-      .button { display: flex; align-items: center; justify-content: center; min-height: 48px; padding: 0 16px; border-radius: 12px; text-decoration: none; font-weight: 800; }
+      .button { display: flex; align-items: center; justify-content: center; min-height: 48px; padding: 0 16px; border: 0; border-radius: 12px; text-decoration: none; font: inherit; font-weight: 800; cursor: pointer; box-sizing: border-box; }
       .primary { background: #d97757; color: white; }
       .secondary { background: #1d1a17; color: white; }
-      .store { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-      .store .button { background: rgba(29,26,23,.08); color: #1d1a17; }
-      @media (max-width: 520px) { .store { grid-template-columns: 1fr; } .body { padding: 20px; } }
+      .divider { height: 1px; background: rgba(29,26,23,.12); margin: 4px 0; }
+      @media (max-width: 520px) { .body { padding: 20px; } .facts { grid-template-columns: 1fr; } }
     </style>
   </head>
   <body>
@@ -317,17 +375,47 @@ function sharePreviewHtml(preview: ReturnType<typeof publicPreview>): string {
           <p class="eyebrow">Project Alpha</p>
           <h1>${safeAddress}</h1>
           <p>${safeDescription}</p>
+          ${factsHtml}
           <div class="actions">
-            <a class="button primary" href="${safeAppUrl}">${htmlEscape(cta)}</a>
-            <div class="store">
-              <a class="button" href="https://apps.apple.com/nz/app/project-alpha/id6762080292" rel="noopener">iOS App Store</a>
-              <a class="button" href="https://play.google.com/store/apps/details?id=nz.devfeasible.app" rel="noopener">Android Play Store</a>
-            </div>
-            <a class="button secondary" href="/">Project Alpha website</a>
+            <a
+              class="button primary"
+              id="open-app-button"
+              href="${safeUrl}"
+              data-ios-store="${safeIosStoreUrl}"
+              data-android-store="${safeAndroidStoreUrl}"
+            >${htmlEscape(cta)}</a>
+            <div class="divider" aria-hidden="true"></div>
+            <a class="button secondary" href="${safeSalesPortalUrl}">Property listing (Property Agent)</a>
           </div>
         </div>
       </article>
     </main>
+    <script>
+      (function () {
+        var button = document.getElementById("open-app-button");
+        if (!button) return;
+        button.addEventListener("click", function (event) {
+          var ua = navigator.userAgent || "";
+          var isiOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+          var isAndroid = /Android/i.test(ua);
+          if (!isiOS && !isAndroid) return;
+
+          event.preventDefault();
+          var fallback = isiOS ? button.dataset.iosStore : button.dataset.androidStore;
+          var cancelled = false;
+          var cancel = function () { cancelled = true; };
+          document.addEventListener("visibilitychange", function () {
+            if (document.hidden) cancel();
+          }, { once: true });
+          window.addEventListener("pagehide", cancel, { once: true });
+          window.addEventListener("blur", cancel, { once: true });
+          window.setTimeout(function () {
+            if (!cancelled && fallback) window.location.assign(fallback);
+          }, 1400);
+          window.location.assign(button.href);
+        });
+      })();
+    </script>
   </body>
 </html>`;
 }

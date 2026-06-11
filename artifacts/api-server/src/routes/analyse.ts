@@ -89,6 +89,7 @@ import {
 } from "../lib/quotas";
 import { usagePeriodExpired } from "../lib/billingPeriod";
 import { formatTitleTypeForDisplay } from "../lib/titleDisplay";
+import { classifySiteCondition, siteStatusLabel } from "../lib/site-condition";
 import { sendPushToUser } from "../lib/expo-push";
 import { runAfterResponse } from "../lib/vercel-wait-until";
 import { getRecentShownForUser, recordShownForUser } from "../lib/discovery-shown-memory";
@@ -198,6 +199,7 @@ export function applyOverviewSnapshot(
 ): void {
   if (!merged) return;
   const fmt = (n: number) => `$${n.toLocaleString("en-NZ")}`;
+  const siteCondition = classifySiteCondition(merged);
   const snapshot: Record<string, unknown> = {
     address: resolvedAddress,
     cv: merged.cv_nzd != null && merged.cv_nzd > 0 ? fmt(merged.cv_nzd) : null,
@@ -210,6 +212,9 @@ export function applyOverviewSnapshot(
     buildYear: merged.build_year_range ?? (merged.build_year != null ? String(merged.build_year) : null),
     build_year: merged.build_year ?? null,
     build_year_range: merged.build_year_range ?? null,
+    propertyType: merged.property_type ?? null,
+    siteStatus: siteCondition.siteStatus,
+    siteStatusLabel: siteStatusLabel(siteCondition.siteStatus),
     bedrooms: merged.bedrooms ?? null,
     bathrooms: merged.bathrooms ?? null,
     zone: merged.zone_description ?? merged.zone_code ?? null,
@@ -241,6 +246,9 @@ export function applyOverviewSnapshot(
     landArea: snapshot.landArea,
     floorArea: snapshot.floorArea,
     buildYear: snapshot.buildYear,
+    propertyType: snapshot.propertyType ?? existingOverview.propertyType ?? null,
+    siteStatus: snapshot.siteStatus,
+    siteStatusLabel: snapshot.siteStatusLabel,
     bedrooms: snapshot.bedrooms ?? null,
     bathrooms: snapshot.bathrooms ?? null,
     zone: snapshot.zone ?? existingOverview.zone,
@@ -532,14 +540,18 @@ function applyDeterministicPipelineOverrides(
 
     if (pipelineResult.asbestos_detail) {
       const ad = pipelineResult.asbestos_detail;
+      const noExistingDwelling = costs.has_existing_dwelling === false || costs.demo_vacant === true;
+      const asbestosNotes = noExistingDwelling
+        ? "No existing dwelling was detected, so demolition and asbestos removal have not been included."
+        : ad.notes;
 
       parsed.asbestos = {
         buildYear: merged?.build_year_range ?? (merged?.build_year ?? null),
-        riskLevel: ad.risk,
-        risk: ad.risk,
-        flagged: ad.risk === "high",
-        notes: ad.notes,
-        worksafe_required: ad.risk === "high",
+        riskLevel: noExistingDwelling ? "low" : ad.risk,
+        risk: noExistingDwelling ? "low" : ad.risk,
+        flagged: noExistingDwelling ? false : ad.risk === "high",
+        notes: asbestosNotes,
+        worksafe_required: noExistingDwelling ? false : ad.risk === "high",
         demoCostLow: costs.demo_low,
         demoCostHigh: costs.demo_high,
       };
@@ -556,7 +568,7 @@ function applyDeterministicPipelineOverrides(
         ),
       );
 
-      const { risk } = ad;
+      const risk = noExistingDwelling ? "low" : ad.risk;
       const demoLow = costs.demo_low;
       const demoHigh = costs.demo_high;
       const buildYear = merged?.build_year ?? null;
@@ -565,6 +577,7 @@ function applyDeterministicPipelineOverrides(
       // Modern builds: no asbestos in riskSummary (detail stays in the asbestos panel if needed).
       // Post-1990 low-risk: same — users asked not to pad risk lists with negligible asbestos notes.
       const omitAsbestosFromRiskSummary =
+        noExistingDwelling ||
         (buildYear != null && buildYear > 2000) ||
         (risk === "low" && buildYear != null && buildYear > 1990);
 
@@ -648,7 +661,7 @@ function applyDeterministicPipelineOverrides(
   rs = filterRiskSummaryRemoveContradictoryTerrainBullets(rs, merged?.contour ?? null);
   rs = filterRiskSummaryRemoveMhsBulletsWhenZoneIsNotMhs(rs, merged?.zone_code ?? null);
   const canonYear = canonicalBuildYearFromReport(parsed, merged?.build_year ?? null);
-  if (canonYear != null && canonYear > 2000) {
+  if ((costs != null && (costs.has_existing_dwelling === false || costs.demo_vacant === true)) || (canonYear != null && canonYear > 2000)) {
     rs = filterRiskSummaryRemoveAsbestosBullets(rs);
   }
   rs = appendRuralTransferRightRiskIfNeeded(
@@ -694,6 +707,33 @@ function applyDeterministicPipelineOverrides(
     }
   }
 
+  // Redevelopment warning: listing claims (new build / townhouse / multi-unit)
+  // conflicted with council records, so the recorded land/CV/yield likely
+  // describe the PRE-development parent site. Surfaced as a dedicated block
+  // for the UI banner AND prepended as the highest-priority risk bullet.
+  const redev = pipelineResult.redevelopmentCheck;
+  if (redev?.suspected) {
+    const councilYearText = redev.councilBuildYear != null ? String(redev.councilBuildYear) : "an older";
+    const message = isZhRisks
+      ? `房源信息显示这是全新住宅（联排/多单元开发），但政府记录仍显示 ${councilYearText} 年的旧建筑 — 该地块很可能已被重新开发。下方的土地面积、CV 估值和分割潜力可能反映开发前的母地块，请勿据此做投资决策。`
+      : `The listing indicates a brand-new dwelling, but council records still show a ${councilYearText} build on this parcel — the site has likely been redeveloped. The land area, CV, and subdivision yield below may describe the pre-development parent site; verify the current title before relying on them.`;
+    parsed.redevelopmentWarning = {
+      suspected: true,
+      councilBuildYear: redev.councilBuildYear,
+      listingEvidence: redev.listingClaims?.evidence ?? [],
+      reasons: redev.reasons,
+      message,
+    };
+    const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim().slice(0, 40);
+    rs = [message, ...rs.filter((b) => norm(b) !== norm(message))];
+  } else {
+    delete parsed.redevelopmentWarning;
+  }
+
+  if (pipelineResult.dataFreshness) {
+    parsed.dataFreshness = pipelineResult.dataFreshness;
+  }
+
   parsed.riskSummary = rs;
 
   // Deterministic "Land title" insight (cross-lease opportunity + risks). Source
@@ -729,6 +769,7 @@ function buildDeterministicFallbackReport(
 
   const zoneLabel = lots.zone_label || merged.zone_description || merged.zone_code || "Unknown zone";
   const minLotSize = lots.min_lot_size ? `${lots.min_lot_size}m2` : null;
+  const siteCondition = classifySiteCondition(merged);
   const riskSeed = [
     zoneLabel
       ? `${zoneLabel} controls should be checked against the intended building layout before assuming the full lot yield is practical.`
@@ -748,6 +789,9 @@ function buildDeterministicFallbackReport(
       landArea: merged.land_area_sqm != null ? `${merged.land_area_sqm}m2` : null,
       floorArea: merged.floor_area_sqm != null ? `${merged.floor_area_sqm}m2` : null,
       buildYear: merged.build_year_range ?? (merged.build_year != null ? String(merged.build_year) : null),
+      propertyType: merged.property_type ?? null,
+      siteStatus: siteCondition.siteStatus,
+      siteStatusLabel: siteStatusLabel(siteCondition.siteStatus),
       zone: zoneLabel,
       listingPrice: merged.listing_price != null ? `$${merged.listing_price.toLocaleString("en-NZ")}` : null,
       isOnMarket: merged.listing_active === true,
@@ -2586,19 +2630,44 @@ async function runFeasibilityAnalyseCore(args: {
     log.info({ addressKey, marker: "PROPERTY_CACHE_HIT", refreshedAt: cachedEntry.row.lastRefreshedAt }, "Property cache hit — skipping external acquisition");
   }
 
-  const pipelineResult = await runPropertyPipeline(analysisAddress, {
+  let pipelineResult = await runPropertyPipeline(analysisAddress, {
     preferredRealestateListingUrl,
     selectedListingContext: selectedContext,
     cachedRaw: cachedEntry?.rawData ?? null,
+    cachedRawAcquiredAt: cachedEntry ? new Date(cachedEntry.row.lastRefreshedAt as unknown as string | Date).toISOString() : null,
   }).catch((err) => {
     log.warn({ err }, "Pipeline failed during feasibility core — falling back to LLM-only report");
     return null;
   });
 
+  // Conflict-triggered cache invalidation: the live listing claims a new
+  // dwelling but the CACHED council records describe an old one — the parcel
+  // may have been redeveloped since the cache row was written. Re-acquire live
+  // once so the report reflects current records, and refresh the cache row.
+  let forcedLiveRefresh = false;
+  if (pipelineResult?.redevelopmentCheck?.suspected && pipelineResult.served_from_cache) {
+    log.info(
+      { addressKey, reasons: pipelineResult.redevelopmentCheck.reasons, marker: "PROPERTY_CACHE_CONFLICT_REFRESH" },
+      "Redevelopment suspected on cached data — forcing live re-acquisition",
+    );
+    const fresh = await runPropertyPipeline(analysisAddress, {
+      preferredRealestateListingUrl,
+      selectedListingContext: selectedContext,
+      cachedRaw: null,
+    }).catch((err) => {
+      log.warn({ err }, "Forced live re-acquisition failed — keeping cached-data result");
+      return null;
+    });
+    if (fresh) {
+      pipelineResult = fresh;
+      forcedLiveRefresh = true;
+    }
+  }
+
   // Persist the raw acquired data globally (or refresh hit stats). Best-effort:
   // never let a cache write affect the user-facing result.
   if (pipelineResult && addressKey) {
-    if (cachedEntry) {
+    if (cachedEntry && !forcedLiveRefresh) {
       void bumpHitCount(addressKey);
     } else if (hasCacheableCore(pipelineResult) && pipelineResult.raw_property) {
       void upsertCachedRaw({
@@ -4737,16 +4806,38 @@ router.post("/chat", async (req, res) => {
             req.log.info({ addressKey: chatAddressKey, marker: "PROPERTY_CACHE_HIT" }, "Property cache hit — skipping external acquisition");
           }
 
-          const pipelineResult = await runPropertyPipeline(analysisAddress, {
+          let pipelineResult = await runPropertyPipeline(analysisAddress, {
             preferredRealestateListingUrl: selectedListingUrlFromHistory(conversationHistory, analysisAddress),
             cachedRaw: chatCachedEntry?.rawData ?? null,
+            cachedRawAcquiredAt: chatCachedEntry ? new Date(chatCachedEntry.row.lastRefreshedAt as unknown as string | Date).toISOString() : null,
           }).catch((err) => {
             req.log.warn({ err }, "Pipeline failed — falling back to AI-only analysis");
             return null;
           });
 
+          // Conflict-triggered cache invalidation — see the feasibility-core
+          // call site for rationale (live listing claims vs cached records).
+          let chatForcedLiveRefresh = false;
+          if (pipelineResult?.redevelopmentCheck?.suspected && pipelineResult.served_from_cache) {
+            req.log.info(
+              { addressKey: chatAddressKey, reasons: pipelineResult.redevelopmentCheck.reasons, marker: "PROPERTY_CACHE_CONFLICT_REFRESH" },
+              "Redevelopment suspected on cached data — forcing live re-acquisition",
+            );
+            const fresh = await runPropertyPipeline(analysisAddress, {
+              preferredRealestateListingUrl: selectedListingUrlFromHistory(conversationHistory, analysisAddress),
+              cachedRaw: null,
+            }).catch((err) => {
+              req.log.warn({ err }, "Forced live re-acquisition failed — keeping cached-data result");
+              return null;
+            });
+            if (fresh) {
+              pipelineResult = fresh;
+              chatForcedLiveRefresh = true;
+            }
+          }
+
           if (pipelineResult && chatAddressKey) {
-            if (chatCachedEntry) {
+            if (chatCachedEntry && !chatForcedLiveRefresh) {
               void bumpHitCount(chatAddressKey);
             } else if (hasCacheableCore(pipelineResult) && pipelineResult.raw_property) {
               void upsertCachedRaw({
@@ -4839,6 +4930,8 @@ router.post("/chat", async (req, res) => {
               const contourSrc = (merged as any).contour_source ?? null;
               const contourTxt = (merged as any).contour_text ?? null;
               const missingCritical = (merged as any).missing_critical_fields ?? [];
+              const siteCondition = classifySiteCondition(merged);
+              const siteConditionLabel = siteStatusLabel(siteCondition.siteStatus);
               const comparablePrices = comparables.map((c) => c.price_nzd).filter((p) => p > 0);
               const comparablePsms = comparables.map((c) => c.price_per_sqm).filter((p) => p > 0);
               const avgComparableSale = comparablePrices.length > 0
@@ -4907,6 +5000,7 @@ SUBDIVISION PATHWAY (pre-computed — copy into subdivisionSummary verbatim, do 
 PRE-COMPUTED FINANCIALS — use verbatim:
   Potential lots: ${lots.lots}
   Zone: ${lots.zone_label} (${merged.zone_code ?? "unknown"})
+  Site condition: ${siteConditionLabel} (${siteCondition.siteStatus}); existing dwelling detected: ${siteCondition.hasExistingDwelling}. ${siteCondition.hasExistingDwelling ? "Existing-dwelling options may be considered." : "Do not include demolition or asbestos-removal cost, and do not recommend holding/refurbishing an existing dwelling."}
   Land / CV: ${cvNote}
   Land area: ${merged.land_area_sqm != null ? `${merged.land_area_sqm}m² (confirmed from ${landSource ?? "selected source"})` : "NOT AVAILABLE for the subject property. If this is a unit, do not use parent parcel/site area; set propertyOverview.landArea to null."}
   CV unavailable: ${costs.cv_unavailable}
@@ -4930,7 +5024,7 @@ ${scenarioLines}
 ${strategyLines || "  unavailable"}
   Recommended development strategy: ${recommendedStrategy ? `${recommendedStrategy.title} — ${recommendedStrategy.rationale}` : "unavailable"}
 
-ASBESTOS: ${asbestos_detail.risk} risk — ${asbestos_detail.notes}
+ASBESTOS: ${siteCondition.hasExistingDwelling ? `${asbestos_detail.risk} risk - ${asbestos_detail.notes}` : "not applicable - no existing dwelling was detected, so demolition and asbestos removal are not included"}
 
 EASEMENTS & RIGHTS OF WAY (from LINZ title memorials):
 Retrieval status: ${easements.retrieval_status}
@@ -4972,6 +5066,9 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
     "landArea": ${merged.land_area_sqm != null ? `"${merged.land_area_sqm}m²"` : "null"},
     "floorArea": "${merged.floor_area_sqm != null ? `${merged.floor_area_sqm}m²` : "null"}",
     "buildYear": ${merged.build_year_range ? `"${merged.build_year_range}"` : (merged.build_year != null ? `"${merged.build_year}"` : "null")},
+    "propertyType": ${JSON.stringify(merged.property_type ?? null)},
+    "siteStatus": ${JSON.stringify(siteCondition.siteStatus)},
+    "siteStatusLabel": ${JSON.stringify(siteConditionLabel)},
     "zone": "...",
     "titleType": ${merged.estate_type ? JSON.stringify(formatTitleTypeForDisplay(merged.estate_type) ?? merged.estate_type) : "null"},
     "titleResolutionSource": ${JSON.stringify(merged.titleResolutionSource ?? "unknown")},
@@ -5029,7 +5126,7 @@ Return a FeasibilityReport JSON using ALL of the above data. Follow this EXACT s
     "land_area_sqm": ${landSource ? `"${landSource}"` : "null"},
     "floor_area_sqm": ${floorSource ? `"${floorSource}"` : "null"}
   },
-  "asbestos": { "buildYear": ${merged.build_year_range ? `"${merged.build_year_range}"` : (merged.build_year != null ? `"${merged.build_year}"` : "null")}, "riskLevel": "${asbestos_detail.risk}", "risk": "${asbestos_detail.risk}", "flagged": ${asbestos_detail.risk === "high"}, "notes": "${asbestos_detail.notes}", "worksafe_required": ${asbestos_detail.risk === "high"}, "demoCostLow": ${costs.demo_low}, "demoCostHigh": ${costs.demo_high} },
+  "asbestos": { "buildYear": ${merged.build_year_range ? `"${merged.build_year_range}"` : (merged.build_year != null ? `"${merged.build_year}"` : "null")}, "riskLevel": "${siteCondition.hasExistingDwelling ? asbestos_detail.risk : "low"}", "risk": "${siteCondition.hasExistingDwelling ? asbestos_detail.risk : "low"}", "flagged": ${siteCondition.hasExistingDwelling && asbestos_detail.risk === "high"}, "notes": ${JSON.stringify(siteCondition.hasExistingDwelling ? asbestos_detail.notes : "No existing dwelling was detected, so demolition and asbestos removal have not been included.")}, "worksafe_required": ${siteCondition.hasExistingDwelling && asbestos_detail.risk === "high"}, "demoCostLow": ${costs.demo_low}, "demoCostHigh": ${costs.demo_high} },
   "terrain": {
     "classification": ${merged.contour ? `"${merged.contour}"` : "null"},
     "official_label": ${contourTxt ? `"${contourTxt}"` : "null"},
@@ -5081,6 +5178,7 @@ ${scenarios.map((s) => {
 }
 CRITICAL RULES:
 - If cv_unavailable is true: set propertyOverview.cv to null, include a riskSummary note about CV being unavailable.
+- If propertyOverview.siteStatus is "vacant_land" or existing dwelling detected is false: do not include demolition or asbestos-removal risk/cost, and do not describe "do nothing" or refurbishment as the recommended development action.
 - If terrain.classification is null: terrain data was unavailable — keep it null, do not guess.
 - Infrastructure location "unknown" means GIS data was unavailable — keep as "unknown", do not guess.
 - comparableSales MUST be exactly the array provided above. If it is empty, keep it empty and keep roiScenarios empty. Never invent comparable sale addresses, dates, prices, or ROI sale-price assumptions.

@@ -69,6 +69,29 @@ describe("estimateCosts — existing dwelling / demolition", () => {
     expect(c.demo_low).toBe(0);
   });
 
+  it("does not infer a dwelling from section listing price alone", () => {
+    const c = estimateCosts(
+      minimal({
+        property_type: "Residential Section",
+        listing_title: "36 Marine Parade, Mellons Bay section",
+        listing_url: "https://www.realestate.co.nz/residential/sale/auckland/manukau-city/mellons-bay/section",
+        listing_active: true,
+        listing_price: 1_500_000,
+        last_sale_price: 1_200_000,
+        build_year: null,
+        floor_area_sqm: null,
+        bedrooms: null,
+        bathrooms: null,
+      }),
+      1,
+    );
+
+    expect(c.demo_vacant).toBe(true);
+    expect(c.has_existing_dwelling).toBe(false);
+    expect(c.demo_low).toBe(0);
+    expect(c.demo_high).toBe(0);
+  });
+
   it("scales construction and consent costs by the final dwelling count", () => {
     const property = minimal({
       cv_nzd: 1_770_000,

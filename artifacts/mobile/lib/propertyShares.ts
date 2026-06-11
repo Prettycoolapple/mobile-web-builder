@@ -130,9 +130,14 @@ export async function shareReport(report: FeasibilityReport, headers: ApiHeaders
     summary: {
       score: report.scores?.composite ?? null,
       zone: report.zone_label ?? report.planning?.zone ?? report.propertyOverview?.zone ?? null,
+      bedrooms: report.propertyOverview?.bedrooms ?? null,
+      bathrooms: report.propertyOverview?.bathrooms ?? null,
+      titleStatus: report.propertyOverview?.titleType ?? null,
+      titleType: report.propertyOverview?.titleType ?? null,
       potentialLots: report.planning?.potentialLots ?? null,
       designLedRange: report.planning?.designLedYieldRange ?? null,
       landArea: report.propertyOverview?.landArea ?? null,
+      floorArea: report.propertyOverview?.floorArea ?? null,
       listingPrice: report.propertyOverview?.listingPrice ?? null,
     },
   }, headers);

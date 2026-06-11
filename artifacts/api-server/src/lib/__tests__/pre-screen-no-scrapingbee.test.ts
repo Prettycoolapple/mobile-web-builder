@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+﻿import { beforeEach, describe, expect, it, vi } from "vitest";
 import { preScreenListingsFast, type PreScreenDetailedResult } from "../pre-screen";
 import { geocodeAddress } from "../geocode";
 import { fetchOverlays, fetchUnitaryPlanZone } from "../auckland-council";
@@ -14,7 +14,7 @@ vi.mock("../auckland-council", () => ({
   fetchUnitaryPlanZone: vi.fn(),
   fetchOverlays: vi.fn(),
 }));
-vi.mock("../linz", () => ({ fetchLINZParcel: vi.fn() }));
+vi.mock("../linz", () => ({ fetchLINZParcel: vi.fn(), fetchLINZChildAddressCount: vi.fn(async () => null) }));
 vi.mock("../scrapers/homes", () => ({ scrapeHomes: vi.fn() }));
 vi.mock("../scrapers/propertyvalue", () => ({ scrapePropertyValue: vi.fn() }));
 vi.mock("../property-data", () => ({ fetchPropertyHistory: vi.fn() }));
@@ -57,7 +57,7 @@ describe("strict-subdivision pre-screen never calls the paid scraper", () => {
     mockedZone.mockResolvedValue({ zone_code: "MHU", zone_description: "Mixed Housing Urban", min_lot_size_sqm: 300 } as any);
     mockedOverlays.mockResolvedValue([]);
     // LINZ deliberately returns null so the legacy code would have fallen
-    // through to scrapeHomes — but the new disablePaidScrapers flag prevents it.
+    // through to scrapeHomes â€” but the new disablePaidScrapers flag prevents it.
     mockedLinz.mockResolvedValue(null);
     mockedPropertyValue.mockResolvedValue(null);
     mockedPropertyHistory.mockResolvedValue({

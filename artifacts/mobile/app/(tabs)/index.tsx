@@ -21,11 +21,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import * as StoreReview from "expo-store-review";
+import { Audio } from "expo-av";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useChat, ChatMessage, FeasibilityReport, FeasibilityReportGroup, LoadingHint, PropertyCandidate, SelectedListingContext, ServiceProvider, type CandidateScoreUpdate } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
-import { AppRatingPrompt } from "@/components/AppRatingPrompt";
+
 import { ChatBubble } from "@/components/ChatBubble";
 import { ResponseRatingBar } from "@/components/ResponseRatingBar";
 import { PaywallModal } from "@/components/PaywallModal";
@@ -99,7 +100,7 @@ function getAnalyseDisclaimerDismissedKey(userId?: string | null): string {
 
 type PendingAnalyseAction =
   | { type: "send"; text: string }
-  | { type: "analyse"; address: string; selectedPhotoUrl?: string | null; selectedListingUrl?: string | null; selectedListingContext?: SelectedListingContext | null };
+  | { type: "analyse"; address: string; selectedPhotoUrl?: string | null; selectedListingUrl?: string | null; selectedListingContext?: SelectedListingContext | null; analysisKey?: string };
 
 function detectClientMode(text: string): "analyse" | "discover" | "followup" {
   const lowerText = text.toLowerCase();
@@ -334,9 +335,11 @@ export default function SearchScreen() {
   const [browseLoadingMore, setBrowseLoadingMore] = useState(false);
   const [browseError, setBrowseError] = useState<string | null>(null);
   const [showPaywall, setShowPaywall] = useState(false);
-  const [showAppRatingPrompt, setShowAppRatingPrompt] = useState(false);
+
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [messageLimitReached, setMessageLimitReached] = useState(false);
+  const [recording, setRecording] = useState<Audio.Recording | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
   const shownRecommendationReportIds = useRef<Set<string>>(new Set());
@@ -347,14 +350,15 @@ export default function SearchScreen() {
   const sessionMessagesRef = useRef<ChatMessage[]>([]);
   const checkedFollowupIds = useRef<Set<string>>(new Set());
   const lastReportIdRef = useRef<string | null>(null);
-  const appRatingPromptOpenRef = useRef(false);
+
   const reportMessageHeightsRef = useRef<Map<string, number>>(new Map());
   const cardScorePollRef = useRef<{ addresses: string[]; sessionId: string; intervalId: ReturnType<typeof setInterval> | null }>({ addresses: [], sessionId: "", intervalId: null });
-  const handleAnalyseRef = useRef<((address: string, selectedPhotoUrl?: string | null, selectedListingUrl?: string | null, selectedListingContext?: SelectedListingContext | null, skipAnalyseDisclaimer?: boolean) => Promise<void>) | null>(null);
+  const handleAnalyseRef = useRef<((address: string, selectedPhotoUrl?: string | null, selectedListingUrl?: string | null, selectedListingContext?: SelectedListingContext | null, skipAnalyseDisclaimer?: boolean, analysisKey?: string) => Promise<void>) | null>(null);
   const processedRouteAnalyseRef = useRef<string | null>(null);
   const processedShareTokenRef = useRef<string | null>(null);
   const [listViewportHeight, setListViewportHeight] = useState(0);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const [analysingPropertyKey, setAnalysingPropertyKey] = useState<string | null>(null);
   const [analyseDisclaimerVisible, setAnalyseDisclaimerVisible] = useState(false);
   const [analyseDisclaimerDontRemind, setAnalyseDisclaimerDontRemind] = useState(false);
   const [analyseDisclaimerDismissed, setAnalyseDisclaimerDismissed] = useState(false);
@@ -873,7 +877,7 @@ export default function SearchScreen() {
 
   const maybeTriggerAppRatingPrompt = useCallback(
     async (kind: "chat" | "report", messageKey: string) => {
-      if (Platform.OS === "web" || !user?.id || appRatingPromptOpenRef.current) return;
+      if (Platform.OS === "web" || !user?.id) return;
       const state = await readAppRatingState(user.id);
       if (state.completed || state.lastTriggeredMessageKey === messageKey) return;
 
@@ -889,10 +893,20 @@ export default function SearchScreen() {
       const lastPromptAt = nextState.lastPromptAt ?? 0;
       const snoozed = lastPromptAt > 0 && Date.now() - lastPromptAt < APP_RATING_SNOOZE_MS;
       const shouldPrompt = kind === "report" || chatCompletions >= APP_RATING_CHAT_THRESHOLD;
-      if (!shouldPrompt || promptCount >= 2 || snoozed || appRatingPromptOpenRef.current) return;
+      if (!shouldPrompt || promptCount >= 2 || snoozed) return;
 
-      appRatingPromptOpenRef.current = true;
-      setShowAppRatingPrompt(true);
+      await writeAppRatingState(user.id, {
+        ...nextState,
+        promptCount: promptCount + 1,
+        lastPromptAt: Date.now(),
+        completed: promptCount + 1 >= 2,
+      });
+
+      try {
+        if (await StoreReview.hasAction()) {
+          await StoreReview.requestReview();
+        }
+      } catch {}
     },
     [user?.id],
   );
@@ -910,50 +924,6 @@ export default function SearchScreen() {
       void maybeTriggerAppRatingPrompt("chat", key);
     }
   }, [currentSession?.id, currentSession?.messages, currentSession?.skipFirstTurnRating, maybeTriggerAppRatingPrompt]);
-
-  const handleDismissAppRating = useCallback(() => {
-    setShowAppRatingPrompt(false);
-    appRatingPromptOpenRef.current = false;
-    if (!user?.id) return;
-    void (async () => {
-      const state = await readAppRatingState(user.id);
-      await writeAppRatingState(user.id, {
-        ...state,
-        promptCount: (state.promptCount ?? 0) + 1,
-        lastPromptAt: Date.now(),
-      });
-    })();
-  }, [user?.id]);
-
-  const handleSubmitAppRating = useCallback(
-    (rating: number) => {
-      setShowAppRatingPrompt(false);
-      appRatingPromptOpenRef.current = false;
-      if (user?.id) {
-        void (async () => {
-          const state = await readAppRatingState(user.id);
-          await writeAppRatingState(user.id, {
-            ...state,
-            completed: true,
-            rating,
-            promptCount: (state.promptCount ?? 0) + 1,
-            lastPromptAt: Date.now(),
-          });
-        })();
-      }
-
-      if (rating >= 4) {
-        void (async () => {
-          try {
-            if (await StoreReview.hasAction()) {
-              await StoreReview.requestReview();
-            }
-          } catch {}
-        })();
-      }
-    },
-    [user?.id],
-  );
 
   const trackBackgroundAnalyseJob = useCallback(
     async (jobId: string | null | undefined, sessionId: string, address: string) => {
@@ -1069,7 +1039,8 @@ export default function SearchScreen() {
 
   const handleSend = useCallback(async (overrideText?: string, skipAnalyseDisclaimer = false, continuePresentation?: "generic_listing" | "scored_screening") => {
     const text = (overrideText !== undefined ? overrideText : inputText).trim();
-    if (!text || isLoading) return;
+    if (!text && !isLoading) return;
+    if (isLoading) return;
     const detectedMode = detectClientMode(text);
     if (!skipAnalyseDisclaimer && detectedMode === "analyse" && shouldShowAnalyseDisclaimer()) {
       openAnalyseDisclaimer({ type: "send", text });
@@ -1795,20 +1766,24 @@ export default function SearchScreen() {
       selectedListingUrl?: string | null,
       selectedListingContext?: SelectedListingContext | null,
       skipAnalyseDisclaimer = false,
+      analysisKey?: string,
     ) => {
       if (isLoading) return;
       if (!skipAnalyseDisclaimer && shouldShowAnalyseDisclaimer()) {
-        openAnalyseDisclaimer({ type: "analyse", address, selectedPhotoUrl, selectedListingUrl, selectedListingContext });
+        openAnalyseDisclaimer({ type: "analyse", address, selectedPhotoUrl, selectedListingUrl, selectedListingContext, analysisKey });
         return;
       }
       setInputText("");
       Keyboard.dismiss();
+      setAnalysingPropertyKey(analysisKey ?? (selectedListingUrl || address).trim());
 
       const sessionId = currentSessionId ?? createSession();
 
       addMessage({ role: "user", content: t("search.analyse_prefix", { address }), type: "text" }, sessionId);
       setIsLoading(true);
       addMessage({ role: "assistant", content: "", type: "loading", loadingMode: "analyse" }, sessionId);
+      setTimeout(scrollToNewestMessage, 80);
+      setTimeout(scrollToNewestMessage, 260);
 
       const currentMessages = currentSession?.messages ?? [];
       const conversationHistory = currentMessages
@@ -1947,6 +1922,7 @@ export default function SearchScreen() {
         }
       } finally {
         setIsLoading(false);
+        setAnalysingPropertyKey(null);
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       }
     },
@@ -1967,6 +1943,7 @@ export default function SearchScreen() {
       trackBackgroundAnalyseJob,
       shouldShowAnalyseDisclaimer,
       openAnalyseDisclaimer,
+      scrollToNewestMessage,
       t,
     ],
   );
@@ -1974,6 +1951,19 @@ export default function SearchScreen() {
   useLayoutEffect(() => {
     handleAnalyseRef.current = handleAnalyse;
   }, [handleAnalyse]);
+
+  const handleCardAnalyse = useCallback(
+    (
+      address: string,
+      selectedPhotoUrl?: string | null,
+      selectedListingUrl?: string | null,
+      selectedListingContext?: SelectedListingContext | null,
+      analysisKey?: string,
+    ) => {
+      void handleAnalyse(address, selectedPhotoUrl, selectedListingUrl, selectedListingContext, false, analysisKey);
+    },
+    [handleAnalyse],
+  );
 
   useEffect(() => {
     const address = typeof routeParams.analyseAddress === "string" ? routeParams.analyseAddress.trim() : "";
@@ -2088,7 +2078,7 @@ export default function SearchScreen() {
     if (action.type === "send") {
       await handleSend(action.text, true);
     } else {
-      await handleAnalyse(action.address, action.selectedPhotoUrl, action.selectedListingUrl, action.selectedListingContext, true);
+      await handleAnalyse(action.address, action.selectedPhotoUrl, action.selectedListingUrl, action.selectedListingContext, true, action.analysisKey);
     }
   }, [analyseDisclaimerDontRemind, handleAnalyse, handleSend, user?.id]);
 
@@ -2105,7 +2095,8 @@ export default function SearchScreen() {
           <ChatBubble
             message={item}
             onFollowUp={handleFollowUp}
-            onAnalyse={handleAnalyse}
+            onAnalyse={handleCardAnalyse}
+            analysingPropertyKey={analysingPropertyKey}
             onRetry={handleSend}
             onConnect={(providerId) => handleConnect(providerId, item.propertyAddress ?? "")}
             onDismiss={handleDismiss}
@@ -2116,7 +2107,7 @@ export default function SearchScreen() {
         </View>
       );
     },
-    [handleFollowUp, handleAnalyse, handleSend, handleConnect, handleDismiss, handleAgentDismiss],
+    [handleFollowUp, handleCardAnalyse, analysingPropertyKey, handleSend, handleConnect, handleDismiss, handleAgentDismiss],
   );
 
   const keyExtractor = useCallback((item: ChatMessage) => item.id, []);
@@ -2127,6 +2118,74 @@ export default function SearchScreen() {
   const TAB_BAR_HEIGHT = Platform.OS === "web" ? 84 : 49;
   const tabBarOffset = Platform.OS === "web" ? TAB_BAR_HEIGHT : TAB_BAR_HEIGHT + insets.bottom;
   const canSend = inputText.trim().length > 0 && !isLoading && !messageLimitReached;
+
+  const startRecording = useCallback(async () => {
+    try {
+      if (messageLimitReached) return;
+      const permission = await Audio.requestPermissionsAsync();
+      if (permission.status !== "granted") return;
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
+
+      const { recording: newRecording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+      setRecording(newRecording);
+      setIsRecording(true);
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    } catch (err) {
+      console.log("Failed to start recording", err);
+    }
+  }, [messageLimitReached]);
+
+  const stopRecording = useCallback(async () => {
+    if (!recording) return;
+    try {
+      setIsRecording(false);
+      await recording.stopAndUnloadAsync();
+      const uri = recording.getURI();
+      setRecording(null);
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+      if (uri) {
+        setIsLoading(true);
+        const formData = new FormData();
+        formData.append("file", {
+          uri,
+          name: "audio.m4a",
+          type: "audio/m4a",
+        } as any);
+
+        // Omit Content-Type to let fetch generate the multipart boundary
+        const { "Content-Type": _ct, ...headersWithoutContentType } = getApiHeaders();
+
+        const res = await fetch(`${resolveApiBase()}/transcribe`, {
+          method: "POST",
+          headers: headersWithoutContentType,
+          body: formData,
+        });
+
+        if (res.ok) {
+          const data = await res.json() as { text?: string };
+          if (data.text && data.text.trim().length > 0) {
+            void handleSend(data.text.trim());
+          } else {
+            setIsLoading(false);
+          }
+        } else {
+          setIsLoading(false);
+        }
+      }
+    } catch (err) {
+      console.log("Failed to stop recording", err);
+      setRecording(null);
+      setIsRecording(false);
+      setIsLoading(false);
+    }
+  }, [recording, getApiHeaders, handleSend, setIsLoading]);
 
   return (
     <KeyboardAvoidingView
@@ -2456,6 +2515,18 @@ export default function SearchScreen() {
               >
                 <Feather name="arrow-up" size={17} color={canSend ? "#fff" : colors.mutedForeground} />
               </TouchableOpacity>
+              {!inputText.trim() && !messageLimitReached && (
+                <TouchableOpacity
+                  style={[styles.micBtn, { backgroundColor: isRecording ? "#ef4444" : "transparent" }]}
+                  onPressIn={startRecording}
+                  onPressOut={stopRecording}
+                  activeOpacity={0.7}
+                  accessibilityRole="button"
+                  accessibilityLabel="Press and hold to speak"
+                >
+                  <Feather name="mic" size={18} color={isRecording ? "#fff" : colors.mutedForeground} />
+                </TouchableOpacity>
+              )}
             </View>
           </View>
         </>
@@ -2513,11 +2584,7 @@ export default function SearchScreen() {
           </View>
         </View>
       </Modal>
-      <AppRatingPrompt
-        visible={showAppRatingPrompt}
-        onDismiss={handleDismissAppRating}
-        onSubmit={handleSubmitAppRating}
-      />
+
     </KeyboardAvoidingView>
   );
 }
@@ -2680,9 +2747,17 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   suggestions: {
-    marginTop: 8,
+    paddingBottom: 2,
   },
-  suggestionChip: {
+  micBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: 4,
+  },
+  suggestionChips: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,

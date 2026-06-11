@@ -96,6 +96,8 @@ export function selectedListingContextFromBrowse(listing: BrowseListing) {
     landAreaApprox: null,
     floorAreaApprox: null,
     priceApprox: null,
+    propertyType: listing.propertyType ?? null,
+    listingTitle: listing.listingTitle ?? null,
     source: listing.source === "internal" ? "project-alpha" : "curated",
     isCombinedListing: null,
     packageAddress: null,

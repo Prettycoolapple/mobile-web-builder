@@ -211,6 +211,64 @@ export async function fetchLINZTitlesByAddress(address: string): Promise<LinzLrs
   return (await fetchLINZTitlesByAddressDetailed(address)).preview;
 }
 
+export interface LinzChildAddressProbe {
+  /** Unit-style child addresses ("1/6, 2/6 … 10/6 Riddell Road") found at the parent address. */
+  childCount: number;
+  samples: string[];
+}
+
+/**
+ * Redevelopment probe: once a parcel is developed into multiple dwellings,
+ * LINZ allocates unit-style child addresses under the parent street number.
+ * Querying the LRS address search with the PARENT address surfaces those
+ * children — `childCount >= 2` is a strong signal the parcel has already been
+ * developed, even while council/valuation records still describe the old
+ * dwelling.
+ *
+ * Gated behind LINZ_CHILD_ADDRESS_PROBE=1 until the LRS response shape for
+ * unit addresses is verified against live data; returns null when disabled,
+ * on parse failure, or on any fetch error (callers treat null as "no signal").
+ */
+export async function fetchLINZChildAddressCount(address: string): Promise<LinzChildAddressProbe | null> {
+  if (process.env["LINZ_CHILD_ADDRESS_PROBE"] !== "1") return null;
+  const query = address.trim();
+  // Parent street number + street name, e.g. "6" + "Riddell Road". Addresses
+  // that are already unit-style ("10/6 …") are not parents — skip them.
+  const m = query.match(/^(\d+)\s+([^,/]+)/);
+  if (!m) return null;
+  const streetNumber = m[1];
+  const streetName = m[2].trim().toLowerCase();
+
+  try {
+    const url = new URL(`${LINZ_LRS_PUBLIC_BASE}/public-search-caches/addresses`);
+    url.searchParams.set("q", query);
+    const resp = await fetch(url.toString(), {
+      headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!resp.ok) {
+      logger.debug({ status: resp.status, query }, "LINZ child-address probe: search failed");
+      return null;
+    }
+    const json = await resp.json() as {
+      data?: Array<{ address?: string; source?: string }>;
+    };
+    const childRe = new RegExp(`^\\d+[a-z]?\\s*/\\s*${streetNumber}\\s`, "i");
+    const children = (json.data ?? [])
+      .filter((item) => String(item.source ?? "").toLowerCase() === "address")
+      .map((item) => String(item.address ?? "").trim())
+      .filter((a) => childRe.test(a) && a.toLowerCase().includes(streetName));
+    const unique = [...new Set(children)];
+    if (unique.length > 0) {
+      logger.info({ query, childCount: unique.length, samples: unique.slice(0, 5) }, "LINZ child-address probe: unit-style children found at parent address");
+    }
+    return { childCount: unique.length, samples: unique.slice(0, 5) };
+  } catch (err) {
+    logger.debug({ err: (err as Error).message, query }, "LINZ child-address probe failed");
+    return null;
+  }
+}
+
 function lrsUnavailableStatus(status: number): LinzLrsTitlePreviewStatus {
   return status === 408 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504
     ? "unavailable"

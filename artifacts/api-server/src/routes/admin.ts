@@ -11,6 +11,7 @@ import {
   chatLlmFeedback,
   dmThreads,
   propertyCache,
+  conversationSyncs,
   withDbRetry,
 } from "@workspace/db";
 import { requireAdmin } from "../lib/auth";
@@ -1408,6 +1409,65 @@ router.get("/admin/listings/pending-count", requireAdmin, async (_req, res) => {
     res.json({ total: Number((rows[0] as any)?.total ?? 0) });
   } catch {
     res.json({ total: 0 });
+  }
+});
+
+// GET /admin/users/:userId/chats — for user detail history
+router.get("/admin/users/:userId/chats", requireAdmin, async (req, res) => {
+  const { userId } = req.params;
+  const limit = parseLimit(req.query.limit, 10, 100);
+  const offset = parseOffset(req.query.offset);
+
+  try {
+    const rows = await db
+      .select({
+        id: conversationSyncs.id,
+        title: conversationSyncs.title,
+        clientUpdatedAt: conversationSyncs.clientUpdatedAt,
+        createdAt: conversationSyncs.createdAt,
+        data: conversationSyncs.data,
+      })
+      .from(conversationSyncs)
+      .where(eq(conversationSyncs.userId, userId))
+      .orderBy(desc(conversationSyncs.clientUpdatedAt))
+      .limit(limit)
+      .offset(offset);
+
+    const totalResult = await db.execute<{ total: string }>(sql`
+      SELECT COUNT(*)::text AS total FROM conversation_syncs WHERE user_id = ${userId}
+    `);
+    const totalRows = (totalResult as any).rows ?? totalResult;
+    const total = Number((totalRows[0] as any)?.total ?? 0);
+
+    // Parse and extract only user messages
+    const processedRows = rows.map((r) => {
+      let userMessages: { content: string; createdAt?: string }[] = [];
+      try {
+        const payload = r.data as any;
+        if (payload && Array.isArray(payload.messages)) {
+          userMessages = payload.messages
+            .filter((m: any) => m.role === "user" && typeof m.content === "string")
+            .map((m: any) => ({
+              content: m.content,
+              createdAt: m.createdAt || m.id,
+            }));
+        }
+      } catch {
+        // safe fallback
+      }
+      return {
+        id: r.id,
+        title: r.title,
+        clientUpdatedAt: r.clientUpdatedAt,
+        createdAt: r.createdAt,
+        userMessages,
+      };
+    });
+
+    res.json({ total, limit, offset, rows: processedRows });
+  } catch (err) {
+    req.log.error({ err }, "admin user chats list failed");
+    res.status(500).json({ error: "Failed to load chats" });
   }
 });
 

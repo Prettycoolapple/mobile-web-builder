@@ -79,6 +79,8 @@ function contextFromRealestateListing(listing: ListingResult): SelectedListingCo
     landAreaApprox: useListingFacts ? (listing.landAreaApprox ?? null) : null,
     floorAreaApprox: useListingFacts ? (listing.floorAreaApprox ?? null) : null,
     priceApprox: useListingFacts ? (listing.priceApprox ?? null) : null,
+    propertyType: useListingFacts ? (listing.propertyType ?? listing.listingCategory ?? null) : null,
+    listingTitle: listing.listingTitle ?? null,
     source: "realestate.co.nz",
     matchConfidence: "verified",
     isActiveListing: true,

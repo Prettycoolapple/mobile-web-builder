@@ -25,6 +25,7 @@ export const pendingAgentSignups = pgTable(
     phoneVid: text("phone_vid").notNull(),
     primaryLanguage: text("primary_language").notNull(),
     agencyName: text("agency_name").notNull(),
+    reaaLicenceNumber: text("reaa_licence_number").notNull(),
     stripeCustomerId: text("stripe_customer_id"),
     stripeCheckoutSessionId: text("stripe_checkout_session_id"),
     /** "pending" until the account is created, then "completed". */

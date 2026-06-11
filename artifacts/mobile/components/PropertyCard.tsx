@@ -11,7 +11,8 @@ import { shareCandidate } from "@/lib/propertyShares";
 
 interface Props {
   candidate: PropertyCandidate;
-  onAnalyse: (address: string, photoUrl?: string | null, listingUrl?: string | null, selectedListingContext?: SelectedListingContext | null) => void;
+  onAnalyse: (address: string, photoUrl?: string | null, listingUrl?: string | null, selectedListingContext?: SelectedListingContext | null, analysisKey?: string) => void;
+  analysingPropertyKey?: string | null;
   /** When true, the subdivision disclaimer note is rendered. Pass true only for
    *  subdivision-intent screenings (single property card). */
   showSubdivisionDisclaimer?: boolean;
@@ -127,7 +128,7 @@ function OverallCompositeBadge({
   );
 }
 
-export function PropertyCard({ candidate, onAnalyse, showSubdivisionDisclaimer = false }: Props) {
+export function PropertyCard({ candidate, onAnalyse, analysingPropertyKey = null, showSubdivisionDisclaimer = false }: Props) {
   const colors = useColors();
   const { getApiHeaders } = useAuth();
   const { t } = useT();
@@ -182,6 +183,8 @@ export function PropertyCard({ candidate, onAnalyse, showSubdivisionDisclaimer =
   const pathwayColor = hasStandardPath ? colors.success : colors.amber;
   const pathwayIcon = hasStandardPath ? "check-circle" : "alert-circle";
   const pathwayTitle = t("search.subdivision_standard_path", { lots: standardLots || potentialLots || 1 });
+  const analysisKey = (candidate.listingUrl || candidate.address).trim();
+  const isAnalysisGenerating = !!analysisKey && analysingPropertyKey === analysisKey;
   const pathwaySubtitle = hasDesignLedUpside
     ? t(hasStandardPath ? "search.subdivision_design_led_test" : "search.subdivision_design_led_range", {
         min: designLedRange?.min ?? 2,
@@ -292,6 +295,21 @@ export function PropertyCard({ candidate, onAnalyse, showSubdivisionDisclaimer =
               </Text>
             </View>
           )}
+          {!!candidate.propertyType?.trim() && (
+            <View style={[styles.tag, { backgroundColor: colors.muted }]}>
+              <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
+                {candidate.propertyType}
+              </Text>
+            </View>
+          )}
+          {candidate.redevelopmentSuspected === true && (
+            <View style={[styles.tag, { backgroundColor: colors.amber + "22", flexDirection: "row", alignItems: "center", gap: 3 }]}>
+              <Feather name="alert-triangle" size={10} color={colors.amber} />
+              <Text style={[styles.tagText, { color: colors.amber, fontFamily: "DM_Sans_500Medium" }]}>
+                {t("search.redevelopment_suspected_chip")}
+              </Text>
+            </View>
+          )}
         </View>
 
         {isPackageListing ? (
@@ -346,19 +364,21 @@ export function PropertyCard({ candidate, onAnalyse, showSubdivisionDisclaimer =
       </View>
 
       <TouchableOpacity
-        style={[styles.analyseBtn, { backgroundColor: colors.accent }]}
+        style={[styles.analyseBtn, { backgroundColor: isAnalysisGenerating ? colors.muted : colors.accent }]}
         onPress={() => onAnalyse(
           candidate.address,
           candidate.photoUrl ?? null,
           candidate.listingUrl ?? null,
           selectedListingContextFromCandidate(candidate),
+          analysisKey,
         )}
-        activeOpacity={0.8}
+        activeOpacity={isAnalysisGenerating ? 1 : 0.8}
+        disabled={isAnalysisGenerating}
       >
-        <Text style={[styles.analyseBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>
-          {isPackageListing ? t("report.combined_listing_analyse_both") : t("search.full_analysis")}
+        <Text style={[styles.analyseBtnText, { color: isAnalysisGenerating ? colors.mutedForeground : "#fff", fontFamily: "DM_Sans_600SemiBold" }]}>
+          {isAnalysisGenerating ? t("search.analysing_property") : isPackageListing ? t("report.combined_listing_analyse_both") : t("search.full_analysis")}
         </Text>
-        <Feather name="arrow-right" size={14} color="#fff" />
+        <Feather name={isAnalysisGenerating ? "clock" : "arrow-right"} size={14} color={isAnalysisGenerating ? colors.mutedForeground : "#fff"} />
       </TouchableOpacity>
     </View>
   );

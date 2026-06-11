@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+﻿import { beforeEach, describe, expect, it, vi } from "vitest";
 import { computeLightScore } from "../light-score";
 import { geocodeAddress } from "../geocode";
 import { fetchContour, fetchOverlays, fetchUnitaryPlanZone } from "../auckland-council";
@@ -10,7 +10,7 @@ vi.mock("../auckland-council", () => ({
   fetchOverlays: vi.fn(),
   fetchContour: vi.fn(),
 }));
-vi.mock("../linz", () => ({ fetchLINZParcel: vi.fn() }));
+vi.mock("../linz", () => ({ fetchLINZParcel: vi.fn(), fetchLINZChildAddressCount: vi.fn(async () => null) }));
 
 const mockedGeocode = vi.mocked(geocodeAddress);
 const mockedZone = vi.mocked(fetchUnitaryPlanZone);

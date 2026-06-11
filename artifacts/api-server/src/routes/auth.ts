@@ -77,6 +77,13 @@ const signupSchema = z
         path: ["agentData"],
       });
     }
+    if (data.role === "sales_agent" && !data.agentData?.reaaLicenceNumber?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "REA licence number is required.",
+        path: ["agentData", "reaaLicenceNumber"],
+      });
+    }
     if (data.role === "service_provider") {
       if (!data.providerData) {
         ctx.addIssue({
@@ -136,6 +143,7 @@ const salesAgentWebSignupSchema = z
     phoneVerificationToken: z.string().min(1),
     primaryLanguage: z.string().min(1),
     agencyName: z.string().min(1),
+    reaaLicenceNumber: z.string().min(1, "REA licence number is required."),
     // Present on the invitation-code path; absent on the subscribe path.
     invitationCode: z.string().optional(),
   })
@@ -156,6 +164,7 @@ const salesAgentWebProfileSchema = z
     phoneNumber: z.string().min(1),
     primaryLanguage: z.string().min(1),
     agencyName: z.string().min(1),
+    reaaLicenceNumber: z.string().min(1, "REA licence number is required."),
   })
   .superRefine((data, ctx) => {
     const phone = data.phoneNumber.replace(/[\s\-()]/g, "").trim();
@@ -474,6 +483,7 @@ router.post("/sales-agent-web-signup", async (req, res) => {
   const fullName = parsed.data.fullName.trim();
   const primaryLanguage = parsed.data.primaryLanguage.trim();
   const agencyName = parsed.data.agencyName.trim();
+  const reaaLicenceNumber = parsed.data.reaaLicenceNumber.trim();
 
   // This endpoint is the INVITATION-code path. Agents without a valid code must
   // complete registration via the Stripe subscribe flow (checkout/claim).
@@ -541,6 +551,7 @@ router.post("/sales-agent-web-signup", async (req, res) => {
       await tx.insert(salesAgentProfiles).values({
         userId: newProfile.id,
         agencyName,
+        reaaLicenceNumber,
         languages,
         regionsCovered: [],
         propertyTypes: [],
@@ -558,6 +569,7 @@ router.post("/sales-agent-web-signup", async (req, res) => {
       user: {
         ...profile,
         agencyName,
+        reaaLicenceNumber,
         primaryLanguage,
         isVerified: false,
       },
@@ -572,6 +584,7 @@ router.post("/sales-agent-web-signup", async (req, res) => {
       languages,
       agentData: {
         agencyName,
+        reaaLicenceNumber,
       },
     });
   } catch (error) {
@@ -615,6 +628,7 @@ router.post("/sales-agent-web-signup/checkout", async (req, res) => {
   const fullName = parsed.data.fullName.trim();
   const primaryLanguage = parsed.data.primaryLanguage.trim();
   const agencyName = parsed.data.agencyName.trim();
+  const reaaLicenceNumber = parsed.data.reaaLicenceNumber.trim();
 
   try {
     const existing = await db
@@ -650,6 +664,7 @@ router.post("/sales-agent-web-signup/checkout", async (req, res) => {
         phoneVid: verifiedPhone.vid,
         primaryLanguage,
         agencyName,
+        reaaLicenceNumber,
         stripeCustomerId: customerId,
         status: "pending",
         expiresAt: new Date(Date.now() + 60 * 60 * 1000),
@@ -736,7 +751,10 @@ router.post("/sales-agent-web-signup/claim", async (req, res) => {
 
     const [profile] = await db.select().from(profiles).where(eq(profiles.id, ensured.profileId)).limit(1);
     const [agentProfile] = await db
-      .select({ agencyName: salesAgentProfiles.agencyName })
+      .select({
+        agencyName: salesAgentProfiles.agencyName,
+        reaaLicenceNumber: salesAgentProfiles.reaaLicenceNumber,
+      })
       .from(salesAgentProfiles)
       .where(eq(salesAgentProfiles.userId, ensured.profileId))
       .limit(1);
@@ -758,6 +776,7 @@ router.post("/sales-agent-web-signup/claim", async (req, res) => {
         avatarUrl: profile.avatarUrl,
         phoneNumber: profile.phoneNumber,
         agencyName: agentProfile?.agencyName ?? null,
+        reaaLicenceNumber: agentProfile?.reaaLicenceNumber ?? null,
         isVerified: profile.isVerified,
       },
     });
@@ -784,6 +803,7 @@ router.patch("/sales-agent-web-profile", requireAuth, async (req, res) => {
   const phoneNumber = parsed.data.phoneNumber.replace(/[\s\-()]/g, "").trim();
   const primaryLanguage = parsed.data.primaryLanguage.trim();
   const agencyName = parsed.data.agencyName.trim();
+  const reaaLicenceNumber = parsed.data.reaaLicenceNumber.trim();
   const languages = [primaryLanguage];
 
   try {
@@ -818,7 +838,7 @@ router.patch("/sales-agent-web-profile", requireAuth, async (req, res) => {
 
       await tx
         .update(salesAgentProfiles)
-        .set({ agencyName, languages })
+        .set({ agencyName, reaaLicenceNumber, languages })
         .where(eq(salesAgentProfiles.userId, userId));
 
       return profile;
@@ -828,6 +848,7 @@ router.patch("/sales-agent-web-profile", requireAuth, async (req, res) => {
       user: {
         ...updated,
         agencyName,
+        reaaLicenceNumber,
         primaryLanguage,
       },
     });
@@ -1076,7 +1097,10 @@ router.post("/login", async (req, res) => {
     }
 
     const [agentProfile] = await db
-      .select({ agencyName: salesAgentProfiles.agencyName })
+      .select({
+        agencyName: salesAgentProfiles.agencyName,
+        reaaLicenceNumber: salesAgentProfiles.reaaLicenceNumber,
+      })
       .from(salesAgentProfiles)
       .where(eq(salesAgentProfiles.userId, profile.id))
       .limit(1);
@@ -1104,6 +1128,7 @@ router.post("/login", async (req, res) => {
         avatarUrl: profile.avatarUrl,
         phoneNumber: profile.phoneNumber,
         agencyName: agentProfile?.agencyName ?? null,
+        reaaLicenceNumber: agentProfile?.reaaLicenceNumber ?? null,
         isVerified: profile.isVerified,
         specialStatus: effectiveSpecialStatus,
         specialStatusExpiresAt: effectiveSpecialStatusExpiresAt,
@@ -1144,7 +1169,10 @@ router.post("/sales-agent-login", async (req, res) => {
     }
 
     const [agentProfile] = await db
-      .select({ agencyName: salesAgentProfiles.agencyName })
+      .select({
+        agencyName: salesAgentProfiles.agencyName,
+        reaaLicenceNumber: salesAgentProfiles.reaaLicenceNumber,
+      })
       .from(salesAgentProfiles)
       .where(eq(salesAgentProfiles.userId, profile.id))
       .limit(1);
@@ -1215,6 +1243,7 @@ router.post("/sales-agent-login", async (req, res) => {
         avatarUrl: profile.avatarUrl,
         phoneNumber: profile.phoneNumber,
         agencyName: agentProfile?.agencyName ?? null,
+        reaaLicenceNumber: agentProfile?.reaaLicenceNumber ?? null,
         isVerified: profile.isVerified,
         specialStatus: effectiveSpecialStatus,
         specialStatusExpiresAt: effectiveSpecialStatusExpiresAt,
@@ -1250,6 +1279,7 @@ router.get("/me", requireAuth, async (req, res) => {
         specialStatusExpiresAt: profiles.specialStatusExpiresAt,
         discipline: serviceProviderProfiles.discipline,
         agencyName: salesAgentProfiles.agencyName,
+        reaaLicenceNumber: salesAgentProfiles.reaaLicenceNumber,
       })
       .from(profiles)
       .leftJoin(salesAgentProfiles, eq(salesAgentProfiles.userId, profiles.id))

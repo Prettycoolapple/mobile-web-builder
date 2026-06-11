@@ -26,6 +26,7 @@ import adminRouter from "./admin";
 import stripeRouter from "./stripe";
 import sharesRouter from "./shares";
 import translateRouter from "./translate";
+import transcribeRouter from "./transcribe";
 
 const router: IRouter = Router();
 
@@ -56,5 +57,6 @@ router.use(adminRouter);
 router.use(stripeRouter);
 router.use(sharesRouter);
 router.use(translateRouter);
+router.use(transcribeRouter);
 
 export default router;

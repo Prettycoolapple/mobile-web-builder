@@ -100,6 +100,7 @@ export async function createAgentAccountFromPending(
       await tx.insert(salesAgentProfiles).values({
         userId: newProfile.id,
         agencyName: pending.agencyName,
+        reaaLicenceNumber: pending.reaaLicenceNumber,
         languages,
         regionsCovered: [],
         propertyTypes: [],
@@ -118,7 +119,10 @@ export async function createAgentAccountFromPending(
       fullName: pending.fullName,
       phone: pending.phoneNumber,
       languages,
-      agentData: { agencyName: pending.agencyName },
+      agentData: {
+        agencyName: pending.agencyName,
+        reaaLicenceNumber: pending.reaaLicenceNumber,
+      },
     });
 
     return { profileId: profile.id, email, role: profile.role, created: true };

@@ -71,6 +71,7 @@ interface FieldErrors {
   email?: string;
   password?: string;
   confirmPassword?: string;
+  reaaNumber?: string;
 }
 
 export default function SignupAgentScreen() {
@@ -130,6 +131,8 @@ export default function SignupAgentScreen() {
       else if (password.length < 8) errors.password = "Password must be at least 8 characters.";
       if (!confirmPassword) errors.confirmPassword = "Please confirm your password.";
       else if (password !== confirmPassword) errors.confirmPassword = "Passwords do not match.";
+    } else if (step === 2) {
+      if (!reaaNumber.trim()) errors.reaaNumber = "REA licence number is required.";
     }
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
@@ -182,10 +185,12 @@ export default function SignupAgentScreen() {
           else if (key === "lastName") mapped.lastName = issue.message;
           else if (key === "email") mapped.email = issue.message;
           else if (key === "password") mapped.password = issue.message;
+          else if (key === "agentData" && issue.path[1] === "reaaLicenceNumber") mapped.reaaNumber = issue.message;
         }
         if (Object.keys(mapped).length > 0) {
           setFieldErrors(mapped);
           if (mapped.email || mapped.password) setStep(1);
+          else if (mapped.reaaNumber) setStep(2);
           else if (mapped.firstName || mapped.lastName) setStep(0);
           return;
         }
@@ -366,17 +371,17 @@ export default function SignupAgentScreen() {
 
             <View style={styles.field}>
               <Text style={[styles.label, { color: colors.foreground }]}>
-                REAA licence number{" "}
-                <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }}>(optional)</Text>
+                REAA licence number
               </Text>
               <TextInput
-                style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+                style={[inputBase("reaaNumber"), { backgroundColor: colors.card, borderColor: fieldErrors.reaaNumber ? colors.danger : colors.border, color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
                 placeholder="e.g. 12345678"
                 placeholderTextColor={colors.mutedForeground}
                 value={reaaNumber}
-                onChangeText={setReaaNumber}
+                onChangeText={(v) => { setReaaNumber(v); if (fieldErrors.reaaNumber) setFieldErrors((p) => ({ ...p, reaaNumber: undefined })); }}
                 keyboardType="number-pad"
               />
+              {fieldErrors.reaaNumber && <Text style={[styles.fieldError, { color: colors.danger }]}>{fieldErrors.reaaNumber}</Text>}
             </View>
 
             <View style={styles.field}>
@@ -412,10 +417,6 @@ export default function SignupAgentScreen() {
           <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: ACCENT }]} onPress={goNext} activeOpacity={0.85}>
             <Text style={styles.primaryBtnText}>Continue</Text>
             <Feather name="arrow-right" size={18} color="#fff" />
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.skipBtn} onPress={goNext}>
-            <Text style={[styles.skipText, { color: colors.mutedForeground }]}>Skip this step</Text>
           </TouchableOpacity>
         </View>
       );

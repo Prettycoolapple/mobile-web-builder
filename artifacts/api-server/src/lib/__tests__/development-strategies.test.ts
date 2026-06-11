@@ -498,6 +498,49 @@ describe("development strategies", () => {
     expect(rebuild?.assumptions.some((item) => /TDR\/TTR/.test(item))).toBe(true);
   });
 
+  it("does not recommend hold/refurbish for a priced residential section", () => {
+    const section = merged({
+      property_type: "Residential Section",
+      listing_title: "36 Marine Parade, Mellons Bay section",
+      listing_url: "https://www.realestate.co.nz/residential/sale/auckland/manukau-city/mellons-bay/section",
+      listing_active: true,
+      listing_price: 1_500_000,
+      last_sale_price: 1_200_000,
+      floor_area_sqm: null,
+      build_year: null,
+      bedrooms: null,
+      bathrooms: null,
+      zone_code: "SHZ",
+      min_lot_size_sqm: 600,
+    });
+    const assessment = buildFallbackDevelopmentStrategyAssessment(section, lotResult);
+    const strategies = calculateDevelopmentStrategies({
+      data: section,
+      baseCosts: {
+        ...baseCosts,
+        demo_low: 0,
+        demo_high: 0,
+        demo_vacant: true,
+        has_existing_dwelling: false,
+      },
+      lotResult,
+      avgSalePrice: 2_400_000,
+      avgPricePerSqm: 10_000,
+      interestRateOutlook: "stable",
+      assessment: { ...assessment, recommended_strategy: "hold_existing" },
+    });
+
+    const hold = strategies.find((strategy) => strategy.id === "hold_existing");
+    const refurbish = strategies.find((strategy) => strategy.id === "refurbish");
+    const rebuild = strategies.find((strategy) => strategy.id === "demolish_rebuild");
+
+    expect(hold?.recommendation).toBe("not_recommended");
+    expect(refurbish?.recommendation).toBe("not_recommended");
+    expect(rebuild?.recommendation).toBe("recommended");
+    expect(rebuild?.title).toBe("Build new dwelling(s)");
+    expect(rebuild?.costItems.some((item) => item.label === "Demolition")).toBe(false);
+  });
+
   it("does not apply a generic terrace/townhouse typology GDV discount", () => {
     const fourLotResult: LotResult = {
       ...lotResult,

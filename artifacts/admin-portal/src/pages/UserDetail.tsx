@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { apiGet, apiPatch } from "@/lib/api";
 import { formatDate, relativeTime } from "@/lib/format";
 
-type Tab = "feedback" | "addresses" | "agent_calls" | "connections";
+type Tab = "feedback" | "addresses" | "agent_calls" | "connections" | "chats";
 
 interface UserDetailResponse {
   profile: {
@@ -64,6 +64,14 @@ interface ConnectionRow {
   otherEmail: string;
   otherFullName: string | null;
   otherRole: string;
+}
+
+interface ChatRow {
+  id: string;
+  title: string;
+  clientUpdatedAt: string | null;
+  createdAt: string;
+  userMessages: { content: string; createdAt?: string }[];
 }
 
 interface ListResponse<T> {
@@ -132,6 +140,8 @@ export default function UserDetailPage() {
   const [callOffset, setCallOffset] = useState(0);
   const [connectionList, setConnectionList] = useState<ListResponse<ConnectionRow> | null>(null);
   const [connectionOffset, setConnectionOffset] = useState(0);
+  const [chatList, setChatList] = useState<ListResponse<ChatRow> | null>(null);
+  const [chatOffset, setChatOffset] = useState(0);
 
   useEffect(() => {
     if (!userId) return;
@@ -180,6 +190,14 @@ export default function UserDetailPage() {
       .catch(() => setConnectionList(null));
   }, [userId, connectionOffset]);
 
+  const loadChats = useCallback(() => {
+    if (!userId) return;
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(chatOffset) });
+    apiGet<ListResponse<ChatRow>>(`/admin/users/${userId}/chats?${params}`)
+      .then(setChatList)
+      .catch(() => setChatList(null));
+  }, [userId, chatOffset]);
+
   useEffect(() => {
     if (tab === "feedback") loadFeedback();
   }, [tab, loadFeedback]);
@@ -192,6 +210,9 @@ export default function UserDetailPage() {
   useEffect(() => {
     if (tab === "connections") loadConnections();
   }, [tab, loadConnections]);
+  useEffect(() => {
+    if (tab === "chats") loadChats();
+  }, [tab, loadChats]);
 
   if (loading) return <div className="empty">Loading…</div>;
   if (error) return <div className="empty">{error}</div>;
@@ -410,6 +431,16 @@ export default function UserDetailPage() {
                 Connections{connectionList ? ` (${connectionList.total})` : ""}
               </button>
             )}
+            <button
+              className="btn ghost"
+              onClick={() => setTab("chats")}
+              style={{
+                fontWeight: tab === "chats" ? 600 : 400,
+                borderColor: tab === "chats" ? "var(--accent, #2563eb)" : undefined,
+              }}
+            >
+              Chats{chatList ? ` (${chatList.total})` : ""}
+            </button>
           </div>
         </div>
 
@@ -424,6 +455,9 @@ export default function UserDetailPage() {
         )}
         {tab === "connections" && (
           <ConnectionsTable list={connectionList} offset={connectionOffset} setOffset={setConnectionOffset} />
+        )}
+        {tab === "chats" && (
+          <ChatsTable list={chatList} offset={chatOffset} setOffset={setChatOffset} />
         )}
       </div>
     </>
@@ -626,6 +660,52 @@ function ConnectionsTable({
             ))}
           </tbody>
         </table>
+      </div>
+      <Pagination total={list.total} offset={offset} setOffset={setOffset} />
+    </>
+  );
+}
+
+function ChatsTable({
+  list,
+  offset,
+  setOffset,
+}: {
+  list: ListResponse<ChatRow> | null;
+  offset: number;
+  setOffset: (n: number) => void;
+}) {
+  if (!list) return <div className="empty">Loading…</div>;
+  if (list.rows.length === 0) return <div className="empty">No chats yet.</div>;
+  return (
+    <>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16, padding: "0 16px" }}>
+        {list.rows.map((r) => (
+          <div key={r.id} style={{ border: "1px solid var(--border, #d1d5db)", borderRadius: 8, padding: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
+              <div style={{ fontWeight: 600 }}>{r.title || "Untitled Session"}</div>
+              <div style={{ fontSize: 13, color: "var(--muted)" }} title={formatDate(r.clientUpdatedAt || r.createdAt)}>
+                Last active: {relativeTime(r.clientUpdatedAt || r.createdAt)}
+              </div>
+            </div>
+            {r.userMessages.length > 0 ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {r.userMessages.map((msg, i) => (
+                  <div key={i} style={{ padding: "8px 12px", background: "var(--surface, #f3f4f6)", borderRadius: 6, fontSize: 14 }}>
+                    <div style={{ color: "var(--muted)", fontSize: 11, marginBottom: 4 }}>
+                      User
+                    </div>
+                    <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{msg.content}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ fontSize: 13, color: "var(--muted)", fontStyle: "italic" }}>
+                No text messages from user in this session.
+              </div>
+            )}
+          </div>
+        ))}
       </div>
       <Pagination total={list.total} offset={offset} setOffset={setOffset} />
     </>

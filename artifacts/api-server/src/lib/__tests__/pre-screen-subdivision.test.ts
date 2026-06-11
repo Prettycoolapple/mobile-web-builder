@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+﻿import { beforeEach, describe, expect, it, vi } from "vitest";
 import { preScreenListingsFast, preScreenListingsFastDetailed } from "../pre-screen";
 import { geocodeAddress } from "../geocode";
 import { fetchOverlays, fetchUnitaryPlanZone } from "../auckland-council";
-import { fetchLINZParcel } from "../linz";
+import { fetchLINZParcel, fetchLINZChildAddressCount } from "../linz";
 import { scrapeHomes } from "../scrapers/homes";
 import { scrapePropertyValue } from "../scrapers/propertyvalue";
 import { fetchPropertyHistory } from "../property-data";
@@ -14,7 +14,7 @@ vi.mock("../auckland-council", () => ({
   fetchUnitaryPlanZone: vi.fn(),
   fetchOverlays: vi.fn(),
 }));
-vi.mock("../linz", () => ({ fetchLINZParcel: vi.fn() }));
+vi.mock("../linz", () => ({ fetchLINZParcel: vi.fn(), fetchLINZChildAddressCount: vi.fn(async () => null) }));
 vi.mock("../scrapers/homes", () => ({ scrapeHomes: vi.fn() }));
 vi.mock("../scrapers/propertyvalue", () => ({ scrapePropertyValue: vi.fn() }));
 vi.mock("../property-data", () => ({ fetchPropertyHistory: vi.fn() }));
@@ -23,6 +23,7 @@ const mockedGeocode = vi.mocked(geocodeAddress);
 const mockedZone = vi.mocked(fetchUnitaryPlanZone);
 const mockedOverlays = vi.mocked(fetchOverlays);
 const mockedLinz = vi.mocked(fetchLINZParcel);
+const mockedLinzChildAddresses = vi.mocked(fetchLINZChildAddressCount);
 const mockedHomes = vi.mocked(scrapeHomes);
 const mockedPropertyValue = vi.mocked(scrapePropertyValue);
 const mockedPropertyHistory = vi.mocked(fetchPropertyHistory);
@@ -49,7 +50,7 @@ function listing(overrides: Partial<ListingResult>): ListingResult {
 
 describe("strict subdivision pre-screening", () => {
   beforeEach(() => {
-    // Verdict cache persists across calls — clear it between tests so each
+    // Verdict cache persists across calls â€” clear it between tests so each
     // test's mocked sources actually take effect.
     clearScreenVerdictCache();
     mockedGeocode.mockImplementation(async (address: string) => ({
@@ -61,6 +62,7 @@ describe("strict subdivision pre-screening", () => {
     mockedZone.mockResolvedValue({ zone_code: "MHU", zone_description: "Mixed Housing Urban", min_lot_size_sqm: 300 } as any);
     mockedOverlays.mockResolvedValue([]);
     mockedLinz.mockResolvedValue(null);
+    mockedLinzChildAddresses.mockResolvedValue(null);
     mockedHomes.mockResolvedValue(null);
     mockedPropertyValue.mockResolvedValue(null);
     mockedPropertyHistory.mockResolvedValue({
@@ -108,6 +110,68 @@ describe("strict subdivision pre-screening", () => {
     ], 1, null, { allowMissingListingPrice: true, strictStandardSubdivision: true });
 
     expect(results).toEqual([]);
+  });
+
+  // 6 Riddell Road incident: a brand-new 10-townhouse development marketed at
+  // the parent address. Council records still say build_year 1935 / 842m² —
+  // before the listing-claims layer this passed every gate and surfaced as a
+  // "subdividable" opportunity.
+  it("rejects a new townhouse development at a parent address despite stale 1935 council records", async () => {
+    mockedPropertyHistory.mockResolvedValue({
+      cv_nzd: 3_200_000,
+      cv_year: 2021,
+      build_year: 1935,
+      floor_area_sqm: 210,
+      land_area_sqm: 842,
+      property_type: "Residential Dwelling",
+      sources_confirmed: [],
+      sources_estimated: [],
+    });
+
+    const detailed = await preScreenListingsFastDetailed([
+      listing({
+        address: "6 Riddell Road, Glendowie, Auckland City, Auckland",
+        landArea: 842,
+        propertyType: null,
+        tenureText: null,
+        legalDescription: null,
+        listingTitle: "6 Riddell Road, Glendowie",
+        description:
+          "Introducing 10 brand new townhouses in the heart of Glendowie. " +
+          "Flexible floorplans: Choose from spacious 3 or 4 bedroom layouts.",
+      }),
+    ], 1, null, { allowMissingListingPrice: true, strictStandardSubdivision: true });
+
+    expect(detailed.candidates).toEqual([]);
+    expect(detailed.indeterminate).toEqual([]);
+  });
+
+  it("rejects via the LINZ child-address probe even when listing copy is silent", async () => {
+    mockedLinzChildAddresses.mockResolvedValue({
+      childCount: 10,
+      samples: ["1/6 Riddell Road, Glendowie", "2/6 Riddell Road, Glendowie"],
+    });
+    mockedPropertyHistory.mockResolvedValue({
+      cv_nzd: null,
+      cv_year: null,
+      build_year: 1935,
+      floor_area_sqm: 210,
+      land_area_sqm: 842,
+      property_type: "Residential Dwelling",
+      sources_confirmed: [],
+      sources_estimated: [],
+    });
+
+    const detailed = await preScreenListingsFastDetailed([
+      listing({
+        address: "6 Riddell Road, Glendowie, Auckland City, Auckland",
+        landArea: 842,
+        description: "A rare opportunity in sought-after Glendowie.",
+      }),
+    ], 1, null, { allowMissingListingPrice: true, strictStandardSubdivision: true });
+
+    expect(detailed.candidates).toEqual([]);
+    mockedLinzChildAddresses.mockResolvedValue(null);
   });
 
   it("keeps a verified unsuffixed MHU site that supports at least two lots", async () => {

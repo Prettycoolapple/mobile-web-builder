@@ -62,6 +62,12 @@ export function extractBuildYearFromListingText(text: string): number | null {
     /\bConstruction\s+(?:year|date)?[:\s]+(\d{4})\b/i,
     /\b(\d{4})\s*[-–]\s*(?:year\s+)?built\b/i,
     /\b[Bb]uilt[:\s]+(\d{4})\b/,
+    // New-build marketing copy: "completed 2025", "completed in 2024",
+    // "2024 build", "new build 2025". Restricted to 20xx so a sale year or
+    // street number can't masquerade as a heritage build year.
+    /\bCompleted\s+(?:in\s+)?(20\d{2})\b/i,
+    /\b(20\d{2})\s+(?:new\s+)?build\b/i,
+    /\bnew\s+(?:build|home)\s+(?:in\s+)?(20\d{2})\b/i,
   ];
   for (const p of patterns) {
     const m = p.exec(text);

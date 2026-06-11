@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { hasCacheableCore, RAW_PROPERTY_SCHEMA_VERSION, type PipelineResult } from "../pipeline";
+import { cacheRowFreshness, PIPELINE_VERSION } from "../property-cache-freshness";
 
 // Importing ../pipeline here also loads its entire dependency graph, so this test
 // fails fast if the cache-aware refactor introduced a load-time/runtime error.
@@ -115,5 +116,26 @@ describe("hasCacheableCore", () => {
 
   it("exposes a schema version", () => {
     expect(RAW_PROPERTY_SCHEMA_VERSION).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("cacheRowFreshness (90-day TTL)", () => {
+  const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000);
+
+  it("treats a recent row as fresh", () => {
+    const { fresh, ageDays } = cacheRowFreshness({ pipelineVersion: PIPELINE_VERSION, lastRefreshedAt: daysAgo(5) });
+    expect(fresh).toBe(true);
+    expect(ageDays).toBe(5);
+  });
+
+  it("treats a row older than the TTL as a miss", () => {
+    const { fresh, ageDays } = cacheRowFreshness({ pipelineVersion: PIPELINE_VERSION, lastRefreshedAt: daysAgo(120) });
+    expect(fresh).toBe(false);
+    expect(ageDays).toBe(120);
+  });
+
+  it("treats an outdated pipeline version as a miss even when recent", () => {
+    const { fresh } = cacheRowFreshness({ pipelineVersion: PIPELINE_VERSION - 1, lastRefreshedAt: daysAgo(1) });
+    expect(fresh).toBe(false);
   });
 });

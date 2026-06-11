@@ -1723,6 +1723,10 @@ async function annotateApproxFields(listings: ListingResult[]): Promise<ListingR
         listingCategory: og.listingCategory ?? l.listingCategory ?? null,
         tenureText: og.tenureText ?? l.tenureText ?? null,
         legalDescription: og.legalDescription ?? l.legalDescription ?? null,
+        // Marketing copy feeds the listing-claims extractor (new-build /
+        // townhouse / multi-unit signals) during discovery screening.
+        listingTitle: og.title ?? l.listingTitle ?? null,
+        description: og.description ?? l.description ?? null,
         bedroomsApprox,
         bathroomsApprox,
         landAreaApprox,

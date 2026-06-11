@@ -88,6 +88,10 @@ export interface PropertyOverview {
   landArea?: string;
   floorArea?: string;
   buildYear?: string;
+  /** Reconciled dwelling type (e.g. House, Townhouse, Unit). */
+  propertyType?: string | null;
+  siteStatus?: "vacant_land" | "has_dwelling" | "unknown";
+  siteStatusLabel?: string | null;
   bedrooms?: number | null;
   bathrooms?: number | null;
   zone?: string;
@@ -405,6 +409,16 @@ export interface FeasibilityReport {
   /** Enriched state/intermediate/secondary zone schools (MoE directory). */
   schoolZones?: SchoolZoneDetail[];
   riskSummary?: string[];
+  /** Listing claims conflicted with council records — parcel likely redeveloped. */
+  redevelopmentWarning?: {
+    suspected: boolean;
+    councilBuildYear?: number | null;
+    listingEvidence?: string[];
+    reasons?: string[];
+    message: string;
+  } | null;
+  /** When the underlying raw property data was acquired ("data as at"). */
+  dataFreshness?: { acquiredAt: string; fromCache: boolean } | null;
   disclaimer?: string;
   overlay_map_image_base64?: string;
   data_sources?: Record<string, string>;
@@ -501,6 +515,8 @@ export interface PropertyCandidate {
   subdivisionEligible?: boolean;
   subdivisionRejectReason?: string | null;
   buildYear?: number | null;
+  /** Listing claims conflicted with council records — parcel likely redeveloped. */
+  redevelopmentSuspected?: boolean;
   screeningStatus?: "preliminary" | "verified";
   screeningNotes?: string[];
   isCombinedListing?: boolean;
@@ -524,6 +540,8 @@ export interface SelectedListingContext {
   landAreaApprox?: boolean | null;
   floorAreaApprox?: boolean | null;
   priceApprox?: boolean | null;
+  propertyType?: string | null;
+  listingTitle?: string | null;
   source?: string | null;
   isCombinedListing?: boolean | null;
   packageAddress?: string | null;

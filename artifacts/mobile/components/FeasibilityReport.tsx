@@ -953,7 +953,7 @@ function ReportPhotoCarousel({
       {/* Overall score badge — hidden when the score is unreliable (e.g. land area unknown). */}
       {!hideScore && (
         <View style={styles.heroOverallBadge}>
-          <Text style={[styles.heroOverallLabel, { color: "rgba(255,255,255,0.85)" }]}>{translate("report.score_overall")}</Text>
+          <Text style={styles.heroOverallLabel}>{translate("report.score_overall")}</Text>
           <View style={[styles.heroOverallPill, { backgroundColor: overallColor + "EE", borderColor: "rgba(255,255,255,0.35)" }]}>
             <Text style={styles.heroOverallNumber}>{overallDisplay}</Text>
             <Text style={styles.heroOverallSub}>/ 5</Text>
@@ -1232,8 +1232,14 @@ function AsbestosPanel({ asbestos, colors }: { asbestos: AsbestosInfo; colors: R
       ? String(buildYearRaw).trim()
       : null;
   const buildYearNum = buildYearStr ? parseInt(buildYearStr, 10) : null;
+  const demoCostLow = asbestos.demoCostLow ?? 0;
+  const demoCostHigh = asbestos.demoCostHigh ?? 0;
+  const isVacant = demoCostLow === 0 && demoCostHigh === 0;
+  const effectiveRiskColor = isVacant ? colors.success : riskColor;
   const riskLabel =
-    risk === "high"
+    isVacant
+      ? t("report.asbestos_not_applicable")
+      : risk === "high"
       ? t("report.asbestos_risk_high")
       : risk === "low"
         ? buildYearNum && buildYearNum < 1940
@@ -1241,16 +1247,12 @@ function AsbestosPanel({ asbestos, colors }: { asbestos: AsbestosInfo; colors: R
           : t("report.asbestos_risk_low_post1990")
         : t("report.asbestos_risk_unknown");
 
-  const demoCostLow = asbestos.demoCostLow ?? 0;
-  const demoCostHigh = asbestos.demoCostHigh ?? 0;
-  const isVacant = demoCostLow === 0 && demoCostHigh === 0;
-
   return (
     <View style={{ gap: 10 }}>
-      <View style={[styles.riskBanner, { backgroundColor: riskColor + "15", borderColor: riskColor + "30", borderRadius: 10 }]}>
+      <View style={[styles.riskBanner, { backgroundColor: effectiveRiskColor + "15", borderColor: effectiveRiskColor + "30", borderRadius: 10 }]}>
         <Text style={{ fontSize: 18 }}>{risk === "high" ? "⚠️" : risk === "low" ? "✅" : "❓"}</Text>
         <View style={{ flex: 1 }}>
-          <Text style={{ color: riskColor, fontFamily: "DM_Sans_700Bold", fontSize: 13 }}>{t("report.asbestos_risk_prefix")}: {riskLabel}</Text>
+          <Text style={{ color: effectiveRiskColor, fontFamily: "DM_Sans_700Bold", fontSize: 13 }}>{t("report.asbestos_risk_prefix")}: {riskLabel}</Text>
           {buildYearStr && (
             <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, marginTop: 2 }}>
               {t("report.build_year")}: {buildYearStr}
@@ -1282,7 +1284,7 @@ function AsbestosPanel({ asbestos, colors }: { asbestos: AsbestosInfo; colors: R
           {asbestos.worksafeNote}
         </Text>
       ) : null}
-      {(asbestos.worksafe_required || asbestos.flagged) && (
+      {!isVacant && (asbestos.worksafe_required || asbestos.flagged) && (
         <View style={[styles.warningBox, { backgroundColor: colors.amber + "12", borderColor: colors.amber + "30" }]}>
           <Feather name="alert-triangle" size={13} color={colors.amber} />
           <Text style={{ color: colors.amber, fontFamily: "DM_Sans_500Medium", fontSize: 13, flex: 1, lineHeight: 18 }}>
@@ -2162,7 +2164,14 @@ function RiskSummaryPanel({ riskSummary, colors }: { riskSummary: string[]; colo
 }
 
 /** Quiet legal / data-staleness note at end of report—not a full section card. */
-function ReportAnalysisFootnote({ colors }: { colors: ReturnType<typeof useColors> }) {
+function ReportAnalysisFootnote({ colors, dataFreshness }: {
+  colors: ReturnType<typeof useColors>;
+  dataFreshness?: Report["dataFreshness"];
+}) {
+  const acquiredDate = dataFreshness?.acquiredAt ? new Date(dataFreshness.acquiredAt) : null;
+  const acquiredText = acquiredDate && !isNaN(acquiredDate.getTime())
+    ? acquiredDate.toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" })
+    : null;
   return (
     <View
       style={{
@@ -2174,6 +2183,23 @@ function ReportAnalysisFootnote({ colors }: { colors: ReturnType<typeof useColor
         borderTopColor: colors.border,
       }}
     >
+      {acquiredText ? (
+        <View style={{ flexDirection: "row", gap: 8, alignItems: "flex-start", marginBottom: 6 }}>
+          <Feather name="clock" size={12} color={colors.mutedForeground} style={{ marginTop: 1, opacity: 0.65 }} />
+          <Text
+            style={{
+              flex: 1,
+              color: colors.mutedForeground,
+              fontFamily: "DM_Sans_400Regular",
+              fontSize: 10,
+              lineHeight: 15,
+              opacity: 0.9,
+            }}
+          >
+            {translateForOS("report.data_as_at")}: {acquiredText}
+          </Text>
+        </View>
+      ) : null}
       <View style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
         <Feather name="info" size={12} color={colors.mutedForeground} style={{ marginTop: 1, opacity: 0.65 }} />
         <Text
@@ -2578,6 +2604,20 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
           address automatically, so the per-report disclaimer and re-analyse button
           are redundant. See runCombinedFeasibilityGroupCore on the API. */}
 
+      {report.redevelopmentWarning?.suspected && (
+        <View style={[styles.warningBox, { backgroundColor: colors.amber + "12", borderColor: colors.amber + "45", borderRadius: 12, padding: 12 }]}>
+          <Feather name="alert-triangle" size={14} color={colors.amber} />
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: colors.amber, fontFamily: "DM_Sans_600SemiBold", fontSize: 13 }}>
+              {t("report.redevelopment_warning_title")}
+            </Text>
+            <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 17, marginTop: 3 }}>
+              {report.redevelopmentWarning.message || t("report.redevelopment_warning_subtitle")}
+            </Text>
+          </View>
+        </View>
+      )}
+
       {report.propertyOverview && (
         <SectionCard title={t("report.overview")} icon="📍" defaultOpen={false} colors={colors}>
           <InfoRow
@@ -2610,6 +2650,17 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
             colors={colors}
           />
           <InfoRow label={t("report.build_year")} value={report.propertyOverview.buildYear || t("report.na")} colors={colors} />
+          {report.propertyOverview.propertyType?.trim() ? (
+            <InfoRow label={t("report.property_type")} value={report.propertyOverview.propertyType} colors={colors} />
+          ) : null}
+          {report.propertyOverview.siteStatusLabel?.trim() ? (
+            <InfoRow
+              label={t("report.site_status")}
+              value={report.propertyOverview.siteStatusLabel}
+              valueColor={report.propertyOverview.siteStatus === "vacant_land" ? colors.success : undefined}
+              colors={colors}
+            />
+          ) : null}
           {titleTypeDisplay ? (
             <InfoRow
               label={translateForOS("report.title_type")}
@@ -2816,7 +2867,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
       )}
 
       <FollowUpChips report={report} onChipClick={onFollowUp} colors={colors} />
-      <ReportAnalysisFootnote colors={colors} />
+      <ReportAnalysisFootnote colors={colors} dataFreshness={report.dataFreshness} />
     </View>
   );
 }
@@ -2833,7 +2884,7 @@ const styles = StyleSheet.create({
   reportPhotoOverlay: { position: "absolute", bottom: 0, left: 0, right: 0, height: 80, backgroundColor: "transparent" },
   reportPhotoScrim: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
   heroOverallBadge: { position: "absolute", top: 12, right: 12, alignItems: "flex-end", gap: 4 },
-  heroOverallLabel: { fontFamily: "DM_Sans_600SemiBold", fontSize: 9, textTransform: "uppercase", letterSpacing: 1.2, textShadowColor: "rgba(0,0,0,0.5)", textShadowRadius: 3 },
+  heroOverallLabel: { fontFamily: "DM_Sans_600SemiBold", fontSize: 9, textTransform: "uppercase", letterSpacing: 1.2, color: "rgba(255,255,255,0.92)", backgroundColor: "rgba(0,0,0,0.38)", borderRadius: 4, paddingHorizontal: 5, paddingVertical: 2, overflow: "hidden", textShadowColor: "rgba(0,0,0,0.6)", textShadowRadius: 2 },
   heroOverallPill: { flexDirection: "row", alignItems: "baseline", gap: 3, borderRadius: 14, borderWidth: 1.5, paddingHorizontal: 12, paddingVertical: 5 },
   heroOverallNumber: { fontFamily: "DM_Sans_700Bold", fontSize: 28, lineHeight: 32, color: "#FFFFFF" },
   heroOverallSub: { fontFamily: "DM_Sans_500Medium", fontSize: 12, lineHeight: 16, color: "rgba(255,255,255,0.85)" },

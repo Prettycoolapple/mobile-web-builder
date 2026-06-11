@@ -1,6 +1,7 @@
 import { estimateCosts, type CostBreakdown } from "./cost-estimator";
 import type { LotResult, SubdivisionPathwayAssessment } from "./lot-calculator";
 import type { MergedPropertyData } from "./scrapers/merge";
+import { classifySiteCondition } from "./site-condition";
 import {
   calculateScenariosFromGdv,
   estimateGdvPerLot,
@@ -92,11 +93,7 @@ function isDevelopmentZone(zoneCode: string | null): boolean {
 }
 
 function hasExistingDwelling(data: MergedPropertyData): boolean {
-  if (data.build_year != null) return true;
-  if (data.floor_area_sqm != null && data.floor_area_sqm >= 30) return true;
-  if (data.bedrooms != null && data.bedrooms > 0) return true;
-  if (data.bathrooms != null && data.bathrooms > 0) return true;
-  return false;
+  return classifySiteCondition(data).hasExistingDwelling;
 }
 
 export function buildFallbackDevelopmentStrategyAssessment(
@@ -385,8 +382,10 @@ function bestBaseAnnualisedReturn(scenarios: ROIScenario[]): number | null {
 function selectRoiBackedRecommendation(
   strategies: DevelopmentStrategyScenario[],
   fallback: DevelopmentStrategyId,
+  options?: { hasDwelling?: boolean },
 ): DevelopmentStrategyId {
   const scored = strategies
+    .filter((strategy) => options?.hasDwelling !== false || (strategy.id !== "hold_existing" && strategy.id !== "refurbish"))
     .map((strategy) => ({
       id: strategy.id,
       score: bestBaseAnnualisedReturn(strategy.roiScenarios),
@@ -408,7 +407,13 @@ function selectRoiBackedRecommendation(
   return scored[0].id;
 }
 
-function roiAlignedStatus(id: DevelopmentStrategyId, recommendedId: DevelopmentStrategyId, scenarios: ROIScenario[]): DevelopmentStrategyRecommendationStatus {
+function roiAlignedStatus(
+  id: DevelopmentStrategyId,
+  recommendedId: DevelopmentStrategyId,
+  scenarios: ROIScenario[],
+  options?: { hasDwelling?: boolean },
+): DevelopmentStrategyRecommendationStatus {
+  if (options?.hasDwelling === false && (id === "hold_existing" || id === "refurbish")) return "not_recommended";
   if (id === recommendedId) return "recommended";
   if (hasViableReturn(scenarios)) return "viable";
   return "not_recommended";
@@ -653,12 +658,12 @@ export function calculateDevelopmentStrategies(params: {
     };
   });
 
-  const roiRecommendedId = selectRoiBackedRecommendation(strategies, effectiveAssessment.recommended_strategy);
+  const roiRecommendedId = selectRoiBackedRecommendation(strategies, effectiveAssessment.recommended_strategy, { hasDwelling });
 
   return strategies.map((strategy) => appendRoiSelectionReason(
     {
       ...strategy,
-      recommendation: roiAlignedStatus(strategy.id, roiRecommendedId, strategy.roiScenarios),
+      recommendation: roiAlignedStatus(strategy.id, roiRecommendedId, strategy.roiScenarios, { hasDwelling }),
     },
     roiRecommendedId,
     effectiveAssessment.recommended_strategy,

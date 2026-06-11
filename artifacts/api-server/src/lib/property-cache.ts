@@ -1,6 +1,6 @@
 import { and, asc, eq, lt, sql } from "drizzle-orm";
 import { db, propertyCache, withDbRetry, type PropertyCacheRow } from "@workspace/db";
-import { RAW_PROPERTY_SCHEMA_VERSION, type RawPropertyData } from "./pipeline";
+import type { RawPropertyData } from "./pipeline";
 import { logger } from "./logger";
 
 /**
@@ -13,26 +13,33 @@ import { logger } from "./logger";
  * are never stored; they recompute on serve.
  */
 
-/**
- * Bump when the SHAPE of the cached RawPropertyData bundle changes (a new field
- * the derived layer now needs, or different scraper parsing). A stored row with
- * a lower version is treated as a cache MISS and re-acquired. Derived-only
- * changes (cost/ROI model tuning) need NO bump — those recompute by design.
- *
- * Kept in lock-step with RAW_PROPERTY_SCHEMA_VERSION so there is one source of
- * truth for "what version is the cached data".
- */
-export const PIPELINE_VERSION = RAW_PROPERTY_SCHEMA_VERSION;
+export { PIPELINE_VERSION, PROPERTY_CACHE_TTL_DAYS, cacheRowFreshness } from "./property-cache-freshness";
+import { PIPELINE_VERSION, PROPERTY_CACHE_TTL_DAYS, cacheRowFreshness } from "./property-cache-freshness";
 
 export interface CachedRaw {
   rawData: RawPropertyData;
   row: PropertyCacheRow;
+  /** Whole days since the row was last refreshed. */
+  ageDays: number;
+}
+
+function freshCachedRawOrNull(row: PropertyCacheRow | undefined, context: Record<string, unknown>): CachedRaw | null {
+  if (!row) return null;
+  const { fresh, ageDays } = cacheRowFreshness(row);
+  if (!fresh) {
+    if (row.pipelineVersion >= PIPELINE_VERSION) {
+      logger.info({ ...context, ageDays, ttlDays: PROPERTY_CACHE_TTL_DAYS }, "property-cache: row exceeded TTL — treating as miss");
+    }
+    return null;
+  }
+  return { rawData: row.rawData as RawPropertyData, row, ageDays };
 }
 
 /**
  * Look up a globally-cached raw bundle by normalised address key. Returns null
- * on a miss OR when the stored row predates the current PIPELINE_VERSION (forcing
- * a fresh re-acquisition that will upsert at the new version).
+ * on a miss, when the stored row predates the current PIPELINE_VERSION, or when
+ * the row is older than the TTL (each forcing a fresh re-acquisition that will
+ * upsert a new row).
  */
 export async function getCachedRaw(addressKey: string): Promise<CachedRaw | null> {
   if (!addressKey) return null;
@@ -40,10 +47,7 @@ export async function getCachedRaw(addressKey: string): Promise<CachedRaw | null
     const rows = await withDbRetry(() =>
       db.select().from(propertyCache).where(eq(propertyCache.addressKey, addressKey)).limit(1),
     );
-    const row = rows[0];
-    if (!row) return null;
-    if (row.pipelineVersion < PIPELINE_VERSION) return null;
-    return { rawData: row.rawData as RawPropertyData, row };
+    return freshCachedRawOrNull(rows[0], { addressKey });
   } catch (err) {
     logger.warn({ err: (err as Error).message, addressKey }, "property-cache getCachedRaw failed");
     return null;
@@ -65,10 +69,7 @@ export async function getCachedRawByParcel(parcelId: string | null | undefined):
         .orderBy(asc(propertyCache.lastRefreshedAt))
         .limit(1),
     );
-    const row = rows[0];
-    if (!row) return null;
-    if (row.pipelineVersion < PIPELINE_VERSION) return null;
-    return { rawData: row.rawData as RawPropertyData, row };
+    return freshCachedRawOrNull(rows[0], { parcelId });
   } catch (err) {
     logger.warn({ err: (err as Error).message, parcelId }, "property-cache getCachedRawByParcel failed");
     return null;

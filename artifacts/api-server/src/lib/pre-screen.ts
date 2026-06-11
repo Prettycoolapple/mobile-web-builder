@@ -10,7 +10,7 @@ import {
   type DesignLedConfidence,
   type DesignLedYieldRange,
 } from "./lot-calculator";
-import { fetchLINZParcel } from "./linz";
+import { fetchLINZParcel, fetchLINZChildAddressCount } from "./linz";
 import { fetchPropertyHistory } from "./property-data";
 import { scrapePropertyValue } from "./scrapers/propertyvalue";
 import {
@@ -27,6 +27,8 @@ import {
   type DiscoveryLandAreaSource,
 } from "./discovery-land-area";
 import { strictAttributePrefilter } from "./strict-prefilter";
+import { extractListingClaims, detectRedevelopmentConflict, hasAmbiguousListingSignals } from "./listing-claims";
+import { extractListingClaimsLLM } from "./listing-claims-llm";
 import { getScreenVerdict, setScreenVerdict } from "./listing-cache";
 
 export interface PropertyCandidate {
@@ -88,6 +90,13 @@ export interface PropertyCandidate {
   subdivisionEligible?: boolean;
   subdivisionRejectReason?: string | null;
   buildYear?: number | null;
+  /**
+   * True when the listing's own claims (new build / townhouse / multi-unit)
+   * conflict with council records — the parcel was likely demolished and
+   * redeveloped, so recorded land area / build year describe the
+   * pre-development parent site.
+   */
+  redevelopmentSuspected?: boolean;
   screeningStatus?: "preliminary" | "verified";
   screeningNotes?: string[];
   isCombinedListing?: boolean;
@@ -345,6 +354,11 @@ async function screenOneFast(
       }
     }
 
+    // Structured claims from the listing's marketing copy — the only source
+    // that knows about a NEW dwelling on a parcel whose council/valuation
+    // records still describe the demolished one.
+    const claims = extractListingClaims(listing);
+
     const geo = listingGeo(listing) ?? await geocodeAddress(listing.address);
     const shouldVerifyLandArea: boolean =
       options?.strictStandardSubdivision === true ||
@@ -369,6 +383,32 @@ async function screenOneFast(
 
     const zone = zoneRecord?.zone_code ?? null;
 
+    // Council/valuation sources lag redevelopment — a listing-stated
+    // completion year is the only build year that knows about the new
+    // dwelling, so it wins when present.
+    const councilBuildYear = propertyHistory?.build_year ?? propertyValue?.build_year ?? null;
+    const resolvedBuildYear = claims.completionYear ?? councilBuildYear;
+    // Optional LINZ probe (env-flag gated, one free HTTP call in strict mode):
+    // unit-style child addresses at the parent address mean the parcel has
+    // already been developed.
+    const linzChildProbe = options?.strictStandardSubdivision
+      ? await fetchLINZChildAddressCount(listing.address).catch(() => null)
+      : null;
+    const redevelopment = detectRedevelopmentConflict({
+      claims,
+      councilBuildYear,
+      listingFloorAreaSqm: listing.floorArea ?? null,
+      councilFloorAreaSqm: propertyHistory?.floor_area_sqm ?? propertyValue?.floor_area_sqm ?? null,
+      linzChildAddressCount: linzChildProbe?.childCount ?? null,
+    });
+    if (redevelopment.suspected && options?.strictStandardSubdivision) {
+      logger.info(
+        { address: listing.address, councilBuildYear, reasons: redevelopment.reasons },
+        "Pre-screen: rejected — listing claims conflict with council records (parcel likely redeveloped)",
+      );
+      return { kind: "rejected", reason: "redevelopment_suspected_stale_council_data" };
+    }
+
     const preliminaryEligibility = assessPropertyEligibility({
       address: listing.address,
       estateType: listing.tenureText,
@@ -388,11 +428,12 @@ async function screenOneFast(
       linzParcel,
       landAreaSqm: listing.landArea ?? propertyValue?.land_area_sqm ?? null,
       floorAreaSqm: listing.floorArea ?? propertyHistory?.floor_area_sqm ?? propertyValue?.floor_area_sqm,
-      buildYear: propertyHistory?.build_year ?? propertyValue?.build_year ?? null,
+      buildYear: resolvedBuildYear,
       zoneCode: zone,
       potentialLots: null,
       minLotSize: null,
       isCombinedListingAggregate: listing.isCombinedListing,
+      listingClaims: claims,
     });
     const suppressParentLandArea = shouldSuppressParentLandAreaForEligibility(preliminaryEligibility);
     const listingLandAreaForVerification =
@@ -454,11 +495,12 @@ async function screenOneFast(
           linzParcel,
           landAreaSqm: land,
           floorAreaSqm: listing.floorArea ?? propertyHistory?.floor_area_sqm ?? propertyValue?.floor_area_sqm,
-          buildYear: propertyHistory?.build_year ?? propertyValue?.build_year ?? null,
+          buildYear: resolvedBuildYear,
           zoneCode: zone,
           potentialLots: lots,
           minLotSize,
           isCombinedListingAggregate: listing.isCombinedListing,
+          listingClaims: claims,
         });
     const standardSubdivisionPasses = options?.preliminarySubdivision
       ? passesPreliminaryStandardSubdivisionScreen({
@@ -472,7 +514,7 @@ async function screenOneFast(
           typology: eligibility?.typology,
           titleConfidence: eligibility?.titleConfidence,
           subdivisionRejectReason: eligibility?.subdivisionRejectReason,
-          buildYear: propertyHistory?.build_year ?? propertyValue?.build_year ?? null,
+          buildYear: resolvedBuildYear,
         })
       : passesStrictStandardSubdivisionScreen({
       address: listing.address,
@@ -485,7 +527,7 @@ async function screenOneFast(
       typology: eligibility?.typology,
       titleConfidence: eligibility?.titleConfidence,
       subdivisionEligible: eligibility?.subdivisionEligible,
-      buildYear: propertyHistory?.build_year ?? null,
+      buildYear: claims.completionYear ?? propertyHistory?.build_year ?? null,
     });
     const designLedAssessment = assessSubdivisionPathways({
       netAreaSqm: land ?? null,
@@ -496,7 +538,7 @@ async function screenOneFast(
       titleConfidence: eligibility?.titleConfidence,
       landAreaConfidence: verifiedLand.landAreaConfidence,
       isAlreadySubdividedChild: verifiedLand.isAlreadySubdividedChild,
-      buildYear: propertyHistory?.build_year ?? propertyValue?.build_year ?? null,
+      buildYear: resolvedBuildYear,
       parcelBbox: linzParcel?.bbox ?? null,
       overlays: resolvedOverlays,
     });
@@ -520,7 +562,7 @@ async function screenOneFast(
           typology: eligibility?.typology,
           titleConfidence: eligibility?.titleConfidence,
           subdivisionRejectReason: eligibility?.subdivisionRejectReason,
-          buildYear: propertyHistory?.build_year ?? propertyValue?.build_year ?? null,
+          buildYear: resolvedBuildYear,
           failedSources,
         },
         "Pre-screen: rejected strict subdivision candidate",
@@ -532,7 +574,7 @@ async function screenOneFast(
       // decision inputs rather than which sources happened to fail — e.g. if
       // build year is known but >= 2000 the listing is a real reject, even if
       // some redundant source (LINZ / PropertyValue) was unavailable.
-      const haveAnyBuildYear = propertyHistory?.build_year != null || propertyValue?.build_year != null;
+      const haveAnyBuildYear = resolvedBuildYear != null;
       const isIndeterminate =
         (!options?.preliminarySubdivision && !haveAnyBuildYear) ||
         !zone ||
@@ -549,6 +591,23 @@ async function screenOneFast(
       }
       return { kind: "rejected", reason: eligibility?.subdivisionRejectReason ?? "strict_screen_failed" };
     }
+    // LLM tie-breaker (final-acceptance check only, never in the bulk
+    // prefilter): the copy mentions townhouse/terrace but the deterministic
+    // extractor couldn't classify it. One small LLM call decides whether the
+    // dwelling IS one before we publish this as a subdividable candidate. The
+    // LLM can only make the verdict safer — a deterministic pass stands unless
+    // the LLM finds a concrete risk flag.
+    if (options?.strictStandardSubdivision && hasAmbiguousListingSignals(listing)) {
+      const llmClaims = await extractListingClaimsLLM(listing).catch(() => null);
+      if (llmClaims && (llmClaims.dwellingIsTownhouse || llmClaims.isNewBuild || llmClaims.multiUnitDevelopment)) {
+        logger.info(
+          { address: listing.address, evidence: llmClaims.evidence },
+          "Pre-screen: LLM tie-breaker rejected ambiguous listing copy",
+        );
+        return { kind: "rejected", reason: `llm_claims:${llmClaims.evidence[0] ?? "ambiguous_copy_resolved_to_risk"}` };
+      }
+    }
+
     const scores = quickScore(zone, resolvedOverlays, land ?? null, price);
 
     const candidate: PropertyCandidate = {
@@ -574,7 +633,7 @@ async function screenOneFast(
       photoUrl: listing.photoUrl ?? undefined,
       photoUrls: listing.photoUrls?.length ? listing.photoUrls : listing.photoUrl ? [listing.photoUrl] : undefined,
       priceDisplay: listing.priceText || undefined,
-      propertyType: listing.propertyType ?? listing.listingCategory ?? undefined,
+      propertyType: claims.dwellingIsTownhouse ? "Townhouse" : (listing.propertyType ?? listing.listingCategory ?? undefined),
       listingTitle: listing.listingTitle ?? listing.address.split(",")[0]?.trim() ?? listing.address,
       description: listing.description ?? undefined,
       features: listing.features?.length ? listing.features : undefined,
@@ -598,13 +657,19 @@ async function screenOneFast(
       titleConfidence: packageParts ? "inferred" : eligibility?.titleConfidence,
       subdivisionEligible: packageParts ? packageSubdivisionPasses : eligibility?.subdivisionEligible,
       subdivisionRejectReason: packageParts ? "combined_listing_aggregate" : eligibility?.subdivisionRejectReason,
-      buildYear: propertyHistory?.build_year ?? propertyValue?.build_year ?? null,
+      buildYear: resolvedBuildYear,
+      redevelopmentSuspected: redevelopment.suspected || undefined,
       screeningStatus: options?.preliminarySubdivision ? "preliminary" : "verified",
-      screeningNotes: designLedPasses && !standardSubdivisionPasses && !packageSubdivisionPasses
-        ? ["Design-led consent opportunity; standard vacant-lot screen remains conservative."]
-        : options?.preliminarySubdivision
-          ? ["Preliminary active-listing subdivision screen; build year is checked in the full analysis."]
-          : ["Verified pre-screen."],
+      screeningNotes: [
+        ...(redevelopment.suspected
+          ? [`Listing claims conflict with council records — parcel likely redeveloped (${redevelopment.reasons.join("; ")}).`]
+          : []),
+        ...(designLedPasses && !standardSubdivisionPasses && !packageSubdivisionPasses
+          ? ["Design-led consent opportunity; standard vacant-lot screen remains conservative."]
+          : options?.preliminarySubdivision
+            ? ["Preliminary active-listing subdivision screen; build year is checked in the full analysis."]
+            : ["Verified pre-screen."]),
+      ],
       isCombinedListing: Boolean(packageParts || listing.isCombinedListing),
       packageAddress: packageParts?.packageAddress,
       childAddresses: packageParts?.childAddresses,
@@ -767,6 +832,7 @@ export async function preScreenListingsFast(
 
 async function screenOne(listing: ListingResult): Promise<PropertyCandidate | null> {
   try {
+    const claims = extractListingClaims(listing);
     const geo = await geocodeAddress(listing.address);
 
     const hougarden = await scrapeHougarden(geo.lat, geo.lng, listing.address).catch(() => null);
@@ -794,7 +860,7 @@ async function screenOne(listing: ListingResult): Promise<PropertyCandidate | nu
       photoUrl: listing.photoUrl ?? undefined,
       photoUrls: listing.photoUrls?.length ? listing.photoUrls : listing.photoUrl ? [listing.photoUrl] : undefined,
       priceDisplay: listing.priceText || undefined,
-      propertyType: listing.propertyType ?? listing.listingCategory ?? undefined,
+      propertyType: claims.dwellingIsTownhouse ? "Townhouse" : (listing.propertyType ?? listing.listingCategory ?? undefined),
       listingTitle: listing.listingTitle ?? listing.address.split(",")[0]?.trim() ?? listing.address,
       description: listing.description ?? undefined,
       features: listing.features?.length ? listing.features : undefined,

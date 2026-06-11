@@ -86,4 +86,45 @@ describe("strictAttributePrefilter", () => {
     }));
     expect(v.kind).toBe("pass");
   });
+
+  // 6 Riddell Road incident: a brand-new multi-townhouse development marketed
+  // at the parent address, with no propertyType from the source feed. The
+  // marketing copy is the only signal — it must reject before any backend fetch
+  // returns the (stale) 1935 council build year.
+  it("rejects a new townhouse development described only in marketing copy", () => {
+    const v = strictAttributePrefilter(listing({
+      address: "6 Riddell Road, Glendowie, Auckland City, Auckland",
+      propertyType: null,
+      tenureText: null,
+      legalDescription: null,
+      landArea: 842,
+      listingTitle: "6 Riddell Road, Glendowie",
+      description:
+        "Introducing 10 brand new townhouses in the heart of Glendowie. " +
+        "Flexible floorplans: Choose from spacious 3 or 4 bedroom layouts.",
+    }));
+    expect(v.kind).toBe("reject");
+    if (v.kind === "reject") expect(v.reason).toMatch(/listing_claims|verified_typology/);
+  });
+
+  it("still passes a genuine do-up that merely advertises townhouse POTENTIAL", () => {
+    const v = strictAttributePrefilter(listing({
+      propertyType: "House",
+      landArea: 842,
+      landAreaConfidence: "verified",
+      description:
+        "Solid 1950s bungalow on a full 842m² MHU section. " +
+        "Potential to build townhouses STCA, or land bank and hold.",
+    }));
+    expect(v.kind).toBe("pass");
+  });
+
+  it("rejects a marketed new build even when propertyType says House", () => {
+    const v = strictAttributePrefilter(listing({
+      propertyType: "House",
+      description: "Brand new home completed 2025 with 10-year Master Build guarantee.",
+    }));
+    expect(v.kind).toBe("reject");
+    if (v.kind === "reject") expect(v.reason).toMatch(/listing_claims_new_build/);
+  });
 });

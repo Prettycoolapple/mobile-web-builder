@@ -140,4 +140,15 @@ describe("extractBuildYearFromListingText", () => {
   it("matches Built in YYYY", () => {
     expect(extractBuildYearFromListingText("Quality home. Built in 2014 near schools.")).toBe(2014);
   });
+  it("matches new-build marketing copy: completed YYYY", () => {
+    expect(extractBuildYearFromListingText("Completed 2025 and never lived in.")).toBe(2025);
+    expect(extractBuildYearFromListingText("Completed in 2024 to a high spec.")).toBe(2024);
+  });
+  it("matches 'YYYY build' and 'new build YYYY'", () => {
+    expect(extractBuildYearFromListingText("A 2024 build with Master Build guarantee.")).toBe(2024);
+    expect(extractBuildYearFromListingText("Stunning new build 2025 in a quiet cul-de-sac.")).toBe(2025);
+  });
+  it("does not invent a build year from renovation copy", () => {
+    expect(extractBuildYearFromListingText("Brand new kitchen and bathroom throughout.")).toBeNull();
+  });
 });

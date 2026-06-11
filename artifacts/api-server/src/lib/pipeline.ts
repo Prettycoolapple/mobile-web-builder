@@ -1,7 +1,7 @@
 import { logger } from "./logger";
 import { ai } from "@workspace/integrations-gemini-ai";
 import { geocodeAddress, type GeoResult } from "./geocode";
-import { fetchLINZParcel, fetchLINZTitle, fetchLINZMemorials, fetchLINZTitlesByAddressDetailed, estateTypeFromLrsTitles, type LinzParcel, type LinzTitle, type LinzLrsAddressTitlePreview, type LinzLrsTitlePreviewStatus, type LinzLrsTitlePreviewSource } from "./linz";
+import { fetchLINZParcel, fetchLINZTitle, fetchLINZMemorials, fetchLINZTitlesByAddressDetailed, fetchLINZChildAddressCount, estateTypeFromLrsTitles, type LinzParcel, type LinzTitle, type LinzLrsAddressTitlePreview, type LinzLrsTitlePreviewStatus, type LinzLrsTitlePreviewSource } from "./linz";
 import { fetchUnitaryPlanZone, fetchOverlaysWithConsensus, fetchContour, type ZoneResult, type Overlay, type ContourResult } from "./auckland-council";
 import { fetchPropertyHistory, checkAsbestosRisk, type PropertyHistory, type AsbestosRisk } from "./property-data";
 import { fetchInfrastructure, type InfrastructureItem } from "./infrastructure";
@@ -50,6 +50,8 @@ import {
   shouldForceSingleLotForEligibility,
   shouldSuppressParentLandAreaForEligibility,
 } from "./property-eligibility";
+import { extractListingClaims, detectRedevelopmentConflict, hasAmbiguousListingSignals, type ListingClaims } from "./listing-claims";
+import { extractListingClaimsLLM, mergeClaimsSafer } from "./listing-claims-llm";
 
 const AC_PROP_MAPSERVER = "https://mapspublic.aucklandcouncil.govt.nz/arcgis3/rest/services/NonCouncil/PropertyValueInfo/MapServer";
 
@@ -422,6 +424,20 @@ export interface PipelineResult {
   /** True when external fetches were served from a supplied `cachedRaw` bundle
    * rather than hit live. The derived numbers are still freshly computed. */
   served_from_cache?: boolean;
+  /**
+   * Council-lag detector: set when the active listing's own claims (new build /
+   * townhouse / multi-unit development) conflict with council/valuation
+   * records — the parcel was likely demolished and redeveloped, so recorded
+   * land area, CV, and build year describe the PRE-development parent site.
+   */
+  redevelopmentCheck?: {
+    suspected: boolean;
+    listingClaims: ListingClaims | null;
+    councilBuildYear: number | null;
+    reasons: string[];
+  } | null;
+  /** When the underlying raw property data was acquired, for "data as at" display. */
+  dataFreshness?: { acquiredAt: string; fromCache: boolean } | null;
 }
 
 /**
@@ -497,6 +513,9 @@ export async function runPropertyPipeline(
      * this bundle's value instead of hitting the network, while the derived
      * computation and the live listing/photo fetches still run fresh. */
     cachedRaw?: RawPropertyData | null;
+    /** When `cachedRaw` is supplied: the timestamp that bundle was acquired
+     * (cache row's lastRefreshedAt), surfaced as `dataFreshness.acquiredAt`. */
+    cachedRawAcquiredAt?: string | null;
   } = {},
 ): Promise<PipelineResult> {
   const timing: Record<string, number> = {};
@@ -1011,6 +1030,7 @@ export async function runPropertyPipeline(
       analysed_address: geocode!.formatted ?? address,
       realestate_listing: realestateListing,
       preferred_realestate_listing_url: preferredRealestateListing?.listingUrl ?? null,
+      selected_listing_context: resolvedListingContext ?? null,
       realestate_photo_urls: [
         ...selectedListingPhotoUrls(resolvedListingContext),
         ...realestatePhotoUrls,
@@ -1127,6 +1147,58 @@ export async function runPropertyPipeline(
   }
 
   // Compute asbestos classification AFTER merge so both use the same canonical build_year
+  // Listing-claims reconciliation: the active listing is the only source that
+  // knows about a NEW dwelling on a parcel whose council/valuation records
+  // still describe the demolished one (e.g. 1935 house → 10 new townhouses).
+  // Must run BEFORE asbestos/eligibility so every downstream consumer sees the
+  // reconciled build year rather than the stale pre-redevelopment one.
+  let listingClaims = realestateListingForFacts ? extractListingClaims(realestateListingForFacts) : null;
+  // LLM tie-breaker for ambiguous copy (townhouse mentions the regex layer
+  // couldn't classify). Only ADDS risk flags — never clears deterministic ones.
+  if (realestateListingForFacts && listingClaims && hasAmbiguousListingSignals(realestateListingForFacts)) {
+    const llmClaims = await timed("listing_claims_llm", () => extractListingClaimsLLM(realestateListingForFacts), timing);
+    listingClaims = mergeClaimsSafer(listingClaims, llmClaims.value ?? null);
+  }
+  const councilBuildYearForCheck = merged.build_year;
+  // Optional LINZ probe (env-flag gated): unit-style child addresses at the
+  // parent address mean the parcel has already been developed, even when the
+  // listing copy is silent about it.
+  const linzChildProbe = await fetchLINZChildAddressCount(geocode!.formatted ?? address).catch(() => null);
+  const redevelopmentConflict = detectRedevelopmentConflict({
+    claims: listingClaims ?? extractListingClaims({}),
+    councilBuildYear: councilBuildYearForCheck,
+    listingFloorAreaSqm: realestateListingForFacts?.floorArea ?? null,
+    councilFloorAreaSqm: merged.floor_area_sqm,
+    linzChildAddressCount: linzChildProbe?.childCount ?? null,
+  });
+  const redevelopmentCheck = {
+    suspected: redevelopmentConflict.suspected,
+    listingClaims,
+    councilBuildYear: councilBuildYearForCheck,
+    reasons: redevelopmentConflict.reasons,
+  };
+  if (redevelopmentConflict.suspected) {
+    logger.warn(
+      { address, councilBuildYear: councilBuildYearForCheck, reasons: redevelopmentConflict.reasons },
+      "Pipeline: listing claims conflict with council records — parcel likely redeveloped; preferring listing-derived dwelling attributes",
+    );
+    merged.discrepancies.push(
+      `Listing claims conflict with council records (parcel likely redeveloped): ${redevelopmentConflict.reasons.join("; ")}.`,
+    );
+    // Prefer the listing's view of the dwelling: a claimed completion year (or
+    // nothing, rather than the demolished dwelling's year) and listing floor area.
+    merged.build_year = listingClaims?.completionYear ?? null;
+    merged.data_sources["build_year"] = "listing_claims";
+    if (realestateListingForFacts?.floorArea != null) {
+      merged.floor_area_sqm = realestateListingForFacts.floorArea;
+      merged.data_sources["floor_area_sqm"] = "listing_claims";
+    }
+    if (listingClaims?.dwellingIsTownhouse) {
+      merged.property_type = "Townhouse";
+      merged.data_sources["property_type"] = "listing_claims";
+    }
+  }
+
   // that will be displayed in the UI. This prevents the asbestos risk label from contradicting
   // the build year shown elsewhere in the report.
   const canonicalBuildYear = merged.build_year;
@@ -1166,6 +1238,7 @@ export async function runPropertyPipeline(
     potentialLots: null,
     minLotSize: null,
     isCombinedListingAggregate: !!realestateListing?.isCombinedListing && !realestateListingForFacts,
+    listingClaims,
   });
   if (shouldSuppressParentLandAreaForEligibility(preliminaryEligibility)) {
     const subjectLandArea = resolveSubjectLandAreaForEligibility({
@@ -1235,6 +1308,7 @@ export async function runPropertyPipeline(
     potentialLots: rawLotResult.lots,
     minLotSize: rawLotResult.min_lot_size,
     isCombinedListingAggregate: !!realestateListing?.isCombinedListing && !realestateListingForFacts,
+    listingClaims,
   });
   merged.typology = eligibility.typology;
   merged.typologyConfidence = eligibility.typologyConfidence;
@@ -1527,5 +1601,10 @@ export async function runPropertyPipeline(
     completed_at: new Date().toISOString(),
     raw_property: rawProperty,
     served_from_cache: !!cr,
+    redevelopmentCheck,
+    dataFreshness: {
+      acquiredAt: (cr ? options.cachedRawAcquiredAt : null) ?? new Date().toISOString(),
+      fromCache: !!cr,
+    },
   };
 }

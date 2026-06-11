@@ -13,6 +13,8 @@ export interface SelectedListingContext {
   landAreaApprox?: boolean | null;
   floorAreaApprox?: boolean | null;
   priceApprox?: boolean | null;
+  propertyType?: string | null;
+  listingTitle?: string | null;
   source?: string | null;
   agentName?: string | null;
   agentPhone?: string | null;
@@ -82,6 +84,8 @@ export function normaliseSelectedListingContext(raw: unknown): SelectedListingCo
     landAreaApprox: cleanBool(input.landAreaApprox),
     floorAreaApprox: cleanBool(input.floorAreaApprox),
     priceApprox: cleanBool(input.priceApprox),
+    propertyType: cleanString(input.propertyType),
+    listingTitle: cleanString(input.listingTitle),
     source: cleanString(input.source) ?? inferListingSourceFromUrl(listingUrl),
     agentName: cleanString(input.agentName),
     agentPhone: cleanString(input.agentPhone),
@@ -173,6 +177,10 @@ export function applySelectedListingContextToReport(
     overview.listingPrice = fmt(selectedListingContext.price);
     overview.listing_price_nzd = selectedListingContext.price;
     existingSources.listing_price = sourceLabel;
+  }
+  if (!excludeAggregateFacts && selectedListingContext.propertyType) {
+    overview.propertyType = selectedListingContext.propertyType;
+    existingSources.property_type = sourceLabel;
   }
   if (!excludeAggregateFacts && selectedListingContext.landArea != null) {
     overview.landArea = area(selectedListingContext.landArea);

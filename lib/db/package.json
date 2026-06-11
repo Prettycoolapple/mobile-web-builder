@@ -10,7 +10,8 @@
   "scripts": {
     "push": "drizzle-kit push --config ./drizzle.config.cjs",
     "push-force": "drizzle-kit push --force --config ./drizzle.config.cjs",
-    "set-henry-zeng-provider-stats": "node ./scripts/set-henry-zeng-provider-stats.mjs"
+    "set-henry-zeng-provider-stats": "node ./scripts/set-henry-zeng-provider-stats.mjs",
+    "add-pending-agent-rea-licence": "node ./scripts/add-pending-agent-rea-licence.mjs"
   },
   "dependencies": {
     "drizzle-orm": "catalog:",
