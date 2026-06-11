@@ -18,18 +18,30 @@ function propertyTypeLabel(t: (k: string) => string, value: string | null | unde
 
 function descriptionTeaser(desc: string | null | undefined): string | null {
   if (!desc) return null;
-  const clean = desc.trim();
+  // Strip Markdown markers so **bold**, ## headings, - bullets etc. don't
+  // bleed into the card teaser — users should see clean readable prose.
+  const clean = desc
+    .replace(/^#{1,6}\s+/gm, "")         // headings
+    .replace(/\*\*([^*]+)\*\*/g, "$1")   // bold
+    .replace(/\*([^*]+)\*/g, "$1")       // italic *
+    .replace(/_([^_]+)_/g, "$1")         // italic _
+    .replace(/^[-*•]\s+/gm, "")          // bullet list markers
+    .replace(/\n+/g, " ")                // collapse newlines → space
+    .trim();
   if (!clean) return null;
-  const sentences = clean.match(/[^.?!。？！]+[.?!。？！]+(?=\s|$)/g);
-  let teaser = clean;
-  if (sentences && sentences.length > 0) {
-    teaser = sentences.slice(0, 2).join(" ").trim();
+
+  // Extract the very first sentence (ends at . ? ! or their CJK equivalents).
+  const match = clean.match(/^[^.?!。？！]+[.?!。？！]+/);
+  if (match) {
+    const sentence = match[0].trim();
+    // Hard cap at 150 chars in case a single sentence is unusually long.
+    return sentence.length > 150 ? sentence.slice(0, 147).trim() + "..." : sentence;
   }
-  if (teaser.length > 120) {
-    teaser = teaser.slice(0, 117).trim() + "...";
-  }
-  return teaser;
+
+  // No sentence boundary found — fall back to a 120-char excerpt.
+  return clean.length > 120 ? clean.slice(0, 117).trim() + "..." : clean;
 }
+
 
 export function BrowseListingCard({ listing, onPress, onShare }: { listing: BrowseListing; onPress: () => void; onShare?: () => void }) {
   const colors = useColors();
