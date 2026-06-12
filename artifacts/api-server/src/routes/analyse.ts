@@ -1914,6 +1914,9 @@ async function generateContinuationCandidates(args: {
   }
 
   candidates = filterCandidatesAlreadyShown(candidates, args.shownKeys);
+  if (args.presentation === "generic_listing" && candidates.length > 0) {
+    candidates = await hydrateGenericListingAgentDetails(candidates, args.log);
+  }
   const updatedCache = getListingCache(tempCacheKey);
   const nextRemaining = updatedCache?.remainingListings ?? [];
   const exhausted = candidates.length === 0 && nextRemaining.length === 0;
@@ -4107,8 +4110,12 @@ router.post("/discovery/next", async (req, res) => {
     if (prefetchOnly) {
       const firstReady = readyPages[0]?.candidates as PropertyCandidate[] | undefined;
       if (firstReady?.length) {
+        const readyCandidates = filterCandidatesAlreadyShown(firstReady, shownKeys).slice(0, count);
+        const responseCandidates = row.searchPresentation === "generic_listing"
+          ? await hydrateGenericListingAgentDetails(readyCandidates, req.log)
+          : readyCandidates;
         await sendDiscoveryNextPayload({
-          candidates: filterCandidatesAlreadyShown(firstReady, shownKeys).slice(0, count),
+          candidates: responseCandidates,
           continuationToken: row.exhausted ? null : row.id,
           exhausted: row.exhausted,
           searchPresentation: row.searchPresentation,
@@ -4139,6 +4146,21 @@ router.post("/discovery/next", async (req, res) => {
       });
       const nextReadyPages = generated.candidates.length > 0 ? [{ candidates: generated.candidates }] : [];
       await saveContinuationState(row.id, { ...generated.state, readyPages: nextReadyPages }, generated.exhausted);
+      if (generated.exhausted && generated.candidates.length === 0) {
+        // Freshly-discovered exhaustion during prefetch must still carry the
+        // "see again / search nearby" choice payload, otherwise the client
+        // stores prefetchedExhausted with no clarification and "Show more"
+        // renders a silent, button-less message. Mirror the non-prefetch path.
+        const payload = JSON.parse(buildDiscoveryExhaustedChoicePayload(row.suburb)) as { question: string; options: string[] };
+        await sendDiscoveryNextPayload({
+          candidates: [],
+          continuationToken: null,
+          exhausted: true,
+          clarification: payload,
+          searchPresentation: row.searchPresentation,
+        });
+        return;
+      }
       await sendDiscoveryNextPayload({
         candidates: generated.candidates,
         continuationToken: generated.exhausted ? null : row.id,
@@ -4182,6 +4204,10 @@ router.post("/discovery/next", async (req, res) => {
 
     const servedAddressKeys = shownKeysFromCandidates(candidates);
     for (const key of servedAddressKeys) shownKeys.add(key);
+
+    if (row.searchPresentation === "generic_listing" && candidates.length > 0) {
+      candidates = await hydrateGenericListingAgentDetails(candidates, req.log);
+    }
 
     await saveContinuationState(row.id, nextState, exhausted);
 

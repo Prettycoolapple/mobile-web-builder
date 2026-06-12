@@ -989,9 +989,14 @@ export default function SearchScreen() {
         role: "assistant",
         content: "",
         type: "discovery_exhausted_choice",
+        // The backend always sends a clarification with two options now; this
+        // fallback only fires if it's ever missing. Never render empty options
+        // (that produces a silent, button-less message). The default labels are
+        // chosen to match the backend's repeat/nearby intent detectors so the
+        // round-trip still routes correctly.
         clarification: clarification ?? {
-          question: t("search.no_listings_msg"),
-          options: [],
+          question: t("search.exhausted_question"),
+          options: [t("search.exhausted_see_again"), t("search.exhausted_nearby")],
         },
       }, sessionId);
     },
@@ -2474,6 +2479,14 @@ export default function SearchScreen() {
         return;
       }
 
+      // Fire the confirmation buzz BEFORE the audio session enters record mode.
+      // iOS suppresses UIFeedbackGenerator haptics while a recording session is
+      // active, so firing after createAsync() made the buzz unreliable on the
+      // 2nd+ hold (the session stays primed after a swipe-up cancel). Doing it
+      // here guarantees a strong, consistent vibration on every tap-and-hold,
+      // both on the home search and inside a chat (same code path).
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
@@ -2496,7 +2509,6 @@ export default function SearchScreen() {
       if (startY != null && currentY != null) {
         armRecordingCancel(startY - currentY >= RECORDING_CANCEL_SWIPE_UP_PX);
       }
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     } catch (err) {
       console.log("Failed to start recording", err);
       recordingRef.current = null;
@@ -2545,6 +2557,9 @@ export default function SearchScreen() {
     if (!activeRecording) return;
     try {
       await activeRecording.stopAndUnloadAsync();
+      // Release the recording audio session so it doesn't stay primed and
+      // suppress the next tap-and-hold's confirmation haptic.
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => {});
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch (err) {
       console.log("Failed to cancel recording", err);
@@ -2579,6 +2594,9 @@ export default function SearchScreen() {
       recordingPressActiveRef.current = false;
       setRecording(null);
       setRecordingCancelArmed(false);
+      // Release the recording audio session so it doesn't stay primed and
+      // suppress the next tap-and-hold's confirmation haptic.
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => {});
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
       if (uri) {
