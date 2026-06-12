@@ -1974,9 +1974,9 @@ function buildDiscoveryExhaustedChoicePayload(suburb: string | null | undefined)
   const suburbLabel = suburb ? titleCaseSuburb(suburb) : "this area";
   return JSON.stringify({
     clarificationType: "discovery_exhausted",
-    question: "I've shown you all properties that met the criteria in this area, including some from previous chats. You can check History, see them again, or search nearby suburbs.",
+    question: "I've shown you all properties that met the criteria in this area, including some from previous chats. Would you like to see them again or search nearby suburbs?",
     options: [
-      `Show me ${suburbLabel} opportunities again`,
+      `Remind me what is available in ${suburbLabel} again`,
       "Search nearby",
     ],
   });
@@ -4392,6 +4392,20 @@ router.post("/chat", async (req, res) => {
                 || hasRecentShownForSuburb(recentShownEntries, suburb)
               );
             if (exhaustedByShownMemory) {
+              const exhaustedPayload = buildDiscoveryExhaustedChoicePayload(suburb);
+              const translatedExhausted = await translateChatContent(exhaustedPayload, "clarification", chatLocale, chatTranslateTitleSchool);
+              res.json({ content: translatedExhausted, mode: "clarification", ...providerSignal });
+              return;
+            }
+
+            const strictPrimarySubdivisionExhausted =
+              strictStandardSubdivision
+              && !forceNearbyDiscovery
+              && candidates.length < discoveryTargetCount
+              && suburb
+              && !streetHint
+              && getRemainingCount(cacheKey) === 0;
+            if (strictPrimarySubdivisionExhausted) {
               const exhaustedPayload = buildDiscoveryExhaustedChoicePayload(suburb);
               const translatedExhausted = await translateChatContent(exhaustedPayload, "clarification", chatLocale, chatTranslateTitleSchool);
               res.json({ content: translatedExhausted, mode: "clarification", ...providerSignal });
