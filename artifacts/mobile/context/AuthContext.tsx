@@ -207,11 +207,18 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 const STORAGE_KEY_TOKEN = "@devfeasible/auth_token";
 const STORAGE_KEY_USER = "@devfeasible/auth_user";
+const STORAGE_KEY_ANONYMOUS_INSTALL_ID = "@devfeasible/anonymous_install_id";
+
+function createAnonymousInstallId(): string {
+  const random = Math.random().toString(36).slice(2);
+  return `anon_${Date.now().toString(36)}_${random}`;
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient();
   const [user, setUser] = useState<UserProfile | null>(null);
   const [token, setToken] = useState<string | null>(null);
+  const [anonymousInstallId, setAnonymousInstallId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubscriptionIdentityReady, setIsSubscriptionIdentityReady] = useState(false);
   /** Throttle repair sync when paid tier is missing `subscriptionPeriodEndAt` (e.g. legacy row or failed sync). */
@@ -250,6 +257,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     ]);
     await switchRevenueCatIdentity(null);
   }, [switchRevenueCatIdentity]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        let installId = await AsyncStorage.getItem(STORAGE_KEY_ANONYMOUS_INSTALL_ID);
+        if (!installId) {
+          installId = createAnonymousInstallId();
+          await AsyncStorage.setItem(STORAGE_KEY_ANONYMOUS_INSTALL_ID, installId);
+        }
+        if (!cancelled) setAnonymousInstallId(installId);
+      } catch {
+        if (!cancelled) setAnonymousInstallId(createAnonymousInstallId());
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -445,13 +469,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
+    } else if (anonymousInstallId) {
+      headers["X-Anonymous-Install-Id"] = anonymousInstallId;
     }
     const locale = getCurrentLocale();
     headers["Accept-Language"] = locale === "zh" ? "zh-CN" : "en-NZ";
     headers["X-Locale"] = locale;
     headers["X-OS-Chinese"] = isOSChineseLocale() ? "1" : "0";
     return headers;
-  }, [token]);
+  }, [anonymousInstallId, token]);
 
   const uploadIncorporationCert = useCallback(async (
     fileUri: string,

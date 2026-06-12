@@ -11,7 +11,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useDm } from "@/context/DmContext";
 import { useT } from "@/lib/i18n";
 
-function ClassicTabLayout() {
+function ClassicTabLayout({ isGuest }: { isGuest: boolean }) {
   const colors = useColors();
   const { t } = useT();
   const colorScheme = useColorScheme();
@@ -73,6 +73,7 @@ function ClassicTabLayout() {
       <Tabs.Screen
         name="messages"
         options={{
+          href: isGuest ? null : undefined,
           title: t("tab.messages"),
           tabBarBadge: unreadCount > 0 ? (unreadCount > 99 ? "99+" : unreadCount) : undefined,
           tabBarBadgeStyle: { backgroundColor: colors.accent, fontSize: 10, minWidth: 18 },
@@ -87,6 +88,7 @@ function ClassicTabLayout() {
       <Tabs.Screen
         name="history"
         options={{
+          href: isGuest ? null : undefined,
           title: t("tab.history"),
           tabBarIcon: ({ color }) =>
             isIOS ? (
@@ -99,6 +101,7 @@ function ClassicTabLayout() {
       <Tabs.Screen
         name="profile"
         options={{
+          href: isGuest ? null : undefined,
           title: t("tab.account"),
           tabBarIcon: ({ color }) =>
             isIOS ? (
@@ -117,18 +120,14 @@ export default function TabLayout() {
   const router = useRouter();
 
   useEffect(() => {
-    if (!isLoading && !user) {
-      router.replace("/(auth)/welcome" as never);
-      return;
-    }
     if (!isLoading && user?.role === "service_provider" && user.subscriptionTier === "free") {
       router.replace("/(onboarding)/service-provider-welcome" as never);
     }
   }, [user, isLoading, router]);
 
-  if (isLoading || !user || (user.role === "service_provider" && user.subscriptionTier === "free")) return null;
+  if (isLoading || (user?.role === "service_provider" && user.subscriptionTier === "free")) return null;
 
-  return <ClassicTabLayout />;
+  return <ClassicTabLayout isGuest={!user} />;
 }
 
 const styles = StyleSheet.create({});

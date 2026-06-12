@@ -10,16 +10,45 @@ import {
   ActivityIndicator,
   RefreshControl,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Feather } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
 import { useColors } from "@/hooks/useColors";
-import { useChat, ChatMessage, FeasibilityReport, FeasibilityReportGroup } from "@/context/ChatContext";
+import { useChat, ChatMessage, FeasibilityReport, FeasibilityReportGroup, PropertyCandidate, SelectedListingContext } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
+import { useWatchlist, WatchlistItem } from "@/context/WatchlistContext";
+import { PropertyCard } from "@/components/PropertyCard";
 import { useFocusEffect, useRouter } from "expo-router";
 import { getApiBase } from "@/lib/api";
 import { useT, getCurrentLocale } from "@/lib/i18n";
 import { translateReportViaApi } from "@/lib/translateReport";
+
+// Mirrors the queue key in app/(tabs)/index.tsx — writing an analyse action here
+// and navigating home lets the Search tab pick it up on focus and run it.
+const PENDING_ANALYSE_ACTION_KEY = "@devfeasible/pending-guest-analyse-action";
+
+/** Render a stored watchlist row as a PropertyCandidate (prefer the snapshot). */
+function watchItemToCandidate(item: WatchlistItem): PropertyCandidate {
+  const snap = item.snapshot;
+  if (snap && typeof snap === "object" && typeof (snap as PropertyCandidate).address === "string") {
+    return snap as PropertyCandidate;
+  }
+  return {
+    address: item.address,
+    price: 0,
+    scores: { ease: 0, cost: 0, roi: 0, composite: item.compositeScore ?? 0 },
+    scoresLoading: false,
+    photoUrl: item.photoUrl ?? undefined,
+    listingUrl: item.listingUrl ?? undefined,
+    priceDisplay: item.priceDisplay ?? undefined,
+    propertyType: item.propertyType ?? undefined,
+    zone: item.zone ?? undefined,
+    bedrooms: item.bedrooms ?? undefined,
+    bathrooms: item.bathrooms ?? undefined,
+    landArea: item.landAreaSqm ?? undefined,
+  };
+}
 
 type SearchSummary = {
   id: string;
@@ -155,17 +184,43 @@ export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
   const { sessions, openHistoryReport, openHistoryReportGroup, switchSession, deleteSession, startNewChat, searchHistoryTick } = useChat();
   const { getApiHeaders } = useAuth();
+  const { items: watchItems, loading: watchLoading, refresh: refreshWatch } = useWatchlist();
   const router = useRouter();
   const { t } = useT();
 
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
 
+  const [tab, setTab] = useState<"history" | "watchlist">("history");
   const [searches, setSearches] = useState<SearchSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [openingId, setOpeningId] = useState<string | null>(null);
   const hasLoadedRef = useRef(false);
+
+  // Tapping "Analyse" on a watchlist card queues the action and sends the user
+  // to the Search tab, which runs it on focus.
+  const handleWatchAnalyse = useCallback(
+    async (
+      address: string,
+      photoUrl?: string | null,
+      listingUrl?: string | null,
+      selectedListingContext?: SelectedListingContext | null,
+      analysisKey?: string,
+    ) => {
+      const action = {
+        type: "analyse" as const,
+        address,
+        selectedPhotoUrl: photoUrl ?? null,
+        selectedListingUrl: listingUrl ?? null,
+        selectedListingContext: selectedListingContext ?? null,
+        analysisKey,
+      };
+      await AsyncStorage.setItem(PENDING_ANALYSE_ACTION_KEY, JSON.stringify(action)).catch(() => {});
+      router.push("/");
+    },
+    [router],
+  );
 
   // One row per locally-saved conversation (session). Every conversation is
   // resumable — not just feasibility reports but also discover/search threads
@@ -408,7 +463,35 @@ export default function HistoryScreen() {
         </View>
       </View>
 
-      {loading ? (
+      <View style={[styles.segmentWrap, { backgroundColor: colors.muted }]}>
+        {(["history", "watchlist"] as const).map((seg) => {
+          const active = tab === seg;
+          return (
+            <TouchableOpacity
+              key={seg}
+              style={[styles.segment, active && { backgroundColor: colors.accent }]}
+              onPress={() => setTab(seg)}
+              activeOpacity={0.8}
+            >
+              <Feather
+                name={seg === "history" ? "clock" : "heart"}
+                size={13}
+                color={active ? "#fff" : colors.mutedForeground}
+              />
+              <Text
+                style={[
+                  styles.segmentText,
+                  { color: active ? "#fff" : colors.mutedForeground, fontFamily: "DM_Sans_600SemiBold" },
+                ]}
+              >
+                {seg === "history" ? t("history.tab_history") : t("history.tab_watchlist")}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      {tab === "history" && (loading ? (
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={colors.accent} />
         </View>
@@ -459,7 +542,43 @@ export default function HistoryScreen() {
             </Text>
           }
         />
-      )}
+      ))}
+
+      {tab === "watchlist" && (watchLoading && watchItems.length === 0 ? (
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color={colors.accent} />
+        </View>
+      ) : watchItems.length === 0 ? (
+        <View style={styles.empty}>
+          <View style={[styles.emptyIcon, { backgroundColor: colors.muted }]}>
+            <Feather name="heart" size={28} color={colors.mutedForeground} />
+          </View>
+          <Text style={[styles.emptyTitle, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>
+            {t("watchlist.empty_title")}
+          </Text>
+          <Text style={[styles.emptyText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+            {t("watchlist.empty_text")}
+          </Text>
+        </View>
+      ) : (
+        <FlatList
+          data={watchItems}
+          keyExtractor={(it) => it.propertyKey}
+          renderItem={({ item }) => (
+            <PropertyCard candidate={watchItemToCandidate(item)} onAnalyse={handleWatchAnalyse} />
+          )}
+          contentContainerStyle={[styles.list, { paddingBottom: bottomInset + 24 }]}
+          showsVerticalScrollIndicator={false}
+          ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
+          refreshControl={
+            <RefreshControl
+              refreshing={watchLoading}
+              onRefresh={() => { void refreshWatch(); }}
+              tintColor={colors.accent}
+            />
+          }
+        />
+      ))}
     </View>
   );
 }
@@ -500,6 +619,27 @@ const styles = StyleSheet.create({
   list: {
     padding: 16,
     gap: 0,
+  },
+  segmentWrap: {
+    flexDirection: "row",
+    marginHorizontal: 20,
+    marginTop: 12,
+    marginBottom: 4,
+    borderRadius: 12,
+    padding: 3,
+    gap: 3,
+  },
+  segment: {
+    flex: 1,
+    minHeight: 36,
+    borderRadius: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  segmentText: {
+    fontSize: 13,
   },
   hint: {
     fontSize: 12,

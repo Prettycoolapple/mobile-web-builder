@@ -16,6 +16,7 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Modal,
+  Alert,
   type GestureResponderEvent,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -23,7 +24,7 @@ import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import * as StoreReview from "expo-store-review";
 import { Audio } from "expo-av";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useChat, ChatMessage, FeasibilityReport, FeasibilityReportGroup, LoadingHint, PropertyCandidate, SelectedListingContext, ServiceProvider, type CandidateScoreUpdate } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
@@ -93,6 +94,7 @@ type BackgroundAnalyseJob = {
 const BACKGROUND_ANALYSE_JOBS_KEY = "@devfeasible/background-analyse-jobs";
 const APP_RATING_STATE_KEY = "@devfeasible/app-rating-state";
 const ANALYSE_DISCLAIMER_DISMISSED_KEY = "@devfeasible/analyse-disclaimer-dismissed";
+const PENDING_GUEST_ANALYSE_ACTION_KEY = "@devfeasible/pending-guest-analyse-action";
 const HOME_MODE_KEY = "@devfeasible/home-mode";
 const BROWSE_MODE_ENABLED = false;
 const APP_RATING_CHAT_THRESHOLD = 3;
@@ -105,6 +107,17 @@ function getAnalyseDisclaimerDismissedKey(userId?: string | null): string {
 type PendingAnalyseAction =
   | { type: "send"; text: string }
   | { type: "analyse"; address: string; selectedPhotoUrl?: string | null; selectedListingUrl?: string | null; selectedListingContext?: SelectedListingContext | null; analysisKey?: string };
+
+type DiscoveryNextResponse = {
+  candidates?: PropertyCandidate[];
+  continuationToken?: string | null;
+  exhausted?: boolean;
+  searchPresentation?: ChatMessage["searchPresentation"];
+  clarification?: {
+    question: string;
+    options: string[];
+  };
+};
 
 function detectClientMode(text: string): "analyse" | "discover" | "followup" {
   const lowerText = text.toLowerCase();
@@ -316,6 +329,7 @@ export default function SearchScreen() {
     createSession,
     startNewChat,
     addMessage,
+    updateMessage,
     updateLastMessage,
     updateLastMessageIfType,
     replaceBackgroundAnalyseMessage,
@@ -344,6 +358,7 @@ export default function SearchScreen() {
   const [messageLimitReached, setMessageLimitReached] = useState(false);
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const [recordingCancelArmed, setRecordingCancelArmed] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
@@ -357,6 +372,7 @@ export default function SearchScreen() {
   const shownRecommendationReportIds = useRef<Set<string>>(new Set());
   const lastCheckedFollowUpCount = useRef<Map<string, number>>(new Map());
   const providerRecommendationKeysRef = useRef<Set<string>>(new Set());
+  const prefetchingContinuationRef = useRef<Set<string>>(new Set());
   // Always-current mirror of currentSession?.messages — used in async timer
   // callbacks where the closure would otherwise hold stale captured state.
   const sessionMessagesRef = useRef<ChatMessage[]>([]);
@@ -448,6 +464,25 @@ export default function SearchScreen() {
     setAnalyseDisclaimerDontRemind(false);
     setAnalyseDisclaimerVisible(true);
   }, []);
+
+  const promptSignInForAnalysis = useCallback(async (action: PendingAnalyseAction) => {
+    await AsyncStorage.setItem(PENDING_GUEST_ANALYSE_ACTION_KEY, JSON.stringify(action)).catch(() => {});
+    const title = t("guest_analysis.title");
+    const message = t("guest_analysis.body");
+    const goLogin = () => router.push("/(auth)/login" as never);
+    const goSignup = () => router.push("/(auth)/signup" as never);
+
+    if (Platform.OS === "web") {
+      goSignup();
+      return;
+    }
+
+    Alert.alert(title, message, [
+      { text: t("common.cancel"), style: "cancel" },
+      { text: t("login.submit"), onPress: goLogin },
+      { text: t("signup.create_account"), onPress: goSignup },
+    ]);
+  }, [router, t]);
 
   const chatQuota = user ? resolveChatQuota(user.role, user.subscriptionTier, user.specialStatus) : null;
 
@@ -887,6 +922,174 @@ export default function SearchScreen() {
     [getApiBase, getApiHeaders, updateCandidateScores],
   );
 
+  const fetchDiscoveryNext = useCallback(
+    async (message: ChatMessage, count = 6, prefetchOnly = false): Promise<DiscoveryNextResponse | null> => {
+      if (!message.continuationToken) return null;
+      const resp = await fetch(`${getApiBase()}/discovery/next`, {
+        method: "POST",
+        headers: getApiHeaders(),
+        body: JSON.stringify({
+          continuationToken: message.continuationToken,
+          shownCandidates: message.searchResults ?? [],
+          prefetchOnly,
+          count,
+        }),
+      });
+      if (!resp.ok) return null;
+      return (await resp.json()) as DiscoveryNextResponse;
+    },
+    [getApiBase, getApiHeaders],
+  );
+
+  const claimDiscoveryCandidates = useCallback(
+    async (continuationToken: string | null | undefined, candidates: PropertyCandidate[]) => {
+      if (!continuationToken || candidates.length === 0) return;
+      await fetch(`${getApiBase()}/discovery/next`, {
+        method: "POST",
+        headers: getApiHeaders(),
+        body: JSON.stringify({
+          continuationToken,
+          claimCandidates: candidates.map((candidate) => ({
+            address: candidate.address,
+            listingUrl: candidate.listingUrl,
+          })),
+        }),
+      }).catch(() => {});
+    },
+    [getApiBase, getApiHeaders],
+  );
+
+  const prefetchDiscoveryNext = useCallback(
+    async (message: ChatMessage, sessionId: string) => {
+      if (!message.continuationToken) return;
+      if (message.prefetchedSearchResults?.length || message.prefetchedExhausted || message.showMoreStatus === "loading") return;
+      const key = `${sessionId}:${message.id}:${message.continuationToken}`;
+      if (prefetchingContinuationRef.current.has(key)) return;
+      prefetchingContinuationRef.current.add(key);
+      try {
+        const data = await fetchDiscoveryNext(message, 6, true);
+        if (!data) return;
+        updateMessage(message.id, {
+          prefetchedSearchResults: data.candidates ?? [],
+          prefetchedContinuationToken: data.continuationToken ?? null,
+          prefetchedExhausted: Boolean(data.exhausted),
+          prefetchedClarification: data.clarification,
+          showMoreStatus: "ready",
+        }, sessionId);
+      } finally {
+        prefetchingContinuationRef.current.delete(key);
+      }
+    },
+    [fetchDiscoveryNext, updateMessage],
+  );
+
+  const showDiscoveryExhaustedChoice = useCallback(
+    (clarification: { question: string; options: string[] } | undefined, sessionId: string) => {
+      addMessage({
+        role: "assistant",
+        content: "",
+        type: "discovery_exhausted_choice",
+        clarification: clarification ?? {
+          question: t("search.no_listings_msg"),
+          options: [],
+        },
+      }, sessionId);
+    },
+    [addMessage, t],
+  );
+
+  const appendContinuationCandidates = useCallback(
+    (
+      message: ChatMessage,
+      candidates: PropertyCandidate[],
+      continuationToken: string | null | undefined,
+      exhausted: boolean | undefined,
+      clarification: { question: string; options: string[] } | undefined,
+      sessionId: string,
+      claimServed = false,
+    ) => {
+      if (candidates.length === 0) {
+        updateMessage(message.id, {
+          continuationToken: continuationToken ?? null,
+          prefetchedSearchResults: undefined,
+          prefetchedContinuationToken: undefined,
+          prefetchedExhausted: undefined,
+          prefetchedClarification: undefined,
+          showMoreStatus: "idle",
+        }, sessionId);
+        showDiscoveryExhaustedChoice(clarification, sessionId);
+        return;
+      }
+      const nextResults = [...(message.searchResults ?? []), ...candidates];
+      if (claimServed) {
+        void claimDiscoveryCandidates(message.continuationToken, candidates);
+      }
+      updateMessage(message.id, {
+        searchResults: nextResults,
+        continuationToken: continuationToken ?? null,
+        prefetchedSearchResults: undefined,
+        prefetchedContinuationToken: undefined,
+        prefetchedExhausted: undefined,
+        prefetchedClarification: undefined,
+        showMoreStatus: exhausted ? "idle" : "idle",
+      }, sessionId);
+      if (message.searchPresentation !== "generic_listing") {
+        startCardScorePoll(candidates.map((c) => ({ address: c.address, listingUrl: c.listingUrl })), sessionId);
+      }
+    },
+    [claimDiscoveryCandidates, showDiscoveryExhaustedChoice, startCardScorePoll, updateMessage],
+  );
+
+  const handleShowMore = useCallback(
+    async (message: ChatMessage) => {
+      const sessionId = currentSessionId ?? currentSession?.id;
+      if (!sessionId) return;
+      const prefetched = message.prefetchedSearchResults ?? [];
+      if (prefetched.length > 0 || message.prefetchedExhausted) {
+        appendContinuationCandidates(
+          message,
+          prefetched,
+          message.prefetchedContinuationToken,
+          message.prefetchedExhausted,
+          message.prefetchedClarification,
+          sessionId,
+          true,
+        );
+        return;
+      }
+      if (!message.continuationToken) {
+        showDiscoveryExhaustedChoice(message.prefetchedClarification, sessionId);
+        return;
+      }
+      updateMessage(message.id, { showMoreStatus: "loading" }, sessionId);
+      const data = await fetchDiscoveryNext(message, 3).catch(() => null);
+      if (!data) {
+        updateMessage(message.id, { showMoreStatus: "idle" }, sessionId);
+        return;
+      }
+      appendContinuationCandidates(
+        message,
+        data.candidates ?? [],
+        data.continuationToken,
+        data.exhausted,
+        data.clarification,
+        sessionId,
+      );
+    },
+    [appendContinuationCandidates, currentSession?.id, currentSessionId, fetchDiscoveryNext, showDiscoveryExhaustedChoice, updateMessage],
+  );
+
+  useEffect(() => {
+    const sessionId = currentSessionId ?? currentSession?.id;
+    if (!sessionId) return;
+    for (const message of currentSession?.messages ?? []) {
+      if (message.type !== "search") continue;
+      if (!message.continuationToken) continue;
+      if (message.prefetchedSearchResults?.length || message.prefetchedExhausted || message.showMoreStatus === "loading") continue;
+      void prefetchDiscoveryNext(message, sessionId);
+    }
+  }, [currentSession?.id, currentSession?.messages, currentSessionId, prefetchDiscoveryNext]);
+
   const maybeTriggerAppRatingPrompt = useCallback(
     async (kind: "chat" | "report", messageKey: string) => {
       if (Platform.OS === "web" || !user?.id) return;
@@ -1054,6 +1257,10 @@ export default function SearchScreen() {
     if (!text && !isLoading) return;
     if (isLoading) return;
     const detectedMode = detectClientMode(text);
+    if (!user && detectedMode === "analyse") {
+      await promptSignInForAnalysis({ type: "send", text });
+      return;
+    }
     if (!skipAnalyseDisclaimer && detectedMode === "analyse" && shouldShowAnalyseDisclaimer()) {
       openAnalyseDisclaimer({ type: "send", text });
       return;
@@ -1452,6 +1659,17 @@ export default function SearchScreen() {
 
           if (!resp.ok) {
             const err = (await resp.json()) as { error?: string; code?: string; message?: string };
+            if (resp.status === 401 && err.code === "AUTH_REQUIRED" && !user) {
+              updateLastMessage({ type: "text", content: err.message || t("guest_analysis.body") }, sessionId);
+              setIsLoading(false);
+              await promptSignInForAnalysis({ type: "send", text });
+              return;
+            }
+            if (resp.status === 429 && err.code === "GUEST_LIMIT_REACHED") {
+              updateLastMessage({ type: "text", content: err.message || t("guest_analysis.limit") }, sessionId);
+              setIsLoading(false);
+              return;
+            }
             if (resp.status === 429 && err.error === "monthly_limit_reached") {
               const isUpgrade = err.code === "upgrade_required";
               setMessageLimitReached(true);
@@ -1518,7 +1736,7 @@ export default function SearchScreen() {
           const hasJsonShape = /\{[\s\S]*\}|\[[\s\S]*\]/.test(trimmed);
           const maybeParsed = hasJsonShape
             ? (extractJSON(trimmed) as
-                | { candidates?: PropertyCandidate[]; isMockData?: boolean; noListings?: boolean; aiIntro?: string; searchPresentation?: ChatMessage["searchPresentation"] }
+                | { candidates?: PropertyCandidate[]; isMockData?: boolean; noListings?: boolean; aiIntro?: string; searchPresentation?: ChatMessage["searchPresentation"]; continuationToken?: string | null }
                 | FeasibilityReportGroup
                 | null)
             : null;
@@ -1591,7 +1809,7 @@ export default function SearchScreen() {
             const aiIntro = searchPayload?.aiIntro ?? "";
             if (searchPayload?.candidates && searchPayload.candidates.length > 0) {
               const searchPresentation = searchPayload.searchPresentation === "generic_listing" ? "generic_listing" : "scored_screening";
-              updateLastMessage({ type: "search", searchResults: searchPayload.candidates, content: "", aiIntro, searchPresentation }, sessionId);
+              updateLastMessage({ type: "search", searchResults: searchPayload.candidates, content: "", aiIntro, searchPresentation, continuationToken: searchPayload.continuationToken ?? null }, sessionId);
               if (searchPresentation !== "generic_listing") {
                 startCardScorePoll(searchPayload.candidates.map((c: PropertyCandidate) => ({ address: c.address, listingUrl: c.listingUrl })), sessionId);
               }
@@ -1627,7 +1845,7 @@ export default function SearchScreen() {
               const searchPayload = !isFeasibilityReportGroup(maybeParsed) ? maybeParsed : null;
               if (searchPayload?.candidates && searchPayload.candidates.length > 0) {
                 const searchPresentation = searchPayload.searchPresentation === "generic_listing" ? "generic_listing" : "scored_screening";
-                updateLastMessage({ type: "search", searchResults: searchPayload.candidates, content: "", searchPresentation }, sessionId);
+                updateLastMessage({ type: "search", searchResults: searchPayload.candidates, content: "", searchPresentation, continuationToken: searchPayload.continuationToken ?? null }, sessionId);
               } else if (hasJsonShape) {
                 updateLastMessage({ type: "text", content: sanitizeForDisplay(rawContent, t("search.format_error")) }, sessionId);
               } else {
@@ -1777,6 +1995,7 @@ export default function SearchScreen() {
     addProviderRecommendationOnce,
     shouldShowAnalyseDisclaimer,
     openAnalyseDisclaimer,
+    promptSignInForAnalysis,
     user?.role,
     user?.subscriptionTier,
     user,
@@ -1800,6 +2019,10 @@ export default function SearchScreen() {
       analysisKey?: string,
     ) => {
       if (isLoading) return;
+      if (!user) {
+        await promptSignInForAnalysis({ type: "analyse", address, selectedPhotoUrl, selectedListingUrl, selectedListingContext, analysisKey });
+        return;
+      }
       if (!skipAnalyseDisclaimer && shouldShowAnalyseDisclaimer()) {
         openAnalyseDisclaimer({ type: "analyse", address, selectedPhotoUrl, selectedListingUrl, selectedListingContext, analysisKey });
         return;
@@ -1982,8 +2205,10 @@ export default function SearchScreen() {
       trackBackgroundAnalyseJob,
       shouldShowAnalyseDisclaimer,
       openAnalyseDisclaimer,
+      promptSignInForAnalysis,
       scrollToNewestMessage,
       t,
+      user,
     ],
   );
 
@@ -2121,6 +2346,54 @@ export default function SearchScreen() {
     }
   }, [analyseDisclaimerDontRemind, handleAnalyse, handleSend, user?.id]);
 
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    (async () => {
+      const raw = await AsyncStorage.getItem(PENDING_GUEST_ANALYSE_ACTION_KEY).catch(() => null);
+      if (!raw || cancelled) return;
+      await AsyncStorage.removeItem(PENDING_GUEST_ANALYSE_ACTION_KEY).catch(() => {});
+      try {
+        const action = JSON.parse(raw) as PendingAnalyseAction;
+        if (action.type === "send") {
+          await handleSend(action.text);
+        } else if (action.type === "analyse") {
+          await handleAnalyse(action.address, action.selectedPhotoUrl, action.selectedListingUrl, action.selectedListingContext, false, action.analysisKey);
+        }
+      } catch {
+        // Ignore malformed stale guest actions.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [handleAnalyse, handleSend, user]);
+
+  // Drain a queued analyse action whenever the Search tab regains focus. This
+  // is how a tap from another screen (e.g. "Analyse" on a Watchlist card) runs
+  // its analysis even though this tab is already mounted, so the on-mount /
+  // on-login effect above won't re-fire.
+  useFocusEffect(
+    useCallback(() => {
+      if (!user) return;
+      let cancelled = false;
+      (async () => {
+        const raw = await AsyncStorage.getItem(PENDING_GUEST_ANALYSE_ACTION_KEY).catch(() => null);
+        if (!raw || cancelled) return;
+        await AsyncStorage.removeItem(PENDING_GUEST_ANALYSE_ACTION_KEY).catch(() => {});
+        try {
+          const action = JSON.parse(raw) as PendingAnalyseAction;
+          if (action.type === "send") {
+            await handleSend(action.text);
+          } else if (action.type === "analyse") {
+            await handleAnalyse(action.address, action.selectedPhotoUrl, action.selectedListingUrl, action.selectedListingContext, false, action.analysisKey);
+          }
+        } catch {
+          // Ignore malformed stale actions.
+        }
+      })();
+      return () => { cancelled = true; };
+    }, [handleAnalyse, handleSend, user]),
+  );
+
   const renderItem = useCallback(
     ({ item }: { item: ChatMessage }) => {
       const handleLayout = item.type === "report"
@@ -2141,12 +2414,12 @@ export default function SearchScreen() {
             onDismiss={handleDismiss}
             onAgentDismiss={handleAgentDismiss}
             onUpgrade={() => setShowPaywall(true)}
-            onShowMore={(text, continuePresentation) => handleSend(text, false, continuePresentation)}
+            onShowMore={handleShowMore}
           />
         </View>
       );
     },
-    [handleFollowUp, handleCardAnalyse, analysingPropertyKey, handleSend, handleConnect, handleDismiss, handleAgentDismiss],
+    [handleFollowUp, handleCardAnalyse, analysingPropertyKey, handleSend, handleConnect, handleDismiss, handleAgentDismiss, handleShowMore],
   );
 
   const keyExtractor = useCallback((item: ChatMessage) => item.id, []);
@@ -2268,6 +2541,7 @@ export default function SearchScreen() {
     setRecordingCancelArmed(false);
     setRecording(null);
     setIsRecording(false);
+    setIsTranscribing(false);
     if (!activeRecording) return;
     try {
       await activeRecording.stopAndUnloadAsync();
@@ -2308,6 +2582,7 @@ export default function SearchScreen() {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
       if (uri) {
+        setIsTranscribing(true);
         setIsLoading(true);
         const formData = new FormData();
         formData.append("file", {
@@ -2328,11 +2603,14 @@ export default function SearchScreen() {
         if (res.ok) {
           const data = await res.json() as { text?: string };
           if (data.text && data.text.trim().length > 0) {
+            setIsTranscribing(false);
             void handleSend(data.text.trim());
           } else {
+            setIsTranscribing(false);
             setIsLoading(false);
           }
         } else {
+          setIsTranscribing(false);
           setIsLoading(false);
         }
       }
@@ -2346,6 +2624,7 @@ export default function SearchScreen() {
       recordingPressActiveRef.current = false;
       setRecording(null);
       setIsRecording(false);
+      setIsTranscribing(false);
       setRecordingCancelArmed(false);
       setIsLoading(false);
     }
@@ -2391,6 +2670,16 @@ export default function SearchScreen() {
             </Text>
           </View>
           <View style={styles.headerActions}>
+            {!user && (
+              <TouchableOpacity
+                style={[styles.signInBtn, { borderColor: "rgba(250,249,246,0.22)" }]}
+                onPress={() => router.push("/(auth)/login" as never)}
+                activeOpacity={0.75}
+              >
+                <Feather name="user-plus" size={13} color="rgba(250,249,246,0.78)" />
+                <Text style={[styles.signInBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>{t("guest.sign_in")}</Text>
+              </TouchableOpacity>
+            )}
             {user?.role === "sales_agent" && (
               <>
                 <TouchableOpacity
@@ -2710,12 +2999,19 @@ export default function SearchScreen() {
         </>
       )}
 
-      {isRecording && (
+      {(isRecording || isTranscribing) && (
         <View style={styles.recordingOverlay} pointerEvents="none">
           <View style={styles.recordingOverlayCenter}>
-            <Text style={styles.recordingOverlayText}>
-              {recordingCancelArmed ? t("search.voice_stop") : t("search.voice_listening")}
-            </Text>
+            {isTranscribing ? (
+              <>
+                <ActivityIndicator color="#fff" size="small" style={{ marginBottom: 10 }} />
+                <Text style={styles.recordingOverlayText}>{t("search.voice_transcribing")}</Text>
+              </>
+            ) : (
+              <Text style={styles.recordingOverlayText}>
+                {recordingCancelArmed ? t("search.voice_stop") : t("search.voice_listening")}
+              </Text>
+            )}
           </View>
         </View>
       )}
@@ -2817,6 +3113,19 @@ const styles = StyleSheet.create({
   myListingsBtnText: {
     fontSize: 13,
     color: "rgba(250,249,246,0.75)",
+  },
+  signInBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderWidth: 1,
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  signInBtnText: {
+    fontSize: 13,
+    color: "rgba(250,249,246,0.78)",
   },
   addListingBtn: {
     flexDirection: "row",

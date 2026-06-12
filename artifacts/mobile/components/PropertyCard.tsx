@@ -1,9 +1,11 @@
 import React, { useEffect, useRef } from "react";
-import { View, Text, StyleSheet, TouchableOpacity, Image, Animated } from "react-native";
-import { Feather } from "@expo/vector-icons";
+import { View, Text, StyleSheet, TouchableOpacity, Image, Animated, Alert, Platform } from "react-native";
+import { Feather, Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { PropertyCandidate, SelectedListingContext } from "@/context/ChatContext";
+import { useWatchlist } from "@/context/WatchlistContext";
 import { StarRating } from "@/components/StarRating";
 import { useT } from "@/lib/i18n";
 import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
@@ -130,8 +132,11 @@ function OverallCompositeBadge({
 
 export function PropertyCard({ candidate, onAnalyse, analysingPropertyKey = null, showSubdivisionDisclaimer = false }: Props) {
   const colors = useColors();
-  const { getApiHeaders } = useAuth();
+  const { getApiHeaders, user } = useAuth();
+  const { isWatched, toggle } = useWatchlist();
+  const router = useRouter();
   const { t } = useT();
+  const watched = isWatched(candidate);
   const compositeRaw = candidate.scores.composite;
   const isPreliminarySubdivisionScreen = candidate.screeningStatus === "preliminary";
   const showOverall =
@@ -199,6 +204,28 @@ export function PropertyCard({ candidate, onAnalyse, analysingPropertyKey = null
     }
   };
 
+  const promptSignInForWatchlist = () => {
+    const goLogin = () => router.push("/(auth)/login" as never);
+    const goSignup = () => router.push("/(auth)/signup" as never);
+    if (Platform.OS === "web") {
+      goSignup();
+      return;
+    }
+    Alert.alert(t("watchlist.signin_title"), t("watchlist.signin_body"), [
+      { text: t("common.cancel"), style: "cancel" },
+      { text: t("login.submit"), onPress: goLogin },
+      { text: t("signup.create_account"), onPress: goSignup },
+    ]);
+  };
+
+  const handleToggleWatch = async () => {
+    if (!user) {
+      promptSignInForWatchlist();
+      return;
+    }
+    await toggle(candidate);
+  };
+
   return (
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
       {candidate.photoUrl ? (
@@ -218,6 +245,15 @@ export function PropertyCard({ candidate, onAnalyse, analysingPropertyKey = null
           >
             <Feather name="log-out" size={15} color={colors.foreground} />
           </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.heartBtn, { backgroundColor: "rgba(255,255,255,0.92)", borderColor: colors.border }]}
+            onPress={handleToggleWatch}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel={watched ? t("watchlist.remove") : t("watchlist.add")}
+          >
+            <Ionicons name={watched ? "heart" : "heart-outline"} size={17} color={watched ? "#ef4444" : colors.foreground} />
+          </TouchableOpacity>
         </View>
       ) : (
         <View style={[styles.photoPlaceholder, { backgroundColor: colors.muted }]}>
@@ -231,6 +267,15 @@ export function PropertyCard({ candidate, onAnalyse, analysingPropertyKey = null
             accessibilityLabel="Share property"
           >
             <Feather name="log-out" size={15} color={colors.foreground} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.heartBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+            onPress={handleToggleWatch}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel={watched ? t("watchlist.remove") : t("watchlist.add")}
+          >
+            <Ionicons name={watched ? "heart" : "heart-outline"} size={17} color={watched ? "#ef4444" : colors.foreground} />
           </TouchableOpacity>
         </View>
       )}
@@ -425,6 +470,17 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: 10,
     left: 10,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  heartBtn: {
+    position: "absolute",
+    top: 10,
+    left: 52,
     width: 34,
     height: 34,
     borderRadius: 17,

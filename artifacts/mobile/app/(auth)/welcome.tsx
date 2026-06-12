@@ -174,7 +174,7 @@ export default function WelcomeScreen() {
           <TouchableOpacity
             style={styles.primaryButton}
             activeOpacity={0.88}
-            onPress={() => router.push("/(auth)/signup")}
+            onPress={() => router.replace("/(tabs)" as never)}
           >
             <Text style={styles.primaryButtonText}>{t("welcome.cta_primary")}</Text>
             <Text style={styles.primaryButtonArrow}>{">"}</Text>

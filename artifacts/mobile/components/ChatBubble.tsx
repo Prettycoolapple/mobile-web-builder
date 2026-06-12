@@ -128,7 +128,7 @@ interface Props {
   onDismiss?: (messageId: string) => void;
   onAgentDismiss?: (messageId: string) => void;
   onUpgrade?: () => void;
-  onShowMore?: (prompt: string, continuePresentation?: "generic_listing" | "scored_screening") => void;
+  onShowMore?: (message: ChatMessage) => void;
 }
 
 const THINKING_KEYS = [
@@ -460,15 +460,16 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, analysingPropertyKe
             <PropertyCard key={i} candidate={candidate} onAnalyse={onAnalyse} analysingPropertyKey={analysingPropertyKey} showSubdivisionDisclaimer={results.length === 1} />
           );
         })}
-        {results.length > 0 ? (
+        {results.length > 0 && (message.continuationToken || message.prefetchedSearchResults?.length || message.prefetchedExhausted || message.showMoreStatus === "loading") ? (
           <TouchableOpacity
             style={[styles.showMoreButton, { backgroundColor: colors.card, borderColor: colors.border }]}
             activeOpacity={0.78}
-            onPress={() => onShowMore?.(t("search.show_more"), message.searchPresentation ?? "scored_screening")}
+            onPress={() => onShowMore?.(message)}
+            disabled={message.showMoreStatus === "loading"}
           >
-            <Feather name="plus" size={15} color={colors.accent} />
+            <Feather name={message.showMoreStatus === "loading" ? "loader" : "plus"} size={15} color={colors.accent} />
             <Text style={[styles.showMoreText, { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" }]}>
-              {t("search.show_more")}
+              {message.showMoreStatus === "loading" ? t("search.finding_more") : t("search.show_more")}
             </Text>
           </TouchableOpacity>
         ) : null}

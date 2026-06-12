@@ -66,7 +66,7 @@ export function getIosAppStoreUrl(): string {
 }
 
 export function getAndroidPlayStoreUrl(): string {
-  return readOptional("ANDROID_PLAY_STORE_URL") ?? "https://play.google.com/store/apps/details?id=nz.devfeasible.app";
+  return readOptional("ANDROID_PLAY_STORE_URL") ?? "https://play.google.com/store/apps/details?id=nz.devfeasible.app&hl=en";
 }
 
 export function getStripeSecretKey(): string {

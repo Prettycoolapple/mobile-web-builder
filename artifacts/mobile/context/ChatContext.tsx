@@ -58,6 +58,15 @@ export interface ChatMessage {
   reportGroup?: FeasibilityReportGroup;
   searchResults?: PropertyCandidate[];
   searchPresentation?: "generic_listing" | "scored_screening";
+  continuationToken?: string | null;
+  prefetchedSearchResults?: PropertyCandidate[];
+  prefetchedContinuationToken?: string | null;
+  prefetchedExhausted?: boolean;
+  prefetchedClarification?: {
+    question: string;
+    options: string[];
+  };
+  showMoreStatus?: "idle" | "loading" | "ready";
   isMockData?: boolean;
   aiIntro?: string;
   provider?: ServiceProvider;
@@ -592,6 +601,7 @@ interface ChatContextValue {
   startNewChat: () => void;
   switchSession: (id: string) => void;
   addMessage: (msg: Omit<ChatMessage, "id" | "timestamp">, sessionId?: string) => void;
+  updateMessage: (messageId: string, updates: Partial<ChatMessage>, sessionId?: string) => void;
   updateLastMessage: (updates: Partial<ChatMessage>, sessionId?: string) => void;
   updateLastMessageIfType: (expectedType: ChatMessage["type"], updates: Partial<ChatMessage>, sessionId?: string) => void;
   replaceBackgroundAnalyseMessage: (jobId: string, msg: Omit<ChatMessage, "id" | "timestamp">, sessionId?: string) => void;
@@ -971,6 +981,27 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             messages[lastIdx] = { ...messages[lastIdx], ...updates };
           }
           return { ...s, messages, updatedAt: Date.now() };
+        });
+        saveSessions(updated);
+        return updated;
+      });
+    },
+    [currentSessionId, saveSessions],
+  );
+
+  const updateMessage = useCallback(
+    (messageId: string, updates: Partial<ChatMessage>, sessionId?: string) => {
+      setSessions((prev) => {
+        const targetId = sessionId ?? currentSessionId;
+        const updated = prev.map((s) => {
+          if (s.id !== targetId) return s;
+          let changed = false;
+          const messages = s.messages.map((m) => {
+            if (m.id !== messageId) return m;
+            changed = true;
+            return { ...m, ...updates };
+          });
+          return changed ? { ...s, messages, updatedAt: Date.now() } : s;
         });
         saveSessions(updated);
         return updated;
@@ -1471,6 +1502,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         startNewChat,
         switchSession,
         addMessage,
+        updateMessage,
         updateLastMessage,
         updateLastMessageIfType,
         replaceBackgroundAnalyseMessage,

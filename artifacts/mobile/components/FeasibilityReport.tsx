@@ -8,8 +8,11 @@ import {
   Image,
   ActivityIndicator,
   Modal,
+  Alert,
+  Platform,
   useWindowDimensions,
 } from "react-native";
+import { useRouter } from "expo-router";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
   runOnJS,
@@ -21,8 +24,9 @@ import { useAuth } from "@/context/AuthContext";
 import { getApiBase } from "@/lib/api";
 import Svg, { Polygon } from "react-native-svg";
 import { LinearGradient } from "expo-linear-gradient";
-import { Feather } from "@expo/vector-icons";
+import { Feather, Ionicons } from "@expo/vector-icons";
 import { StarRating } from "@/components/StarRating";
+import { useWatchlist, type WatchlistCandidate } from "@/context/WatchlistContext";
 import { useColors } from "@/hooks/useColors";
 import { useT, translate, translateForOS, isOSChineseLocale } from "@/lib/i18n";
 import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
@@ -2393,7 +2397,9 @@ function SchoolZonesPanel({ zones, colors }: { zones: SchoolZoneDetail[]; colors
 export function FeasibilityReportCard({ report, onFollowUp }: Props) {
   const colors = useColors();
   const { t, locale } = useT();
-  const { getApiHeaders } = useAuth();
+  const { getApiHeaders, user } = useAuth();
+  const { isWatched, toggle } = useWatchlist();
+  const router = useRouter();
 
   const planningSection = overlayStatus(report);
   const asbestosStatus: "good" | "warning" | "risk" | "neutral" = report.asbestos
@@ -2420,6 +2426,45 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
       // Best-effort: sharing should not interrupt report reading.
     }
   }, [effectiveReport, getApiHeaders]);
+
+  // Build a watchlist candidate from the report so a heart here saves the same
+  // property a result card would (same listingUrl||address key).
+  const watchCandidate = useMemo<WatchlistCandidate>(() => {
+    const ctx = report.selectedListingContext;
+    return {
+      address: (report.address ?? "").trim(),
+      listingUrl: ctx?.listingUrl ?? undefined,
+      photoUrl: effectiveReport.photoUrl ?? effectiveReport.photoUrls?.[0] ?? undefined,
+      propertyType: report.propertyOverview?.propertyType ?? ctx?.propertyType ?? undefined,
+      zone: report.propertyOverview?.zone ?? report.zone_label ?? undefined,
+      bedrooms: report.propertyOverview?.bedrooms ?? ctx?.bedrooms ?? undefined,
+      bathrooms: report.propertyOverview?.bathrooms ?? ctx?.bathrooms ?? undefined,
+      scores: report.scores,
+    };
+  }, [report, effectiveReport]);
+  const watched = isWatched(watchCandidate);
+
+  const promptSignInForWatchlist = useCallback(() => {
+    const goLogin = () => router.push("/(auth)/login" as never);
+    const goSignup = () => router.push("/(auth)/signup" as never);
+    if (Platform.OS === "web") {
+      goSignup();
+      return;
+    }
+    Alert.alert(t("watchlist.signin_title"), t("watchlist.signin_body"), [
+      { text: t("common.cancel"), style: "cancel" },
+      { text: t("login.submit"), onPress: goLogin },
+      { text: t("signup.create_account"), onPress: goSignup },
+    ]);
+  }, [router, t]);
+
+  const handleToggleWatch = useCallback(async () => {
+    if (!user) {
+      promptSignInForWatchlist();
+      return;
+    }
+    await toggle(watchCandidate);
+  }, [user, toggle, watchCandidate, promptSignInForWatchlist]);
 
   const handleRefreshPhotos = useCallback(async () => {
     const searchId = report.historyId ?? null;
@@ -2551,6 +2596,15 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
               ) : null}
             </View>
           </View>
+          <TouchableOpacity
+            style={[styles.reportShareBtn, { backgroundColor: "rgba(250,250,249,0.15)", borderColor: "rgba(250,250,249,0.24)" }]}
+            onPress={handleToggleWatch}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel={watched ? t("watchlist.remove") : t("watchlist.add")}
+          >
+            <Ionicons name={watched ? "heart" : "heart-outline"} size={17} color={watched ? "#ef4444" : "rgba(250,250,249,0.92)"} />
+          </TouchableOpacity>
           <TouchableOpacity
             style={[styles.reportShareBtn, { backgroundColor: "rgba(250,250,249,0.15)", borderColor: "rgba(250,250,249,0.24)" }]}
             onPress={handleShare}

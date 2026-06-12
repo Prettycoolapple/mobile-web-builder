@@ -1,6 +1,7 @@
 import { Router } from "express";
+import { randomUUID } from "node:crypto";
 import { and, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
-import { db, profiles, searches, feasibilityJobs, salesAgentProfiles, listings, withDbRetry } from "@workspace/db";
+import { db, profiles, searches, feasibilityJobs, salesAgentProfiles, listings, discoveryContinuations, withDbRetry, type DiscoveryContinuationState } from "@workspace/db";
 import { agentAiUnlimited } from "../lib/agent-entitlements";
 import { logger } from "../lib/logger";
 import {
@@ -61,6 +62,7 @@ import {
   popNextListings,
   markShown,
   getShownUrls,
+  getListingCache,
   restoreListingsAfterPop,
   getRemainingCount,
 } from "../lib/listing-cache";
@@ -94,6 +96,15 @@ import { classifySiteCondition, siteStatusLabel } from "../lib/site-condition";
 import { sendPushToUser } from "../lib/expo-push";
 import { runAfterResponse } from "../lib/vercel-wait-until";
 import { clearRecentShownForUserSuburb, getRecentShownForUser, recordShownForUser, type RecentShownListing } from "../lib/discovery-shown-memory";
+import {
+  checkAndRecordAnonymousUsage,
+  clearRecentShownForAnonymousSuburb,
+  getAnonymousInstallHash,
+  getIpHash,
+  getRecentShownForAnonymous,
+  recordAnonymousDiscoveryEvent,
+  recordShownForAnonymous,
+} from "../lib/anonymous-discovery";
 import type { Logger } from "pino";
 
 type ReqLike = { headers: Record<string, string | string[] | undefined> };
@@ -1765,6 +1776,254 @@ function topUpGenericListingCandidates(
   return out.slice(0, targetCount);
 }
 
+const DISCOVERY_CONTINUATION_TTL_MS = 30 * 60 * 1000;
+const DISCOVERY_CONTINUATION_PREFETCH_COUNT = 6;
+const DISCOVERY_CONTINUATION_PAGE_SIZE = 3;
+
+type DiscoverySearchPresentation = "generic_listing" | "scored_screening";
+
+function continuationOwnerKey(userId: string | null, anonymousHash: string | null): string | null {
+  if (userId) return `user:${userId}`;
+  if (anonymousHash) return `anon:${anonymousHash}`;
+  return null;
+}
+
+function candidateShownKey(candidate: Pick<PropertyCandidate, "address" | "listingUrl">): string {
+  return normaliseDiscoveryAddressKey(candidate.address) || candidate.listingUrl || candidate.address;
+}
+
+function shownKeysFromCandidates(candidates: Array<Pick<PropertyCandidate, "address" | "listingUrl">>): Set<string> {
+  const keys = new Set<string>();
+  for (const candidate of candidates) {
+    const addressKey = normaliseDiscoveryAddressKey(candidate.address);
+    if (addressKey) keys.add(addressKey);
+    if (candidate.listingUrl) keys.add(candidate.listingUrl);
+  }
+  return keys;
+}
+
+function filterCandidatesAlreadyShown<T extends Pick<PropertyCandidate, "address" | "listingUrl">>(
+  candidates: T[],
+  shownKeys: Set<string>,
+): T[] {
+  if (shownKeys.size === 0) return candidates;
+  return candidates.filter((candidate) => {
+    const addressKey = normaliseDiscoveryAddressKey(candidate.address);
+    if (addressKey && shownKeys.has(addressKey)) return false;
+    if (candidate.listingUrl && shownKeys.has(candidate.listingUrl)) return false;
+    return true;
+  });
+}
+
+function continuationState(row: { state: DiscoveryContinuationState | null }): DiscoveryContinuationState {
+  return row.state && typeof row.state === "object" ? row.state : {};
+}
+
+async function saveContinuationState(
+  id: string,
+  state: DiscoveryContinuationState,
+  exhausted: boolean,
+): Promise<void> {
+  await withDbRetry(() =>
+    db
+      .update(discoveryContinuations)
+      .set({ state, exhausted, updatedAt: new Date() })
+      .where(eq(discoveryContinuations.id, id)),
+  );
+}
+
+async function generateContinuationCandidates(args: {
+  id: string;
+  presentation: DiscoverySearchPresentation;
+  suburb: string | null;
+  minPrice: number | null;
+  maxPrice: number | null;
+  state: DiscoveryContinuationState;
+  shownKeys: Set<string>;
+  count: number;
+  log: Logger;
+}): Promise<{ candidates: PropertyCandidate[]; state: DiscoveryContinuationState; exhausted: boolean }> {
+  const remainingListings = Array.isArray(args.state.remainingListings)
+    ? (args.state.remainingListings as ListingResult[])
+    : [];
+  if (remainingListings.length === 0) {
+    return { candidates: [], state: { ...args.state, remainingListings: [] }, exhausted: true };
+  }
+
+  const tempCacheKey = `continuation:${args.id}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+  setListingCache(tempCacheKey, {
+    remainingListings: [...remainingListings],
+    shownUrls: [],
+    suburb: args.suburb ?? "",
+    minPrice: args.minPrice ?? 0,
+    maxPrice: args.maxPrice ?? 20_000_000,
+  });
+
+  let candidates: PropertyCandidate[] = [];
+  if (args.presentation === "generic_listing") {
+    candidates = topUpGenericListingCandidates(
+      tempCacheKey,
+      [],
+      args.shownKeys,
+      args.count,
+      12,
+    );
+    candidates = sanitizeDiscoveryCandidates(candidates);
+  } else {
+    const preScreenOpts = {
+      allowMissingListingPrice: true,
+      pricePlaceholderNzd: 3_500_000,
+      ...(args.state.preScreenOpts ?? {}),
+    } as {
+      allowMissingListingPrice?: boolean;
+      pricePlaceholderNzd?: number;
+      strictStandardSubdivision?: boolean;
+      preliminarySubdivision?: boolean;
+    };
+    candidates = await topUpDiscoveryCandidates(
+      tempCacheKey,
+      [],
+      typeof args.state.criteria === "string" ? args.state.criteria : null,
+      preScreenOpts,
+      args.shownKeys,
+      {
+        batchSize: 12,
+        nonStrictAttemptLimit: 3,
+        targetCount: args.count,
+      },
+    );
+    candidates = sanitizeDiscoveryCandidates(candidates);
+    if (candidates.length > 0) {
+      queueBackgroundScores(
+        candidates.map((c) => ({
+          address: c.address,
+          listingUrl: c.listingUrl,
+          price: c.price,
+          landArea: c.landArea,
+          landAreaConfidence: c.landAreaConfidence,
+          isAlreadySubdividedChild: c.isAlreadySubdividedChild,
+          zone: c.zone,
+          buildYear: c.buildYear,
+          typology: c.typology,
+          titleConfidence: c.titleConfidence,
+          subdivisionEligible: c.subdivisionEligible,
+          subdivisionRejectReason: c.subdivisionRejectReason,
+        })),
+      );
+    }
+  }
+
+  candidates = filterCandidatesAlreadyShown(candidates, args.shownKeys);
+  const updatedCache = getListingCache(tempCacheKey);
+  const nextRemaining = updatedCache?.remainingListings ?? [];
+  const exhausted = candidates.length === 0 && nextRemaining.length === 0;
+  args.log.info(
+    { id: args.id, presentation: args.presentation, candidates: candidates.length, remaining: nextRemaining.length },
+    "Discovery continuation: generated candidates",
+  );
+  return {
+    candidates,
+    state: { ...args.state, remainingListings: nextRemaining },
+    exhausted,
+  };
+}
+
+async function prefetchContinuationPage(id: string, requestedCount = DISCOVERY_CONTINUATION_PREFETCH_COUNT, log: Logger): Promise<void> {
+  const [row] = await withDbRetry(() =>
+    db
+      .select()
+      .from(discoveryContinuations)
+      .where(eq(discoveryContinuations.id, id))
+      .limit(1),
+  );
+  if (!row || row.exhausted || row.expiresAt <= new Date()) return;
+  const state = continuationState(row);
+  const existingReady = state.readyPages ?? [];
+  const readyCount = existingReady.reduce((sum, page) => sum + (Array.isArray(page.candidates) ? page.candidates.length : 0), 0);
+  if (readyCount >= DISCOVERY_CONTINUATION_PAGE_SIZE) return;
+  const generated = await generateContinuationCandidates({
+    id,
+    presentation: row.searchPresentation === "generic_listing" ? "generic_listing" : "scored_screening",
+    suburb: row.suburb,
+    minPrice: row.minPrice,
+    maxPrice: row.maxPrice,
+    state,
+    shownKeys: new Set(),
+    count: requestedCount,
+    log,
+  });
+  const readyPages = [...existingReady];
+  if (generated.candidates.length > 0) readyPages.push({ candidates: generated.candidates });
+  await saveContinuationState(
+    id,
+    { ...generated.state, readyPages },
+    generated.exhausted,
+  );
+}
+
+async function createDiscoveryContinuation(args: {
+  ownerKey: string | null;
+  presentation: DiscoverySearchPresentation;
+  suburb: string | null;
+  minPrice: number;
+  maxPrice: number;
+  cacheKey: string;
+  criteria: string | null;
+  preScreenOpts: Record<string, unknown>;
+  initialCandidates: PropertyCandidate[];
+  log: Logger;
+}): Promise<string | null> {
+  const cacheEntry = getListingCache(args.cacheKey);
+  const remainingListings = cacheEntry?.remainingListings ?? [];
+  if (remainingListings.length === 0) return null;
+  const id = randomUUID();
+  const initialShownKeys = shownKeysFromCandidates(args.initialCandidates);
+  const state: DiscoveryContinuationState = {
+    criteria: args.criteria,
+    preScreenOpts: args.preScreenOpts,
+    remainingListings,
+    readyPages: [],
+  };
+  await withDbRetry(() =>
+    db.insert(discoveryContinuations).values({
+      id,
+      ownerKey: args.ownerKey,
+      searchPresentation: args.presentation,
+      suburb: args.suburb,
+      minPrice: args.minPrice,
+      maxPrice: args.maxPrice,
+      cacheKey: args.cacheKey,
+      state,
+      exhausted: false,
+      expiresAt: new Date(Date.now() + DISCOVERY_CONTINUATION_TTL_MS),
+    }),
+  );
+  runAfterResponse(
+    (async () => {
+      const generated = await generateContinuationCandidates({
+        id,
+        presentation: args.presentation,
+        suburb: args.suburb,
+        minPrice: args.minPrice,
+        maxPrice: args.maxPrice,
+        state,
+        shownKeys: initialShownKeys,
+        count: DISCOVERY_CONTINUATION_PREFETCH_COUNT,
+        log: args.log,
+      });
+      await saveContinuationState(
+        id,
+        {
+          ...generated.state,
+          readyPages: generated.candidates.length > 0 ? [{ candidates: generated.candidates }] : [],
+        },
+        generated.exhausted,
+      );
+    })().catch((err) => args.log.warn({ err, id }, "Discovery continuation: prefetch failed")),
+  );
+  return id;
+}
+
 /**
  * Outer "did we genuinely exhaust this suburb?" pass for strict-subdivision
  * discovery. When the primary drain returned 0 candidates but some listings
@@ -2135,6 +2394,16 @@ function rejectInvalidAuthSession(res: any): void {
   res.status(401).json({
     error: "This account is now signed in on another device.",
     code: "SESSION_REPLACED",
+  });
+}
+
+async function rejectAuthRequired(res: any, locale: ReturnType<typeof normaliseLocale>): Promise<void> {
+  const baseMessage = "Create a free account or sign in to generate the full feasibility analysis.";
+  const message = locale === "zh" ? await ensureChinese(baseMessage) : baseMessage;
+  res.status(401).json({
+    error: message,
+    code: "AUTH_REQUIRED",
+    message,
   });
 }
 
@@ -3008,6 +3277,10 @@ router.post("/analyse", async (req, res) => {
     rejectInvalidAuthSession(res);
     return;
   }
+  if (!userId) {
+    await rejectAuthRequired(res, analyseLocale);
+    return;
+  }
 
   if (userId) {
     let profile:
@@ -3716,6 +3989,234 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
   };
 }
 
+router.post("/discovery/next", async (req, res) => {
+  const requestLocale = localeFromReq({ headers: req.headers as Record<string, string | string[] | undefined> });
+  const translateTitleSchool = translateTitleSchoolFromReq(
+    { headers: req.headers as Record<string, string | string[] | undefined> },
+    requestLocale,
+  );
+  const sendDiscoveryNextPayload = async (payload: Record<string, unknown>) => {
+    if (requestLocale === "zh") {
+      const translated = await translateChatContent(JSON.stringify(payload), "discover", requestLocale, translateTitleSchool)
+        .catch(() => JSON.stringify(payload));
+      try {
+        res.json(JSON.parse(translated));
+        return;
+      } catch {
+        // Fall through to raw JSON if translation returns malformed structured content.
+      }
+    }
+    res.json(payload);
+  };
+  const {
+    continuationToken,
+    shownCandidates,
+    claimCandidates,
+    prefetchOnly,
+    count: requestedCount,
+  } = req.body as {
+    continuationToken?: string;
+    shownCandidates?: Array<Pick<PropertyCandidate, "address" | "listingUrl">>;
+    claimCandidates?: Array<Pick<PropertyCandidate, "address" | "listingUrl">>;
+    prefetchOnly?: boolean;
+    count?: number;
+  };
+  const count = Math.max(1, Math.min(6, Number(requestedCount ?? DISCOVERY_CONTINUATION_PAGE_SIZE)));
+  if (!continuationToken) {
+    res.status(400).json({ error: "continuationToken is required", code: "MISSING_CONTINUATION_TOKEN" });
+    return;
+  }
+
+  const userId = await getUserIdFromHeader(req);
+  if (userId === INVALID_AUTH_SESSION) {
+    rejectInvalidAuthSession(res);
+    return;
+  }
+  const anonymousIpHash = userId ? null : getIpHash(req as any);
+  const anonymousIdentityHash = userId
+    ? null
+    : getAnonymousInstallHash(req.headers as Record<string, unknown>) ?? anonymousIpHash;
+  const ownerKey = continuationOwnerKey(userId, anonymousIdentityHash);
+
+  try {
+    const [row] = await withDbRetry(() =>
+      db
+        .select()
+        .from(discoveryContinuations)
+        .where(eq(discoveryContinuations.id, continuationToken))
+        .limit(1),
+    );
+    if (!row || row.expiresAt <= new Date()) {
+      res.status(410).json({ error: "Discovery continuation expired", code: "CONTINUATION_EXPIRED" });
+      return;
+    }
+    if (row.ownerKey && row.ownerKey !== ownerKey) {
+      res.status(403).json({ error: "Discovery continuation belongs to another session", code: "CONTINUATION_FORBIDDEN" });
+      return;
+    }
+
+    const state = continuationState(row);
+    const shownKeys = shownKeysFromCandidates(shownCandidates ?? []);
+    const recordServedCandidates = (served: Array<Pick<PropertyCandidate, "address" | "listingUrl" | "internalListingId">>) => {
+      if (served.length === 0) return;
+      const shownItems = served.map((c) => ({
+        addressKey: c.internalListingId ? internalSponsoredAddressKey(c.internalListingId) : normaliseDiscoveryAddressKey(c.address),
+        listingUrl: c.listingUrl ?? null,
+        address: c.address ?? null,
+        suburb: row.suburb ?? null,
+      }));
+      if (userId) {
+        runAfterResponse(
+          recordShownForUser(userId, shownItems).catch((err) =>
+            req.log.warn({ err }, "Discovery continuation: failed to record account-level shown memory"),
+          ),
+        );
+      } else if (anonymousIdentityHash) {
+        runAfterResponse(
+          recordShownForAnonymous(anonymousIdentityHash, shownItems).catch((err) =>
+            req.log.warn({ err }, "Discovery continuation: failed to record anonymous shown memory"),
+          ),
+        );
+      }
+    };
+
+    if (Array.isArray(claimCandidates) && claimCandidates.length > 0) {
+      const claimKeys = shownKeysFromCandidates(claimCandidates);
+      const readyPages = (state.readyPages ?? [])
+        .map((page) => ({
+          candidates: ((page.candidates ?? []) as PropertyCandidate[]).filter((candidate) => {
+            const addressKey = normaliseDiscoveryAddressKey(candidate.address);
+            if (addressKey && claimKeys.has(addressKey)) return false;
+            if (candidate.listingUrl && claimKeys.has(candidate.listingUrl)) return false;
+            return true;
+          }),
+        }))
+        .filter((page) => page.candidates.length > 0);
+      await saveContinuationState(row.id, { ...state, readyPages }, row.exhausted);
+      recordServedCandidates(claimCandidates);
+      runAfterResponse(prefetchContinuationPage(row.id, DISCOVERY_CONTINUATION_PREFETCH_COUNT, req.log).catch((err) =>
+        req.log.warn({ err, id: row.id }, "Discovery continuation: claim prefetch failed"),
+      ));
+      res.json({ ok: true, continuationToken: row.exhausted ? null : row.id });
+      return;
+    }
+
+    let readyPages = [...(state.readyPages ?? [])];
+    let candidates: PropertyCandidate[] = [];
+
+    if (prefetchOnly) {
+      const firstReady = readyPages[0]?.candidates as PropertyCandidate[] | undefined;
+      if (firstReady?.length) {
+        await sendDiscoveryNextPayload({
+          candidates: filterCandidatesAlreadyShown(firstReady, shownKeys).slice(0, count),
+          continuationToken: row.exhausted ? null : row.id,
+          exhausted: row.exhausted,
+          searchPresentation: row.searchPresentation,
+        });
+        return;
+      }
+      if (row.exhausted) {
+        const payload = JSON.parse(buildDiscoveryExhaustedChoicePayload(row.suburb)) as { question: string; options: string[] };
+        await sendDiscoveryNextPayload({
+          candidates: [],
+          continuationToken: null,
+          exhausted: true,
+          clarification: payload,
+          searchPresentation: row.searchPresentation,
+        });
+        return;
+      }
+      const generated = await generateContinuationCandidates({
+        id: row.id,
+        presentation: row.searchPresentation === "generic_listing" ? "generic_listing" : "scored_screening",
+        suburb: row.suburb,
+        minPrice: row.minPrice,
+        maxPrice: row.maxPrice,
+        state,
+        shownKeys,
+        count,
+        log: req.log,
+      });
+      const nextReadyPages = generated.candidates.length > 0 ? [{ candidates: generated.candidates }] : [];
+      await saveContinuationState(row.id, { ...generated.state, readyPages: nextReadyPages }, generated.exhausted);
+      await sendDiscoveryNextPayload({
+        candidates: generated.candidates,
+        continuationToken: generated.exhausted ? null : row.id,
+        exhausted: generated.exhausted,
+        searchPresentation: row.searchPresentation,
+      });
+      return;
+    }
+
+    while (readyPages.length > 0 && candidates.length === 0) {
+      const [firstPage, ...restPages] = readyPages;
+      const pageCandidates = filterCandidatesAlreadyShown(
+        ((firstPage?.candidates ?? []) as PropertyCandidate[]),
+        shownKeys,
+      );
+      candidates = pageCandidates.slice(0, count);
+      const leftovers = pageCandidates.slice(count);
+      readyPages = leftovers.length > 0
+        ? [{ candidates: leftovers }, ...restPages]
+        : restPages;
+    }
+
+    let nextState: DiscoveryContinuationState = { ...state, readyPages };
+    let exhausted = row.exhausted;
+    if (candidates.length === 0 && !row.exhausted) {
+      const generated = await generateContinuationCandidates({
+        id: row.id,
+        presentation: row.searchPresentation === "generic_listing" ? "generic_listing" : "scored_screening",
+        suburb: row.suburb,
+        minPrice: row.minPrice,
+        maxPrice: row.maxPrice,
+        state: nextState,
+        shownKeys,
+        count,
+        log: req.log,
+      });
+      candidates = generated.candidates;
+      nextState = { ...generated.state, readyPages: [] };
+      exhausted = generated.exhausted;
+    }
+
+    const servedAddressKeys = shownKeysFromCandidates(candidates);
+    for (const key of servedAddressKeys) shownKeys.add(key);
+
+    await saveContinuationState(row.id, nextState, exhausted);
+
+    if (candidates.length > 0) {
+      recordServedCandidates(candidates);
+      runAfterResponse(prefetchContinuationPage(row.id, DISCOVERY_CONTINUATION_PREFETCH_COUNT, req.log).catch((err) =>
+        req.log.warn({ err, id: row.id }, "Discovery continuation: follow-up prefetch failed"),
+      ));
+    }
+
+    if (candidates.length === 0) {
+      const payload = JSON.parse(buildDiscoveryExhaustedChoicePayload(row.suburb)) as { question: string; options: string[] };
+      await sendDiscoveryNextPayload({
+        candidates: [],
+        continuationToken: exhausted ? null : row.id,
+        exhausted: true,
+        clarification: payload,
+        searchPresentation: row.searchPresentation,
+      });
+      return;
+    }
+
+    const directPayload = {
+      candidates,
+      continuationToken: exhausted ? null : row.id,
+      exhausted,
+      searchPresentation: row.searchPresentation,
+    };
+    await sendDiscoveryNextPayload(directPayload);
+  } catch (err) {
+    req.log.error({ err }, "POST /discovery/next failed");
+    res.status(500).json({ error: "Could not load more listings", code: "DISCOVERY_NEXT_FAILED" });
+  }
+});
+
 router.post("/chat", async (req, res) => {
   const chatLocale = localeFromReq({ headers: req.headers as Record<string, string | string[] | undefined> });
   const chatTranslateTitleSchool = translateTitleSchoolFromReq(
@@ -3749,6 +4250,10 @@ router.post("/chat", async (req, res) => {
     rejectInvalidAuthSession(res);
     return;
   }
+  const anonymousIpHash = chatUserId ? null : getIpHash(req as any);
+  const anonymousIdentityHash = chatUserId
+    ? null
+    : getAnonymousInstallHash(req.headers as Record<string, unknown>) ?? anonymousIpHash;
   if (chatUserId) {
     try {
       const { allowed, messagesUsed, nearLimit, isFreeLimit, subscriptionRequired } = await checkAndIncrementChatMessages(chatUserId);
@@ -4015,6 +4520,35 @@ router.post("/chat", async (req, res) => {
         );
       }
 
+      if (effectiveMode === "analyse" && !chatUserId) {
+        await rejectAuthRequired(res, chatLocale);
+        return;
+      }
+
+      if (!chatUserId && anonymousIdentityHash) {
+        try {
+          const usage = await checkAndRecordAnonymousUsage({
+            installHash: anonymousIdentityHash,
+            ipHash: anonymousIpHash,
+            eventType: "chat",
+          });
+          if (!usage.allowed) {
+            const baseMessage = "You've reached today's guest search limit. Create a free account to keep searching.";
+            const message = chatLocale === "zh" ? await ensureChinese(baseMessage) : baseMessage;
+            res.status(429).json({
+              error: message,
+              code: "GUEST_LIMIT_REACHED",
+              message,
+              limit: usage.limit,
+              used: usage.used,
+            });
+            return;
+          }
+        } catch (err) {
+          req.log.warn({ err }, "Guest usage limit check failed");
+        }
+      }
+
       if (
         effectiveMode !== "analyse"
         && hasNonStandardSalePropertyReference(userText)
@@ -4078,6 +4612,21 @@ router.post("/chat", async (req, res) => {
               }
             } catch (err) {
               req.log.warn({ err }, "Discovery: failed to load account-level shown memory");
+            }
+          } else if (!chatUserId && anonymousIdentityHash && !repeatShownAreaIntent) {
+            try {
+              const persisted = await getRecentShownForAnonymous(anonymousIdentityHash);
+              recentShownEntries = persisted.entries;
+              for (const k of persisted.addressKeys) alreadyShownAddressKeys.add(k);
+              for (const u of persisted.urls) alreadyShownUrlsFromHistory.push(u);
+              if (persisted.addressKeys.length || persisted.urls.length) {
+                req.log.info(
+                  { keys: persisted.addressKeys.length, urls: persisted.urls.length },
+                  "Discovery: seeded dedup set from anonymous shown memory",
+                );
+              }
+            } catch (err) {
+              req.log.warn({ err }, "Discovery: failed to load anonymous shown memory");
             }
           }
 
@@ -4191,6 +4740,8 @@ router.post("/chat", async (req, res) => {
           const discoveryTargetCount = 3;
           const discoveryScreenConcurrency = strictStandardSubdivision ? 3 : 5;
           const discoveryBatchSize = strictStandardSubdivision ? 3 : 8;
+          let continuationCacheKey: string | null = null;
+          let continuationPreScreenOpts: Record<string, unknown> | null = null;
 
           // Accumulator for listings that couldn't be conclusively screened
           // (zone/build-year/land-area source still failing after the per-listing
@@ -4207,6 +4758,10 @@ router.post("/chat", async (req, res) => {
                 await clearRecentShownForUserSuburb(chatUserId, suburb).catch((err) =>
                   req.log.warn({ err, suburb }, "Discovery: failed to clear shown memory for repeat request"),
                 );
+              } else if (anonymousIdentityHash) {
+                await clearRecentShownForAnonymousSuburb(anonymousIdentityHash, suburb).catch((err) =>
+                  req.log.warn({ err, suburb }, "Discovery: failed to clear anonymous shown memory for repeat request"),
+                );
               }
             }
             const streetHint = extractDiscoverStreetHintFromThread(messages, userText, isFollowUp);
@@ -4219,6 +4774,8 @@ router.post("/chat", async (req, res) => {
               strictStandardSubdivision,
               preliminarySubdivision: strictStandardSubdivision,
             };
+            continuationCacheKey = cacheKey;
+            continuationPreScreenOpts = discoverPreOpts;
             req.log.info({ streetHint }, "Discovery: street hint for listing order");
 
             // "Show more" follow-up: only try the cache if we've actually shown results before.
@@ -4489,6 +5046,8 @@ router.post("/chat", async (req, res) => {
                   ), alreadyShownAddressKeys);
                   if (filtered.length > 0) {
                     const fallbackCacheKey = makeCacheKey(nearbySuburb, effectiveMinPrice, effectiveMaxPrice);
+                    continuationCacheKey = fallbackCacheKey;
+                    continuationPreScreenOpts = discoverPreOpts;
                     const priorShownFallback = [...getShownUrls(fallbackCacheKey)];
                     setListingCache(fallbackCacheKey, {
                       remainingListings: filterAlreadyShownListings(rankListingsByStreetHint(
@@ -4716,7 +5275,54 @@ router.post("/chat", async (req, res) => {
                 req.log.warn({ err }, "Discovery: failed to record account-level shown memory"),
               ),
             );
+          } else if (!chatUserId && anonymousIdentityHash && candidates.length > 0) {
+            const shownItems = candidates.map((c) => ({
+              addressKey: c.internalListingId ? internalSponsoredAddressKey(c.internalListingId) : normaliseDiscoveryAddressKey(c.address),
+              listingUrl: c.listingUrl ?? null,
+              address: c.address ?? null,
+              suburb: suburb ?? null,
+            }));
+            runAfterResponse(
+              recordShownForAnonymous(anonymousIdentityHash, shownItems).catch((err) =>
+                req.log.warn({ err }, "Discovery: failed to record anonymous shown memory"),
+              ),
+            );
           }
+
+          if (!chatUserId && anonymousIdentityHash) {
+            runAfterResponse(
+              recordAnonymousDiscoveryEvent({
+                installHash: anonymousIdentityHash,
+                ipHash: anonymousIpHash,
+                mode: plainListingBrowse ? "generic_listing" : "scored_screening",
+                suburb,
+                criteria: criteriaLabel || null,
+                locale: chatLocale,
+                query: userText,
+                resultCount: candidates.length,
+              }).catch((err) =>
+                req.log.warn({ err }, "Discovery: failed to record anonymous discovery event"),
+              ),
+            );
+          }
+
+          const continuationToken = !noListings
+            ? await createDiscoveryContinuation({
+                ownerKey: continuationOwnerKey(chatUserId, anonymousIdentityHash),
+                presentation: plainListingBrowse ? "generic_listing" : "scored_screening",
+                suburb,
+                minPrice: effectiveMinPrice,
+                maxPrice: effectiveMaxPrice,
+                cacheKey: continuationCacheKey ?? "",
+                criteria: discoveryCriteria,
+                preScreenOpts: continuationPreScreenOpts ?? {},
+                initialCandidates: candidates,
+                log: req.log,
+              }).catch((err) => {
+                req.log.warn({ err }, "Discovery continuation: failed to create token");
+                return null;
+              })
+            : null;
 
           const responsePayload = JSON.stringify({
             candidates,
@@ -4726,6 +5332,7 @@ router.post("/chat", async (req, res) => {
             noListings,
             aiIntro,
             searchPresentation: plainListingBrowse ? "generic_listing" : "scored_screening",
+            continuationToken,
           });
           const translatedContent = await translateChatContent(responsePayload, "discover", chatLocale, chatTranslateTitleSchool);
           res.json({ content: translatedContent, mode: "discover", ...providerSignal });
@@ -5561,6 +6168,34 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                         req.log.warn({ err }, "Discovery: failed to record account-level shown memory (safety net generic)"),
                       ),
                     );
+                  } else if (anonymousIdentityHash) {
+                    const shownItems = discoverCandidates.map((c) => ({
+                      addressKey: c.internalListingId ? internalSponsoredAddressKey(c.internalListingId) : normaliseDiscoveryAddressKey(c.address),
+                      listingUrl: c.listingUrl ?? null,
+                      address: c.address ?? null,
+                      suburb: suburb ?? null,
+                    }));
+                    runAfterResponse(
+                      recordShownForAnonymous(anonymousIdentityHash, shownItems).catch((err) =>
+                        req.log.warn({ err }, "Discovery: failed to record anonymous shown memory (safety net generic)"),
+                      ),
+                    );
+                  }
+                  if (!chatUserId && anonymousIdentityHash) {
+                    runAfterResponse(
+                      recordAnonymousDiscoveryEvent({
+                        installHash: anonymousIdentityHash,
+                        ipHash: anonymousIpHash,
+                        mode: "generic_listing",
+                        suburb,
+                        criteria: safetyNetCriteria || null,
+                        locale: chatLocale,
+                        query: userText,
+                        resultCount: discoverCandidates.length,
+                      }).catch((err) =>
+                        req.log.warn({ err }, "Discovery: failed to record anonymous discovery event (safety net generic)"),
+                      ),
+                    );
                   }
                   const payload = JSON.stringify({
                     candidates: discoverCandidates,
@@ -5666,6 +6301,34 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                   runAfterResponse(
                     recordShownForUser(chatUserId, shownItems).catch((err) =>
                       req.log.warn({ err }, "Discovery: failed to record account-level shown memory (safety net)"),
+                    ),
+                  );
+                } else if (anonymousIdentityHash) {
+                  const shownItems = discoverCandidates.map((c) => ({
+                    addressKey: c.internalListingId ? internalSponsoredAddressKey(c.internalListingId) : normaliseDiscoveryAddressKey(c.address),
+                    listingUrl: c.listingUrl ?? null,
+                    address: c.address ?? null,
+                    suburb: suburb ?? null,
+                  }));
+                  runAfterResponse(
+                    recordShownForAnonymous(anonymousIdentityHash, shownItems).catch((err) =>
+                      req.log.warn({ err }, "Discovery: failed to record anonymous shown memory (safety net)"),
+                    ),
+                  );
+                }
+                if (!chatUserId && anonymousIdentityHash) {
+                  runAfterResponse(
+                    recordAnonymousDiscoveryEvent({
+                      installHash: anonymousIdentityHash,
+                      ipHash: anonymousIpHash,
+                      mode: plainListingBrowseSafetyNet ? "generic_listing" : "scored_screening",
+                      suburb,
+                      criteria: safetyNetCriteria || null,
+                      locale: chatLocale,
+                      query: userText,
+                      resultCount: discoverCandidates.length,
+                    }).catch((err) =>
+                      req.log.warn({ err }, "Discovery: failed to record anonymous discovery event (safety net)"),
                     ),
                   );
                 }

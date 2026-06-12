@@ -32,6 +32,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ChatProvider } from "@/context/ChatContext";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { DmProvider } from "@/context/DmContext";
+import { WatchlistProvider } from "@/context/WatchlistContext";
 import { getApiBase } from "@/lib/api";
 import { parseShareTokenFromUrl, storePendingShareToken } from "@/lib/propertyShares";
 import { initializeRevenueCat, SubscriptionProvider } from "@/lib/revenuecat";
@@ -219,14 +220,14 @@ function NotificationSetup() {
 }
 
 function ShareLinkSetup() {
-  const { isLoading, user } = useAuth();
+  const { isLoading } = useAuth();
   const router = useRouter();
   const checkedInitialUrlRef = useRef(false);
   const [pendingRouteToken, setPendingRouteToken] = useState<string | null>(null);
 
   const routeToShareEntry = useCallback(() => {
-    router.replace((user ? "/(tabs)" : "/(auth)/welcome") as never);
-  }, [router, user]);
+    router.replace("/(tabs)" as never);
+  }, [router]);
 
   const handleShareUrl = useCallback(async (url: string | null | undefined) => {
     const token = parseShareTokenFromUrl(url);
@@ -311,16 +312,18 @@ export default function RootLayout() {
               <SplashUntilReady fontsReady={fontsReady} />
               <SubscriptionGate>
                 <DmProvider>
-                  <ChatProvider>
-                    <GestureHandlerRootView style={{ flex: 1 }}>
-                      <KeyboardProvider>
-                        <MetaSdkSetup />
-                        <NotificationSetup />
-                        <ShareLinkSetup />
-                        <RootLayoutNav />
-                      </KeyboardProvider>
-                    </GestureHandlerRootView>
-                  </ChatProvider>
+                  <WatchlistProvider>
+                    <ChatProvider>
+                      <GestureHandlerRootView style={{ flex: 1 }}>
+                        <KeyboardProvider>
+                          <MetaSdkSetup />
+                          <NotificationSetup />
+                          <ShareLinkSetup />
+                          <RootLayoutNav />
+                        </KeyboardProvider>
+                      </GestureHandlerRootView>
+                    </ChatProvider>
+                  </WatchlistProvider>
                 </DmProvider>
               </SubscriptionGate>
             </AuthProvider>
