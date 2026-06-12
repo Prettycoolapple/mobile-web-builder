@@ -44,6 +44,7 @@ import { BrowseListing, BrowseListingFilters, fetchBrowseListings } from "@/lib/
 setBaseUrl(getApiOrigin() || null);
 
 const RECORDING_CANCEL_SWIPE_UP_PX = 56;
+const RECORDING_HOLD_TO_START_MS = 450;
 
 /** Prefer top-level report address, then property overview (some API payloads only set the latter). */
 function resolveReportAddress(report: FeasibilityReport | null | undefined): string {
@@ -348,9 +349,11 @@ export default function SearchScreen() {
   const inputRef = useRef<TextInput>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const recordingStartYRef = useRef<number | null>(null);
+  const recordingCurrentYRef = useRef<number | null>(null);
   const recordingCancelArmedRef = useRef(false);
   const recordingStartInFlightRef = useRef(false);
   const recordingPressActiveRef = useRef(false);
+  const recordingStartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const shownRecommendationReportIds = useRef<Set<string>>(new Set());
   const lastCheckedFollowUpCount = useRef<Map<string, number>>(new Map());
   const providerRecommendationKeysRef = useRef<Set<string>>(new Set());
@@ -2164,7 +2167,15 @@ export default function SearchScreen() {
     }
   }, []);
 
+  const clearScheduledRecordingStart = useCallback(() => {
+    if (recordingStartTimerRef.current) {
+      clearTimeout(recordingStartTimerRef.current);
+      recordingStartTimerRef.current = null;
+    }
+  }, []);
+
   const handleRecordingPressMove = useCallback((event: GestureResponderEvent) => {
+    recordingCurrentYRef.current = event.nativeEvent.pageY;
     if (!isRecording && !recordingRef.current) return;
     const startY = recordingStartYRef.current;
     if (startY == null) return;
@@ -2172,18 +2183,16 @@ export default function SearchScreen() {
     armRecordingCancel(startY - currentY >= RECORDING_CANCEL_SWIPE_UP_PX);
   }, [armRecordingCancel, isRecording]);
 
-  const startRecording = useCallback(async (event?: GestureResponderEvent) => {
+  const beginRecording = useCallback(async () => {
     try {
       if (messageLimitReached || recordingRef.current || recordingStartInFlightRef.current) return;
       recordingStartInFlightRef.current = true;
-      recordingPressActiveRef.current = true;
-      recordingStartYRef.current = event?.nativeEvent.pageY ?? null;
-      recordingCancelArmedRef.current = false;
-      setRecordingCancelArmed(false);
       const permission = await Audio.requestPermissionsAsync();
       if (permission.status !== "granted") {
         recordingStartInFlightRef.current = false;
         recordingPressActiveRef.current = false;
+        recordingStartYRef.current = null;
+        recordingCurrentYRef.current = null;
         return;
       }
 
@@ -2209,6 +2218,11 @@ export default function SearchScreen() {
       setRecording(newRecording);
       setIsRecording(true);
       recordingStartInFlightRef.current = false;
+      const startY = recordingStartYRef.current;
+      const currentY = recordingCurrentYRef.current;
+      if (startY != null && currentY != null) {
+        armRecordingCancel(startY - currentY >= RECORDING_CANCEL_SWIPE_UP_PX);
+      }
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     } catch (err) {
       console.log("Failed to start recording", err);
@@ -2216,17 +2230,38 @@ export default function SearchScreen() {
       recordingStartInFlightRef.current = false;
       recordingPressActiveRef.current = false;
       recordingStartYRef.current = null;
+      recordingCurrentYRef.current = null;
       recordingCancelArmedRef.current = false;
       setRecording(null);
       setIsRecording(false);
       setRecordingCancelArmed(false);
     }
-  }, [messageLimitReached]);
+  }, [armRecordingCancel, messageLimitReached]);
+
+  const startRecording = useCallback((event?: GestureResponderEvent) => {
+    if (messageLimitReached || recordingRef.current || recordingStartInFlightRef.current) return;
+    clearScheduledRecordingStart();
+    recordingPressActiveRef.current = true;
+    const pageY = event?.nativeEvent.pageY ?? null;
+    recordingStartYRef.current = pageY;
+    recordingCurrentYRef.current = pageY;
+    recordingCancelArmedRef.current = false;
+    setRecordingCancelArmed(false);
+    recordingStartTimerRef.current = setTimeout(() => {
+      recordingStartTimerRef.current = null;
+      if (!recordingPressActiveRef.current) return;
+      void beginRecording();
+    }, RECORDING_HOLD_TO_START_MS);
+  }, [beginRecording, clearScheduledRecordingStart, messageLimitReached]);
+
+  useEffect(() => clearScheduledRecordingStart, [clearScheduledRecordingStart]);
 
   const cancelRecording = useCallback(async () => {
+    clearScheduledRecordingStart();
     const activeRecording = recordingRef.current ?? recording;
     recordingRef.current = null;
     recordingStartYRef.current = null;
+    recordingCurrentYRef.current = null;
     recordingCancelArmedRef.current = false;
     recordingStartInFlightRef.current = false;
     recordingPressActiveRef.current = false;
@@ -2240,7 +2275,7 @@ export default function SearchScreen() {
     } catch (err) {
       console.log("Failed to cancel recording", err);
     }
-  }, [recording]);
+  }, [clearScheduledRecordingStart, recording]);
 
   const stopRecording = useCallback(async () => {
     if (recordingCancelArmedRef.current) {
@@ -2248,9 +2283,14 @@ export default function SearchScreen() {
       return;
     }
     recordingPressActiveRef.current = false;
+    clearScheduledRecordingStart();
     const activeRecording = recordingRef.current ?? recording;
     if (!activeRecording) {
       recordingStartInFlightRef.current = false;
+      recordingStartYRef.current = null;
+      recordingCurrentYRef.current = null;
+      recordingCancelArmedRef.current = false;
+      setRecordingCancelArmed(false);
       return;
     }
     try {
@@ -2259,6 +2299,7 @@ export default function SearchScreen() {
       const uri = activeRecording.getURI();
       recordingRef.current = null;
       recordingStartYRef.current = null;
+      recordingCurrentYRef.current = null;
       recordingCancelArmedRef.current = false;
       recordingStartInFlightRef.current = false;
       recordingPressActiveRef.current = false;
@@ -2299,6 +2340,7 @@ export default function SearchScreen() {
       console.log("Failed to stop recording", err);
       recordingRef.current = null;
       recordingStartYRef.current = null;
+      recordingCurrentYRef.current = null;
       recordingCancelArmedRef.current = false;
       recordingStartInFlightRef.current = false;
       recordingPressActiveRef.current = false;
@@ -2307,7 +2349,7 @@ export default function SearchScreen() {
       setRecordingCancelArmed(false);
       setIsLoading(false);
     }
-  }, [cancelRecording, recording, getApiHeaders, handleSend, setIsLoading]);
+  }, [cancelRecording, clearScheduledRecordingStart, recording, getApiHeaders, handleSend, setIsLoading]);
 
   const renderMicButton = useCallback(() => (
     <View
