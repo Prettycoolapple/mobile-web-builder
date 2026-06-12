@@ -338,6 +338,9 @@ function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?: Reque
   const safeIosStoreUrl = htmlEscape(getIosAppStoreUrl());
   const safeAndroidStoreUrl = htmlEscape(getAndroidPlayStoreUrl());
   const safeSalesPortalUrl = htmlEscape("https://www.projectalpha.app/sales-portal/");
+  const safeAppOpenUrl = preview
+    ? htmlEscape(`devfeasible://share/${encodeURIComponent(preview.token)}`)
+    : safeUrl;
   const safeAddress = htmlEscape(preview?.address ?? "Shared property");
   const facts = preview?.facts ?? [];
   const factsHtml = facts.length
@@ -403,6 +406,7 @@ function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?: Reque
               class="button primary"
               id="open-app-button"
               href="${safeUrl}"
+              data-app-url="${safeAppOpenUrl}"
               data-ios-store="${safeIosStoreUrl}"
               data-android-store="${safeAndroidStoreUrl}"
             >${htmlEscape(cta)}</a>
@@ -424,6 +428,7 @@ function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?: Reque
 
           event.preventDefault();
           var fallback = isiOS ? button.dataset.iosStore : button.dataset.androidStore;
+          var appUrl = button.dataset.appUrl || button.href;
           var cancelled = false;
           var cancel = function () { cancelled = true; };
           document.addEventListener("visibilitychange", function () {
@@ -434,7 +439,7 @@ function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?: Reque
           window.setTimeout(function () {
             if (!cancelled && fallback) window.location.assign(fallback);
           }, 1400);
-          window.location.assign(button.href);
+          window.location.assign(appUrl);
         });
       })();
     </script>
