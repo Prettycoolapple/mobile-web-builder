@@ -58,6 +58,10 @@ export interface ChatMessage {
   reportGroup?: FeasibilityReportGroup;
   searchResults?: PropertyCandidate[];
   searchPresentation?: "generic_listing" | "scored_screening";
+  // The suburb this result block is browsing. Stored so the exhausted-discovery
+  // choice chips can piggyback it back to the backend (keeping the repeat/nearby
+  // suburb authoritative as the conversation moves Glendowie → Meadowbank → next).
+  suburb?: string;
   continuationToken?: string | null;
   prefetchedSearchResults?: PropertyCandidate[];
   prefetchedContinuationToken?: string | null;

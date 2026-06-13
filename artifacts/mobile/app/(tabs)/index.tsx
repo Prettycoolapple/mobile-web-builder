@@ -984,7 +984,11 @@ export default function SearchScreen() {
   );
 
   const showDiscoveryExhaustedChoice = useCallback(
-    (clarification: { question: string; options: string[] } | undefined, sessionId: string) => {
+    (
+      clarification: { question: string; options: string[] } | undefined,
+      sessionId: string,
+      context?: { searchPresentation?: ChatMessage["searchPresentation"]; suburb?: string },
+    ) => {
       addMessage({
         role: "assistant",
         content: "",
@@ -998,6 +1002,10 @@ export default function SearchScreen() {
           question: t("search.exhausted_question"),
           options: [t("search.exhausted_see_again"), t("search.exhausted_nearby")],
         },
+        // Inherit the exhausted search's presentation + suburb so the chip tap
+        // piggybacks them back to /chat (keeps intent + current suburb pinned).
+        searchPresentation: context?.searchPresentation,
+        suburb: context?.suburb,
       }, sessionId);
     },
     [addMessage, t],
@@ -1022,7 +1030,10 @@ export default function SearchScreen() {
           prefetchedClarification: undefined,
           showMoreStatus: "idle",
         }, sessionId);
-        showDiscoveryExhaustedChoice(clarification, sessionId);
+        showDiscoveryExhaustedChoice(clarification, sessionId, {
+          searchPresentation: message.searchPresentation,
+          suburb: message.suburb,
+        });
         return;
       }
       const nextResults = [...(message.searchResults ?? []), ...candidates];
@@ -1063,7 +1074,10 @@ export default function SearchScreen() {
         return;
       }
       if (!message.continuationToken) {
-        showDiscoveryExhaustedChoice(message.prefetchedClarification, sessionId);
+        showDiscoveryExhaustedChoice(message.prefetchedClarification, sessionId, {
+          searchPresentation: message.searchPresentation,
+          suburb: message.suburb,
+        });
         return;
       }
       updateMessage(message.id, { showMoreStatus: "loading" }, sessionId);
@@ -1257,7 +1271,7 @@ export default function SearchScreen() {
     };
   }, [pollBackgroundAnalyseJobs, user?.id]);
 
-  const handleSend = useCallback(async (overrideText?: string, skipAnalyseDisclaimer = false, continuePresentation?: "generic_listing" | "scored_screening") => {
+  const handleSend = useCallback(async (overrideText?: string, skipAnalyseDisclaimer = false, continuePresentation?: "generic_listing" | "scored_screening", discoveryChoiceSuburb?: string) => {
     const text = (overrideText !== undefined ? overrideText : inputText).trim();
     if (!text && !isLoading) return;
     if (isLoading) return;
@@ -1551,6 +1565,8 @@ export default function SearchScreen() {
             clarificationType?: string;
             question?: string;
             options?: string[];
+            searchPresentation?: ChatMessage["searchPresentation"];
+            suburb?: string | null;
           };
 
           if (data.type === "clarification" && data.clarificationType === "subdivision" && Array.isArray(data.options) && data.options.length > 0) {
@@ -1574,6 +1590,8 @@ export default function SearchScreen() {
               type: "discovery_exhausted_choice",
               content: "",
               clarification: { question: data.question || t("search.no_listings_msg"), options: data.options },
+              searchPresentation: data.searchPresentation,
+              suburb: data.suburb ?? undefined,
             }, sessionId);
             return;
           }
@@ -1657,7 +1675,7 @@ export default function SearchScreen() {
           const resp = await fetch(`${getApiBase()}/chat`, {
             method: "POST",
             headers,
-            body: JSON.stringify({ messages: allMessages, currentReport: currentReportContext, continuePresentation }),
+            body: JSON.stringify({ messages: allMessages, currentReport: currentReportContext, continuePresentation, discoveryChoiceSuburb }),
             signal: controller.signal,
           });
           clearTimeout(timeoutId);
@@ -1741,14 +1759,14 @@ export default function SearchScreen() {
           const hasJsonShape = /\{[\s\S]*\}|\[[\s\S]*\]/.test(trimmed);
           const maybeParsed = hasJsonShape
             ? (extractJSON(trimmed) as
-                | { candidates?: PropertyCandidate[]; isMockData?: boolean; noListings?: boolean; aiIntro?: string; searchPresentation?: ChatMessage["searchPresentation"]; continuationToken?: string | null }
+                | { candidates?: PropertyCandidate[]; isMockData?: boolean; noListings?: boolean; aiIntro?: string; searchPresentation?: ChatMessage["searchPresentation"]; suburb?: string; continuationToken?: string | null }
                 | FeasibilityReportGroup
                 | null)
             : null;
 
           if (data.mode === "clarification") {
             try {
-              const parsed = JSON.parse(data.content) as { clarificationType?: string; question: string; options: string[] };
+              const parsed = JSON.parse(data.content) as { clarificationType?: string; question: string; options: string[]; searchPresentation?: ChatMessage["searchPresentation"]; suburb?: string | null };
               if (parsed.clarificationType === "subdivision" && Array.isArray(parsed.options) && parsed.options.length > 0) {
                 updateLastMessage({
                   type: "subdivision_clarification",
@@ -1776,6 +1794,10 @@ export default function SearchScreen() {
                     question: parsed.question || t("search.no_listings_msg"),
                     options: parsed.options,
                   },
+                  // Carry the originating search's context so the chip tap can
+                  // piggyback the screening intent + current suburb back to /chat.
+                  searchPresentation: parsed.searchPresentation,
+                  suburb: parsed.suburb ?? undefined,
                 }, sessionId);
                 return;
               }
@@ -1814,7 +1836,7 @@ export default function SearchScreen() {
             const aiIntro = searchPayload?.aiIntro ?? "";
             if (searchPayload?.candidates && searchPayload.candidates.length > 0) {
               const searchPresentation = searchPayload.searchPresentation === "generic_listing" ? "generic_listing" : "scored_screening";
-              updateLastMessage({ type: "search", searchResults: searchPayload.candidates, content: "", aiIntro, searchPresentation, continuationToken: searchPayload.continuationToken ?? null }, sessionId);
+              updateLastMessage({ type: "search", searchResults: searchPayload.candidates, content: "", aiIntro, searchPresentation, suburb: searchPayload.suburb, continuationToken: searchPayload.continuationToken ?? null }, sessionId);
               if (searchPresentation !== "generic_listing") {
                 startCardScorePoll(searchPayload.candidates.map((c: PropertyCandidate) => ({ address: c.address, listingUrl: c.listingUrl })), sessionId);
               }
@@ -1850,7 +1872,7 @@ export default function SearchScreen() {
               const searchPayload = !isFeasibilityReportGroup(maybeParsed) ? maybeParsed : null;
               if (searchPayload?.candidates && searchPayload.candidates.length > 0) {
                 const searchPresentation = searchPayload.searchPresentation === "generic_listing" ? "generic_listing" : "scored_screening";
-                updateLastMessage({ type: "search", searchResults: searchPayload.candidates, content: "", searchPresentation, continuationToken: searchPayload.continuationToken ?? null }, sessionId);
+                updateLastMessage({ type: "search", searchResults: searchPayload.candidates, content: "", searchPresentation, suburb: searchPayload.suburb, continuationToken: searchPayload.continuationToken ?? null }, sessionId);
               } else if (hasJsonShape) {
                 updateLastMessage({ type: "text", content: sanitizeForDisplay(rawContent, t("search.format_error")) }, sessionId);
               } else {
@@ -2014,6 +2036,17 @@ export default function SearchScreen() {
     [handleSend],
   );
 
+  // Exhausted-discovery choice chips ("see again" / "search nearby"). Unlike a
+  // plain follow-up, these piggyback the originating search's presentation +
+  // suburb so the backend keeps the screening intent (generic vs subdivision)
+  // and the current suburb authoritative instead of re-deriving them.
+  const handleDiscoveryChoice = useCallback(
+    (message: ChatMessage, option: string) => {
+      void handleSend(option, false, message.searchPresentation, message.suburb);
+    },
+    [handleSend],
+  );
+
   const handleAnalyse = useCallback(
     async (
       address: string,
@@ -2120,6 +2153,8 @@ export default function SearchScreen() {
               clarificationType?: string;
               question?: string;
               options?: string[];
+              searchPresentation?: ChatMessage["searchPresentation"];
+              suburb?: string | null;
             };
 
             if (data.type === "clarification" && data.clarificationType === "subdivision" && Array.isArray(data.options) && data.options.length > 0) {
@@ -2144,6 +2179,8 @@ export default function SearchScreen() {
                 type: "discovery_exhausted_choice",
                 content: "",
                 clarification: { question: data.question || t("search.no_listings_msg"), options: data.options },
+                searchPresentation: data.searchPresentation,
+                suburb: data.suburb ?? undefined,
               }, sessionId);
               return;
             }
@@ -2412,6 +2449,7 @@ export default function SearchScreen() {
           <ChatBubble
             message={item}
             onFollowUp={handleFollowUp}
+            onDiscoveryChoice={handleDiscoveryChoice}
             onAnalyse={handleCardAnalyse}
             analysingPropertyKey={analysingPropertyKey}
             onRetry={handleSend}
@@ -2424,7 +2462,7 @@ export default function SearchScreen() {
         </View>
       );
     },
-    [handleFollowUp, handleCardAnalyse, analysingPropertyKey, handleSend, handleConnect, handleDismiss, handleAgentDismiss, handleShowMore],
+    [handleFollowUp, handleDiscoveryChoice, handleCardAnalyse, analysingPropertyKey, handleSend, handleConnect, handleDismiss, handleAgentDismiss, handleShowMore],
   );
 
   const keyExtractor = useCallback((item: ChatMessage) => item.id, []);
@@ -2571,6 +2609,7 @@ export default function SearchScreen() {
       await cancelRecording();
       return;
     }
+    let reachedTranscribe = false;
     recordingPressActiveRef.current = false;
     clearScheduledRecordingStart();
     const activeRecording = recordingRef.current ?? recording;
@@ -2600,6 +2639,7 @@ export default function SearchScreen() {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
       if (uri) {
+        reachedTranscribe = true;
         setIsTranscribing(true);
         setIsLoading(true);
         const formData = new FormData();
@@ -2624,12 +2664,16 @@ export default function SearchScreen() {
             setIsTranscribing(false);
             void handleSend(data.text.trim());
           } else {
+            // Recording captured but no speech detected — don't leave the user
+            // staring at a vanished overlay with no explanation.
             setIsTranscribing(false);
             setIsLoading(false);
+            Alert.alert(t("search.voice_failed_title"), t("search.voice_failed_body"));
           }
         } else {
           setIsTranscribing(false);
           setIsLoading(false);
+          Alert.alert(t("search.voice_failed_title"), t("search.voice_failed_body"));
         }
       }
     } catch (err) {
@@ -2645,8 +2689,13 @@ export default function SearchScreen() {
       setIsTranscribing(false);
       setRecordingCancelArmed(false);
       setIsLoading(false);
+      // Only surface the error if we'd already reached the transcription stage;
+      // a bare stop/unload glitch shouldn't pop an alert.
+      if (reachedTranscribe) {
+        Alert.alert(t("search.voice_failed_title"), t("search.voice_failed_body"));
+      }
     }
-  }, [cancelRecording, clearScheduledRecordingStart, recording, getApiHeaders, handleSend, setIsLoading]);
+  }, [cancelRecording, clearScheduledRecordingStart, recording, getApiHeaders, handleSend, setIsLoading, t]);
 
   const renderMicButton = useCallback(() => (
     <View

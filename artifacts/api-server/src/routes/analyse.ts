@@ -2232,10 +2232,22 @@ function hasRecentShownForSuburb(entries: RecentShownListing[], suburb: string |
   return entries.some((entry) => entry.suburb?.toLowerCase().trim() === normalized);
 }
 
-function buildDiscoveryExhaustedChoicePayload(suburb: string | null | undefined): string {
+function buildDiscoveryExhaustedChoicePayload(
+  suburb: string | null | undefined,
+  presentation: string = "scored_screening",
+): string {
   const suburbLabel = suburb ? titleCaseSuburb(suburb) : "this area";
+  const normalizedPresentation: DiscoverySearchPresentation =
+    presentation === "generic_listing" ? "generic_listing" : "scored_screening";
   return JSON.stringify({
     clarificationType: "discovery_exhausted",
+    // Echo the originating search's presentation + suburb so the client can
+    // piggyback them back on the choice tap. This keeps the screening intent
+    // (generic vs subdivision) and the *current* suburb authoritative across
+    // the Glendowie → Meadowbank → next-nearby evolution, instead of forcing
+    // the backend to re-derive them from fragile history/LLM inference.
+    searchPresentation: normalizedPresentation,
+    suburb: suburb ? suburbLabel : null,
     question: "I've shown you all properties that met the criteria in this area, including some from previous chats. Would you like to see them again or search nearby suburbs?",
     options: [
       `Remind me what is available in ${suburbLabel} again`,
@@ -4060,6 +4072,8 @@ router.post("/discovery/next", async (req, res) => {
 
     const state = continuationState(row);
     const shownKeys = shownKeysFromCandidates(shownCandidates ?? []);
+    const searchPresentation: DiscoverySearchPresentation =
+      row.searchPresentation === "generic_listing" ? "generic_listing" : "scored_screening";
     const recordServedCandidates = (served: Array<Pick<PropertyCandidate, "address" | "listingUrl" | "internalListingId">>) => {
       if (served.length === 0) return;
       const shownItems = served.map((c) => ({
@@ -4111,31 +4125,31 @@ router.post("/discovery/next", async (req, res) => {
       const firstReady = readyPages[0]?.candidates as PropertyCandidate[] | undefined;
       if (firstReady?.length) {
         const readyCandidates = filterCandidatesAlreadyShown(firstReady, shownKeys).slice(0, count);
-        const responseCandidates = row.searchPresentation === "generic_listing"
+        const responseCandidates = searchPresentation === "generic_listing"
           ? await hydrateGenericListingAgentDetails(readyCandidates, req.log)
           : readyCandidates;
         await sendDiscoveryNextPayload({
           candidates: responseCandidates,
           continuationToken: row.exhausted ? null : row.id,
           exhausted: row.exhausted,
-          searchPresentation: row.searchPresentation,
+          searchPresentation,
         });
         return;
       }
       if (row.exhausted) {
-        const payload = JSON.parse(buildDiscoveryExhaustedChoicePayload(row.suburb)) as { question: string; options: string[] };
+        const payload = JSON.parse(buildDiscoveryExhaustedChoicePayload(row.suburb, searchPresentation)) as { question: string; options: string[] };
         await sendDiscoveryNextPayload({
           candidates: [],
           continuationToken: null,
           exhausted: true,
           clarification: payload,
-          searchPresentation: row.searchPresentation,
+          searchPresentation,
         });
         return;
       }
       const generated = await generateContinuationCandidates({
         id: row.id,
-        presentation: row.searchPresentation === "generic_listing" ? "generic_listing" : "scored_screening",
+        presentation: searchPresentation,
         suburb: row.suburb,
         minPrice: row.minPrice,
         maxPrice: row.maxPrice,
@@ -4151,13 +4165,13 @@ router.post("/discovery/next", async (req, res) => {
         // "see again / search nearby" choice payload, otherwise the client
         // stores prefetchedExhausted with no clarification and "Show more"
         // renders a silent, button-less message. Mirror the non-prefetch path.
-        const payload = JSON.parse(buildDiscoveryExhaustedChoicePayload(row.suburb)) as { question: string; options: string[] };
+        const payload = JSON.parse(buildDiscoveryExhaustedChoicePayload(row.suburb, searchPresentation)) as { question: string; options: string[] };
         await sendDiscoveryNextPayload({
           candidates: [],
           continuationToken: null,
           exhausted: true,
           clarification: payload,
-          searchPresentation: row.searchPresentation,
+          searchPresentation,
         });
         return;
       }
@@ -4165,7 +4179,7 @@ router.post("/discovery/next", async (req, res) => {
         candidates: generated.candidates,
         continuationToken: generated.exhausted ? null : row.id,
         exhausted: generated.exhausted,
-        searchPresentation: row.searchPresentation,
+        searchPresentation,
       });
       return;
     }
@@ -4188,7 +4202,7 @@ router.post("/discovery/next", async (req, res) => {
     if (candidates.length === 0 && !row.exhausted) {
       const generated = await generateContinuationCandidates({
         id: row.id,
-        presentation: row.searchPresentation === "generic_listing" ? "generic_listing" : "scored_screening",
+        presentation: searchPresentation,
         suburb: row.suburb,
         minPrice: row.minPrice,
         maxPrice: row.maxPrice,
@@ -4205,7 +4219,7 @@ router.post("/discovery/next", async (req, res) => {
     const servedAddressKeys = shownKeysFromCandidates(candidates);
     for (const key of servedAddressKeys) shownKeys.add(key);
 
-    if (row.searchPresentation === "generic_listing" && candidates.length > 0) {
+    if (searchPresentation === "generic_listing" && candidates.length > 0) {
       candidates = await hydrateGenericListingAgentDetails(candidates, req.log);
     }
 
@@ -4219,13 +4233,13 @@ router.post("/discovery/next", async (req, res) => {
     }
 
     if (candidates.length === 0) {
-      const payload = JSON.parse(buildDiscoveryExhaustedChoicePayload(row.suburb)) as { question: string; options: string[] };
+      const payload = JSON.parse(buildDiscoveryExhaustedChoicePayload(row.suburb, searchPresentation)) as { question: string; options: string[] };
       await sendDiscoveryNextPayload({
         candidates: [],
         continuationToken: exhausted ? null : row.id,
         exhausted: true,
         clarification: payload,
-        searchPresentation: row.searchPresentation,
+        searchPresentation,
       });
       return;
     }
@@ -4234,7 +4248,7 @@ router.post("/discovery/next", async (req, res) => {
       candidates,
       continuationToken: exhausted ? null : row.id,
       exhausted,
-      searchPresentation: row.searchPresentation,
+      searchPresentation,
     };
     await sendDiscoveryNextPayload(directPayload);
   } catch (err) {
@@ -4249,7 +4263,7 @@ router.post("/chat", async (req, res) => {
     { headers: req.headers as Record<string, string | string[] | undefined> },
     chatLocale,
   );
-  const { messages, currentReport, message, conversationHistory, reportContext, continuePresentation } = req.body as {
+  const { messages, currentReport, message, conversationHistory, reportContext, continuePresentation, discoveryChoiceSuburb } = req.body as {
     messages?: Message[];
     currentReport?: object;
     message?: string;
@@ -4259,6 +4273,11 @@ router.post("/chat", async (req, res) => {
     // result block it belongs to so we continue that exact presentation regardless
     // of any intervening single-property analyse drill-down.
     continuePresentation?: "generic_listing" | "scored_screening";
+    // Set by the exhausted-discovery choice chips ("see again" / "search nearby").
+    // Carries the suburb the user is currently browsing so the repeat target /
+    // nearby base is authoritative, instead of being re-inferred from the thread
+    // (which fails once the conversation has moved on to a nearby suburb).
+    discoveryChoiceSuburb?: string;
   };
   const continueGenericListing = continuePresentation === "generic_listing";
   const continueScoredScreening = continuePresentation === "scored_screening";
@@ -4661,6 +4680,13 @@ router.post("/chat", async (req, res) => {
           // inferred from the current report context when absent from the message.
           const contextualAreaBrowse = isContextualAreaBrowseFollowup(userText);
           let suburb = intent.suburb ?? delegatedDiscoverSuburb?.suburb ?? (contextualAreaBrowse ? reportCtx?.suburb ?? null : null);
+          // Exhausted-choice chips carry the suburb the user is actually browsing.
+          // For "see again" / "search nearby" it is authoritative — use it as the
+          // repeat target / nearby base so the conversation evolves (Glendowie →
+          // Meadowbank → next) instead of snapping back to the original suburb.
+          if ((repeatShownAreaIntent || forceNearbyDiscovery) && discoveryChoiceSuburb?.trim()) {
+            suburb = discoveryChoiceSuburb.trim().toLowerCase();
+          }
           const isFollowUp = intent.isFollowUp || contextualAreaBrowse || isDiscoverStreetContinuation(userText) || repeatShownAreaIntent || forceNearbyDiscovery;
           const discoveryCriteria = buildDiscoveryCriteriaText(messages, userText, intent.criteria);
           let plainListingBrowse = isPlainListingBrowseWithoutDevelopment(userText);
@@ -4677,7 +4703,12 @@ router.post("/chat", async (req, res) => {
               if (msg.role !== "user" || !msg.content) continue;
               const prevText = msg.content;
               if (prevText === userText) continue;
-              if (isDiscoverStreetContinuation(prevText) && !isListingBrowseIntent(prevText)) continue;
+              // Skip ALL prior continuations ("show more", "show more properties").
+              // A prior "show more properties" is itself a listing-browse string, so
+              // the old `&& !isListingBrowseIntent(...)` guard failed to skip it and
+              // let it flip a subdivision search to generic. We want the last
+              // SUBSTANTIVE area search, not an intervening continuation.
+              if (isDiscoverStreetContinuation(prevText)) continue;
               if (hasNumberedStreetAddress(prevText)) continue;
               plainListingBrowse = isPlainListingBrowseWithoutDevelopment(prevText);
               break;
@@ -4694,7 +4725,7 @@ router.post("/chat", async (req, res) => {
               if (msg.role !== "user" || !msg.content) continue;
               const prevText = msg.content;
               if (prevText === userText) continue; // skip messages identical to current (prior Show mores)
-              if (isDiscoverStreetContinuation(prevText) && !isListingBrowseIntent(prevText)) continue; // skip other prior continuations
+              if (isDiscoverStreetContinuation(prevText)) continue; // skip ALL prior continuations (incl. "show more properties")
               if (hasNumberedStreetAddress(prevText)) continue; // skip single-property analyse drill-downs
               // Found the last substantive area search — inherit its presentation type
               if (isPlainListingBrowseWithoutDevelopment(prevText)) {
@@ -4768,6 +4799,13 @@ router.post("/chat", async (req, res) => {
           const discoveryBatchSize = strictStandardSubdivision ? 3 : 8;
           let continuationCacheKey: string | null = null;
           let continuationPreScreenOpts: Record<string, unknown> | null = null;
+          // Tracks the suburb the continuation row should be stamped with. It
+          // advances to the nearby suburb once the search jumps there, so the
+          // persisted row (and every later exhausted-choice prompt) references
+          // where the user actually is — not the original suburb they started
+          // from. Kept separate from `suburb` so the nearby intro prompts can
+          // still say "couldn't find in <original>, here are some in <nearby>".
+          let continuationSuburb: string | null = suburb;
 
           // Accumulator for listings that couldn't be conclusively screened
           // (zone/build-year/land-area source still failing after the per-listing
@@ -4975,7 +5013,7 @@ router.post("/chat", async (req, res) => {
                 || hasRecentShownForSuburb(recentShownEntries, suburb)
               );
             if (exhaustedByShownMemory) {
-              const exhaustedPayload = buildDiscoveryExhaustedChoicePayload(suburb);
+              const exhaustedPayload = buildDiscoveryExhaustedChoicePayload(suburb, plainListingBrowse ? "generic_listing" : "scored_screening");
               const translatedExhausted = await translateChatContent(exhaustedPayload, "clarification", chatLocale, chatTranslateTitleSchool);
               res.json({ content: translatedExhausted, mode: "clarification", ...providerSignal });
               return;
@@ -4989,7 +5027,7 @@ router.post("/chat", async (req, res) => {
               && !streetHint
               && getRemainingCount(cacheKey) === 0;
             if (strictPrimarySubdivisionExhausted) {
-              const exhaustedPayload = buildDiscoveryExhaustedChoicePayload(suburb);
+              const exhaustedPayload = buildDiscoveryExhaustedChoicePayload(suburb, plainListingBrowse ? "generic_listing" : "scored_screening");
               const translatedExhausted = await translateChatContent(exhaustedPayload, "clarification", chatLocale, chatTranslateTitleSchool);
               res.json({ content: translatedExhausted, mode: "clarification", ...providerSignal });
               return;
@@ -5073,6 +5111,10 @@ router.post("/chat", async (req, res) => {
                   if (filtered.length > 0) {
                     const fallbackCacheKey = makeCacheKey(nearbySuburb, effectiveMinPrice, effectiveMaxPrice);
                     continuationCacheKey = fallbackCacheKey;
+                    // The conversation has now moved to the nearby suburb — stamp
+                    // the continuation row (and thus future exhausted prompts) with
+                    // it so the suburb evolves instead of pinning to the original.
+                    continuationSuburb = nearbySuburb;
                     continuationPreScreenOpts = discoverPreOpts;
                     const priorShownFallback = [...getShownUrls(fallbackCacheKey)];
                     setListingCache(fallbackCacheKey, {
@@ -5336,7 +5378,7 @@ router.post("/chat", async (req, res) => {
             ? await createDiscoveryContinuation({
                 ownerKey: continuationOwnerKey(chatUserId, anonymousIdentityHash),
                 presentation: plainListingBrowse ? "generic_listing" : "scored_screening",
-                suburb,
+                suburb: continuationSuburb,
                 minPrice: effectiveMinPrice,
                 maxPrice: effectiveMaxPrice,
                 cacheKey: continuationCacheKey ?? "",
@@ -5353,7 +5395,7 @@ router.post("/chat", async (req, res) => {
           const responsePayload = JSON.stringify({
             candidates,
             isMockData,
-            suburb,
+            suburb: continuationSuburb,
             dataSource,
             noListings,
             aiIntro,

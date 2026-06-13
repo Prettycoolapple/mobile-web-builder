@@ -1,10 +1,13 @@
-import React from "react";
-import { Image, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { Feather } from "@expo/vector-icons";
+import React, { useCallback, useMemo } from "react";
+import { Alert, Image, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Feather, Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+import { useAuth } from "@/context/AuthContext";
+import { useWatchlist } from "@/context/WatchlistContext";
 import { useColors } from "@/hooks/useColors";
 import { useT } from "@/lib/i18n";
 import { useMaybeTranslated } from "@/hooks/useMaybeTranslated";
-import { BrowseListing, isListingSponsored, resolveListingImageUrl } from "@/lib/browseListings";
+import { BrowseListing, isListingSponsored, resolveListingImageUrl, watchlistCandidateFromBrowse } from "@/lib/browseListings";
 
 const PROPERTY_TYPE_KEYS = new Set([
   "house", "apartment", "townhouse", "unit", "section", "commercial", "industrial", "rural", "other",
@@ -46,6 +49,9 @@ function descriptionTeaser(desc: string | null | undefined): string | null {
 export function BrowseListingCard({ listing, onPress, onShare }: { listing: BrowseListing; onPress: () => void; onShare?: () => void }) {
   const colors = useColors();
   const { t } = useT();
+  const router = useRouter();
+  const { user } = useAuth();
+  const { isWatched, toggle } = useWatchlist();
   const cover = resolveListingImageUrl(listing.imageUrls?.[0]);
   const hasAgent = !!(listing.agent?.fullName || listing.agent?.agencyName || listing.agent?.avatarUrl);
   const agentName = listing.agent?.fullName ?? t("lcard.agent_fallback");
@@ -53,6 +59,30 @@ export function BrowseListingCard({ listing, onPress, onShare }: { listing: Brow
   const agentAvatar = resolveListingImageUrl(listing.agent?.avatarUrl);
   const teaserText = listing.teaser?.trim() || descriptionTeaser(listing.description);
   const description = useMaybeTranslated(teaserText);
+  const watchCandidate = useMemo(() => watchlistCandidateFromBrowse(listing), [listing]);
+  const watched = isWatched(watchCandidate);
+
+  const promptSignInForWatchlist = useCallback(() => {
+    const goLogin = () => router.push("/(auth)/login" as never);
+    const goSignup = () => router.push("/(auth)/signup" as never);
+    if (Platform.OS === "web") {
+      goSignup();
+      return;
+    }
+    Alert.alert(t("watchlist.signin_title"), t("watchlist.signin_body"), [
+      { text: t("common.cancel"), style: "cancel" },
+      { text: t("login.submit"), onPress: goLogin },
+      { text: t("signup.create_account"), onPress: goSignup },
+    ]);
+  }, [router, t]);
+
+  const handleToggleWatch = useCallback(async () => {
+    if (!user) {
+      promptSignInForWatchlist();
+      return;
+    }
+    await toggle(watchCandidate);
+  }, [user, promptSignInForWatchlist, toggle, watchCandidate]);
 
   return (
     <TouchableOpacity
@@ -64,11 +94,13 @@ export function BrowseListingCard({ listing, onPress, onShare }: { listing: Brow
         <View>
           <Image source={{ uri: cover }} style={styles.cover} />
           {onShare ? <ShareButton onPress={onShare} /> : null}
+          <HeartButton watched={watched} onPress={handleToggleWatch} />
         </View>
       ) : (
         <View style={[styles.coverPlaceholder, { backgroundColor: colors.muted }]}>
           <Feather name="home" size={30} color={colors.mutedForeground} />
           {onShare ? <ShareButton onPress={onShare} /> : null}
+          <HeartButton watched={watched} onPress={handleToggleWatch} />
         </View>
       )}
       <View style={styles.body}>
@@ -132,6 +164,22 @@ export function BrowseListingCard({ listing, onPress, onShare }: { listing: Brow
   );
 }
 
+function HeartButton({ watched, onPress }: { watched: boolean; onPress: () => void }) {
+  const colors = useColors();
+  const { t } = useT();
+  return (
+    <TouchableOpacity
+      style={[styles.heartBtn, { backgroundColor: "rgba(255,255,255,0.92)", borderColor: colors.border }]}
+      onPress={onPress}
+      activeOpacity={0.82}
+      accessibilityRole="button"
+      accessibilityLabel={watched ? t("watchlist.remove") : t("watchlist.add")}
+    >
+      <Ionicons name={watched ? "heart" : "heart-outline"} size={17} color={watched ? "#ef4444" : colors.foreground} />
+    </TouchableOpacity>
+  );
+}
+
 function ShareButton({ onPress }: { onPress: () => void }) {
   const colors = useColors();
   return (
@@ -170,6 +218,7 @@ const styles = StyleSheet.create({
   cover: { width: "100%", height: 176 },
   coverPlaceholder: { width: "100%", height: 150, alignItems: "center", justifyContent: "center", position: "relative" },
   shareBtn: { position: "absolute", top: 10, left: 10, width: 34, height: 34, borderRadius: 17, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  heartBtn: { position: "absolute", top: 10, right: 10, width: 34, height: 34, borderRadius: 17, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   body: { padding: 13, gap: 6 },
   priceRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   price: { flex: 1, fontSize: 18 },

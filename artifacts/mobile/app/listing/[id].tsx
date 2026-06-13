@@ -14,9 +14,10 @@ import {
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Feather } from "@expo/vector-icons";
+import { Feather, Ionicons } from "@expo/vector-icons";
 import Markdown from "react-native-markdown-display";
 import { useAuth } from "@/context/AuthContext";
+import { useWatchlist } from "@/context/WatchlistContext";
 import { useColors } from "@/hooks/useColors";
 import { useT } from "@/lib/i18n";
 import { useMaybeTranslated } from "@/hooks/useMaybeTranslated";
@@ -30,6 +31,7 @@ import {
   isListingSponsored,
   resolveListingImageUrl,
   selectedListingContextFromBrowse,
+  watchlistCandidateFromBrowse,
 } from "@/lib/browseListings";
 
 const GENERIC_LISTING_DESCRIPTION = "Curated from live NZ marketplace listings. Analyse this property in Project Alpha for feasibility context.";
@@ -61,7 +63,8 @@ export default function ListingDetailScreen() {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const router = useRouter();
-  const { getApiHeaders } = useAuth();
+  const { getApiHeaders, user } = useAuth();
+  const { isWatched, toggle } = useWatchlist();
   const { t } = useT();
   const initial = useMemo(() => parsePreview(preview), [preview]);
   const [listing, setListing] = useState<BrowseListing | null>(initial);
@@ -208,6 +211,32 @@ export default function ListingDetailScreen() {
     void shareListing(listing, getApiHeaders()).catch(() => {});
   }, [getApiHeaders, listing]);
 
+  const watchCandidate = useMemo(() => (listing ? watchlistCandidateFromBrowse(listing) : null), [listing]);
+  const watched = watchCandidate ? isWatched(watchCandidate) : false;
+
+  const promptSignInForWatchlist = useCallback(() => {
+    const goLogin = () => router.push("/(auth)/login" as never);
+    const goSignup = () => router.push("/(auth)/signup" as never);
+    if (Platform.OS === "web") {
+      goSignup();
+      return;
+    }
+    Alert.alert(t("watchlist.signin_title"), t("watchlist.signin_body"), [
+      { text: t("common.cancel"), style: "cancel" },
+      { text: t("login.submit"), onPress: goLogin },
+      { text: t("signup.create_account"), onPress: goSignup },
+    ]);
+  }, [router, t]);
+
+  const handleToggleWatch = useCallback(async () => {
+    if (!watchCandidate) return;
+    if (!user) {
+      promptSignInForWatchlist();
+      return;
+    }
+    await toggle(watchCandidate);
+  }, [user, promptSignInForWatchlist, toggle, watchCandidate]);
+
   if (loading && !listing) {
     return <View style={[styles.center, { backgroundColor: colors.background }]}><ActivityIndicator color={colors.accent} /></View>;
   }
@@ -293,13 +322,25 @@ export default function ListingDetailScreen() {
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
       <View style={[styles.header, { paddingTop: insets.top + 8, backgroundColor: colors.headerBg }]}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.headerBtn}>
-          <Feather name="arrow-left" size={22} color="#FAFAF9" />
-        </TouchableOpacity>
+        <View style={styles.headerSide}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.headerBtn}>
+            <Feather name="arrow-left" size={22} color="#FAFAF9" />
+          </TouchableOpacity>
+        </View>
         <Text style={styles.headerTitle}>{t("pdp.header")}</Text>
-        <TouchableOpacity onPress={handleShare} style={styles.headerBtn} accessibilityRole="button" accessibilityLabel={t("pdp.share")}>
-          <Feather name="log-out" size={20} color="#FAFAF9" />
-        </TouchableOpacity>
+        <View style={[styles.headerSide, styles.headerActions]}>
+          <TouchableOpacity
+            onPress={handleToggleWatch}
+            style={styles.headerBtn}
+            accessibilityRole="button"
+            accessibilityLabel={watched ? t("watchlist.remove") : t("watchlist.add")}
+          >
+            <Ionicons name={watched ? "heart" : "heart-outline"} size={21} color={watched ? "#ef4444" : "#FAFAF9"} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handleShare} style={styles.headerBtn} accessibilityRole="button" accessibilityLabel={t("pdp.share")}>
+            <Feather name="log-out" size={20} color="#FAFAF9" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 28 }} showsVerticalScrollIndicator={false}>
@@ -435,6 +476,8 @@ const styles = StyleSheet.create({
   root: { flex: 1 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 14 },
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingBottom: 12 },
+  headerSide: { width: 84, flexDirection: "row", alignItems: "center" },
+  headerActions: { justifyContent: "flex-end" },
   headerBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
   headerTitle: { flex: 1, textAlign: "center", color: "#FAFAF9", fontFamily: "DM_Sans_700Bold", fontSize: 16 },
   heroImage: { height: 260 },

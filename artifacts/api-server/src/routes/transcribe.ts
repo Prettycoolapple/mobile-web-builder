@@ -1,7 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import multer from "multer";
 import OpenAI, { toFile } from "openai";
-import { requireAuth } from "../lib/auth";
 
 const router: IRouter = Router();
 
@@ -11,9 +10,12 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024 },
 });
 
+// No auth gate: voice input must work for anonymous users too, consistent with
+// the anonymous chat/discovery flows. This endpoint does not use the user id —
+// it only turns audio into text; the downstream message send still enforces
+// per-user/anonymous message limits.
 router.post(
   "/transcribe",
-  requireAuth,
   upload.single("file"),
   async (req: Request, res: Response) => {
     if (!req.file) {

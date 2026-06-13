@@ -1,4 +1,5 @@
 import { getApiBase } from "@/lib/api";
+import type { WatchlistCandidate } from "@/context/WatchlistContext";
 
 export type BrowseListingSource = "internal" | "curated";
 
@@ -104,6 +105,35 @@ export function selectedListingContextFromBrowse(listing: BrowseListing) {
     packageAddress: null,
     childAddresses: null,
     aggregateFactsExcluded: null,
+  };
+}
+
+export function watchlistCandidateFromBrowse(listing: BrowseListing): WatchlistCandidate {
+  return {
+    address: listing.address,
+    price: listing.priceNzd ?? 0,
+    landArea: listing.landAreaSqm ?? undefined,
+    scores: { ease: 0, cost: 0, roi: 0, composite: 0 },
+    photoUrl: listing.imageUrls?.[0] ?? undefined,
+    photoUrls: listing.imageUrls ?? [],
+    listingUrl: listing.externalUrl ?? undefined,
+    priceDisplay: listing.priceDisplay ?? undefined,
+    propertyType: listing.propertyType ?? undefined,
+    listingTitle: listing.listingTitle ?? undefined,
+    description: listing.description ?? undefined,
+    features: listing.features ?? [],
+    agentName: listing.agent?.fullName ?? undefined,
+    agencyName: listing.agent?.agencyName ?? undefined,
+    agentAvatarUrl: listing.agent?.avatarUrl ?? undefined,
+    agentPhone: listing.agent?.phone ?? undefined,
+    source: listing.source,
+    internalListingId: listing.source === "internal" ? listing.id : undefined,
+    isSponsored: isListingSponsored(listing),
+    bedrooms: listing.bedrooms ?? undefined,
+    bathrooms: listing.bathrooms ?? undefined,
+    toilets: listing.toilets ?? undefined,
+    garages: listing.garages ?? undefined,
+    floorArea: listing.floorAreaSqm ?? undefined,
   };
 }
 

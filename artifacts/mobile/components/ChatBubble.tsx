@@ -121,6 +121,7 @@ function SafeMarkdown({
 interface Props {
   message: ChatMessage;
   onFollowUp: (question: string) => void;
+  onDiscoveryChoice?: (message: ChatMessage, option: string) => void;
   onAnalyse: (address: string, photoUrl?: string | null, listingUrl?: string | null, selectedListingContext?: SelectedListingContext | null, analysisKey?: string) => void;
   analysingPropertyKey?: string | null;
   onRetry?: (text: string) => void;
@@ -279,7 +280,7 @@ function TypingDots() {
   );
 }
 
-export function ChatBubble({ message, onFollowUp, onAnalyse, analysingPropertyKey, onRetry, onConnect, onDismiss, onAgentDismiss, onUpgrade, onShowMore }: Props) {
+export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, analysingPropertyKey, onRetry, onConnect, onDismiss, onAgentDismiss, onUpgrade, onShowMore }: Props) {
   const colors = useColors();
   const { t } = useT();
   const router = useRouter();
@@ -317,7 +318,7 @@ export function ChatBubble({ message, onFollowUp, onAnalyse, analysingPropertyKe
             {options.map((opt, i) => (
               <TouchableOpacity
                 key={i}
-                onPress={() => isDiscoveryChoice ? onFollowUp(opt) : onAnalyse(opt)}
+                onPress={() => isDiscoveryChoice ? (onDiscoveryChoice ? onDiscoveryChoice(message, opt) : onFollowUp(opt)) : onAnalyse(opt)}
                 style={{
                   backgroundColor: colors.accent + "12",
                   borderColor: colors.accent + "55",
