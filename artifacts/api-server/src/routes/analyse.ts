@@ -29,6 +29,7 @@ import {
   findSuburbInTextViaIndex,
   getDistrictSiblings,
   findSuburbId,
+  findClosestSuburbByName,
 } from "../lib/scrapers/realestate-api";
 import { suggestNearbySuburbs } from "../lib/claude";
 import { runPropertyPipeline, hasCacheableCore, type PipelineResult } from "../lib/pipeline";
@@ -68,6 +69,7 @@ import {
 } from "../lib/listing-cache";
 import type { ListingResult } from "../lib/scrapers/oneroof";
 import { queueBackgroundScores, getCardScores } from "../lib/analysis-cache";
+import { isHighConfidenceSuburbMatch } from "../lib/transcription-place-correction";
 import { normaliseLocale } from "../lib/prompts";
 import { terrainSlopeText, type TerrainContour } from "../lib/terrain-slope-copy";
 import { buildListingTeaser } from "../lib/listing-teaser";
@@ -1007,6 +1009,50 @@ function isPlainListingBrowseWithoutDevelopment(userText: string): boolean {
     && !isStandardSubdivisionDiscoveryIntent(userText);
 }
 
+type DiscoverySuburbResolution =
+  | { status: "valid"; suburb: string; original: string | null }
+  | { status: "invalid"; message: string };
+
+function replaceFirstInsensitive(haystack: string, needle: string, replacement: string): string {
+  if (!needle.trim()) return haystack;
+  const index = haystack.toLowerCase().indexOf(needle.toLowerCase());
+  if (index < 0) return haystack;
+  return haystack.slice(0, index) + replacement + haystack.slice(index + needle.length);
+}
+
+async function resolveDiscoverySuburbName(
+  suburb: string | null | undefined,
+  locale: "en" | "zh",
+): Promise<DiscoverySuburbResolution | null> {
+  const raw = suburb?.trim();
+  if (!raw) return null;
+
+  const districtChildren = resolveDistrictToSuburbs(raw);
+  if (districtChildren && districtChildren.length > 0) {
+    return { status: "valid", suburb: raw.toLowerCase(), original: null };
+  }
+
+  const direct = await findSuburbId(raw);
+  if (direct) {
+    const normalized = direct.title.toLowerCase();
+    return { status: "valid", suburb: normalized, original: normalized === raw.toLowerCase() ? null : raw };
+  }
+
+  const fuzzy = await findClosestSuburbByName(raw);
+  if (fuzzy && isHighConfidenceSuburbMatch(raw, fuzzy)) {
+    return { status: "valid", suburb: fuzzy.suburb.title.toLowerCase(), original: raw };
+  }
+
+  const closest = fuzzy?.suburb.title;
+  const baseMessage = closest
+    ? `I couldn't confidently match "${titleCaseSuburb(raw)}" to a NZ suburb. Did you mean ${closest}? Please check the spelling and try again.`
+    : `I couldn't confidently match "${titleCaseSuburb(raw)}" to a NZ suburb. Please check the spelling and try again.`;
+  return {
+    status: "invalid",
+    message: locale === "zh" ? await ensureChinese(baseMessage) : baseMessage,
+  };
+}
+
 function rankByCriteria(candidates: PropertyCandidate[], criteria: string | null): PropertyCandidate[] {
   if (!criteria || candidates.length === 0) return candidates;
   const c = criteria.toLowerCase();
@@ -1555,6 +1601,8 @@ async function searchSuburbOrDistrict(args: {
   firstBatchSize?: number;
   fetchAllPages: boolean;
   maxListings?: number;
+  startOffset?: number;
+  maxPages?: number;
   log: Logger;
 }): Promise<{
   firstBatch: ListingResult[];
@@ -1562,6 +1610,9 @@ async function searchSuburbOrDistrict(args: {
   source: string;
   suburbsSearched: string[];
   isDistrictFanOut: boolean;
+  nextOffset: number;
+  totalAvailable: number | null;
+  done: boolean;
 }> {
   const childSuburbs = resolveDistrictToSuburbs(args.suburb);
   if (!childSuburbs || childSuburbs.length === 0) {
@@ -1574,6 +1625,8 @@ async function searchSuburbOrDistrict(args: {
       firstBatchSize: args.firstBatchSize,
       fetchAllPages: args.fetchAllPages,
       maxListings: args.maxListings,
+      startOffset: args.startOffset,
+      maxPages: args.maxPages,
     });
     return {
       firstBatch: result.firstBatch,
@@ -1581,6 +1634,9 @@ async function searchSuburbOrDistrict(args: {
       source: result.source,
       suburbsSearched: [args.suburb],
       isDistrictFanOut: false,
+      nextOffset: result.nextOffset,
+      totalAvailable: result.totalAvailable,
+      done: result.done,
     };
   }
 
@@ -1607,6 +1663,8 @@ async function searchSuburbOrDistrict(args: {
         firstBatchSize: args.firstBatchSize,
         fetchAllPages: args.fetchAllPages,
         maxListings: perChildMaxListings,
+        startOffset: args.startOffset,
+        maxPages: args.maxPages,
       }),
     ),
   );
@@ -1646,7 +1704,11 @@ async function searchSuburbOrDistrict(args: {
     "Discovery: district fan-out merged",
   );
 
-  return { firstBatch, remainingListings, source, suburbsSearched, isDistrictFanOut: true };
+  // District fan-out merges several suburbs into one pool; offset-based resume
+  // doesn't map cleanly across them, so we treat the merged set as complete and
+  // don't attempt lazy refill for districts (per-child page caps already bound
+  // the up-front cost).
+  return { firstBatch, remainingListings, source, suburbsSearched, isDistrictFanOut: true, nextOffset: 0, totalAvailable: null, done: true };
 }
 
 async function topUpDiscoveryCandidates(
@@ -1779,6 +1841,19 @@ function topUpGenericListingCandidates(
 const DISCOVERY_CONTINUATION_TTL_MS = 30 * 60 * 1000;
 const DISCOVERY_CONTINUATION_PREFETCH_COUNT = 6;
 const DISCOVERY_CONTINUATION_PAGE_SIZE = 3;
+// Generic browse paginates the source lazily: fetch this many API pages (100
+// listings each) per window, then refill the pool one window at a time on
+// Show-more. Keeps the first-load latency bounded on high-inventory suburbs
+// (e.g. a 900-listing suburb loads 200 up front instead of all 900) while every
+// subsequent Show-more stays an instant cache hit until a window genuinely drains.
+const GENERIC_PAGE_WINDOW = 2;
+// Subdivision/scored screening uses a larger window: the pool is ranked
+// (best development sites first) before per-listing screening, so the initial
+// window must be big enough to rank a meaningful set. There is NO hard count
+// cap — when this ranked window drains, the cursor resumes the next window until
+// the suburb is genuinely exhausted (true full exhaustion). Heavy per-listing
+// screening stays incremental and is hidden by background prefetch.
+const SUBDIVISION_PAGE_WINDOW = 5;
 
 type DiscoverySearchPresentation = "generic_listing" | "scored_screening";
 
@@ -1843,92 +1918,218 @@ async function generateContinuationCandidates(args: {
   count: number;
   log: Logger;
 }): Promise<{ candidates: PropertyCandidate[]; state: DiscoveryContinuationState; exhausted: boolean }> {
-  const remainingListings = Array.isArray(args.state.remainingListings)
+  let remainingListings = Array.isArray(args.state.remainingListings)
     ? (args.state.remainingListings as ListingResult[])
     : [];
-  if (remainingListings.length === 0) {
-    return { candidates: [], state: { ...args.state, remainingListings: [] }, exhausted: true };
-  }
+  const nearbyQueue = Array.isArray(args.state.nearbyQueue)
+    ? [...(args.state.nearbyQueue as string[])]
+    : [];
+  let currentSuburb: string | null =
+    typeof args.state.currentSuburb === "string" && args.state.currentSuburb
+      ? args.state.currentSuburb
+      : args.suburb;
 
-  const tempCacheKey = `continuation:${args.id}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-  setListingCache(tempCacheKey, {
-    remainingListings: [...remainingListings],
-    shownUrls: [],
-    suburb: args.suburb ?? "",
-    minPrice: args.minPrice ?? 0,
-    maxPrice: args.maxPrice ?? 20_000_000,
+  const minP = args.minPrice ?? 0;
+  const maxP = args.maxPrice ?? 20_000_000;
+  const inRange = (l: { price: number | null }) =>
+    l.price == null || (l.price >= minP && l.price <= maxP * 1.1);
+
+  // Pick the next page of candidates from a given listing pool, honouring the
+  // presentation type. Returns the leftover pool so the caller can persist it.
+  const pickFromPool = async (
+    pool: ListingResult[],
+  ): Promise<{ candidates: PropertyCandidate[]; nextRemaining: ListingResult[] }> => {
+    const tempCacheKey = `continuation:${args.id}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    setListingCache(tempCacheKey, {
+      remainingListings: [...pool],
+      shownUrls: [],
+      suburb: currentSuburb ?? args.suburb ?? "",
+      minPrice: minP,
+      maxPrice: maxP,
+    });
+
+    let candidates: PropertyCandidate[] = [];
+    if (args.presentation === "generic_listing") {
+      candidates = topUpGenericListingCandidates(tempCacheKey, [], args.shownKeys, args.count, 12);
+      candidates = sanitizeDiscoveryCandidates(candidates);
+    } else {
+      const preScreenOpts = {
+        allowMissingListingPrice: true,
+        pricePlaceholderNzd: 3_500_000,
+        ...(args.state.preScreenOpts ?? {}),
+      } as {
+        allowMissingListingPrice?: boolean;
+        pricePlaceholderNzd?: number;
+        strictStandardSubdivision?: boolean;
+        preliminarySubdivision?: boolean;
+      };
+      candidates = await topUpDiscoveryCandidates(
+        tempCacheKey,
+        [],
+        typeof args.state.criteria === "string" ? args.state.criteria : null,
+        preScreenOpts,
+        args.shownKeys,
+        {
+          batchSize: 12,
+          nonStrictAttemptLimit: 3,
+          targetCount: args.count,
+        },
+      );
+      candidates = sanitizeDiscoveryCandidates(candidates);
+      if (candidates.length > 0) {
+        queueBackgroundScores(
+          candidates.map((c) => ({
+            address: c.address,
+            listingUrl: c.listingUrl,
+            price: c.price,
+            landArea: c.landArea,
+            landAreaConfidence: c.landAreaConfidence,
+            isAlreadySubdividedChild: c.isAlreadySubdividedChild,
+            zone: c.zone,
+            buildYear: c.buildYear,
+            typology: c.typology,
+            titleConfidence: c.titleConfidence,
+            subdivisionEligible: c.subdivisionEligible,
+            subdivisionRejectReason: c.subdivisionRejectReason,
+          })),
+        );
+      }
+    }
+
+    candidates = filterCandidatesAlreadyShown(candidates, args.shownKeys);
+    if (args.presentation === "generic_listing" && candidates.length > 0) {
+      candidates = await hydrateGenericListingAgentDetails(candidates, args.log);
+    }
+    const nextRemaining = (getListingCache(tempCacheKey)?.remainingListings ?? []) as ListingResult[];
+    return { candidates, nextRemaining };
+  };
+
+  // Lazy-pagination cursor for the current suburb. Both presentations fetch the
+  // source one window at a time, so when the pool drains we may still have more
+  // pages of THIS suburb to pull before moving the nearby train forward.
+  let pageOffset = typeof args.state.pageOffset === "number" ? args.state.pageOffset : 0;
+  let pageTotal: number | null = typeof args.state.pageTotal === "number" ? args.state.pageTotal : null;
+  // Default true: when unset (pre-pagination rows) there is nothing more to fetch.
+  let pageDone = args.state.pageDone !== false;
+  const isGeneric = args.presentation === "generic_listing";
+  const isStrict = (args.state.preScreenOpts as { strictStandardSubdivision?: boolean } | undefined)?.strictStandardSubdivision === true;
+  const pageWindow = isGeneric ? GENERIC_PAGE_WINDOW : SUBDIVISION_PAGE_WINDOW;
+
+  // Order a freshly-fetched window the same way the primary search does so the
+  // ranked "best development sites first" ordering carries into refilled pages
+  // (strict subdivision only — generic and non-strict scored keep source order).
+  const orderWindow = (pool: ListingResult[]): ListingResult[] =>
+    isStrict ? rankListingsForStrictSubdivision(pool) : pool;
+
+  // Pull one more window of the CURRENT suburb's source pages, advancing the
+  // cursor. Returns the freshly-fetched, in-range, not-yet-shown listings (may be
+  // empty if that window was all already shown — the caller loops to the next).
+  const fetchCurrentSuburbWindow = async (): Promise<ListingResult[]> => {
+    if (pageDone || !currentSuburb) return [];
+    const win = await searchRealEstateListings({
+      suburb: currentSuburb,
+      minPrice: minP,
+      maxPrice: maxP,
+      startOffset: pageOffset,
+      maxPages: pageWindow,
+    }).catch((err) => {
+      args.log.warn({ err, currentSuburb }, "Discovery train: window refill fetch failed");
+      return null;
+    });
+    if (!win) { pageDone = true; return []; }
+    pageOffset = win.nextOffset;
+    pageTotal = win.totalAvailable;
+    pageDone = win.done;
+    return filterAlreadyShownListings(
+      orderWindow([...win.firstBatch, ...win.remainingListings].filter(inRange)),
+      args.shownKeys,
+    );
+  };
+
+  // Advance the train to the next queued nearby suburb: fetch its first window
+  // and reset the per-suburb cursor (so the new suburb is then drained window by
+  // window before the train advances again).
+  const fetchNextNearbySuburb = async (): Promise<ListingResult[]> => {
+    const nextSuburb = nearbyQueue.shift() as string;
+    const fetched = await searchRealEstateListings({
+      suburb: nextSuburb,
+      minPrice: minP,
+      maxPrice: maxP,
+      maxPages: pageWindow,
+    }).catch((err) => {
+      args.log.warn({ err, nextSuburb }, "Discovery train: nearby suburb fetch failed");
+      return null;
+    });
+    if (!fetched) return [];
+    currentSuburb = nextSuburb;
+    pageOffset = fetched.nextOffset;
+    pageTotal = fetched.totalAvailable;
+    pageDone = fetched.done;
+    return filterAlreadyShownListings(
+      orderWindow([...fetched.firstBatch, ...fetched.remainingListings].filter(inRange)),
+      args.shownKeys,
+    );
+  };
+
+  const buildState = (remaining: ListingResult[]): DiscoveryContinuationState => ({
+    ...args.state,
+    remainingListings: remaining,
+    nearbyQueue,
+    currentSuburb: currentSuburb ?? undefined,
+    pageOffset,
+    pageTotal,
+    pageDone,
   });
 
-  let candidates: PropertyCandidate[] = [];
-  if (args.presentation === "generic_listing") {
-    candidates = topUpGenericListingCandidates(
-      tempCacheKey,
-      [],
-      args.shownKeys,
-      args.count,
-      12,
-    );
-    candidates = sanitizeDiscoveryCandidates(candidates);
-  } else {
-    const preScreenOpts = {
-      allowMissingListingPrice: true,
-      pricePlaceholderNzd: 3_500_000,
-      ...(args.state.preScreenOpts ?? {}),
-    } as {
-      allowMissingListingPrice?: boolean;
-      pricePlaceholderNzd?: number;
-      strictStandardSubdivision?: boolean;
-      preliminarySubdivision?: boolean;
-    };
-    candidates = await topUpDiscoveryCandidates(
-      tempCacheKey,
-      [],
-      typeof args.state.criteria === "string" ? args.state.criteria : null,
-      preScreenOpts,
-      args.shownKeys,
-      {
-        batchSize: 12,
-        nonStrictAttemptLimit: 3,
-        targetCount: args.count,
-      },
-    );
-    candidates = sanitizeDiscoveryCandidates(candidates);
-    if (candidates.length > 0) {
-      queueBackgroundScores(
-        candidates.map((c) => ({
-          address: c.address,
-          listingUrl: c.listingUrl,
-          price: c.price,
-          landArea: c.landArea,
-          landAreaConfidence: c.landAreaConfidence,
-          isAlreadySubdividedChild: c.isAlreadySubdividedChild,
-          zone: c.zone,
-          buildYear: c.buildYear,
-          typology: c.typology,
-          titleConfidence: c.titleConfidence,
-          subdivisionEligible: c.subdivisionEligible,
-          subdivisionRejectReason: c.subdivisionRejectReason,
-        })),
-      );
+  // Drain order: current pool → more windows of the current suburb → next nearby
+  // suburb → … Only exhausted once the pool is empty, the current suburb has no
+  // more source pages, AND the nearby queue is empty. The origin and drained
+  // suburbs are never revisited (they're not in the queue).
+  for (;;) {
+    while (remainingListings.length === 0 && (!pageDone || nearbyQueue.length > 0)) {
+      let refill: ListingResult[] = [];
+      if (!pageDone) {
+        refill = await fetchCurrentSuburbWindow();
+      } else if (nearbyQueue.length > 0) {
+        refill = await fetchNextNearbySuburb();
+      }
+      if (refill.length > 0) remainingListings = refill;
+      // Empty refill but more windows/suburbs remain → loop tries the next one;
+      // pageOffset/queue always advance, so this terminates.
     }
-  }
 
-  candidates = filterCandidatesAlreadyShown(candidates, args.shownKeys);
-  if (args.presentation === "generic_listing" && candidates.length > 0) {
-    candidates = await hydrateGenericListingAgentDetails(candidates, args.log);
+    if (remainingListings.length === 0) {
+      return { candidates: [], state: buildState([]), exhausted: true };
+    }
+
+    const { candidates, nextRemaining } = await pickFromPool(remainingListings);
+    if (candidates.length > 0) {
+      args.log.info(
+        { id: args.id, presentation: args.presentation, candidates: candidates.length, remaining: nextRemaining.length, queue: nearbyQueue.length, pageDone, currentSuburb },
+        "Discovery continuation: generated candidates",
+      );
+      return {
+        candidates,
+        state: buildState(nextRemaining),
+        exhausted: nextRemaining.length === 0 && pageDone && nearbyQueue.length === 0,
+      };
+    }
+
+    // This pool yielded nothing pickable.
+    remainingListings = nextRemaining;
+    if (remainingListings.length > 0) {
+      // Pool still had items but none became candidates — bail to avoid a loop.
+      return {
+        candidates: [],
+        state: buildState(nextRemaining),
+        exhausted: pageDone && nearbyQueue.length === 0,
+      };
+    }
+    if (pageDone && nearbyQueue.length === 0) {
+      return { candidates: [], state: buildState([]), exhausted: true };
+    }
+    // else: pool empty but more windows/suburbs remain → loop refills.
   }
-  const updatedCache = getListingCache(tempCacheKey);
-  const nextRemaining = updatedCache?.remainingListings ?? [];
-  const exhausted = candidates.length === 0 && nextRemaining.length === 0;
-  args.log.info(
-    { id: args.id, presentation: args.presentation, candidates: candidates.length, remaining: nextRemaining.length },
-    "Discovery continuation: generated candidates",
-  );
-  return {
-    candidates,
-    state: { ...args.state, remainingListings: nextRemaining },
-    exhausted,
-  };
 }
 
 async function prefetchContinuationPage(id: string, requestedCount = DISCOVERY_CONTINUATION_PREFETCH_COUNT, log: Logger): Promise<void> {
@@ -1974,11 +2175,25 @@ async function createDiscoveryContinuation(args: {
   criteria: string | null;
   preScreenOpts: Record<string, unknown>;
   initialCandidates: PropertyCandidate[];
+  // Nearby "train" expansion seed. When present, Show-more auto-advances through
+  // these suburbs as each drains (see generateContinuationCandidates).
+  nearbyQueue?: string[];
+  originSuburb?: string | null;
+  // Lazy-pagination cursor for the current suburb (generic browse). When the
+  // suburb still has un-fetched source pages, the continuation pool is refilled
+  // a window at a time on Show-more before the nearby train advances.
+  pageOffset?: number;
+  pageTotal?: number | null;
+  pageDone?: boolean;
   log: Logger;
 }): Promise<string | null> {
   const cacheEntry = getListingCache(args.cacheKey);
   const remainingListings = cacheEntry?.remainingListings ?? [];
-  if (remainingListings.length === 0) return null;
+  // With a nearby queue we can keep going even if THIS suburb's pool is empty,
+  // so only bail when there's nothing left to serve anywhere. The current suburb
+  // may also have more un-fetched source pages (lazy pagination not yet done).
+  const hasMoreToFetch = args.pageDone === false;
+  if (remainingListings.length === 0 && (args.nearbyQueue?.length ?? 0) === 0 && !hasMoreToFetch) return null;
   const id = randomUUID();
   const initialShownKeys = shownKeysFromCandidates(args.initialCandidates);
   const state: DiscoveryContinuationState = {
@@ -1986,6 +2201,12 @@ async function createDiscoveryContinuation(args: {
     preScreenOpts: args.preScreenOpts,
     remainingListings,
     readyPages: [],
+    ...(args.nearbyQueue?.length ? { nearbyQueue: args.nearbyQueue } : {}),
+    ...(args.originSuburb ? { originSuburb: args.originSuburb } : {}),
+    ...(args.suburb ? { currentSuburb: args.suburb } : {}),
+    ...(typeof args.pageOffset === "number" ? { pageOffset: args.pageOffset } : {}),
+    ...(args.pageTotal !== undefined ? { pageTotal: args.pageTotal } : {}),
+    ...(args.pageDone !== undefined ? { pageDone: args.pageDone } : {}),
   };
   await withDbRetry(() =>
     db.insert(discoveryContinuations).values({
@@ -4133,11 +4354,16 @@ router.post("/discovery/next", async (req, res) => {
           continuationToken: row.exhausted ? null : row.id,
           exhausted: row.exhausted,
           searchPresentation,
+          suburb: state.currentSuburb ?? row.suburb,
         });
         return;
       }
       if (row.exhausted) {
-        const payload = JSON.parse(buildDiscoveryExhaustedChoicePayload(row.suburb, searchPresentation)) as { question: string; options: string[] };
+        // Prefer the origin suburb so a fully-drained train's "see again"
+        // restarts from where the user began (e.g. Glendowie), not the last
+        // nearby suburb. Falls back to current/row suburb for non-train rows.
+        const exhaustedSuburb = state.originSuburb ?? state.currentSuburb ?? row.suburb;
+        const payload = JSON.parse(buildDiscoveryExhaustedChoicePayload(exhaustedSuburb, searchPresentation)) as { question: string; options: string[]; searchPresentation?: DiscoverySearchPresentation; suburb?: string | null };
         await sendDiscoveryNextPayload({
           candidates: [],
           continuationToken: null,
@@ -4165,7 +4391,8 @@ router.post("/discovery/next", async (req, res) => {
         // "see again / search nearby" choice payload, otherwise the client
         // stores prefetchedExhausted with no clarification and "Show more"
         // renders a silent, button-less message. Mirror the non-prefetch path.
-        const payload = JSON.parse(buildDiscoveryExhaustedChoicePayload(row.suburb, searchPresentation)) as { question: string; options: string[] };
+        const exhaustedSuburb = generated.state.originSuburb ?? generated.state.currentSuburb ?? row.suburb;
+        const payload = JSON.parse(buildDiscoveryExhaustedChoicePayload(exhaustedSuburb, searchPresentation)) as { question: string; options: string[]; searchPresentation?: DiscoverySearchPresentation; suburb?: string | null };
         await sendDiscoveryNextPayload({
           candidates: [],
           continuationToken: null,
@@ -4180,6 +4407,7 @@ router.post("/discovery/next", async (req, res) => {
         continuationToken: generated.exhausted ? null : row.id,
         exhausted: generated.exhausted,
         searchPresentation,
+        suburb: generated.state.currentSuburb ?? row.suburb,
       });
       return;
     }
@@ -4233,7 +4461,8 @@ router.post("/discovery/next", async (req, res) => {
     }
 
     if (candidates.length === 0) {
-      const payload = JSON.parse(buildDiscoveryExhaustedChoicePayload(row.suburb, searchPresentation)) as { question: string; options: string[] };
+      const exhaustedSuburb = nextState.originSuburb ?? nextState.currentSuburb ?? row.suburb;
+      const payload = JSON.parse(buildDiscoveryExhaustedChoicePayload(exhaustedSuburb, searchPresentation)) as { question: string; options: string[]; searchPresentation?: DiscoverySearchPresentation; suburb?: string | null };
       await sendDiscoveryNextPayload({
         candidates: [],
         continuationToken: exhausted ? null : row.id,
@@ -4249,6 +4478,7 @@ router.post("/discovery/next", async (req, res) => {
       continuationToken: exhausted ? null : row.id,
       exhausted,
       searchPresentation,
+      suburb: nextState.currentSuburb ?? row.suburb,
     };
     await sendDiscoveryNextPayload(directPayload);
   } catch (err) {
@@ -4620,7 +4850,13 @@ router.post("/chat", async (req, res) => {
       // for a discover search), return the clarification question immediately.
       // The next user reply will carry the answer in conversation history so the
       // intent extractor can resolve the suburb/price/address and proceed normally.
-      if (intent.needsClarification && intent.clarificationQuestion && effectiveMode !== "analyse" && !delegatedDiscoverSuburb) {
+      // A "Search nearby"/"see again" choice chip already carries the base suburb
+      // in discoveryChoiceSuburb, so we must NOT fall into the "Which suburb?"
+      // clarification — the discover flow below seeds `suburb` from it and
+      // auto-resolves nearby suburbs without asking.
+      const choiceSuppliedSuburb =
+        (forceNearbyDiscovery || repeatShownAreaIntent) && Boolean(discoveryChoiceSuburb?.trim());
+      if (intent.needsClarification && intent.clarificationQuestion && effectiveMode !== "analyse" && !delegatedDiscoverSuburb && !choiceSuppliedSuburb) {
         req.log.info(
           { question: intent.clarificationQuestion, intent_reasoning: intent.reasoning },
           "Returning clarification question to user",
@@ -4680,6 +4916,7 @@ router.post("/chat", async (req, res) => {
           // inferred from the current report context when absent from the message.
           const contextualAreaBrowse = isContextualAreaBrowseFollowup(userText);
           let suburb = intent.suburb ?? delegatedDiscoverSuburb?.suburb ?? (contextualAreaBrowse ? reportCtx?.suburb ?? null : null);
+          let discoveryPromptText = userText;
           // Exhausted-choice chips carry the suburb the user is actually browsing.
           // For "see again" / "search nearby" it is authoritative — use it as the
           // repeat target / nearby base so the conversation evolves (Glendowie →
@@ -4733,6 +4970,31 @@ router.post("/chat", async (req, res) => {
               }
               break;
             }
+          } else if (
+            isFollowUp
+            && !plainListingBrowse
+            && !isStandardSubdivisionDiscoveryIntent(userText)
+            && !isDevelopmentDiscoveryIntent(userText)
+            && !isListingBrowseIntent(userText)
+          ) {
+            // Ambiguous area follow-up with NO explicit intent of its own — e.g. a
+            // bare suburb reply ("Glen Innes") or "show me more in <suburb>". Without
+            // this, isPlainListingBrowseWithoutDevelopment is false and the search
+            // wrongly defaults to scored_screening (subdivision), flipping a generic
+            // session. Inherit the presentation of the last substantive area search
+            // so a generic browse stays generic; only an EXPLICIT subdivision/
+            // development phrase in the current message switches to scored.
+            for (const msg of [...messages].reverse()) {
+              if (msg.role !== "user" || !msg.content) continue;
+              const prevText = msg.content;
+              if (prevText === userText) continue;
+              if (isDiscoverStreetContinuation(prevText)) continue;
+              if (hasNumberedStreetAddress(prevText)) continue;
+              if (isPlainListingBrowseWithoutDevelopment(prevText)) {
+                plainListingBrowse = true;
+              }
+              break;
+            }
           }
 
           const wantsDevelopmentDiscovery = !plainListingBrowse && isDevelopmentDiscoveryIntent(discoveryCriteria);
@@ -4781,6 +5043,23 @@ router.post("/chat", async (req, res) => {
             }
           }
 
+          const suburbResolution = await resolveDiscoverySuburbName(suburb, chatLocale);
+          if (suburbResolution?.status === "invalid") {
+            req.log.info({ suburb, sample: userText.slice(0, 100) }, "Discovery: invalid suburb rejected before listing search");
+            res.json({ content: suburbResolution.message, mode: "text", ...providerSignal });
+            return;
+          }
+          if (suburbResolution?.status === "valid") {
+            if (suburbResolution.original) {
+              discoveryPromptText = replaceFirstInsensitive(userText, suburbResolution.original, titleCaseSuburb(suburbResolution.suburb));
+              req.log.info(
+                { original: suburbResolution.original, normalized: suburbResolution.suburb },
+                "Discovery: normalized suburb before listing search",
+              );
+            }
+            suburb = suburbResolution.suburb;
+          }
+
           req.log.info({ suburb, effectiveMinPrice, effectiveMaxPrice, isFollowUp, includeNegotiation, wantsDevelopmentDiscovery, intent_reasoning: intent.reasoning }, "Discovery search started");
 
           let candidates: import("../lib/pre-screen").PropertyCandidate[] = [];
@@ -4806,6 +5085,21 @@ router.post("/chat", async (req, res) => {
           // from. Kept separate from `suburb` so the nearby intro prompts can
           // still say "couldn't find in <original>, here are some in <nearby>".
           let continuationSuburb: string | null = suburb;
+          // Nearby "train" seed — only populated when the user explicitly chose
+          // "Search nearby". `continuationNearbyQueue` is the ordered list of
+          // further nearby suburbs to auto-expand into as each drains;
+          // `continuationOriginSuburb` is where the train started so a later
+          // "see again" can refresh the origin cleanly.
+          let continuationNearbyQueue: string[] = [];
+          let continuationOriginSuburb: string | null = null;
+          // Lazy-pagination cursor for the continuation's current suburb. Generic
+          // browse fetches only the first window of source pages up front; these
+          // record where to resume and whether the suburb is already drained, so
+          // generateContinuationCandidates can refill on Show-more without the
+          // initial search blocking on the suburb's entire inventory.
+          let continuationPageOffset = 0;
+          let continuationPageTotal: number | null = null;
+          let continuationPageDone = true;
 
           // Accumulator for listings that couldn't be conclusively screened
           // (zone/build-year/land-area source still failing after the per-listing
@@ -4900,10 +5194,27 @@ router.post("/chat", async (req, res) => {
                 skipUrls: shownUrls,
                 includeNegotiation,
                 firstBatchSize: wantsDevelopmentDiscovery ? 24 : undefined,
-                fetchAllPages: strictStandardSubdivision,
-                maxListings: strictStandardSubdivision ? 500 : undefined,
+                // Both presentations paginate lazily: fetch the first window of
+                // source pages now, then refill the continuation pool one window at
+                // a time on Show-more (see generateContinuationCandidates). Generic
+                // uses a small window; subdivision/scored uses a larger one so the
+                // ranked "best sites first" ordering applies over a meaningful set.
+                // No hard count cap — the cursor drives true exhaustion in both
+                // cases. Heavy per-listing screening stays incremental + prefetched.
+                fetchAllPages: false,
+                maxPages: plainListingBrowse ? GENERIC_PAGE_WINDOW : SUBDIVISION_PAGE_WINDOW,
+                maxListings: undefined,
                 log: req.log,
               }).catch((err) => { req.log.warn({ err }, "realestate.co.nz search failed"); return null; });
+
+              if (searchResult) {
+                // Capture the lazy-pagination cursor so the continuation can resume
+                // the next window of THIS suburb on Show-more — for both generic and
+                // subdivision/scored (true exhaustion, no cap).
+                continuationPageOffset = searchResult.nextOffset;
+                continuationPageTotal = searchResult.totalAvailable;
+                continuationPageDone = searchResult.done;
+              }
 
               if (searchResult && searchResult.firstBatch.length > 0) {
                 // Allow null-priced (negotiation) listings through unconditionally; price-range filter still applies to priced ones
@@ -4941,7 +5252,7 @@ router.post("/chat", async (req, res) => {
                     discoveryBatchSize,
                   );
                   const criteriaContext = criteriaLabel ? ` matching criteria: ${criteriaLabel}` : "";
-                  const introPromptGeneric = `The user asked: "${userText}". You found some matching listings in ${suburb || "the area"}${criteriaContext}. In 1 sentence, acknowledge this result conversationally. Do NOT mention a specific number; say "a few", "some", or "a handful". Never mention any external website, data source, URL, or platform name. Call them listings/properties only; do not call them development sites or development land. Be natural and brief; no JSON.`;
+                  const introPromptGeneric = `The user asked: "${discoveryPromptText}". You found some matching listings in ${suburb || "the area"}${criteriaContext}. In 1 sentence, acknowledge this result conversationally. Do NOT mention a specific number; say "a few", "some", or "a handful". Never mention any external website, data source, URL, or platform name. Call them listings/properties only; do not call them development sites or development land. Be natural and brief; no JSON.`;
                   prescreenedIntro = await generateAnalysis(introPromptGeneric, chatLocale).catch(() => "");
                   req.log.info({ fetched: firstFiltered.length, cached: remainingFiltered.length, picked: candidates.length }, "realestate.co.nz: selected generic listing cards");
                 } else {
@@ -4952,7 +5263,7 @@ router.post("/chat", async (req, res) => {
                 // until the user taps Start analysis.
                 const criteriaContext = criteriaLabel ? ` matching criteria: ${criteriaLabel}` : "";
                 const resultKind = wantsDevelopmentDiscovery ? "development-focused listings" : "listings";
-                const introPromptPreScreen = `The user asked: "${userText}". You found some matching ${resultKind} in ${suburb || "the area"}${criteriaContext}. In 1 sentence, acknowledge this result conversationally. Do NOT mention a specific number; say "a few", "some", or "a handful". Never mention any external website, data source, URL, or platform name. If the user's exact request did not explicitly ask for development, subdivision, yield, or redevelopment, call them listings/properties only; do not call them development sites or development land. Be natural and brief; no JSON.`;
+                const introPromptPreScreen = `The user asked: "${discoveryPromptText}". You found some matching ${resultKind} in ${suburb || "the area"}${criteriaContext}. In 1 sentence, acknowledge this result conversationally. Do NOT mention a specific number; say "a few", "some", or "a handful". Never mention any external website, data source, URL, or platform name. If the user's exact request did not explicitly ask for development, subdivision, yield, or redevelopment, call them listings/properties only; do not call them development sites or development land. Be natural and brief; no JSON.`;
                 const preScreenOptsWithBail = strictStandardSubdivision
                   ? { ...discoverPreOpts, earlyBailAt: discoveryTargetCount }
                   : discoverPreOpts;
@@ -5037,7 +5348,7 @@ router.post("/chat", async (req, res) => {
             // when we still have unscanned listings or prescreen returned no UI rows this round.
             if (candidates.length < discoveryTargetCount && suburb && !streetHint && getRemainingCount(cacheKey) === 0) {
               const primaryCandidateCount = candidates.length;
-              const nearbyList = await resolveNearbySuburbs(suburb, 5);
+              const nearbyList = await resolveNearbySuburbs(suburb, 8);
               // Run nearby-suburb scrapes concurrently and return as soon as the first
               // one yields any listings — keeps tail latency bounded when the slow
               // Playwright fallback is in play.
@@ -5056,8 +5367,10 @@ router.post("/chat", async (req, res) => {
                     skipUrls: alreadyShownUrlsFromHistory,
                     includeNegotiation,
                     firstBatchSize: wantsDevelopmentDiscovery ? 18 : undefined,
-                    fetchAllPages: true,
-                    maxListings: 500,
+                    // Windowed (no hard cap): fetch the first ranked window now; the
+                    // continuation resumes deeper pages of the chosen suburb on
+                    // Show-more until it's genuinely exhausted.
+                    maxPages: SUBDIVISION_PAGE_WINDOW,
                   }).catch((err) => {
                     req.log.warn({ err, nearbySuburb: nb }, "Discovery: strict nearby suburb search failed");
                     return null;
@@ -5074,8 +5387,10 @@ router.post("/chat", async (req, res) => {
                     skipUrls: alreadyShownUrlsFromHistory,
                     includeNegotiation,
                     firstBatchSize: wantsDevelopmentDiscovery ? 18 : undefined,
-                    fetchAllPages: strictStandardSubdivision,
-                    maxListings: strictStandardSubdivision ? 500 : undefined,
+                    // Window the first nearby suburb too (the train refills it and
+                    // later suburbs one window at a time, no hard cap): a small
+                    // window for generic, a larger ranked window for scored.
+                    maxPages: plainListingBrowse ? GENERIC_PAGE_WINDOW : SUBDIVISION_PAGE_WINDOW,
                   }).then((res) => {
                     if (!res || res.firstBatch.length === 0) {
                       // Reject so Promise.any moves on; if all reject we fall through to no-listings
@@ -5116,6 +5431,12 @@ router.post("/chat", async (req, res) => {
                     // it so the suburb evolves instead of pinning to the original.
                     continuationSuburb = nearbySuburb;
                     continuationPreScreenOpts = discoverPreOpts;
+                    // Carry the nearby suburb's lazy-pagination cursor so the train
+                    // can refill it window-by-window before advancing — for both
+                    // generic and subdivision/scored (no hard cap, true exhaustion).
+                    continuationPageOffset = fallbackResult.nextOffset;
+                    continuationPageTotal = fallbackResult.totalAvailable;
+                    continuationPageDone = fallbackResult.done;
                     const priorShownFallback = [...getShownUrls(fallbackCacheKey)];
                     setListingCache(fallbackCacheKey, {
                       remainingListings: filterAlreadyShownListings(rankListingsByStreetHint(
@@ -5149,7 +5470,13 @@ router.post("/chat", async (req, res) => {
                           ? `The user asked about ${suburb}${criteriaContextFallback} but no listings were found there right now. You found some properties in nearby ${nearbySuburb}. In 1 sentence acknowledge this naturally. Do NOT mention a specific number; say "a few", "some", or "a handful". Call them listings/properties only; do not call them development sites or development land. Be brief; no JSON.`
                           : `The user asked about ${suburb}${criteriaContextFallback}. You found some matching properties there and added nearby options from ${nearbySuburb} to round out the results. In 1 sentence acknowledge this naturally. Do NOT mention a specific number; say "a few", "some", or "a handful". Call them listings/properties only; do not call them development sites or development land. Be brief; no JSON.`;
                         prescreenedIntro = await generateAnalysis(introPromptFallback, chatLocale).catch(() => "");
-                        req.log.info({ nearbySuburb, count: candidates.length }, "Discovery: nearby generic fallback succeeded");
+                        if (forceNearbyDiscovery) {
+                          // Seed the train: the remaining nearby suburbs (this
+                          // one is being served now) become the auto-expand queue.
+                          continuationNearbyQueue = nearbyList.filter((s) => s.toLowerCase() !== nearbySuburb.toLowerCase());
+                          continuationOriginSuburb = suburb;
+                        }
+                        req.log.info({ nearbySuburb, count: candidates.length, queue: continuationNearbyQueue.length }, "Discovery: nearby generic fallback succeeded");
                         break;
                       }
                       continue;
@@ -5213,7 +5540,11 @@ router.post("/chat", async (req, res) => {
 
                     if (candidates.length > primaryCandidateCount) {
                       prescreenedIntro = introFallback;
-                      req.log.info({ nearbySuburb, count: candidates.length }, "Discovery: nearby suburb fallback succeeded");
+                      if (forceNearbyDiscovery) {
+                        continuationNearbyQueue = nearbyList.filter((s) => s.toLowerCase() !== nearbySuburb.toLowerCase());
+                        continuationOriginSuburb = suburb;
+                      }
+                      req.log.info({ nearbySuburb, count: candidates.length, queue: continuationNearbyQueue.length }, "Discovery: nearby suburb fallback succeeded");
                       break;
                     }
                   }
@@ -5304,8 +5635,8 @@ router.post("/chat", async (req, res) => {
                 ? "from available Project Alpha and marketplace listings"
                 : "in the current market";
               const introPrompt = noListings
-                ? `The user asked: "${userText}". No matching listings were found right now for ${suburb || "this area"}${criteriaContextGeneral}. In 1-2 sentences, acknowledge this warmly and suggest they try a different suburb, adjust their budget, or check back soon. Never mention any external website, data source, URL, or platform name. Do NOT output any JSON.`
-                : `The user asked: "${userText}". You found some matching properties in ${suburb || "the area"} ${genericListingSource}${criteriaContextGeneral}. In 1 sentence, acknowledge the results conversationally. Do NOT mention a specific number; say "a few", "some", or "a handful". Never mention any external website, data source, URL, or platform name. If the user's exact request did not explicitly ask for development, subdivision, yield, or redevelopment, call them listings/properties only; do not call them development sites or development land. Be natural and brief; no JSON.`;
+                ? `The user asked: "${discoveryPromptText}". No matching listings were found right now for ${suburb || "this area"}${criteriaContextGeneral}. In 1-2 sentences, acknowledge this warmly and suggest they try a different suburb, adjust their budget, or check back soon. Never mention any external website, data source, URL, or platform name. Do NOT output any JSON.`
+                : `The user asked: "${discoveryPromptText}". You found some matching properties in ${suburb || "the area"} ${genericListingSource}${criteriaContextGeneral}. In 1 sentence, acknowledge the results conversationally. Do NOT mention a specific number; say "a few", "some", or "a handful". Never mention any external website, data source, URL, or platform name. If the user's exact request did not explicitly ask for development, subdivision, yield, or redevelopment, call them listings/properties only; do not call them development sites or development land. Be natural and brief; no JSON.`;
               aiIntro = await generateAnalysis(introPrompt, chatLocale).catch(() => "");
             } catch { /* silent */ }
           }
@@ -5385,6 +5716,11 @@ router.post("/chat", async (req, res) => {
                 criteria: discoveryCriteria,
                 preScreenOpts: continuationPreScreenOpts ?? {},
                 initialCandidates: candidates,
+                nearbyQueue: continuationNearbyQueue,
+                originSuburb: continuationOriginSuburb,
+                pageOffset: continuationPageOffset,
+                pageTotal: continuationPageTotal,
+                pageDone: continuationPageDone,
                 log: req.log,
               }).catch((err) => {
                 req.log.warn({ err }, "Discovery continuation: failed to create token");
@@ -6172,8 +6508,9 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             const searchResult = await searchRealEstateListings({
               suburb, minPrice, maxPrice, skipUrls: shownUrls, includeNegotiation,
               firstBatchSize: wantsDevelopmentSafetyNet ? 24 : undefined,
-              fetchAllPages: discoverPreOptsSn.strictStandardSubdivision,
-              maxListings: discoverPreOptsSn.strictStandardSubdivision ? 500 : undefined,
+              // Windowed fetch (no hard cap) to bound latency — this safety-net
+              // branch shows a one-shot result and builds no continuation.
+              maxPages: plainListingBrowseSafetyNet ? GENERIC_PAGE_WINDOW : SUBDIVISION_PAGE_WINDOW,
             }).catch(() => null);
 
             if (searchResult && searchResult.firstBatch.length > 0) {

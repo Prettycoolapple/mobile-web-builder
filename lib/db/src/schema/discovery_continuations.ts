@@ -12,6 +12,20 @@ export type DiscoveryContinuationState = {
   preScreenOpts?: Record<string, unknown>;
   remainingListings?: unknown[];
   readyPages?: DiscoveryContinuationPage[];
+  // Nearby "train" expansion: when the user taps "Search nearby", we resolve an
+  // ordered list of nearby suburbs and expand outward one at a time as each is
+  // drained — never revisiting the origin or already-drained suburbs.
+  nearbyQueue?: string[];     // ordered nearby suburbs still to expand into
+  originSuburb?: string;      // where the train started (for refresh-on-drain)
+  currentSuburb?: string;     // suburb currently being served (for the exhausted prompt)
+  // Lazy/incremental pagination of the current suburb. Generic browse fetches a
+  // small window of source pages up front and refills the pool one window at a
+  // time on Show-more, so a high-inventory suburb isn't fetched in full before
+  // the first cards appear. These track where to resume and when the suburb's
+  // source is genuinely drained. Reset when the train advances to a new suburb.
+  pageOffset?: number;        // next raw API offset to resume the current suburb from
+  pageTotal?: number | null;  // raw source total for the current suburb (null if unknown)
+  pageDone?: boolean;         // true once the current suburb's source is fully drained
 };
 
 export const discoveryContinuations = pgTable(

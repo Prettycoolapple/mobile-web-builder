@@ -24,12 +24,20 @@ const MEDIA_BASE = "https://mediaserver.realestate.co.nz";
 const FETCH_TIMEOUT_MS = 12_000;
 const ADDRESS_MATCH_TIMEOUT_MS = 15_000;
 
-interface SuburbRecord {
+export interface SuburbRecord {
   id: string;
   title: string;          // "Bucklands Beach"
   slug: string;           // "bucklands-beach"
   fqSlug: string;         // "auckland_manukau-city_bucklands-beach"
   districtId: number;     // 223
+}
+
+export interface FuzzySuburbMatch {
+  suburb: SuburbRecord;
+  alias: string;
+  distance: number;
+  similarity: number;
+  margin: number;
 }
 
 interface DistrictRecord {
@@ -268,6 +276,38 @@ export async function findSuburbId(name: string): Promise<SuburbRecord | null> {
     }
   }
   return best;
+}
+
+export async function findClosestSuburbByName(name: string): Promise<FuzzySuburbMatch | null> {
+  if (!name || !name.trim()) return null;
+  let index: SuburbIndex;
+  try {
+    index = await loadSuburbIndex();
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "realestate-api: failed to load suburb index for fuzzy match");
+    return null;
+  }
+
+  const target = normaliseName(name);
+  if (!target || target.length < 4) return null;
+
+  let best: FuzzySuburbMatch | null = null;
+  let secondSimilarity = -Infinity;
+
+  for (const [alias, rec] of index.byNormalisedName) {
+    if (alias.length < 4 || Math.abs(alias.length - target.length) > 4) continue;
+    const distance = levenshtein(alias, target);
+    const similarity = 1 - distance / Math.max(alias.length, target.length);
+    if (!best || similarity > best.similarity || (similarity === best.similarity && distance < best.distance)) {
+      if (best) secondSimilarity = Math.max(secondSimilarity, best.similarity);
+      best = { suburb: rec, alias, distance, similarity, margin: 0 };
+    } else {
+      secondSimilarity = Math.max(secondSimilarity, similarity);
+    }
+  }
+
+  if (!best) return null;
+  return { ...best, margin: best.similarity - (secondSimilarity === -Infinity ? 0 : secondSimilarity) };
 }
 
 /**
@@ -648,21 +688,40 @@ function suburbFromAddress(address: string): string | null {
   return parts[1] ?? null;
 }
 
+export interface ListingWindowResult {
+  listings: ListingResult[];
+  /** Raw source total for the suburb, when the API reported it (null if unknown). */
+  totalResults: number | null;
+  /** Raw API offset to resume from on the next window. */
+  nextOffset: number;
+  /** True once the suburb's source is genuinely drained (no further offsets). */
+  done: boolean;
+}
+
 /**
- * Fetch active for-sale listings for a given suburb ID.
- * By default this returns one API page (100 listings). When `fetchAllPages` is
- * true, it follows `page[offset]` until the suburb listing pool is exhausted.
+ * Fetch a window of active for-sale listings for a given suburb ID, following
+ * `page[offset]` from `startOffset`.
+ *
+ * Modes:
+ *  - default (no flags): one API page (100 listings).
+ *  - `fetchAllPages`: every page until the source is drained (bounded by `maxListings`).
+ *  - `maxPages` (+ `startOffset`): a bounded window of N pages starting at the
+ *    given offset — used for lazy/incremental pagination so a high-inventory
+ *    suburb isn't fetched in full up front. The returned `nextOffset`/`done`
+ *    let the caller resume the next window on demand.
  */
-async function fetchListingsForSuburbId(
+async function fetchListingWindow(
   suburbId: string,
   limit = 100,
-  options: { fetchAllPages?: boolean; maxListings?: number } = {},
-): Promise<ListingResult[]> {
+  options: { fetchAllPages?: boolean; maxListings?: number; startOffset?: number; maxPages?: number } = {},
+): Promise<ListingWindowResult> {
   const pageLimit = Math.min(limit, 100);
   const all: ListingResult[] = [];
   const seenIds = new Set<string>();
-  let offset = 0;
+  let offset = Math.max(0, options.startOffset ?? 0);
   let totalResults: number | null = null;
+  let pagesFetched = 0;
+  let exhausted = false;
 
   do {
     const params = new URLSearchParams();
@@ -677,6 +736,8 @@ async function fetchListingsForSuburbId(
     const json = await fetchJsonWithTimeout<ListingsResponse>(url);
 
     if (json.message || !json.data) {
+      // Network/parse failure — NOT a clean exhaustion. Leave `done` false so the
+      // caller can retry this same offset on the next window.
       logger.warn({ err: json.message, url }, "realestate-api: listings request failed");
       break;
     }
@@ -694,16 +755,45 @@ async function fetchListingsForSuburbId(
     }
 
     totalResults = typeof json.meta?.totalResults === "number" ? json.meta.totalResults : totalResults;
+    offset += pageLimit;
+    pagesFetched++;
     logger.info(
       { suburbId, total: totalResults, offset, pageMapped: mapped.length, accumulated: all.length },
       "realestate-api: listings page fetched",
     );
-    if (!options.fetchAllPages || mapped.length === 0 || (options.maxListings && all.length >= options.maxListings)) break;
-    offset += pageLimit;
+
+    // An empty page, or passing the reported total, means the suburb is drained.
+    // (We don't treat a short page as exhaustion: withdrawn-status filtering can
+    // shrink a page below `pageLimit` without it being the last one.)
+    if (json.data.length === 0 || (totalResults != null && offset >= totalResults)) {
+      exhausted = true;
+      break;
+    }
+    if (options.maxListings && all.length >= options.maxListings) break;
+    if (options.maxPages && pagesFetched >= options.maxPages) break;
+    // Single-page mode: no fetchAllPages and no window size → stop after page 1.
+    if (!options.fetchAllPages && !options.maxPages) break;
   } while (totalResults == null || offset < totalResults);
 
-  logger.info({ suburbId, total: totalResults, mapped: all.length, fetchAllPages: !!options.fetchAllPages }, "realestate-api: listings fetched");
-  return all;
+  logger.info(
+    { suburbId, total: totalResults, mapped: all.length, nextOffset: offset, done: exhausted, fetchAllPages: !!options.fetchAllPages },
+    "realestate-api: listings fetched",
+  );
+  return { listings: all, totalResults, nextOffset: offset, done: exhausted };
+}
+
+/**
+ * Backwards-compatible thin wrapper returning just the listing array. Callers
+ * that need offset/total/done for incremental pagination should call
+ * `fetchListingWindow` directly.
+ */
+async function fetchListingsForSuburbId(
+  suburbId: string,
+  limit = 100,
+  options: { fetchAllPages?: boolean; maxListings?: number } = {},
+): Promise<ListingResult[]> {
+  const { listings } = await fetchListingWindow(suburbId, limit, options);
+  return listings;
 }
 
 async function fetchRawListingsForSuburbId(
@@ -1750,6 +1840,12 @@ export interface ApiSearchResult {
   totalFound: number;
   source: string;
   suburbResolved: { id: string; title: string; fqSlug: string } | null;
+  /** Raw API offset to resume the next window from (for incremental pagination). */
+  nextOffset: number;
+  /** Raw source total for the suburb, when known (null otherwise). */
+  totalAvailable: number | null;
+  /** True once the suburb's source is genuinely drained (no further windows). */
+  done: boolean;
 }
 
 /**
@@ -1773,6 +1869,10 @@ export async function searchListingsByName(opts: {
   fetchAllPages?: boolean;
   /** Safety cap for all-page scans. */
   maxListings?: number;
+  /** Raw API offset to start the window at (for incremental pagination). */
+  startOffset?: number;
+  /** Window size in API pages (100 listings each) for incremental pagination. */
+  maxPages?: number;
 }): Promise<ApiSearchResult> {
   const {
     suburbName,
@@ -1783,12 +1883,14 @@ export async function searchListingsByName(opts: {
     skipUrls = [],
     fetchAllPages = false,
     maxListings,
+    startOffset,
+    maxPages,
   } = opts;
 
   const suburb = await findSuburbId(suburbName);
   if (!suburb) {
     logger.info({ suburbName }, "realestate-api: suburb not found in directory");
-    return { firstBatch: [], remainingListings: [], totalFound: 0, source: "realestate.co.nz/api", suburbResolved: null };
+    return { firstBatch: [], remainingListings: [], totalFound: 0, source: "realestate.co.nz/api", suburbResolved: null, nextOffset: 0, totalAvailable: null, done: true };
   }
 
   logger.info(
@@ -1797,14 +1899,22 @@ export async function searchListingsByName(opts: {
   );
 
   let listings: ListingResult[];
+  let nextOffset = startOffset ?? 0;
+  let totalAvailable: number | null = null;
+  let done = true;
   try {
-    listings = await fetchListingsForSuburbId(suburb.id, 100, { fetchAllPages, maxListings });
+    const window = await fetchListingWindow(suburb.id, 100, { fetchAllPages, maxListings, startOffset, maxPages });
+    listings = window.listings;
+    nextOffset = window.nextOffset;
+    totalAvailable = window.totalResults;
+    done = window.done;
   } catch (err) {
     logger.warn({ err: (err as Error).message, suburbId: suburb.id }, "realestate-api: fetch failed");
     return {
       firstBatch: [], remainingListings: [], totalFound: 0,
       source: "realestate.co.nz/api",
       suburbResolved: { id: suburb.id, title: suburb.title, fqSlug: suburb.fqSlug },
+      nextOffset: startOffset ?? 0, totalAvailable: null, done: false,
     };
   }
 
@@ -1835,5 +1945,8 @@ export async function searchListingsByName(opts: {
     totalFound: annotatedOrdered.length,
     source: "realestate.co.nz/api",
     suburbResolved: { id: suburb.id, title: suburb.title, fqSlug: suburb.fqSlug },
+    nextOffset,
+    totalAvailable,
+    done,
   };
 }

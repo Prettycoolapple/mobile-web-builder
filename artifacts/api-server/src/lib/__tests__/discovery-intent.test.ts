@@ -27,6 +27,8 @@ describe("listing browse intent", () => {
   it("still flags classic availability questions", () => {
     expect(isListingBrowseIntent("what is available in Bucklands Beach?")).toBe(true);
     expect(isListingBrowseIntent("anything for sale in Remuera")).toBe(true);
+    expect(isListingBrowseIntent("What is currently listed in Marine Parade, Mellons Bay?")).toBe(true);
+    expect(isListingBrowseIntent("show me what is listed in Orakei")).toBe(true);
   });
 });
 

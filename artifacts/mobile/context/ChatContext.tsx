@@ -66,9 +66,14 @@ export interface ChatMessage {
   prefetchedSearchResults?: PropertyCandidate[];
   prefetchedContinuationToken?: string | null;
   prefetchedExhausted?: boolean;
+  // Suburb of the prefetched batch — used to show a "now showing nearby X" note
+  // and advance message.suburb when the nearby "train" jumps suburbs.
+  prefetchedSuburb?: string;
   prefetchedClarification?: {
     question: string;
     options: string[];
+    searchPresentation?: "generic_listing" | "scored_screening";
+    suburb?: string | null;
   };
   showMoreStatus?: "idle" | "loading" | "ready";
   isMockData?: boolean;

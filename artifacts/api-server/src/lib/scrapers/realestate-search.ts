@@ -714,6 +714,12 @@ export interface RealestateSearchResult {
   remainingListings: ListingResult[];
   totalFound: number;
   source: "realestate.co.nz";
+  /** Raw API offset to resume the next window from (incremental pagination). */
+  nextOffset: number;
+  /** Raw source total for the suburb, when known (null otherwise). */
+  totalAvailable: number | null;
+  /** True once the suburb's source is genuinely drained (no further windows). */
+  done: boolean;
 }
 
 function extractListingUrlsFromHtml(
@@ -840,6 +846,8 @@ export async function searchRealEstateListings(params: {
   includeNegotiation?: boolean;
   fetchAllPages?: boolean;
   maxListings?: number;
+  startOffset?: number;
+  maxPages?: number;
 }): Promise<RealestateSearchResult> {
   const {
     suburb,
@@ -850,6 +858,8 @@ export async function searchRealEstateListings(params: {
     includeNegotiation = false,
     fetchAllPages = false,
     maxListings,
+    startOffset,
+    maxPages,
   } = params;
   const priceMidpoint = Math.round((minPrice + maxPrice) / 2);
 
@@ -866,6 +876,8 @@ export async function searchRealEstateListings(params: {
       skipUrls,
       fetchAllPages,
       maxListings,
+      startOffset,
+      maxPages,
     });
     if (apiResult.suburbResolved && (apiResult.firstBatch.length + apiResult.remainingListings.length) > 0) {
       logger.info(
@@ -877,13 +889,16 @@ export async function searchRealEstateListings(params: {
         remainingListings: apiResult.remainingListings,
         totalFound: apiResult.totalFound,
         source: "realestate.co.nz",
+        nextOffset: apiResult.nextOffset,
+        totalAvailable: apiResult.totalAvailable,
+        done: apiResult.done,
       };
     }
     // Empty API result with resolved suburb → genuinely no listings; return early
     // rather than hammering the HTML scraper for the same answer.
     if (apiResult.suburbResolved) {
       logger.info({ suburb, resolvedTo: apiResult.suburbResolved.title }, "realestate-search: API returned no listings for resolved suburb");
-      return { firstBatch: [], remainingListings: [], totalFound: 0, source: "realestate.co.nz" };
+      return { firstBatch: [], remainingListings: [], totalFound: 0, source: "realestate.co.nz", nextOffset: apiResult.nextOffset, totalAvailable: apiResult.totalAvailable, done: true };
     }
     // Suburb couldn't be resolved → fall through to legacy scraper as a long-shot.
     logger.info({ suburb }, "realestate-search: API could not resolve suburb, falling back to scraper");
@@ -926,12 +941,12 @@ export async function searchRealEstateListings(params: {
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "realestate-search: failed to fetch search page");
     if (allListingUrls.length === 0) {
-      return { firstBatch: [], remainingListings: [], totalFound: 0, source: "realestate.co.nz" };
+      return { firstBatch: [], remainingListings: [], totalFound: 0, source: "realestate.co.nz", nextOffset: 0, totalAvailable: 0, done: true };
     }
   }
 
   if (allListingUrls.length === 0) {
-    return { firstBatch: [], remainingListings: [], totalFound: 0, source: "realestate.co.nz" };
+    return { firstBatch: [], remainingListings: [], totalFound: 0, source: "realestate.co.nz", nextOffset: 0, totalAvailable: 0, done: true };
   }
 
   logger.info({ total: allListingUrls.length }, "realestate-search: fetching all listing meta pages");
@@ -943,10 +958,15 @@ export async function searchRealEstateListings(params: {
   const allListings = allResults.filter((r): r is ListingResult => r !== null);
   logger.info({ suburb, fetched: allListings.length, total: allListingUrls.length }, "realestate-search: done");
 
+  // The HTML-scraper fallback is single-shot (no offset pagination), so the
+  // returned set is everything it could find — mark it drained.
   return {
     firstBatch: allListings.slice(0, firstBatchSize),
     remainingListings: allListings.slice(firstBatchSize),
     totalFound: allListingUrls.length,
     source: "realestate.co.nz",
+    nextOffset: 0,
+    totalAvailable: allListingUrls.length,
+    done: true,
   };
 }

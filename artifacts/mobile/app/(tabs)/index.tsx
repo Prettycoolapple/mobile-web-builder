@@ -113,9 +113,16 @@ type DiscoveryNextResponse = {
   continuationToken?: string | null;
   exhausted?: boolean;
   searchPresentation?: ChatMessage["searchPresentation"];
+  // The suburb this batch is for. During nearby "train" expansion it advances
+  // as each suburb drains — the client shows a one-line note when it changes.
+  suburb?: string;
   clarification?: {
     question: string;
     options: string[];
+    // Echoed from the exhausted payload so the choice chip can piggyback the
+    // authoritative presentation + suburb (origin, on full-train drain).
+    searchPresentation?: ChatMessage["searchPresentation"];
+    suburb?: string | null;
   };
 };
 
@@ -974,6 +981,7 @@ export default function SearchScreen() {
           prefetchedContinuationToken: data.continuationToken ?? null,
           prefetchedExhausted: Boolean(data.exhausted),
           prefetchedClarification: data.clarification,
+          prefetchedSuburb: data.suburb,
           showMoreStatus: "ready",
         }, sessionId);
       } finally {
@@ -985,10 +993,17 @@ export default function SearchScreen() {
 
   const showDiscoveryExhaustedChoice = useCallback(
     (
-      clarification: { question: string; options: string[] } | undefined,
+      clarification:
+        | { question: string; options: string[]; searchPresentation?: ChatMessage["searchPresentation"]; suburb?: string | null }
+        | undefined,
       sessionId: string,
       context?: { searchPresentation?: ChatMessage["searchPresentation"]; suburb?: string },
     ) => {
+      // The exhausted payload echoes the authoritative presentation + suburb
+      // (the origin suburb on a fully-drained train), so prefer it; fall back to
+      // the originating message's context only when the payload omits them.
+      const resolvedPresentation = clarification?.searchPresentation ?? context?.searchPresentation;
+      const resolvedSuburb = (clarification?.suburb ?? undefined) ?? context?.suburb;
       addMessage({
         role: "assistant",
         content: "",
@@ -998,14 +1013,16 @@ export default function SearchScreen() {
         // (that produces a silent, button-less message). The default labels are
         // chosen to match the backend's repeat/nearby intent detectors so the
         // round-trip still routes correctly.
-        clarification: clarification ?? {
-          question: t("search.exhausted_question"),
-          options: [t("search.exhausted_see_again"), t("search.exhausted_nearby")],
-        },
-        // Inherit the exhausted search's presentation + suburb so the chip tap
-        // piggybacks them back to /chat (keeps intent + current suburb pinned).
-        searchPresentation: context?.searchPresentation,
-        suburb: context?.suburb,
+        clarification: clarification
+          ? { question: clarification.question, options: clarification.options }
+          : {
+              question: t("search.exhausted_question"),
+              options: [t("search.exhausted_see_again"), t("search.exhausted_nearby")],
+            },
+        // Piggyback these back to /chat on the chip tap (keeps intent + the
+        // refresh/expand suburb authoritative).
+        searchPresentation: resolvedPresentation,
+        suburb: resolvedSuburb,
       }, sessionId);
     },
     [addMessage, t],
@@ -1017,9 +1034,12 @@ export default function SearchScreen() {
       candidates: PropertyCandidate[],
       continuationToken: string | null | undefined,
       exhausted: boolean | undefined,
-      clarification: { question: string; options: string[] } | undefined,
+      clarification:
+        | { question: string; options: string[]; searchPresentation?: ChatMessage["searchPresentation"]; suburb?: string | null }
+        | undefined,
       sessionId: string,
       claimServed = false,
+      nextSuburb?: string,
     ) => {
       if (candidates.length === 0) {
         updateMessage(message.id, {
@@ -1028,6 +1048,7 @@ export default function SearchScreen() {
           prefetchedContinuationToken: undefined,
           prefetchedExhausted: undefined,
           prefetchedClarification: undefined,
+          prefetchedSuburb: undefined,
           showMoreStatus: "idle",
         }, sessionId);
         showDiscoveryExhaustedChoice(clarification, sessionId, {
@@ -1036,6 +1057,15 @@ export default function SearchScreen() {
         });
         return;
       }
+      // Nearby "train" advanced to a new suburb — show a brief one-line note
+      // before the new cards so the suburb change is obvious.
+      const advancedSuburb =
+        nextSuburb && message.suburb && nextSuburb.toLowerCase() !== message.suburb.toLowerCase()
+          ? nextSuburb
+          : undefined;
+      if (advancedSuburb) {
+        addMessage({ role: "assistant", content: t("search.now_showing_nearby", { suburb: advancedSuburb }), type: "text" }, sessionId);
+      }
       const nextResults = [...(message.searchResults ?? []), ...candidates];
       if (claimServed) {
         void claimDiscoveryCandidates(message.continuationToken, candidates);
@@ -1043,17 +1073,19 @@ export default function SearchScreen() {
       updateMessage(message.id, {
         searchResults: nextResults,
         continuationToken: continuationToken ?? null,
+        ...(nextSuburb ? { suburb: nextSuburb } : {}),
         prefetchedSearchResults: undefined,
         prefetchedContinuationToken: undefined,
         prefetchedExhausted: undefined,
         prefetchedClarification: undefined,
+        prefetchedSuburb: undefined,
         showMoreStatus: exhausted ? "idle" : "idle",
       }, sessionId);
       if (message.searchPresentation !== "generic_listing") {
         startCardScorePoll(candidates.map((c) => ({ address: c.address, listingUrl: c.listingUrl })), sessionId);
       }
     },
-    [claimDiscoveryCandidates, showDiscoveryExhaustedChoice, startCardScorePoll, updateMessage],
+    [addMessage, claimDiscoveryCandidates, showDiscoveryExhaustedChoice, startCardScorePoll, t, updateMessage],
   );
 
   const handleShowMore = useCallback(
@@ -1070,6 +1102,7 @@ export default function SearchScreen() {
           message.prefetchedClarification,
           sessionId,
           true,
+          message.prefetchedSuburb,
         );
         return;
       }
@@ -1093,6 +1126,8 @@ export default function SearchScreen() {
         data.exhausted,
         data.clarification,
         sessionId,
+        false,
+        data.suburb,
       );
     },
     [appendContinuationCandidates, currentSession?.id, currentSessionId, fetchDiscoveryNext, showDiscoveryExhaustedChoice, updateMessage],

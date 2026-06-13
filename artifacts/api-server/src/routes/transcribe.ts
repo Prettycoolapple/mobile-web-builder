@@ -1,8 +1,13 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import multer from "multer";
 import OpenAI, { toFile } from "openai";
+import {
+  correctTranscribedNzPlaces,
+  NZ_PROPERTY_TRANSCRIPTION_PROMPT,
+} from "../lib/transcription-place-correction";
 
 const router: IRouter = Router();
+const DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-transcribe";
 
 // Store audio in memory. Whisper has a 25MB file size limit.
 const upload = multer({
@@ -38,14 +43,20 @@ router.post(
       const extension = req.file.mimetype.includes("wav") ? "wav" : "m4a";
       const file = await toFile(req.file.buffer, `audio.${extension}`, { type: req.file.mimetype });
 
+      const transcriptionModel = process.env.OPENAI_TRANSCRIPTION_MODEL?.trim() || DEFAULT_TRANSCRIPTION_MODEL;
       const transcription = await openai.audio.transcriptions.create({
         file: file,
-        model: "whisper-1",
-        // 'en' helps accuracy if we know it's english, but leaving it out allows auto-detect. 
-        // We will leave it out or auto-detect so it supports Chinese/etc if the user speaks it.
-      });
+        model: transcriptionModel as any,
+        prompt: NZ_PROPERTY_TRANSCRIPTION_PROMPT,
+      } as any);
 
-      res.status(200).json({ text: transcription.text });
+      const rawText = (transcription.text ?? "").trim();
+      const correctedText = await correctTranscribedNzPlaces(rawText);
+      if (correctedText !== rawText) {
+        req.log.info({ rawText, correctedText }, "Audio transcript corrected with NZ place-name matcher");
+      }
+
+      res.status(200).json({ text: correctedText });
     } catch (error) {
       req.log.error({ err: error }, "Audio transcription failed");
       res.status(500).json({ error: "Failed to transcribe audio", code: "TRANSCRIPTION_FAILED" });

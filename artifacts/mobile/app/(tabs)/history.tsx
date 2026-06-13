@@ -9,6 +9,7 @@ import {
   Alert,
   ActivityIndicator,
   RefreshControl,
+  Image,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Feather } from "@expo/vector-icons";
@@ -18,11 +19,11 @@ import { useColors } from "@/hooks/useColors";
 import { useChat, ChatMessage, FeasibilityReport, FeasibilityReportGroup, PropertyCandidate, SelectedListingContext } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
 import { useWatchlist, WatchlistItem } from "@/context/WatchlistContext";
-import { PropertyCard } from "@/components/PropertyCard";
 import { useFocusEffect, useRouter } from "expo-router";
 import { getApiBase } from "@/lib/api";
 import { useT, getCurrentLocale } from "@/lib/i18n";
 import { translateReportViaApi } from "@/lib/translateReport";
+import { shareCandidate } from "@/lib/propertyShares";
 
 // Mirrors the queue key in app/(tabs)/index.tsx — writing an analyse action here
 // and navigating home lets the Search tab pick it up on focus and run it.
@@ -47,6 +48,32 @@ function watchItemToCandidate(item: WatchlistItem): PropertyCandidate {
     bedrooms: item.bedrooms ?? undefined,
     bathrooms: item.bathrooms ?? undefined,
     landArea: item.landAreaSqm ?? undefined,
+  };
+}
+
+function selectedListingContextFromCandidate(candidate: PropertyCandidate): SelectedListingContext {
+  return {
+    address: candidate.address,
+    listingUrl: candidate.listingUrl ?? null,
+    photoUrl: candidate.photoUrl ?? null,
+    photoUrls: candidate.photoUrls?.length ? candidate.photoUrls : candidate.photoUrl ? [candidate.photoUrl] : [],
+    price: candidate.price > 0 ? candidate.price : null,
+    landArea: candidate.landArea ?? null,
+    floorArea: candidate.floorArea ?? null,
+    bedrooms: candidate.bedrooms ?? null,
+    bathrooms: candidate.bathrooms ?? null,
+    bedroomsApprox: candidate.bedroomsApprox ?? null,
+    bathroomsApprox: candidate.bathroomsApprox ?? null,
+    landAreaApprox: candidate.landAreaApprox ?? null,
+    floorAreaApprox: candidate.floorAreaApprox ?? null,
+    priceApprox: candidate.priceApprox ?? null,
+    propertyType: candidate.propertyType ?? null,
+    listingTitle: candidate.listingTitle ?? null,
+    source: candidate.source ?? null,
+    isCombinedListing: candidate.isCombinedListing ?? null,
+    packageAddress: candidate.packageAddress ?? null,
+    childAddresses: candidate.childAddresses ?? null,
+    aggregateFactsExcluded: candidate.aggregateFactsExcluded ?? null,
   };
 }
 
@@ -152,6 +179,101 @@ function HistoryItem({ item, onTap, onDelete, isOpening }: HistoryItemProps) {
         )}
       </View>
     </TouchableOpacity>
+  );
+}
+
+interface WatchlistPropertyCardProps {
+  candidate: PropertyCandidate;
+  onShare: () => void;
+  onAnalyse: (
+    address: string,
+    photoUrl?: string | null,
+    listingUrl?: string | null,
+    selectedListingContext?: SelectedListingContext | null,
+    analysisKey?: string,
+  ) => void;
+}
+
+function WatchlistPropertyCard({ candidate, onShare, onAnalyse }: WatchlistPropertyCardProps) {
+  const colors = useColors();
+  const { t } = useT();
+  const analysisKey = (candidate.listingUrl || candidate.address).trim();
+  const photoUrl = candidate.photoUrl ?? candidate.photoUrls?.[0] ?? null;
+
+  const handleAnalyse = () => {
+    onAnalyse(
+      candidate.address,
+      photoUrl,
+      candidate.listingUrl ?? null,
+      selectedListingContextFromCandidate(candidate),
+      analysisKey,
+    );
+  };
+
+  return (
+    <View style={[styles.watchCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      {photoUrl ? (
+        <View style={styles.watchPhotoWrap}>
+          <Image source={{ uri: photoUrl }} style={styles.watchPhoto} resizeMode="cover" />
+          <TouchableOpacity
+            style={[styles.watchShareBtn, { backgroundColor: "rgba(255,255,255,0.92)", borderColor: colors.border }]}
+            onPress={onShare}
+            activeOpacity={0.82}
+            accessibilityRole="button"
+            accessibilityLabel="Share property"
+          >
+            <Feather name="log-out" size={15} color={colors.foreground} />
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <View style={[styles.watchPhotoPlaceholder, { backgroundColor: colors.muted }]}>
+          <Feather name="home" size={30} color={colors.mutedForeground} />
+          <TouchableOpacity
+            style={[styles.watchShareBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+            onPress={onShare}
+            activeOpacity={0.82}
+            accessibilityRole="button"
+            accessibilityLabel="Share property"
+          >
+            <Feather name="log-out" size={15} color={colors.foreground} />
+          </TouchableOpacity>
+        </View>
+      )}
+
+      <View style={styles.watchBody}>
+        <Text style={[styles.watchAddress, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]} numberOfLines={2}>
+          {candidate.address}
+        </Text>
+        <View style={styles.watchTagRow}>
+          {candidate.price > 0 ? <WatchTag text={`${candidate.priceApprox ? "~" : ""}$${(candidate.price / 1_000_000).toFixed(2)}M`} /> : null}
+          {candidate.landArea != null && candidate.landArea > 0 ? <WatchTag text={`${candidate.landAreaApprox ? "~" : ""}${candidate.landArea}m²`} /> : null}
+          {typeof candidate.floorArea === "number" && candidate.floorArea > 0 ? <WatchTag text={`${candidate.floorAreaApprox ? "~" : ""}${candidate.floorArea}m² floor`} /> : null}
+          {typeof candidate.bedrooms === "number" && candidate.bedrooms > 0 ? <WatchTag icon="moon" text={`${candidate.bedroomsApprox ? "~" : ""}${candidate.bedrooms} bd`} /> : null}
+          {typeof candidate.bathrooms === "number" && candidate.bathrooms > 0 ? <WatchTag icon="droplet" text={`${candidate.bathroomsApprox ? "~" : ""}${candidate.bathrooms} ba`} /> : null}
+          {!!candidate.zone?.trim() ? <WatchTag text={candidate.zone} /> : null}
+          {!!candidate.propertyType?.trim() ? <WatchTag text={candidate.propertyType} /> : null}
+        </View>
+      </View>
+
+      <TouchableOpacity style={[styles.watchAnalyseBtn, { backgroundColor: colors.accent }]} onPress={handleAnalyse} activeOpacity={0.82}>
+        <Text style={[styles.watchAnalyseText, { fontFamily: "DM_Sans_600SemiBold" }]}>
+          {t("search.full_analysis")}
+        </Text>
+        <Feather name="arrow-right" size={15} color="#fff" />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+function WatchTag({ text, icon }: { text: string; icon?: keyof typeof Feather.glyphMap }) {
+  const colors = useColors();
+  return (
+    <View style={[styles.watchTag, { backgroundColor: colors.muted }]}>
+      {icon ? <Feather name={icon} size={10} color={colors.foreground} /> : null}
+      <Text style={[styles.watchTagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]} numberOfLines={1}>
+        {text}
+      </Text>
+    </View>
   );
 }
 
@@ -564,9 +686,16 @@ export default function HistoryScreen() {
         <FlatList
           data={watchItems}
           keyExtractor={(it) => it.propertyKey}
-          renderItem={({ item }) => (
-            <PropertyCard candidate={watchItemToCandidate(item)} onAnalyse={handleWatchAnalyse} />
-          )}
+          renderItem={({ item }) => {
+            const candidate = watchItemToCandidate(item);
+            return (
+              <WatchlistPropertyCard
+                candidate={candidate}
+                onShare={() => { void shareCandidate(candidate, getApiHeaders()).catch(() => {}); }}
+                onAnalyse={handleWatchAnalyse}
+              />
+            );
+          }}
           contentContainerStyle={[styles.list, { paddingBottom: bottomInset + 24 }]}
           showsVerticalScrollIndicator={false}
           ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
@@ -702,6 +831,78 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 6,
     flexShrink: 0,
+  },
+  watchCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    overflow: "hidden",
+    shadowColor: "rgba(28,25,23,0.06)",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 1,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  watchPhotoWrap: {
+    position: "relative",
+    height: 150,
+  },
+  watchPhoto: {
+    width: "100%",
+    height: 150,
+  },
+  watchPhotoPlaceholder: {
+    height: 120,
+    alignItems: "center",
+    justifyContent: "center",
+    position: "relative",
+  },
+  watchShareBtn: {
+    position: "absolute",
+    top: 10,
+    left: 10,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  watchBody: {
+    padding: 14,
+    gap: 10,
+  },
+  watchAddress: {
+    fontSize: 15,
+    lineHeight: 21,
+  },
+  watchTagRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  watchTag: {
+    maxWidth: "100%",
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  watchTagText: {
+    flexShrink: 1,
+    fontSize: 12,
+  },
+  watchAnalyseBtn: {
+    minHeight: 50,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  watchAnalyseText: {
+    color: "#fff",
+    fontSize: 15,
   },
   scoreDot: {
     paddingHorizontal: 8,

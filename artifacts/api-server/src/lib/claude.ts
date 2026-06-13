@@ -90,7 +90,7 @@ export function isListingBrowseIntent(message: string): boolean {
   }
   const lower = message.toLowerCase();
   if (
-    /what(?:'s| is| are)\s+(?:for\s+)?sale|on\s+the\s+market|anything\s+for\s+sale|any\s+listings?|properties\s+for\s+sale|homes\s+for\s+sale|houses\s+for\s+sale|land\s+for\s+sale|what(?:'s| is)\s+available/i.test(
+    /what(?:'s| is| are)\s+(?:for\s+)?sale|what(?:'s| is| are)\s+(?:currently\s+)?listed|currently\s+listed|listed\s+in|on\s+the\s+market|anything\s+for\s+sale|any\s+listings?|properties\s+for\s+sale|homes\s+for\s+sale|houses\s+for\s+sale|land\s+for\s+sale|what(?:'s| is)\s+available/i.test(
       lower,
     )
   ) {
