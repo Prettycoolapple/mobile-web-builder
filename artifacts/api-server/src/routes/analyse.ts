@@ -74,6 +74,7 @@ import { isHighConfidenceSuburbMatch } from "../lib/transcription-place-correcti
 import { normaliseLocale } from "../lib/prompts";
 import { terrainSlopeText, type TerrainContour } from "../lib/terrain-slope-copy";
 import { buildListingTeaser } from "../lib/listing-teaser";
+import { prioritizeSponsoredGenericCandidates } from "../lib/sponsored-ordering";
 import { translateChatContent, translateReportNarrative, ensureChinese } from "../lib/translation";
 import {
   normaliseSelectedListingContext,
@@ -1487,8 +1488,12 @@ async function mergeSponsoredGenericListingCandidate(args: {
   targetCount: number;
   log: { warn: (obj: unknown, msg?: string) => void };
 }): Promise<PropertyCandidate[]> {
-  if (!args.suburb || args.targetCount <= 0) return args.candidates.slice(0, args.targetCount);
-  if (args.candidates.some((candidate) => candidate.isSponsored)) return args.candidates.slice(0, args.targetCount);
+  if (!args.suburb || args.targetCount <= 0) {
+    return prioritizeSponsoredGenericCandidates(args.candidates).slice(0, args.targetCount);
+  }
+  if (args.candidates.some((candidate) => candidate.isSponsored || candidate.sponsoredLabel?.trim())) {
+    return prioritizeSponsoredGenericCandidates(args.candidates).slice(0, args.targetCount);
+  }
 
   const sponsored = await pickSponsoredGenericListingCandidate({
     userId: args.userId,
@@ -1499,7 +1504,7 @@ async function mergeSponsoredGenericListingCandidate(args: {
     shownAddressKeys: args.shownAddressKeys,
     log: args.log,
   });
-  if (!sponsored) return args.candidates.slice(0, args.targetCount);
+  if (!sponsored) return prioritizeSponsoredGenericCandidates(args.candidates).slice(0, args.targetCount);
 
   const sponsoredAddressKey = normaliseDiscoveryAddressKey(sponsored.address);
   const withoutDuplicate = args.candidates.filter((candidate) => {
@@ -1507,10 +1512,9 @@ async function mergeSponsoredGenericListingCandidate(args: {
     const key = normaliseDiscoveryAddressKey(candidate.address);
     return !sponsoredAddressKey || key !== sponsoredAddressKey;
   });
-  const insertionIndex = args.isFollowUp ? Math.min(1, withoutDuplicate.length) : 0;
   const merged = [...withoutDuplicate];
-  merged.splice(insertionIndex, 0, sponsored);
-  return merged.slice(0, args.targetCount);
+  merged.splice(0, 0, sponsored);
+  return prioritizeSponsoredGenericCandidates(merged).slice(0, args.targetCount);
 }
 
 function pickDiscoveryCandidates(
@@ -1926,8 +1930,25 @@ function topUpGenericListingCandidates(
     const next = pickGenericListingCandidates(nextListings, shownAddressKeys, targetCount - out.length);
     out = appendUniqueDiscoveryCandidates(out, next, targetCount);
     markShown(cacheKey, next.map((candidate) => candidate.listingUrl).filter((url): url is string => Boolean(url)));
+    // popNextListings spliced `batchSize` rows out of the pool, but we only keep
+    // up to (targetCount - out.length). Without restoring the overflow, every
+    // "show more" silently discards the unpicked rows (~batchSize-targetCount per
+    // tap), draining the pool far faster than it displays and faking exhaustion.
+    // Restore the not-picked, not-already-shown rows to the FRONT so the next tap
+    // serves them in original order. (Already-shown / intra-batch duplicates share
+    // a picked key or are filtered here, so they're never restored — which also
+    // means `leftover` is only non-empty once targetCount is reached, so the loop
+    // still terminates.)
+    const pickedKeys = new Set(
+      next.map((candidate) => normaliseDiscoveryAddressKey(candidate.address) || candidate.listingUrl || ""),
+    );
+    const leftover = nextListings.filter((listing) => {
+      const key = normaliseDiscoveryAddressKey(listing.address) || listing.listingUrl || "";
+      return Boolean(key) && !pickedKeys.has(key) && !isAlreadyShownAddress(listing.address, shownAddressKeys);
+    });
+    if (leftover.length > 0) restoreListingsAfterPop(cacheKey, leftover, []);
   }
-  return out.slice(0, targetCount);
+  return prioritizeSponsoredGenericCandidates(out).slice(0, targetCount);
 }
 
 const DISCOVERY_CONTINUATION_TTL_MS = 30 * 60 * 1000;

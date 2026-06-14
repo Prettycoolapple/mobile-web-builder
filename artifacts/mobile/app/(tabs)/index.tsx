@@ -38,6 +38,7 @@ import { setBaseUrl } from "@workspace/api-client-react";
 import { getApiBase as resolveApiBase, getApiOrigin } from "@/lib/api";
 import { useT, isOSChineseLocale } from "@/lib/i18n";
 import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
+import { normaliseAddressKey } from "@/lib/address-key";
 import { resolveChatQuota } from "@/lib/quotas";
 import { consumePendingShareToken, openShareToken } from "@/lib/propertyShares";
 import { BrowseListing, BrowseListingFilters, fetchBrowseListings } from "@/lib/browseListings";
@@ -381,6 +382,10 @@ export default function SearchScreen() {
   const lastCheckedFollowUpCount = useRef<Map<string, number>>(new Map());
   const providerRecommendationKeysRef = useRef<Set<string>>(new Set());
   const prefetchingContinuationRef = useRef<Set<string>>(new Set());
+  // Guards against rapid "Show more" taps firing concurrent /discovery/next
+  // requests on the same continuation token (the button's disabled state only
+  // applies after an async re-render). Keyed by message id.
+  const showMoreInFlightRef = useRef<Set<string>>(new Set());
   // Always-current mirror of currentSession?.messages — used in async timer
   // callbacks where the closure would otherwise hold stale captured state.
   const sessionMessagesRef = useRef<ChatMessage[]>([]);
@@ -1099,6 +1104,40 @@ export default function SearchScreen() {
         });
         return;
       }
+      // Drop any incoming candidate already shown for this message (by listing URL
+      // or normalised address) so a raced/duplicate continuation response can't
+      // render duplicate cards. Defence-in-depth alongside the in-flight guard.
+      const existingResults = message.searchResults ?? [];
+      const seenKeys = new Set<string>();
+      for (const existing of existingResults) {
+        const url = existing.listingUrl?.trim().toLowerCase();
+        if (url) seenKeys.add(url);
+        const addrKey = normaliseAddressKey(existing.address);
+        if (addrKey) seenKeys.add(addrKey);
+      }
+      const dedupedCandidates = candidates.filter((candidate) => {
+        const url = candidate.listingUrl?.trim().toLowerCase();
+        const addrKey = normaliseAddressKey(candidate.address);
+        if ((url && seenKeys.has(url)) || (addrKey && seenKeys.has(addrKey))) return false;
+        if (url) seenKeys.add(url);
+        if (addrKey) seenKeys.add(addrKey);
+        return true;
+      });
+      if (dedupedCandidates.length === 0) {
+        // Response carried only already-shown listings (e.g. a duplicate/raced
+        // request). Don't end browsing — just refresh the token so the next tap
+        // can fetch genuinely new cards.
+        updateMessage(message.id, {
+          continuationToken: continuationToken ?? null,
+          prefetchedSearchResults: undefined,
+          prefetchedContinuationToken: undefined,
+          prefetchedExhausted: undefined,
+          prefetchedClarification: undefined,
+          prefetchedSuburb: undefined,
+          showMoreStatus: "idle",
+        }, sessionId);
+        return;
+      }
       // Nearby "train" advanced to a new suburb — show a brief one-line note
       // before the new cards so the suburb change is obvious.
       const advancedSuburb =
@@ -1109,9 +1148,9 @@ export default function SearchScreen() {
         addMessage({ role: "assistant", content: t("search.now_showing_nearby", { suburb: advancedSuburb }), type: "text" }, sessionId);
       }
       const firstNewResultIndex = message.searchResults?.length ?? 0;
-      const nextResults = [...(message.searchResults ?? []), ...candidates];
+      const nextResults = [...existingResults, ...dedupedCandidates];
       if (claimServed) {
-        void claimDiscoveryCandidates(message.continuationToken, candidates);
+        void claimDiscoveryCandidates(message.continuationToken, dedupedCandidates);
       }
       pendingSearchScrollTargetRef.current = { messageId: message.id, index: firstNewResultIndex };
       updateMessage(message.id, {
@@ -1127,7 +1166,7 @@ export default function SearchScreen() {
         showMoreStatus: exhausted ? "idle" : "idle",
       }, sessionId);
       if (message.searchPresentation !== "generic_listing") {
-        startCardScorePoll(candidates.map((c) => ({ address: c.address, listingUrl: c.listingUrl })), sessionId);
+        startCardScorePoll(dedupedCandidates.map((c) => ({ address: c.address, listingUrl: c.listingUrl })), sessionId);
       }
     },
     [addMessage, claimDiscoveryCandidates, showDiscoveryExhaustedChoice, startCardScorePoll, t, updateMessage],
@@ -1137,43 +1176,52 @@ export default function SearchScreen() {
     async (message: ChatMessage) => {
       const sessionId = currentSessionId ?? currentSession?.id;
       if (!sessionId) return;
-      const prefetched = message.prefetchedSearchResults ?? [];
-      if (prefetched.length > 0 || message.prefetchedExhausted) {
+      // Drop the tap if this message already has a "show more" in flight — the
+      // button's disabled state only takes effect after an async re-render, so
+      // rapid taps could otherwise fire concurrent same-token requests.
+      if (showMoreInFlightRef.current.has(message.id)) return;
+      showMoreInFlightRef.current.add(message.id);
+      try {
+        const prefetched = message.prefetchedSearchResults ?? [];
+        if (prefetched.length > 0 || message.prefetchedExhausted) {
+          appendContinuationCandidates(
+            message,
+            prefetched,
+            message.prefetchedContinuationToken,
+            message.prefetchedExhausted,
+            message.prefetchedClarification,
+            sessionId,
+            true,
+            message.prefetchedSuburb,
+          );
+          return;
+        }
+        if (!message.continuationToken) {
+          showDiscoveryExhaustedChoice(message.prefetchedClarification, sessionId, {
+            searchPresentation: message.searchPresentation,
+            suburb: message.suburb,
+          });
+          return;
+        }
+        updateMessage(message.id, { showMoreStatus: "loading" }, sessionId);
+        const data = await fetchDiscoveryNext(message, 3).catch(() => null);
+        if (!data) {
+          updateMessage(message.id, { showMoreStatus: "idle" }, sessionId);
+          return;
+        }
         appendContinuationCandidates(
           message,
-          prefetched,
-          message.prefetchedContinuationToken,
-          message.prefetchedExhausted,
-          message.prefetchedClarification,
+          data.candidates ?? [],
+          data.continuationToken,
+          data.exhausted,
+          data.clarification,
           sessionId,
-          true,
-          message.prefetchedSuburb,
+          false,
+          data.suburb,
         );
-        return;
+      } finally {
+        showMoreInFlightRef.current.delete(message.id);
       }
-      if (!message.continuationToken) {
-        showDiscoveryExhaustedChoice(message.prefetchedClarification, sessionId, {
-          searchPresentation: message.searchPresentation,
-          suburb: message.suburb,
-        });
-        return;
-      }
-      updateMessage(message.id, { showMoreStatus: "loading" }, sessionId);
-      const data = await fetchDiscoveryNext(message, 3).catch(() => null);
-      if (!data) {
-        updateMessage(message.id, { showMoreStatus: "idle" }, sessionId);
-        return;
-      }
-      appendContinuationCandidates(
-        message,
-        data.candidates ?? [],
-        data.continuationToken,
-        data.exhausted,
-        data.clarification,
-        sessionId,
-        false,
-        data.suburb,
-      );
     },
     [appendContinuationCandidates, currentSession?.id, currentSessionId, fetchDiscoveryNext, showDiscoveryExhaustedChoice, updateMessage],
   );
