@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { AppState } from "react-native";
 import { useAuth } from "./AuthContext";
 import { getApiBase } from "@/lib/api";
+import { normaliseAddressKey } from "@/lib/address-key";
 import type { PropertyCandidate } from "./ChatContext";
 
 /** Anything we can save: a full candidate, or a lighter shape built from a report. */
@@ -41,24 +43,65 @@ interface WatchlistContextValue {
 
 const WatchlistContext = createContext<WatchlistContextValue | null>(null);
 
-/** Normalised dedup key — mirrors the analysis-key logic used on cards. */
+/** Exact dedup key for stable identifiers (listing URL, internal id, propertyKey). */
 function normalizeWatchKey(value: string | null | undefined): string {
   return (value ?? "").trim().toLowerCase();
 }
 
 export function watchlistKeyOf(candidate: WatchlistCandidate): string {
-  return normalizeWatchKey(candidate.listingUrl || candidate.address);
+  return normalizeWatchKey(
+    candidate.listingUrl ||
+    candidate.internalListingId ||
+    candidate.address,
+  );
 }
 
+/**
+ * Address-derived match key. Uses the canonical normaliser so the same property
+ * typed differently — abbreviated street type, postcode present/absent, case —
+ * still matches a saved item (e.g. "12 Marine Pde" ≡ "12 Marine Parade, …").
+ * This is what pre-lights the heart on result cards via {@link isWatched}.
+ */
 function watchlistAddressKeyOf(candidate: Pick<WatchlistCandidate, "address">): string {
-  return normalizeWatchKey(candidate.address);
+  return normaliseAddressKey(candidate.address);
 }
 
 function watchlistKeysOf(candidate: WatchlistCandidate): string[] {
   return Array.from(new Set([
     normalizeWatchKey(candidate.listingUrl),
+    normalizeWatchKey(candidate.internalListingId),
     watchlistAddressKeyOf(candidate),
   ].filter(Boolean)));
+}
+
+function itemKeysOf(item: WatchlistItem): string[] {
+  const snapshot = item.snapshot as WatchlistCandidate | null | undefined;
+  return Array.from(new Set([
+    normalizeWatchKey(item.propertyKey),
+    normalizeWatchKey(item.listingUrl),
+    normalizeWatchKey(snapshot?.listingUrl),
+    normalizeWatchKey(snapshot?.internalListingId),
+    watchlistAddressKeyOf(item),
+    snapshot?.address ? watchlistAddressKeyOf({ address: snapshot.address }) : "",
+  ].filter(Boolean)));
+}
+
+function buildWatchedKeySet(rows: WatchlistItem[]): Set<string> {
+  return new Set(rows.flatMap(itemKeysOf));
+}
+
+function buildWatchedAddressSet(rows: WatchlistItem[]): Set<string> {
+  return new Set(rows.map((r) => watchlistAddressKeyOf(r)).filter(Boolean));
+}
+
+function mergePendingRows(rows: WatchlistItem[], pending: Map<string, { watched: boolean; item?: WatchlistItem }>): WatchlistItem[] {
+  let next = [...rows];
+  for (const [key, change] of pending) {
+    const aliases = change.item ? itemKeysOf(change.item) : [key];
+    next = next.filter((item) => !itemKeysOf(item).some((alias) => aliases.includes(alias)));
+    if (change.watched && change.item) next.unshift(change.item);
+  }
+  return next;
 }
 
 export function WatchlistProvider({ children }: { children: React.ReactNode }) {
@@ -69,9 +112,11 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(false);
   // Guards against a stale GET (from a previous user) overwriting newer state.
   const requestSeqRef = useRef(0);
+  const pendingToggleRef = useRef<Map<string, { watched: boolean; item?: WatchlistItem }>>(new Map());
 
   const refresh = useCallback(async () => {
     if (!user) {
+      pendingToggleRef.current.clear();
       setItems([]);
       setWatchedKeys(new Set());
       setWatchedAddressKeys(new Set());
@@ -84,10 +129,10 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
       if (!resp.ok) return;
       const data = (await resp.json()) as { items?: WatchlistItem[] };
       if (seq !== requestSeqRef.current) return; // superseded
-      const rows = data.items ?? [];
+      const rows = mergePendingRows(data.items ?? [], pendingToggleRef.current);
       setItems(rows);
-      setWatchedKeys(new Set(rows.map((r) => normalizeWatchKey(r.propertyKey)).filter(Boolean)));
-      setWatchedAddressKeys(new Set(rows.map((r) => normalizeWatchKey(r.address)).filter(Boolean)));
+      setWatchedKeys(buildWatchedKeySet(rows));
+      setWatchedAddressKeys(buildWatchedAddressSet(rows));
     } catch {
       // Best-effort: leave existing state untouched on failure.
     } finally {
@@ -100,6 +145,14 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     void refresh();
   }, [user?.id, refresh]);
+
+  useEffect(() => {
+    if (!user) return;
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") void refresh();
+    });
+    return () => sub.remove();
+  }, [user, refresh]);
 
   const isKeyWatched = useCallback((key: string) => watchedKeys.has(normalizeWatchKey(key)), [watchedKeys]);
   const isWatched = useCallback(
@@ -116,50 +169,53 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
       const aliases = watchlistKeysOf(candidate);
       const addressKey = watchlistAddressKeyOf(candidate);
       const existingItem = items.find((item) =>
-        aliases.includes(normalizeWatchKey(item.propertyKey)) ||
-        normalizeWatchKey(item.address) === addressKey,
+        itemKeysOf(item).some((key) => aliases.includes(key)) ||
+        watchlistAddressKeyOf(item) === addressKey,
       );
       const key = existingItem?.propertyKey ?? watchlistKeyOf(candidate);
       if (!key) return {};
       const wasWatched = !!existingItem || aliases.some((alias) => watchedKeys.has(alias)) || watchedAddressKeys.has(addressKey);
       const nextWatched = !wasWatched;
+      const affectedAliases = Array.from(new Set([...(existingItem ? itemKeysOf(existingItem) : []), ...aliases, key].filter(Boolean)));
+      const existingAddressKey = existingItem ? watchlistAddressKeyOf(existingItem) : addressKey;
+      const optimistic: WatchlistItem = {
+        id: `pending:${key}`,
+        propertyKey: key,
+        address: candidate.address,
+        listingUrl: candidate.listingUrl ?? null,
+        photoUrl: candidate.photoUrl ?? candidate.photoUrls?.[0] ?? null,
+        priceDisplay: candidate.priceDisplay ?? null,
+        propertyType: candidate.propertyType ?? null,
+        bedrooms: candidate.bedrooms ?? null,
+        bathrooms: candidate.bathrooms ?? null,
+        landAreaSqm: candidate.landArea ?? null,
+        zone: candidate.zone ?? null,
+        compositeScore: candidate.scores?.composite ?? null,
+        snapshot: candidate as PropertyCandidate,
+        createdAt: new Date().toISOString(),
+      };
+      pendingToggleRef.current.set(key, nextWatched ? { watched: true, item: optimistic } : { watched: false });
 
       // Optimistic update.
       setWatchedKeys((prev) => {
         const next = new Set(prev);
-        if (nextWatched) next.add(key);
-        else next.delete(key);
+        for (const alias of affectedAliases) {
+          if (nextWatched) next.add(alias);
+          else next.delete(alias);
+        }
         return next;
       });
       setWatchedAddressKeys((prev) => {
         const next = new Set(prev);
-        const existingAddressKey = existingItem ? normalizeWatchKey(existingItem.address) : addressKey;
         if (nextWatched) next.add(addressKey);
         else next.delete(existingAddressKey);
         return next;
       });
       setItems((prev) => {
         if (nextWatched) {
-          if (prev.some((it) => it.propertyKey === key)) return prev;
-          const optimistic: WatchlistItem = {
-            id: `pending:${key}`,
-            propertyKey: key,
-            address: candidate.address,
-            listingUrl: candidate.listingUrl ?? null,
-            photoUrl: candidate.photoUrl ?? candidate.photoUrls?.[0] ?? null,
-            priceDisplay: candidate.priceDisplay ?? null,
-            propertyType: candidate.propertyType ?? null,
-            bedrooms: candidate.bedrooms ?? null,
-            bathrooms: candidate.bathrooms ?? null,
-            landAreaSqm: candidate.landArea ?? null,
-            zone: candidate.zone ?? null,
-            compositeScore: candidate.scores?.composite ?? null,
-            snapshot: candidate as PropertyCandidate,
-            createdAt: new Date().toISOString(),
-          };
-          return [optimistic, ...prev];
+          return [optimistic, ...prev.filter((it) => !itemKeysOf(it).some((alias) => affectedAliases.includes(alias)))];
         }
-        return prev.filter((it) => it.propertyKey !== key);
+        return prev.filter((it) => !itemKeysOf(it).some((alias) => affectedAliases.includes(alias)));
       });
 
       try {
@@ -169,24 +225,49 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
           body: JSON.stringify({ ...candidate, propertyKey: key }),
         });
         if (!resp.ok) throw new Error(`toggle failed: ${resp.status}`);
-        const data = (await resp.json()) as { watched?: boolean };
+        const data = (await resp.json()) as { watched?: boolean; item?: WatchlistItem | null };
+        pendingToggleRef.current.delete(key);
+        const serverWatched = data.watched ?? nextWatched;
         // If the server's authoritative state diverged from our optimistic
         // guess (rare — e.g. another device changed it), re-sync from server.
-        if (typeof data.watched === "boolean" && data.watched !== nextWatched) {
-          void refresh();
+        if (serverWatched && data.item) {
+          const serverAliases = itemKeysOf(data.item);
+          setItems((prev) => [data.item!, ...prev.filter((it) => !itemKeysOf(it).some((alias) => serverAliases.includes(alias)))]);
+          setWatchedKeys((prev) => new Set([...prev, ...serverAliases]));
+          setWatchedAddressKeys((prev) => {
+            const next = new Set(prev);
+            next.add(watchlistAddressKeyOf(data.item!));
+            return next;
+          });
+        } else if (!serverWatched) {
+          setItems((prev) => prev.filter((it) => !itemKeysOf(it).some((alias) => affectedAliases.includes(alias))));
+          setWatchedKeys((prev) => {
+            const next = new Set(prev);
+            for (const alias of affectedAliases) next.delete(alias);
+            return next;
+          });
+          setWatchedAddressKeys((prev) => {
+            const next = new Set(prev);
+            next.delete(existingAddressKey);
+            next.delete(addressKey);
+            return next;
+          });
         }
-        return { watched: data.watched ?? nextWatched };
+        if (serverWatched !== nextWatched) void refresh();
+        return { watched: serverWatched };
       } catch {
+        pendingToggleRef.current.delete(key);
         // Revert on failure.
         setWatchedKeys((prev) => {
           const next = new Set(prev);
-          if (wasWatched) next.add(key);
-          else next.delete(key);
+          for (const alias of affectedAliases) {
+            if (wasWatched) next.add(alias);
+            else next.delete(alias);
+          }
           return next;
         });
         setWatchedAddressKeys((prev) => {
           const next = new Set(prev);
-          const existingAddressKey = existingItem ? normalizeWatchKey(existingItem.address) : addressKey;
           if (wasWatched) next.add(existingAddressKey);
           else next.delete(addressKey);
           return next;

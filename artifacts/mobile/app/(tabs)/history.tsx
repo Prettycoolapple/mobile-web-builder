@@ -12,13 +12,14 @@ import {
   Image,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Feather } from "@expo/vector-icons";
+import { Feather, Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
 import { useColors } from "@/hooks/useColors";
 import { useChat, ChatMessage, FeasibilityReport, FeasibilityReportGroup, PropertyCandidate, SelectedListingContext } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
 import { useWatchlist, WatchlistItem } from "@/context/WatchlistContext";
+import { confirmRemoveFromWatchlist } from "@/lib/watchlist-confirm";
 import { useFocusEffect, useRouter } from "expo-router";
 import { getApiBase } from "@/lib/api";
 import { useT, getCurrentLocale } from "@/lib/i18n";
@@ -197,6 +198,7 @@ interface WatchlistPropertyCardProps {
 function WatchlistPropertyCard({ candidate, onShare, onAnalyse }: WatchlistPropertyCardProps) {
   const colors = useColors();
   const { t } = useT();
+  const { toggle } = useWatchlist();
   const analysisKey = (candidate.listingUrl || candidate.address).trim();
   const photoUrl = candidate.photoUrl ?? candidate.photoUrls?.[0] ?? null;
 
@@ -209,6 +211,26 @@ function WatchlistPropertyCard({ candidate, onShare, onAnalyse }: WatchlistPrope
       analysisKey,
     );
   };
+
+  // Every card here is already saved, so the heart is always lit and the tap
+  // path is removal-only: confirm, then toggle off. The list is derived from the
+  // watchlist context, so the optimistic toggle drops this card immediately.
+  const handleRemove = async () => {
+    if (!(await confirmRemoveFromWatchlist(t))) return;
+    await toggle(candidate);
+  };
+
+  const heartButton = (
+    <TouchableOpacity
+      style={[styles.watchHeartBtn, { backgroundColor: "rgba(255,255,255,0.92)", borderColor: colors.border }]}
+      onPress={handleRemove}
+      activeOpacity={0.82}
+      accessibilityRole="button"
+      accessibilityLabel={t("watchlist.remove")}
+    >
+      <Ionicons name="heart" size={16} color="#ef4444" />
+    </TouchableOpacity>
+  );
 
   return (
     <View style={[styles.watchCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -224,6 +246,7 @@ function WatchlistPropertyCard({ candidate, onShare, onAnalyse }: WatchlistPrope
           >
             <Feather name="log-out" size={15} color={colors.foreground} />
           </TouchableOpacity>
+          {heartButton}
         </View>
       ) : (
         <View style={[styles.watchPhotoPlaceholder, { backgroundColor: colors.muted }]}>
@@ -237,6 +260,7 @@ function WatchlistPropertyCard({ candidate, onShare, onAnalyse }: WatchlistPrope
           >
             <Feather name="log-out" size={15} color={colors.foreground} />
           </TouchableOpacity>
+          {heartButton}
         </View>
       )}
 
@@ -473,7 +497,8 @@ export default function HistoryScreen() {
       const isRefresh = hasLoadedRef.current;
       hasLoadedRef.current = true;
       load(isRefresh);
-    }, [load]),
+      void refreshWatch();
+    }, [load, refreshWatch]),
   );
 
   useEffect(() => {
@@ -860,6 +885,17 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: 10,
     left: 10,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  watchHeartBtn: {
+    position: "absolute",
+    top: 10,
+    left: 52,
     width: 34,
     height: 34,
     borderRadius: 17,

@@ -31,6 +31,7 @@ import { useColors } from "@/hooks/useColors";
 import { useT, translate, translateForOS, isOSChineseLocale } from "@/lib/i18n";
 import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
 import { shareReport } from "@/lib/propertyShares";
+import { confirmRemoveFromWatchlist } from "@/lib/watchlist-confirm";
 import {
   filterRiskSummaryRemoveIncompleteDataDisclaimerBullets,
   filterScoreReasonStrings,
@@ -2458,8 +2459,10 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
       promptSignInForWatchlist();
       return;
     }
+    // Removing a saved property asks for confirmation; saving stays instant.
+    if (watched && !(await confirmRemoveFromWatchlist(t))) return;
     await toggle(watchCandidate);
-  }, [user, toggle, watchCandidate, promptSignInForWatchlist]);
+  }, [user, watched, t, toggle, watchCandidate, promptSignInForWatchlist]);
 
   const handleRefreshPhotos = useCallback(async () => {
     const searchId = report.historyId ?? null;

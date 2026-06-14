@@ -10,6 +10,7 @@ import { StarRating } from "@/components/StarRating";
 import { useT } from "@/lib/i18n";
 import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
 import { shareCandidate } from "@/lib/propertyShares";
+import { confirmRemoveFromWatchlist } from "@/lib/watchlist-confirm";
 
 interface Props {
   candidate: PropertyCandidate;
@@ -226,6 +227,8 @@ export function PropertyCard({ candidate, onAnalyse, analysingPropertyKey = null
       promptSignInForWatchlist();
       return;
     }
+    // Removing a saved property asks for confirmation; saving stays instant.
+    if (watched && !(await confirmRemoveFromWatchlist(t))) return;
     await toggle(candidate);
   };
 
