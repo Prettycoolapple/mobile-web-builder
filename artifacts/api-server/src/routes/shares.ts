@@ -3,7 +3,7 @@ import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
 import crypto from "node:crypto";
 import { z } from "zod";
 import { db, propertyShares } from "@workspace/db";
-import { requireAuth } from "../lib/auth";
+import { verifyActiveToken } from "../lib/auth";
 import { getAndroidPlayStoreUrl, getIosAppStoreUrl, getPublicAppUrl } from "../lib/env";
 
 const router = Router();
@@ -234,6 +234,18 @@ function notExpiredCondition() {
   return or(isNull(propertyShares.expiresAt), gt(propertyShares.expiresAt, new Date()));
 }
 
+async function optionalUserId(req: Request, res: Response): Promise<string | null | undefined> {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith("Bearer ")) return null;
+
+  const payload = await verifyActiveToken(authHeader.slice(7)).catch(() => null);
+  if (!payload) {
+    res.status(401).json({ error: "This account is now signed in on another device.", code: "SESSION_REPLACED" });
+    return undefined;
+  }
+  return payload.sub;
+}
+
 async function getPublicShare(token: string) {
   const [row] = await db
     .select({
@@ -447,28 +459,32 @@ function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?: Reque
 </html>`;
 }
 
-router.post("/shares", requireAuth, async (req, res) => {
+router.post("/shares", async (req, res) => {
+  const userId = await optionalUserId(req, res);
+  if (userId === undefined) return;
+
   const parsed = createShareSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid share payload", code: "INVALID_SHARE_PAYLOAD" });
     return;
   }
 
-  const userId = (req as any).userId as string;
   const share = buildShare(parsed.data);
 
   try {
-    const [existing] = await db
-      .select()
-      .from(propertyShares)
-      .where(and(
-        eq(propertyShares.ownerUserId, userId),
-        eq(propertyShares.kind, share.kind),
-        eq(propertyShares.address, share.address),
-        notExpiredCondition(),
-      ))
-      .orderBy(desc(propertyShares.createdAt))
-      .limit(1);
+    const [existing] = userId
+      ? await db
+          .select()
+          .from(propertyShares)
+          .where(and(
+            eq(propertyShares.ownerUserId, userId),
+            eq(propertyShares.kind, share.kind),
+            eq(propertyShares.address, share.address),
+            notExpiredCondition(),
+          ))
+          .orderBy(desc(propertyShares.createdAt))
+          .limit(1)
+      : [];
 
     const token = existing?.token ?? randomToken();
     const [row] = existing
@@ -503,7 +519,9 @@ router.post("/shares", requireAuth, async (req, res) => {
   }
 });
 
-router.get("/shares/:token", requireAuth, async (req, res) => {
+router.get("/shares/:token", async (req, res) => {
+  if ((await optionalUserId(req, res)) === undefined) return;
+
   const token = cleanText(req.params.token);
   if (!token) {
     res.status(400).json({ error: "token is required", code: "MISSING_TOKEN" });

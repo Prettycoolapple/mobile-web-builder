@@ -18,6 +18,7 @@ export type DiscoveryContinuationState = {
   nearbyQueue?: string[];     // ordered nearby suburbs still to expand into
   originSuburb?: string;      // where the train started (for refresh-on-drain)
   currentSuburb?: string;     // suburb currently being served (for the exhausted prompt)
+  requireSourceBackedPrice?: boolean; // true when the user gave an explicit budget; POA/unknown-price listings should not match
   // Lazy/incremental pagination of the current suburb. Generic browse fetches a
   // small window of source pages up front and refills the pool one window at a
   // time on Show-more, so a high-inventory suburb isn't fetched in full before

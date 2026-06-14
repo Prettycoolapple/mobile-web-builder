@@ -121,7 +121,7 @@ function SafeMarkdown({
 interface Props {
   message: ChatMessage;
   onFollowUp: (question: string) => void;
-  onDiscoveryChoice?: (message: ChatMessage, option: string) => void;
+  onDiscoveryChoice?: (message: ChatMessage, option: string, optionIndex: number) => void;
   onAnalyse: (address: string, photoUrl?: string | null, listingUrl?: string | null, selectedListingContext?: SelectedListingContext | null, analysisKey?: string) => void;
   analysingPropertyKey?: string | null;
   onRetry?: (text: string) => void;
@@ -130,6 +130,7 @@ interface Props {
   onAgentDismiss?: (messageId: string) => void;
   onUpgrade?: () => void;
   onShowMore?: (message: ChatMessage) => void;
+  onSearchResultLayout?: (messageId: string, index: number, layout: { y: number; height: number }) => void;
 }
 
 const THINKING_KEYS = [
@@ -280,7 +281,7 @@ function TypingDots() {
   );
 }
 
-export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, analysingPropertyKey, onRetry, onConnect, onDismiss, onAgentDismiss, onUpgrade, onShowMore }: Props) {
+export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, analysingPropertyKey, onRetry, onConnect, onDismiss, onAgentDismiss, onUpgrade, onShowMore, onSearchResultLayout }: Props) {
   const colors = useColors();
   const { t } = useT();
   const router = useRouter();
@@ -318,7 +319,7 @@ export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, 
             {options.map((opt, i) => (
               <TouchableOpacity
                 key={i}
-                onPress={() => isDiscoveryChoice ? (onDiscoveryChoice ? onDiscoveryChoice(message, opt) : onFollowUp(opt)) : onAnalyse(opt)}
+                onPress={() => isDiscoveryChoice ? (onDiscoveryChoice ? onDiscoveryChoice(message, opt, i) : onFollowUp(opt)) : onAnalyse(opt)}
                 style={{
                   backgroundColor: colors.accent + "12",
                   borderColor: colors.accent + "55",
@@ -441,24 +442,39 @@ export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, 
             : t("search.opportunity_other", { n: results.length })}
         </Text>
         {results.map((candidate, i) => {
+          const handleResultLayout = message.scrollToSearchResultIndex === i
+            ? (event: { nativeEvent: { layout: { y: number; height: number } } }) => {
+                onSearchResultLayout?.(message.id, i, event.nativeEvent.layout);
+              }
+            : undefined;
           if (showGenericListings) {
             const listing = browseListingFromCandidate(candidate);
             return (
-              <BrowseListingCard
-                key={`${listing.id}-${i}`}
-                listing={listing}
-                onShare={() => {
-                  void shareListing(listing, getApiHeaders()).catch(() => {});
-                }}
-                onPress={() => router.push({
-                  pathname: "/listing/[id]",
-                  params: { id: listing.id, preview: JSON.stringify(listing) },
-                } as never)}
-              />
+              <View key={`${listing.id}-${i}`} onLayout={handleResultLayout}>
+                <BrowseListingCard
+                  listing={listing}
+                  onShare={async () => {
+                    try {
+                      await shareListing(listing, getApiHeaders());
+                    } catch (error) {
+                      Alert.alert(
+                        "Couldn't share listing",
+                        error instanceof Error ? error.message : "Please try again.",
+                      );
+                    }
+                  }}
+                  onPress={() => router.push({
+                    pathname: "/listing/[id]",
+                    params: { id: listing.id, preview: JSON.stringify(listing) },
+                  } as never)}
+                />
+              </View>
             );
           }
           return (
-            <PropertyCard key={i} candidate={candidate} onAnalyse={onAnalyse} analysingPropertyKey={analysingPropertyKey} showSubdivisionDisclaimer={results.length === 1} />
+            <View key={i} onLayout={handleResultLayout}>
+              <PropertyCard candidate={candidate} onAnalyse={onAnalyse} analysingPropertyKey={analysingPropertyKey} showSubdivisionDisclaimer={results.length === 1} />
+            </View>
           );
         })}
         {results.length > 0 && (message.continuationToken || message.prefetchedSearchResults?.length || message.prefetchedExhausted || message.showMoreStatus === "loading") ? (

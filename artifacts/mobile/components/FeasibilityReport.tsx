@@ -90,6 +90,23 @@ function capitalize(s: string | undefined): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+function localisePropertyType(value: string, t: (key: string) => string): string {
+  const raw = value.trim();
+  if (!isOSChineseLocale()) return raw;
+  switch (raw.toUpperCase()) {
+    case "RESIDENTIAL":
+      return t("report.property_type_residential");
+    case "COMMERCIAL":
+      return t("report.property_type_commercial");
+    case "INDUSTRIAL":
+      return t("report.property_type_industrial");
+    case "RURAL":
+      return t("report.property_type_rural");
+    default:
+      return raw;
+  }
+}
+
 function hasCjk(text: string | null | undefined): boolean {
   return typeof text === "string" && /[\u3400-\u9fff]/.test(text);
 }
@@ -1036,10 +1053,10 @@ function SubdivisionPathwayComparison({ planning, colors }: { planning?: Plannin
           {t("report.standard_vacant_pathway")}
         </Text>
         <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", fontSize: 13 }}>
-          {standardLots != null ? `${standardLots} lot(s)` : t("report.na")}
+          {standardLots != null ? t("report.standard_lots_value", { lots: standardLots }) : t("report.na")}
         </Text>
         <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, lineHeight: 15 }}>
-          {planning.standardMinLotSize ? `${planning.standardMinLotSize}sqm minimum lot-size test` : t("report.na")}
+          {planning.standardMinLotSize ? t("report.minimum_lot_size_test", { sqm: planning.standardMinLotSize }) : t("report.na")}
         </Text>
       </View>
       {planning.designLedEligible && designRange ? (
@@ -2168,14 +2185,9 @@ function RiskSummaryPanel({ riskSummary, colors }: { riskSummary: string[]; colo
 }
 
 /** Quiet legal / data-staleness note at end of report—not a full section card. */
-function ReportAnalysisFootnote({ colors, dataFreshness }: {
+function ReportAnalysisFootnote({ colors }: {
   colors: ReturnType<typeof useColors>;
-  dataFreshness?: Report["dataFreshness"];
 }) {
-  const acquiredDate = dataFreshness?.acquiredAt ? new Date(dataFreshness.acquiredAt) : null;
-  const acquiredText = acquiredDate && !isNaN(acquiredDate.getTime())
-    ? acquiredDate.toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" })
-    : null;
   return (
     <View
       style={{
@@ -2187,23 +2199,6 @@ function ReportAnalysisFootnote({ colors, dataFreshness }: {
         borderTopColor: colors.border,
       }}
     >
-      {acquiredText ? (
-        <View style={{ flexDirection: "row", gap: 8, alignItems: "flex-start", marginBottom: 6 }}>
-          <Feather name="clock" size={12} color={colors.mutedForeground} style={{ marginTop: 1, opacity: 0.65 }} />
-          <Text
-            style={{
-              flex: 1,
-              color: colors.mutedForeground,
-              fontFamily: "DM_Sans_400Regular",
-              fontSize: 10,
-              lineHeight: 15,
-              opacity: 0.9,
-            }}
-          >
-            {translateForOS("report.data_as_at")}: {acquiredText}
-          </Text>
-        </View>
-      ) : null}
       <View style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
         <Feather name="info" size={12} color={colors.mutedForeground} style={{ marginTop: 1, opacity: 0.65 }} />
         <Text
@@ -2705,7 +2700,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
           />
           <InfoRow label={t("report.build_year")} value={report.propertyOverview.buildYear || t("report.na")} colors={colors} />
           {report.propertyOverview.propertyType?.trim() ? (
-            <InfoRow label={t("report.property_type")} value={report.propertyOverview.propertyType} colors={colors} />
+            <InfoRow label={t("report.property_type")} value={localisePropertyType(report.propertyOverview.propertyType, t)} colors={colors} />
           ) : null}
           {report.propertyOverview.siteStatusLabel?.trim() ? (
             <InfoRow
@@ -2921,7 +2916,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
       )}
 
       <FollowUpChips report={report} onChipClick={onFollowUp} colors={colors} />
-      <ReportAnalysisFootnote colors={colors} dataFreshness={report.dataFreshness} />
+      <ReportAnalysisFootnote colors={colors} />
     </View>
   );
 }

@@ -199,8 +199,11 @@ export function PropertyCard({ candidate, onAnalyse, analysingPropertyKey = null
   const handleShare = async () => {
     try {
       await shareCandidate(candidate, getApiHeaders());
-    } catch {
-      // Best-effort: leave the card flow uninterrupted if sharing fails.
+    } catch (error) {
+      Alert.alert(
+        "Couldn't share property",
+        error instanceof Error ? error.message : "Please try again.",
+      );
     }
   };
 

@@ -617,7 +617,7 @@ function parseAddressFromSlug(slug: string): string {
   return words.join(" ").replace(/\b(\d+)\s+([A-Z])/g, "$1 $2");
 }
 
-async function fetchListingMeta(url: string, fallbackAddress: string, priceMidpoint: number): Promise<ListingResult | null> {
+async function fetchListingMeta(url: string, fallbackAddress: string): Promise<ListingResult | null> {
   try {
     const resp = await fetch(url, {
       headers: {
@@ -645,14 +645,13 @@ async function fetchListingMeta(url: string, fallbackAddress: string, priceMidpo
     const address = parseAddressFromOgTitle(ogTitle) ?? fallbackAddress;
     const landArea = parseLandAreaFromOgDesc(ogDesc);
     const explicitPrice = parsePriceFromOgDesc(ogDesc);
-    const price = explicitPrice ?? priceMidpoint;
     const { bedrooms, bathrooms } = extractBedsBaths(`${ogTitle} ${ogDesc}`);
 
     if (!address || address.length < 5) return null;
 
     return {
       address,
-      price,
+      price: explicitPrice,
       priceText: explicitPrice ? `$${explicitPrice.toLocaleString()}` : "Price on application",
       landArea,
       photoUrl: ogImage,
@@ -669,10 +668,10 @@ async function fetchListingMeta(url: string, fallbackAddress: string, priceMidpo
 
 export async function fetchListingBatch(
   urls: string[],
-  priceMidpoint: number,
+  _priceMidpoint?: number,
 ): Promise<ListingResult[]> {
   const results = await Promise.all(
-    urls.map((url) => fetchListingMeta(url, parseAddressFromSlug(url), priceMidpoint)),
+    urls.map((url) => fetchListingMeta(url, parseAddressFromSlug(url))),
   );
   return results.filter((r): r is ListingResult => r !== null);
 }
@@ -861,8 +860,6 @@ export async function searchRealEstateListings(params: {
     startOffset,
     maxPages,
   } = params;
-  const priceMidpoint = Math.round((minPrice + maxPrice) / 2);
-
   // ── PRIMARY: Official JSON API ───────────────────────────────────────────
   // Talk to platform.realestate.co.nz/search/v1 — same API the SPA uses.
   // Authoritative suburb resolution, structured data, no JS rendering required.
@@ -952,7 +949,7 @@ export async function searchRealEstateListings(params: {
   logger.info({ total: allListingUrls.length }, "realestate-search: fetching all listing meta pages");
 
   const allResults = await Promise.all(
-    allListingUrls.map((url) => fetchListingMeta(url, parseAddressFromSlug(url), priceMidpoint)),
+    allListingUrls.map((url) => fetchListingMeta(url, parseAddressFromSlug(url))),
   );
 
   const allListings = allResults.filter((r): r is ListingResult => r !== null);

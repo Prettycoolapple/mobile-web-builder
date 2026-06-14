@@ -1181,6 +1181,16 @@ function filterAlreadyShownCandidates(
   return candidates.filter((candidate) => !isAlreadyShownAddress(candidate.address, shownKeys));
 }
 
+function listingMatchesPriceRange(
+  listing: { price: number | null },
+  minPrice: number,
+  maxPrice: number,
+  requireSourceBackedPrice: boolean,
+): boolean {
+  if (listing.price == null) return !requireSourceBackedPrice;
+  return listing.price >= minPrice && listing.price <= maxPrice * 1.1;
+}
+
 const INTERNAL_SPONSORED_LISTING_URL_PREFIX = "projectalpha://listing/";
 const INTERNAL_SPONSORED_ADDRESS_KEY_PREFIX = "internal-listing:";
 
@@ -1661,10 +1671,11 @@ async function searchSuburbOrDistrict(args: {
         skipUrls: args.skipUrls,
         includeNegotiation: args.includeNegotiation,
         firstBatchSize: args.firstBatchSize,
-        fetchAllPages: args.fetchAllPages,
+        // District fan-out cannot be resumed with one flat offset because each
+        // child suburb has its own source cursor. Fetch every child suburb here
+        // so a district-style query is still genuinely exhausted before fallback.
+        fetchAllPages: true,
         maxListings: perChildMaxListings,
-        startOffset: args.startOffset,
-        maxPages: args.maxPages,
       }),
     ),
   );
@@ -1704,10 +1715,8 @@ async function searchSuburbOrDistrict(args: {
     "Discovery: district fan-out merged",
   );
 
-  // District fan-out merges several suburbs into one pool; offset-based resume
-  // doesn't map cleanly across them, so we treat the merged set as complete and
-  // don't attempt lazy refill for districts (per-child page caps already bound
-  // the up-front cost).
+  // District fan-out merges several suburbs into one pool; every child was
+  // fetched with fetchAllPages=true above, so this merged set is complete.
   return { firstBatch, remainingListings, source, suburbsSearched, isDistrictFanOut: true, nextOffset: 0, totalAvailable: null, done: true };
 }
 
@@ -1931,8 +1940,9 @@ async function generateContinuationCandidates(args: {
 
   const minP = args.minPrice ?? 0;
   const maxP = args.maxPrice ?? 20_000_000;
+  const requireSourceBackedPrice = args.state.requireSourceBackedPrice === true;
   const inRange = (l: { price: number | null }) =>
-    l.price == null || (l.price >= minP && l.price <= maxP * 1.1);
+    listingMatchesPriceRange(l, minP, maxP, requireSourceBackedPrice);
 
   // Pick the next page of candidates from a given listing pool, honouring the
   // presentation type. Returns the leftover pool so the caller can persist it.
@@ -1954,9 +1964,9 @@ async function generateContinuationCandidates(args: {
       candidates = sanitizeDiscoveryCandidates(candidates);
     } else {
       const preScreenOpts = {
-        allowMissingListingPrice: true,
         pricePlaceholderNzd: 3_500_000,
         ...(args.state.preScreenOpts ?? {}),
+        allowMissingListingPrice: !requireSourceBackedPrice,
       } as {
         allowMissingListingPrice?: boolean;
         pricePlaceholderNzd?: number;
@@ -2102,6 +2112,7 @@ async function generateContinuationCandidates(args: {
       return { candidates: [], state: buildState([]), exhausted: true };
     }
 
+    const poolSizeBeforePick = remainingListings.length;
     const { candidates, nextRemaining } = await pickFromPool(remainingListings);
     if (candidates.length > 0) {
       args.log.info(
@@ -2117,6 +2128,7 @@ async function generateContinuationCandidates(args: {
 
     // This pool yielded nothing pickable.
     remainingListings = nextRemaining;
+    if (remainingListings.length > 0 && remainingListings.length < poolSizeBeforePick) continue;
     if (remainingListings.length > 0) {
       // Pool still had items but none became candidates — bail to avoid a loop.
       return {
@@ -2185,6 +2197,7 @@ async function createDiscoveryContinuation(args: {
   pageOffset?: number;
   pageTotal?: number | null;
   pageDone?: boolean;
+  requireSourceBackedPrice?: boolean;
   log: Logger;
 }): Promise<string | null> {
   const cacheEntry = getListingCache(args.cacheKey);
@@ -2204,6 +2217,7 @@ async function createDiscoveryContinuation(args: {
     ...(args.nearbyQueue?.length ? { nearbyQueue: args.nearbyQueue } : {}),
     ...(args.originSuburb ? { originSuburb: args.originSuburb } : {}),
     ...(args.suburb ? { currentSuburb: args.suburb } : {}),
+    ...(args.requireSourceBackedPrice ? { requireSourceBackedPrice: true } : {}),
     ...(typeof args.pageOffset === "number" ? { pageOffset: args.pageOffset } : {}),
     ...(args.pageTotal !== undefined ? { pageTotal: args.pageTotal } : {}),
     ...(args.pageDone !== undefined ? { pageDone: args.pageDone } : {}),
@@ -2434,6 +2448,7 @@ function isDiscoverStreetContinuation(text: string): boolean {
 
 function isRepeatShownAreaRequest(text: string): boolean {
   const lower = text.toLowerCase().trim();
+  if (/^\[discovery_exhausted_choice:repeat_origin\]$/i.test(text.trim())) return true;
   if (/(show|see|display|bring\s+up|remind).{0,40}\b(again|same|previous|earlier|already|available)\b/i.test(lower)) return true;
   if (/\b(show|see)\s+(them|those|these|it)\s+again\b/i.test(lower)) return true;
   if (/\bwhat\s+is\s+available\b.{0,40}\bagain\b/i.test(lower)) return true;
@@ -2442,6 +2457,7 @@ function isRepeatShownAreaRequest(text: string): boolean {
 
 function isNearbyDiscoveryChoice(text: string): boolean {
   const lower = text.toLowerCase().trim();
+  if (/^\[discovery_exhausted_choice:search_nearby\]$/i.test(text.trim())) return true;
   if (/\b(search|show|find|look|keep\s+looking).{0,25}\b(nearby|neighbouring|neighboring|surrounding|other\s+(suburbs|areas|neighbourhoods|neighborhoods))\b/i.test(lower)) return true;
   if (/^(nearby|search nearby|nearby suburbs|other suburbs|surrounding areas)$/i.test(lower)) return true;
   return /(?:附近|周边|周邊|邻近|鄰近|周围|周圍|其他区|其他區|附近郊区|附近郊區)/.test(text);
@@ -2474,7 +2490,29 @@ function buildDiscoveryExhaustedChoicePayload(
       `Remind me what is available in ${suburbLabel} again`,
       "Search nearby",
     ],
+    optionActions: ["repeat_origin", "search_nearby"],
   });
+}
+
+function formatDiscoveryPriceRange(minPrice: number, maxPrice: number, explicitPrice: boolean): string {
+  if (!explicitPrice) return "";
+  const fmt = (n: number) => `$${formatNZD(n)}`;
+  return ` with a source-backed asking price between ${fmt(minPrice)} and ${fmt(maxPrice)}`;
+}
+
+function buildDiscoveryNoListingsIntro(args: {
+  suburb: string | null | undefined;
+  criteriaLabel: string;
+  minPrice: number;
+  maxPrice: number;
+  explicitPrice: boolean;
+  plainListingBrowse: boolean;
+}): string {
+  const suburbLabel = args.suburb ? titleCaseSuburb(args.suburb) : "this area";
+  const criteria = args.criteriaLabel.trim();
+  const criteriaText = criteria && !args.plainListingBrowse ? ` for ${criteria}` : "";
+  const priceText = formatDiscoveryPriceRange(args.minPrice, args.maxPrice, args.explicitPrice);
+  return `I couldn't find any matching listings in ${suburbLabel}${criteriaText}${priceText} right now. Try widening the budget, including price-by-negotiation listings, or searching nearby suburbs.`;
 }
 
 function isContextualAreaBrowseFollowup(text: string): boolean {
@@ -2571,6 +2609,11 @@ function filterListingsByStreetHint(listings: ListingResult[], hint: string | nu
   if (key.length < 4) return listings;
   const matches = listings.filter((listing) => normaliseStreetHintKey(listing.address).includes(key));
   return matches.length > 0 ? matches : listings;
+}
+
+function hasExplicitPriceConstraint(text: string): boolean {
+  return /(?:\$|budget|price|under|below|less than|up to|max(?:imum)?|between)\s*\$?\d/i.test(text)
+    || /\d+(?:\.\d+)?\s*[mk]\s*(?:to|-)\s*\$?\d/i.test(text);
 }
 
 async function parseDiscoverParams(text: string): Promise<{ suburb: string | null; minPrice: number; maxPrice: number }> {
@@ -5068,6 +5111,7 @@ router.post("/chat", async (req, res) => {
           let prescreenedIntro = "";
           const criteriaLabel = plainListingBrowse ? "" : (intent.criteria || (wantsDevelopmentDiscovery ? "subdivision/development potential" : ""));
           const strictStandardSubdivision = !plainListingBrowse && isStandardSubdivisionDiscoveryIntent(discoveryCriteria);
+          const requireSourceBackedPrice = userTextHasPrice;
           // Return up to 3 cards for every discovery intent, including strict
           // subdivision. Strict subdivision used to early-bail at the first card
           // to save on its expensive per-listing screening; we now target 3 and
@@ -5125,7 +5169,7 @@ router.post("/chat", async (req, res) => {
             const streetHint = extractDiscoverStreetHintFromThread(messages, userText, isFollowUp);
             const cacheKey = makeCacheKey(suburb, effectiveMinPrice, effectiveMaxPrice, streetHint);
             const discoverPreOpts = {
-              allowMissingListingPrice: true as const,
+              allowMissingListingPrice: !requireSourceBackedPrice,
               pricePlaceholderNzd: wantsDevelopmentDiscovery && !userTextHasPrice
                 ? 3_500_000
                 : Math.max(600_000, Math.round((effectiveMinPrice + effectiveMaxPrice) / 2)),
@@ -5178,20 +5222,21 @@ router.post("/chat", async (req, res) => {
             // Fresh search when: first search, clarification answer, or cache exhausted.
             // Combine in-memory shown URLs with history-derived URLs so we still skip
             // previously-shown listings even after a server restart.
+            let discoverySkipUrls: string[] = [];
             if (candidates.length === 0 && !forceNearbyDiscovery) {
-              const shownUrls = Array.from(new Set([
+              discoverySkipUrls = Array.from(new Set([
                 ...(repeatShownAreaIntent ? [] : getShownUrls(cacheKey)),
                 ...(repeatShownAreaIntent ? [] : alreadyShownUrlsFromHistory),
               ]));
               req.log.info(
-                { fromCache: getShownUrls(cacheKey).length, fromHistory: alreadyShownUrlsFromHistory.length, total: shownUrls.length },
+                { fromCache: getShownUrls(cacheKey).length, fromHistory: alreadyShownUrlsFromHistory.length, total: discoverySkipUrls.length },
                 "Discovery: dedupe skipUrls assembled",
               );
               const searchResult = await searchSuburbOrDistrict({
                 suburb,
                 minPrice: effectiveMinPrice,
                 maxPrice: effectiveMaxPrice,
-                skipUrls: shownUrls,
+                skipUrls: discoverySkipUrls,
                 includeNegotiation,
                 firstBatchSize: wantsDevelopmentDiscovery ? 24 : undefined,
                 // Both presentations paginate lazily: fetch the first window of
@@ -5214,12 +5259,23 @@ router.post("/chat", async (req, res) => {
                 continuationPageOffset = searchResult.nextOffset;
                 continuationPageTotal = searchResult.totalAvailable;
                 continuationPageDone = searchResult.done;
+                req.log.info(
+                  {
+                    suburb,
+                    rawFirstBatch: searchResult.firstBatch.length,
+                    rawRemainingWindow: searchResult.remainingListings.length,
+                    totalAvailable: searchResult.totalAvailable,
+                    nextOffset: searchResult.nextOffset,
+                    done: searchResult.done,
+                    requireSourceBackedPrice,
+                  },
+                  "Discovery: source window fetched",
+                );
               }
 
               if (searchResult && searchResult.firstBatch.length > 0) {
-                // Allow null-priced (negotiation) listings through unconditionally; price-range filter still applies to priced ones
                 const inRange = (l: { price: number | null }) =>
-                  l.price == null || (l.price >= effectiveMinPrice && l.price <= effectiveMaxPrice * 1.1);
+                  listingMatchesPriceRange(l, effectiveMinPrice, effectiveMaxPrice, requireSourceBackedPrice);
 
                 const firstRanked = strictStandardSubdivision ? rankListingsForStrictSubdivision(searchResult.firstBatch) : searchResult.firstBatch;
                 const remainingRanked = strictStandardSubdivision ? rankListingsForStrictSubdivision(searchResult.remainingListings) : searchResult.remainingListings;
@@ -5310,6 +5366,83 @@ router.post("/chat", async (req, res) => {
               }
             }
 
+            // ── SOURCE WINDOW REFILL ─────────────────────────────────────────
+            // If the first source window did not produce enough displayable
+            // cards, keep advancing the same suburb before declaring exhaustion
+            // or jumping nearby. This is the initial-response counterpart to
+            // generateContinuationCandidates' lazy source pagination.
+            while (
+              candidates.length < discoveryTargetCount &&
+              !forceNearbyDiscovery &&
+              suburb &&
+              !streetHint &&
+              !continuationPageDone &&
+              getRemainingCount(cacheKey) === 0
+            ) {
+              const nextWindow = await searchRealEstateListings({
+                suburb,
+                minPrice: effectiveMinPrice,
+                maxPrice: effectiveMaxPrice,
+                skipUrls: discoverySkipUrls,
+                includeNegotiation,
+                firstBatchSize: wantsDevelopmentDiscovery ? 24 : undefined,
+                startOffset: continuationPageOffset,
+                maxPages: plainListingBrowse ? GENERIC_PAGE_WINDOW : SUBDIVISION_PAGE_WINDOW,
+              }).catch((err) => {
+                req.log.warn({ err, suburb, offset: continuationPageOffset }, "Discovery: source window refill failed");
+                return null;
+              });
+
+              if (!nextWindow) break;
+              continuationPageOffset = nextWindow.nextOffset;
+              continuationPageTotal = nextWindow.totalAvailable;
+              continuationPageDone = nextWindow.done;
+
+              const inRangeWindow = (l: { price: number | null }) =>
+                listingMatchesPriceRange(l, effectiveMinPrice, effectiveMaxPrice, requireSourceBackedPrice);
+              const rankedWindow = strictStandardSubdivision
+                ? rankListingsForStrictSubdivision([...nextWindow.firstBatch, ...nextWindow.remainingListings])
+                : [...nextWindow.firstBatch, ...nextWindow.remainingListings];
+              const windowFiltered = filterAlreadyShownListings(rankListingsByStreetHint(
+                filterListingsByStreetHint(rankedWindow.filter(inRangeWindow), streetHint),
+                streetHint,
+              ), alreadyShownAddressKeys);
+
+              if (windowFiltered.length === 0) continue;
+
+              setListingCache(cacheKey, {
+                remainingListings: windowFiltered,
+                shownUrls: repeatShownAreaIntent ? [] : [...getShownUrls(cacheKey)],
+                suburb,
+                minPrice: effectiveMinPrice,
+                maxPrice: effectiveMaxPrice,
+              });
+
+              if (plainListingBrowse) {
+                candidates = topUpGenericListingCandidates(
+                  cacheKey,
+                  candidates,
+                  alreadyShownAddressKeys,
+                  discoveryTargetCount,
+                  discoveryBatchSize,
+                );
+              } else {
+                candidates = await topUpDiscoveryCandidates(
+                  cacheKey,
+                  candidates,
+                  discoveryCriteria,
+                  discoverPreOpts,
+                  alreadyShownAddressKeys,
+                  {
+                    batchSize: discoveryBatchSize,
+                    nonStrictAttemptLimit: 6,
+                    targetCount: discoveryTargetCount,
+                    indeterminateAccumulator: strictStandardSubdivision ? strictIndeterminate : undefined,
+                  },
+                );
+              }
+            }
+
             // ── NEARBY SUBURB FALLBACK ─────────────────────────────────────────
             const exhaustedByShownMemory =
               !repeatShownAreaIntent
@@ -5318,6 +5451,7 @@ router.post("/chat", async (req, res) => {
               && candidates.length === 0
               && !streetHint
               && getRemainingCount(cacheKey) === 0
+              && continuationPageDone
               && (
                 getShownUrls(cacheKey).length > 0
                 || alreadyShownFromHistory.length > 0
@@ -5330,23 +5464,9 @@ router.post("/chat", async (req, res) => {
               return;
             }
 
-            const strictPrimarySubdivisionExhausted =
-              strictStandardSubdivision
-              && !forceNearbyDiscovery
-              && candidates.length < discoveryTargetCount
-              && suburb
-              && !streetHint
-              && getRemainingCount(cacheKey) === 0;
-            if (strictPrimarySubdivisionExhausted) {
-              const exhaustedPayload = buildDiscoveryExhaustedChoicePayload(suburb, plainListingBrowse ? "generic_listing" : "scored_screening");
-              const translatedExhausted = await translateChatContent(exhaustedPayload, "clarification", chatLocale, chatTranslateTitleSchool);
-              res.json({ content: translatedExhausted, mode: "clarification", ...providerSignal });
-              return;
-            }
-
             // Only after the primary suburb queue is empty: avoid jumping to neighbours
             // when we still have unscanned listings or prescreen returned no UI rows this round.
-            if (candidates.length < discoveryTargetCount && suburb && !streetHint && getRemainingCount(cacheKey) === 0) {
+            if (candidates.length < discoveryTargetCount && suburb && !streetHint && getRemainingCount(cacheKey) === 0 && continuationPageDone && (!strictStandardSubdivision || forceNearbyDiscovery)) {
               const primaryCandidateCount = candidates.length;
               const nearbyList = await resolveNearbySuburbs(suburb, 8);
               // Run nearby-suburb scrapes concurrently and return as soon as the first
@@ -5418,7 +5538,7 @@ router.post("/chat", async (req, res) => {
               for (const { nearbySuburb, fallbackResult } of orderedResults) {
                 if (fallbackResult && fallbackResult.firstBatch.length > 0) {
                   const inRangeFallback = (l: { price: number | null }) =>
-                    l.price == null || (l.price >= effectiveMinPrice && l.price <= effectiveMaxPrice * 1.1);
+                    listingMatchesPriceRange(l, effectiveMinPrice, effectiveMaxPrice, requireSourceBackedPrice);
                   const filtered = filterAlreadyShownListings(rankListingsByStreetHint(
                     fallbackResult.firstBatch.filter(inRangeFallback),
                     streetHint,
@@ -5583,7 +5703,7 @@ router.post("/chat", async (req, res) => {
               indeterminate: uniqueIndeterminate,
               criteria: discoveryCriteria,
               preScreenOpts: {
-                allowMissingListingPrice: true,
+                allowMissingListingPrice: !requireSourceBackedPrice,
                 pricePlaceholderNzd: wantsDevelopmentDiscovery && !userTextHasPrice
                   ? 3_500_000
                   : Math.max(600_000, Math.round((effectiveMinPrice + effectiveMaxPrice) / 2)),
@@ -5627,7 +5747,16 @@ router.post("/chat", async (req, res) => {
           const noListings = candidates.length === 0;
 
           // Use pre-computed intro if available, otherwise generate one now for the no-results case
-          let aiIntro = (!noListings && prescreenedIntro) ? prescreenedIntro : "";
+          let aiIntro = noListings
+            ? buildDiscoveryNoListingsIntro({
+                suburb,
+                criteriaLabel,
+                minPrice: effectiveMinPrice,
+                maxPrice: effectiveMaxPrice,
+                explicitPrice: userTextHasPrice,
+                plainListingBrowse,
+              })
+            : prescreenedIntro;
           if (!aiIntro) {
             try {
               const criteriaContextGeneral = criteriaLabel ? ` (${criteriaLabel})` : "";
@@ -5721,12 +5850,27 @@ router.post("/chat", async (req, res) => {
                 pageOffset: continuationPageOffset,
                 pageTotal: continuationPageTotal,
                 pageDone: continuationPageDone,
+                requireSourceBackedPrice: userTextHasPrice,
                 log: req.log,
               }).catch((err) => {
                 req.log.warn({ err }, "Discovery continuation: failed to create token");
                 return null;
               })
             : null;
+
+          req.log.info(
+            {
+              suburb: continuationSuburb,
+              resultCount: candidates.length,
+              continuationCreated: Boolean(continuationToken),
+              remainingPool: continuationCacheKey ? getRemainingCount(continuationCacheKey) : 0,
+              pageDone: continuationPageDone,
+              pageOffset: continuationPageOffset,
+              pageTotal: continuationPageTotal,
+              requireSourceBackedPrice,
+            },
+            "Discovery: response assembled",
+          );
 
           const responsePayload = JSON.stringify({
             candidates,
@@ -6494,8 +6638,9 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
               ...getShownUrls(cacheKey),
               ...alreadyShownUrlsFromHistory,
             ]));
+            const requireSourceBackedPriceSn = hasExplicitPriceConstraint(userText);
             const discoverPreOptsSn = {
-              allowMissingListingPrice: true as const,
+              allowMissingListingPrice: !requireSourceBackedPriceSn,
               pricePlaceholderNzd: wantsDevelopmentSafetyNet
                 ? 3_500_000
                 : Math.max(600_000, Math.round((minPrice + maxPrice) / 2)),
@@ -6515,7 +6660,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
 
             if (searchResult && searchResult.firstBatch.length > 0) {
               const inRange = (l: { price: number | null }) =>
-                l.price == null || (l.price >= minPrice && l.price <= maxPrice * 1.1);
+                listingMatchesPriceRange(l, minPrice, maxPrice, requireSourceBackedPriceSn);
               const firstRanked = discoverPreOptsSn.strictStandardSubdivision ? rankListingsForStrictSubdivision(searchResult.firstBatch) : searchResult.firstBatch;
               const remainingRanked = discoverPreOptsSn.strictStandardSubdivision ? rankListingsForStrictSubdivision(searchResult.remainingListings) : searchResult.remainingListings;
               const firstFiltered = filterAlreadyShownListings(rankListingsByStreetHint(

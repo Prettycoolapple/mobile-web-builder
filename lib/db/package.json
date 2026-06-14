@@ -14,7 +14,8 @@
     "add-pending-agent-rea-licence": "node ./scripts/add-pending-agent-rea-licence.mjs",
     "add-anonymous-discovery-tables": "node ./scripts/add-anonymous-discovery-tables.mjs",
     "add-discovery-continuations": "node ./scripts/add-discovery-continuations.mjs",
-    "add-watchlist-table": "node ./scripts/add-watchlist-table.mjs"
+    "add-watchlist-table": "node ./scripts/add-watchlist-table.mjs",
+    "allow-guest-property-shares": "node ./scripts/allow-guest-property-shares.mjs"
   },
   "dependencies": {
     "drizzle-orm": "catalog:",

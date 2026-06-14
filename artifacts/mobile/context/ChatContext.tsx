@@ -49,6 +49,7 @@ export interface ChatMessage {
   clarification?: {
     question: string;
     options: string[];
+    optionActions?: Array<"repeat_origin" | "search_nearby">;
   };
   loadingMode?: "analyse" | "discover" | "followup";
   loadingHint?: LoadingHint;
@@ -58,6 +59,7 @@ export interface ChatMessage {
   reportGroup?: FeasibilityReportGroup;
   searchResults?: PropertyCandidate[];
   searchPresentation?: "generic_listing" | "scored_screening";
+  scrollToSearchResultIndex?: number;
   // The suburb this result block is browsing. Stored so the exhausted-discovery
   // choice chips can piggyback it back to the backend (keeping the repeat/nearby
   // suburb authoritative as the conversation moves Glendowie → Meadowbank → next).

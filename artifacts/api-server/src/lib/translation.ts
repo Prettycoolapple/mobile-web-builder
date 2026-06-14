@@ -31,6 +31,14 @@ export function isPredominantlyChinese(text: string, threshold = 0.3): boolean {
   return cjk / stripped.length >= threshold;
 }
 
+function isBadTranslationOutput(source: string, translated: string): boolean {
+  const out = translated.trim();
+  if (!out) return true;
+  if (/无法执行这个请求|请提供需要翻译|不能执行该请求|无法翻译|provide.*english/i.test(out)) return true;
+  if (!containsChinese(source) && !containsChinese(out)) return true;
+  return false;
+}
+
 // ─── Translation call (DeepSeek chat — low latency) ───────────────────────────
 // Strict translation prompt: preserve entities, numbers, JSON shapes, currency,
 // addresses and enum values. Translate natural-language prose only.
@@ -58,7 +66,7 @@ export async function translateToChinese(text: string): Promise<string> {
       contents: [{ role: "user", parts: [{ text }] }],
     });
     const out = (response.text ?? "").trim();
-    if (!out) return text;
+    if (isBadTranslationOutput(text, out)) return text;
     return out;
   } catch (err) {
     logger.warn({ err: (err as Error).message, sample: text.slice(0, 80) }, "translateToChinese failed — returning original");
@@ -91,6 +99,7 @@ export async function translateFreeTextToChinese(text: string): Promise<string> 
 
   const promise = (async () => {
     const out = await translateToChinese(text);
+    if (out === text && !containsChinese(text)) return out;
     if (freeTextTranslationCache.size >= FREE_TEXT_CACHE_MAX) {
       const drop = Math.ceil(FREE_TEXT_CACHE_MAX * 0.1);
       let i = 0;

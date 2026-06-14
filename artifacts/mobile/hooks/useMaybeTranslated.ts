@@ -10,14 +10,15 @@ import { getCachedTranslation, isProbablyChinese, translateOne } from "@/lib/tra
  * swapped in when it resolves. Used for listing descriptions/headlines on the
  * generic screening cards and the property detail screen.
  */
-export function useMaybeTranslated(text: string | null | undefined): string {
+export function useMaybeTranslated(text: string | null | undefined, pendingFallback?: string): string {
   const { locale } = useT();
   const { getApiHeaders } = useAuth();
   const source = text ?? "";
+  const fallback = pendingFallback ?? source;
 
   const [value, setValue] = useState<string>(() => {
     if (locale !== "zh" || !source.trim() || isProbablyChinese(source)) return source;
-    return getCachedTranslation(source) ?? source;
+    return getCachedTranslation(source) ?? fallback;
   });
 
   useEffect(() => {
@@ -27,20 +28,21 @@ export function useMaybeTranslated(text: string | null | undefined): string {
     }
     const cached = getCachedTranslation(source);
     if (cached != null) {
-      setValue(cached);
+      setValue(cached === source && !isProbablyChinese(source) ? fallback : cached);
       return;
     }
     let mounted = true;
-    setValue(source);
+    setValue(fallback);
     translateOne(getApiHeaders(), source)
       .then((translated) => {
-        if (mounted) setValue(translated);
+        if (!mounted) return;
+        setValue(translated === source && !isProbablyChinese(source) ? fallback : translated);
       })
       .catch(() => {});
     return () => {
       mounted = false;
     };
-  }, [source, locale, getApiHeaders]);
+  }, [source, fallback, locale, getApiHeaders]);
 
   return value;
 }

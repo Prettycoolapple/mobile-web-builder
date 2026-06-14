@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Share } from "react-native";
+import { Platform, Share } from "react-native";
 import { getApiBase } from "@/lib/api";
 import type {
   FeasibilityReport,
@@ -94,11 +94,20 @@ async function createShare(body: unknown, headers: ApiHeaders): Promise<ShareRes
   return { token: data.token, url: data.url };
 }
 
+async function shareText({ title, message, url }: { title: string; message: string; url: string }): Promise<void> {
+  const text = message.includes(url) ? message : `${message} ${url}`;
+  await Share.share(
+    Platform.OS === "ios"
+      ? { title, message: text }
+      : { title, message: text, url },
+  );
+}
+
 export async function shareCandidate(candidate: PropertyCandidate, headers: ApiHeaders): Promise<void> {
   const address = cleanAddress(candidate.address);
   if (!address) throw new Error("This property cannot be shared yet.");
   const share = await createShare({ kind: "candidate", address, candidate }, headers);
-  await Share.share({
+  await shareText({
     title: "Project Alpha property opportunity",
     message: `I found this Project Alpha property opportunity: ${address}. Open Project Alpha to view more: ${share.url}`,
     url: share.url,
@@ -109,7 +118,7 @@ export async function shareListing(listing: BrowseListing, headers: ApiHeaders):
   const address = cleanAddress(listing.address);
   if (!address) throw new Error("This listing cannot be shared yet.");
   const share = await createShare({ kind: "listing", address, listing }, headers);
-  await Share.share({
+  await shareText({
     title: "Project Alpha property listing",
     message: `I found this property listing on Project Alpha: ${address}. Open it here: ${share.url}`,
     url: share.url,
@@ -141,7 +150,7 @@ export async function shareReport(report: FeasibilityReport, headers: ApiHeaders
       listingPrice: report.propertyOverview?.listingPrice ?? null,
     },
   }, headers);
-  await Share.share({
+  await shareText({
     title: "Project Alpha feasibility analysis",
     message: `Project Alpha feasibility analysis for ${address}. Open Project Alpha to view the latest analysis: ${share.url}`,
     url: share.url,

@@ -42,14 +42,30 @@ interface WatchlistContextValue {
 const WatchlistContext = createContext<WatchlistContextValue | null>(null);
 
 /** Normalised dedup key — mirrors the analysis-key logic used on cards. */
+function normalizeWatchKey(value: string | null | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
 export function watchlistKeyOf(candidate: WatchlistCandidate): string {
-  return (candidate.listingUrl || candidate.address || "").trim().toLowerCase();
+  return normalizeWatchKey(candidate.listingUrl || candidate.address);
+}
+
+function watchlistAddressKeyOf(candidate: Pick<WatchlistCandidate, "address">): string {
+  return normalizeWatchKey(candidate.address);
+}
+
+function watchlistKeysOf(candidate: WatchlistCandidate): string[] {
+  return Array.from(new Set([
+    normalizeWatchKey(candidate.listingUrl),
+    watchlistAddressKeyOf(candidate),
+  ].filter(Boolean)));
 }
 
 export function WatchlistProvider({ children }: { children: React.ReactNode }) {
   const { user, getApiHeaders } = useAuth();
   const [items, setItems] = useState<WatchlistItem[]>([]);
   const [watchedKeys, setWatchedKeys] = useState<Set<string>>(new Set());
+  const [watchedAddressKeys, setWatchedAddressKeys] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   // Guards against a stale GET (from a previous user) overwriting newer state.
   const requestSeqRef = useRef(0);
@@ -58,6 +74,7 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
     if (!user) {
       setItems([]);
       setWatchedKeys(new Set());
+      setWatchedAddressKeys(new Set());
       return;
     }
     const seq = ++requestSeqRef.current;
@@ -69,7 +86,8 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
       if (seq !== requestSeqRef.current) return; // superseded
       const rows = data.items ?? [];
       setItems(rows);
-      setWatchedKeys(new Set(rows.map((r) => r.propertyKey)));
+      setWatchedKeys(new Set(rows.map((r) => normalizeWatchKey(r.propertyKey)).filter(Boolean)));
+      setWatchedAddressKeys(new Set(rows.map((r) => normalizeWatchKey(r.address)).filter(Boolean)));
     } catch {
       // Best-effort: leave existing state untouched on failure.
     } finally {
@@ -83,19 +101,27 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
     void refresh();
   }, [user?.id, refresh]);
 
-  const isKeyWatched = useCallback((key: string) => watchedKeys.has(key), [watchedKeys]);
+  const isKeyWatched = useCallback((key: string) => watchedKeys.has(normalizeWatchKey(key)), [watchedKeys]);
   const isWatched = useCallback(
-    (candidate: WatchlistCandidate) => watchedKeys.has(watchlistKeyOf(candidate)),
-    [watchedKeys],
+    (candidate: WatchlistCandidate) =>
+      watchlistKeysOf(candidate).some((key) => watchedKeys.has(key)) ||
+      watchedAddressKeys.has(watchlistAddressKeyOf(candidate)),
+    [watchedAddressKeys, watchedKeys],
   );
 
   const toggle = useCallback(
     async (candidate: WatchlistCandidate): Promise<ToggleResult> => {
       if (!user) return { requiresAuth: true };
 
-      const key = watchlistKeyOf(candidate);
+      const aliases = watchlistKeysOf(candidate);
+      const addressKey = watchlistAddressKeyOf(candidate);
+      const existingItem = items.find((item) =>
+        aliases.includes(normalizeWatchKey(item.propertyKey)) ||
+        normalizeWatchKey(item.address) === addressKey,
+      );
+      const key = existingItem?.propertyKey ?? watchlistKeyOf(candidate);
       if (!key) return {};
-      const wasWatched = watchedKeys.has(key);
+      const wasWatched = !!existingItem || aliases.some((alias) => watchedKeys.has(alias)) || watchedAddressKeys.has(addressKey);
       const nextWatched = !wasWatched;
 
       // Optimistic update.
@@ -103,6 +129,13 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
         const next = new Set(prev);
         if (nextWatched) next.add(key);
         else next.delete(key);
+        return next;
+      });
+      setWatchedAddressKeys((prev) => {
+        const next = new Set(prev);
+        const existingAddressKey = existingItem ? normalizeWatchKey(existingItem.address) : addressKey;
+        if (nextWatched) next.add(addressKey);
+        else next.delete(existingAddressKey);
         return next;
       });
       setItems((prev) => {
@@ -151,11 +184,18 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
           else next.delete(key);
           return next;
         });
+        setWatchedAddressKeys((prev) => {
+          const next = new Set(prev);
+          const existingAddressKey = existingItem ? normalizeWatchKey(existingItem.address) : addressKey;
+          if (wasWatched) next.add(existingAddressKey);
+          else next.delete(addressKey);
+          return next;
+        });
         void refresh();
         return { watched: wasWatched };
       }
     },
-    [user, watchedKeys, getApiHeaders, refresh],
+    [user, items, watchedAddressKeys, watchedKeys, getApiHeaders, refresh],
   );
 
   const value = useMemo<WatchlistContextValue>(

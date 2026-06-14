@@ -119,6 +119,7 @@ type DiscoveryNextResponse = {
   clarification?: {
     question: string;
     options: string[];
+    optionActions?: Array<"repeat_origin" | "search_nearby">;
     // Echoed from the exhausted payload so the choice chip can piggyback the
     // authoritative presentation + suburb (origin, on full-train drain).
     searchPresentation?: ChatMessage["searchPresentation"];
@@ -387,6 +388,8 @@ export default function SearchScreen() {
   const lastReportIdRef = useRef<string | null>(null);
 
   const reportMessageHeightsRef = useRef<Map<string, number>>(new Map());
+  const messageHeightsRef = useRef<Map<string, number>>(new Map());
+  const pendingSearchScrollTargetRef = useRef<{ messageId: string; index: number } | null>(null);
   const cardScorePollRef = useRef<{ addresses: string[]; sessionId: string; intervalId: ReturnType<typeof setInterval> | null }>({ addresses: [], sessionId: "", intervalId: null });
   const handleAnalyseRef = useRef<((address: string, selectedPhotoUrl?: string | null, selectedListingUrl?: string | null, selectedListingContext?: SelectedListingContext | null, skipAnalyseDisclaimer?: boolean, analysisKey?: string) => Promise<void>) | null>(null);
   const processedRouteAnalyseRef = useRef<string | null>(null);
@@ -555,6 +558,44 @@ export default function SearchScreen() {
     };
     setTimeout(run, 80);
   }, [listViewportHeight]);
+
+  const handleSearchResultLayout = useCallback((messageId: string, index: number, layout: { y: number; height: number }) => {
+    const pending = pendingSearchScrollTargetRef.current;
+    if (!pending || pending.messageId !== messageId || pending.index !== index) return;
+
+    let attempts = 0;
+    const run = () => {
+      attempts += 1;
+      const latestPending = pendingSearchScrollTargetRef.current;
+      if (!latestPending || latestPending.messageId !== messageId || latestPending.index !== index) return;
+
+      const messageHeight = messageHeightsRef.current.get(messageId) ?? 0;
+      if (messageHeight <= 0 || layout.height <= 0 || messageHeight < layout.y + layout.height) {
+        if (attempts < 8) setTimeout(run, 60);
+        return;
+      }
+
+      const messageIndex = messages.findIndex((message) => message.id === messageId);
+      const newerMessagesHeight = messageIndex >= 0
+        ? messages
+            .slice(messageIndex + 1)
+            .reduce((sum, message) => sum + (messageHeightsRef.current.get(message.id) ?? 0), 0)
+        : 0;
+
+      const offset = Math.max(0, newerMessagesHeight + messageHeight - layout.y - layout.height + 12);
+      pendingSearchScrollTargetRef.current = null;
+      flatListRef.current?.scrollToOffset({ offset, animated: true });
+      setShowJumpToLatest(offset > 80);
+
+      const sessionId = currentSessionId ?? currentSession?.id;
+      if (sessionId) {
+        setTimeout(() => {
+          updateMessage(messageId, { scrollToSearchResultIndex: undefined }, sessionId);
+        }, 250);
+      }
+    };
+    setTimeout(run, 40);
+  }, [currentSession?.id, currentSessionId, messages, updateMessage]);
 
   const showRatingStrip = useMemo(() => {
     if (!currentSession?.id || currentSession.skipFirstTurnRating) return false;
@@ -994,7 +1035,7 @@ export default function SearchScreen() {
   const showDiscoveryExhaustedChoice = useCallback(
     (
       clarification:
-        | { question: string; options: string[]; searchPresentation?: ChatMessage["searchPresentation"]; suburb?: string | null }
+        | { question: string; options: string[]; optionActions?: Array<"repeat_origin" | "search_nearby">; searchPresentation?: ChatMessage["searchPresentation"]; suburb?: string | null }
         | undefined,
       sessionId: string,
       context?: { searchPresentation?: ChatMessage["searchPresentation"]; suburb?: string },
@@ -1014,10 +1055,11 @@ export default function SearchScreen() {
         // chosen to match the backend's repeat/nearby intent detectors so the
         // round-trip still routes correctly.
         clarification: clarification
-          ? { question: clarification.question, options: clarification.options }
+          ? { question: clarification.question, options: clarification.options, optionActions: clarification.optionActions }
           : {
               question: t("search.exhausted_question"),
               options: [t("search.exhausted_see_again"), t("search.exhausted_nearby")],
+              optionActions: ["repeat_origin", "search_nearby"],
             },
         // Piggyback these back to /chat on the chip tap (keeps intent + the
         // refresh/expand suburb authoritative).
@@ -1035,7 +1077,7 @@ export default function SearchScreen() {
       continuationToken: string | null | undefined,
       exhausted: boolean | undefined,
       clarification:
-        | { question: string; options: string[]; searchPresentation?: ChatMessage["searchPresentation"]; suburb?: string | null }
+        | { question: string; options: string[]; optionActions?: Array<"repeat_origin" | "search_nearby">; searchPresentation?: ChatMessage["searchPresentation"]; suburb?: string | null }
         | undefined,
       sessionId: string,
       claimServed = false,
@@ -1066,12 +1108,15 @@ export default function SearchScreen() {
       if (advancedSuburb) {
         addMessage({ role: "assistant", content: t("search.now_showing_nearby", { suburb: advancedSuburb }), type: "text" }, sessionId);
       }
+      const firstNewResultIndex = message.searchResults?.length ?? 0;
       const nextResults = [...(message.searchResults ?? []), ...candidates];
       if (claimServed) {
         void claimDiscoveryCandidates(message.continuationToken, candidates);
       }
+      pendingSearchScrollTargetRef.current = { messageId: message.id, index: firstNewResultIndex };
       updateMessage(message.id, {
         searchResults: nextResults,
+        scrollToSearchResultIndex: firstNewResultIndex,
         continuationToken: continuationToken ?? null,
         ...(nextSuburb ? { suburb: nextSuburb } : {}),
         prefetchedSearchResults: undefined,
@@ -1306,10 +1351,11 @@ export default function SearchScreen() {
     };
   }, [pollBackgroundAnalyseJobs, user?.id]);
 
-  const handleSend = useCallback(async (overrideText?: string, skipAnalyseDisclaimer = false, continuePresentation?: "generic_listing" | "scored_screening", discoveryChoiceSuburb?: string) => {
+  const handleSend = useCallback(async (overrideText?: string, skipAnalyseDisclaimer = false, continuePresentation?: "generic_listing" | "scored_screening", discoveryChoiceSuburb?: string, displayText?: string) => {
     const text = (overrideText !== undefined ? overrideText : inputText).trim();
     if (!text && !isLoading) return;
     if (isLoading) return;
+    const visibleText = (displayText ?? text).trim();
     const detectedMode = detectClientMode(text);
     if (!user && detectedMode === "analyse") {
       await promptSignInForAnalysis({ type: "send", text });
@@ -1334,7 +1380,7 @@ export default function SearchScreen() {
     Keyboard.dismiss();
 
     const sessionId = sessionIdEarly;
-    addMessage({ role: "user", content: text, type: "text" }, sessionId);
+    addMessage({ role: "user", content: visibleText, type: "text" }, sessionId);
     setIsLoading(true);
 
     const lowerText = text.toLowerCase();
@@ -1600,6 +1646,7 @@ export default function SearchScreen() {
             clarificationType?: string;
             question?: string;
             options?: string[];
+            optionActions?: Array<"repeat_origin" | "search_nearby">;
             searchPresentation?: ChatMessage["searchPresentation"];
             suburb?: string | null;
           };
@@ -1624,7 +1671,7 @@ export default function SearchScreen() {
             updateLastMessage({
               type: "discovery_exhausted_choice",
               content: "",
-              clarification: { question: data.question || t("search.no_listings_msg"), options: data.options },
+              clarification: { question: data.question || t("search.no_listings_msg"), options: data.options, optionActions: data.optionActions },
               searchPresentation: data.searchPresentation,
               suburb: data.suburb ?? undefined,
             }, sessionId);
@@ -1801,7 +1848,7 @@ export default function SearchScreen() {
 
           if (data.mode === "clarification") {
             try {
-              const parsed = JSON.parse(data.content) as { clarificationType?: string; question: string; options: string[]; searchPresentation?: ChatMessage["searchPresentation"]; suburb?: string | null };
+              const parsed = JSON.parse(data.content) as { clarificationType?: string; question: string; options: string[]; optionActions?: Array<"repeat_origin" | "search_nearby">; searchPresentation?: ChatMessage["searchPresentation"]; suburb?: string | null };
               if (parsed.clarificationType === "subdivision" && Array.isArray(parsed.options) && parsed.options.length > 0) {
                 updateLastMessage({
                   type: "subdivision_clarification",
@@ -1828,6 +1875,7 @@ export default function SearchScreen() {
                   clarification: {
                     question: parsed.question || t("search.no_listings_msg"),
                     options: parsed.options,
+                    optionActions: parsed.optionActions,
                   },
                   // Carry the originating search's context so the chip tap can
                   // piggyback the screening intent + current suburb back to /chat.
@@ -2076,8 +2124,12 @@ export default function SearchScreen() {
   // suburb so the backend keeps the screening intent (generic vs subdivision)
   // and the current suburb authoritative instead of re-deriving them.
   const handleDiscoveryChoice = useCallback(
-    (message: ChatMessage, option: string) => {
-      void handleSend(option, false, message.searchPresentation, message.suburb);
+    (message: ChatMessage, option: string, optionIndex: number) => {
+      const action = message.clarification?.optionActions?.[optionIndex] ?? (optionIndex === 1 ? "search_nearby" : "repeat_origin");
+      const command = action === "search_nearby"
+        ? "[discovery_exhausted_choice:search_nearby]"
+        : "[discovery_exhausted_choice:repeat_origin]";
+      void handleSend(command, false, message.searchPresentation, message.suburb, option);
     },
     [handleSend],
   );
@@ -2188,6 +2240,7 @@ export default function SearchScreen() {
               clarificationType?: string;
               question?: string;
               options?: string[];
+              optionActions?: Array<"repeat_origin" | "search_nearby">;
               searchPresentation?: ChatMessage["searchPresentation"];
               suburb?: string | null;
             };
@@ -2213,7 +2266,7 @@ export default function SearchScreen() {
               updateLastMessage({
                 type: "discovery_exhausted_choice",
                 content: "",
-                clarification: { question: data.question || t("search.no_listings_msg"), options: data.options },
+                clarification: { question: data.question || t("search.no_listings_msg"), options: data.options, optionActions: data.optionActions },
                 searchPresentation: data.searchPresentation,
                 suburb: data.suburb ?? undefined,
               }, sessionId);
@@ -2473,11 +2526,12 @@ export default function SearchScreen() {
 
   const renderItem = useCallback(
     ({ item }: { item: ChatMessage }) => {
-      const handleLayout = item.type === "report"
-        ? (event: { nativeEvent: { layout: { height: number } } }) => {
+      const handleLayout = (event: { nativeEvent: { layout: { height: number } } }) => {
+        messageHeightsRef.current.set(item.id, event.nativeEvent.layout.height);
+        if (item.type === "report") {
             reportMessageHeightsRef.current.set(item.id, event.nativeEvent.layout.height);
-          }
-        : undefined;
+        }
+      };
 
       return (
         <View onLayout={handleLayout}>
@@ -2493,11 +2547,12 @@ export default function SearchScreen() {
             onAgentDismiss={handleAgentDismiss}
             onUpgrade={() => setShowPaywall(true)}
             onShowMore={handleShowMore}
+            onSearchResultLayout={handleSearchResultLayout}
           />
         </View>
       );
     },
-    [handleFollowUp, handleDiscoveryChoice, handleCardAnalyse, analysingPropertyKey, handleSend, handleConnect, handleDismiss, handleAgentDismiss, handleShowMore],
+    [handleFollowUp, handleDiscoveryChoice, handleCardAnalyse, analysingPropertyKey, handleSend, handleConnect, handleDismiss, handleAgentDismiss, handleShowMore, handleSearchResultLayout],
   );
 
   const keyExtractor = useCallback((item: ChatMessage) => item.id, []);

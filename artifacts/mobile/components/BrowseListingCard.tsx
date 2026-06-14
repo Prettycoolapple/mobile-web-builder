@@ -58,7 +58,8 @@ export function BrowseListingCard({ listing, onPress, onShare }: { listing: Brow
   const agency = listing.agent?.agencyName ?? (listing.source === "internal" ? t("lcard.agency_internal") : t("lcard.agency_curated"));
   const agentAvatar = resolveListingImageUrl(listing.agent?.avatarUrl);
   const teaserText = listing.teaser?.trim() || descriptionTeaser(listing.description);
-  const description = useMaybeTranslated(teaserText);
+  const fallbackDescription = `${listing.listingType === "for_sale" ? t("lcard.for_sale") : t("lcard.for_rent")} · ${propertyTypeLabel(t, listing.propertyType)}`;
+  const description = useMaybeTranslated(teaserText, fallbackDescription);
   const watchCandidate = useMemo(() => watchlistCandidateFromBrowse(listing), [listing]);
   const watched = isWatched(watchCandidate);
 

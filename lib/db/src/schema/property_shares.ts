@@ -16,7 +16,6 @@ export const propertyShares = pgTable(
     id: text("id").primaryKey().default(sql`gen_random_uuid()`),
     token: text("token").notNull().unique(),
     ownerUserId: text("owner_user_id")
-      .notNull()
       .references(() => profiles.id, { onDelete: "cascade" }),
     kind: text("kind").notNull(),
     address: text("address").notNull(),

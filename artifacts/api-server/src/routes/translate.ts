@@ -1,5 +1,4 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { requireAuth } from "../lib/auth";
 import { normaliseLocale } from "../lib/prompts";
 import { translateFreeTextBatchToChinese } from "../lib/translation";
 
@@ -19,7 +18,7 @@ const MAX_TEXT_LENGTH = 4000;
  * Non-zh locales and already-Chinese strings are echoed back unchanged at zero
  * LLM cost; results are cached server-side by exact source text.
  */
-router.post("/translate", requireAuth, async (req: Request, res: Response) => {
+router.post("/translate", async (req: Request, res: Response) => {
   try {
     const { texts } = req.body as { texts?: unknown };
     if (!Array.isArray(texts) || texts.some((t) => typeof t !== "string")) {

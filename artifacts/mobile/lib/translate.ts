@@ -17,6 +17,14 @@ export function isProbablyChinese(text: string): boolean {
   return CJK_RE.test(text);
 }
 
+function isBadTranslationOutput(source: string, translated: string): boolean {
+  const out = translated.trim();
+  if (!out) return true;
+  if (/无法执行这个请求|请提供需要翻译|不能执行该请求|无法翻译|provide.*english/i.test(out)) return true;
+  if (!isProbablyChinese(out) && !isProbablyChinese(source)) return true;
+  return false;
+}
+
 /** Synchronous cache peek so components can render the translation immediately on re-mount. */
 export function getCachedTranslation(text: string): string | undefined {
   return cache.get(text);
@@ -43,7 +51,9 @@ export async function translateOne(headers: Record<string, string>, text: string
       });
       const data = (await resp.json().catch(() => null)) as { translations?: string[] } | null;
       const out = data?.translations?.[0];
-      const final = typeof out === "string" && out.trim() ? out : text;
+      const isValid = typeof out === "string" && !isBadTranslationOutput(text, out);
+      const final = isValid ? out.trim() : text;
+      if (!isValid) return final;
       cache.set(text, final);
       return final;
     } catch {

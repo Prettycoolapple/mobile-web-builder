@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, or, sql } from "drizzle-orm";
 import { db, watchlistItems, withDbRetry } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 
@@ -81,7 +81,13 @@ router.post("/watchlist/toggle", requireAuth, async (req, res) => {
       db
         .select({ id: watchlistItems.id })
         .from(watchlistItems)
-        .where(and(eq(watchlistItems.userId, userId), eq(watchlistItems.propertyKey, propertyKey)))
+        .where(and(
+          eq(watchlistItems.userId, userId),
+          or(
+            eq(watchlistItems.propertyKey, propertyKey),
+            sql`lower(trim(${watchlistItems.address})) = ${address.toLowerCase()}`,
+          ),
+        ))
         .limit(1),
     );
 
@@ -89,7 +95,7 @@ router.post("/watchlist/toggle", requireAuth, async (req, res) => {
       await withDbRetry(() =>
         db
           .delete(watchlistItems)
-          .where(and(eq(watchlistItems.userId, userId), eq(watchlistItems.propertyKey, propertyKey))),
+          .where(and(eq(watchlistItems.userId, userId), eq(watchlistItems.id, existing.id))),
       );
       res.json({ watched: false });
       return;
