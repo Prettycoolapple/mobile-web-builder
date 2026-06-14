@@ -19,7 +19,7 @@ import { useColors } from "@/hooks/useColors";
 import { useChat, ChatMessage, FeasibilityReport, FeasibilityReportGroup, PropertyCandidate, SelectedListingContext } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
 import { useWatchlist, WatchlistItem } from "@/context/WatchlistContext";
-import { confirmRemoveFromWatchlist } from "@/lib/watchlist-confirm";
+import { confirmRemoveFromWatchlist, notifyWatchlistError } from "@/lib/watchlist-confirm";
 import { useFocusEffect, useRouter } from "expo-router";
 import { getApiBase } from "@/lib/api";
 import { useT, getCurrentLocale } from "@/lib/i18n";
@@ -217,7 +217,8 @@ function WatchlistPropertyCard({ candidate, onShare, onAnalyse }: WatchlistPrope
   // watchlist context, so the optimistic toggle drops this card immediately.
   const handleRemove = async () => {
     if (!(await confirmRemoveFromWatchlist(t))) return;
-    await toggle(candidate);
+    const result = await toggle(candidate);
+    if (result.error) notifyWatchlistError(t);
   };
 
   const heartButton = (

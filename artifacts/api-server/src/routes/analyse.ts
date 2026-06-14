@@ -20,6 +20,7 @@ import {
   sanitizeAssistantProse,
   resolveDelegatedDiscoverSuburb,
   Message,
+  type ChatIntent,
 } from "../lib/claude";
 import { verifyActiveToken } from "../lib/auth";
 import { extractNZAddress } from "../lib/address-parser";
@@ -1009,6 +1010,69 @@ function isPlainListingBrowseWithoutDevelopment(userText: string): boolean {
     && !isStandardSubdivisionDiscoveryIntent(userText);
 }
 
+function inferPresentationFromSearchText(text: string): DiscoverySearchPresentation {
+  if (isDevelopmentDiscoveryIntent(text) || isStandardSubdivisionDiscoveryIntent(text)) {
+    return "scored_screening";
+  }
+  return "generic_listing";
+}
+
+function findLastSubstantiveSearchPresentation(
+  threadMessages: Message[] | undefined,
+  currentUserText: string,
+): DiscoverySearchPresentation | null {
+  for (const msg of [...(threadMessages ?? [])].reverse()) {
+    if (msg.role !== "user" || !msg.content) continue;
+    const prevText = msg.content;
+    if (prevText === currentUserText) continue;
+    if (isDiscoverStreetContinuation(prevText)) continue;
+    if (hasNumberedStreetAddress(prevText)) continue;
+    return inferPresentationFromSearchText(prevText);
+  }
+  return null;
+}
+
+function resolveDiscoveryPresentation(input: {
+  userText: string;
+  discoveryCriteria: string;
+  intent?: Pick<ChatIntent, "discoveryPresentation"> | null;
+  messages?: Message[];
+  isFollowUp: boolean;
+  continuePresentation?: DiscoverySearchPresentation;
+  repeatShownAreaIntent?: boolean;
+  forceNearbyDiscovery?: boolean;
+}): DiscoverySearchPresentation {
+  if (input.continuePresentation) return input.continuePresentation;
+
+  // A fresh market-availability request must reset to plain listing cards, even
+  // if earlier turns were about subdivision/development.
+  if (isPlainListingBrowseWithoutDevelopment(input.userText)) return "generic_listing";
+  if (isDevelopmentDiscoveryIntent(input.userText) || isStandardSubdivisionDiscoveryIntent(input.userText)) {
+    return "scored_screening";
+  }
+
+  if (input.intent?.discoveryPresentation) return input.intent.discoveryPresentation;
+
+  const shouldInherit =
+    input.repeatShownAreaIntent ||
+    input.forceNearbyDiscovery ||
+    (input.isFollowUp && isDiscoverStreetContinuation(input.userText)) ||
+    (
+      input.isFollowUp &&
+      !isListingBrowseIntent(input.userText) &&
+      !isDevelopmentDiscoveryIntent(input.userText) &&
+      !isStandardSubdivisionDiscoveryIntent(input.userText)
+    );
+  if (shouldInherit) {
+    return findLastSubstantiveSearchPresentation(input.messages, input.userText) ?? "generic_listing";
+  }
+
+  if (isDevelopmentDiscoveryIntent(input.discoveryCriteria) || isStandardSubdivisionDiscoveryIntent(input.discoveryCriteria)) {
+    return "scored_screening";
+  }
+  return "generic_listing";
+}
+
 type DiscoverySuburbResolution =
   | { status: "valid"; suburb: string; original: string | null }
   | { status: "invalid"; message: string };
@@ -1181,14 +1245,33 @@ function filterAlreadyShownCandidates(
   return candidates.filter((candidate) => !isAlreadyShownAddress(candidate.address, shownKeys));
 }
 
-function listingMatchesPriceRange(
-  listing: { price: number | null },
+/**
+ * Order a raw listing pool for a price-range search. Numeric prices outside the
+ * range (`[minPrice, maxPrice * 1.1]`) are always dropped.
+ *
+ * When the user gave an explicit price range (`requireSourceBackedPrice`),
+ * priced in-range listings lead and unpriced negotiation/auction listings
+ * (`price == null`) follow — *included* rather than excluded, since dropping
+ * them yields empty results in negotiation-heavy suburbs (Kohimarama, Remuera),
+ * and the card clearly labels them "By negotiation". With no explicit range,
+ * unpriced listings stay first-class in a single ranked stream (prior behaviour).
+ */
+function orderListingsByPriceTier(
+  listings: ListingResult[],
   minPrice: number,
   maxPrice: number,
+  isStrict: boolean,
   requireSourceBackedPrice: boolean,
-): boolean {
-  if (listing.price == null) return !requireSourceBackedPrice;
-  return listing.price >= minPrice && listing.price <= maxPrice * 1.1;
+): ListingResult[] {
+  const rank = (xs: ListingResult[]) => (isStrict ? rankListingsForStrictSubdivision(xs) : xs);
+  const inNumericRange = (l: ListingResult) =>
+    l.price != null && l.price >= minPrice && l.price <= maxPrice * 1.1;
+  if (!requireSourceBackedPrice) {
+    return rank(listings.filter((l) => l.price == null || inNumericRange(l)));
+  }
+  const priced = listings.filter(inNumericRange);
+  const unpriced = listings.filter((l) => l.price == null);
+  return [...rank(priced), ...rank(unpriced)];
 }
 
 const INTERNAL_SPONSORED_LISTING_URL_PREFIX = "projectalpha://listing/";
@@ -1941,8 +2024,6 @@ async function generateContinuationCandidates(args: {
   const minP = args.minPrice ?? 0;
   const maxP = args.maxPrice ?? 20_000_000;
   const requireSourceBackedPrice = args.state.requireSourceBackedPrice === true;
-  const inRange = (l: { price: number | null }) =>
-    listingMatchesPriceRange(l, minP, maxP, requireSourceBackedPrice);
 
   // Pick the next page of candidates from a given listing pool, honouring the
   // presentation type. Returns the leftover pool so the caller can persist it.
@@ -1966,7 +2047,11 @@ async function generateContinuationCandidates(args: {
       const preScreenOpts = {
         pricePlaceholderNzd: 3_500_000,
         ...(args.state.preScreenOpts ?? {}),
-        allowMissingListingPrice: !requireSourceBackedPrice,
+        // Always let unpriced (negotiation/auction) listings through pre-screen
+        // with a flagged scoring placeholder; orderListingsByPriceTier ranks
+        // them after priced in-range matches and the card shows their real
+        // "By negotiation" text rather than the placeholder number.
+        allowMissingListingPrice: true,
       } as {
         allowMissingListingPrice?: boolean;
         pricePlaceholderNzd?: number;
@@ -2025,12 +2110,6 @@ async function generateContinuationCandidates(args: {
   const isStrict = (args.state.preScreenOpts as { strictStandardSubdivision?: boolean } | undefined)?.strictStandardSubdivision === true;
   const pageWindow = isGeneric ? GENERIC_PAGE_WINDOW : SUBDIVISION_PAGE_WINDOW;
 
-  // Order a freshly-fetched window the same way the primary search does so the
-  // ranked "best development sites first" ordering carries into refilled pages
-  // (strict subdivision only — generic and non-strict scored keep source order).
-  const orderWindow = (pool: ListingResult[]): ListingResult[] =>
-    isStrict ? rankListingsForStrictSubdivision(pool) : pool;
-
   // Pull one more window of the CURRENT suburb's source pages, advancing the
   // cursor. Returns the freshly-fetched, in-range, not-yet-shown listings (may be
   // empty if that window was all already shown — the caller loops to the next).
@@ -2051,7 +2130,13 @@ async function generateContinuationCandidates(args: {
     pageTotal = win.totalAvailable;
     pageDone = win.done;
     return filterAlreadyShownListings(
-      orderWindow([...win.firstBatch, ...win.remainingListings].filter(inRange)),
+      orderListingsByPriceTier(
+        [...win.firstBatch, ...win.remainingListings],
+        minP,
+        maxP,
+        isStrict,
+        requireSourceBackedPrice,
+      ),
       args.shownKeys,
     );
   };
@@ -2076,7 +2161,13 @@ async function generateContinuationCandidates(args: {
     pageTotal = fetched.totalAvailable;
     pageDone = fetched.done;
     return filterAlreadyShownListings(
-      orderWindow([...fetched.firstBatch, ...fetched.remainingListings].filter(inRange)),
+      orderListingsByPriceTier(
+        [...fetched.firstBatch, ...fetched.remainingListings],
+        minP,
+        maxP,
+        isStrict,
+        requireSourceBackedPrice,
+      ),
       args.shownKeys,
     );
   };
@@ -4553,7 +4644,6 @@ router.post("/chat", async (req, res) => {
     discoveryChoiceSuburb?: string;
   };
   const continueGenericListing = continuePresentation === "generic_listing";
-  const continueScoredScreening = continuePresentation === "scored_screening";
   const translateSafeChatContent = async (content: string, mode: string | undefined): Promise<string> => {
     const proseMode = mode !== "analyse" && mode !== "discover" && mode !== "clarification";
     const preSanitized = proseMode ? sanitizeAssistantProse(content, chatLocale) : content;
@@ -4969,7 +5059,17 @@ router.post("/chat", async (req, res) => {
           }
           const isFollowUp = intent.isFollowUp || contextualAreaBrowse || isDiscoverStreetContinuation(userText) || repeatShownAreaIntent || forceNearbyDiscovery;
           const discoveryCriteria = buildDiscoveryCriteriaText(messages, userText, intent.criteria);
-          let plainListingBrowse = isPlainListingBrowseWithoutDevelopment(userText);
+          const searchPresentation = resolveDiscoveryPresentation({
+            userText,
+            discoveryCriteria,
+            intent,
+            messages,
+            isFollowUp,
+            continuePresentation,
+            repeatShownAreaIntent,
+            forceNearbyDiscovery,
+          });
+          let plainListingBrowse = searchPresentation === "generic_listing";
 
           if (continuePresentation) {
             // Explicit signal from the "Show more" button — it knows the presentation
@@ -5040,6 +5140,7 @@ router.post("/chat", async (req, res) => {
             }
           }
 
+          plainListingBrowse = searchPresentation === "generic_listing";
           const wantsDevelopmentDiscovery = !plainListingBrowse && isDevelopmentDiscoveryIntent(discoveryCriteria);
           const includeNegotiation = intent.includeNegotiation || wantsDevelopmentDiscovery;
           const userTextHasPrice = intent.minPrice !== null || intent.maxPrice !== null;
@@ -5169,7 +5270,7 @@ router.post("/chat", async (req, res) => {
             const streetHint = extractDiscoverStreetHintFromThread(messages, userText, isFollowUp);
             const cacheKey = makeCacheKey(suburb, effectiveMinPrice, effectiveMaxPrice, streetHint);
             const discoverPreOpts = {
-              allowMissingListingPrice: !requireSourceBackedPrice,
+              allowMissingListingPrice: true,
               pricePlaceholderNzd: wantsDevelopmentDiscovery && !userTextHasPrice
                 ? 3_500_000
                 : Math.max(600_000, Math.round((effectiveMinPrice + effectiveMaxPrice) / 2)),
@@ -5274,17 +5375,14 @@ router.post("/chat", async (req, res) => {
               }
 
               if (searchResult && searchResult.firstBatch.length > 0) {
-                const inRange = (l: { price: number | null }) =>
-                  listingMatchesPriceRange(l, effectiveMinPrice, effectiveMaxPrice, requireSourceBackedPrice);
-
-                const firstRanked = strictStandardSubdivision ? rankListingsForStrictSubdivision(searchResult.firstBatch) : searchResult.firstBatch;
-                const remainingRanked = strictStandardSubdivision ? rankListingsForStrictSubdivision(searchResult.remainingListings) : searchResult.remainingListings;
+                const firstRanked = orderListingsByPriceTier(searchResult.firstBatch, effectiveMinPrice, effectiveMaxPrice, strictStandardSubdivision, requireSourceBackedPrice);
+                const remainingRanked = orderListingsByPriceTier(searchResult.remainingListings, effectiveMinPrice, effectiveMaxPrice, strictStandardSubdivision, requireSourceBackedPrice);
                 const firstFiltered = filterAlreadyShownListings(rankListingsByStreetHint(
-                  filterListingsByStreetHint(firstRanked.filter(inRange), streetHint),
+                  filterListingsByStreetHint(firstRanked, streetHint),
                   streetHint,
                 ), alreadyShownAddressKeys);
                 const remainingFiltered = filterAlreadyShownListings(rankListingsByStreetHint(
-                  filterListingsByStreetHint(remainingRanked.filter(inRange), streetHint),
+                  filterListingsByStreetHint(remainingRanked, streetHint),
                   streetHint,
                 ), alreadyShownAddressKeys);
 
@@ -5398,13 +5496,15 @@ router.post("/chat", async (req, res) => {
               continuationPageTotal = nextWindow.totalAvailable;
               continuationPageDone = nextWindow.done;
 
-              const inRangeWindow = (l: { price: number | null }) =>
-                listingMatchesPriceRange(l, effectiveMinPrice, effectiveMaxPrice, requireSourceBackedPrice);
-              const rankedWindow = strictStandardSubdivision
-                ? rankListingsForStrictSubdivision([...nextWindow.firstBatch, ...nextWindow.remainingListings])
-                : [...nextWindow.firstBatch, ...nextWindow.remainingListings];
+              const rankedWindow = orderListingsByPriceTier(
+                [...nextWindow.firstBatch, ...nextWindow.remainingListings],
+                effectiveMinPrice,
+                effectiveMaxPrice,
+                strictStandardSubdivision,
+                requireSourceBackedPrice,
+              );
               const windowFiltered = filterAlreadyShownListings(rankListingsByStreetHint(
-                filterListingsByStreetHint(rankedWindow.filter(inRangeWindow), streetHint),
+                filterListingsByStreetHint(rankedWindow, streetHint),
                 streetHint,
               ), alreadyShownAddressKeys);
 
@@ -5537,10 +5637,15 @@ router.post("/chat", async (req, res) => {
 
               for (const { nearbySuburb, fallbackResult } of orderedResults) {
                 if (fallbackResult && fallbackResult.firstBatch.length > 0) {
-                  const inRangeFallback = (l: { price: number | null }) =>
-                    listingMatchesPriceRange(l, effectiveMinPrice, effectiveMaxPrice, requireSourceBackedPrice);
+                  const orderedFallback = orderListingsByPriceTier(
+                    fallbackResult.firstBatch,
+                    effectiveMinPrice,
+                    effectiveMaxPrice,
+                    strictStandardSubdivision,
+                    requireSourceBackedPrice,
+                  );
                   const filtered = filterAlreadyShownListings(rankListingsByStreetHint(
-                    fallbackResult.firstBatch.filter(inRangeFallback),
+                    orderedFallback,
                     streetHint,
                   ), alreadyShownAddressKeys);
                   if (filtered.length > 0) {
@@ -5560,7 +5665,7 @@ router.post("/chat", async (req, res) => {
                     const priorShownFallback = [...getShownUrls(fallbackCacheKey)];
                     setListingCache(fallbackCacheKey, {
                       remainingListings: filterAlreadyShownListings(rankListingsByStreetHint(
-                        fallbackResult.remainingListings.filter(inRangeFallback),
+                        orderListingsByPriceTier(fallbackResult.remainingListings, effectiveMinPrice, effectiveMaxPrice, strictStandardSubdivision, requireSourceBackedPrice),
                         streetHint,
                       ), alreadyShownAddressKeys),
                       shownUrls: priorShownFallback,
@@ -5703,7 +5808,7 @@ router.post("/chat", async (req, res) => {
               indeterminate: uniqueIndeterminate,
               criteria: discoveryCriteria,
               preScreenOpts: {
-                allowMissingListingPrice: !requireSourceBackedPrice,
+                allowMissingListingPrice: true,
                 pricePlaceholderNzd: wantsDevelopmentDiscovery && !userTextHasPrice
                   ? 3_500_000
                   : Math.max(600_000, Math.round((effectiveMinPrice + effectiveMaxPrice) / 2)),
@@ -5879,7 +5984,7 @@ router.post("/chat", async (req, res) => {
             dataSource,
             noListings,
             aiIntro,
-            searchPresentation: plainListingBrowse ? "generic_listing" : "scored_screening",
+            searchPresentation,
             continuationToken,
           });
           const translatedContent = await translateChatContent(responsePayload, "discover", chatLocale, chatTranslateTitleSchool);
@@ -6605,11 +6710,22 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
         const aiHit = userSuburb == null ? await findSuburbInTextViaIndex(content) : null;
         const suburb = userSuburb ?? (aiHit ? aiHit.title.toLowerCase() : null);
         const safetyNetCriteria = buildDiscoveryCriteriaText(messages, userText, null);
-        let plainListingBrowseSafetyNet = isPlainListingBrowseWithoutDevelopment(userText);
+        const safetyNetFollowUp = isDiscoverStreetContinuation(userText);
+        const searchPresentationSafetyNet = resolveDiscoveryPresentation({
+          userText,
+          discoveryCriteria: safetyNetCriteria,
+          intent,
+          messages,
+          isFollowUp: safetyNetFollowUp,
+          continuePresentation,
+          repeatShownAreaIntent,
+          forceNearbyDiscovery,
+        });
+        let plainListingBrowseSafetyNet = searchPresentationSafetyNet === "generic_listing";
         if (continuePresentation) {
           // Explicit "Show more" button signal — honour it directly (same as discover flow above)
           plainListingBrowseSafetyNet = continueGenericListing;
-        } else if (!plainListingBrowseSafetyNet && isDiscoverStreetContinuation(userText)) {
+        } else if (!plainListingBrowseSafetyNet && safetyNetFollowUp) {
           // Inherit presentation type from history on typed continuation signals (same logic as discover flow above)
           for (const msg of [...messages].reverse()) {
             if (msg.role !== "user" || !msg.content) continue;
@@ -6621,6 +6737,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             break;
           }
         }
+        plainListingBrowseSafetyNet = searchPresentationSafetyNet === "generic_listing";
         const wantsDevelopmentSafetyNet = !plainListingBrowseSafetyNet && isDevelopmentDiscoveryIntent(safetyNetCriteria);
         const strictStandardSubdivisionSafetyNet = !plainListingBrowseSafetyNet && isStandardSubdivisionDiscoveryIntent(safetyNetCriteria);
         const includeNegotiation = wantsDevelopmentSafetyNet || /negotiat|without\s+price|no\s+price|poa|tender|auction/i.test(userText);
@@ -6640,7 +6757,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             ]));
             const requireSourceBackedPriceSn = hasExplicitPriceConstraint(userText);
             const discoverPreOptsSn = {
-              allowMissingListingPrice: !requireSourceBackedPriceSn,
+              allowMissingListingPrice: true,
               pricePlaceholderNzd: wantsDevelopmentSafetyNet
                 ? 3_500_000
                 : Math.max(600_000, Math.round((minPrice + maxPrice) / 2)),
@@ -6659,16 +6776,14 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             }).catch(() => null);
 
             if (searchResult && searchResult.firstBatch.length > 0) {
-              const inRange = (l: { price: number | null }) =>
-                listingMatchesPriceRange(l, minPrice, maxPrice, requireSourceBackedPriceSn);
-              const firstRanked = discoverPreOptsSn.strictStandardSubdivision ? rankListingsForStrictSubdivision(searchResult.firstBatch) : searchResult.firstBatch;
-              const remainingRanked = discoverPreOptsSn.strictStandardSubdivision ? rankListingsForStrictSubdivision(searchResult.remainingListings) : searchResult.remainingListings;
+              const firstRanked = orderListingsByPriceTier(searchResult.firstBatch, minPrice, maxPrice, discoverPreOptsSn.strictStandardSubdivision, requireSourceBackedPriceSn);
+              const remainingRanked = orderListingsByPriceTier(searchResult.remainingListings, minPrice, maxPrice, discoverPreOptsSn.strictStandardSubdivision, requireSourceBackedPriceSn);
               const firstFiltered = filterAlreadyShownListings(rankListingsByStreetHint(
-                filterListingsByStreetHint(firstRanked.filter(inRange), streetHintSn),
+                filterListingsByStreetHint(firstRanked, streetHintSn),
                 streetHintSn,
               ), alreadyShownAddressKeys);
               const remainingFiltered = filterAlreadyShownListings(rankListingsByStreetHint(
-                filterListingsByStreetHint(remainingRanked.filter(inRange), streetHintSn),
+                filterListingsByStreetHint(remainingRanked, streetHintSn),
                 streetHintSn,
               ), alreadyShownAddressKeys);
               const priorShownSn = [...getShownUrls(cacheKey)];
@@ -6890,7 +7005,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                   dataSource: safetyNetDataSource,
                   noListings: false,
                   aiIntro,
-                  searchPresentation: plainListingBrowseSafetyNet ? "generic_listing" : "scored_screening",
+                  searchPresentation: searchPresentationSafetyNet,
                 });
                 const translatedPayload = await translateChatContent(payload, "discover", chatLocale, chatTranslateTitleSchool);
                 res.json({ content: translatedPayload, mode: "discover", ...providerSignal });

@@ -526,6 +526,11 @@ export interface PropertyCandidate {
   isParentParcelSuspect?: boolean;
   isAlreadySubdividedChild?: boolean;
   priceApprox?: boolean;
+  /**
+   * True when `price` is an internal scoring placeholder (listing had no
+   * source-backed asking price). Show `priceDisplay` text instead of the number.
+   */
+  priceIsPlaceholder?: boolean;
   /** Floor (dwelling) area in m². */
   floorArea?: number;
   floorAreaApprox?: boolean;

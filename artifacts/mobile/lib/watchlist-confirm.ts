@@ -21,3 +21,12 @@ export function confirmRemoveFromWatchlist(t: (key: string) => string): Promise<
     );
   });
 }
+
+/**
+ * Surfaced when a watchlist save/remove fails to reach the server and the
+ * optimistic change was rolled back, so the user knows it didn't stick rather
+ * than discovering an empty watchlist later.
+ */
+export function notifyWatchlistError(t: (key: string) => string): void {
+  Alert.alert(t("watchlist.save_failed_title"), t("watchlist.save_failed_body"));
+}

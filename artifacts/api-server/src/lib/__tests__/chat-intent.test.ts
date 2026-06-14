@@ -67,6 +67,7 @@ describe("chat intent extraction", () => {
       minPrice: null,
       maxPrice: null,
       criteria: "subdividable properties in coatesville",
+      discoveryPresentation: "scored_screening",
       isFollowUp: false,
       includeNegotiation: false,
       needsClarification: false,
@@ -85,5 +86,185 @@ describe("chat intent extraction", () => {
     expect(intent.intentCategory).toBe("property_discovery");
     expect(intent.execution).toBe("show_listing_cards");
     expect(intent.mode).toBe("discover");
+    expect(intent.discoveryPresentation).toBe("scored_screening");
+  });
+
+  it("classifies currently available suburb searches as generic listing discovery", async () => {
+    mockIntentJson({
+      intentCategory: "property_discovery",
+      subject: "market",
+      execution: "show_listing_cards",
+      confidence: 0.95,
+      mode: "discover",
+      address: null,
+      suburb: "st heliers",
+      minPrice: null,
+      maxPrice: null,
+      criteria: "currently available listings in Saint Heliers",
+      discoveryPresentation: "generic_listing",
+      isFollowUp: false,
+      includeNegotiation: false,
+      needsClarification: false,
+      clarificationQuestion: null,
+      wantsProviderRecommendation: false,
+      wantsAnotherProvider: false,
+      suggestedDiscipline: null,
+      wideScanSubdivisionIntent: false,
+      reasoning: "The user is asking to browse current listings.",
+    });
+
+    const intent = await extractChatIntent([
+      { role: "user", content: "What is currently available in Saint Heliers?" },
+    ]);
+
+    expect(intent.intentCategory).toBe("property_discovery");
+    expect(intent.execution).toBe("show_listing_cards");
+    expect(intent.mode).toBe("discover");
+    expect(intent.discoveryPresentation).toBe("generic_listing");
+  });
+
+  it("classifies currently on-market suburb searches as generic listing discovery", async () => {
+    mockIntentJson({
+      intentCategory: "property_discovery",
+      subject: "market",
+      execution: "show_listing_cards",
+      confidence: 0.95,
+      mode: "discover",
+      address: null,
+      suburb: "highland park",
+      minPrice: null,
+      maxPrice: null,
+      criteria: "currently on the market in Highland Park",
+      discoveryPresentation: "generic_listing",
+      isFollowUp: false,
+      includeNegotiation: false,
+      needsClarification: false,
+      clarificationQuestion: null,
+      wantsProviderRecommendation: false,
+      wantsAnotherProvider: false,
+      suggestedDiscipline: null,
+      wideScanSubdivisionIntent: false,
+      reasoning: "The user is asking to browse current listings.",
+    });
+
+    const intent = await extractChatIntent([
+      { role: "user", content: "What's currently on the market in Highland Park?" },
+    ]);
+
+    expect(intent.mode).toBe("discover");
+    expect(intent.discoveryPresentation).toBe("generic_listing");
+  });
+
+  it("classifies area-wide subdividable searches as scored screening discovery", async () => {
+    mockIntentJson({
+      intentCategory: "property_discovery",
+      subject: "subdivision",
+      execution: "show_listing_cards",
+      confidence: 0.95,
+      mode: "discover",
+      address: null,
+      suburb: "orakei",
+      minPrice: null,
+      maxPrice: null,
+      criteria: "subdividable properties in Orakei",
+      discoveryPresentation: "scored_screening",
+      isFollowUp: false,
+      includeNegotiation: true,
+      needsClarification: false,
+      clarificationQuestion: null,
+      wantsProviderRecommendation: false,
+      wantsAnotherProvider: false,
+      suggestedDiscipline: null,
+      wideScanSubdivisionIntent: true,
+      reasoning: "The user wants subdivision opportunities.",
+    });
+
+    const intent = await extractChatIntent([
+      { role: "user", content: "What is subdividable in Orakei?" },
+    ]);
+
+    expect(intent.mode).toBe("discover");
+    expect(intent.discoveryPresentation).toBe("scored_screening");
+  });
+
+  it("resets a fresh plain availability search to generic after earlier subdivision context", async () => {
+    mockIntentJson({
+      intentCategory: "property_discovery",
+      subject: "market",
+      execution: "show_listing_cards",
+      confidence: 0.95,
+      mode: "discover",
+      address: null,
+      suburb: "st heliers",
+      minPrice: null,
+      maxPrice: null,
+      criteria: "currently available listings in Saint Heliers",
+      discoveryPresentation: "generic_listing",
+      isFollowUp: false,
+      includeNegotiation: false,
+      needsClarification: false,
+      clarificationQuestion: null,
+      wantsProviderRecommendation: false,
+      wantsAnotherProvider: false,
+      suggestedDiscipline: null,
+      wideScanSubdivisionIntent: false,
+      reasoning: "The latest message is a fresh plain availability search.",
+    });
+
+    const intent = await extractChatIntent([
+      { role: "user", content: "What is subdividable in Orakei?" },
+      { role: "assistant", content: "I found a few subdivision opportunities in Orakei." },
+      { role: "user", content: "What is currently available in Saint Heliers?" },
+    ]);
+
+    expect(intent.mode).toBe("discover");
+    expect(intent.discoveryPresentation).toBe("generic_listing");
+  });
+
+  it("keeps a price clarification after subdivision discovery as scored screening", async () => {
+    mockIntentJson({
+      intentCategory: "property_discovery",
+      subject: "subdivision",
+      execution: "show_listing_cards",
+      confidence: 0.9,
+      mode: "discover",
+      address: null,
+      suburb: "orakei",
+      minPrice: 2500000,
+      maxPrice: 3000000,
+      criteria: "subdividable properties in Orakei between $2.5M and $3M",
+      discoveryPresentation: "scored_screening",
+      isFollowUp: true,
+      includeNegotiation: false,
+      needsClarification: false,
+      clarificationQuestion: null,
+      wantsProviderRecommendation: false,
+      wantsAnotherProvider: false,
+      suggestedDiscipline: null,
+      wideScanSubdivisionIntent: true,
+      reasoning: "The user answered the price question for an existing subdivision search.",
+    });
+
+    const intent = await extractChatIntent([
+      { role: "user", content: "What is subdividable in Orakei?" },
+      { role: "assistant", content: "Do you have a price range in mind?" },
+      { role: "user", content: "$2.5M-$3M" },
+    ]);
+
+    expect(intent.mode).toBe("discover");
+    expect(intent.minPrice).toBe(2500000);
+    expect(intent.maxPrice).toBe(3000000);
+    expect(intent.discoveryPresentation).toBe("scored_screening");
+  });
+
+  it("falls back to generic listing discovery when LLM parsing fails for currently available searches", async () => {
+    mockedGenerateContent.mockRejectedValueOnce(new Error("llm unavailable"));
+
+    const intent = await extractChatIntent([
+      { role: "user", content: "What is currently available in Saint Heliers?" },
+    ]);
+
+    expect(intent.mode).toBe("discover");
+    expect(intent.discoveryPresentation).toBe("generic_listing");
   });
 });

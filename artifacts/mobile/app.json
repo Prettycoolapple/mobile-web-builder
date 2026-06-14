@@ -16,7 +16,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "nz.devfeasible.app",
-      "buildNumber": "30",
+      "buildNumber": "31",
       "associatedDomains": [
         "applinks:projectalpha.app",
         "applinks:www.projectalpha.app"
@@ -33,7 +33,7 @@
     },
     "android": {
       "package": "nz.devfeasible.app",
-      "versionCode": 23,
+      "versionCode": 24,
       "edgeToEdgeEnabled": true,
       "blockedPermissions": [
         "android.permission.READ_MEDIA_IMAGES",

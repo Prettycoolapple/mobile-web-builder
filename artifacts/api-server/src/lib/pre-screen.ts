@@ -80,6 +80,12 @@ export interface PropertyCandidate {
   isParentParcelSuspect?: boolean;
   isAlreadySubdividedChild?: boolean;
   priceApprox?: boolean;
+  /**
+   * True when `price` is an internal scoring placeholder (the listing had no
+   * source-backed asking price — POA / auction / negotiation). The number must
+   * NOT be shown as the listing's price; render `priceDisplay` text instead.
+   */
+  priceIsPlaceholder?: boolean;
   /** Floor (dwelling) area in m², extracted from listing og:description / JSON-LD. */
   floorArea?: number;
   /** True when og:description and page JSON-LD disagree on floor area. */
@@ -468,9 +474,13 @@ async function screenOneFast(
       undefined;
     let price = listing.price;
     let priceApprox = listing.priceApprox ?? false;
+    let priceIsPlaceholder = false;
     if (price == null && options?.allowMissingListingPrice) {
       price = options.pricePlaceholderNzd ?? 1_750_000;
       priceApprox = true;
+      // Internal scoring stand-in only — the card must show the negotiation/
+      // auction text (priceDisplay), never this fabricated number.
+      priceIsPlaceholder = true;
     }
     if (!price) return { kind: "rejected", reason: "no_price" };
 
@@ -650,6 +660,7 @@ async function screenOneFast(
       isParentParcelSuspect: verifiedLand.isParentParcelSuspect || undefined,
       isAlreadySubdividedChild: verifiedLand.isAlreadySubdividedChild || undefined,
       priceApprox: priceApprox || undefined,
+      priceIsPlaceholder: priceIsPlaceholder || undefined,
       floorArea: listing.floorArea ?? undefined,
       floorAreaApprox: listing.floorAreaApprox || undefined,
       typology: packageParts ? "standalone" : eligibility?.typology,

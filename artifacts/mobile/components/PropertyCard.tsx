@@ -10,7 +10,7 @@ import { StarRating } from "@/components/StarRating";
 import { useT } from "@/lib/i18n";
 import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
 import { shareCandidate } from "@/lib/propertyShares";
-import { confirmRemoveFromWatchlist } from "@/lib/watchlist-confirm";
+import { confirmRemoveFromWatchlist, notifyWatchlistError } from "@/lib/watchlist-confirm";
 
 interface Props {
   candidate: PropertyCandidate;
@@ -229,7 +229,8 @@ export function PropertyCard({ candidate, onAnalyse, analysingPropertyKey = null
     }
     // Removing a saved property asks for confirmation; saving stays instant.
     if (watched && !(await confirmRemoveFromWatchlist(t))) return;
-    await toggle(candidate);
+    const result = await toggle(candidate);
+    if (result.error) notifyWatchlistError(t);
   };
 
   return (
@@ -295,10 +296,12 @@ export function PropertyCard({ candidate, onAnalyse, analysingPropertyKey = null
         </Text>
 
         <View style={styles.tagRow}>
-          {candidate.price > 0 && (
+          {(candidate.price > 0 || !!candidate.priceDisplay?.trim() || candidate.priceIsPlaceholder) && (
             <View style={[styles.tag, { backgroundColor: colors.muted }]}>
               <Text style={[styles.tagText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
-                {isPackageListing ? t("search.package_price_prefix") : ""}{candidate.priceApprox ? "~" : ""}${(candidate.price / 1_000_000).toFixed(2)}M
+                {candidate.priceIsPlaceholder || !(candidate.price > 0)
+                  ? candidate.priceDisplay?.trim() || t("search.price_by_negotiation")
+                  : `${isPackageListing ? t("search.package_price_prefix") : ""}${candidate.priceApprox ? "~" : ""}$${(candidate.price / 1_000_000).toFixed(2)}M`}
               </Text>
             </View>
           )}

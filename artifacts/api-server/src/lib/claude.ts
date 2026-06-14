@@ -4,7 +4,11 @@ import { SYSTEM_PROMPT, ANALYSE_AUGMENTATION, DISCOVER_AUGMENTATION, languageIns
 import { findSuburbId, findSuburbInTextViaIndex } from "./scrapers/realestate-api";
 import type { DevelopmentStrategyAssessment, DevelopmentStrategyId, RefurbishmentScope } from "./development-strategies";
 import { hasNumberedStreetAddress, hasUnnumberedStreetLine } from "./street-address-detect";
-import { isSubdivisionRulesInformationIntent } from "./discovery-intent";
+import {
+  isDevelopmentDiscoveryIntent,
+  isStandardSubdivisionDiscoveryIntent,
+  isSubdivisionRulesInformationIntent,
+} from "./discovery-intent";
 
 export { hasNumberedStreetAddress, hasNonStandardSalePropertyReference, hasUnnumberedStreetLine } from "./street-address-detect";
 
@@ -40,6 +44,7 @@ export type ChatIntentExecution =
   | "run_feasibility_report"
   | "answer_in_chat"
   | "ask_clarifying_question";
+export type DiscoveryPresentation = "generic_listing" | "scored_screening";
 
 export function sanitizeAssistantProse(content: string, locale: Locale = "en"): string {
   let out = content;
@@ -127,6 +132,7 @@ export interface ChatIntent {
   minPrice: number | null;
   maxPrice: number | null;
   criteria: string | null;         // free-text description of what they want (subdividable, lifestyle, etc.)
+  discoveryPresentation: DiscoveryPresentation | null; // generic listings vs scored subdivision/development screening cards
   isFollowUp: boolean;             // true when asking for more results from a prior search
   includeNegotiation: boolean;     // true when user doesn't require a listed price (auction, tender, POA)
   // Clarification loop
@@ -161,6 +167,7 @@ const INTENT_SCHEMA = `{
   "minPrice": <NZD number> | null,
   "maxPrice": <NZD number> | null,
   "criteria": "<free-text describing what the user wants> | null",
+  "discoveryPresentation": "generic_listing" | "scored_screening" | null,
   "isFollowUp": <true if asking for more results from an earlier search OR answering a clarification question, false otherwise>,
   "includeNegotiation": <true if user does not require a price (accepts auction/tender/POA), false otherwise>,
   "needsClarification": <true ONLY when required info is missing AND you cannot infer it — see rules>,
@@ -192,13 +199,21 @@ execution:
   answer_in_chat          = answer conversationally. Use for rules_explanation and general_property_advice.
   ask_clarifying_question = ask one short question because required information is missing for discovery or analysis.
 
+discoveryPresentation:
+  generic_listing         = ordinary currently-for-sale / available / on-market browsing. Use for plain market availability searches, even if the user says "currently available", "on the market", "listings", "homes for sale", or simply wants to browse a suburb.
+  scored_screening        = subdivision/development/redevelopment/yield/multi-lot opportunity screening. Use only when the user semantically asks for subdivision, development, redevelopment, yield, splitting, multiple lots, or similar opportunity analysis.
+  null                    = not a property_discovery request.
+
 Critical distinction:
   The word "subdivision" alone does NOT mean show_listing_cards.
+  "what is currently available in Saint Heliers?" => property_discovery, subject=market, execution=show_listing_cards, mode=discover, discoveryPresentation=generic_listing.
+  "what's currently on the market in Highland Park?" => property_discovery, subject=market, execution=show_listing_cards, mode=discover, discoveryPresentation=generic_listing.
   "what are the subdivision rules in Coatesville?" => rules_explanation, subject=subdivision, execution=answer_in_chat, mode=followup.
   "how does subdivision consent work in Auckland?" => rules_explanation, subject=subdivision, execution=answer_in_chat, mode=followup.
-  "show me subdividable properties in Coatesville" => property_discovery, subject=subdivision, execution=show_listing_cards, mode=discover.
-  "which listings in Coatesville can be subdivided?" => property_discovery, subject=subdivision, execution=show_listing_cards, mode=discover.
+  "show me subdividable properties in Coatesville" => property_discovery, subject=subdivision, execution=show_listing_cards, mode=discover, discoveryPresentation=scored_screening.
+  "which listings in Coatesville can be subdivided?" => property_discovery, subject=subdivision, execution=show_listing_cards, mode=discover, discoveryPresentation=scored_screening.
   "can 12 Smith Road be subdivided?" => single_property_analysis, subject=subdivision, execution=run_feasibility_report, mode=analyse.
+  If the previous conversation discussed subdivision but the latest user message is a fresh plain availability search in another suburb, reset to discoveryPresentation=generic_listing.
 
 The legacy mode field must agree with execution:
   show_listing_cards -> mode="discover"
@@ -516,7 +531,7 @@ export async function extractChatIntent(
       execution: "answer_in_chat",
       confidence: null,
       mode: "followup", address: null, suburb: null, minPrice: null, maxPrice: null,
-      criteria: null, isFollowUp: false, includeNegotiation: false,
+      criteria: null, discoveryPresentation: null, isFollowUp: false, includeNegotiation: false,
       needsClarification: false, clarificationQuestion: null,
       wantsProviderRecommendation: false, suggestedDiscipline: null,
       wantsAnotherProvider: false,
@@ -533,7 +548,7 @@ export async function extractChatIntent(
       execution: "answer_in_chat",
       confidence: null,
       mode: "followup", address: null, suburb: null, minPrice: null, maxPrice: null,
-      criteria: null, isFollowUp: false, includeNegotiation: false,
+      criteria: null, discoveryPresentation: null, isFollowUp: false, includeNegotiation: false,
       needsClarification: false, clarificationQuestion: null,
       wantsProviderRecommendation: false, suggestedDiscipline: null,
       wantsAnotherProvider: false,
@@ -616,6 +631,10 @@ ${INTENT_SCHEMA}`;
     const parsedConfidence = typeof parsed.confidence === "number" && parsed.confidence >= 0 && parsed.confidence <= 1
       ? parsed.confidence
       : null;
+    const parsedDiscoveryPresentation: DiscoveryPresentation | null =
+      parsed.discoveryPresentation === "generic_listing" || parsed.discoveryPresentation === "scored_screening"
+        ? parsed.discoveryPresentation
+        : null;
 
     // Sanitise fields
     let intent: ChatIntent = {
@@ -629,6 +648,7 @@ ${INTENT_SCHEMA}`;
       minPrice: typeof parsed.minPrice === "number" && parsed.minPrice > 0 ? parsed.minPrice : null,
       maxPrice: typeof parsed.maxPrice === "number" && parsed.maxPrice > 0 ? parsed.maxPrice : null,
       criteria: parsed.criteria ?? null,
+      discoveryPresentation: parsedDiscoveryPresentation,
       isFollowUp: Boolean(parsed.isFollowUp),
       includeNegotiation: Boolean(parsed.includeNegotiation),
       needsClarification: Boolean(parsed.needsClarification),
@@ -649,6 +669,7 @@ ${INTENT_SCHEMA}`;
         confidence: intent.confidence ?? 1,
         mode: "followup",
         address: null,
+        discoveryPresentation: null,
         isFollowUp: false,
         includeNegotiation: false,
         needsClarification: false,
@@ -678,6 +699,7 @@ ${INTENT_SCHEMA}`;
         mode: "discover",
         address: null,
         suburb,
+        discoveryPresentation: "generic_listing",
         needsClarification: !suburb,
         clarificationQuestion: !suburb
           ? (locale === "zh" ? "您想搜索哪个区域或郊区？" : "Which suburb or area should I search?")
@@ -759,6 +781,11 @@ async function fallbackDetectIntent(
     ? "subdivision"
     : "unknown";
 
+  const discoveryPresentation: DiscoveryPresentation | null =
+    mode === "discover"
+      ? (isDevelopmentDiscoveryIntent(lastMessage) || isStandardSubdivisionDiscoveryIntent(lastMessage) ? "scored_screening" : "generic_listing")
+      : null;
+
   const lowerFallback = lastMessage.toLowerCase();
   const providerKeywordsFallback = [
     "recommend", "referral", "architect", "builder", "planner", "engineer",
@@ -778,6 +805,7 @@ async function fallbackDetectIntent(
     minPrice: null,
     maxPrice: null,
     criteria: lastMessage,
+    discoveryPresentation,
     isFollowUp,
     includeNegotiation: /negotiat|poa|by\s+applic|tender|auction/i.test(lowerFallback),
     needsClarification,

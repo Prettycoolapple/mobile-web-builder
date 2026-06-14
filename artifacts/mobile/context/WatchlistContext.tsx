@@ -30,6 +30,8 @@ interface ToggleResult {
   requiresAuth?: boolean;
   /** New watched state when the toggle was applied. */
   watched?: boolean;
+  /** Set when the server call failed and the optimistic change was rolled back. */
+  error?: boolean;
 }
 
 interface WatchlistContextValue {
@@ -257,7 +259,8 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
         return { watched: serverWatched };
       } catch {
         pendingToggleRef.current.delete(key);
-        // Revert on failure.
+        // Revert on failure — including `items`, so a save that never reached the
+        // server doesn't keep masquerading as saved in the Watchlist tab.
         setWatchedKeys((prev) => {
           const next = new Set(prev);
           for (const alias of affectedAliases) {
@@ -272,8 +275,15 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
           else next.delete(addressKey);
           return next;
         });
+        setItems((prev) => {
+          const withoutOptimistic = prev.filter(
+            (it) => !itemKeysOf(it).some((alias) => affectedAliases.includes(alias)),
+          );
+          // If we had been removing, restore the row we optimistically dropped.
+          return wasWatched && existingItem ? [existingItem, ...withoutOptimistic] : withoutOptimistic;
+        });
         void refresh();
-        return { watched: wasWatched };
+        return { watched: wasWatched, error: true };
       }
     },
     [user, items, watchedAddressKeys, watchedKeys, getApiHeaders, refresh],
