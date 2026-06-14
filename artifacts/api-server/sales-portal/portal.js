@@ -485,6 +485,202 @@
     });
   }
 
+  // ── WYSIWYG rich-text editor (no dependency) ───────────────────────────────
+  // Edits formatting live in a contenteditable surface, then serialises back to
+  // the same Markdown subset the rest of the app already renders (`**bold**`,
+  // `_italic_`, `## heading`, `- bullet`) into a hidden <textarea>, so form
+  // submission and validation are unchanged.
+  function htmlToMarkdown(root) {
+    const out = [];
+    function inlineMd(node) {
+      let s = "";
+      node.childNodes.forEach((child) => {
+        if (child.nodeType === Node.TEXT_NODE) {
+          s += child.nodeValue.replace(/ /g, " ");
+          return;
+        }
+        if (child.nodeType !== Node.ELEMENT_NODE) return;
+        const tag = child.tagName.toLowerCase();
+        if (tag === "br") {
+          s += "\n";
+          return;
+        }
+        const inner = inlineMd(child);
+        if (!inner.trim()) {
+          s += inner;
+          return;
+        }
+        if (tag === "strong" || tag === "b") s += `**${inner}**`;
+        else if (tag === "em" || tag === "i") s += `_${inner}_`;
+        else s += inner;
+      });
+      return s;
+    }
+    Array.from(root.childNodes).forEach((node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        if (node.nodeValue.trim()) out.push(node.nodeValue.replace(/ /g, " "));
+        return;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      const tag = node.tagName.toLowerCase();
+      if (tag === "ul" || tag === "ol") {
+        node.querySelectorAll("li").forEach((li) => out.push(`- ${inlineMd(li).trim()}`));
+        return;
+      }
+      if (/^h[1-6]$/.test(tag)) {
+        out.push(`## ${inlineMd(node).trim()}`);
+        return;
+      }
+      if (tag === "br") {
+        out.push("");
+        return;
+      }
+      // p / div / other block → one or more lines (honour inner <br>).
+      inlineMd(node).split("\n").forEach((line) => out.push(line));
+    });
+    return out.join("\n").replace(/\n{3,}/g, "\n\n").replace(/[ \t]+$/gm, "").trim();
+  }
+
+  function insertEmojiAtCaret(surface, emoji) {
+    surface.focus();
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !surface.contains(sel.anchorNode)) {
+      const range = document.createRange();
+      range.selectNodeContents(surface);
+      range.collapse(false); // caret to end
+      if (sel) {
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    }
+    // execCommand keeps the native undo stack and fires `input` for us.
+    document.execCommand("insertText", false, emoji);
+  }
+
+  function buildRteEmojiPopover(surface) {
+    const pop = document.createElement("div");
+    pop.className = "md-emoji-pop";
+    pop.innerHTML = MD_EMOJIS.map(
+      (e) => `<button type="button" class="md-emoji" data-emoji="${e}">${e}</button>`,
+    ).join("");
+    // Don't let pressing a swatch blur the surface / drop the caret.
+    pop.addEventListener("mousedown", (event) => event.preventDefault());
+    pop.addEventListener("click", (event) => {
+      const btn = event.target.closest("[data-emoji]");
+      if (!btn) return;
+      insertEmojiAtCaret(surface, btn.dataset.emoji);
+      pop.remove();
+    });
+    document.addEventListener(
+      "click",
+      function onAway(e) {
+        if (!pop.contains(e.target)) {
+          pop.remove();
+          document.removeEventListener("click", onAway, true);
+        }
+      },
+      { capture: true },
+    );
+    return pop;
+  }
+
+  function setupRichTextEditors(form) {
+    form.querySelectorAll(".rte").forEach((rte) => {
+      const field = form.elements[rte.dataset.rte];
+      const surface = rte.querySelector(".rte-surface");
+      const toolbar = rte.querySelector(".rte-toolbar");
+      if (!field || !surface || !toolbar) return;
+
+      function syncEmptyState() {
+        const empty = surface.textContent.trim() === "" && !surface.querySelector("li, img");
+        surface.classList.toggle("is-empty", empty);
+      }
+
+      function serialise() {
+        field.value = htmlToMarkdown(surface);
+        // Mirror the textarea's own input event so existing validators run.
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+        syncEmptyState();
+      }
+
+      function updateToolbarState() {
+        const within = surface.contains(window.getSelection()?.anchorNode || null);
+        const block = (document.queryCommandValue("formatBlock") || "").toLowerCase();
+        const state = {
+          bold: within && document.queryCommandState("bold"),
+          italic: within && document.queryCommandState("italic"),
+          bullet: within && document.queryCommandState("insertUnorderedList"),
+          heading: within && /h[1-6]/.test(block),
+        };
+        toolbar.querySelectorAll(".rte-btn").forEach((btn) => {
+          const cmd = btn.dataset.cmd;
+          if (cmd in state) btn.classList.toggle("is-active", !!state[cmd]);
+        });
+      }
+
+      // Hydrate any pre-existing Markdown (edit/autofill); empty for new listings.
+      const initial = String(field.value || "").trim();
+      surface.innerHTML = initial ? renderMarkdownPreview(initial) : "";
+      syncEmptyState();
+
+      // Toolbar buttons must not steal the selection from the surface.
+      toolbar.addEventListener("mousedown", (event) => {
+        if (event.target.closest(".rte-btn")) event.preventDefault();
+      });
+
+      toolbar.addEventListener("click", (event) => {
+        const btn = event.target.closest(".rte-btn");
+        if (!btn) return;
+        event.preventDefault();
+        const cmd = btn.dataset.cmd;
+        if (cmd === "emoji") {
+          const open = toolbar.querySelector(".md-emoji-pop");
+          if (open) {
+            open.remove();
+            return;
+          }
+          const pop = buildRteEmojiPopover(surface);
+          btn.parentElement.style.position = "relative";
+          btn.insertAdjacentElement("afterend", pop);
+          return;
+        }
+        surface.focus();
+        if (cmd === "bold") document.execCommand("bold");
+        else if (cmd === "italic") document.execCommand("italic");
+        else if (cmd === "bullet") document.execCommand("insertUnorderedList");
+        else if (cmd === "heading") {
+          const block = (document.queryCommandValue("formatBlock") || "").toLowerCase();
+          document.execCommand("formatBlock", false, /h[1-6]/.test(block) ? "p" : "h3");
+        }
+        updateToolbarState();
+        serialise();
+      });
+
+      surface.addEventListener("input", serialise);
+      surface.addEventListener("keyup", updateToolbarState);
+      surface.addEventListener("mouseup", updateToolbarState);
+      surface.addEventListener("focus", updateToolbarState);
+      document.addEventListener("selectionchange", () => {
+        if (surface.contains(document.getSelection()?.anchorNode || null)) updateToolbarState();
+      });
+
+      // Paste as plain text so the surface (and serialised Markdown) stay clean.
+      surface.addEventListener("paste", (event) => {
+        event.preventDefault();
+        const text = (event.clipboardData || window.clipboardData).getData("text/plain");
+        document.execCommand("insertText", false, text);
+      });
+
+      // Reset hook used by resetListingWizard() (form.reset() won't clear a
+      // contenteditable surface on its own).
+      rte._resetEditor = () => {
+        field.value = "";
+        surface.innerHTML = "";
+        syncEmptyState();
+      };
+    });
+  }
+
   function setFieldError(key, message) {
     const element = $(`[data-error-for='${key}']`);
     if (element) element.textContent = message || "";
@@ -520,7 +716,11 @@
 
   function resetListingWizard() {
     const form = $("#new-listing-form");
-    if (form) form.reset();
+    if (form) {
+      form.reset();
+      // form.reset() doesn't touch contenteditable surfaces — clear them too.
+      form.querySelectorAll(".rte").forEach((rte) => rte._resetEditor && rte._resetEditor());
+    }
     state.listingPhotos.forEach((item) => URL.revokeObjectURL(item.previewUrl));
     state.listingPhotos = [];
     state.listingDocuments = [];
@@ -1799,6 +1999,7 @@
     });
 
     setupMarkdownToolbars(form);
+    setupRichTextEditors(form);
 
     const dropzone = $("#listing-photo-dropzone");
     const photoInput = $("#listing-photo-input");

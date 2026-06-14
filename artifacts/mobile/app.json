@@ -16,7 +16,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "nz.devfeasible.app",
-      "buildNumber": "29",
+      "buildNumber": "30",
       "associatedDomains": [
         "applinks:projectalpha.app",
         "applinks:www.projectalpha.app"
@@ -27,13 +27,13 @@
         "FacebookAppID": "1686829092523282",
         "FacebookClientToken": "02dfcb5788c6a9dfab5c4634a395abdc",
         "FacebookDisplayName": "projectalpha.app",
-        "FacebookAutoLogAppEventsEnabled": true,
+        "FacebookAutoLogAppEventsEnabled": false,
         "FacebookAdvertiserIDCollectionEnabled": true
       }
     },
     "android": {
       "package": "nz.devfeasible.app",
-      "versionCode": 22,
+      "versionCode": 23,
       "edgeToEdgeEnabled": true,
       "blockedPermissions": [
         "android.permission.READ_MEDIA_IMAGES",
@@ -107,7 +107,7 @@
           "displayName": "projectalpha.app",
           "scheme": "fb1686829092523282",
           "advertiserIDCollectionEnabled": true,
-          "autoLogAppEventsEnabled": true,
+          "autoLogAppEventsEnabled": false,
           "isAutoInitEnabled": false,
           "iosUserTrackingPermission": "This identifier will be used to deliver personalized ads to you."
         }

@@ -535,21 +535,30 @@
                     </div>
                     <div class="field">
                       <span class="field-label">Description</span>
-                      <div class="md-toolbar" data-md-target="description">
-                        <button type="button" class="md-btn" data-md="bold" title="Bold"><strong>B</strong></button>
-                        <button type="button" class="md-btn" data-md="italic" title="Italic"><em>I</em></button>
-                        <button type="button" class="md-btn" data-md="heading" title="Heading">H</button>
-                        <button type="button" class="md-btn" data-md="bullet" title="Bullet list">• List</button>
-                        <button type="button" class="md-btn" data-md="emoji" title="Insert emoji">😊</button>
-                        <button type="button" class="md-btn md-btn--toggle" data-md="preview" title="Toggle preview">👁 Preview</button>
+                      <div class="rte" data-rte="description">
+                        <div class="rte-toolbar" role="toolbar" aria-label="Text formatting">
+                          <div class="rte-group">
+                            <button type="button" class="rte-btn" data-cmd="bold" title="Bold (Ctrl+B)" aria-label="Bold"><strong>B</strong></button>
+                            <button type="button" class="rte-btn rte-btn--italic" data-cmd="italic" title="Italic (Ctrl+I)" aria-label="Italic"><em>I</em></button>
+                          </div>
+                          <div class="rte-group">
+                            <button type="button" class="rte-btn" data-cmd="heading" title="Heading" aria-label="Heading">H</button>
+                            <button type="button" class="rte-btn" data-cmd="bullet" title="Bullet list" aria-label="Bullet list">•&nbsp;List</button>
+                          </div>
+                          <div class="rte-group">
+                            <button type="button" class="rte-btn rte-btn--emoji" data-cmd="emoji" title="Insert emoji" aria-label="Insert emoji">😊</button>
+                          </div>
+                        </div>
+                        <div
+                          class="rte-surface is-empty"
+                          contenteditable="true"
+                          role="textbox"
+                          aria-multiline="true"
+                          aria-label="Description"
+                          data-placeholder="Describe the key selling points, standout features, and location highlights."
+                        ></div>
+                        <textarea name="description" hidden aria-hidden="true" tabindex="-1"></textarea>
                       </div>
-                      <textarea
-                        name="description"
-                        rows="7"
-                        placeholder="Describe the key selling points, standout features, and location highlights.&#10;&#10;Tip: use **bold**, a heading, or a • bullet list to make it pop."
-                        required
-                      ></textarea>
-                      <div class="md-preview" data-md-preview="description" hidden></div>
                     </div>
                     <p class="portal-friendly-note">
                       We'll automatically add nearby schools, public transport, and other local highlights for you.

@@ -71,6 +71,7 @@ function MetaSdkSetup() {
       initialized = true;
 
       try {
+        Settings.setAutoLogAppEventsEnabled(false);
         Settings.initializeSDK();
 
         const { status } = await requestTrackingPermissionsAsync();
