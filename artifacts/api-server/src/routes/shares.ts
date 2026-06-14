@@ -170,13 +170,14 @@ function reportDescription(summary: z.infer<typeof reportPayloadSchema>["summary
 function buildShare(input: z.infer<typeof createShareSchema>) {
   if (input.kind === "candidate") {
     const candidate = input.candidate;
+    const photoUrls = Array.isArray(candidate.photoUrls) ? candidate.photoUrls : [];
     const title = `${input.address} - Project Alpha property opportunity`;
     return {
       kind: input.kind,
       address: input.address,
       previewTitle: title,
       previewDescription: candidateDescription(candidate),
-      previewImageUrl: cleanUrl(candidate.photoUrl),
+      previewImageUrl: cleanUrl(candidate.photoUrl) ?? cleanUrl(photoUrls[0]),
       payloadJson: {
         kind: "candidate",
         address: input.address,
