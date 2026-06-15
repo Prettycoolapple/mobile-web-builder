@@ -115,7 +115,83 @@ function cleanUrl(value: unknown): string | null {
   return trimmed;
 }
 
+function firstCleanUrl(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (Array.isArray(value)) {
+      const nested = firstCleanUrl(...value);
+      if (nested) return nested;
+      continue;
+    }
+    const url = cleanUrl(value);
+    if (url) return url;
+  }
+  return null;
+}
+
+function firstCleanText(...values: unknown[]): string {
+  for (const value of values) {
+    const text = cleanText(value, "");
+    if (text) return text;
+  }
+  return "";
+}
+
+// Keep this in sync with image-proxy.ts. Social crawlers are more reliable when
+// real-estate CDN photos are served from our own public origin.
+const PROXYABLE_IMAGE_HOST_SUFFIXES = [
+  "oneroof.co.nz",
+  "realestate.co.nz",
+  "trademe.co.nz",
+  "tmcdn.co.nz",
+  "homes.co.nz",
+  "qv.co.nz",
+  "hougarden.com",
+  "hgimg.com",
+  "amazonaws.com",
+  "cloudfront.net",
+  "akamaized.net",
+  "akamaihd.net",
+  "fastly.net",
+  "cdninstagram.com",
+  "googleusercontent.com",
+  "ggpht.com",
+  "googleapis.com",
+];
+
+function isProxyableImageHost(host: string): boolean {
+  const lower = host.toLowerCase();
+  return PROXYABLE_IMAGE_HOST_SUFFIXES.some(
+    (suffix) => lower === suffix || lower.endsWith(`.${suffix}`),
+  );
+}
+
+function absolutePublicUrl(url: string, req?: Request | null): string {
+  if (/^https?:\/\//i.test(url)) return url;
+  return `${baseUrl(req)}${url.startsWith("/") ? "" : "/"}${url}`;
+}
+
+function socialPreviewImageUrl(value: unknown, req?: Request | null): string | null {
+  const cleaned = typeof value === "string" ? value.trim() : "";
+  if (!cleaned) return null;
+
+  const absolute = absolutePublicUrl(cleaned, req);
+  try {
+    const parsed = new URL(absolute);
+    const publicHost = new URL(baseUrl(req)).hostname.toLowerCase();
+    if (parsed.hostname.toLowerCase() === publicHost) return absolute;
+    if (isProxyableImageHost(parsed.hostname)) {
+      return `${baseUrl(req)}/api/image-proxy?url=${encodeURIComponent(absolute)}`;
+    }
+  } catch {
+    return null;
+  }
+  return absolute;
+}
+
 function candidateDescription(candidate: Record<string, unknown>): string {
+  const body = firstCleanText(candidate.briefSummary, candidate.teaser, candidate.description);
+  if (body) return body.slice(0, 220);
+
   const bits: string[] = [];
   const score = (candidate.scores as Record<string, unknown> | undefined)?.composite;
   if (typeof score === "number" && score > 0) bits.push(`Score ${score.toFixed(1)}/5`);
@@ -137,7 +213,7 @@ function candidateDescription(candidate: Record<string, unknown>): string {
 }
 
 function listingDescription(listing: Record<string, unknown>): string {
-  const rawDescription = cleanText(listing.description, "");
+  const rawDescription = firstCleanText(listing.teaser, listing.description, listing.briefSummary);
   if (rawDescription) return rawDescription.slice(0, 220);
   const bits: string[] = [];
   const priceDisplay = cleanText(listing.priceDisplay, "");
@@ -167,17 +243,16 @@ function reportDescription(summary: z.infer<typeof reportPayloadSchema>["summary
     : "Open Project Alpha to view the latest feasibility analysis.";
 }
 
-function buildShare(input: z.infer<typeof createShareSchema>) {
+export function buildShare(input: z.infer<typeof createShareSchema>) {
   if (input.kind === "candidate") {
     const candidate = input.candidate;
-    const photoUrls = Array.isArray(candidate.photoUrls) ? candidate.photoUrls : [];
     const title = `${input.address} - Project Alpha property opportunity`;
     return {
       kind: input.kind,
       address: input.address,
       previewTitle: title,
       previewDescription: candidateDescription(candidate),
-      previewImageUrl: cleanUrl(candidate.photoUrl) ?? cleanUrl(photoUrls[0]),
+      previewImageUrl: firstCleanUrl(candidate.photoUrl, candidate.photoUrls, candidate.imageUrls),
       payloadJson: {
         kind: "candidate",
         address: input.address,
@@ -188,14 +263,13 @@ function buildShare(input: z.infer<typeof createShareSchema>) {
 
   if (input.kind === "listing") {
     const listing = input.listing;
-    const imageUrls = Array.isArray(listing.imageUrls) ? listing.imageUrls : [];
     const title = `${input.address} - Project Alpha property listing`;
     return {
       kind: input.kind,
       address: input.address,
       previewTitle: title,
       previewDescription: listingDescription(listing),
-      previewImageUrl: cleanUrl(imageUrls[0]) ?? cleanUrl(listing.photoUrl),
+      previewImageUrl: firstCleanUrl(listing.imageUrls, listing.photoUrls, listing.photoUrl),
       payloadJson: {
         kind: "listing",
         address: input.address,
@@ -205,8 +279,13 @@ function buildShare(input: z.infer<typeof createShareSchema>) {
   }
 
   const title = `${input.address} - Project Alpha feasibility analysis`;
-  const image = cleanUrl(input.photoUrl) ?? cleanUrl(input.photoUrls?.[0]);
   const selectedListingContext = input.selectedListingContext ?? null;
+  const image = firstCleanUrl(
+    input.photoUrl,
+    input.photoUrls,
+    selectedListingContext?.photoUrl,
+    selectedListingContext?.photoUrls,
+  );
   const selectedListingUrl = cleanUrl(input.listingUrl) ?? cleanUrl(selectedListingContext?.listingUrl);
   const selectedPhotoUrl = image ?? cleanUrl(selectedListingContext?.photoUrl);
   return {
@@ -338,12 +417,12 @@ function propertyFacts(payload: unknown): Fact[] {
   return facts;
 }
 
-function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?: Request | null): string {
+export function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?: Request | null): string {
   const found = !!preview;
   const title = preview?.title ?? "Project Alpha property share";
   const description = preview?.description ?? "This Project Alpha share link could not be found or has expired.";
   const url = preview?.url ?? `${baseUrl(req)}/`;
-  const image = preview?.imageUrl ?? `${baseUrl(req)}/favicon.png`;
+  const image = socialPreviewImageUrl(preview?.imageUrl, req) ?? `${baseUrl(req)}/favicon.png`;
   const safeTitle = htmlEscape(title);
   const safeDescription = htmlEscape(description);
   const safeImage = htmlEscape(image);
