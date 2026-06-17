@@ -31,3 +31,5 @@ export * from "./user_reports";
 export * from "./user_login_events";
 export * from "./support_requests";
 export * from "./agent_call_events";
+export * from "./rate_limit_counters";
+export * from "./abuse_events";

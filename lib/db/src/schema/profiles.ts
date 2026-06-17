@@ -56,6 +56,15 @@ export const profiles = pgTable("profiles", {
    */
   specialStatus: text("special_status"),
   specialStatusExpiresAt: timestamp("special_status_expires_at", { withTimezone: true }),
+  /**
+   * Abuse / harvesting flag (Layer 2 detection → Layer 3 enforcement). Set
+   * manually by an admin or auto when the rolling abuse score crosses a
+   * threshold. Read by Layer 3 to degrade output for confirmed abusers; until
+   * Layer 3 ships this is purely informational. Legitimate accounts stay false.
+   */
+  abuseFlag: boolean("abuse_flag").default(false).notNull(),
+  abuseFlagReason: text("abuse_flag_reason"),
+  abuseFlaggedAt: timestamp("abuse_flagged_at", { withTimezone: true }),
 });
 
 export const insertProfileSchema = createInsertSchema(profiles).omit({

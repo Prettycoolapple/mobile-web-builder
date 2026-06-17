@@ -11,6 +11,7 @@ import PropertyCachePage from "@/pages/PropertyCache";
 import AgentsPage from "@/pages/Agents";
 import AgentDetailPage from "@/pages/AgentDetail";
 import ListingDetailPage from "@/pages/ListingDetail";
+import SecurityPage from "@/pages/Security";
 
 export default function App() {
   return (
@@ -29,6 +30,7 @@ export default function App() {
         <Route path="/pending-providers" element={<PendingProvidersPage />} />
         <Route path="/inquiries" element={<InquiriesPage />} />
         <Route path="/property-cache" element={<PropertyCachePage />} />
+        <Route path="/security" element={<SecurityPage />} />
         <Route path="/agents" element={<AgentsPage />} />
         <Route path="/agents/:agentId" element={<AgentDetailPage />} />
         <Route path="/listings/:listingId" element={<ListingDetailPage />} />

@@ -15,6 +15,8 @@
     "add-anonymous-discovery-tables": "node ./scripts/add-anonymous-discovery-tables.mjs",
     "add-discovery-continuations": "node ./scripts/add-discovery-continuations.mjs",
     "add-watchlist-table": "node ./scripts/add-watchlist-table.mjs",
+    "add-rate-limit-counters": "node ./scripts/add-rate-limit-counters.mjs",
+    "add-abuse-detection": "node ./scripts/add-abuse-detection.mjs",
     "allow-guest-property-shares": "node ./scripts/allow-guest-property-shares.mjs"
   },
   "dependencies": {

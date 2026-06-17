@@ -13,6 +13,8 @@ import {
   pendingAgentSignups,
 } from "@workspace/db";
 import { createSessionId, hashPassword, verifyPassword, signToken, requireAuth } from "../lib/auth";
+import { ipRateLimit, bodyFieldRateLimit, minutes, hours } from "../lib/rateLimit";
+import { noteSignup } from "../lib/abuse";
 import { sendNewUserSignupNotification, sendPasswordResetCodeEmail } from "../lib/mailer";
 import { usagePeriodExpired } from "../lib/billingPeriod";
 import { verifyPhoneVerificationToken, consumePhoneVerification } from "./otp";
@@ -269,7 +271,13 @@ function genericResetResponse() {
   return { ok: true, expiresInSeconds: PASSWORD_RESET_TTL_MINUTES * 60 };
 }
 
-router.post("/signup", async (req, res) => {
+router.post(
+  "/signup",
+  // Signup is rare per IP; phone OTP already gates it. This caps account
+  // farming (the cheap path to many harvesting accounts) from one host.
+  ipRateLimit({ name: "signup", windowMs: hours(1), max: 15 }),
+  ipRateLimit({ name: "signup-min", windowMs: minutes(1), max: 5 }),
+  async (req, res) => {
   const parsed = signupSchema.safeParse(req.body);
   if (!parsed.success) {
     const firstError = parsed.error.issues[0];
@@ -420,6 +428,8 @@ router.post("/signup", async (req, res) => {
     const token = signToken(profile.id, profile.email, role, sessionId);
     res.status(201).json({ token, user: { ...profile, isVerified: false } });
     recordLoginEvent(profile.id);
+    // Detection only: flags account-farming from one IP. Does not affect signup.
+    noteSignup({ userId: profile.id, ip: req.ip });
 
     const providerCertObjectPath = providerData
       ? objectPathFromStorageUrl(providerData.incorporationCertUrl)
@@ -1029,7 +1039,14 @@ router.post("/password-reset/confirm", async (req, res) => {
   }
 });
 
-router.post("/login", async (req, res) => {
+router.post(
+  "/login",
+  // Brute-force / credential-stuffing protection: cap attempts per IP and per
+  // targeted email. Generous enough that a fat-fingering real user never trips.
+  ipRateLimit({ name: "login", windowMs: minutes(1), max: 20 }),
+  ipRateLimit({ name: "login-hr", windowMs: hours(1), max: 100 }),
+  bodyFieldRateLimit("email", { name: "login", windowMs: minutes(15), max: 10 }),
+  async (req, res) => {
   const { email, password } = req.body as { email?: string; password?: string };
 
   if (!email || !password) {

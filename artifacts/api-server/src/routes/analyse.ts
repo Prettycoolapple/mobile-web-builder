@@ -95,6 +95,10 @@ import {
   resolveChatLimitKey,
   resolveReportLimit,
 } from "../lib/quotas";
+import { ipRateLimit, userRateLimit, minutes, hours } from "../lib/rateLimit";
+import { noteQuotaUsage, noteAbuseSignal } from "../lib/abuse";
+import { matchCanary, buildCanaryReport } from "../lib/canaries";
+import { protectReport } from "../lib/outputProtection";
 import { usagePeriodExpired } from "../lib/billingPeriod";
 import { formatTitleTypeForDisplay } from "../lib/titleDisplay";
 import { classifySiteCondition, siteStatusLabel } from "../lib/site-condition";
@@ -3685,7 +3689,14 @@ async function processFeasibilityJob(jobId: string, log: FeasibilityLog): Promis
   }
 }
 
-router.post("/analyse", async (req, res) => {
+router.post(
+  "/analyse",
+  // The crown-jewel endpoint: every call burns the AI pipeline and is the prime
+  // target for distillation harvesting. Caps are far above any human's usage.
+  ipRateLimit({ name: "analyse", windowMs: minutes(1), max: 30 }),
+  ipRateLimit({ name: "analyse-hr", windowMs: hours(1), max: 200 }),
+  userRateLimit({ name: "analyse", windowMs: minutes(1), max: 12 }),
+  async (req, res) => {
   const { address, conversationHistory, async: asyncFlag, selectedListingUrl, selectedListingContext } = req.body as {
     address: string;
     conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
@@ -3712,6 +3723,21 @@ router.post("/analyse", async (req, res) => {
     return;
   }
 
+  // Canary honeytokens (Layer 3): a request for a trap address is near-certain
+  // scraping. Short-circuit with the fingerprint payload (no pipeline, no quota)
+  // and log the hit. Real users never reach this — they don't know these exist.
+  const canary = matchCanary(address);
+  if (canary) {
+    noteAbuseSignal({
+      kind: "canary_hit",
+      userId,
+      ip: req.ip,
+      detail: `canary ${canary.id} (${canary.label})`,
+    });
+    res.json({ report: buildCanaryReport(canary, address), type: "report", searchId: null });
+    return;
+  }
+
   if (userId) {
     let profile:
       | {
@@ -3724,6 +3750,7 @@ router.post("/analyse", async (req, res) => {
           subscriptionStatus: string | null;
           specialStatus: string | null;
           specialStatusExpiresAt: Date | null;
+          createdAt: Date;
         }
       | undefined;
     try {
@@ -3739,6 +3766,7 @@ router.post("/analyse", async (req, res) => {
             subscriptionStatus: profiles.subscriptionStatus,
             specialStatus: profiles.specialStatus,
             specialStatusExpiresAt: profiles.specialStatusExpiresAt,
+            createdAt: profiles.createdAt,
           })
           .from(profiles)
           .where(eq(profiles.id, userId))
@@ -3816,6 +3844,17 @@ router.post("/analyse", async (req, res) => {
       // Use special limit if active, otherwise resolve from plan/role
       const limit = specialLimit !== null ? specialLimit : resolveReportLimit(profile.subscriptionTier, profile.role);
       const isStandard = profile.subscriptionTier === "pro" || profile.subscriptionTier === "standard";
+
+      // Detection only (Layer 2): a brand-new free account burning through its
+      // small free quota is the fingerprint of a farmed harvesting account.
+      noteQuotaUsage({
+        userId,
+        ip: req.ip,
+        tier: profile.subscriptionTier,
+        reportsUsedThisMonth: usedCount,
+        reportLimit: limit,
+        accountCreatedAt: profile.createdAt,
+      });
 
       if (specialLimit === null && profile.role === "service_provider" && limit === SERVICE_PROVIDER_FREE_REPORT_LIMIT) {
         const baseMsg = "Service provider accounts require an active subscription before generating feasibility reports.";
@@ -4038,6 +4077,12 @@ router.post("/analyse", async (req, res) => {
       userId,
       log: req.log,
     });
+    // Layer 3: degrade scores in the outbound copy only for flagged abusers
+    // (no-op for everyone else; shadow-logs until ABUSE_DEGRADE_ENABLED).
+    await protectReport(result.report as Record<string, unknown>, {
+      userId,
+      addressSeed: normaliseDiscoveryAddressKey(analysisAddress),
+    });
     res.json({
       report: result.report,
       type: "report",
@@ -4095,6 +4140,14 @@ router.get("/analyse/jobs/:jobId", async (req, res) => {
         ? new Date(srows[0].createdAt as unknown as string).toISOString()
         : null;
       const isGroup = report?.kind === "combined_listing_group";
+      // Layer 3: degrade the outbound copy for flagged abusers (no-op otherwise;
+      // the stored search row is untouched). Single-report path only.
+      if (!isGroup) {
+        await protectReport(report, {
+          userId: uid,
+          addressSeed: normaliseDiscoveryAddressKey((report?.address as string) ?? job.analysisAddress ?? ""),
+        });
+      }
       res.json({
         status: job.status,
         searchId: job.searchId,
@@ -4285,7 +4338,11 @@ router.post("/translate-report", async (req, res) => {
   }
 });
 
-router.post("/search", async (req, res) => {
+router.post(
+  "/search",
+  // Supports anonymous browsing, so limit by IP only — no auth wall.
+  ipRateLimit({ name: "search", windowMs: minutes(1), max: 40 }),
+  async (req, res) => {
   const { query, suburb, minPrice, maxPrice } = req.body as {
     query: string;
     suburb?: string;
@@ -4419,7 +4476,11 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
   };
 }
 
-router.post("/discovery/next", async (req, res) => {
+router.post(
+  "/discovery/next",
+  // Supports anonymous browsing, so limit by IP only — no auth wall.
+  ipRateLimit({ name: "discovery", windowMs: minutes(1), max: 40 }),
+  async (req, res) => {
   const requestLocale = localeFromReq({ headers: req.headers as Record<string, string | string[] | undefined> });
   const translateTitleSchool = translateTitleSchoolFromReq(
     { headers: req.headers as Record<string, string | string[] | undefined> },
@@ -4699,7 +4760,11 @@ router.post("/discovery/next", async (req, res) => {
   }
 });
 
-router.post("/chat", async (req, res) => {
+router.post(
+  "/chat",
+  // Chat has its own monthly quota; this just blunts scripted bursts.
+  userRateLimit({ name: "chat", windowMs: minutes(1), max: 20 }),
+  async (req, res) => {
   const chatLocale = localeFromReq({ headers: req.headers as Record<string, string | string[] | undefined> });
   const chatTranslateTitleSchool = translateTitleSchoolFromReq(
     { headers: req.headers as Record<string, string | string[] | undefined> },
@@ -6015,17 +6080,15 @@ router.post("/chat", async (req, res) => {
             } catch { /* silent */ }
           }
 
-          // Out-of-hours title screening: the LINZ title service is closed
-          // (8am–10pm NZ), so freehold couldn't be verified. Show the price +
-          // suburb matches with a "Title unverified" caveat and tell the user we
-          // can confirm title later. (The disclaimer is English here; the whole
-          // payload is run through translateChatContent below for zh users.)
+          // Out-of-hours title screening: the LINZ title service is closed, so
+          // freehold couldn't be verified. Tag the candidates "unverified" so the
+          // neutral "Title unverified / 产权待核实" chip shows on the cards, but do
+          // NOT surface any explanation about service hours — that operational
+          // detail must never be exposed to customers (in any language).
           if (titleScreeningOutOfHours && candidates.length > 0) {
             for (const candidate of candidates) {
               if (!candidate.titleStatus) candidate.titleStatus = "unverified";
             }
-            const titleDisclaimer = "Title screening is available 8am–10pm, so I couldn't confirm freehold title right now. I've shown properties matching your price and suburb, and can verify their freehold title once the service is back.";
-            aiIntro = aiIntro ? `${aiIntro}\n\n${titleDisclaimer}` : titleDisclaimer;
           }
 
           // Non-freehold exclusion reminder: when this search dropped cross-lease
@@ -7361,7 +7424,14 @@ router.get("/pipeline-test", async (req, res) => {
   }
 });
 
-router.get("/analyse/card-scores", async (req, res) => {
+router.get(
+  "/analyse/card-scores",
+  // Returns scores for many addresses at once (a prime harvest vector), but is
+  // also called as the user scrolls listings — so the cap is generous. The IP
+  // cap also covers anonymous callers (no token → no per-account limit).
+  ipRateLimit({ name: "card-scores", windowMs: minutes(1), max: 240 }),
+  userRateLimit({ name: "card-scores", windowMs: minutes(1), max: 120 }),
+  async (req, res) => {
   const raw = req.query.addresses;
   const addresses: string[] = Array.isArray(raw)
     ? (raw as string[])

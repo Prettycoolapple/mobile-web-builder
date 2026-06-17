@@ -26,6 +26,34 @@ export function getPublicAppUrl(): string {
   return "http://localhost:8080";
 }
 
+/**
+ * Origins allowed to call the API from a *browser* context. CORS is a browser
+ * protection only — it does not stop a server-side scraper — but it cheaply
+ * blocks another website (e.g. a competitor's web app) from calling our API
+ * directly. Native clients (React Native fetch) send no Origin and are allowed
+ * by the app.ts callback, so this never affects the mobile app.
+ *
+ * Defaults to the public app URL; extend with CORS_ALLOWED_ORIGINS (comma
+ * separated) and/or ADMIN_ORIGIN.
+ */
+export function getAllowedOrigins(): string[] {
+  const stripSlash = (s: string) => s.replace(/\/+$/, "");
+  const origins = new Set<string>();
+  origins.add(stripSlash(getPublicAppUrl()));
+
+  const adminOrigin = readOptional("ADMIN_ORIGIN");
+  if (adminOrigin) origins.add(stripSlash(adminOrigin));
+
+  const configured = readOptional("CORS_ALLOWED_ORIGINS");
+  if (configured) {
+    for (const entry of configured.split(",")) {
+      const trimmed = entry.trim();
+      if (trimmed) origins.add(stripSlash(trimmed));
+    }
+  }
+  return Array.from(origins);
+}
+
 export function getTrustProxySetting(): boolean | number | string {
   const value = readOptional("TRUST_PROXY");
   if (!value) return true;

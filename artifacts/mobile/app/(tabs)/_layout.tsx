@@ -21,8 +21,19 @@ function ClassicTabLayout({ isGuest }: { isGuest: boolean }) {
   const isWeb = Platform.OS === "web";
   const safeAreaInsets = useSafeAreaInsets();
   const { unreadCount } = useDm();
-  const { startNewChat } = useChat();
+  const { startNewChat, currentSession, sessions, switchSession } = useChat();
   const router = useRouter();
+
+  // The Home and Search tabs both resolve to the index screen, so the active
+  // tab can't be derived from the route — it follows chat state instead.
+  // "In a conversation" = the current session has at least one message.
+  const inConversation = (currentSession?.messages?.length ?? 0) > 0;
+  // The most-recently-used session that still holds messages — what the Search
+  // tab resumes when the user is back on the Home landing.
+  const resumable =
+    [...sessions].sort((a, b) => b.updatedAt - a.updatedAt).find((s) => s.messages.length > 0) ?? null;
+  const searchTappable = inConversation || resumable !== null;
+  const searchTint = inConversation ? colors.accent : colors.mutedForeground;
 
   return (
     <Tabs
@@ -65,12 +76,28 @@ function ClassicTabLayout({ isGuest }: { isGuest: boolean }) {
         name="index"
         options={{
           title: t("tab.search"),
-          tabBarIcon: ({ color }) =>
-            isIOS ? (
-              <SymbolView name="magnifyingglass.circle" tintColor={color} size={24} />
-            ) : (
-              <Feather name="search" size={22} color={color} />
-            ),
+          tabBarButton: ({ style }) => (
+            <Pressable
+              style={[style, styles.tabCell, { opacity: searchTappable ? 1 : 0.4 }]}
+              disabled={!searchTappable}
+              onPress={() => {
+                // Resume the backgrounded conversation when returning from the
+                // Home landing; if already in one, just stay on the index route.
+                if (!inConversation && resumable) switchSession(resumable.id);
+                router.navigate("/(tabs)");
+              }}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !searchTappable, selected: inConversation }}
+              accessibilityLabel={t("tab.search")}
+            >
+              {isIOS ? (
+                <SymbolView name="magnifyingglass.circle" tintColor={searchTint} size={24} />
+              ) : (
+                <Feather name="search" size={22} color={searchTint} />
+              )}
+              <Text style={[styles.tabLabel, { color: searchTint }]}>{t("tab.search")}</Text>
+            </Pressable>
+          ),
         }}
       />
       <Tabs.Screen
@@ -92,10 +119,12 @@ function ClassicTabLayout({ isGuest }: { isGuest: boolean }) {
         name="home"
         options={{
           title: t("tab.home"),
-          tabBarButton: ({ ref: _ref, style }) => (
+          tabBarButton: ({ style }) => (
             <Pressable
               style={[style, styles.homeTabCell]}
               onPress={() => {
+                // Fresh Home landing; prior sessions stay alive in `sessions`
+                // and are resumable via the Search tab.
                 startNewChat();
                 router.navigate("/(tabs)");
               }}
@@ -162,6 +191,17 @@ export default function TabLayout() {
 }
 
 const styles = StyleSheet.create({
+  tabCell: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+  },
+  tabLabel: {
+    fontFamily: "DM_Sans_500Medium",
+    fontSize: 11,
+    marginTop: -2,
+  },
   homeTabCell: {
     flex: 1,
     alignItems: "center",

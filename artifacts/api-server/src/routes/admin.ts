@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { and, asc, count, desc, eq, ilike, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, isNotNull, isNull, or, sql } from "drizzle-orm";
 import {
   db,
   profiles,
@@ -12,9 +12,11 @@ import {
   dmThreads,
   propertyCache,
   conversationSyncs,
+  abuseEvents,
   withDbRetry,
 } from "@workspace/db";
 import { requireAdmin } from "../lib/auth";
+import { setAbuseFlag } from "../lib/abuse";
 import { createStorageReviewToken } from "../lib/storage-review-token";
 import { getPublicAppUrl } from "../lib/env";
 import { logger } from "../lib/logger";
@@ -1468,6 +1470,133 @@ router.get("/admin/users/:userId/chats", requireAdmin, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "admin user chats list failed");
     res.status(500).json({ error: "Failed to load chats" });
+  }
+});
+
+// ── Abuse / harvest-pattern detection (Layer 2) ──────────────────────────────
+
+// GET /admin/abuse/events?kind=&limit=&offset=  — recent abuse signals
+router.get("/admin/abuse/events", requireAdmin, async (req, res) => {
+  const kind = typeof req.query.kind === "string" ? req.query.kind.trim() : "";
+  const limit = parseLimit(req.query.limit);
+  const offset = parseOffset(req.query.offset);
+
+  try {
+    const whereClause = kind ? eq(abuseEvents.kind, kind) : undefined;
+    const rows = await db
+      .select({
+        id: abuseEvents.id,
+        userId: abuseEvents.userId,
+        ipHash: abuseEvents.ipHash,
+        kind: abuseEvents.kind,
+        weight: abuseEvents.weight,
+        detail: abuseEvents.detail,
+        createdAt: abuseEvents.createdAt,
+        email: profiles.email,
+        fullName: profiles.fullName,
+      })
+      .from(abuseEvents)
+      .leftJoin(profiles, eq(profiles.id, abuseEvents.userId))
+      .where(whereClause)
+      .orderBy(desc(abuseEvents.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    res.json({ limit, offset, rows });
+  } catch (err) {
+    req.log.error({ err }, "admin abuse events list failed");
+    res.status(500).json({ error: "Failed to load abuse events" });
+  }
+});
+
+// GET /admin/abuse/flagged  — accounts currently flagged for abuse
+router.get("/admin/abuse/flagged", requireAdmin, async (req, res) => {
+  try {
+    const rows = await db
+      .select({
+        id: profiles.id,
+        email: profiles.email,
+        fullName: profiles.fullName,
+        role: profiles.role,
+        subscriptionTier: profiles.subscriptionTier,
+        createdAt: profiles.createdAt,
+        abuseFlagReason: profiles.abuseFlagReason,
+        abuseFlaggedAt: profiles.abuseFlaggedAt,
+      })
+      .from(profiles)
+      .where(eq(profiles.abuseFlag, true))
+      .orderBy(desc(profiles.abuseFlaggedAt));
+
+    res.json({ rows });
+  } catch (err) {
+    req.log.error({ err }, "admin flagged accounts list failed");
+    res.status(500).json({ error: "Failed to load flagged accounts" });
+  }
+});
+
+// GET /admin/abuse/suspicious?days=&limit=  — accounts ranked by rolling abuse
+// score (sum of signal weights in the window). Surfaces accounts worth a manual
+// review/warning *before* any auto-flag fires. A score >= 10 is auto-flag-grade.
+router.get("/admin/abuse/suspicious", requireAdmin, async (req, res) => {
+  const days = (() => {
+    const n = Number(req.query.days);
+    if (!Number.isFinite(n) || n <= 0) return 7;
+    return Math.min(Math.floor(n), 90);
+  })();
+  const limit = parseLimit(req.query.limit, 100, 500);
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+  try {
+    const rows = await db
+      .select({
+        id: profiles.id,
+        email: profiles.email,
+        fullName: profiles.fullName,
+        role: profiles.role,
+        subscriptionTier: profiles.subscriptionTier,
+        createdAt: profiles.createdAt,
+        abuseFlag: profiles.abuseFlag,
+        abuseFlagReason: profiles.abuseFlagReason,
+        abuseFlaggedAt: profiles.abuseFlaggedAt,
+        score: sql<number>`coalesce(sum(${abuseEvents.weight}), 0)`,
+        signalCount: sql<number>`count(*) filter (where ${abuseEvents.weight} > 0)`,
+        lastSignalAt: sql<string>`max(${abuseEvents.createdAt})`,
+        kinds: sql<string>`string_agg(distinct ${abuseEvents.kind}, ',')`,
+      })
+      .from(abuseEvents)
+      .innerJoin(profiles, eq(profiles.id, abuseEvents.userId))
+      .where(and(isNotNull(abuseEvents.userId), gte(abuseEvents.createdAt, since)))
+      .groupBy(profiles.id)
+      .having(sql`coalesce(sum(${abuseEvents.weight}), 0) > 0`)
+      .orderBy(desc(sql`coalesce(sum(${abuseEvents.weight}), 0)`), desc(sql`max(${abuseEvents.createdAt})`))
+      .limit(limit);
+
+    res.json({ days, limit, autoFlagScore: 10, rows });
+  } catch (err) {
+    req.log.error({ err }, "admin suspicious accounts list failed");
+    res.status(500).json({ error: "Failed to load suspicious accounts" });
+  }
+});
+
+// POST /admin/abuse/flag  — manually set/clear an account's abuse flag
+// Body: { userId: string, flag: boolean, reason?: string }
+router.post("/admin/abuse/flag", requireAdmin, async (req, res) => {
+  const { userId, flag, reason } = req.body as { userId?: unknown; flag?: unknown; reason?: unknown };
+  if (typeof userId !== "string" || !userId || typeof flag !== "boolean") {
+    res.status(400).json({ error: "userId (string) and flag (boolean) are required" });
+    return;
+  }
+
+  try {
+    const ok = await setAbuseFlag(userId, flag, typeof reason === "string" ? reason : undefined);
+    if (!ok) {
+      res.status(404).json({ error: "Account not found" });
+      return;
+    }
+    res.json({ ok: true, userId, abuseFlag: flag });
+  } catch (err) {
+    req.log.error({ err }, "admin set abuse flag failed");
+    res.status(500).json({ error: "Failed to update abuse flag" });
   }
 });
 
