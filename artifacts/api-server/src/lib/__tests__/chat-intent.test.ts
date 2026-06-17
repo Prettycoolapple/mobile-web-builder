@@ -9,7 +9,7 @@ vi.mock("@workspace/integrations-gemini-ai", () => ({
 }));
 
 import { ai } from "@workspace/integrations-gemini-ai";
-import { extractChatIntent } from "../claude";
+import { extractChatIntent, normaliseAdditionalSuburbs, normaliseIncludeTenures } from "../claude";
 
 const mockedGenerateContent = vi.mocked(ai.models.generateContent);
 
@@ -266,5 +266,128 @@ describe("chat intent extraction", () => {
 
     expect(intent.mode).toBe("discover");
     expect(intent.discoveryPresentation).toBe("generic_listing");
+  });
+
+  it("captures multiple suburbs in order and a freehold-title requirement", async () => {
+    mockIntentJson({
+      intentCategory: "property_discovery",
+      subject: "subdivision",
+      execution: "show_listing_cards",
+      confidence: 0.95,
+      mode: "discover",
+      address: null,
+      suburb: "st heliers",
+      // Mixed case + a duplicate of the primary to exercise normalisation.
+      additionalSuburbs: ["Kohimarama", "st heliers", "Mission Bay"],
+      minPrice: null,
+      maxPrice: 1500000,
+      criteria: "subdividable, freehold title",
+      requiresFreeholdTitle: true,
+      discoveryPresentation: "scored_screening",
+      isFollowUp: false,
+      includeNegotiation: false,
+      needsClarification: false,
+      clarificationQuestion: null,
+      wantsProviderRecommendation: false,
+      wantsAnotherProvider: false,
+      suggestedDiscipline: null,
+      wideScanSubdivisionIntent: false,
+      reasoning: "Subdividable freehold search across two suburbs.",
+    });
+
+    const intent = await extractChatIntent([
+      { role: "user", content: "What is subdividable under $1.5M with a freehold title in St Heliers or Kohimarama?" },
+    ]);
+
+    expect(intent.suburb).toBe("st heliers");
+    expect(intent.additionalSuburbs).toEqual(["kohimarama", "mission bay"]);
+    expect(intent.maxPrice).toBe(1500000);
+    expect(intent.requiresFreeholdTitle).toBe(true);
+  });
+
+  it("normaliseAdditionalSuburbs lowercases, drops the primary, and dedupes in order", () => {
+    expect(normaliseAdditionalSuburbs(["Kohimarama", "St Heliers", "kohimarama", "Mission Bay"], "st heliers"))
+      .toEqual(["kohimarama", "mission bay"]);
+    expect(normaliseAdditionalSuburbs(undefined, "st heliers")).toEqual([]);
+    expect(normaliseAdditionalSuburbs(["", "  ", null, 7], null)).toEqual([]);
+  });
+
+  it("captures an explicit non-freehold opt-in (includeTenures)", async () => {
+    mockIntentJson({
+      intentCategory: "property_discovery",
+      subject: "subdivision",
+      execution: "show_listing_cards",
+      confidence: 0.92,
+      mode: "discover",
+      address: null,
+      suburb: "st heliers",
+      additionalSuburbs: [],
+      minPrice: null,
+      maxPrice: null,
+      criteria: "subdividable, include cross-lease",
+      requiresFreeholdTitle: false,
+      includeTenures: ["cross_lease"],
+      discoveryPresentation: "scored_screening",
+      isFollowUp: true,
+      includeNegotiation: false,
+      needsClarification: false,
+      clarificationQuestion: null,
+      wantsProviderRecommendation: false,
+      wantsAnotherProvider: false,
+      suggestedDiscipline: null,
+      wideScanSubdivisionIntent: false,
+      reasoning: "User opted in to cross-lease.",
+    });
+
+    const intent = await extractChatIntent([
+      { role: "user", content: "show me subdividable in St Heliers" },
+      { role: "assistant", content: "I left out some cross-lease properties because subdivision needs a freehold title. Tell me if you'd like me to include them." },
+      { role: "user", content: "yes, include the cross-lease ones too" },
+    ]);
+
+    expect(intent.includeTenures).toEqual(["cross_lease"]);
+  });
+
+  it("defaults includeTenures to [] when no opt-in is mentioned", async () => {
+    mockIntentJson({
+      intentCategory: "property_discovery",
+      subject: "subdivision",
+      execution: "show_listing_cards",
+      confidence: 0.9,
+      mode: "discover",
+      address: null,
+      suburb: "orakei",
+      additionalSuburbs: [],
+      minPrice: null,
+      maxPrice: null,
+      criteria: "subdividable in Orakei",
+      requiresFreeholdTitle: false,
+      discoveryPresentation: "scored_screening",
+      isFollowUp: false,
+      includeNegotiation: false,
+      needsClarification: false,
+      clarificationQuestion: null,
+      wantsProviderRecommendation: false,
+      wantsAnotherProvider: false,
+      suggestedDiscipline: null,
+      wideScanSubdivisionIntent: true,
+      reasoning: "Plain subdivision search.",
+    });
+
+    const intent = await extractChatIntent([
+      { role: "user", content: "What is subdividable in Orakei?" },
+    ]);
+
+    expect(intent.includeTenures).toEqual([]);
+  });
+
+  it("normaliseIncludeTenures maps synonyms/stratum and dedupes", () => {
+    expect(normaliseIncludeTenures(["cross-lease", "Cross Lease", "leasehold"]))
+      .toEqual(["cross_lease", "leasehold"]);
+    expect(normaliseIncludeTenures(["stratum", "unit title"])).toEqual(["unit_title"]);
+    expect(normaliseIncludeTenures(["cross_lease", "leasehold", "unit_title"]))
+      .toEqual(["cross_lease", "leasehold", "unit_title"]);
+    expect(normaliseIncludeTenures(undefined)).toEqual([]);
+    expect(normaliseIncludeTenures(["", null, 7, "freehold"])).toEqual([]);
   });
 });

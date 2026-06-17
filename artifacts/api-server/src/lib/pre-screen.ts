@@ -10,7 +10,7 @@ import {
   type DesignLedConfidence,
   type DesignLedYieldRange,
 } from "./lot-calculator";
-import { fetchLINZParcel, fetchLINZChildAddressCount } from "./linz";
+import { fetchLINZParcel, fetchLINZChildAddressCount, screenAddressFreehold, isLinzTitleServiceAvailable, tenureCategoryFromEstate } from "./linz";
 import { fetchPropertyHistory } from "./property-data";
 import { scrapePropertyValue } from "./scrapers/propertyvalue";
 import {
@@ -93,6 +93,30 @@ export interface PropertyCandidate {
   typology?: PropertyTypology;
   typologyConfidence?: PropertyEligibilityConfidence;
   titleConfidence?: PropertyEligibilityConfidence;
+  /**
+   * Land tenure displayed on the card. "Freehold" when LINZ confirmed fee
+   * simple; otherwise the confirmed estate (only freehold survives screening,
+   * so this is "Freehold" or absent). Set only when title screening ran.
+   */
+  titleType?: string | null;
+  /**
+   * Outcome of freehold title screening for this candidate:
+   *  - "verified"   = LINZ confirmed the title (freehold).
+   *  - "unverified" = title screening was requested but LINZ couldn't confirm
+   *    (new build with no title yet, address mismatch, or service unavailable /
+   *    out-of-hours) — shown with a caveat rather than dropped.
+   * Absent when title screening did not run for this search.
+   */
+  titleStatus?: "verified" | "unverified";
+  /**
+   * Set when the user opted in to a non-freehold tenure: LINZ positively
+   * confirmed this title is cross-lease / leasehold / unit-title, and the user
+   * asked to see it anyway. The card shows a warning chip explaining the
+   * subdivision catch instead of the freehold tick. titleType carries the
+   * display name ("Cross Lease" etc.) and titleStatus stays "verified" (the
+   * title IS confirmed — just not freehold).
+   */
+  subdivisionTenureWarning?: "cross_lease" | "leasehold" | "unit_title";
   subdivisionEligible?: boolean;
   subdivisionRejectReason?: string | null;
   buildYear?: number | null;
@@ -335,6 +359,13 @@ async function fetchScreenSourcesWithRetry(
   return { zone, resolvedOverlays, linzParcel, propertyHistory, propertyValue, failedSources };
 }
 
+/** Display name shown on the card for an opted-in non-freehold tenure. */
+const TENURE_DISPLAY_NAME: Record<"cross_lease" | "leasehold" | "unit_title", string> = {
+  cross_lease: "Cross Lease",
+  leasehold: "Leasehold",
+  unit_title: "Unit Title",
+};
+
 async function screenOneFast(
   listing: ListingResult,
   options?: {
@@ -342,6 +373,22 @@ async function screenOneFast(
     pricePlaceholderNzd?: number;
     strictStandardSubdivision?: boolean;
     preliminarySubdivision?: boolean;
+    /**
+     * Verify freehold/fee-simple title against LINZ. Set only when the user's
+     * intent calls for it (requiresFreeholdTitle, or any subdivision search —
+     * the strict screen already requires verified freehold). Caller is
+     * responsible for only enabling this in service hours; this function
+     * re-checks isLinzTitleServiceAvailable() defensively.
+     */
+    verifyFreeholdTitle?: boolean;
+    /**
+     * Non-freehold tenures the user opted in to seeing despite the subdivision
+     * catch. A LINZ-confirmed non-freehold listing whose tenure is in this set
+     * is KEPT (with a warning) and screened on land/zone potential only (the
+     * eligibility tenure waiver), instead of being dropped. Empty/absent = drop
+     * every non-freehold title as usual.
+     */
+    includeTenures?: ("cross_lease" | "leasehold" | "unit_title")[];
   },
 ): Promise<ScreenVerdict> {
   try {
@@ -357,6 +404,52 @@ async function screenOneFast(
       if (prefilter.kind === "reject") {
         logger.debug({ address: listing.address, reason: prefilter.reason }, "Pre-screen: strict attribute prefilter rejected listing");
         return { kind: "rejected", reason: `prefilter:${prefilter.reason}` };
+      }
+    }
+
+    // Freehold title screening (authoritative LINZ tenure). Done right after the
+    // cheap prefilter so a positively non-freehold listing is dropped BEFORE the
+    // heavier zone/parcel/PropertyValue fetches, and so a confirmed freehold
+    // estate can feed the eligibility assessments below (the strict subdivision
+    // screen hard-requires verified freehold title). Bounded concurrency + the
+    // LRS preview cache keep this cheap and race-free. The result is carried onto
+    // the candidate card; "caveat" means LINZ couldn't confirm (new build with no
+    // title yet, mismatch, or service blip) — shown as "unverified", never dropped.
+    let verifiedEstateType: string | null = null;
+    let titleType: string | null | undefined;
+    let titleStatus: "verified" | "unverified" | undefined;
+    // When the user opted in to a non-freehold tenure, a positively-confirmed
+    // match is kept (with a warning) and the eligibility assessment screens it
+    // on land/zone potential only — see waiveTenureForSubdivision below.
+    let tenureWarning: "cross_lease" | "leasehold" | "unit_title" | undefined;
+    let waiveTenureForSubdivision: "cross_lease" | "leasehold" | "unit_title" | null = null;
+    if (options?.verifyFreeholdTitle && isLinzTitleServiceAvailable()) {
+      const fh = await screenAddressFreehold(listing.address);
+      if (fh.decision === "reject") {
+        const cat = tenureCategoryFromEstate(fh.estate);
+        if (cat && cat !== "freehold" && options?.includeTenures?.includes(cat)) {
+          // User opted in: surface it with a warning instead of dropping it. The
+          // estate is fed through as verified (LINZ confirmed the title — it's
+          // just not freehold) so the title-confidence gate passes; the tenure
+          // waiver below skips the freehold/standalone-typology requirements.
+          logger.info({ address: listing.address, estate: fh.estate, tenure: cat }, "Pre-screen: kept opted-in non-freehold title");
+          verifiedEstateType = fh.estate;
+          titleType = TENURE_DISPLAY_NAME[cat];
+          titleStatus = "verified";
+          tenureWarning = cat;
+          waiveTenureForSubdivision = cat;
+        } else {
+          // Encode the tenure in the reason so the batch driver can count which
+          // tenures were excluded (drives the "I left some out…" reminder).
+          logger.info({ address: listing.address, estate: fh.estate }, "Pre-screen: rejected — LINZ title is not freehold");
+          return { kind: "rejected", reason: `not_freehold_title:${cat ?? "unknown"}` };
+        }
+      } else if (fh.decision === "keep") {
+        verifiedEstateType = fh.estate;
+        titleType = fh.titleType;
+        titleStatus = "verified";
+      } else {
+        titleStatus = "unverified";
       }
     }
 
@@ -418,6 +511,8 @@ async function screenOneFast(
     const preliminaryEligibility = assessPropertyEligibility({
       address: listing.address,
       estateType: listing.tenureText,
+      verifiedEstateType,
+      waiveTenureForSubdivision,
       legalDescription: [
         listing.legalDescription,
         ...(propertyValue?.legal_descriptions ?? []),
@@ -489,6 +584,8 @@ async function screenOneFast(
     const eligibility = assessPropertyEligibility({
           address: listing.address,
           estateType: listing.tenureText,
+          verifiedEstateType,
+          waiveTenureForSubdivision,
           legalDescription: [
             listing.legalDescription,
             ...(propertyValue?.legal_descriptions ?? []),
@@ -525,6 +622,7 @@ async function screenOneFast(
           titleConfidence: eligibility?.titleConfidence,
           subdivisionRejectReason: eligibility?.subdivisionRejectReason,
           buildYear: resolvedBuildYear,
+          tenureWaived: waiveTenureForSubdivision != null,
         })
       : passesStrictStandardSubdivisionScreen({
       address: listing.address,
@@ -538,6 +636,7 @@ async function screenOneFast(
       titleConfidence: eligibility?.titleConfidence,
       subdivisionEligible: eligibility?.subdivisionEligible,
       buildYear: claims.completionYear ?? propertyHistory?.build_year ?? null,
+      tenureWaived: waiveTenureForSubdivision != null,
     });
     const designLedAssessment = assessSubdivisionPathways({
       netAreaSqm: land ?? null,
@@ -666,6 +765,9 @@ async function screenOneFast(
       typology: packageParts ? "standalone" : eligibility?.typology,
       typologyConfidence: packageParts ? "inferred" : eligibility?.typologyConfidence,
       titleConfidence: packageParts ? "inferred" : eligibility?.titleConfidence,
+      titleType: titleType ?? undefined,
+      titleStatus,
+      subdivisionTenureWarning: tenureWarning,
       subdivisionEligible: packageParts ? packageSubdivisionPasses : eligibility?.subdivisionEligible,
       subdivisionRejectReason: packageParts ? "combined_listing_aggregate" : eligibility?.subdivisionRejectReason,
       buildYear: resolvedBuildYear,
@@ -698,6 +800,14 @@ export interface PreScreenDetailedResult {
   /** Listings that couldn't be conclusively screened because an essential source failed after retries. Caller can re-screen these with longer waits. */
   indeterminate: ListingResult[];
   /**
+   * Count of listings dropped because LINZ positively confirmed a non-freehold
+   * title the user had NOT opted in to, by tenure. Drives the "I left some
+   * cross-lease / leasehold properties out…" reminder. Counts only the
+   * foreground batch (what the user is about to see); the background drain runs
+   * after the response is built.
+   */
+  excludedTenures: { cross_lease: number; leasehold: number; unit_title: number };
+  /**
    * When early-bail fires, this resolves once the entire pool finishes
    * screening in the background — useful for warming the verdict cache so
    * "show more" follow-ups are instant. Always present, even when no
@@ -716,15 +826,26 @@ async function cachedScreenOneFast(
   listing: ListingResult,
   options?: Parameters<typeof screenOneFast>[1],
 ): Promise<ScreenVerdict> {
-  if (options?.strictStandardSubdivision) {
-    const cached = getScreenVerdict(listing);
+  // Freehold-screened verdicts live in a separate cache namespace so a verdict
+  // formed with the freehold gate is never served to a non-freehold search. The
+  // opt-in set is folded into the key too: a "rejected (cross-lease)" verdict
+  // cached for a plain freehold search must NOT shadow a search that opted in to
+  // cross-lease (where the same listing is now kept).
+  const optInSuffix =
+    options?.includeTenures && options.includeTenures.length > 0
+      ? "|" + [...options.includeTenures].sort().join(",")
+      : "";
+  const variant = options?.verifyFreeholdTitle ? `freehold${optInSuffix}` : undefined;
+  const shouldCache = options?.strictStandardSubdivision === true || options?.verifyFreeholdTitle === true;
+  if (shouldCache) {
+    const cached = getScreenVerdict(listing, variant);
     if (cached) {
       logger.debug({ address: listing.address, verdict: cached.kind }, "Pre-screen: verdict cache hit");
       return cached;
     }
   }
   const verdict = await screenOneFast(listing, options);
-  if (options?.strictStandardSubdivision) setScreenVerdict(listing, verdict);
+  if (shouldCache) setScreenVerdict(listing, verdict, variant);
   return verdict;
 }
 
@@ -748,6 +869,10 @@ export async function preScreenListingsFastDetailed(
     pricePlaceholderNzd?: number;
     strictStandardSubdivision?: boolean;
     preliminarySubdivision?: boolean;
+    /** Verify freehold/fee-simple title against LINZ (see screenOneFast). */
+    verifyFreeholdTitle?: boolean;
+    /** Non-freehold tenures the user opted in to seeing despite the subdivision catch (see screenOneFast). */
+    includeTenures?: ("cross_lease" | "leasehold" | "unit_title")[];
     /** Resolve once this many candidates have been collected; keep draining the rest in the background. */
     earlyBailAt?: number;
     /** Called each time a candidate is found, in order of completion (not score-sorted). */
@@ -757,6 +882,12 @@ export async function preScreenListingsFastDetailed(
   const nonApartments = listings.filter((l) => !isApartmentAddress(l.address));
   const results: PropertyCandidate[] = [];
   const indeterminate: ListingResult[] = [];
+  const excludedTenures = { cross_lease: 0, leasehold: 0, unit_title: 0 };
+  const tallyExcludedTenure = (verdict: ScreenVerdict): void => {
+    if (verdict.kind !== "rejected" || !verdict.reason.startsWith("not_freehold_title:")) return;
+    const cat = verdict.reason.slice("not_freehold_title:".length);
+    if (cat === "cross_lease" || cat === "leasehold" || cat === "unit_title") excludedTenures[cat]++;
+  };
   const queue = [...nonApartments];
   const queueListings = [...nonApartments];
   const earlyBailAt = options?.earlyBailAt;
@@ -777,6 +908,8 @@ export async function preScreenListingsFastDetailed(
         options?.onCandidate?.(r.candidate);
       } else if (r.kind === "indeterminate") {
         indeterminate.push(batchOriginals[i]);
+      } else {
+        tallyExcludedTenure(r);
       }
     }
     if (earlyBailAt != null && results.length >= earlyBailAt && queue.length > 0) {
@@ -820,7 +953,7 @@ export async function preScreenListingsFastDetailed(
     return b.scores.composite - a.scores.composite;
   });
   const candidates = resultCap == null ? sorted : sorted.slice(0, resultCap);
-  return { candidates, indeterminate, drainComplete };
+  return { candidates, indeterminate, excludedTenures, drainComplete };
 }
 
 export async function preScreenListingsFast(
@@ -835,6 +968,10 @@ export async function preScreenListingsFast(
     pricePlaceholderNzd?: number;
     strictStandardSubdivision?: boolean;
     preliminarySubdivision?: boolean;
+    /** Verify freehold/fee-simple title against LINZ (see screenOneFast). */
+    verifyFreeholdTitle?: boolean;
+    /** Non-freehold tenures the user opted in to seeing despite the subdivision catch (see screenOneFast). */
+    includeTenures?: ("cross_lease" | "leasehold" | "unit_title")[];
   },
 ): Promise<PropertyCandidate[]> {
   const detailed = await preScreenListingsFastDetailed(listings, maxConcurrent, resultCap, options);

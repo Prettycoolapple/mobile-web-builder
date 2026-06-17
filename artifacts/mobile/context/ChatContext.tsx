@@ -71,6 +71,9 @@ export interface ChatMessage {
   // Suburb of the prefetched batch — used to show a "now showing nearby X" note
   // and advance message.suburb when the nearby "train" jumps suburbs.
   prefetchedSuburb?: string;
+  // Whether the queued suburbs are the user's own list ("user") or LLM nearby
+  // suggestions ("nearby") — controls the hand-off wording on advance.
+  prefetchedQueueSource?: "user" | "nearby";
   prefetchedClarification?: {
     question: string;
     options: string[];
@@ -537,6 +540,12 @@ export interface PropertyCandidate {
   typology?: "standalone" | "terrace_townhouse" | "unit_apartment" | "unknown";
   typologyConfidence?: "verified" | "inferred" | "unknown";
   titleConfidence?: "verified" | "inferred" | "unknown";
+  /** Land tenure for the card (e.g. "Freehold"); set only when title screening ran. */
+  titleType?: string | null;
+  /** "verified" = LINZ confirmed freehold; "unverified" = couldn't confirm (shown with caveat). */
+  titleStatus?: "verified" | "unverified";
+  /** Set when the user opted in to a non-freehold tenure: the card shows a warning chip about the subdivision catch instead of the freehold tick. */
+  subdivisionTenureWarning?: "cross_lease" | "leasehold" | "unit_title";
   subdivisionEligible?: boolean;
   subdivisionRejectReason?: string | null;
   buildYear?: number | null;

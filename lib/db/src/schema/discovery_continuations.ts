@@ -18,6 +18,13 @@ export type DiscoveryContinuationState = {
   nearbyQueue?: string[];     // ordered nearby suburbs still to expand into
   originSuburb?: string;      // where the train started (for refresh-on-drain)
   currentSuburb?: string;     // suburb currently being served (for the exhausted prompt)
+  // Where the queued suburbs came from. "user" = the searcher explicitly named
+  // multiple suburbs ("St Heliers or Kohimarama") so the queue is seeded upfront
+  // and the hand-off is worded as a continuation of their request. "nearby" =
+  // LLM-suggested adjacent suburbs after the origin drained (the legacy default).
+  // (Whether to verify freehold title is carried inside preScreenOpts as
+  // verifyFreeholdTitle, so it persists and applies to every "Show more".)
+  queueSource?: "user" | "nearby";
   requireSourceBackedPrice?: boolean; // true when the user gave an explicit budget; POA/unknown-price listings should not match
   // Lazy/incremental pagination of the current suburb. Generic browse fetches a
   // small window of source pages up front and refills the pool one window at a

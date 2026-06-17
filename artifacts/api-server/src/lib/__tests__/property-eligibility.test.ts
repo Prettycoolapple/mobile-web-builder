@@ -334,4 +334,96 @@ describe("property eligibility verifier", () => {
     expect(result.source).toBe("linz");
     expect(result.suppressedParentLandArea).toBe(false);
   });
+
+  it("uses a LINZ-verified fee-simple estate to confirm freehold even when listing copy is silent", () => {
+    const result = assessPropertyEligibility({
+      address: "12 Verified Road, St Heliers, Auckland",
+      estateType: null,
+      verifiedEstateType: "Fee Simple",
+      legalDescription: "",
+      landAreaSqm: 900,
+      buildYear: 1980,
+      zoneCode: "MHU",
+      potentialLots: 2,
+      minLotSize: 400,
+    });
+    expect(result.titleConfidence).toBe("verified");
+    expect(result.titleIsFreehold).toBe(true);
+  });
+
+  it("treats a LINZ-verified cross lease as confirmed non-freehold", () => {
+    const result = assessPropertyEligibility({
+      address: "8 Crosslease Ave, Kohimarama, Auckland",
+      estateType: null,
+      verifiedEstateType: "Cross Lease",
+      legalDescription: "",
+      landAreaSqm: 800,
+      buildYear: 1980,
+      zoneCode: "MHU",
+      potentialLots: 2,
+      minLotSize: 400,
+    });
+    expect(result.titleConfidence).toBe("verified");
+    expect(result.titleIsFreehold).toBe(false);
+    expect(result.subdivisionEligible).toBe(false);
+  });
+
+  it("waives the tenure/typology gates for an opted-in cross-lease site with land potential", () => {
+    const base = {
+      address: "2/10 Example Street, St Heliers, Auckland",
+      estateType: "Cross Lease",
+      legalDescription: "Flat 2 Deposited Plan 98765",
+      propertyType: "House",
+      landAreaSqm: 1000,
+      floorAreaSqm: 130,
+      buildYear: 1960,
+      zoneCode: "MHU",
+      potentialLots: 6,
+      minLotSize: 300,
+    } as const;
+
+    // Without the waiver it is rejected on the cross-lease signal (baseline).
+    expect(assessPropertyEligibility(base).subdivisionEligible).toBe(false);
+
+    // With the opt-in waiver the land/zone potential carries it through.
+    const waived = assessPropertyEligibility({ ...base, waiveTenureForSubdivision: "cross_lease" });
+    expect(waived.subdivisionEligible).toBe(true);
+    expect(waived.subdivisionRejectReason).toBeNull();
+  });
+
+  it("still rejects an opted-in tenure when a structural gate fails (post-2000 build)", () => {
+    const result = assessPropertyEligibility({
+      address: "3/22 New Build Lane, Kohimarama, Auckland",
+      estateType: "Cross Lease",
+      legalDescription: "Flat 3 Deposited Plan 55555",
+      propertyType: "House",
+      landAreaSqm: 1000,
+      floorAreaSqm: 150,
+      buildYear: 2010,
+      zoneCode: "MHU",
+      potentialLots: 4,
+      minLotSize: 300,
+      waiveTenureForSubdivision: "cross_lease",
+    });
+    expect(result.subdivisionEligible).toBe(false);
+    expect(result.subdivisionRejectReason).toBe("post_2000_build");
+  });
+
+  it("still rejects an opted-in tenure when the parcel can't yield two lots", () => {
+    const result = assessPropertyEligibility({
+      address: "1/5 Tiny Site Road, St Heliers, Auckland",
+      estateType: "Leasehold",
+      legalDescription: "Flat 1 Deposited Plan 44444",
+      propertyType: "House",
+      landAreaSqm: 350,
+      floorAreaSqm: 120,
+      buildYear: 1965,
+      zoneCode: "MHS",
+      potentialLots: 1,
+      minLotSize: 400,
+      waiveTenureForSubdivision: "leasehold",
+    });
+    expect(result.subdivisionEligible).toBe(false);
+    expect(result.subdivisionRejectReason).toBe("insufficient_land_for_two_lots");
+  });
 });

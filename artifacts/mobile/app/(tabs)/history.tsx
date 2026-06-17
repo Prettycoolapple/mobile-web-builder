@@ -223,7 +223,7 @@ function WatchlistPropertyCard({ candidate, onShare, onAnalyse }: WatchlistPrope
 
   const heartButton = (
     <TouchableOpacity
-      style={[styles.watchHeartBtn, { backgroundColor: "rgba(255,255,255,0.92)", borderColor: colors.border }]}
+       style={[styles.watchHeartBtn, { backgroundColor: colors.card + "EB", borderColor: colors.border }]}
       onPress={handleRemove}
       activeOpacity={0.82}
       accessibilityRole="button"
@@ -239,7 +239,7 @@ function WatchlistPropertyCard({ candidate, onShare, onAnalyse }: WatchlistPrope
         <View style={styles.watchPhotoWrap}>
           <Image source={{ uri: photoUrl }} style={styles.watchPhoto} resizeMode="cover" />
           <TouchableOpacity
-            style={[styles.watchShareBtn, { backgroundColor: "rgba(255,255,255,0.92)", borderColor: colors.border }]}
+            style={[styles.watchShareBtn, { backgroundColor: colors.card + "EB", borderColor: colors.border }]}
             onPress={onShare}
             activeOpacity={0.82}
             accessibilityRole="button"

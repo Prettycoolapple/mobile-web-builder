@@ -129,9 +129,12 @@ export interface ChatIntent {
   address: string | null;
   // Discover
   suburb: string | null;           // normalised suburb name; inferred from context if needed
+  additionalSuburbs: string[];     // further suburbs the user named, in spoken order AFTER `suburb` (e.g. "St Heliers or Kohimarama" → suburb="st heliers", additionalSuburbs=["kohimarama"]); [] when only one
   minPrice: number | null;
   maxPrice: number | null;
   criteria: string | null;         // free-text description of what they want (subdividable, lifestyle, etc.)
+  requiresFreeholdTitle: boolean;  // true when the user wants a freehold / fee-simple title (triggers authoritative LINZ title screening)
+  includeTenures: ("cross_lease" | "leasehold" | "unit_title")[]; // non-freehold tenures the user has EXPLICITLY opted in to seeing despite the subdivision catch (shown with a warning); [] by default
   discoveryPresentation: DiscoveryPresentation | null; // generic listings vs scored subdivision/development screening cards
   isFollowUp: boolean;             // true when asking for more results from a prior search
   includeNegotiation: boolean;     // true when user doesn't require a listed price (auction, tender, POA)
@@ -163,10 +166,13 @@ const INTENT_SCHEMA = `{
   "confidence": <number from 0 to 1> | null,
   "mode": "analyse" | "discover" | "followup",
   "address": "<full NZ street address string> | null",
-  "suburb": "<suburb name, lowercase, normalised> | null",
+  "suburb": "<primary suburb name, lowercase, normalised> | null",
+  "additionalSuburbs": ["<further suburb names the user named, lowercase, normalised, in spoken order after the primary one>"],
   "minPrice": <NZD number> | null,
   "maxPrice": <NZD number> | null,
   "criteria": "<free-text describing what the user wants> | null",
+  "requiresFreeholdTitle": <true when the user wants a freehold / fee-simple title, false otherwise>,
+  "includeTenures": ["<any of: cross_lease, leasehold, unit_title — non-freehold tenures the user EXPLICITLY opted in to seeing; [] unless clearly stated>"],
   "discoveryPresentation": "generic_listing" | "scored_screening" | null,
   "isFollowUp": <true if asking for more results from an earlier search OR answering a clarification question, false otherwise>,
   "includeNegotiation": <true if user does not require a price (accepts auction/tender/POA), false otherwise>,
@@ -296,6 +302,49 @@ has already told you in an earlier turn.
 - "this area", "around here", "this suburb", "currently" → infer from CURRENT REPORT ADDRESS
 - Short reply like "St Heliers" or "Grey Lynn" after an assistant question → that IS the suburb
 - If truly undetermined after checking all history → leave null
+
+MULTIPLE SUBURBS (important):
+- When the user names two or more suburbs in one request — joined by "or", "and", commas,
+  "/", or any phrasing ("St Heliers or Kohimarama", "Mission Bay, Kohi and St Heliers",
+  "St Heliers 或 Kohimarama", "either Remuera or Meadowbank") — put the FIRST-named suburb in
+  "suburb" and ALL the others, in the order the user said them, in "additionalSuburbs".
+- Each entry must be lowercase and normalised the same way as "suburb".
+- Do NOT invent suburbs. Only list suburbs the user actually named.
+- When only one suburb is named (or none), "additionalSuburbs" is an empty array [].
+- The app searches the primary suburb to exhaustion first, then automatically moves through
+  additionalSuburbs in order — so the order you return them in matters.
+
+## FREEHOLD / TITLE INTENT (requiresFreeholdTitle)
+
+Set requiresFreeholdTitle=true when the user asks for a particular land title / tenure that
+implies freehold ownership, in ANY language or phrasing. Triggers include:
+- "freehold", "fee simple", "freehold title", "full freehold", "standalone freehold"
+- "freehold only", "must be freehold", "with a freehold title", "not cross-lease / not leasehold"
+- Chinese: "永久产权", "永久產權", "freehold 产权", "独立产权", "獨立業權", "非交叉租约"
+Set requiresFreeholdTitle=false when title/tenure is not mentioned, OR when the user explicitly
+wants a non-freehold tenure (e.g. asks specifically for cross-lease or leasehold).
+Note: this is independent of subdivision — a plain "freehold homes under $1.5M in Kohi" sets it true.
+
+## NON-FREEHOLD OPT-IN (includeTenures)
+
+Subdivision/freehold searches drop properties with a non-freehold title. The user can OPT IN to
+seeing those anyway (they are shown with a warning). Only populate includeTenures when the user
+CLEARLY signals they want a specific non-freehold tenure included — never by default.
+- "include cross-lease", "show me the cross-lease ones too", "cross lease is fine", "even if
+  it's cross lease", "I don't mind cross-lease" → add "cross_lease".
+- "include leasehold", "leasehold is ok", "show leasehold too" → add "leasehold".
+- "include unit title", "unit title is fine", "show the unit-title ones" → add "unit_title".
+- "include all titles", "any title", "show all of them", "don't filter by title" → add all three:
+  ["cross_lease","leasehold","unit_title"].
+- Chinese: "交叉地契"/"十字地契"→cross_lease, "租赁产权"/"租地"/"租约地"→leasehold,
+  "单位产权"/"分契产权"/"地契公寓"→unit_title; "所有地契都可以"/"不限地契"→all three.
+- HISTORY-AWARE AFFIRMATION: when the PREVIOUS assistant turn offered to include excluded
+  non-freehold tenures (e.g. "I left out some cross-lease and leasehold properties… say the word
+  and I'll include them") and the user replies with a bare affirmative ("yes", "yes please",
+  "go ahead", "include them", "好的"/"可以"/"都加进来"), set includeTenures to the tenures that
+  were offered in that prior turn. Check the full history to see which tenures were offered.
+- includeTenures is [] unless one of the above clearly applies. requiresFreeholdTitle and
+  includeTenures are independent (a user can want freehold yet also say "but show cross-lease too").
 
 ## PRICE EXTRACTION (check full history)
 
@@ -515,6 +564,47 @@ Reply with ONLY valid JSON, no markdown: {"wide": true|false}`;
   }
 }
 
+/**
+ * Normalise the LLM's extra-suburb list: lowercase/trim each, drop blanks, drop
+ * the primary suburb, and dedupe — preserving the spoken order so the discovery
+ * train serves them in the sequence the user named (see analyse.ts seeding).
+ */
+export function normaliseAdditionalSuburbs(
+  raw: unknown,
+  primarySuburb: string | null | undefined,
+): string[] {
+  if (!Array.isArray(raw)) return [];
+  const primary = (primarySuburb ?? "").toLowerCase().trim();
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "string") continue;
+    const s = entry.toLowerCase().trim();
+    if (!s || s === primary || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
+
+/**
+ * Normalise the LLM's includeTenures array to the canonical tenure keys,
+ * mapping common synonyms/typos (and "stratum" → unit_title) and dropping
+ * anything unrecognised. Order-independent; deduped.
+ */
+export function normaliseIncludeTenures(raw: unknown): ("cross_lease" | "leasehold" | "unit_title")[] {
+  if (!Array.isArray(raw)) return [];
+  const out = new Set<"cross_lease" | "leasehold" | "unit_title">();
+  for (const entry of raw) {
+    if (typeof entry !== "string") continue;
+    const s = entry.toLowerCase().trim();
+    if (/cross[-\s_]*lease|crosslease/.test(s)) out.add("cross_lease");
+    else if (/unit[-\s_]*title|stratum/.test(s)) out.add("unit_title");
+    else if (/lease[-\s_]*hold|leasehold/.test(s)) out.add("leasehold");
+  }
+  return [...out];
+}
+
 export async function extractChatIntent(
   messages: Message[],
   reportContext?: {
@@ -530,8 +620,8 @@ export async function extractChatIntent(
       subject: "unknown",
       execution: "answer_in_chat",
       confidence: null,
-      mode: "followup", address: null, suburb: null, minPrice: null, maxPrice: null,
-      criteria: null, discoveryPresentation: null, isFollowUp: false, includeNegotiation: false,
+      mode: "followup", address: null, suburb: null, additionalSuburbs: [], minPrice: null, maxPrice: null,
+      criteria: null, requiresFreeholdTitle: false, includeTenures: [], discoveryPresentation: null, isFollowUp: false, includeNegotiation: false,
       needsClarification: false, clarificationQuestion: null,
       wantsProviderRecommendation: false, suggestedDiscipline: null,
       wantsAnotherProvider: false,
@@ -547,8 +637,8 @@ export async function extractChatIntent(
       subject: "unknown",
       execution: "answer_in_chat",
       confidence: null,
-      mode: "followup", address: null, suburb: null, minPrice: null, maxPrice: null,
-      criteria: null, discoveryPresentation: null, isFollowUp: false, includeNegotiation: false,
+      mode: "followup", address: null, suburb: null, additionalSuburbs: [], minPrice: null, maxPrice: null,
+      criteria: null, requiresFreeholdTitle: false, includeTenures: [], discoveryPresentation: null, isFollowUp: false, includeNegotiation: false,
       needsClarification: false, clarificationQuestion: null,
       wantsProviderRecommendation: false, suggestedDiscipline: null,
       wantsAnotherProvider: false,
@@ -645,9 +735,12 @@ ${INTENT_SCHEMA}`;
       mode: legacyModeFromExecution(parsedExecution, parsedMode),
       address: parsed.address ?? null,
       suburb: parsed.suburb ? parsed.suburb.toLowerCase().trim() : null,
+      additionalSuburbs: normaliseAdditionalSuburbs(parsed.additionalSuburbs, parsed.suburb),
+      includeTenures: normaliseIncludeTenures(parsed.includeTenures),
       minPrice: typeof parsed.minPrice === "number" && parsed.minPrice > 0 ? parsed.minPrice : null,
       maxPrice: typeof parsed.maxPrice === "number" && parsed.maxPrice > 0 ? parsed.maxPrice : null,
       criteria: parsed.criteria ?? null,
+      requiresFreeholdTitle: Boolean(parsed.requiresFreeholdTitle),
       discoveryPresentation: parsedDiscoveryPresentation,
       isFollowUp: Boolean(parsed.isFollowUp),
       includeNegotiation: Boolean(parsed.includeNegotiation),
@@ -802,9 +895,16 @@ async function fallbackDetectIntent(
     mode,
     address: null,
     suburb,
+    // The regex fallback only fires when the LLM call fails; multi-suburb
+    // parsing is left to the LLM path, so default to none here.
+    additionalSuburbs: [],
     minPrice: null,
     maxPrice: null,
     criteria: lastMessage,
+    requiresFreeholdTitle: /\b(freehold|fee\s*simple)\b/i.test(lowerFallback) || /永久产权|永久產權|独立产权|獨立業權/.test(lastMessage),
+    // Opt-in is a deliberate, often conversational signal — leave it to the LLM
+    // path. The regex fallback never opts the user in to non-freehold tenures.
+    includeTenures: [],
     discoveryPresentation,
     isFollowUp,
     includeNegotiation: /negotiat|poa|by\s+applic|tender|auction/i.test(lowerFallback),

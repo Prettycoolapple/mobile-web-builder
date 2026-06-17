@@ -104,10 +104,17 @@ export function passesStrictStandardSubdivisionScreen(input: {
   titleConfidence?: "verified" | "inferred" | "unknown" | null;
   subdivisionEligible?: boolean | null;
   buildYear?: number | null;
+  /**
+   * The user opted in to a non-freehold tenure: screen on land/zone potential
+   * only, so the standalone-typology gate is waived (cross-lease/unit-title are
+   * inherently multi-dwelling). Title is still required to be verified — an
+   * opted-in card carries a LINZ-confirmed (non-freehold) estate.
+   */
+  tenureWaived?: boolean | null;
 }): boolean {
   if (input.isAlreadySubdividedChild) return false;
   if (input.subdivisionEligible === false) return false;
-  if (input.typology !== "standalone") return false;
+  if (!input.tenureWaived && input.typology !== "standalone") return false;
   if (input.titleConfidence !== "verified") return false;
   if (input.buildYear == null || input.buildYear >= 2000) return false;
   if (input.landAreaConfidence !== "verified") return false;
@@ -131,9 +138,11 @@ export function passesPreliminaryStandardSubdivisionScreen(input: {
   titleConfidence?: "verified" | "inferred" | "unknown" | null;
   subdivisionRejectReason?: string | null;
   buildYear?: number | null;
+  /** See passesStrictStandardSubdivisionScreen: waives the typology gate for an opted-in non-freehold tenure. */
+  tenureWaived?: boolean | null;
 }): boolean {
   if (input.isAlreadySubdividedChild) return false;
-  if (input.typology === "unit_apartment" || input.typology === "terrace_townhouse") return false;
+  if (!input.tenureWaived && (input.typology === "unit_apartment" || input.typology === "terrace_townhouse")) return false;
   if (input.landAreaConfidence !== "verified") return false;
   if (!input.landArea || input.landArea <= 0) return false;
   if (!input.zone) return false;

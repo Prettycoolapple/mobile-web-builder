@@ -49,6 +49,7 @@ import { detectSubdivision } from "../lib/subdivision";
 import { formatNZD } from "../lib/utils";
 import { searchRealEstateListings, resolveDistrictToSuburbs, detectDirectionalAreaTerm } from "../lib/scrapers/realestate-search";
 import { preScreenListingsFastDetailed, type PropertyCandidate } from "../lib/pre-screen";
+import { isLinzTitleServiceAvailable } from "../lib/linz";
 import {
   hasStandardSubdivisionYield,
   isDevelopmentDiscoveryIntent,
@@ -1607,7 +1608,7 @@ async function prescreenPickRestoreBatch(
   cacheKey: string,
   batch: ListingResult[],
   criteria: string | null,
-  preScreenOpts?: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number; strictStandardSubdivision?: boolean; preliminarySubdivision?: boolean },
+  preScreenOpts?: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number; strictStandardSubdivision?: boolean; preliminarySubdivision?: boolean; verifyFreeholdTitle?: boolean; includeTenures?: ("cross_lease" | "leasehold" | "unit_title")[] },
   shownAddressKeys: Set<string> = new Set(),
   n = 3,
   restoreUnpicked = true,
@@ -1616,7 +1617,7 @@ async function prescreenPickRestoreBatch(
   const visibleBatch = filterAlreadyShownListings(batch, shownAddressKeys);
   if (visibleBatch.length === 0) return [];
   const detailed = await preScreenListingsFastDetailed(visibleBatch, 5, null, preScreenOpts).catch(
-    () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], drainComplete: Promise.resolve() }),
+    () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], excludedTenures: { cross_lease: 0, leasehold: 0, unit_title: 0 }, drainComplete: Promise.resolve() }),
   );
   const screened = detailed.candidates;
   if (indeterminateAccumulator && detailed.indeterminate.length > 0) {
@@ -1811,7 +1812,7 @@ async function topUpDiscoveryCandidates(
   cacheKey: string,
   existing: PropertyCandidate[],
   criteria: string | null,
-  preScreenOpts: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number; strictStandardSubdivision?: boolean; preliminarySubdivision?: boolean },
+  preScreenOpts: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number; strictStandardSubdivision?: boolean; preliminarySubdivision?: boolean; verifyFreeholdTitle?: boolean; includeTenures?: ("cross_lease" | "leasehold" | "unit_title")[] },
   shownAddressKeys: Set<string>,
   options: { batchSize?: number; nonStrictAttemptLimit?: number; targetCount?: number; indeterminateAccumulator?: ListingResult[] } = {},
 ): Promise<PropertyCandidate[]> {
@@ -2078,6 +2079,8 @@ async function generateContinuationCandidates(args: {
         pricePlaceholderNzd?: number;
         strictStandardSubdivision?: boolean;
         preliminarySubdivision?: boolean;
+        verifyFreeholdTitle?: boolean;
+        includeTenures?: ("cross_lease" | "leasehold" | "unit_title")[];
       };
       candidates = await topUpDiscoveryCandidates(
         tempCacheKey,
@@ -2303,6 +2306,9 @@ async function createDiscoveryContinuation(args: {
   // these suburbs as each drains (see generateContinuationCandidates).
   nearbyQueue?: string[];
   originSuburb?: string | null;
+  // "user" when the queue is the user's explicitly-named suburbs (vs "nearby"
+  // LLM suggestions) — controls how the hand-off notice is worded.
+  queueSource?: "user" | "nearby";
   // Lazy-pagination cursor for the current suburb (generic browse). When the
   // suburb still has un-fetched source pages, the continuation pool is refilled
   // a window at a time on Show-more before the nearby train advances.
@@ -2328,6 +2334,7 @@ async function createDiscoveryContinuation(args: {
     readyPages: [],
     ...(args.nearbyQueue?.length ? { nearbyQueue: args.nearbyQueue } : {}),
     ...(args.originSuburb ? { originSuburb: args.originSuburb } : {}),
+    ...(args.queueSource ? { queueSource: args.queueSource } : {}),
     ...(args.suburb ? { currentSuburb: args.suburb } : {}),
     ...(args.requireSourceBackedPrice ? { requireSourceBackedPrice: true } : {}),
     ...(typeof args.pageOffset === "number" ? { pageOffset: args.pageOffset } : {}),
@@ -2390,7 +2397,7 @@ const INDETERMINATE_RETRY_DELAYS_MS = [4_000, 12_000, 30_000, 60_000, 120_000];
 async function reScreenIndeterminateListings(opts: {
   indeterminate: ListingResult[];
   criteria: string | null;
-  preScreenOpts: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number; strictStandardSubdivision?: boolean; preliminarySubdivision?: boolean };
+  preScreenOpts: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number; strictStandardSubdivision?: boolean; preliminarySubdivision?: boolean; verifyFreeholdTitle?: boolean; includeTenures?: ("cross_lease" | "leasehold" | "unit_title")[] };
   shownAddressKeys: Set<string>;
   targetCount: number;
   log: Logger;
@@ -2408,7 +2415,7 @@ async function reScreenIndeterminateListings(opts: {
     await new Promise((resolve) => setTimeout(resolve, delayMs));
 
     const detailed = await preScreenListingsFastDetailed(queue, 5, null, preScreenOpts).catch(
-      () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], drainComplete: Promise.resolve() }),
+      () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], excludedTenures: { cross_lease: 0, leasehold: 0, unit_title: 0 }, drainComplete: Promise.resolve() }),
     );
     const fresh = pickDiscoveryCandidates(detailed.candidates, criteria, shownAddressKeys, targetCount - found.length);
     found.push(...fresh);
@@ -2625,6 +2632,38 @@ function buildDiscoveryNoListingsIntro(args: {
   const criteriaText = criteria && !args.plainListingBrowse ? ` for ${criteria}` : "";
   const priceText = formatDiscoveryPriceRange(args.minPrice, args.maxPrice, args.explicitPrice);
   return `I couldn't find any matching listings in ${suburbLabel}${criteriaText}${priceText} right now. Try widening the budget, including price-by-negotiation listings, or searching nearby suburbs.`;
+}
+
+/**
+ * Compose the "I left some properties out because subdivision needs a freehold
+ * title" reminder. Only tenures with count > 0 that the user has NOT already
+ * opted in to are mentioned; each gets its own caveat. Returns "" when there is
+ * nothing to report (so the caller can skip appending). English copy — the whole
+ * payload is run through translateChatContent for zh users, same as the
+ * out-of-hours disclaimer.
+ */
+function buildTenureExclusionReminder(
+  totals: { cross_lease: number; leasehold: number; unit_title: number },
+  optIns: readonly ("cross_lease" | "leasehold" | "unit_title")[],
+): string {
+  const clauses: string[] = [];
+  if (totals.cross_lease > 0 && !optIns.includes("cross_lease")) {
+    const n = totals.cross_lease;
+    clauses.push(`${n} cross-lease ${n === 1 ? "property" : "properties"} (a cross-lease can only be subdivided once every cross-lease owner consents to convert the title to freehold)`);
+  }
+  if (totals.leasehold > 0 && !optIns.includes("leasehold")) {
+    const n = totals.leasehold;
+    clauses.push(`${n} leasehold ${n === 1 ? "property" : "properties"} (leasehold land is very difficult to subdivide because you don't own the freehold)`);
+  }
+  if (totals.unit_title > 0 && !optIns.includes("unit_title")) {
+    const n = totals.unit_title;
+    clauses.push(`${n} unit-title ${n === 1 ? "property" : "properties"} (a unit title generally has to be converted to freehold before it can be subdivided)`);
+  }
+  if (clauses.length === 0) return "";
+  const list = clauses.length === 1
+    ? clauses[0]
+    : clauses.slice(0, -1).join("; ") + "; and " + clauses[clauses.length - 1];
+  return `I left out ${list} because subdivision needs a freehold title. Tell me if you'd like me to include any of these — I'll show them with a note on what's involved.`;
 }
 
 function isContextualAreaBrowseFollowup(text: string): boolean {
@@ -4450,6 +4489,18 @@ router.post("/discovery/next", async (req, res) => {
     const shownKeys = shownKeysFromCandidates(shownCandidates ?? []);
     const searchPresentation: DiscoverySearchPresentation =
       row.searchPresentation === "generic_listing" ? "generic_listing" : "scored_screening";
+    // If this search wanted freehold title screening but the LINZ service is now
+    // out of hours, the Show-more cards weren't title-verified — tag them so the
+    // client keeps showing the "Title unverified" caveat (consistent with the
+    // initial response). In-hours, screenOneFast already set titleStatus.
+    const titleScreeningWantedForRow =
+      (state.preScreenOpts as { verifyFreeholdTitle?: boolean } | undefined)?.verifyFreeholdTitle === true;
+    const markTitleUnverifiedIfOutOfHours = (list: PropertyCandidate[]): void => {
+      if (!titleScreeningWantedForRow || isLinzTitleServiceAvailable()) return;
+      for (const candidate of list) {
+        if (!candidate.titleStatus) candidate.titleStatus = "unverified";
+      }
+    };
     const recordServedCandidates = (served: Array<Pick<PropertyCandidate, "address" | "listingUrl" | "internalListingId">>) => {
       if (served.length === 0) return;
       const shownItems = served.map((c) => ({
@@ -4504,12 +4555,14 @@ router.post("/discovery/next", async (req, res) => {
         const responseCandidates = searchPresentation === "generic_listing"
           ? await hydrateGenericListingAgentDetails(readyCandidates, req.log)
           : readyCandidates;
+        markTitleUnverifiedIfOutOfHours(responseCandidates);
         await sendDiscoveryNextPayload({
           candidates: responseCandidates,
           continuationToken: row.exhausted ? null : row.id,
           exhausted: row.exhausted,
           searchPresentation,
           suburb: state.currentSuburb ?? row.suburb,
+          queueSource: state.queueSource,
         });
         return;
       }
@@ -4557,12 +4610,14 @@ router.post("/discovery/next", async (req, res) => {
         });
         return;
       }
+      markTitleUnverifiedIfOutOfHours(generated.candidates);
       await sendDiscoveryNextPayload({
         candidates: generated.candidates,
         continuationToken: generated.exhausted ? null : row.id,
         exhausted: generated.exhausted,
         searchPresentation,
         suburb: generated.state.currentSuburb ?? row.suburb,
+        queueSource: generated.state.queueSource,
       });
       return;
     }
@@ -4628,12 +4683,14 @@ router.post("/discovery/next", async (req, res) => {
       return;
     }
 
+    markTitleUnverifiedIfOutOfHours(candidates);
     const directPayload = {
       candidates,
       continuationToken: exhausted ? null : row.id,
       exhausted,
       searchPresentation,
       suburb: nextState.currentSuburb ?? row.suburb,
+      queueSource: nextState.queueSource,
     };
     await sendDiscoveryNextPayload(directPayload);
   } catch (err) {
@@ -5242,6 +5299,26 @@ router.post("/chat", async (req, res) => {
           const discoveryTargetCount = 3;
           const discoveryScreenConcurrency = strictStandardSubdivision ? 3 : 5;
           const discoveryBatchSize = strictStandardSubdivision ? 3 : 8;
+          // Title screening is wanted when the user asked for a freehold/fee-simple
+          // title OR for any subdivision search (the strict screen already requires
+          // verified freehold). We only actually hit LINZ in service hours; out of
+          // hours we still show price+suburb matches with an "unverified" caveat.
+          const titleScreeningWanted = intent.requiresFreeholdTitle || strictStandardSubdivision;
+          const titleServiceAvailable = isLinzTitleServiceAvailable();
+          const titleScreeningOutOfHours = titleScreeningWanted && !titleServiceAvailable;
+          // Non-freehold tenures the user explicitly opted in to (cross-lease /
+          // leasehold / unit-title). When set, those titles are kept (with a
+          // warning) instead of being dropped; otherwise we count what we drop
+          // so the assistant can offer to include them.
+          const tenureOptIns = intent.includeTenures ?? [];
+          // Running tally of non-freehold listings dropped this turn, by tenure,
+          // for the "I left some out…" reminder appended to the intro below.
+          const excludedTenureTotals = { cross_lease: 0, leasehold: 0, unit_title: 0 };
+          const addExcludedTenures = (t: { cross_lease: number; leasehold: number; unit_title: number }): void => {
+            excludedTenureTotals.cross_lease += t.cross_lease;
+            excludedTenureTotals.leasehold += t.leasehold;
+            excludedTenureTotals.unit_title += t.unit_title;
+          };
           let continuationCacheKey: string | null = null;
           let continuationPreScreenOpts: Record<string, unknown> | null = null;
           // Tracks the suburb the continuation row should be stamped with. It
@@ -5258,6 +5335,32 @@ router.post("/chat", async (req, res) => {
           // "see again" can refresh the origin cleanly.
           let continuationNearbyQueue: string[] = [];
           let continuationOriginSuburb: string | null = null;
+          // "user" once the user explicitly named more than one suburb, so the
+          // hand-off reads as a continuation of their request rather than a nearby
+          // suggestion. Carried into the continuation state.
+          let queueSource: "user" | "nearby" | undefined;
+
+          // Multi-suburb intent: the user named more than one suburb ("St Heliers
+          // or Kohimarama"). Validate/normalise the extras the same way as the
+          // primary, then seed the train UPFRONT so the primary suburb is served
+          // to exhaustion first and Show-more advances through the rest in the
+          // order the user said them (see generateContinuationCandidates).
+          const userExtraSuburbs: string[] = [];
+          if (suburb && intent.additionalSuburbs.length > 0) {
+            for (const extra of intent.additionalSuburbs) {
+              if (userExtraSuburbs.length >= 6) break;
+              const resolved = await resolveDiscoverySuburbName(extra, chatLocale).catch(() => null);
+              if (resolved?.status === "invalid") continue;
+              const name = resolved?.status === "valid" ? resolved.suburb : extra.toLowerCase().trim();
+              if (name && name !== suburb && !userExtraSuburbs.includes(name)) userExtraSuburbs.push(name);
+            }
+          }
+          if (userExtraSuburbs.length > 0) {
+            continuationNearbyQueue = [...userExtraSuburbs];
+            continuationOriginSuburb = suburb;
+            queueSource = "user";
+            req.log.info({ suburb, userExtraSuburbs }, "Discovery: seeded multi-suburb train from user intent");
+          }
           // Lazy-pagination cursor for the continuation's current suburb. Generic
           // browse fetches only the first window of source pages up front; these
           // record where to resume and whether the suburb is already drained, so
@@ -5297,6 +5400,10 @@ router.post("/chat", async (req, res) => {
                 : Math.max(600_000, Math.round((effectiveMinPrice + effectiveMaxPrice) / 2)),
               strictStandardSubdivision,
               preliminarySubdivision: strictStandardSubdivision,
+              // screenOneFast re-checks service hours and skips the LINZ lookup
+              // out of hours, so passing this through is safe year-round.
+              verifyFreeholdTitle: titleScreeningWanted,
+              includeTenures: tenureOptIns,
             };
             continuationCacheKey = cacheKey;
             continuationPreScreenOpts = discoverPreOpts;
@@ -5444,11 +5551,12 @@ router.post("/chat", async (req, res) => {
                   : discoverPreOpts;
                 const [screenedDetailed, introFromPreScreen] = await Promise.all([
                   preScreenListingsFastDetailed(firstFiltered, discoveryScreenConcurrency, null, preScreenOptsWithBail).catch(
-                    () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], drainComplete: Promise.resolve() }),
+                    () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], excludedTenures: { cross_lease: 0, leasehold: 0, unit_title: 0 }, drainComplete: Promise.resolve() }),
                   ),
                   generateAnalysis(introPromptPreScreen, chatLocale).catch(() => ""),
                 ]);
                 const screened = screenedDetailed.candidates;
+                addExcludedTenures(screenedDetailed.excludedTenures);
                 if (strictStandardSubdivision) strictIndeterminate.push(...screenedDetailed.indeterminate);
                 if (strictStandardSubdivision) {
                   // Detach the remaining drain so the verdict cache warms in the
@@ -5589,7 +5697,13 @@ router.post("/chat", async (req, res) => {
             // when we still have unscanned listings or prescreen returned no UI rows this round.
             if (candidates.length < discoveryTargetCount && suburb && !streetHint && getRemainingCount(cacheKey) === 0 && continuationPageDone && (!strictStandardSubdivision || forceNearbyDiscovery)) {
               const primaryCandidateCount = candidates.length;
-              const nearbyList = await resolveNearbySuburbs(suburb, 8);
+              // When the user explicitly named more suburbs, advance into THOSE
+              // first (in order) before any LLM-suggested neighbours, so an empty
+              // primary still flows St Heliers → Kohimarama as requested.
+              const llmNearby = await resolveNearbySuburbs(suburb, 8);
+              const nearbyList = userExtraSuburbs.length > 0
+                ? [...userExtraSuburbs, ...llmNearby.filter((s) => !userExtraSuburbs.includes(s.toLowerCase()))]
+                : llmNearby;
               // Run nearby-suburb scrapes concurrently and return as soon as the first
               // one yields any listings — keeps tail latency bounded when the slow
               // Playwright fallback is in play.
@@ -5716,11 +5830,13 @@ router.post("/chat", async (req, res) => {
                           ? `The user asked about ${suburb}${criteriaContextFallback} but no listings were found there right now. You found some properties in nearby ${nearbySuburb}. In 1 sentence acknowledge this naturally. Do NOT mention a specific number; say "a few", "some", or "a handful". Call them listings/properties only; do not call them development sites or development land. Be brief; no JSON.`
                           : `The user asked about ${suburb}${criteriaContextFallback}. You found some matching properties there and added nearby options from ${nearbySuburb} to round out the results. In 1 sentence acknowledge this naturally. Do NOT mention a specific number; say "a few", "some", or "a handful". Call them listings/properties only; do not call them development sites or development land. Be brief; no JSON.`;
                         prescreenedIntro = await generateAnalysis(introPromptFallback, chatLocale).catch(() => "");
-                        if (forceNearbyDiscovery) {
-                          // Seed the train: the remaining nearby suburbs (this
-                          // one is being served now) become the auto-expand queue.
+                        if (forceNearbyDiscovery || userExtraSuburbs.length > 0) {
+                          // Seed the train: the remaining suburbs (this one is
+                          // being served now) become the auto-expand queue. With
+                          // user-named suburbs this preserves their stated order.
                           continuationNearbyQueue = nearbyList.filter((s) => s.toLowerCase() !== nearbySuburb.toLowerCase());
                           continuationOriginSuburb = suburb;
+                          queueSource = userExtraSuburbs.length > 0 ? "user" : "nearby";
                         }
                         req.log.info({ nearbySuburb, count: candidates.length, queue: continuationNearbyQueue.length }, "Discovery: nearby generic fallback succeeded");
                         break;
@@ -5736,11 +5852,12 @@ router.post("/chat", async (req, res) => {
                         ...discoverPreOpts,
                         ...(strictStandardSubdivision ? { earlyBailAt: discoveryTargetCount } : {}),
                       }).catch(
-                        () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], drainComplete: Promise.resolve() }),
+                        () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], excludedTenures: { cross_lease: 0, leasehold: 0, unit_title: 0 }, drainComplete: Promise.resolve() }),
                       ),
                       generateAnalysis(introPromptFallback, chatLocale).catch(() => ""),
                     ]);
                     const screenedFallback = screenedFallbackDetailed.candidates;
+                    addExcludedTenures(screenedFallbackDetailed.excludedTenures);
                     if (strictStandardSubdivision) strictIndeterminate.push(...screenedFallbackDetailed.indeterminate);
                     if (strictStandardSubdivision) {
                       runAfterResponse(screenedFallbackDetailed.drainComplete.catch(() => {}));
@@ -5786,9 +5903,10 @@ router.post("/chat", async (req, res) => {
 
                     if (candidates.length > primaryCandidateCount) {
                       prescreenedIntro = introFallback;
-                      if (forceNearbyDiscovery) {
+                      if (forceNearbyDiscovery || userExtraSuburbs.length > 0) {
                         continuationNearbyQueue = nearbyList.filter((s) => s.toLowerCase() !== nearbySuburb.toLowerCase());
                         continuationOriginSuburb = suburb;
+                        queueSource = userExtraSuburbs.length > 0 ? "user" : "nearby";
                       }
                       req.log.info({ nearbySuburb, count: candidates.length, queue: continuationNearbyQueue.length }, "Discovery: nearby suburb fallback succeeded");
                       break;
@@ -5835,6 +5953,7 @@ router.post("/chat", async (req, res) => {
                   : Math.max(600_000, Math.round((effectiveMinPrice + effectiveMaxPrice) / 2)),
                 strictStandardSubdivision: true,
                 preliminarySubdivision: true,
+                verifyFreeholdTitle: titleScreeningWanted,
               },
               shownAddressKeys: alreadyShownAddressKeys,
               targetCount: discoveryTargetCount,
@@ -5894,6 +6013,28 @@ router.post("/chat", async (req, res) => {
                 : `The user asked: "${discoveryPromptText}". You found some matching properties in ${suburb || "the area"} ${genericListingSource}${criteriaContextGeneral}. In 1 sentence, acknowledge the results conversationally. Do NOT mention a specific number; say "a few", "some", or "a handful". Never mention any external website, data source, URL, or platform name. If the user's exact request did not explicitly ask for development, subdivision, yield, or redevelopment, call them listings/properties only; do not call them development sites or development land. Be natural and brief; no JSON.`;
               aiIntro = await generateAnalysis(introPrompt, chatLocale).catch(() => "");
             } catch { /* silent */ }
+          }
+
+          // Out-of-hours title screening: the LINZ title service is closed
+          // (8am–10pm NZ), so freehold couldn't be verified. Show the price +
+          // suburb matches with a "Title unverified" caveat and tell the user we
+          // can confirm title later. (The disclaimer is English here; the whole
+          // payload is run through translateChatContent below for zh users.)
+          if (titleScreeningOutOfHours && candidates.length > 0) {
+            for (const candidate of candidates) {
+              if (!candidate.titleStatus) candidate.titleStatus = "unverified";
+            }
+            const titleDisclaimer = "Title screening is available 8am–10pm, so I couldn't confirm freehold title right now. I've shown properties matching your price and suburb, and can verify their freehold title once the service is back.";
+            aiIntro = aiIntro ? `${aiIntro}\n\n${titleDisclaimer}` : titleDisclaimer;
+          }
+
+          // Non-freehold exclusion reminder: when this search dropped cross-lease
+          // / leasehold / unit-title titles the user hadn't opted in to, tell them
+          // why and offer to include them (shown with a warning). Skipped entirely
+          // when nothing was dropped or everything dropped was already opted in.
+          const tenureReminder = buildTenureExclusionReminder(excludedTenureTotals, tenureOptIns);
+          if (tenureReminder) {
+            aiIntro = aiIntro ? `${aiIntro}\n\n${tenureReminder}` : tenureReminder;
           }
 
           if (!plainListingBrowse && candidates.length > 0) {
@@ -5973,6 +6114,7 @@ router.post("/chat", async (req, res) => {
                 initialCandidates: candidates,
                 nearbyQueue: continuationNearbyQueue,
                 originSuburb: continuationOriginSuburb,
+                queueSource,
                 pageOffset: continuationPageOffset,
                 pageTotal: continuationPageTotal,
                 pageDone: continuationPageDone,
@@ -6905,7 +7047,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                   ? { ...discoverPreOptsSn, earlyBailAt: safetyNetTargetCount }
                   : discoverPreOptsSn,
               ).catch(
-                () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], drainComplete: Promise.resolve() }),
+                () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], excludedTenures: { cross_lease: 0, leasehold: 0, unit_title: 0 }, drainComplete: Promise.resolve() }),
               );
               if (discoverPreOptsSn.strictStandardSubdivision) {
                 runAfterResponse(screenedSnDetailed.drainComplete.catch(() => {}));

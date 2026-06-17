@@ -7,6 +7,15 @@ export type PropertyEligibilityConfidence = "verified" | "inferred" | "unknown";
 export interface PropertyEligibilityInput {
   address: string;
   estateType?: string | null;
+  /**
+   * Estate/tenure resolved authoritatively from a LINZ title lookup (e.g.
+   * "Fee Simple", "Cross Lease", "Unit Title", "Stratum", "Leasehold"). When
+   * present this overrides text inference and sets titleConfidence to "verified".
+   * Leave null/undefined when LINZ could not confirm the title (new builds with
+   * no title yet, address mismatch, service unavailable) — the assessment then
+   * falls back to inferring tenure from listing/council copy as before.
+   */
+  verifiedEstateType?: string | null;
   legalDescription?: string | null;
   propertyType?: string | null;
   propertySubType?: string | null;
@@ -26,6 +35,17 @@ export interface PropertyEligibilityInput {
   potentialLots?: number | null;
   minLotSize?: number | null;
   isCombinedListingAggregate?: boolean | null;
+  /**
+   * Discovery opt-in: the user has explicitly asked to include this non-freehold
+   * tenure despite the subdivision catch (shown with a warning chip). When set,
+   * the assessment screens the parcel on land/zone potential only — the
+   * tenure/typology-driven rejections (cross-lease/unit signal, title-not-
+   * freehold, non-standalone typology, parent-land suspicion) are waived so a
+   * big-enough, correctly-zoned cross-lease/leasehold/unit-title site passes;
+   * the structural gates (new-build, build-year, zone/min-lot, two-lot land
+   * requirement) still apply. Null/undefined = normal strict screening.
+   */
+  waiveTenureForSubdivision?: "cross_lease" | "leasehold" | "unit_title" | null;
   /**
    * Structured claims extracted from the listing's own marketing copy
    * (see listing-claims.ts). Deliberately NOT folded into corpus() — raw
@@ -136,6 +156,25 @@ function isRural(zoneCode: string | null | undefined): boolean {
   return !!z && RURAL_ZONES.has(z);
 }
 
+/**
+ * Title tenure from an authoritative LINZ estate type. Returns null when the
+ * estate is absent/unrecognised so the caller falls back to text inference.
+ */
+function titleFromVerifiedEstate(estateType: string | null | undefined): {
+  titleConfidence: PropertyEligibilityConfidence;
+  titleIsFreehold: boolean;
+} | null {
+  const raw = (estateType ?? "").trim();
+  if (!raw) return null;
+  if (/\b(fee\s*simple|freehold)\b/i.test(raw)) {
+    return { titleConfidence: "verified", titleIsFreehold: true };
+  }
+  if (/\b(cross[-\s]*lease|crosslease|unit\s*title|stratum|leasehold)\b/i.test(raw)) {
+    return { titleConfidence: "verified", titleIsFreehold: false };
+  }
+  return null;
+}
+
 function inferTitleConfidence(text: string): {
   titleConfidence: PropertyEligibilityConfidence;
   titleIsFreehold: boolean;
@@ -190,7 +229,9 @@ export function assessPropertyEligibility(input: PropertyEligibilityInput): Prop
   const text = corpus(input);
   const unitLikeSignal = hasUnitLikeSignal(text);
   const crossLeaseSignal = hasCrossLeaseSignal(text);
-  const { titleConfidence, titleIsFreehold } = inferTitleConfidence(text);
+  // A LINZ-verified estate type wins over text inference; fall back to copy.
+  const { titleConfidence, titleIsFreehold } =
+    titleFromVerifiedEstate(input.verifiedEstateType) ?? inferTitleConfidence(text);
   const { typology, typologyConfidence } = inferTypology(input, text);
   const buildYearEligible = input.buildYear != null && input.buildYear < 2000;
   const landAreaParentOrTypologySuspect = hasSuspiciousUrbanLandFloorRatio(input);
@@ -198,15 +239,21 @@ export function assessPropertyEligibility(input: PropertyEligibilityInput): Prop
   const claims = input.listingClaims ?? null;
   const claimsNewBuild = !!claims && (claims.isNewBuild || (claims.completionYear ?? 0) >= 2000);
 
+  // Opt-in: the user accepted this non-freehold tenure, so screen on land/zone
+  // potential only — the tenure- and typology-driven gates below are waived
+  // (the title is surfaced to the user via a warning chip instead of dropping
+  // the listing). Structural gates still apply.
+  const tenureWaived = input.waiveTenureForSubdivision != null;
+
   let subdivisionRejectReason: string | null = null;
-  if (unitLikeSignal || crossLeaseSignal) subdivisionRejectReason = "unit_or_crosslease_signal";
+  if (!tenureWaived && (unitLikeSignal || crossLeaseSignal)) subdivisionRejectReason = "unit_or_crosslease_signal";
   // A dwelling marketed as a new build can never satisfy the pre-2000 build
   // doctrine, regardless of what (lagging) council records say.
   else if (claimsNewBuild) subdivisionRejectReason = "listing_claims_new_build";
   else if (claims?.multiUnitDevelopment) subdivisionRejectReason = "listing_claims_multi_unit_development";
-  else if (!titleIsFreehold || titleConfidence !== "verified") subdivisionRejectReason = "title_not_confirmed_freehold";
-  else if (typology !== "standalone") subdivisionRejectReason = "typology_not_confirmed_standalone";
-  else if (landAreaParentOrTypologySuspect) subdivisionRejectReason = "land_area_parent_or_typology_suspect";
+  else if (!tenureWaived && (!titleIsFreehold || titleConfidence !== "verified")) subdivisionRejectReason = "title_not_confirmed_freehold";
+  else if (!tenureWaived && typology !== "standalone") subdivisionRejectReason = "typology_not_confirmed_standalone";
+  else if (!tenureWaived && landAreaParentOrTypologySuspect) subdivisionRejectReason = "land_area_parent_or_typology_suspect";
   else if (input.isCombinedListingAggregate) subdivisionRejectReason = "combined_listing_aggregate";
   else if (input.buildYear == null) subdivisionRejectReason = "build_year_unknown";
   else if (!buildYearEligible) subdivisionRejectReason = "post_2000_build";

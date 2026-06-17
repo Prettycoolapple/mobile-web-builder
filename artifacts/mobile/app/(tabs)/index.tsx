@@ -17,6 +17,7 @@ import {
   KeyboardAvoidingView,
   Modal,
   Alert,
+  Animated,
   type GestureResponderEvent,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -47,6 +48,10 @@ setBaseUrl(getApiOrigin() || null);
 
 const RECORDING_CANCEL_SWIPE_UP_PX = 56;
 const RECORDING_HOLD_TO_START_MS = 450;
+const RECORDING_START_WATCHDOG_MS = 8_000;
+const RECORDING_MAX_DURATION_MS = 90_000;
+const RECORDING_STOP_TIMEOUT_MS = 5_000;
+const TRANSCRIBE_TIMEOUT_MS = 45_000;
 
 /** Prefer top-level report address, then property overview (some API payloads only set the latter). */
 function resolveReportAddress(report: FeasibilityReport | null | undefined): string {
@@ -55,6 +60,19 @@ function resolveReportAddress(report: FeasibilityReport | null | undefined): str
   if (top) return top;
   const ov = report.propertyOverview?.address;
   return typeof ov === "string" ? ov.trim() : "";
+}
+
+function stopAndUnloadRecordingWithTimeout(recording: Audio.Recording): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(new Error("Recording stop timed out"));
+    }, RECORDING_STOP_TIMEOUT_MS);
+
+    recording.stopAndUnloadAsync()
+      .then(() => resolve())
+      .catch(reject)
+      .finally(() => clearTimeout(timeoutId));
+  });
 }
 
 function withHistoryMetadata(
@@ -117,6 +135,9 @@ type DiscoveryNextResponse = {
   // The suburb this batch is for. During nearby "train" expansion it advances
   // as each suburb drains — the client shows a one-line note when it changes.
   suburb?: string;
+  // "user" when the queued suburbs are the user's own list (so the hand-off note
+  // omits "nearby"); "nearby" for LLM-suggested neighbours.
+  queueSource?: "user" | "nearby";
   clarification?: {
     question: string;
     options: string[];
@@ -371,6 +392,7 @@ export default function SearchScreen() {
   const [recordingCancelArmed, setRecordingCancelArmed] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
+  const isLoadingRef = useRef(isLoading);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const recordingStartYRef = useRef<number | null>(null);
   const recordingCurrentYRef = useRef<number | null>(null);
@@ -378,6 +400,12 @@ export default function SearchScreen() {
   const recordingStartInFlightRef = useRef(false);
   const recordingPressActiveRef = useRef(false);
   const recordingStartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recordingStartWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recordingMaxDurationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const voiceInterruptionNoticePendingRef = useRef(false);
+  const [showMicHoldHint, setShowMicHoldHint] = useState(false);
+  const micHoldHintOpacity = useRef(new Animated.Value(0)).current;
+  const micHoldHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const shownRecommendationReportIds = useRef<Set<string>>(new Set());
   const lastCheckedFollowUpCount = useRef<Map<string, number>>(new Map());
   const providerRecommendationKeysRef = useRef<Set<string>>(new Set());
@@ -405,6 +433,7 @@ export default function SearchScreen() {
   const [analyseDisclaimerVisible, setAnalyseDisclaimerVisible] = useState(false);
   const [analyseDisclaimerDontRemind, setAnalyseDisclaimerDontRemind] = useState(false);
   const [analyseDisclaimerDismissed, setAnalyseDisclaimerDismissed] = useState(false);
+  const [guestAnalysisPromptVisible, setGuestAnalysisPromptVisible] = useState(false);
   const pendingAnalyseActionRef = useRef<PendingAnalyseAction | null>(null);
 
   const handlePurchaseSuccess = useCallback(() => {
@@ -446,6 +475,10 @@ export default function SearchScreen() {
   }, []);
 
   useEffect(() => {
+    isLoadingRef.current = isLoading;
+  }, [isLoading]);
+
+  useEffect(() => {
     AsyncStorage.getItem(getAnalyseDisclaimerDismissedKey(user?.id))
       .then((value) => setAnalyseDisclaimerDismissed(value === "true"))
       .catch(() => {});
@@ -482,22 +515,22 @@ export default function SearchScreen() {
 
   const promptSignInForAnalysis = useCallback(async (action: PendingAnalyseAction) => {
     await AsyncStorage.setItem(PENDING_GUEST_ANALYSE_ACTION_KEY, JSON.stringify(action)).catch(() => {});
-    const title = t("guest_analysis.title");
-    const message = t("guest_analysis.body");
-    const goLogin = () => router.push("/(auth)/login" as never);
-    const goSignup = () => router.push("/(auth)/signup" as never);
+    setGuestAnalysisPromptVisible(true);
+  }, []);
 
-    if (Platform.OS === "web") {
-      goSignup();
-      return;
-    }
+  const closeGuestAnalysisPrompt = useCallback(() => {
+    setGuestAnalysisPromptVisible(false);
+  }, []);
 
-    Alert.alert(title, message, [
-      { text: t("common.cancel"), style: "cancel" },
-      { text: t("login.submit"), onPress: goLogin },
-      { text: t("signup.create_account"), onPress: goSignup },
-    ]);
-  }, [router, t]);
+  const openGuestAnalysisLogin = useCallback(() => {
+    setGuestAnalysisPromptVisible(false);
+    router.push("/(auth)/login" as never);
+  }, [router]);
+
+  const openGuestAnalysisSignup = useCallback(() => {
+    setGuestAnalysisPromptVisible(false);
+    router.push("/(auth)/signup" as never);
+  }, [router]);
 
   const chatQuota = user ? resolveChatQuota(user.role, user.subscriptionTier, user.specialStatus) : null;
 
@@ -1028,6 +1061,7 @@ export default function SearchScreen() {
           prefetchedExhausted: Boolean(data.exhausted),
           prefetchedClarification: data.clarification,
           prefetchedSuburb: data.suburb,
+          prefetchedQueueSource: data.queueSource,
           showMoreStatus: "ready",
         }, sessionId);
       } finally {
@@ -1087,6 +1121,7 @@ export default function SearchScreen() {
       sessionId: string,
       claimServed = false,
       nextSuburb?: string,
+      queueSource?: "user" | "nearby",
     ) => {
       if (candidates.length === 0) {
         updateMessage(message.id, {
@@ -1145,7 +1180,10 @@ export default function SearchScreen() {
           ? nextSuburb
           : undefined;
       if (advancedSuburb) {
-        addMessage({ role: "assistant", content: t("search.now_showing_nearby", { suburb: advancedSuburb }), type: "text" }, sessionId);
+        // User-named suburbs ("St Heliers or Kohimarama") read as a continuation
+        // of their request; LLM-suggested ones read as "nearby".
+        const handoffKey = queueSource === "user" ? "search.now_showing" : "search.now_showing_nearby";
+        addMessage({ role: "assistant", content: t(handoffKey, { suburb: advancedSuburb }), type: "text" }, sessionId);
       }
       const firstNewResultIndex = message.searchResults?.length ?? 0;
       const nextResults = [...existingResults, ...dedupedCandidates];
@@ -1193,6 +1231,7 @@ export default function SearchScreen() {
             sessionId,
             true,
             message.prefetchedSuburb,
+            message.prefetchedQueueSource,
           );
           return;
         }
@@ -1218,6 +1257,7 @@ export default function SearchScreen() {
           sessionId,
           false,
           data.suburb,
+          data.queueSource,
         );
       } finally {
         showMoreInFlightRef.current.delete(message.id);
@@ -2628,6 +2668,134 @@ export default function SearchScreen() {
     }
   }, []);
 
+  const clearRecordingWatchdogs = useCallback(() => {
+    if (recordingStartWatchdogRef.current) {
+      clearTimeout(recordingStartWatchdogRef.current);
+      recordingStartWatchdogRef.current = null;
+    }
+    if (recordingMaxDurationTimerRef.current) {
+      clearTimeout(recordingMaxDurationTimerRef.current);
+      recordingMaxDurationTimerRef.current = null;
+    }
+  }, []);
+
+  const hideMicHoldReminder = useCallback((animated = true) => {
+    if (micHoldHintTimerRef.current) {
+      clearTimeout(micHoldHintTimerRef.current);
+      micHoldHintTimerRef.current = null;
+    }
+    micHoldHintOpacity.stopAnimation();
+    if (!animated) {
+      micHoldHintOpacity.setValue(0);
+      setShowMicHoldHint(false);
+      return;
+    }
+    Animated.timing(micHoldHintOpacity, {
+      toValue: 0,
+      duration: 140,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) setShowMicHoldHint(false);
+    });
+  }, [micHoldHintOpacity]);
+
+  const resetVoiceCapture = useCallback(async (options?: { notify?: boolean }) => {
+    clearScheduledRecordingStart();
+    clearRecordingWatchdogs();
+    hideMicHoldReminder(false);
+    const activeRecording = recordingRef.current;
+    recordingRef.current = null;
+    recordingStartYRef.current = null;
+    recordingCurrentYRef.current = null;
+    recordingCancelArmedRef.current = false;
+    recordingStartInFlightRef.current = false;
+    recordingPressActiveRef.current = false;
+    setRecordingCancelArmed(false);
+    setRecording(null);
+    setIsRecording(false);
+    setIsTranscribing(false);
+
+    if (activeRecording) {
+      await stopAndUnloadRecordingWithTimeout(activeRecording).catch((err) => {
+        console.log("Failed to reset recording", err);
+      });
+    }
+    await Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => {});
+
+    if (options?.notify) {
+      Alert.alert(t("search.voice_reset_title"), t("search.voice_reset_body"));
+    }
+  }, [clearRecordingWatchdogs, clearScheduledRecordingStart, hideMicHoldReminder, t]);
+
+  const showMicHoldReminder = useCallback(() => {
+    if (messageLimitReached) return;
+    if (micHoldHintTimerRef.current) {
+      clearTimeout(micHoldHintTimerRef.current);
+      micHoldHintTimerRef.current = null;
+    }
+    setShowMicHoldHint(true);
+    micHoldHintOpacity.stopAnimation();
+    micHoldHintOpacity.setValue(0);
+    Animated.spring(micHoldHintOpacity, {
+      toValue: 1,
+      friction: 8,
+      tension: 120,
+      useNativeDriver: true,
+    }).start();
+    void Haptics.selectionAsync();
+    micHoldHintTimerRef.current = setTimeout(() => {
+      micHoldHintTimerRef.current = null;
+      hideMicHoldReminder(true);
+    }, 2200);
+  }, [hideMicHoldReminder, messageLimitReached, micHoldHintOpacity]);
+
+  useEffect(() => () => {
+    if (micHoldHintTimerRef.current) {
+      clearTimeout(micHoldHintTimerRef.current);
+      micHoldHintTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      const hasActiveVoiceCapture =
+        !!recordingRef.current ||
+        recordingStartInFlightRef.current ||
+        !!recordingStartTimerRef.current;
+
+      if (state === "inactive" || state === "background") {
+        if (hasActiveVoiceCapture) {
+          voiceInterruptionNoticePendingRef.current = true;
+          void resetVoiceCapture();
+        }
+        return;
+      }
+
+      if (state === "active" && voiceInterruptionNoticePendingRef.current) {
+        voiceInterruptionNoticePendingRef.current = false;
+        Alert.alert(t("search.voice_reset_title"), t("search.voice_reset_body"));
+      }
+    });
+
+    return () => subscription.remove();
+  }, [resetVoiceCapture, t]);
+
+  useEffect(() => () => {
+    clearScheduledRecordingStart();
+    clearRecordingWatchdogs();
+    const activeRecording = recordingRef.current;
+    recordingRef.current = null;
+    if (activeRecording) {
+      void stopAndUnloadRecordingWithTimeout(activeRecording)
+        .catch((err) => console.log("Failed to unload recording on screen cleanup", err))
+        .finally(() => {
+          void Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => {});
+        });
+    } else {
+      void Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => {});
+    }
+  }, [clearRecordingWatchdogs, clearScheduledRecordingStart]);
+
   const handleRecordingPressMove = useCallback((event: GestureResponderEvent) => {
     recordingCurrentYRef.current = event.nativeEvent.pageY;
     if (!isRecording && !recordingRef.current) return;
@@ -2643,6 +2811,7 @@ export default function SearchScreen() {
       recordingStartInFlightRef.current = true;
       const permission = await Audio.requestPermissionsAsync();
       if (permission.status !== "granted") {
+        clearRecordingWatchdogs();
         recordingStartInFlightRef.current = false;
         recordingPressActiveRef.current = false;
         recordingStartYRef.current = null;
@@ -2651,9 +2820,16 @@ export default function SearchScreen() {
       }
 
       if (!recordingPressActiveRef.current) {
+        clearRecordingWatchdogs();
         recordingStartInFlightRef.current = false;
         return;
       }
+
+      recordingStartWatchdogRef.current = setTimeout(() => {
+        if (recordingStartInFlightRef.current) {
+          void resetVoiceCapture({ notify: true });
+        }
+      }, RECORDING_START_WATCHDOG_MS);
 
       // Fire the confirmation buzz BEFORE the audio session enters record mode.
       // iOS suppresses UIFeedbackGenerator haptics while a recording session is
@@ -2672,14 +2848,25 @@ export default function SearchScreen() {
         Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
       if (!recordingPressActiveRef.current) {
-        await newRecording.stopAndUnloadAsync().catch(() => {});
+        clearRecordingWatchdogs();
+        await stopAndUnloadRecordingWithTimeout(newRecording).catch(() => {});
+        await Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => {});
         recordingStartInFlightRef.current = false;
         return;
+      }
+      if (recordingStartWatchdogRef.current) {
+        clearTimeout(recordingStartWatchdogRef.current);
+        recordingStartWatchdogRef.current = null;
       }
       recordingRef.current = newRecording;
       setRecording(newRecording);
       setIsRecording(true);
       recordingStartInFlightRef.current = false;
+      recordingMaxDurationTimerRef.current = setTimeout(() => {
+        if (recordingRef.current) {
+          void resetVoiceCapture({ notify: true });
+        }
+      }, RECORDING_MAX_DURATION_MS);
       const startY = recordingStartYRef.current;
       const currentY = recordingCurrentYRef.current;
       if (startY != null && currentY != null) {
@@ -2687,6 +2874,7 @@ export default function SearchScreen() {
       }
     } catch (err) {
       console.log("Failed to start recording", err);
+      clearRecordingWatchdogs();
       recordingRef.current = null;
       recordingStartInFlightRef.current = false;
       recordingPressActiveRef.current = false;
@@ -2696,11 +2884,13 @@ export default function SearchScreen() {
       setRecording(null);
       setIsRecording(false);
       setRecordingCancelArmed(false);
+      void Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => {});
     }
-  }, [armRecordingCancel, messageLimitReached]);
+  }, [armRecordingCancel, clearRecordingWatchdogs, messageLimitReached, resetVoiceCapture]);
 
   const startRecording = useCallback((event?: GestureResponderEvent) => {
     if (messageLimitReached || recordingRef.current || recordingStartInFlightRef.current) return;
+    hideMicHoldReminder(false);
     clearScheduledRecordingStart();
     recordingPressActiveRef.current = true;
     const pageY = event?.nativeEvent.pageY ?? null;
@@ -2713,12 +2903,13 @@ export default function SearchScreen() {
       if (!recordingPressActiveRef.current) return;
       void beginRecording();
     }, RECORDING_HOLD_TO_START_MS);
-  }, [beginRecording, clearScheduledRecordingStart, messageLimitReached]);
+  }, [beginRecording, clearScheduledRecordingStart, hideMicHoldReminder, messageLimitReached]);
 
   useEffect(() => clearScheduledRecordingStart, [clearScheduledRecordingStart]);
 
   const cancelRecording = useCallback(async () => {
     clearScheduledRecordingStart();
+    clearRecordingWatchdogs();
     const activeRecording = recordingRef.current ?? recording;
     recordingRef.current = null;
     recordingStartYRef.current = null;
@@ -2730,17 +2921,21 @@ export default function SearchScreen() {
     setRecording(null);
     setIsRecording(false);
     setIsTranscribing(false);
-    if (!activeRecording) return;
+    if (!activeRecording) {
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => {});
+      return;
+    }
     try {
-      await activeRecording.stopAndUnloadAsync();
+      await stopAndUnloadRecordingWithTimeout(activeRecording);
       // Release the recording audio session so it doesn't stay primed and
       // suppress the next tap-and-hold's confirmation haptic.
       await Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => {});
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch (err) {
       console.log("Failed to cancel recording", err);
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => {});
     }
-  }, [clearScheduledRecordingStart, recording]);
+  }, [clearRecordingWatchdogs, clearScheduledRecordingStart, recording]);
 
   const stopRecording = useCallback(async () => {
     if (recordingCancelArmedRef.current) {
@@ -2748,20 +2943,28 @@ export default function SearchScreen() {
       return;
     }
     let reachedTranscribe = false;
+    const releasedBeforeHoldStarted =
+      recordingPressActiveRef.current &&
+      !!recordingStartTimerRef.current &&
+      !recordingRef.current &&
+      !recordingStartInFlightRef.current;
     recordingPressActiveRef.current = false;
     clearScheduledRecordingStart();
+    clearRecordingWatchdogs();
     const activeRecording = recordingRef.current ?? recording;
     if (!activeRecording) {
+      if (releasedBeforeHoldStarted) showMicHoldReminder();
       recordingStartInFlightRef.current = false;
       recordingStartYRef.current = null;
       recordingCurrentYRef.current = null;
       recordingCancelArmedRef.current = false;
       setRecordingCancelArmed(false);
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => {});
       return;
     }
     try {
       setIsRecording(false);
-      await activeRecording.stopAndUnloadAsync();
+      await stopAndUnloadRecordingWithTimeout(activeRecording);
       const uri = activeRecording.getURI();
       recordingRef.current = null;
       recordingStartYRef.current = null;
@@ -2779,7 +2982,6 @@ export default function SearchScreen() {
       if (uri) {
         reachedTranscribe = true;
         setIsTranscribing(true);
-        setIsLoading(true);
         const formData = new FormData();
         formData.append("file", {
           uri,
@@ -2790,27 +2992,35 @@ export default function SearchScreen() {
         // Omit Content-Type to let fetch generate the multipart boundary
         const { "Content-Type": _ct, ...headersWithoutContentType } = getApiHeaders();
 
+        const transcribeController = new AbortController();
+        const transcribeTimeout = setTimeout(() => transcribeController.abort(), TRANSCRIBE_TIMEOUT_MS);
         const res = await fetch(`${resolveApiBase()}/transcribe`, {
           method: "POST",
           headers: headersWithoutContentType,
           body: formData,
-        });
+          signal: transcribeController.signal,
+        }).finally(() => clearTimeout(transcribeTimeout));
 
         if (res.ok) {
           const data = await res.json() as { text?: string };
-          if (data.text && data.text.trim().length > 0) {
+          const transcript = data.text?.trim() ?? "";
+          if (transcript.length > 0) {
             setIsTranscribing(false);
-            void handleSend(data.text.trim());
+            if (isLoadingRef.current) {
+              setInputText(transcript);
+              inputRef.current?.focus();
+              Alert.alert(t("search.voice_busy_title"), t("search.voice_busy_body"));
+            } else {
+              void handleSend(transcript);
+            }
           } else {
             // Recording captured but no speech detected — don't leave the user
             // staring at a vanished overlay with no explanation.
             setIsTranscribing(false);
-            setIsLoading(false);
             Alert.alert(t("search.voice_failed_title"), t("search.voice_failed_body"));
           }
         } else {
           setIsTranscribing(false);
-          setIsLoading(false);
           Alert.alert(t("search.voice_failed_title"), t("search.voice_failed_body"));
         }
       }
@@ -2826,35 +3036,65 @@ export default function SearchScreen() {
       setIsRecording(false);
       setIsTranscribing(false);
       setRecordingCancelArmed(false);
-      setIsLoading(false);
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => {});
       // Only surface the error if we'd already reached the transcription stage;
       // a bare stop/unload glitch shouldn't pop an alert.
       if (reachedTranscribe) {
         Alert.alert(t("search.voice_failed_title"), t("search.voice_failed_body"));
       }
     }
-  }, [cancelRecording, clearScheduledRecordingStart, recording, getApiHeaders, handleSend, setIsLoading, t]);
+  }, [cancelRecording, clearRecordingWatchdogs, clearScheduledRecordingStart, recording, getApiHeaders, handleSend, showMicHoldReminder, t]);
 
   const renderMicButton = useCallback(() => (
-    <View
-      style={[
-        styles.micBtn,
-        {
-          backgroundColor: isRecording ? (recordingCancelArmed ? "#991b1b" : "#ef4444") : "transparent",
-          opacity: isRecording ? 1 : 0.85,
-        },
-      ]}
-      onStartShouldSetResponder={() => true}
-      onResponderGrant={startRecording}
-      onResponderMove={handleRecordingPressMove}
-      onResponderRelease={stopRecording}
-      onResponderTerminate={cancelRecording}
-      accessibilityRole="button"
-      accessibilityLabel="Press and hold to speak"
-    >
-      <Feather name="mic" size={18} color={isRecording ? "#fff" : colors.mutedForeground} />
+    <View style={styles.micButtonSlot}>
+      {showMicHoldHint ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.micHoldHint,
+            {
+              opacity: micHoldHintOpacity,
+              transform: [
+                {
+                  translateY: micHoldHintOpacity.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [8, 0],
+                  }),
+                },
+                {
+                  scale: micHoldHintOpacity.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0.96, 1],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          <Text style={styles.micHoldHintText}>{t("search.voice_hold_hint")}</Text>
+          <View style={styles.micHoldHintTail} />
+        </Animated.View>
+      ) : null}
+      <View
+        style={[
+          styles.micBtn,
+          {
+            backgroundColor: isRecording ? (recordingCancelArmed ? "#991b1b" : "#ef4444") : "transparent",
+            opacity: isRecording ? 1 : 0.85,
+          },
+        ]}
+        onStartShouldSetResponder={() => true}
+        onResponderGrant={startRecording}
+        onResponderMove={handleRecordingPressMove}
+        onResponderRelease={stopRecording}
+        onResponderTerminate={cancelRecording}
+        accessibilityRole="button"
+        accessibilityLabel={t("search.voice_hold_hint")}
+      >
+        <Feather name="mic" size={18} color={isRecording ? "#fff" : colors.mutedForeground} />
+      </View>
     </View>
-  ), [cancelRecording, colors.mutedForeground, handleRecordingPressMove, isRecording, recordingCancelArmed, startRecording, stopRecording]);
+  ), [cancelRecording, colors.mutedForeground, handleRecordingPressMove, isRecording, micHoldHintOpacity, recordingCancelArmed, showMicHoldHint, startRecording, stopRecording, t]);
 
   return (
     <KeyboardAvoidingView
@@ -3227,6 +3467,72 @@ export default function SearchScreen() {
         onPurchaseSuccess={handlePurchaseSuccess}
       />
       <Modal
+        visible={guestAnalysisPromptVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeGuestAnalysisPrompt}
+      >
+        <View style={styles.guestPromptRoot}>
+          <View style={styles.guestPromptBackdrop} />
+          <View style={styles.guestPromptCenter}>
+            <View style={[styles.guestPromptCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <View style={[styles.guestPromptIcon, { backgroundColor: colors.accent + "18" }]}>
+                <Feather name="lock" size={20} color={colors.accent} />
+              </View>
+              <Text style={[styles.guestPromptTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
+                {t("guest_analysis.title")}
+              </Text>
+              <Text style={[styles.guestPromptBody, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                {t("guest_analysis.body")}
+              </Text>
+              <View style={styles.guestPromptBenefits}>
+                {[
+                  "guest_analysis.benefit_analysis",
+                  "guest_analysis.benefit_history",
+                  "guest_analysis.benefit_security",
+                ].map((key) => (
+                  <View key={key} style={styles.guestPromptBenefitRow}>
+                    <View style={[styles.guestPromptBenefitIcon, { backgroundColor: colors.accent + "16" }]}>
+                      <Feather name="check" size={12} color={colors.accent} />
+                    </View>
+                    <Text style={[styles.guestPromptBenefitText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>
+                      {t(key)}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+              <TouchableOpacity
+                style={[styles.guestPromptPrimaryBtn, { backgroundColor: colors.accent }]}
+                onPress={openGuestAnalysisSignup}
+                activeOpacity={0.85}
+              >
+                <Text style={[styles.guestPromptPrimaryText, { fontFamily: "DM_Sans_700Bold" }]}>
+                  {t("signup.create_account")}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.guestPromptSecondaryBtn, { borderColor: colors.border }]}
+                onPress={openGuestAnalysisLogin}
+                activeOpacity={0.78}
+              >
+                <Text style={[styles.guestPromptSecondaryText, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>
+                  {t("login.submit")}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.guestPromptCancelBtn}
+                onPress={closeGuestAnalysisPrompt}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.guestPromptCancelText, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>
+                  {t("common.cancel")}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+      <Modal
         visible={analyseDisclaimerVisible}
         transparent
         animationType="fade"
@@ -3451,13 +3757,54 @@ const styles = StyleSheet.create({
   suggestions: {
     paddingBottom: 2,
   },
+  micButtonSlot: {
+    width: 36,
+    height: 36,
+    marginLeft: 4,
+    alignItems: "center",
+    justifyContent: "center",
+    position: "relative",
+    zIndex: 5,
+  },
   micBtn: {
     width: 36,
     height: 36,
     borderRadius: 18,
     alignItems: "center",
     justifyContent: "center",
-    marginLeft: 4,
+  },
+  micHoldHint: {
+    position: "absolute",
+    right: -4,
+    bottom: 46,
+    minWidth: 142,
+    maxWidth: 176,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 14,
+    backgroundColor: "#201915",
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    elevation: 12,
+  },
+  micHoldHintText: {
+    color: "#fffaf3",
+    fontSize: 12,
+    lineHeight: 16,
+    textAlign: "center",
+    fontFamily: "DM_Sans_700Bold",
+  },
+  micHoldHintTail: {
+    position: "absolute",
+    right: 16,
+    bottom: -6,
+    width: 12,
+    height: 12,
+    backgroundColor: "#201915",
+    transform: [{ rotate: "45deg" }],
   },
   recordingOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -3609,6 +3956,98 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     justifyContent: "center",
     alignItems: "center",
+  },
+  guestPromptRoot: {
+    flex: 1,
+  },
+  guestPromptBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.46)",
+  },
+  guestPromptCenter: {
+    flex: 1,
+    justifyContent: "center",
+    paddingHorizontal: 22,
+  },
+  guestPromptCard: {
+    borderWidth: 1,
+    borderRadius: 22,
+    padding: 22,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.22,
+    shadowRadius: 28,
+    elevation: 14,
+  },
+  guestPromptIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
+  guestPromptTitle: {
+    fontSize: 22,
+    lineHeight: 28,
+    letterSpacing: -0.3,
+    marginBottom: 8,
+  },
+  guestPromptBody: {
+    fontSize: 14,
+    lineHeight: 22,
+    marginBottom: 18,
+  },
+  guestPromptBenefits: {
+    gap: 10,
+    marginBottom: 20,
+  },
+  guestPromptBenefitRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  guestPromptBenefitIcon: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  guestPromptBenefitText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  guestPromptPrimaryBtn: {
+    height: 50,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  guestPromptPrimaryText: {
+    color: "#fff",
+    fontSize: 16,
+  },
+  guestPromptSecondaryBtn: {
+    height: 48,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 10,
+  },
+  guestPromptSecondaryText: {
+    fontSize: 15,
+  },
+  guestPromptCancelBtn: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingTop: 14,
+    paddingBottom: 2,
+  },
+  guestPromptCancelText: {
+    fontSize: 14,
   },
   disclaimerModalRoot: {
     flex: 1,

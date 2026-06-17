@@ -176,7 +176,7 @@ function HeartButton({ watched, onPress }: { watched: boolean; onPress: () => vo
   const { t } = useT();
   return (
     <TouchableOpacity
-      style={[styles.heartBtn, { backgroundColor: "rgba(255,255,255,0.92)", borderColor: colors.border }]}
+      style={[styles.heartBtn, { backgroundColor: colors.card + "EB", borderColor: colors.border }]}
       onPress={onPress}
       activeOpacity={0.82}
       accessibilityRole="button"
@@ -191,7 +191,7 @@ function ShareButton({ onPress }: { onPress: () => void }) {
   const colors = useColors();
   return (
     <TouchableOpacity
-      style={[styles.shareBtn, { backgroundColor: "rgba(255,255,255,0.92)", borderColor: colors.border }]}
+      style={[styles.shareBtn, { backgroundColor: colors.card + "EB", borderColor: colors.border }]}
       onPress={onPress}
       activeOpacity={0.82}
       accessibilityRole="button"

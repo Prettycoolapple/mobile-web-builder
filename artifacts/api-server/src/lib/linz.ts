@@ -103,6 +103,91 @@ function getKey(): string | null {
   return process.env["LINZ_API_KEY"] ?? null;
 }
 
+/**
+ * The LINZ Landonline title-preview service (LRS public API) is only published
+ * during business hours — outside the window the address/title endpoints return
+ * errors rather than data. Title screening must therefore be gated on this
+ * window so we don't spend calls (or strand the user with empty results) when
+ * the service is down. Window is NZ local time (Pacific/Auckland, DST-aware via
+ * Intl) and defaults to 08:00–22:00; both bounds are env-overridable for tests.
+ */
+export function isLinzTitleServiceAvailable(now: Date = new Date()): boolean {
+  const startHour = Number(process.env["LINZ_TITLE_SERVICE_START_HOUR"] ?? 8);
+  const endHour = Number(process.env["LINZ_TITLE_SERVICE_END_HOUR"] ?? 22);
+  let hour: number;
+  try {
+    const hh = new Intl.DateTimeFormat("en-NZ", {
+      timeZone: "Pacific/Auckland",
+      hour: "2-digit",
+      hour12: false,
+    }).format(now);
+    // Intl renders midnight as "24" in some runtimes; normalise to 0.
+    hour = Number(hh) % 24;
+  } catch {
+    hour = now.getHours();
+  }
+  return hour >= startHour && hour < endHour;
+}
+
+/**
+ * Outcome of screening one address for freehold tenure against LINZ:
+ *  - keep   = LINZ confirmed fee-simple/freehold title.
+ *  - reject = LINZ positively confirmed a NON-freehold estate (cross lease,
+ *             leasehold, unit title, stratum) — drop it from a freehold search.
+ *  - caveat = title could not be confirmed (no title issued yet for a new build,
+ *             address mismatch, or service unavailable) — keep with "unverified".
+ */
+export type FreeholdScreen =
+  | { decision: "keep"; titleType: "Freehold"; estate: string }
+  | { decision: "reject"; estate: string }
+  | { decision: "caveat" };
+
+// The public Landonline (LRS) title API is rate-limited and only published in
+// business hours. The discovery pre-screen runs listings in parallel batches,
+// so cap concurrent title lookups with a small counting semaphore to avoid a
+// burst of 429s (and the races the user flagged). Lookups are otherwise
+// idempotent and deduped by LRS_TITLE_PREVIEW_CACHE.
+const LRS_SCREEN_CONCURRENCY = Math.max(1, Number(process.env["LINZ_TITLE_SCREEN_CONCURRENCY"] ?? 2));
+let lrsScreenActive = 0;
+const lrsScreenWaiters: Array<() => void> = [];
+
+function acquireLrsScreenSlot(): Promise<void> {
+  if (lrsScreenActive < LRS_SCREEN_CONCURRENCY) {
+    lrsScreenActive++;
+    return Promise.resolve();
+  }
+  // Slot is handed directly to the next waiter on release (count unchanged).
+  return new Promise<void>((resolve) => lrsScreenWaiters.push(resolve));
+}
+
+function releaseLrsScreenSlot(): void {
+  const next = lrsScreenWaiters.shift();
+  if (next) next();
+  else lrsScreenActive--;
+}
+
+/**
+ * Screen one address for freehold tenure. Caller must already have decided that
+ * title screening is wanted AND that the service is in-hours
+ * (isLinzTitleServiceAvailable) — this function always attempts the lookup.
+ */
+export async function screenAddressFreehold(address: string): Promise<FreeholdScreen> {
+  await acquireLrsScreenSlot();
+  try {
+    const lookup = await fetchLINZTitlesByAddressDetailed(address).catch(() => null);
+    const estate = lookup ? estateTypeFromLrsTitles(lookup.preview?.titles ?? []) : null;
+    if (lookup?.status === "resolved" && estate) {
+      if (/fee\s*simple|freehold/i.test(estate)) {
+        return { decision: "keep", titleType: "Freehold", estate };
+      }
+      return { decision: "reject", estate };
+    }
+    return { decision: "caveat" };
+  } finally {
+    releaseLrsScreenSlot();
+  }
+}
+
 const LRS_TITLE_PREVIEW_CACHE = new Map<string, LinzLrsAddressTitlePreview>();
 
 function lrsCacheKeys(...values: Array<string | null | undefined>): string[] {
@@ -205,6 +290,25 @@ export function estateTypeFromLrsTitles(titles: LinzLrsTitlePreview[]): string |
   const leasehold = candidates.find((title) => /leasehold/i.test(title));
   if (leasehold) return "Leasehold";
   return candidates[0] ?? null;
+}
+
+/**
+ * Collapse a LINZ estate string into one of the tenure categories the discovery
+ * opt-in works with. Stratum is grouped with unit-title (both are unit-style
+ * shared-title estates that must be converted before standard subdivision).
+ * Returns null when the estate is empty/unrecognised so callers treat it as
+ * "couldn't categorise" rather than "non-freehold".
+ */
+export function tenureCategoryFromEstate(
+  estate: string | null | undefined,
+): "cross_lease" | "leasehold" | "unit_title" | "freehold" | null {
+  const raw = (estate ?? "").trim();
+  if (!raw) return null;
+  if (/cross[-\s]*lease|crosslease/i.test(raw)) return "cross_lease";
+  if (/unit\s*title|stratum/i.test(raw)) return "unit_title";
+  if (/leasehold/i.test(raw)) return "leasehold";
+  if (/fee\s*simple|freehold/i.test(raw)) return "freehold";
+  return null;
 }
 
 export async function fetchLINZTitlesByAddress(address: string): Promise<LinzLrsAddressTitlePreview | null> {

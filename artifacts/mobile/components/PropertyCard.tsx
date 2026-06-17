@@ -247,7 +247,7 @@ export function PropertyCard({ candidate, onAnalyse, analysingPropertyKey = null
           />
           {showOverall ? <OverallCompositeBadge composite={composite} plain={false} /> : null}
           <TouchableOpacity
-            style={[styles.shareBtn, { backgroundColor: "rgba(255,255,255,0.92)", borderColor: colors.border }]}
+            style={[styles.shareBtn, { backgroundColor: colors.card + "EB", borderColor: colors.border }]}
             onPress={handleShare}
             activeOpacity={0.8}
             accessibilityRole="button"
@@ -256,7 +256,7 @@ export function PropertyCard({ candidate, onAnalyse, analysingPropertyKey = null
             <Feather name="log-out" size={15} color={colors.foreground} />
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.heartBtn, { backgroundColor: "rgba(255,255,255,0.92)", borderColor: colors.border }]}
+            style={[styles.heartBtn, { backgroundColor: colors.card + "EB", borderColor: colors.border }]}
             onPress={handleToggleWatch}
             activeOpacity={0.8}
             accessibilityRole="button"
@@ -364,6 +364,30 @@ export function PropertyCard({ candidate, onAnalyse, analysingPropertyKey = null
               <Feather name="alert-triangle" size={10} color={colors.amber} />
               <Text style={[styles.tagText, { color: colors.amber, fontFamily: "DM_Sans_500Medium" }]}>
                 {t("search.redevelopment_suspected_chip")}
+              </Text>
+            </View>
+          )}
+          {candidate.subdivisionTenureWarning && (
+            <View style={[styles.tag, { backgroundColor: colors.amber + "22", flexDirection: "row", alignItems: "center", gap: 3 }]}>
+              <Feather name="alert-triangle" size={10} color={colors.amber} />
+              <Text style={[styles.tagText, { color: colors.amber, fontFamily: "DM_Sans_500Medium" }]}>
+                {t(`search.tenure_warning_${candidate.subdivisionTenureWarning}`)}
+              </Text>
+            </View>
+          )}
+          {candidate.titleStatus === "verified" && !candidate.subdivisionTenureWarning && (
+            <View style={[styles.tag, { backgroundColor: colors.emerald + "22", flexDirection: "row", alignItems: "center", gap: 3 }]}>
+              <Feather name="check-circle" size={10} color={colors.emerald} />
+              <Text style={[styles.tagText, { color: colors.emerald, fontFamily: "DM_Sans_500Medium" }]}>
+                {candidate.titleType?.trim() || t("search.freehold_chip")}
+              </Text>
+            </View>
+          )}
+          {candidate.titleStatus === "unverified" && (
+            <View style={[styles.tag, { backgroundColor: colors.muted, flexDirection: "row", alignItems: "center", gap: 3 }]}>
+              <Feather name="help-circle" size={10} color={colors.mutedForeground} />
+              <Text style={[styles.tagText, { color: colors.mutedForeground, fontFamily: "DM_Sans_500Medium" }]}>
+                {t("search.title_unverified_chip")}
               </Text>
             </View>
           )}

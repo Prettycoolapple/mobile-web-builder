@@ -32,16 +32,23 @@ const VERDICT_TTL_REJECTED_MS = 60 * 60 * 1000;
 const VERDICT_TTL_INDETERMINATE_MS = 5 * 60 * 1000;
 const verdictCache = new Map<string, VerdictEntry>();
 
-function normaliseVerdictKey(listingUrl: string | null | undefined, address: string): string {
+function normaliseVerdictKey(listingUrl: string | null | undefined, address: string, variant?: string): string {
   const fromUrl = listingUrl?.trim();
-  if (fromUrl) return fromUrl.toLowerCase();
-  return address.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+  const base = fromUrl
+    ? fromUrl.toLowerCase()
+    : address.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!base) return base;
+  // A freehold-screened verdict (which may reject a non-freehold property) must
+  // not be served to a non-freehold search and vice-versa, so the screening
+  // variant is part of the cache key.
+  return variant ? `${base}::${variant}` : base;
 }
 
 export function getScreenVerdict(
   listing: { listingUrl?: string | null; address: string },
+  variant?: string,
 ): ScreenVerdict | null {
-  const key = normaliseVerdictKey(listing.listingUrl, listing.address);
+  const key = normaliseVerdictKey(listing.listingUrl, listing.address, variant);
   if (!key) return null;
   const entry = verdictCache.get(key);
   if (!entry) return null;
@@ -55,8 +62,9 @@ export function getScreenVerdict(
 export function setScreenVerdict(
   listing: { listingUrl?: string | null; address: string },
   verdict: ScreenVerdict,
+  variant?: string,
 ): void {
-  const key = normaliseVerdictKey(listing.listingUrl, listing.address);
+  const key = normaliseVerdictKey(listing.listingUrl, listing.address, variant);
   if (!key) return;
   const ttl = verdict.kind === "candidate"
     ? VERDICT_TTL_CANDIDATE_MS

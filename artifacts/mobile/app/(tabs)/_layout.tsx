@@ -86,6 +86,20 @@ function ClassicTabLayout({ isGuest }: { isGuest: boolean }) {
         }}
       />
       <Tabs.Screen
+        name="home"
+        options={{
+          title: t("tab.home"),
+          tabBarIcon: () =>
+            isIOS ? (
+              <SymbolView name="house" tintColor={colors.accent} size={24} />
+            ) : (
+              <Feather name="home" size={22} color={colors.accent} />
+            ),
+          tabBarActiveTintColor: colors.accent,
+          tabBarInactiveTintColor: colors.accent,
+        }}
+      />
+      <Tabs.Screen
         name="history"
         options={{
           href: isGuest ? null : undefined,
