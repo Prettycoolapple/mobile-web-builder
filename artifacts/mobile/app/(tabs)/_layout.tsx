@@ -3,11 +3,12 @@ import { Tabs, useRouter } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import { Feather } from "@expo/vector-icons";
 import React, { useEffect } from "react";
-import { Platform, StyleSheet, View, useColorScheme } from "react-native";
+import { Platform, Pressable, StyleSheet, Text, View, useColorScheme } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
+import { useChat } from "@/context/ChatContext";
 import { useDm } from "@/context/DmContext";
 import { useT } from "@/lib/i18n";
 
@@ -20,6 +21,8 @@ function ClassicTabLayout({ isGuest }: { isGuest: boolean }) {
   const isWeb = Platform.OS === "web";
   const safeAreaInsets = useSafeAreaInsets();
   const { unreadCount } = useDm();
+  const { startNewChat } = useChat();
+  const router = useRouter();
 
   return (
     <Tabs
@@ -89,14 +92,28 @@ function ClassicTabLayout({ isGuest }: { isGuest: boolean }) {
         name="home"
         options={{
           title: t("tab.home"),
-          tabBarIcon: () =>
-            isIOS ? (
-              <SymbolView name="house" tintColor={colors.accent} size={24} />
-            ) : (
-              <Feather name="home" size={22} color={colors.accent} />
-            ),
-          tabBarActiveTintColor: colors.accent,
-          tabBarInactiveTintColor: colors.accent,
+          tabBarButton: ({ ref: _ref, style }) => (
+            <Pressable
+              style={[style, styles.homeTabCell]}
+              onPress={() => {
+                startNewChat();
+                router.navigate("/(tabs)");
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={t("tab.home")}
+            >
+              <View style={[styles.homeCircle, { backgroundColor: colors.accent }]}>
+                {isIOS ? (
+                  <SymbolView name="house.fill" tintColor="#fff" size={18} />
+                ) : (
+                  <Feather name="home" size={18} color="#fff" />
+                )}
+              </View>
+              <Text style={[styles.homeLabel, { color: colors.mutedForeground }]}>
+                {t("tab.home")}
+              </Text>
+            </Pressable>
+          ),
         }}
       />
       <Tabs.Screen
@@ -144,4 +161,22 @@ export default function TabLayout() {
   return <ClassicTabLayout isGuest={!user} />;
 }
 
-const styles = StyleSheet.create({});
+const styles = StyleSheet.create({
+  homeTabCell: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+  },
+  homeCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  homeLabel: {
+    fontFamily: "DM_Sans_500Medium",
+    fontSize: 11,
+  },
+});

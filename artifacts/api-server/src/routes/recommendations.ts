@@ -128,19 +128,22 @@ FULL CONVERSATION HISTORY:
 ${conversationText || "(no conversation yet)"}
 
 TASK:
-Determine whether the user is showing genuine interest in property development and/or would benefit from being connected with a professional service provider.
+Determine whether the user is showing CLEAR, EXPLICIT interest in property development and/or wants to be connected with a professional service provider.
 
-Look for ANY of these signals (explicit OR implicit):
-- Development intent: wanting to build, subdivide, redevelop, demolish+rebuild, or renovate
-- Asking for professional help: architects, designers, planners, engineers, builders, quantity surveyors, project managers
-- Questions about professional fees, costs, timelines, or processes that suggest intent to hire
-- Asking about resource consent, building consent, or council approval processes
-- Expressing desire to proceed, take action, or start a project
-- Asking "who can help me", "where do I find", "do you know anyone", or similar
-- Any indication they want expert professional guidance, even indirect
+Only set "recommend": true when you see STRONG, UNAMBIGUOUS signals such as:
+- Directly asking to be connected with a professional (architect, designer, planner, engineer, builder, etc.)
+- Explicitly stating they want to build, subdivide, redevelop, or renovate THIS property
+- Asking specific questions about resource/building consent, fees, or timelines that indicate they are actively planning to proceed
+- Asking "who can help me", "do you know anyone", "can you recommend someone", or similar direct referral requests
+
+Do NOT set "recommend": true based on:
+- The property merely having development potential (zone, lot size) without the user expressing intent
+- General curiosity about what COULD be done with a property
+- The user just reading a report without asking for next steps
+- Vague or speculative comments about the property
 
 Understand BOTH English and Chinese (Simplified) messages equally.
-Chinese signals include: 设计师, 建筑师, 工程师, 推荐, 介绍, 有没有, 找人, 需要帮助, 开发, 建造, etc.
+Chinese explicit signals include: 设计师, 建筑师, 工程师, 推荐, 介绍, 有没有人, 找人, 帮我联系, 想建, 准备开发, 打算改建 etc.
 
 Reply with ONLY valid JSON (no markdown, no explanation):
 {
@@ -152,7 +155,7 @@ Reply with ONLY valid JSON (no markdown, no explanation):
 }
 
 "discipline" must reflect what kind of professional they appear to need; use null when unclear.
-Set "recommend": false only when there is clearly no development interest or professional guidance needed.`;
+Set "recommend": true only when there are clear, explicit signals of intent or a direct referral request. Default to false when signals are weak or absent.`;
 
     const llmResult = await ai.models.generateContent({
       model: "deepseek-chat",
@@ -164,12 +167,14 @@ Set "recommend": false only when there is clearly no development interest or pro
     const cleaned = raw.replace(/```(?:json)?\s*/gi, "").replace(/```\s*/g, "").trim();
     const parsed = JSON.parse(cleaned);
 
+    const confidence = typeof parsed.confidence === "number" ? Math.min(1, Math.max(0, parsed.confidence)) : 0.5;
     return {
-      shouldRecommend: Boolean(parsed.recommend),
+      // Require confident detection to avoid surfacing providers on weak signals.
+      shouldRecommend: Boolean(parsed.recommend) && confidence >= 0.7,
       intentType: (["subdivision", "newbuild", "renovation", "none"] as const).includes(parsed.type)
         ? parsed.type
         : "none",
-      confidence: typeof parsed.confidence === "number" ? Math.min(1, Math.max(0, parsed.confidence)) : 0.5,
+      confidence,
       reason: parsed.reason ?? "LLM detected development interest",
       suggestedDiscipline: parsed.discipline ?? null,
     };
@@ -197,7 +202,7 @@ Set "recommend": false only when there is clearly no development interest or pro
     ];
     const hasKeywordIntent = developerKeywords.some((kw) => recentMessages.includes(kw));
 
-    if (signalCount >= 3 || (hasKeywordIntent && signalCount >= 2)) {
+    if (signalCount >= 4 || (hasKeywordIntent && signalCount >= 3)) {
       return {
         shouldRecommend: true,
         intentType: signals.isSubdividable ? "subdivision" : "newbuild",
@@ -415,9 +420,10 @@ router.post("/recommendations/check", requireAuth, async (req: Request, res: Res
     }
 
     const strategy = report.recommendedDevelopmentStrategy ?? null;
-    const designProfessionalStrategies = new Set(["demolish_rebuild", "refurbish"]);
-    if (strategy && designProfessionalStrategies.has(strategy)) {
-      const intentType = strategy === "demolish_rebuild" ? "newbuild" : "renovation";
+    // Only auto-surface a provider for demolish_rebuild — a concrete, high-commitment
+    // strategy where an architect/planner is clearly needed. refurbish/renovation is
+    // too speculative to push a provider without the user asking.
+    if (strategy === "demolish_rebuild") {
       const designDisciplines = ["architect_designer", "planner"];
       const provider = await selectServiceProvider({
         disciplineIn: designDisciplines,
@@ -426,8 +432,8 @@ router.post("/recommendations/check", requireAuth, async (req: Request, res: Res
       res.json({
         shouldRecommend: provider !== null,
         provider,
-        intentType,
-        reason: "Recommended development strategy (rebuild or renovate) — design / planning professional",
+        intentType: "newbuild",
+        reason: "Recommended development strategy (demolish & rebuild) — design / planning professional",
         allowExternalSearch: false,
         upgradeRequired,
       });
