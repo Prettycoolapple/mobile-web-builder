@@ -410,7 +410,12 @@ function propertyFacts(payload: unknown): Fact[] {
   push("Bedrooms", numberFact(firstValue(source, ["bedrooms", "bedroomCount"])));
   push("Bathrooms", numberFact(firstValue(source, ["bathrooms", "bathroomCount"])));
   push("Zoning", textFact(firstValue(source, ["zone", "zoning"])));
-  push("Title status", textFact(firstValue(source, ["titleStatus", "titleType", "tenure"])));
+  // Only show the title type when LINZ has positively confirmed it ("verified").
+  // Outside government API hours the status is "unverified" — omit the row entirely
+  // rather than surfacing a meaningless "verified"/"unverified" string.
+  const titleStatus = textFact(firstValue(source, ["titleStatus"]));
+  const titleType = textFact(firstValue(source, ["titleType", "tenure"]));
+  if (titleStatus === "verified" && titleType) push("Title", titleType);
   push("Land area", numberFact(firstValue(source, ["landArea", "landAreaSqm"]), "m²") ?? textFact(firstValue(source, ["landAreaDisplay", "landArea"])));
   push("Floor area", numberFact(firstValue(source, ["floorArea", "floorAreaSqm"]), "m²") ?? textFact(firstValue(source, ["floorAreaDisplay", "floorArea"])));
 

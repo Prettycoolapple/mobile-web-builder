@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform, Share } from "react-native";
 import { getApiBase } from "@/lib/api";
+import { isOSChineseLocale } from "@/lib/i18n";
 import type {
   FeasibilityReport,
   PropertyCandidate,
@@ -107,9 +108,12 @@ export async function shareCandidate(candidate: PropertyCandidate, headers: ApiH
   const address = cleanAddress(candidate.address);
   if (!address) throw new Error("This property cannot be shared yet.");
   const share = await createShare({ kind: "candidate", address, candidate }, headers);
+  const zh = isOSChineseLocale();
   await shareText({
-    title: "Project Alpha property opportunity",
-    message: `I found this Project Alpha property opportunity: ${address}. Open Project Alpha to view more: ${share.url}`,
+    title: zh ? "奥房房产机会" : "Project Alpha property opportunity",
+    message: zh
+      ? `我在奥房上发现了一个房产机会：${address}，点击查看更多：${share.url}`
+      : `I found this opportunity on Project Alpha: ${address}. Open Project Alpha to view more: ${share.url}`,
     url: share.url,
   });
 }
@@ -118,9 +122,12 @@ export async function shareListing(listing: BrowseListing, headers: ApiHeaders):
   const address = cleanAddress(listing.address);
   if (!address) throw new Error("This listing cannot be shared yet.");
   const share = await createShare({ kind: "listing", address, listing }, headers);
+  const zh = isOSChineseLocale();
   await shareText({
-    title: "Project Alpha property listing",
-    message: `I found this property listing on Project Alpha: ${address}. Open it here: ${share.url}`,
+    title: zh ? "奥房房源" : "Project Alpha property listing",
+    message: zh
+      ? `我在奥房上看到了一个房源：${address}，点击查看：${share.url}`
+      : `I found this property listing on Project Alpha: ${address}. Open it here: ${share.url}`,
     url: share.url,
   });
 }
@@ -150,9 +157,12 @@ export async function shareReport(report: FeasibilityReport, headers: ApiHeaders
       listingPrice: report.propertyOverview?.listingPrice ?? null,
     },
   }, headers);
+  const zh = isOSChineseLocale();
   await shareText({
-    title: "Project Alpha feasibility analysis",
-    message: `Project Alpha feasibility analysis for ${address}. Open Project Alpha to view the latest analysis: ${share.url}`,
+    title: zh ? "奥房可行性分析" : "Project Alpha feasibility analysis",
+    message: zh
+      ? `奥房可行性分析报告 - ${address}，点击查看最新分析：${share.url}`
+      : `Project Alpha feasibility analysis for ${address}. Open Project Alpha to view the latest analysis: ${share.url}`,
     url: share.url,
   });
 }
