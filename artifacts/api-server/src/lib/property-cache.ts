@@ -136,6 +136,28 @@ export async function upsertCachedRaw(args: UpsertCachedRawArgs): Promise<void> 
   }
 }
 
+/**
+ * Backfill ONLY the `derived_scores` key of a cached row's rawData (so screening
+ * cards can show the exact report score), without touching `lastRefreshedAt` /
+ * `pipelineVersion` / `refreshCount`. Crucially this does NOT reset the freshness
+ * clock — a cache-serve read must never revive stale data. Best-effort.
+ */
+export async function backfillDerivedScores(addressKey: string, derivedScores: unknown): Promise<void> {
+  if (!addressKey || derivedScores == null) return;
+  try {
+    await withDbRetry(() =>
+      db
+        .update(propertyCache)
+        .set({
+          rawData: sql`jsonb_set(${propertyCache.rawData}, '{derived_scores}', ${JSON.stringify(derivedScores)}::jsonb, true)`,
+        })
+        .where(eq(propertyCache.addressKey, addressKey)),
+    );
+  } catch (err) {
+    logger.warn({ err: (err as Error).message, addressKey }, "property-cache backfillDerivedScores failed");
+  }
+}
+
 /** Best-effort increment of the served-from-cache counter (any user). */
 export async function bumpHitCount(addressKey: string): Promise<void> {
   if (!addressKey) return;

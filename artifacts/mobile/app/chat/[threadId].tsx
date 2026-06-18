@@ -102,6 +102,11 @@ function normalizeImageContentType(mimeType: string | null | undefined): string 
   return normalized;
 }
 
+function telUrl(phone: string): string {
+  const normalized = phone.trim().replace(/[^\d+]/g, "");
+  return `tel:${normalized || phone.trim()}`;
+}
+
 interface SignedDmUploadResponse {
   uploadURL: string;
   objectPath: string;
@@ -333,6 +338,15 @@ export default function ChatScreen() {
       if (tid !== threadId) return;
       setMessages((prev) => {
         if (prev.some((m) => m.id === message.id)) return prev;
+        const optimisticIndex = prev.findIndex((m) =>
+          m.senderId === message.senderId &&
+          m.localStatus === "sending" &&
+          m.body === message.body &&
+          m.imageUrl === message.imageUrl,
+        );
+        if (optimisticIndex >= 0) {
+          return prev.map((m, index) => index === optimisticIndex ? message : m);
+        }
         return [...prev, message];
       });
       if (isAtBottomRef.current) {
@@ -366,8 +380,8 @@ export default function ChatScreen() {
       return;
     }
     if (!msgBody && !imageUrl) return;
-    const isOptimisticImage = !!options.optimisticId;
-    if (isOptimisticImage) {
+    const isOptimisticSend = !!options.optimisticId;
+    if (isOptimisticSend) {
       setMessages((prev) => prev.map((m) =>
         m.id === options.optimisticId ? { ...m, localStatus: "sending" } : m,
       ));
@@ -430,9 +444,37 @@ export default function ChatScreen() {
       }
       Alert.alert(t("common.error"), t("dm.error.send_failed"));
     } finally {
-      if (!isOptimisticImage) setSending(false);
+      if (!isOptimisticSend) setSending(false);
     }
   }, [threadId, token, fetchThreads, t, blockStatus.messagingBlocked, scrollToLatest]);
+
+  const sendTextMessage = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!threadId || !user?.id || !trimmed || blockStatus.messagingBlocked) return;
+    const optimisticId = `local-text-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const optimisticMessage: LocalDmMessage = {
+      id: optimisticId,
+      threadId: String(threadId),
+      senderId: user.id,
+      body: trimmed,
+      imageUrl: null,
+      readAt: null,
+      createdAt: new Date().toISOString(),
+      localStatus: "sending",
+    };
+    setMessages((prev) => [...prev, optimisticMessage]);
+    setBody("");
+    setTimeout(() => scrollToLatest(true), 50);
+    void sendMessage(trimmed, undefined, { optimisticId });
+  }, [threadId, user?.id, blockStatus.messagingBlocked, scrollToLatest, sendMessage]);
+
+  const retryTextMessage = useCallback((message: LocalDmMessage) => {
+    if (!message.body || !message.id.startsWith("local-text-")) return;
+    setMessages((prev) => prev.map((m) =>
+      m.id === message.id ? { ...m, localStatus: "sending" } : m,
+    ));
+    void sendMessage(message.body, undefined, { optimisticId: message.id });
+  }, [sendMessage]);
 
   const pickImage = useCallback(async (useCamera: boolean) => {
     if (uploadingImage || blockStatus.messagingBlocked) return;
@@ -671,8 +713,8 @@ export default function ChatScreen() {
   }, [nextCursor, loadingMore, fetchMessages]);
 
   const inputLocked = blockStatus.messagingBlocked;
-  const sendDisabled = !body.trim() || sending || blockStatus.messagingBlocked;
-  const mediaDisabled = blockStatus.messagingBlocked || uploadingImage || sending;
+  const sendDisabled = !body.trim() || blockStatus.messagingBlocked;
+  const mediaDisabled = blockStatus.messagingBlocked || uploadingImage;
 
   const items: ListItem[] = buildListItems(messages, locale, t);
 
@@ -707,7 +749,9 @@ export default function ChatScreen() {
     const showAvatar = !isMine && isLastInGroup;
     const showSenderName = !isMine && isFirstInGroup && !!otherName;
     const isLocalImage = !!msg.imageUrl && /^(file:|data:|blob:)/i.test(msg.imageUrl);
-    const isPendingImage = msg.localStatus === "uploading" || msg.localStatus === "sending";
+    const isPendingImage = !!msg.imageUrl && (msg.localStatus === "uploading" || msg.localStatus === "sending");
+    const isPendingText = !msg.imageUrl && msg.localStatus === "sending";
+    const isFailedText = !msg.imageUrl && msg.localStatus === "failed";
     const imageSource = msg.imageUrl
       ? {
           uri: resolveDmStoredImageUri(msg.imageUrl),
@@ -777,18 +821,34 @@ export default function ChatScreen() {
               ) : null}
             </TouchableOpacity>
           ) : (
-            <View
+            <TouchableOpacity
+              activeOpacity={isFailedText ? 0.8 : 1}
+              disabled={!isFailedText}
+              onPress={() => retryTextMessage(msg)}
               style={[
                 styles.bubble,
                 isMine
                   ? [styles.myBubble, { backgroundColor: colors.accent }]
                   : [styles.theirBubble, { backgroundColor: colors.card, borderColor: colors.border }],
+                isFailedText && { borderWidth: 1, borderColor: "#FCA5A5" },
               ]}
             >
               <Text style={[styles.bubbleText, { color: isMine ? "#fff" : colors.foreground }]}>
                 {msg.body}
               </Text>
-            </View>
+              {isFailedText ? (
+                <View style={styles.textStatusRow}>
+                  <Feather name="alert-circle" size={12} color={isMine ? "#fff" : colors.mutedForeground} />
+                  <Text style={[styles.textStatusText, { color: isMine ? "#fff" : colors.mutedForeground }]}>
+                    {t("dm.error.send_failed")}
+                  </Text>
+                </View>
+              ) : isPendingText ? (
+                <View style={styles.textStatusRow}>
+                  <ActivityIndicator size="small" color={isMine ? "#fff" : colors.mutedForeground} />
+                </View>
+              ) : null}
+            </TouchableOpacity>
           )}
           {isLastInGroup ? (
             <Text
@@ -861,7 +921,7 @@ export default function ChatScreen() {
           {otherPhone ? (
             <TouchableOpacity
               style={styles.callBtn}
-              onPress={() => Linking.openURL(`tel:${otherPhone}`)}
+              onPress={() => Linking.openURL(telUrl(otherPhone))}
               activeOpacity={0.75}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
@@ -1005,7 +1065,7 @@ export default function ChatScreen() {
             onPress={() => {
               const trimmed = body.trim();
               if (!trimmed || sendDisabled) return;
-              sendMessage(trimmed);
+              sendTextMessage(trimmed);
             }}
             disabled={sendDisabled}
           >
@@ -1240,6 +1300,18 @@ const styles = StyleSheet.create({
   myBubble: { borderRadius: 18, borderBottomRightRadius: 4 },
   theirBubble: { borderRadius: 18, borderBottomLeftRadius: 4, borderWidth: 1 },
   bubbleText: { fontFamily: "DM_Sans_400Regular", fontSize: 15, lineHeight: 22 },
+  textStatusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    marginTop: 5,
+    opacity: 0.82,
+  },
+  textStatusText: {
+    fontFamily: "DM_Sans_400Regular",
+    fontSize: 10,
+    lineHeight: 14,
+  },
   imgBubble: {
     borderRadius: 16,
     overflow: "hidden",

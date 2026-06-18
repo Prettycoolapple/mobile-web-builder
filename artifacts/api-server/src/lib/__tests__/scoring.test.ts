@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { scoreProperty } from "../scoring";
+import { buildBuiltEnvironmentContext, type ParcelBuildAssessment } from "../built-environment-context";
 import type { MergedPropertyData } from "../scrapers/merge";
 import type { CostBreakdown } from "../cost-estimator";
 import type { ROIScenario } from "../roi-calculator";
+import type { LinzParcelNearby } from "../linz";
 
 function merged(overrides: Partial<MergedPropertyData> = {}): MergedPropertyData {
   return {
@@ -103,6 +105,26 @@ function scenario(overrides: Partial<ROIScenario>): ROIScenario {
 const CROSS_LEASE_REASON = "Cross-lease title — co-owner consent constrains development";
 const LEASEHOLD_REASON = "Leasehold title — limited development rights vs freehold";
 
+function builtEnvAssessment(id: string, representativeYear: number): ParcelBuildAssessment {
+  const parcel: LinzParcelNearby = {
+    parcel_id: id,
+    appellation: `Lot ${id} DP 12345`,
+    area_sqm: 450,
+    title_no: `NA${id}/1`,
+    legal_description: `Lot ${id} DP 12345`,
+    topology_type: "Primary",
+    bbox: null,
+    distance_m: 20,
+  };
+  return {
+    parcel,
+    address: `${id} Test Street`,
+    buildYear: representativeYear,
+    buildYearRange: null,
+    representativeYear,
+  };
+}
+
 describe("scoreProperty — tenure", () => {
   const freehold = scoreProperty(merged({ estate_type: "Fee Simple" }), baseCosts, scenarios, LOTS);
   const unknown = scoreProperty(merged({ estate_type: null }), baseCosts, scenarios, LOTS);
@@ -164,5 +186,46 @@ describe("scoreProperty — cost position", () => {
 
     expect(result.cost).toBeLessThanOrEqual(2.5);
     expect(result.cost_reasons.join(" ")).toContain("relative to the estimated end value");
+  });
+});
+
+describe("scoreProperty — built environment", () => {
+  it("adds a bounded ROI uplift and reason for a confident last-missing-piece signal", () => {
+    const context = buildBuiltEnvironmentContext({
+      radiusM: 100,
+      subjectBuildYear: 1955,
+      assessments: [
+        builtEnvAssessment("1", 2022),
+        builtEnvAssessment("2", 2020),
+        builtEnvAssessment("3", 2018),
+        builtEnvAssessment("4", 2014),
+        builtEnvAssessment("5", 2008),
+        builtEnvAssessment("6", 2002),
+        builtEnvAssessment("7", 1985),
+        builtEnvAssessment("8", 1975),
+      ],
+    });
+    const base = scoreProperty(merged(), baseCosts, scenarios, LOTS);
+    const scored = scoreProperty(merged(), baseCosts, scenarios, LOTS, context);
+
+    expect(scored.roi).toBe(Math.min(5, base.roi + 0.5));
+    expect(scored.roi_reasons).toContain("Older dwelling among newer nearby homes suggests rebuild value may be unlocked.");
+  });
+
+  it("does not numerically adjust ROI for low-confidence built-environment context", () => {
+    const context = buildBuiltEnvironmentContext({
+      radiusM: 100,
+      subjectBuildYear: 1955,
+      assessments: [
+        builtEnvAssessment("1", 2022),
+        builtEnvAssessment("2", 2020),
+        builtEnvAssessment("3", 1970),
+      ],
+    });
+    const base = scoreProperty(merged(), baseCosts, scenarios, LOTS);
+    const scored = scoreProperty(merged(), baseCosts, scenarios, LOTS, context);
+
+    expect(context.confidence).toBe("low");
+    expect(scored.roi).toBe(base.roi);
   });
 });

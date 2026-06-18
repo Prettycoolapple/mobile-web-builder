@@ -321,6 +321,13 @@ export interface LinzChildAddressProbe {
   samples: string[];
 }
 
+export interface LinzLetterSuffixAddressCandidate {
+  letter: string;
+  address: string;
+  id: string;
+  rank: number | null;
+}
+
 /**
  * Redevelopment probe: once a parcel is developed into multiple dwellings,
  * LINZ allocates unit-style child addresses under the parent street number.
@@ -371,6 +378,63 @@ export async function fetchLINZChildAddressCount(address: string): Promise<LinzC
     logger.debug({ err: (err as Error).message, query }, "LINZ child-address probe failed");
     return null;
   }
+}
+
+export async function fetchLINZLetterSuffixAddresses(
+  parentAddress: string,
+  letters: readonly string[] = ["A", "B", "C", "D", "E", "F"],
+): Promise<LinzLetterSuffixAddressCandidate[]> {
+  const parsed = parentAddress.trim().match(/^(\d+)([A-Za-z])?\s+(.+)$/);
+  if (!parsed || parsed[2]) return [];
+
+  const [, number, , rest] = parsed;
+  const hits = await Promise.all(
+    letters.map(async (rawLetter): Promise<LinzLetterSuffixAddressCandidate | null> => {
+      const letter = rawLetter.toUpperCase();
+      const candidate = `${number}${letter} ${rest}`;
+      try {
+        for (const query of lrsAddressQueryVariants(candidate)) {
+          const url = new URL(`${LINZ_LRS_PUBLIC_BASE}/public-search-caches/addresses`);
+          url.searchParams.set("q", query);
+          const resp = await fetch(url.toString(), {
+            headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" },
+            signal: AbortSignal.timeout(8000),
+          });
+          if (!resp.ok) {
+            logger.debug({ status: resp.status, query }, "LINZ letter-suffix address search failed");
+            continue;
+          }
+          const json = await resp.json() as {
+            data?: Array<{ id?: string | number; address?: string; source?: string; rank?: number }>;
+          };
+          const addressCandidates = (json.data ?? [])
+            .filter((item) => String(item.source ?? "").toLowerCase() === "address" && item.id != null && item.address)
+            .sort((a, b) => (b.rank ?? 0) - (a.rank ?? 0));
+          const exact = addressCandidates.find((item) => lrsAddressLooksExact(candidate, item.address ?? ""));
+          if (exact?.id && exact.address) {
+            return {
+              letter,
+              address: exact.address.trim(),
+              id: String(exact.id),
+              rank: typeof exact.rank === "number" ? exact.rank : null,
+            };
+          }
+        }
+      } catch (err) {
+        logger.debug({ err: (err as Error).message, candidate }, "LINZ letter-suffix address lookup failed");
+      }
+      return null;
+    }),
+  );
+
+  const byAddress = new Map<string, LinzLetterSuffixAddressCandidate>();
+  for (const hit of hits) {
+    if (!hit) continue;
+    const key = normaliseLrsAddress(hit.address);
+    if (!byAddress.has(key)) byAddress.set(key, hit);
+  }
+
+  return Array.from(byAddress.values()).sort((a, b) => a.letter.localeCompare(b.letter));
 }
 
 function lrsUnavailableStatus(status: number): LinzLrsTitlePreviewStatus {

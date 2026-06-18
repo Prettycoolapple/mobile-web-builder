@@ -89,4 +89,23 @@ describe("property share previews", () => {
 
     expect(html).toContain('meta property="og:image" content="https://www.projectalpha.app/favicon.png"');
   });
+
+  it("renders channel-safe app open fallbacks", () => {
+    const html = sharePreviewHtml({
+      token: "abc123",
+      kind: "candidate",
+      address: "10 Example Road, Auckland",
+      title: "10 Example Road - Project Alpha property opportunity",
+      description: "Open Project Alpha to view this property opportunity.",
+      imageUrl: null,
+      url: "https://www.projectalpha.app/share/abc123",
+      facts: [],
+    }, request());
+
+    expect(html).toContain('href="https://www.projectalpha.app/share/abc123"');
+    expect(html).toContain('data-app-url="devfeasible://share/abc123"');
+    expect(html).toContain('data-android-intent-url="intent://share/abc123#Intent;scheme=devfeasible;package=nz.devfeasible.app;');
+    expect(html).toContain("isMobileSafari");
+    expect(html).toContain("window.location.assign(fallback)");
+  });
 });

@@ -2,6 +2,7 @@ import type { MergedPropertyData } from "./scrapers/merge";
 import type { CostBreakdown } from "./cost-estimator";
 import type { ROIScenario } from "./roi-calculator";
 import { roundToHalf } from "./utils";
+import { builtEnvironmentScoreAdjustment, type BuiltEnvironmentContext } from "./built-environment-context";
 
 export interface ScoringResult {
   ease: number;
@@ -108,6 +109,7 @@ export function scoreProperty(
   costs: CostBreakdown,
   scenarios: ROIScenario[],
   lots: number,
+  builtEnvironmentContext?: BuiltEnvironmentContext | null,
 ): ScoringResult {
   const estateType = (merged.estate_type ?? "").trim();
   const isCrossLeaseTenure = /cross\s*lease|stratum/i.test(estateType);
@@ -258,8 +260,11 @@ export function scoreProperty(
       "ROI unavailable — no real fetched comparable sales were available",
       "Sale price assumptions were not estimated from synthetic comparables",
     ];
-    const composite = parseFloat(((ease * 0.3) + (cost * 0.3) + (roi * 0.4)).toFixed(1));
-    return { ease, cost, roi, composite, ease_reasons, cost_reasons, roi_reasons };
+    const adjustment = builtEnvironmentScoreAdjustment(builtEnvironmentContext);
+    if (adjustment.reason) roi_reasons.push(adjustment.reason);
+    const adjustedRoi = roundToHalf(clampScore(roi + adjustment.roiDelta));
+    const composite = parseFloat(((ease * 0.3) + (cost * 0.3) + (adjustedRoi * 0.4)).toFixed(1));
+    return { ease, cost, roi: adjustedRoi, composite, ease_reasons, cost_reasons, roi_reasons };
   }
 
   const bestScenario = bestRoiScenario(scenarios)!;
@@ -290,6 +295,10 @@ export function scoreProperty(
       "Several potential lots increase programme length and absorption exposure versus a single-dwelling flip.",
     );
   }
+
+  const adjustment = builtEnvironmentScoreAdjustment(builtEnvironmentContext);
+  if (adjustment.reason) roi_reasons.push(adjustment.reason);
+  roi = roundToHalf(clampScore(roi + adjustment.roiDelta));
 
   const composite = parseFloat(((ease * 0.3) + (cost * 0.3) + (roi * 0.4)).toFixed(1));
 

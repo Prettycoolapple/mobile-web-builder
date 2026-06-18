@@ -17,7 +17,7 @@ export const CHAT_LIMITS: Record<ChatLimitKey, QuotaTier> = {
   general_free: { limit: 30, warnAt: 24 },
 };
 
-export const FREE_REPORT_LIMIT = 6;
+export const FREE_REPORT_LIMIT = 15;
 export const STANDARD_REPORT_LIMIT = 60;
 export const SERVICE_PROVIDER_FREE_REPORT_LIMIT = 0;
 export const SUPERCHARGE_REPORT_LIMIT = 60;

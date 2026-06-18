@@ -29,6 +29,10 @@ import { calculateBearBaseBullScenarios, type ROIScenario } from "./roi-calculat
 import { selectComparableSalesForExit } from "./market-comparables";
 import { fetchNeighbourhoodContext, type NeighbourhoodContext } from "./neighbourhood-context";
 import { fetchTransportContext, type TransportContext } from "./transport-context";
+import {
+  fetchBuiltEnvironmentContext,
+  type BuiltEnvironmentContext,
+} from "./built-environment-context";
 import { assessDevelopmentStrategy, assessInterestRateOutlook } from "./claude";
 import { scoreProperty, type ScoringResult } from "./scoring";
 import { parseEasements, NO_TITLE, API_ERROR, type EasementAnalysis } from "./easements";
@@ -40,8 +44,9 @@ import {
 import { fetchRealestateListingByUrl, fetchSupplementListingComparables } from "./scrapers/realestate-api";
 import { selectedListingPhotoUrls, type SelectedListingContext } from "./selected-listing-context";
 import { resolveActiveListingContext } from "./active-listing-context";
-import { enrichSchoolZonesDetail, type SchoolZoneDetail } from "./school-directory";
-import { inferSchoolZonesFromLocation } from "./school-zones-llm";
+import { enrichSchoolZonesFromGis, type SchoolZoneDetail } from "./school-directory";
+import { fetchSchoolZonesByPoint, type SchoolZoneGisHit } from "./school-zones-gis";
+import { SCORING_VERSION, type DerivedCardScores } from "./card-score";
 import { resolvePipelineSuburb } from "./suburb-resolver";
 import {
   assessPropertyEligibility,
@@ -373,9 +378,17 @@ export interface RawPropertyData {
   propertyValue: PropertyValueData | null;
   neighbourhood_context: NeighbourhoodContext | null;
   transport_context: TransportContext | null;
+  built_environment_context?: BuiltEnvironmentContext | null;
+  /** Official MoE enrolment-zone hits (point-in-polygon). Optional: rows cached
+   * before this field existed fall back to a live lookup on serve. */
+  school_zones_gis?: SchoolZoneGisHit[];
+  /** Real report-grade scores, persisted so screening cards match the report.
+   * Versioned by SCORING_VERSION; ignored when the version no longer matches.
+   * (The only derived numbers we deliberately cache — see card-score.ts.) */
+  derived_scores?: DerivedCardScores;
 }
 
-export const RAW_PROPERTY_SCHEMA_VERSION = 1;
+export const RAW_PROPERTY_SCHEMA_VERSION = 2;
 
 export interface PipelineResult {
   address_input: string;
@@ -409,6 +422,7 @@ export interface PipelineResult {
   comparables_quality: "live" | "estimated" | "unavailable";
   neighbourhoodContext: NeighbourhoodContext | null;
   transportContext: TransportContext | null;
+  builtEnvironmentContext: BuiltEnvironmentContext | null;
   scenarios: ROIScenario[];
   developmentStrategies: DevelopmentStrategyScenario[];
   scores: ScoringResult | null;
@@ -590,6 +604,7 @@ export async function runPropertyPipeline(
       comparables_quality: "unavailable",
       neighbourhoodContext: null,
       transportContext: null,
+      builtEnvironmentContext: null,
       scenarios: [],
       developmentStrategies: [],
       scores: null,
@@ -1375,6 +1390,22 @@ export async function runPropertyPipeline(
   if (transportContextResult.failed) failedSources.push("transport_context");
   const transportContext = transportContextResult.value;
 
+  const builtEnvironmentContextResult = await timed(
+    "built_environment_context",
+    () => (cr?.built_environment_context
+      ? Promise.resolve(cr.built_environment_context)
+      : fetchBuiltEnvironmentContext({
+          lat,
+          lng,
+          subjectParcelId: linzParcelData?.parcel_id ?? null,
+          subjectBuildYear: merged.build_year,
+          subjectBuildYearRange: merged.build_year_range,
+        })),
+    timing,
+  );
+  if (builtEnvironmentContextResult.failed) failedSources.push("built_environment_context");
+  const builtEnvironmentContext = builtEnvironmentContextResult.value;
+
   let comparablesResult = getComparables(
     suburb,
     merged.zone_code,
@@ -1494,7 +1525,7 @@ export async function runPropertyPipeline(
     subdivisionAssessment,
   });
 
-  const scores = scoreProperty(merged, costs, scenarios, modelledLotResult.lots);
+  const scores = scoreProperty(merged, costs, scenarios, modelledLotResult.lots, builtEnvironmentContext);
   if (neighbourhoodContext?.marketAdjustment.reason && !scores.roi_reasons.includes(neighbourhoodContext.marketAdjustment.reason)) {
     scores.roi_reasons.push(neighbourhoodContext.marketAdjustment.reason);
   }
@@ -1502,34 +1533,20 @@ export async function runPropertyPipeline(
     if (!scores.roi_reasons.includes(reason)) scores.roi_reasons.push(reason);
   }
 
-  let schoolZonesForEnrichment = merged.school_zones;
-  const missingAllSchoolZones =
-    !schoolZonesForEnrichment.primary?.trim() &&
-    !schoolZonesForEnrichment.intermediate?.trim() &&
-    !schoolZonesForEnrichment.secondary?.trim();
-
-  if (missingAllSchoolZones) {
-    const llmZonesResult = await timed(
-      "school_zones_llm",
-      () => inferSchoolZonesFromLocation(geocode.formatted ?? address, suburb),
-      timing,
-    );
-    const inferred = llmZonesResult.failed ? null : llmZonesResult.value;
-    if (
-      inferred &&
-      (inferred.primary?.trim() || inferred.intermediate?.trim() || inferred.secondary?.trim())
-    ) {
-      schoolZonesForEnrichment = {
-        primary: inferred.primary?.trim() || null,
-        intermediate: inferred.intermediate?.trim() || null,
-        secondary: inferred.secondary?.trim() || null,
-      };
-      merged.school_zones = schoolZonesForEnrichment;
-      merged.data_sources["school_zones"] = "llm_inferred";
-    }
-  }
-
-  const school_zones_detail = await enrichSchoolZonesDetail(schoolZonesForEnrichment, timing);
+  // School zones: point-in-polygon against the official MoE enrolment-zone
+  // boundaries using the geocoded location. Authoritative — it returns the
+  // schools whose zone actually contains the property (multiple per level
+  // possible). Replaces the old scrape/LLM-guess of school names. Cache-aware:
+  // reuse stored hits, but fall back to a live query for rows cached before
+  // this field existed (cheap; avoids a full re-acquire).
+  const schoolZonesResult = await timed(
+    "school_zones_gis",
+    () => (cr?.school_zones_gis ? Promise.resolve(cr.school_zones_gis) : fetchSchoolZonesByPoint(lat, lng)),
+    timing,
+  );
+  const schoolGisZones: SchoolZoneGisHit[] = schoolZonesResult.value ?? [];
+  merged.data_sources["school_zones"] = schoolGisZones.length > 0 ? "moe_gis" : "none";
+  const school_zones_detail = await enrichSchoolZonesFromGis(schoolGisZones, timing);
 
   timing["total"] = Date.now() - pipelineStart;
   logger.info({ timing, failedSources, served_from_cache: !!cr, cv_nzd: merged.cv_nzd, land_area_sqm: merged.land_area_sqm }, "Pipeline complete");
@@ -1560,6 +1577,30 @@ export async function runPropertyPipeline(
     propertyValue: stripScraperPhotos(propertyValueData),
     neighbourhood_context: neighbourhoodContext,
     transport_context: transportContext,
+    built_environment_context: builtEnvironmentContext,
+    school_zones_gis: schoolGisZones,
+    // Persist the real scores so subdivision screening cards show the exact same
+    // numbers as the report (globally, for any user, once analysed). Recomputed
+    // and re-persisted on every analysis (fresh or cache-serve), keeping it current.
+    derived_scores: {
+      scoringVersion: SCORING_VERSION,
+      scores,
+      landArea: merged.land_area_sqm,
+      zone: merged.zone_code,
+      potentialLots: modelledLotResult.lots,
+      minLotSize: modelledLotResult.min_lot_size > 0 ? modelledLotResult.min_lot_size : null,
+      standardVacantLots: subdivisionAssessment.standardVacantLots,
+      standardPathViable: subdivisionAssessment.standardPathViable,
+      standardMinLotSize: subdivisionAssessment.standardMinLotSize,
+      designLedEligible: subdivisionAssessment.designLedEligible,
+      designLedYieldRange: subdivisionAssessment.designLedYieldRange,
+      designLedConfidence: subdivisionAssessment.designLedConfidence,
+      designLedReasons: subdivisionAssessment.designLedReasons,
+      designLedBlockers: subdivisionAssessment.designLedBlockers,
+      designLedSummary: subdivisionAssessment.designLedSummary,
+      designLedDetail: subdivisionAssessment.designLedDetail,
+      builtEnvironmentContext,
+    },
   };
 
   return {
@@ -1591,6 +1632,7 @@ export async function runPropertyPipeline(
     comparables_quality: comparablesResult.data_quality,
     neighbourhoodContext,
     transportContext,
+    builtEnvironmentContext,
     scenarios,
     developmentStrategies,
     scores,

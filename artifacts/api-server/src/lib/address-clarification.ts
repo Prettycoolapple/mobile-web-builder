@@ -135,6 +135,48 @@ function looksLikePropertyAddressAttempt(s: string): boolean {
   return leadingStreetNumber(s) != null && tokens.some((token) => /[a-z]/i.test(token));
 }
 
+// City/region/country markers that do NOT disambiguate one suburb from another.
+const GENERIC_LOCALITY_TOKENS = new Set(["auckland", "city", "nz", "newzealand"]);
+
+/**
+ * True when the user's input names a suburb/locality beyond the bare street
+ * number+name (e.g. "…, Avondale"). When it does, the geocoder can resolve a
+ * single property and we don't need to ask which suburb. When it doesn't (just
+ * "35 Rosebank Road"), the same street may exist in several suburbs.
+ */
+function inputSpecifiesSuburb(input: string): boolean {
+  const sk = streetKey(input);
+  if (!sk) return false;
+  const streetTokens = new Set(tokenizeRough(sk));
+  return tokenizeRough(input).some(
+    (tok) =>
+      !streetTokens.has(tok) &&
+      !GENERIC_LOCALITY_TOKENS.has(tok) &&
+      !/^\d{3,4}$/.test(tok) && // ignore postcodes
+      /[a-z]/i.test(tok),
+  );
+}
+
+/**
+ * When the user typed a bare street address with no suburb and that same street
+ * number+name resolves to two or more distinct suburbs, return those options so
+ * the caller can ask which one the user meant. Returns null when the input is
+ * suburb-qualified or the street is unambiguous. Options are expected to be
+ * already deduped + filtered to the input's street number
+ * ({@link dedupeEquivalentAddressOptions} / {@link filterAddressOptionsForAnalysis}),
+ * so two survivors sharing a street key are genuinely different locations.
+ */
+export function detectMultiSuburbAmbiguity(
+  input: string,
+  options: AddressOption[],
+): AddressOption[] | null {
+  if (inputSpecifiesSuburb(input)) return null;
+  const inputStreet = streetKey(input);
+  if (!inputStreet) return null;
+  const sameStreet = options.filter((option) => streetKey(option.formatted) === inputStreet);
+  return sameStreet.length >= 2 ? sameStreet : null;
+}
+
 export function filterAddressOptionsForAnalysis(input: string, options: AddressOption[]): AddressOption[] {
   const inputNumber = leadingStreetNumber(input);
 
@@ -296,6 +338,23 @@ export async function resolveAddressForAnalysis(
   }
 
   if (!deduped.length) return noPropertyAddressResolution(trimmed, locale);
+
+  // Same street number+name in multiple suburbs and the user gave no suburb
+  // (e.g. "35 Rosebank Road" → Avondale AND Papatoetoe). Always confirm before
+  // analysing — this must take precedence over the high-similarity auto-proceed
+  // below, since a bare street is a near-subset of any single resolved match.
+  const multiSuburb = detectMultiSuburbAmbiguity(trimmed, deduped);
+  if (multiSuburb) {
+    const questionEn = `"${trimmed}" matches more than one suburb. Tap the exact property you want me to analyse:`;
+    return {
+      resolvedAddress: trimmed,
+      clarification: {
+        clarificationType: "address",
+        question: locale === "zh" ? await ensureChinese(questionEn) : questionEn,
+        options: multiSuburb.map((option) => option.formatted).slice(0, 5),
+      },
+    };
+  }
 
   let resolvedBest = deduped.find((option) => option.formatted === geoPrimary?.formatted)?.formatted ?? deduped[0]!.formatted;
   resolvedBest = resolvedBest.trim();

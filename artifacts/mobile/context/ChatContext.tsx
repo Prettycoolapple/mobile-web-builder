@@ -383,9 +383,35 @@ export interface TransportContext {
   };
 }
 
+export interface BuiltEnvironmentExample {
+  address: string | null;
+  distanceM: number | null;
+  buildYear: number | null;
+  buildYearRange: string | null;
+}
+
+export interface BuiltEnvironmentContext {
+  radiusM: number;
+  assessedProperties: number;
+  knownBuildYearCount: number;
+  modernCount: number;
+  post2000Count: number;
+  oldCount: number;
+  unknownCount: number;
+  modernShare: number;
+  post2000Share: number;
+  medianBuildYear: number | null;
+  subjectBuildYear: number | null;
+  subjectBuildYearRange: string | null;
+  signal: "last_missing_piece" | "mixed_renewal" | "older_environment" | "insufficient_data" | "unknown";
+  confidence: "high" | "medium" | "low" | "unknown";
+  reasons: string[];
+  nearbyExamples: BuiltEnvironmentExample[];
+}
+
 /** MoE Schools Directory enrichment for home-zone listing text (Hougarden). */
 export interface SchoolZoneDetail {
-  level: "primary" | "intermediate" | "secondary";
+  level: "primary" | "intermediate" | "secondary" | "composite" | "other";
   sourceLabel: string;
   orgName: string | null;
   orgType: string | null;
@@ -395,6 +421,8 @@ export interface SchoolZoneDetail {
   enrolmentScheme: string | null;
   roll: number | null;
   matched: boolean;
+  institutionType?: string | null;
+  yearLevels?: string | null;
 }
 
 export interface FeasibilityReport {
@@ -427,6 +455,7 @@ export interface FeasibilityReport {
   comparables_quality?: "live" | "estimated" | "unavailable";
   neighbourhoodContext?: NeighbourhoodContext | null;
   transportContext?: TransportContext | null;
+  builtEnvironmentContext?: BuiltEnvironmentContext | null;
   avgPricePerSqm?: number | null;
   avg_sale_price?: number | null;
   /** Enriched state/intermediate/secondary zone schools (MoE directory). */
@@ -553,6 +582,7 @@ export interface PropertyCandidate {
   redevelopmentSuspected?: boolean;
   screeningStatus?: "preliminary" | "verified";
   screeningNotes?: string[];
+  builtEnvironmentContext?: BuiltEnvironmentContext | null;
   isCombinedListing?: boolean;
   packageAddress?: string;
   childAddresses?: string[];
@@ -602,6 +632,7 @@ export interface CandidateScoreUpdate {
   designLedBlockers?: string[];
   designLedSummary?: string | null;
   designLedDetail?: string | null;
+  builtEnvironmentContext?: BuiltEnvironmentContext | null;
 }
 
 export interface Session {
@@ -1150,6 +1181,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 designLedBlockers,
                 designLedSummary,
                 designLedDetail,
+                builtEnvironmentContext,
                 ...scoreFields
               } = update;
               return {
@@ -1170,6 +1202,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 ...(designLedBlockers !== undefined ? { designLedBlockers } : {}),
                 ...(designLedSummary !== undefined ? { designLedSummary } : {}),
                 ...(designLedDetail !== undefined ? { designLedDetail } : {}),
+                ...(builtEnvironmentContext !== undefined ? { builtEnvironmentContext } : {}),
               };
             });
             return { ...m, searchResults: updatedResults };

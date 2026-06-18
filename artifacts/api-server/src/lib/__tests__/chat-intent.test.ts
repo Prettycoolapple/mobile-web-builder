@@ -9,7 +9,12 @@ vi.mock("@workspace/integrations-gemini-ai", () => ({
 }));
 
 import { ai } from "@workspace/integrations-gemini-ai";
-import { extractChatIntent, normaliseAdditionalSuburbs, normaliseIncludeTenures } from "../claude";
+import {
+  extractChatIntent,
+  isListingBrowseContinuation,
+  normaliseAdditionalSuburbs,
+  normaliseIncludeTenures,
+} from "../claude";
 
 const mockedGenerateContent = vi.mocked(ai.models.generateContent);
 
@@ -389,5 +394,16 @@ describe("chat intent extraction", () => {
       .toEqual(["cross_lease", "leasehold", "unit_title"]);
     expect(normaliseIncludeTenures(undefined)).toEqual([]);
     expect(normaliseIncludeTenures(["", null, 7, "freehold"])).toEqual([]);
+  });
+
+  it("isListingBrowseContinuation: continuations yes, fresh browses no", () => {
+    // Continuations ("more"/"other"/…) — should inherit the prior presentation.
+    expect(isListingBrowseContinuation("Show me more property options")).toBe(true);
+    expect(isListingBrowseContinuation("any other listings?")).toBe(true);
+    expect(isListingBrowseContinuation("更多房源")).toBe(true);
+    // Fresh browse — should reset to plain listing cards, not inherit.
+    expect(isListingBrowseContinuation("show me listings in Ponsonby")).toBe(false);
+    // Not a listing-browse phrase at all.
+    expect(isListingBrowseContinuation("what is subdividable in Mission Bay")).toBe(false);
   });
 });

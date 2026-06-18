@@ -13,6 +13,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
+import { useDm } from "@/context/DmContext";
 import { avatarImageSource, getAvatarInitials } from "@/lib/avatar";
 import { getApiBase } from "@/lib/api";
 import { useT } from "@/lib/i18n";
@@ -141,6 +142,7 @@ export default function UserProfileScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
   const { token, user } = useAuth();
+  const { updateParticipantRecommendationCount } = useDm();
   const { t } = useT();
 
   const [profile, setProfile] = useState<PublicProfile | null>(null);
@@ -170,6 +172,18 @@ export default function UserProfileScreen() {
 
   const handleRecommend = async () => {
     if (!profile || !token || recommending) return;
+    const previous = profile;
+    const nextHasRecommended = !profile.hasRecommended;
+    const nextRecommendationCount = Math.max(
+      0,
+      profile.recommendationCount + (nextHasRecommended ? 1 : -1),
+    );
+    setProfile({
+      ...profile,
+      hasRecommended: nextHasRecommended,
+      recommendationCount: nextRecommendationCount,
+    });
+    updateParticipantRecommendationCount(profile.id, nextRecommendationCount);
     setRecommending(true);
     try {
       const resp = await fetch(`${getApiBase()}/users/${userId}/recommend`, {
@@ -183,7 +197,10 @@ export default function UserProfileScreen() {
           ? { ...prev, hasRecommended: data.hasRecommended, recommendationCount: data.recommendationCount }
           : prev,
       );
+      updateParticipantRecommendationCount(profile.id, data.recommendationCount);
     } catch {
+      setProfile(previous);
+      updateParticipantRecommendationCount(previous.id, previous.recommendationCount);
     } finally {
       setRecommending(false);
     }

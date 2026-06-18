@@ -17,6 +17,7 @@ import {
   hasNonStandardSalePropertyReference,
   hasUnnumberedStreetLine,
   isListingBrowseIntent,
+  isListingBrowseContinuation,
   sanitizeAssistantProse,
   resolveDelegatedDiscoverSuburb,
   Message,
@@ -35,7 +36,8 @@ import {
 import { suggestNearbySuburbs } from "../lib/claude";
 import { runPropertyPipeline, hasCacheableCore, type PipelineResult } from "../lib/pipeline";
 import { normaliseDiscoveryAddressKey } from "../lib/address-key";
-import { getCachedRaw, upsertCachedRaw, bumpHitCount } from "../lib/property-cache";
+import { getCachedRaw, upsertCachedRaw, bumpHitCount, backfillDerivedScores } from "../lib/property-cache";
+import { SCORING_VERSION } from "../lib/card-score";
 import { buildSubdivisionPathwayNote } from "../lib/lot-calculator";
 import {
   canonicalBuildYearFromReport,
@@ -56,6 +58,7 @@ import {
   isStandardSubdivisionDiscoveryIntent,
   shouldContinueDiscoveryDrain,
 } from "../lib/discovery-intent";
+import { parseOfferedTenuresFromAssistant, isBareTenureAffirmation, type Tenure } from "../lib/tenure-optin";
 import {
   passesPreliminaryStandardSubdivisionScreen,
 } from "../lib/discovery-land-area";
@@ -644,6 +647,7 @@ function applyDeterministicPipelineOverrides(
   }
   parsed.neighbourhoodContext = pipelineResult.neighbourhoodContext ?? null;
   parsed.transportContext = pipelineResult.transportContext ?? null;
+  parsed.builtEnvironmentContext = pipelineResult.builtEnvironmentContext ?? null;
 
   if (pipelineResult.infrastructure.length > 0) {
     parsed.infrastructure = pipelineResult.infrastructure;
@@ -876,6 +880,7 @@ function buildDeterministicFallbackReport(
     comparables_quality: pipelineResult.comparables_quality,
     neighbourhoodContext: pipelineResult.neighbourhoodContext ?? null,
     transportContext: pipelineResult.transportContext ?? null,
+    builtEnvironmentContext: pipelineResult.builtEnvironmentContext ?? null,
     avg_sale_price: null,
     avgPricePerSqm: null,
     riskSummary: finalRiskSeed,
@@ -1038,6 +1043,29 @@ function findLastSubstantiveSearchPresentation(
   return null;
 }
 
+// True when this thread recently ran an AREA/DISCOVERY search (a discovery-intent
+// user turn with no specific address, or our tenure-exclusion offer). Used to gate
+// re-routing an intent correction ("I mean that is subdividable") back into the
+// discover flow without hijacking a single-property report thread (where "is THIS
+// subdividable?" should stay an analysis answer).
+function threadHasRecentAreaDiscovery(messages: Message[] | undefined): boolean {
+  for (const msg of [...(messages ?? [])].slice(-8)) {
+    const text = msg.content ?? "";
+    if (!text) continue;
+    if (msg.role === "assistant" && parseOfferedTenuresFromAssistant(text).length > 0) return true;
+    if (
+      msg.role === "user" &&
+      !hasNumberedStreetAddress(text) &&
+      (isListingBrowseIntent(text) ||
+        isStandardSubdivisionDiscoveryIntent(text) ||
+        isDevelopmentDiscoveryIntent(text))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function resolveDiscoveryPresentation(input: {
   userText: string;
   discoveryCriteria: string;
@@ -1049,6 +1077,14 @@ function resolveDiscoveryPresentation(input: {
   forceNearbyDiscovery?: boolean;
 }): DiscoverySearchPresentation {
   if (input.continuePresentation) return input.continuePresentation;
+
+  // A continuation ("show me more …", "any others") inherits the prior
+  // substantive search's presentation — it is NOT a fresh plain-browse reset.
+  // Without this, "show me more property options" after a subdivision search is
+  // misread as a fresh listing browse and flips to generic cards.
+  if (input.isFollowUp && isListingBrowseContinuation(input.userText)) {
+    return findLastSubstantiveSearchPresentation(input.messages, input.userText) ?? "generic_listing";
+  }
 
   // A fresh market-availability request must reset to plain listing cards, even
   // if earlier turns were about subdivision/development.
@@ -3427,6 +3463,15 @@ async function runFeasibilityAnalyseCore(args: {
   if (pipelineResult && addressKey) {
     if (cachedEntry && !forcedLiveRefresh) {
       void bumpHitCount(addressKey);
+      // Backfill the real scores onto rows cached before this feature (or under an
+      // older SCORING_VERSION) so screening cards match the report — without
+      // resetting the freshness clock. Scores were just recomputed on cache-serve.
+      if (
+        cachedEntry.rawData.derived_scores?.scoringVersion !== SCORING_VERSION &&
+        pipelineResult.raw_property?.derived_scores
+      ) {
+        void backfillDerivedScores(addressKey, pipelineResult.raw_property.derived_scores);
+      }
     } else if (hasCacheableCore(pipelineResult) && pipelineResult.raw_property) {
       void upsertCachedRaw({
         addressKey,
@@ -5023,6 +5068,17 @@ router.post(
         forcedAnalyseAddress && semanticWantsAnalysis && (mode === "discover" || (mode === "followup" && (contextualBareAddress || looksLikeStreetAddress(userText))))
           ? "analyse"
           : mode;
+      // Deterministic non-freehold opt-in: when the prior assistant turn offered to
+      // include excluded cross-lease/leasehold/unit-title listings and the user
+      // replies with a bare affirmation, accept that offer (independent of the LLM's
+      // includeTenures parse) and re-run the prior subdivision discovery with those
+      // tenures included.
+      const priorAssistantMessage =
+        [...(messages ?? [])].reverse().find((m) => m.role === "assistant")?.content ?? null;
+      const offeredTenures: Tenure[] = isBareTenureAffirmation(userText)
+        ? parseOfferedTenuresFromAssistant(priorAssistantMessage)
+        : [];
+      const affirmingTenureOffer = offeredTenures.length > 0;
       if (delegatedDiscoverSuburb && effectiveMode !== "analyse") {
         effectiveMode = "discover";
       }
@@ -5054,6 +5110,26 @@ router.post(
         && !/\b(re-?analy[sz]e|redo|run again|analy[sz]e again|new analysis|re-?run|fresh analysis)\b/i.test(userText);
       if (effectiveMode === "analyse" && analysisIsLikelyAreaOnly) {
         req.log.info({ sample: userText.slice(0, 100) }, "Chat routing: area/listing query — using discover flow");
+        effectiveMode = "discover";
+      }
+      // Accepting the "include the ones I left out" tenure offer must re-run the
+      // discovery, not fall through to a prose reply that repeats "couldn't find".
+      if (affirmingTenureOffer && effectiveMode !== "discover" && !hasNumberedStreetAddress(userText)) {
+        req.log.info({ offeredTenures }, "Chat routing: tenure-inclusion affirmation — using discover flow");
+        effectiveMode = "discover";
+      }
+      // Intent correction toward subdivision/development ("I mean that is
+      // subdividable") inside a discovery thread: re-run discovery rather than
+      // answering as prose about an open single-property report. Guarded by
+      // threadHasRecentAreaDiscovery so "is this subdividable?" on a report thread
+      // is never hijacked.
+      if (
+        effectiveMode !== "discover"
+        && !hasNumberedStreetAddress(userText)
+        && (isStandardSubdivisionDiscoveryIntent(userText) || isDevelopmentDiscoveryIntent(userText))
+        && threadHasRecentAreaDiscovery(messages)
+      ) {
+        req.log.info({ sample: userText.slice(0, 100) }, "Chat routing: subdivision intent correction — using discover flow");
         effectiveMode = "discover";
       }
       // Explicit "Show more" button continuation: always run the discover flow so a
@@ -5212,78 +5288,12 @@ router.post(
             repeatShownAreaIntent,
             forceNearbyDiscovery,
           });
-          let plainListingBrowse = searchPresentation === "generic_listing";
-
-          if (continuePresentation) {
-            // Explicit signal from the "Show more" button — it knows the presentation
-            // type of the exact result block it belongs to. Honour it directly; this is
-            // ground truth and immune to intervening analyse drill-downs.
-            plainListingBrowse = continueGenericListing;
-          } else if (repeatShownAreaIntent || forceNearbyDiscovery) {
-            // Exhausted-result choices should inherit the presentation type from
-            // the last real area search, even if the choice text says "available".
-            for (const msg of [...messages].reverse()) {
-              if (msg.role !== "user" || !msg.content) continue;
-              const prevText = msg.content;
-              if (prevText === userText) continue;
-              // Skip ALL prior continuations ("show more", "show more properties").
-              // A prior "show more properties" is itself a listing-browse string, so
-              // the old `&& !isListingBrowseIntent(...)` guard failed to skip it and
-              // let it flip a subdivision search to generic. We want the last
-              // SUBSTANTIVE area search, not an intervening continuation.
-              if (isDiscoverStreetContinuation(prevText)) continue;
-              if (hasNumberedStreetAddress(prevText)) continue;
-              plainListingBrowse = isPlainListingBrowseWithoutDevelopment(prevText);
-              break;
-            }
-          } else if (!plainListingBrowse && isFollowUp && isDiscoverStreetContinuation(userText)) {
-            // Typed continuation ("show more", "show more properties") with no button
-            // signal. Inherit the presentation type from the last substantive AREA
-            // search in history so that:
-            //   - continuation after a generic listing search → generic_listing cards
-            //   - continuation after a subdivision/development search → scored_screening cards
-            // Skip intervening single-property analyse drill-downs and prior continuations
-            // so a "Full Analysis" tap between searches doesn't flip the presentation.
-            for (const msg of [...messages].reverse()) {
-              if (msg.role !== "user" || !msg.content) continue;
-              const prevText = msg.content;
-              if (prevText === userText) continue; // skip messages identical to current (prior Show mores)
-              if (isDiscoverStreetContinuation(prevText)) continue; // skip ALL prior continuations (incl. "show more properties")
-              if (hasNumberedStreetAddress(prevText)) continue; // skip single-property analyse drill-downs
-              // Found the last substantive area search — inherit its presentation type
-              if (isPlainListingBrowseWithoutDevelopment(prevText)) {
-                plainListingBrowse = true;
-              }
-              break;
-            }
-          } else if (
-            isFollowUp
-            && !plainListingBrowse
-            && !isStandardSubdivisionDiscoveryIntent(userText)
-            && !isDevelopmentDiscoveryIntent(userText)
-            && !isListingBrowseIntent(userText)
-          ) {
-            // Ambiguous area follow-up with NO explicit intent of its own — e.g. a
-            // bare suburb reply ("Glen Innes") or "show me more in <suburb>". Without
-            // this, isPlainListingBrowseWithoutDevelopment is false and the search
-            // wrongly defaults to scored_screening (subdivision), flipping a generic
-            // session. Inherit the presentation of the last substantive area search
-            // so a generic browse stays generic; only an EXPLICIT subdivision/
-            // development phrase in the current message switches to scored.
-            for (const msg of [...messages].reverse()) {
-              if (msg.role !== "user" || !msg.content) continue;
-              const prevText = msg.content;
-              if (prevText === userText) continue;
-              if (isDiscoverStreetContinuation(prevText)) continue;
-              if (hasNumberedStreetAddress(prevText)) continue;
-              if (isPlainListingBrowseWithoutDevelopment(prevText)) {
-                plainListingBrowse = true;
-              }
-              break;
-            }
-          }
-
-          plainListingBrowse = searchPresentation === "generic_listing";
+          // resolveDiscoveryPresentation already accounts for the "Show more"
+          // button (continuePresentation), exhausted-result repeat/nearby choices,
+          // typed continuations, and ambiguous follow-ups (inheriting the last
+          // substantive search's presentation), so its result is the single source
+          // of truth here.
+          const plainListingBrowse = searchPresentation === "generic_listing";
           const wantsDevelopmentDiscovery = !plainListingBrowse && isDevelopmentDiscoveryIntent(discoveryCriteria);
           const includeNegotiation = intent.includeNegotiation || wantsDevelopmentDiscovery;
           const userTextHasPrice = intent.minPrice !== null || intent.maxPrice !== null;
@@ -5375,7 +5385,12 @@ router.post(
           // leasehold / unit-title). When set, those titles are kept (with a
           // warning) instead of being dropped; otherwise we count what we drop
           // so the assistant can offer to include them.
-          const tenureOptIns = intent.includeTenures ?? [];
+          // Union the LLM-parsed opt-in with any tenures the user just affirmed
+          // (the deterministic "Yes include" path) so the cross-lease/leasehold/
+          // unit-title listings the prior turn offered are now kept and shown.
+          const tenureOptIns = Array.from(
+            new Set<Tenure>([...(intent.includeTenures ?? []), ...offeredTenures]),
+          );
           // Running tally of non-freehold listings dropped this turn, by tenure,
           // for the "I left some out…" reminder appended to the intro below.
           const excludedTenureTotals = { cross_lease: 0, leasehold: 0, unit_title: 0 };
@@ -6456,6 +6471,14 @@ router.post(
           if (pipelineResult && chatAddressKey) {
             if (chatCachedEntry && !chatForcedLiveRefresh) {
               void bumpHitCount(chatAddressKey);
+              // Backfill real scores onto pre-feature / stale-version cached rows so
+              // screening cards match the report — without resetting freshness.
+              if (
+                chatCachedEntry.rawData.derived_scores?.scoringVersion !== SCORING_VERSION &&
+                pipelineResult.raw_property?.derived_scores
+              ) {
+                void backfillDerivedScores(chatAddressKey, pipelineResult.raw_property.derived_scores);
+              }
             } else if (hasCacheableCore(pipelineResult) && pipelineResult.raw_property) {
               void upsertCachedRaw({
                 addressKey: chatAddressKey,

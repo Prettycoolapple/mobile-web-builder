@@ -1,4 +1,5 @@
 import { logger } from "./logger";
+import type { SchoolZoneGisHit, SchoolZoneLevel } from "./school-zones-gis";
 
 /** MoE Schools Directory on data.govt.nz (CKAN datastore). */
 const CKAN_DATASTORE_SEARCH = "https://catalogue.data.govt.nz/api/3/action/datastore_search";
@@ -7,7 +8,7 @@ const SCHOOLS_RESOURCE_ID = "4b292323-9fcc-41f8-814b-3c7b19cf14b3";
 export type SchoolAuthorityCategory = "public" | "state_integrated" | "private" | "unknown";
 
 export interface SchoolZoneDetail {
-  level: "primary" | "intermediate" | "secondary";
+  level: SchoolZoneLevel;
   /** Text from listing/Hougarden used as the search query. */
   sourceLabel: string;
   /** Official name from MoE directory when matched. */
@@ -20,6 +21,10 @@ export interface SchoolZoneDetail {
   enrolmentScheme: string | null;
   roll: number | null;
   matched: boolean;
+  /** MoE Institution_type for the zoned school (e.g. "Contributing", "Secondary (Year 9-15)"). */
+  institutionType?: string | null;
+  /** Human year-range label, e.g. "Years 1–6". */
+  yearLevels?: string | null;
 }
 
 type CkanRecord = Record<string, unknown>;
@@ -188,27 +193,65 @@ function detailFromRecord(level: SchoolZoneDetail["level"], label: string, rec: 
   };
 }
 
+const byIdCache = new Map<number, CkanRecord | null>();
+
+/** Exact lookup by MoE school number (School_Id) — precise join for GIS zone hits. */
+async function searchSchoolRecordById(schoolId: number): Promise<CkanRecord | null> {
+  if (!Number.isFinite(schoolId)) return null;
+  if (byIdCache.has(schoolId)) return byIdCache.get(schoolId) ?? null;
+
+  const filters = encodeURIComponent(JSON.stringify({ School_Id: schoolId }));
+  const url = `${CKAN_DATASTORE_SEARCH}?resource_id=${encodeURIComponent(SCHOOLS_RESOURCE_ID)}&limit=1&filters=${filters}`;
+  let rec: CkanRecord | null = null;
+  try {
+    const resp = await fetch(url, {
+      headers: { Accept: "application/json", "User-Agent": "ProjectAlphaNZ/1.0 (school zone enrichment)" },
+      signal: AbortSignal.timeout(14_000),
+    });
+    if (resp.ok) {
+      const json = (await resp.json()) as { success?: boolean; result?: { records?: CkanRecord[] } };
+      const found = json.success ? json.result?.records?.[0] ?? null : null;
+      // Confirm the id matches (a filter on a text column can be lenient).
+      rec = found && String(found.School_Id ?? "").trim() === String(schoolId) ? found : null;
+    }
+  } catch (err) {
+    logger.warn({ err: (err as Error).message, schoolId }, "school-directory: by-id fetch failed");
+  }
+  byIdCache.set(schoolId, rec);
+  return rec;
+}
+
+function detailFromGisHit(hit: SchoolZoneGisHit, rec: CkanRecord | null): SchoolZoneDetail {
+  const base = detailFromRecord(hit.level, hit.schoolName, rec);
+  return {
+    ...base,
+    // Always prefer the authoritative GIS zone name; keep directory enrichment fields.
+    orgName: base.matched && base.orgName ? base.orgName : hit.schoolName,
+    institutionType: hit.institutionType,
+    yearLevels: hit.yearLevels,
+  };
+}
+
 /**
- * Enriches Hougarden-extracted zone school names with MoE Schools Directory fields.
- * Runs up to three CKAN searches (parallel). Results are cached in-memory for the process lifetime.
+ * Enriches official MoE enrolment-zone hits (from the GIS point-in-polygon query)
+ * with Schools Directory fields (authority, EQI, roll, enrolment scheme). Joins by
+ * School_Id first, falling back to a name search. Enrichment is additive — an
+ * unmatched school still displays with its authoritative GIS name.
  */
-export async function enrichSchoolZonesDetail(
-  school_zones: { primary: string | null; intermediate: string | null; secondary: string | null },
+export async function enrichSchoolZonesFromGis(
+  hits: SchoolZoneGisHit[],
   timing?: Record<string, number>,
 ): Promise<SchoolZoneDetail[]> {
   const start = Date.now();
-  const jobs: Array<{ level: SchoolZoneDetail["level"]; label: string }> = [];
-  if (school_zones.primary?.trim()) jobs.push({ level: "primary", label: school_zones.primary.trim() });
-  if (school_zones.intermediate?.trim()) jobs.push({ level: "intermediate", label: school_zones.intermediate.trim() });
-  if (school_zones.secondary?.trim()) jobs.push({ level: "secondary", label: school_zones.secondary.trim() });
-
   const results = await Promise.all(
-    jobs.map(async ({ level, label }) => {
-      const rec = await searchSchoolRecord(label);
-      return detailFromRecord(level, label, rec);
+    hits.map(async (hit) => {
+      let rec: CkanRecord | null = null;
+      if (hit.schoolId != null) rec = await searchSchoolRecordById(hit.schoolId);
+      if (!rec) rec = await searchSchoolRecord(hit.schoolName);
+      return detailFromGisHit(hit, rec);
     }),
   );
-
   if (timing) timing["school_directory_ms"] = Date.now() - start;
   return results;
 }
+

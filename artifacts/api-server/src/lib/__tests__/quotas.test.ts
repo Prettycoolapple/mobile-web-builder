@@ -10,9 +10,9 @@ import {
 
 describe("usage quotas", () => {
   it("triples feasibility report limits", () => {
-    expect(FREE_REPORT_LIMIT).toBe(6);
+    expect(FREE_REPORT_LIMIT).toBe(15);
     expect(STANDARD_REPORT_LIMIT).toBe(60);
-    expect(resolveReportLimit("free", "general")).toBe(6);
+    expect(resolveReportLimit("free", "general")).toBe(15);
     expect(resolveReportLimit("standard", "general")).toBe(60);
     expect(resolveReportLimit("pro", "service_provider")).toBe(60);
   });

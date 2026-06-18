@@ -1,15 +1,38 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, or, sql } from "drizzle-orm";
 import {
   db,
   profiles,
   salesAgentProfiles,
   serviceProviderProfiles,
   recommendations,
+  dmThreads,
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 
 const router: IRouter = Router();
+
+async function countRecommendationsForUser(userId: string): Promise<number> {
+  const [countRow] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(recommendations)
+    .where(eq(recommendations.toUserId, userId));
+  return countRow?.count ?? 0;
+}
+
+async function hasDmRelationship(viewerId: string, targetUserId: string): Promise<boolean> {
+  const [thread] = await db
+    .select({ id: dmThreads.id })
+    .from(dmThreads)
+    .where(
+      or(
+        and(eq(dmThreads.participantA, viewerId), eq(dmThreads.participantB, targetUserId)),
+        and(eq(dmThreads.participantA, targetUserId), eq(dmThreads.participantB, viewerId)),
+      ),
+    )
+    .limit(1);
+  return !!thread;
+}
 
 router.get("/users/:userId", requireAuth, async (req: Request, res: Response) => {
   const viewerId = (req as unknown as { userId: string }).userId;
@@ -23,6 +46,7 @@ router.get("/users/:userId", requireAuth, async (req: Request, res: Response) =>
         role: profiles.role,
         avatarUrl: profiles.avatarUrl,
         isVerified: profiles.isVerified,
+        phoneNumber: profiles.phoneNumber,
         createdAt: profiles.createdAt,
       })
       .from(profiles)
@@ -66,11 +90,7 @@ router.get("/users/:userId", requireAuth, async (req: Request, res: Response) =>
           bio: agent.bio,
         };
       }
-      const [countRow] = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(recommendations)
-        .where(eq(recommendations.toUserId, userId));
-      recommendationCount = countRow?.count ?? 0;
+      recommendationCount = await countRecommendationsForUser(userId);
     } else if (profile.role === "service_provider") {
       // Use the denormalized column so admin overrides are reflected immediately.
       const [provider] = await db
@@ -94,11 +114,13 @@ router.get("/users/:userId", requireAuth, async (req: Request, res: Response) =>
         };
       }
     } else {
-      const [countRow] = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(recommendations)
-        .where(eq(recommendations.toUserId, userId));
-      recommendationCount = countRow?.count ?? 0;
+      recommendationCount = await countRecommendationsForUser(userId);
+      if (profile.role === "general" && viewerId !== userId && profile.phoneNumber) {
+        const canShareContact = await hasDmRelationship(viewerId, userId);
+        if (canShareContact) {
+          roleData = { contactNumber: profile.phoneNumber };
+        }
+      }
     }
 
     res.json({
@@ -129,7 +151,7 @@ router.post("/users/:userId/recommend", requireAuth, async (req: Request, res: R
 
   try {
     const [target] = await db
-      .select({ id: profiles.id })
+      .select({ id: profiles.id, role: profiles.role })
       .from(profiles)
       .where(eq(profiles.id, toUserId))
       .limit(1);
@@ -147,29 +169,34 @@ router.post("/users/:userId/recommend", requireAuth, async (req: Request, res: R
       )
       .limit(1);
 
+    const syncRecommendationCount = async (hasRecommended: boolean): Promise<number> => {
+      if (target.role !== "service_provider") {
+        return countRecommendationsForUser(toUserId);
+      }
+
+      const [updated] = await db
+        .update(serviceProviderProfiles)
+        .set({
+          recommendationCount: hasRecommended
+            ? sql`recommendation_count + 1`
+            : sql`GREATEST(recommendation_count - 1, 0)`,
+        })
+        .where(eq(serviceProviderProfiles.userId, toUserId))
+        .returning({ recommendationCount: serviceProviderProfiles.recommendationCount });
+      return updated?.recommendationCount ?? countRecommendationsForUser(toUserId);
+    };
+
     if (existing) {
       await db
         .delete(recommendations)
         .where(
           sql`${recommendations.fromUserId} = ${fromUserId} AND ${recommendations.toUserId} = ${toUserId}`,
         );
-      // Decrement atomically so admin-set base values are preserved.
-      const [updated] = await db
-        .update(serviceProviderProfiles)
-        .set({ recommendationCount: sql`GREATEST(recommendation_count - 1, 0)` })
-        .where(eq(serviceProviderProfiles.userId, toUserId))
-        .returning({ recommendationCount: serviceProviderProfiles.recommendationCount });
-      const recommendationCount = updated?.recommendationCount ?? 0;
+      const recommendationCount = await syncRecommendationCount(false);
       res.json({ hasRecommended: false, recommendationCount });
     } else {
       await db.insert(recommendations).values({ fromUserId, toUserId });
-      // Increment atomically so admin-set base values are preserved.
-      const [updated] = await db
-        .update(serviceProviderProfiles)
-        .set({ recommendationCount: sql`recommendation_count + 1` })
-        .where(eq(serviceProviderProfiles.userId, toUserId))
-        .returning({ recommendationCount: serviceProviderProfiles.recommendationCount });
-      const recommendationCount = updated?.recommendationCount ?? 0;
+      const recommendationCount = await syncRecommendationCount(true);
       res.json({ hasRecommended: true, recommendationCount });
     }
   } catch (err) {

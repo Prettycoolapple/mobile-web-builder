@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   dedupeEquivalentAddressOptions,
+  detectMultiSuburbAmbiguity,
   filterAddressOptionsForAnalysis,
   isFullStreetAddressForAnalysis,
 } from "../address-clarification";
@@ -114,5 +115,50 @@ describe("address clarification candidate dedupe", () => {
     ]);
 
     expect(options).toEqual([]);
+  });
+});
+
+describe("multi-suburb address ambiguity", () => {
+  const rosebankAvondale = {
+    formatted: "35 Rosebank Road, Avondale, Auckland 1026, New Zealand",
+    lat: -36.894,
+    lng: 174.689,
+  };
+  const rosebankPapatoetoe = {
+    formatted: "35 Rosebank Road, Papatoetoe, Auckland 2025, New Zealand",
+    lat: -36.977,
+    lng: 174.861,
+  };
+
+  it("asks when a bare street number+name maps to multiple suburbs", () => {
+    const ambiguous = detectMultiSuburbAmbiguity("35 Rosebank Road", [
+      rosebankAvondale,
+      rosebankPapatoetoe,
+    ]);
+
+    expect(ambiguous).not.toBeNull();
+    expect(ambiguous).toHaveLength(2);
+  });
+
+  it("treats a bare '… Auckland' (region only, no suburb) as still ambiguous", () => {
+    const ambiguous = detectMultiSuburbAmbiguity("35 Rosebank Road, Auckland", [
+      rosebankAvondale,
+      rosebankPapatoetoe,
+    ]);
+
+    expect(ambiguous).toHaveLength(2);
+  });
+
+  it("does NOT ask once the user names the suburb", () => {
+    expect(
+      detectMultiSuburbAmbiguity("35 Rosebank Road, Avondale", [
+        rosebankAvondale,
+        rosebankPapatoetoe,
+      ]),
+    ).toBeNull();
+  });
+
+  it("does NOT ask when the street resolves to a single place", () => {
+    expect(detectMultiSuburbAmbiguity("35 Rosebank Road", [rosebankAvondale])).toBeNull();
   });
 });

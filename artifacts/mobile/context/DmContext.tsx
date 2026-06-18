@@ -44,6 +44,7 @@ interface DmContextValue {
   threads: DmThread[];
   setThreads: React.Dispatch<React.SetStateAction<DmThread[]>>;
   fetchThreads: () => Promise<void>;
+  updateParticipantRecommendationCount: (userId: string, recommendationCount: number) => void;
 }
 
 const DmContext = createContext<DmContextValue | null>(null);
@@ -95,6 +96,22 @@ export function DmProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const updateParticipantRecommendationCount = useCallback((userId: string, recommendationCount: number) => {
+    setThreads((prev) =>
+      prev.map((thread) =>
+        thread.otherParticipant?.id === userId
+          ? {
+              ...thread,
+              otherParticipant: {
+                ...thread.otherParticipant,
+                recommendationCount,
+              },
+            }
+          : thread,
+      ),
+    );
+  }, []);
+
   useEffect(() => {
     if (!user || !token) {
       if (socketRef.current) {
@@ -142,7 +159,12 @@ export function DmProvider({ children }: { children: React.ReactNode }) {
         const updated = prev.map((t) => {
           if (t.id === threadId) {
             const extra = isMine ? 0 : 1;
-            return { ...t, unreadCount: t.unreadCount + extra, lastMessageAt: new Date().toISOString() };
+            return {
+              ...t,
+              unreadCount: t.unreadCount + extra,
+              lastMessageAt: message.createdAt ?? new Date().toISOString(),
+              lastMessage: message,
+            };
           }
           return t;
         });
@@ -176,7 +198,17 @@ export function DmProvider({ children }: { children: React.ReactNode }) {
   }, [user, token, fetchThreads, startPolling, stopPolling]);
 
   return (
-    <DmContext.Provider value={{ socket, unreadCount, setUnreadCount, threads, setThreads, fetchThreads }}>
+    <DmContext.Provider
+      value={{
+        socket,
+        unreadCount,
+        setUnreadCount,
+        threads,
+        setThreads,
+        fetchThreads,
+        updateParticipantRecommendationCount,
+      }}
+    >
       {children}
     </DmContext.Provider>
   );

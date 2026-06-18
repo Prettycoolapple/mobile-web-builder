@@ -185,6 +185,17 @@ export function PropertyCard({ candidate, onAnalyse, analysingPropertyKey = null
     !!designLedRange &&
     typeof designLedRange.min === "number" &&
     typeof designLedRange.max === "number";
+  const builtEnvironmentSignal = candidate.builtEnvironmentContext?.signal;
+  const showBuiltEnvironmentChip =
+    builtEnvironmentSignal === "last_missing_piece" ||
+    builtEnvironmentSignal === "mixed_renewal" ||
+    builtEnvironmentSignal === "older_environment";
+  const builtEnvironmentChipTone =
+    builtEnvironmentSignal === "older_environment" ? colors.amber : colors.success;
+  const builtEnvironmentChipLabel =
+    builtEnvironmentSignal === "older_environment"
+      ? t("search.built_env_older_chip")
+      : t("search.built_env_renewal_chip");
   const standardLots = candidate.standardVacantLots ?? potentialLots;
   const hasStandardPath = showSubdivisionRecommendation || candidate.standardPathViable === true || potentialLots >= 2;
   const showPathwayCallout = hasStandardPath || hasDesignLedUpside;
@@ -364,6 +375,14 @@ export function PropertyCard({ candidate, onAnalyse, analysingPropertyKey = null
               <Feather name="alert-triangle" size={10} color={colors.amber} />
               <Text style={[styles.tagText, { color: colors.amber, fontFamily: "DM_Sans_500Medium" }]}>
                 {t("search.redevelopment_suspected_chip")}
+              </Text>
+            </View>
+          )}
+          {showBuiltEnvironmentChip && (
+            <View style={[styles.tag, { backgroundColor: builtEnvironmentChipTone + "22", flexDirection: "row", alignItems: "center", gap: 3 }]}>
+              <Feather name={builtEnvironmentSignal === "older_environment" ? "alert-circle" : "trending-up"} size={10} color={builtEnvironmentChipTone} />
+              <Text style={[styles.tagText, { color: builtEnvironmentChipTone, fontFamily: "DM_Sans_500Medium" }]}>
+                {builtEnvironmentChipLabel}
               </Text>
             </View>
           )}

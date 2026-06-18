@@ -1,6 +1,10 @@
 import { logger } from "./logger";
-import { computeLightScore, type LightScoreInput } from "./light-score";
+import { computeLightScore, type LightScoreInput, type LightScoreResult } from "./light-score";
 import type { DesignLedConfidence, DesignLedYieldRange } from "./lot-calculator";
+import { getCachedRaw } from "./property-cache";
+import { normaliseDiscoveryAddressKey } from "./address-key";
+import { SCORING_VERSION, type DerivedCardScores } from "./card-score";
+import type { BuiltEnvironmentContext } from "./built-environment-context";
 
 export interface CardScoreEntry {
   status: "pending" | "ready" | "failed";
@@ -27,6 +31,7 @@ export interface CardScoreEntry {
   designLedBlockers?: string[];
   designLedSummary?: string | null;
   designLedDetail?: string | null;
+  builtEnvironmentContext?: BuiltEnvironmentContext | null;
   listingUrl?: string;
   updatedAt: number;
 }
@@ -59,6 +64,51 @@ function evictStale(): void {
   }
 }
 
+function derivedToLightResult(ds: DerivedCardScores): LightScoreResult {
+  return {
+    scores: ds.scores,
+    landArea: ds.landArea ?? 0,
+    zone: ds.zone,
+    potentialLots: ds.potentialLots,
+    minLotSize: ds.minLotSize,
+    standardVacantLots: ds.standardVacantLots,
+    standardPathViable: ds.standardPathViable,
+    standardMinLotSize: ds.standardMinLotSize,
+    designLedEligible: ds.designLedEligible,
+    designLedYieldRange: ds.designLedYieldRange,
+    designLedConfidence: ds.designLedConfidence,
+    designLedReasons: ds.designLedReasons,
+    designLedBlockers: ds.designLedBlockers,
+    designLedSummary: ds.designLedSummary,
+    designLedDetail: ds.designLedDetail,
+    builtEnvironmentContext: ds.builtEnvironmentContext ?? null,
+  };
+}
+
+/**
+ * Resolve a card score: prefer the REAL report-grade scores persisted in the
+ * global property cache (so the card matches the report exactly, for any user,
+ * once anyone has analysed the property — and faster, since it skips the live
+ * geocode/LINZ/zone lookups). Fall back to the lightweight estimate on a miss.
+ */
+async function resolveCardScore(
+  c: LightScoreInput,
+): Promise<{ result: LightScoreResult; source: "report" | "estimate" }> {
+  const addressKey = normaliseDiscoveryAddressKey(c.address);
+  if (addressKey) {
+    try {
+      const cached = await getCachedRaw(addressKey);
+      const ds = cached?.rawData.derived_scores;
+      if (ds && ds.scoringVersion === SCORING_VERSION) {
+        return { result: derivedToLightResult(ds), source: "report" };
+      }
+    } catch (err) {
+      logger.warn({ err: (err as Error).message, address: c.address }, "card-score: cached real-score lookup failed");
+    }
+  }
+  return { result: await computeLightScore(c), source: "estimate" };
+}
+
 export function queueBackgroundScores(candidates: LightScoreInput[]): void {
   evictStale();
   for (const c of candidates) {
@@ -68,8 +118,8 @@ export function queueBackgroundScores(candidates: LightScoreInput[]): void {
 
     cache.set(key, { status: "pending", updatedAt: Date.now() });
 
-    computeLightScore(c)
-      .then((result) => {
+    resolveCardScore(c)
+      .then(({ result, source }) => {
         cache.set(key, {
           status: "ready",
           scores: {
@@ -95,12 +145,13 @@ export function queueBackgroundScores(candidates: LightScoreInput[]): void {
           designLedBlockers: result.designLedBlockers,
           designLedSummary: result.designLedSummary,
           designLedDetail: result.designLedDetail,
+          builtEnvironmentContext: result.builtEnvironmentContext ?? null,
           listingUrl: c.listingUrl,
           updatedAt: Date.now(),
         });
         logger.info(
-          { address: c.address, scores: { ease: result.scores.ease, cost: result.scores.cost, roi: result.scores.roi }, landArea: result.landArea, zone: result.zone, potentialLots: result.potentialLots, minLotSize: result.minLotSize },
-          "Light score computed for card",
+          { address: c.address, source, scores: { ease: result.scores.ease, cost: result.scores.cost, roi: result.scores.roi, composite: result.scores.composite }, landArea: result.landArea, zone: result.zone, potentialLots: result.potentialLots, minLotSize: result.minLotSize },
+          source === "report" ? "Card score from cached report (exact match)" : "Light score estimate computed for card",
         );
       })
       .catch((err) => {
@@ -112,7 +163,7 @@ export function queueBackgroundScores(candidates: LightScoreInput[]): void {
 
 export function getCardScores(
   entries: Array<string | { address: string; listingUrl?: string | null }>,
-): Array<{ address: string; listingUrl?: string | null; status: string; scores?: CardScoreEntry["scores"]; landArea?: number; zone?: string | null; potentialLots?: number; minLotSize?: number | null; standardVacantLots?: number; standardPathViable?: boolean; standardMinLotSize?: number | null; designLedEligible?: boolean; designLedYieldRange?: DesignLedYieldRange | null; designLedConfidence?: DesignLedConfidence; designLedReasons?: string[]; designLedBlockers?: string[]; designLedSummary?: string | null; designLedDetail?: string | null }> {
+): Array<{ address: string; listingUrl?: string | null; status: string; scores?: CardScoreEntry["scores"]; landArea?: number; zone?: string | null; potentialLots?: number; minLotSize?: number | null; standardVacantLots?: number; standardPathViable?: boolean; standardMinLotSize?: number | null; designLedEligible?: boolean; designLedYieldRange?: DesignLedYieldRange | null; designLedConfidence?: DesignLedConfidence; designLedReasons?: string[]; designLedBlockers?: string[]; designLedSummary?: string | null; designLedDetail?: string | null; builtEnvironmentContext?: BuiltEnvironmentContext | null }> {
   evictStale();
   return entries.map((requested) => {
     const addr = typeof requested === "string" ? requested : requested.address;
@@ -138,6 +189,7 @@ export function getCardScores(
       designLedBlockers: cached.designLedBlockers,
       designLedSummary: cached.designLedSummary,
       designLedDetail: cached.designLedDetail,
+      builtEnvironmentContext: cached.builtEnvironmentContext ?? null,
     };
   });
 }

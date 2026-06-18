@@ -1,5 +1,6 @@
 import { logger } from "./logger";
 import { geocodeAddress } from "./geocode";
+import { fetchLINZLetterSuffixAddresses } from "./linz";
 
 /**
  * Subdivision detection.
@@ -124,10 +125,25 @@ export async function detectSubdivision(address: string): Promise<SubdivisionRes
     };
   }
 
+  const linzSubLots = await fetchLINZLetterSuffixAddresses(address, LETTERS).catch(() => []);
+  if (linzSubLots.length >= 2) {
+    const subLots = linzSubLots.map((hit) => hit.address);
+    logger.info(
+      { parent: address, subLots, source: "linz_lrs_address_search" },
+      "Subdivision detected",
+    );
+    return {
+      isSubdivided: true,
+      parentAddress: address,
+      subLots,
+    };
+  }
+
+  let parentLooksValid = false;
   try {
     const parentGeo = await geocodeAddress(address);
     if (formattedContainsParentLot(parentGeo.formatted, number)) {
-      return { isSubdivided: false, parentAddress: address, subLots: [] };
+      parentLooksValid = true;
     }
   } catch {
     // Ignore parent geocode failures and keep probing likely child lots.
@@ -158,7 +174,7 @@ export async function detectSubdivision(address: string): Promise<SubdivisionRes
     .sort((a, b) => a.letter.localeCompare(b.letter))
     .map((h) => h.formatted);
 
-  if (deduped.length < 2) {
+  if (deduped.length < 2 || parentLooksValid) {
     return { isSubdivided: false, parentAddress: address, subLots: [] };
   }
 

@@ -33,6 +33,7 @@ function baseResult(over: Partial<PipelineResult>): PipelineResult {
     comparables_quality: "unavailable",
     neighbourhoodContext: null,
     transportContext: null,
+    builtEnvironmentContext: null,
     scenarios: [],
     developmentStrategies: [],
     scores: null,

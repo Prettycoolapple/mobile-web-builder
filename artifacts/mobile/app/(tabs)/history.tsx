@@ -639,9 +639,26 @@ export default function HistoryScreen() {
         })}
       </View>
 
-      {tab === "history" && (loading ? (
-        <View style={styles.centered}>
-          <ActivityIndicator size="large" color={colors.accent} />
+      {tab === "history" && (loading && visibleSearches.length === 0 ? (
+        <View style={styles.inlineLoading}>
+          <ActivityIndicator size="small" color={colors.accent} />
+          <View style={styles.loadingRows}>
+            {[0, 1, 2].map((i) => (
+              <View
+                key={i}
+                style={[
+                  styles.loadingRow,
+                  { backgroundColor: colors.card, borderColor: colors.border },
+                ]}
+              >
+                <View style={[styles.loadingIcon, { backgroundColor: colors.muted }]} />
+                <View style={{ flex: 1, gap: 8 }}>
+                  <View style={[styles.loadingLine, { width: "68%", backgroundColor: colors.muted }]} />
+                  <View style={[styles.loadingLine, { width: "44%", backgroundColor: colors.muted }]} />
+                </View>
+              </View>
+            ))}
+          </View>
         </View>
       ) : visibleSearches.length === 0 ? (
         <View style={styles.empty}>
@@ -693,8 +710,27 @@ export default function HistoryScreen() {
       ))}
 
       {tab === "watchlist" && (watchLoading && watchItems.length === 0 ? (
-        <View style={styles.centered}>
-          <ActivityIndicator size="large" color={colors.accent} />
+        <View style={styles.inlineLoading}>
+          <ActivityIndicator size="small" color={colors.accent} />
+          <View style={styles.loadingRows}>
+            {[0, 1].map((i) => (
+              <View
+                key={i}
+                style={[
+                  styles.loadingRow,
+                  styles.watchLoadingRow,
+                  { backgroundColor: colors.card, borderColor: colors.border },
+                ]}
+              >
+                <View style={[styles.loadingThumb, { backgroundColor: colors.muted }]} />
+                <View style={{ flex: 1, gap: 9 }}>
+                  <View style={[styles.loadingLine, { width: "72%", backgroundColor: colors.muted }]} />
+                  <View style={[styles.loadingLine, { width: "52%", backgroundColor: colors.muted }]} />
+                  <View style={[styles.loadingLine, { width: "38%", backgroundColor: colors.muted }]} />
+                </View>
+              </View>
+            ))}
+          </View>
         </View>
       ) : watchItems.length === 0 ? (
         <View style={styles.empty}>
@@ -766,10 +802,41 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#fff",
   },
-  centered: {
-    flex: 1,
-    justifyContent: "center",
+  inlineLoading: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
     alignItems: "center",
+    gap: 12,
+  },
+  loadingRows: {
+    width: "100%",
+    gap: 8,
+  },
+  loadingRow: {
+    minHeight: 74,
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  watchLoadingRow: {
+    minHeight: 110,
+  },
+  loadingIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+  },
+  loadingThumb: {
+    width: 76,
+    height: 76,
+    borderRadius: 12,
+  },
+  loadingLine: {
+    height: 10,
+    borderRadius: 6,
   },
   list: {
     padding: 16,

@@ -114,6 +114,21 @@ export function isListingBrowseIntent(message: string): boolean {
   return false;
 }
 
+/**
+ * A listing-browse phrase that is a CONTINUATION ("show me more property
+ * options", "any other listings") rather than a fresh request. Continuations
+ * inherit the prior search's presentation; a fresh browse resets to plain cards.
+ * The continuation marker distinguishes "show me MORE properties" (continue) from
+ * "show me properties in Ponsonby" (fresh).
+ */
+export function isListingBrowseContinuation(message: string): boolean {
+  return (
+    isListingBrowseIntent(message) &&
+    (/\b(?:more|other|others|another|additional|else|again)\b/i.test(message) ||
+      /还有|還有|再(?:看|来|來|给|給)|更多|其他|另外|多.{0,2}(?:看|来|來)/.test(message))
+  );
+}
+
 // ─── LLM-powered intent extraction ───────────────────────────────────────────
 // Instead of hardcoded keyword lists and regex, we ask DeepSeek chat to parse
 // the user's intent from the full conversation context. This handles arbitrary

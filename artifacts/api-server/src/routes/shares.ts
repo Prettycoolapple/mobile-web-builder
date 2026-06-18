@@ -99,6 +99,16 @@ function shareUrl(token: string, req?: Request | null): string {
   return `${baseUrl(req)}/share/${encodeURIComponent(token)}`;
 }
 
+function appSchemeShareUrl(token: string): string {
+  return `devfeasible://share/${encodeURIComponent(token)}`;
+}
+
+function androidIntentShareUrl(token: string, fallbackUrl: string): string {
+  const encodedToken = encodeURIComponent(token);
+  const encodedFallback = encodeURIComponent(fallbackUrl);
+  return `intent://share/${encodedToken}#Intent;scheme=devfeasible;package=nz.devfeasible.app;S.browser_fallback_url=${encodedFallback};end`;
+}
+
 function randomToken(): string {
   return crypto.randomBytes(18).toString("base64url");
 }
@@ -436,8 +446,11 @@ export function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?
   const safeAndroidStoreUrl = htmlEscape(getAndroidPlayStoreUrl());
   const safeSalesPortalUrl = htmlEscape("https://www.projectalpha.app/sales-portal/");
   const safeAppOpenUrl = preview
-    ? htmlEscape(`devfeasible://share/${encodeURIComponent(preview.token)}`)
+    ? htmlEscape(appSchemeShareUrl(preview.token))
     : safeUrl;
+  const safeAndroidIntentUrl = preview
+    ? htmlEscape(androidIntentShareUrl(preview.token, getAndroidPlayStoreUrl()))
+    : safeAndroidStoreUrl;
   const safeAddress = htmlEscape(preview?.address ?? "Shared property");
   const facts = preview?.facts ?? [];
   const factsHtml = facts.length
@@ -504,6 +517,7 @@ export function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?
               id="open-app-button"
               href="${safeUrl}"
               data-app-url="${safeAppOpenUrl}"
+              data-android-intent-url="${safeAndroidIntentUrl}"
               data-ios-store="${safeIosStoreUrl}"
               data-android-store="${safeAndroidStoreUrl}"
             >${htmlEscape(cta)}</a>
@@ -525,7 +539,14 @@ export function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?
 
           event.preventDefault();
           var fallback = isiOS ? button.dataset.iosStore : button.dataset.androidStore;
-          var appUrl = button.dataset.appUrl || button.href;
+          var isMobileSafari = isiOS && /Safari/i.test(ua) && !/(CriOS|FxiOS|EdgiOS|OPiOS|MicroMessenger|FBAN|FBAV|Instagram|Line|Twitter)/i.test(ua);
+          if (isMobileSafari) {
+            if (fallback) window.location.assign(fallback);
+            return;
+          }
+          var appUrl = isAndroid && button.dataset.androidIntentUrl
+            ? button.dataset.androidIntentUrl
+            : (button.dataset.appUrl || button.href);
           var cancelled = false;
           var cancel = function () { cancelled = true; };
           document.addEventListener("visibilitychange", function () {

@@ -55,6 +55,7 @@ import {
   SchoolZoneDetail,
   NeighbourhoodContext,
   TransportContext,
+  BuiltEnvironmentContext,
   TitleInsight,
 } from "@/context/ChatContext";
 
@@ -1959,6 +1960,88 @@ function marketAccessStatus(report: Report): "good" | "warning" | "risk" | "neut
   return "neutral";
 }
 
+function builtEnvironmentSignalLabel(signal: BuiltEnvironmentContext["signal"], t: (key: string) => string): string {
+  if (signal === "last_missing_piece") return t("report.built_env_signal_last_piece");
+  if (signal === "mixed_renewal") return t("report.built_env_signal_mixed");
+  if (signal === "older_environment") return t("report.built_env_signal_old");
+  if (signal === "insufficient_data") return t("report.built_env_signal_insufficient");
+  return t("report.built_env_signal_unknown");
+}
+
+function formatBuildEra(year: number | null | undefined, range: string | null | undefined, t: (key: string) => string): string {
+  if (range) return range;
+  if (year != null) return String(year);
+  return t("report.na");
+}
+
+function BuiltEnvironmentPanel({ context, colors }: {
+  context: BuiltEnvironmentContext;
+  colors: ReturnType<typeof useColors>;
+}) {
+  const { t } = useT();
+  return (
+    <View style={{ gap: 10 }}>
+      <InfoRow
+        label={t("report.built_env_signal")}
+        value={builtEnvironmentSignalLabel(context.signal, t)}
+        valueColor={
+          context.signal === "last_missing_piece" || context.signal === "mixed_renewal"
+            ? colors.success
+            : context.signal === "older_environment"
+              ? colors.amber
+              : colors.mutedForeground
+        }
+        colors={colors}
+      />
+      <InfoRow
+        label={t("report.built_env_nearby")}
+        value={t("report.built_env_nearby_value", {
+          known: context.knownBuildYearCount,
+          assessed: context.assessedProperties,
+          radius: context.radiusM,
+          pct: Math.round(context.post2000Share * 100),
+        })}
+        colors={colors}
+      />
+      <InfoRow
+        label={t("report.built_env_subject")}
+        value={formatBuildEra(context.subjectBuildYear, context.subjectBuildYearRange, t)}
+        colors={colors}
+      />
+      {context.reasons.slice(0, 2).map((reason, index) => (
+        <Text key={`${reason}-${index}`} style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 17 }}>
+          {reason}
+        </Text>
+      ))}
+      {context.nearbyExamples.length > 0 ? (
+        <View style={{ gap: 6 }}>
+          <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_700Bold", fontSize: 11 }}>
+            {t("report.built_env_examples")}
+          </Text>
+          {context.nearbyExamples.slice(0, 3).map((example, index) => (
+            <View key={`${example.address ?? "nearby"}-${index}`} style={{ flexDirection: "row", justifyContent: "space-between", gap: 10 }}>
+              <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1 }} numberOfLines={1}>
+                {example.address ?? t("report.nearby_property")}
+              </Text>
+              <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
+                {formatBuildEra(example.buildYear, example.buildYearRange, t)}
+                {example.distanceM != null ? ` • ${formatDistanceM(example.distanceM)}` : ""}
+              </Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function builtEnvironmentStatus(context?: BuiltEnvironmentContext | null): "good" | "warning" | "risk" | "neutral" {
+  if (!context) return "neutral";
+  if (context.signal === "last_missing_piece" || context.signal === "mixed_renewal") return "good";
+  if (context.signal === "older_environment") return "warning";
+  return "neutral";
+}
+
 function DevelopmentStrategyPanel({ strategies, interestRateOutlook, comparablesQuality, neighbourhoodContext, transportContext, potentialLots, colors }: {
   strategies: DevelopmentStrategyScenario[];
   interestRateOutlook?: "falling" | "stable" | "rising";
@@ -2369,9 +2452,16 @@ function SchoolZonesPanel({ zones, colors }: { zones: SchoolZoneDetail[]; colors
             style={[styles.overlayRow, { backgroundColor: colors.muted, borderRadius: 10, flexDirection: "column", alignItems: "stretch", gap: 8 }]}
           >
             <View style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
-              <Text style={{ flex: 1, color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", fontSize: 14, lineHeight: 20 }}>
-                {z.matched && z.orgName ? z.orgName : z.sourceLabel}
-              </Text>
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", fontSize: 14, lineHeight: 20 }}>
+                  {z.matched && z.orgName ? z.orgName : z.sourceLabel}
+                </Text>
+                {z.yearLevels ? (
+                  <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 16 }}>
+                    {z.yearLevels}
+                  </Text>
+                ) : null}
+              </View>
               {showAuthorityBadge ? (
                 <View style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 100, backgroundColor: colors.accent + "18" }}>
                   <Text style={{ color: colors.accent, fontFamily: "DM_Sans_600SemiBold", fontSize: 10 }}>
@@ -2847,6 +2937,20 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
           colors={colors}
         />
       </SectionCard>
+
+      {report.builtEnvironmentContext ? (
+        <SectionCard
+          title={t("report.built_environment")}
+          icon=""
+          status={builtEnvironmentStatus(report.builtEnvironmentContext)}
+          colors={colors}
+        >
+          <BuiltEnvironmentPanel
+            context={report.builtEnvironmentContext}
+            colors={colors}
+          />
+        </SectionCard>
+      ) : null}
 
       {hasDevelopmentStrategies && !landAreaMissing && (
         <SectionCard title={t("report.development_strategy_scenarios")} icon="🧭" status={strategyStatus(developmentStrategies)} alert={safeNum(report.scores?.roi) < 2.5} colors={colors}>

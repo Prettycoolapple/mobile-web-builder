@@ -12,6 +12,11 @@ import { calculateBearBaseBullScenarios } from "./roi-calculator";
 import { scoreProperty, type ScoringResult } from "./scoring";
 import type { MergedPropertyData } from "./scrapers/merge";
 import type { PropertyEligibilityConfidence, PropertyTypology } from "./property-eligibility";
+import {
+  BUILT_ENVIRONMENT_LIGHT_SCAN_COUNT,
+  fetchBuiltEnvironmentContext,
+  type BuiltEnvironmentContext,
+} from "./built-environment-context";
 
 export interface LightScoreInput {
   address: string;
@@ -44,6 +49,7 @@ export interface LightScoreResult {
   designLedBlockers: string[];
   designLedSummary: string | null;
   designLedDetail: string | null;
+  builtEnvironmentContext?: BuiltEnvironmentContext | null;
 }
 
 /**
@@ -152,18 +158,43 @@ export async function computeLightScore(input: LightScoreInput): Promise<LightSc
   const AUCKLAND_MEDIAN_PRICE_PER_SQM = 8500;
   const AUCKLAND_MEDIAN_SALE_PRICE = 900_000;
 
+  // The Auckland-wide median understates exit value in premium suburbs (and
+  // overstates it in cheaper ones) — the main reason a screening-card score
+  // diverged from the full report. Scale the exit value by the property's price
+  // tier (asking price vs the Auckland median) as a coarse suburb-premium proxy,
+  // dampened (^0.6) and bounded (0.6–3.0×) so a single asking price can't
+  // over-extrapolate. This is only the ESTIMATE path — a cached real report
+  // score supersedes it entirely (see analysis-cache.resolveCardScore).
+  const priceTier = Math.min(
+    3.0,
+    Math.max(0.6, (price > 0 ? price : AUCKLAND_MEDIAN_SALE_PRICE) / AUCKLAND_MEDIAN_SALE_PRICE),
+  );
+  const exitScale = Math.pow(priceTier, 0.6);
+  const gdvPricePerSqm = Math.round(AUCKLAND_MEDIAN_PRICE_PER_SQM * exitScale);
+  const gdvSalePrice = Math.round(AUCKLAND_MEDIAN_SALE_PRICE * exitScale);
+
   const scenarios = calculateBearBaseBullScenarios(
     costs,
-    AUCKLAND_MEDIAN_PRICE_PER_SQM,
-    AUCKLAND_MEDIAN_SALE_PRICE,
+    gdvPricePerSqm,
+    gdvSalePrice,
     lots,
     lotResult.sqm_per_lot,
     "stable",
     1,
   );
 
+  const builtEnvironmentContext = await fetchBuiltEnvironmentContext({
+    lat: geo.lat,
+    lng: geo.lng,
+    subjectParcelId: linzParcel?.parcel_id ?? null,
+    subjectBuildYear: buildYear ?? null,
+    subjectBuildYearRange: null,
+    maxParcels: BUILT_ENVIRONMENT_LIGHT_SCAN_COUNT,
+    timeoutMsPerParcel: 1200,
+  }).catch(() => null);
+
   return {
-    scores: scoreProperty(minimalMerged, costs, scenarios, lots),
+    scores: scoreProperty(minimalMerged, costs, scenarios, lots, builtEnvironmentContext),
     landArea: land,
     zone: zoneCode,
     potentialLots: lots,
@@ -178,5 +209,6 @@ export async function computeLightScore(input: LightScoreInput): Promise<LightSc
     designLedBlockers: subdivisionAssessment.designLedBlockers,
     designLedSummary: subdivisionAssessment.designLedSummary,
     designLedDetail: subdivisionAssessment.designLedDetail,
+    builtEnvironmentContext,
   };
 }

@@ -1,16 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { detectSubdivision, parseStreetNumberSuffix } from "../subdivision";
 import { geocodeAddress } from "../geocode";
+import { fetchLINZLetterSuffixAddresses } from "../linz";
 
 vi.mock("../geocode", () => ({
   geocodeAddress: vi.fn(),
 }));
 
+vi.mock("../linz", () => ({
+  fetchLINZLetterSuffixAddresses: vi.fn(async () => []),
+}));
+
 const mockedGeocodeAddress = vi.mocked(geocodeAddress);
+const mockedFetchLINZLetterSuffixAddresses = vi.mocked(fetchLINZLetterSuffixAddresses);
 
 describe("subdivision detection", () => {
   beforeEach(() => {
     mockedGeocodeAddress.mockReset();
+    mockedFetchLINZLetterSuffixAddresses.mockReset();
+    mockedFetchLINZLetterSuffixAddresses.mockResolvedValue([]);
   });
 
   it("parses parent and child street-number suffixes", () => {
@@ -54,6 +62,32 @@ describe("subdivision detection", () => {
       isSubdivided: false,
       parentAddress: "66A Marine Parade, Mellons Bay",
       subLots: [],
+    });
+  });
+
+  it("asks for child lots from LINZ even when the parent address may still geocode", async () => {
+    mockedFetchLINZLetterSuffixAddresses.mockResolvedValue([
+      { letter: "A", address: "38A Rosebank Road, Papatoetoe, Auckland", id: "2429567", rank: 0.46 },
+      { letter: "B", address: "38B Rosebank Road, Papatoetoe, Auckland", id: "2429568", rank: 0.46 },
+      { letter: "C", address: "38C Rosebank Road, Papatoetoe, Auckland", id: "2429569", rank: 0.46 },
+      { letter: "D", address: "38D Rosebank Road, Papatoetoe, Auckland", id: "2429570", rank: 0.46 },
+    ]);
+    mockedGeocodeAddress.mockResolvedValue({
+      lat: -36.971,
+      lng: 174.838,
+      formatted: "38 Rosebank Road, Papatoetoe, Auckland 2025, New Zealand",
+      suburb: "papatoetoe",
+    });
+
+    await expect(detectSubdivision("38 Rosebank Road, Papatoetoe")).resolves.toEqual({
+      isSubdivided: true,
+      parentAddress: "38 Rosebank Road, Papatoetoe",
+      subLots: [
+        "38A Rosebank Road, Papatoetoe, Auckland",
+        "38B Rosebank Road, Papatoetoe, Auckland",
+        "38C Rosebank Road, Papatoetoe, Auckland",
+        "38D Rosebank Road, Papatoetoe, Auckland",
+      ],
     });
   });
 

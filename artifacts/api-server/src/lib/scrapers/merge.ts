@@ -427,10 +427,15 @@ export function mergePropertyData(
     sourceAddressMatchesSubject(extra?.analysed_address, qv.address_confirmed);
   const propertyValueBeds = propertyValueMatchesSubject ? propertyValue?.bedrooms : null;
   const propertyValueBaths = propertyValueMatchesSubject ? propertyValue?.bathrooms : null;
+  const propertyValueBuildYear = propertyValueMatchesSubject ? propertyValue?.build_year : null;
+  const propertyValueBuildYearRange = propertyValueMatchesSubject ? propertyValue?.build_year_range : null;
   const homesBeds = homesMatchesSubject ? homes?.bedrooms : null;
   const homesBaths = homesMatchesSubject ? homes?.bathrooms : null;
+  const homesBuildYear = homesMatchesSubject ? homes?.build_year : null;
   const qvBeds = qvMatchesSubject ? qv?.bedrooms : null;
   const qvBaths = qvMatchesSubject ? qv?.bathrooms : null;
+  const qvBuildYear = qvMatchesSubject ? qv?.build_year : null;
+  const qvBuildYearRange = qvMatchesSubject ? qv?.build_year_range : null;
   if (propertyValue && !propertyValueMatchesSubject) {
     logger.info(
       { analysed: extra?.analysed_address, confirmed: propertyValue.address_confirmed },
@@ -462,28 +467,16 @@ export function mergePropertyData(
 
   // Build year: prefer exact source years over rounded decade values.
   const buildYearResult = resolveBuildYear(sources, [
-    { src: "propertyvalue",      build_year: propertyValue?.build_year },
-    { src: "oneroof",            build_year: oneroof?.build_year },
+    { src: "propertyvalue",      build_year: propertyValueBuildYear },
+    { src: "oneroof",            build_year: oneroof?.listing_active ? oneroof.build_year : null },
     { src: "hougarden",          build_year: hougarden?.build_year },
     { src: "auckland_council_gis", build_year: ph?.build_year },
-    { src: "qv",                 build_year: qv?.build_year },
-    { src: "homes",              build_year: homes?.build_year },
+    { src: "qv",                 build_year: qvBuildYear },
+    { src: "homes",              build_year: homesBuildYear },
   ]);
   let build_year = buildYearResult.build_year;
-  // When we have a range but no exact year, extract the end year as a fallback
-  // (e.g. "2010-2019" → 2019). NZ council decades use the end year as the
-  // registered completion year (same data CoreLogic/PropertyValue exposes as exact).
-  const rawRange = build_year == null ? (propertyValue?.build_year_range ?? qv?.build_year_range ?? null) : null;
-  if (build_year == null && rawRange) {
-    const rangeEndM = rawRange.match(/\d{4}[–\-](\d{4})/);
-    if (rangeEndM) {
-      const endY = parseInt(rangeEndM[1], 10);
-      if (endY >= 1800 && endY <= new Date().getFullYear() + 1) {
-        build_year = endY;
-        sources["build_year"] = "qv (range-end)";
-      }
-    }
-  }
+  // Keep decade/range-only records approximate instead of manufacturing an exact year.
+  const rawRange = build_year == null ? (propertyValueBuildYearRange ?? qvBuildYearRange ?? null) : null;
   const build_year_range = build_year == null ? rawRange : null;
 
   // Floor area: median of credible values.
@@ -887,7 +880,7 @@ export function mergePropertyData(
       );
       build_year = orY;
       sources["build_year"] = "oneroof (exact vs decade)";
-    } else if (orY > build_year + 3) {
+    } else if (oneroof.listing_active && orY > build_year + 3) {
       logger.info({ previous: build_year, oneroof: orY }, "Merge: OneRoof reports newer build year (replacement / record lag)");
       discrepancies.push(
         `Build year: OneRoof reports ${orY} vs other sources ${build_year}. Using OneRoof (likely newer dwelling or records not yet updated).`,
