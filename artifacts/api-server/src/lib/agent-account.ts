@@ -112,7 +112,7 @@ export async function createAgentAccountFromPending(
 
     await markPendingCompleted(pending.id).catch(() => {});
 
-    sendNewUserSignupNotification({
+    await sendNewUserSignupNotification({
       role: "sales_agent",
       profileId: profile.id,
       email: profile.email,
@@ -123,6 +123,8 @@ export async function createAgentAccountFromPending(
         agencyName: pending.agencyName,
         reaaLicenceNumber: pending.reaaLicenceNumber,
       },
+    }).catch((mailErr) => {
+      logger.warn({ mailErr, userId: profile.id, email }, "New sales-agent signup owner email failed");
     });
 
     return { profileId: profile.id, email, role: profile.role, created: true };

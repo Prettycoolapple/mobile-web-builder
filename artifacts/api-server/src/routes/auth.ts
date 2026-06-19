@@ -25,9 +25,20 @@ import { createAgentAccountFromPending, type AgentSubscriptionInfo } from "../li
 import type Stripe from "stripe";
 import { ObjectNotFoundError, ObjectStorageService } from "../lib/objectStorage";
 import { createStorageReviewToken } from "../lib/storage-review-token";
+import { runAfterResponse } from "../lib/vercel-wait-until";
 
 const router = Router();
 const objectStorageService = new ObjectStorageService();
+
+type SignupNotificationArgs = Parameters<typeof sendNewUserSignupNotification>[0];
+
+function queueSignupNotification(req: any, args: SignupNotificationArgs): void {
+  runAfterResponse(
+    sendNewUserSignupNotification(args).catch((mailErr) => {
+      req.log?.warn?.({ mailErr, userId: args.profileId, email: args.email, role: args.role }, "New signup owner email failed");
+    }),
+  );
+}
 
 const salesAgentSchema = z.object({
   agencyName: z.string().optional(),
@@ -434,7 +445,7 @@ router.post(
     const providerCertObjectPath = providerData
       ? objectPathFromStorageUrl(providerData.incorporationCertUrl)
       : null;
-    sendNewUserSignupNotification({
+    queueSignupNotification(req, {
       role,
       profileId: profile.id,
       email: profile.email,
@@ -585,7 +596,7 @@ router.post("/sales-agent-web-signup", async (req, res) => {
       },
     });
 
-    sendNewUserSignupNotification({
+    queueSignupNotification(req, {
       role: "sales_agent",
       profileId: profile.id,
       email: profile.email,
@@ -1268,6 +1279,128 @@ router.post("/sales-agent-login", async (req, res) => {
     });
   } catch (error) {
     req.log.error({ error }, "Sales-agent portal login failed");
+    res.status(500).json({ error: "Login failed. Please try again.", code: "LOGIN_FAILED" });
+  }
+});
+
+// Provider-portal login. Mirrors /sales-agent-login but gates on the
+// service_provider role so general users / sales agents can't sign into the
+// provider portal. Credentials live in the shared `profiles` table, so these
+// are the same email/password used by the mobile app.
+router.post("/service-provider-login", async (req, res) => {
+  const { email, password } = req.body as { email?: string; password?: string };
+
+  if (!email || !password) {
+    res.status(400).json({ error: "Email and password are required", code: "MISSING_FIELDS" });
+    return;
+  }
+
+  const emailLower = email.toLowerCase().trim();
+
+  try {
+    const [profile] = await db
+      .select()
+      .from(profiles)
+      .where(eq(profiles.email, emailLower))
+      .limit(1);
+
+    if (!profile) {
+      res.status(401).json({ error: "Invalid email or password", code: "INVALID_CREDENTIALS" });
+      return;
+    }
+
+    const valid = await verifyPassword(password, profile.passwordHash);
+    if (!valid) {
+      res.status(401).json({ error: "Invalid email or password", code: "INVALID_CREDENTIALS" });
+      return;
+    }
+
+    const [providerProfile] = await db
+      .select({
+        companyName: serviceProviderProfiles.companyName,
+        discipline: serviceProviderProfiles.discipline,
+      })
+      .from(serviceProviderProfiles)
+      .where(eq(serviceProviderProfiles.userId, profile.id))
+      .limit(1);
+
+    if (profile.role !== "service_provider" && !providerProfile) {
+      res.status(403).json({
+        error: "This portal is only for service providers.",
+        code: "SERVICE_PROVIDER_REQUIRED",
+      });
+      return;
+    }
+
+    const now = new Date();
+    const lastReset = new Date(profile.lastResetAt);
+    const periodEnd = profile.subscriptionPeriodEndAt ? new Date(profile.subscriptionPeriodEndAt) : null;
+    if (usagePeriodExpired(now, lastReset, profile.subscriptionTier, periodEnd)) {
+      await db
+        .update(profiles)
+        .set({
+          reportsUsedThisMonth: 0,
+          messagesUsedThisMonth: 0,
+          lastResetAt: now,
+          subscriptionPeriodEndAt: null,
+        })
+        .where(eq(profiles.id, profile.id));
+      profile.reportsUsedThisMonth = 0;
+      profile.messagesUsedThisMonth = 0;
+    }
+
+    let effectiveSpecialStatus = profile.specialStatus;
+    let effectiveSpecialStatusExpiresAt = profile.specialStatusExpiresAt;
+    if (
+      effectiveSpecialStatus === "supercharge" &&
+      effectiveSpecialStatusExpiresAt &&
+      now >= effectiveSpecialStatusExpiresAt
+    ) {
+      void (async () => {
+        try {
+          await db
+            .update(profiles)
+            .set({ specialStatus: null, specialStatusExpiresAt: null })
+            .where(eq(profiles.id, profile.id));
+        } catch {
+          // non-critical; next /me request will retry
+        }
+      })();
+      effectiveSpecialStatus = null;
+      effectiveSpecialStatusExpiresAt = null;
+    }
+
+    const sessionId = createSessionId();
+    await db
+      .update(profiles)
+      .set({ activeSessionId: sessionId })
+      .where(eq(profiles.id, profile.id));
+
+    const token = signToken(profile.id, profile.email, profile.role, sessionId);
+    recordLoginEvent(profile.id);
+    res.json({
+      token,
+      user: {
+        id: profile.id,
+        email: profile.email,
+        fullName: profile.fullName,
+        role: profile.role,
+        languages: profile.languages,
+        subscriptionTier: profile.subscriptionTier,
+        subscriptionPeriodEndAt: profile.subscriptionPeriodEndAt,
+        reportsUsedThisMonth: profile.reportsUsedThisMonth,
+        messagesUsedThisMonth: profile.messagesUsedThisMonth,
+        avatarUrl: profile.avatarUrl,
+        phoneNumber: profile.phoneNumber,
+        companyName: providerProfile?.companyName ?? null,
+        discipline: providerProfile?.discipline ?? null,
+        isVerified: profile.isVerified,
+        specialStatus: effectiveSpecialStatus,
+        specialStatusExpiresAt: effectiveSpecialStatusExpiresAt,
+      },
+    });
+  } catch (error) {
+    req.log.error({ error }, "Service-provider portal login failed");
     res.status(500).json({ error: "Login failed. Please try again.", code: "LOGIN_FAILED" });
   }
 });

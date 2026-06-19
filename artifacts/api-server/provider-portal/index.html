@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en-NZ">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Provider Portal | Project Alpha</title>
+    <meta
+      name="description"
+      content="Sign in or create your Project Alpha service provider account — for architects, designers, planners, engineers, and quantity surveyors."
+    />
+    <link rel="icon" href="/alpha-icon.svg" type="image/svg+xml" sizes="any" />
+    <link rel="icon" href="/favicon.png" type="image/png" sizes="512x512" />
+    <link rel="apple-touch-icon" href="/favicon.png" />
+    <link rel="stylesheet" href="/styles.css" />
+    <style>
+      .provider-welcome-card {
+        max-width: 620px;
+      }
+      .provider-welcome-copy {
+        display: grid;
+        gap: 12px;
+        margin: 0 0 20px;
+        color: var(--muted, #7a766f);
+        line-height: 1.55;
+      }
+      .provider-welcome-copy strong {
+        color: var(--ink, #1d1a17);
+      }
+      .app-download-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .app-download-button {
+        display: flex;
+        min-height: 54px;
+        align-items: center;
+        justify-content: center;
+        padding: 12px 14px;
+        border-radius: 12px;
+        background: var(--ink, #1d1a17);
+        color: #fff;
+        text-decoration: none;
+        font-weight: 800;
+        text-align: center;
+      }
+      .app-download-button:hover {
+        transform: translateY(-1px);
+      }
+      .app-download-button--android {
+        background: #1d6f4b;
+      }
+      @media (max-width: 640px) {
+        .app-download-actions {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+    <script defer src="/site.js"></script>
+    <script defer src="/provider-portal/portal.js"></script>
+  </head>
+  <body data-page="providerPortal">
+    <div class="site-shell">
+      <header class="topbar topbar--solid">
+        <a class="brand" href="/" aria-label="Project Alpha home">
+          <img class="brand-mark" src="/alpha-icon.svg" alt="" width="34" height="34" decoding="async" />
+          <span data-i18n="brand">Project Alpha</span>
+        </a>
+        <nav class="nav" aria-label="Primary navigation">
+          <a href="/" data-i18n="navHome">Home</a>
+          <a href="/#professionals" data-i18n="navProfessionals">Professionals</a>
+          <a href="/contact/" data-i18n="navContact">Contact</a>
+        </nav>
+      </header>
+
+      <main class="portal-page">
+        <section class="portal-hero">
+          <div class="portal-hero-copy">
+            <p class="eyebrow">For service providers</p>
+            <h1>Provider Portal</h1>
+            <p>
+              Sign in to manage your service provider account. New here? Creating an account takes just a
+              few minutes, and you can use the same login to sign in to the Project Alpha app.
+            </p>
+          </div>
+        </section>
+
+        <section class="portal-shell" id="portal-auth">
+          <div class="portal-tabs" role="tablist" aria-label="Sign in or create an account">
+            <button class="portal-tab is-active" type="button" data-tab-target="login" role="tab" aria-selected="true">
+              Sign in
+            </button>
+            <button class="portal-tab" type="button" data-tab-target="signup" role="tab" aria-selected="false">
+              Create account
+            </button>
+          </div>
+
+          <div class="portal-auth-grid">
+            <section class="portal-card portal-panel is-active" data-tab-panel="login" role="tabpanel">
+              <div class="portal-panel-header">
+                <p class="section-kicker">Sign in</p>
+                <h2>Welcome back</h2>
+                <p>Sign in to your service provider account.</p>
+              </div>
+
+              <form id="provider-login-form" class="portal-form">
+                <label class="field">
+                  Email address
+                  <input name="email" type="email" autocomplete="email" placeholder="you@example.com" required />
+                </label>
+                <label class="field">
+                  Password
+                  <input name="password" type="password" autocomplete="current-password" placeholder="Your password" required />
+                </label>
+                <button class="button button-primary portal-submit" type="submit">Sign in</button>
+                <div class="portal-form-row portal-form-row--center">
+                  <button class="link-button" type="button" data-reset-open>Forgot your password?</button>
+                </div>
+                <p class="form-status" id="login-status" aria-live="polite"></p>
+              </form>
+            </section>
+
+            <section class="portal-card portal-panel" data-tab-panel="signup" role="tabpanel" hidden>
+              <div class="portal-panel-header">
+                <p class="section-kicker">Create account</p>
+                <h2>Create your provider account</h2>
+                <p>It only takes a few minutes. You can use the same login to sign in to the Project Alpha app.</p>
+              </div>
+
+              <form id="provider-signup-form" class="portal-form">
+                <label class="field">
+                  Full name
+                  <input name="fullName" autocomplete="name" placeholder="Jane Smith" required />
+                </label>
+                <label class="field">
+                  Email address
+                  <input name="email" type="email" autocomplete="email" placeholder="you@example.com" required />
+                </label>
+                <label class="field">
+                  Password
+                  <input
+                    name="password"
+                    type="password"
+                    autocomplete="new-password"
+                    minlength="8"
+                    placeholder="At least 8 characters"
+                    required
+                  />
+                </label>
+
+                <div class="portal-divider"></div>
+
+                <label class="field">
+                  Mobile number
+                  <input name="phone" type="tel" autocomplete="tel" inputmode="tel" placeholder="+64 21 123 4567" required />
+                  <span class="field-help">Enter a New Zealand mobile starting with +64. We'll text you a code to confirm it.</span>
+                </label>
+                <div class="portal-form-row" id="otp-send-row">
+                  <button class="button button-quiet" type="button" id="send-otp-button">Send code</button>
+                  <span class="portal-otp-state" id="otp-state">Not verified yet</span>
+                </div>
+
+                <div class="portal-verify-block" id="otp-verify-block" hidden>
+                  <label class="field">
+                    Verification code
+                    <input name="otpCode" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" />
+                  </label>
+                  <div class="portal-form-row">
+                    <button class="button button-quiet" type="button" id="verify-otp-button">Confirm code</button>
+                    <button class="link-button" type="button" id="resend-otp-button">Resend code</button>
+                  </div>
+                  <span class="portal-inline-note" id="otp-cooldown" aria-live="polite"></span>
+                </div>
+
+                <label class="field">
+                  Preferred language
+                  <select name="primaryLanguage" required>
+                    <option value="">Choose a language</option>
+                    <option value="English">English</option>
+                    <option value="Chinese (Mandarin)">Chinese (Mandarin)</option>
+                    <option value="Chinese (Cantonese)">Chinese (Cantonese)</option>
+                    <option value="Korean">Korean</option>
+                    <option value="Japanese">Japanese</option>
+                    <option value="Hindi">Hindi</option>
+                    <option value="Tagalog">Tagalog</option>
+                    <option value="Samoan">Samoan</option>
+                    <option value="Māori">Māori</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </label>
+
+                <label class="field">
+                  Secondary language <span class="field-optional">(optional)</span>
+                  <select name="secondaryLanguage">
+                    <option value="">None</option>
+                    <option value="English">English</option>
+                    <option value="Chinese (Mandarin)">Chinese (Mandarin)</option>
+                    <option value="Chinese (Cantonese)">Chinese (Cantonese)</option>
+                    <option value="Korean">Korean</option>
+                    <option value="Japanese">Japanese</option>
+                    <option value="Hindi">Hindi</option>
+                    <option value="Tagalog">Tagalog</option>
+                    <option value="Samoan">Samoan</option>
+                    <option value="Māori">Māori</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </label>
+
+                <label class="field">
+                  Profile photo <span class="field-optional">(optional)</span>
+                  <input name="profilePicture" type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif" />
+                  <span class="field-help">Add a photo so clients and the Project Alpha app can recognise you. You can change it anytime.</span>
+                </label>
+
+                <div class="portal-divider"></div>
+
+                <label class="field">
+                  Company name
+                  <input name="companyName" autocomplete="organization" placeholder="Smith Engineering Ltd" required />
+                </label>
+
+                <label class="field">
+                  NZ Companies Register number
+                  <input name="nzCompanyRegisterNumber" autocomplete="off" inputmode="numeric" placeholder="e.g. 1234567" required />
+                  <span class="field-help">Your company's registration number on the NZ Companies Register.</span>
+                </label>
+
+                <label class="field">
+                  Discipline
+                  <select name="discipline" id="discipline-select" required>
+                    <option value="">Choose your discipline</option>
+                    <option value="architect_designer">Architect / Designer</option>
+                    <option value="planner">Planner</option>
+                    <option value="engineer">Engineer</option>
+                    <option value="quantity_surveyor">Quantity Surveyor</option>
+                    <option value="other">Other</option>
+                  </select>
+                </label>
+                <label class="field" id="discipline-other-field" hidden>
+                  Describe your discipline
+                  <input name="otherDiscipline" autocomplete="off" placeholder="Tell us your discipline" />
+                </label>
+
+                <div class="portal-divider"></div>
+
+                <p class="field-label">Business address <span class="field-optional">(optional)</span></p>
+                <label class="field">
+                  Street address
+                  <input name="addressStreet" autocomplete="address-line1" placeholder="123 Example Road" />
+                </label>
+                <div class="portal-field-grid">
+                  <label class="field">
+                    Suburb
+                    <input name="addressSuburb" autocomplete="address-level3" placeholder="Suburb" />
+                  </label>
+                  <label class="field">
+                    City
+                    <input name="addressCity" autocomplete="address-level2" placeholder="Auckland" />
+                  </label>
+                </div>
+                <label class="field">
+                  Postcode
+                  <input name="addressPostcode" autocomplete="postal-code" inputmode="numeric" placeholder="1010" />
+                </label>
+
+                <button class="button button-primary portal-submit" type="submit">Create account</button>
+                <p class="form-status" id="signup-status" aria-live="polite"></p>
+              </form>
+            </section>
+          </div>
+        </section>
+
+        <section class="portal-shell portal-dashboard" id="portal-dashboard" hidden>
+          <div class="portal-dashboard-header">
+            <div>
+              <p class="section-kicker">Your account</p>
+              <h2 id="dashboard-title">You're signed in</h2>
+            </div>
+            <button class="button button-quiet" type="button" id="signout-button">Sign out</button>
+          </div>
+
+          <div class="portal-card provider-welcome-card">
+            <div class="portal-panel-header">
+              <p class="section-kicker">Account ready</p>
+              <h2>Welcome to Project Alpha</h2>
+              <p id="dashboard-summary">You're signed in to your service provider account.</p>
+            </div>
+            <div class="provider-welcome-copy">
+              <p><strong>Your provider dashboard is on its way.</strong></p>
+              <p>
+                For now, head into the Project Alpha app to complete your profile and connect with
+                clients. Sign in with the same email and password you just used here.
+              </p>
+            </div>
+            <div class="app-download-actions">
+              <a
+                class="app-download-button"
+                href="https://apps.apple.com/nz/app/project-alpha/id6762080292"
+                target="_blank"
+                rel="noopener"
+              >
+                iOS App Store
+              </a>
+              <a
+                class="app-download-button app-download-button--android"
+                href="https://play.google.com/store/apps/details?id=nz.devfeasible.app&hl=en"
+                target="_blank"
+                rel="noopener"
+              >
+                Android Play Store
+              </a>
+            </div>
+          </div>
+        </section>
+
+        <section class="portal-reset" id="consent-panel" hidden>
+          <div class="portal-card portal-reset-card portal-consent-card">
+            <button class="portal-close" type="button" data-consent-close aria-label="Close">&times;</button>
+            <div class="portal-panel-header">
+              <p class="section-kicker">One last step</p>
+              <h2>Review &amp; agree</h2>
+              <p>Before creating your account, please read and acknowledge the following.</p>
+            </div>
+            <ul class="consent-list">
+              <li>By registering you agree to Project Alpha's <a href="/terms/" target="_blank" rel="noopener">Terms and Conditions</a> governing how the platform may be used.</li>
+              <li>Your personal information will be collected, stored, and used in accordance with our <a href="/privacy/" target="_blank" rel="noopener">Privacy Policy</a>.</li>
+              <li>Your name, company, and contact details may be displayed to clients who connect with you on Project Alpha.</li>
+              <li>You confirm that the company and registration details you provide are accurate.</li>
+              <li>Project Alpha may contact you about your account or relevant platform updates.</li>
+            </ul>
+            <label class="portal-consent-check">
+              <input type="checkbox" id="consent-checkbox" />
+              <span>I have read and agree to the Terms and Conditions and Privacy Policy</span>
+            </label>
+            <div class="portal-form-row portal-consent-actions">
+              <button class="button button-quiet" type="button" data-consent-close>Cancel</button>
+              <button class="button button-primary" type="button" id="consent-confirm-button" disabled>Create account &rarr;</button>
+            </div>
+            <p class="form-status" id="consent-status" aria-live="polite"></p>
+          </div>
+        </section>
+
+        <section class="portal-reset" id="reset-panel" hidden>
+          <div class="portal-card portal-reset-card">
+            <button class="portal-close" type="button" data-reset-close aria-label="Close">&times;</button>
+            <div class="portal-panel-header">
+              <p class="section-kicker">Password reset</p>
+              <h2>Reset your password</h2>
+              <p>Enter your email and we'll send you a reset code.</p>
+            </div>
+            <form id="password-reset-form" class="portal-form">
+              <label class="field">
+                Email address
+                <input name="email" type="email" autocomplete="email" placeholder="you@example.com" required />
+              </label>
+              <div class="portal-form-row" id="reset-request-row">
+                <button class="button button-quiet" type="button" id="request-reset-button">Send reset code</button>
+              </div>
+
+              <div class="portal-verify-block" id="reset-verify-block" hidden>
+                <label class="field">
+                  Reset code
+                  <input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" />
+                </label>
+                <label class="field">
+                  New password
+                  <input name="password" type="password" autocomplete="new-password" minlength="8" placeholder="At least 8 characters" />
+                </label>
+                <div class="portal-form-row portal-form-row--center">
+                  <button class="link-button" type="button" id="resend-reset-button">Resend code</button>
+                </div>
+                <button class="button button-primary portal-submit" type="submit">Update password</button>
+              </div>
+              <p class="form-status" id="reset-status" aria-live="polite"></p>
+            </form>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <div class="footer-inner">
+          <a class="brand" href="/">
+            <img class="brand-mark" src="/alpha-icon.svg" alt="" width="34" height="34" decoding="async" />
+            <span data-i18n="brand">Project Alpha</span>
+          </a>
+          <div class="footer-links">
+            <a class="footer-support" href="/contact/" data-i18n="footerContact">Contact</a>
+            <a href="/privacy/" data-i18n="footerPrivacy">Privacy</a>
+            <a href="/terms/" data-i18n="footerTerms">Terms and conditions</a>
+          </div>
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>

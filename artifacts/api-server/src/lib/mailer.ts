@@ -61,16 +61,13 @@ export async function sendOwnerNotification(subject: string, body: string): Prom
   if (!isOwnerNotificationConfigured()) {
     return;
   }
-  try {
-    const transporter = getTransporter();
-    await transporter.sendMail({
-      from: `"Project Alpha Notifications" <${SMTP_USER}>`,
-      to: SMTP_TO,
-      subject,
-      text: body,
-    });
-  } catch {
-  }
+  const transporter = getTransporter();
+  await transporter.sendMail({
+    from: `"Project Alpha Notifications" <${SMTP_USER}>`,
+    to: SMTP_TO,
+    subject,
+    text: body,
+  });
 }
 
 export async function sendPasswordResetCodeEmail(args: {
@@ -152,7 +149,7 @@ type SignupNotifyProvider = {
   incorporationCertReviewUrl?: string | null;
 };
 
-/** Fire-and-forget owner alert for any successful self-serve signup (SMTP must be configured). */
+/** Owner alert for any successful self-serve signup (no-op when SMTP is not configured). */
 export function sendNewUserSignupNotification(args: {
   role: SignupRole;
   profileId: string;
@@ -162,7 +159,7 @@ export function sendNewUserSignupNotification(args: {
   languages: string[];
   agentData?: SignupNotifyAgent;
   providerData?: SignupNotifyProvider;
-}): void {
+}): Promise<void> {
   const type = accountTypeLabel(args.role);
   const who = args.fullName?.trim() || args.email;
   const subject = `New signup — ${type}: ${who}`;
@@ -207,5 +204,5 @@ export function sendNewUserSignupNotification(args: {
   }
 
   const body = lines.join("\n");
-  sendOwnerNotification(subject, body).catch(() => {});
+  return sendOwnerNotification(subject, body);
 }

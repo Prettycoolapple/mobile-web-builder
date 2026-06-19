@@ -5,6 +5,7 @@ const dictionaries = {
     navWorkflow: "流程",
     navProfessionals: "专业人士",
     navSalesPortal: "销售门户",
+    navProviderPortal: "服务商门户",
     navContact: "联系",
     navHome: "首页",
     navPrivacy: "隐私政策",
