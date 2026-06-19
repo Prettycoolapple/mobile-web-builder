@@ -35,6 +35,8 @@ import type Stripe from "stripe";
 import { ObjectNotFoundError, ObjectStorageService } from "../lib/objectStorage";
 import { createStorageReviewToken } from "../lib/storage-review-token";
 import { runAfterResponse } from "../lib/vercel-wait-until";
+import { checkPhoneLineTypeForSignup, sendPhoneLineTypeBlock } from "../lib/phone-line-type";
+import { checkSignupCreationLimits, sendSignupLimitBlock } from "../lib/signup-limits";
 import {
   checkPhoneCanRegister,
   normalizeRegistrationPhone,
@@ -62,6 +64,22 @@ function sendPhoneRegistrationBlock(res: any, block: Exclude<PhoneRegistrationBl
     retryAfterSeconds: block.retryAfterSeconds,
     blockedUntil: block.blockedUntil ? block.blockedUntil.toISOString() : undefined,
   });
+}
+
+async function guardPhoneAndSignupLimits(req: any, res: any, phoneNumber: string): Promise<boolean> {
+  const lineType = await checkPhoneLineTypeForSignup(phoneNumber);
+  if (!lineType.allowed) {
+    sendPhoneLineTypeBlock(res, lineType);
+    return false;
+  }
+
+  const signupLimit = await checkSignupCreationLimits(req);
+  if (!signupLimit.allowed) {
+    sendSignupLimitBlock(res, signupLimit);
+    return false;
+  }
+
+  return true;
 }
 
 const salesAgentSchema = z.object({
@@ -472,6 +490,8 @@ router.post(
       return;
     }
 
+    if (!(await guardPhoneAndSignupLimits(req, res, phoneTrimmed))) return;
+
     const passwordHash = await hashPassword(password);
 
     const sessionId = createSessionId();
@@ -676,6 +696,8 @@ router.post("/sales-agent-web-signup", async (req, res) => {
       return;
     }
 
+    if (!(await guardPhoneAndSignupLimits(req, res, phoneTrimmed))) return;
+
     const passwordHash = await hashPassword(parsed.data.password);
     const sessionId = createSessionId();
     const languages = [primaryLanguage];
@@ -825,6 +847,8 @@ router.post("/sales-agent-web-signup/checkout", async (req, res) => {
       res.status(409).json({ error: "An account with this email already exists", code: "EMAIL_TAKEN" });
       return;
     }
+
+    if (!(await guardPhoneAndSignupLimits(req, res, phoneTrimmed))) return;
 
     const phoneBlock = await db.transaction((tx) => checkPhoneCanRegister(tx, phoneTrimmed, "sales_agent"));
     if (!phoneBlock.allowed) {
@@ -1653,6 +1677,8 @@ router.post(
         return;
       }
 
+      if (!(await guardPhoneAndSignupLimits(req, res, phoneTrimmed))) return;
+
       const passwordHash = await hashPassword(parsed.data.password);
       const sessionId = createSessionId();
 
@@ -1788,6 +1814,8 @@ router.post(
         res.status(409).json({ error: "An account with this email already exists", code: "EMAIL_TAKEN" });
         return;
       }
+
+      if (!(await guardPhoneAndSignupLimits(req, res, phoneTrimmed))) return;
 
       const phoneBlock = await db.transaction((tx) => checkPhoneCanRegister(tx, phoneTrimmed, "service_provider"));
       if (!phoneBlock.allowed) {
@@ -2026,6 +2054,19 @@ router.get("/me", requireAuth, async (req, res) => {
   } catch (error) {
     req.log.error({ error }, "Failed to get profile");
     res.status(500).json({ error: "Failed to get profile", code: "PROFILE_FAILED" });
+  }
+});
+
+router.post("/activity", requireAuth, async (req, res) => {
+  const userId = (req as any).userId as string;
+  const now = new Date();
+
+  try {
+    await db.update(profiles).set({ lastLoginAt: now }).where(eq(profiles.id, userId));
+    res.json({ ok: true, lastActiveAt: now.toISOString() });
+  } catch (error) {
+    req.log.error({ error }, "Failed to update last activity");
+    res.status(500).json({ error: "Failed to update activity", code: "ACTIVITY_FAILED" });
   }
 });
 

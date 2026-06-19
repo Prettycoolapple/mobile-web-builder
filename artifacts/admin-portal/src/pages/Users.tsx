@@ -13,6 +13,7 @@ interface UserRow {
   subscriptionTier: string;
   planLabel: string;
   createdAt: string;
+  /** Backed by profiles.last_login_at; now updated by app activity pings as last active. */
   lastLoginAt: string | null;
   isVerified: boolean;
   phoneNumber: string | null;
@@ -180,7 +181,7 @@ export default function UsersPage() {
                   <th>Status</th>
                   <th>Verified</th>
                   <th>Created</th>
-                  <th>Last login</th>
+                  <th>Last active</th>
                 </tr>
               </thead>
               <tbody>

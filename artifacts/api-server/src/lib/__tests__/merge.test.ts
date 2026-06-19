@@ -693,6 +693,43 @@ describe("mergePropertyData", () => {
     expect(merged.data_sources.floor_area_sqm).toBe("homes");
   });
 
+  it("prefers exact child Homes land over a conflicting LINZ parcel area", () => {
+    const merged = mergePropertyData(
+      { area_sqm: 129 } as any,
+      null,
+      null,
+      { zone_code: "MHS", zone_description: "Mixed Housing Suburban", min_lot_size_sqm: 400 } as any,
+      [],
+      {
+        contour: null,
+        asbestos_risk: "unknown",
+        infrastructure: [],
+        analysed_address: "38A Rosebank Road, Papatoetoe, Auckland",
+        homes: {
+          land_area_sqm: 150,
+          floor_area_sqm: 136,
+          bedrooms: 3,
+          bathrooms: 1,
+          build_year: null,
+          build_year_range: "2020-2029",
+          address_confirmed: "https://homes.co.nz/address/auckland/papatoetoe/38a-rosebank-road/O0v58N",
+        } as any,
+        propertyValue: {
+          land_area_sqm: 129,
+          floor_area_sqm: 120,
+          bedrooms: 4,
+          bathrooms: 2,
+          address_confirmed: "38B Rosebank Road, Papatoetoe, Auckland",
+        } as any,
+      },
+    );
+
+    expect(merged.land_area_sqm).toBe(150);
+    expect(merged.floor_area_sqm).toBe(136);
+    expect(merged.data_sources.land_area_sqm).toBe("homes");
+    expect(merged.data_sources.floor_area_sqm).toBe("homes");
+  });
+
   it("keeps a Homes-only build decade as an approximate range", () => {
     const merged = mergePropertyData(
       null,

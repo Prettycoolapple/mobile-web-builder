@@ -123,6 +123,7 @@ interface Props {
   onFollowUp: (question: string) => void;
   onDiscoveryChoice?: (message: ChatMessage, option: string, optionIndex: number) => void;
   onAnalyse: (address: string, photoUrl?: string | null, listingUrl?: string | null, selectedListingContext?: SelectedListingContext | null, analysisKey?: string) => void;
+  onAnalyseProperty?: (address: string) => void;
   analysingPropertyKey?: string | null;
   onRetry?: (text: string) => void;
   onConnect?: (providerId: string) => Promise<void>;
@@ -281,7 +282,7 @@ function TypingDots() {
   );
 }
 
-export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, analysingPropertyKey, onRetry, onConnect, onDismiss, onAgentDismiss, onUpgrade, onShowMore, onSearchResultLayout }: Props) {
+export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, onAnalyseProperty, analysingPropertyKey, onRetry, onConnect, onDismiss, onAgentDismiss, onUpgrade, onShowMore, onSearchResultLayout }: Props) {
   const colors = useColors();
   const { t } = useT();
   const router = useRouter();
@@ -402,7 +403,7 @@ export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, 
     return (
       <View style={styles.reportContainer}>
         <ReportErrorBoundary>
-          <FeasibilityReportCard report={message.report} onFollowUp={onFollowUp} />
+          <FeasibilityReportCard report={message.report} onFollowUp={onFollowUp} onAnalyseProperty={onAnalyseProperty} />
         </ReportErrorBoundary>
       </View>
     );
@@ -412,7 +413,7 @@ export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, 
     return (
       <View style={styles.reportContainer}>
         <ReportErrorBoundary>
-          <CombinedReportGroupCard group={message.reportGroup} onFollowUp={onFollowUp} />
+          <CombinedReportGroupCard group={message.reportGroup} onFollowUp={onFollowUp} onAnalyseProperty={onAnalyseProperty} />
         </ReportErrorBoundary>
       </View>
     );

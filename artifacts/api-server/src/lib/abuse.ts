@@ -23,13 +23,22 @@ const AUTO_FLAG_SCORE = 10;
 const SIGNUP_VELOCITY_WINDOW_MS = 60 * 60 * 1000;
 const SIGNUP_VELOCITY_THRESHOLD = 4;
 
-export type AbuseKind = "signup_velocity" | "quota_burst" | "rate_limit_trip" | "canary_hit" | "manual";
+export type AbuseKind =
+  | "signup_velocity"
+  | "signup_limited"
+  | "phone_type_blocked"
+  | "quota_burst"
+  | "rate_limit_trip"
+  | "canary_hit"
+  | "manual";
 
 // Per-signal contribution to the rolling score. Tuned so a single weak signal
 // never flags an account, but a combination (farming + quota burn) does. A
 // canary hit is near-conclusive — a real user never types a trap address.
 const WEIGHTS: Record<AbuseKind, number> = {
   signup_velocity: 5,
+  signup_limited: 3,
+  phone_type_blocked: 3,
   quota_burst: 4,
   rate_limit_trip: 1,
   canary_hit: 8,

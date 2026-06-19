@@ -95,7 +95,7 @@ function baseUrl(req?: Request | null): string {
   return /^https?:\/\//i.test(url) ? url : "https://projectalpha.app";
 }
 
-function shareUrl(token: string, req?: Request | null): string {
+export function shareUrl(token: string, req?: Request | null): string {
   return `${baseUrl(req)}/property-share/${encodeURIComponent(token)}`;
 }
 
@@ -125,6 +125,27 @@ function cleanUrl(value: unknown): string | null {
   return trimmed;
 }
 
+function cleanImageUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (/^\/api\/image-proxy\?/i.test(trimmed)) return trimmed;
+  return null;
+}
+
+function firstCleanImageUrl(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (Array.isArray(value)) {
+      const nested = firstCleanImageUrl(...value);
+      if (nested) return nested;
+      continue;
+    }
+    const url = cleanImageUrl(value);
+    if (url) return url;
+  }
+  return null;
+}
+
 function firstCleanUrl(...values: unknown[]): string | null {
   for (const value of values) {
     if (Array.isArray(value)) {
@@ -148,18 +169,43 @@ function nestedValue(source: unknown, path: string[]): unknown {
 }
 
 function shareImageFromRecord(record: Record<string, unknown>): string | null {
-  return firstCleanUrl(
+  return firstCleanImageUrl(
     record["photoUrl"],
     record["photoUrls"],
     record["imageUrl"],
     record["imageUrls"],
     record["mainPhotoUrl"],
+    record["mainImageUrl"],
+    record["primaryImageUrl"],
+    record["coverPhotoUrl"],
+    record["coverImageUrl"],
+    record["thumbnailUrl"],
+    record["thumbnailPhotoUrl"],
+    record["largePhotoUrl"],
+    record["mediumPhotoUrl"],
+    record["image"],
+    record["images"],
+    record["photos"],
+    record["media"],
     record["main_photo_url"],
+    record["main_image_url"],
+    record["primary_image_url"],
+    record["cover_photo_url"],
+    record["cover_image_url"],
+    record["thumbnail_url"],
+    record["thumbnail_photo_url"],
+    record["large_photo_url"],
+    record["medium_photo_url"],
     record["photo_urls"],
+    record["image_urls"],
     nestedValue(record, ["selectedListingContext", "photoUrl"]),
     nestedValue(record, ["selectedListingContext", "photoUrls"]),
+    nestedValue(record, ["selectedListingContext", "imageUrl"]),
+    nestedValue(record, ["selectedListingContext", "imageUrls"]),
     nestedValue(record, ["propertyOverview", "selectedListingContext", "photoUrl"]),
     nestedValue(record, ["propertyOverview", "selectedListingContext", "photoUrls"]),
+    nestedValue(record, ["propertyOverview", "photoUrl"]),
+    nestedValue(record, ["propertyOverview", "photoUrls"]),
   );
 }
 
@@ -315,7 +361,7 @@ export function buildShare(input: z.infer<typeof createShareSchema>) {
 
   const title = `${input.address} - Project Alpha feasibility analysis`;
   const selectedListingContext = input.selectedListingContext ?? null;
-  const image = firstCleanUrl(
+  const image = firstCleanImageUrl(
     input.photoUrl,
     input.photoUrls,
     selectedListingContext?.photoUrl,

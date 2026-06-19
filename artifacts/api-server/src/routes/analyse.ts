@@ -2640,10 +2640,15 @@ function hasRecentShownForSuburb(entries: RecentShownListing[], suburb: string |
 function buildDiscoveryExhaustedChoicePayload(
   suburb: string | null | undefined,
   presentation: string = "scored_screening",
+  // Optional non-freehold offer (e.g. the cross-lease exclusion reminder) to
+  // append to the question so the user can still ask to include those listings
+  // even though the freehold pool is exhausted.
+  extraNote?: string | null,
 ): string {
   const suburbLabel = suburb ? titleCaseSuburb(suburb) : "this area";
   const normalizedPresentation: DiscoverySearchPresentation =
     presentation === "generic_listing" ? "generic_listing" : "scored_screening";
+  const baseQuestion = "I've shown you all properties that met the criteria in this area, including some from previous chats. Would you like to see them again or search nearby suburbs?";
   return JSON.stringify({
     clarificationType: "discovery_exhausted",
     // Echo the originating search's presentation + suburb so the client can
@@ -2653,7 +2658,7 @@ function buildDiscoveryExhaustedChoicePayload(
     // the backend to re-derive them from fragile history/LLM inference.
     searchPresentation: normalizedPresentation,
     suburb: suburb ? suburbLabel : null,
-    question: "I've shown you all properties that met the criteria in this area, including some from previous chats. Would you like to see them again or search nearby suburbs?",
+    question: extraNote && extraNote.trim() ? `${baseQuestion}\n\n${extraNote.trim()}` : baseQuestion,
     options: [
       `Remind me what is available in ${suburbLabel} again`,
       "Search nearby",
@@ -6055,7 +6060,17 @@ router.post(
                 || hasRecentShownForSuburb(recentShownEntries, suburb)
               );
             if (exhaustedByShownMemory) {
-              const exhaustedPayload = buildDiscoveryExhaustedChoicePayload(suburb, plainListingBrowse ? "generic_listing" : "scored_screening");
+              // Freehold pool is exhausted, but non-freehold listings (cross-lease
+              // etc.) were never shown. Still surface the "I left out N cross-lease…"
+              // offer so the user can ask to include them — replying "yes/include"
+              // re-runs discovery with the tenure opted in (cross-lease cards then
+              // surface via the screen waiver in pre-screen.ts).
+              const exhaustedTenureReminder = buildTenureExclusionReminder(excludedTenureTotals, tenureOptIns);
+              const exhaustedPayload = buildDiscoveryExhaustedChoicePayload(
+                suburb,
+                plainListingBrowse ? "generic_listing" : "scored_screening",
+                exhaustedTenureReminder || undefined,
+              );
               const translatedExhausted = await translateChatContent(exhaustedPayload, "clarification", chatLocale, chatTranslateTitleSchool);
               res.json({ content: translatedExhausted, mode: "clarification", ...providerSignal });
               return;
@@ -6401,6 +6416,17 @@ router.post(
           const tenureReminder = buildTenureExclusionReminder(excludedTenureTotals, tenureOptIns);
           if (tenureReminder) {
             aiIntro = aiIntro ? `${aiIntro}\n\n${tenureReminder}` : tenureReminder;
+          }
+
+          // When opted-in cross-lease listings are among the cards (they surface
+          // without a verified individual land area, since a cross-lease can't be
+          // subdivided on its own title), add the neighbour-acquisition guidance
+          // once above the cards rather than on each one.
+          const hasCrossLeaseCard = candidates.some((c) => c.subdivisionTenureWarning === "cross_lease");
+          if (hasCrossLeaseCard) {
+            const crossLeaseAdvice =
+              "Note: these are cross-lease properties — they can't be subdivided on their current title. Acquiring the neighbouring cross-lease unit(s) and converting the shared title to freehold is what unlocks the subdivision potential here.";
+            aiIntro = aiIntro ? `${aiIntro}\n\n${crossLeaseAdvice}` : crossLeaseAdvice;
           }
 
           if (!plainListingBrowse && candidates.length > 0) {

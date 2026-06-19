@@ -1,6 +1,6 @@
 import type { Request } from "express";
 import { describe, expect, it, vi } from "vitest";
-import { buildShare, sharePreviewHtml } from "../shares";
+import { buildShare, sharePreviewHtml, shareUrl } from "../shares";
 
 vi.mock("@workspace/db", () => ({
   db: {},
@@ -19,6 +19,10 @@ function request(origin = "https://www.projectalpha.app"): Request {
 }
 
 describe("property share previews", () => {
+  it("generates public preview-first property-share URLs", () => {
+    expect(shareUrl("abc123", request())).toBe("https://www.projectalpha.app/property-share/abc123");
+  });
+
   it("uses listing teaser text for the social description", () => {
     const share = buildShare({
       kind: "listing",
@@ -73,6 +77,59 @@ describe("property share previews", () => {
     });
 
     expect(share.previewImageUrl).toBe("https://photos.trademe.co.nz/property/hero.jpg");
+  });
+
+  it("uses common thumbnail and cover image fields instead of falling back to PA", () => {
+    const share = buildShare({
+      kind: "candidate",
+      address: "10 Example Road, Auckland",
+      candidate: {
+        briefSummary: "A strong development site near transport.",
+        thumbnailPhotoUrl: "https://photos.trademe.co.nz/property/thumb.jpg",
+      },
+    });
+
+    const html = sharePreviewHtml({
+      token: "abc123",
+      kind: "candidate",
+      address: share.address,
+      title: share.previewTitle,
+      description: share.previewDescription,
+      imageUrl: share.previewImageUrl,
+      url: "https://www.projectalpha.app/property-share/abc123",
+      facts: [],
+    }, request());
+
+    expect(share.previewImageUrl).toBe("https://photos.trademe.co.nz/property/thumb.jpg");
+    expect(html).toContain("<img src=");
+    expect(html).not.toContain('<div class="hero-fallback">PA</div>');
+  });
+
+  it("accepts safe relative image-proxy URLs for preview images", () => {
+    const share = buildShare({
+      kind: "listing",
+      address: "10 Example Road, Auckland",
+      listing: {
+        teaser: "A listing with an already proxied cover image.",
+        coverImageUrl: "/api/image-proxy?url=https%3A%2F%2Fmediaserver.realestate.co.nz%2Flisting.jpg",
+      },
+    });
+
+    const html = sharePreviewHtml({
+      token: "abc123",
+      kind: "listing",
+      address: share.address,
+      title: share.previewTitle,
+      description: share.previewDescription,
+      imageUrl: share.previewImageUrl,
+      url: "https://www.projectalpha.app/property-share/abc123",
+      facts: [],
+    }, request());
+
+    expect(share.previewImageUrl).toBe("/api/image-proxy?url=https%3A%2F%2Fmediaserver.realestate.co.nz%2Flisting.jpg");
+    expect(html).toContain('meta property="og:image" content="https://www.projectalpha.app/api/image-proxy?url=');
+    expect(html).toContain("<img src=");
+    expect(html).not.toContain('<div class="hero-fallback">PA</div>');
   });
 
   it("falls back to selected listing context photos for report shares", () => {

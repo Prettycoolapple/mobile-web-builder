@@ -676,29 +676,38 @@ async function screenOneFast(
         },
         "Pre-screen: rejected strict subdivision candidate",
       );
-      // Distinguish a confirmed reject (we know enough to say "no") from an
-      // indeterminate one (essential data still missing even after retries).
-      // The outer discovery loop re-screens indeterminate listings with longer
-      // waits before declaring "no listings". We base this on the actual
-      // decision inputs rather than which sources happened to fail — e.g. if
-      // build year is known but >= 2000 the listing is a real reject, even if
-      // some redundant source (LINZ / PropertyValue) was unavailable.
-      const haveAnyBuildYear = resolvedBuildYear != null;
-      const isIndeterminate =
-        (!options?.preliminarySubdivision && !haveAnyBuildYear) ||
-        !zone ||
-        verifiedLand.landAreaConfidence !== "verified" ||
-        eligibility?.typology === "unknown" ||
-        eligibility?.titleConfidence === "unknown";
-      if (isIndeterminate) {
-        return {
-          kind: "indeterminate",
-          reason: failedSources.length > 0
-            ? `essential_sources_failed:${failedSources.join(",")}`
-            : "missing_data_after_retry",
-        };
+      // Cross-lease the user explicitly opted in to: it can never pass the
+      // standard freehold subdivision screen (you can't subdivide a cross-lease
+      // on its own title), so it always lands here — but the user asked to see
+      // these anyway. Surface it as an informational candidate (standardPathViable
+      // stays false; the card carries the cross-lease warning + the neighbour-
+      // acquisition note added below) instead of dropping it as rejected or
+      // indeterminate on missing/unverified land area.
+      if (waiveTenureForSubdivision !== "cross_lease") {
+        // Distinguish a confirmed reject (we know enough to say "no") from an
+        // indeterminate one (essential data still missing even after retries).
+        // The outer discovery loop re-screens indeterminate listings with longer
+        // waits before declaring "no listings". We base this on the actual
+        // decision inputs rather than which sources happened to fail — e.g. if
+        // build year is known but >= 2000 the listing is a real reject, even if
+        // some redundant source (LINZ / PropertyValue) was unavailable.
+        const haveAnyBuildYear = resolvedBuildYear != null;
+        const isIndeterminate =
+          (!options?.preliminarySubdivision && !haveAnyBuildYear) ||
+          !zone ||
+          verifiedLand.landAreaConfidence !== "verified" ||
+          eligibility?.typology === "unknown" ||
+          eligibility?.titleConfidence === "unknown";
+        if (isIndeterminate) {
+          return {
+            kind: "indeterminate",
+            reason: failedSources.length > 0
+              ? `essential_sources_failed:${failedSources.join(",")}`
+              : "missing_data_after_retry",
+          };
+        }
+        return { kind: "rejected", reason: eligibility?.subdivisionRejectReason ?? "strict_screen_failed" };
       }
-      return { kind: "rejected", reason: eligibility?.subdivisionRejectReason ?? "strict_screen_failed" };
     }
     // LLM tie-breaker (final-acceptance check only, never in the bulk
     // prefilter): the copy mentions townhouse/terrace but the deterministic
@@ -706,7 +715,14 @@ async function screenOneFast(
     // dwelling IS one before we publish this as a subdividable candidate. The
     // LLM can only make the verdict safer — a deterministic pass stands unless
     // the LLM finds a concrete risk flag.
-    if (options?.strictStandardSubdivision && hasAmbiguousListingSignals(listing)) {
+    // Skipped for an opted-in cross-lease: a cross-lease is inherently a
+    // multi-unit development, so this check would always reject it — but the
+    // user explicitly asked to see these as informational (buy-the-neighbour) cards.
+    if (
+      options?.strictStandardSubdivision &&
+      waiveTenureForSubdivision !== "cross_lease" &&
+      hasAmbiguousListingSignals(listing)
+    ) {
       const llmClaims = await extractListingClaimsLLM(listing).catch(() => null);
       if (llmClaims && (llmClaims.dwellingIsTownhouse || llmClaims.isNewBuild || llmClaims.multiUnitDevelopment)) {
         logger.info(
@@ -774,6 +790,9 @@ async function screenOneFast(
       redevelopmentSuspected: redevelopment.suspected || undefined,
       screeningStatus: options?.preliminarySubdivision ? "preliminary" : "verified",
       screeningNotes: [
+        ...(waiveTenureForSubdivision === "cross_lease"
+          ? ["Cross-lease title — it can't be subdivided on its own. Acquiring the neighbouring cross-lease unit(s) and converting the shared title to freehold can unlock subdivision potential."]
+          : []),
         ...(redevelopment.suspected
           ? [`Listing claims conflict with council records — parcel likely redeveloped (${redevelopment.reasons.join("; ")}).`]
           : []),
@@ -930,6 +949,10 @@ export async function preScreenListingsFastDetailed(
                 options?.onCandidate?.(r.candidate);
               } else if (r.kind === "indeterminate") {
                 indeterminate.push(bgOriginals[i]);
+              } else {
+                // Keep the non-freehold tally complete past the early-bail so the
+                // "I left out N cross-lease…" reminder reflects the whole pool.
+                tallyExcludedTenure(r);
               }
             }
           }

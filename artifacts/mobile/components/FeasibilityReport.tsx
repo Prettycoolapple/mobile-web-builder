@@ -65,6 +65,7 @@ const SHOW_COMPARABLE_SALES_IN_UI = false;
 interface Props {
   report: Report;
   onFollowUp: (question: string) => void;
+  onAnalyseProperty?: (address: string) => void;
 }
 
 function formatNZD(n: number | string | undefined | null): string {
@@ -1983,9 +1984,10 @@ function builtEnvironmentStatusColor(status: BuiltEnvironmentStatusValue, colors
   return colors.mutedForeground;
 }
 
-function BuiltEnvironmentPanel({ context, colors }: {
+function BuiltEnvironmentPanel({ context, colors, onAnalyseProperty }: {
   context: BuiltEnvironmentContext;
   colors: ReturnType<typeof useColors>;
+  onAnalyseProperty?: (address: string) => void;
 }) {
   const { t } = useT();
   const rows = (context.nearbyStatus && context.nearbyStatus.length > 0
@@ -1998,6 +2000,18 @@ function BuiltEnvironmentPanel({ context, colors }: {
         status: example.status ?? builtEnvironmentStatusFromYear(example.buildYear),
       }))
   ).slice(0, 15);
+
+  const handleRowPress = useCallback((address: string | null | undefined) => {
+    if (!address || !onAnalyseProperty) return;
+    Alert.alert(
+      t("report.built_env_analyse_title"),
+      t("report.built_env_analyse_body"),
+      [
+        { text: t("history.cancel"), style: "cancel" },
+        { text: t("report.built_env_analyse_confirm"), onPress: () => onAnalyseProperty(address) },
+      ],
+    );
+  }, [t, onAnalyseProperty]);
 
   return (
     <View style={{ gap: 10 }}>
@@ -2022,14 +2036,28 @@ function BuiltEnvironmentPanel({ context, colors }: {
           {rows.map((row, index) => {
             const status = (row.status ?? "unknown") as BuiltEnvironmentStatusValue;
             const statusColor = builtEnvironmentStatusColor(status, colors);
-            return (
-              <View key={`${row.address ?? "nearby"}-${index}`} style={[styles.tableRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}>
+            const rowContent = (
+              <>
                 <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1 }} numberOfLines={1}>
                   {row.address ?? t("report.nearby_property")}
                 </Text>
                 <Text style={{ color: statusColor, fontFamily: "DM_Sans_600SemiBold", fontSize: 12, width: 86, textAlign: "right" }}>
                   {builtEnvironmentStatusLabel(status, t)}
                 </Text>
+              </>
+            );
+            return onAnalyseProperty ? (
+              <TouchableOpacity
+                key={`${row.address ?? "nearby"}-${index}`}
+                style={[styles.tableRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}
+                onPress={() => handleRowPress(row.address)}
+                activeOpacity={0.6}
+              >
+                {rowContent}
+              </TouchableOpacity>
+            ) : (
+              <View key={`${row.address ?? "nearby"}-${index}`} style={[styles.tableRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}>
+                {rowContent}
               </View>
             );
           })}
@@ -2488,7 +2516,7 @@ function SchoolZonesPanel({ zones, colors }: { zones: SchoolZoneDetail[]; colors
   );
 }
 
-export function FeasibilityReportCard({ report, onFollowUp }: Props) {
+export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }: Props) {
   const colors = useColors();
   const { t, locale } = useT();
   const { getApiHeaders, user } = useAuth();
@@ -2956,6 +2984,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
           <BuiltEnvironmentPanel
             context={report.builtEnvironmentContext}
             colors={colors}
+            onAnalyseProperty={onAnalyseProperty}
           />
         </SectionCard>
       ) : null}

@@ -256,7 +256,7 @@ router.get("/admin/users", requireAdmin, async (req, res) => {
       })
       .from(profiles)
       .where(whereClause)
-      .orderBy(desc(profiles.createdAt))
+      .orderBy(sql`${profiles.lastLoginAt} DESC NULLS LAST`, desc(profiles.createdAt))
       .limit(limit)
       .offset(offset);
 

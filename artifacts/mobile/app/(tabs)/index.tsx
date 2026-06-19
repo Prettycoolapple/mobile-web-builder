@@ -1416,6 +1416,12 @@ export default function SearchScreen() {
     [user?.id],
   );
 
+  // JobIds whose terminal result has already been rendered this session. The
+  // mount / AppState-active / 30s-interval triggers can otherwise race and render
+  // the same completed job twice — and because the rendered message no longer
+  // carries the loading bubble, the second render would append a duplicate.
+  const resolvedBackgroundJobIdsRef = useRef<Set<string>>(new Set());
+
   const backgroundJobPollInFlightRef = useRef(false);
   const pollBackgroundAnalyseJobs = useCallback(async () => {
     if (!user?.id || backgroundJobPollInFlightRef.current) return;
@@ -1424,6 +1430,10 @@ export default function SearchScreen() {
       const stored = await readBackgroundAnalyseJobs();
       const jobs = stored.filter((job) => job.userId === user.id);
       for (const job of jobs) {
+        if (resolvedBackgroundJobIdsRef.current.has(job.jobId)) {
+          await removeBackgroundAnalyseJob(job.jobId);
+          continue;
+        }
         try {
           const resp = await fetch(`${getApiBase()}/analyse/jobs/${job.jobId}`, {
             headers: getApiHeaders(),
@@ -1440,6 +1450,7 @@ export default function SearchScreen() {
 
           if (data.status === "completed") {
             await removeBackgroundAnalyseJob(job.jobId);
+            resolvedBackgroundJobIdsRef.current.add(job.jobId);
             if (data.reportGroup && isFeasibilityReportGroup(data.reportGroup)) {
               const groupWithHistory = withGroupHistoryMetadata(data.reportGroup, data.searchId, data.historyCreatedAt);
               if (currentSessionId === job.sessionId) {
@@ -1467,6 +1478,7 @@ export default function SearchScreen() {
             }
           } else if (data.status === "failed") {
             await removeBackgroundAnalyseJob(job.jobId);
+            resolvedBackgroundJobIdsRef.current.add(job.jobId);
             replaceBackgroundAnalyseMessage(job.jobId, {
               role: "assistant",
               type: "text",
@@ -1622,6 +1634,10 @@ export default function SearchScreen() {
       const stored = await readBackgroundScreeningJobs();
       const jobs = stored.filter((job) => job.userId === user.id);
       for (const job of jobs) {
+        if (resolvedBackgroundJobIdsRef.current.has(job.jobId)) {
+          await removeBackgroundScreeningJob(job.jobId);
+          continue;
+        }
         try {
           const resp = await fetch(`${getApiBase()}/screening/jobs/${job.jobId}`, {
             headers: getApiHeaders(),
@@ -1635,9 +1651,11 @@ export default function SearchScreen() {
 
           if (data.status === "completed") {
             await removeBackgroundScreeningJob(job.jobId);
+            resolvedBackgroundJobIdsRef.current.add(job.jobId);
             renderBackgroundScreeningResult(job, data.result);
           } else if (data.status === "failed") {
             await removeBackgroundScreeningJob(job.jobId);
+            resolvedBackgroundJobIdsRef.current.add(job.jobId);
             replaceBackgroundAnalyseMessage(job.jobId, {
               role: "assistant",
               type: "text",
@@ -2734,6 +2752,14 @@ export default function SearchScreen() {
     [handleAnalyse],
   );
 
+  const handleAnalyseProperty = useCallback(
+    (address: string) => {
+      startNewChat();
+      void handleAnalyse(address, null, null, null, false);
+    },
+    [startNewChat, handleAnalyse],
+  );
+
   useEffect(() => {
     const address = typeof routeParams.analyseAddress === "string" ? routeParams.analyseAddress.trim() : "";
     const key = typeof routeParams.analyseListingId === "string"
@@ -2915,6 +2941,7 @@ export default function SearchScreen() {
             onFollowUp={handleFollowUp}
             onDiscoveryChoice={handleDiscoveryChoice}
             onAnalyse={handleCardAnalyse}
+            onAnalyseProperty={handleAnalyseProperty}
             analysingPropertyKey={analysingPropertyKey}
             onRetry={handleSend}
             onConnect={(providerId) => handleConnect(providerId, item.propertyAddress ?? "")}
@@ -2927,7 +2954,7 @@ export default function SearchScreen() {
         </View>
       );
     },
-    [handleFollowUp, handleDiscoveryChoice, handleCardAnalyse, analysingPropertyKey, handleSend, handleConnect, handleDismiss, handleAgentDismiss, handleShowMore, handleSearchResultLayout],
+    [handleFollowUp, handleDiscoveryChoice, handleCardAnalyse, handleAnalyseProperty, analysingPropertyKey, handleSend, handleConnect, handleDismiss, handleAgentDismiss, handleShowMore, handleSearchResultLayout],
   );
 
   const keyExtractor = useCallback((item: ChatMessage) => item.id, []);

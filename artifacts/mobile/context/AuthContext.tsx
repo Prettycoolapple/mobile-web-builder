@@ -208,6 +208,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 const STORAGE_KEY_TOKEN = "@devfeasible/auth_token";
 const STORAGE_KEY_USER = "@devfeasible/auth_user";
 const STORAGE_KEY_ANONYMOUS_INSTALL_ID = "@devfeasible/anonymous_install_id";
+const ACTIVITY_PING_INTERVAL_MS = 5 * 60 * 1000;
 
 function createAnonymousInstallId(): string {
   const random = Math.random().toString(36).slice(2);
@@ -223,6 +224,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isSubscriptionIdentityReady, setIsSubscriptionIdentityReady] = useState(false);
   /** Throttle repair sync when paid tier is missing `subscriptionPeriodEndAt` (e.g. legacy row or failed sync). */
   const lastSubscriptionPeriodRepairAtRef = useRef<{ userId: string; at: number } | null>(null);
+  const lastActivityPingAtRef = useRef(0);
 
   // Wipe RevenueCat customer-info / offerings cache so the next user never
   // sees the previous user's subscription state.
@@ -336,13 +338,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => sub.remove();
   }, [refreshProfile, token]);
 
+  const pingActivity = useCallback(async () => {
+    if (!token) return;
+    const now = Date.now();
+    if (now - lastActivityPingAtRef.current < ACTIVITY_PING_INTERVAL_MS) return;
+    lastActivityPingAtRef.current = now;
+    try {
+      const resp = await fetch(`${getApiBase()}/auth/activity`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (resp.status === 401) await clearLocalAuth();
+    } catch {
+      lastActivityPingAtRef.current = 0;
+    }
+  }, [clearLocalAuth, token]);
+
+  useEffect(() => {
+    if (!token || isLoading) return;
+    void pingActivity();
+  }, [isLoading, pingActivity, token]);
+
+  useEffect(() => {
+    if (!token) return;
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") void pingActivity();
+    });
+    return () => sub.remove();
+  }, [pingActivity, token]);
+
   useEffect(() => {
     if (!token) return;
     const interval = setInterval(() => {
       void refreshProfile();
+      void pingActivity();
     }, 60_000);
     return () => clearInterval(interval);
-  }, [refreshProfile, token]);
+  }, [pingActivity, refreshProfile, token]);
 
   useEffect(() => {
     if (!token || !user?.id || !isSubscriptionIdentityReady || IS_TEST_PAYMENT_MODE) return;
@@ -390,9 +422,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signUp = useCallback(async (data: SignUpData): Promise<{ token: string }> => {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (anonymousInstallId) headers["X-Anonymous-Install-Id"] = anonymousInstallId;
     const resp = await fetch(`${getApiBase()}/auth/signup`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(data),
     });
     const json = (await readResponseJson(resp)) as {
@@ -413,7 +447,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // RevenueCat identity switch to fully complete before returning.
     await switchRevenueCatIdentity(profile.id);
     return { token: json.token };
-  }, [persistAuth, switchRevenueCatIdentity]);
+  }, [anonymousInstallId, persistAuth, switchRevenueCatIdentity]);
 
   const signIn = useCallback(async (email: string, password: string): Promise<UserProfile> => {
     const resp = await fetch(`${getApiBase()}/auth/login`, {

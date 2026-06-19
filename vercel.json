@@ -18,6 +18,7 @@
     { "source": "/api/healthz", "destination": "/api/healthz" },
     { "source": "/api/(.*)", "destination": "/api" },
     { "source": "/api", "destination": "/api" },
+    { "source": "/property-share/(.*)", "destination": "/api" },
     { "source": "/share/(.*)", "destination": "/api" },
     { "source": "/admin", "destination": "/admin/index.html" },
     { "source": "/admin/(.*)", "destination": "/admin/index.html" }

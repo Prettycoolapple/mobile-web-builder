@@ -318,6 +318,7 @@ async function assessParcels(parcels: LinzParcelNearby[], timeoutMs: number): Pr
 async function validateNearbyAddresses(subjectAddress: string, targetCount: number, timeoutMs: number): Promise<string[]> {
   const rawCandidates = generateNearbyAddressCandidates(subjectAddress, Math.max(targetCount * 3, 30));
   const subjectKey = normaliseAddress(subjectAddress);
+  const subjectLocality = parseStreetAddress(subjectAddress)?.locality?.toLowerCase().trim() ?? null;
   const unique = new Map<string, string>();
   const concurrency = 4;
 
@@ -332,6 +333,11 @@ async function validateNearbyAddresses(subjectAddress: string, targetCount: numb
     for (const address of resolved) {
       const key = normaliseAddress(address);
       if (!address || !key || key === subjectKey || unique.has(key)) continue;
+      // Reject addresses from a different suburb — same street name can exist in multiple suburbs
+      if (subjectLocality) {
+        const returnedLocality = parseStreetAddress(address)?.locality?.toLowerCase().trim() ?? null;
+        if (returnedLocality && returnedLocality !== subjectLocality) continue;
+      }
       unique.set(key, address);
       if (unique.size >= targetCount) break;
     }

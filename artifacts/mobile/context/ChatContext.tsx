@@ -1128,7 +1128,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           const idx = s.messages.findIndex((m) => m.backgroundJobId === jobId);
           if (idx < 0) {
             shouldSave = true;
-            return { ...s, messages: [...s.messages, fullMsg], currentReport, currentReportGroup, updatedAt: Date.now() };
+            // Preserve backgroundJobId on the appended message too, so a later
+            // re-render of the same completed job REPLACES this one in place
+            // instead of appending a second copy (the duplicate-message bug).
+            return { ...s, messages: [...s.messages, { ...fullMsg, backgroundJobId: jobId }], currentReport, currentReportGroup, updatedAt: Date.now() };
           }
           const messages = [...s.messages];
           const existing = messages[idx]!;
@@ -1136,6 +1139,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             ...fullMsg,
             id: existing.id,
             timestamp: existing.timestamp,
+            // Keep the job id on the resolved message so repeat renders are
+            // idempotent (findIndex above still matches → replace, never append).
+            backgroundJobId: jobId,
           };
           shouldSave = true;
           return { ...s, messages, currentReport, currentReportGroup, updatedAt: Date.now() };

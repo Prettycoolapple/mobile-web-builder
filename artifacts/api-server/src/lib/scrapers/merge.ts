@@ -357,7 +357,33 @@ function sourceAddressMatchesSubject(
 ): boolean {
   if (!confirmedAddress) return true;
   const target = analysedAddress ?? "";
+  const targetUnit = firstLineStreetNumberUnit(target);
+  const confirmedUnit = firstLineStreetNumberUnit(confirmedAddress);
+  if (targetUnit && confirmedUnit) {
+    if (targetUnit.number !== confirmedUnit.number) return false;
+    if (targetUnit.suffix !== confirmedUnit.suffix) return false;
+  }
   return addressesLikelyMatch(target, confirmedAddress) || addressLineAppearsInText(target, confirmedAddress);
+}
+
+function firstLineStreetNumberUnit(value: string | null | undefined): { number: string; suffix: string } | null {
+  const firstLine = String(value ?? "")
+    .replace(/^https?:\/\/[^/]+\/address\//i, "")
+    .replace(/[-_/]+/g, " ")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+  const match = firstLine.match(/\b(\d+)\s*([a-z])?\b/);
+  if (!match) return null;
+  return {
+    number: match[1],
+    suffix: match[2] ?? "",
+  };
+}
+
+function analysedAddressHasChildSuffix(value: string | null | undefined): boolean {
+  const unit = firstLineStreetNumberUnit(value);
+  return !!unit?.suffix;
 }
 
 export function mergePropertyData(
@@ -451,7 +477,18 @@ export function mergePropertyData(
   }
 
   // Land area: LINZ is the authoritative cadastral measurement — always wins.
+  const analysedIsChildAddress = analysedAddressHasChildSuffix(extra?.analysed_address);
+  const exactChildLandCandidates: Array<[string, number | null | undefined]> = analysedIsChildAddress
+    ? [
+        ["propertyvalue", propertyValueLandArea],
+        ["qv", qvLandArea],
+        ["homes", homesLandArea],
+        ["realestate.co.nz", realestateListing?.landArea],
+      ]
+    : [];
+
   const land_area_sqm = first("land_area_sqm", sources,
+    ...exactChildLandCandidates,
     ["linz", linz?.area_sqm],
     ["auckland_council_gis", ph?.land_area_sqm],
     ["propertyvalue", propertyValueLandArea],

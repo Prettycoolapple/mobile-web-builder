@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import { db, phoneVerifications } from "@workspace/db";
 import { sendSms } from "../lib/twilio";
+import { checkPhoneLineTypeForSignup, sendPhoneLineTypeBlock } from "../lib/phone-line-type";
 
 const router: IRouter = Router();
 
@@ -190,6 +191,12 @@ router.post("/auth/send-otp", async (req: Request, res: Response) => {
       code: "RATE_LIMITED",
       retryAfterSeconds: ipLimit.retryAfterSeconds,
     });
+    return;
+  }
+
+  const lineType = await checkPhoneLineTypeForSignup(normalized);
+  if (!lineType.allowed) {
+    sendPhoneLineTypeBlock(res, lineType);
     return;
   }
 

@@ -9,9 +9,11 @@ import { FeasibilityReportCard } from "./FeasibilityReport";
 export function CombinedReportGroupCard({
   group,
   onFollowUp,
+  onAnalyseProperty,
 }: {
   group: FeasibilityReportGroup;
   onFollowUp: (question: string) => void;
+  onAnalyseProperty?: (address: string) => void;
 }) {
   const colors = useColors();
   const { t } = useT();
@@ -61,7 +63,7 @@ export function CombinedReportGroupCard({
                 </Text>
               </View>
             </View>
-            <FeasibilityReportCard report={report} onFollowUp={onFollowUp} />
+            <FeasibilityReportCard report={report} onFollowUp={onFollowUp} onAnalyseProperty={onAnalyseProperty} />
           </View>
         );
       })}

@@ -27,6 +27,7 @@ export * from "./push_tokens";
 export * from "./recommendations";
 export * from "./phone_verifications";
 export * from "./phone_registration_history";
+export * from "./phone_line_type_cache";
 export * from "./password_reset_tokens";
 export * from "./chat_llm_feedback";
 export * from "./user_blocks";

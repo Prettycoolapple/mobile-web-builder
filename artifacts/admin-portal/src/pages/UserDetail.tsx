@@ -19,6 +19,7 @@ interface UserDetailResponse {
     specialStatusExpiresAt: string | null;
     isVerified: boolean;
     createdAt: string;
+    /** Backed by profiles.last_login_at; now updated by app activity pings as last active. */
     lastLoginAt: string | null;
     reportsUsedThisMonth: number;
   };
@@ -284,7 +285,7 @@ export default function UserDetailPage() {
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5 }}>
-              Last login
+              Last active
             </div>
             <span title={profile.lastLoginAt ? formatDate(profile.lastLoginAt) : ""}>
               {profile.lastLoginAt ? relativeTime(profile.lastLoginAt) : "Never"}

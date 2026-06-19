@@ -515,6 +515,15 @@ export async function translateReportNarrative(
     out.transportContext = context;
   }
 
+  // builtEnvironmentContext.reasons[] — hardcoded English signal strings → Chinese
+  if (translateTitleSchool && out.builtEnvironmentContext && typeof out.builtEnvironmentContext === "object") {
+    const bec = { ...(out.builtEnvironmentContext as Record<string, unknown>) };
+    if (Array.isArray(bec.reasons)) {
+      bec.reasons = await translateReportZhStringArray(bec.reasons, true);
+    }
+    out.builtEnvironmentContext = bec;
+  }
+
   // disclaimer
   if ("disclaimer" in out) {
     out.disclaimer = await translateIfString(out.disclaimer);
