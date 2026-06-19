@@ -129,9 +129,10 @@ export function verifyPhoneVerificationToken(
 export async function consumePhoneVerification(
   verificationId: string,
   expectedPhone: string,
+  executor: Pick<typeof db, "update"> = db,
 ): Promise<boolean> {
   const normalized = normalizePhone(expectedPhone);
-  const result = await db
+  const result = await executor
     .update(phoneVerifications)
     .set({ consumedAt: new Date() })
     .where(

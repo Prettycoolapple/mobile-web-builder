@@ -114,3 +114,18 @@ export function getStripeAgentPriceId(): string {
 export function getAgentInvitationCode(): string {
   return readOptional("AGENT_INVITATION_CODE") ?? "projectalpha26";
 }
+
+/** Public URL of the static provider portal (used for Stripe Checkout return URLs). */
+export function getProviderPortalUrl(): string {
+  return `${getPublicAppUrl()}/provider-portal/`;
+}
+
+/** The $127.50/month recurring Price id for provider portal subscriptions. */
+export function getStripeProviderPriceId(): string {
+  return readRequired("STRIPE_PROVIDER_PRICE_ID");
+}
+
+/** Shared invitation code providers can enter to bypass the subscription. */
+export function getProviderInvitationCode(): string {
+  return readOptional("PROVIDER_INVITATION_CODE") ?? "arch140326!";
+}

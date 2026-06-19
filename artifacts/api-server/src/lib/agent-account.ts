@@ -3,6 +3,7 @@ import { db, profiles, salesAgentProfiles, pendingAgentSignups, type PendingAgen
 import { consumePhoneVerification } from "../routes/otp";
 import { sendNewUserSignupNotification } from "./mailer";
 import { logger } from "./logger";
+import { checkPhoneCanRegister, normalizeRegistrationPhone } from "./phone-registration";
 
 export interface AgentSubscriptionInfo {
   stripeCustomerId: string | null;
@@ -47,6 +48,7 @@ export async function createAgentAccountFromPending(
   sub: AgentSubscriptionInfo,
 ): Promise<EnsuredAgentAccount> {
   const email = pending.email.toLowerCase().trim();
+  const phoneNumber = normalizeRegistrationPhone(pending.phoneNumber);
 
   // Fast path: already created (e.g. webhook ran first).
   const existing = await findProfileByEmail(email);
@@ -69,10 +71,15 @@ export async function createAgentAccountFromPending(
 
   try {
     const profile = await db.transaction(async (tx) => {
+      const phoneBlock = await checkPhoneCanRegister(tx, phoneNumber, "sales_agent");
+      if (!phoneBlock.allowed) {
+        throw Object.assign(new Error(phoneBlock.message), { phoneRegistrationBlock: phoneBlock });
+      }
+
       // Consume the OTP now that the account is actually being created. Payment
       // already succeeded, so we don't block creation if it was already consumed
       // (e.g. a concurrent path) — just log.
-      const consumed = await consumePhoneVerification(pending.phoneVid, pending.phoneNumber);
+      const consumed = await consumePhoneVerification(pending.phoneVid, phoneNumber, tx);
       if (!consumed) {
         logger.warn({ pendingId: pending.id }, "Agent account creation: OTP already consumed (continuing)");
       }
@@ -87,7 +94,7 @@ export async function createAgentAccountFromPending(
           languages,
           subscriptionTier: "free",
           reportsUsedThisMonth: 0,
-          phoneNumber: pending.phoneNumber,
+          phoneNumber,
           phoneVerifiedAt: new Date(),
           stripeCustomerId: sub.stripeCustomerId,
           stripeSubscriptionId: sub.stripeSubscriptionId,
@@ -117,7 +124,7 @@ export async function createAgentAccountFromPending(
       profileId: profile.id,
       email: profile.email,
       fullName: pending.fullName,
-      phone: pending.phoneNumber,
+      phone: phoneNumber,
       languages,
       agentData: {
         agencyName: pending.agencyName,

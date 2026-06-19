@@ -1,21 +1,23 @@
-import { pgTable, text, integer, timestamp, pgEnum, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, integer, timestamp, pgEnum, boolean, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { sql } from "drizzle-orm";
 import { z } from "zod/v4";
 
 export const userRoleEnum = pgEnum("user_role", ["general", "sales_agent", "service_provider", "admin"]);
 
-export const profiles = pgTable("profiles", {
-  id: text("id").primaryKey().default(sql`gen_random_uuid()`),
-  email: text("email").notNull().unique(),
-  fullName: text("full_name"),
-  passwordHash: text("password_hash").notNull(),
-  role: userRoleEnum("role").default("general").notNull(),
-  languages: text("languages").array().default(sql`'{}'`).notNull(),
-  subscriptionTier: text("subscription_tier").default("free").notNull(),
-  reportsUsedThisMonth: integer("reports_used_this_month").default(0).notNull(),
-  messagesUsedThisMonth: integer("messages_used_this_month").default(0).notNull(),
-  lastResetAt: timestamp("last_reset_at", { withTimezone: true }).defaultNow().notNull(),
+export const profiles = pgTable(
+  "profiles",
+  {
+    id: text("id").primaryKey().default(sql`gen_random_uuid()`),
+    email: text("email").notNull().unique(),
+    fullName: text("full_name"),
+    passwordHash: text("password_hash").notNull(),
+    role: userRoleEnum("role").default("general").notNull(),
+    languages: text("languages").array().default(sql`'{}'`).notNull(),
+    subscriptionTier: text("subscription_tier").default("free").notNull(),
+    reportsUsedThisMonth: integer("reports_used_this_month").default(0).notNull(),
+    messagesUsedThisMonth: integer("messages_used_this_month").default(0).notNull(),
+    lastResetAt: timestamp("last_reset_at", { withTimezone: true }).defaultNow().notNull(),
   /**
    * End of the current App Store / Play Billing period for the active subscription,
    * copied from RevenueCat (entitlement expiration). Usage quotas for paid tiers use
@@ -65,7 +67,13 @@ export const profiles = pgTable("profiles", {
   abuseFlag: boolean("abuse_flag").default(false).notNull(),
   abuseFlagReason: text("abuse_flag_reason"),
   abuseFlaggedAt: timestamp("abuse_flagged_at", { withTimezone: true }),
-});
+  },
+  (table) => ({
+    phoneRoleUnique: uniqueIndex("profiles_phone_role_unique")
+      .on(table.phoneNumber, table.role)
+      .where(sql`${table.phoneNumber} IS NOT NULL AND btrim(${table.phoneNumber}) <> ''`),
+  }),
+);
 
 export const insertProfileSchema = createInsertSchema(profiles).omit({
   id: true,

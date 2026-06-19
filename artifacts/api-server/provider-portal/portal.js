@@ -366,33 +366,6 @@
     openConsentModal();
   }
 
-  async function submitSignup() {
-    const status = $("#signup-status");
-    if (!state.pendingSignupPayload) {
-      setStatus(status, "Please restart your signup.", "error");
-      return;
-    }
-    setStatus(status, "Creating your account…", null);
-    try {
-      const data = await api("/auth/signup", { method: "POST", body: state.pendingSignupPayload });
-      let user = data.user;
-      const picture = state.pendingSignupForm ? selectedProfilePicture(state.pendingSignupForm) : null;
-      if (picture) {
-        try {
-          const uploaded = await uploadProfilePicture(data.token, picture);
-          user = { ...user, avatarUrl: uploaded.fileUrl };
-        } catch {
-          // Non-fatal: the account exists; the photo can be added later in the app.
-        }
-      }
-      saveSession(data.token, user);
-      setStatus(status, "Your account is ready.", "success");
-      showDashboard(user);
-    } catch (error) {
-      setStatus(status, getErrorMessage(error, "We couldn't create your account. Please try again."), "error");
-    }
-  }
-
   // ── T&C consent modal ──────────────────────────────────────────────────────
   function openConsentModal() {
     const panel = $("#consent-panel");
@@ -424,7 +397,130 @@
       return;
     }
     closeConsentModal();
-    void submitSignup();
+    openPaywall();
+  }
+
+  // ── Paywall ───────────────────────────────────────────────────────────────
+  function openPaywall() {
+    const panel = $("#paywall-panel");
+    if (!panel) return;
+    setStatus($("#paywall-status"), "", null);
+    switchPaywallMode("subscribe");
+    const code = $("#paywall-invite-code");
+    if (code) code.value = "";
+    panel.hidden = false;
+    panel.querySelector(".portal-paywall-card")?.scrollTo?.(0, 0);
+  }
+
+  function closePaywall() {
+    const panel = $("#paywall-panel");
+    if (panel) panel.hidden = true;
+    setStatus($("#paywall-status"), "", null);
+  }
+
+  function switchPaywallMode(mode) {
+    $$(".paywall-toggle-btn").forEach((btn) => {
+      btn.classList.toggle("is-active", btn.dataset.paywallMode === mode);
+    });
+    $$("[data-paywall-pane]").forEach((pane) => {
+      pane.hidden = pane.dataset.paywallPane !== mode;
+    });
+  }
+
+  async function submitPaywallInvite() {
+    const status = $("#paywall-status");
+    const code = String($("#paywall-invite-code")?.value || "").trim();
+    if (!code) {
+      setStatus(status, "Enter your invitation code.", "error");
+      return;
+    }
+    if (!state.pendingSignupPayload) {
+      setStatus(status, "Please restart your signup.", "error");
+      return;
+    }
+    const btn = $("#paywall-invite-button");
+    if (btn) btn.disabled = true;
+    setStatus(status, "Completing registration…", null);
+    try {
+      const data = await api("/auth/service-provider-web-signup", {
+        method: "POST",
+        body: { ...state.pendingSignupPayload, invitationCode: code },
+      });
+      let user = data.user;
+      const picture = state.pendingSignupForm ? selectedProfilePicture(state.pendingSignupForm) : null;
+      if (picture) {
+        try {
+          const uploaded = await uploadProfilePicture(data.token, picture);
+          user = { ...user, avatarUrl: uploaded.fileUrl };
+        } catch {
+          // Non-fatal; photo can be added later in the app.
+        }
+      }
+      closePaywall();
+      saveSession(data.token, user);
+      showDashboard(user);
+    } catch (error) {
+      if (btn) btn.disabled = false;
+      if (error && error.code === "INVITATION_OR_SUBSCRIPTION_REQUIRED") {
+        setStatus(status, "That invitation code isn't valid. Check it and try again, or subscribe.", "error");
+        return;
+      }
+      setStatus(status, getErrorMessage(error, "We couldn't complete registration. Please try again."), "error");
+    }
+  }
+
+  async function submitPaywallSubscribe() {
+    const status = $("#paywall-status");
+    if (!state.pendingSignupPayload) {
+      setStatus(status, "Please restart your signup.", "error");
+      return;
+    }
+    const btn = $("#paywall-subscribe-button");
+    if (btn) btn.disabled = true;
+    setStatus(status, "Preparing checkout…", null);
+    try {
+      const data = await api("/auth/service-provider-web-signup/checkout", {
+        method: "POST",
+        body: state.pendingSignupPayload,
+      });
+      window.location.href = data.checkoutUrl;
+    } catch (error) {
+      if (btn) btn.disabled = false;
+      setStatus(status, getErrorMessage(error, "We couldn't start checkout. Please try again."), "error");
+    }
+  }
+
+  async function handleStripeReturn(sessionId) {
+    const authSection = $("#portal-auth");
+    const hero = $(".portal-hero");
+    if (authSection) authSection.hidden = true;
+    if (hero) hero.hidden = true;
+    const dash = $("#portal-dashboard");
+    if (dash) {
+      const summary = $("#dashboard-summary");
+      if (summary) summary.textContent = "Completing your registration…";
+      dash.hidden = false;
+    }
+    try {
+      const data = await api("/auth/service-provider-web-signup/claim", {
+        method: "POST",
+        body: { checkoutSessionId: sessionId },
+      });
+      saveSession(data.token, data.user);
+      showDashboard(data.user);
+      window.history.replaceState({}, "", window.location.pathname);
+    } catch (error) {
+      if (authSection) authSection.hidden = false;
+      if (hero) hero.hidden = false;
+      if (dash) dash.hidden = true;
+      const loginStatus = $("#login-status");
+      setStatus(
+        loginStatus,
+        getErrorMessage(error, "We couldn't complete your registration. Please sign in or contact support."),
+        "error",
+      );
+      switchTab("login");
+    }
   }
 
   // ── Login ────────────────────────────────────────────────────────────────
@@ -578,11 +674,33 @@
     const consentConfirmBtn = $("#consent-confirm-button");
     if (consentConfirmBtn) consentConfirmBtn.addEventListener("click", consentAndProceed);
 
+    $$("[data-paywall-close]").forEach((button) => button.addEventListener("click", closePaywall));
+    $$(".paywall-toggle-btn").forEach((btn) => btn.addEventListener("click", () => switchPaywallMode(btn.dataset.paywallMode)));
+    const subscribeBtn = $("#paywall-subscribe-button");
+    if (subscribeBtn) subscribeBtn.addEventListener("click", () => { void submitPaywallSubscribe(); });
+    const inviteBtn = $("#paywall-invite-button");
+    if (inviteBtn) inviteBtn.addEventListener("click", () => { void submitPaywallInvite(); });
+
     document.addEventListener("keydown", (event) => {
       if (event.key !== "Escape") return;
       if (!$("#reset-panel").hidden) closeReset();
       if (!$("#consent-panel")?.hidden) closeConsentModal();
+      if (!$("#paywall-panel")?.hidden) closePaywall();
     });
+
+    // Handle return from Stripe Checkout.
+    const params = new URLSearchParams(window.location.search);
+    const stripeSignupStatus = params.get("providerSignup");
+    const stripeSessionId = params.get("session_id");
+    let handlingStripeReturn = false;
+    if (stripeSignupStatus === "success" && stripeSessionId) {
+      handlingStripeReturn = true;
+      void handleStripeReturn(stripeSessionId);
+    } else if (stripeSignupStatus === "cancelled") {
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+
+    if (handlingStripeReturn) return;
 
     // Resume a stored session if the token still belongs to a service provider.
     const session = getSession();

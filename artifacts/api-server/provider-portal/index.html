@@ -340,6 +340,44 @@
           </div>
         </section>
 
+        <section class="portal-reset" id="paywall-panel" hidden>
+          <div class="portal-card portal-reset-card portal-paywall-card">
+            <button class="portal-close" type="button" data-paywall-close aria-label="Close">&times;</button>
+            <div class="portal-panel-header">
+              <p class="section-kicker">Final step</p>
+              <h2>Activate your provider account</h2>
+              <p>Choose how to complete your registration.</p>
+            </div>
+
+            <div class="paywall-toggle" role="tablist" aria-label="Registration method">
+              <button type="button" class="paywall-toggle-btn is-active" data-paywall-mode="subscribe">Subscribe</button>
+              <button type="button" class="paywall-toggle-btn" data-paywall-mode="invite">I have an invitation code</button>
+            </div>
+
+            <div class="paywall-mode" data-paywall-pane="subscribe">
+              <div class="paywall-price"><span class="paywall-amount">$127.50</span><span class="paywall-period">/ month</span></div>
+              <ul class="paywall-features">
+                <li>Connect with property buyers &amp; developers</li>
+                <li>Unlimited AI-assisted project matching</li>
+                <li>In-app live translation calls — 80+ languages <span class="paywall-soon">coming soon</span></li>
+                <li>Potential client leads <span class="paywall-soon">coming soon</span></li>
+              </ul>
+              <button class="button button-primary portal-submit" type="button" id="paywall-subscribe-button">Subscribe with card</button>
+              <p class="paywall-fineprint">You'll be redirected to our secure payment provider (Stripe) to enter your card.</p>
+            </div>
+
+            <div class="paywall-mode" data-paywall-pane="invite" hidden>
+              <label class="field">
+                Invitation code
+                <input id="paywall-invite-code" type="text" placeholder="Enter your invitation code" autocomplete="off" />
+              </label>
+              <button class="button button-primary portal-submit" type="button" id="paywall-invite-button">Complete registration</button>
+            </div>
+
+            <p class="form-status" id="paywall-status" aria-live="polite"></p>
+          </div>
+        </section>
+
         <section class="portal-reset" id="reset-panel" hidden>
           <div class="portal-card portal-reset-card">
             <button class="portal-close" type="button" data-reset-close aria-label="Close">&times;</button>

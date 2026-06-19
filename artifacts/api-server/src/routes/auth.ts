@@ -11,6 +11,8 @@ import {
   userLoginEvents,
   userUploads,
   pendingAgentSignups,
+  pendingProviderSignups,
+  type PendingProviderSignup,
 } from "@workspace/db";
 import { createSessionId, hashPassword, verifyPassword, signToken, requireAuth } from "../lib/auth";
 import { ipRateLimit, bodyFieldRateLimit, minutes, hours } from "../lib/rateLimit";
@@ -18,7 +20,14 @@ import { noteSignup } from "../lib/abuse";
 import { sendNewUserSignupNotification, sendPasswordResetCodeEmail } from "../lib/mailer";
 import { usagePeriodExpired } from "../lib/billingPeriod";
 import { verifyPhoneVerificationToken, consumePhoneVerification } from "./otp";
-import { getPublicAppUrl, getSalesPortalUrl, getStripeAgentPriceId } from "../lib/env";
+import {
+  getPublicAppUrl,
+  getSalesPortalUrl,
+  getStripeAgentPriceId,
+  getProviderPortalUrl,
+  getStripeProviderPriceId,
+  getProviderInvitationCode,
+} from "../lib/env";
 import { getStripe, subscriptionInfoFromStripe } from "../lib/stripe";
 import { isValidInvitationCode } from "../lib/agent-entitlements";
 import { createAgentAccountFromPending, type AgentSubscriptionInfo } from "../lib/agent-account";
@@ -26,6 +35,12 @@ import type Stripe from "stripe";
 import { ObjectNotFoundError, ObjectStorageService } from "../lib/objectStorage";
 import { createStorageReviewToken } from "../lib/storage-review-token";
 import { runAfterResponse } from "../lib/vercel-wait-until";
+import {
+  checkPhoneCanRegister,
+  normalizeRegistrationPhone,
+  recordPhoneAccountDeletion,
+  type PhoneRegistrationBlock,
+} from "../lib/phone-registration";
 
 const router = Router();
 const objectStorageService = new ObjectStorageService();
@@ -38,6 +53,15 @@ function queueSignupNotification(req: any, args: SignupNotificationArgs): void {
       req.log?.warn?.({ mailErr, userId: args.profileId, email: args.email, role: args.role }, "New signup owner email failed");
     }),
   );
+}
+
+function sendPhoneRegistrationBlock(res: any, block: Exclude<PhoneRegistrationBlock, { allowed: true }>): void {
+  res.status(block.status).json({
+    error: block.message,
+    code: block.code,
+    retryAfterSeconds: block.retryAfterSeconds,
+    blockedUntil: block.blockedUntil ? block.blockedUntil.toISOString() : undefined,
+  });
 }
 
 const salesAgentSchema = z.object({
@@ -190,6 +214,113 @@ const salesAgentWebProfileSchema = z
     }
   });
 
+const serviceProviderWebSignupSchema = z
+  .object({
+    email: z.string().email(),
+    password: z.string().min(8),
+    fullName: z.string().min(2),
+    phoneNumber: z.string().min(1),
+    phoneVerificationToken: z.string().min(1),
+    primaryLanguage: z.string().min(1),
+    companyName: z.string().min(1),
+    nzCompanyRegisterNumber: z.string().min(1),
+    discipline: z.string().min(1),
+    otherDiscipline: z.string().optional(),
+    secondaryLanguage: z.string().optional(),
+    addressStreet: z.string().optional(),
+    addressSuburb: z.string().optional(),
+    addressCity: z.string().optional(),
+    addressPostcode: z.string().optional(),
+    invitationCode: z.string().optional(),
+  })
+  .superRefine((data, ctx) => {
+    const phone = data.phoneNumber.replace(/[\s\-()]/g, "").trim();
+    if (!/^\+64\d{7,10}$/.test(phone)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Enter a valid New Zealand mobile or contact number starting with +64.",
+        path: ["phoneNumber"],
+      });
+    }
+  });
+
+async function createProviderAccountFromPending(
+  pending: PendingProviderSignup,
+  sub: AgentSubscriptionInfo,
+): Promise<{ profileId: string; email: string; created: boolean }> {
+  const email = pending.email.toLowerCase().trim();
+  const languages = [pending.primaryLanguage, ...(pending.secondaryLanguage ? [pending.secondaryLanguage] : [])];
+
+  async function markDone() {
+    await db
+      .update(pendingProviderSignups)
+      .set({ status: "completed" })
+      .where(eq(pendingProviderSignups.id, pending.id))
+      .catch(() => {});
+  }
+
+  const existing = await db.select({ id: profiles.id }).from(profiles).where(eq(profiles.email, email)).limit(1);
+  if (existing[0]) {
+    await db
+      .update(profiles)
+      .set({
+        stripeCustomerId: sub.stripeCustomerId,
+        stripeSubscriptionId: sub.stripeSubscriptionId,
+        subscriptionStatus: sub.subscriptionStatus,
+        subscriptionPeriodEndAt: sub.subscriptionPeriodEndAt,
+        subscriptionCancelAtPeriodEnd: sub.subscriptionCancelAtPeriodEnd,
+      })
+      .where(eq(profiles.id, existing[0].id));
+    await markDone();
+    return { profileId: existing[0].id, email, created: false };
+  }
+
+  const newProfile = await db.transaction(async (tx) => {
+    await consumePhoneVerification(pending.phoneVid, pending.phoneNumber, tx);
+
+    const [p] = await tx
+      .insert(profiles)
+      .values({
+        email,
+        fullName: pending.fullName,
+        passwordHash: pending.passwordHash,
+        role: "service_provider",
+        languages,
+        subscriptionTier: "free",
+        reportsUsedThisMonth: 0,
+        phoneNumber: pending.phoneNumber,
+        phoneVerifiedAt: new Date(),
+        stripeCustomerId: sub.stripeCustomerId,
+        stripeSubscriptionId: sub.stripeSubscriptionId,
+        subscriptionStatus: sub.subscriptionStatus,
+        subscriptionPeriodEndAt: sub.subscriptionPeriodEndAt,
+        subscriptionCancelAtPeriodEnd: sub.subscriptionCancelAtPeriodEnd,
+      })
+      .returning({ id: profiles.id, email: profiles.email });
+
+    await tx.insert(serviceProviderProfiles).values({
+      userId: p.id,
+      companyName: pending.companyName,
+      nzCompanyRegisterNumber: pending.nzCompanyRegisterNumber,
+      discipline: pending.discipline,
+      otherDiscipline: pending.otherDiscipline ?? null,
+      primaryLanguage: pending.primaryLanguage,
+      secondaryLanguage: pending.secondaryLanguage ?? null,
+      contactNumber: pending.phoneNumber,
+      languages,
+      addressStreet: pending.addressStreet ?? null,
+      addressSuburb: pending.addressSuburb ?? null,
+      addressCity: pending.addressCity ?? null,
+      addressPostcode: pending.addressPostcode ?? null,
+    });
+
+    return p;
+  });
+
+  await markDone();
+  return { profileId: newProfile.id, email, created: true };
+}
+
 function resolvePasswordResetSecret(): string {
   const secret = process.env.PASSWORD_RESET_SECRET || process.env.SESSION_SECRET;
   if (!secret) {
@@ -313,22 +444,12 @@ router.post(
     providerData,
   } = parsed.data;
   const emailLower = email.toLowerCase().trim();
-  const phoneTrimmed = phoneNumber.replace(/[\s\-()]/g, "").trim();
+  const phoneTrimmed = normalizeRegistrationPhone(phoneNumber);
   const verifiedPhone = verifyPhoneVerificationToken(phoneVerificationToken, phoneTrimmed);
   if (!verifiedPhone) {
     res.status(400).json({
       error: "Phone verification token is invalid or expired. Please re-verify your number.",
       code: "PHONE_NOT_VERIFIED",
-    });
-    return;
-  }
-  // Atomically consume the verification row so this token cannot be replayed
-  // to create more than one account during its TTL window.
-  const consumed = await consumePhoneVerification(verifiedPhone.vid, phoneTrimmed);
-  if (!consumed) {
-    res.status(400).json({
-      error: "Phone verification has already been used. Please re-verify your number.",
-      code: "PHONE_VERIFICATION_CONSUMED",
     });
     return;
   }
@@ -354,7 +475,15 @@ router.post(
     const passwordHash = await hashPassword(password);
 
     const sessionId = createSessionId();
-    const profile = await db.transaction(async (tx) => {
+    const signupResult = await db.transaction(async (tx) => {
+      const phoneBlock = await checkPhoneCanRegister(tx, phoneTrimmed, role);
+      if (!phoneBlock.allowed) return { phoneBlock };
+
+      // Atomically consume the verification row inside the phone-registration
+      // transaction so this token cannot be replayed during a concurrent signup.
+      const consumed = await consumePhoneVerification(verifiedPhone.vid, phoneTrimmed, tx);
+      if (!consumed) return { phoneConsumed: false as const };
+
       const [newProfile] = await tx
         .insert(profiles)
         .values({
@@ -433,8 +562,24 @@ router.post(
         });
       }
 
-      return newProfile;
+      return { profile: newProfile };
     });
+    const blockedSignup = "phoneBlock" in signupResult ? signupResult.phoneBlock : null;
+    if (blockedSignup) {
+      sendPhoneRegistrationBlock(res, blockedSignup);
+      return;
+    }
+    if ("phoneConsumed" in signupResult) {
+      res.status(400).json({
+        error: "Phone verification has already been used. Please re-verify your number.",
+        code: "PHONE_VERIFICATION_CONSUMED",
+      });
+      return;
+    }
+    const profile = signupResult.profile;
+    if (!profile) {
+      throw new Error("PROFILE_INSERT_FAILED");
+    }
 
     const token = signToken(profile.id, profile.email, role, sessionId);
     res.status(201).json({ token, user: { ...profile, isVerified: false } });
@@ -492,7 +637,7 @@ router.post("/sales-agent-web-signup", async (req, res) => {
   }
 
   const emailLower = normalizeEmail(parsed.data.email);
-  const phoneTrimmed = parsed.data.phoneNumber.replace(/[\s\-()]/g, "").trim();
+  const phoneTrimmed = normalizeRegistrationPhone(parsed.data.phoneNumber);
   const verifiedPhone = verifyPhoneVerificationToken(parsed.data.phoneVerificationToken, phoneTrimmed);
   if (!verifiedPhone) {
     res.status(400).json({
@@ -537,10 +682,13 @@ router.post("/sales-agent-web-signup", async (req, res) => {
     // Invitation agents get lifetime listing + 3 months of unlimited AI search.
     const aiBoostExpiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
 
-    const profile = await db.transaction(async (tx) => {
-      const consumed = await consumePhoneVerification(verifiedPhone.vid, phoneTrimmed);
+    const signupResult = await db.transaction(async (tx) => {
+      const phoneBlock = await checkPhoneCanRegister(tx, phoneTrimmed, "sales_agent");
+      if (!phoneBlock.allowed) return { phoneBlock };
+
+      const consumed = await consumePhoneVerification(verifiedPhone.vid, phoneTrimmed, tx);
       if (!consumed) {
-        throw new Error("PHONE_VERIFICATION_CONSUMED");
+        return { phoneConsumed: false as const };
       }
 
       const [newProfile] = await tx
@@ -580,8 +728,24 @@ router.post("/sales-agent-web-signup", async (req, res) => {
         aiBoostExpiresAt,
       });
 
-      return newProfile;
+      return { profile: newProfile };
     });
+    const blockedSignup = "phoneBlock" in signupResult ? signupResult.phoneBlock : null;
+    if (blockedSignup) {
+      sendPhoneRegistrationBlock(res, blockedSignup);
+      return;
+    }
+    if ("phoneConsumed" in signupResult) {
+      res.status(400).json({
+        error: "Phone verification has already been used. Please re-verify your number.",
+        code: "PHONE_VERIFICATION_CONSUMED",
+      });
+      return;
+    }
+    const profile = signupResult.profile;
+    if (!profile) {
+      throw new Error("PROFILE_INSERT_FAILED");
+    }
 
     const token = signToken(profile.id, profile.email, profile.role, sessionId);
     recordLoginEvent(profile.id);
@@ -637,7 +801,7 @@ router.post("/sales-agent-web-signup/checkout", async (req, res) => {
   }
 
   const emailLower = normalizeEmail(parsed.data.email);
-  const phoneTrimmed = parsed.data.phoneNumber.replace(/[\s\-()]/g, "").trim();
+  const phoneTrimmed = normalizeRegistrationPhone(parsed.data.phoneNumber);
   const verifiedPhone = verifyPhoneVerificationToken(parsed.data.phoneVerificationToken, phoneTrimmed);
   if (!verifiedPhone) {
     res.status(400).json({
@@ -659,6 +823,12 @@ router.post("/sales-agent-web-signup/checkout", async (req, res) => {
       .limit(1);
     if (existing.length > 0) {
       res.status(409).json({ error: "An account with this email already exists", code: "EMAIL_TAKEN" });
+      return;
+    }
+
+    const phoneBlock = await db.transaction((tx) => checkPhoneCanRegister(tx, phoneTrimmed, "sales_agent"));
+    if (!phoneBlock.allowed) {
+      sendPhoneRegistrationBlock(res, phoneBlock);
       return;
     }
 
@@ -802,6 +972,11 @@ router.post("/sales-agent-web-signup/claim", async (req, res) => {
       },
     });
   } catch (error) {
+    const phoneBlock = (error as { phoneRegistrationBlock?: PhoneRegistrationBlock })?.phoneRegistrationBlock;
+    if (phoneBlock && !phoneBlock.allowed) {
+      sendPhoneRegistrationBlock(res, phoneBlock);
+      return;
+    }
     req.log.error({ error }, "Agent signup claim failed");
     res.status(500).json({ error: "Could not finish registration. Please try again.", code: "CLAIM_FAILED" });
   }
@@ -821,7 +996,7 @@ router.patch("/sales-agent-web-profile", requireAuth, async (req, res) => {
   }
 
   const fullName = parsed.data.fullName.trim();
-  const phoneNumber = parsed.data.phoneNumber.replace(/[\s\-()]/g, "").trim();
+  const phoneNumber = normalizeRegistrationPhone(parsed.data.phoneNumber);
   const primaryLanguage = parsed.data.primaryLanguage.trim();
   const agencyName = parsed.data.agencyName.trim();
   const reaaLicenceNumber = parsed.data.reaaLicenceNumber.trim();
@@ -840,6 +1015,16 @@ router.patch("/sales-agent-web-profile", requireAuth, async (req, res) => {
     }
 
     const updated = await db.transaction(async (tx) => {
+      const [currentProfile] = await tx
+        .select({ phoneNumber: profiles.phoneNumber })
+        .from(profiles)
+        .where(eq(profiles.id, userId))
+        .limit(1);
+      if (normalizeRegistrationPhone(currentProfile?.phoneNumber ?? "") !== phoneNumber) {
+        const phoneBlock = await checkPhoneCanRegister(tx, phoneNumber, "sales_agent", new Date(), userId);
+        if (!phoneBlock.allowed) return { phoneBlock };
+      }
+
       const [profile] = await tx
         .update(profiles)
         .set({ fullName, phoneNumber, languages })
@@ -862,12 +1047,17 @@ router.patch("/sales-agent-web-profile", requireAuth, async (req, res) => {
         .set({ agencyName, reaaLicenceNumber, languages })
         .where(eq(salesAgentProfiles.userId, userId));
 
-      return profile;
+      return { profile };
     });
+    const blockedUpdate = "phoneBlock" in updated ? updated.phoneBlock : null;
+    if (blockedUpdate) {
+      sendPhoneRegistrationBlock(res, blockedUpdate);
+      return;
+    }
 
     res.json({
       user: {
-        ...updated,
+        ...updated.profile,
         agencyName,
         reaaLicenceNumber,
         primaryLanguage,
@@ -1405,6 +1595,359 @@ router.post("/service-provider-login", async (req, res) => {
   }
 });
 
+// ── Provider portal web signup — invitation path ──────────────────────────────
+router.post(
+  "/service-provider-web-signup",
+  ipRateLimit({ name: "provider-signup", windowMs: hours(1), max: 10 }),
+  bodyFieldRateLimit("email", { name: "provider-signup", windowMs: hours(1), max: 3 }),
+  async (req, res) => {
+    const parsed = serviceProviderWebSignupSchema.safeParse(req.body);
+    if (!parsed.success) {
+      const firstError = parsed.error.issues[0];
+      res.status(400).json({
+        error: firstError?.message || "Invalid signup data",
+        code: "VALIDATION_ERROR",
+        details: parsed.error.issues,
+      });
+      return;
+    }
+
+    const emailLower = normalizeEmail(parsed.data.email);
+    const phoneTrimmed = normalizeRegistrationPhone(parsed.data.phoneNumber);
+    const verifiedPhone = verifyPhoneVerificationToken(parsed.data.phoneVerificationToken, phoneTrimmed);
+    if (!verifiedPhone) {
+      res.status(400).json({
+        error: "Phone verification token is invalid or expired. Please re-verify your number.",
+        code: "PHONE_NOT_VERIFIED",
+      });
+      return;
+    }
+
+    const code = (parsed.data.invitationCode ?? "").trim().toLowerCase();
+    const validCode = getProviderInvitationCode().trim().toLowerCase();
+    if (!code || code !== validCode) {
+      res.status(402).json({
+        error: "A valid invitation code is required, or subscribe to complete registration.",
+        code: "INVITATION_OR_SUBSCRIPTION_REQUIRED",
+      });
+      return;
+    }
+
+    const fullName = parsed.data.fullName.trim();
+    const primaryLanguage = parsed.data.primaryLanguage.trim();
+    const secondaryLanguage = parsed.data.secondaryLanguage?.trim() || null;
+    const companyName = parsed.data.companyName.trim();
+    const nzCompanyRegisterNumber = parsed.data.nzCompanyRegisterNumber.trim();
+    const discipline = parsed.data.discipline.trim();
+    const otherDiscipline = parsed.data.otherDiscipline?.trim() || null;
+    const languages = [primaryLanguage, ...(secondaryLanguage ? [secondaryLanguage] : [])];
+
+    try {
+      const existing = await db
+        .select({ id: profiles.id })
+        .from(profiles)
+        .where(eq(profiles.email, emailLower))
+        .limit(1);
+      if (existing.length > 0) {
+        res.status(409).json({ error: "An account with this email already exists", code: "EMAIL_TAKEN" });
+        return;
+      }
+
+      const passwordHash = await hashPassword(parsed.data.password);
+      const sessionId = createSessionId();
+
+      const signupResult = await db.transaction(async (tx) => {
+        const phoneBlock = await checkPhoneCanRegister(tx, phoneTrimmed, "service_provider");
+        if (!phoneBlock.allowed) return { phoneBlock };
+
+        const consumed = await consumePhoneVerification(verifiedPhone.vid, phoneTrimmed, tx);
+        if (!consumed) return { phoneConsumed: false as const };
+
+        const [newProfile] = await tx
+          .insert(profiles)
+          .values({
+            email: emailLower,
+            fullName,
+            passwordHash,
+            role: "service_provider",
+            languages,
+            subscriptionTier: "free",
+            reportsUsedThisMonth: 0,
+            phoneNumber: phoneTrimmed,
+            phoneVerifiedAt: new Date(),
+            activeSessionId: sessionId,
+            subscriptionStatus: "active",
+          })
+          .returning({
+            id: profiles.id,
+            email: profiles.email,
+            fullName: profiles.fullName,
+            role: profiles.role,
+            languages: profiles.languages,
+            subscriptionTier: profiles.subscriptionTier,
+            reportsUsedThisMonth: profiles.reportsUsedThisMonth,
+            messagesUsedThisMonth: profiles.messagesUsedThisMonth,
+            avatarUrl: profiles.avatarUrl,
+            phoneNumber: profiles.phoneNumber,
+          });
+
+        await tx.insert(serviceProviderProfiles).values({
+          userId: newProfile.id,
+          companyName,
+          nzCompanyRegisterNumber,
+          discipline,
+          otherDiscipline,
+          primaryLanguage,
+          secondaryLanguage,
+          contactNumber: phoneTrimmed,
+          languages,
+          addressStreet: parsed.data.addressStreet?.trim() || null,
+          addressSuburb: parsed.data.addressSuburb?.trim() || null,
+          addressCity: parsed.data.addressCity?.trim() || null,
+          addressPostcode: parsed.data.addressPostcode?.trim() || null,
+        });
+
+        return { profile: newProfile };
+      });
+
+      const blockedSignup = "phoneBlock" in signupResult ? signupResult.phoneBlock : null;
+      if (blockedSignup) {
+        sendPhoneRegistrationBlock(res, blockedSignup);
+        return;
+      }
+      if ("phoneConsumed" in signupResult) {
+        res.status(400).json({
+          error: "Phone verification has already been used. Please re-verify your number.",
+          code: "PHONE_VERIFICATION_CONSUMED",
+        });
+        return;
+      }
+      const profile = signupResult.profile!;
+
+      const token = signToken(profile.id, profile.email, profile.role, sessionId);
+      recordLoginEvent(profile.id);
+      res.status(201).json({
+        token,
+        user: { ...profile, companyName, discipline, primaryLanguage, isVerified: false },
+      });
+
+      queueSignupNotification(req, {
+        role: "service_provider",
+        profileId: profile.id,
+        email: profile.email,
+        fullName: profile.fullName,
+        phone: phoneTrimmed,
+        languages,
+        providerData: { companyName, nzCompanyRegisterNumber, discipline },
+      });
+    } catch (error) {
+      req.log.error({ error }, "Provider web signup (invitation) failed");
+      res.status(500).json({ error: "Signup failed. Please try again.", code: "SIGNUP_FAILED" });
+    }
+  },
+);
+
+// ── Provider portal web signup — Stripe checkout path ────────────────────────
+router.post(
+  "/service-provider-web-signup/checkout",
+  ipRateLimit({ name: "provider-checkout", windowMs: hours(1), max: 10 }),
+  bodyFieldRateLimit("email", { name: "provider-checkout", windowMs: hours(1), max: 3 }),
+  async (req, res) => {
+    const parsed = serviceProviderWebSignupSchema.safeParse(req.body);
+    if (!parsed.success) {
+      const firstError = parsed.error.issues[0];
+      res.status(400).json({
+        error: firstError?.message || "Invalid signup data",
+        code: "VALIDATION_ERROR",
+        details: parsed.error.issues,
+      });
+      return;
+    }
+
+    const emailLower = normalizeEmail(parsed.data.email);
+    const phoneTrimmed = normalizeRegistrationPhone(parsed.data.phoneNumber);
+    const verifiedPhone = verifyPhoneVerificationToken(parsed.data.phoneVerificationToken, phoneTrimmed);
+    if (!verifiedPhone) {
+      res.status(400).json({
+        error: "Phone verification token is invalid or expired. Please re-verify your number.",
+        code: "PHONE_NOT_VERIFIED",
+      });
+      return;
+    }
+
+    const fullName = parsed.data.fullName.trim();
+    const primaryLanguage = parsed.data.primaryLanguage.trim();
+
+    try {
+      const existing = await db
+        .select({ id: profiles.id })
+        .from(profiles)
+        .where(eq(profiles.email, emailLower))
+        .limit(1);
+      if (existing.length > 0) {
+        res.status(409).json({ error: "An account with this email already exists", code: "EMAIL_TAKEN" });
+        return;
+      }
+
+      const phoneBlock = await db.transaction((tx) => checkPhoneCanRegister(tx, phoneTrimmed, "service_provider"));
+      if (!phoneBlock.allowed) {
+        sendPhoneRegistrationBlock(res, phoneBlock);
+        return;
+      }
+
+      const passwordHash = await hashPassword(parsed.data.password);
+      const stripe = getStripe();
+
+      let customerId: string;
+      const found = await stripe.customers.list({ email: emailLower, limit: 1 });
+      if (found.data[0]) {
+        customerId = found.data[0].id;
+      } else {
+        const customer = await stripe.customers.create({ email: emailLower, name: fullName, phone: phoneTrimmed });
+        customerId = customer.id;
+      }
+
+      const [pending] = await db
+        .insert(pendingProviderSignups)
+        .values({
+          email: emailLower,
+          passwordHash,
+          fullName,
+          phoneNumber: phoneTrimmed,
+          phoneVid: verifiedPhone.vid,
+          primaryLanguage,
+          secondaryLanguage: parsed.data.secondaryLanguage?.trim() || null,
+          companyName: parsed.data.companyName.trim(),
+          nzCompanyRegisterNumber: parsed.data.nzCompanyRegisterNumber.trim(),
+          discipline: parsed.data.discipline.trim(),
+          otherDiscipline: parsed.data.otherDiscipline?.trim() || null,
+          addressStreet: parsed.data.addressStreet?.trim() || null,
+          addressSuburb: parsed.data.addressSuburb?.trim() || null,
+          addressCity: parsed.data.addressCity?.trim() || null,
+          addressPostcode: parsed.data.addressPostcode?.trim() || null,
+          stripeCustomerId: customerId,
+          status: "pending",
+          expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+        })
+        .returning({ id: pendingProviderSignups.id });
+
+      const portal = getProviderPortalUrl();
+      const session = await stripe.checkout.sessions.create({
+        mode: "subscription",
+        customer: customerId,
+        line_items: [{ price: getStripeProviderPriceId(), quantity: 1 }],
+        success_url: `${portal}?providerSignup=success&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${portal}?providerSignup=cancelled`,
+        metadata: { pendingProviderSignupId: pending.id },
+        subscription_data: { metadata: { pendingProviderSignupId: pending.id } },
+      });
+
+      await db
+        .update(pendingProviderSignups)
+        .set({ stripeCheckoutSessionId: session.id })
+        .where(eq(pendingProviderSignups.id, pending.id));
+
+      res.json({ checkoutUrl: session.url });
+    } catch (error) {
+      req.log.error({ error }, "Provider checkout creation failed");
+      res.status(500).json({ error: "Could not start checkout. Please try again.", code: "CHECKOUT_FAILED" });
+    }
+  },
+);
+
+// ── Provider portal web signup — claim after payment ─────────────────────────
+router.post("/service-provider-web-signup/claim", async (req, res) => {
+  const checkoutSessionId =
+    typeof req.body?.checkoutSessionId === "string" ? req.body.checkoutSessionId.trim() : "";
+  if (!checkoutSessionId) {
+    res.status(400).json({ error: "checkoutSessionId is required", code: "MISSING_SESSION_ID" });
+    return;
+  }
+
+  try {
+    const stripe = getStripe();
+    const session = await stripe.checkout.sessions.retrieve(checkoutSessionId, {
+      expand: ["subscription"],
+    });
+
+    const paid = session.payment_status === "paid" || session.status === "complete";
+    if (!paid) {
+      res.status(409).json({ error: "Payment not completed yet.", code: "PAYMENT_PENDING" });
+      return;
+    }
+
+    const pendingId = session.metadata?.pendingProviderSignupId;
+    if (!pendingId) {
+      res.status(400).json({ error: "Invalid checkout session.", code: "INVALID_SESSION" });
+      return;
+    }
+
+    const [pending] = await db
+      .select()
+      .from(pendingProviderSignups)
+      .where(eq(pendingProviderSignups.id, pendingId))
+      .limit(1);
+    if (!pending) {
+      res.status(404).json({ error: "Signup session not found.", code: "PENDING_NOT_FOUND" });
+      return;
+    }
+
+    const customerId = typeof session.customer === "string" ? session.customer : session.customer?.id ?? null;
+    const subscription = (session.subscription as Stripe.Subscription | null) ?? null;
+    const subInfo: AgentSubscriptionInfo = subscription
+      ? subscriptionInfoFromStripe(subscription, customerId)
+      : {
+          stripeCustomerId: customerId,
+          stripeSubscriptionId: null,
+          subscriptionStatus: "active",
+          subscriptionPeriodEndAt: null,
+          subscriptionCancelAtPeriodEnd: false,
+        };
+
+    const ensured = await createProviderAccountFromPending(pending, subInfo);
+
+    const sessionId = createSessionId();
+    await db.update(profiles).set({ activeSessionId: sessionId }).where(eq(profiles.id, ensured.profileId));
+
+    const [profile] = await db.select().from(profiles).where(eq(profiles.id, ensured.profileId)).limit(1);
+    const [providerProfile] = await db
+      .select({
+        companyName: serviceProviderProfiles.companyName,
+        discipline: serviceProviderProfiles.discipline,
+        primaryLanguage: serviceProviderProfiles.primaryLanguage,
+      })
+      .from(serviceProviderProfiles)
+      .where(eq(serviceProviderProfiles.userId, ensured.profileId))
+      .limit(1);
+
+    const token = signToken(profile.id, profile.email, profile.role, sessionId);
+    recordLoginEvent(profile.id);
+    res.json({
+      token,
+      user: {
+        id: profile.id,
+        email: profile.email,
+        fullName: profile.fullName,
+        role: profile.role,
+        languages: profile.languages,
+        subscriptionTier: profile.subscriptionTier,
+        subscriptionPeriodEndAt: profile.subscriptionPeriodEndAt,
+        reportsUsedThisMonth: profile.reportsUsedThisMonth,
+        messagesUsedThisMonth: profile.messagesUsedThisMonth,
+        avatarUrl: profile.avatarUrl,
+        phoneNumber: profile.phoneNumber,
+        companyName: providerProfile?.companyName ?? null,
+        discipline: providerProfile?.discipline ?? null,
+        primaryLanguage: providerProfile?.primaryLanguage ?? null,
+        isVerified: profile.isVerified,
+      },
+    });
+  } catch (error) {
+    req.log.error({ error }, "Provider signup claim failed");
+    res.status(500).json({ error: "Could not finish registration. Please try again.", code: "CLAIM_FAILED" });
+  }
+});
+
 router.get("/me", requireAuth, async (req, res) => {
   const userId = (req as any).userId as string;
 
@@ -1489,7 +2032,17 @@ router.get("/me", requireAuth, async (req, res) => {
 router.delete("/account", requireAuth, async (req, res) => {
   const userId = (req as any).userId as string;
   try {
-    await db.delete(profiles).where(eq(profiles.id, userId));
+    await db.transaction(async (tx) => {
+      const [profile] = await tx
+        .select({ phoneNumber: profiles.phoneNumber, role: profiles.role })
+        .from(profiles)
+        .where(eq(profiles.id, userId))
+        .limit(1);
+      if (profile?.phoneNumber) {
+        await recordPhoneAccountDeletion(tx, profile.phoneNumber, profile.role);
+      }
+      await tx.delete(profiles).where(eq(profiles.id, userId));
+    });
     res.json({ success: true });
   } catch (error) {
     req.log.error({ error }, "Failed to delete account");
