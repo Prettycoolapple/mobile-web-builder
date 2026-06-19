@@ -32,6 +32,7 @@ function buildPlanFeatures(t: (k: string) => string) {
     free: [t("feature.feasibility_reports"), t("feature.chat_search")],
     standard: [
       t("paywall.f1"),
+      t("feature.private_search"),
       t("paywall.f2"),
       t("paywall.f3"),
       t("paywall.f4"),
@@ -41,6 +42,7 @@ function buildPlanFeatures(t: (k: string) => string) {
     agent: [
       t("feature.unlimited_listings"),
       t("feature.featured_search"),
+      t("feature.private_search"),
       t("feature.client_tools"),
       t("feature.analytics"),
       t("feature.priority_support"),
@@ -48,6 +50,7 @@ function buildPlanFeatures(t: (k: string) => string) {
     provider: [
       { text: t("provider_welcome.feature_investors"), included: true },
       { text: t("provider_welcome.feature_search_reports"), included: true },
+      { text: t("feature.private_search"), included: true },
       { text: t("provider_welcome.feature_encrypted_chat"), included: true },
       { text: t("feature.provider_live_translation_soon"), included: false },
       { text: t("feature.provider_automation_tools_soon"), included: false },

@@ -1,3 +1,5 @@
+import { addressLineAppearsInText, addressesLikelyMatch } from "./scrapers/realestate-api";
+
 export interface SelectedListingContext {
   address?: string | null;
   listingUrl?: string | null;
@@ -135,6 +137,30 @@ export function selectedListingPhotoUrls(ctx: SelectedListingContext | null | un
   ].filter((u): u is string => typeof u === "string" && u.length > 0)));
 }
 
+function selectedListingFactsMatchSubject(
+  ctx: SelectedListingContext,
+  overview: Record<string, unknown>,
+): boolean {
+  const subjectAddress = typeof overview.address === "string" && overview.address.trim()
+    ? overview.address.trim()
+    : null;
+  if (!subjectAddress) return true;
+
+  const candidateAddress = ctx.address ?? null;
+  if (candidateAddress && (
+    addressesLikelyMatch(subjectAddress, candidateAddress)
+    || addressLineAppearsInText(subjectAddress, candidateAddress)
+  )) {
+    return true;
+  }
+
+  if (ctx.listingUrl && addressLineAppearsInText(subjectAddress, ctx.listingUrl)) {
+    return true;
+  }
+
+  return !candidateAddress && ctx.matchConfidence === "verified";
+}
+
 export function applySelectedListingContextToReport(
   parsed: Record<string, unknown>,
   selectedListingContext: SelectedListingContext | null | undefined,
@@ -147,6 +173,7 @@ export function applySelectedListingContextToReport(
   const existingSources = (parsed.data_sources as Record<string, string> | undefined) ?? {};
   const sourceLabel = selectedListingContext.source ?? "selected active listing";
   const excludeAggregateFacts = selectedListingContext.aggregateFactsExcluded === true || selectedListingContext.isCombinedListing === true;
+  const allowSubjectFacts = !excludeAggregateFacts && selectedListingFactsMatchSubject(selectedListingContext, existingOverview);
 
   const overview: Record<string, unknown> = {
     ...existingOverview,
@@ -173,39 +200,39 @@ export function applySelectedListingContextToReport(
   if (selectedListingContext.agentPhone) overview.agentPhone = selectedListingContext.agentPhone;
   if (selectedListingContext.agencyName) overview.agencyName = selectedListingContext.agencyName;
 
-  if (!excludeAggregateFacts && selectedListingContext.price != null) {
+  if (allowSubjectFacts && selectedListingContext.price != null) {
     overview.listingPrice = fmt(selectedListingContext.price);
     overview.listing_price_nzd = selectedListingContext.price;
     existingSources.listing_price = sourceLabel;
   }
-  if (!excludeAggregateFacts && selectedListingContext.propertyType) {
+  if (allowSubjectFacts && selectedListingContext.propertyType) {
     overview.propertyType = selectedListingContext.propertyType;
     existingSources.property_type = sourceLabel;
   }
-  if (!excludeAggregateFacts && selectedListingContext.landArea != null) {
+  if (allowSubjectFacts && selectedListingContext.landArea != null) {
     overview.landArea = area(selectedListingContext.landArea);
     overview.land_area_sqm = selectedListingContext.landArea;
     existingSources.landArea_display = sourceLabel;
   }
-  if (!excludeAggregateFacts && selectedListingContext.floorArea != null) {
+  if (allowSubjectFacts && selectedListingContext.floorArea != null) {
     overview.floorArea = area(selectedListingContext.floorArea);
     overview.floor_area_sqm = selectedListingContext.floorArea;
     existingSources.floorArea_display = sourceLabel;
   }
-  if (!excludeAggregateFacts && selectedListingContext.bedrooms != null) {
+  if (allowSubjectFacts && selectedListingContext.bedrooms != null) {
     overview.bedrooms = selectedListingContext.bedrooms;
     existingSources.bedrooms_display = sourceLabel;
   }
-  if (!excludeAggregateFacts && selectedListingContext.bathrooms != null) {
+  if (allowSubjectFacts && selectedListingContext.bathrooms != null) {
     overview.bathrooms = selectedListingContext.bathrooms;
     existingSources.bathrooms_display = sourceLabel;
   }
 
-  if (!excludeAggregateFacts && selectedListingContext.bedroomsApprox != null) overview.bedroomsApprox = selectedListingContext.bedroomsApprox;
-  if (!excludeAggregateFacts && selectedListingContext.bathroomsApprox != null) overview.bathroomsApprox = selectedListingContext.bathroomsApprox;
-  if (!excludeAggregateFacts && selectedListingContext.landAreaApprox != null) overview.landAreaApprox = selectedListingContext.landAreaApprox;
-  if (!excludeAggregateFacts && selectedListingContext.floorAreaApprox != null) overview.floorAreaApprox = selectedListingContext.floorAreaApprox;
-  if (!excludeAggregateFacts && selectedListingContext.priceApprox != null) overview.priceApprox = selectedListingContext.priceApprox;
+  if (allowSubjectFacts && selectedListingContext.bedroomsApprox != null) overview.bedroomsApprox = selectedListingContext.bedroomsApprox;
+  if (allowSubjectFacts && selectedListingContext.bathroomsApprox != null) overview.bathroomsApprox = selectedListingContext.bathroomsApprox;
+  if (allowSubjectFacts && selectedListingContext.landAreaApprox != null) overview.landAreaApprox = selectedListingContext.landAreaApprox;
+  if (allowSubjectFacts && selectedListingContext.floorAreaApprox != null) overview.floorAreaApprox = selectedListingContext.floorAreaApprox;
+  if (allowSubjectFacts && selectedListingContext.priceApprox != null) overview.priceApprox = selectedListingContext.priceApprox;
 
   parsed.propertyOverview = overview;
   parsed.selectedListingContext = selectedListingContext;

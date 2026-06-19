@@ -1960,18 +1960,27 @@ function marketAccessStatus(report: Report): "good" | "warning" | "risk" | "neut
   return "neutral";
 }
 
-function builtEnvironmentSignalLabel(signal: BuiltEnvironmentContext["signal"], t: (key: string) => string): string {
-  if (signal === "last_missing_piece") return t("report.built_env_signal_last_piece");
-  if (signal === "mixed_renewal") return t("report.built_env_signal_mixed");
-  if (signal === "older_environment") return t("report.built_env_signal_old");
-  if (signal === "insufficient_data") return t("report.built_env_signal_insufficient");
-  return t("report.built_env_signal_unknown");
+type BuiltEnvironmentStatusValue = "old" | "modern" | "new" | "unknown";
+
+function builtEnvironmentStatusFromYear(year: number | null | undefined): BuiltEnvironmentStatusValue {
+  if (year == null) return "unknown";
+  if (year < 1990) return "old";
+  if (year < 2020) return "modern";
+  return "new";
 }
 
-function formatBuildEra(year: number | null | undefined, range: string | null | undefined, t: (key: string) => string): string {
-  if (range) return range;
-  if (year != null) return String(year);
-  return t("report.na");
+function builtEnvironmentStatusLabel(status: BuiltEnvironmentStatusValue, t: (key: string) => string): string {
+  if (status === "old") return t("report.built_env_status_old");
+  if (status === "modern") return t("report.built_env_status_modern");
+  if (status === "new") return t("report.built_env_status_new");
+  return t("report.built_env_status_unknown");
+}
+
+function builtEnvironmentStatusColor(status: BuiltEnvironmentStatusValue, colors: ReturnType<typeof useColors>): string {
+  if (status === "new") return colors.success;
+  if (status === "modern") return colors.accent;
+  if (status === "old") return colors.amber;
+  return colors.mutedForeground;
 }
 
 function BuiltEnvironmentPanel({ context, colors }: {
@@ -1979,58 +1988,57 @@ function BuiltEnvironmentPanel({ context, colors }: {
   colors: ReturnType<typeof useColors>;
 }) {
   const { t } = useT();
+  const rows = (context.nearbyStatus && context.nearbyStatus.length > 0
+    ? context.nearbyStatus
+    : context.nearbyExamples.map((example) => ({
+        address: example.address,
+        buildYear: example.buildYear,
+        buildYearRange: example.buildYearRange,
+        distanceM: example.distanceM,
+        status: example.status ?? builtEnvironmentStatusFromYear(example.buildYear),
+      }))
+  ).slice(0, 15);
+
   return (
     <View style={{ gap: 10 }}>
-      <InfoRow
-        label={t("report.built_env_signal")}
-        value={builtEnvironmentSignalLabel(context.signal, t)}
-        valueColor={
-          context.signal === "last_missing_piece" || context.signal === "mixed_renewal"
-            ? colors.success
-            : context.signal === "older_environment"
-              ? colors.amber
-              : colors.mutedForeground
-        }
-        colors={colors}
-      />
-      <InfoRow
-        label={t("report.built_env_nearby")}
-        value={t("report.built_env_nearby_value", {
-          known: context.knownBuildYearCount,
-          assessed: context.assessedProperties,
-          radius: context.radiusM,
-          pct: Math.round(context.post2000Share * 100),
-        })}
-        colors={colors}
-      />
-      <InfoRow
-        label={t("report.built_env_subject")}
-        value={formatBuildEra(context.subjectBuildYear, context.subjectBuildYearRange, t)}
-        colors={colors}
-      />
       {context.reasons.slice(0, 2).map((reason, index) => (
         <Text key={`${reason}-${index}`} style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 17 }}>
           {reason}
         </Text>
       ))}
-      {context.nearbyExamples.length > 0 ? (
-        <View style={{ gap: 6 }}>
+      {rows.length > 0 ? (
+        <View style={{ gap: 4 }}>
           <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_700Bold", fontSize: 11 }}>
-            {t("report.built_env_examples")}
+            {t("report.built_env_nearby_status")}
           </Text>
-          {context.nearbyExamples.slice(0, 3).map((example, index) => (
-            <View key={`${example.address ?? "nearby"}-${index}`} style={{ flexDirection: "row", justifyContent: "space-between", gap: 10 }}>
-              <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1 }} numberOfLines={1}>
-                {example.address ?? t("report.nearby_property")}
-              </Text>
-              <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>
-                {formatBuildEra(example.buildYear, example.buildYearRange, t)}
-                {example.distanceM != null ? ` • ${formatDistanceM(example.distanceM)}` : ""}
-              </Text>
-            </View>
-          ))}
+          <View style={[styles.tableHeader, { borderBottomColor: colors.border }]}>
+            <Text style={[styles.tableHeaderCell, { color: colors.mutedForeground, flex: 1 }]}>
+              {t("report.built_env_address")}
+            </Text>
+            <Text style={[styles.tableHeaderCell, { color: colors.mutedForeground, width: 86, textAlign: "right" }]}>
+              {t("report.built_env_status")}
+            </Text>
+          </View>
+          {rows.map((row, index) => {
+            const status = (row.status ?? "unknown") as BuiltEnvironmentStatusValue;
+            const statusColor = builtEnvironmentStatusColor(status, colors);
+            return (
+              <View key={`${row.address ?? "nearby"}-${index}`} style={[styles.tableRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}>
+                <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 12, flex: 1 }} numberOfLines={1}>
+                  {row.address ?? t("report.nearby_property")}
+                </Text>
+                <Text style={{ color: statusColor, fontFamily: "DM_Sans_600SemiBold", fontSize: 12, width: 86, textAlign: "right" }}>
+                  {builtEnvironmentStatusLabel(status, t)}
+                </Text>
+              </View>
+            );
+          })}
         </View>
-      ) : null}
+      ) : (
+        <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 17 }}>
+          {t("report.built_env_unavailable")}
+        </Text>
+      )}
     </View>
   );
 }
@@ -2941,7 +2949,7 @@ export function FeasibilityReportCard({ report, onFollowUp }: Props) {
       {report.builtEnvironmentContext ? (
         <SectionCard
           title={t("report.built_environment")}
-          icon=""
+          icon="🏢"
           status={builtEnvironmentStatus(report.builtEnvironmentContext)}
           colors={colors}
         >

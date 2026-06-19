@@ -15,6 +15,7 @@ import { Feather } from "@expo/vector-icons";
 import { useAuth } from "@/context/AuthContext";
 import { getApiBase } from "@/lib/api";
 import { useSubscription, getSubscriptionSyncBody } from "@/lib/revenuecat";
+import { isOSChineseLocale } from "@/lib/i18n";
 
 const BG = "#1E1610";
 const CARD_BG = "#261B12";
@@ -26,6 +27,7 @@ const BORDER = "rgba(250,249,246,0.1)";
 const FEATURES: { icon: React.ComponentProps<typeof Feather>["name"]; label: string }[] = [
   { icon: "list", label: "Unlimited listings" },
   { icon: "users", label: "Qualified buyer leads" },
+  { icon: "search", label: isOSChineseLocale() ? "私密搜索" : "Private Search" },
   { icon: "message-circle", label: "Built-in live chat with leads" },
   { icon: "cpu", label: "AI-recommended listings to buyers" },
   { icon: "star", label: "Priority placement in AI recommendations" },

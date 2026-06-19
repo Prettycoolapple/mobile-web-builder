@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildBuiltEnvironmentContext,
   builtEnvironmentScoreAdjustment,
+  generateNearbyAddressCandidates,
   type ParcelBuildAssessment,
 } from "../built-environment-context";
 import { selectNearestResidentialParcels } from "../neighbourhood-context";
@@ -28,6 +29,7 @@ function assessment(
   return {
     parcel: parcel({ parcel_id: id, distance_m: 10 + Number(id.replace(/\D/g, "") || 0) }),
     address: `${id} Test Street`,
+    distanceM: 10 + Number(id.replace(/\D/g, "") || 0),
     buildYear: representativeYear,
     buildYearRange: null,
     representativeYear,
@@ -36,6 +38,22 @@ function assessment(
 }
 
 describe("built environment context", () => {
+  it("generates nearby same-street candidate addresses around the subject", () => {
+    const candidates = generateNearbyAddressCandidates("8 Hampton Drive, St Heliers", 8);
+
+    expect(candidates).toEqual([
+      "10 Hampton Drive, St Heliers",
+      "6 Hampton Drive, St Heliers",
+      "9 Hampton Drive, St Heliers",
+      "7 Hampton Drive, St Heliers",
+      "12 Hampton Drive, St Heliers",
+      "4 Hampton Drive, St Heliers",
+      "11 Hampton Drive, St Heliers",
+      "5 Hampton Drive, St Heliers",
+    ]);
+    expect(candidates).not.toContain("8 Hampton Drive, St Heliers");
+  });
+
   it("uses the shared neighbour parcel filter for subject, roads, reserves, tiny parcels, duplicates, and radius caps", () => {
     const selected = selectNearestResidentialParcels([
       parcel({ parcel_id: "subject", distance_m: 0 }),
@@ -53,7 +71,7 @@ describe("built environment context", () => {
     expect(selected.map((p) => p.parcel_id)).toEqual(["duplicate", "n1", "n2"]);
   });
 
-  it("classifies an old subject among many post-2000 neighbours as the last missing piece", () => {
+  it("classifies an old subject among many modern or new neighbours as the last missing piece", () => {
     const context = buildBuiltEnvironmentContext({
       radiusM: 100,
       subjectBuildYear: 1955,
@@ -71,7 +89,9 @@ describe("built environment context", () => {
 
     expect(context.signal).toBe("last_missing_piece");
     expect(context.confidence).toBe("high");
-    expect(context.post2000Share).toBe(0.75);
+    expect(context.renewedShare).toBe(0.75);
+    expect(context.statusCounts).toMatchObject({ old: 2, modern: 4, new: 2 });
+    expect(context.nearbyStatus[0]).toMatchObject({ status: "new" });
   });
 
   it("classifies an old subject with some nearby renewal as mixed renewal", () => {
@@ -80,18 +100,17 @@ describe("built environment context", () => {
       subjectBuildYearRange: "1950s",
       assessments: [
         assessment("n1", 2022),
-        assessment("n2", 2016),
-        assessment("n3", 2003),
-        assessment("n4", 1995),
-        assessment("n5", 1988),
+        assessment("n2", 1998),
+        assessment("n3", 2004),
+        assessment("n4", 1988),
+        assessment("n5", 1982),
         assessment("n6", 1975),
         assessment("n7", 1968),
-        assessment("n8", 1955),
       ],
     });
 
     expect(context.signal).toBe("mixed_renewal");
-    expect(context.post2000Share).toBe(0.38);
+    expect(context.renewedShare).toBe(0.43);
     expect(context.subjectBuildYearRange).toBe("1950s");
   });
 
@@ -113,6 +132,7 @@ describe("built environment context", () => {
 
     expect(context.signal).toBe("older_environment");
     expect(context.oldCount).toBe(6);
+    expect(builtEnvironmentScoreAdjustment(context).roiDelta).toBe(-0.25);
   });
 
   it("stays score-neutral when fewer than three nearby build years are known", () => {

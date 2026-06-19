@@ -58,7 +58,30 @@ describe("Homes scraper", () => {
     expect(data?.bathrooms).toBe(1);
     expect(data?.cv_nzd).toBe(1900000);
     expect(data?.land_area_sqm).toBe(1082);
+    expect(data?.build_year).toBeNull();
+    expect(data?.build_year_range).toBe("1960-1969");
     expect(data?.address_confirmed).toBe("8 Hampton Drive, St Heliers, Auckland");
+  });
+
+  it("keeps Homes decade_built as an approximate range, not an exact build year", () => {
+    const payload = {
+      cards: [{
+        property_id: "rosebank-38a",
+        url: "/auckland/papatoetoe/38a-rosebank-road/O0v58N",
+        property_details: {
+          address: "38A Rosebank Road, Papatoetoe, Auckland",
+          display_address: "38A Rosebank Road, Papatoetoe, Auckland",
+          floor_area: 136,
+          land_area: 150,
+          decade_built: "2020s",
+        },
+      }],
+    };
+
+    const data = extractHomesDataFromGatewayPayload(payload, "38A Rosebank Road, Papatoetoe, Auckland");
+
+    expect(data?.build_year).toBeNull();
+    expect(data?.build_year_range).toBe("2020-2029");
   });
 
   it("extracts exact facts from Homes gateway property cards for 38 Te Arawa Street", () => {

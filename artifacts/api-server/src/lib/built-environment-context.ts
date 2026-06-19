@@ -1,6 +1,7 @@
-import { fetchLINZParcelsNear, type LinzParcelNearby } from "./linz";
+import { fetchLINZAddressCandidates, fetchLINZParcelsNear, type LinzParcelNearby } from "./linz";
 import { selectNearestResidentialParcels } from "./neighbourhood-context";
 import { logger } from "./logger";
+import { scrapePropertyValue } from "./scrapers/propertyvalue";
 
 const AC_PROPERTY_VALUE_MAPSERVER =
   "https://mapspublic.aucklandcouncil.govt.nz/arcgis3/rest/services/NonCouncil/PropertyValueInfo/MapServer";
@@ -19,6 +20,24 @@ export interface BuiltEnvironmentExample {
   distanceM: number | null;
   buildYear: number | null;
   buildYearRange: string | null;
+  status?: BuiltEnvironmentNearbyStatus;
+}
+
+export type BuiltEnvironmentNearbyStatus = "old" | "modern" | "new" | "unknown";
+
+export interface BuiltEnvironmentNearbyStatusEntry {
+  address: string | null;
+  status: BuiltEnvironmentNearbyStatus;
+  buildYear: number | null;
+  buildYearRange: string | null;
+  distanceM: number | null;
+}
+
+export interface BuiltEnvironmentStatusCounts {
+  old: number;
+  modern: number;
+  new: number;
+  unknown: number;
 }
 
 export interface BuiltEnvironmentContext {
@@ -38,6 +57,10 @@ export interface BuiltEnvironmentContext {
   confidence: BuiltEnvironmentConfidence;
   reasons: string[];
   nearbyExamples: BuiltEnvironmentExample[];
+  nearbyStatus: BuiltEnvironmentNearbyStatusEntry[];
+  statusCounts: BuiltEnvironmentStatusCounts;
+  renewedShare: number;
+  newCount: number;
 }
 
 interface BuildYearInfo {
@@ -49,14 +72,26 @@ interface BuildYearInfo {
 export interface ParcelBuildAssessment {
   parcel: LinzParcelNearby;
   address: string | null;
+  distanceM: number | null;
   buildYear: number | null;
   buildYearRange: string | null;
   representativeYear: number | null;
 }
 
+export interface AddressBuildAssessment {
+  address: string | null;
+  distanceM: number | null;
+  buildYear: number | null;
+  buildYearRange: string | null;
+  representativeYear: number | null;
+}
+
+export type BuiltEnvironmentAssessment = ParcelBuildAssessment | AddressBuildAssessment;
+
 export const BUILT_ENVIRONMENT_RADIUS_M = 100;
 export const BUILT_ENVIRONMENT_FULL_SCAN_COUNT = 30;
 export const BUILT_ENVIRONMENT_LIGHT_SCAN_COUNT = 12;
+export const BUILT_ENVIRONMENT_FULL_STATUS_COUNT = 15;
 
 const DEFAULT_CONTEXT: BuiltEnvironmentContext = {
   radiusM: BUILT_ENVIRONMENT_RADIUS_M,
@@ -75,6 +110,10 @@ const DEFAULT_CONTEXT: BuiltEnvironmentContext = {
   confidence: "unknown",
   reasons: ["Built-environment context was unavailable for this address."],
   nearbyExamples: [],
+  nearbyStatus: [],
+  statusCounts: { old: 0, modern: 0, new: 0, unknown: 0 },
+  renewedShare: 0,
+  newCount: 0,
 };
 
 function roundShare(count: number, total: number): number {
@@ -90,6 +129,27 @@ function median(values: number[]): number | null {
   const a = sorted[mid - 1];
   const b = sorted[mid];
   return a != null && b != null ? Math.round((a + b) / 2) : null;
+}
+
+function normaliseAddress(value: string | null | undefined): string {
+  return (value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\b(saint)\b/g, "st")
+    .replace(/\b(mount)\b/g, "mt")
+    .replace(/\b(new zealand|nz|auckland city|auckland)\b/g, "")
+    .replace(/\b\d{4}\b/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function statusForYear(year: number | null): BuiltEnvironmentNearbyStatus {
+  if (year == null) return "unknown";
+  if (year < 1990) return "old";
+  if (year < 2020) return "modern";
+  return "new";
 }
 
 function parseBuildYear(raw: unknown): BuildYearInfo {
@@ -112,6 +172,59 @@ function parseBuildYear(raw: unknown): BuildYearInfo {
   }
 
   return { representativeYear: null, exactYear: null, range: null };
+}
+
+function representativeYearFor(buildYear: number | null, buildYearRange: string | null): number | null {
+  if (buildYear != null) return buildYear;
+  return parseBuildYear(buildYearRange).representativeYear;
+}
+
+interface ParsedStreetAddress {
+  number: number;
+  suffix: string | null;
+  street: string;
+  locality: string | null;
+}
+
+function parseStreetAddress(address: string): ParsedStreetAddress | null {
+  const trimmed = address.trim();
+  if (/^\d+\s*\/\s*\d+/i.test(trimmed)) return null;
+  const match = trimmed.match(/^(\d+)([a-z])?\s+([^,]+)(?:,\s*(.+))?$/i);
+  if (!match) return null;
+  const number = Number(match[1]);
+  const street = match[3]?.trim();
+  if (!Number.isFinite(number) || number <= 0 || !street) return null;
+  const locality = match[4]?.replace(/\bnew zealand\b/ig, "").replace(/\b\d{4}\b/g, "").trim() || null;
+  return {
+    number,
+    suffix: match[2]?.toUpperCase() ?? null,
+    street,
+    locality,
+  };
+}
+
+export function generateNearbyAddressCandidates(address: string, maxCandidates = 45): string[] {
+  const parsed = parseStreetAddress(address);
+  if (!parsed) return [];
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const add = (number: number) => {
+    if (!Number.isFinite(number) || number <= 0 || number === parsed.number) return;
+    const value = `${number} ${parsed.street}${parsed.locality ? `, ${parsed.locality}` : ""}`;
+    const key = normaliseAddress(value);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    candidates.push(value);
+  };
+
+  for (let step = 1; candidates.length < maxCandidates && step <= 24; step++) {
+    add(parsed.number + step * 2);
+    add(parsed.number - step * 2);
+    add(parsed.number + (step * 2 - 1));
+    add(parsed.number - (step * 2 - 1));
+  }
+
+  return candidates.slice(0, maxCandidates);
 }
 
 function bestBuildYear(attrs: Record<string, unknown>): BuildYearInfo {
@@ -174,20 +287,21 @@ async function queryCouncilBuildInfo(
 async function assessParcel(parcel: LinzParcelNearby, timeoutMs: number): Promise<ParcelBuildAssessment> {
   const point = parcelPoint(parcel);
   if (!point) {
-    return { parcel, address: null, buildYear: null, buildYearRange: null, representativeYear: null };
+    return { parcel, address: null, distanceM: parcel.distance_m, buildYear: null, buildYearRange: null, representativeYear: null };
   }
   try {
     const result = await queryCouncilBuildInfo(point.lat, point.lng, timeoutMs);
     return {
       parcel,
       address: result?.address ?? null,
+      distanceM: parcel.distance_m,
       buildYear: result?.build.exactYear ?? null,
       buildYearRange: result?.build.range ?? null,
       representativeYear: result?.build.representativeYear ?? null,
     };
   } catch (err) {
     logger.debug({ err: (err as Error).message, parcelId: parcel.parcel_id }, "Built environment parcel lookup failed");
-    return { parcel, address: null, buildYear: null, buildYearRange: null, representativeYear: null };
+    return { parcel, address: null, distanceM: parcel.distance_m, buildYear: null, buildYearRange: null, representativeYear: null };
   }
 }
 
@@ -201,22 +315,81 @@ async function assessParcels(parcels: LinzParcelNearby[], timeoutMs: number): Pr
   return results;
 }
 
+async function validateNearbyAddresses(subjectAddress: string, targetCount: number, timeoutMs: number): Promise<string[]> {
+  const rawCandidates = generateNearbyAddressCandidates(subjectAddress, Math.max(targetCount * 3, 30));
+  const subjectKey = normaliseAddress(subjectAddress);
+  const unique = new Map<string, string>();
+  const concurrency = 4;
+
+  for (let i = 0; i < rawCandidates.length && unique.size < targetCount; i += concurrency) {
+    const batch = rawCandidates.slice(i, i + concurrency);
+    const resolved = await Promise.all(
+      batch.map(async (candidate) => {
+        const matches = await fetchLINZAddressCandidates(candidate, { timeoutMs, maxResults: 1 }).catch(() => []);
+        return matches[0]?.address ?? null;
+      }),
+    );
+    for (const address of resolved) {
+      const key = normaliseAddress(address);
+      if (!address || !key || key === subjectKey || unique.has(key)) continue;
+      unique.set(key, address);
+      if (unique.size >= targetCount) break;
+    }
+  }
+
+  return Array.from(unique.values());
+}
+
+function timeoutAfter<T>(timeoutMs: number, value: T): Promise<T> {
+  return new Promise((resolve) => setTimeout(() => resolve(value), timeoutMs));
+}
+
+async function assessAddress(address: string, timeoutMs: number): Promise<AddressBuildAssessment> {
+  try {
+    const result = await Promise.race([
+      scrapePropertyValue(address),
+      timeoutAfter<null>(timeoutMs, null),
+    ]);
+    const buildYear = result?.build_year ?? null;
+    const buildYearRange = result?.build_year_range ?? null;
+    return {
+      address: result?.address_confirmed ?? address,
+      distanceM: null,
+      buildYear,
+      buildYearRange,
+      representativeYear: representativeYearFor(buildYear, buildYearRange),
+    };
+  } catch (err) {
+    logger.debug({ err: (err as Error).message, address }, "Built environment address lookup failed");
+    return { address, distanceM: null, buildYear: null, buildYearRange: null, representativeYear: null };
+  }
+}
+
+async function assessAddresses(addresses: string[], timeoutMs: number): Promise<AddressBuildAssessment[]> {
+  const concurrency = 4;
+  const results: AddressBuildAssessment[] = [];
+  for (let i = 0; i < addresses.length; i += concurrency) {
+    const batch = addresses.slice(i, i + concurrency);
+    results.push(...await Promise.all(batch.map((address) => assessAddress(address, timeoutMs))));
+  }
+  return results;
+}
+
 function confidenceFor(knownCount: number, assessedCount: number): BuiltEnvironmentConfidence {
   if (knownCount < 3 || assessedCount <= 0) return "unknown";
-  const share = knownCount / assessedCount;
-  if (knownCount >= 8 && share >= 0.6) return "high";
-  if (knownCount >= 5 && share >= 0.45) return "medium";
+  if (knownCount >= 8) return "high";
+  if (knownCount >= 5) return "medium";
   return "low";
 }
 
 function isSubjectOld(subjectBuildYear: number | null, subjectBuildYearRange: string | null): boolean {
-  if (subjectBuildYear != null) return subjectBuildYear < 2000;
+  if (subjectBuildYear != null) return subjectBuildYear < 1990;
   const parsed = parseBuildYear(subjectBuildYearRange);
-  return parsed.representativeYear != null && parsed.representativeYear < 2000;
+  return parsed.representativeYear != null && parsed.representativeYear < 1990;
 }
 
 export function buildBuiltEnvironmentContext(args: {
-  assessments: ParcelBuildAssessment[];
+  assessments: BuiltEnvironmentAssessment[];
   radiusM: number;
   subjectBuildYear?: number | null;
   subjectBuildYearRange?: string | null;
@@ -226,12 +399,14 @@ export function buildBuiltEnvironmentContext(args: {
     .map((a) => a.representativeYear)
     .filter((year): year is number => year != null);
   const knownBuildYearCount = years.length;
-  const modernCount = years.filter((year) => year >= 2010).length;
+  const newCount = years.filter((year) => year >= 2020).length;
+  const modernCount = years.filter((year) => year >= 1990 && year < 2020).length;
   const post2000Count = years.filter((year) => year >= 2000).length;
-  const oldCount = years.filter((year) => year < 1980).length;
+  const oldCount = years.filter((year) => year < 1990).length;
   const unknownCount = Math.max(0, assessedProperties - knownBuildYearCount);
   const modernShare = roundShare(modernCount, knownBuildYearCount);
   const post2000Share = roundShare(post2000Count, knownBuildYearCount);
+  const renewedShare = roundShare(modernCount + newCount, knownBuildYearCount);
   const subjectBuildYear = args.subjectBuildYear ?? null;
   const subjectBuildYearRange = args.subjectBuildYearRange ?? null;
   const subjectOld = isSubjectOld(subjectBuildYear, subjectBuildYearRange);
@@ -239,26 +414,40 @@ export function buildBuiltEnvironmentContext(args: {
 
   let signal: BuiltEnvironmentSignal = "unknown";
   if (knownBuildYearCount < 3) signal = "insufficient_data";
-  else if (subjectOld && post2000Share >= 0.45) signal = "last_missing_piece";
-  else if (subjectOld && post2000Share >= 0.25) signal = "mixed_renewal";
-  else if (oldCount / knownBuildYearCount >= 0.6) signal = "older_environment";
+  else if (subjectOld && renewedShare >= 0.45) signal = "last_missing_piece";
+  else if (subjectOld && oldCount / knownBuildYearCount >= 0.6) signal = "older_environment";
+  else if (subjectOld && renewedShare >= 0.25) signal = "mixed_renewal";
   else signal = "unknown";
 
   const reasons: string[] = [];
   if (assessedProperties <= 0) {
-    reasons.push(`No nearby residential parcels could be assessed within ${args.radiusM} m.`);
+    reasons.push("Nearby build-era data was unavailable for this address.");
   } else if (knownBuildYearCount < 3) {
-    reasons.push(`Only ${knownBuildYearCount} nearby build year${knownBuildYearCount === 1 ? "" : "s"} could be confirmed within ${args.radiusM} m.`);
+    reasons.push("Nearby build-era data is limited, so this factor has not changed the score.");
   } else {
-    reasons.push(`${knownBuildYearCount} of ${assessedProperties} nearby residential properties had usable build year or decade data within ${args.radiusM} m.`);
     if (signal === "last_missing_piece") {
-      reasons.push("Older subject dwelling sits among a strong nearby renewal pattern; rebuild may unlock value to match the neighbourhood.");
+      reasons.push("Older subject dwelling sits among modern or new nearby homes; rebuild may unlock value to match the neighbourhood.");
     } else if (signal === "mixed_renewal") {
-      reasons.push("Nearby redevelopment is visible but mixed; rebuild value uplift should be treated as supportive rather than decisive.");
+      reasons.push("Nearby renewal is visible but mixed; rebuild value uplift should be treated as supportive rather than decisive.");
     } else if (signal === "older_environment") {
-      reasons.push("Most known nearby homes are older, so a new build may need to lead rather than complete the local renewal pattern.");
+      reasons.push("Most known nearby homes are old, so value matching is less certain and a new build may need to lead local renewal.");
+    } else {
+      reasons.push("Nearby build ages do not show a clear renewal pattern, so this factor is score-neutral.");
     }
   }
+
+  const nearbyStatus = args.assessments
+    .slice(0, BUILT_ENVIRONMENT_FULL_STATUS_COUNT)
+    .map((a) => {
+      const status = statusForYear(a.representativeYear);
+      return {
+        address: a.address,
+        distanceM: a.distanceM,
+        buildYear: a.buildYear,
+        buildYearRange: a.buildYearRange,
+        status,
+      };
+    });
 
   return {
     radiusM: args.radiusM,
@@ -268,27 +457,38 @@ export function buildBuiltEnvironmentContext(args: {
     post2000Count,
     oldCount,
     unknownCount,
+    newCount,
     modernShare,
     post2000Share,
+    renewedShare,
     medianBuildYear: median(years),
     subjectBuildYear,
     subjectBuildYearRange,
     signal,
     confidence,
     reasons,
+    statusCounts: {
+      old: oldCount,
+      modern: modernCount,
+      new: newCount,
+      unknown: unknownCount,
+    },
+    nearbyStatus,
     nearbyExamples: args.assessments
       .filter((a) => a.representativeYear != null)
       .slice(0, 5)
       .map((a) => ({
         address: a.address,
-        distanceM: a.parcel.distance_m,
+        distanceM: a.distanceM,
         buildYear: a.buildYear,
         buildYearRange: a.buildYearRange,
+        status: statusForYear(a.representativeYear),
       })),
   };
 }
 
 export async function fetchBuiltEnvironmentContext(opts: {
+  address?: string | null;
   lat: number;
   lng: number;
   subjectParcelId?: string | null;
@@ -301,8 +501,24 @@ export async function fetchBuiltEnvironmentContext(opts: {
   const radiusM = opts.radiusM ?? BUILT_ENVIRONMENT_RADIUS_M;
   const maxParcels = opts.maxParcels ?? BUILT_ENVIRONMENT_FULL_SCAN_COUNT;
   const timeoutMsPerParcel = opts.timeoutMsPerParcel ?? 2500;
+  const targetAddressCount = maxParcels <= BUILT_ENVIRONMENT_LIGHT_SCAN_COUNT
+    ? BUILT_ENVIRONMENT_LIGHT_SCAN_COUNT
+    : BUILT_ENVIRONMENT_FULL_STATUS_COUNT;
 
   try {
+    if (opts.address?.trim()) {
+      const addresses = await validateNearbyAddresses(opts.address, targetAddressCount, timeoutMsPerParcel);
+      if (addresses.length > 0) {
+        const assessments = await assessAddresses(addresses, timeoutMsPerParcel);
+        return buildBuiltEnvironmentContext({
+          assessments,
+          radiusM,
+          subjectBuildYear: opts.subjectBuildYear ?? null,
+          subjectBuildYearRange: opts.subjectBuildYearRange ?? null,
+        });
+      }
+    }
+
     const parcels = await fetchLINZParcelsNear(opts.lat, opts.lng, radiusM, Math.max(maxParcels * 3, 40));
     if (parcels === null) {
       return { ...DEFAULT_CONTEXT, radiusM, subjectBuildYear: opts.subjectBuildYear ?? null, subjectBuildYearRange: opts.subjectBuildYearRange ?? null };
@@ -342,7 +558,7 @@ export function builtEnvironmentScoreAdjustment(context: BuiltEnvironmentContext
   }
   if (context.signal === "older_environment") {
     return {
-      roiDelta: 0,
+      roiDelta: -0.25,
       reason: "Nearby homes are mostly older, so a new build may need to lead the local environment rather than complete it.",
     };
   }

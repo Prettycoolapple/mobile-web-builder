@@ -110,7 +110,17 @@ type BackgroundAnalyseJob = {
   createdAt: number;
 };
 
+type BackgroundScreeningJob = {
+  jobId: string;
+  userId: string;
+  sessionId: string;
+  query: string;
+  presentation?: ChatMessage["searchPresentation"];
+  createdAt: number;
+};
+
 const BACKGROUND_ANALYSE_JOBS_KEY = "@devfeasible/background-analyse-jobs";
+const BACKGROUND_SCREENING_JOBS_KEY = "@devfeasible/background-screening-jobs";
 const APP_RATING_STATE_KEY = "@devfeasible/app-rating-state";
 const ANALYSE_DISCLAIMER_DISMISSED_KEY = "@devfeasible/analyse-disclaimer-dismissed";
 const PENDING_GUEST_ANALYSE_ACTION_KEY = "@devfeasible/pending-guest-analyse-action";
@@ -185,6 +195,16 @@ function isLongRunningSubdivisionDiscover(text: string, mode: "analyse" | "disco
   return /subdivi|sub[-\s]?divide|subdivision|分割|分地|细分|細分|可分割|可细分|可細分/i.test(text);
 }
 
+function serializeSearchMessageForChat(message: ChatMessage): string {
+  const results = (message.searchResults ?? [])
+    .map((result) => `${result.address}||${result.listingUrl ?? ""}`)
+    .join("; ");
+  const parts = [`[Search results shown: ${results}]`];
+  const aiIntro = message.aiIntro?.trim();
+  if (aiIntro) parts.push(`[Assistant search note: ${aiIntro}]`);
+  return parts.join("\n");
+}
+
 async function readBackgroundAnalyseJobs(): Promise<BackgroundAnalyseJob[]> {
   try {
     const raw = await AsyncStorage.getItem(BACKGROUND_ANALYSE_JOBS_KEY);
@@ -218,6 +238,41 @@ async function upsertBackgroundAnalyseJob(job: BackgroundAnalyseJob): Promise<vo
 async function removeBackgroundAnalyseJob(jobId: string): Promise<void> {
   const jobs = await readBackgroundAnalyseJobs();
   await writeBackgroundAnalyseJobs(jobs.filter((job) => job.jobId !== jobId));
+}
+
+async function readBackgroundScreeningJobs(): Promise<BackgroundScreeningJob[]> {
+  try {
+    const raw = await AsyncStorage.getItem(BACKGROUND_SCREENING_JOBS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((job): job is BackgroundScreeningJob =>
+      job &&
+      typeof job === "object" &&
+      typeof job.jobId === "string" &&
+      typeof job.userId === "string" &&
+      typeof job.sessionId === "string" &&
+      typeof job.query === "string" &&
+      typeof job.createdAt === "number",
+    );
+  } catch {
+    return [];
+  }
+}
+
+async function writeBackgroundScreeningJobs(jobs: BackgroundScreeningJob[]): Promise<void> {
+  await AsyncStorage.setItem(BACKGROUND_SCREENING_JOBS_KEY, JSON.stringify(jobs));
+}
+
+async function upsertBackgroundScreeningJob(job: BackgroundScreeningJob): Promise<void> {
+  const jobs = await readBackgroundScreeningJobs();
+  const withoutCurrent = jobs.filter((item) => item.jobId !== job.jobId);
+  await writeBackgroundScreeningJobs([job, ...withoutCurrent].slice(0, 20));
+}
+
+async function removeBackgroundScreeningJob(jobId: string): Promise<void> {
+  const jobs = await readBackgroundScreeningJobs();
+  await writeBackgroundScreeningJobs(jobs.filter((job) => job.jobId !== jobId));
 }
 
 type AppRatingState = {
@@ -1341,6 +1396,26 @@ export default function SearchScreen() {
     [user?.id],
   );
 
+  const trackBackgroundScreeningJob = useCallback(
+    async (
+      jobId: string | null | undefined,
+      sessionId: string,
+      query: string,
+      presentation?: ChatMessage["searchPresentation"],
+    ) => {
+      if (!jobId || !user?.id) return;
+      await upsertBackgroundScreeningJob({
+        jobId,
+        userId: user.id,
+        sessionId,
+        query,
+        presentation,
+        createdAt: Date.now(),
+      });
+    },
+    [user?.id],
+  );
+
   const backgroundJobPollInFlightRef = useRef(false);
   const pollBackgroundAnalyseJobs = useCallback(async () => {
     if (!user?.id || backgroundJobPollInFlightRef.current) return;
@@ -1420,24 +1495,193 @@ export default function SearchScreen() {
     user?.id,
   ]);
 
+  const renderBackgroundScreeningResult = useCallback(
+    (job: BackgroundScreeningJob, result: unknown) => {
+      const data = result && typeof result === "object"
+        ? result as { content?: string; mode?: string }
+        : null;
+      if (!data) {
+        replaceBackgroundAnalyseMessage(job.jobId, {
+          role: "assistant",
+          type: "text",
+          content: t("search.cant_reach"),
+          retryText: job.query,
+        }, job.sessionId);
+        return;
+      }
+
+      if (data.mode === "clarification") {
+        try {
+          const parsed = JSON.parse(data.content ?? "{}") as {
+            clarificationType?: string;
+            question?: string;
+            options?: string[];
+            optionActions?: Array<"repeat_origin" | "search_nearby">;
+            searchPresentation?: ChatMessage["searchPresentation"];
+            suburb?: string | null;
+          };
+          if (parsed.clarificationType === "subdivision" && Array.isArray(parsed.options) && parsed.options.length > 0) {
+            replaceBackgroundAnalyseMessage(job.jobId, {
+              role: "assistant",
+              type: "subdivision_clarification",
+              content: "",
+              clarification: { question: parsed.question || t("search.which_lot"), options: parsed.options },
+            }, job.sessionId);
+            return;
+          }
+          if (parsed.clarificationType === "address" && Array.isArray(parsed.options)) {
+            replaceBackgroundAnalyseMessage(job.jobId, {
+              role: "assistant",
+              type: "address_clarification",
+              content: "",
+              clarification: { question: parsed.question || t("search.confirm_address_intro"), options: parsed.options },
+            }, job.sessionId);
+            return;
+          }
+          if (parsed.clarificationType === "discovery_exhausted" && Array.isArray(parsed.options)) {
+            replaceBackgroundAnalyseMessage(job.jobId, {
+              role: "assistant",
+              type: "discovery_exhausted_choice",
+              content: "",
+              clarification: {
+                question: parsed.question || t("search.no_listings_msg"),
+                options: parsed.options,
+                optionActions: parsed.optionActions,
+              },
+              searchPresentation: parsed.searchPresentation ?? job.presentation,
+              suburb: parsed.suburb ?? undefined,
+            }, job.sessionId);
+            return;
+          }
+        } catch {
+        }
+        replaceBackgroundAnalyseMessage(job.jobId, {
+          role: "assistant",
+          type: "text",
+          content: data.content || t("search.could_clarify"),
+          retryText: job.query,
+        }, job.sessionId);
+        return;
+      }
+
+      if (data.mode === "discover") {
+        try {
+          const parsed = extractJSON(data.content ?? "{}") as {
+            candidates?: PropertyCandidate[];
+            aiIntro?: string;
+            searchPresentation?: ChatMessage["searchPresentation"];
+            suburb?: string;
+            continuationToken?: string | null;
+          };
+          if (Array.isArray(parsed.candidates) && parsed.candidates.length > 0) {
+            const searchPresentation = parsed.searchPresentation === "generic_listing" ? "generic_listing" : "scored_screening";
+            replaceBackgroundAnalyseMessage(job.jobId, {
+              role: "assistant",
+              type: "search",
+              searchResults: parsed.candidates,
+              content: "",
+              aiIntro: parsed.aiIntro ?? "",
+              searchPresentation,
+              suburb: parsed.suburb,
+              continuationToken: parsed.continuationToken ?? null,
+            }, job.sessionId);
+            if (searchPresentation !== "generic_listing") {
+              startCardScorePoll(
+                parsed.candidates.map((candidate) => ({ address: candidate.address, listingUrl: candidate.listingUrl })),
+                job.sessionId,
+              );
+            }
+            return;
+          }
+          replaceBackgroundAnalyseMessage(job.jobId, {
+            role: "assistant",
+            type: "text",
+            content: parsed.aiIntro || t("search.no_listings_msg"),
+            retryText: job.query,
+          }, job.sessionId);
+          return;
+        } catch {
+        }
+      }
+
+      replaceBackgroundAnalyseMessage(job.jobId, {
+        role: "assistant",
+        type: "text",
+        content: data.content || t("search.cant_reach"),
+        retryText: job.query,
+      }, job.sessionId);
+    },
+    [replaceBackgroundAnalyseMessage, startCardScorePoll, t],
+  );
+
+  const backgroundScreeningPollInFlightRef = useRef(false);
+  const pollBackgroundScreeningJobs = useCallback(async () => {
+    if (!user?.id || backgroundScreeningPollInFlightRef.current) return;
+    backgroundScreeningPollInFlightRef.current = true;
+    try {
+      const stored = await readBackgroundScreeningJobs();
+      const jobs = stored.filter((job) => job.userId === user.id);
+      for (const job of jobs) {
+        try {
+          const resp = await fetch(`${getApiBase()}/screening/jobs/${job.jobId}`, {
+            headers: getApiHeaders(),
+          });
+          if (!resp.ok) continue;
+          const data = await resp.json() as {
+            status: string;
+            result?: unknown;
+            error?: string | null;
+          };
+
+          if (data.status === "completed") {
+            await removeBackgroundScreeningJob(job.jobId);
+            renderBackgroundScreeningResult(job, data.result);
+          } else if (data.status === "failed") {
+            await removeBackgroundScreeningJob(job.jobId);
+            replaceBackgroundAnalyseMessage(job.jobId, {
+              role: "assistant",
+              type: "text",
+              content: data.error || t("search.cant_reach"),
+              retryText: job.query,
+            }, job.sessionId);
+          }
+        } catch {
+          // The next foreground/resume poll will try again.
+        }
+      }
+    } finally {
+      backgroundScreeningPollInFlightRef.current = false;
+    }
+  }, [
+    getApiBase,
+    getApiHeaders,
+    renderBackgroundScreeningResult,
+    replaceBackgroundAnalyseMessage,
+    t,
+    user?.id,
+  ]);
+
   useEffect(() => {
     if (!user?.id) return;
     void pollBackgroundAnalyseJobs();
+    void pollBackgroundScreeningJobs();
     const appStateSub = AppState.addEventListener("change", (state) => {
       if (state === "active") {
         void pollBackgroundAnalyseJobs();
+        void pollBackgroundScreeningJobs();
       }
     });
     const intervalId = setInterval(() => {
       if (AppState.currentState === "active") {
         void pollBackgroundAnalyseJobs();
+        void pollBackgroundScreeningJobs();
       }
     }, 30000);
     return () => {
       appStateSub.remove();
       clearInterval(intervalId);
     };
-  }, [pollBackgroundAnalyseJobs, user?.id]);
+  }, [pollBackgroundAnalyseJobs, pollBackgroundScreeningJobs, user?.id]);
 
   const handleSend = useCallback(async (overrideText?: string, skipAnalyseDisclaimer = false, continuePresentation?: "generic_listing" | "scored_screening", discoveryChoiceSuburb?: string, displayText?: string) => {
     const text = (overrideText !== undefined ? overrideText : inputText).trim();
@@ -1652,13 +1896,14 @@ export default function SearchScreen() {
                   // LLM knows this topic is already resolved and doesn't re-answer it on the
                   // next turn.
                   ? `[Listing agent contact card shown for ${m.propertyAddress ?? "the property"}: ${m.agentName ?? "agent details"}]`
-                  : `[Search results shown: ${(m.searchResults ?? []).map((r) => `${r.address}||${r.listingUrl ?? ""}`).join("; ")}]`,
+                  : serializeSearchMessageForChat(m),
         })),
       { role: "user" as const, content: text },
     ];
     const headers = getApiHeaders();
 
     const useBackgroundAnalyse = detectedMode === "analyse" && Boolean(user) && Platform.OS !== "web";
+    const useBackgroundScreening = detectedMode === "discover" && Boolean(user) && Platform.OS !== "web";
 
     // Warms the backend in case it's cold-starting. Pings /healthz repeatedly
     // (short timeout per ping) until it responds OK or we give up. Returns true
@@ -1683,6 +1928,47 @@ export default function SearchScreen() {
     };
 
     try {
+      if (useBackgroundScreening) {
+        try {
+          const qCtrl = new AbortController();
+          const qT = setTimeout(() => qCtrl.abort(), 60_000);
+          const r = await fetch(`${getApiBase()}/screening/jobs`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              messages: allMessages,
+              currentReport: currentReportContext,
+              continuePresentation,
+              discoveryChoiceSuburb,
+            }),
+            signal: qCtrl.signal,
+          });
+          clearTimeout(qT);
+
+          if (r.status === 401) {
+            updateLastMessage({ type: "text", content: t("search.session_expired") }, sessionId);
+            return;
+          }
+          if (r.status === 202) {
+            const queued = await r.json().catch(() => ({} as { jobId?: string }));
+            await trackBackgroundScreeningJob(queued.jobId, sessionId, text, continuePresentation);
+            updateLastMessage({
+              type: "loading",
+              content: "",
+              loadingMode: "discover",
+              retryLabel: t("search.screening_background"),
+              backgroundJobId: queued.jobId,
+            }, sessionId);
+            return;
+          }
+          if (!r.ok) {
+            throw new Error(`HTTP ${r.status}`);
+          }
+        } catch {
+          // Fall through to the existing foreground path if queueing is unavailable.
+        }
+      }
+
       if (useBackgroundAnalyse) {
         try {
           const qCtrl = new AbortController();
@@ -2190,6 +2476,7 @@ export default function SearchScreen() {
     refreshProfile,
     bumpSearchHistory,
     trackBackgroundAnalyseJob,
+    trackBackgroundScreeningJob,
     addProviderRecommendationOnce,
     shouldShowAnalyseDisclaimer,
     openAnalyseDisclaimer,

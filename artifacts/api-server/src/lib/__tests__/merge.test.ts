@@ -301,6 +301,7 @@ describe("mergePropertyData", () => {
           land_area_sqm: null,
           floor_area_sqm: null,
           build_year: null,
+          build_year_range: null,
           bedrooms: 5,
           bathrooms: 2,
           last_sale_price: null,
@@ -409,6 +410,7 @@ describe("mergePropertyData", () => {
           land_area_sqm: null,
           floor_area_sqm: 84,
           build_year: null,
+          build_year_range: null,
           bedrooms: 2,
           bathrooms: 1,
           last_sale_price: null,
@@ -497,6 +499,7 @@ describe("mergePropertyData", () => {
           land_area_sqm: null,
           floor_area_sqm: null,
           build_year: null,
+          build_year_range: null,
           bedrooms: 3,
           bathrooms: 1,
           last_sale_price: null,
@@ -644,6 +647,75 @@ describe("mergePropertyData", () => {
 
     expect(merged.build_year).toBe(2020);
     expect(merged.data_sources.build_year).toBe("propertyvalue");
+  });
+
+  it("does not let neighbouring suffix records supply land or floor area for the analysed child", () => {
+    const merged = mergePropertyData(
+      null,
+      null,
+      null,
+      { zone_code: "MHS", zone_description: "Mixed Housing Suburban", min_lot_size_sqm: 400 } as any,
+      [],
+      {
+        contour: null,
+        asbestos_risk: "unknown",
+        infrastructure: [],
+        analysed_address: "38A Rosebank Road, Papatoetoe, Auckland",
+        propertyValue: {
+          land_area_sqm: 129,
+          floor_area_sqm: 120,
+          bedrooms: 4,
+          bathrooms: 2,
+          address_confirmed: "38B Rosebank Road, Papatoetoe, Auckland",
+        } as any,
+        qv: {
+          land_area_sqm: 129,
+          floor_area_sqm: 129,
+          bedrooms: 4,
+          bathrooms: 2,
+          address_confirmed: "https://www.qv.co.nz/property/auckland/papatoetoe/38b-rosebank-road",
+        } as any,
+        homes: {
+          land_area_sqm: 150,
+          floor_area_sqm: 136,
+          bedrooms: 4,
+          bathrooms: 2,
+          build_year: null,
+          build_year_range: "2020-2029",
+          address_confirmed: "https://homes.co.nz/address/auckland/papatoetoe/38a-rosebank-road/O0v58N",
+        } as any,
+      },
+    );
+
+    expect(merged.land_area_sqm).toBe(150);
+    expect(merged.floor_area_sqm).toBe(136);
+    expect(merged.data_sources.land_area_sqm).toBe("homes");
+    expect(merged.data_sources.floor_area_sqm).toBe("homes");
+  });
+
+  it("keeps a Homes-only build decade as an approximate range", () => {
+    const merged = mergePropertyData(
+      null,
+      null,
+      null,
+      { zone_code: "MHS", zone_description: "Mixed Housing Suburban", min_lot_size_sqm: 400 } as any,
+      [],
+      {
+        contour: null,
+        asbestos_risk: "unknown",
+        infrastructure: [],
+        analysed_address: "38A Rosebank Road, Papatoetoe, Auckland",
+        homes: {
+          build_year: null,
+          build_year_range: "2020-2029",
+          address_confirmed: "38A Rosebank Road, Papatoetoe, Auckland",
+        } as any,
+      },
+    );
+
+    expect(merged.build_year).toBeNull();
+    expect(merged.build_year_range).toBe("2020-2029");
+    expect(merged.data_sources.build_year).toBeUndefined();
   });
 
   it("does not let an inactive OneRoof page replace an older council build year", () => {

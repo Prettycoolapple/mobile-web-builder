@@ -296,6 +296,7 @@ const en: Catalog = {
 
   "feature.feasibility_reports": "Feasibility reports",
   "feature.chat_search": "Chat & property search",
+  "feature.private_search": "Private Search",
   "feature.chat_planners": "In-app chat with matched professionals",
   "feature.connect_agents": "Connect with real estate agents",
   "feature.unlimited_listings": "Unlimited property listings",
@@ -804,6 +805,8 @@ const en: Catalog = {
   "search.fetching": "Fetching data…",
   "search.analyse_background":
     "Your feasibility report is generating in the background. You can switch apps or lock your phone — we'll send a push notification when it's ready. You can also check History anytime.",
+  "search.screening_background":
+    "Your screening search is running in the background. You can switch apps or lock your phone - we'll send a push notification when results are ready.",
   "search.analyse_prefix": "Analyse {address}",
   "search.full_analysis": "Full Analysis",
 
@@ -824,6 +827,14 @@ const en: Catalog = {
   "report.built_env_nearby_value": "{known}/{assessed} known within {radius} m; {pct}% post-2000",
   "report.built_env_subject": "Subject build era",
   "report.built_env_examples": "Nearby examples",
+  "report.built_env_nearby_status": "Nearby status",
+  "report.built_env_address": "Address",
+  "report.built_env_status": "Status",
+  "report.built_env_status_old": "Old",
+  "report.built_env_status_modern": "Modern",
+  "report.built_env_status_new": "New",
+  "report.built_env_status_unknown": "Unknown",
+  "report.built_env_unavailable": "Nearby build status is not available on this saved report. Re-run the analysis to add it.",
   "report.nearby_property": "Nearby property",
   "report.built_env_signal_last_piece": "Older missing piece among newer homes",
   "report.built_env_signal_mixed": "Mixed renewal nearby",
@@ -1338,6 +1349,7 @@ const zh: Catalog = {
 
   "feature.feasibility_reports": "地产 & 房屋分析报告",
   "feature.chat_search": "AI 聊天质询",
+  "feature.private_search": "私密搜索",
   "feature.chat_planners": "对接匹配的专业人士",
   "feature.connect_agents": "对接房屋中介",
   "feature.unlimited_listings": "无限物业刊登",
@@ -1845,6 +1857,8 @@ const zh: Catalog = {
   "search.fetching": "正在获取数据…",
   "search.analyse_background":
     "可行性报告正在后台生成。您可以切换应用或锁屏——完成后我们会发送推送通知。您也可以随时在「历史」中查看。",
+  "search.screening_background":
+    "筛选正在后台进行。您可以切换应用或锁屏；结果准备好后我们会发送推送通知。",
   "search.analyse_prefix": "分析 {address}",
   "search.full_analysis": "开始分析",
 
@@ -1865,6 +1879,14 @@ const zh: Catalog = {
   "report.built_env_nearby_value": "{radius} 米内 {assessed} 个物业中有 {known} 个可确认；{pct}% 为 2000 年后建成",
   "report.built_env_subject": "目标物业建造年代",
   "report.built_env_examples": "周边例子",
+  "report.built_env_nearby_status": "附近",
+  "report.built_env_address": "地址",
+  "report.built_env_status": "状态",
+  "report.built_env_status_old": "旧",
+  "report.built_env_status_modern": "现代",
+  "report.built_env_status_new": "新",
+  "report.built_env_status_unknown": "未知",
+  "report.built_env_unavailable": "此历史报告暂无周边建成状态。重新分析后可补充。",
   "report.nearby_property": "周边物业",
   "report.built_env_signal_last_piece": "较新街区中的旧房缺口",
   "report.built_env_signal_mixed": "周边已有部分更新",

@@ -13,6 +13,12 @@ describe("parseOfferedTenuresFromAssistant", () => {
     expect(parseOfferedTenuresFromAssistant(CROSS_LEASE_OFFER)).toEqual(["cross_lease"]);
   });
 
+  it("extracts cross-lease from the mobile serialized search note", () => {
+    expect(
+      parseOfferedTenuresFromAssistant(`[Search results shown: 1 Example Road||https://example.test/listing]\n[Assistant search note: ${CROSS_LEASE_OFFER}]`),
+    ).toEqual(["cross_lease"]);
+  });
+
   it("extracts multiple tenures, in canonical order", () => {
     expect(parseOfferedTenuresFromAssistant(MIXED_OFFER)).toEqual(["cross_lease", "leasehold"]);
   });

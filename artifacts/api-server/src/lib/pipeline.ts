@@ -41,7 +41,12 @@ import {
   calculateDevelopmentStrategies,
   type DevelopmentStrategyScenario,
 } from "./development-strategies";
-import { fetchRealestateListingByUrl, fetchSupplementListingComparables } from "./scrapers/realestate-api";
+import {
+  addressLineAppearsInText,
+  addressesLikelyMatch,
+  fetchRealestateListingByUrl,
+  fetchSupplementListingComparables,
+} from "./scrapers/realestate-api";
 import { selectedListingPhotoUrls, type SelectedListingContext } from "./selected-listing-context";
 import { resolveActiveListingContext } from "./active-listing-context";
 import { enrichSchoolZonesFromGis, type SchoolZoneDetail } from "./school-directory";
@@ -74,8 +79,13 @@ function activeListingFactsMatchSubject(
   listing: ListingResult | null,
   subjectAddress: string | null | undefined,
 ): boolean {
-  if (!listing?.isCombinedListing) return true;
-  return normaliseListingScope(listing.address) === normaliseListingScope(subjectAddress);
+  if (!listing || !subjectAddress) return false;
+  if (listing.isCombinedListing) {
+    return normaliseListingScope(listing.address) === normaliseListingScope(subjectAddress);
+  }
+  return addressesLikelyMatch(subjectAddress, listing.address)
+    || addressLineAppearsInText(subjectAddress, listing.address)
+    || addressLineAppearsInText(subjectAddress, listing.listingUrl);
 }
 
 function browserScrapersEnabled(): boolean {
@@ -388,7 +398,7 @@ export interface RawPropertyData {
   derived_scores?: DerivedCardScores;
 }
 
-export const RAW_PROPERTY_SCHEMA_VERSION = 2;
+export const RAW_PROPERTY_SCHEMA_VERSION = 3;
 
 export interface PipelineResult {
   address_input: string;
@@ -1395,6 +1405,7 @@ export async function runPropertyPipeline(
     () => (cr?.built_environment_context
       ? Promise.resolve(cr.built_environment_context)
       : fetchBuiltEnvironmentContext({
+          address: geocode.formatted ?? address,
           lat,
           lng,
           subjectParcelId: linzParcelData?.parcel_id ?? null,

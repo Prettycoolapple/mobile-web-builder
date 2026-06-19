@@ -30,6 +30,7 @@ const BORDER = "rgba(250,249,246,0.1)";
 const FEATURES: { icon: React.ComponentProps<typeof Feather>["name"]; labelKey: string }[] = [
   { icon: "users", labelKey: "provider_welcome.feature_investors" },
   { icon: "file-text", labelKey: "provider_welcome.feature_search_reports" },
+  { icon: "search", labelKey: "feature.private_search" },
   { icon: "message-circle", labelKey: "provider_welcome.feature_encrypted_chat" },
 ];
 

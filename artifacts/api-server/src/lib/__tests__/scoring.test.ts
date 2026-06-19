@@ -119,6 +119,7 @@ function builtEnvAssessment(id: string, representativeYear: number): ParcelBuild
   return {
     parcel,
     address: `${id} Test Street`,
+    distanceM: 20,
     buildYear: representativeYear,
     buildYearRange: null,
     representativeYear,
@@ -227,5 +228,28 @@ describe("scoreProperty — built environment", () => {
 
     expect(context.confidence).toBe("low");
     expect(scored.roi).toBe(base.roi);
+  });
+
+  it("slightly deducts ROI for a confident older surrounding environment", () => {
+    const context = buildBuiltEnvironmentContext({
+      radiusM: 100,
+      subjectBuildYear: 1955,
+      assessments: [
+        builtEnvAssessment("1", 1975),
+        builtEnvAssessment("2", 1970),
+        builtEnvAssessment("3", 1968),
+        builtEnvAssessment("4", 1962),
+        builtEnvAssessment("5", 1958),
+        builtEnvAssessment("6", 1952),
+        builtEnvAssessment("7", 1994),
+        builtEnvAssessment("8", 2004),
+      ],
+    });
+    const base = scoreProperty(merged(), baseCosts, scenarios, LOTS);
+    const scored = scoreProperty(merged(), baseCosts, scenarios, LOTS, context);
+
+    expect(context.signal).toBe("older_environment");
+    expect(scored.roi).toBe(Math.max(0.5, base.roi - 0.25));
+    expect(scored.roi_reasons).toContain("Nearby homes are mostly older, so a new build may need to lead the local environment rather than complete it.");
   });
 });

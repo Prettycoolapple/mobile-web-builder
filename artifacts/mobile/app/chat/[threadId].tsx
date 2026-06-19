@@ -750,7 +750,6 @@ export default function ChatScreen() {
     const showSenderName = !isMine && isFirstInGroup && !!otherName;
     const isLocalImage = !!msg.imageUrl && /^(file:|data:|blob:)/i.test(msg.imageUrl);
     const isPendingImage = !!msg.imageUrl && (msg.localStatus === "uploading" || msg.localStatus === "sending");
-    const isPendingText = !msg.imageUrl && msg.localStatus === "sending";
     const isFailedText = !msg.imageUrl && msg.localStatus === "failed";
     const imageSource = msg.imageUrl
       ? {
@@ -842,10 +841,6 @@ export default function ChatScreen() {
                   <Text style={[styles.textStatusText, { color: isMine ? "#fff" : colors.mutedForeground }]}>
                     {t("dm.error.send_failed")}
                   </Text>
-                </View>
-              ) : isPendingText ? (
-                <View style={styles.textStatusRow}>
-                  <ActivityIndicator size="small" color={isMine ? "#fff" : colors.mutedForeground} />
                 </View>
               ) : null}
             </TouchableOpacity>

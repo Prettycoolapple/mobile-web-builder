@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
-import { db, profiles, searches, feasibilityJobs, salesAgentProfiles, listings, discoveryContinuations, withDbRetry, type DiscoveryContinuationState } from "@workspace/db";
+import { db, profiles, searches, feasibilityJobs, screeningJobs, salesAgentProfiles, listings, discoveryContinuations, withDbRetry, type DiscoveryContinuationState } from "@workspace/db";
 import { agentAiUnlimited } from "../lib/agent-entitlements";
 import { logger } from "../lib/logger";
 import {
@@ -23,7 +23,7 @@ import {
   Message,
   type ChatIntent,
 } from "../lib/claude";
-import { verifyActiveToken } from "../lib/auth";
+import { signToken, verifyActiveToken } from "../lib/auth";
 import { extractNZAddress } from "../lib/address-parser";
 import {
   extractCombinedListingAddressParts,
@@ -1064,6 +1064,15 @@ function threadHasRecentAreaDiscovery(messages: Message[] | undefined): boolean 
     }
   }
   return false;
+}
+
+function findRecentOfferedTenures(messages: Message[] | undefined): Tenure[] {
+  for (const msg of [...(messages ?? [])].reverse().slice(0, 8)) {
+    if (msg.role !== "assistant") continue;
+    const offered = parseOfferedTenuresFromAssistant(msg.content ?? "");
+    if (offered.length > 0) return offered;
+  }
+  return [];
 }
 
 function resolveDiscoveryPresentation(input: {
@@ -2912,11 +2921,18 @@ function pgErrorChain(err: unknown): Array<Record<string, unknown>> {
 
 type FeasibilityLog = Pick<Logger, "warn" | "error" | "info">;
 const STALE_FEASIBILITY_JOB_MS = 10 * 60 * 1000;
+const STALE_SCREENING_JOB_MS = 10 * 60 * 1000;
 
 function isStaleFeasibilityJob(job: { status: string; updatedAt: Date | string | null }): boolean {
   if (job.status !== "processing") return false;
   const updatedAt = job.updatedAt ? new Date(job.updatedAt).getTime() : 0;
   return !Number.isFinite(updatedAt) || Date.now() - updatedAt > STALE_FEASIBILITY_JOB_MS;
+}
+
+function isStaleScreeningJob(job: { status: string; updatedAt: Date | string | null }): boolean {
+  if (job.status !== "processing") return false;
+  const updatedAt = job.updatedAt ? new Date(job.updatedAt).getTime() : 0;
+  return !Number.isFinite(updatedAt) || Date.now() - updatedAt > STALE_SCREENING_JOB_MS;
 }
 
 async function findReusableFeasibilityJob(args: {
@@ -2941,6 +2957,170 @@ async function findReusableFeasibilityJob(args: {
       .limit(1),
   );
   return rows[0] ?? null;
+}
+
+type ScreeningJobMode = "generic_listing" | "scored_screening" | "unknown";
+type ScreeningJobRequestPayload = {
+  baseUrl?: string;
+  headers?: Record<string, string | undefined>;
+  body?: {
+    messages?: Message[];
+    currentReport?: object;
+    message?: string;
+    conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
+    reportContext?: string;
+    continuePresentation?: "generic_listing" | "scored_screening";
+    discoveryChoiceSuburb?: string;
+  };
+};
+
+function requestApiBase(req: any): string | undefined {
+  const host = req.get?.("host");
+  if (!host) return undefined;
+  const protocol = req.protocol || "https";
+  const baseUrl = typeof req.baseUrl === "string" && req.baseUrl ? req.baseUrl : "/api";
+  return `${protocol}://${host}${baseUrl}`;
+}
+
+function fallbackApiBase(): string | undefined {
+  const raw =
+    process.env.PUBLIC_API_BASE ||
+    process.env.EXPO_PUBLIC_API_URL ||
+    process.env.PUBLIC_APP_URL ||
+    process.env.APP_URL ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined);
+  if (!raw) return undefined;
+  const trimmed = raw.replace(/\/+$/, "");
+  return trimmed.endsWith("/api") ? trimmed : `${trimmed}/api`;
+}
+
+function latestUserMessage(messages: Message[] | undefined): string {
+  for (const item of [...(messages ?? [])].reverse()) {
+    if (item?.role === "user" && typeof item.content === "string" && item.content.trim()) {
+      return item.content.trim();
+    }
+  }
+  return "Screening search";
+}
+
+function shortQueryForPush(query: string): string {
+  const compact = query.replace(/\s+/g, " ").trim();
+  if (compact.length <= 70) return compact || "your search";
+  return `${compact.slice(0, 67).trimEnd()}...`;
+}
+
+function screeningModeFromResult(result: unknown): ScreeningJobMode {
+  if (!result || typeof result !== "object") return "unknown";
+  const obj = result as Record<string, unknown>;
+  if (typeof obj.mode !== "string" || obj.mode !== "discover") return "unknown";
+  const content = typeof obj.content === "string" ? obj.content : "";
+  try {
+    const parsed = JSON.parse(content) as Record<string, unknown>;
+    const presentation = parsed.searchPresentation;
+    if (presentation === "generic_listing" || presentation === "scored_screening") return presentation;
+  } catch {
+  }
+  return "unknown";
+}
+
+async function createInternalTokenForUser(userId: string): Promise<string> {
+  const [profile] = await withDbRetry(() =>
+    db
+      .select({
+        email: profiles.email,
+        role: profiles.role,
+        activeSessionId: profiles.activeSessionId,
+      })
+      .from(profiles)
+      .where(eq(profiles.id, userId))
+      .limit(1),
+  );
+  if (!profile) throw new Error("User profile not found for screening job");
+  return signToken(userId, profile.email, profile.role, profile.activeSessionId ?? undefined);
+}
+
+async function processScreeningJob(jobId: string, log: FeasibilityLog): Promise<void> {
+  const rows = await withDbRetry(() =>
+    db.select().from(screeningJobs).where(eq(screeningJobs.id, jobId)).limit(1),
+  );
+  const job = rows[0];
+  if (!job) return;
+  if (job.status !== "pending" && !isStaleScreeningJob(job)) return;
+
+  await withDbRetry(() =>
+    db
+      .update(screeningJobs)
+      .set({ status: "processing", updatedAt: new Date() })
+      .where(eq(screeningJobs.id, jobId)),
+  );
+
+  try {
+    const payload = (job.requestPayload ?? {}) as ScreeningJobRequestPayload;
+    const baseUrl = (payload.baseUrl || fallbackApiBase())?.replace(/\/+$/, "");
+    if (!baseUrl) throw new Error("No API base URL available for screening job");
+
+    const token = await createInternalTokenForUser(job.userId);
+    const locale = job.locale === "zh" ? "zh" : "en";
+    const response = await fetch(`${baseUrl}/chat`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        "x-locale": locale,
+        ...(payload.headers?.["x-os-chinese"] ? { "x-os-chinese": payload.headers["x-os-chinese"] } : {}),
+      },
+      body: JSON.stringify(payload.body ?? { messages: job.conversationHistory ?? [] }),
+      signal: AbortSignal.timeout(10 * 60 * 1000),
+    });
+
+    if (!response.ok) {
+      let message = `Screening request failed with ${response.status}`;
+      try {
+        const body = await response.json() as { error?: string; message?: string };
+        message = body.message || body.error || message;
+      } catch {
+        const text = await response.text().catch(() => "");
+        if (text) message = text.slice(0, 300);
+      }
+      throw new Error(message);
+    }
+
+    const result = await response.json();
+    const mode = screeningModeFromResult(result);
+    await withDbRetry(() =>
+      db
+        .update(screeningJobs)
+        .set({
+          status: "completed",
+          mode,
+          resultJson: result,
+          updatedAt: new Date(),
+        })
+        .where(eq(screeningJobs.id, jobId)),
+    );
+
+    const query = shortQueryForPush(job.queryText);
+    const title = locale === "zh" ? "筛选结果已就绪" : "Screening ready";
+    const body = locale === "zh"
+      ? `您请求的「${query}」筛选已完成，请打开应用查看。`
+      : `Your screening results for "${query}" are ready. Open Project Alpha to view them.`;
+    void sendPushToUser(job.userId, title, body, {
+      type: "screening_ready",
+      jobId,
+    });
+  } catch (err) {
+    await withDbRetry(() =>
+      db
+        .update(screeningJobs)
+        .set({
+          status: "failed",
+          error: err instanceof Error ? err.message : String(err),
+          updatedAt: new Date(),
+        })
+        .where(eq(screeningJobs.id, jobId)),
+    );
+    log.error({ err }, "Background screening job failed");
+  }
 }
 
 type CombinedReportFailure = {
@@ -4806,6 +4986,116 @@ router.post(
 });
 
 router.post(
+  "/screening/jobs",
+  userRateLimit({ name: "screening-jobs", windowMs: minutes(1), max: 12 }),
+  async (req, res) => {
+    const screeningLocale = localeFromReq({ headers: req.headers as Record<string, string | string[] | undefined> });
+    const userId = await getUserIdFromHeader(req);
+    if (userId === INVALID_AUTH_SESSION) {
+      rejectInvalidAuthSession(res);
+      return;
+    }
+    if (!userId) {
+      res.status(401).json({ error: "Unauthorized", code: "UNAUTHORIZED" });
+      return;
+    }
+
+    const {
+      messages,
+      currentReport,
+      message,
+      conversationHistory,
+      reportContext,
+      continuePresentation,
+      discoveryChoiceSuburb,
+    } = (req.body as ScreeningJobRequestPayload["body"] | undefined) ?? {};
+    const queryText = (typeof message === "string" && message.trim()) || latestUserMessage(messages) || "Screening search";
+    const requestPayload: ScreeningJobRequestPayload = {
+      baseUrl: requestApiBase(req),
+      headers: {
+        "x-locale": headerSingle(req.headers as Record<string, string | string[] | undefined>, "x-locale"),
+        "x-os-chinese": headerSingle(req.headers as Record<string, string | string[] | undefined>, "x-os-chinese"),
+      },
+      body: {
+        messages,
+        currentReport,
+        message,
+        conversationHistory,
+        reportContext,
+        continuePresentation,
+        discoveryChoiceSuburb,
+      },
+    };
+
+    try {
+      const rows = await withDbRetry(() =>
+        db
+          .insert(screeningJobs)
+          .values({
+            userId,
+            status: "pending",
+            queryText,
+            locale: screeningLocale,
+            conversationHistory: messages ?? conversationHistory ?? null,
+            requestPayload,
+          })
+          .returning({ id: screeningJobs.id }),
+      );
+      const inserted = rows[0];
+      if (!inserted?.id) {
+        res.status(500).json({ error: "Could not queue background screening.", code: "JOB_QUEUE_FAILED" });
+        return;
+      }
+      runAfterResponse(processScreeningJob(inserted.id, req.log));
+      res.status(202).json({ type: "queued", jobId: inserted.id, status: "queued" });
+    } catch (err) {
+      req.log.error({ err }, "POST /screening/jobs failed");
+      res.status(500).json({ error: "Could not queue background screening.", code: "JOB_QUEUE_FAILED" });
+    }
+  },
+);
+
+router.get("/screening/jobs/:jobId", async (req, res) => {
+  const jobId = (req.params as { jobId?: string }).jobId;
+  const userId = await getUserIdFromHeader(req);
+  if (userId === INVALID_AUTH_SESSION) {
+    rejectInvalidAuthSession(res);
+    return;
+  }
+  if (!jobId) {
+    res.status(400).json({ error: "jobId is required", code: "MISSING_JOB_ID" });
+    return;
+  }
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized", code: "UNAUTHORIZED" });
+    return;
+  }
+
+  try {
+    const rows = await withDbRetry(() =>
+      db.select().from(screeningJobs).where(eq(screeningJobs.id, jobId)).limit(1),
+    );
+    const job = rows[0];
+    if (!job || job.userId !== userId) {
+      res.status(404).json({ error: "Not found", code: "NOT_FOUND" });
+      return;
+    }
+    if (job.status === "pending" || isStaleScreeningJob(job)) {
+      runAfterResponse(processScreeningJob(job.id, req.log));
+    }
+    res.json({
+      status: job.status,
+      mode: job.mode,
+      result: job.resultJson ?? null,
+      error: job.error,
+    });
+  } catch (err) {
+    req.log.error({ err }, "GET /screening/jobs/:jobId failed");
+    res.status(500).json({ error: "Failed to load job", code: "JOB_LOAD_FAILED" });
+  }
+});
+
+router.post(
   "/chat",
   // Chat has its own monthly quota; this just blunts scripted bursts.
   userRateLimit({ name: "chat", windowMs: minutes(1), max: 20 }),
@@ -5073,10 +5363,8 @@ router.post(
       // replies with a bare affirmation, accept that offer (independent of the LLM's
       // includeTenures parse) and re-run the prior subdivision discovery with those
       // tenures included.
-      const priorAssistantMessage =
-        [...(messages ?? [])].reverse().find((m) => m.role === "assistant")?.content ?? null;
       const offeredTenures: Tenure[] = isBareTenureAffirmation(userText)
-        ? parseOfferedTenuresFromAssistant(priorAssistantMessage)
+        ? findRecentOfferedTenures(messages)
         : [];
       const affirmingTenureOffer = offeredTenures.length > 0;
       if (delegatedDiscoverSuburb && effectiveMode !== "analyse") {

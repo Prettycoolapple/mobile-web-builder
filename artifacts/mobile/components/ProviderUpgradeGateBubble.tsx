@@ -27,6 +27,7 @@ export function ProviderUpgradeGateBubble({ onUpgrade, onDismiss }: Props) {
   const features = useMemo(
     () => [
       t("paywall.f1"),
+      t("feature.private_search"),
       t("paywall.f2"),
       t("paywall.f3"),
       t("paywall.f4"),

@@ -328,6 +328,60 @@ export interface LinzLetterSuffixAddressCandidate {
   rank: number | null;
 }
 
+export interface LinzAddressSearchCandidate {
+  address: string;
+  id: string;
+  rank: number | null;
+}
+
+export async function fetchLINZAddressCandidates(
+  address: string,
+  opts: { timeoutMs?: number; maxResults?: number } = {},
+): Promise<LinzAddressSearchCandidate[]> {
+  const initialQuery = address.trim();
+  if (!initialQuery) return [];
+  const timeoutMs = opts.timeoutMs ?? 8000;
+  const maxResults = opts.maxResults ?? 5;
+  const byAddress = new Map<string, LinzAddressSearchCandidate>();
+
+  for (const query of lrsAddressQueryVariants(initialQuery)) {
+    try {
+      const url = new URL(`${LINZ_LRS_PUBLIC_BASE}/public-search-caches/addresses`);
+      url.searchParams.set("q", query);
+      const resp = await fetch(url.toString(), {
+        headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!resp.ok) {
+        logger.debug({ status: resp.status, query }, "LINZ address search failed");
+        continue;
+      }
+      const json = await resp.json() as {
+        data?: Array<{ id?: string | number; address?: string; source?: string; rank?: number }>;
+      };
+      const candidates = (json.data ?? [])
+        .filter((item) => String(item.source ?? "").toLowerCase() === "address" && item.id != null && item.address)
+        .filter((item) => lrsAddressLooksExact(query, item.address ?? ""))
+        .sort((a, b) => (b.rank ?? 0) - (a.rank ?? 0));
+      for (const candidate of candidates) {
+        if (!candidate.id || !candidate.address) continue;
+        const key = normaliseLrsAddress(candidate.address);
+        if (!key || byAddress.has(key)) continue;
+        byAddress.set(key, {
+          address: candidate.address.trim(),
+          id: String(candidate.id),
+          rank: typeof candidate.rank === "number" ? candidate.rank : null,
+        });
+        if (byAddress.size >= maxResults) return Array.from(byAddress.values());
+      }
+    } catch (err) {
+      logger.debug({ err: (err as Error).message, query }, "LINZ address lookup failed");
+    }
+  }
+
+  return Array.from(byAddress.values()).slice(0, maxResults);
+}
+
 /**
  * Redevelopment probe: once a parcel is developed into multiple dwellings,
  * LINZ allocates unit-style child addresses under the parent street number.

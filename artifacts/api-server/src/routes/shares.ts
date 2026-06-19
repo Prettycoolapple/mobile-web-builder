@@ -96,7 +96,7 @@ function baseUrl(req?: Request | null): string {
 }
 
 function shareUrl(token: string, req?: Request | null): string {
-  return `${baseUrl(req)}/share/${encodeURIComponent(token)}`;
+  return `${baseUrl(req)}/property-share/${encodeURIComponent(token)}`;
 }
 
 function appSchemeShareUrl(token: string): string {
@@ -136,6 +136,31 @@ function firstCleanUrl(...values: unknown[]): string | null {
     if (url) return url;
   }
   return null;
+}
+
+function nestedValue(source: unknown, path: string[]): unknown {
+  let current = source;
+  for (const key of path) {
+    if (!current || typeof current !== "object") return undefined;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current;
+}
+
+function shareImageFromRecord(record: Record<string, unknown>): string | null {
+  return firstCleanUrl(
+    record["photoUrl"],
+    record["photoUrls"],
+    record["imageUrl"],
+    record["imageUrls"],
+    record["mainPhotoUrl"],
+    record["main_photo_url"],
+    record["photo_urls"],
+    nestedValue(record, ["selectedListingContext", "photoUrl"]),
+    nestedValue(record, ["selectedListingContext", "photoUrls"]),
+    nestedValue(record, ["propertyOverview", "selectedListingContext", "photoUrl"]),
+    nestedValue(record, ["propertyOverview", "selectedListingContext", "photoUrls"]),
+  );
 }
 
 function firstCleanText(...values: unknown[]): string {
@@ -262,7 +287,7 @@ export function buildShare(input: z.infer<typeof createShareSchema>) {
       address: input.address,
       previewTitle: title,
       previewDescription: candidateDescription(candidate),
-      previewImageUrl: firstCleanUrl(candidate.photoUrl, candidate.photoUrls, candidate.imageUrls),
+      previewImageUrl: shareImageFromRecord(candidate),
       payloadJson: {
         kind: "candidate",
         address: input.address,
@@ -279,7 +304,7 @@ export function buildShare(input: z.infer<typeof createShareSchema>) {
       address: input.address,
       previewTitle: title,
       previewDescription: listingDescription(listing),
-      previewImageUrl: firstCleanUrl(listing.imageUrls, listing.photoUrls, listing.photoUrl),
+      previewImageUrl: shareImageFromRecord(listing),
       payloadJson: {
         kind: "listing",
         address: input.address,
@@ -437,7 +462,8 @@ export function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?
   const title = preview?.title ?? "Project Alpha property share";
   const description = preview?.description ?? "This Project Alpha share link could not be found or has expired.";
   const url = preview?.url ?? `${baseUrl(req)}/`;
-  const image = socialPreviewImageUrl(preview?.imageUrl, req) ?? `${baseUrl(req)}/favicon.png`;
+  const resolvedImage = socialPreviewImageUrl(preview?.imageUrl, req);
+  const image = resolvedImage ?? `${baseUrl(req)}/favicon.png`;
   const safeTitle = htmlEscape(title);
   const safeDescription = htmlEscape(description);
   const safeImage = htmlEscape(image);
@@ -504,7 +530,7 @@ export function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?
     <main>
       <article class="card">
         <div class="hero">
-          ${preview?.imageUrl ? `<img src="${safeImage}" alt="" />` : `<div class="hero-fallback">PA</div>`}
+          ${resolvedImage ? `<img src="${safeImage}" alt="" />` : `<div class="hero-fallback">PA</div>`}
         </div>
         <div class="body">
           <p class="eyebrow">Project Alpha</p>
@@ -539,11 +565,6 @@ export function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?
 
           event.preventDefault();
           var fallback = isiOS ? button.dataset.iosStore : button.dataset.androidStore;
-          var isMobileSafari = isiOS && /Safari/i.test(ua) && !/(CriOS|FxiOS|EdgiOS|OPiOS|MicroMessenger|FBAN|FBAV|Instagram|Line|Twitter)/i.test(ua);
-          if (isMobileSafari) {
-            if (fallback) window.location.assign(fallback);
-            return;
-          }
           var appUrl = isAndroid && button.dataset.androidIntentUrl
             ? button.dataset.androidIntentUrl
             : (button.dataset.appUrl || button.href);
@@ -678,5 +699,9 @@ async function sendSharePage(req: Request, res: Response) {
 router.get("/share/:token", sendSharePage);
 
 router.get("/share/:token/page", sendSharePage);
+
+router.get("/property-share/:token", sendSharePage);
+
+router.get("/property-share/:token/page", sendSharePage);
 
 export default router;

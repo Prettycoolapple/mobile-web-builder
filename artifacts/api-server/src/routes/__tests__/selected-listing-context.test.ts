@@ -94,4 +94,59 @@ describe("selected listing context", () => {
       },
     });
   });
+
+  it("does not overwrite overview facts with a neighbouring selected listing suffix", () => {
+    const report: Record<string, unknown> = {
+      propertyOverview: {
+        address: "38A Rosebank Road, Papatoetoe, Auckland",
+        bedrooms: 4,
+        bathrooms: 2,
+        landArea: "150mÂ²",
+        land_area_sqm: 150,
+      },
+      data_sources: {},
+    };
+
+    applySelectedListingContextToReport(report, {
+      address: "38B Rosebank Road, Papatoetoe, Auckland",
+      listingUrl: "https://www.barfoot.co.nz/property/residential/manukau-city/papatoetoe/house/923840",
+      landArea: 129,
+      bedrooms: 4,
+      bathrooms: 2,
+      source: "barfoot",
+    });
+
+    expect(report.propertyOverview).toMatchObject({
+      address: "38A Rosebank Road, Papatoetoe, Auckland",
+      landArea: "150mÂ²",
+      land_area_sqm: 150,
+      isOnMarket: true,
+    });
+  });
+
+  it("allows selected listing facts when the selected address matches the overview address", () => {
+    const report: Record<string, unknown> = {
+      propertyOverview: {
+        address: "38A Rosebank Road, Papatoetoe, Auckland",
+        landArea: "129mÂ²",
+        land_area_sqm: 129,
+      },
+      data_sources: {},
+    };
+
+    applySelectedListingContextToReport(report, {
+      address: "38A Rosebank Road, Papatoetoe, Auckland",
+      listingUrl: "https://www.barfoot.co.nz/property/residential/manukau-city/papatoetoe/house/921708",
+      landArea: 150,
+      floorArea: 136,
+      source: "barfoot",
+    });
+
+    expect(report.propertyOverview).toMatchObject({
+      landArea: "150m²",
+      land_area_sqm: 150,
+      floorArea: "136m²",
+      floor_area_sqm: 136,
+    });
+  });
 });

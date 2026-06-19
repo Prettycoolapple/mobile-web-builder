@@ -17,7 +17,8 @@
     "add-watchlist-table": "node ./scripts/add-watchlist-table.mjs",
     "add-rate-limit-counters": "node ./scripts/add-rate-limit-counters.mjs",
     "add-abuse-detection": "node ./scripts/add-abuse-detection.mjs",
-    "allow-guest-property-shares": "node ./scripts/allow-guest-property-shares.mjs"
+    "allow-guest-property-shares": "node ./scripts/allow-guest-property-shares.mjs",
+    "add-screening-jobs": "node ./scripts/add-screening-jobs.mjs"
   },
   "dependencies": {
     "drizzle-orm": "catalog:",

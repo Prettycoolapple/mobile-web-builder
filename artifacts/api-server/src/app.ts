@@ -72,6 +72,11 @@ app.use("/share", (req, res, next) => {
   router(req, res, next);
 });
 
+app.use("/property-share", (req, res, next) => {
+  req.url = `/property-share${req.url}`;
+  router(req, res, next);
+});
+
 app.use("/api", router);
 
 export default app;

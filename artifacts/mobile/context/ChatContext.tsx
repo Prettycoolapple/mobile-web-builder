@@ -388,6 +388,15 @@ export interface BuiltEnvironmentExample {
   distanceM: number | null;
   buildYear: number | null;
   buildYearRange: string | null;
+  status?: "old" | "modern" | "new" | "unknown";
+}
+
+export interface BuiltEnvironmentNearbyStatus {
+  address: string | null;
+  status: "old" | "modern" | "new" | "unknown";
+  buildYear: number | null;
+  buildYearRange: string | null;
+  distanceM: number | null;
 }
 
 export interface BuiltEnvironmentContext {
@@ -407,6 +416,15 @@ export interface BuiltEnvironmentContext {
   confidence: "high" | "medium" | "low" | "unknown";
   reasons: string[];
   nearbyExamples: BuiltEnvironmentExample[];
+  nearbyStatus?: BuiltEnvironmentNearbyStatus[];
+  statusCounts?: {
+    old: number;
+    modern: number;
+    new: number;
+    unknown: number;
+  };
+  renewedShare?: number;
+  newCount?: number;
 }
 
 /** MoE Schools Directory enrichment for home-zone listing text (Hougarden). */

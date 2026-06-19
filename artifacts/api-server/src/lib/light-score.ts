@@ -184,6 +184,7 @@ export async function computeLightScore(input: LightScoreInput): Promise<LightSc
   );
 
   const builtEnvironmentContext = await fetchBuiltEnvironmentContext({
+    address,
     lat: geo.lat,
     lng: geo.lng,
     subjectParcelId: linzParcel?.parcel_id ?? null,

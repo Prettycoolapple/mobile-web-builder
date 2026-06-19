@@ -427,15 +427,22 @@ export function mergePropertyData(
     sourceAddressMatchesSubject(extra?.analysed_address, qv.address_confirmed);
   const propertyValueBeds = propertyValueMatchesSubject ? propertyValue?.bedrooms : null;
   const propertyValueBaths = propertyValueMatchesSubject ? propertyValue?.bathrooms : null;
-  const propertyValueBuildYear = propertyValueMatchesSubject ? propertyValue?.build_year : null;
+  const propertyValueLandArea = propertyValueMatchesSubject ? propertyValue?.land_area_sqm : null;
+  const propertyValueFloorArea = propertyValueMatchesSubject ? propertyValue?.floor_area_sqm : null;
   const propertyValueBuildYearRange = propertyValueMatchesSubject ? propertyValue?.build_year_range : null;
+  const propertyValueBuildYear = propertyValueMatchesSubject && !propertyValueBuildYearRange ? propertyValue?.build_year : null;
   const homesBeds = homesMatchesSubject ? homes?.bedrooms : null;
   const homesBaths = homesMatchesSubject ? homes?.bathrooms : null;
-  const homesBuildYear = homesMatchesSubject ? homes?.build_year : null;
+  const homesLandArea = homesMatchesSubject ? homes?.land_area_sqm : null;
+  const homesFloorArea = homesMatchesSubject ? homes?.floor_area_sqm : null;
+  const homesBuildYearRange = homesMatchesSubject ? homes?.build_year_range : null;
+  const homesBuildYear = homesMatchesSubject && !homesBuildYearRange ? homes?.build_year : null;
   const qvBeds = qvMatchesSubject ? qv?.bedrooms : null;
   const qvBaths = qvMatchesSubject ? qv?.bathrooms : null;
-  const qvBuildYear = qvMatchesSubject ? qv?.build_year : null;
+  const qvLandArea = qvMatchesSubject ? qv?.land_area_sqm : null;
+  const qvFloorArea = qvMatchesSubject ? qv?.floor_area_sqm : null;
   const qvBuildYearRange = qvMatchesSubject ? qv?.build_year_range : null;
+  const qvBuildYear = qvMatchesSubject && !qvBuildYearRange ? qv?.build_year : null;
   if (propertyValue && !propertyValueMatchesSubject) {
     logger.info(
       { analysed: extra?.analysed_address, confirmed: propertyValue.address_confirmed },
@@ -447,9 +454,9 @@ export function mergePropertyData(
   const land_area_sqm = first("land_area_sqm", sources,
     ["linz", linz?.area_sqm],
     ["auckland_council_gis", ph?.land_area_sqm],
-    ["propertyvalue", propertyValue?.land_area_sqm],
-    ["qv", qv?.land_area_sqm],
-    ["homes", homes?.land_area_sqm],
+    ["propertyvalue", propertyValueLandArea],
+    ["qv", qvLandArea],
+    ["homes", homesLandArea],
     ["hougarden", hougarden?.land_area_sqm],
     ["oneroof", oneroof?.land_area_sqm],
     ["realestate.co.nz", realestateListing?.landArea],
@@ -476,18 +483,18 @@ export function mergePropertyData(
   ]);
   let build_year = buildYearResult.build_year;
   // Keep decade/range-only records approximate instead of manufacturing an exact year.
-  const rawRange = build_year == null ? (propertyValueBuildYearRange ?? qvBuildYearRange ?? null) : null;
+  const rawRange = build_year == null ? (propertyValueBuildYearRange ?? qvBuildYearRange ?? homesBuildYearRange ?? null) : null;
   const build_year_range = build_year == null ? rawRange : null;
 
   // Floor area: median of credible values.
   let floor_area_sqm = medianFloorArea(sources, [
-    { src: "propertyvalue",      floor_area_sqm: propertyValue?.floor_area_sqm },
+    { src: "propertyvalue",      floor_area_sqm: propertyValueFloorArea },
     { src: "oneroof",            floor_area_sqm: oneroof?.floor_area_sqm },
     { src: "realestate.co.nz",   floor_area_sqm: realestateListing?.floorArea },
     { src: "hougarden",          floor_area_sqm: hougarden?.floor_area_sqm },
     { src: "auckland_council_gis", floor_area_sqm: ph?.floor_area_sqm },
-    { src: "qv",                 floor_area_sqm: qv?.floor_area_sqm },
-    { src: "homes",              floor_area_sqm: homes?.floor_area_sqm },
+    { src: "qv",                 floor_area_sqm: qvFloorArea },
+    { src: "homes",              floor_area_sqm: homesFloorArea },
   ]);
 
   const oneroofLiveBeds = oneroof?.listing_active ? oneroof?.bedrooms : null;
@@ -549,10 +556,10 @@ export function mergePropertyData(
         false,
         [
           { src: "realestate.co.nz", value: realestateListing?.floorArea },
-          { src: "propertyvalue", value: propertyValue?.floor_area_sqm },
+          { src: "propertyvalue", value: propertyValueFloorArea },
           { src: "auckland_council_gis", value: ph?.floor_area_sqm },
-          { src: "qv", value: qv?.floor_area_sqm },
-          { src: "homes", value: homes?.floor_area_sqm },
+          { src: "qv", value: qvFloorArea },
+          { src: "homes", value: homesFloorArea },
           { src: "hougarden", value: hougarden?.floor_area_sqm },
         ],
         0.15,
@@ -616,10 +623,10 @@ export function mergePropertyData(
         false,
         [
           { src: "realestate.co.nz", value: realestateListing?.landArea },
-          { src: "propertyvalue", value: propertyValue?.land_area_sqm },
+          { src: "propertyvalue", value: propertyValueLandArea },
           { src: "auckland_council_gis", value: ph?.land_area_sqm },
-          { src: "qv", value: qv?.land_area_sqm },
-          { src: "homes", value: homes?.land_area_sqm },
+          { src: "qv", value: qvLandArea },
+          { src: "homes", value: homesLandArea },
           { src: "hougarden", value: hougarden?.land_area_sqm },
         ],
         0.1,
@@ -657,10 +664,10 @@ export function mergePropertyData(
         realestateListing.floorAreaApprox,
         [
           { src: "oneroof", value: oneroof?.floor_area_sqm },
-          { src: "propertyvalue", value: propertyValue?.floor_area_sqm },
+          { src: "propertyvalue", value: propertyValueFloorArea },
           { src: "auckland_council_gis", value: ph?.floor_area_sqm },
-          { src: "qv", value: qv?.floor_area_sqm },
-          { src: "homes", value: homes?.floor_area_sqm },
+          { src: "qv", value: qvFloorArea },
+          { src: "homes", value: homesFloorArea },
           { src: "hougarden", value: hougarden?.floor_area_sqm },
         ],
         0.15,
@@ -734,10 +741,10 @@ export function mergePropertyData(
         realestateListing.landAreaApprox,
         [
           { src: "oneroof", value: oneroof?.land_area_sqm },
-          { src: "propertyvalue", value: propertyValue?.land_area_sqm },
+          { src: "propertyvalue", value: propertyValueLandArea },
           { src: "auckland_council_gis", value: ph?.land_area_sqm },
-          { src: "qv", value: qv?.land_area_sqm },
-          { src: "homes", value: homes?.land_area_sqm },
+          { src: "qv", value: qvLandArea },
+          { src: "homes", value: homesLandArea },
           { src: "hougarden", value: hougarden?.land_area_sqm },
         ],
         0.1,
@@ -765,16 +772,16 @@ export function mergePropertyData(
     }
   }
   let final_land_area_sqm = live_land_area_sqm ?? land_area_sqm;
-  if (hasIgnoredCombinedListing && propertyValue) {
-    if (propertyValue.land_area_sqm != null && final_land_area_sqm !== propertyValue.land_area_sqm) {
+  if (hasIgnoredCombinedListing && propertyValue && propertyValueMatchesSubject) {
+    if (propertyValueLandArea != null && final_land_area_sqm !== propertyValueLandArea) {
       discrepancies.push(
-        `Land area: active package listing/parcel context indicated ${final_land_area_sqm ?? "unknown"}m², but PropertyValue resolved the analysed child address at ${propertyValue.land_area_sqm}m². Using the child-property value.`,
+        `Land area: active package listing/parcel context indicated ${final_land_area_sqm ?? "unknown"}m², but PropertyValue resolved the analysed child address at ${propertyValueLandArea}m². Using the child-property value.`,
       );
-      final_land_area_sqm = propertyValue.land_area_sqm;
+      final_land_area_sqm = propertyValueLandArea;
       sources["land_area_sqm"] = "propertyvalue (child address; combined listing excluded)";
     }
-    if (propertyValue.floor_area_sqm != null && floor_area_sqm !== propertyValue.floor_area_sqm) {
-      floor_area_sqm = propertyValue.floor_area_sqm;
+    if (propertyValueFloorArea != null && floor_area_sqm !== propertyValueFloorArea) {
+      floor_area_sqm = propertyValueFloorArea;
       sources["floor_area_sqm"] = "propertyvalue (child address; combined listing excluded)";
     }
     if (propertyValue.bedrooms != null && bedrooms !== propertyValue.bedrooms) {
@@ -897,6 +904,8 @@ export function mergePropertyData(
     final_build_year_range = propertyValue.build_year_range;
   } else if (!final_build_year_range && buildYearSource.includes("qv") && qv?.build_year_range) {
     final_build_year_range = qv.build_year_range;
+  } else if (!final_build_year_range && buildYearSource.includes("homes") && homes?.build_year_range) {
+    final_build_year_range = homes.build_year_range;
   }
 
   // Auckland Council GIS is the authoritative overlay source. Hougarden text can

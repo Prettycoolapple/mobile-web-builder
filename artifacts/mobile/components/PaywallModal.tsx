@@ -36,6 +36,7 @@ export function PaywallModal({ visible, onClose, onPurchaseSuccess }: Props) {
   const { t } = useT();
   const FEATURES = [
     t("paywall.f1"),
+    t("feature.private_search"),
     t("paywall.f2"),
     t("paywall.f3"),
     t("paywall.f4"),

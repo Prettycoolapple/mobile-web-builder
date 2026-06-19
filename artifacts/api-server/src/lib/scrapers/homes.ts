@@ -26,6 +26,7 @@ export interface HomesData {
   land_area_sqm: number | null;
   floor_area_sqm: number | null;
   build_year: number | null;
+  build_year_range: string | null;
   bedrooms: number | null;
   bathrooms: number | null;
   last_sale_price: number | null;
@@ -72,6 +73,23 @@ function parseYear(raw: string): number | null {
   return y >= 1900 && y <= new Date().getFullYear() + 1 ? y : null;
 }
 
+function parseBuildDecade(raw: string): string | null {
+  const s = raw.trim();
+  const m = s.match(/\b((?:19|20)\d)0s?\b/i)
+    ?? s.match(/\b((?:19|20)\d)0\s*[-–]\s*((?:19|20)\d)9\b/i);
+  if (!m) return null;
+  const start = parseInt(`${m[1]}0`, 10);
+  const max = new Date().getFullYear() + 1;
+  if (!Number.isFinite(start) || start < 1900 || start > max) return null;
+  return `${start}-${start + 9}`;
+}
+
+function parseHomesDecadeBuilt(raw: unknown): { buildYear: number | null; buildYearRange: string | null } {
+  const s = String(raw ?? "").trim();
+  if (!s) return { buildYear: null, buildYearRange: null };
+  return { buildYear: null, buildYearRange: parseBuildDecade(s) };
+}
+
 function toNumber(raw: unknown): number | null {
   if (raw == null || raw === "") return null;
   const n = typeof raw === "number" ? raw : Number(String(raw).replace(/[$,\s]/g, ""));
@@ -107,11 +125,15 @@ function extractFromText(allText: string): Partial<HomesData> {
   const floorMatch = allText.match(/floor\s*(?:area|size)[^0-9\n]*([\d,]+(?:\.\d+)?)\s*m/i)
     ?? allText.match(/house\s*(?:size|area)[^0-9\n]*([\d,]+(?:\.\d+)?)\s*m/i);
   if (floorMatch) data.floor_area_sqm = parseSqm(floorMatch[1]);
+  const decadeMatch = allText.match(/[Dd]ecade\s+[Bb]uilt[^0-9\n]*(?:((?:19|20)\d)0s?|((?:19|20)\d)0\s*[-–]\s*((?:19|20)\d)9)/);
+  if (decadeMatch) data.build_year_range = parseBuildDecade(decadeMatch[0]) ?? undefined;
   const buildMatch = allText.match(/[Yy]ear\s+[Bb]uilt[^0-9\n]*(\d{4})/)
     ?? allText.match(/[Bb]uilt\s+in\s+(\d{4})/i)
-    ?? allText.match(/[Cc]onstruction\s+[Yy]ear[^0-9\n]*(\d{4})/i)
-    ?? allText.match(/(?:built|year\s*built|decade\s*built)[^0-9\n]*(\d{4})/i);
-  if (buildMatch) data.build_year = parseYear(buildMatch[0]);
+    ?? allText.match(/[Cc]onstruction\s+[Yy]ear[^0-9\n]*(\d{4})/i);
+  if (buildMatch) {
+    data.build_year = parseYear(buildMatch[0]);
+    data.build_year_range = undefined;
+  }
   const bb = extractBedsBaths(allText);
   if (bb.bedrooms != null) data.bedrooms = bb.bedrooms;
   if (bb.bathrooms != null) data.bathrooms = bb.bathrooms;
@@ -202,9 +224,9 @@ function cardToHomesData(card: HomesGatewayPropertyCard, addressNeedle: string):
   const floorArea = toNumber(details.floor_area);
   const cv = toNumber(details.capital_value);
   const cvYear = parseYear(String(details.current_revision_date ?? ""));
-  const buildYear = parseYear(String(details.decade_built ?? ""));
+  const { buildYear, buildYearRange } = parseHomesDecadeBuilt(details.decade_built);
 
-  if (!cv && !landArea && !floorArea && !buildYear && !bedrooms && !bathrooms) return null;
+  if (!cv && !landArea && !floorArea && !buildYear && !buildYearRange && !bedrooms && !bathrooms) return null;
 
   return {
     cv_nzd: cv,
@@ -212,6 +234,7 @@ function cardToHomesData(card: HomesGatewayPropertyCard, addressNeedle: string):
     land_area_sqm: landArea,
     floor_area_sqm: floorArea,
     build_year: buildYear,
+    build_year_range: buildYearRange,
     bedrooms,
     bathrooms,
     last_sale_price: null,
@@ -350,7 +373,7 @@ export function extractHomesDataFromHtml(html: string, address: string): Partial
 }
 
 function hasUsableData(d: Partial<HomesData>): boolean {
-  return !!(d.cv_nzd || d.land_area_sqm || d.build_year || d.bedrooms || d.bathrooms);
+  return !!(d.cv_nzd || d.land_area_sqm || d.build_year || d.build_year_range || d.bedrooms || d.bathrooms);
 }
 
 export function buildHomesPropertyUrls(address: string, suburb: string, formattedAddress: string): string[] {
@@ -423,6 +446,7 @@ function toHomesData(data: Partial<HomesData>, addressNeedle: string): HomesData
     land_area_sqm: data.land_area_sqm ?? null,
     floor_area_sqm: data.floor_area_sqm ?? null,
     build_year: data.build_year ?? null,
+    build_year_range: data.build_year_range ?? null,
     bedrooms: data.bedrooms ?? null,
     bathrooms: data.bathrooms ?? null,
     last_sale_price: data.last_sale_price ?? null,
@@ -668,6 +692,7 @@ async function tryPlaywrightSearch(address: string, formattedAddress: string): P
       land_area_sqm: data.land_area_sqm ?? null,
       floor_area_sqm: data.floor_area_sqm ?? null,
       build_year: data.build_year ?? null,
+      build_year_range: data.build_year_range ?? null,
       bedrooms: data.bedrooms ?? null,
       bathrooms: data.bathrooms ?? null,
       last_sale_price: data.last_sale_price ?? null,

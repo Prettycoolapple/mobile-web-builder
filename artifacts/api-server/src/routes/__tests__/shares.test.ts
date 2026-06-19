@@ -58,6 +58,21 @@ describe("property share previews", () => {
     expect(html).toContain('meta property="og:image"');
     expect(html).toContain("https://www.projectalpha.app/api/image-proxy?url=");
     expect(html).toContain(encodeURIComponent("https://mediaserver.realestate.co.nz/listing.jpg"));
+    expect(html).toContain("<img src=");
+    expect(html).not.toContain('<div class="hero-fallback">PA</div>');
+  });
+
+  it("uses candidate photoUrl for the preview image", () => {
+    const share = buildShare({
+      kind: "candidate",
+      address: "10 Example Road, Auckland",
+      candidate: {
+        briefSummary: "A strong development site near transport.",
+        photoUrl: "https://photos.trademe.co.nz/property/hero.jpg",
+      },
+    });
+
+    expect(share.previewImageUrl).toBe("https://photos.trademe.co.nz/property/hero.jpg");
   });
 
   it("falls back to selected listing context photos for report shares", () => {
@@ -83,7 +98,7 @@ describe("property share previews", () => {
       title: "10 Example Road - Project Alpha property opportunity",
       description: "Open Project Alpha to view this property opportunity.",
       imageUrl: null,
-      url: "https://www.projectalpha.app/share/abc123",
+      url: "https://www.projectalpha.app/property-share/abc123",
       facts: [],
     }, request());
 
@@ -98,14 +113,13 @@ describe("property share previews", () => {
       title: "10 Example Road - Project Alpha property opportunity",
       description: "Open Project Alpha to view this property opportunity.",
       imageUrl: null,
-      url: "https://www.projectalpha.app/share/abc123",
+      url: "https://www.projectalpha.app/property-share/abc123",
       facts: [],
     }, request());
 
-    expect(html).toContain('href="https://www.projectalpha.app/share/abc123"');
+    expect(html).toContain('href="https://www.projectalpha.app/property-share/abc123"');
     expect(html).toContain('data-app-url="devfeasible://share/abc123"');
     expect(html).toContain('data-android-intent-url="intent://share/abc123#Intent;scheme=devfeasible;package=nz.devfeasible.app;');
-    expect(html).toContain("isMobileSafari");
     expect(html).toContain("window.location.assign(fallback)");
   });
 });

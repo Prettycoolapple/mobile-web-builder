@@ -185,6 +185,10 @@ function NotificationSetup() {
         router.push("/(tabs)/history" as never);
         return;
       }
+      if (type === "screening_ready") {
+        router.push("/(tabs)" as never);
+        return;
+      }
       if (threadId) {
         router.push(`/chat/${threadId}` as never);
       }
