@@ -176,7 +176,9 @@ describe("property share previews", () => {
 
     expect(html).toContain('href="https://www.projectalpha.app/property-share/abc123"');
     expect(html).toContain('data-app-url="devfeasible://share/abc123"');
+    expect(html).toContain('data-ios-app-url="https://www.projectalpha.app/share/abc123"');
     expect(html).toContain('data-android-intent-url="intent://share/abc123#Intent;scheme=devfeasible;package=nz.devfeasible.app;');
+    expect(html).toContain('button.textContent = "Opening..."');
     expect(html).toContain("window.location.assign(fallback)");
   });
 });

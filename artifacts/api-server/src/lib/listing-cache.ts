@@ -138,3 +138,53 @@ export function restoreListingsAfterPop(
   if (!entry || Date.now() > entry.expiresAt) return;
   entry.remainingListings = [...putAtFront, ...entry.remainingListings, ...putAtBack];
 }
+
+// ── Excluded non-freehold stash ──────────────────────────────────────────
+// Subdivision discovery drops cross-lease/leasehold/unit-title listings the
+// user hasn't opted in to. We keep the dropped listing objects here, keyed by
+// the same cache key as the suburb's listing pool, so a later "include them"
+// opt-in can re-screen exactly those listings with the tenure waiver — instead
+// of relying on a fresh re-search to re-surface the same listing (unreliable due
+// to source windowing/ordering and pool consumption). Kept separate from the
+// listing pool so a normal "show more" can't consume/evict it.
+type Tenure = "cross_lease" | "leasehold" | "unit_title";
+interface ExcludedEntry {
+  items: Array<{ listing: ListingResult; tenure: Tenure }>;
+  expiresAt: number;
+}
+const excludedCache = new Map<string, ExcludedEntry>();
+
+function excludedListingKey(listing: ListingResult): string {
+  return (listing.listingUrl?.trim().toLowerCase())
+    || listing.address.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+export function addExcludedNonFreehold(
+  key: string,
+  items: Array<{ listing: ListingResult; tenure: Tenure }>,
+): void {
+  if (!key || items.length === 0) return;
+  const existing = excludedCache.get(key);
+  const base = existing && Date.now() <= existing.expiresAt ? existing.items : [];
+  const seen = new Set(base.map((e) => excludedListingKey(e.listing)));
+  const merged = [...base];
+  for (const item of items) {
+    const k = excludedListingKey(item.listing);
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    merged.push(item);
+  }
+  excludedCache.set(key, { items: merged, expiresAt: Date.now() + CACHE_TTL_MS });
+}
+
+export function getExcludedNonFreehold(
+  key: string,
+): Array<{ listing: ListingResult; tenure: Tenure }> {
+  const entry = excludedCache.get(key);
+  if (!entry) return [];
+  if (Date.now() > entry.expiresAt) {
+    excludedCache.delete(key);
+    return [];
+  }
+  return entry.items;
+}

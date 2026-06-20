@@ -376,14 +376,13 @@ export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, 
     return (
       <View style={styles.aiRow}>
         <AiAvatar />
-        <View style={[styles.loadingBubble, { backgroundColor: colors.card, borderColor: colors.border, gap: wideScanHint ? 6 : 0 }]}>
+        <View style={[styles.loadingBubble, { backgroundColor: colors.card, borderColor: colors.border, gap: wideScanHint || message.retryLabel ? 6 : 0 }]}>
+          <TypingDots />
           {message.retryLabel ? (
             <Text style={[styles.retryLabel, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
               {message.retryLabel}
             </Text>
-          ) : (
-            <TypingDots />
-          )}
+          ) : null}
           {wideScanHint ? (
             <View style={{ gap: 2 }}>
               <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", fontSize: 12 }}>
@@ -478,7 +477,7 @@ export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, 
             </View>
           );
         })}
-        {results.length > 0 && (message.continuationToken || message.prefetchedSearchResults?.length || message.prefetchedExhausted || message.showMoreStatus === "loading") ? (
+        {results.length > 0 ? (
           <TouchableOpacity
             style={[styles.showMoreButton, { backgroundColor: colors.card, borderColor: colors.border }]}
             activeOpacity={0.78}

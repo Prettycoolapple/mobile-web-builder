@@ -42,7 +42,7 @@ import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
 import { normaliseAddressKey } from "@/lib/address-key";
 import { resolveChatQuota } from "@/lib/quotas";
 import { consumePendingShareToken, openShareToken } from "@/lib/propertyShares";
-import { BrowseListing, BrowseListingFilters, fetchBrowseListings } from "@/lib/browseListings";
+import { BrowseListing, BrowseListingFilters, fetchBrowseListings, selectedListingContextFromBrowse } from "@/lib/browseListings";
 
 setBaseUrl(getApiOrigin() || null);
 
@@ -60,6 +60,32 @@ function resolveReportAddress(report: FeasibilityReport | null | undefined): str
   if (top) return top;
   const ov = report.propertyOverview?.address;
   return typeof ov === "string" ? ov.trim() : "";
+}
+
+function selectedListingContextFromCandidate(candidate: PropertyCandidate): SelectedListingContext {
+  return {
+    address: candidate.address,
+    listingUrl: candidate.listingUrl ?? null,
+    photoUrl: candidate.photoUrl ?? candidate.photoUrls?.[0] ?? null,
+    photoUrls: candidate.photoUrls ?? (candidate.photoUrl ? [candidate.photoUrl] : []),
+    price: candidate.priceIsPlaceholder ? null : candidate.price ?? null,
+    landArea: candidate.landArea ?? null,
+    floorArea: candidate.floorArea ?? null,
+    bedrooms: candidate.bedrooms ?? null,
+    bathrooms: candidate.bathrooms ?? null,
+    bedroomsApprox: candidate.bedroomsApprox ?? null,
+    bathroomsApprox: candidate.bathroomsApprox ?? null,
+    landAreaApprox: candidate.landAreaApprox ?? null,
+    floorAreaApprox: candidate.floorAreaApprox ?? null,
+    priceApprox: candidate.priceApprox ?? null,
+    propertyType: candidate.propertyType ?? null,
+    listingTitle: candidate.listingTitle ?? null,
+    source: candidate.source ?? null,
+    isCombinedListing: candidate.isCombinedListing ?? null,
+    packageAddress: candidate.packageAddress ?? null,
+    childAddresses: candidate.childAddresses ?? null,
+    aggregateFactsExcluded: candidate.aggregateFactsExcluded ?? null,
+  };
 }
 
 function stopAndUnloadRecordingWithTimeout(recording: Audio.Recording): Promise<void> {
@@ -480,6 +506,7 @@ export default function SearchScreen() {
   const pendingSearchScrollTargetRef = useRef<{ messageId: string; index: number } | null>(null);
   const cardScorePollRef = useRef<{ addresses: string[]; sessionId: string; intervalId: ReturnType<typeof setInterval> | null }>({ addresses: [], sessionId: "", intervalId: null });
   const handleAnalyseRef = useRef<((address: string, selectedPhotoUrl?: string | null, selectedListingUrl?: string | null, selectedListingContext?: SelectedListingContext | null, skipAnalyseDisclaimer?: boolean, analysisKey?: string) => Promise<void>) | null>(null);
+  const handleSendRef = useRef<((overrideText?: string, skipAnalyseDisclaimer?: boolean, continuePresentation?: "generic_listing" | "scored_screening", discoveryChoiceSuburb?: string, displayText?: string) => Promise<void>) | null>(null);
   const processedRouteAnalyseRef = useRef<string | null>(null);
   const processedShareTokenRef = useRef<string | null>(null);
   const [listViewportHeight, setListViewportHeight] = useState(0);
@@ -1291,10 +1318,19 @@ export default function SearchScreen() {
           return;
         }
         if (!message.continuationToken) {
-          showDiscoveryExhaustedChoice(message.prefetchedClarification, sessionId, {
-            searchPresentation: message.searchPresentation,
-            suburb: message.suburb,
-          });
+          // No continuation token means the immediate pool for this suburb drained
+          // and no nearby-suburb queue was seeded (e.g. the first page already
+          // filled, so the backend never set up the train). Rather than dead-ending
+          // the button, fire the same nearby-expansion discovery that typing
+          // "show more" / tapping "Search nearby" runs — it re-scrapes adjacent
+          // suburbs and appends a fresh result set.
+          await handleSendRef.current?.(
+            "[discovery_exhausted_choice:search_nearby]",
+            false,
+            message.searchPresentation,
+            message.suburb,
+            t("search.show_more"),
+          );
           return;
         }
         updateMessage(message.id, { showMoreStatus: "loading" }, sessionId);
@@ -1318,7 +1354,7 @@ export default function SearchScreen() {
         showMoreInFlightRef.current.delete(message.id);
       }
     },
-    [appendContinuationCandidates, currentSession?.id, currentSessionId, fetchDiscoveryNext, showDiscoveryExhaustedChoice, updateMessage],
+    [appendContinuationCandidates, currentSession?.id, currentSessionId, fetchDiscoveryNext, updateMessage, t],
   );
 
   useEffect(() => {
@@ -2739,6 +2775,10 @@ export default function SearchScreen() {
     handleAnalyseRef.current = handleAnalyse;
   }, [handleAnalyse]);
 
+  useLayoutEffect(() => {
+    handleSendRef.current = handleSend;
+  }, [handleSend]);
+
   const handleCardAnalyse = useCallback(
     (
       address: string,
@@ -2812,9 +2852,14 @@ export default function SearchScreen() {
             address: rawCandidate.address || share.address,
             scores: rawCandidate.scores ?? { ease: 0, cost: 0, roi: 0, composite: 0 },
           };
-          const sessionId = createSession();
-          addMessage({ role: "user", content: `Shared property: ${candidate.address}`, type: "text" }, sessionId);
-          addMessage({ role: "assistant", content: "", type: "search", searchResults: [candidate] }, sessionId);
+          await handleAnalyse(
+            candidate.address,
+            candidate.photoUrl ?? candidate.photoUrls?.[0] ?? null,
+            candidate.listingUrl ?? null,
+            selectedListingContextFromCandidate(candidate),
+            true,
+            candidate.listingUrl ?? candidate.address,
+          );
           return;
         }
 
@@ -2823,13 +2868,15 @@ export default function SearchScreen() {
             ...share.payload.listing,
             address: share.payload.listing.address || share.address,
           };
-          router.push({
-            pathname: "/listing/[id]",
-            params: {
-              id: listing.id || `shared_${token}`,
-              preview: JSON.stringify(listing),
-            },
-          } as never);
+          const listingContext = selectedListingContextFromBrowse(listing);
+          await handleAnalyse(
+            listing.address,
+            listingContext.photoUrl ?? null,
+            listingContext.listingUrl ?? null,
+            listingContext,
+            true,
+            listingContext.listingUrl ?? listing.id ?? listing.address,
+          );
           return;
         }
 

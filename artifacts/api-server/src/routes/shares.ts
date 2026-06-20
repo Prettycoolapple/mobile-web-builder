@@ -103,6 +103,10 @@ function appSchemeShareUrl(token: string): string {
   return `devfeasible://share/${encodeURIComponent(token)}`;
 }
 
+function universalShareUrl(token: string, req?: Request | null): string {
+  return `${baseUrl(req)}/share/${encodeURIComponent(token)}`;
+}
+
 function androidIntentShareUrl(token: string, fallbackUrl: string): string {
   const encodedToken = encodeURIComponent(token);
   const encodedFallback = encodeURIComponent(fallbackUrl);
@@ -520,6 +524,9 @@ export function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?
   const safeAppOpenUrl = preview
     ? htmlEscape(appSchemeShareUrl(preview.token))
     : safeUrl;
+  const safeIosUniversalUrl = preview
+    ? htmlEscape(universalShareUrl(preview.token, req))
+    : safeIosStoreUrl;
   const safeAndroidIntentUrl = preview
     ? htmlEscape(androidIntentShareUrl(preview.token, getAndroidPlayStoreUrl()))
     : safeAndroidStoreUrl;
@@ -589,6 +596,7 @@ export function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?
               id="open-app-button"
               href="${safeUrl}"
               data-app-url="${safeAppOpenUrl}"
+              data-ios-app-url="${safeIosUniversalUrl}"
               data-android-intent-url="${safeAndroidIntentUrl}"
               data-ios-store="${safeIosStoreUrl}"
               data-android-store="${safeAndroidStoreUrl}"
@@ -610,21 +618,35 @@ export function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?
           if (!isiOS && !isAndroid) return;
 
           event.preventDefault();
+          if (button.dataset.opening === "true") return;
+          button.dataset.opening = "true";
+          var originalText = button.textContent;
+          button.textContent = "Opening...";
           var fallback = isiOS ? button.dataset.iosStore : button.dataset.androidStore;
           var appUrl = isAndroid && button.dataset.androidIntentUrl
             ? button.dataset.androidIntentUrl
-            : (button.dataset.appUrl || button.href);
+            : (button.dataset.iosAppUrl || button.href);
           var cancelled = false;
-          var cancel = function () { cancelled = true; };
+          var fallbackTimer = null;
+          var cancel = function () {
+            cancelled = true;
+            if (fallbackTimer) window.clearTimeout(fallbackTimer);
+          };
           document.addEventListener("visibilitychange", function () {
             if (document.hidden) cancel();
           }, { once: true });
           window.addEventListener("pagehide", cancel, { once: true });
           window.addEventListener("blur", cancel, { once: true });
-          window.setTimeout(function () {
+          fallbackTimer = window.setTimeout(function () {
             if (!cancelled && fallback) window.location.assign(fallback);
-          }, 1400);
+          }, isiOS ? 1800 : 1400);
           window.location.assign(appUrl);
+          window.setTimeout(function () {
+            if (!cancelled) {
+              button.dataset.opening = "false";
+              button.textContent = originalText || "${htmlEscape(cta)}";
+            }
+          }, 2600);
         });
       })();
     </script>

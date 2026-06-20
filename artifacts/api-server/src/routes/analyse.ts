@@ -71,6 +71,8 @@ import {
   getListingCache,
   restoreListingsAfterPop,
   getRemainingCount,
+  addExcludedNonFreehold,
+  getExcludedNonFreehold,
 } from "../lib/listing-cache";
 import type { ListingResult } from "../lib/scrapers/oneroof";
 import { queueBackgroundScores, getCardScores } from "../lib/analysis-cache";
@@ -1666,9 +1668,14 @@ async function prescreenPickRestoreBatch(
   const visibleBatch = filterAlreadyShownListings(batch, shownAddressKeys);
   if (visibleBatch.length === 0) return [];
   const detailed = await preScreenListingsFastDetailed(visibleBatch, 5, null, preScreenOpts).catch(
-    () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], excludedTenures: { cross_lease: 0, leasehold: 0, unit_title: 0 }, drainComplete: Promise.resolve() }),
+    () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], excludedTenures: { cross_lease: 0, leasehold: 0, unit_title: 0 }, excludedNonFreehold: [], drainComplete: Promise.resolve() }),
   );
   const screened = detailed.candidates;
+  // Stash any non-freehold listings dropped while paging so a later "include
+  // them" opt-in can re-screen exactly these with the tenure waiver.
+  if (detailed.excludedNonFreehold.length > 0) {
+    addExcludedNonFreehold(cacheKey, detailed.excludedNonFreehold);
+  }
   if (indeterminateAccumulator && detailed.indeterminate.length > 0) {
     indeterminateAccumulator.push(...detailed.indeterminate);
   }
@@ -2464,7 +2471,7 @@ async function reScreenIndeterminateListings(opts: {
     await new Promise((resolve) => setTimeout(resolve, delayMs));
 
     const detailed = await preScreenListingsFastDetailed(queue, 5, null, preScreenOpts).catch(
-      () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], excludedTenures: { cross_lease: 0, leasehold: 0, unit_title: 0 }, drainComplete: Promise.resolve() }),
+      () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], excludedTenures: { cross_lease: 0, leasehold: 0, unit_title: 0 }, excludedNonFreehold: [], drainComplete: Promise.resolve() }),
     );
     const fresh = pickDiscoveryCandidates(detailed.candidates, criteria, shownAddressKeys, targetCount - found.length);
     found.push(...fresh);
@@ -5924,12 +5931,17 @@ router.post(
                   : discoverPreOpts;
                 const [screenedDetailed, introFromPreScreen] = await Promise.all([
                   preScreenListingsFastDetailed(firstFiltered, discoveryScreenConcurrency, null, preScreenOptsWithBail).catch(
-                    () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], excludedTenures: { cross_lease: 0, leasehold: 0, unit_title: 0 }, drainComplete: Promise.resolve() }),
+                    () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], excludedTenures: { cross_lease: 0, leasehold: 0, unit_title: 0 }, excludedNonFreehold: [], drainComplete: Promise.resolve() }),
                   ),
                   generateAnalysis(introPromptPreScreen, chatLocale).catch(() => ""),
                 ]);
                 const screened = screenedDetailed.candidates;
                 addExcludedTenures(screenedDetailed.excludedTenures);
+                // Keep the dropped non-freehold listings so a later "include them"
+                // opt-in can re-screen exactly these with the tenure waiver.
+                if (screenedDetailed.excludedNonFreehold.length > 0) {
+                  addExcludedNonFreehold(cacheKey, screenedDetailed.excludedNonFreehold);
+                }
                 if (strictStandardSubdivision) strictIndeterminate.push(...screenedDetailed.indeterminate);
                 if (strictStandardSubdivision) {
                   // Detach the remaining drain so the verdict cache warms in the
@@ -6041,6 +6053,43 @@ router.post(
                     targetCount: discoveryTargetCount,
                     indeterminateAccumulator: strictStandardSubdivision ? strictIndeterminate : undefined,
                   },
+                );
+              }
+            }
+
+            // ── OPTED-IN NON-FREEHOLD RE-SCREEN ────────────────────────────────
+            // When the user accepted the "include the cross-lease/leasehold I left
+            // out" offer, re-screen exactly those listings (stashed at screen time)
+            // with the tenure waiver. This is deterministic — it does not depend on
+            // a fresh re-search re-surfacing the same listing — so the opted-in card
+            // reliably appears instead of falling through to the exhausted choice.
+            if (tenureOptIns.length > 0 && candidates.length < discoveryTargetCount) {
+              const stashed = getExcludedNonFreehold(cacheKey)
+                .filter((e) => tenureOptIns.includes(e.tenure))
+                .map((e) => e.listing);
+              const freshStashed = filterAlreadyShownListings(stashed, alreadyShownAddressKeys);
+              if (freshStashed.length > 0) {
+                const optInDetailed = await preScreenListingsFastDetailed(
+                  freshStashed,
+                  discoveryScreenConcurrency,
+                  null,
+                  discoverPreOpts,
+                ).catch(() => null);
+                const optInPicked = optInDetailed
+                  ? pickDiscoveryCandidates(
+                      optInDetailed.candidates,
+                      discoveryCriteria,
+                      alreadyShownAddressKeys,
+                      discoveryTargetCount - candidates.length,
+                    )
+                  : [];
+                if (optInPicked.length > 0) {
+                  markShown(cacheKey, optInPicked.map((c) => c.listingUrl).filter((u): u is string => Boolean(u)));
+                  candidates.push(...optInPicked);
+                }
+                req.log.info(
+                  { suburb, tenureOptIns, stashed: freshStashed.length, optInCandidates: optInPicked.length },
+                  "Discovery: re-screened opted-in non-freehold listings from stash",
                 );
               }
             }
@@ -6235,7 +6284,7 @@ router.post(
                         ...discoverPreOpts,
                         ...(strictStandardSubdivision ? { earlyBailAt: discoveryTargetCount } : {}),
                       }).catch(
-                        () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], excludedTenures: { cross_lease: 0, leasehold: 0, unit_title: 0 }, drainComplete: Promise.resolve() }),
+                        () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], excludedTenures: { cross_lease: 0, leasehold: 0, unit_title: 0 }, excludedNonFreehold: [], drainComplete: Promise.resolve() }),
                       ),
                       generateAnalysis(introPromptFallback, chatLocale).catch(() => ""),
                     ]);
@@ -7447,7 +7496,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                   ? { ...discoverPreOptsSn, earlyBailAt: safetyNetTargetCount }
                   : discoverPreOptsSn,
               ).catch(
-                () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], excludedTenures: { cross_lease: 0, leasehold: 0, unit_title: 0 }, drainComplete: Promise.resolve() }),
+                () => ({ candidates: [] as PropertyCandidate[], indeterminate: [] as ListingResult[], excludedTenures: { cross_lease: 0, leasehold: 0, unit_title: 0 }, excludedNonFreehold: [], drainComplete: Promise.resolve() }),
               );
               if (discoverPreOptsSn.strictStandardSubdivision) {
                 runAfterResponse(screenedSnDetailed.drainComplete.catch(() => {}));

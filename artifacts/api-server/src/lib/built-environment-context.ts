@@ -333,10 +333,14 @@ async function validateNearbyAddresses(subjectAddress: string, targetCount: numb
     for (const address of resolved) {
       const key = normaliseAddress(address);
       if (!address || !key || key === subjectKey || unique.has(key)) continue;
-      // Reject addresses from a different suburb — same street name can exist in multiple suburbs
+      // Reject addresses from a different suburb — same street name can exist in multiple suburbs.
+      // Use a bidirectional contains check because LINZ sometimes omits "Auckland" from the
+      // returned locality (e.g. subject "St Heliers, Auckland" vs returned "St Heliers").
       if (subjectLocality) {
         const returnedLocality = parseStreetAddress(address)?.locality?.toLowerCase().trim() ?? null;
-        if (returnedLocality && returnedLocality !== subjectLocality) continue;
+        if (returnedLocality &&
+            !returnedLocality.includes(subjectLocality) &&
+            !subjectLocality.includes(returnedLocality)) continue;
       }
       unique.set(key, address);
       if (unique.size >= targetCount) break;

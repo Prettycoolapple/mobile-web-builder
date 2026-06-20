@@ -827,6 +827,14 @@ export interface PreScreenDetailedResult {
    */
   excludedTenures: { cross_lease: number; leasehold: number; unit_title: number };
   /**
+   * The actual listings dropped because LINZ confirmed a non-freehold title the
+   * user had NOT opted in to, paired with the confirmed tenure. The discovery
+   * loop stashes these (see listing-cache) so a later "include them" opt-in can
+   * re-screen exactly these listings with the tenure waiver — without depending
+   * on an unreliable fresh re-search to re-surface the same listing.
+   */
+  excludedNonFreehold: Array<{ listing: ListingResult; tenure: "cross_lease" | "leasehold" | "unit_title" }>;
+  /**
    * When early-bail fires, this resolves once the entire pool finishes
    * screening in the background — useful for warming the verdict cache so
    * "show more" follow-ups are instant. Always present, even when no
@@ -902,10 +910,17 @@ export async function preScreenListingsFastDetailed(
   const results: PropertyCandidate[] = [];
   const indeterminate: ListingResult[] = [];
   const excludedTenures = { cross_lease: 0, leasehold: 0, unit_title: 0 };
-  const tallyExcludedTenure = (verdict: ScreenVerdict): void => {
+  const excludedNonFreehold: Array<{ listing: ListingResult; tenure: "cross_lease" | "leasehold" | "unit_title" }> = [];
+  // Count the dropped non-freehold listing AND keep the listing object so an
+  // "include them" opt-in can re-screen exactly this listing later (the listing
+  // is otherwise discarded after the first-batch screen and lost to the opt-in).
+  const recordExcluded = (verdict: ScreenVerdict, listing: ListingResult): void => {
     if (verdict.kind !== "rejected" || !verdict.reason.startsWith("not_freehold_title:")) return;
     const cat = verdict.reason.slice("not_freehold_title:".length);
-    if (cat === "cross_lease" || cat === "leasehold" || cat === "unit_title") excludedTenures[cat]++;
+    if (cat === "cross_lease" || cat === "leasehold" || cat === "unit_title") {
+      excludedTenures[cat]++;
+      excludedNonFreehold.push({ listing, tenure: cat });
+    }
   };
   const queue = [...nonApartments];
   const queueListings = [...nonApartments];
@@ -928,7 +943,7 @@ export async function preScreenListingsFastDetailed(
       } else if (r.kind === "indeterminate") {
         indeterminate.push(batchOriginals[i]);
       } else {
-        tallyExcludedTenure(r);
+        recordExcluded(r, batchOriginals[i]);
       }
     }
     if (earlyBailAt != null && results.length >= earlyBailAt && queue.length > 0) {
@@ -952,7 +967,7 @@ export async function preScreenListingsFastDetailed(
               } else {
                 // Keep the non-freehold tally complete past the early-bail so the
                 // "I left out N cross-lease…" reminder reflects the whole pool.
-                tallyExcludedTenure(r);
+                recordExcluded(r, bgOriginals[i]);
               }
             }
           }
@@ -976,7 +991,7 @@ export async function preScreenListingsFastDetailed(
     return b.scores.composite - a.scores.composite;
   });
   const candidates = resultCap == null ? sorted : sorted.slice(0, resultCap);
-  return { candidates, indeterminate, excludedTenures, drainComplete };
+  return { candidates, indeterminate, excludedTenures, excludedNonFreehold, drainComplete };
 }
 
 export async function preScreenListingsFast(
