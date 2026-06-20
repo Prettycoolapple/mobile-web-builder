@@ -315,10 +315,30 @@ async function assessParcels(parcels: LinzParcelNearby[], timeoutMs: number): Pr
   return results;
 }
 
+// Normalised suburb token for cross-suburb matching. Reduces a locality string
+// ("Saint Heliers, Auckland") to just the suburb and expands common NZ abbreviations
+// to LINZ canonical long forms so "Mt Eden", "Pt Chev", "St Heliers", etc. all match.
+function suburbToken(locality: string | null | undefined): string | null {
+  if (!locality) return null;
+  const suburb = locality.split(",")[0]?.toLowerCase().trim();
+  if (!suburb) return null;
+  return suburb
+    .replace(/\bmt\b/g, "mount")
+    .replace(/\bpt\b/g, "point")
+    .replace(/\bst\b/g, "saint")
+    .replace(/\bnth\b/g, "north")
+    .replace(/\bsth\b/g, "south")
+    .replace(/\best\b/g, "east")
+    .replace(/\bwst\b/g, "west")
+    .replace(/\bjct\b/g, "junction")
+    .replace(/\s+/g, " ")
+    .trim() || null;
+}
+
 async function validateNearbyAddresses(subjectAddress: string, targetCount: number, timeoutMs: number): Promise<string[]> {
   const rawCandidates = generateNearbyAddressCandidates(subjectAddress, Math.max(targetCount * 3, 30));
   const subjectKey = normaliseAddress(subjectAddress);
-  const subjectLocality = parseStreetAddress(subjectAddress)?.locality?.toLowerCase().trim() ?? null;
+  const subjectSuburb = suburbToken(parseStreetAddress(subjectAddress)?.locality);
   const unique = new Map<string, string>();
   const concurrency = 4;
 
@@ -326,22 +346,25 @@ async function validateNearbyAddresses(subjectAddress: string, targetCount: numb
     const batch = rawCandidates.slice(i, i + concurrency);
     const resolved = await Promise.all(
       batch.map(async (candidate) => {
-        const matches = await fetchLINZAddressCandidates(candidate, { timeoutMs, maxResults: 1 }).catch(() => []);
-        return matches[0]?.address ?? null;
+        // Fetch several matches, not just the top one: the app's suburb spelling
+        // ("St Heliers") often only matches LINZ via the street-only query variant,
+        // which can return the same street number in MULTIPLE suburbs (e.g. Hampton
+        // Drive in both Saint Heliers and Swannanoa). Pick the first whose suburb
+        // matches the subject so a wrong-suburb top hit doesn't shadow the right one.
+        const matches = await fetchLINZAddressCandidates(candidate, { timeoutMs, maxResults: 5 }).catch(
+          () => [] as Awaited<ReturnType<typeof fetchLINZAddressCandidates>>,
+        );
+        if (!subjectSuburb) return matches[0]?.address ?? null;
+        const match = matches.find((m) => {
+          const s = suburbToken(parseStreetAddress(m.address)?.locality);
+          return !s || s === subjectSuburb;
+        });
+        return match?.address ?? null;
       }),
     );
     for (const address of resolved) {
       const key = normaliseAddress(address);
       if (!address || !key || key === subjectKey || unique.has(key)) continue;
-      // Reject addresses from a different suburb — same street name can exist in multiple suburbs.
-      // Use a bidirectional contains check because LINZ sometimes omits "Auckland" from the
-      // returned locality (e.g. subject "St Heliers, Auckland" vs returned "St Heliers").
-      if (subjectLocality) {
-        const returnedLocality = parseStreetAddress(address)?.locality?.toLowerCase().trim() ?? null;
-        if (returnedLocality &&
-            !returnedLocality.includes(subjectLocality) &&
-            !subjectLocality.includes(returnedLocality)) continue;
-      }
       unique.set(key, address);
       if (unique.size >= targetCount) break;
     }

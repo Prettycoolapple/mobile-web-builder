@@ -1301,6 +1301,10 @@ export default function SearchScreen() {
       // rapid taps could otherwise fire concurrent same-token requests.
       if (showMoreInFlightRef.current.has(message.id)) return;
       showMoreInFlightRef.current.add(message.id);
+      // Show the processing state immediately on tap — before any branch — so the
+      // button never looks stuck while a slow nearby re-scrape runs in the
+      // background. Reset in the finally; the append paths set their own final state.
+      updateMessage(message.id, { showMoreStatus: "loading" }, sessionId);
       try {
         const prefetched = message.prefetchedSearchResults ?? [];
         if (prefetched.length > 0 || message.prefetchedExhausted) {
@@ -1333,10 +1337,8 @@ export default function SearchScreen() {
           );
           return;
         }
-        updateMessage(message.id, { showMoreStatus: "loading" }, sessionId);
         const data = await fetchDiscoveryNext(message, 3).catch(() => null);
         if (!data) {
-          updateMessage(message.id, { showMoreStatus: "idle" }, sessionId);
           return;
         }
         appendContinuationCandidates(
@@ -1352,6 +1354,10 @@ export default function SearchScreen() {
         );
       } finally {
         showMoreInFlightRef.current.delete(message.id);
+        // Clear the processing state. The append paths replace the message with
+        // its own final state (idle); this covers the tokenless nearby dispatch
+        // and early returns so the button never stays stuck on the spinner.
+        updateMessage(message.id, { showMoreStatus: "idle" }, sessionId);
       }
     },
     [appendContinuationCandidates, currentSession?.id, currentSessionId, fetchDiscoveryNext, updateMessage, t],

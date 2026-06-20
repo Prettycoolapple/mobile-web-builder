@@ -110,6 +110,7 @@ import { classifySiteCondition, siteStatusLabel } from "../lib/site-condition";
 import { sendPushToUser } from "../lib/expo-push";
 import { runAfterResponse } from "../lib/vercel-wait-until";
 import { clearRecentShownForUserSuburb, getRecentShownForUser, recordShownForUser, type RecentShownListing } from "../lib/discovery-shown-memory";
+import { loadExcludedNonFreehold, persistExcludedNonFreehold } from "../lib/discovery-excluded-store";
 import {
   checkAndRecordAnonymousUsage,
   clearRecentShownForAnonymousSuburb,
@@ -5699,6 +5700,10 @@ router.post(
             excludedTenureTotals.leasehold += t.leasehold;
             excludedTenureTotals.unit_title += t.unit_title;
           };
+          // Actual dropped non-freehold listings this turn (cross-lease etc.),
+          // accumulated key-independently so we can persist them durably for a
+          // later "include them" reply (see persistExcludedNonFreehold).
+          const excludedNonFreeholdThisTurn: Array<{ listing: unknown; tenure: "cross_lease" | "leasehold" | "unit_title" }> = [];
           let continuationCacheKey: string | null = null;
           let continuationPreScreenOpts: Record<string, unknown> | null = null;
           // Tracks the suburb the continuation row should be stamped with. It
@@ -5938,9 +5943,12 @@ router.post(
                 const screened = screenedDetailed.candidates;
                 addExcludedTenures(screenedDetailed.excludedTenures);
                 // Keep the dropped non-freehold listings so a later "include them"
-                // opt-in can re-screen exactly these with the tenure waiver.
+                // opt-in can re-screen exactly these with the tenure waiver — both
+                // in-memory (warm-instance fast path) and accumulated for durable
+                // persistence below.
                 if (screenedDetailed.excludedNonFreehold.length > 0) {
                   addExcludedNonFreehold(cacheKey, screenedDetailed.excludedNonFreehold);
+                  excludedNonFreeholdThisTurn.push(...screenedDetailed.excludedNonFreehold);
                 }
                 if (strictStandardSubdivision) strictIndeterminate.push(...screenedDetailed.indeterminate);
                 if (strictStandardSubdivision) {
@@ -6059,15 +6067,28 @@ router.post(
 
             // ── OPTED-IN NON-FREEHOLD RE-SCREEN ────────────────────────────────
             // When the user accepted the "include the cross-lease/leasehold I left
-            // out" offer, re-screen exactly those listings (stashed at screen time)
-            // with the tenure waiver. This is deterministic — it does not depend on
-            // a fresh re-search re-surfacing the same listing — so the opted-in card
-            // reliably appears instead of falling through to the exhausted choice.
+            // out" offer, re-screen exactly those listings (captured at screen time)
+            // with the tenure waiver. Deterministic — it does not depend on a fresh
+            // re-search re-surfacing the same listing. Sourced from BOTH the
+            // in-memory stash (warm-instance fast path) AND the durable DB store, so
+            // it works even when the offer turn and this turn hit different
+            // serverless instances — instead of falling through to the exhausted choice.
             if (tenureOptIns.length > 0 && candidates.length < discoveryTargetCount) {
-              const stashed = getExcludedNonFreehold(cacheKey)
-                .filter((e) => tenureOptIns.includes(e.tenure))
-                .map((e) => e.listing);
-              const freshStashed = filterAlreadyShownListings(stashed, alreadyShownAddressKeys);
+              const inMemory = getExcludedNonFreehold(cacheKey);
+              const durable = await loadExcludedNonFreehold(
+                continuationOwnerKey(chatUserId, anonymousIdentityHash),
+                suburb,
+              ).catch(() => []);
+              const usedDurable = inMemory.length === 0 && durable.length > 0;
+              const byKey = new Map<string, ListingResult>();
+              for (const e of [...inMemory, ...durable]) {
+                if (!tenureOptIns.includes(e.tenure)) continue;
+                const listing = e.listing as ListingResult;
+                const key = (listing.listingUrl?.trim().toLowerCase()) || listing.address?.toLowerCase().trim();
+                if (!key || byKey.has(key)) continue;
+                byKey.set(key, listing);
+              }
+              const freshStashed = filterAlreadyShownListings([...byKey.values()], alreadyShownAddressKeys);
               if (freshStashed.length > 0) {
                 const optInDetailed = await preScreenListingsFastDetailed(
                   freshStashed,
@@ -6088,8 +6109,8 @@ router.post(
                   candidates.push(...optInPicked);
                 }
                 req.log.info(
-                  { suburb, tenureOptIns, stashed: freshStashed.length, optInCandidates: optInPicked.length },
-                  "Discovery: re-screened opted-in non-freehold listings from stash",
+                  { suburb, tenureOptIns, source: usedDurable ? "durable_db" : "in_memory", stashed: freshStashed.length, optInCandidates: optInPicked.length },
+                  "Discovery: re-screened opted-in non-freehold listings",
                 );
               }
             }
@@ -6121,6 +6142,18 @@ router.post(
                 exhaustedTenureReminder || undefined,
               );
               const translatedExhausted = await translateChatContent(exhaustedPayload, "clarification", chatLocale, chatTranslateTitleSchool);
+              // Durably persist the offered (excluded) listings so a later
+              // "include them" reply can re-screen them even on a cold instance.
+              if (excludedNonFreeholdThisTurn.length > 0) {
+                runAfterResponse(
+                  persistExcludedNonFreehold({
+                    ownerKey: continuationOwnerKey(chatUserId, anonymousIdentityHash),
+                    suburb,
+                    cacheKey,
+                    items: excludedNonFreeholdThisTurn,
+                  }).catch((err) => req.log.warn({ err }, "Discovery: failed to persist excluded non-freehold (exhausted path)")),
+                );
+              }
               res.json({ content: translatedExhausted, mode: "clarification", ...providerSignal });
               return;
             }
@@ -6592,6 +6625,18 @@ router.post(
             continuationToken,
           });
           const translatedContent = await translateChatContent(responsePayload, "discover", chatLocale, chatTranslateTitleSchool);
+          // Durably persist the offered (excluded) non-freehold listings so a
+          // later "include them" reply can re-screen them even on a cold instance.
+          if (excludedNonFreeholdThisTurn.length > 0) {
+            runAfterResponse(
+              persistExcludedNonFreehold({
+                ownerKey: continuationOwnerKey(chatUserId, anonymousIdentityHash),
+                suburb,
+                cacheKey: continuationCacheKey,
+                items: excludedNonFreeholdThisTurn,
+              }).catch((err) => req.log.warn({ err }, "Discovery: failed to persist excluded non-freehold")),
+            );
+          }
           res.json({ content: translatedContent, mode: "discover", ...providerSignal });
           return;
         } catch (err) {

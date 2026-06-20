@@ -1,6 +1,6 @@
 import type { Request } from "express";
 import { describe, expect, it, vi } from "vitest";
-import { buildShare, sharePreviewHtml, shareUrl } from "../shares";
+import { buildShare, shareOpenFallbackHtml, sharePreviewHtml, shareUrl } from "../shares";
 
 vi.mock("@workspace/db", () => ({
   db: {},
@@ -174,11 +174,44 @@ describe("property share previews", () => {
       facts: [],
     }, request());
 
-    expect(html).toContain('href="https://www.projectalpha.app/property-share/abc123"');
-    expect(html).toContain('data-app-url="devfeasible://share/abc123"');
-    expect(html).toContain('data-ios-app-url="https://www.projectalpha.app/share/abc123"');
+    expect(html).toContain('href="https://projectalpha.app/share/abc123"');
+    expect(html).not.toContain("devfeasible://share/abc123");
+    expect(html).toContain('data-ios-app-url="https://projectalpha.app/share/abc123"');
     expect(html).toContain('data-android-intent-url="intent://share/abc123#Intent;scheme=devfeasible;package=nz.devfeasible.app;');
     expect(html).toContain('button.textContent = "Opening..."');
     expect(html).toContain("window.location.assign(fallback)");
+  });
+
+  it("toggles the iOS app-open host when preview is already on the apex domain", () => {
+    const html = sharePreviewHtml({
+      token: "abc123",
+      kind: "candidate",
+      address: "10 Example Road, Auckland",
+      title: "10 Example Road - Project Alpha property opportunity",
+      description: "Open Project Alpha to view this property opportunity.",
+      imageUrl: null,
+      url: "https://projectalpha.app/property-share/abc123",
+      facts: [],
+    }, request("https://projectalpha.app"));
+
+    expect(html).toContain('href="https://www.projectalpha.app/share/abc123"');
+  });
+
+  it("renders a store fallback page for /share links that reach the browser", () => {
+    const html = shareOpenFallbackHtml({
+      token: "abc123",
+      kind: "candidate",
+      address: "10 Example Road, Auckland",
+      title: "10 Example Road - Project Alpha property opportunity",
+      description: "Open Project Alpha to view this property opportunity.",
+      imageUrl: null,
+      url: "https://www.projectalpha.app/property-share/abc123",
+      facts: [],
+    }, request());
+
+    expect(html).toContain("Download on the App Store");
+    expect(html).toContain("Get it on Google Play");
+    expect(html).toContain('href="https://www.projectalpha.app/property-share/abc123"');
+    expect(html).toContain("window.location.replace(target)");
   });
 });

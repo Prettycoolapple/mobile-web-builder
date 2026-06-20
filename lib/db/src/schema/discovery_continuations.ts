@@ -34,6 +34,11 @@ export type DiscoveryContinuationState = {
   pageOffset?: number;        // next raw API offset to resume the current suburb from
   pageTotal?: number | null;  // raw source total for the current suburb (null if unknown)
   pageDone?: boolean;         // true once the current suburb's source is fully drained
+  // Non-freehold listings (cross-lease / leasehold / unit-title) dropped this turn
+  // because the user hadn't opted in. Persisted durably so a later "include them"
+  // reply can re-screen exactly these with the tenure waiver — works across
+  // serverless instances where an in-memory stash would be empty.
+  excludedNonFreehold?: Array<{ listing: unknown; tenure: "cross_lease" | "leasehold" | "unit_title" }>;
 };
 
 export const discoveryContinuations = pgTable(

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, Component } from "react";
-import { View, Text, StyleSheet, Animated, Easing, TouchableOpacity, TouchableWithoutFeedback, Clipboard, Alert, Image } from "react-native";
+import { View, Text, StyleSheet, Animated, Easing, TouchableOpacity, TouchableWithoutFeedback, Clipboard, Alert, Image, ActivityIndicator } from "react-native";
 import Markdown from "react-native-markdown-display";
 import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -484,7 +484,11 @@ export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, 
             onPress={() => onShowMore?.(message)}
             disabled={message.showMoreStatus === "loading"}
           >
-            <Feather name={message.showMoreStatus === "loading" ? "loader" : "plus"} size={15} color={colors.accent} />
+            {message.showMoreStatus === "loading" ? (
+              <ActivityIndicator size="small" color={colors.accent} />
+            ) : (
+              <Feather name="plus" size={15} color={colors.accent} />
+            )}
             <Text style={[styles.showMoreText, { color: colors.accent, fontFamily: "DM_Sans_600SemiBold" }]}>
               {message.showMoreStatus === "loading" ? t("search.finding_more") : t("search.show_more")}
             </Text>

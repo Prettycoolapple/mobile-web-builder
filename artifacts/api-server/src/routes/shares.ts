@@ -99,12 +99,24 @@ export function shareUrl(token: string, req?: Request | null): string {
   return `${baseUrl(req)}/property-share/${encodeURIComponent(token)}`;
 }
 
-function appSchemeShareUrl(token: string): string {
-  return `devfeasible://share/${encodeURIComponent(token)}`;
-}
-
 function universalShareUrl(token: string, req?: Request | null): string {
   return `${baseUrl(req)}/share/${encodeURIComponent(token)}`;
+}
+
+function alternateUniversalShareUrl(token: string, req?: Request | null): string {
+  const current = universalShareUrl(token, req);
+  try {
+    const parsed = new URL(current);
+    const host = parsed.hostname.toLowerCase();
+    if (host === "www.projectalpha.app") {
+      parsed.hostname = "projectalpha.app";
+    } else if (host === "projectalpha.app") {
+      parsed.hostname = "www.projectalpha.app";
+    }
+    return parsed.toString();
+  } catch {
+    return current;
+  }
 }
 
 function androidIntentShareUrl(token: string, fallbackUrl: string): string {
@@ -521,11 +533,8 @@ export function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?
   const safeIosStoreUrl = htmlEscape(getIosAppStoreUrl());
   const safeAndroidStoreUrl = htmlEscape(getAndroidPlayStoreUrl());
   const safeSalesPortalUrl = htmlEscape("https://www.projectalpha.app/sales-portal/");
-  const safeAppOpenUrl = preview
-    ? htmlEscape(appSchemeShareUrl(preview.token))
-    : safeUrl;
   const safeIosUniversalUrl = preview
-    ? htmlEscape(universalShareUrl(preview.token, req))
+    ? htmlEscape(alternateUniversalShareUrl(preview.token, req))
     : safeIosStoreUrl;
   const safeAndroidIntentUrl = preview
     ? htmlEscape(androidIntentShareUrl(preview.token, getAndroidPlayStoreUrl()))
@@ -594,8 +603,7 @@ export function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?
             <a
               class="button primary"
               id="open-app-button"
-              href="${safeUrl}"
-              data-app-url="${safeAppOpenUrl}"
+              href="${safeIosUniversalUrl}"
               data-ios-app-url="${safeIosUniversalUrl}"
               data-android-intent-url="${safeAndroidIntentUrl}"
               data-ios-store="${safeIosStoreUrl}"
@@ -615,13 +623,18 @@ export function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?
           var ua = navigator.userAgent || "";
           var isiOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
           var isAndroid = /Android/i.test(ua);
-          if (!isiOS && !isAndroid) return;
-
-          event.preventDefault();
           if (button.dataset.opening === "true") return;
           button.dataset.opening = "true";
           var originalText = button.textContent;
           button.textContent = "Opening...";
+          if (!isAndroid) {
+            window.setTimeout(function () {
+              button.dataset.opening = "false";
+              button.textContent = originalText || "${htmlEscape(cta)}";
+            }, 2600);
+            return;
+          }
+          event.preventDefault();
           var fallback = isiOS ? button.dataset.iosStore : button.dataset.androidStore;
           var appUrl = isAndroid && button.dataset.androidIntentUrl
             ? button.dataset.androidIntentUrl
@@ -650,6 +663,87 @@ export function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?
         });
       })();
     </script>
+  </body>
+</html>`;
+}
+
+export function shareOpenFallbackHtml(preview: ReturnType<typeof publicPreview>, req?: Request | null): string {
+  const found = !!preview;
+  const title = found ? "Open Project Alpha" : "Project Alpha property share";
+  const description = found
+    ? "Open this property in the Project Alpha app, or install the app to continue."
+    : "This Project Alpha share link could not be found or has expired.";
+  const safeTitle = htmlEscape(title);
+  const safeDescription = htmlEscape(description);
+  const safeAddress = htmlEscape(preview?.address ?? "Shared property");
+  const safePreviewUrl = preview
+    ? htmlEscape(shareUrl(preview.token, req))
+    : htmlEscape(`${baseUrl(req)}/`);
+  const safeIosStoreUrl = htmlEscape(getIosAppStoreUrl());
+  const safeAndroidStoreUrl = htmlEscape(getAndroidPlayStoreUrl());
+  const iosStoreJs = JSON.stringify(getIosAppStoreUrl()).replace(/</g, "\\u003c");
+  const androidStoreJs = JSON.stringify(getAndroidPlayStoreUrl()).replace(/</g, "\\u003c");
+  const resolvedImage = socialPreviewImageUrl(preview?.imageUrl, req);
+  const safeImage = htmlEscape(resolvedImage ?? `${baseUrl(req)}/favicon.png`);
+  const storeScript = found
+    ? `
+      <script>
+        (function () {
+          var ua = navigator.userAgent || "";
+          var isiOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+          var isAndroid = /Android/i.test(ua);
+          var target = isiOS ? ${iosStoreJs} : (isAndroid ? ${androidStoreJs} : "");
+          if (!target) return;
+          window.setTimeout(function () {
+            window.location.replace(target);
+          }, 900);
+        })();
+      </script>`
+    : "";
+
+  return `<!doctype html>
+<html lang="en-NZ">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${safeTitle}</title>
+    <meta name="description" content="${safeDescription}" />
+    <link rel="icon" href="/favicon.png" />
+    <style>
+      :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; box-sizing: border-box; background: #f6f1e8; color: #1d1a17; }
+      .card { width: min(100%, 480px); overflow: hidden; border: 1px solid rgba(29,26,23,.12); border-radius: 22px; background: #fffaf3; box-shadow: 0 20px 60px rgba(29,26,23,.12); }
+      .hero { aspect-ratio: 16 / 9; background: #1d1a17; display: grid; place-items: center; overflow: hidden; }
+      .hero img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .hero-fallback { color: #fffaf3; font-size: 52px; font-weight: 800; }
+      .body { padding: 24px; display: grid; gap: 14px; }
+      .eyebrow { margin: 0; color: #d97757; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+      h1 { margin: 0; font-size: clamp(26px, 6vw, 36px); line-height: 1.05; }
+      p { margin: 0; color: #6f675c; line-height: 1.55; }
+      .actions { display: grid; gap: 10px; margin-top: 4px; }
+      .button { display: flex; align-items: center; justify-content: center; min-height: 48px; padding: 0 16px; border-radius: 12px; text-decoration: none; font-weight: 800; box-sizing: border-box; }
+      .primary { background: #d97757; color: white; }
+      .secondary { background: #1d1a17; color: white; }
+      .ghost { border: 1px solid rgba(29,26,23,.14); color: #1d1a17; background: transparent; }
+    </style>
+  </head>
+  <body>
+    <article class="card">
+      <div class="hero">
+        ${resolvedImage ? `<img src="${safeImage}" alt="" />` : `<div class="hero-fallback">PA</div>`}
+      </div>
+      <div class="body">
+        <p class="eyebrow">Project Alpha</p>
+        <h1>${safeAddress}</h1>
+        <p>${safeDescription}</p>
+        <div class="actions">
+          <a class="button primary" href="${safeIosStoreUrl}">Download on the App Store</a>
+          <a class="button secondary" href="${safeAndroidStoreUrl}">Get it on Google Play</a>
+          <a class="button ghost" href="${safePreviewUrl}">Back to property preview</a>
+        </div>
+      </div>
+    </article>
+    ${storeScript}
   </body>
 </html>`;
 }
@@ -764,9 +858,16 @@ async function sendSharePage(req: Request, res: Response) {
   res.status(preview ? 200 : 404).type("html").send(sharePreviewHtml(preview, req));
 }
 
-router.get("/share/:token", sendSharePage);
+async function sendShareOpenPage(req: Request, res: Response) {
+  const token = cleanText(req.params.token);
+  const row = token ? await getPublicShare(token).catch(() => null) : null;
+  const preview = publicPreview(row, req);
+  res.status(preview ? 200 : 404).type("html").send(shareOpenFallbackHtml(preview, req));
+}
 
-router.get("/share/:token/page", sendSharePage);
+router.get("/share/:token", sendShareOpenPage);
+
+router.get("/share/:token/page", sendShareOpenPage);
 
 router.get("/property-share/:token", sendSharePage);
 
