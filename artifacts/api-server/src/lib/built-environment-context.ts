@@ -187,8 +187,11 @@ interface ParsedStreetAddress {
 }
 
 function parseStreetAddress(address: string): ParsedStreetAddress | null {
-  const trimmed = address.trim();
-  if (/^\d+\s*\/\s*\d+/i.test(trimmed)) return null;
+  let trimmed = address.trim();
+  const unitParent = trimmed.match(/^\d+[a-z]?\s*\/\s*(\d+[a-z]?\s+.+)$/i);
+  if (unitParent?.[1]) {
+    trimmed = unitParent[1].trim();
+  }
   const match = trimmed.match(/^(\d+)([a-z])?\s+([^,]+)(?:,\s*(.+))?$/i);
   if (!match) return null;
   const number = Number(match[1]);
@@ -201,6 +204,27 @@ function parseStreetAddress(address: string): ParsedStreetAddress | null {
     street,
     locality,
   };
+}
+
+function streetKey(value: string | null | undefined): string {
+  return (value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\b(street)\b/g, "st")
+    .replace(/\b(road)\b/g, "rd")
+    .replace(/\b(avenue)\b/g, "ave")
+    .replace(/\b(crescent)\b/g, "cres")
+    .replace(/\b(drive)\b/g, "dr")
+    .replace(/\b(lane)\b/g, "ln")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function parsedStreetMatches(a: ParsedStreetAddress | null, b: ParsedStreetAddress | null): boolean {
+  if (!a || !b) return false;
+  return a.number === b.number && a.suffix === b.suffix && streetKey(a.street) === streetKey(b.street);
 }
 
 export function generateNearbyAddressCandidates(address: string, maxCandidates = 45): string[] {
@@ -335,10 +359,25 @@ function suburbToken(locality: string | null | undefined): string | null {
     .trim() || null;
 }
 
+function compatibleSuburb(subjectSuburb: string | null, candidateSuburb: string | null): boolean {
+  if (!subjectSuburb || !candidateSuburb) return true;
+  if (subjectSuburb === candidateSuburb) return true;
+  return subjectSuburb.startsWith(`${candidateSuburb} `) || candidateSuburb.startsWith(`${subjectSuburb} `);
+}
+
+export function isAcceptableNearbyAddressMatch(requested: string, resolved: string, subjectAddress: string): boolean {
+  const requestedParsed = parseStreetAddress(requested);
+  const resolvedParsed = parseStreetAddress(resolved);
+  if (!parsedStreetMatches(requestedParsed, resolvedParsed)) return false;
+
+  const subjectSuburb = suburbToken(parseStreetAddress(subjectAddress)?.locality);
+  const resolvedSuburb = suburbToken(resolvedParsed?.locality);
+  return compatibleSuburb(subjectSuburb, resolvedSuburb);
+}
+
 async function validateNearbyAddresses(subjectAddress: string, targetCount: number, timeoutMs: number): Promise<string[]> {
   const rawCandidates = generateNearbyAddressCandidates(subjectAddress, Math.max(targetCount * 3, 30));
   const subjectKey = normaliseAddress(subjectAddress);
-  const subjectSuburb = suburbToken(parseStreetAddress(subjectAddress)?.locality);
   const unique = new Map<string, string>();
   const concurrency = 4;
 
@@ -354,11 +393,10 @@ async function validateNearbyAddresses(subjectAddress: string, targetCount: numb
         const matches = await fetchLINZAddressCandidates(candidate, { timeoutMs, maxResults: 5 }).catch(
           () => [] as Awaited<ReturnType<typeof fetchLINZAddressCandidates>>,
         );
-        if (!subjectSuburb) return matches[0]?.address ?? null;
-        const match = matches.find((m) => {
-          const s = suburbToken(parseStreetAddress(m.address)?.locality);
-          return !s || s === subjectSuburb;
-        });
+        const match = matches.find((m) => isAcceptableNearbyAddressMatch(candidate, m.address, subjectAddress));
+        if (!match && matches.length > 0) {
+          logger.debug({ candidate, matches: matches.map((m) => m.address), subjectAddress }, "Built environment: rejected nearby address candidates");
+        }
         return match?.address ?? null;
       }),
     );
@@ -373,6 +411,10 @@ async function validateNearbyAddresses(subjectAddress: string, targetCount: numb
   return Array.from(unique.values());
 }
 
+function rawNearbyAddressCandidates(subjectAddress: string, targetCount: number): string[] {
+  return generateNearbyAddressCandidates(subjectAddress, Math.max(targetCount * 3, 30)).slice(0, targetCount);
+}
+
 function timeoutAfter<T>(timeoutMs: number, value: T): Promise<T> {
   return new Promise((resolve) => setTimeout(() => resolve(value), timeoutMs));
 }
@@ -385,6 +427,10 @@ async function assessAddress(address: string, timeoutMs: number): Promise<Addres
     ]);
     const buildYear = result?.build_year ?? null;
     const buildYearRange = result?.build_year_range ?? null;
+    if (result?.address_confirmed && !parsedStreetMatches(parseStreetAddress(address), parseStreetAddress(result.address_confirmed))) {
+      logger.debug({ requested: address, confirmed: result.address_confirmed }, "Built environment: rejected PropertyValue candidate address mismatch");
+      return { address, distanceM: null, buildYear: null, buildYearRange: null, representativeYear: null };
+    }
     return {
       address: result?.address_confirmed ?? address,
       distanceM: null,
@@ -542,6 +588,7 @@ export async function fetchBuiltEnvironmentContext(opts: {
     if (opts.address?.trim()) {
       const addresses = await validateNearbyAddresses(opts.address, targetAddressCount, timeoutMsPerParcel);
       if (addresses.length > 0) {
+        logger.debug({ address: opts.address, count: addresses.length }, "Built environment: using LINZ-validated nearby addresses");
         const assessments = await assessAddresses(addresses, timeoutMsPerParcel);
         return buildBuiltEnvironmentContext({
           assessments,
@@ -550,8 +597,22 @@ export async function fetchBuiltEnvironmentContext(opts: {
           subjectBuildYearRange: opts.subjectBuildYearRange ?? null,
         });
       }
+      const fallbackAddresses = rawNearbyAddressCandidates(opts.address, targetAddressCount);
+      if (fallbackAddresses.length > 0) {
+        logger.debug({ address: opts.address, count: fallbackAddresses.length }, "Built environment: using PropertyValue direct nearby-address fallback");
+        const assessments = await assessAddresses(fallbackAddresses, timeoutMsPerParcel);
+        if (assessments.some((a) => a.representativeYear != null)) {
+          return buildBuiltEnvironmentContext({
+            assessments,
+            radiusM,
+            subjectBuildYear: opts.subjectBuildYear ?? null,
+            subjectBuildYearRange: opts.subjectBuildYearRange ?? null,
+          });
+        }
+      }
     }
 
+    logger.debug({ lat: opts.lat, lng: opts.lng }, "Built environment: using parcel fallback");
     const parcels = await fetchLINZParcelsNear(opts.lat, opts.lng, radiusM, Math.max(maxParcels * 3, 40));
     if (parcels === null) {
       return { ...DEFAULT_CONTEXT, radiusM, subjectBuildYear: opts.subjectBuildYear ?? null, subjectBuildYearRange: opts.subjectBuildYearRange ?? null };

@@ -49,8 +49,11 @@ export interface ChatMessage {
   clarification?: {
     question: string;
     options: string[];
-    optionActions?: Array<"repeat_origin" | "search_nearby">;
+    optionActions?: Array<"repeat_origin" | "search_nearby" | "include_tenures">;
   };
+  // Non-freehold tenures offered by a "Show the N cross-lease" chip, carried so
+  // the tap can build the deterministic [discovery_include_tenures:…] command.
+  tenureOfferTenures?: Array<"cross_lease" | "leasehold" | "unit_title">;
   loadingMode?: "analyse" | "discover" | "followup";
   loadingHint?: LoadingHint;
   retryLabel?: string;

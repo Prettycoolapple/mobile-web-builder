@@ -6,6 +6,7 @@ import {
   builtEnvironmentScoreAdjustment,
   generateNearbyAddressCandidates,
   hasUsableBuiltEnvironmentContext,
+  isAcceptableNearbyAddressMatch,
   type ParcelBuildAssessment,
 } from "../built-environment-context";
 import { selectNearestResidentialParcels } from "../neighbourhood-context";
@@ -60,6 +61,54 @@ describe("built environment context", () => {
       "5 Hampton Drive, St Heliers",
     ]);
     expect(candidates).not.toContain("8 Hampton Drive, St Heliers");
+  });
+
+  it("generates nearby parent-street building addresses for unit apartments", () => {
+    const candidates = generateNearbyAddressCandidates("78/386 Richmond Road, Grey Lynn, Auckland", 8);
+
+    expect(candidates).toEqual([
+      "388 Richmond Road, Grey Lynn, Auckland",
+      "384 Richmond Road, Grey Lynn, Auckland",
+      "387 Richmond Road, Grey Lynn, Auckland",
+      "385 Richmond Road, Grey Lynn, Auckland",
+      "390 Richmond Road, Grey Lynn, Auckland",
+      "382 Richmond Road, Grey Lynn, Auckland",
+      "389 Richmond Road, Grey Lynn, Auckland",
+      "383 Richmond Road, Grey Lynn, Auckland",
+    ]);
+    expect(candidates).not.toContain("77/386 Richmond Road, Grey Lynn, Auckland");
+    expect(candidates).not.toContain("79/386 Richmond Road, Grey Lynn, Auckland");
+    expect(candidates).not.toContain("386 Richmond Road, Grey Lynn, Auckland");
+  });
+
+  it("accepts canonical nearby suburb aliases when street number and name match", () => {
+    expect(
+      isAcceptableNearbyAddressMatch(
+        "21 Chatsworth Crescent, Pakuranga, Manukau City, Auckland",
+        "21 Chatsworth Crescent, Pakuranga Heights, Auckland",
+        "19 Chatsworth Crescent, Pakuranga, Manukau City, Auckland",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects nearby address validation when the resolved street does not match", () => {
+    expect(
+      isAcceptableNearbyAddressMatch(
+        "21 Chatsworth Crescent, Pakuranga, Manukau City, Auckland",
+        "21 Cascades Road, Pakuranga Heights, Auckland",
+        "19 Chatsworth Crescent, Pakuranga, Manukau City, Auckland",
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects unrelated suburbs when locality does not look like an alias", () => {
+    expect(
+      isAcceptableNearbyAddressMatch(
+        "10 Hampton Drive, St Heliers",
+        "10 Hampton Drive, Swannanoa",
+        "8 Hampton Drive, St Heliers",
+      ),
+    ).toBe(false);
   });
 
   it("uses the shared neighbour parcel filter for subject, roads, reserves, tiny parcels, duplicates, and radius caps", () => {

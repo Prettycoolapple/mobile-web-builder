@@ -14,7 +14,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
-import { useAuth } from "@/context/AuthContext";
+import { hasServiceProviderAccess, useAuth } from "@/context/AuthContext";
 import { useT, isOSChineseLocale } from "@/lib/i18n";
 
 export default function LoginScreen() {
@@ -50,7 +50,7 @@ export default function LoginScreen() {
       const tier = result?.subscriptionTier ?? "free";
       if (role === "sales_agent" && tier === "free") {
         router.replace("/(onboarding)/sales-agent-welcome");
-      } else if (role === "service_provider" && tier === "free") {
+      } else if (role === "service_provider" && !hasServiceProviderAccess(result)) {
         router.replace("/(onboarding)/service-provider-welcome");
       } else {
         router.replace("/(tabs)");

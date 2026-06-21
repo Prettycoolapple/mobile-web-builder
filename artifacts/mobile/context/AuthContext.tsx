@@ -33,17 +33,41 @@ export interface UserProfile {
   subscriptionTier: string;
   /** ISO date from API; when set for paid tiers, usage period aligns with store renewal. */
   subscriptionPeriodEndAt?: string | null;
+  subscriptionStatus?: string | null;
+  providerTrialStartedAt?: string | null;
+  providerTrialEndsAt?: string | null;
+  providerAccessActive?: boolean;
+  providerAccessKind?: "stripe" | "trial" | "iap" | "expired_trial" | "none";
+  providerAccessEndsAt?: string | null;
   reportsUsedThisMonth: number;
   messagesUsedThisMonth?: number;
   avatarUrl?: string | null;
   phoneNumber?: string | null;
   agencyName?: string | null;
+  reaaLicenceNumber?: string | null;
   isVerified?: boolean;
+  companyName?: string | null;
+  nzCompanyRegisterNumber?: string | null;
   discipline?: string | null;
+  otherDiscipline?: string | null;
+  addressStreet?: string | null;
+  addressSuburb?: string | null;
+  addressCity?: string | null;
+  addressPostcode?: string | null;
+  contactNumber?: string | null;
+  primaryLanguage?: string | null;
+  secondaryLanguage?: string | null;
+  bio?: string | null;
   /** Admin-granted override: "supercharge" (60/mo, 6mo) | "friends_family" (9999/mo) | null. */
   specialStatus?: string | null;
   /** ISO date; only set for "supercharge". null = never expires (friends_family). */
   specialStatusExpiresAt?: string | null;
+}
+
+export function hasServiceProviderAccess(user: UserProfile | null | undefined): boolean {
+  if (!user || user.role !== "service_provider") return false;
+  if (user.providerAccessActive === true) return true;
+  return user.subscriptionTier === "standard" || user.subscriptionTier === "pro";
 }
 
 export type ProviderDiscipline =
@@ -378,6 +402,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!token || !user?.id || !isSubscriptionIdentityReady || IS_TEST_PAYMENT_MODE) return;
+    if (user.role === "service_provider" && (user.providerAccessKind === "stripe" || user.providerAccessKind === "trial")) return;
     const paid = user.subscriptionTier === "pro" || user.subscriptionTier === "standard";
     if (!paid || user.subscriptionPeriodEndAt) return;
 
@@ -401,7 +426,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch {
       }
     })();
-  }, [token, user?.id, user?.subscriptionTier, user?.subscriptionPeriodEndAt, isSubscriptionIdentityReady, refreshProfile]);
+  }, [
+    token,
+    user?.id,
+    user?.role,
+    user?.subscriptionTier,
+    user?.subscriptionPeriodEndAt,
+    user?.providerAccessKind,
+    isSubscriptionIdentityReady,
+    refreshProfile,
+  ]);
 
   const persistAuth = useCallback(async (newToken: string, newUser: UserProfile) => {
     setToken(newToken);

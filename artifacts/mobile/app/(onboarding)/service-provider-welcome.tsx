@@ -14,7 +14,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
-import { useAuth } from "@/context/AuthContext";
+import { hasServiceProviderAccess, useAuth } from "@/context/AuthContext";
 import { getApiBase } from "@/lib/api";
 import { useSubscription, getSubscriptionSyncBody } from "@/lib/revenuecat";
 import { useT } from "@/lib/i18n";
@@ -59,7 +59,7 @@ export default function ServiceProviderWelcomeScreen() {
   const [showWelcomePopup, setShowWelcomePopup] = useState(true);
 
   const firstName = user?.fullName?.split(" ")[0] || t("provider_welcome.fallback_name");
-  const hasSubscription = isSubscribed || (user?.subscriptionTier && user.subscriptionTier !== "free");
+  const hasSubscription = isSubscribed || hasServiceProviderAccess(user);
   const priceString = getPriceForRole("service_provider");
   const storeName = Platform.OS === "ios" ? "App Store" : "Google Play";
 

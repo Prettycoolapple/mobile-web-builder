@@ -146,6 +146,641 @@
           grid-template-columns: 1fr;
         }
       }
+      .provider-dashboard-shell {
+        width: min(1180px, 100%);
+        margin: 0 auto;
+      }
+      .provider-dashboard-top {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+        gap: 18px;
+        align-items: center;
+        margin-bottom: 22px;
+      }
+      .provider-dashboard-title h2 {
+        margin: 0;
+        font-size: clamp(30px, 4vw, 52px);
+        letter-spacing: -0.04em;
+      }
+      .provider-dashboard-title p {
+        margin: 6px 0 0;
+        color: var(--muted, #6b625b);
+      }
+      .provider-mode-toggle {
+        display: inline-flex;
+        justify-self: center;
+        gap: 4px;
+        padding: 5px;
+        border: 1px solid var(--line, #e5ded4);
+        border-radius: 999px;
+        background: var(--surface, #fff);
+        box-shadow: 0 10px 30px rgba(32, 25, 21, 0.08);
+      }
+      .provider-mode-toggle button {
+        min-width: 120px;
+        min-height: 42px;
+        padding: 0 18px;
+        border: 0;
+        border-radius: 999px;
+        background: transparent;
+        color: var(--muted, #6b625b);
+        font: inherit;
+        font-weight: 800;
+        cursor: pointer;
+      }
+      .provider-mode-toggle button.is-active {
+        background: var(--forest, #173f2e);
+        color: #fff;
+      }
+      .provider-dashboard-signout {
+        justify-self: end;
+      }
+      .provider-dashboard-layout {
+        display: grid;
+        grid-template-columns: 260px minmax(0, 1fr);
+        gap: 18px;
+        align-items: start;
+      }
+      .provider-sidebar {
+        position: sticky;
+        top: 96px;
+        padding: 12px;
+        border: 1px solid var(--line, #e5ded4);
+        border-radius: 8px;
+        background: var(--surface, #fff);
+      }
+      .provider-sidebar-label {
+        margin: 4px 10px 10px;
+        color: var(--muted, #6b625b);
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .provider-side-nav {
+        display: grid;
+        gap: 6px;
+      }
+      .provider-side-nav button {
+        display: flex;
+        width: 100%;
+        min-height: 46px;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 12px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--ink, #201915);
+        font: inherit;
+        font-weight: 780;
+        text-align: left;
+        cursor: pointer;
+      }
+      .provider-side-nav button::after {
+        content: "›";
+        color: var(--muted, #6b625b);
+        font-size: 20px;
+      }
+      .provider-side-nav button.is-active {
+        border-color: rgba(23, 63, 46, 0.18);
+        background: rgba(23, 63, 46, 0.08);
+        color: var(--forest, #173f2e);
+      }
+      .provider-dashboard-main {
+        display: grid;
+        gap: 16px;
+      }
+      .provider-dashboard-panel {
+        padding: clamp(22px, 4vw, 34px);
+        border: 1px solid var(--line, #e5ded4);
+        border-radius: 8px;
+        background: var(--surface, #fff);
+      }
+      .provider-dashboard-panel[hidden],
+      .provider-mode-panel[hidden] {
+        display: none;
+      }
+      .provider-dashboard-panel h3 {
+        margin: 0 0 8px;
+        font-size: clamp(26px, 3vw, 36px);
+        letter-spacing: -0.035em;
+      }
+      .provider-dashboard-panel p {
+        max-width: 680px;
+        margin: 0;
+        color: var(--muted, #6b625b);
+        line-height: 1.55;
+      }
+      .provider-dashboard-empty {
+        display: grid;
+        min-height: 280px;
+        place-items: center;
+        padding: 28px;
+        border: 1px dashed var(--line, #e5ded4);
+        border-radius: 8px;
+        background: #fffaf3;
+        text-align: center;
+      }
+      .provider-dashboard-empty strong {
+        display: block;
+        margin-bottom: 8px;
+        color: var(--ink, #201915);
+        font-size: 18px;
+      }
+      .provider-dashboard-shell.is-access-locked [data-provider-mode="workspace"],
+      .provider-dashboard-shell.is-access-locked [data-provider-manage-panel]:not([data-provider-manage-panel="subscription"]) {
+        cursor: not-allowed;
+        opacity: 0.42;
+      }
+      .provider-subscription-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
+        gap: 18px;
+        margin-top: 22px;
+      }
+      .provider-subscription-card {
+        padding: 22px;
+        border: 1px solid var(--line, #e5ded4);
+        border-radius: 8px;
+        background: #fffaf3;
+      }
+      .provider-subscription-card h4 {
+        margin: 0 0 10px;
+        color: var(--ink, #201915);
+        font-size: 18px;
+      }
+      .provider-subscription-status {
+        display: inline-flex;
+        min-height: 32px;
+        align-items: center;
+        padding: 0 12px;
+        border-radius: 999px;
+        background: rgba(23, 63, 46, 0.1);
+        color: var(--forest, #173f2e);
+        font-weight: 850;
+      }
+      .provider-subscription-status.is-warning {
+        background: rgba(216, 112, 78, 0.14);
+        color: #8a3b22;
+      }
+      .provider-subscription-meta {
+        display: grid;
+        gap: 10px;
+        margin: 18px 0;
+      }
+      .provider-subscription-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 12px 0;
+        border-bottom: 1px solid rgba(32, 25, 21, 0.08);
+      }
+      .provider-subscription-row span:first-child {
+        color: var(--muted, #6b625b);
+        font-weight: 700;
+      }
+      .provider-subscription-row strong {
+        color: var(--ink, #201915);
+        text-align: right;
+      }
+      .provider-subscription-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .provider-feature-list {
+        list-style: none;
+        display: grid;
+        gap: 12px;
+        margin: 0;
+        padding: 0;
+      }
+      .provider-feature-list li {
+        position: relative;
+        padding-left: 28px;
+        color: var(--ink, #201915);
+        line-height: 1.45;
+      }
+      .provider-feature-list li::before {
+        content: "\2713";
+        position: absolute;
+        left: 0;
+        top: 0;
+        color: var(--green, #2f9e6b);
+        font-weight: 900;
+      }
+      .provider-subscription-note {
+        margin-top: 16px;
+        padding: 12px 14px;
+        border-radius: 8px;
+        background: rgba(23, 63, 46, 0.08);
+        color: var(--forest, #173f2e);
+        font-weight: 750;
+      }
+      .provider-message-panel {
+        padding: 0;
+        overflow: hidden;
+      }
+      .provider-message-shell {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 330px;
+        min-height: 680px;
+        background: #fffaf3;
+      }
+      .provider-message-chat {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+        min-width: 0;
+        border-right: 1px solid var(--line, #e5ded4);
+        background: var(--surface, #fff);
+      }
+      .provider-message-header,
+      .provider-message-composer {
+        padding: 18px 20px;
+        background: rgba(255, 250, 243, 0.92);
+      }
+      .provider-message-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        border-bottom: 1px solid var(--line, #e5ded4);
+      }
+      .provider-message-user {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        gap: 12px;
+      }
+      .provider-message-avatar,
+      .provider-thread-avatar,
+      .provider-profile-avatar {
+        display: inline-grid;
+        flex: 0 0 auto;
+        place-items: center;
+        overflow: hidden;
+        border-radius: 999px;
+        background: var(--forest, #173f2e);
+        color: #fff;
+        font-weight: 850;
+      }
+      .provider-message-avatar {
+        width: 46px;
+        height: 46px;
+        font-size: 17px;
+      }
+      .provider-thread-avatar {
+        width: 42px;
+        height: 42px;
+        font-size: 15px;
+      }
+      .provider-profile-avatar {
+        width: 64px;
+        height: 64px;
+        font-size: 22px;
+      }
+      .provider-message-avatar img,
+      .provider-thread-avatar img,
+      .provider-profile-avatar img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      .provider-message-header h3 {
+        margin: 0;
+        font-size: 18px;
+        letter-spacing: 0;
+      }
+      .provider-message-header p {
+        margin: 2px 0 0;
+        color: var(--muted, #6b625b);
+        font-size: 13px;
+      }
+      .provider-message-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .provider-icon-button {
+        display: inline-grid;
+        width: 42px;
+        height: 42px;
+        place-items: center;
+        border: 1px solid var(--line, #e5ded4);
+        border-radius: 999px;
+        background: #fff;
+        color: var(--ink, #201915);
+        font: inherit;
+        font-weight: 850;
+        cursor: pointer;
+      }
+      .provider-icon-button:hover:not(:disabled) {
+        border-color: rgba(23, 63, 46, 0.28);
+        color: var(--forest, #173f2e);
+      }
+      .provider-icon-button:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+      .provider-icon-button[hidden] {
+        display: none;
+      }
+      .provider-message-list {
+        display: flex;
+        min-height: 0;
+        flex-direction: column;
+        gap: 10px;
+        overflow-y: auto;
+        padding: 20px;
+        background:
+          radial-gradient(circle at top left, rgba(47, 158, 107, 0.08), transparent 28%),
+          #fff;
+      }
+      .provider-message-load-more {
+        align-self: center;
+        min-height: 34px;
+        padding: 0 14px;
+        border: 1px solid var(--line, #e5ded4);
+        border-radius: 999px;
+        background: #fffaf3;
+        color: var(--forest, #173f2e);
+        font: inherit;
+        font-size: 13px;
+        font-weight: 800;
+        cursor: pointer;
+      }
+      .provider-message-empty {
+        display: grid;
+        flex: 1;
+        place-items: center;
+        padding: 24px;
+        text-align: center;
+      }
+      .provider-message-empty strong {
+        display: block;
+        margin-bottom: 8px;
+        color: var(--ink, #201915);
+      }
+      .provider-message-empty p {
+        max-width: 420px;
+        margin: 0 auto;
+        color: var(--muted, #6b625b);
+      }
+      .provider-message-bubble-row {
+        display: flex;
+      }
+      .provider-message-bubble-row.is-mine {
+        justify-content: flex-end;
+      }
+      .provider-message-bubble {
+        max-width: min(620px, 78%);
+        padding: 11px 13px;
+        border: 1px solid var(--line, #e5ded4);
+        border-radius: 16px;
+        border-bottom-left-radius: 6px;
+        background: #fffaf3;
+        box-shadow: 0 8px 22px rgba(32, 25, 21, 0.06);
+      }
+      .provider-message-bubble-row.is-mine .provider-message-bubble {
+        border-color: rgba(23, 63, 46, 0.18);
+        border-bottom-right-radius: 6px;
+        border-bottom-left-radius: 16px;
+        background: var(--forest, #173f2e);
+        color: #fff;
+      }
+      .provider-message-bubble p {
+        margin: 0;
+        color: inherit;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .provider-message-bubble img {
+        display: block;
+        max-width: min(360px, 100%);
+        max-height: 320px;
+        margin-bottom: 8px;
+        border-radius: 12px;
+        object-fit: cover;
+      }
+      .provider-message-time {
+        display: block;
+        margin-top: 6px;
+        color: rgba(107, 98, 91, 0.8);
+        font-size: 11px;
+      }
+      .provider-message-bubble-row.is-mine .provider-message-time {
+        color: rgba(255, 255, 255, 0.68);
+      }
+      .provider-message-composer {
+        border-top: 1px solid var(--line, #e5ded4);
+      }
+      .provider-message-blocked {
+        display: none;
+        margin-bottom: 12px;
+        padding: 10px 12px;
+        border: 1px solid rgba(173, 82, 45, 0.22);
+        border-radius: 8px;
+        background: rgba(216, 112, 78, 0.1);
+        color: #7a341f;
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .provider-message-blocked.is-visible {
+        display: block;
+      }
+      .provider-message-compose-row {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: end;
+      }
+      .provider-message-compose-row textarea {
+        min-height: 46px;
+        max-height: 132px;
+        resize: vertical;
+        border-radius: 14px;
+      }
+      .provider-message-side {
+        display: grid;
+        grid-template-rows: auto auto minmax(0, 1fr);
+        min-width: 0;
+        background: #fffaf3;
+      }
+      .provider-thread-toolbar {
+        padding: 18px;
+        border-bottom: 1px solid var(--line, #e5ded4);
+      }
+      .provider-thread-toolbar h3 {
+        margin: 0 0 12px;
+        font-size: 22px;
+        letter-spacing: -0.02em;
+      }
+      .provider-thread-search {
+        width: 100%;
+        min-height: 42px;
+        border-radius: 999px;
+      }
+      .provider-profile-card {
+        display: none;
+        padding: 16px 18px;
+        border-bottom: 1px solid var(--line, #e5ded4);
+        background: #fff;
+      }
+      .provider-profile-card.is-visible {
+        display: block;
+      }
+      .provider-profile-top {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      .provider-profile-top strong {
+        display: block;
+        color: var(--ink, #201915);
+        line-height: 1.2;
+      }
+      .provider-profile-top span,
+      .provider-profile-meta {
+        color: var(--muted, #6b625b);
+        font-size: 13px;
+      }
+      .provider-profile-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .provider-profile-actions button,
+      .provider-profile-actions a {
+        display: inline-flex;
+        min-height: 38px;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        font-size: 13px;
+        font-weight: 800;
+        text-decoration: none;
+      }
+      .provider-thread-list {
+        min-height: 0;
+        overflow-y: auto;
+        padding: 8px;
+      }
+      .provider-thread-item {
+        display: grid;
+        width: 100%;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        padding: 11px 10px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+      .provider-thread-item:hover,
+      .provider-thread-item.is-active {
+        border-color: rgba(23, 63, 46, 0.16);
+        background: #fff;
+      }
+      .provider-thread-name {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        gap: 8px;
+      }
+      .provider-thread-name strong,
+      .provider-thread-preview {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .provider-thread-name strong {
+        color: var(--ink, #201915);
+        font-size: 14px;
+      }
+      .provider-thread-preview {
+        display: block;
+        margin-top: 3px;
+        color: var(--muted, #6b625b);
+        font-size: 13px;
+      }
+      .provider-thread-time {
+        color: var(--muted, #6b625b);
+        font-size: 11px;
+        white-space: nowrap;
+      }
+      .provider-thread-badge {
+        display: inline-grid;
+        min-width: 20px;
+        height: 20px;
+        place-items: center;
+        margin-left: 6px;
+        padding: 0 6px;
+        border-radius: 999px;
+        background: var(--forest, #173f2e);
+        color: #fff;
+        font-size: 11px;
+        font-weight: 850;
+      }
+      .provider-thread-empty {
+        padding: 24px 14px;
+        color: var(--muted, #6b625b);
+        text-align: center;
+      }
+      @media (max-width: 860px) {
+        .provider-dashboard-top {
+          grid-template-columns: 1fr;
+        }
+        .provider-mode-toggle,
+        .provider-dashboard-signout {
+          justify-self: stretch;
+        }
+        .provider-mode-toggle button {
+          flex: 1;
+          min-width: 0;
+        }
+        .provider-dashboard-layout {
+          grid-template-columns: 1fr;
+        }
+        .provider-subscription-grid {
+          grid-template-columns: 1fr;
+        }
+        .provider-sidebar {
+          position: static;
+        }
+        .provider-message-shell {
+          grid-template-columns: 1fr;
+          min-height: 620px;
+        }
+        .provider-message-chat {
+          border-right: 0;
+        }
+        .provider-message-side {
+          grid-row: 1;
+          max-height: 420px;
+          border-bottom: 1px solid var(--line, #e5ded4);
+        }
+        .provider-message-shell.has-active-thread .provider-message-side {
+          display: none;
+        }
+        .provider-message-shell:not(.has-active-thread) .provider-message-chat {
+          display: none;
+        }
+        .provider-message-back {
+          display: inline-grid;
+        }
+      }
+      @media (min-width: 861px) {
+        .provider-message-back {
+          display: none;
+        }
+      }
     </style>
     <script defer src="/site.js"></script>
     <script defer src="/provider-portal/portal.js"></script>
@@ -362,44 +997,254 @@
         </section>
 
         <section class="portal-shell portal-dashboard" id="portal-dashboard" hidden>
-          <div class="portal-dashboard-header">
-            <div>
-              <p class="section-kicker">Your account</p>
-              <h2 id="dashboard-title">You're signed in</h2>
+          <div class="provider-dashboard-shell">
+            <div class="provider-dashboard-top">
+              <div class="provider-dashboard-title">
+                <p class="section-kicker">Provider portal</p>
+                <h2 id="dashboard-title">Manage your account</h2>
+                <p id="dashboard-summary">You're signed in to your service provider account.</p>
+              </div>
+              <div class="provider-mode-toggle" role="tablist" aria-label="Provider dashboard mode">
+                <button type="button" data-provider-mode="workspace" role="tab" aria-selected="false">Work space</button>
+                <button class="is-active" type="button" data-provider-mode="manage" role="tab" aria-selected="true">Manage</button>
+              </div>
+              <button class="button button-quiet provider-dashboard-signout" type="button" id="signout-button">Sign out</button>
             </div>
-            <button class="button button-quiet" type="button" id="signout-button">Sign out</button>
-          </div>
 
-          <div class="portal-card provider-welcome-card">
-            <div class="portal-panel-header">
-              <p class="section-kicker">Account ready</p>
-              <h2>Welcome to Project Alpha</h2>
-              <p id="dashboard-summary">You're signed in to your service provider account.</p>
+            <div class="provider-mode-panel" data-provider-mode-panel="workspace" hidden>
+              <div class="provider-dashboard-panel">
+                <p class="section-kicker">Work space</p>
+                <h3>Work space is coming next</h3>
+                <p>
+                  This area will hold the day-to-day client and project workflow. For now, use Manage to control account settings.
+                </p>
+              </div>
             </div>
-            <div class="provider-welcome-copy">
-              <p><strong>Your provider dashboard is on its way.</strong></p>
-              <p>
-                For now, head into the Project Alpha app to complete your profile and connect with
-                clients. Sign in with the same email and password you just used here.
-              </p>
-            </div>
-            <div class="app-download-actions">
-              <a
-                class="app-download-button"
-                href="https://apps.apple.com/nz/app/project-alpha/id6762080292"
-                target="_blank"
-                rel="noopener"
-              >
-                iOS App Store
-              </a>
-              <a
-                class="app-download-button app-download-button--android"
-                href="https://play.google.com/store/apps/details?id=nz.devfeasible.app&hl=en"
-                target="_blank"
-                rel="noopener"
-              >
-                Android Play Store
-              </a>
+
+            <div class="provider-mode-panel" data-provider-mode-panel="manage">
+              <div class="provider-dashboard-layout">
+                <aside class="provider-sidebar" aria-label="Manage navigation">
+                  <p class="provider-sidebar-label">Manage</p>
+                  <nav class="provider-side-nav">
+                    <button class="is-active" type="button" data-provider-manage-panel="message">Message</button>
+                    <button type="button" data-provider-manage-panel="profile">Profile</button>
+                    <button type="button" data-provider-manage-panel="subscription">Manage subscription</button>
+                  </nav>
+                </aside>
+
+                <div class="provider-dashboard-main">
+                  <section class="provider-dashboard-panel provider-message-panel" data-provider-manage-content="message">
+                    <div class="provider-message-shell" id="provider-message-shell">
+                      <div class="provider-message-chat">
+                        <div class="provider-message-header">
+                          <div class="provider-message-user">
+                            <button class="provider-icon-button provider-message-back" type="button" id="provider-message-back" aria-label="Back to contacts">&lt;</button>
+                            <span class="provider-message-avatar" id="provider-active-avatar" aria-hidden="true">PA</span>
+                            <div>
+                              <h3 id="provider-active-name">Select a conversation</h3>
+                              <p id="provider-active-subtitle">Choose a general user from the contact list.</p>
+                            </div>
+                          </div>
+                          <div class="provider-message-actions">
+                            <button class="provider-icon-button" type="button" id="provider-call-link" aria-label="Reveal phone number" hidden>☎</button>
+                            <button class="provider-icon-button" type="button" id="provider-refresh-messages" aria-label="Refresh messages">↻</button>
+                          </div>
+                        </div>
+
+                        <div class="provider-message-list" id="provider-message-list" aria-live="polite">
+                          <div class="provider-message-empty">
+                            <div>
+                              <strong>No conversation selected.</strong>
+                              <p>Select a contact on the right to view and reply to messages from Project Alpha users.</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        <form class="provider-message-composer" id="provider-message-form">
+                          <div class="provider-message-blocked" id="provider-message-blocked">
+                            Messaging is currently unavailable with this user.
+                          </div>
+                          <div class="provider-message-compose-row">
+                            <input id="provider-message-photo" type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif" hidden />
+                            <button class="provider-icon-button" type="button" id="provider-message-attach" aria-label="Attach photo">＋</button>
+                            <textarea id="provider-message-input" rows="1" placeholder="Write a message" disabled></textarea>
+                            <button class="button button-primary" type="submit" id="provider-message-send" disabled>Send</button>
+                          </div>
+                          <p class="form-status" id="provider-message-status" aria-live="polite"></p>
+                        </form>
+                      </div>
+
+                      <aside class="provider-message-side" aria-label="Message contacts">
+                        <div class="provider-thread-toolbar">
+                          <p class="section-kicker">Message</p>
+                          <h3>Contacts</h3>
+                          <input class="provider-thread-search" id="provider-thread-search" type="search" placeholder="Search contacts" autocomplete="off" />
+                        </div>
+                        <div class="provider-profile-card" id="provider-profile-card"></div>
+                        <div class="provider-thread-list" id="provider-thread-list">
+                          <div class="provider-thread-empty">Loading conversations...</div>
+                        </div>
+                      </aside>
+                    </div>
+                  </section>
+
+                  <section class="provider-dashboard-panel" data-provider-manage-content="profile" hidden>
+                    <div class="portal-panel-header">
+                      <p class="section-kicker">Profile</p>
+                      <h2>Your provider details</h2>
+                      <p>Keep this in sync with the Project Alpha app. Changes saved here update the same profile users see in-app.</p>
+                    </div>
+                    <form id="provider-profile-form" class="portal-form provider-profile-form">
+                      <div class="portal-field-grid">
+                        <label class="field">
+                          Full name
+                          <input name="fullName" autocomplete="name" required />
+                        </label>
+                        <label class="field">
+                          Mobile number
+                          <input name="phone" type="tel" autocomplete="tel" inputmode="tel" placeholder="+64 21 123 4567" required />
+                        </label>
+                      </div>
+
+                      <div class="portal-field-grid">
+                        <label class="field">
+                          Preferred language
+                          <select name="primaryLanguage" required>
+                            <option value="">Choose a language</option>
+                            <option value="English">English</option>
+                            <option value="Chinese (Mandarin)">Chinese (Mandarin)</option>
+                            <option value="Chinese (Cantonese)">Chinese (Cantonese)</option>
+                            <option value="Korean">Korean</option>
+                            <option value="Japanese">Japanese</option>
+                            <option value="Hindi">Hindi</option>
+                            <option value="Tagalog">Tagalog</option>
+                            <option value="Samoan">Samoan</option>
+                            <option value="Māori">Māori</option>
+                            <option value="Other">Other</option>
+                          </select>
+                        </label>
+                        <label class="field">
+                          Secondary language <span class="field-optional">(optional)</span>
+                          <select name="secondaryLanguage">
+                            <option value="">None</option>
+                            <option value="English">English</option>
+                            <option value="Chinese (Mandarin)">Chinese (Mandarin)</option>
+                            <option value="Chinese (Cantonese)">Chinese (Cantonese)</option>
+                            <option value="Korean">Korean</option>
+                            <option value="Japanese">Japanese</option>
+                            <option value="Hindi">Hindi</option>
+                            <option value="Tagalog">Tagalog</option>
+                            <option value="Samoan">Samoan</option>
+                            <option value="Māori">Māori</option>
+                            <option value="Other">Other</option>
+                          </select>
+                        </label>
+                      </div>
+
+                      <div class="portal-divider"></div>
+
+                      <div class="portal-field-grid">
+                        <label class="field">
+                          Company name
+                          <input name="companyName" autocomplete="organization" required />
+                        </label>
+                        <label class="field">
+                          NZ Companies Register number
+                          <input name="nzCompanyRegisterNumber" autocomplete="off" inputmode="numeric" required />
+                        </label>
+                      </div>
+
+                      <div class="portal-field-grid">
+                        <label class="field">
+                          Discipline
+                          <select name="discipline" id="profile-discipline-select" required>
+                            <option value="">Choose your discipline</option>
+                            <option value="architect_designer">Architect / Designer</option>
+                            <option value="planner">Planner</option>
+                            <option value="engineer">Engineer</option>
+                            <option value="quantity_surveyor">Land Surveyor</option>
+                            <option value="other">Other</option>
+                          </select>
+                        </label>
+                        <label class="field">
+                          Contact number
+                          <input name="contactNumber" type="tel" autocomplete="tel" inputmode="tel" placeholder="+64 21 123 4567" />
+                          <span class="field-help">Shown only where Project Alpha allows contact details to be shared.</span>
+                        </label>
+                      </div>
+
+                      <label class="field" id="profile-discipline-other-field" hidden>
+                        Describe your discipline
+                        <input name="otherDiscipline" autocomplete="off" placeholder="Tell us your discipline" />
+                      </label>
+
+                      <label class="field">
+                        Bio <span class="field-optional">(optional)</span>
+                        <textarea name="bio" rows="4" maxlength="1200" placeholder="Briefly describe your services, experience, and areas you can help with."></textarea>
+                      </label>
+
+                      <label class="field">
+                        Profile photo
+                        <input name="profilePicture" type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif" />
+                        <span class="field-help">Leave blank to keep your current photo.</span>
+                      </label>
+
+                      <div class="portal-divider"></div>
+
+                      <p class="field-label">Business address <span class="field-optional">(optional)</span></p>
+                      <label class="field">
+                        Street address
+                        <input name="addressStreet" autocomplete="address-line1" />
+                      </label>
+                      <div class="portal-field-grid">
+                        <label class="field">
+                          Suburb
+                          <input name="addressSuburb" autocomplete="address-level3" />
+                        </label>
+                        <label class="field">
+                          City
+                          <input name="addressCity" autocomplete="address-level2" />
+                        </label>
+                      </div>
+                      <label class="field">
+                        Postcode
+                        <input name="addressPostcode" autocomplete="postal-code" inputmode="numeric" />
+                      </label>
+
+                      <button class="button button-primary portal-submit" type="submit">Save changes</button>
+                      <p class="form-status" id="provider-profile-status" aria-live="polite"></p>
+                    </form>
+                  </section>
+
+                  <section class="provider-dashboard-panel" data-provider-manage-content="subscription" hidden>
+                    <p class="section-kicker">Subscription</p>
+                    <h3>Manage subscription</h3>
+                    <p>Manage provider access for the web portal and the Project Alpha mobile app.</p>
+                    <div class="provider-subscription-grid">
+                      <div class="provider-subscription-card">
+                        <h4>Current access</h4>
+                        <span class="provider-subscription-status" id="provider-subscription-badge">Loading...</span>
+                        <div class="provider-subscription-meta" id="provider-subscription-meta"></div>
+                        <div class="provider-subscription-actions" id="provider-subscription-actions"></div>
+                        <p class="form-status" id="provider-subscription-status" aria-live="polite"></p>
+                      </div>
+                      <div class="provider-subscription-card">
+                        <h4>Included features</h4>
+                        <ul class="provider-feature-list">
+                          <li>Connect with property buyers &amp; developers</li>
+                          <li>Property search &amp; analysis</li>
+                          <li>Customize analysis report for sharing</li>
+                          <li>Automation tool <span class="paywall-soon">coming soon</span></li>
+                          <li>Live translation phone calls <span class="paywall-soon">coming soon</span></li>
+                        </ul>
+                        <div class="provider-subscription-note" id="provider-subscription-note">
+                          Active provider access unlocks both the browser portal and the mobile app.
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                </div>
+              </div>
             </div>
           </div>
         </section>

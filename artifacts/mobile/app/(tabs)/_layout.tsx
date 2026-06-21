@@ -7,7 +7,7 @@ import { Platform, Pressable, StyleSheet, Text, View, useColorScheme } from "rea
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useColors } from "@/hooks/useColors";
-import { useAuth } from "@/context/AuthContext";
+import { hasServiceProviderAccess, useAuth } from "@/context/AuthContext";
 import { useChat } from "@/context/ChatContext";
 import { useDm } from "@/context/DmContext";
 import { useT } from "@/lib/i18n";
@@ -180,12 +180,12 @@ export default function TabLayout() {
   const router = useRouter();
 
   useEffect(() => {
-    if (!isLoading && user?.role === "service_provider" && user.subscriptionTier === "free") {
+    if (!isLoading && user?.role === "service_provider" && !hasServiceProviderAccess(user)) {
       router.replace("/(onboarding)/service-provider-welcome" as never);
     }
   }, [user, isLoading, router]);
 
-  if (isLoading || (user?.role === "service_provider" && user.subscriptionTier === "free")) return null;
+  if (isLoading || (user?.role === "service_provider" && !hasServiceProviderAccess(user))) return null;
 
   return <ClassicTabLayout isGuest={!user} />;
 }

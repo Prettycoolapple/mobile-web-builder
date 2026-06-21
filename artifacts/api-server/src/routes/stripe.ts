@@ -21,7 +21,7 @@ async function pauseAgentListings(userId: string): Promise<void> {
 async function syncSubscription(sub: Stripe.Subscription): Promise<void> {
   const info = subscriptionInfoFromStripe(sub);
   const [profile] = await db
-    .select({ id: profiles.id })
+    .select({ id: profiles.id, role: profiles.role })
     .from(profiles)
     .where(eq(profiles.stripeSubscriptionId, sub.id))
     .limit(1);
@@ -31,13 +31,18 @@ async function syncSubscription(sub: Stripe.Subscription): Promise<void> {
     return;
   }
 
+  const active = ACTIVE_SUBSCRIPTION_STATUSES.has(info.subscriptionStatus ?? "");
   await db
     .update(profiles)
     .set({
+      ...(profile.role === "service_provider" ? { subscriptionTier: active ? "standard" : "free" } : {}),
       subscriptionStatus: info.subscriptionStatus,
       subscriptionPeriodEndAt: info.subscriptionPeriodEndAt,
       subscriptionCancelAtPeriodEnd: info.subscriptionCancelAtPeriodEnd,
       stripeCustomerId: info.stripeCustomerId,
+      ...(profile.role === "service_provider" && active
+        ? { providerTrialStartedAt: null, providerTrialEndsAt: null }
+        : {}),
     })
     .where(eq(profiles.id, profile.id));
 
@@ -70,6 +75,35 @@ router.post("/stripe/webhook", async (req, res) => {
         const session = event.data.object as Stripe.Checkout.Session;
         if (session.mode !== "subscription") break;
         const pendingId = session.metadata?.pendingSignupId;
+        const providerUserId = session.metadata?.providerUserId;
+        if (!pendingId && providerUserId) {
+          const customerId = typeof session.customer === "string" ? session.customer : session.customer?.id ?? null;
+          const subId = typeof session.subscription === "string" ? session.subscription : session.subscription?.id ?? null;
+          const subInfo = subId
+            ? subscriptionInfoFromStripe(await getStripe().subscriptions.retrieve(subId), customerId)
+            : {
+                stripeCustomerId: customerId,
+                stripeSubscriptionId: null,
+                subscriptionStatus: "active",
+                subscriptionPeriodEndAt: null,
+                subscriptionCancelAtPeriodEnd: false,
+              };
+          await db
+            .update(profiles)
+            .set({
+              subscriptionTier: "standard",
+              stripeCustomerId: subInfo.stripeCustomerId,
+              stripeSubscriptionId: subInfo.stripeSubscriptionId,
+              subscriptionStatus: subInfo.subscriptionStatus,
+              subscriptionPeriodEndAt: subInfo.subscriptionPeriodEndAt,
+              subscriptionCancelAtPeriodEnd: subInfo.subscriptionCancelAtPeriodEnd,
+              providerTrialStartedAt: null,
+              providerTrialEndsAt: null,
+            })
+            .where(eq(profiles.id, providerUserId));
+          logger.info({ providerUserId }, "Stripe: provider subscription attached from checkout.session.completed");
+          break;
+        }
         if (!pendingId) break;
 
         const [pending] = await db
@@ -108,13 +142,13 @@ router.post("/stripe/webhook", async (req, res) => {
           typeof invoice.subscription === "string" ? invoice.subscription : invoice.subscription?.id ?? null;
         if (subId) {
           const [profile] = await db
-            .select({ id: profiles.id })
+            .select({ id: profiles.id, role: profiles.role })
             .from(profiles)
             .where(eq(profiles.stripeSubscriptionId, subId))
             .limit(1);
           await db
             .update(profiles)
-            .set({ subscriptionStatus: "past_due" })
+            .set({ subscriptionStatus: "past_due", ...(profile?.role === "service_provider" ? { subscriptionTier: "free" } : {}) })
             .where(eq(profiles.stripeSubscriptionId, subId));
           if (profile) {
             await pauseAgentListings(profile.id);

@@ -49,9 +49,11 @@ export function resolveReportLimit(
   tier: string | null | undefined,
   role?: string | null | undefined,
   specialStatus?: string | null | undefined,
+  providerAccessActive?: boolean,
 ): number {
   if (specialStatus === "friends_family") return FRIENDS_FAMILY_REPORT_LIMIT;
   if (specialStatus === "supercharge") return SUPERCHARGE_REPORT_LIMIT;
+  if (role === "service_provider" && providerAccessActive) return STANDARD_REPORT_LIMIT;
   if (role === "service_provider" && tier !== "standard" && tier !== "pro") {
     return SERVICE_PROVIDER_FREE_REPORT_LIMIT;
   }

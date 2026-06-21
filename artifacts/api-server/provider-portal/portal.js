@@ -13,6 +13,19 @@
     otpCooldownTimer: null,
     pendingSignupPayload: null,
     pendingSignupForm: null,
+    dmThreads: [],
+    dmMessages: [],
+    dmSelectedThreadId: null,
+    dmSelectedProfile: null,
+    dmNextCursor: null,
+    dmLoading: false,
+    dmSending: false,
+    dmPollTimer: null,
+    dmSocket: null,
+    dmSocketScriptPromise: null,
+    dmSocketConnected: false,
+    dmRevealedPhoneUserId: null,
+    providerSubscription: null,
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -79,6 +92,104 @@
     return payload;
   }
 
+  function currentToken() {
+    const session = getSession();
+    return session ? session.token : null;
+  }
+
+  function displayName(user) {
+    if (!user) return "Project Alpha user";
+    return user.fullName || user.companyName || "Project Alpha user";
+  }
+
+  function initialsFor(name) {
+    const parts = String(name || "PA")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2);
+    return (parts.map((part) => part[0]).join("") || "PA").toUpperCase();
+  }
+
+  function resolveAssetUrl(url) {
+    if (!url) return "";
+    if (/^(https?:|data:|blob:|file:)/i.test(url)) return url;
+    if (url.startsWith("/")) return url;
+    return `/${url}`;
+  }
+
+  function setAvatar(container, user, sizeLabel) {
+    if (!container) return;
+    const name = displayName(user);
+    const url = resolveAssetUrl(user && user.avatarUrl);
+    container.replaceChildren();
+    container.setAttribute("aria-label", name);
+    if (url) {
+      const img = document.createElement("img");
+      img.src = url;
+      img.alt = "";
+      img.loading = "lazy";
+      img.decoding = "async";
+      img.onerror = () => {
+        container.replaceChildren(initialsFor(name));
+      };
+      container.appendChild(img);
+    } else {
+      container.textContent = initialsFor(name);
+    }
+    if (sizeLabel) container.dataset.avatarSize = sizeLabel;
+  }
+
+  function createAvatar(user, className) {
+    const span = document.createElement("span");
+    span.className = className;
+    setAvatar(span, user);
+    return span;
+  }
+
+  function formatTime(value) {
+    if (!value) return "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    const now = new Date();
+    const sameDay = date.toDateString() === now.toDateString();
+    return date.toLocaleString(undefined, sameDay
+      ? { hour: "numeric", minute: "2-digit" }
+      : { month: "short", day: "numeric" });
+  }
+
+  function formatFullTime(value) {
+    if (!value) return "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    return date.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
+
+  function formatDate(value) {
+    if (!value) return "Not set";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "Not set";
+    return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  }
+
+  function daysUntil(value) {
+    if (!value) return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    return Math.max(0, Math.ceil((date.getTime() - Date.now()) / (24 * 60 * 60 * 1000)));
+  }
+
+  function messagePreview(message) {
+    if (!message) return "No messages yet";
+    if (message.imageUrl && !message.body) return "Photo";
+    return message.body || "Photo";
+  }
+
   function formValues(form) {
     return Object.fromEntries(new FormData(form).entries());
   }
@@ -120,13 +231,250 @@
         ? `You're signed in as ${name}${email ? ` (${email})` : ""}.`
         : "You're signed in to your service provider account.";
     }
+    startDmPolling();
+    void loadDmThreads({ preserveSelection: true });
+    void connectDmSocket();
+    fillProviderProfileForm(user || {});
+    void loadProviderSubscription();
   }
 
   function showAuth() {
+    stopDmPolling();
+    resetDmState();
     const hero = $(".portal-hero");
     if (hero) hero.hidden = false;
     $("#portal-auth").hidden = false;
     $("#portal-dashboard").hidden = true;
+  }
+
+  function switchProviderMode(mode) {
+    const selectedMode = isProviderAccessLocked() && mode === "workspace" ? "manage" : (mode === "workspace" ? "workspace" : "manage");
+    $$("[data-provider-mode]").forEach((button) => {
+      const active = button.dataset.providerMode === selectedMode;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-selected", active ? "true" : "false");
+    });
+    $$("[data-provider-mode-panel]").forEach((panel) => {
+      panel.hidden = panel.dataset.providerModePanel !== selectedMode;
+    });
+    if (isProviderAccessLocked()) switchManagePanel("subscription");
+  }
+
+  function switchManagePanel(panelName) {
+    const requestedPanel = panelName === "profile" || panelName === "subscription" ? panelName : "message";
+    const selectedPanel = isProviderAccessLocked() && requestedPanel !== "subscription" ? "subscription" : requestedPanel;
+    $$("[data-provider-manage-panel]").forEach((button) => {
+      button.classList.toggle("is-active", button.dataset.providerManagePanel === selectedPanel);
+    });
+    $$("[data-provider-manage-content]").forEach((panel) => {
+      panel.hidden = panel.dataset.providerManageContent !== selectedPanel;
+    });
+    if (selectedPanel === "message") {
+      void loadDmThreads({ preserveSelection: true });
+    } else if (selectedPanel === "profile") {
+      fillProviderProfileForm(state.currentUser || {});
+    } else if (selectedPanel === "subscription") {
+      void loadProviderSubscription({ quiet: true });
+    }
+  }
+
+  function isProviderAccessLocked() {
+    return !!state.providerSubscription && state.providerSubscription.providerAccessActive === false;
+  }
+
+  function applyProviderAccessLock() {
+    const locked = isProviderAccessLocked();
+    const shell = $(".provider-dashboard-shell");
+    if (shell) shell.classList.toggle("is-access-locked", locked);
+    $$("[data-provider-mode='workspace'], [data-provider-manage-panel='message'], [data-provider-manage-panel='profile']").forEach((button) => {
+      button.setAttribute("aria-disabled", locked ? "true" : "false");
+    });
+    if (locked) {
+      switchProviderMode("manage");
+      switchManagePanel("subscription");
+    }
+  }
+
+  function subscriptionMetaRow(label, value) {
+    const row = document.createElement("div");
+    row.className = "provider-subscription-row";
+    const left = document.createElement("span");
+    left.textContent = label;
+    const right = document.createElement("strong");
+    right.textContent = value;
+    row.append(left, right);
+    return row;
+  }
+
+  function setSubscriptionLoading() {
+    const badge = $("#provider-subscription-badge");
+    const meta = $("#provider-subscription-meta");
+    const actions = $("#provider-subscription-actions");
+    if (badge) {
+      badge.textContent = "Loading...";
+      badge.classList.remove("is-warning");
+    }
+    if (meta) meta.replaceChildren(subscriptionMetaRow("Status", "Checking account"));
+    if (actions) actions.replaceChildren();
+  }
+
+  async function loadProviderSubscription(options) {
+    const token = currentToken();
+    if (!token) return;
+    const opts = options || {};
+    if (!opts.quiet) setSubscriptionLoading();
+    try {
+      const data = await api("/subscription/provider-status", { method: "GET", token });
+      state.providerSubscription = data;
+      renderProviderSubscription();
+      applyProviderAccessLock();
+    } catch (error) {
+      const badge = $("#provider-subscription-badge");
+      const meta = $("#provider-subscription-meta");
+      if (badge) {
+        badge.textContent = "Could not load";
+        badge.classList.add("is-warning");
+      }
+      if (meta) meta.replaceChildren(subscriptionMetaRow("Error", getErrorMessage(error, "Subscription status is unavailable.")));
+      setStatus($("#provider-subscription-status"), getErrorMessage(error, "We couldn't load your subscription."), "error");
+    }
+  }
+
+  function renderProviderSubscription() {
+    const data = state.providerSubscription || {};
+    const badge = $("#provider-subscription-badge");
+    const meta = $("#provider-subscription-meta");
+    const actions = $("#provider-subscription-actions");
+    const note = $("#provider-subscription-note");
+    if (!badge || !meta || !actions) return;
+
+    badge.classList.toggle("is-warning", !data.providerAccessActive);
+    meta.replaceChildren();
+    actions.replaceChildren();
+    setStatus($("#provider-subscription-status"), "", null);
+
+    const kind = data.providerAccessKind || "none";
+    const trialDays = daysUntil(data.providerTrialEndsAt);
+
+    if (kind === "stripe" && data.providerAccessActive) {
+      badge.textContent = data.cancelAtPeriodEnd ? "Active until cancellation date" : "Stripe subscription active";
+      meta.append(
+        subscriptionMetaRow("Plan", "Provider Standard"),
+        subscriptionMetaRow("Status", data.subscriptionStatus || "active"),
+        subscriptionMetaRow(data.cancelAtPeriodEnd ? "Access ends" : "Renews", formatDate(data.subscriptionPeriodEndAt)),
+      );
+      const manage = document.createElement("button");
+      manage.type = "button";
+      manage.className = data.cancelAtPeriodEnd ? "button button-primary" : "button button-quiet";
+      manage.textContent = data.cancelAtPeriodEnd ? "Resume subscription" : "Cancel subscription";
+      manage.addEventListener("click", () => {
+        void changeProviderSubscription(data.cancelAtPeriodEnd ? "resume" : "cancel");
+      });
+      actions.appendChild(manage);
+      if (note) note.textContent = "Your provider access is active on the web portal and mobile app.";
+      return;
+    }
+
+    if (kind === "trial" && data.providerAccessActive) {
+      badge.textContent = "Trial active";
+      meta.append(
+        subscriptionMetaRow("Trial ends", formatDate(data.providerTrialEndsAt)),
+        subscriptionMetaRow("Days remaining", trialDays === null ? "14 days" : `${trialDays} day${trialDays === 1 ? "" : "s"}`),
+        subscriptionMetaRow("Mobile app access", "Active during trial"),
+      );
+      actions.appendChild(createProviderSubscribeButton("Subscribe with Stripe"));
+      if (note) note.textContent = "Your invitation-code trial unlocks all provider features for 14 days. Subscribe before it ends to keep access.";
+      return;
+    }
+
+    if (kind === "iap" && data.providerAccessActive) {
+      badge.textContent = "Mobile subscription active";
+      meta.append(
+        subscriptionMetaRow("Plan", "Provider Standard"),
+        subscriptionMetaRow("Access", "Active"),
+        subscriptionMetaRow("Period ends", formatDate(data.subscriptionPeriodEndAt)),
+      );
+      if (note) note.textContent = "Your mobile app subscription is active. Stripe controls are only shown for web subscriptions.";
+      return;
+    }
+
+    badge.textContent = kind === "expired_trial" ? "Trial ended" : "Subscription required";
+    meta.append(
+      subscriptionMetaRow("Access", "Paused"),
+      subscriptionMetaRow("Trial ended", data.providerTrialEndsAt ? formatDate(data.providerTrialEndsAt) : "No active trial"),
+      subscriptionMetaRow("Next step", "Subscribe through Stripe"),
+    );
+    actions.appendChild(createProviderSubscribeButton("Reactivate with Stripe"));
+    if (note) note.textContent = "Provider features are locked until this account is reactivated with Stripe.";
+  }
+
+  function createProviderSubscribeButton(label) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "button button-primary";
+    button.textContent = label;
+    button.addEventListener("click", () => {
+      void startProviderSubscriptionCheckout(button);
+    });
+    return button;
+  }
+
+  async function startProviderSubscriptionCheckout(button) {
+    const token = currentToken();
+    if (!token) return;
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = "Opening Stripe...";
+    setStatus($("#provider-subscription-status"), "", null);
+    try {
+      const data = await api("/subscription/provider-checkout", { method: "POST", token });
+      if (!data.checkoutUrl) throw new Error("Stripe checkout did not return a URL.");
+      window.location.href = data.checkoutUrl;
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = original;
+      setStatus($("#provider-subscription-status"), getErrorMessage(error, "Could not open Stripe checkout."), "error");
+    }
+  }
+
+  async function changeProviderSubscription(action) {
+    const token = currentToken();
+    if (!token) return;
+    setStatus($("#provider-subscription-status"), action === "cancel" ? "Cancelling at period end..." : "Resuming subscription...", null);
+    try {
+      await api(`/subscription/${action}`, { method: "POST", token });
+      await loadProviderSubscription({ quiet: true });
+      setStatus($("#provider-subscription-status"), action === "cancel" ? "Subscription will end at the period end." : "Subscription resumed.", "success");
+    } catch (error) {
+      setStatus($("#provider-subscription-status"), getErrorMessage(error, "Subscription could not be updated."), "error");
+    }
+  }
+
+  async function handleProviderSubscriptionReturn(sessionId) {
+    const session = getSession();
+    if (!session) {
+      window.history.replaceState({}, "", window.location.pathname);
+      return;
+    }
+    try {
+      setSubscriptionLoading();
+      await api("/subscription/provider-checkout/claim", {
+        method: "POST",
+        token: session.token,
+        body: { checkoutSessionId: sessionId },
+      });
+      const me = await api("/auth/me", { method: "GET", token: session.token });
+      saveSession(session.token, me.user);
+      showDashboard(me.user);
+      switchManagePanel("subscription");
+      setStatus($("#provider-subscription-status"), "Subscription active. Your provider access is restored.", "success");
+    } catch (error) {
+      showDashboard(session.user || {});
+      switchManagePanel("subscription");
+      setStatus($("#provider-subscription-status"), getErrorMessage(error, "We could not confirm the Stripe subscription yet."), "error");
+    } finally {
+      window.history.replaceState({}, "", window.location.pathname);
+    }
   }
 
   function switchTab(target) {
@@ -140,6 +488,740 @@
       panel.classList.toggle("is-active", active);
       panel.hidden = !active;
     });
+  }
+
+  function resetDmState() {
+    state.dmThreads = [];
+    state.dmMessages = [];
+    state.dmSelectedThreadId = null;
+    state.dmSelectedProfile = null;
+    state.dmNextCursor = null;
+    state.dmLoading = false;
+    state.dmSending = false;
+    state.dmRevealedPhoneUserId = null;
+    disconnectDmSocket();
+    renderDmThreads();
+    renderSelectedDmThread();
+  }
+
+  function stopDmPolling() {
+    if (state.dmPollTimer) {
+      window.clearInterval(state.dmPollTimer);
+      state.dmPollTimer = null;
+    }
+  }
+
+  function startDmPolling() {
+    stopDmPolling();
+    if (state.dmSocketConnected) return;
+    state.dmPollTimer = window.setInterval(() => {
+      const dashboard = $("#portal-dashboard");
+      const messagePanel = $('[data-provider-manage-content="message"]');
+      if (!dashboard || dashboard.hidden || !messagePanel || messagePanel.hidden) return;
+      void refreshDmInbox();
+    }, 10000);
+  }
+
+  function selectedDmThread() {
+    return state.dmThreads.find((thread) => thread.id === state.dmSelectedThreadId) || null;
+  }
+
+  function isDmBlocked(thread) {
+    return !!(thread && thread.blockStatus && thread.blockStatus.messagingBlocked);
+  }
+
+  async function refreshDmInbox() {
+    await loadDmThreads({ preserveSelection: true, quiet: true });
+  }
+
+  function ensureSocketClient() {
+    if (window.io) return Promise.resolve(window.io);
+    if (state.dmSocketScriptPromise) return state.dmSocketScriptPromise;
+    state.dmSocketScriptPromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = `${API_BASE}/socket.io/socket.io.js`;
+      script.async = true;
+      script.onload = () => window.io ? resolve(window.io) : reject(new Error("Socket client unavailable"));
+      script.onerror = () => reject(new Error("Socket client unavailable"));
+      document.head.appendChild(script);
+    });
+    return state.dmSocketScriptPromise;
+  }
+
+  async function connectDmSocket() {
+    const token = currentToken();
+    if (!token || state.dmSocket) return;
+    try {
+      const io = await ensureSocketClient();
+      const socket = io(window.location.origin, {
+        path: `${API_BASE}/socket.io`,
+        auth: { token },
+        transports: ["websocket", "polling"],
+        reconnection: true,
+        reconnectionDelay: 2000,
+      });
+      state.dmSocket = socket;
+      socket.on("connect", () => {
+        state.dmSocketConnected = true;
+        stopDmPolling();
+        void refreshDmInbox();
+      });
+      socket.on("connect_error", () => {
+        state.dmSocketConnected = false;
+        startDmPolling();
+      });
+      socket.on("disconnect", () => {
+        state.dmSocketConnected = false;
+        startDmPolling();
+      });
+      socket.on("new_message", ({ threadId, message }) => {
+        handleIncomingDmMessage(threadId, message);
+      });
+    } catch {
+      state.dmSocketConnected = false;
+      startDmPolling();
+    }
+  }
+
+  function disconnectDmSocket() {
+    if (state.dmSocket) {
+      state.dmSocket.disconnect();
+      state.dmSocket = null;
+    }
+    state.dmSocketConnected = false;
+  }
+
+  function hasDmMessage(messageId) {
+    return !!messageId && state.dmMessages.some((message) => message.id === messageId);
+  }
+
+  function handleIncomingDmMessage(threadId, message) {
+    if (!threadId || !message) return;
+    const isMine = state.currentUser && message.senderId === state.currentUser.id;
+    let threadFound = false;
+    state.dmThreads = state.dmThreads.map((thread) => {
+      if (thread.id !== threadId) return thread;
+      threadFound = true;
+      const isActive = thread.id === state.dmSelectedThreadId;
+      return {
+        ...thread,
+        lastMessage: message,
+        lastMessageAt: message.createdAt || new Date().toISOString(),
+        unreadCount: isMine || isActive ? 0 : (thread.unreadCount || 0) + 1,
+      };
+    });
+    if (!threadFound) {
+      void loadDmThreads({ preserveSelection: true, quiet: true });
+      return;
+    }
+    if (threadId === state.dmSelectedThreadId && !isMine && !hasDmMessage(message.id)) {
+      state.dmMessages = [...state.dmMessages, message];
+      renderSelectedDmThread();
+      void markDmThreadRead(threadId);
+    }
+    renderDmThreads();
+  }
+
+  async function loadDmThreads(options) {
+    const token = currentToken();
+    if (!token) return;
+    const opts = options || {};
+    const list = $("#provider-thread-list");
+    if (!opts.quiet && list) {
+      list.replaceChildren();
+      const loading = document.createElement("div");
+      loading.className = "provider-thread-empty";
+      loading.textContent = "Loading conversations...";
+      list.appendChild(loading);
+    }
+    try {
+      const data = await api("/dm/threads", { method: "GET", token });
+      const threads = Array.isArray(data.threads) ? data.threads : [];
+      state.dmThreads = threads.filter((thread) => thread.otherParticipant && thread.otherParticipant.role === "general");
+      if (!opts.preserveSelection || !state.dmThreads.some((thread) => thread.id === state.dmSelectedThreadId)) {
+        state.dmSelectedThreadId = state.dmThreads[0] ? state.dmThreads[0].id : null;
+      }
+      renderDmThreads();
+      if (state.dmSelectedThreadId) {
+        await loadDmMessages(state.dmSelectedThreadId, { quiet: opts.quiet });
+      } else {
+        state.dmMessages = [];
+        state.dmSelectedProfile = null;
+        state.dmNextCursor = null;
+        renderSelectedDmThread();
+      }
+    } catch (error) {
+      renderDmThreadError(getErrorMessage(error, "We couldn't load conversations. Please try again."));
+    }
+  }
+
+  function renderDmThreadError(message) {
+    const list = $("#provider-thread-list");
+    if (!list) return;
+    list.replaceChildren();
+    const empty = document.createElement("div");
+    empty.className = "provider-thread-empty";
+    const strong = document.createElement("strong");
+    strong.textContent = message;
+    const retry = document.createElement("button");
+    retry.className = "button button-quiet";
+    retry.type = "button";
+    retry.textContent = "Retry";
+    retry.addEventListener("click", () => {
+      void loadDmThreads({ preserveSelection: true });
+    });
+    empty.append(strong, document.createElement("br"), retry);
+    list.appendChild(empty);
+  }
+
+  function renderDmThreads() {
+    const list = $("#provider-thread-list");
+    if (!list) return;
+    const query = String($("#provider-thread-search")?.value || "").trim().toLowerCase();
+    const filtered = state.dmThreads.filter((thread) => {
+      const name = displayName(thread.otherParticipant).toLowerCase();
+      const preview = messagePreview(thread.lastMessage).toLowerCase();
+      return !query || name.includes(query) || preview.includes(query);
+    });
+    list.replaceChildren();
+    if (filtered.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "provider-thread-empty";
+      empty.textContent = state.dmThreads.length
+        ? "No contacts match that search."
+        : "No general users have messaged you yet.";
+      list.appendChild(empty);
+      return;
+    }
+    filtered.forEach((thread) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "provider-thread-item";
+      if (thread.id === state.dmSelectedThreadId) button.classList.add("is-active");
+      button.dataset.threadId = thread.id;
+
+      const other = thread.otherParticipant;
+      const avatar = createAvatar(other, "provider-thread-avatar");
+      const body = document.createElement("span");
+      const nameRow = document.createElement("span");
+      nameRow.className = "provider-thread-name";
+      const name = document.createElement("strong");
+      name.textContent = displayName(other);
+      nameRow.appendChild(name);
+      if (thread.unreadCount) {
+        const badge = document.createElement("span");
+        badge.className = "provider-thread-badge";
+        badge.textContent = String(Math.min(thread.unreadCount, 99));
+        nameRow.appendChild(badge);
+      }
+      const preview = document.createElement("span");
+      preview.className = "provider-thread-preview";
+      preview.textContent = messagePreview(thread.lastMessage);
+      body.append(nameRow, preview);
+
+      const time = document.createElement("span");
+      time.className = "provider-thread-time";
+      time.textContent = formatTime(thread.lastMessageAt || thread.lastMessage?.createdAt || thread.createdAt);
+
+      button.append(avatar, body, time);
+      button.addEventListener("click", () => {
+        void selectDmThread(thread.id);
+      });
+      list.appendChild(button);
+    });
+  }
+
+  async function selectDmThread(threadId) {
+    if (!threadId || state.dmSelectedThreadId === threadId) return;
+    state.dmSelectedThreadId = threadId;
+    state.dmMessages = [];
+    state.dmSelectedProfile = null;
+    state.dmNextCursor = null;
+    state.dmRevealedPhoneUserId = null;
+    renderDmThreads();
+    renderSelectedDmThread();
+    await loadDmMessages(threadId);
+  }
+
+  async function loadDmMessages(threadId, options) {
+    const token = currentToken();
+    if (!token || !threadId) return;
+    const opts = options || {};
+    if (!opts.quiet) {
+      state.dmLoading = true;
+      renderSelectedDmThread();
+    }
+    try {
+      const data = await api(`/dm/threads/${encodeURIComponent(threadId)}/messages`, { method: "GET", token });
+      state.dmMessages = Array.isArray(data.messages) ? data.messages.slice().reverse() : [];
+      state.dmNextCursor = data.nextCursor || null;
+      const thread = selectedDmThread();
+      if (thread && data.blockStatus) thread.blockStatus = data.blockStatus;
+      await markDmThreadRead(threadId);
+      await loadSelectedDmProfile();
+      state.dmLoading = false;
+      renderSelectedDmThread();
+      renderDmThreads();
+    } catch (error) {
+      state.dmLoading = false;
+      renderDmMessageError(getErrorMessage(error, "We couldn't load this conversation. Please try again."));
+    }
+  }
+
+  async function loadOlderDmMessages() {
+    const token = currentToken();
+    const threadId = state.dmSelectedThreadId;
+    if (!token || !threadId || !state.dmNextCursor) return;
+    const cursor = state.dmNextCursor;
+    try {
+      const data = await api(`/dm/threads/${encodeURIComponent(threadId)}/messages?cursor=${encodeURIComponent(cursor)}`, {
+        method: "GET",
+        token,
+      });
+      const older = Array.isArray(data.messages) ? data.messages.slice().reverse() : [];
+      state.dmMessages = [...older, ...state.dmMessages];
+      state.dmNextCursor = data.nextCursor || null;
+      renderSelectedDmThread({ preserveScroll: true });
+    } catch (error) {
+      setStatus($("#provider-message-status"), getErrorMessage(error, "Older messages could not be loaded."), "error");
+    }
+  }
+
+  async function markDmThreadRead(threadId) {
+    const token = currentToken();
+    if (!token || !threadId) return;
+    try {
+      await api(`/dm/threads/${encodeURIComponent(threadId)}/read`, { method: "PATCH", token });
+      state.dmThreads = state.dmThreads.map((thread) =>
+        thread.id === threadId ? { ...thread, unreadCount: 0 } : thread,
+      );
+    } catch {
+      // Read receipts are best-effort; the inbox still works if this call fails.
+    }
+  }
+
+  async function loadSelectedDmProfile() {
+    const token = currentToken();
+    const thread = selectedDmThread();
+    const userId = thread && thread.otherParticipant && thread.otherParticipant.id;
+    if (!token || !userId) {
+      state.dmSelectedProfile = null;
+      return;
+    }
+    try {
+      state.dmSelectedProfile = await api(`/users/${encodeURIComponent(userId)}`, { method: "GET", token });
+    } catch {
+      state.dmSelectedProfile = null;
+    }
+  }
+
+  function renderDmMessageError(message) {
+    const list = $("#provider-message-list");
+    if (!list) return;
+    list.replaceChildren();
+    const empty = document.createElement("div");
+    empty.className = "provider-message-empty";
+    const inner = document.createElement("div");
+    const strong = document.createElement("strong");
+    strong.textContent = message;
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "button button-quiet";
+    retry.textContent = "Retry";
+    retry.addEventListener("click", () => {
+      if (state.dmSelectedThreadId) void loadDmMessages(state.dmSelectedThreadId);
+    });
+    inner.append(strong, retry);
+    empty.appendChild(inner);
+    list.appendChild(empty);
+  }
+
+  function renderSelectedDmThread(options) {
+    const thread = selectedDmThread();
+    const shell = $("#provider-message-shell");
+    const list = $("#provider-message-list");
+    const activeName = $("#provider-active-name");
+    const activeSubtitle = $("#provider-active-subtitle");
+    const activeAvatar = $("#provider-active-avatar");
+    const input = $("#provider-message-input");
+    const send = $("#provider-message-send");
+    const attach = $("#provider-message-attach");
+    const blocked = $("#provider-message-blocked");
+    const callLink = $("#provider-call-link");
+    if (!list) return;
+
+    if (shell) shell.classList.toggle("has-active-thread", !!thread);
+
+    if (!thread) {
+      if (activeName) activeName.textContent = "Select a conversation";
+      if (activeSubtitle) activeSubtitle.textContent = "Choose a general user from the contact list.";
+      setAvatar(activeAvatar, { fullName: "Project Alpha" });
+      list.replaceChildren();
+      const empty = document.createElement("div");
+      empty.className = "provider-message-empty";
+      const inner = document.createElement("div");
+      const strong = document.createElement("strong");
+      strong.textContent = "No conversation selected.";
+      const copy = document.createElement("p");
+      copy.textContent = "Select a contact on the right to view and reply to messages from Project Alpha users.";
+      inner.append(strong, copy);
+      empty.appendChild(inner);
+      list.appendChild(empty);
+      renderSelectedDmProfile();
+      if (input) input.disabled = true;
+      if (send) send.disabled = true;
+      if (attach) attach.disabled = true;
+      if (blocked) blocked.classList.remove("is-visible");
+      if (callLink) callLink.hidden = true;
+      return;
+    }
+
+    const other = thread.otherParticipant || {};
+    const name = displayName(other);
+    if (activeName) activeName.textContent = name;
+    if (activeSubtitle) {
+      const rec = Number(state.dmSelectedProfile?.recommendationCount ?? other.recommendationCount ?? 0);
+      activeSubtitle.textContent = rec > 0 ? `General user · ${rec} recommendations` : "General user";
+    }
+    setAvatar(activeAvatar, other);
+
+    const contactNumber = state.dmSelectedProfile?.roleData?.contactNumber;
+    const phoneRevealed = !!contactNumber && state.dmRevealedPhoneUserId === other.id;
+    if (callLink) {
+      if (contactNumber) {
+        callLink.title = phoneRevealed ? `Phone: ${contactNumber}` : "Reveal phone number";
+        callLink.textContent = phoneRevealed ? "123" : "☎";
+        callLink.hidden = false;
+      } else {
+        callLink.hidden = true;
+      }
+    }
+
+    const blockedNow = isDmBlocked(thread);
+    if (blocked) {
+      blocked.textContent = thread.blockStatus?.iBlockedThem
+        ? "You blocked this user. Unblock them before sending messages."
+        : "Messaging is currently unavailable with this user.";
+      blocked.classList.toggle("is-visible", blockedNow);
+    }
+    if (input) input.disabled = blockedNow || state.dmSending || state.dmLoading;
+    if (attach) attach.disabled = blockedNow || state.dmSending || state.dmLoading;
+    updateDmSendState();
+
+    list.replaceChildren();
+    if (state.dmLoading) {
+      const loading = document.createElement("div");
+      loading.className = "provider-message-empty";
+      loading.textContent = "Loading conversation...";
+      list.appendChild(loading);
+      renderSelectedDmProfile();
+      return;
+    }
+
+    if (state.dmNextCursor) {
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "provider-message-load-more";
+      more.textContent = "Load earlier messages";
+      more.addEventListener("click", () => {
+        void loadOlderDmMessages();
+      });
+      list.appendChild(more);
+    }
+
+    if (state.dmMessages.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "provider-message-empty";
+      empty.textContent = "No messages in this conversation yet.";
+      list.appendChild(empty);
+    } else {
+      state.dmMessages.forEach((message) => {
+        list.appendChild(createDmMessageBubble(message));
+      });
+    }
+    renderSelectedDmProfile();
+    if (!options || !options.preserveScroll) {
+      requestAnimationFrame(() => {
+        list.scrollTop = list.scrollHeight;
+      });
+    }
+  }
+
+  function createDmMessageBubble(message) {
+    const row = document.createElement("div");
+    row.className = "provider-message-bubble-row";
+    if (message.senderId && state.currentUser && message.senderId === state.currentUser.id) row.classList.add("is-mine");
+    const bubble = document.createElement("div");
+    bubble.className = "provider-message-bubble";
+    if (message.imageUrl) {
+      const img = document.createElement("img");
+      img.src = resolveAssetUrl(message.imageUrl);
+      img.alt = "Shared image";
+      img.loading = "lazy";
+      img.decoding = "async";
+      bubble.appendChild(img);
+    }
+    if (message.body) {
+      const text = document.createElement("p");
+      text.textContent = message.body;
+      bubble.appendChild(text);
+    }
+    const time = document.createElement("span");
+    time.className = "provider-message-time";
+    time.textContent = formatFullTime(message.createdAt);
+    bubble.appendChild(time);
+    row.appendChild(bubble);
+    return row;
+  }
+
+  function renderSelectedDmProfile() {
+    const card = $("#provider-profile-card");
+    const thread = selectedDmThread();
+    if (!card || !thread) {
+      if (card) {
+        card.classList.remove("is-visible");
+        card.replaceChildren();
+      }
+      return;
+    }
+    const other = state.dmSelectedProfile || thread.otherParticipant || {};
+    const name = displayName(other);
+    const contactNumber = other.roleData && other.roleData.contactNumber;
+    const phoneRevealed = !!contactNumber && state.dmRevealedPhoneUserId === other.id;
+    card.replaceChildren();
+    card.classList.add("is-visible");
+
+    const top = document.createElement("div");
+    top.className = "provider-profile-top";
+    top.appendChild(createAvatar(other, "provider-profile-avatar"));
+    const text = document.createElement("div");
+    const strong = document.createElement("strong");
+    strong.textContent = name;
+    const role = document.createElement("span");
+    const rec = Number(other.recommendationCount ?? thread.otherParticipant?.recommendationCount ?? 0);
+    role.textContent = rec > 0 ? `General user · ${rec} recommendations` : "General user";
+    text.append(strong, role);
+    top.appendChild(text);
+
+    const meta = document.createElement("div");
+    meta.className = "provider-profile-meta";
+    meta.textContent = contactNumber
+      ? phoneRevealed
+        ? `Phone number: ${contactNumber}`
+        : "Phone number is available. Reveal it when you are ready to call from your mobile."
+      : "Phone number is hidden unless this user has shared it through an active DM relationship.";
+
+    const actions = document.createElement("div");
+    actions.className = "provider-profile-actions";
+    if (contactNumber) {
+      const call = document.createElement("button");
+      call.className = "button button-primary";
+      call.type = "button";
+      call.textContent = phoneRevealed ? "Hide phone" : "Reveal phone";
+      call.addEventListener("click", revealSelectedPhone);
+      actions.appendChild(call);
+    }
+    const block = document.createElement("button");
+    block.type = "button";
+    block.className = "button button-quiet";
+    block.textContent = thread.blockStatus?.iBlockedThem ? "Unblock" : "Block";
+    block.addEventListener("click", () => {
+      void toggleDmBlock();
+    });
+    const report = document.createElement("button");
+    report.type = "button";
+    report.className = "button button-quiet";
+    report.textContent = "Report";
+    report.addEventListener("click", () => {
+      void reportDmUser();
+    });
+    actions.append(block, report);
+
+    card.append(top, meta, actions);
+  }
+
+  function updateDmSendState() {
+    const input = $("#provider-message-input");
+    const send = $("#provider-message-send");
+    const attach = $("#provider-message-attach");
+    const thread = selectedDmThread();
+    const disabled = !thread || state.dmSending || state.dmLoading || isDmBlocked(thread);
+    if (input) input.disabled = disabled;
+    if (attach) attach.disabled = disabled;
+    if (!send) return;
+    const hasText = !!(input && input.value.trim());
+    send.disabled = disabled || !hasText;
+  }
+
+  function revealSelectedPhone() {
+    const thread = selectedDmThread();
+    const userId = thread?.otherParticipant?.id;
+    const contactNumber = state.dmSelectedProfile?.roleData?.contactNumber;
+    if (!userId || !contactNumber) return;
+    state.dmRevealedPhoneUserId = state.dmRevealedPhoneUserId === userId ? null : userId;
+    renderSelectedDmThread({ preserveScroll: true });
+    if (state.dmRevealedPhoneUserId === userId) {
+      setStatus($("#provider-message-status"), `Phone number: ${contactNumber}`, "success");
+    } else {
+      setStatus($("#provider-message-status"), "", null);
+    }
+  }
+
+  async function uploadDmImage(file, token) {
+    try {
+      const signed = await api("/upload/dm-image/request-url", {
+        method: "POST",
+        token,
+        body: {
+          name: file.name || "message-photo",
+          size: file.size,
+          contentType: file.type || "application/octet-stream",
+        },
+      });
+      const uploadResp = await fetch(signed.uploadURL, {
+        method: "PUT",
+        headers: signed.requiredHeaders || { "Content-Type": file.type || "application/octet-stream" },
+        body: file,
+      });
+      if (!uploadResp.ok) throw new Error("Upload failed. Please try again.");
+      const completed = await api("/upload/dm-image/complete", {
+        method: "POST",
+        token,
+        body: { objectPath: signed.objectPath },
+      });
+      return completed.fileUrl;
+    } catch (error) {
+      if (error && error.code !== "LOCAL_MODE") throw error;
+      const uploaded = await uploadFile("/upload/dm-image", token, file);
+      return uploaded.fileUrl;
+    }
+  }
+
+  async function sendDmMessage(event) {
+    event.preventDefault();
+    const token = currentToken();
+    const thread = selectedDmThread();
+    const input = $("#provider-message-input");
+    const body = input ? input.value.trim() : "";
+    if (!token || !thread || !body || isDmBlocked(thread)) return;
+    updateDmSendState();
+    setStatus($("#provider-message-status"), "", null);
+    try {
+      const optimistic = {
+        id: `local-${Date.now()}`,
+        threadId: thread.id,
+        senderId: state.currentUser?.id,
+        body,
+        imageUrl: null,
+        readAt: null,
+        createdAt: new Date().toISOString(),
+      };
+      state.dmMessages = [...state.dmMessages, optimistic];
+      if (input) input.value = "";
+      renderSelectedDmThread();
+      const data = await api(`/dm/threads/${encodeURIComponent(thread.id)}/messages`, {
+        method: "POST",
+        token,
+        body: { body },
+      });
+      state.dmMessages = state.dmMessages.map((message) => message.id === optimistic.id ? data.message : message);
+      setStatus($("#provider-message-status"), "", null);
+      await loadDmThreads({ preserveSelection: true, quiet: true });
+    } catch (error) {
+      setStatus($("#provider-message-status"), getErrorMessage(error, "We couldn't send that message."), "error");
+      await loadDmMessages(thread.id, { quiet: true });
+    } finally {
+      updateDmSendState();
+    }
+  }
+
+  async function sendDmPhoto(file) {
+    const token = currentToken();
+    const thread = selectedDmThread();
+    if (!token || !thread || !file || isDmBlocked(thread)) return;
+    if (!/^image\//i.test(file.type || "")) {
+      setStatus($("#provider-message-status"), "Choose an image file to send.", "error");
+      return;
+    }
+    state.dmSending = true;
+    updateDmSendState();
+    setStatus($("#provider-message-status"), "Uploading photo...", null);
+    let localUrl = "";
+    try {
+      localUrl = URL.createObjectURL(file);
+      const optimistic = {
+        id: `local-${Date.now()}`,
+        threadId: thread.id,
+        senderId: state.currentUser?.id,
+        body: null,
+        imageUrl: localUrl,
+        readAt: null,
+        createdAt: new Date().toISOString(),
+      };
+      state.dmMessages = [...state.dmMessages, optimistic];
+      renderSelectedDmThread();
+      const imageUrl = await uploadDmImage(file, token);
+      setStatus($("#provider-message-status"), "Sending photo...", null);
+      const data = await api(`/dm/threads/${encodeURIComponent(thread.id)}/messages`, {
+        method: "POST",
+        token,
+        body: { imageUrl },
+      });
+      URL.revokeObjectURL(localUrl);
+      localUrl = "";
+      state.dmMessages = state.dmMessages.map((message) => message.id === optimistic.id ? data.message : message);
+      setStatus($("#provider-message-status"), "", null);
+      await loadDmThreads({ preserveSelection: true, quiet: true });
+    } catch (error) {
+      setStatus($("#provider-message-status"), getErrorMessage(error, "We couldn't send that photo."), "error");
+      await loadDmMessages(thread.id, { quiet: true });
+    } finally {
+      if (localUrl) URL.revokeObjectURL(localUrl);
+      state.dmSending = false;
+      updateDmSendState();
+    }
+  }
+
+  async function toggleDmBlock() {
+    const token = currentToken();
+    const thread = selectedDmThread();
+    const userId = thread?.otherParticipant?.id;
+    if (!token || !thread || !userId) return;
+    const shouldUnblock = !!thread.blockStatus?.iBlockedThem;
+    try {
+      if (shouldUnblock) {
+        await api(`/dm/block/${encodeURIComponent(userId)}`, { method: "DELETE", token });
+      } else {
+        await api("/dm/block", { method: "POST", token, body: { blockedUserId: userId } });
+      }
+      await loadDmThreads({ preserveSelection: true, quiet: true });
+      await loadDmMessages(thread.id, { quiet: true });
+    } catch (error) {
+      setStatus($("#provider-message-status"), getErrorMessage(error, "We couldn't update blocking."), "error");
+    }
+  }
+
+  async function reportDmUser() {
+    const token = currentToken();
+    const thread = selectedDmThread();
+    const userId = thread?.otherParticipant?.id;
+    if (!token || !thread || !userId) return;
+    const comment = window.prompt("Briefly describe the issue with this conversation.");
+    if (!comment) return;
+    try {
+      await api("/dm/report", {
+        method: "POST",
+        token,
+        body: {
+          reportedUserId: userId,
+          threadId: thread.id,
+          comment,
+        },
+      });
+      setStatus($("#provider-message-status"), "Report sent. Thank you.", "success");
+    } catch (error) {
+      setStatus($("#provider-message-status"), getErrorMessage(error, "We couldn't send the report."), "error");
+    }
   }
 
   // ── Phone OTP (shared backend with the sales portal) ─────────────────────
@@ -278,6 +1360,111 @@
 
   async function uploadProfilePicture(token, file) {
     return uploadFile("/upload/profile-picture", token, file);
+  }
+
+  function setProviderProfileDiscipline(discipline, otherDiscipline) {
+    const select = $("#profile-discipline-select");
+    const field = $("#profile-discipline-other-field");
+    if (!select || !field) return;
+    const input = field.querySelector("input");
+    select.value = discipline || "";
+    const showOther = select.value === "other";
+    field.hidden = !showOther;
+    if (input) {
+      input.required = showOther;
+      input.value = showOther ? (otherDiscipline || "") : "";
+    }
+  }
+
+  function fillProviderProfileForm(user) {
+    const form = $("#provider-profile-form");
+    if (!form) return;
+    form.elements.fullName.value = user.fullName || "";
+    form.elements.phone.value = user.phoneNumber || "";
+    form.elements.primaryLanguage.value = user.primaryLanguage || (user.languages && user.languages[0]) || "";
+    form.elements.secondaryLanguage.value = user.secondaryLanguage || (user.languages && user.languages[1]) || "";
+    form.elements.companyName.value = user.companyName || "";
+    form.elements.nzCompanyRegisterNumber.value = user.nzCompanyRegisterNumber || "";
+    setProviderProfileDiscipline(user.discipline || "", user.otherDiscipline || "");
+    form.elements.contactNumber.value = user.contactNumber || user.phoneNumber || "";
+    form.elements.bio.value = user.bio || "";
+    form.elements.addressStreet.value = user.addressStreet || "";
+    form.elements.addressSuburb.value = user.addressSuburb || "";
+    form.elements.addressCity.value = user.addressCity || "";
+    form.elements.addressPostcode.value = user.addressPostcode || "";
+    if (form.elements.profilePicture) form.elements.profilePicture.value = "";
+  }
+
+  async function handleProviderProfileSave(event) {
+    event.preventDefault();
+    const session = getSession();
+    const status = $("#provider-profile-status");
+    if (!session) {
+      showAuth();
+      return;
+    }
+    const form = event.currentTarget;
+    const values = formValues(form);
+    const phoneNumber = normalizeNzPhone(values.phone);
+    const contactNumber = normalizeNzPhone(values.contactNumber || values.phone);
+    if (!/^\+64\d{7,10}$/.test(phoneNumber)) {
+      setStatus(status, "Enter a valid New Zealand mobile number starting with +64.", "error");
+      return;
+    }
+    if (contactNumber && !/^\+64\d{7,10}$/.test(contactNumber)) {
+      setStatus(status, "Enter a valid New Zealand contact number starting with +64.", "error");
+      return;
+    }
+    const discipline = String(values.discipline || "").trim();
+    const otherDiscipline = String(values.otherDiscipline || "").trim();
+    if (discipline === "other" && !otherDiscipline) {
+      setStatus(status, "Please describe your discipline.", "error");
+      return;
+    }
+    const payload = {
+      fullName: String(values.fullName || "").trim(),
+      phoneNumber,
+      primaryLanguage: String(values.primaryLanguage || "").trim(),
+      secondaryLanguage: String(values.secondaryLanguage || "").trim(),
+      companyName: String(values.companyName || "").trim(),
+      nzCompanyRegisterNumber: String(values.nzCompanyRegisterNumber || "").trim(),
+      discipline,
+      otherDiscipline,
+      contactNumber: contactNumber || phoneNumber,
+      bio: String(values.bio || "").trim(),
+      addressStreet: String(values.addressStreet || "").trim(),
+      addressSuburb: String(values.addressSuburb || "").trim(),
+      addressCity: String(values.addressCity || "").trim(),
+      addressPostcode: String(values.addressPostcode || "").trim(),
+    };
+    if (!payload.fullName || !payload.primaryLanguage || !payload.companyName || !payload.nzCompanyRegisterNumber || !payload.discipline) {
+      setStatus(status, "Complete the required profile fields before saving.", "error");
+      return;
+    }
+
+    setStatus(status, "Saving your profile...", null);
+    try {
+      const data = await api("/auth/service-provider-web-profile", {
+        method: "PATCH",
+        token: session.token,
+        body: payload,
+      });
+      let user = data.user;
+      const picture = selectedProfilePicture(form);
+      if (picture) {
+        setStatus(status, "Profile saved. Updating your photo...", null);
+        const uploaded = await uploadProfilePicture(session.token, picture);
+        user = { ...user, avatarUrl: uploaded.fileUrl };
+      }
+      saveSession(session.token, user);
+      fillProviderProfileForm(user);
+      showDashboard(user);
+      switchProviderMode("manage");
+      switchManagePanel("profile");
+      setStatus(status, "Your provider profile has been saved.", "success");
+    } catch (error) {
+      setStatus(status, getErrorMessage(error, "We couldn't save your profile. Please try again."), "error");
+    }
   }
 
   async function handleSignup(event) {
@@ -641,8 +1828,12 @@
         if (!showOther) input.value = "";
       }
     });
+    $("#profile-discipline-select")?.addEventListener("change", (event) => {
+      setProviderProfileDiscipline(event.currentTarget.value, $("#profile-discipline-other-field input")?.value || "");
+    });
 
     $("#provider-login-form").addEventListener("submit", handleLogin);
+    $("#provider-profile-form")?.addEventListener("submit", handleProviderProfileSave);
     $$("[data-reset-open]").forEach((button) => button.addEventListener("click", openReset));
     $$("[data-reset-close]").forEach((button) => button.addEventListener("click", closeReset));
     $("#request-reset-button").addEventListener("click", () => requestReset(false));
@@ -652,6 +1843,56 @@
     $("#signout-button").addEventListener("click", () => {
       clearSession();
       showAuth();
+    });
+    $$("[data-provider-mode]").forEach((button) => {
+      button.addEventListener("click", () => switchProviderMode(button.dataset.providerMode));
+    });
+    $$("[data-provider-manage-panel]").forEach((button) => {
+      button.addEventListener("click", () => switchManagePanel(button.dataset.providerManagePanel));
+    });
+    const messageForm = $("#provider-message-form");
+    if (messageForm) messageForm.addEventListener("submit", sendDmMessage);
+    const messageInput = $("#provider-message-input");
+    if (messageInput) {
+      messageInput.addEventListener("input", updateDmSendState);
+      messageInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          if (!$("#provider-message-send")?.disabled) {
+            messageForm?.requestSubmit();
+          }
+        }
+      });
+    }
+    const attachButton = $("#provider-message-attach");
+    const photoInput = $("#provider-message-photo");
+    if (attachButton && photoInput) {
+      attachButton.addEventListener("click", () => photoInput.click());
+      photoInput.addEventListener("change", () => {
+        const file = photoInput.files && photoInput.files[0];
+        photoInput.value = "";
+        if (file) void sendDmPhoto(file);
+      });
+    }
+    $("#provider-thread-search")?.addEventListener("input", renderDmThreads);
+    $("#provider-refresh-messages")?.addEventListener("click", () => {
+      void refreshDmInbox();
+    });
+    $("#provider-call-link")?.addEventListener("click", revealSelectedPhone);
+    $("#provider-message-back")?.addEventListener("click", () => {
+      state.dmSelectedThreadId = null;
+      state.dmMessages = [];
+      state.dmSelectedProfile = null;
+      state.dmNextCursor = null;
+      state.dmRevealedPhoneUserId = null;
+      renderDmThreads();
+      renderSelectedDmThread();
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") void refreshDmInbox();
+    });
+    window.addEventListener("focus", () => {
+      void refreshDmInbox();
     });
 
     $$("[data-consent-close]").forEach((button) => button.addEventListener("click", closeConsentModal));
@@ -682,12 +1923,18 @@
     // Handle return from Stripe Checkout.
     const params = new URLSearchParams(window.location.search);
     const stripeSignupStatus = params.get("providerSignup");
+    const stripeSubscriptionStatus = params.get("providerSubscription");
     const stripeSessionId = params.get("session_id");
     let handlingStripeReturn = false;
     if (stripeSignupStatus === "success" && stripeSessionId) {
       handlingStripeReturn = true;
       void handleStripeReturn(stripeSessionId);
+    } else if (stripeSubscriptionStatus === "success" && stripeSessionId) {
+      handlingStripeReturn = true;
+      void handleProviderSubscriptionReturn(stripeSessionId);
     } else if (stripeSignupStatus === "cancelled") {
+      window.history.replaceState({}, "", window.location.pathname);
+    } else if (stripeSubscriptionStatus === "cancelled") {
       window.history.replaceState({}, "", window.location.pathname);
     }
 

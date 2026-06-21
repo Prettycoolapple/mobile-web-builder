@@ -195,6 +195,34 @@ function isDiscoveryNextError(value: unknown): value is DiscoveryNextError {
   return Boolean(value) && typeof (value as DiscoveryNextError).error === "string";
 }
 
+// Build the deterministic "Show the N cross-lease" opt-in chip from a discover
+// payload's structured tenureOffer, or null when there's nothing set aside. The
+// chip reuses the discovery_exhausted_choice rendering + onDiscoveryChoice path.
+function buildTenureOfferChipMessage(
+  parsed: {
+    suburb?: string;
+    tenureOffer?: { suburb?: string; entries?: Array<{ tenure: "cross_lease" | "leasehold" | "unit_title"; count: number }> };
+  },
+  searchPresentation: ChatMessage["searchPresentation"],
+  t: (key: string, vars?: Record<string, string | number>) => string,
+): Omit<ChatMessage, "id" | "timestamp"> | null {
+  const entries = parsed.tenureOffer?.entries;
+  if (!entries || entries.length === 0) return null;
+  return {
+    role: "assistant",
+    content: "",
+    type: "discovery_exhausted_choice",
+    clarification: {
+      question: t("search.tenure_offer_q"),
+      options: [t("search.tenure_offer_show")],
+      optionActions: ["include_tenures"],
+    },
+    searchPresentation,
+    suburb: parsed.tenureOffer?.suburb ?? parsed.suburb,
+    tenureOfferTenures: entries.map((e) => e.tenure),
+  };
+}
+
 function detectClientMode(text: string): "analyse" | "discover" | "followup" {
   const lowerText = text.toLowerCase();
   const isDiscoverQuery =
@@ -1150,7 +1178,7 @@ export default function SearchScreen() {
       if (prefetchingContinuationRef.current.has(key)) return;
       prefetchingContinuationRef.current.add(key);
       try {
-        const data = await fetchDiscoveryNext(message, 6, true);
+        const data = await fetchDiscoveryNext(message, 9, true);
         // No prefetch available (no token, or expired/transient error). Leave the
         // message as-is; the manual Show-more tap surfaces the choice/retry.
         if (!data || isDiscoveryNextError(data)) return;
@@ -1661,6 +1689,7 @@ export default function SearchScreen() {
             searchPresentation?: ChatMessage["searchPresentation"];
             suburb?: string;
             continuationToken?: string | null;
+            tenureOffer?: { suburb?: string; entries?: Array<{ tenure: "cross_lease" | "leasehold" | "unit_title"; count: number }> };
           };
           if (Array.isArray(parsed.candidates) && parsed.candidates.length > 0) {
             const searchPresentation = parsed.searchPresentation === "generic_listing" ? "generic_listing" : "scored_screening";
@@ -1674,6 +1703,8 @@ export default function SearchScreen() {
               suburb: parsed.suburb,
               continuationToken: parsed.continuationToken ?? null,
             }, job.sessionId);
+            const tenureChip = buildTenureOfferChipMessage(parsed, searchPresentation, t);
+            if (tenureChip) addMessage(tenureChip, job.sessionId);
             if (searchPresentation !== "generic_listing") {
               startCardScorePoll(
                 parsed.candidates.map((candidate) => ({ address: candidate.address, listingUrl: candidate.listingUrl })),
@@ -1700,7 +1731,7 @@ export default function SearchScreen() {
         retryText: job.query,
       }, job.sessionId);
     },
-    [replaceBackgroundAnalyseMessage, startCardScorePoll, t],
+    [addMessage, replaceBackgroundAnalyseMessage, startCardScorePoll, t],
   );
 
   const backgroundScreeningPollInFlightRef = useRef(false);
@@ -2394,6 +2425,8 @@ export default function SearchScreen() {
             if (searchPayload?.candidates && searchPayload.candidates.length > 0) {
               const searchPresentation = searchPayload.searchPresentation === "generic_listing" ? "generic_listing" : "scored_screening";
               updateLastMessage({ type: "search", searchResults: searchPayload.candidates, content: "", aiIntro, searchPresentation, suburb: searchPayload.suburb, continuationToken: searchPayload.continuationToken ?? null }, sessionId);
+              const tenureChip = buildTenureOfferChipMessage(searchPayload, searchPresentation, t);
+              if (tenureChip) addMessage(tenureChip, sessionId);
               if (searchPresentation !== "generic_listing") {
                 startCardScorePoll(searchPayload.candidates.map((c: PropertyCandidate) => ({ address: c.address, listingUrl: c.listingUrl })), sessionId);
               }
@@ -2601,6 +2634,14 @@ export default function SearchScreen() {
   const handleDiscoveryChoice = useCallback(
     (message: ChatMessage, option: string, optionIndex: number) => {
       const action = message.clarification?.optionActions?.[optionIndex] ?? (optionIndex === 1 ? "search_nearby" : "repeat_origin");
+      if (action === "include_tenures") {
+        // Deterministic cross-lease/leasehold/unit-title opt-in — re-screens
+        // exactly the listings we set aside, no free-text/LLM dependence.
+        const tenures = message.tenureOfferTenures ?? ["cross_lease"];
+        const command = `[discovery_include_tenures:${tenures.join(",")}]`;
+        void handleSend(command, false, message.searchPresentation, message.suburb, option);
+        return;
+      }
       const command = action === "search_nearby"
         ? "[discovery_exhausted_choice:search_nearby]"
         : "[discovery_exhausted_choice:repeat_origin]";

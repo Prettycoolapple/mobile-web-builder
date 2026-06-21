@@ -63,10 +63,19 @@ function reportAddress(report: FeasibilityReport): string {
   return cleanAddress(report.address) || cleanAddress(report.propertyOverview?.address);
 }
 
-function firstPhoto(report: FeasibilityReport): string | null {
-  if (report.photoUrl) return report.photoUrl;
-  if (Array.isArray(report.photoUrls) && report.photoUrls[0]) return report.photoUrls[0];
-  return null;
+function reportPhotoUrls(report: FeasibilityReport): string[] {
+  const contexts = [
+    report.selectedListingContext,
+    report.propertyOverview?.selectedListingContext,
+  ];
+  return Array.from(new Set([
+    ...(report.photoUrls ?? []),
+    ...(report.photoUrl ? [report.photoUrl] : []),
+    ...contexts.flatMap((ctx) => [
+      ...(ctx?.photoUrls ?? []),
+      ...(ctx?.photoUrl ? [ctx.photoUrl] : []),
+    ]),
+  ].filter((url): url is string => typeof url === "string" && url.trim().length > 0)));
 }
 
 function reportListingUrl(report: FeasibilityReport): string | null {
@@ -136,11 +145,12 @@ export async function shareReport(report: FeasibilityReport, headers: ApiHeaders
   const address = reportAddress(report);
   if (!address) throw new Error("This report cannot be shared yet.");
   const selectedListingContext = reportSelectedListingContext(report);
+  const photos = reportPhotoUrls(report);
   const share = await createShare({
     kind: "report",
     address,
-    photoUrl: firstPhoto(report),
-    photoUrls: report.photoUrls ?? [],
+    photoUrl: photos[0] ?? null,
+    photoUrls: photos,
     listingUrl: reportListingUrl(report),
     selectedListingContext,
     summary: {

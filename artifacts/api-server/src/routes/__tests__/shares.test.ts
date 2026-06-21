@@ -1,18 +1,19 @@
 import type { Request } from "express";
 import { describe, expect, it, vi } from "vitest";
-import { buildShare, shareOpenFallbackHtml, sharePreviewHtml, shareUrl } from "../shares";
+import { buildShare, shareImageFromPayload, shareOpenFallbackHtml, sharePreviewHtml, shareUrl } from "../shares";
 
 vi.mock("@workspace/db", () => ({
   db: {},
   propertyShares: {},
 }));
 
-function request(origin = "https://www.projectalpha.app"): Request {
+function request(origin = "https://www.projectalpha.app", acceptLanguage?: string): Request {
   const url = new URL(origin);
   return {
     headers: {
       host: url.host,
       "x-forwarded-proto": url.protocol.replace(":", ""),
+      ...(acceptLanguage ? { "accept-language": acceptLanguage } : {}),
     },
     protocol: url.protocol.replace(":", ""),
   } as unknown as Request;
@@ -145,6 +146,38 @@ describe("property share previews", () => {
     });
 
     expect(share.previewImageUrl).toBe("https://s.oneroof.co.nz/image/example/hero.jpg");
+    expect((share.payloadJson.preview as { imageUrl?: string }).imageUrl).toBe("https://s.oneroof.co.nz/image/example/hero.jpg");
+    expect((share.payloadJson.preview as { photoUrls?: string[] }).photoUrls).toEqual([
+      "https://s.oneroof.co.nz/image/example/hero.jpg",
+    ]);
+  });
+
+  it("renders report property photos on the app-open fallback page", () => {
+    const html = shareOpenFallbackHtml({
+      token: "abc123",
+      kind: "report",
+      address: "38A Rosebank Road, Papatoetoe, Auckland",
+      title: "38A Rosebank Road, Papatoetoe, Auckland - Project Alpha feasibility analysis",
+      description: "Open Project Alpha for the latest analysis.",
+      imageUrl: "https://s.oneroof.co.nz/image/example/hero.jpg",
+      url: "https://www.projectalpha.app/property-share/abc123",
+      facts: [],
+    }, request());
+
+    expect(html).toContain("<img src=");
+    expect(html).toContain("https://www.projectalpha.app/api/image-proxy?url=");
+    expect(html).not.toContain('<div class="hero-fallback">PA</div>');
+  });
+
+  it("recovers report preview photos from stored share payloads", () => {
+    expect(shareImageFromPayload({
+      kind: "report",
+      rerun: {
+        selectedListingContext: {
+          photoUrls: ["https://s.oneroof.co.nz/image/example/hero.jpg"],
+        },
+      },
+    })).toBe("https://s.oneroof.co.nz/image/example/hero.jpg");
   });
 
   it("uses the app icon when a share has no image", () => {
@@ -213,5 +246,27 @@ describe("property share previews", () => {
     expect(html).toContain("Get it on Google Play");
     expect(html).toContain('href="https://www.projectalpha.app/property-share/abc123"');
     expect(html).toContain("window.location.replace(target)");
+  });
+
+  it("localizes the app-open fallback page to Chinese", () => {
+    const html = shareOpenFallbackHtml({
+      token: "abc123",
+      kind: "report",
+      address: "38A Rosebank Road, Papatoetoe, Auckland",
+      title: "38A Rosebank Road, Papatoetoe, Auckland - Project Alpha feasibility analysis",
+      description: "Open Project Alpha for the latest analysis.",
+      imageUrl: "https://s.oneroof.co.nz/image/example/hero.jpg",
+      url: "https://www.projectalpha.app/property-share/abc123",
+      facts: [],
+    }, request("https://www.projectalpha.app", "zh-CN,zh;q=0.9,en;q=0.8"));
+
+    expect(html).toContain('<html lang="zh-Hans">');
+    expect(html).toContain("奥房");
+    expect(html).toContain("在奥房 App 中打开此房产，或安装 App 后继续。");
+    expect(html).toContain("前往 App Store 下载");
+    expect(html).toContain("前往 Google Play 下载");
+    expect(html).toContain("返回房产预览");
+    expect(html).not.toContain(">Project Alpha</p>");
+    expect(html).not.toContain(">Download on the App Store</a>");
   });
 });

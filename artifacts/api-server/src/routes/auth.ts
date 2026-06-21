@@ -29,6 +29,7 @@ import {
   getProviderInvitationCode,
 } from "../lib/env";
 import { getStripe, subscriptionInfoFromStripe } from "../lib/stripe";
+import { resolveProviderEntitlement } from "../lib/provider-entitlements";
 import { isValidInvitationCode } from "../lib/agent-entitlements";
 import { createAgentAccountFromPending, type AgentSubscriptionInfo } from "../lib/agent-account";
 import type Stripe from "stripe";
@@ -47,6 +48,7 @@ import {
 
 const router = Router();
 const objectStorageService = new ObjectStorageService();
+const PROVIDER_TRIAL_DAYS = 14;
 
 type SignupNotificationArgs = Parameters<typeof sendNewUserSignupNotification>[0];
 
@@ -233,6 +235,49 @@ const salesAgentWebProfileSchema = z
     }
   });
 
+const serviceProviderWebProfileSchema = z
+  .object({
+    fullName: z.string().min(2),
+    phoneNumber: z.string().min(1),
+    primaryLanguage: z.string().min(1),
+    secondaryLanguage: z.string().optional(),
+    companyName: z.string().min(1),
+    nzCompanyRegisterNumber: z.string().min(1),
+    discipline: z.enum(["architect_designer", "planner", "engineer", "quantity_surveyor", "other"]),
+    otherDiscipline: z.string().optional(),
+    contactNumber: z.string().optional(),
+    addressStreet: z.string().optional(),
+    addressSuburb: z.string().optional(),
+    addressCity: z.string().optional(),
+    addressPostcode: z.string().optional(),
+    bio: z.string().max(1200).optional(),
+  })
+  .superRefine((data, ctx) => {
+    const phone = data.phoneNumber.replace(/[\s\-()]/g, "").trim();
+    if (!/^\+64\d{7,10}$/.test(phone)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Enter a valid New Zealand mobile or contact number starting with +64.",
+        path: ["phoneNumber"],
+      });
+    }
+    const contact = (data.contactNumber ?? "").replace(/[\s\-()]/g, "").trim();
+    if (contact && !/^\+64\d{7,10}$/.test(contact)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Enter a valid New Zealand contact number starting with +64.",
+        path: ["contactNumber"],
+      });
+    }
+    if (data.discipline === "other" && !data.otherDiscipline?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Please describe your discipline.",
+        path: ["otherDiscipline"],
+      });
+    }
+  });
+
 const serviceProviderWebSignupSchema = z
   .object({
     email: z.string().email(),
@@ -283,11 +328,14 @@ async function createProviderAccountFromPending(
     await db
       .update(profiles)
       .set({
+        subscriptionTier: "standard",
         stripeCustomerId: sub.stripeCustomerId,
         stripeSubscriptionId: sub.stripeSubscriptionId,
         subscriptionStatus: sub.subscriptionStatus,
         subscriptionPeriodEndAt: sub.subscriptionPeriodEndAt,
         subscriptionCancelAtPeriodEnd: sub.subscriptionCancelAtPeriodEnd,
+        providerTrialStartedAt: null,
+        providerTrialEndsAt: null,
       })
       .where(eq(profiles.id, existing[0].id));
     await markDone();
@@ -305,7 +353,7 @@ async function createProviderAccountFromPending(
         passwordHash: pending.passwordHash,
         role: "service_provider",
         languages,
-        subscriptionTier: "free",
+        subscriptionTier: "standard",
         reportsUsedThisMonth: 0,
         phoneNumber: pending.phoneNumber,
         phoneVerifiedAt: new Date(),
@@ -314,6 +362,8 @@ async function createProviderAccountFromPending(
         subscriptionStatus: sub.subscriptionStatus,
         subscriptionPeriodEndAt: sub.subscriptionPeriodEndAt,
         subscriptionCancelAtPeriodEnd: sub.subscriptionCancelAtPeriodEnd,
+        providerTrialStartedAt: null,
+        providerTrialEndsAt: null,
       })
       .returning({ id: profiles.id, email: profiles.email });
 
@@ -415,6 +465,24 @@ function recordLoginEvent(userId: string): void {
       // intentionally swallow — analytics must not impact auth
     }
   })();
+}
+
+function providerAccessPayload(profile: {
+  role?: string | null;
+  subscriptionTier?: string | null;
+  subscriptionStatus?: string | null;
+  subscriptionPeriodEndAt?: Date | string | null;
+  providerTrialStartedAt?: Date | string | null;
+  providerTrialEndsAt?: Date | string | null;
+}) {
+  return resolveProviderEntitlement(profile);
+}
+
+function createProviderTrialWindow(now = new Date()): { startedAt: Date; endsAt: Date } {
+  return {
+    startedAt: now,
+    endsAt: new Date(now.getTime() + PROVIDER_TRIAL_DAYS * 24 * 60 * 60 * 1000),
+  };
 }
 
 function generateResetCode(): string {
@@ -1094,6 +1162,131 @@ router.patch("/sales-agent-web-profile", requireAuth, async (req, res) => {
   }
 });
 
+router.patch("/service-provider-web-profile", requireAuth, async (req, res) => {
+  const userId = (req as any).userId as string;
+  const parsed = serviceProviderWebProfileSchema.safeParse(req.body);
+  if (!parsed.success) {
+    const firstError = parsed.error.issues[0];
+    res.status(400).json({
+      error: firstError?.message || "Invalid profile data",
+      code: "VALIDATION_ERROR",
+      details: parsed.error.issues,
+    });
+    return;
+  }
+
+  const fullName = parsed.data.fullName.trim();
+  const phoneNumber = normalizeRegistrationPhone(parsed.data.phoneNumber);
+  const contactNumber = parsed.data.contactNumber?.trim()
+    ? normalizeRegistrationPhone(parsed.data.contactNumber)
+    : phoneNumber;
+  const primaryLanguage = parsed.data.primaryLanguage.trim();
+  const secondaryLanguage = parsed.data.secondaryLanguage?.trim() || null;
+  const languages = [primaryLanguage, ...(secondaryLanguage ? [secondaryLanguage] : [])];
+  const companyName = parsed.data.companyName.trim();
+  const nzCompanyRegisterNumber = parsed.data.nzCompanyRegisterNumber.trim();
+  const discipline = parsed.data.discipline;
+  const otherDiscipline = discipline === "other" ? parsed.data.otherDiscipline?.trim() || null : null;
+  const addressStreet = parsed.data.addressStreet?.trim() || null;
+  const addressSuburb = parsed.data.addressSuburb?.trim() || null;
+  const addressCity = parsed.data.addressCity?.trim() || null;
+  const addressPostcode = parsed.data.addressPostcode?.trim() || null;
+  const bio = parsed.data.bio?.trim() || null;
+
+  try {
+    const [providerProfile] = await db
+      .select({ id: serviceProviderProfiles.id })
+      .from(serviceProviderProfiles)
+      .where(eq(serviceProviderProfiles.userId, userId))
+      .limit(1);
+
+    if (!providerProfile) {
+      res.status(403).json({ error: "This portal is only for service providers.", code: "SERVICE_PROVIDER_REQUIRED" });
+      return;
+    }
+
+    const updated = await db.transaction(async (tx) => {
+      const [currentProfile] = await tx
+        .select({ phoneNumber: profiles.phoneNumber })
+        .from(profiles)
+        .where(eq(profiles.id, userId))
+        .limit(1);
+      if (normalizeRegistrationPhone(currentProfile?.phoneNumber ?? "") !== phoneNumber) {
+        const phoneBlock = await checkPhoneCanRegister(tx, phoneNumber, "service_provider", new Date(), userId);
+        if (!phoneBlock.allowed) return { phoneBlock };
+      }
+
+      const [profile] = await tx
+        .update(profiles)
+        .set({ fullName, phoneNumber, languages })
+        .where(eq(profiles.id, userId))
+        .returning({
+          id: profiles.id,
+          email: profiles.email,
+          fullName: profiles.fullName,
+          role: profiles.role,
+          languages: profiles.languages,
+          subscriptionTier: profiles.subscriptionTier,
+          subscriptionPeriodEndAt: profiles.subscriptionPeriodEndAt,
+          reportsUsedThisMonth: profiles.reportsUsedThisMonth,
+          messagesUsedThisMonth: profiles.messagesUsedThisMonth,
+          avatarUrl: profiles.avatarUrl,
+          phoneNumber: profiles.phoneNumber,
+          isVerified: profiles.isVerified,
+          specialStatus: profiles.specialStatus,
+          specialStatusExpiresAt: profiles.specialStatusExpiresAt,
+        });
+
+      await tx
+        .update(serviceProviderProfiles)
+        .set({
+          companyName,
+          nzCompanyRegisterNumber,
+          discipline,
+          otherDiscipline,
+          addressStreet,
+          addressSuburb,
+          addressCity,
+          addressPostcode,
+          contactNumber,
+          primaryLanguage,
+          secondaryLanguage,
+          languages,
+          bio,
+        })
+        .where(eq(serviceProviderProfiles.userId, userId));
+
+      return { profile };
+    });
+    const blockedUpdate = "phoneBlock" in updated ? updated.phoneBlock : null;
+    if (blockedUpdate) {
+      sendPhoneRegistrationBlock(res, blockedUpdate);
+      return;
+    }
+
+    res.json({
+      user: {
+        ...updated.profile,
+        companyName,
+        nzCompanyRegisterNumber,
+        discipline,
+        otherDiscipline,
+        addressStreet,
+        addressSuburb,
+        addressCity,
+        addressPostcode,
+        contactNumber,
+        primaryLanguage,
+        secondaryLanguage,
+        bio,
+      },
+    });
+  } catch (error) {
+    req.log.error({ error }, "Service-provider web profile update failed");
+    res.status(500).json({ error: "Profile update failed. Please try again.", code: "PROFILE_UPDATE_FAILED" });
+  }
+});
+
 router.post("/password-reset/request", async (req, res) => {
   const parsed = requestPasswordResetSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -1375,6 +1568,7 @@ router.post(
         isVerified: profile.isVerified,
         specialStatus: effectiveSpecialStatus,
         specialStatusExpiresAt: effectiveSpecialStatusExpiresAt,
+        ...providerAccessPayload(profile),
       },
     });
   } catch (error) {
@@ -1533,7 +1727,17 @@ router.post("/service-provider-login", async (req, res) => {
     const [providerProfile] = await db
       .select({
         companyName: serviceProviderProfiles.companyName,
+        nzCompanyRegisterNumber: serviceProviderProfiles.nzCompanyRegisterNumber,
         discipline: serviceProviderProfiles.discipline,
+        otherDiscipline: serviceProviderProfiles.otherDiscipline,
+        addressStreet: serviceProviderProfiles.addressStreet,
+        addressSuburb: serviceProviderProfiles.addressSuburb,
+        addressCity: serviceProviderProfiles.addressCity,
+        addressPostcode: serviceProviderProfiles.addressPostcode,
+        contactNumber: serviceProviderProfiles.contactNumber,
+        primaryLanguage: serviceProviderProfiles.primaryLanguage,
+        secondaryLanguage: serviceProviderProfiles.secondaryLanguage,
+        bio: serviceProviderProfiles.bio,
       })
       .from(serviceProviderProfiles)
       .where(eq(serviceProviderProfiles.userId, profile.id))
@@ -1608,10 +1812,21 @@ router.post("/service-provider-login", async (req, res) => {
         avatarUrl: profile.avatarUrl,
         phoneNumber: profile.phoneNumber,
         companyName: providerProfile?.companyName ?? null,
+        nzCompanyRegisterNumber: providerProfile?.nzCompanyRegisterNumber ?? null,
         discipline: providerProfile?.discipline ?? null,
+        otherDiscipline: providerProfile?.otherDiscipline ?? null,
+        addressStreet: providerProfile?.addressStreet ?? null,
+        addressSuburb: providerProfile?.addressSuburb ?? null,
+        addressCity: providerProfile?.addressCity ?? null,
+        addressPostcode: providerProfile?.addressPostcode ?? null,
+        contactNumber: providerProfile?.contactNumber ?? null,
+        primaryLanguage: providerProfile?.primaryLanguage ?? null,
+        secondaryLanguage: providerProfile?.secondaryLanguage ?? null,
+        bio: providerProfile?.bio ?? null,
         isVerified: profile.isVerified,
         specialStatus: effectiveSpecialStatus,
         specialStatusExpiresAt: effectiveSpecialStatusExpiresAt,
+        ...providerAccessPayload(profile),
       },
     });
   } catch (error) {
@@ -1682,6 +1897,7 @@ router.post(
 
       const passwordHash = await hashPassword(parsed.data.password);
       const sessionId = createSessionId();
+      const trial = createProviderTrialWindow();
 
       const signupResult = await db.transaction(async (tx) => {
         const phoneBlock = await checkPhoneCanRegister(tx, phoneTrimmed, "service_provider");
@@ -1704,6 +1920,8 @@ router.post(
             phoneVerifiedAt: new Date(),
             activeSessionId: sessionId,
             subscriptionStatus: "active",
+            providerTrialStartedAt: trial.startedAt,
+            providerTrialEndsAt: trial.endsAt,
           })
           .returning({
             id: profiles.id,
@@ -1716,6 +1934,8 @@ router.post(
             messagesUsedThisMonth: profiles.messagesUsedThisMonth,
             avatarUrl: profiles.avatarUrl,
             phoneNumber: profiles.phoneNumber,
+            providerTrialStartedAt: profiles.providerTrialStartedAt,
+            providerTrialEndsAt: profiles.providerTrialEndsAt,
           });
 
         await tx.insert(serviceProviderProfiles).values({
@@ -1755,7 +1975,18 @@ router.post(
       recordLoginEvent(profile.id);
       res.status(201).json({
         token,
-        user: { ...profile, companyName, discipline, primaryLanguage, isVerified: false },
+        user: {
+          ...profile,
+          ...providerAccessPayload({
+            ...profile,
+            subscriptionStatus: "active",
+            subscriptionPeriodEndAt: null,
+          }),
+          companyName,
+          discipline,
+          primaryLanguage,
+          isVerified: false,
+        },
       });
 
       queueSignupNotification(req, {
@@ -1969,6 +2200,7 @@ router.post("/service-provider-web-signup/claim", async (req, res) => {
         discipline: providerProfile?.discipline ?? null,
         primaryLanguage: providerProfile?.primaryLanguage ?? null,
         isVerified: profile.isVerified,
+        ...providerAccessPayload(profile),
       },
     });
   } catch (error) {
@@ -1993,13 +2225,28 @@ router.get("/me", requireAuth, async (req, res) => {
         messagesUsedThisMonth: profiles.messagesUsedThisMonth,
         lastResetAt: profiles.lastResetAt,
         subscriptionPeriodEndAt: profiles.subscriptionPeriodEndAt,
+        subscriptionStatus: profiles.subscriptionStatus,
+        subscriptionCancelAtPeriodEnd: profiles.subscriptionCancelAtPeriodEnd,
+        providerTrialStartedAt: profiles.providerTrialStartedAt,
+        providerTrialEndsAt: profiles.providerTrialEndsAt,
         createdAt: profiles.createdAt,
         avatarUrl: profiles.avatarUrl,
         phoneNumber: profiles.phoneNumber,
         isVerified: profiles.isVerified,
         specialStatus: profiles.specialStatus,
         specialStatusExpiresAt: profiles.specialStatusExpiresAt,
+        companyName: serviceProviderProfiles.companyName,
+        nzCompanyRegisterNumber: serviceProviderProfiles.nzCompanyRegisterNumber,
         discipline: serviceProviderProfiles.discipline,
+        otherDiscipline: serviceProviderProfiles.otherDiscipline,
+        addressStreet: serviceProviderProfiles.addressStreet,
+        addressSuburb: serviceProviderProfiles.addressSuburb,
+        addressCity: serviceProviderProfiles.addressCity,
+        addressPostcode: serviceProviderProfiles.addressPostcode,
+        contactNumber: serviceProviderProfiles.contactNumber,
+        primaryLanguage: serviceProviderProfiles.primaryLanguage,
+        secondaryLanguage: serviceProviderProfiles.secondaryLanguage,
+        bio: serviceProviderProfiles.bio,
         agencyName: salesAgentProfiles.agencyName,
         reaaLicenceNumber: salesAgentProfiles.reaaLicenceNumber,
       })
@@ -2051,7 +2298,7 @@ router.get("/me", requireAuth, async (req, res) => {
       profile.specialStatusExpiresAt = null;
     }
 
-    res.json({ user: profile });
+    res.json({ user: { ...profile, ...providerAccessPayload(profile) } });
   } catch (error) {
     req.log.error({ error }, "Failed to get profile");
     res.status(500).json({ error: "Failed to get profile", code: "PROFILE_FAILED" });

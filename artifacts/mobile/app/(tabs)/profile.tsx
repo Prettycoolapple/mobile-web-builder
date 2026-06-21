@@ -17,7 +17,7 @@ import * as ImagePicker from "expo-image-picker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
-import { useAuth } from "@/context/AuthContext";
+import { hasServiceProviderAccess, useAuth } from "@/context/AuthContext";
 import { useSubscription, getSubscriptionSyncBody } from "@/lib/revenuecat";
 import { avatarImageSource, getAvatarInitials } from "@/lib/avatar";
 import { getApiBase } from "@/lib/api";
@@ -141,8 +141,9 @@ export default function ProfileScreen() {
   const isFriendsFamily = specialStatus === "friends_family";
   const isSupercharge = specialStatus === "supercharge";
   const hasSpecialStatus = isFriendsFamily || isSupercharge;
-  const isStandard = user?.subscriptionTier === "pro" || user?.subscriptionTier === "standard";
-  const planLimit = resolveReportLimit(user?.subscriptionTier, user?.role, specialStatus);
+  const providerHasAccess = hasServiceProviderAccess(user);
+  const isStandard = user?.subscriptionTier === "pro" || user?.subscriptionTier === "standard" || providerHasAccess;
+  const planLimit = resolveReportLimit(user?.subscriptionTier, user?.role, specialStatus, providerHasAccess);
   const usage = user?.reportsUsedThisMonth ?? 0;
   const remaining = planLimit - usage;
   const usagePct = planLimit > 0 ? Math.min((usage / planLimit) * 100, 100) : 100;
@@ -182,6 +183,7 @@ export default function ProfileScreen() {
     // Never act on stale RC data from a previous identity.
     if (!isSubscriptionIdentityReady) return;
     if (!user?.id) return;
+    if (user.role === "service_provider" && (user.providerAccessKind === "stripe" || user.providerAccessKind === "trial")) return;
     if (isSubscribed) {
       syncToBackend("pro");
     } else if (customerInfoLoaded) {
@@ -189,7 +191,16 @@ export default function ProfileScreen() {
       // correct the DB tier if needed.
       syncToBackend("free");
     }
-  }, [isSubscribed, customerInfoLoaded, isTestPaymentMode, isSubscriptionIdentityReady, user?.id]);
+  }, [
+    isSubscribed,
+    customerInfoLoaded,
+    isTestPaymentMode,
+    isSubscriptionIdentityReady,
+    user?.id,
+    user?.role,
+    user?.providerAccessKind,
+    syncToBackend,
+  ]);
 
   const handleUpgrade = useCallback(async () => {
     setUpgradeLoading(true);

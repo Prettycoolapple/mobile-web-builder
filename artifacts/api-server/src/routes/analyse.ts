@@ -106,6 +106,7 @@ import { noteQuotaUsage, noteAbuseSignal } from "../lib/abuse";
 import { matchCanary, buildCanaryReport } from "../lib/canaries";
 import { protectReport } from "../lib/outputProtection";
 import { usagePeriodExpired } from "../lib/billingPeriod";
+import { resolveProviderEntitlement } from "../lib/provider-entitlements";
 import { formatTitleTypeForDisplay } from "../lib/titleDisplay";
 import { classifySiteCondition, siteStatusLabel } from "../lib/site-condition";
 import { sendPushToUser } from "../lib/expo-push";
@@ -1004,6 +1005,14 @@ function passesStandardSubdivisionSizeScreen(candidate: PropertyCandidate): bool
 }
 
 function passesSubdivisionDiscoveryScreen(candidate: PropertyCandidate): boolean {
+  // Opted-in non-freehold cards (cross-lease / leasehold / unit-title) are
+  // informational cards the user explicitly asked to see — they can never pass
+  // the freehold size / design-led screen (a cross-lease has no verified
+  // individual land area), so admit them here. Without this they'd be picked
+  // back out and the opt-in would dead-end to the exhausted choice. Only
+  // opted-in candidates ever carry subdivisionTenureWarning (non-opted-in
+  // non-freehold are dropped before becoming candidates).
+  if (candidate.subdivisionTenureWarning) return true;
   return passesStandardSubdivisionSizeScreen(candidate) || candidate.designLedEligible === true;
 }
 
@@ -2026,7 +2035,10 @@ function topUpGenericListingCandidates(
 // /discovery/next call (see saveContinuationState) so an active browse never
 // expires mid-session. The durable shown-memory (30-day) stays separate.
 const DISCOVERY_CONTINUATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const DISCOVERY_CONTINUATION_PREFETCH_COUNT = 6;
+// Prefetch a couple of Show-more pages ahead (not just one) so the next tap is
+// an instant cache hit even when a source window drains, instead of stalling
+// into a live re-fetch / nearby-suburb screen mid-scroll.
+const DISCOVERY_CONTINUATION_PREFETCH_COUNT = 9;
 const DISCOVERY_CONTINUATION_PAGE_SIZE = 3;
 // Generic browse paginates the source lazily: fetch this many API pages (100
 // listings each) per window, then refill the pool one window at a time on
@@ -2653,6 +2665,22 @@ function isRepeatShownAreaRequest(text: string): boolean {
   if (/\b(show|see)\s+(them|those|these|it)\s+again\b/i.test(lower)) return true;
   if (/\bwhat\s+is\s+available\b.{0,40}\bagain\b/i.test(lower)) return true;
   return /(?:再看|再给我|再給我|重新看|重新显示|重新顯示|看过的|看過的|之前的|已经看过|已經看過|再来一次|再來一次)/.test(text);
+}
+
+// Deterministic "include the cross-lease/leasehold/unit-title I set aside" chip
+// command, e.g. "[discovery_include_tenures:cross_lease,leasehold]". Parsed
+// straight into the opt-in set so the offer works regardless of phrasing, the
+// LLM's parse, or whether the offer text survived in the conversation history.
+function parseIncludeTenuresChoice(text: string): Tenure[] | null {
+  const m = /^\[discovery_include_tenures:([a-z_,]+)\]$/i.exec(text.trim());
+  if (!m) return null;
+  const valid: readonly string[] = ["cross_lease", "leasehold", "unit_title"];
+  const parsed = m[1]
+    .toLowerCase()
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s): s is Tenure => valid.includes(s));
+  return parsed.length > 0 ? parsed : null;
 }
 
 function isNearbyDiscoveryChoice(text: string): boolean {
@@ -4026,6 +4054,8 @@ router.post(
           lastResetAt: Date;
           subscriptionPeriodEndAt: Date | null;
           subscriptionStatus: string | null;
+          providerTrialStartedAt: Date | null;
+          providerTrialEndsAt: Date | null;
           specialStatus: string | null;
           specialStatusExpiresAt: Date | null;
           createdAt: Date;
@@ -4042,6 +4072,8 @@ router.post(
             lastResetAt: profiles.lastResetAt,
             subscriptionPeriodEndAt: profiles.subscriptionPeriodEndAt,
             subscriptionStatus: profiles.subscriptionStatus,
+            providerTrialStartedAt: profiles.providerTrialStartedAt,
+            providerTrialEndsAt: profiles.providerTrialEndsAt,
             specialStatus: profiles.specialStatus,
             specialStatusExpiresAt: profiles.specialStatusExpiresAt,
             createdAt: profiles.createdAt,
@@ -4120,21 +4152,31 @@ router.post(
       }
 
       // Use special limit if active, otherwise resolve from plan/role
-      const limit = specialLimit !== null ? specialLimit : resolveReportLimit(profile.subscriptionTier, profile.role);
-      const isStandard = profile.subscriptionTier === "pro" || profile.subscriptionTier === "standard";
+      const providerEntitlement = resolveProviderEntitlement(profile);
+      const effectiveTier =
+        profile.role === "service_provider" && providerEntitlement.providerAccessActive
+          ? "standard"
+          : profile.subscriptionTier;
+      const limit = specialLimit !== null ? specialLimit : resolveReportLimit(effectiveTier, profile.role);
+      const isStandard = effectiveTier === "pro" || effectiveTier === "standard";
 
       // Detection only (Layer 2): a brand-new free account burning through its
       // small free quota is the fingerprint of a farmed harvesting account.
       noteQuotaUsage({
         userId,
         ip: req.ip,
-        tier: profile.subscriptionTier,
+        tier: effectiveTier,
         reportsUsedThisMonth: usedCount,
         reportLimit: limit,
         accountCreatedAt: profile.createdAt,
       });
 
-      if (specialLimit === null && profile.role === "service_provider" && limit === SERVICE_PROVIDER_FREE_REPORT_LIMIT) {
+      if (
+        specialLimit === null &&
+        profile.role === "service_provider" &&
+        !providerEntitlement.providerAccessActive &&
+        limit === SERVICE_PROVIDER_FREE_REPORT_LIMIT
+      ) {
         const baseMsg = "Service provider accounts require an active subscription before generating feasibility reports.";
         const translatedMsg = analyseLocale === "zh" ? await ensureChinese(baseMsg) : baseMsg;
         res.status(402).json({
@@ -4683,6 +4725,8 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
       subscriptionStatus: profiles.subscriptionStatus,
       role: profiles.role,
       subscriptionTier: profiles.subscriptionTier,
+      providerTrialStartedAt: profiles.providerTrialStartedAt,
+      providerTrialEndsAt: profiles.providerTrialEndsAt,
       specialStatus: profiles.specialStatus,
     })
     .from(profiles)
@@ -4709,10 +4753,12 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
 
   const tier = profile.subscriptionTier ?? "free";
   const role = profile.role ?? "general";
-  if (role === "service_provider" && tier !== "standard" && tier !== "pro") {
+  const providerEntitlement = resolveProviderEntitlement(profile);
+  const effectiveTier = role === "service_provider" && providerEntitlement.providerAccessActive ? "standard" : tier;
+  if (role === "service_provider" && !providerEntitlement.providerAccessActive && tier !== "standard" && tier !== "pro") {
     return { allowed: false, messagesUsed: profile.messagesUsedThisMonth, nearLimit: true, isFreeLimit: false, subscriptionRequired: true };
   }
-  const limitKey = resolveChatLimitKey(role, tier, profile.specialStatus);
+  const limitKey = resolveChatLimitKey(role, effectiveTier, profile.specialStatus);
   const { limit, warnAt } = CHAT_LIMITS[limitKey] ?? CHAT_LIMITS.default;
   const isFreeLimit = limitKey === "general_free";
 
@@ -5311,6 +5357,8 @@ router.post(
       );
       const repeatShownAreaIntent = isRepeatShownAreaRequest(userText);
       const forceNearbyDiscovery = isNearbyDiscoveryChoice(userText);
+      // Deterministic tenure opt-in from the "Show the N cross-lease" chip.
+      const includeTenuresChoice = parseIncludeTenuresChoice(userText);
 
       const intent = await extractChatIntent(messages, reportCtx, alreadyShownFromHistory, chatLocale);
       const semanticWantsDiscovery = intent.execution === "show_listing_cards" || intent.intentCategory === "property_discovery";
@@ -5416,9 +5464,11 @@ router.post(
       // replies with a bare affirmation, accept that offer (independent of the LLM's
       // includeTenures parse) and re-run the prior subdivision discovery with those
       // tenures included.
-      const offeredTenures: Tenure[] = isBareTenureAffirmation(userText)
-        ? findRecentOfferedTenures(messages)
-        : [];
+      const offeredTenures: Tenure[] = includeTenuresChoice
+        ? includeTenuresChoice
+        : isBareTenureAffirmation(userText)
+          ? findRecentOfferedTenures(messages)
+          : [];
       const affirmingTenureOffer = offeredTenures.length > 0;
       if (delegatedDiscoverSuburb && effectiveMode !== "analyse") {
         effectiveMode = "discover";
@@ -5548,7 +5598,7 @@ router.post(
       // clarification — the discover flow below seeds `suburb` from it and
       // auto-resolves nearby suburbs without asking.
       const choiceSuppliedSuburb =
-        (forceNearbyDiscovery || repeatShownAreaIntent) && Boolean(discoveryChoiceSuburb?.trim());
+        (forceNearbyDiscovery || repeatShownAreaIntent || Boolean(includeTenuresChoice)) && Boolean(discoveryChoiceSuburb?.trim());
       if (intent.needsClarification && intent.clarificationQuestion && effectiveMode !== "analyse" && !delegatedDiscoverSuburb && !choiceSuppliedSuburb) {
         req.log.info(
           { question: intent.clarificationQuestion, intent_reasoning: intent.reasoning },
@@ -5573,12 +5623,20 @@ router.post(
           // matches here" and reset just the cross-chat memory (see fresh-chat
           // re-show below).
           const durableShownKeys = { addressKeys: new Set<string>(), urls: new Set<string>() };
+          // A brand-new chat (the "+New" button) sends no prior assistant turns.
+          // The user expects "+New" to be a clean slate, so a fresh conversation
+          // ignores the account-level shown memory (and the in-memory shown URLs
+          // below) and re-shows the suburb from the top. Continuing inside an
+          // existing chat still seeds the memory so Show-more never repeats.
+          const isFreshConversation = !(messages ?? []).some((m) => m.role === "assistant");
+          const resetShownThisTurn = repeatShownAreaIntent || isFreshConversation;
           // ─── Account-level shown memory (30-day) ─────────────────────────
           // Seed the per-conversation dedup set with everything this account has
-          // already been shown in the last 30 days, so a brand-new conversation
+          // already been shown in the last 30 days, so a CONTINUING conversation
           // asking the same thing ("subdivision in St Heliers") continues with
-          // unshown listings instead of restarting from property #1.
-          if (chatUserId && !repeatShownAreaIntent) {
+          // unshown listings instead of restarting from property #1. Skipped on a
+          // fresh "+New" chat (resetShownThisTurn) so it starts clean.
+          if (chatUserId && !resetShownThisTurn) {
             try {
               const persisted = await getRecentShownForUser(chatUserId);
               recentShownEntries = persisted.entries;
@@ -5593,7 +5651,7 @@ router.post(
             } catch (err) {
               req.log.warn({ err }, "Discovery: failed to load account-level shown memory");
             }
-          } else if (!chatUserId && anonymousIdentityHash && !repeatShownAreaIntent) {
+          } else if (!chatUserId && anonymousIdentityHash && !resetShownThisTurn) {
             try {
               const persisted = await getRecentShownForAnonymous(anonymousIdentityHash);
               recentShownEntries = persisted.entries;
@@ -5620,7 +5678,7 @@ router.post(
           // For "see again" / "search nearby" it is authoritative — use it as the
           // repeat target / nearby base so the conversation evolves (Glendowie →
           // Meadowbank → next) instead of snapping back to the original suburb.
-          if ((repeatShownAreaIntent || forceNearbyDiscovery) && discoveryChoiceSuburb?.trim()) {
+          if ((repeatShownAreaIntent || forceNearbyDiscovery || includeTenuresChoice) && discoveryChoiceSuburb?.trim()) {
             suburb = discoveryChoiceSuburb.trim().toLowerCase();
           }
           const isFollowUp = intent.isFollowUp || contextualAreaBrowse || isDiscoverStreetContinuation(userText) || repeatShownAreaIntent || forceNearbyDiscovery;
@@ -5710,7 +5768,12 @@ router.post(
           let isMockData = false;
           let dataSource = "realestate.co.nz";
           let prescreenedIntro = "";
-          const criteriaLabel = plainListingBrowse ? "" : (intent.criteria || (wantsDevelopmentDiscovery ? "subdivision/development potential" : ""));
+          // User-facing label for the intro text ONLY (the pick/ranking uses
+          // discoveryCriteria separately). Derived from the resolved search TYPE,
+          // never from raw intent.criteria — the latter accumulates words from
+          // prior turns (e.g. "crosslease" from an earlier message) and would make
+          // the intro contradict the cards actually shown.
+          const criteriaLabel = plainListingBrowse ? "" : "subdivision potential";
           const strictStandardSubdivision = !plainListingBrowse && isStandardSubdivisionDiscoveryIntent(discoveryCriteria);
           const requireSourceBackedPrice = userTextHasPrice;
           // Return up to 3 cards for every discovery intent, including strict
@@ -5843,7 +5906,7 @@ router.post(
             // "Show more" follow-up: only try the cache if we've actually shown results before.
             // When isFollowUp=true because the user answered a clarification question (first search
             // for this suburb), hasShownAny=false so we skip straight to the fresh search below.
-            const hasShownAny = !repeatShownAreaIntent && getShownUrls(cacheKey).length > 0;
+            const hasShownAny = !resetShownThisTurn && getShownUrls(cacheKey).length > 0;
 
             if (isFollowUp && hasShownAny) {
               candidates = plainListingBrowse
@@ -5892,8 +5955,8 @@ router.post(
             for (let freshSearchPass = 0; freshSearchPass < 2; freshSearchPass++) {
             if (candidates.length === 0 && !forceNearbyDiscovery) {
               discoverySkipUrls = Array.from(new Set([
-                ...(repeatShownAreaIntent ? [] : getShownUrls(cacheKey)),
-                ...(repeatShownAreaIntent ? [] : alreadyShownUrlsFromHistory),
+                ...(resetShownThisTurn ? [] : getShownUrls(cacheKey)),
+                ...(resetShownThisTurn ? [] : alreadyShownUrlsFromHistory),
               ]));
               req.log.info(
                 { fromCache: getShownUrls(cacheKey).length, fromHistory: alreadyShownUrlsFromHistory.length, total: discoverySkipUrls.length },
@@ -5952,7 +6015,7 @@ router.post(
                   streetHint,
                 ), alreadyShownAddressKeys);
 
-                const priorShown = repeatShownAreaIntent ? [] : [...getShownUrls(cacheKey)];
+                const priorShown = resetShownThisTurn ? [] : [...getShownUrls(cacheKey)];
                 setListingCache(cacheKey, {
                   remainingListings: [...remainingFiltered],
                   shownUrls: priorShown,
@@ -6554,6 +6617,26 @@ router.post(
             } catch { /* silent */ }
           }
 
+          // When this turn shows opted-in non-freehold cards (the user asked to
+          // include the cross-lease / leasehold / unit-title we'd set aside), lead
+          // with an intro that matches those cards instead of the generic "found
+          // subdividable properties" — otherwise the response contradicts what's
+          // shown (the reported "I've found a few crosslease listings" over
+          // freehold cards, and vice-versa). The neighbour-acquisition note below
+          // still appends for the cross-lease specifics.
+          const shownTenureWarnings = new Set(
+            candidates.map((c) => c.subdivisionTenureWarning).filter((w): w is "cross_lease" | "leasehold" | "unit_title" => Boolean(w)),
+          );
+          if (tenureOptIns.length > 0 && shownTenureWarnings.size > 0) {
+            const tenureWord = shownTenureWarnings.has("cross_lease")
+              ? "cross-lease"
+              : shownTenureWarnings.has("leasehold")
+                ? "leasehold"
+                : "unit-title";
+            const optInSuburbLabel = suburb ? titleCaseSuburb(suburb) : "this area";
+            aiIntro = `Here are the ${tenureWord} listings you asked me to include in ${optInSuburbLabel}.`;
+          }
+
           // Out-of-hours title screening: the LINZ title service is closed, so
           // freehold couldn't be verified. Tag the candidates "unverified" so the
           // neutral "Title unverified / 产权待核实" chip shows on the cards, but do
@@ -6639,7 +6722,9 @@ router.post(
                 ipHash: anonymousIpHash,
                 mode: plainListingBrowse ? "generic_listing" : "scored_screening",
                 suburb,
-                criteria: criteriaLabel || null,
+                // Analytics keeps the real extracted criteria (criteriaLabel is now
+                // a canonical display label, not the user's actual ask).
+                criteria: intent.criteria ?? null,
                 locale: chatLocale,
                 query: userText,
                 resultCount: candidates.length,
@@ -6688,6 +6773,13 @@ router.post(
             "Discovery: response assembled",
           );
 
+          // Structured version of the "I left out N cross-lease" offer so the
+          // client can render a deterministic "Show the N cross-lease" chip
+          // (the free-text reply path still works). Mirrors the tenureReminder
+          // condition: tenures that were dropped this turn and not yet opted in.
+          const tenureOfferEntries = (["cross_lease", "leasehold", "unit_title"] as const)
+            .filter((tn) => excludedTenureTotals[tn] > 0 && !tenureOptIns.includes(tn))
+            .map((tn) => ({ tenure: tn, count: excludedTenureTotals[tn] }));
           const responsePayload = JSON.stringify({
             candidates,
             isMockData,
@@ -6697,6 +6789,9 @@ router.post(
             aiIntro,
             searchPresentation,
             continuationToken,
+            tenureOffer: tenureOfferEntries.length > 0
+              ? { suburb: continuationSuburb, entries: tenureOfferEntries }
+              : undefined,
           });
           const translatedContent = await translateChatContent(responsePayload, "discover", chatLocale, chatTranslateTitleSchool);
           // Durably persist the offered (excluded) non-freehold listings so a

@@ -1,7 +1,7 @@
 import { Redirect } from "expo-router";
 import React from "react";
 
-import { useAuth } from "@/context/AuthContext";
+import { hasServiceProviderAccess, useAuth } from "@/context/AuthContext";
 
 /**
  * Root entry: send signed-in users to search (tabs), others to welcome.
@@ -13,7 +13,7 @@ export default function Index() {
   if (isLoading) return null;
 
   if (user) {
-    if (user.role === "service_provider" && user.subscriptionTier === "free") {
+    if (user.role === "service_provider" && !hasServiceProviderAccess(user)) {
       return <Redirect href="/(onboarding)/service-provider-welcome" />;
     }
     return <Redirect href="/(tabs)" />;

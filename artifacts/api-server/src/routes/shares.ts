@@ -377,6 +377,14 @@ export function buildShare(input: z.infer<typeof createShareSchema>) {
 
   const title = `${input.address} - Project Alpha feasibility analysis`;
   const selectedListingContext = input.selectedListingContext ?? null;
+  const reportPhotoUrls = Array.from(new Set(
+    [
+      ...(Array.isArray(input.photoUrls) ? input.photoUrls : []),
+      ...(Array.isArray(selectedListingContext?.photoUrls) ? selectedListingContext.photoUrls : []),
+      input.photoUrl,
+      selectedListingContext?.photoUrl,
+    ].filter((url): url is string => typeof url === "string" && url.trim().length > 0),
+  ));
   const image = firstCleanImageUrl(
     input.photoUrl,
     input.photoUrls,
@@ -402,6 +410,8 @@ export function buildShare(input: z.infer<typeof createShareSchema>) {
       },
       preview: {
         summary: input.summary ?? null,
+        imageUrl: image,
+        photoUrls: reportPhotoUrls,
       },
     },
   };
@@ -445,13 +455,14 @@ type PublicShareRow = NonNullable<Awaited<ReturnType<typeof getPublicShare>>>;
 
 function publicPreview(row: PublicShareRow | null, req?: Request | null) {
   if (!row) return null;
+  const payloadImageUrl = shareImageFromPayload(row.payloadJson);
   return {
     token: row.token,
     kind: row.kind as ShareKind,
     address: row.address,
     title: row.previewTitle,
     description: row.previewDescription,
-    imageUrl: row.previewImageUrl,
+    imageUrl: row.previewImageUrl ?? payloadImageUrl,
     url: shareUrl(row.token, req),
     facts: propertyFacts(row.payloadJson),
   };
@@ -538,6 +549,28 @@ function firstValue(source: unknown, keys: string[]): unknown {
     if (value !== undefined && value !== null && value !== "") return value;
   }
   return undefined;
+}
+
+export function shareImageFromPayload(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  const kind = cleanText(recordValue(payload, "kind"), "");
+  if (kind === "candidate") {
+    const candidate = recordValue(payload, "candidate");
+    return candidate && typeof candidate === "object" ? shareImageFromRecord(candidate as Record<string, unknown>) : null;
+  }
+  if (kind === "listing") {
+    const listing = recordValue(payload, "listing");
+    return listing && typeof listing === "object" ? shareImageFromRecord(listing as Record<string, unknown>) : null;
+  }
+  if (kind !== "report") return null;
+  return firstCleanImageUrl(
+    nestedValue(payload, ["rerun", "selectedPhotoUrl"]),
+    nestedValue(payload, ["rerun", "selectedListingContext", "photoUrl"]),
+    nestedValue(payload, ["rerun", "selectedListingContext", "photoUrls"]),
+    nestedValue(payload, ["preview", "imageUrl"]),
+    nestedValue(payload, ["preview", "photoUrl"]),
+    nestedValue(payload, ["preview", "photoUrls"]),
+  );
 }
 
 function numberFact(value: unknown, suffix = ""): string | null {
@@ -753,12 +786,24 @@ export function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?
 
 export function shareOpenFallbackHtml(preview: ReturnType<typeof publicPreview>, req?: Request | null): string {
   const found = !!preview;
+  const zh = requestPrefersChinese(req);
   const title = found ? "Open Project Alpha" : "Project Alpha property share";
+  const titleZh = found ? "打开奥房" : "奥房房产分享";
   const description = found
     ? "Open this property in the Project Alpha app, or install the app to continue."
     : "This Project Alpha share link could not be found or has expired.";
-  const safeTitle = htmlEscape(title);
-  const safeDescription = htmlEscape(description);
+  const descriptionZh = found
+    ? "在奥房 App 中打开此房产，或安装 App 后继续。"
+    : "此奥房分享链接不存在或已过期。";
+  const safeTitle = htmlEscape(zh ? titleZh : title);
+  const safeDescription = htmlEscape(zh ? descriptionZh : description);
+  const safeTitleZh = htmlEscape(titleZh);
+  const safeDescriptionEn = htmlEscape(description);
+  const safeDescriptionZh = htmlEscape(descriptionZh);
+  const eyebrow = zh ? "奥房" : "Project Alpha";
+  const appStoreText = zh ? "前往 App Store 下载" : "Download on the App Store";
+  const playStoreText = zh ? "前往 Google Play 下载" : "Get it on Google Play";
+  const previewText = zh ? "返回房产预览" : "Back to property preview";
   const safeAddress = htmlEscape(preview?.address ?? "Shared property");
   const safePreviewUrl = preview
     ? htmlEscape(shareUrl(preview.token, req))
@@ -786,7 +831,7 @@ export function shareOpenFallbackHtml(preview: ReturnType<typeof publicPreview>,
     : "";
 
   return `<!doctype html>
-<html lang="en-NZ">
+<html lang="${zh ? "zh-Hans" : "en-NZ"}">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -817,16 +862,31 @@ export function shareOpenFallbackHtml(preview: ReturnType<typeof publicPreview>,
         ${resolvedImage ? `<img src="${safeImage}" alt="" />` : `<div class="hero-fallback">PA</div>`}
       </div>
       <div class="body">
-        <p class="eyebrow">Project Alpha</p>
+        <p class="eyebrow" data-en="Project Alpha" data-zh="奥房">${htmlEscape(eyebrow)}</p>
         <h1>${safeAddress}</h1>
-        <p>${safeDescription}</p>
+        <p data-en="${safeDescriptionEn}" data-zh="${safeDescriptionZh}">${safeDescription}</p>
         <div class="actions">
-          <a class="button primary" href="${safeIosStoreUrl}">Download on the App Store</a>
-          <a class="button secondary" href="${safeAndroidStoreUrl}">Get it on Google Play</a>
-          <a class="button ghost" href="${safePreviewUrl}">Back to property preview</a>
+          <a class="button primary" href="${safeIosStoreUrl}" data-en="Download on the App Store" data-zh="前往 App Store 下载">${htmlEscape(appStoreText)}</a>
+          <a class="button secondary" href="${safeAndroidStoreUrl}" data-en="Get it on Google Play" data-zh="前往 Google Play 下载">${htmlEscape(playStoreText)}</a>
+          <a class="button ghost" href="${safePreviewUrl}" data-en="Back to property preview" data-zh="返回房产预览">${htmlEscape(previewText)}</a>
         </div>
       </div>
     </article>
+    <script>
+      (function () {
+        var prefersZh = (navigator.languages || [navigator.language || ""]).some(function (lang) {
+          return String(lang || "").toLowerCase().indexOf("zh") === 0;
+        });
+        if (!prefersZh) return;
+        document.documentElement.lang = "zh-Hans";
+        document.title = "${safeTitleZh}";
+        var desc = document.querySelector('meta[name="description"]');
+        if (desc) desc.setAttribute("content", "${safeDescriptionZh}");
+        document.querySelectorAll("[data-zh]").forEach(function (node) {
+          node.textContent = node.getAttribute("data-zh") || node.textContent;
+        });
+      })();
+    </script>
     ${storeScript}
   </body>
 </html>`;

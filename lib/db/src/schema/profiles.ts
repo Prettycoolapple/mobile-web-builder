@@ -39,6 +39,9 @@ export const profiles = pgTable(
   subscriptionCancelAtPeriodEnd: boolean("subscription_cancel_at_period_end")
     .default(false)
     .notNull(),
+  /** Provider portal invitation-code trial window. Null for paid Stripe/IAP accounts and non-providers. */
+  providerTrialStartedAt: timestamp("provider_trial_started_at", { withTimezone: true }),
+  providerTrialEndsAt: timestamp("provider_trial_ends_at", { withTimezone: true }),
   avatarUrl: text("avatar_url"),
   isVerified: boolean("is_verified").default(false).notNull(),
   phoneNumber: text("phone_number"),

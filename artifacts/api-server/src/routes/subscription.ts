@@ -1,9 +1,12 @@
 import { Router } from "express";
 import { eq } from "drizzle-orm";
+import type Stripe from "stripe";
 import { db, profiles, salesAgentProfiles } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { logger } from "../lib/logger";
 import { getStripe, subscriptionInfoFromStripe } from "../lib/stripe";
+import { getProviderPortalUrl, getStripeProviderPriceId } from "../lib/env";
+import { hasProviderWebEntitlement, resolveProviderEntitlement } from "../lib/provider-entitlements";
 
 const router = Router();
 
@@ -29,8 +32,12 @@ router.post("/subscription/sync", requireAuth, async (req, res) => {
   try {
     const [row] = await db
       .select({
+        role: profiles.role,
         subscriptionTier: profiles.subscriptionTier,
         subscriptionPeriodEndAt: profiles.subscriptionPeriodEndAt,
+        subscriptionStatus: profiles.subscriptionStatus,
+        providerTrialStartedAt: profiles.providerTrialStartedAt,
+        providerTrialEndsAt: profiles.providerTrialEndsAt,
       })
       .from(profiles)
       .where(eq(profiles.id, userId))
@@ -44,6 +51,17 @@ router.post("/subscription/sync", requireAuth, async (req, res) => {
     const wasPaid = row.subscriptionTier === "pro" || row.subscriptionTier === "standard";
 
     if (tier === "free") {
+      if (hasProviderWebEntitlement(row)) {
+        const entitlement = resolveProviderEntitlement(row);
+        res.json({
+          success: true,
+          tier: row.subscriptionTier,
+          ignored: true,
+          providerAccessActive: entitlement.providerAccessActive,
+          providerAccessKind: entitlement.providerAccessKind,
+        });
+        return;
+      }
       await db
         .update(profiles)
         .set({ subscriptionTier: "free", subscriptionPeriodEndAt: null })
@@ -88,6 +106,166 @@ router.post("/subscription/sync", requireAuth, async (req, res) => {
   } catch (err) {
     logger.error({ err }, "Failed to sync subscription");
     res.status(500).json({ error: "Failed to sync subscription" });
+  }
+});
+
+router.get("/subscription/provider-status", requireAuth, async (req, res) => {
+  const userId = (req as any).userId as string;
+  try {
+    const [profile] = await db
+      .select({
+        role: profiles.role,
+        subscriptionTier: profiles.subscriptionTier,
+        subscriptionStatus: profiles.subscriptionStatus,
+        subscriptionPeriodEndAt: profiles.subscriptionPeriodEndAt,
+        subscriptionCancelAtPeriodEnd: profiles.subscriptionCancelAtPeriodEnd,
+        stripeCustomerId: profiles.stripeCustomerId,
+        stripeSubscriptionId: profiles.stripeSubscriptionId,
+        providerTrialStartedAt: profiles.providerTrialStartedAt,
+        providerTrialEndsAt: profiles.providerTrialEndsAt,
+      })
+      .from(profiles)
+      .where(eq(profiles.id, userId))
+      .limit(1);
+
+    if (!profile || profile.role !== "service_provider") {
+      res.status(404).json({ error: "Not a service provider", code: "NOT_A_PROVIDER" });
+      return;
+    }
+
+    const entitlement = resolveProviderEntitlement(profile);
+    res.json({
+      ...entitlement,
+      subscriptionTier: profile.subscriptionTier,
+      subscriptionStatus: profile.subscriptionStatus,
+      subscriptionPeriodEndAt: profile.subscriptionPeriodEndAt,
+      cancelAtPeriodEnd: profile.subscriptionCancelAtPeriodEnd,
+      hasStripeSubscription: !!profile.stripeSubscriptionId,
+    });
+  } catch (err) {
+    logger.error({ err }, "Failed to load provider subscription status");
+    res.status(500).json({ error: "Failed to load subscription status" });
+  }
+});
+
+router.post("/subscription/provider-checkout", requireAuth, async (req, res) => {
+  const userId = (req as any).userId as string;
+  try {
+    const [profile] = await db
+      .select({
+        id: profiles.id,
+        role: profiles.role,
+        email: profiles.email,
+        fullName: profiles.fullName,
+        phoneNumber: profiles.phoneNumber,
+        stripeCustomerId: profiles.stripeCustomerId,
+      })
+      .from(profiles)
+      .where(eq(profiles.id, userId))
+      .limit(1);
+
+    if (!profile || profile.role !== "service_provider") {
+      res.status(403).json({ error: "Service provider account required.", code: "NOT_A_PROVIDER" });
+      return;
+    }
+
+    const stripe = getStripe();
+    let customerId = profile.stripeCustomerId;
+    if (!customerId) {
+      const found = await stripe.customers.list({ email: profile.email, limit: 1 });
+      customerId = found.data[0]?.id ?? null;
+    }
+    if (!customerId) {
+      const customer = await stripe.customers.create({
+        email: profile.email,
+        name: profile.fullName ?? undefined,
+        phone: profile.phoneNumber ?? undefined,
+      });
+      customerId = customer.id;
+    }
+
+    if (customerId !== profile.stripeCustomerId) {
+      await db.update(profiles).set({ stripeCustomerId: customerId }).where(eq(profiles.id, userId));
+    }
+
+    const portal = getProviderPortalUrl();
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      customer: customerId,
+      line_items: [{ price: getStripeProviderPriceId(), quantity: 1 }],
+      success_url: `${portal}?providerSubscription=success&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${portal}?providerSubscription=cancelled`,
+      metadata: { providerUserId: userId },
+      subscription_data: { metadata: { providerUserId: userId } },
+    });
+
+    res.json({ checkoutUrl: session.url });
+  } catch (err) {
+    logger.error({ err }, "Failed to start provider checkout");
+    res.status(500).json({ error: "Could not start checkout. Please try again.", code: "CHECKOUT_FAILED" });
+  }
+});
+
+router.post("/subscription/provider-checkout/claim", requireAuth, async (req, res) => {
+  const userId = (req as any).userId as string;
+  const checkoutSessionId =
+    typeof req.body?.checkoutSessionId === "string" ? req.body.checkoutSessionId.trim() : "";
+  if (!checkoutSessionId) {
+    res.status(400).json({ error: "checkoutSessionId is required", code: "MISSING_SESSION_ID" });
+    return;
+  }
+
+  try {
+    const session = await getStripe().checkout.sessions.retrieve(checkoutSessionId, {
+      expand: ["subscription"],
+    });
+    if (session.metadata?.providerUserId !== userId) {
+      res.status(403).json({ error: "This checkout session does not belong to this account.", code: "SESSION_MISMATCH" });
+      return;
+    }
+    const paid = session.payment_status === "paid" || session.status === "complete";
+    if (!paid) {
+      res.status(409).json({ error: "Payment not completed yet.", code: "PAYMENT_PENDING" });
+      return;
+    }
+    const customerId = typeof session.customer === "string" ? session.customer : session.customer?.id ?? null;
+    const subscription = session.subscription as Stripe.Subscription | null;
+    const info = subscription
+      ? subscriptionInfoFromStripe(subscription, customerId)
+      : {
+          stripeCustomerId: customerId,
+          stripeSubscriptionId: null,
+          subscriptionStatus: "active",
+          subscriptionPeriodEndAt: null,
+          subscriptionCancelAtPeriodEnd: false,
+        };
+
+    await db
+      .update(profiles)
+      .set({
+        subscriptionTier: "standard",
+        stripeCustomerId: info.stripeCustomerId,
+        stripeSubscriptionId: info.stripeSubscriptionId,
+        subscriptionStatus: info.subscriptionStatus,
+        subscriptionPeriodEndAt: info.subscriptionPeriodEndAt,
+        subscriptionCancelAtPeriodEnd: info.subscriptionCancelAtPeriodEnd,
+        providerTrialStartedAt: null,
+        providerTrialEndsAt: null,
+      })
+      .where(eq(profiles.id, userId));
+
+    const entitlement = resolveProviderEntitlement({
+      role: "service_provider",
+      subscriptionTier: "standard",
+      subscriptionStatus: info.subscriptionStatus,
+      subscriptionPeriodEndAt: info.subscriptionPeriodEndAt,
+      providerTrialStartedAt: null,
+      providerTrialEndsAt: null,
+    });
+    res.json({ success: true, ...entitlement });
+  } catch (err) {
+    logger.error({ err }, "Failed to claim provider checkout");
+    res.status(500).json({ error: "Could not finish subscription. Please try again.", code: "CLAIM_FAILED" });
   }
 });
 
