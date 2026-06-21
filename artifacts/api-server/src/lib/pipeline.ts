@@ -31,6 +31,7 @@ import { fetchNeighbourhoodContext, type NeighbourhoodContext } from "./neighbou
 import { fetchTransportContext, type TransportContext } from "./transport-context";
 import {
   fetchBuiltEnvironmentContext,
+  hasUsableBuiltEnvironmentContext,
   type BuiltEnvironmentContext,
 } from "./built-environment-context";
 import { assessDevelopmentStrategy, assessInterestRateOutlook } from "./claude";
@@ -62,6 +63,7 @@ import {
 } from "./property-eligibility";
 import { extractListingClaims, detectRedevelopmentConflict, hasAmbiguousListingSignals, type ListingClaims } from "./listing-claims";
 import { extractListingClaimsLLM, mergeClaimsSafer } from "./listing-claims-llm";
+import { looksLikeUnitOrApartmentAddress } from "./address-patterns";
 
 const AC_PROP_MAPSERVER = "https://mapspublic.aucklandcouncil.govt.nz/arcgis3/rest/services/NonCouncil/PropertyValueInfo/MapServer";
 
@@ -482,6 +484,28 @@ export function hasCacheableCore(r: PipelineResult): boolean {
   if (r.linz_parcel?.parcel_id) return true;
   const m = r.merged;
   return !!(m && (m.cv_nzd != null || m.land_area_sqm != null));
+}
+
+export function developmentScoreUnavailableReason(
+  merged: MergedPropertyData,
+  costs: CostBreakdown,
+  scenarios: ROIScenario[],
+): string | null {
+  if (merged.typology === "unit_apartment") return "unit_or_apartment_typology";
+  if (merged.subdivisionRejectReason === "unit_or_crosslease_signal" && merged.typology !== "standalone") {
+    return "unit_or_crosslease_signal";
+  }
+  if (merged.land_area_sqm == null || !Number.isFinite(merged.land_area_sqm) || merged.land_area_sqm <= 0) {
+    return "missing_land_area_sqm";
+  }
+  if (merged.cv_nzd == null || costs.cv_unavailable) return "missing_cv_nzd";
+  if (merged.contour == null) return "missing_contour";
+  if (merged.build_year == null && !merged.build_year_range) return "missing_build_year_or_decade";
+  if (merged.titleConfidence !== "verified") return "unverified_title";
+  if (merged.typology === "unknown" || merged.typologyConfidence === "unknown") return "unverified_typology";
+  if (merged.zone_code == null) return "missing_zone";
+  if (scenarios.length === 0) return "missing_roi_market_evidence";
+  return null;
 }
 
 /** Drop bulky, volatile photo fields before caching — photos are refetched live
@@ -1130,7 +1154,8 @@ export async function runPropertyPipeline(
 
   const titleEstate = linzTitle?.estate_type?.trim() ?? null;
   const lrsTenure = estateTypeFromLrsTitles(linzLrsTitlePreview?.titles ?? []);
-  const parcelEstate = inferEstateTypeFromParcel(linzParcelData);
+  const addressHasUnitPrefix = looksLikeUnitOrApartmentAddress(geocode.formatted ?? address);
+  const parcelEstate = addressHasUnitPrefix ? null : inferEstateTypeFromParcel(linzParcelData);
   // Sanitize scraped tenure text at the source: scrapers occasionally capture
   // page navigation/menu chrome instead of a tenure, which previously leaked all
   // the way to the property card as a bogus title badge. Only keep values that
@@ -1415,7 +1440,10 @@ export async function runPropertyPipeline(
     timing,
   );
   if (builtEnvironmentContextResult.failed) failedSources.push("built_environment_context");
-  const builtEnvironmentContext = builtEnvironmentContextResult.value;
+  const builtEnvironmentContextRaw = builtEnvironmentContextResult.value;
+  const builtEnvironmentContext = hasUsableBuiltEnvironmentContext(builtEnvironmentContextRaw)
+    ? builtEnvironmentContextRaw
+    : null;
 
   let comparablesResult = getComparables(
     suburb,
@@ -1536,13 +1564,18 @@ export async function runPropertyPipeline(
     subdivisionAssessment,
   });
 
-  const scores = scoreProperty(merged, costs, scenarios, modelledLotResult.lots, builtEnvironmentContext);
-  if (neighbourhoodContext?.marketAdjustment.reason && !scores.roi_reasons.includes(neighbourhoodContext.marketAdjustment.reason)) {
-    scores.roi_reasons.push(neighbourhoodContext.marketAdjustment.reason);
+  const computedScores = scoreProperty(merged, costs, scenarios, modelledLotResult.lots, builtEnvironmentContext);
+  if (neighbourhoodContext?.marketAdjustment.reason && !computedScores.roi_reasons.includes(neighbourhoodContext.marketAdjustment.reason)) {
+    computedScores.roi_reasons.push(neighbourhoodContext.marketAdjustment.reason);
   }
   for (const reason of transportContext?.roiInfluence.reasons ?? []) {
-    if (!scores.roi_reasons.includes(reason)) scores.roi_reasons.push(reason);
+    if (!computedScores.roi_reasons.includes(reason)) computedScores.roi_reasons.push(reason);
   }
+  const scoreUnavailableReason = developmentScoreUnavailableReason(merged, costs, scenarios);
+  const scores = scoreUnavailableReason ? null : computedScores;
+  const exposedCosts = scoreUnavailableReason ? null : costs;
+  const exposedScenarios = scoreUnavailableReason ? [] : scenarios;
+  const exposedDevelopmentStrategies = scoreUnavailableReason ? [] : developmentStrategies;
 
   // School zones: point-in-polygon against the official MoE enrolment-zone
   // boundaries using the geocoded location. Authoritative — it returns the
@@ -1596,6 +1629,7 @@ export async function runPropertyPipeline(
     derived_scores: {
       scoringVersion: SCORING_VERSION,
       scores,
+      scoreUnavailableReason,
       landArea: merged.land_area_sqm,
       zone: merged.zone_code,
       potentialLots: modelledLotResult.lots,
@@ -1638,14 +1672,14 @@ export async function runPropertyPipeline(
     merged,
     lots: modelledLotResult,
     subdivision_pathway: subdivisionPathway,
-    costs,
+    costs: exposedCosts,
     comparables: comparablesResult.comparables,
     comparables_quality: comparablesResult.data_quality,
     neighbourhoodContext,
     transportContext,
     builtEnvironmentContext,
-    scenarios,
-    developmentStrategies,
+    scenarios: exposedScenarios,
+    developmentStrategies: exposedDevelopmentStrategies,
     scores,
     school_zones_detail,
     easements: easementAnalysis,

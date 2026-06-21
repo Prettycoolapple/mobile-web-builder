@@ -327,37 +327,28 @@
       return;
     }
 
-    const languages = [primaryLanguage];
-    if (secondaryLanguage && secondaryLanguage !== primaryLanguage) languages.push(secondaryLanguage);
-
-    const providerData = {
-      companyName,
-      nzCompanyRegisterNumber,
-      discipline,
-      contactNumber: phoneNumber,
-      primaryLanguage,
-    };
-    if (discipline === "other") providerData.otherDiscipline = otherDiscipline;
-    if (secondaryLanguage) providerData.secondaryLanguage = secondaryLanguage;
     const addressStreet = String(values.addressStreet || "").trim();
     const addressSuburb = String(values.addressSuburb || "").trim();
     const addressCity = String(values.addressCity || "").trim();
     const addressPostcode = String(values.addressPostcode || "").trim();
-    if (addressStreet) providerData.addressStreet = addressStreet;
-    if (addressSuburb) providerData.addressSuburb = addressSuburb;
-    if (addressCity) providerData.addressCity = addressCity;
-    if (addressPostcode) providerData.addressPostcode = addressPostcode;
 
     const payload = {
-      role: "service_provider",
       fullName,
       email,
       password,
       phoneNumber,
       phoneVerificationToken: state.phoneVerificationToken,
-      languages,
-      providerData,
+      primaryLanguage,
+      companyName,
+      nzCompanyRegisterNumber,
+      discipline,
     };
+    if (discipline === "other") payload.otherDiscipline = otherDiscipline;
+    if (secondaryLanguage) payload.secondaryLanguage = secondaryLanguage;
+    if (addressStreet) payload.addressStreet = addressStreet;
+    if (addressSuburb) payload.addressSuburb = addressSuburb;
+    if (addressCity) payload.addressCity = addressCity;
+    if (addressPostcode) payload.addressPostcode = addressPostcode;
 
     // Details are valid — confirm T&C consent before creating the account.
     state.pendingSignupPayload = payload;

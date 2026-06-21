@@ -988,7 +988,7 @@ export function mergePropertyData(
     ? (sources["listing_price"] = "oneroof (live listing)", oneroof.listing_price)
     : realestateListing?.price != null
       ? (sources["listing_price"] = "realestate.co.nz (active listing)", realestateListing.price)
-      : first("listing_price", sources, ["oneroof", oneroof?.listing_price]);
+      : null;
 
   const school_zones          = hougarden?.school_zones ?? { primary: null, intermediate: null, secondary: null };
   // Listing hero photos only. Do not carry generic property-record galleries

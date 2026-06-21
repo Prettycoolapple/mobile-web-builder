@@ -5,6 +5,7 @@ import { getCachedRaw } from "./property-cache";
 import { normaliseDiscoveryAddressKey } from "./address-key";
 import { SCORING_VERSION, type DerivedCardScores } from "./card-score";
 import type { BuiltEnvironmentContext } from "./built-environment-context";
+import { looksLikeUnitOrApartmentAddress } from "./address-patterns";
 
 export interface CardScoreEntry {
   status: "pending" | "ready" | "failed";
@@ -33,6 +34,7 @@ export interface CardScoreEntry {
   designLedDetail?: string | null;
   builtEnvironmentContext?: BuiltEnvironmentContext | null;
   listingUrl?: string;
+  scoreUnavailableReason?: string | null;
   updatedAt: number;
 }
 
@@ -64,7 +66,7 @@ function evictStale(): void {
   }
 }
 
-function derivedToLightResult(ds: DerivedCardScores): LightScoreResult {
+function derivedToLightResult(ds: DerivedCardScores & { scores: NonNullable<DerivedCardScores["scores"]> }): LightScoreResult {
   return {
     scores: ds.scores,
     landArea: ds.landArea ?? 0,
@@ -85,6 +87,19 @@ function derivedToLightResult(ds: DerivedCardScores): LightScoreResult {
   };
 }
 
+function cardScoreUnavailableReason(input: LightScoreInput): string | null {
+  if (looksLikeUnitOrApartmentAddress(input.address)) return "unit_or_apartment_address";
+  if (input.typology === "unit_apartment") return "unit_or_apartment_typology";
+  if (
+    input.subdivisionEligible === false
+    && input.subdivisionRejectReason != null
+    && /unit|apartment|crosslease|cross[-\s]*lease/i.test(input.subdivisionRejectReason)
+  ) {
+    return input.subdivisionRejectReason;
+  }
+  return null;
+}
+
 /**
  * Resolve a card score: prefer the REAL report-grade scores persisted in the
  * global property cache (so the card matches the report exactly, for any user,
@@ -93,19 +108,24 @@ function derivedToLightResult(ds: DerivedCardScores): LightScoreResult {
  */
 async function resolveCardScore(
   c: LightScoreInput,
-): Promise<{ result: LightScoreResult; source: "report" | "estimate" }> {
+): Promise<{ result: LightScoreResult | null; source: "report" | "estimate"; unavailableReason?: string | null }> {
   const addressKey = normaliseDiscoveryAddressKey(c.address);
   if (addressKey) {
     try {
       const cached = await getCachedRaw(addressKey);
       const ds = cached?.rawData.derived_scores;
       if (ds && ds.scoringVersion === SCORING_VERSION) {
-        return { result: derivedToLightResult(ds), source: "report" };
+        if (!ds.scores) {
+          return { result: null, source: "report", unavailableReason: ds.scoreUnavailableReason ?? "score_unavailable" };
+        }
+        return { result: derivedToLightResult(ds as DerivedCardScores & { scores: NonNullable<DerivedCardScores["scores"]> }), source: "report" };
       }
     } catch (err) {
       logger.warn({ err: (err as Error).message, address: c.address }, "card-score: cached real-score lookup failed");
     }
   }
+  const unavailableReason = cardScoreUnavailableReason(c);
+  if (unavailableReason) return { result: null, source: "estimate", unavailableReason };
   return { result: await computeLightScore(c), source: "estimate" };
 }
 
@@ -119,7 +139,20 @@ export function queueBackgroundScores(candidates: LightScoreInput[]): void {
     cache.set(key, { status: "pending", updatedAt: Date.now() });
 
     resolveCardScore(c)
-      .then(({ result, source }) => {
+      .then(({ result, source, unavailableReason }) => {
+        if (!result) {
+          cache.set(key, {
+            status: "ready",
+            listingUrl: c.listingUrl,
+            scoreUnavailableReason: unavailableReason ?? "score_unavailable",
+            updatedAt: Date.now(),
+          });
+          logger.info(
+            { address: c.address, source, unavailableReason },
+            source === "report" ? "Card score unavailable from cached report" : "Card score estimate suppressed",
+          );
+          return;
+        }
         cache.set(key, {
           status: "ready",
           scores: {

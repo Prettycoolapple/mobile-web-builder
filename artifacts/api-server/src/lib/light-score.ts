@@ -15,6 +15,7 @@ import type { PropertyEligibilityConfidence, PropertyTypology } from "./property
 import {
   BUILT_ENVIRONMENT_LIGHT_SCAN_COUNT,
   fetchBuiltEnvironmentContext,
+  hasUsableBuiltEnvironmentContext,
   type BuiltEnvironmentContext,
 } from "./built-environment-context";
 
@@ -183,7 +184,7 @@ export async function computeLightScore(input: LightScoreInput): Promise<LightSc
     1,
   );
 
-  const builtEnvironmentContext = await fetchBuiltEnvironmentContext({
+  const builtEnvironmentContextRaw = await fetchBuiltEnvironmentContext({
     address,
     lat: geo.lat,
     lng: geo.lng,
@@ -193,6 +194,9 @@ export async function computeLightScore(input: LightScoreInput): Promise<LightSc
     maxParcels: BUILT_ENVIRONMENT_LIGHT_SCAN_COUNT,
     timeoutMsPerParcel: 1200,
   }).catch(() => null);
+  const builtEnvironmentContext = hasUsableBuiltEnvironmentContext(builtEnvironmentContextRaw)
+    ? builtEnvironmentContextRaw
+    : null;
 
   return {
     scores: scoreProperty(minimalMerged, costs, scenarios, lots, builtEnvironmentContext),

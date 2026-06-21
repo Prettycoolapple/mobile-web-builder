@@ -85,6 +85,27 @@ describe("property eligibility verifier", () => {
     expect(shouldForceSingleLotForEligibility(result)).toBe(true);
   });
 
+  it("treats slash-prefixed apartment addresses as verified unit/apartment typology", () => {
+    const result = assessPropertyEligibility({
+      address: "3F/31 Scanlan Street, Grey Lynn, Auckland City, Auckland",
+      estateType: null,
+      propertyType: null,
+      landAreaSqm: null,
+      floorAreaSqm: 95,
+      buildYear: null,
+      zoneCode: "THAB",
+      potentialLots: null,
+      minLotSize: null,
+    });
+
+    expect(result.typology).toBe("unit_apartment");
+    expect(result.typologyConfidence).toBe("verified");
+    expect(result.titleConfidence).toBe("unknown");
+    expect(result.subdivisionEligible).toBe(false);
+    expect(result.subdivisionRejectReason).toBe("unit_or_crosslease_signal");
+    expect(shouldForceSingleLotForEligibility(result)).toBe(true);
+  });
+
   it("rejects ownership home unit signals from PropertyValue even when listing tenure says freehold", () => {
     const result = assessPropertyEligibility({
       address: "1 Chesterfield Avenue, St Heliers, Auckland",

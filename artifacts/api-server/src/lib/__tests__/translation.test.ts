@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { localiseTitleTypeForZh } from "../translation";
+import { localiseSiteStatusForZh, localiseTitleTypeForZh } from "../translation";
 
 describe("localiseTitleTypeForZh", () => {
   it("maps Freehold / Fee Simple to the Chinese label with English in parens", () => {
@@ -34,5 +34,17 @@ describe("localiseTitleTypeForZh", () => {
     expect(localiseTitleTypeForZh("")).toBeNull();
     expect(localiseTitleTypeForZh("   ")).toBeNull();
     expect(localiseTitleTypeForZh("Some Bespoke Tenure")).toBeNull();
+  });
+});
+
+describe("localiseSiteStatusForZh", () => {
+  it("maps deterministic property overview site statuses", () => {
+    expect(localiseSiteStatusForZh("has_dwelling", "Existing dwelling detected")).toBe("已检测到现有住宅");
+    expect(localiseSiteStatusForZh("vacant_land", "Vacant land / section")).toBe("空地 / 建地");
+    expect(localiseSiteStatusForZh("unknown", "Site condition unknown")).toBe("地块状态未知");
+  });
+
+  it("maps legacy English labels when the semantic enum is missing", () => {
+    expect(localiseSiteStatusForZh(null, "Existing dwelling detected")).toBe("已检测到现有住宅");
   });
 });

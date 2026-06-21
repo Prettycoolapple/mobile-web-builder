@@ -87,6 +87,20 @@ describe("realestate-api combined listing detection", () => {
     });
   });
 
+  it("does not split unit or apartment slash addresses as package listings", () => {
+    const addresses = [
+      "3F/31 Scanlan Street, Grey Lynn, Auckland City, Auckland",
+      "3/31 Scanlan Street, Grey Lynn, Auckland City, Auckland",
+      "Unit 3F/31 Scanlan Street, Grey Lynn, Auckland City, Auckland",
+      "Apartment 3, 31 Scanlan Street, Grey Lynn, Auckland City, Auckland",
+    ];
+
+    for (const address of addresses) {
+      expect(looksLikeCombinedListingAddress(address)).toBe(false);
+      expect(extractCombinedListingAddressParts(address)).toBeNull();
+    }
+  });
+
   it("expands shared street names for package listing shorthand", () => {
     expect(extractCombinedListingAddressParts("15 & 17 Fisherton Street, Grey Lynn")).toEqual({
       packageAddress: "15 & 17 Fisherton Street, Grey Lynn",

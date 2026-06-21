@@ -178,7 +178,7 @@ describe("property share previews", () => {
     expect(html).not.toContain("devfeasible://share/abc123");
     expect(html).toContain('data-ios-app-url="https://projectalpha.app/share/abc123"');
     expect(html).toContain('data-android-intent-url="intent://share/abc123#Intent;scheme=devfeasible;package=nz.devfeasible.app;');
-    expect(html).toContain('button.textContent = "Opening..."');
+    expect(html).toContain('button.textContent = prefersZh ? "正在打开..." : "Opening..."');
     expect(html).toContain("window.location.assign(fallback)");
   });
 

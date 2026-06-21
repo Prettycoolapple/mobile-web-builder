@@ -21,7 +21,7 @@ import { Stack, useRouter } from "expo-router";
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
 import * as Notifications from "expo-notifications";
-import { Alert, AppState, Platform, type AppStateStatus } from "react-native";
+import { Alert, AppState, DeviceEventEmitter, Platform, type AppStateStatus } from "react-native";
 import { Settings } from "react-native-fbsdk-next";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -182,10 +182,12 @@ function NotificationSetup() {
       const type = typeof data.type === "string" ? data.type : undefined;
       const threadId = typeof data.threadId === "string" ? data.threadId : undefined;
       if (type === "report_ready") {
+        DeviceEventEmitter.emit("projectAlpha:backgroundJobsReady", { type });
         router.push("/(tabs)/history" as never);
         return;
       }
       if (type === "screening_ready") {
+        DeviceEventEmitter.emit("projectAlpha:backgroundJobsReady", { type });
         router.push("/(tabs)" as never);
         return;
       }
@@ -194,7 +196,12 @@ function NotificationSetup() {
       }
     };
 
-    notificationListener.current = Notifications.addNotificationReceivedListener(() => {
+    notificationListener.current = Notifications.addNotificationReceivedListener((notification) => {
+      const data = notification.request.content.data as Record<string, unknown> | undefined;
+      const type = data && typeof data.type === "string" ? data.type : undefined;
+      if (type === "report_ready" || type === "screening_ready") {
+        DeviceEventEmitter.emit("projectAlpha:backgroundJobsReady", { type });
+      }
     });
 
     responseListener.current = Notifications.addNotificationResponseReceivedListener((response) => {

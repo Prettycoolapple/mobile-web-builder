@@ -162,6 +162,56 @@ describe("card score cache", () => {
     expect(mockedComputeLightScore).not.toHaveBeenCalled();
   });
 
+  it("honours cached score-unavailable reports without falling back to an estimate", async () => {
+    mockedGetCachedRaw.mockResolvedValue({
+      ageDays: 1,
+      row: {} as never,
+      rawData: {
+        derived_scores: {
+          scoringVersion: SCORING_VERSION,
+          scores: null,
+          scoreUnavailableReason: "unit_or_apartment_typology",
+          landArea: null,
+          zone: "THAB",
+          potentialLots: 1,
+          minLotSize: null,
+          standardVacantLots: 1,
+          standardPathViable: false,
+          standardMinLotSize: null,
+          designLedEligible: false,
+          designLedYieldRange: null,
+          designLedConfidence: "none",
+          designLedReasons: [],
+          designLedBlockers: ["Unit/apartment typology is not a subdivision candidate."],
+          designLedSummary: null,
+          designLedDetail: null,
+        },
+      },
+    } as never);
+
+    queueBackgroundScores([
+      { address: "3F/31 Scanlan Street, Grey Lynn, Auckland City, Auckland", listingUrl: "https://example.test/unit", price: 1_000_000 },
+    ]);
+    await flushPromises();
+
+    const scores = getCardScores([{ address: "3F/31 Scanlan Street, Grey Lynn, Auckland City, Auckland", listingUrl: "https://example.test/unit" }]);
+    expect(scores[0].status).toBe("ready");
+    expect(scores[0].scores).toBeUndefined();
+    expect(mockedComputeLightScore).not.toHaveBeenCalled();
+  });
+
+  it("does not estimate card scores for unit slash addresses", async () => {
+    queueBackgroundScores([
+      { address: "3F/31 Scanlan Street, Grey Lynn, Auckland City, Auckland", listingUrl: "https://example.test/unit", price: 1_000_000 },
+    ]);
+    await flushPromises();
+
+    const scores = getCardScores([{ address: "3F/31 Scanlan Street, Grey Lynn, Auckland City, Auckland", listingUrl: "https://example.test/unit" }]);
+    expect(scores[0].status).toBe("ready");
+    expect(scores[0].scores).toBeUndefined();
+    expect(mockedComputeLightScore).not.toHaveBeenCalled();
+  });
+
   it("ignores persisted scores from a stale SCORING_VERSION and falls back to the estimate", async () => {
     mockedGetCachedRaw.mockResolvedValue({
       ageDays: 3,

@@ -89,9 +89,9 @@ export interface AddressBuildAssessment {
 export type BuiltEnvironmentAssessment = ParcelBuildAssessment | AddressBuildAssessment;
 
 export const BUILT_ENVIRONMENT_RADIUS_M = 100;
-export const BUILT_ENVIRONMENT_FULL_SCAN_COUNT = 30;
-export const BUILT_ENVIRONMENT_LIGHT_SCAN_COUNT = 12;
-export const BUILT_ENVIRONMENT_FULL_STATUS_COUNT = 15;
+export const BUILT_ENVIRONMENT_FULL_SCAN_COUNT = 7;
+export const BUILT_ENVIRONMENT_LIGHT_SCAN_COUNT = 7;
+export const BUILT_ENVIRONMENT_FULL_STATUS_COUNT = 7;
 
 const DEFAULT_CONTEXT: BuiltEnvironmentContext = {
   radiusM: BUILT_ENVIRONMENT_RADIUS_M,
@@ -410,8 +410,8 @@ async function assessAddresses(addresses: string[], timeoutMs: number): Promise<
 
 function confidenceFor(knownCount: number, assessedCount: number): BuiltEnvironmentConfidence {
   if (knownCount < 3 || assessedCount <= 0) return "unknown";
-  if (knownCount >= 8) return "high";
-  if (knownCount >= 5) return "medium";
+  if (knownCount >= 6) return "high";
+  if (knownCount >= 4) return "medium";
   return "low";
 }
 
@@ -596,4 +596,12 @@ export function builtEnvironmentScoreAdjustment(context: BuiltEnvironmentContext
     };
   }
   return { roiDelta: 0, reason: null };
+}
+
+export function hasUsableBuiltEnvironmentContext(context: BuiltEnvironmentContext | null | undefined): boolean {
+  if (!context) return false;
+  if (context.knownBuildYearCount <= 0) return false;
+  const rows = context.nearbyStatus?.length ? context.nearbyStatus : context.nearbyExamples ?? [];
+  if (rows.length === 0) return false;
+  return rows.some((row) => row.status !== "unknown" || row.buildYear != null || row.buildYearRange != null);
 }

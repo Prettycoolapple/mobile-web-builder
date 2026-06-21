@@ -1,5 +1,6 @@
 import type { LinzParcel } from "./linz";
 import type { ListingClaims } from "./listing-claims";
+import { looksLikeUnitOrApartmentAddress } from "./address-patterns";
 
 export type PropertyTypology = "standalone" | "terrace_townhouse" | "unit_apartment" | "unknown";
 export type PropertyEligibilityConfidence = "verified" | "inferred" | "unknown";
@@ -195,7 +196,7 @@ function inferTypology(input: PropertyEligibilityInput, text: string): {
   typology: PropertyTypology;
   typologyConfidence: PropertyEligibilityConfidence;
 } {
-  if (hasUnitLikeSignal(text) || hasCrossLeaseSignal(text)) {
+  if (looksLikeUnitOrApartmentAddress(input.address) || hasUnitLikeSignal(text) || hasCrossLeaseSignal(text)) {
     return { typology: "unit_apartment", typologyConfidence: "verified" };
   }
   // The listing's own self-description of the dwelling ("brand new townhouses",
@@ -227,7 +228,7 @@ function hasSuspiciousUrbanLandFloorRatio(input: PropertyEligibilityInput): bool
 
 export function assessPropertyEligibility(input: PropertyEligibilityInput): PropertyEligibilityResult {
   const text = corpus(input);
-  const unitLikeSignal = hasUnitLikeSignal(text);
+  const unitLikeSignal = looksLikeUnitOrApartmentAddress(input.address) || hasUnitLikeSignal(text);
   const crossLeaseSignal = hasCrossLeaseSignal(text);
   // A LINZ-verified estate type wins over text inference; fall back to copy.
   const { titleConfidence, titleIsFreehold } =

@@ -28,6 +28,12 @@ describe("strictAttributePrefilter", () => {
     expect(v.kind).toBe("reject");
   });
 
+  it("rejects lettered unit slash addresses", () => {
+    const v = strictAttributePrefilter(listing({ address: "3F/31 Scanlan Street, Grey Lynn, Auckland City, Auckland" }));
+    expect(v.kind).toBe("reject");
+    if (v.kind === "reject") expect(v.reason).toBe("apartment_or_unit_address_format");
+  });
+
   it("rejects letter-suffixed street numbers (already-subdivided child lot)", () => {
     const v = strictAttributePrefilter(listing({ address: "352F Kohimarama Road, St Heliers" }));
     expect(v.kind).toBe("reject");

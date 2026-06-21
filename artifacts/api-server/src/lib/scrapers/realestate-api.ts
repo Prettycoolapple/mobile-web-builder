@@ -16,6 +16,7 @@
  */
 
 import { logger } from "../logger";
+import { looksLikeUnitOrApartmentAddress } from "../address-patterns";
 import type { ComparableSale, ListingResult } from "./oneroof";
 import { extractBedsBaths } from "./bed-bath-extractor";
 
@@ -954,6 +955,7 @@ function expandStreetSegment(segment: string, suffix: string): string[] {
 export function extractCombinedListingAddressParts(rawAddress: string | null | undefined): CombinedListingAddressParts | null {
   const address = rawAddress?.trim();
   if (!address) return null;
+  if (looksLikeUnitOrApartmentAddress(address)) return null;
 
   const split = splitPackageStreetAndSuffix(address);
   if (!split) return null;

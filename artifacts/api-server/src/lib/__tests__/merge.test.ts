@@ -92,6 +92,8 @@ describe("mergePropertyData", () => {
 
     expect(merged.land_area_sqm).toBe(2694);
     expect(merged.data_sources.land_area_sqm).toBe("realestate.co.nz (selected active listing)");
+    expect(merged.listing_price).toBe(3_500_000);
+    expect(merged.data_sources.listing_price).toBe("realestate.co.nz (active listing)");
   });
 
   it("passes optional terrain distribution metrics through the merged payload", () => {
@@ -801,5 +803,43 @@ describe("mergePropertyData", () => {
 
     expect(merged.build_year).toBe(1950);
     expect(merged.data_sources.build_year).toBe("auckland_council_gis");
+  });
+
+  it("does not expose inactive OneRoof listing price as current asking price", () => {
+    const merged = mergePropertyData(
+      { area_sqm: 809 } as any,
+      null,
+      {
+        found: true,
+        cv_nzd: null,
+        cv_year: null,
+        last_sale_price: null,
+        last_sale_date: null,
+        listing_price: 3_500_000,
+        listing_active: false,
+        floor_area_sqm: null,
+        land_area_sqm: null,
+        build_year: null,
+        bedrooms: null,
+        bathrooms: null,
+        tenureText: null,
+        main_photo_url: null,
+        photo_urls: [],
+        comparables: [],
+        data_source: "oneroof",
+        scraped_at: "2026-06-18T00:00:00.000Z",
+      },
+      { zone_code: "MHS", zone_description: "Mixed Housing Suburban", min_lot_size_sqm: 400 } as any,
+      [],
+      {
+        contour: null,
+        asbestos_risk: "unknown",
+        infrastructure: [],
+        analysed_address: "19 Chatsworth Crescent, Pakuranga, Auckland",
+      },
+    );
+
+    expect(merged.listing_price).toBeNull();
+    expect(merged.data_sources.listing_price).toBeUndefined();
   });
 });

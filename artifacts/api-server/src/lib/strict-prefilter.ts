@@ -2,6 +2,7 @@ import type { ListingResult } from "./scrapers/oneroof";
 import { isLetterSuffixedStreetNumber } from "./discovery-land-area";
 import { assessPropertyEligibility } from "./property-eligibility";
 import { extractListingClaims } from "./listing-claims";
+import { looksLikeUnitOrApartmentAddress } from "./address-patterns";
 
 export type PrefilterVerdict =
   | { kind: "reject"; reason: string }
@@ -21,14 +22,6 @@ const UNIT_PROPERTY_TYPE_RE = /\b(unit|apartment|flat|townhouse|terrace|terraced
 const SECTION_PROPERTY_TYPE_RE = /\b(section|lifestyle|farm|bare\s*land|vacant\s*land)\b/i;
 const NON_FREEHOLD_TENURE_RE = /(cross\s*lease|unit\s*title|leasehold|stratum\s*estate|company\s*share|licence\s*to\s*occupy|licence-to-occupy)/i;
 
-function looksLikeApartmentAddress(address: string): boolean {
-  const a = address.trim();
-  return /^[\dA-Za-z]+\/[\dA-Za-z]+/i.test(a)
-    || /^[\d&, ]+\/\d+/i.test(a)
-    || /^(unit|apt|apartment|level|flat|suite)\s+[\dA-Za-z]/i.test(a)
-    || /^\d+[A-Za-z]+\/\d+/i.test(a);
-}
-
 /**
  * Free, synchronous gate that rejects a for-sale listing when its own
  * attributes alone prove it cannot satisfy the strict-subdivision criteria.
@@ -42,7 +35,7 @@ function looksLikeApartmentAddress(address: string): boolean {
  * of a suburb queue with zero REST calls.
  */
 export function strictAttributePrefilter(listing: ListingResult): PrefilterVerdict {
-  if (looksLikeApartmentAddress(listing.address)) {
+  if (looksLikeUnitOrApartmentAddress(listing.address)) {
     return { kind: "reject", reason: "apartment_or_unit_address_format" };
   }
   if (isLetterSuffixedStreetNumber(listing.address)) {

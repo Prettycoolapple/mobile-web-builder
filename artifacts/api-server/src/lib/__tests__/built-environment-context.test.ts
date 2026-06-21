@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  BUILT_ENVIRONMENT_FULL_SCAN_COUNT,
+  BUILT_ENVIRONMENT_FULL_STATUS_COUNT,
   buildBuiltEnvironmentContext,
   builtEnvironmentScoreAdjustment,
   generateNearbyAddressCandidates,
+  hasUsableBuiltEnvironmentContext,
   type ParcelBuildAssessment,
 } from "../built-environment-context";
 import { selectNearestResidentialParcels } from "../neighbourhood-context";
@@ -38,6 +41,11 @@ function assessment(
 }
 
 describe("built environment context", () => {
+  it("uses a smaller seven-property scan window for report context", () => {
+    expect(BUILT_ENVIRONMENT_FULL_SCAN_COUNT).toBe(7);
+    expect(BUILT_ENVIRONMENT_FULL_STATUS_COUNT).toBe(7);
+  });
+
   it("generates nearby same-street candidate addresses around the subject", () => {
     const candidates = generateNearbyAddressCandidates("8 Hampton Drive, St Heliers", 8);
 
@@ -150,6 +158,37 @@ describe("built environment context", () => {
     expect(context.signal).toBe("insufficient_data");
     expect(context.confidence).toBe("unknown");
     expect(builtEnvironmentScoreAdjustment(context)).toEqual({ roiDelta: 0, reason: null });
+  });
+
+  it("treats all-unknown nearby rows as unusable context", () => {
+    const context = buildBuiltEnvironmentContext({
+      radiusM: 100,
+      subjectBuildYear: 1950,
+      assessments: [
+        assessment("n1", null),
+        assessment("n2", null),
+        assessment("n3", null),
+        assessment("n4", null),
+      ],
+    });
+
+    expect(context.knownBuildYearCount).toBe(0);
+    expect(context.nearbyStatus.every((row) => row.status === "unknown")).toBe(true);
+    expect(hasUsableBuiltEnvironmentContext(context)).toBe(false);
+  });
+
+  it("keeps built-environment context usable when at least one nearby build year is known", () => {
+    const context = buildBuiltEnvironmentContext({
+      radiusM: 100,
+      subjectBuildYear: 1950,
+      assessments: [
+        assessment("n1", 2022),
+        assessment("n2", null),
+        assessment("n3", null),
+      ],
+    });
+
+    expect(hasUsableBuiltEnvironmentContext(context)).toBe(true);
   });
 
   it("preserves decade data as an approximate range in examples", () => {

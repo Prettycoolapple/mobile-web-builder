@@ -468,6 +468,65 @@ function htmlEscape(value: unknown): string {
 
 type Fact = { label: string; value: string };
 
+function requestPrefersChinese(req?: Request | null): boolean {
+  const raw = cleanText(req?.headers["accept-language"], "").toLowerCase();
+  return raw.split(",").some((part) => part.trim().startsWith("zh"));
+}
+
+function shareTitleZh(title: string): string {
+  return title
+    .replace("Project Alpha property opportunity", "奥房房产机会")
+    .replace("Project Alpha property listing", "奥房房源")
+    .replace("Project Alpha feasibility analysis", "奥房可行性分析")
+    .replace("Project Alpha property share", "奥房房产分享");
+}
+
+function shareDescriptionZh(description: string): string {
+  const source = description.trim();
+  let out = description
+    .replace("Open Project Alpha to view more.", "打开奥房查看更多。")
+    .replace("Open Project Alpha to view this property opportunity.", "打开奥房查看此房产机会。")
+    .replace("Open Project Alpha to view this listing.", "打开奥房查看此房源。")
+    .replace("Open Project Alpha to view this property listing.", "打开奥房查看此房源。")
+    .replace("Open Project Alpha for the latest analysis.", "打开奥房查看最新分析。")
+    .replace("Open Project Alpha to view the latest feasibility analysis.", "打开奥房查看最新可行性分析。")
+    .replace("This Project Alpha share link could not be found or has expired.", "此奥房分享链接不存在或已过期。");
+
+  out = out.replace(/\bScore ([0-9.]+)\/5\b/g, "评分 $1/5");
+  out = out.replace(/\b([0-9]+) potential lots\b/g, "$1 个潜在地块");
+  out = out.replace(/\bdesign-led ([0-9]+)-([0-9]+) lots to test\b/g, "可测试设计主导方案 $1-$2 个地块");
+  out = out.replace(/\bsqm land\b/g, "平方米土地");
+  if (out === source && !/[\u3400-\u9fff]/.test(out)) return "打开奥房查看此房产详情。";
+  return out;
+}
+
+function factLabelZh(label: string): string {
+  switch (label) {
+    case "Bedrooms": return "卧室";
+    case "Bathrooms": return "浴室";
+    case "Zoning": return "分区";
+    case "Title": return "产权";
+    case "Land area": return "土地面积";
+    case "Floor area": return "建筑面积";
+    default: return label;
+  }
+}
+
+function factValueZh(value: string): string {
+  return value
+    .replace(/mÂ²|m²/g, "平方米")
+    .replace(/\bsqm\b/gi, "平方米")
+    .replace(/\bMixed Housing Urban\b/gi, "混合住房城区")
+    .replace(/\bMixed Housing Suburban\b/gi, "混合住房郊区")
+    .replace(/\bSingle House\b/gi, "独栋住宅区")
+    .replace(/\bTerrace Housing and Apartment Buildings\b/gi, "联排住宅和公寓建筑区")
+    .replace(/\bFreehold\b/gi, "永久产权")
+    .replace(/\bFee Simple\b/gi, "永久产权")
+    .replace(/\bCross[- ]lease\b/gi, "交叉租赁产权")
+    .replace(/\bLeasehold\b/gi, "租赁产权")
+    .replace(/\bUnit Title\b/gi, "单元产权");
+}
+
 function recordValue(source: unknown, key: string): unknown {
   if (!source || typeof source !== "object") return undefined;
   return (source as Record<string, unknown>)[key];
@@ -523,16 +582,21 @@ export function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?
   const found = !!preview;
   const title = preview?.title ?? "Project Alpha property share";
   const description = preview?.description ?? "This Project Alpha share link could not be found or has expired.";
+  const zh = requestPrefersChinese(req);
+  const titleZh = shareTitleZh(title);
+  const descriptionZh = shareDescriptionZh(description);
   const url = preview?.url ?? `${baseUrl(req)}/`;
   const resolvedImage = socialPreviewImageUrl(preview?.imageUrl, req);
   const image = resolvedImage ?? `${baseUrl(req)}/favicon.png`;
-  const safeTitle = htmlEscape(title);
-  const safeDescription = htmlEscape(description);
+  const safeTitle = htmlEscape(zh ? titleZh : title);
+  const safeDescription = htmlEscape(zh ? descriptionZh : description);
+  const safeTitleZh = htmlEscape(titleZh);
+  const safeDescriptionEn = htmlEscape(description);
+  const safeDescriptionZh = htmlEscape(descriptionZh);
   const safeImage = htmlEscape(image);
   const safeUrl = htmlEscape(url);
   const safeIosStoreUrl = htmlEscape(getIosAppStoreUrl());
   const safeAndroidStoreUrl = htmlEscape(getAndroidPlayStoreUrl());
-  const safeSalesPortalUrl = htmlEscape("https://www.projectalpha.app/sales-portal/");
   const safeIosUniversalUrl = preview
     ? htmlEscape(alternateUniversalShareUrl(preview.token, req))
     : safeIosStoreUrl;
@@ -542,12 +606,20 @@ export function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?
   const safeAddress = htmlEscape(preview?.address ?? "Shared property");
   const facts = preview?.facts ?? [];
   const factsHtml = facts.length
-    ? `<dl class="facts">${facts.map((fact) => `<div><dt>${htmlEscape(fact.label)}</dt><dd>${htmlEscape(fact.value)}</dd></div>`).join("")}</dl>`
+    ? `<dl class="facts">${facts.map((fact) => {
+        const labelZh = factLabelZh(fact.label);
+        const valueZh = factValueZh(fact.value);
+        return `<div><dt data-en="${htmlEscape(fact.label)}" data-zh="${htmlEscape(labelZh)}">${htmlEscape(zh ? labelZh : fact.label)}</dt><dd data-en="${htmlEscape(fact.value)}" data-zh="${htmlEscape(valueZh)}">${htmlEscape(zh ? valueZh : fact.value)}</dd></div>`;
+      }).join("")}</dl>`
     : "";
+  const eyebrow = zh ? "奥房" : "Project Alpha";
+  const eyebrowEn = "Project Alpha";
+  const eyebrowZh = "奥房";
   const cta = found ? "Open Project Alpha to view more" : "Get Project Alpha";
+  const ctaZh = found ? "打开奥房查看" : "下载奥房";
 
   return `<!doctype html>
-<html lang="en-NZ">
+<html lang="${zh ? "zh-Hans" : "en-NZ"}">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -595,9 +667,9 @@ export function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?
           ${resolvedImage ? `<img src="${safeImage}" alt="" />` : `<div class="hero-fallback">PA</div>`}
         </div>
         <div class="body">
-          <p class="eyebrow">Project Alpha</p>
+          <p class="eyebrow" data-en="${htmlEscape(eyebrowEn)}" data-zh="${htmlEscape(eyebrowZh)}">${htmlEscape(eyebrow)}</p>
           <h1>${safeAddress}</h1>
-          <p>${safeDescription}</p>
+          <p data-en="${safeDescriptionEn}" data-zh="${safeDescriptionZh}">${safeDescription}</p>
           ${factsHtml}
           <div class="actions">
             <a
@@ -608,9 +680,9 @@ export function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?
               data-android-intent-url="${safeAndroidIntentUrl}"
               data-ios-store="${safeIosStoreUrl}"
               data-android-store="${safeAndroidStoreUrl}"
-            >${htmlEscape(cta)}</a>
-            <div class="divider" aria-hidden="true"></div>
-            <a class="button secondary" href="${safeSalesPortalUrl}">Property listing (Property Agent)</a>
+              data-en="${htmlEscape(cta)}"
+              data-zh="${htmlEscape(ctaZh)}"
+            >${htmlEscape(zh ? ctaZh : cta)}</a>
           </div>
         </div>
       </article>
@@ -618,6 +690,18 @@ export function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?
     <script>
       (function () {
         var button = document.getElementById("open-app-button");
+        var prefersZh = (navigator.languages || [navigator.language || ""]).some(function (lang) {
+          return String(lang || "").toLowerCase().indexOf("zh") === 0;
+        });
+        if (prefersZh) {
+          document.documentElement.lang = "zh-Hans";
+          document.title = "${safeTitleZh}";
+          var desc = document.querySelector('meta[name="description"]');
+          if (desc) desc.setAttribute("content", "${safeDescriptionZh}");
+          document.querySelectorAll("[data-zh]").forEach(function (node) {
+            node.textContent = node.getAttribute("data-zh") || node.textContent;
+          });
+        }
         if (!button) return;
         button.addEventListener("click", function (event) {
           var ua = navigator.userAgent || "";
@@ -626,11 +710,11 @@ export function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?
           if (button.dataset.opening === "true") return;
           button.dataset.opening = "true";
           var originalText = button.textContent;
-          button.textContent = "Opening...";
+          button.textContent = prefersZh ? "正在打开..." : "Opening...";
           if (!isAndroid) {
             window.setTimeout(function () {
               button.dataset.opening = "false";
-              button.textContent = originalText || "${htmlEscape(cta)}";
+              button.textContent = originalText || (prefersZh ? "${htmlEscape(ctaZh)}" : "${htmlEscape(cta)}");
             }, 2600);
             return;
           }
@@ -657,7 +741,7 @@ export function sharePreviewHtml(preview: ReturnType<typeof publicPreview>, req?
           window.setTimeout(function () {
             if (!cancelled) {
               button.dataset.opening = "false";
-              button.textContent = originalText || "${htmlEscape(cta)}";
+              button.textContent = originalText || (prefersZh ? "${htmlEscape(ctaZh)}" : "${htmlEscape(cta)}");
             }
           }, 2600);
         });

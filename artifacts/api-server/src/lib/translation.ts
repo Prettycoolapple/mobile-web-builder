@@ -166,6 +166,23 @@ export function localiseTitleTypeForZh(raw: string | null | undefined): string |
   return TITLE_TYPE_ZH[normalised] ?? null;
 }
 
+export function localiseSiteStatusForZh(
+  siteStatus: unknown,
+  rawLabel: string | null | undefined,
+): string | null {
+  const status = typeof siteStatus === "string" ? siteStatus.trim().toLowerCase() : "";
+  if (status === "has_dwelling") return "已检测到现有住宅";
+  if (status === "vacant_land") return "空地 / 建地";
+  if (status === "unknown") return "地块状态未知";
+
+  const key = typeof rawLabel === "string" ? rawLabel.trim().toLowerCase().replace(/\s+/g, " ") : "";
+  if (!key) return null;
+  if (key === "existing dwelling detected") return "已检测到现有住宅";
+  if (key === "vacant land / section") return "空地 / 建地";
+  if (key === "site condition unknown") return "地块状态未知";
+  return null;
+}
+
 export async function ensureChineseForLocale(text: string, locale: Locale): Promise<string> {
   if (locale !== "zh") return text;
   return ensureChinese(text);
@@ -339,6 +356,8 @@ export async function translateReportNarrative(
         typeof po.titleType === "string" ? formatTitleTypeForDisplay(po.titleType) ?? po.titleType : po.titleType;
       const mapped = typeof rawTitle === "string" ? localiseTitleTypeForZh(rawTitle) : null;
       po.titleType = mapped ?? (await translateIfString(rawTitle));
+      const mappedSiteStatus = localiseSiteStatusForZh(po.siteStatus, typeof po.siteStatusLabel === "string" ? po.siteStatusLabel : null);
+      po.siteStatusLabel = mappedSiteStatus ?? (await translateIfString(po.siteStatusLabel));
     } else {
       po.titleType =
         typeof po.titleType === "string" ? formatTitleTypeForDisplay(po.titleType) ?? po.titleType : po.titleType;

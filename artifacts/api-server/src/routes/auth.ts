@@ -37,6 +37,7 @@ import { createStorageReviewToken } from "../lib/storage-review-token";
 import { runAfterResponse } from "../lib/vercel-wait-until";
 import { checkPhoneLineTypeForSignup, sendPhoneLineTypeBlock } from "../lib/phone-line-type";
 import { checkSignupCreationLimits, sendSignupLimitBlock } from "../lib/signup-limits";
+import { touchUserLastActive } from "../lib/user-activity";
 import {
   checkPhoneCanRegister,
   normalizeRegistrationPhone,
@@ -408,7 +409,7 @@ function recordLoginEvent(userId: string): void {
   void (async () => {
     try {
       const now = new Date();
-      await db.update(profiles).set({ lastLoginAt: now }).where(eq(profiles.id, userId));
+      await touchUserLastActive(userId, now);
       await db.insert(userLoginEvents).values({ userId });
     } catch {
       // intentionally swallow — analytics must not impact auth
@@ -2059,11 +2060,10 @@ router.get("/me", requireAuth, async (req, res) => {
 
 router.post("/activity", requireAuth, async (req, res) => {
   const userId = (req as any).userId as string;
-  const now = new Date();
 
   try {
-    await db.update(profiles).set({ lastLoginAt: now }).where(eq(profiles.id, userId));
-    res.json({ ok: true, lastActiveAt: now.toISOString() });
+    const lastActiveAt = await touchUserLastActive(userId);
+    res.json({ ok: true, lastActiveAt: lastActiveAt.toISOString() });
   } catch (error) {
     req.log.error({ error }, "Failed to update last activity");
     res.status(500).json({ error: "Failed to update activity", code: "ACTIVITY_FAILED" });

@@ -38,6 +38,7 @@ import { runPropertyPipeline, hasCacheableCore, type PipelineResult } from "../l
 import { normaliseDiscoveryAddressKey } from "../lib/address-key";
 import { getCachedRaw, upsertCachedRaw, bumpHitCount, backfillDerivedScores } from "../lib/property-cache";
 import { SCORING_VERSION } from "../lib/card-score";
+import { noteUserActivity } from "../lib/user-activity";
 import { buildSubdivisionPathwayNote } from "../lib/lot-calculator";
 import {
   canonicalBuildYearFromReport,
@@ -633,6 +634,13 @@ function applyDeterministicPipelineOverrides(
         parsed.riskSummary = filteredBullets;
       }
     }
+  } else {
+    delete parsed.cv_unavailable;
+    delete parsed.total_excludes_land;
+    delete parsed.totalCostLow;
+    delete parsed.totalCostHigh;
+    delete parsed.cost_per_unit_avg;
+    delete parsed.costItems;
   }
 
   parsed.interest_rate_outlook = scenarios[0]?.interest_rate_outlook ?? parsed.interest_rate_outlook;
@@ -647,6 +655,8 @@ function applyDeterministicPipelineOverrides(
   const recommendedStrategy = developmentStrategies.find((strategy) => strategy.recommendation === "recommended");
   if (recommendedStrategy) {
     parsed.recommendedDevelopmentStrategy = recommendedStrategy.id;
+  } else {
+    delete parsed.recommendedDevelopmentStrategy;
   }
   parsed.neighbourhoodContext = pipelineResult.neighbourhoodContext ?? null;
   parsed.transportContext = pipelineResult.transportContext ?? null;
@@ -783,6 +793,8 @@ function applyDeterministicPipelineOverrides(
 
   if (pipelineResult.scores) {
     parsed.scores = pipelineResult.scores;
+  } else {
+    delete parsed.scores;
   }
 
   sanitizeReportScoresReasons(parsed.scores as Record<string, unknown> | undefined);
@@ -2009,7 +2021,11 @@ function topUpGenericListingCandidates(
   return prioritizeSponsoredGenericCandidates(out).slice(0, targetCount);
 }
 
-const DISCOVERY_CONTINUATION_TTL_MS = 30 * 60 * 1000;
+// Resume window for "Show more". Long enough to survive an overnight / next-day
+// gap (user closes the app and comes back later), and slid forward on every
+// /discovery/next call (see saveContinuationState) so an active browse never
+// expires mid-session. The durable shown-memory (30-day) stays separate.
+const DISCOVERY_CONTINUATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DISCOVERY_CONTINUATION_PREFETCH_COUNT = 6;
 const DISCOVERY_CONTINUATION_PAGE_SIZE = 3;
 // Generic browse paginates the source lazily: fetch this many API pages (100
@@ -2073,7 +2089,15 @@ async function saveContinuationState(
   await withDbRetry(() =>
     db
       .update(discoveryContinuations)
-      .set({ state, exhausted, updatedAt: new Date() })
+      // Slide the expiry forward on every save so an actively-browsing user
+      // never hits the expiry guard mid-session, and a recently-used
+      // continuation stays resumable for a full TTL of "come back later".
+      .set({
+        state,
+        exhausted,
+        updatedAt: new Date(),
+        expiresAt: new Date(Date.now() + DISCOVERY_CONTINUATION_TTL_MS),
+      })
       .where(eq(discoveryContinuations.id, id)),
   );
 }
@@ -3594,6 +3618,7 @@ async function runFeasibilityAnalyseCore(args: {
   selectedListingContext?: SelectedListingContext | null;
   userId: string | null;
   log: FeasibilityLog;
+  notifyWhenReady?: boolean;
 }): Promise<{
   report: Record<string, unknown>;
   savedSearchId: string | null;
@@ -3733,7 +3758,7 @@ async function runFeasibilityAnalyseCore(args: {
       log.error({ err }, "Failed to save analyse report to history");
     }
 
-    if (savedSearchId) {
+    if (savedSearchId && args.notifyWhenReady !== false) {
       const shortAddr = address.length > 90 ? `${address.slice(0, 87)}…` : address;
       const pushTitle = locale === "zh" ? "分析报告已就绪" : "Report ready";
       const pushBody =
@@ -3901,6 +3926,7 @@ async function processFeasibilityJob(jobId: string, log: FeasibilityLog): Promis
           conversationHistory: conv,
           userId: job.userId,
           log,
+          notifyWhenReady: false,
         });
     await withDbRetry(() =>
       db
@@ -3912,6 +3938,19 @@ async function processFeasibilityJob(jobId: string, log: FeasibilityLog): Promis
         })
         .where(eq(feasibilityJobs.id, jobId)),
     );
+    if (result.savedSearchId) {
+      const shortAddr = job.queryAddress.length > 90 ? `${job.queryAddress.slice(0, 87)}…` : job.queryAddress;
+      const pushTitle = locale === "zh" ? "分析报告已就绪" : "Report ready";
+      const pushBody =
+        locale === "zh"
+          ? `您请求的「${shortAddr}」分析已完成，请打开应用查看。`
+          : `Your analysis for ${shortAddr} is ready — open the app to view it.`;
+      void sendPushToUser(job.userId, pushTitle, pushBody, {
+        type: "report_ready",
+        searchId: result.savedSearchId,
+        jobId,
+      }).catch((e) => log.warn({ e }, "Report-ready push failed (non-fatal)"));
+    }
   } catch (err) {
     await withDbRetry(() =>
       db
@@ -3960,6 +3999,7 @@ router.post(
     await rejectAuthRequired(res, analyseLocale);
     return;
   }
+  noteUserActivity(userId, req.log);
 
   // Canary honeytokens (Layer 3): a request for a trap address is near-certain
   // scraping. Short-circuit with the fingerprint payload (no pipeline, no quota)
@@ -5527,6 +5567,12 @@ router.post(
       if (effectiveMode === "discover") {
         try {
           let recentShownEntries: RecentShownListing[] = [];
+          // Keys/urls seeded specifically from the durable 30-day shown memory,
+          // tracked apart from conversation-history keys so a brand-new chat that
+          // dead-ends can tell "you've already seen everything here" from "nothing
+          // matches here" and reset just the cross-chat memory (see fresh-chat
+          // re-show below).
+          const durableShownKeys = { addressKeys: new Set<string>(), urls: new Set<string>() };
           // ─── Account-level shown memory (30-day) ─────────────────────────
           // Seed the per-conversation dedup set with everything this account has
           // already been shown in the last 30 days, so a brand-new conversation
@@ -5536,8 +5582,8 @@ router.post(
             try {
               const persisted = await getRecentShownForUser(chatUserId);
               recentShownEntries = persisted.entries;
-              for (const k of persisted.addressKeys) alreadyShownAddressKeys.add(k);
-              for (const u of persisted.urls) alreadyShownUrlsFromHistory.push(u);
+              for (const k of persisted.addressKeys) { alreadyShownAddressKeys.add(k); durableShownKeys.addressKeys.add(k); }
+              for (const u of persisted.urls) { alreadyShownUrlsFromHistory.push(u); durableShownKeys.urls.add(u); }
               if (persisted.addressKeys.length || persisted.urls.length) {
                 req.log.info(
                   { keys: persisted.addressKeys.length, urls: persisted.urls.length },
@@ -5551,8 +5597,8 @@ router.post(
             try {
               const persisted = await getRecentShownForAnonymous(anonymousIdentityHash);
               recentShownEntries = persisted.entries;
-              for (const k of persisted.addressKeys) alreadyShownAddressKeys.add(k);
-              for (const u of persisted.urls) alreadyShownUrlsFromHistory.push(u);
+              for (const k of persisted.addressKeys) { alreadyShownAddressKeys.add(k); durableShownKeys.addressKeys.add(k); }
+              for (const u of persisted.urls) { alreadyShownUrlsFromHistory.push(u); durableShownKeys.urls.add(u); }
               if (persisted.addressKeys.length || persisted.urls.length) {
                 req.log.info(
                   { keys: persisted.addressKeys.length, urls: persisted.urls.length },
@@ -5837,6 +5883,13 @@ router.post(
             // Combine in-memory shown URLs with history-derived URLs so we still skip
             // previously-shown listings even after a server restart.
             let discoverySkipUrls: string[] = [];
+            // Brand-new chats can dead-end purely because the durable 30-day shown
+            // memory filtered out every listing already shown in a prior chat. When
+            // that happens we clear just those seeded keys and re-run the fresh
+            // search ONCE so the suburb re-shows from the top — but only on a genuine
+            // dead-end, so a chat with unseen listings still surfaces those first and
+            // the cross-chat anti-repeat is preserved.
+            for (let freshSearchPass = 0; freshSearchPass < 2; freshSearchPass++) {
             if (candidates.length === 0 && !forceNearbyDiscovery) {
               discoverySkipUrls = Array.from(new Set([
                 ...(repeatShownAreaIntent ? [] : getShownUrls(cacheKey)),
@@ -5984,6 +6037,27 @@ router.post(
                 );
                 }
               }
+            }
+            // Only retry after a genuine fresh-chat dead-end caused by the durable
+            // shown memory: clear just those seeded keys and loop once to re-show
+            // the suburb from the top. A chat with unseen listings never reaches
+            // here (candidates > 0), so cross-chat anti-repeat stays intact.
+            const deadEndFromShownMemory =
+              freshSearchPass === 0 &&
+              candidates.length === 0 &&
+              !isFollowUp &&
+              !repeatShownAreaIntent &&
+              !forceNearbyDiscovery &&
+              !streetHint &&
+              (durableShownKeys.addressKeys.size > 0 || durableShownKeys.urls.size > 0);
+            if (!deadEndFromShownMemory) break;
+            for (const k of durableShownKeys.addressKeys) alreadyShownAddressKeys.delete(k);
+            if (durableShownKeys.urls.size > 0) {
+              const keptUrls = alreadyShownUrlsFromHistory.filter((u) => !durableShownKeys.urls.has(u));
+              alreadyShownUrlsFromHistory.length = 0;
+              alreadyShownUrlsFromHistory.push(...keptUrls);
+            }
+            req.log.info({ suburb }, "Discovery: fresh-chat dead-end on durable shown memory — resetting and re-showing suburb");
             }
 
             // ── SOURCE WINDOW REFILL ─────────────────────────────────────────

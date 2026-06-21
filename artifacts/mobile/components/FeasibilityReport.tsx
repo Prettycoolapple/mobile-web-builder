@@ -110,6 +110,17 @@ function localisePropertyType(value: string, t: (key: string) => string): string
   }
 }
 
+function localiseSiteStatusLabel(
+  siteStatus: NonNullable<Report["propertyOverview"]>["siteStatus"] | undefined,
+  fallbackLabel: string | undefined,
+  t: (key: string) => string,
+): string {
+  if (siteStatus === "has_dwelling") return t("report.site_status_has_dwelling");
+  if (siteStatus === "vacant_land") return t("report.site_status_vacant_land");
+  if (siteStatus === "unknown") return t("report.site_status_unknown");
+  return fallbackLabel || t("report.site_status_unknown");
+}
+
 function hasCjk(text: string | null | undefined): boolean {
   return typeof text === "string" && /[\u3400-\u9fff]/.test(text);
 }
@@ -2078,6 +2089,16 @@ function builtEnvironmentStatus(context?: BuiltEnvironmentContext | null): "good
   return "neutral";
 }
 
+function hasUsableBuiltEnvironmentContext(context?: BuiltEnvironmentContext | null): boolean {
+  if (!context || (context.knownBuildYearCount ?? 0) <= 0) return false;
+  const rows = context.nearbyStatus?.length
+    ? context.nearbyStatus
+    : context.nearbyExamples ?? [];
+  return rows.some((row) =>
+    row.status !== "unknown" || row.buildYear != null || row.buildYearRange != null,
+  );
+}
+
 function DevelopmentStrategyPanel({ strategies, interestRateOutlook, comparablesQuality, neighbourhoodContext, transportContext, potentialLots, colors }: {
   strategies: DevelopmentStrategyScenario[];
   interestRateOutlook?: "falling" | "stable" | "rising";
@@ -2540,6 +2561,9 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
   }, [report, refreshedPhotoUrls]);
 
   const photoUrls = getReportPhotoUrls(effectiveReport);
+  const visibleBuiltEnvironmentContext = hasUsableBuiltEnvironmentContext(report.builtEnvironmentContext)
+    ? report.builtEnvironmentContext
+    : null;
 
   const handleShare = useCallback(async () => {
     try {
@@ -2832,10 +2856,14 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
           {report.propertyOverview.propertyType?.trim() ? (
             <InfoRow label={t("report.property_type")} value={localisePropertyType(report.propertyOverview.propertyType, t)} colors={colors} />
           ) : null}
-          {report.propertyOverview.siteStatusLabel?.trim() ? (
+          {report.propertyOverview.siteStatus || report.propertyOverview.siteStatusLabel?.trim() ? (
             <InfoRow
               label={t("report.site_status")}
-              value={report.propertyOverview.siteStatusLabel}
+              value={localiseSiteStatusLabel(
+                report.propertyOverview.siteStatus,
+                report.propertyOverview.siteStatusLabel ?? undefined,
+                t,
+              )}
               valueColor={report.propertyOverview.siteStatus === "vacant_land" ? colors.success : undefined}
               colors={colors}
             />
@@ -2974,15 +3002,15 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
         />
       </SectionCard>
 
-      {report.builtEnvironmentContext ? (
+      {visibleBuiltEnvironmentContext ? (
         <SectionCard
           title={t("report.built_environment")}
           icon="🏢"
-          status={builtEnvironmentStatus(report.builtEnvironmentContext)}
+          status={builtEnvironmentStatus(visibleBuiltEnvironmentContext)}
           colors={colors}
         >
           <BuiltEnvironmentPanel
-            context={report.builtEnvironmentContext}
+            context={visibleBuiltEnvironmentContext}
             colors={colors}
             onAnalyseProperty={onAnalyseProperty}
           />

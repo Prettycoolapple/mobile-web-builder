@@ -2,6 +2,7 @@ import React, { useRef, useState, useCallback, useEffect, useLayoutEffect, useMe
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   AppState,
+  DeviceEventEmitter,
   View,
   Text,
   TextInput,
@@ -184,6 +185,15 @@ type DiscoveryNextResponse = {
     suburb?: string | null;
   };
 };
+
+// A non-OK /discovery/next outcome. "expired" → the continuation can't be
+// resumed (token expired or owned by another session); "transient" → a
+// server/network blip the user can retry.
+type DiscoveryNextError = { error: "expired" | "transient" };
+
+function isDiscoveryNextError(value: unknown): value is DiscoveryNextError {
+  return Boolean(value) && typeof (value as DiscoveryNextError).error === "string";
+}
 
 function detectClientMode(text: string): "analyse" | "discover" | "followup" {
   const lowerText = text.toLowerCase();
@@ -1091,7 +1101,7 @@ export default function SearchScreen() {
   );
 
   const fetchDiscoveryNext = useCallback(
-    async (message: ChatMessage, count = 6, prefetchOnly = false): Promise<DiscoveryNextResponse | null> => {
+    async (message: ChatMessage, count = 6, prefetchOnly = false): Promise<DiscoveryNextResponse | DiscoveryNextError | null> => {
       if (!message.continuationToken) return null;
       const resp = await fetch(`${getApiBase()}/discovery/next`, {
         method: "POST",
@@ -1103,7 +1113,12 @@ export default function SearchScreen() {
           count,
         }),
       });
-      if (!resp.ok) return null;
+      if (!resp.ok) {
+        // 410 = continuation expired, 403 = belongs to another session. Neither
+        // can be resumed, so the caller surfaces the "see again / search nearby"
+        // choice. Everything else (5xx) is transient → caller offers a retry.
+        return { error: resp.status === 410 || resp.status === 403 ? "expired" : "transient" };
+      }
       return (await resp.json()) as DiscoveryNextResponse;
     },
     [getApiBase, getApiHeaders],
@@ -1136,7 +1151,9 @@ export default function SearchScreen() {
       prefetchingContinuationRef.current.add(key);
       try {
         const data = await fetchDiscoveryNext(message, 6, true);
-        if (!data) return;
+        // No prefetch available (no token, or expired/transient error). Leave the
+        // message as-is; the manual Show-more tap surfaces the choice/retry.
+        if (!data || isDiscoveryNextError(data)) return;
         updateMessage(message.id, {
           prefetchedSearchResults: data.candidates ?? [],
           prefetchedContinuationToken: data.continuationToken ?? null,
@@ -1337,8 +1354,26 @@ export default function SearchScreen() {
           );
           return;
         }
-        const data = await fetchDiscoveryNext(message, 3).catch(() => null);
+        // A thrown fetch (network failure) is a transient error, same as a 5xx.
+        const data = await fetchDiscoveryNext(message, 3).catch((): DiscoveryNextError => ({ error: "transient" }));
         if (!data) {
+          return;
+        }
+        if (isDiscoveryNextError(data)) {
+          if (data.error === "expired") {
+            // The continuation can't be resumed (expired / another session).
+            // Drop the dead token so we stop hammering it, and surface the same
+            // "see again / search nearby" choice the user would get on a normal
+            // pool drain — never a silent revert.
+            updateMessage(message.id, { continuationToken: null }, sessionId);
+            showDiscoveryExhaustedChoice(undefined, sessionId, {
+              searchPresentation: message.searchPresentation,
+              suburb: message.suburb,
+            });
+          } else {
+            // Transient: keep the token so the next tap retries, and tell the user.
+            addMessage({ role: "assistant", content: t("search.show_more_retry"), type: "text" }, sessionId);
+          }
           return;
         }
         appendContinuationCandidates(
@@ -1360,7 +1395,7 @@ export default function SearchScreen() {
         updateMessage(message.id, { showMoreStatus: "idle" }, sessionId);
       }
     },
-    [appendContinuationCandidates, currentSession?.id, currentSessionId, fetchDiscoveryNext, updateMessage, t],
+    [addMessage, appendContinuationCandidates, currentSession?.id, currentSessionId, fetchDiscoveryNext, showDiscoveryExhaustedChoice, updateMessage, t],
   );
 
   useEffect(() => {
@@ -1725,6 +1760,10 @@ export default function SearchScreen() {
     if (!user?.id) return;
     void pollBackgroundAnalyseJobs();
     void pollBackgroundScreeningJobs();
+    const jobReadySub = DeviceEventEmitter.addListener("projectAlpha:backgroundJobsReady", () => {
+      void pollBackgroundAnalyseJobs();
+      void pollBackgroundScreeningJobs();
+    });
     const appStateSub = AppState.addEventListener("change", (state) => {
       if (state === "active") {
         void pollBackgroundAnalyseJobs();
@@ -1738,6 +1777,7 @@ export default function SearchScreen() {
       }
     }, 30000);
     return () => {
+      jobReadySub.remove();
       appStateSub.remove();
       clearInterval(intervalId);
     };

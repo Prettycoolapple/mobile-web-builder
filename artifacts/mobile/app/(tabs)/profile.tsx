@@ -527,7 +527,7 @@ export default function ProfileScreen() {
                     {user.discipline === "architect_designer" ? "Architect / Designer"
                       : user.discipline === "planner" ? "Planner"
                       : user.discipline === "engineer" ? "Engineer"
-                      : user.discipline === "quantity_surveyor" ? "Quantity Surveyor"
+                      : user.discipline === "quantity_surveyor" ? "Land Surveyor"
                       : user.discipline === "other" ? "Other"
                       : user.discipline}
                   </Text>
