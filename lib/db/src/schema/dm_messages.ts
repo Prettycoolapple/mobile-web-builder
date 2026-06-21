@@ -13,6 +13,12 @@ export const dmMessages = pgTable("dm_messages", {
     .notNull(),
   body: text("body"),
   imageUrl: text("image_url"),
+  // Non-image attachment (e.g. a PDF a service provider sends). Stored as a
+  // served object URL plus original name + mime so clients can render a file
+  // card and open/download it. Null for plain text / image messages.
+  fileUrl: text("file_url"),
+  fileName: text("file_name"),
+  fileMime: text("file_mime"),
   readAt: timestamp("read_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });

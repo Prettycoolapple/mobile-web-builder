@@ -91,6 +91,24 @@ describe("built environment context", () => {
     ).toBe(true);
   });
 
+  it("accepts nearby matches across street-type abbreviations (Cres/Crescent, Dr/Drive)", () => {
+    // App holds the abbreviated form; LINZ resolves the full word (or vice versa).
+    expect(
+      isAcceptableNearbyAddressMatch(
+        "21 Chatsworth Cres, Pakuranga",
+        "21 Chatsworth Crescent, Pakuranga Heights, Auckland",
+        "19 Chatsworth Crescent, Pakuranga",
+      ),
+    ).toBe(true);
+    expect(
+      isAcceptableNearbyAddressMatch(
+        "10 Hampton Drive, St Heliers",
+        "10 Hampton Dr, Saint Heliers, Auckland",
+        "8 Hampton Drive, St Heliers",
+      ),
+    ).toBe(true);
+  });
+
   it("rejects nearby address validation when the resolved street does not match", () => {
     expect(
       isAcceptableNearbyAddressMatch(

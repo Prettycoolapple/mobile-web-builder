@@ -1,5 +1,5 @@
 import { BlurView } from "expo-blur";
-import { Tabs, useRouter } from "expo-router";
+import { Tabs, useRouter, useSegments } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import { Feather } from "@expo/vector-icons";
 import React, { useEffect } from "react";
@@ -23,6 +23,7 @@ function ClassicTabLayout({ isGuest }: { isGuest: boolean }) {
   const { unreadCount } = useDm();
   const { startNewChat, currentSession, sessions, switchSession } = useChat();
   const router = useRouter();
+  const segments = useSegments();
 
   // The Home and Search tabs both resolve to the index screen, so the active
   // tab can't be derived from the route — it follows chat state instead.
@@ -33,7 +34,16 @@ function ClassicTabLayout({ isGuest }: { isGuest: boolean }) {
   const resumable =
     [...sessions].sort((a, b) => b.updatedAt - a.updatedAt).find((s) => s.messages.length > 0) ?? null;
   const searchTappable = inConversation || resumable !== null;
-  const searchTint = inConversation ? colors.accent : colors.mutedForeground;
+  // Only the index route renders the search screen; on Messages/History/Account
+  // the leaf segment is that tab's name. The search icon must light up ONLY when
+  // we're actually on the search screen AND in a conversation — otherwise the
+  // active tab and the search tab would both appear lit.
+  // On the search/home (index) screen the leaf segment is the tab group itself
+  // ("(tabs)"); every other tab leaf is that tab's route name.
+  const leafSegment = segments[segments.length - 1];
+  const onSearchScreen = leafSegment === "(tabs)";
+  const searchActive = inConversation && onSearchScreen;
+  const searchTint = searchActive ? colors.accent : colors.mutedForeground;
 
   return (
     <Tabs
@@ -87,7 +97,7 @@ function ClassicTabLayout({ isGuest }: { isGuest: boolean }) {
                 router.navigate("/(tabs)");
               }}
               accessibilityRole="button"
-              accessibilityState={{ disabled: !searchTappable, selected: inConversation }}
+              accessibilityState={{ disabled: !searchTappable, selected: searchActive }}
               accessibilityLabel={t("tab.search")}
             >
               {isIOS ? (

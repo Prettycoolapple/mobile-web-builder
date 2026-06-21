@@ -470,8 +470,10 @@ function recordLoginEvent(userId: string): void {
 function providerAccessPayload(profile: {
   role?: string | null;
   subscriptionTier?: string | null;
+  stripeSubscriptionId?: string | null;
   subscriptionStatus?: string | null;
   subscriptionPeriodEndAt?: Date | string | null;
+  createdAt?: Date | string | null;
   providerTrialStartedAt?: Date | string | null;
   providerTrialEndsAt?: Date | string | null;
 }) {
@@ -2226,6 +2228,7 @@ router.get("/me", requireAuth, async (req, res) => {
         lastResetAt: profiles.lastResetAt,
         subscriptionPeriodEndAt: profiles.subscriptionPeriodEndAt,
         subscriptionStatus: profiles.subscriptionStatus,
+        stripeSubscriptionId: profiles.stripeSubscriptionId,
         subscriptionCancelAtPeriodEnd: profiles.subscriptionCancelAtPeriodEnd,
         providerTrialStartedAt: profiles.providerTrialStartedAt,
         providerTrialEndsAt: profiles.providerTrialEndsAt,

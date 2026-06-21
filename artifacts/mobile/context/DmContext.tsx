@@ -9,6 +9,9 @@ export interface DmMessage {
   senderId: string;
   body: string | null;
   imageUrl: string | null;
+  fileUrl?: string | null;
+  fileName?: string | null;
+  fileMime?: string | null;
   readAt: string | null;
   createdAt: string;
 }

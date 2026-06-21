@@ -151,24 +151,14 @@
         margin: 0 auto;
       }
       .provider-dashboard-top {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-        gap: 18px;
+        display: flex;
+        gap: 14px;
         align-items: center;
+        justify-content: space-between;
         margin-bottom: 22px;
-      }
-      .provider-dashboard-title h2 {
-        margin: 0;
-        font-size: clamp(30px, 4vw, 52px);
-        letter-spacing: -0.04em;
-      }
-      .provider-dashboard-title p {
-        margin: 6px 0 0;
-        color: var(--muted, #6b625b);
       }
       .provider-mode-toggle {
         display: inline-flex;
-        justify-self: center;
         gap: 4px;
         padding: 5px;
         border: 1px solid var(--line, #e5ded4);
@@ -193,7 +183,7 @@
         color: #fff;
       }
       .provider-dashboard-signout {
-        justify-self: end;
+        margin-left: auto;
       }
       .provider-dashboard-layout {
         display: grid;
@@ -384,7 +374,7 @@
       }
       .provider-message-shell {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) 330px;
+        grid-template-columns: 330px minmax(0, 1fr);
         min-height: 680px;
         background: #fffaf3;
       }
@@ -392,7 +382,7 @@
         display: grid;
         grid-template-rows: auto minmax(0, 1fr) auto;
         min-width: 0;
-        border-right: 1px solid var(--line, #e5ded4);
+        border-left: 1px solid var(--line, #e5ded4);
         background: var(--surface, #fff);
       }
       .provider-message-header,
@@ -486,6 +476,18 @@
       .provider-icon-button[hidden] {
         display: none;
       }
+      /* When the ☎ icon is tapped it swaps to the actual phone number — let it
+         grow from the round icon into a readable pill. */
+      .provider-icon-button.is-phone-revealed {
+        width: auto;
+        min-width: 42px;
+        padding: 0 14px;
+        gap: 6px;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0.02em;
+        border-color: rgba(23, 63, 46, 0.28);
+        color: var(--forest, #173f2e);
+      }
       .provider-message-list {
         display: flex;
         min-height: 0;
@@ -562,6 +564,32 @@
         margin-bottom: 8px;
         border-radius: 12px;
         object-fit: cover;
+      }
+      .provider-message-file {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        max-width: 100%;
+        margin-bottom: 6px;
+        padding: 10px 12px;
+        border-radius: 12px;
+        background: rgba(23, 63, 46, 0.06);
+        color: inherit;
+        text-decoration: none;
+        font-weight: 600;
+      }
+      .provider-message-bubble-row.is-mine .provider-message-file {
+        background: rgba(255, 255, 255, 0.16);
+      }
+      .provider-message-file:hover {
+        text-decoration: underline;
+      }
+      .provider-message-file-icon {
+        font-size: 20px;
+        line-height: 1;
+      }
+      .provider-message-file-name {
+        overflow-wrap: anywhere;
       }
       .provider-message-time {
         display: block;
@@ -735,11 +763,12 @@
       }
       @media (max-width: 860px) {
         .provider-dashboard-top {
-          grid-template-columns: 1fr;
+          align-items: stretch;
+          flex-direction: column;
         }
         .provider-mode-toggle,
         .provider-dashboard-signout {
-          justify-self: stretch;
+          width: 100%;
         }
         .provider-mode-toggle button {
           flex: 1;
@@ -759,10 +788,9 @@
           min-height: 620px;
         }
         .provider-message-chat {
-          border-right: 0;
+          border-left: 0;
         }
         .provider-message-side {
-          grid-row: 1;
           max-height: 420px;
           border-bottom: 1px solid var(--line, #e5ded4);
         }
@@ -999,14 +1027,9 @@
         <section class="portal-shell portal-dashboard" id="portal-dashboard" hidden>
           <div class="provider-dashboard-shell">
             <div class="provider-dashboard-top">
-              <div class="provider-dashboard-title">
-                <p class="section-kicker">Provider portal</p>
-                <h2 id="dashboard-title">Manage your account</h2>
-                <p id="dashboard-summary">You're signed in to your service provider account.</p>
-              </div>
               <div class="provider-mode-toggle" role="tablist" aria-label="Provider dashboard mode">
-                <button type="button" data-provider-mode="workspace" role="tab" aria-selected="false">Work space</button>
                 <button class="is-active" type="button" data-provider-mode="manage" role="tab" aria-selected="true">Manage</button>
+                <button type="button" data-provider-mode="workspace" role="tab" aria-selected="false">Work space</button>
               </div>
               <button class="button button-quiet provider-dashboard-signout" type="button" id="signout-button">Sign out</button>
             </div>
@@ -1035,6 +1058,18 @@
                 <div class="provider-dashboard-main">
                   <section class="provider-dashboard-panel provider-message-panel" data-provider-manage-content="message">
                     <div class="provider-message-shell" id="provider-message-shell">
+                      <aside class="provider-message-side" aria-label="Message contacts">
+                        <div class="provider-thread-toolbar">
+                          <p class="section-kicker">Message</p>
+                          <h3>Contacts</h3>
+                          <input class="provider-thread-search" id="provider-thread-search" type="search" placeholder="Search contacts" autocomplete="off" />
+                        </div>
+                        <div class="provider-profile-card" id="provider-profile-card"></div>
+                        <div class="provider-thread-list" id="provider-thread-list">
+                          <div class="provider-thread-empty">Loading conversations...</div>
+                        </div>
+                      </aside>
+
                       <div class="provider-message-chat">
                         <div class="provider-message-header">
                           <div class="provider-message-user">
@@ -1055,7 +1090,7 @@
                           <div class="provider-message-empty">
                             <div>
                               <strong>No conversation selected.</strong>
-                              <p>Select a contact on the right to view and reply to messages from Project Alpha users.</p>
+                              <p>Select a contact on the left to view and reply to messages from Project Alpha users.</p>
                             </div>
                           </div>
                         </div>
@@ -1065,26 +1100,14 @@
                             Messaging is currently unavailable with this user.
                           </div>
                           <div class="provider-message-compose-row">
-                            <input id="provider-message-photo" type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif" hidden />
-                            <button class="provider-icon-button" type="button" id="provider-message-attach" aria-label="Attach photo">＋</button>
+                            <input id="provider-message-photo" type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif,application/pdf" hidden />
+                            <button class="provider-icon-button" type="button" id="provider-message-attach" aria-label="Attach photo or PDF">＋</button>
                             <textarea id="provider-message-input" rows="1" placeholder="Write a message" disabled></textarea>
                             <button class="button button-primary" type="submit" id="provider-message-send" disabled>Send</button>
                           </div>
                           <p class="form-status" id="provider-message-status" aria-live="polite"></p>
                         </form>
                       </div>
-
-                      <aside class="provider-message-side" aria-label="Message contacts">
-                        <div class="provider-thread-toolbar">
-                          <p class="section-kicker">Message</p>
-                          <h3>Contacts</h3>
-                          <input class="provider-thread-search" id="provider-thread-search" type="search" placeholder="Search contacts" autocomplete="off" />
-                        </div>
-                        <div class="provider-profile-card" id="provider-profile-card"></div>
-                        <div class="provider-thread-list" id="provider-thread-list">
-                          <div class="provider-thread-empty">Loading conversations...</div>
-                        </div>
-                      </aside>
                     </div>
                   </section>
 

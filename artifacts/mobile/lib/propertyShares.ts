@@ -105,12 +105,21 @@ async function createShare(body: unknown, headers: ApiHeaders): Promise<ShareRes
 }
 
 async function shareText({ title, message, url }: { title: string; message: string; url: string }): Promise<void> {
+  if (Platform.OS === "ios") {
+    // WeChat's iOS share extension rejects plain text ("不支持的分享类型 / unsupported type"); it
+    // needs a real URL item to build a link card. Pull the URL (and the trailing connector
+    // punctuation that preceded it, e.g. "：" / ": ") out of the body and pass it as `url`, so
+    // WeChat works and iMessage shows the description text plus one clean link preview (no
+    // duplicated raw URL).
+    const body = message.includes(url)
+      ? message.replace(url, "").replace(/[\s：:，,]+$/u, "").trim()
+      : message.trim();
+    await Share.share({ title, message: body, url });
+    return;
+  }
+  // Android: RN ignores `url`; keep the URL inline in the message so SMS / WeChat get the link.
   const text = message.includes(url) ? message : `${message} ${url}`;
-  await Share.share(
-    Platform.OS === "ios"
-      ? { title, message: text }
-      : { title, message: text, url },
-  );
+  await Share.share({ title, message: text });
 }
 
 export async function shareCandidate(candidate: PropertyCandidate, headers: ApiHeaders): Promise<void> {

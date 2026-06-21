@@ -5,10 +5,25 @@ import {
   fetchLINZTitlesByAddress,
   fetchLINZTitlesByAddressDetailed,
   isLinzTitleServiceAvailable,
+  lrsAddressLooksExact,
   mapLinzParcelFeature,
   screenAddressFreehold,
   tenureCategoryFromEstate,
 } from "../linz";
+
+describe("lrsAddressLooksExact street-type tolerance", () => {
+  it("treats abbreviated and full street types as the same address", () => {
+    expect(
+      lrsAddressLooksExact("19 Chatsworth Cres, Pakuranga", "19 Chatsworth Crescent, Pakuranga Heights"),
+    ).toBe(true);
+    expect(lrsAddressLooksExact("8 Hampton Dr, St Heliers", "8 Hampton Drive, Saint Heliers")).toBe(true);
+  });
+
+  it("still rejects a different street number or street name", () => {
+    expect(lrsAddressLooksExact("19 Chatsworth Cres", "21 Chatsworth Crescent")).toBe(false);
+    expect(lrsAddressLooksExact("19 Chatsworth Cres", "19 Cascades Road")).toBe(false);
+  });
+});
 
 function lrsTitleResponses(addressId: string, address: string, typeCode: string, typeDesc: string) {
   return [

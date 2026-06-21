@@ -4054,6 +4054,7 @@ router.post(
           lastResetAt: Date;
           subscriptionPeriodEndAt: Date | null;
           subscriptionStatus: string | null;
+          stripeSubscriptionId: string | null;
           providerTrialStartedAt: Date | null;
           providerTrialEndsAt: Date | null;
           specialStatus: string | null;
@@ -4072,6 +4073,7 @@ router.post(
             lastResetAt: profiles.lastResetAt,
             subscriptionPeriodEndAt: profiles.subscriptionPeriodEndAt,
             subscriptionStatus: profiles.subscriptionStatus,
+            stripeSubscriptionId: profiles.stripeSubscriptionId,
             providerTrialStartedAt: profiles.providerTrialStartedAt,
             providerTrialEndsAt: profiles.providerTrialEndsAt,
             specialStatus: profiles.specialStatus,
@@ -4723,6 +4725,7 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
       lastResetAt: profiles.lastResetAt,
       subscriptionPeriodEndAt: profiles.subscriptionPeriodEndAt,
       subscriptionStatus: profiles.subscriptionStatus,
+      stripeSubscriptionId: profiles.stripeSubscriptionId,
       role: profiles.role,
       subscriptionTier: profiles.subscriptionTier,
       providerTrialStartedAt: profiles.providerTrialStartedAt,

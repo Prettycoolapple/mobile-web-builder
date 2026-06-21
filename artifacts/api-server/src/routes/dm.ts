@@ -316,10 +316,16 @@ router.get("/dm/threads/:threadId/messages", requireAuth, async (req: Request, r
 router.post("/dm/threads/:threadId/messages", requireAuth, async (req: Request, res: Response) => {
   const userId = (req as any).userId as string;
   const { threadId } = req.params;
-  const { body: msgBody, imageUrl } = req.body as { body?: string; imageUrl?: string };
+  const { body: msgBody, imageUrl, fileUrl, fileName, fileMime } = req.body as {
+    body?: string;
+    imageUrl?: string;
+    fileUrl?: string;
+    fileName?: string;
+    fileMime?: string;
+  };
 
-  if (!msgBody && !imageUrl) {
-    res.status(400).json({ error: "body or imageUrl is required" });
+  if (!msgBody && !imageUrl && !fileUrl) {
+    res.status(400).json({ error: "body, imageUrl, or fileUrl is required" });
     return;
   }
 
@@ -344,7 +350,15 @@ router.post("/dm/threads/:threadId/messages", requireAuth, async (req: Request, 
 
     const [message] = await db
       .insert(dmMessages)
-      .values({ threadId, senderId: userId, body: msgBody ?? null, imageUrl: imageUrl ?? null })
+      .values({
+        threadId,
+        senderId: userId,
+        body: msgBody ?? null,
+        imageUrl: imageUrl ?? null,
+        fileUrl: fileUrl ?? null,
+        fileName: fileName ?? null,
+        fileMime: fileMime ?? null,
+      })
       .returning();
 
     await db
@@ -370,7 +384,7 @@ router.post("/dm/threads/:threadId/messages", requireAuth, async (req: Request, 
         .limit(1);
 
       const senderName = sender?.fullName ?? "Someone";
-      const preview = msgBody ? msgBody.slice(0, 80) : "📷 Photo";
+      const preview = msgBody ? msgBody.slice(0, 80) : fileUrl ? "📄 File" : "📷 Photo";
 
       await sendPushToUser(recipientId, senderName, preview, {
         type: "dm",

@@ -186,8 +186,10 @@
 
   function messagePreview(message) {
     if (!message) return "No messages yet";
-    if (message.imageUrl && !message.body) return "Photo";
-    return message.body || "Photo";
+    if (message.body) return message.body;
+    if (message.fileUrl) return message.fileName || "File";
+    if (message.imageUrl) return "Photo";
+    return "Photo";
   }
 
   function formValues(form) {
@@ -223,14 +225,6 @@
     if (hero) hero.hidden = true;
     $("#portal-auth").hidden = true;
     $("#portal-dashboard").hidden = false;
-    const summary = $("#dashboard-summary");
-    if (summary) {
-      const name = (user && (user.fullName || user.companyName)) || "";
-      const email = user && user.email ? user.email : "";
-      summary.textContent = name
-        ? `You're signed in as ${name}${email ? ` (${email})` : ""}.`
-        : "You're signed in to your service provider account.";
-    }
     startDmPolling();
     void loadDmThreads({ preserveSelection: true });
     void connectDmSocket();
@@ -361,7 +355,7 @@
       meta.append(
         subscriptionMetaRow("Plan", "Provider Standard"),
         subscriptionMetaRow("Status", data.subscriptionStatus || "active"),
-        subscriptionMetaRow(data.cancelAtPeriodEnd ? "Access ends" : "Renews", formatDate(data.subscriptionPeriodEndAt)),
+        subscriptionMetaRow(data.cancelAtPeriodEnd ? "Access ends" : "Renews", data.subscriptionPeriodEndAt ? formatDate(data.subscriptionPeriodEndAt) : "Renewal date syncing"),
       );
       const manage = document.createElement("button");
       manage.type = "button";
@@ -378,12 +372,13 @@
     if (kind === "trial" && data.providerAccessActive) {
       badge.textContent = "Trial active";
       meta.append(
+        subscriptionMetaRow("Access source", "Invitation code trial"),
         subscriptionMetaRow("Trial ends", formatDate(data.providerTrialEndsAt)),
         subscriptionMetaRow("Days remaining", trialDays === null ? "14 days" : `${trialDays} day${trialDays === 1 ? "" : "s"}`),
         subscriptionMetaRow("Mobile app access", "Active during trial"),
       );
       actions.appendChild(createProviderSubscribeButton("Subscribe with Stripe"));
-      if (note) note.textContent = "Your invitation-code trial unlocks all provider features for 14 days. Subscribe before it ends to keep access.";
+      if (note) note.textContent = "This account was activated with an invitation code, so it is on a 14-day trial. Subscribe before the trial ends to keep provider access.";
       return;
     }
 
@@ -401,6 +396,7 @@
     badge.textContent = kind === "expired_trial" ? "Trial ended" : "Subscription required";
     meta.append(
       subscriptionMetaRow("Access", "Paused"),
+      subscriptionMetaRow("Access source", kind === "expired_trial" ? "Invitation code trial" : "No active subscription"),
       subscriptionMetaRow("Trial ended", data.providerTrialEndsAt ? formatDate(data.providerTrialEndsAt) : "No active trial"),
       subscriptionMetaRow("Next step", "Subscribe through Stripe"),
     );
@@ -863,7 +859,7 @@
       const strong = document.createElement("strong");
       strong.textContent = "No conversation selected.";
       const copy = document.createElement("p");
-      copy.textContent = "Select a contact on the right to view and reply to messages from Project Alpha users.";
+      copy.textContent = "Select a contact on the left to view and reply to messages from Project Alpha users.";
       inner.append(strong, copy);
       empty.appendChild(inner);
       list.appendChild(empty);
@@ -890,9 +886,14 @@
     if (callLink) {
       if (contactNumber) {
         callLink.title = phoneRevealed ? `Phone: ${contactNumber}` : "Reveal phone number";
-        callLink.textContent = phoneRevealed ? "123" : "☎";
+        // This ☎ icon (next to refresh) is the ONLY place the user's number is
+        // revealed: tap to swap the icon for the actual mobile number.
+        callLink.textContent = phoneRevealed ? contactNumber : "☎";
+        callLink.classList.toggle("is-phone-revealed", phoneRevealed);
         callLink.hidden = false;
       } else {
+        callLink.textContent = "☎";
+        callLink.classList.remove("is-phone-revealed");
         callLink.hidden = true;
       }
     }
@@ -961,6 +962,21 @@
       img.decoding = "async";
       bubble.appendChild(img);
     }
+    if (message.fileUrl) {
+      const fileCard = document.createElement("a");
+      fileCard.className = "provider-message-file";
+      fileCard.href = resolveAssetUrl(message.fileUrl);
+      fileCard.target = "_blank";
+      fileCard.rel = "noopener noreferrer";
+      const icon = document.createElement("span");
+      icon.className = "provider-message-file-icon";
+      icon.textContent = "📄";
+      const fileName = document.createElement("span");
+      fileName.className = "provider-message-file-name";
+      fileName.textContent = message.fileName || "Attachment";
+      fileCard.append(icon, fileName);
+      bubble.appendChild(fileCard);
+    }
     if (message.body) {
       const text = document.createElement("p");
       text.textContent = message.body;
@@ -987,7 +1003,6 @@
     const other = state.dmSelectedProfile || thread.otherParticipant || {};
     const name = displayName(other);
     const contactNumber = other.roleData && other.roleData.contactNumber;
-    const phoneRevealed = !!contactNumber && state.dmRevealedPhoneUserId === other.id;
     card.replaceChildren();
     card.classList.add("is-visible");
 
@@ -1005,22 +1020,14 @@
 
     const meta = document.createElement("div");
     meta.className = "provider-profile-meta";
+    // The actual number is revealed ONLY via the ☎ icon at the top-right of the
+    // chat window. Here we only state availability — never the number itself.
     meta.textContent = contactNumber
-      ? phoneRevealed
-        ? `Phone number: ${contactNumber}`
-        : "Phone number is available. Reveal it when you are ready to call from your mobile."
+      ? "Phone number is available. Tap the ☎ icon at the top of the chat to reveal it."
       : "Phone number is hidden unless this user has shared it through an active DM relationship.";
 
     const actions = document.createElement("div");
     actions.className = "provider-profile-actions";
-    if (contactNumber) {
-      const call = document.createElement("button");
-      call.className = "button button-primary";
-      call.type = "button";
-      call.textContent = phoneRevealed ? "Hide phone" : "Reveal phone";
-      call.addEventListener("click", revealSelectedPhone);
-      actions.appendChild(call);
-    }
     const block = document.createElement("button");
     block.type = "button";
     block.className = "button button-quiet";
@@ -1059,12 +1066,10 @@
     const contactNumber = state.dmSelectedProfile?.roleData?.contactNumber;
     if (!userId || !contactNumber) return;
     state.dmRevealedPhoneUserId = state.dmRevealedPhoneUserId === userId ? null : userId;
+    // The number is shown in-place on the ☎ icon itself (see renderSelectedDmThread);
+    // don't echo it into the status bar — the icon is the single reveal location.
     renderSelectedDmThread({ preserveScroll: true });
-    if (state.dmRevealedPhoneUserId === userId) {
-      setStatus($("#provider-message-status"), `Phone number: ${contactNumber}`, "success");
-    } else {
-      setStatus($("#provider-message-status"), "", null);
-    }
+    setStatus($("#provider-message-status"), "", null);
   }
 
   async function uploadDmImage(file, token) {
@@ -1091,7 +1096,10 @@
       });
       return completed.fileUrl;
     } catch (error) {
-      if (error && error.code !== "LOCAL_MODE") throw error;
+      // The signed-URL path can fail for reasons other than local storage mode —
+      // e.g. the object-storage bucket's CORS blocks the cross-origin PUT, which
+      // surfaces as a "Failed to fetch" TypeError. In every such case fall back to
+      // the same-origin multipart endpoint (no CORS), so images still send.
       const uploaded = await uploadFile("/upload/dm-image", token, file);
       return uploaded.fileUrl;
     }
@@ -1177,6 +1185,77 @@
       await loadDmMessages(thread.id, { quiet: true });
     } finally {
       if (localUrl) URL.revokeObjectURL(localUrl);
+      state.dmSending = false;
+      updateDmSendState();
+    }
+  }
+
+  async function uploadDmFile(file, token) {
+    try {
+      const signed = await api("/upload/dm-file/request-url", {
+        method: "POST",
+        token,
+        body: {
+          name: file.name || "attachment",
+          size: file.size,
+          contentType: file.type || "application/octet-stream",
+        },
+      });
+      const uploadResp = await fetch(signed.uploadURL, {
+        method: "PUT",
+        headers: signed.requiredHeaders || { "Content-Type": file.type || "application/octet-stream" },
+        body: file,
+      });
+      if (!uploadResp.ok) throw new Error("Upload failed. Please try again.");
+      const completed = await api("/upload/dm-file/complete", {
+        method: "POST",
+        token,
+        body: { objectPath: signed.objectPath },
+      });
+      return completed.fileUrl;
+    } catch (error) {
+      // Same-origin multipart fallback (handles object-storage CORS / local mode).
+      const uploaded = await uploadFile("/upload/dm-file", token, file);
+      return uploaded.fileUrl;
+    }
+  }
+
+  async function sendDmFile(file) {
+    const token = currentToken();
+    const thread = selectedDmThread();
+    if (!token || !thread || !file || isDmBlocked(thread)) return;
+    state.dmSending = true;
+    updateDmSendState();
+    setStatus($("#provider-message-status"), "Uploading file...", null);
+    try {
+      const optimistic = {
+        id: `local-${Date.now()}`,
+        threadId: thread.id,
+        senderId: state.currentUser?.id,
+        body: null,
+        imageUrl: null,
+        fileUrl: "#",
+        fileName: file.name || "attachment",
+        fileMime: file.type || "application/octet-stream",
+        readAt: null,
+        createdAt: new Date().toISOString(),
+      };
+      state.dmMessages = [...state.dmMessages, optimistic];
+      renderSelectedDmThread();
+      const fileUrl = await uploadDmFile(file, token);
+      setStatus($("#provider-message-status"), "Sending file...", null);
+      const data = await api(`/dm/threads/${encodeURIComponent(thread.id)}/messages`, {
+        method: "POST",
+        token,
+        body: { fileUrl, fileName: file.name || "attachment", fileMime: file.type || "application/octet-stream" },
+      });
+      state.dmMessages = state.dmMessages.map((message) => message.id === optimistic.id ? data.message : message);
+      setStatus($("#provider-message-status"), "", null);
+      await loadDmThreads({ preserveSelection: true, quiet: true });
+    } catch (error) {
+      setStatus($("#provider-message-status"), getErrorMessage(error, "We couldn't send that file."), "error");
+      await loadDmMessages(thread.id, { quiet: true });
+    } finally {
       state.dmSending = false;
       updateDmSendState();
     }
@@ -1871,7 +1950,10 @@
       photoInput.addEventListener("change", () => {
         const file = photoInput.files && photoInput.files[0];
         photoInput.value = "";
-        if (file) void sendDmPhoto(file);
+        if (!file) return;
+        // Images render inline; everything else (PDFs) sends as a file card.
+        if (/^image\//i.test(file.type || "")) void sendDmPhoto(file);
+        else void sendDmFile(file);
       });
     }
     $("#provider-thread-search")?.addEventListener("input", renderDmThreads);

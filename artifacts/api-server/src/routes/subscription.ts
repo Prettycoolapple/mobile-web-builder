@@ -35,7 +35,9 @@ router.post("/subscription/sync", requireAuth, async (req, res) => {
         role: profiles.role,
         subscriptionTier: profiles.subscriptionTier,
         subscriptionPeriodEndAt: profiles.subscriptionPeriodEndAt,
+        stripeSubscriptionId: profiles.stripeSubscriptionId,
         subscriptionStatus: profiles.subscriptionStatus,
+        createdAt: profiles.createdAt,
         providerTrialStartedAt: profiles.providerTrialStartedAt,
         providerTrialEndsAt: profiles.providerTrialEndsAt,
       })
@@ -121,6 +123,7 @@ router.get("/subscription/provider-status", requireAuth, async (req, res) => {
         subscriptionCancelAtPeriodEnd: profiles.subscriptionCancelAtPeriodEnd,
         stripeCustomerId: profiles.stripeCustomerId,
         stripeSubscriptionId: profiles.stripeSubscriptionId,
+        createdAt: profiles.createdAt,
         providerTrialStartedAt: profiles.providerTrialStartedAt,
         providerTrialEndsAt: profiles.providerTrialEndsAt,
       })
@@ -131,6 +134,27 @@ router.get("/subscription/provider-status", requireAuth, async (req, res) => {
     if (!profile || profile.role !== "service_provider") {
       res.status(404).json({ error: "Not a service provider", code: "NOT_A_PROVIDER" });
       return;
+    }
+
+    if (profile.stripeSubscriptionId) {
+      try {
+        const sub = await getStripe().subscriptions.retrieve(profile.stripeSubscriptionId);
+        const info = subscriptionInfoFromStripe(sub, profile.stripeCustomerId);
+        profile.subscriptionStatus = info.subscriptionStatus;
+        profile.subscriptionPeriodEndAt = info.subscriptionPeriodEndAt;
+        profile.subscriptionCancelAtPeriodEnd = info.subscriptionCancelAtPeriodEnd;
+        await db
+          .update(profiles)
+          .set({
+            stripeCustomerId: info.stripeCustomerId,
+            subscriptionStatus: info.subscriptionStatus,
+            subscriptionPeriodEndAt: info.subscriptionPeriodEndAt,
+            subscriptionCancelAtPeriodEnd: info.subscriptionCancelAtPeriodEnd,
+          })
+          .where(eq(profiles.id, userId));
+      } catch (err) {
+        logger.warn({ err, userId }, "Could not refresh provider Stripe subscription before status response");
+      }
     }
 
     const entitlement = resolveProviderEntitlement(profile);

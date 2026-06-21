@@ -2,6 +2,7 @@ import { fetchLINZAddressCandidates, fetchLINZParcelsNear, type LinzParcelNearby
 import { selectNearestResidentialParcels } from "./neighbourhood-context";
 import { logger } from "./logger";
 import { scrapePropertyValue } from "./scrapers/propertyvalue";
+import { canonicaliseTrailingStreetType } from "./street-types";
 
 const AC_PROPERTY_VALUE_MAPSERVER =
   "https://mapspublic.aucklandcouncil.govt.nz/arcgis3/rest/services/NonCouncil/PropertyValueInfo/MapServer";
@@ -206,20 +207,12 @@ function parseStreetAddress(address: string): ParsedStreetAddress | null {
   };
 }
 
+// Canonicalise a street NAME (locality already split off by parseStreetAddress)
+// for equality comparison. Collapses every street-type form to one canonical
+// word via the shared table so "Chatsworth Cres" === "Chatsworth Crescent",
+// "Hampton Dr" === "Hampton Drive", etc.
 function streetKey(value: string | null | undefined): string {
-  return (value ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/\b(street)\b/g, "st")
-    .replace(/\b(road)\b/g, "rd")
-    .replace(/\b(avenue)\b/g, "ave")
-    .replace(/\b(crescent)\b/g, "cres")
-    .replace(/\b(drive)\b/g, "dr")
-    .replace(/\b(lane)\b/g, "ln")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim()
-    .replace(/\s+/g, " ");
+  return canonicaliseTrailingStreetType(value ?? "");
 }
 
 function parsedStreetMatches(a: ParsedStreetAddress | null, b: ParsedStreetAddress | null): boolean {

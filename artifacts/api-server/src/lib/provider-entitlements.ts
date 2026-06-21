@@ -3,8 +3,10 @@ import { ACTIVE_SUBSCRIPTION_STATUSES } from "./stripe";
 type ProviderProfileLike = {
   role?: string | null;
   subscriptionTier?: string | null;
+  stripeSubscriptionId?: string | null;
   subscriptionStatus?: string | null;
   subscriptionPeriodEndAt?: Date | string | null;
+  createdAt?: Date | string | null;
   providerTrialStartedAt?: Date | string | null;
   providerTrialEndsAt?: Date | string | null;
 };
@@ -29,12 +31,26 @@ function periodAllowsAccess(periodEnd: Date | null, now: Date): boolean {
   return !periodEnd || periodEnd > now;
 }
 
+function addDays(date: Date, days: number): Date {
+  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
 export function resolveProviderEntitlement(
   profile: ProviderProfileLike | null | undefined,
   now = new Date(),
 ): ProviderEntitlement {
-  const trialStartedAt = toDate(profile?.providerTrialStartedAt);
-  const trialEndsAt = toDate(profile?.providerTrialEndsAt);
+  const explicitTrialStartedAt = toDate(profile?.providerTrialStartedAt);
+  const explicitTrialEndsAt = toDate(profile?.providerTrialEndsAt);
+  const createdAt = toDate(profile?.createdAt);
+  const legacyInviteTrial =
+    profile?.role === "service_provider" &&
+    !profile.stripeSubscriptionId &&
+    !explicitTrialEndsAt &&
+    profile.subscriptionTier === "free" &&
+    profile.subscriptionStatus === "active" &&
+    !!createdAt;
+  const trialStartedAt = explicitTrialStartedAt ?? (legacyInviteTrial ? createdAt : null);
+  const trialEndsAt = explicitTrialEndsAt ?? (legacyInviteTrial && createdAt ? addDays(createdAt, 14) : null);
   const periodEnd = toDate(profile?.subscriptionPeriodEndAt);
 
   const base: ProviderEntitlement = {
@@ -48,6 +64,7 @@ export function resolveProviderEntitlement(
   if (profile?.role !== "service_provider") return base;
 
   const hasActiveStripe =
+    !!profile.stripeSubscriptionId &&
     ACTIVE_SUBSCRIPTION_STATUSES.has(profile.subscriptionStatus ?? "") &&
     periodAllowsAccess(periodEnd, now);
   if (hasActiveStripe) {
@@ -69,7 +86,7 @@ export function resolveProviderEntitlement(
   }
 
   const paidTier = profile.subscriptionTier === "standard" || profile.subscriptionTier === "pro";
-  const hasStripeState = !!profile.subscriptionStatus;
+  const hasStripeState = !!profile.stripeSubscriptionId || !!profile.subscriptionStatus;
   if (!hasStripeState && paidTier && periodAllowsAccess(periodEnd, now)) {
     return {
       ...base,

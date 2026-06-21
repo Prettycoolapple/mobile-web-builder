@@ -25,6 +25,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
+import * as Sharing from "expo-sharing";
 
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
@@ -476,6 +477,41 @@ export default function ChatScreen() {
     void sendMessage(message.body, undefined, { optimisticId: message.id });
   }, [sendMessage]);
 
+  const [openingFileId, setOpeningFileId] = useState<string | null>(null);
+  const openDmFile = useCallback(async (message: DmMessage) => {
+    const url = message.fileUrl;
+    if (!url || openingFileId) return;
+    setOpeningFileId(message.id);
+    try {
+      // data: URLs (inline fallback) and http(s) can open directly; the
+      // /api/storage objects path is authenticated, so download with the bearer
+      // token to a cache file first, then hand it to the system viewer.
+      if (/^(https?:|data:|file:)/i.test(url) && !/\/api\/storage\//i.test(url)) {
+        await Linking.openURL(url);
+        return;
+      }
+      const absolute = resolveDmStoredImageUri(url);
+      const safeName = (message.fileName || "attachment").replace(/[^\w.\-]+/g, "_");
+      const dest = `${FileSystem.cacheDirectory}${Date.now()}_${safeName}`;
+      const headers: Record<string, string> = {};
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const result = await FileSystem.downloadAsync(absolute, dest, { headers });
+      if (result.status >= 400) throw new Error(`Download failed (${result.status})`);
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(result.uri, {
+          mimeType: message.fileMime || "application/pdf",
+          dialogTitle: message.fileName || t("dm.file.open"),
+        });
+      } else {
+        await Linking.openURL(result.uri);
+      }
+    } catch (err: any) {
+      Alert.alert(t("dm.file.open_failed"), err?.message ?? t("dm.error.try_again"));
+    } finally {
+      setOpeningFileId(null);
+    }
+  }, [openingFileId, token, t]);
+
   const pickImage = useCallback(async (useCamera: boolean) => {
     if (uploadingImage || blockStatus.messagingBlocked) return;
     let result: ImagePicker.ImagePickerResult;
@@ -818,6 +854,32 @@ export default function ChatScreen() {
                   <Feather name="alert-circle" size={18} color="#fff" />
                 </View>
               ) : null}
+            </TouchableOpacity>
+          ) : msg.fileUrl ? (
+            <TouchableOpacity
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel={msg.fileName || t("dm.file.open")}
+              onPress={() => openDmFile(msg)}
+              style={[
+                styles.bubble,
+                styles.fileBubble,
+                isMine
+                  ? [styles.myBubble, { backgroundColor: colors.accent }]
+                  : [styles.theirBubble, { backgroundColor: colors.card, borderColor: colors.border }],
+              ]}
+            >
+              {openingFileId === msg.id ? (
+                <ActivityIndicator size="small" color={isMine ? "#fff" : colors.mutedForeground} />
+              ) : (
+                <Feather name="file-text" size={20} color={isMine ? "#fff" : colors.foreground} />
+              )}
+              <Text
+                numberOfLines={2}
+                style={[styles.fileName, { color: isMine ? "#fff" : colors.foreground }]}
+              >
+                {msg.fileName || t("dm.file.attachment")}
+              </Text>
             </TouchableOpacity>
           ) : (
             <TouchableOpacity
@@ -1295,6 +1357,18 @@ const styles = StyleSheet.create({
   myBubble: { borderRadius: 18, borderBottomRightRadius: 4 },
   theirBubble: { borderRadius: 18, borderBottomLeftRadius: 4, borderWidth: 1 },
   bubbleText: { fontFamily: "DM_Sans_400Regular", fontSize: 15, lineHeight: 22 },
+  fileBubble: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    maxWidth: 260,
+  },
+  fileName: {
+    flexShrink: 1,
+    fontFamily: "DM_Sans_500Medium",
+    fontSize: 14,
+    lineHeight: 19,
+  },
   textStatusRow: {
     flexDirection: "row",
     alignItems: "center",

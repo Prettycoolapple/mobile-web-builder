@@ -1,4 +1,5 @@
 import { logger } from "./logger";
+import { canonicaliseStreetTypesInText, STREET_TYPE_WORDS } from "./street-types";
 
 const LINZ_BASE = "https://data.linz.govt.nz/services/api/v1";
 const LINZ_LRS_PUBLIC_BASE = "https://public.api.landonline.govt.nz/v1";
@@ -213,19 +214,23 @@ export function clearLrsTitlePreviewCacheForTests(): void {
 }
 
 function normaliseLrsAddress(value: string | null | undefined): string {
-  return (value ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/\b(new zealand|nz|auckland city|auckland)\b/g, "")
-    .replace(/\b\d{4}\b/g, "")
-    .replace(/\bsaint\b/g, "st")
+  return canonicaliseStreetTypesInText(
+    (value ?? "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/\b(new zealand|nz|auckland city|auckland)\b/g, "")
+      .replace(/\b\d{4}\b/g, "")
+      .replace(/\bsaint\b/g, "st"),
+  )
+    // Street types are now canonical full words ("crescent", "drive", \u2026); the
+    // bare "st" left by the Saint handling above is preserved.
     .replace(/[^a-z0-9]+/g, " ")
     .trim()
     .replace(/\s+/g, " ");
 }
 
-function lrsAddressLooksExact(requested: string, candidate: string): boolean {
+export function lrsAddressLooksExact(requested: string, candidate: string): boolean {
   const req = normaliseLrsAddress(requested);
   const cand = normaliseLrsAddress(candidate);
   if (!req || !cand) return false;
@@ -238,7 +243,9 @@ function lrsAddressLooksExact(requested: string, candidate: string): boolean {
   if (reqNumber !== candNumber) return false;
 
   const reqTokens = new Set(reqParts.slice(1));
-  const candTokens = candParts.slice(1).filter((token) => !["street", "road", "drive", "avenue", "place", "lane", "crescent", "parade"].includes(token));
+  // Ignore the street-type word itself (now canonicalised to a full word) so a
+  // candidate that only differs by the type token still counts as exact.
+  const candTokens = candParts.slice(1).filter((token) => !STREET_TYPE_WORDS.has(token));
   return candTokens.length > 0 && candTokens.every((token) => reqTokens.has(token));
 }
 
