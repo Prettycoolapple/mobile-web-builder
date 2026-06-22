@@ -4728,6 +4728,7 @@ async function checkAndIncrementChatMessages(userId: string): Promise<{
       stripeSubscriptionId: profiles.stripeSubscriptionId,
       role: profiles.role,
       subscriptionTier: profiles.subscriptionTier,
+      createdAt: profiles.createdAt,
       providerTrialStartedAt: profiles.providerTrialStartedAt,
       providerTrialEndsAt: profiles.providerTrialEndsAt,
       specialStatus: profiles.specialStatus,

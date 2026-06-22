@@ -248,6 +248,39 @@ a {
 .ws-topbar .spacer {
   flex: 1;
 }
+.ws-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-alt);
+}
+.ws-mode-tab {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 14px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.ws-mode-tab:hover {
+  background: var(--surface);
+  color: var(--ink);
+}
+.ws-mode-tab.is-active {
+  background: var(--forest);
+  color: #fff;
+}
+.ws-mode-tab.is-active:hover {
+  background: var(--forest);
+  color: #fff;
+}
 .ws-user-chip {
   display: flex;
   align-items: center;

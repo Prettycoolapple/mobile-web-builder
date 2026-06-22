@@ -171,6 +171,14 @@ export function WorkspacePage() {
 
       <div className="ws-main">
         <div className="ws-topbar">
+          <nav className="ws-mode-toggle" aria-label="Provider portal sections">
+            <a className="ws-mode-tab" href="/provider-portal/">
+              Manage
+            </a>
+            <span className="ws-mode-tab is-active" aria-current="page">
+              Work space
+            </span>
+          </nav>
           <span className="spacer" />
           {gate && (
             <a className="btn btn-quiet" href="/provider-portal/" style={{ borderColor: "var(--amber)", color: "#9a6a16" }}>
