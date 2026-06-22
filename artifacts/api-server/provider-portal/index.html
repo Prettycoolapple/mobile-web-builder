@@ -531,9 +531,71 @@
       }
       .provider-message-bubble-row {
         display: flex;
+        align-items: center;
+        gap: 4px;
       }
       .provider-message-bubble-row.is-mine {
         justify-content: flex-end;
+      }
+      .provider-message-like {
+        flex: 0 0 auto;
+        border: none;
+        background: transparent;
+        padding: 2px 4px;
+        font-size: 16px;
+        line-height: 1;
+        color: rgba(107, 98, 91, 0.55);
+        cursor: pointer;
+      }
+      .provider-message-like:hover:not(:disabled) {
+        color: #ef4444;
+      }
+      .provider-message-like.is-liked {
+        color: #ef4444;
+      }
+      .provider-message-like:disabled {
+        opacity: 0.3;
+        cursor: default;
+      }
+      .provider-message-bubble-row.is-mine .provider-message-like {
+        order: -1;
+      }
+      .provider-image-lightbox {
+        position: fixed;
+        inset: 0;
+        z-index: 1000;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: rgba(15, 12, 10, 0.82);
+      }
+      .provider-image-lightbox.is-visible {
+        display: flex;
+      }
+      .provider-image-lightbox-img {
+        max-width: 92vw;
+        max-height: 88vh;
+        border-radius: 12px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        object-fit: contain;
+      }
+      .provider-image-lightbox-close {
+        position: absolute;
+        top: 18px;
+        right: 22px;
+        width: 40px;
+        height: 40px;
+        border: none;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.16);
+        color: #fff;
+        font-size: 20px;
+        line-height: 1;
+        cursor: pointer;
+      }
+      .provider-image-lightbox-close:hover {
+        background: rgba(255, 255, 255, 0.28);
       }
       .provider-message-bubble {
         max-width: min(620px, 78%);
@@ -809,6 +871,373 @@
           display: none;
         }
       }
+
+      body.provider-dashboard-active {
+        --portal-bg: #f6f8f4;
+        --portal-panel: #ffffff;
+        --portal-rail: #132d24;
+        --portal-rail-soft: rgba(255, 255, 255, 0.1);
+        --portal-accent: #2f7a55;
+        --portal-text-soft: #647067;
+        background: var(--portal-bg);
+      }
+      body.provider-dashboard-active .nav,
+      body.provider-dashboard-active .footer {
+        display: none;
+      }
+      body.provider-dashboard-active .topbar {
+        position: sticky;
+        top: 0;
+        padding-block: 12px;
+        color: #17231d;
+        background: rgba(246, 248, 244, 0.9);
+        border-bottom-color: rgba(19, 45, 36, 0.1);
+        backdrop-filter: blur(18px);
+      }
+      body.provider-dashboard-active .portal-page {
+        min-height: calc(100vh - 59px);
+        padding: 0;
+      }
+      body.provider-dashboard-active .portal-shell {
+        width: 100%;
+        margin: 0;
+      }
+      body.provider-dashboard-active .provider-dashboard-shell {
+        width: 100%;
+        min-height: calc(100vh - 59px);
+        padding: clamp(18px, 2.4vw, 30px);
+      }
+      body.provider-dashboard-active .provider-dashboard-top {
+        align-items: center;
+        margin: 0 0 18px;
+        padding: 0;
+      }
+      body.provider-dashboard-active .provider-dashboard-top::before {
+        content: "Provider portal";
+        color: #17231d;
+        font-size: clamp(24px, 3vw, 34px);
+        font-weight: 820;
+        letter-spacing: 0;
+      }
+      body.provider-dashboard-active .provider-mode-toggle {
+        margin-left: auto;
+        border-color: rgba(19, 45, 36, 0.12);
+        border-radius: 8px;
+        box-shadow: none;
+      }
+      body.provider-dashboard-active .provider-mode-toggle button,
+      body.provider-dashboard-active .provider-dashboard-signout {
+        min-height: 38px;
+        border-radius: 7px;
+        font-size: 14px;
+      }
+      body.provider-dashboard-active .provider-mode-toggle button.is-active {
+        background: #173f2e;
+      }
+      body.provider-dashboard-active .provider-dashboard-signout {
+        margin-left: 0;
+        border-color: rgba(19, 45, 36, 0.12);
+        box-shadow: none;
+      }
+      body.provider-dashboard-active .provider-dashboard-layout {
+        grid-template-columns: 248px minmax(0, 1fr);
+        gap: 22px;
+        align-items: stretch;
+      }
+      body.provider-dashboard-active .provider-sidebar {
+        position: sticky;
+        top: 83px;
+        min-height: calc(100vh - 113px);
+        padding: 18px;
+        border: 0;
+        border-radius: 8px;
+        background: var(--portal-rail);
+        color: #fff;
+        box-shadow: 0 18px 45px rgba(19, 45, 36, 0.16);
+      }
+      body.provider-dashboard-active .provider-sidebar-label {
+        margin: 0 0 18px;
+        color: rgba(255, 255, 255, 0.58);
+      }
+      body.provider-dashboard-active .provider-side-nav {
+        gap: 8px;
+      }
+      body.provider-dashboard-active .provider-side-nav button {
+        min-height: 48px;
+        padding: 0 14px;
+        border-radius: 8px;
+        color: rgba(255, 255, 255, 0.78);
+      }
+      body.provider-dashboard-active .provider-side-nav button::after {
+        color: rgba(255, 255, 255, 0.36);
+      }
+      body.provider-dashboard-active .provider-side-nav button:hover,
+      body.provider-dashboard-active .provider-side-nav button.is-active {
+        border-color: transparent;
+        background: var(--portal-rail-soft);
+        color: #fff;
+      }
+      body.provider-dashboard-active .provider-dashboard-main {
+        min-width: 0;
+      }
+      body.provider-dashboard-active .provider-dashboard-panel {
+        border-color: rgba(19, 45, 36, 0.1);
+        border-radius: 8px;
+        background: var(--portal-panel);
+        box-shadow: 0 18px 45px rgba(36, 51, 42, 0.08);
+      }
+      body.provider-dashboard-active .provider-dashboard-panel h3,
+      body.provider-dashboard-active .portal-panel-header h2 {
+        letter-spacing: 0;
+      }
+      body.provider-dashboard-active .provider-dashboard-empty {
+        border-color: rgba(19, 45, 36, 0.12);
+        background: #f9faf6;
+      }
+      body.provider-dashboard-active .provider-message-panel {
+        height: calc(100vh - 137px);
+        min-height: 690px;
+      }
+      body.provider-dashboard-active .provider-message-shell {
+        grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+        height: 100%;
+        min-height: 0;
+        background: #f9faf6;
+      }
+      body.provider-dashboard-active .provider-message-side {
+        grid-template-rows: auto minmax(0, auto) minmax(0, 1fr);
+        background: #f9faf6;
+      }
+      body.provider-dashboard-active .provider-thread-toolbar {
+        padding: 22px 20px 18px;
+        border-bottom-color: rgba(19, 45, 36, 0.1);
+      }
+      body.provider-dashboard-active .section-kicker {
+        color: var(--portal-accent);
+        letter-spacing: 0.08em;
+      }
+      body.provider-dashboard-active .provider-thread-toolbar h3 {
+        font-size: 24px;
+        letter-spacing: 0;
+      }
+      body.provider-dashboard-active .provider-thread-search {
+        border-color: rgba(19, 45, 36, 0.12);
+        border-radius: 8px;
+        background: #fff;
+      }
+      body.provider-dashboard-active .provider-profile-card {
+        margin: 12px;
+        padding: 14px;
+        border: 1px solid rgba(19, 45, 36, 0.1);
+        border-radius: 8px;
+        background: #fff;
+      }
+      body.provider-dashboard-active .provider-profile-top {
+        margin-bottom: 10px;
+      }
+      body.provider-dashboard-active .provider-profile-avatar {
+        width: 48px;
+        height: 48px;
+        font-size: 17px;
+      }
+      body.provider-dashboard-active .provider-profile-actions {
+        position: relative;
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 10px;
+      }
+      .provider-profile-menu {
+        position: relative;
+      }
+      .provider-profile-menu summary {
+        display: inline-grid;
+        width: 38px;
+        height: 38px;
+        place-items: center;
+        border: 1px solid rgba(19, 45, 36, 0.14);
+        border-radius: 8px;
+        background: #fff;
+        color: #173f2e;
+        cursor: pointer;
+        list-style: none;
+      }
+      .provider-profile-menu summary::-webkit-details-marker {
+        display: none;
+      }
+      .provider-profile-menu-panel {
+        position: absolute;
+        right: 0;
+        top: calc(100% + 6px);
+        z-index: 5;
+        display: grid;
+        min-width: 156px;
+        padding: 6px;
+        border: 1px solid rgba(19, 45, 36, 0.12);
+        border-radius: 8px;
+        background: #fff;
+        box-shadow: 0 16px 34px rgba(19, 45, 36, 0.16);
+      }
+      .provider-profile-menu-panel button {
+        justify-content: flex-start;
+        min-height: 38px;
+        padding: 0 10px;
+        border: 0;
+        border-radius: 7px;
+        background: transparent;
+        color: #17231d;
+        box-shadow: none;
+      }
+      .provider-profile-menu-panel button:hover {
+        background: #f2f6ef;
+      }
+      body.provider-dashboard-active .provider-thread-list {
+        padding: 10px;
+      }
+      body.provider-dashboard-active .provider-thread-item {
+        min-height: 68px;
+        padding: 12px;
+        border-radius: 8px;
+      }
+      body.provider-dashboard-active .provider-thread-item:hover,
+      body.provider-dashboard-active .provider-thread-item.is-active {
+        border-color: rgba(47, 122, 85, 0.18);
+        background: #fff;
+        box-shadow: 0 8px 18px rgba(36, 51, 42, 0.06);
+      }
+      body.provider-dashboard-active .provider-thread-avatar,
+      body.provider-dashboard-active .provider-message-avatar {
+        background: #2f7a55;
+      }
+      body.provider-dashboard-active .provider-message-chat {
+        border-left-color: rgba(19, 45, 36, 0.1);
+      }
+      body.provider-dashboard-active .provider-message-header,
+      body.provider-dashboard-active .provider-message-composer {
+        padding: 18px 22px;
+        background: #fff;
+      }
+      body.provider-dashboard-active .provider-message-header {
+        min-height: 82px;
+        border-bottom-color: rgba(19, 45, 36, 0.1);
+      }
+      body.provider-dashboard-active .provider-message-header h3 {
+        font-size: 18px;
+      }
+      body.provider-dashboard-active .provider-message-header p,
+      body.provider-dashboard-active .provider-thread-preview,
+      body.provider-dashboard-active .provider-thread-time,
+      body.provider-dashboard-active .provider-profile-meta {
+        color: var(--portal-text-soft);
+      }
+      body.provider-dashboard-active .provider-icon-button {
+        border-color: rgba(19, 45, 36, 0.12);
+        border-radius: 8px;
+        background: #f9faf6;
+      }
+      body.provider-dashboard-active .provider-message-list {
+        gap: 12px;
+        padding: 28px clamp(22px, 4vw, 42px);
+        background: #f6f8f4;
+      }
+      body.provider-dashboard-active .provider-message-bubble {
+        max-width: min(680px, 74%);
+        padding: 12px 14px;
+        border-color: rgba(19, 45, 36, 0.1);
+        border-radius: 14px;
+        border-bottom-left-radius: 5px;
+        background: #fff;
+        box-shadow: 0 8px 22px rgba(36, 51, 42, 0.07);
+      }
+      body.provider-dashboard-active .provider-message-bubble-row.is-mine .provider-message-bubble {
+        border-color: transparent;
+        border-bottom-right-radius: 5px;
+        border-bottom-left-radius: 14px;
+        background: #173f2e;
+      }
+      body.provider-dashboard-active .provider-message-composer {
+        border-top-color: rgba(19, 45, 36, 0.1);
+      }
+      body.provider-dashboard-active .provider-message-compose-row {
+        grid-template-columns: 42px minmax(0, 1fr) auto;
+      }
+      body.provider-dashboard-active .provider-message-compose-row textarea {
+        min-height: 44px;
+        border-color: rgba(19, 45, 36, 0.12);
+        border-radius: 8px;
+        background: #f9faf6;
+      }
+      body.provider-dashboard-active .provider-message-compose-row .button-primary,
+      body.provider-dashboard-active .provider-subscription-actions .button-primary,
+      body.provider-dashboard-active .provider-profile-form .button-primary {
+        border-radius: 8px;
+        background: #173f2e;
+        box-shadow: none;
+      }
+      body.provider-dashboard-active .provider-subscription-grid {
+        gap: 16px;
+      }
+      body.provider-dashboard-active .provider-subscription-card {
+        border-color: rgba(19, 45, 36, 0.1);
+        background: #f9faf6;
+      }
+      @media (max-width: 980px) {
+        body.provider-dashboard-active .provider-dashboard-layout {
+          grid-template-columns: 1fr;
+        }
+        body.provider-dashboard-active .provider-sidebar {
+          position: static;
+          min-height: 0;
+        }
+        body.provider-dashboard-active .provider-side-nav {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+        body.provider-dashboard-active .provider-side-nav button {
+          justify-content: center;
+        }
+        body.provider-dashboard-active .provider-side-nav button::after {
+          display: none;
+        }
+        body.provider-dashboard-active .provider-message-panel {
+          height: auto;
+          min-height: 620px;
+        }
+      }
+      @media (max-width: 860px) {
+        body.provider-dashboard-active .provider-dashboard-shell {
+          padding: 14px;
+        }
+        body.provider-dashboard-active .provider-dashboard-top::before {
+          content: "Provider portal";
+        }
+        body.provider-dashboard-active .provider-message-shell {
+          grid-template-columns: 1fr;
+          height: 620px;
+        }
+        body.provider-dashboard-active .provider-message-side {
+          max-height: none;
+        }
+      }
+      @media (max-width: 620px) {
+        body.provider-dashboard-active .provider-dashboard-top {
+          align-items: stretch;
+        }
+        body.provider-dashboard-active .provider-dashboard-top::before {
+          font-size: 25px;
+        }
+        body.provider-dashboard-active .provider-side-nav {
+          grid-template-columns: 1fr;
+        }
+        body.provider-dashboard-active .provider-message-compose-row {
+          grid-template-columns: 40px minmax(0, 1fr);
+        }
+        body.provider-dashboard-active .provider-message-compose-row .button-primary {
+          grid-column: 1 / -1;
+          width: 100%;
+        }
+        body.provider-dashboard-active .provider-message-bubble {
+          max-width: 88%;
+        }
+      }
     </style>
     <script defer src="/site.js"></script>
     <script defer src="/provider-portal/portal.js"></script>
@@ -1082,7 +1511,6 @@
                           </div>
                           <div class="provider-message-actions">
                             <button class="provider-icon-button" type="button" id="provider-call-link" aria-label="Reveal phone number" hidden>☎</button>
-                            <button class="provider-icon-button" type="button" id="provider-refresh-messages" aria-label="Refresh messages">↻</button>
                           </div>
                         </div>
 

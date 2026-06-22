@@ -13,6 +13,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -220,8 +221,10 @@ export default function ChatScreen() {
   const [otherSecondaryLanguage, setOtherSecondaryLanguage] = useState<string | null>(null);
   const [otherAvatarUrl, setOtherAvatarUrl] = useState<string | null>(null);
   const [body, setBody] = useState("");
+  const [inputHeight, setInputHeight] = useState(0);
   const [sending, setSending] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [pendingImages, setPendingImages] = useState<ImagePicker.ImagePickerAsset[]>([]);
   const [viewerUri, setViewerUri] = useState<string | null>(null);
   const [actionMenuVisible, setActionMenuVisible] = useState(false);
   const [reportModalVisible, setReportModalVisible] = useState(false);
@@ -361,11 +364,22 @@ export default function ChatScreen() {
       }
     };
 
+    const onMessageLike = ({ threadId: tid, message }: { threadId: string; message: DmMessage }) => {
+      if (tid !== threadId) return;
+      setMessages((prev) => prev.map((m) =>
+        m.id === message.id
+          ? { ...m, likedAt: message.likedAt ?? null, likedBy: message.likedBy ?? null }
+          : m,
+      ));
+    };
+
     socket.on("new_message", onNewMessage);
+    socket.on("message_like", onMessageLike);
 
     return () => {
       socket.emit("leave_thread", threadId);
       socket.off("new_message", onNewMessage);
+      socket.off("message_like", onMessageLike);
       joinedRef.current = false;
     };
   }, [socket, threadId, token, scrollToLatest]);
@@ -512,6 +526,8 @@ export default function ChatScreen() {
     }
   }, [openingFileId, token, t]);
 
+  // Stage selected photos for a Send/Cancel confirmation rather than firing them
+  // off immediately. Camera capture and (multi-select) library picks both land here.
   const pickImage = useCallback(async (useCamera: boolean) => {
     if (uploadingImage || blockStatus.messagingBlocked) return;
     let result: ImagePicker.ImagePickerResult;
@@ -531,11 +547,16 @@ export default function ChatScreen() {
         mediaTypes: ["images"],
         quality: 0.55,
         allowsEditing: false,
+        allowsMultipleSelection: true,
+        selectionLimit: 10,
       });
     }
     if (result.canceled || !result.assets?.length) return;
-    const asset = result.assets[0];
-    const optimisticId = `local-photo-${Date.now()}`;
+    setPendingImages(result.assets);
+  }, [uploadingImage, blockStatus.messagingBlocked, t]);
+
+  const uploadAndSendAsset = useCallback(async (asset: ImagePicker.ImagePickerAsset) => {
+    const optimisticId = `local-photo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const optimisticMessage: LocalDmMessage = {
       id: optimisticId,
       threadId: String(threadId),
@@ -548,7 +569,6 @@ export default function ChatScreen() {
     };
     setMessages((prev) => [...prev, optimisticMessage]);
     setTimeout(() => scrollToLatest(true), 50);
-    setUploadingImage(true);
     try {
       const filename = asset.fileName ?? `photo_${Date.now()}.jpg`;
       const mimeType = normalizeImageContentType(asset.mimeType);
@@ -658,10 +678,69 @@ export default function ChatScreen() {
         t("common.error"),
         error instanceof Error && error.message ? error.message : t("dm.error.image_upload_failed"),
       );
+    }
+  }, [token, sendMessage, t, threadId, user?.id, scrollToLatest]);
+
+  // Upload + send every staged photo in order after the user confirms.
+  const confirmSendImages = useCallback(async () => {
+    const assets = pendingImages;
+    setPendingImages([]);
+    if (!assets.length || blockStatus.messagingBlocked) return;
+    setUploadingImage(true);
+    try {
+      for (const asset of assets) {
+        await uploadAndSendAsset(asset);
+      }
     } finally {
       setUploadingImage(false);
     }
-  }, [token, uploadingImage, sendMessage, blockStatus.messagingBlocked, t, threadId, user?.id, scrollToLatest]);
+  }, [pendingImages, blockStatus.messagingBlocked, uploadAndSendAsset]);
+
+  const cancelPendingImages = useCallback(() => {
+    setPendingImages([]);
+  }, []);
+
+  const toggleLike = useCallback(async (message: LocalDmMessage) => {
+    if (!threadId || !token || message.id.startsWith("local-")) return;
+    const nextLiked = !message.likedAt;
+    const prevLikedAt = message.likedAt ?? null;
+    const prevLikedBy = message.likedBy ?? null;
+    setMessages((prev) => prev.map((m) =>
+      m.id === message.id
+        ? {
+            ...m,
+            likedAt: nextLiked ? new Date().toISOString() : null,
+            likedBy: nextLiked ? (user?.id ?? null) : null,
+          }
+        : m,
+    ));
+    try {
+      const resp = await fetch(
+        `${getApiBase()}/dm/threads/${threadId}/messages/${message.id}/like`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ liked: nextLiked }),
+        },
+      );
+      if (!resp.ok) throw new Error("like failed");
+      const data = (await resp.json()) as { message?: DmMessage };
+      if (data.message) {
+        setMessages((prev) => prev.map((m) =>
+          m.id === data.message!.id
+            ? { ...m, likedAt: data.message!.likedAt ?? null, likedBy: data.message!.likedBy ?? null }
+            : m,
+        ));
+      }
+    } catch {
+      setMessages((prev) => prev.map((m) =>
+        m.id === message.id ? { ...m, likedAt: prevLikedAt, likedBy: prevLikedBy } : m,
+      ));
+    }
+  }, [threadId, token, user?.id]);
 
   const submitBlock = useCallback(async () => {
     if (!token || !otherUserId) return;
@@ -782,6 +861,27 @@ export default function ChatScreen() {
     }
     const { data: msg, isFirstInGroup, isLastInGroup } = item;
     const isMine = msg.senderId === user?.id;
+    const liked = !!msg.likedAt;
+    const isLocalMessage = msg.id.startsWith("local-");
+    const likeButton = (
+      <TouchableOpacity
+        onPress={() => toggleLike(msg)}
+        disabled={isLocalMessage}
+        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+        style={styles.likeBtn}
+        accessibilityRole="button"
+        accessibilityLabel={liked ? t("dm.unlike.a11y") : t("dm.like.a11y")}
+      >
+        <Text
+          style={[
+            styles.likeGlyph,
+            { color: liked ? "#EF4444" : colors.mutedForeground, opacity: liked ? 1 : isLocalMessage ? 0.25 : 0.45 },
+          ]}
+        >
+          {liked ? "♥" : "♡"}
+        </Text>
+      </TouchableOpacity>
+    );
     const showAvatar = !isMine && isLastInGroup;
     const showSenderName = !isMine && isFirstInGroup && !!otherName;
     const isLocalImage = !!msg.imageUrl && /^(file:|data:|blob:)/i.test(msg.imageUrl);
@@ -813,6 +913,7 @@ export default function ChatScreen() {
             ) : null}
           </View>
         )}
+        {isMine ? likeButton : null}
         <View style={{ maxWidth: "75%" }}>
           {showSenderName ? (
             <Text style={[styles.senderName, { color: colors.mutedForeground }]}>{otherName}</Text>
@@ -918,6 +1019,7 @@ export default function ChatScreen() {
             </Text>
           ) : null}
         </View>
+        {!isMine ? likeButton : null}
       </View>
     );
   };
@@ -1104,11 +1206,15 @@ export default function ChatScreen() {
           ]}
         >
           <TextInput
-            style={[styles.input, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+            style={[
+              styles.input,
+              { color: colors.foreground, fontFamily: "DM_Sans_400Regular", height: Math.min(120, Math.max(24, inputHeight)) },
+            ]}
             placeholder={inputLocked ? t("dm.block.placeholder") : t("dm.placeholder.message")}
             placeholderTextColor={colors.mutedForeground}
             value={body}
             onChangeText={setBody}
+            onContentSizeChange={(e) => setInputHeight(e.nativeEvent.contentSize.height)}
             multiline
             maxLength={2000}
             returnKeyType="default"
@@ -1260,6 +1366,58 @@ export default function ChatScreen() {
         </View>
       </Modal>
 
+      <Modal
+        visible={pendingImages.length > 0}
+        animationType="fade"
+        transparent
+        onRequestClose={cancelPendingImages}
+      >
+        <View style={styles.reportModalRoot}>
+          <Pressable
+            style={[StyleSheet.absoluteFillObject, { backgroundColor: "rgba(0,0,0,0.5)" }]}
+            onPress={cancelPendingImages}
+          />
+          <View style={styles.reportModalCenter} pointerEvents="box-none">
+            <View style={[styles.reportModalCard, { backgroundColor: colors.card }]}>
+              <Text style={[styles.reportModalTitle, { color: colors.foreground }]}>
+                {pendingImages.length > 1
+                  ? t("dm.image.confirm_title_plural", { count: pendingImages.length })
+                  : t("dm.image.confirm_title")}
+              </Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.previewScroll}
+                contentContainerStyle={styles.previewRow}
+              >
+                {pendingImages.map((a) => (
+                  <Image
+                    key={a.assetId ?? a.uri}
+                    source={{ uri: a.uri }}
+                    style={styles.previewImg}
+                    contentFit="cover"
+                  />
+                ))}
+              </ScrollView>
+              <View style={styles.reportActions}>
+                <TouchableOpacity
+                  style={[styles.reportBtnSecondary, { borderColor: colors.border }]}
+                  onPress={cancelPendingImages}
+                >
+                  <Text style={{ color: colors.foreground }}>{t("common.cancel")}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.reportBtnPrimary, { backgroundColor: colors.accent }]}
+                  onPress={() => void confirmSendImages()}
+                >
+                  <Text style={styles.reportBtnPrimaryText}>{t("dm.image.send")}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <ImageViewerModal
         visible={!!viewerUri}
         uri={viewerUri}
@@ -1349,6 +1507,28 @@ const styles = StyleSheet.create({
   },
   msgRowRight: { justifyContent: "flex-end" },
   msgRowLeft: { justifyContent: "flex-start" },
+  likeBtn: {
+    alignSelf: "center",
+    width: 24,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  likeGlyph: {
+    fontSize: 17,
+    lineHeight: 20,
+  },
+  previewScroll: {
+    marginBottom: 16,
+  },
+  previewRow: {
+    gap: 8,
+    paddingVertical: 4,
+  },
+  previewImg: {
+    width: 96,
+    height: 96,
+    borderRadius: 10,
+  },
   bubble: {
     borderRadius: 18,
     paddingHorizontal: 14,

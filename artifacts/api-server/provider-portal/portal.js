@@ -221,6 +221,7 @@
   // ── Auth view <-> placeholder dashboard ──────────────────────────────────
   function showDashboard(user) {
     state.currentUser = user || null;
+    document.body.classList.add("provider-dashboard-active");
     const hero = $(".portal-hero");
     if (hero) hero.hidden = true;
     $("#portal-auth").hidden = true;
@@ -233,6 +234,7 @@
   }
 
   function showAuth() {
+    document.body.classList.remove("provider-dashboard-active");
     stopDmPolling();
     resetDmState();
     const hero = $(".portal-hero");
@@ -572,6 +574,9 @@
       });
       socket.on("new_message", ({ threadId, message }) => {
         handleIncomingDmMessage(threadId, message);
+      });
+      socket.on("message_like", ({ threadId, message }) => {
+        applyDmLikeUpdate(threadId, message);
       });
     } catch {
       state.dmSocketConnected = false;
@@ -956,10 +961,13 @@
     bubble.className = "provider-message-bubble";
     if (message.imageUrl) {
       const img = document.createElement("img");
-      img.src = resolveAssetUrl(message.imageUrl);
+      const fullUrl = resolveAssetUrl(message.imageUrl);
+      img.src = fullUrl;
       img.alt = "Shared image";
       img.loading = "lazy";
       img.decoding = "async";
+      img.style.cursor = "zoom-in";
+      img.addEventListener("click", () => openDmLightbox(fullUrl));
       bubble.appendChild(img);
     }
     if (message.fileUrl) {
@@ -987,7 +995,94 @@
     time.textContent = formatFullTime(message.createdAt);
     bubble.appendChild(time);
     row.appendChild(bubble);
+
+    const liked = !!message.likedAt;
+    const isLocal = typeof message.id === "string" && message.id.startsWith("local-");
+    const likeBtn = document.createElement("button");
+    likeBtn.type = "button";
+    likeBtn.className = "provider-message-like" + (liked ? " is-liked" : "");
+    likeBtn.textContent = liked ? "♥" : "♡";
+    likeBtn.setAttribute("aria-label", liked ? "Remove like" : "Like message");
+    likeBtn.disabled = isLocal;
+    if (!isLocal) {
+      likeBtn.addEventListener("click", () => {
+        void toggleDmLike(message);
+      });
+    }
+    row.appendChild(likeBtn);
     return row;
+  }
+
+  function applyDmLikeUpdate(threadId, message) {
+    if (!threadId || !message || threadId !== state.dmSelectedThreadId) return;
+    let changed = false;
+    state.dmMessages = state.dmMessages.map((m) => {
+      if (m.id !== message.id) return m;
+      changed = true;
+      return { ...m, likedAt: message.likedAt || null, likedBy: message.likedBy || null };
+    });
+    if (changed) renderSelectedDmThread({ preserveScroll: true });
+  }
+
+  async function toggleDmLike(message) {
+    const token = currentToken();
+    const threadId = state.dmSelectedThreadId;
+    if (!token || !threadId || !message || !message.id) return;
+    const nextLiked = !message.likedAt;
+    // Optimistic update.
+    applyDmLikeUpdate(threadId, {
+      id: message.id,
+      likedAt: nextLiked ? new Date().toISOString() : null,
+      likedBy: nextLiked ? (state.currentUser && state.currentUser.id) || null : null,
+    });
+    try {
+      const data = await api(`/dm/threads/${threadId}/messages/${message.id}/like`, {
+        method: "POST",
+        token,
+        body: { liked: nextLiked },
+      });
+      if (data && data.message) applyDmLikeUpdate(threadId, data.message);
+    } catch {
+      // Revert on failure.
+      applyDmLikeUpdate(threadId, {
+        id: message.id,
+        likedAt: message.likedAt || null,
+        likedBy: message.likedBy || null,
+      });
+    }
+  }
+
+  function openDmLightbox(url) {
+    if (!url) return;
+    let overlay = document.getElementById("provider-image-lightbox");
+    if (!overlay) {
+      overlay = document.createElement("div");
+      overlay.id = "provider-image-lightbox";
+      overlay.className = "provider-image-lightbox";
+      const img = document.createElement("img");
+      img.className = "provider-image-lightbox-img";
+      img.alt = "Enlarged image";
+      const closeBtn = document.createElement("button");
+      closeBtn.type = "button";
+      closeBtn.className = "provider-image-lightbox-close";
+      closeBtn.setAttribute("aria-label", "Close");
+      closeBtn.textContent = "✕";
+      overlay.append(img, closeBtn);
+      overlay.addEventListener("click", (event) => {
+        if (event.target === overlay || event.target === closeBtn) closeDmLightbox();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeDmLightbox();
+      });
+      document.body.appendChild(overlay);
+    }
+    overlay.querySelector(".provider-image-lightbox-img").src = url;
+    overlay.classList.add("is-visible");
+  }
+
+  function closeDmLightbox() {
+    const overlay = document.getElementById("provider-image-lightbox");
+    if (overlay) overlay.classList.remove("is-visible");
   }
 
   function renderSelectedDmProfile() {
@@ -1028,11 +1123,19 @@
 
     const actions = document.createElement("div");
     actions.className = "provider-profile-actions";
+    const menu = document.createElement("details");
+    menu.className = "provider-profile-menu";
+    const summary = document.createElement("summary");
+    summary.setAttribute("aria-label", "User actions");
+    summary.textContent = "⋯";
+    const menuPanel = document.createElement("div");
+    menuPanel.className = "provider-profile-menu-panel";
     const block = document.createElement("button");
     block.type = "button";
     block.className = "button button-quiet";
     block.textContent = thread.blockStatus?.iBlockedThem ? "Unblock" : "Block";
     block.addEventListener("click", () => {
+      menu.open = false;
       void toggleDmBlock();
     });
     const report = document.createElement("button");
@@ -1040,9 +1143,12 @@
     report.className = "button button-quiet";
     report.textContent = "Report";
     report.addEventListener("click", () => {
+      menu.open = false;
       void reportDmUser();
     });
-    actions.append(block, report);
+    menuPanel.append(block, report);
+    menu.append(summary, menuPanel);
+    actions.appendChild(menu);
 
     card.append(top, meta, actions);
   }
@@ -1957,9 +2063,6 @@
       });
     }
     $("#provider-thread-search")?.addEventListener("input", renderDmThreads);
-    $("#provider-refresh-messages")?.addEventListener("click", () => {
-      void refreshDmInbox();
-    });
     $("#provider-call-link")?.addEventListener("click", revealSelectedPhone);
     $("#provider-message-back")?.addEventListener("click", () => {
       state.dmSelectedThreadId = null;

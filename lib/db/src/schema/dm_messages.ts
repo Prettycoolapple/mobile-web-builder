@@ -19,6 +19,11 @@ export const dmMessages = pgTable("dm_messages", {
   fileUrl: text("file_url"),
   fileName: text("file_name"),
   fileMime: text("file_mime"),
+  // Message "like" reaction. In a 1:1 DM either participant may like any
+  // message; we store a single like (who + when) rather than a separate
+  // reactions table. likedAt null = not liked. Toggling off clears both.
+  likedAt: timestamp("liked_at", { withTimezone: true }),
+  likedBy: text("liked_by").references(() => profiles.id, { onDelete: "set null" }),
   readAt: timestamp("read_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });

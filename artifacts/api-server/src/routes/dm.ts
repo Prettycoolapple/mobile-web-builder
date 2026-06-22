@@ -435,6 +435,65 @@ router.patch("/dm/threads/:threadId/read", requireAuth, async (req: Request, res
   }
 });
 
+// Toggle a "like" reaction on a single message. Either participant of the
+// thread may like/unlike any message (their own or the other person's). The
+// updated message is broadcast to both users so the heart stays in sync.
+router.post(
+  "/dm/threads/:threadId/messages/:messageId/like",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    const userId = (req as any).userId as string;
+    const { threadId, messageId } = req.params;
+    const { liked } = req.body as { liked?: boolean };
+
+    try {
+      const [thread] = await db
+        .select()
+        .from(dmThreads)
+        .where(eq(dmThreads.id, threadId))
+        .limit(1);
+
+      if (!thread || (thread.participantA !== userId && thread.participantB !== userId)) {
+        res.status(403).json({ error: "Thread not found or access denied" });
+        return;
+      }
+
+      const [existing] = await db
+        .select({ id: dmMessages.id })
+        .from(dmMessages)
+        .where(and(eq(dmMessages.id, messageId), eq(dmMessages.threadId, threadId)))
+        .limit(1);
+      if (!existing) {
+        res.status(404).json({ error: "Message not found" });
+        return;
+      }
+
+      const [message] = await db
+        .update(dmMessages)
+        .set(
+          liked
+            ? { likedAt: new Date(), likedBy: userId }
+            : { likedAt: null, likedBy: null },
+        )
+        .where(eq(dmMessages.id, messageId))
+        .returning();
+
+      const otherId =
+        thread.participantA === userId ? thread.participantB : thread.participantA;
+      const io = getIo();
+      if (io) {
+        io.to(`user:${otherId}`).emit("message_like", { threadId, message });
+        io.to(`user:${userId}`).emit("message_like", { threadId, message });
+      }
+
+      res.json({ message });
+    } catch (err) {
+      req.log.error({ err }, "POST /dm/threads/:threadId/messages/:messageId/like failed");
+      res.status(500).json({ error: "Failed to update like" });
+    }
+  },
+);
+
 router.post("/dm/block", requireAuth, async (req: Request, res: Response) => {
   const userId = (req as any).userId as string;
   const { blockedUserId } = req.body as { blockedUserId?: string };

@@ -12,6 +12,8 @@ export interface DmMessage {
   fileUrl?: string | null;
   fileName?: string | null;
   fileMime?: string | null;
+  likedAt?: string | null;
+  likedBy?: string | null;
   readAt: string | null;
   createdAt: string;
 }
