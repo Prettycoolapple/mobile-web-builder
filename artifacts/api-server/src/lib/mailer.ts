@@ -117,6 +117,82 @@ export async function sendPasswordResetCodeEmail(args: {
   }
 }
 
+/** Outcome of an attempt to email a white-label report PDF. */
+export type SendReportPdfResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Email a provider's white-label feasibility report PDF to their client (Resend,
+ * with the PDF as an attachment). The provider's own email is set as reply-to so
+ * the client can respond directly to them. Used by /reports/pdf/email.
+ */
+export async function sendReportPdfEmail(args: {
+  to: string;
+  replyTo?: string | null;
+  fromName?: string | null;
+  subject: string;
+  message: string;
+  filename: string;
+  pdfBase64: string;
+}): Promise<SendReportPdfResult> {
+  if (!RESEND_API_KEY || !RESEND_FROM_EMAIL) {
+    return { ok: false, error: "Email service is not configured." };
+  }
+
+  const safeMessage = htmlEscapeBasic(args.message).replace(/\n/g, "<br/>");
+  const html = `
+    <div style="font-family:Arial,sans-serif;line-height:1.6;color:#1c1917">
+      ${safeMessage || "<p>Please find the attached feasibility report.</p>"}
+    </div>
+  `;
+  // Resend allows overriding the visible sender name while keeping the verified
+  // from-address; reply-to routes the client's reply to the provider.
+  const fromHeader = args.fromName ? `${sanitizeFromName(args.fromName)} <${stripAngle(RESEND_FROM_EMAIL)}>` : RESEND_FROM_EMAIL;
+
+  try {
+    const resp = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: fromHeader,
+        to: [args.to],
+        ...(args.replyTo ? { reply_to: args.replyTo } : {}),
+        subject: args.subject,
+        text: args.message || "Please find the attached feasibility report.",
+        html,
+        attachments: [{ filename: args.filename, content: args.pdfBase64 }],
+      }),
+    });
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => "");
+      return { ok: false, error: `Email provider rejected the request (${resp.status}). ${detail}`.trim() };
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Failed to send email." };
+  }
+}
+
+function htmlEscapeBasic(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+/** Strip characters that would break the From display-name in an email header. */
+function sanitizeFromName(name: string): string {
+  return name.replace(/["\r\n<>]/g, "").trim().slice(0, 80) || "Project Alpha";
+}
+
+/** Extract the bare address if RESEND_FROM_EMAIL is in "Name <addr>" form. */
+function stripAngle(from: string): string {
+  const m = from.match(/<([^>]+)>/);
+  return m ? m[1] : from;
+}
+
 export type SignupRole = "general" | "sales_agent" | "service_provider";
 
 export function accountTypeLabel(role: SignupRole): string {

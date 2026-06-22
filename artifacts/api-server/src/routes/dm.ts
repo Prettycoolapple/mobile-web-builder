@@ -486,6 +486,24 @@ router.post(
         io.to(`user:${userId}`).emit("message_like", { threadId, message });
       }
 
+      if (liked) {
+        try {
+          const [liker] = await db
+            .select({ fullName: profiles.fullName })
+            .from(profiles)
+            .where(eq(profiles.id, userId))
+            .limit(1);
+          const likerName = liker?.fullName ?? "Someone";
+          await sendPushToUser(otherId, likerName, "Liked a message", {
+            type: "dm_like",
+            threadId: String(threadId),
+            messageId: String(messageId),
+          });
+        } catch (pushErr) {
+          req.log.warn({ pushErr }, "DM like push notification failed (non-fatal)");
+        }
+      }
+
       res.json({ message });
     } catch (err) {
       req.log.error({ err }, "POST /dm/threads/:threadId/messages/:messageId/like failed");

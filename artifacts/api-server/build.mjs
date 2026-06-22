@@ -210,6 +210,7 @@ async function buildAll() {
   await cp(path.join(artifactDir, ".well-known"), path.join(deployDir, ".well-known"), { recursive: true });
 
   await buildAdminPortal(deployDir);
+  await buildProviderWorkspace(deployDir);
 }
 
 async function buildAdminPortal(deployDir) {
@@ -241,6 +242,37 @@ async function buildAdminPortal(deployDir) {
   await rm(adminDeploy, { recursive: true, force: true });
   await cp(adminDist, adminDeploy, { recursive: true });
   console.log(`[build] copied admin SPA → ${adminDeploy}`);
+}
+
+async function buildProviderWorkspace(deployDir) {
+  const workspaceDir = path.resolve(artifactDir, "..", "provider-workspace");
+
+  try {
+    await stat(workspaceDir);
+  } catch {
+    console.warn("[build] provider-workspace directory not found; skipping workspace SPA build.");
+    return;
+  }
+
+  console.log("[build] building provider workspace SPA…");
+  await new Promise((resolve, reject) => {
+    const proc = spawn("pnpm", ["--filter", "@workspace/provider-workspace", "run", "build"], {
+      cwd: path.resolve(artifactDir, "..", ".."),
+      stdio: "inherit",
+      shell: process.platform === "win32",
+    });
+    proc.on("error", reject);
+    proc.on("exit", (code) => {
+      if (code === 0) resolve(undefined);
+      else reject(new Error(`provider-workspace build exited with code ${code}`));
+    });
+  });
+
+  const workspaceDist = path.join(workspaceDir, "dist");
+  const workspaceDeploy = path.join(deployDir, "workspace");
+  await rm(workspaceDeploy, { recursive: true, force: true });
+  await cp(workspaceDist, workspaceDeploy, { recursive: true });
+  console.log(`[build] copied provider workspace SPA → ${workspaceDeploy}`);
 }
 
 buildAll().catch((err) => {

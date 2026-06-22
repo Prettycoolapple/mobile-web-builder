@@ -27,7 +27,9 @@
     { "source": "/property-share/(.*)", "destination": "/api" },
     { "source": "/share/(.*)", "destination": "/api" },
     { "source": "/admin", "destination": "/admin/index.html" },
-    { "source": "/admin/(.*)", "destination": "/admin/index.html" }
+    { "source": "/admin/(.*)", "destination": "/admin/index.html" },
+    { "source": "/workspace", "destination": "/workspace/index.html" },
+    { "source": "/workspace/(.*)", "destination": "/workspace/index.html" }
   ],
   "env": {
     "ENABLE_SOCKET_IO": "false"

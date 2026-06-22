@@ -1812,3 +1812,55 @@ export async function generateChatReply(
     throw error;
   }
 }
+
+/**
+ * Client-facing executive summary for a white-label PDF export (provider portal).
+ * Reuses the existing DeepSeek client. Given the structured feasibility report,
+ * returns 2-3 short professional paragraphs a service provider can put on the
+ * cover of a report they send to their client. Read-only over the report — does
+ * NOT change any report data or the analysis pipeline.
+ */
+export async function generateExecutiveSummary(
+  report: Record<string, unknown>,
+  locale: Locale = "en",
+): Promise<string> {
+  const overview = (report["propertyOverview"] as Record<string, unknown> | undefined) ?? {};
+  const scores = (report["scores"] as Record<string, unknown> | undefined) ?? {};
+  const planning = (report["planning"] as Record<string, unknown> | undefined) ?? {};
+  const facts = {
+    address: report["address"] ?? overview["address"] ?? "the property",
+    zone: overview["zone"] ?? planning["zone"] ?? null,
+    composite: scores["composite"] ?? null,
+    ease: scores["ease"] ?? null,
+    cost: scores["cost"] ?? null,
+    roi: scores["roi"] ?? null,
+    potentialLots: planning["potentialLots"] ?? report["potential_lots"] ?? null,
+    totalCostLow: report["totalCostLow"] ?? null,
+    totalCostHigh: report["totalCostHigh"] ?? null,
+    riskSummary: Array.isArray(report["riskSummary"]) ? (report["riskSummary"] as unknown[]).slice(0, 5) : [],
+  };
+
+  const system =
+    "You are a property development consultant writing the executive summary that opens a feasibility report sent to a client. " +
+    "Write 2-3 concise, professional paragraphs (no headings, no markdown, no bullet lists). " +
+    "Summarise the development opportunity, the key feasibility signals (subdivision potential, cost, ROI) and the main risks, " +
+    "in plain client-friendly language. Do not invent figures beyond those provided. Do not include a sign-off." +
+    languageInstruction(locale);
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "deepseek-chat",
+      config: { systemInstruction: system, maxOutputTokens: 1024 },
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: `Report facts (JSON):\n${JSON.stringify(facts)}` }],
+        },
+      ],
+    });
+    return sanitizeAssistantProse(response.text ?? "", locale).trim();
+  } catch (error) {
+    logger.error({ error }, "Failed to generate executive summary");
+    throw error;
+  }
+}

@@ -28,6 +28,7 @@ import sharesRouter from "./shares";
 import translateRouter from "./translate";
 import transcribeRouter from "./transcribe";
 import watchlistRouter from "./watchlist";
+import reportPdfRouter from "./report-pdf";
 
 const router: IRouter = Router();
 
@@ -60,5 +61,6 @@ router.use(sharesRouter);
 router.use(translateRouter);
 router.use(transcribeRouter);
 router.use(watchlistRouter);
+router.use(reportPdfRouter);
 
 export default router;

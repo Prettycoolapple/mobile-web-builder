@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   providerRecommendationCount: 0,
   hasDmThread: false,
   dmThread: null as Record<string, unknown> | null,
+  dmMessage: null as Record<string, unknown> | null,
   insertedMessage: null as Record<string, unknown> | null,
   lastRecommendationAction: null as "insert" | "delete" | null,
 }));
@@ -64,6 +65,10 @@ function resolveSelect(t: unknown, selection: unknown): unknown[] {
       return state.hasDmThread ? [{ id: "thread-1" }] : [];
     }
     return state.dmThread ? [state.dmThread] : [];
+  }
+
+  if (name === "dmMessages") {
+    return state.dmMessage ? [state.dmMessage] : [];
   }
 
   if (name === "userBlocks") return [];
@@ -130,7 +135,7 @@ vi.mock("@workspace/db", () => ({
       },
     }),
     update: (t: unknown) => ({
-      set: () => ({
+      set: (values: Record<string, unknown>) => ({
         where: () => ({
           returning: () => {
             if (tableName(t) === "serviceProviderProfiles") {
@@ -138,6 +143,13 @@ vi.mock("@workspace/db", () => ({
                 ? state.providerRecommendationCount + 1
                 : Math.max(0, state.providerRecommendationCount - 1);
               return Promise.resolve([{ recommendationCount: state.providerRecommendationCount }]);
+            }
+            if (tableName(t) === "dmMessages") {
+              state.dmMessage = {
+                ...(state.dmMessage ?? { id: "message-1" }),
+                ...values,
+              };
+              return Promise.resolve([state.dmMessage]);
             }
             return Promise.resolve([]);
           },
@@ -194,6 +206,7 @@ beforeEach(() => {
   state.providerRecommendationCount = 0;
   state.hasDmThread = false;
   state.dmThread = null;
+  state.dmMessage = null;
   state.insertedMessage = null;
   state.lastRecommendationAction = null;
   sendPushToUserMock.mockClear();
@@ -311,6 +324,35 @@ describe("DM push direction", () => {
     expect(sendPushToUserMock).toHaveBeenCalledWith("general-1", "Provider User", "Hi back", {
       type: "dm",
       threadId: "thread-1",
+    });
+  });
+
+  it("pushes a notification to the other participant when a message is liked", async () => {
+    state.userId = "provider-1";
+    state.dmThread = { id: "thread-1", participantA: "general-1", participantB: "provider-1" };
+    state.dmMessage = {
+      id: "message-1",
+      threadId: "thread-1",
+      senderId: "general-1",
+      body: "Can you review this?",
+      likedAt: null,
+      likedBy: null,
+    };
+    state.profileQueue = [{ fullName: "Provider User" }];
+
+    await withServer("../dm", async (baseUrl) => {
+      const resp = await fetch(`${baseUrl}/dm/threads/thread-1/messages/message-1/like`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ liked: true }),
+      });
+      expect(resp.status).toBe(200);
+    });
+
+    expect(sendPushToUserMock).toHaveBeenCalledWith("general-1", "Provider User", "Liked a message", {
+      type: "dm_like",
+      threadId: "thread-1",
+      messageId: "message-1",
     });
   });
 });

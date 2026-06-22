@@ -244,6 +244,13 @@
   }
 
   function switchProviderMode(mode) {
+    // Work space is the dedicated React SPA at /workspace/ (shares this portal's
+    // auth token via localStorage). Navigate there instead of toggling a panel,
+    // unless the account is subscription-locked — then keep them on Manage.
+    if (mode === "workspace" && !isProviderAccessLocked()) {
+      window.location.assign("/workspace/");
+      return;
+    }
     const selectedMode = isProviderAccessLocked() && mode === "workspace" ? "manage" : (mode === "workspace" ? "workspace" : "manage");
     $$("[data-provider-mode]").forEach((button) => {
       const active = button.dataset.providerMode === selectedMode;
@@ -695,11 +702,14 @@
       return;
     }
     filtered.forEach((thread) => {
+      const item = document.createElement("div");
+      item.className = "provider-thread-item";
+      if (thread.id === state.dmSelectedThreadId) item.classList.add("is-active");
+      item.dataset.threadId = thread.id;
+
       const button = document.createElement("button");
       button.type = "button";
-      button.className = "provider-thread-item";
-      if (thread.id === state.dmSelectedThreadId) button.classList.add("is-active");
-      button.dataset.threadId = thread.id;
+      button.className = "provider-thread-select";
 
       const other = thread.otherParticipant;
       const avatar = createAvatar(other, "provider-thread-avatar");
@@ -728,8 +738,44 @@
       button.addEventListener("click", () => {
         void selectDmThread(thread.id);
       });
-      list.appendChild(button);
+      item.appendChild(button);
+      if (thread.id === state.dmSelectedThreadId) item.appendChild(createDmThreadActionMenu(thread));
+      list.appendChild(item);
     });
+  }
+
+  function createDmThreadActionMenu(thread) {
+    const menu = document.createElement("details");
+    menu.className = "provider-thread-actions";
+    const summary = document.createElement("summary");
+    summary.setAttribute("aria-label", "User actions");
+    summary.textContent = "⋯";
+    const panel = document.createElement("div");
+    panel.className = "provider-thread-menu-panel";
+
+    const block = document.createElement("button");
+    block.type = "button";
+    block.className = "button button-quiet";
+    block.textContent = thread.blockStatus?.iBlockedThem ? "Unblock" : "Block";
+    block.addEventListener("click", (event) => {
+      event.stopPropagation();
+      menu.open = false;
+      void toggleDmBlock();
+    });
+
+    const report = document.createElement("button");
+    report.type = "button";
+    report.className = "button button-quiet";
+    report.textContent = "Report";
+    report.addEventListener("click", (event) => {
+      event.stopPropagation();
+      menu.open = false;
+      void reportDmUser();
+    });
+
+    panel.append(block, report);
+    menu.append(summary, panel);
+    return menu;
   }
 
   async function selectDmThread(threadId) {
@@ -891,8 +937,7 @@
     if (callLink) {
       if (contactNumber) {
         callLink.title = phoneRevealed ? `Phone: ${contactNumber}` : "Reveal phone number";
-        // This ☎ icon (next to refresh) is the ONLY place the user's number is
-        // revealed: tap to swap the icon for the actual mobile number.
+        // This phone action is the only place the user's number is revealed.
         callLink.textContent = phoneRevealed ? contactNumber : "☎";
         callLink.classList.toggle("is-phone-revealed", phoneRevealed);
         callLink.hidden = false;
@@ -1086,71 +1131,8 @@
   }
 
   function renderSelectedDmProfile() {
-    const card = $("#provider-profile-card");
-    const thread = selectedDmThread();
-    if (!card || !thread) {
-      if (card) {
-        card.classList.remove("is-visible");
-        card.replaceChildren();
-      }
-      return;
-    }
-    const other = state.dmSelectedProfile || thread.otherParticipant || {};
-    const name = displayName(other);
-    const contactNumber = other.roleData && other.roleData.contactNumber;
-    card.replaceChildren();
-    card.classList.add("is-visible");
-
-    const top = document.createElement("div");
-    top.className = "provider-profile-top";
-    top.appendChild(createAvatar(other, "provider-profile-avatar"));
-    const text = document.createElement("div");
-    const strong = document.createElement("strong");
-    strong.textContent = name;
-    const role = document.createElement("span");
-    const rec = Number(other.recommendationCount ?? thread.otherParticipant?.recommendationCount ?? 0);
-    role.textContent = rec > 0 ? `General user · ${rec} recommendations` : "General user";
-    text.append(strong, role);
-    top.appendChild(text);
-
-    const meta = document.createElement("div");
-    meta.className = "provider-profile-meta";
-    // The actual number is revealed ONLY via the ☎ icon at the top-right of the
-    // chat window. Here we only state availability — never the number itself.
-    meta.textContent = contactNumber
-      ? "Phone number is available. Tap the ☎ icon at the top of the chat to reveal it."
-      : "Phone number is hidden unless this user has shared it through an active DM relationship.";
-
-    const actions = document.createElement("div");
-    actions.className = "provider-profile-actions";
-    const menu = document.createElement("details");
-    menu.className = "provider-profile-menu";
-    const summary = document.createElement("summary");
-    summary.setAttribute("aria-label", "User actions");
-    summary.textContent = "⋯";
-    const menuPanel = document.createElement("div");
-    menuPanel.className = "provider-profile-menu-panel";
-    const block = document.createElement("button");
-    block.type = "button";
-    block.className = "button button-quiet";
-    block.textContent = thread.blockStatus?.iBlockedThem ? "Unblock" : "Block";
-    block.addEventListener("click", () => {
-      menu.open = false;
-      void toggleDmBlock();
-    });
-    const report = document.createElement("button");
-    report.type = "button";
-    report.className = "button button-quiet";
-    report.textContent = "Report";
-    report.addEventListener("click", () => {
-      menu.open = false;
-      void reportDmUser();
-    });
-    menuPanel.append(block, report);
-    menu.append(summary, menuPanel);
-    actions.appendChild(menu);
-
-    card.append(top, meta, actions);
+    // The selected user's safety actions now live directly on the active
+    // contact row, keeping the inbox column dedicated to conversations.
   }
 
   function updateDmSendState() {
