@@ -107,6 +107,45 @@
     return payload;
   }
 
+  // Upload via a presigned URL so the file goes DIRECTLY to object storage,
+  // bypassing the serverless function body cap (Vercel 413). Falls back to the
+  // same-origin multipart endpoint on any non-validation error — e.g. when
+  // signed URLs aren't available, or the bucket's CORS blocks the cross-origin
+  // PUT (surfaces as a "Failed to fetch" TypeError).
+  async function uploadViaSignedUrl(basePath, token, file, extraFields) {
+    const meta = {
+      name: file.name || "upload",
+      size: file.size,
+      contentType: file.type || "application/octet-stream",
+      ...(extraFields || {}),
+    };
+    const signed = await api(`${basePath}/request-url`, { method: "POST", token, body: meta });
+    const uploadResp = await fetch(signed.uploadURL, {
+      method: "PUT",
+      headers: signed.requiredHeaders || { "Content-Type": meta.contentType },
+      body: file,
+    });
+    if (!uploadResp.ok) throw new Error("Upload failed. Please try again.");
+    return api(`${basePath}/complete`, {
+      method: "POST",
+      token,
+      body: { objectPath: signed.objectPath, ...meta },
+    });
+  }
+
+  async function uploadWithFallback(basePath, token, file, extraFields) {
+    try {
+      return await uploadViaSignedUrl(basePath, token, file, extraFields);
+    } catch (error) {
+      const code = error && error.code;
+      // Validation rejections are deterministic — don't silently retry multipart.
+      if (code === "INVALID_FILE_TYPE" || code === "INVALID_SIZE" || code === "INVALID_NAME" || code === "INVALID_CATEGORY") {
+        throw error;
+      }
+      return uploadFile(basePath, token, file, extraFields);
+    }
+  }
+
   function formValues(form) {
     return Object.fromEntries(new FormData(form).entries());
   }
@@ -1113,7 +1152,7 @@
       if (statusElement) setStatus(statusElement, `Uploading photo ${index + 1} of ${total}...`, null);
       try {
         const standardized = await standardizeListingPhoto(item.file);
-        const uploaded = await uploadFile("/upload/listing-image", token, standardized);
+        const uploaded = await uploadWithFallback("/upload/listing-image", token, standardized);
         urls.push(uploaded.fileUrl);
       } catch (error) {
         const fileName = item.file?.name || `photo ${index + 1}`;
@@ -1141,7 +1180,7 @@
       const { category, file } = queue[index];
       if (statusElement) setStatus(statusElement, `Uploading document ${index + 1} of ${total}...`, null);
       try {
-        const uploaded = await uploadFile("/upload/listing-document", token, file, { category });
+        const uploaded = await uploadWithFallback("/upload/listing-document", token, file, { category });
         documents.push(uploaded.document);
       } catch (error) {
         const fileName = file?.name || `document ${index + 1}`;
@@ -1421,7 +1460,7 @@
   }
 
   async function uploadProfilePicture(token, file) {
-    const payload = await uploadFile("/upload/profile-picture", token, file);
+    const payload = await uploadWithFallback("/upload/profile-picture", token, file);
     return payload;
   }
 

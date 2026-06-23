@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import * as Haptics from "expo-haptics";
+import * as FileSystem from "expo-file-system/legacy";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { useAuth } from "@/context/AuthContext";
 import { getApiBase as resolveApiBase, hasExplicitApiConfiguration } from "@/lib/api";
@@ -315,10 +316,14 @@ export default function AddListingScreen() {
 
   const uploadImage = useCallback(
     async (img: PickedImage): Promise<string | null> => {
-      try {
-        const filename = img.uri.split("/").pop() ?? `listing-${Date.now()}.jpg`;
+      const filename = img.uri.split("/").pop() ?? `listing-${Date.now()}.jpg`;
+      const mimeType = img.mimeType ?? "image/jpeg";
+
+      // Multipart fallback — routes the file body THROUGH the API. On serverless
+      // hosts (Vercel) this caps at ~4.5MB (413), so it's the fallback, not primary.
+      const uploadWithMultipart = async (): Promise<string | null> => {
         const formData = new FormData();
-        formData.append("file", { uri: img.uri, type: img.mimeType ?? "image/jpeg", name: filename } as any);
+        formData.append("file", { uri: img.uri, type: mimeType, name: filename } as any);
         const resp = await fetch(`${getApiBase()}/upload/listing-image`, {
           method: "POST",
           headers: getApiHeaders(),
@@ -327,6 +332,63 @@ export default function AddListingScreen() {
         if (!resp.ok) return null;
         const data = (await resp.json()) as { fileUrl?: string };
         return data.fileUrl ?? null;
+      };
+
+      // Primary — presigned PUT directly to object storage, bypassing the API
+      // (and its serverless body cap) entirely.
+      const uploadWithSignedUrl = async (): Promise<string | null> => {
+        const info = await FileSystem.getInfoAsync(img.uri);
+        if (!info.exists || info.isDirectory || !info.size) {
+          throw new Error("Could not read local image file");
+        }
+        const signResp = await fetch(`${getApiBase()}/upload/listing-image/request-url`, {
+          method: "POST",
+          headers: { ...getApiHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify({ name: filename, size: info.size, contentType: mimeType }),
+        });
+        const signJson = (await signResp.json()) as {
+          uploadURL?: string;
+          objectPath?: string;
+          fileUrl?: string;
+          requiredHeaders?: Record<string, string>;
+          code?: string;
+          error?: string;
+        };
+        if (!signResp.ok || !signJson.uploadURL || !signJson.objectPath) {
+          const err = new Error(signJson.error ?? "Could not prepare upload");
+          (err as Error & { code?: string }).code = signJson.code;
+          throw err;
+        }
+        const signedContentType = signJson.requiredHeaders?.["Content-Type"] ?? mimeType;
+        const uploadResult = await FileSystem.uploadAsync(signJson.uploadURL, img.uri, {
+          httpMethod: "PUT",
+          uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+          sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
+          headers: { "Content-Type": signedContentType },
+        });
+        if (uploadResult.status < 200 || uploadResult.status >= 300) {
+          throw new Error("Image upload failed");
+        }
+        const completeResp = await fetch(`${getApiBase()}/upload/listing-image/complete`, {
+          method: "POST",
+          headers: { ...getApiHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify({ objectPath: signJson.objectPath }),
+        });
+        const completeJson = (await completeResp.json()) as { fileUrl?: string };
+        if (!completeResp.ok) throw new Error("Could not finalize upload");
+        return completeJson.fileUrl ?? signJson.fileUrl ?? null;
+      };
+
+      try {
+        try {
+          return await uploadWithSignedUrl();
+        } catch (signedErr) {
+          const code = (signedErr as Error & { code?: string }).code;
+          if (code === "INVALID_FILE_TYPE" || code === "INVALID_SIZE" || code === "INVALID_NAME") {
+            throw signedErr;
+          }
+          return await uploadWithMultipart();
+        }
       } catch {
         return null;
       }

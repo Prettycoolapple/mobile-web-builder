@@ -94,6 +94,43 @@
     return payload;
   }
 
+  // Upload via a presigned URL so the file goes DIRECTLY to object storage,
+  // bypassing the serverless function body cap (Vercel 413). Falls back to the
+  // same-origin multipart endpoint on any non-validation error (signed URLs
+  // unavailable, or bucket CORS blocking the cross-origin PUT).
+  async function uploadViaSignedUrl(basePath, token, file, extraFields) {
+    const meta = {
+      name: file.name || "upload",
+      size: file.size,
+      contentType: file.type || "application/octet-stream",
+      ...(extraFields || {}),
+    };
+    const signed = await api(`${basePath}/request-url`, { method: "POST", token, body: meta });
+    const uploadResp = await fetch(signed.uploadURL, {
+      method: "PUT",
+      headers: signed.requiredHeaders || { "Content-Type": meta.contentType },
+      body: file,
+    });
+    if (!uploadResp.ok) throw new Error("Upload failed. Please try again.");
+    return api(`${basePath}/complete`, {
+      method: "POST",
+      token,
+      body: { objectPath: signed.objectPath, ...meta },
+    });
+  }
+
+  async function uploadWithFallback(basePath, token, file, extraFields) {
+    try {
+      return await uploadViaSignedUrl(basePath, token, file, extraFields);
+    } catch (error) {
+      const code = error && error.code;
+      if (code === "INVALID_FILE_TYPE" || code === "INVALID_SIZE" || code === "INVALID_NAME" || code === "INVALID_CATEGORY") {
+        throw error;
+      }
+      return uploadFile(basePath, token, file, extraFields);
+    }
+  }
+
   function currentToken() {
     const session = getSession();
     return session ? session.token : null;
@@ -1619,7 +1656,7 @@
   }
 
   async function uploadProfilePicture(token, file) {
-    return uploadFile("/upload/profile-picture", token, file);
+    return uploadWithFallback("/upload/profile-picture", token, file);
   }
 
   function setProviderProfileDiscipline(discipline, otherDiscipline) {

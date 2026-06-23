@@ -363,6 +363,43 @@ function validateDmFileUploadRequest(body: unknown):
   return { ok: true, name, size: fileSize, contentType: normalizedContentType };
 }
 
+function validateListingDocumentUploadRequest(body: unknown):
+  | { ok: true; name: string; size: number; contentType: string; category: string }
+  | { ok: false; status: number; error: string; code: string } {
+  const { name, size, contentType, category } = (body ?? {}) as {
+    name?: string;
+    size?: number;
+    contentType?: string;
+    category?: string;
+  };
+  const fileSize = typeof size === "number" ? size : Number.NaN;
+  const normalizedContentType = contentType?.split(";")[0]?.trim().toLowerCase() ?? "";
+  const normalizedCategory = String(category || "").trim();
+
+  if (!["title", "lim", "other"].includes(normalizedCategory)) {
+    return { ok: false, status: 400, error: "Please choose a valid document type.", code: "INVALID_CATEGORY" };
+  }
+  if (!name || typeof name !== "string") {
+    return { ok: false, status: 400, error: "Missing or invalid file name", code: "INVALID_NAME" };
+  }
+  if (!Number.isFinite(fileSize) || fileSize <= 0 || fileSize > MAX_CERT_FILE_SIZE_BYTES) {
+    return {
+      ok: false,
+      status: 400,
+      error: `Invalid file size. Maximum size is ${MAX_CERT_FILE_SIZE_BYTES / (1024 * 1024)}MB`,
+      code: "INVALID_SIZE",
+    };
+  }
+  if (!normalizedContentType || !ALLOWED_LISTING_DOCUMENT_MIME_TYPES.has(normalizedContentType)) {
+    return { ok: false, status: 415, error: "Only PDF, Word, and image files are accepted", code: "INVALID_FILE_TYPE" };
+  }
+  // Record of title and LIM report files must be PDFs (matches multipart handler).
+  if ((normalizedCategory === "title" || normalizedCategory === "lim") && normalizedContentType !== "application/pdf") {
+    return { ok: false, status: 400, error: "Record of title and LIM report files must be PDFs.", code: "INVALID_FILE_TYPE" };
+  }
+  return { ok: true, name, size: fileSize, contentType: normalizedContentType, category: normalizedCategory };
+}
+
 router.post(
   "/upload/incorporation-cert-pre-signup/request-url",
   preSignupRateLimit,
@@ -424,6 +461,24 @@ router.post(
     }
 
     try {
+      // Prefer S3/R2 presigned PUT so the client uploads directly to storage,
+      // bypassing the serverless function body cap (Vercel 413). Matches the
+      // storage priority of the multipart handler below.
+      if (s3StorageService.isConfigured) {
+        const { uploadURL, objectPath, fileUrl } = await s3StorageService.getPresignedUploadUrl({
+          contentType: validated.contentType,
+          namespace: DM_IMAGE_NAMESPACE,
+        });
+        res.json({
+          uploadURL,
+          objectPath,
+          fileUrl,
+          expiresInSec: 900,
+          requiredHeaders: { "Content-Type": validated.contentType },
+          metadata: { name: validated.name, size: validated.size, contentType: validated.contentType },
+        });
+        return;
+      }
       if (objectStorageService.isLocal) {
         res.status(501).json({
           error: "Signed URL upload not available in local storage mode. Use the multipart upload endpoint instead.",
@@ -470,12 +525,25 @@ router.post(
     const userId = (req as any).userId as string;
     const { objectPath } = (req.body ?? {}) as { objectPath?: string };
 
-    if (!objectPath || typeof objectPath !== "string" || !objectPath.startsWith(`/objects/${DM_IMAGE_NAMESPACE}/`)) {
+    const isS3 = typeof objectPath === "string" && objectPath.startsWith(`/s3/${DM_IMAGE_NAMESPACE}/`);
+    const isGcs = typeof objectPath === "string" && objectPath.startsWith(`/objects/${DM_IMAGE_NAMESPACE}/`);
+    if (!objectPath || (!isS3 && !isGcs)) {
       res.status(400).json({ error: "Missing or invalid objectPath", code: "INVALID_OBJECT_PATH" });
       return;
     }
 
     try {
+      if (isS3) {
+        const key = s3StorageService.keyForObjectPath(objectPath)!;
+        if (!(await s3StorageService.exists(key))) {
+          res.status(404).json({ error: "Uploaded object not found", code: "OBJECT_NOT_FOUND" });
+          return;
+        }
+        await db.insert(userUploads).values({ userId, objectPath }).onConflictDoNothing();
+        res.json({ fileUrl: s3StorageService.fileUrlForObjectPath(objectPath), objectPath });
+        return;
+      }
+
       if (objectStorageService.isLocal) {
         if (!objectStorageService.localFileExists(objectPath)) {
           res.status(404).json({ error: "Uploaded object not found", code: "OBJECT_NOT_FOUND" });
@@ -510,6 +578,23 @@ router.post(
       return;
     }
     try {
+      // Prefer S3/R2 presigned PUT (direct-to-storage) to bypass the serverless
+      // request-body cap; mirrors the multipart handler's storage priority.
+      if (s3StorageService.isConfigured) {
+        const { uploadURL, objectPath, fileUrl } = await s3StorageService.getPresignedUploadUrl({
+          contentType: validated.contentType,
+          namespace: DM_FILE_NAMESPACE,
+        });
+        res.json({
+          uploadURL,
+          objectPath,
+          fileUrl,
+          expiresInSec: 900,
+          requiredHeaders: { "Content-Type": validated.contentType },
+          metadata: { name: validated.name, size: validated.size, contentType: validated.contentType },
+        });
+        return;
+      }
       if (objectStorageService.isLocal) {
         res.status(501).json({
           error: "Signed URL upload not available in local storage mode. Use the multipart upload endpoint instead.",
@@ -548,11 +633,23 @@ router.post(
   async (req: Request, res: Response) => {
     const userId = (req as any).userId as string;
     const { objectPath } = (req.body ?? {}) as { objectPath?: string };
-    if (!objectPath || typeof objectPath !== "string" || !objectPath.startsWith(`/objects/${DM_FILE_NAMESPACE}/`)) {
+    const isS3 = typeof objectPath === "string" && objectPath.startsWith(`/s3/${DM_FILE_NAMESPACE}/`);
+    const isGcs = typeof objectPath === "string" && objectPath.startsWith(`/objects/${DM_FILE_NAMESPACE}/`);
+    if (!objectPath || (!isS3 && !isGcs)) {
       res.status(400).json({ error: "Missing or invalid objectPath", code: "INVALID_OBJECT_PATH" });
       return;
     }
     try {
+      if (isS3) {
+        const key = s3StorageService.keyForObjectPath(objectPath)!;
+        if (!(await s3StorageService.exists(key))) {
+          res.status(404).json({ error: "Uploaded object not found", code: "OBJECT_NOT_FOUND" });
+          return;
+        }
+        await db.insert(userUploads).values({ userId, objectPath }).onConflictDoNothing();
+        res.json({ fileUrl: s3StorageService.fileUrlForObjectPath(objectPath), objectPath });
+        return;
+      }
       if (objectStorageService.isLocal) {
         if (!objectStorageService.localFileExists(objectPath)) {
           res.status(404).json({ error: "Uploaded object not found", code: "OBJECT_NOT_FOUND" });
@@ -658,6 +755,23 @@ router.post(
     }
 
     try {
+      // Prefer S3/R2 presigned PUT (direct-to-storage) to bypass the serverless
+      // request-body cap; mirrors the multipart handler's storage priority.
+      if (s3StorageService.isConfigured) {
+        const { uploadURL, objectPath, fileUrl } = await s3StorageService.getPresignedUploadUrl({
+          contentType,
+          namespace: "avatars",
+        });
+        res.json({
+          uploadURL,
+          objectPath,
+          fileUrl,
+          expiresInSec: 900,
+          requiredHeaders: { "Content-Type": contentType },
+          metadata: { name, size: fileSize, contentType },
+        });
+        return;
+      }
       if (objectStorageService.isLocal) {
         res.status(501).json({
           error: "Signed URL upload not available in local storage mode. Use the multipart upload endpoint instead.",
@@ -705,12 +819,29 @@ router.post(
     const userId = (req as any).userId as string;
     const { objectPath } = (req.body ?? {}) as { objectPath?: string };
 
-    if (!objectPath || typeof objectPath !== "string" || !objectPath.startsWith("/objects/")) {
+    const isS3 = typeof objectPath === "string" && objectPath.startsWith("/s3/avatars/");
+    const isGcs = typeof objectPath === "string" && objectPath.startsWith("/objects/");
+    if (!objectPath || (!isS3 && !isGcs)) {
       res.status(400).json({ error: "Missing or invalid objectPath", code: "INVALID_OBJECT_PATH" });
       return;
     }
 
     try {
+      if (isS3) {
+        const key = s3StorageService.keyForObjectPath(objectPath)!;
+        if (!(await s3StorageService.exists(key))) {
+          res.status(404).json({ error: "Uploaded object not found", code: "OBJECT_NOT_FOUND" });
+          return;
+        }
+        const fileUrl = s3StorageService.fileUrlForObjectPath(objectPath);
+        await Promise.all([
+          db.insert(userUploads).values({ userId, objectPath }).onConflictDoNothing(),
+          db.update(profiles).set({ avatarUrl: fileUrl }).where(eq(profiles.id, userId)),
+        ]);
+        res.json({ fileUrl, objectPath });
+        return;
+      }
+
       if (objectStorageService.isLocal) {
         if (!objectStorageService.localFileExists(objectPath)) {
           res.status(404).json({ error: "Uploaded object not found", code: "OBJECT_NOT_FOUND" });
@@ -788,6 +919,225 @@ router.post(
     } catch (error) {
       req.log.error({ err: error }, "Incorporation cert upload failed");
       res.status(500).json({ error: "Upload failed. Please try again.", code: "UPLOAD_FAILED" });
+    }
+  },
+);
+
+// ── Listing image: signed direct-to-storage upload (bypasses the serverless
+//    request-body cap; clients fall back to the multipart endpoint below) ──
+router.post(
+  "/upload/listing-image/request-url",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    const validated = validateImageUploadRequest(req.body);
+    if (!validated.ok) {
+      res.status(validated.status).json({ error: validated.error, code: validated.code });
+      return;
+    }
+    try {
+      if (s3StorageService.isConfigured) {
+        const { uploadURL, objectPath, fileUrl } = await s3StorageService.getPresignedUploadUrl({
+          contentType: validated.contentType,
+          namespace: LISTING_IMAGE_NAMESPACE,
+        });
+        res.json({
+          uploadURL,
+          objectPath,
+          fileUrl,
+          expiresInSec: 900,
+          requiredHeaders: { "Content-Type": validated.contentType },
+          metadata: { name: validated.name, size: validated.size, contentType: validated.contentType },
+        });
+        return;
+      }
+      if (objectStorageService.isLocal) {
+        res.status(501).json({
+          error: "Signed URL upload not available in local storage mode. Use the multipart upload endpoint instead.",
+          code: "LOCAL_MODE",
+        });
+        return;
+      }
+      const uploadURL = await objectStorageService.getObjectEntityUploadURL({
+        contentType: validated.contentType,
+        namespace: LISTING_IMAGE_NAMESPACE,
+      });
+      const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
+      res.json({
+        uploadURL,
+        objectPath,
+        fileUrl: `/api/storage${objectPath}`,
+        expiresInSec: 900,
+        requiredHeaders: { "Content-Type": validated.contentType },
+        metadata: { name: validated.name, size: validated.size, contentType: validated.contentType },
+      });
+    } catch (error) {
+      req.log.error({ err: error }, "Listing image signed URL generation failed");
+      const classified = classifyStorageUploadError(error);
+      if (classified) {
+        res.status(classified.status).json({ error: classified.error, code: classified.code });
+        return;
+      }
+      res.status(500).json({ error: "Could not prepare upload. Please try again.", code: "SIGN_URL_FAILED" });
+    }
+  },
+);
+
+router.post(
+  "/upload/listing-image/complete",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    const { objectPath } = (req.body ?? {}) as { objectPath?: string };
+    const isS3 = typeof objectPath === "string" && objectPath.startsWith(`/s3/${LISTING_IMAGE_NAMESPACE}/`);
+    const isGcs = typeof objectPath === "string" && objectPath.startsWith(`/objects/${LISTING_IMAGE_NAMESPACE}/`);
+    if (!objectPath || (!isS3 && !isGcs)) {
+      res.status(400).json({ error: "Missing or invalid objectPath", code: "INVALID_OBJECT_PATH" });
+      return;
+    }
+    try {
+      if (isS3) {
+        const key = s3StorageService.keyForObjectPath(objectPath)!;
+        if (!(await s3StorageService.exists(key))) {
+          res.status(404).json({ error: "Uploaded object not found", code: "OBJECT_NOT_FOUND" });
+          return;
+        }
+        res.json({ fileUrl: s3StorageService.fileUrlForObjectPath(objectPath), objectPath });
+        return;
+      }
+      if (objectStorageService.isLocal) {
+        if (!objectStorageService.localFileExists(objectPath)) {
+          res.status(404).json({ error: "Uploaded object not found", code: "OBJECT_NOT_FOUND" });
+          return;
+        }
+      } else {
+        await objectStorageService.getObjectEntityFile(objectPath);
+      }
+      res.json({ fileUrl: `/api/storage${objectPath}`, objectPath });
+    } catch (error) {
+      if (error instanceof ObjectNotFoundError) {
+        res.status(404).json({ error: "Uploaded object not found", code: "OBJECT_NOT_FOUND" });
+        return;
+      }
+      req.log.error({ err: error }, "Listing image completion failed");
+      res.status(500).json({ error: "Failed to finalize image upload", code: "FINALIZE_FAILED" });
+    }
+  },
+);
+
+// ── Listing document: signed direct-to-storage upload ──
+router.post(
+  "/upload/listing-document/request-url",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    const validated = validateListingDocumentUploadRequest(req.body);
+    if (!validated.ok) {
+      res.status(validated.status).json({ error: validated.error, code: validated.code });
+      return;
+    }
+    try {
+      if (s3StorageService.isConfigured) {
+        const { uploadURL, objectPath, fileUrl } = await s3StorageService.getPresignedUploadUrl({
+          contentType: validated.contentType,
+          namespace: LISTING_DOCUMENT_NAMESPACE,
+        });
+        res.json({
+          uploadURL,
+          objectPath,
+          fileUrl,
+          expiresInSec: 900,
+          requiredHeaders: { "Content-Type": validated.contentType },
+          metadata: { name: validated.name, size: validated.size, contentType: validated.contentType, category: validated.category },
+        });
+        return;
+      }
+      if (objectStorageService.isLocal) {
+        res.status(501).json({
+          error: "Signed URL upload not available in local storage mode. Use the multipart upload endpoint instead.",
+          code: "LOCAL_MODE",
+        });
+        return;
+      }
+      const uploadURL = await objectStorageService.getObjectEntityUploadURL({
+        contentType: validated.contentType,
+        namespace: LISTING_DOCUMENT_NAMESPACE,
+      });
+      const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
+      res.json({
+        uploadURL,
+        objectPath,
+        fileUrl: `/api/storage${objectPath}`,
+        expiresInSec: 900,
+        requiredHeaders: { "Content-Type": validated.contentType },
+        metadata: { name: validated.name, size: validated.size, contentType: validated.contentType, category: validated.category },
+      });
+    } catch (error) {
+      req.log.error({ err: error }, "Listing document signed URL generation failed");
+      const classified = classifyStorageUploadError(error);
+      if (classified) {
+        res.status(classified.status).json({ error: classified.error, code: classified.code });
+        return;
+      }
+      res.status(500).json({ error: "Could not prepare upload. Please try again.", code: "SIGN_URL_FAILED" });
+    }
+  },
+);
+
+router.post(
+  "/upload/listing-document/complete",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    const { objectPath, name, contentType, size, category } = (req.body ?? {}) as {
+      objectPath?: string;
+      name?: string;
+      contentType?: string;
+      size?: number;
+      category?: string;
+    };
+    const isS3 = typeof objectPath === "string" && objectPath.startsWith(`/s3/${LISTING_DOCUMENT_NAMESPACE}/`);
+    const isGcs = typeof objectPath === "string" && objectPath.startsWith(`/objects/${LISTING_DOCUMENT_NAMESPACE}/`);
+    if (!objectPath || (!isS3 && !isGcs)) {
+      res.status(400).json({ error: "Missing or invalid objectPath", code: "INVALID_OBJECT_PATH" });
+      return;
+    }
+    const cat = String(category || "").trim();
+    if (!["title", "lim", "other"].includes(cat)) {
+      res.status(400).json({ error: "Please choose a valid document type.", code: "INVALID_CATEGORY" });
+      return;
+    }
+    try {
+      let fileUrl: string;
+      if (isS3) {
+        const key = s3StorageService.keyForObjectPath(objectPath)!;
+        if (!(await s3StorageService.exists(key))) {
+          res.status(404).json({ error: "Uploaded object not found", code: "OBJECT_NOT_FOUND" });
+          return;
+        }
+        fileUrl = s3StorageService.fileUrlForObjectPath(objectPath);
+      } else {
+        if (objectStorageService.isLocal) {
+          if (!objectStorageService.localFileExists(objectPath)) {
+            res.status(404).json({ error: "Uploaded object not found", code: "OBJECT_NOT_FOUND" });
+            return;
+          }
+        } else {
+          await objectStorageService.getObjectEntityFile(objectPath);
+        }
+        fileUrl = `/api/storage${objectPath}`;
+      }
+      const fileName = typeof name === "string" && name.trim() ? name.trim() : "document";
+      const mimeType = typeof contentType === "string" && contentType.trim() ? contentType.trim() : "application/octet-stream";
+      const fileSize = typeof size === "number" && Number.isFinite(size) ? size : 0;
+      res.json({
+        fileUrl,
+        objectPath,
+        document: { category: cat, fileName, fileUrl, objectPath, mimeType, size: fileSize, uploadedAt: new Date().toISOString() },
+      });
+    } catch (error) {
+      if (error instanceof ObjectNotFoundError) {
+        res.status(404).json({ error: "Uploaded object not found", code: "OBJECT_NOT_FOUND" });
+        return;
+      }
+      req.log.error({ err: error }, "Listing document completion failed");
+      res.status(500).json({ error: "Failed to finalize document upload", code: "FINALIZE_FAILED" });
     }
   },
 );

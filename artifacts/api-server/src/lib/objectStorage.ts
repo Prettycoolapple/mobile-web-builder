@@ -1,5 +1,6 @@
 import { Storage, File } from "@google-cloud/storage";
-import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand, PutBucketCorsCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Readable } from "stream";
 import { randomUUID } from "crypto";
 import * as os from "os";
@@ -434,6 +435,50 @@ export class S3StorageService {
   }
 
   /**
+   * Generate a presigned PUT URL so clients can upload DIRECTLY to S3/R2,
+   * bypassing the API server entirely. This is essential on serverless hosts
+   * (e.g. Vercel) where routing the file body through a function hits the
+   * ~4.5MB request-body cap (FUNCTION_PAYLOAD_TOO_LARGE / 413).
+   *
+   * The client must PUT with the exact `Content-Type` returned here, since it
+   * is part of the signature. Returns the same `objectPath` (`/s3/<key>`) and
+   * `fileUrl` shape as `upload()` so the rest of the pipeline is identical.
+   */
+  async getPresignedUploadUrl(options: {
+    contentType: string;
+    namespace: string;
+    expiresInSec?: number;
+  }): Promise<{ uploadURL: string; objectPath: string; fileUrl: string }> {
+    if (!this.client) throw new Error("S3 storage is not configured");
+
+    const { contentType, namespace } = options;
+    const bucket = this.resolveBucket(namespace);
+    const ext = contentType.split("/")[1]?.split(";")[0]?.replace("jpeg", "jpg") || "bin";
+    const key = `${namespace}/${randomUUID()}.${ext}`;
+
+    const uploadURL = await getSignedUrl(
+      this.client,
+      new PutObjectCommand({ Bucket: bucket, Key: key, ContentType: contentType }),
+      { expiresIn: options.expiresInSec ?? 900 },
+    );
+
+    return { uploadURL, objectPath: `/s3/${key}`, fileUrl: this.fileUrlForObjectPath(`/s3/${key}`) };
+  }
+
+  /** Map an `/s3/<key>` objectPath back to its storage key, or null if not an S3 path. */
+  keyForObjectPath(objectPath: string): string | null {
+    return objectPath.startsWith("/s3/") ? objectPath.slice("/s3/".length) : null;
+  }
+
+  /** Resolve the client-facing fileUrl for a stored `/s3/<key>` objectPath. */
+  fileUrlForObjectPath(objectPath: string): string {
+    const key = this.keyForObjectPath(objectPath) ?? "";
+    const namespace = key.split("/")[0] ?? "";
+    const isPrivate = PRIVATE_NAMESPACES.has(namespace);
+    return !isPrivate && this.publicUrl ? `${this.publicUrl}/${key}` : `/api/storage/s3/${key}`;
+  }
+
+  /**
    * Download a file for API-proxied serving.
    * Automatically selects the correct bucket based on the namespace prefix in the key.
    */
@@ -459,6 +504,37 @@ export class S3StorageService {
     if (contentLength) headers["Content-Length"] = String(contentLength);
 
     return new Response(body, { headers });
+  }
+
+  /**
+   * Apply a CORS policy to the configured bucket(s) so browsers can PUT files
+   * directly to a presigned URL from the given origins. Without this, the
+   * cross-origin PUT from the web portals is blocked and uploads fall back to
+   * the multipart endpoint (which hits the serverless body cap). Native apps
+   * are unaffected — they don't enforce CORS.
+   *
+   * Returns the bucket names it configured.
+   */
+  async configureCors(origins: string[], allowedMethods: string[] = ["GET", "PUT", "HEAD"]): Promise<string[]> {
+    if (!this.client) throw new Error("S3 storage is not configured");
+    const buckets = Array.from(
+      new Set([this.publicBucket, this.privateBucket].filter((b): b is string => !!b)),
+    );
+    const corsConfiguration = {
+      CORSRules: [
+        {
+          AllowedOrigins: origins,
+          AllowedMethods: allowedMethods,
+          AllowedHeaders: ["*"],
+          ExposeHeaders: ["ETag"],
+          MaxAgeSeconds: 3600,
+        },
+      ],
+    };
+    for (const Bucket of buckets) {
+      await this.client.send(new PutBucketCorsCommand({ Bucket, CORSConfiguration: corsConfiguration }));
+    }
+    return buckets;
   }
 
   /** Check if a key exists without downloading it. */
