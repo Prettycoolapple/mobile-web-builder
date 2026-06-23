@@ -4,6 +4,7 @@ const dictionaries = {
     navFeatures: "功能",
     navWorkflow: "流程",
     navProfessionals: "专业人士",
+    navFaq: "常见问题",
     navSalesPortal: "销售门户",
     navProviderPortal: "服务商门户",
     navContact: "联系",
@@ -83,6 +84,26 @@ const dictionaries = {
       "发邮件至 admin@projectalpha.app 或访问联系页面，咨询媒体合作、商务合作或新西兰境内的应用支持。",
     ctaButton: "联系我们",
     ctaSalesPortal: "销售门户",
+    faqKicker: "常见问题",
+    faqTitle: "关于 Project Alpha 的常见问题",
+    faqQ1: "Project Alpha 是什么？",
+    faqA1:
+      "Project Alpha 是面向新西兰买家、开发者与投资者的物业可行性应用。它整合市政、产权与公开房源数据并结合 AI，为新西兰地址生成面向开发的可行性快照——涵盖分区背景、指示性成本与回报信号、风险提示，以及下一步应联系的专业人士。",
+    faqQ2: "Project Alpha 覆盖新西兰哪些地区？",
+    faqA2:
+      "Project Alpha 适用于全新西兰的地址，从奥克兰、惠灵顿到基督城及不断增长的区域中心。它围绕新西兰的档案与规划构建，包括奥克兰统一规划与各地区规划。",
+    faqQ3: "Project Alpha 属于财务或法律意见吗？",
+    faqA3:
+      "不属于。Project Alpha 的输出仅供参考，并非财务、法律、规划或估值意见。交易前请务必咨询独立专业人士。",
+    faqQ4: "生成一份可行性快照需要多长时间？",
+    faqA4:
+      "首次可行性梳理通常约需五分钟。您输入法定地址或用自然语言提问，Project Alpha 即返回带有可行度、成本与回报评分视角的开发导向快照。",
+    faqQ5: "Project Alpha 适合谁使用？",
+    faqA5:
+      "Project Alpha 服务于希望快速获取开发语境的买家、开发者与投资者，也服务于希望呈现更清晰开发叙事并获取合格转介的销售顾问与项目咨询方。",
+    faqQ6: "Project Alpha 的费用如何？",
+    faqA6:
+      "Project Alpha 可在 iOS 与 Android 上免费下载，并提供付费高级功能。销售中介与服务商可通过销售门户与服务商门户注册。",
   },
   contact: {
     title: "联系 | Project Alpha",

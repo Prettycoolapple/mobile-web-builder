@@ -184,7 +184,7 @@ a {
 .ws-history-row {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 4px;
   margin-bottom: 2px;
@@ -237,9 +237,95 @@ a {
   background: var(--surface-sunken);
   color: var(--ink);
 }
-.ws-history-action.danger:hover {
-  background: rgba(217, 79, 79, 0.12);
+.ws-history-action.menu-trigger {
+  opacity: 0.3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  font-size: 16px;
+  padding: 0;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.ws-history-row:hover .menu-trigger,
+.ws-history-action.menu-trigger:hover {
+  opacity: 1;
+  background: var(--line);
+  color: var(--ink);
+}
+.ws-history-menu-container {
+  position: relative;
+  display: inline-block;
+}
+.ws-history-dropdown {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  margin-top: 4px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  z-index: 100;
+  min-width: 110px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: ws-dropdown-fade 0.12s ease-out;
+}
+@keyframes ws-dropdown-fade {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.ws-history-dropdown button {
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--ink);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.ws-history-dropdown button:hover {
+  background: var(--surface-sunken);
+}
+.ws-history-dropdown button.danger {
   color: var(--red);
+}
+.ws-history-dropdown button.danger:hover {
+  background: rgba(217, 79, 79, 0.08);
+}
+.ws-active-chat-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 320px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.ws-active-chat-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+.ws-active-chat-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--forest);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ws-history-rename-input {
   width: 100%;
@@ -325,6 +411,9 @@ a {
   }
   .ws-user-chip {
     margin-left: auto;
+  }
+  .ws-active-chat-header {
+    max-width: 180px;
   }
 }
 

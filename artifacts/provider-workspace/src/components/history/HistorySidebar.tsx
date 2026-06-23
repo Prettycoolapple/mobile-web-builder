@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useChatStore } from "@/state/ChatStore";
 import { formatRelativeTime } from "@/lib/format";
 
@@ -13,6 +13,16 @@ export function HistorySidebar({
   const { sessions, currentSessionId, switchSession, startNewChat, deleteSession, renameSession } = useChatStore();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!menuOpenId) return;
+    const handleOutsideClick = () => {
+      setMenuOpenId(null);
+    };
+    window.addEventListener("click", handleOutsideClick);
+    return () => window.removeEventListener("click", handleOutsideClick);
+  }, [menuOpenId]);
 
   const beginRename = (id: string, title: string) => {
     setEditingId(id);
@@ -81,27 +91,45 @@ export function HistorySidebar({
                     )}
 
                     {!isEditing && (
-                      <button
-                        className="ws-history-action"
-                        aria-label="Rename conversation"
-                        title="Rename"
-                        onClick={() => beginRename(s.id, title)}
-                      >
-                        Edit
-                      </button>
+                      <div className="ws-history-menu-container">
+                        <button
+                          className="ws-history-action menu-trigger"
+                          aria-label="Conversation options"
+                          title="Options"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setMenuOpenId(menuOpenId === s.id ? null : s.id);
+                          }}
+                        >
+                          ⋮
+                        </button>
+                        {menuOpenId === s.id && (
+                          <div className="ws-history-dropdown">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setMenuOpenId(null);
+                                beginRename(s.id, title);
+                              }}
+                            >
+                              Rename
+                            </button>
+                            <button
+                              className="danger"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setMenuOpenId(null);
+                                if (confirm("Delete this conversation? This also removes it from your other devices.")) {
+                                  deleteSession(s.id);
+                                }
+                              }}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     )}
-                    <button
-                      className="ws-history-action danger"
-                      aria-label="Delete conversation"
-                      title="Delete"
-                      onClick={() => {
-                        if (confirm("Delete this conversation? This also removes it from your other devices.")) {
-                          deleteSession(s.id);
-                        }
-                      }}
-                    >
-                      Del
-                    </button>
                   </div>
                 );
               })

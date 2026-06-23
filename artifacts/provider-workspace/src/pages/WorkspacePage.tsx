@@ -171,7 +171,15 @@ export function WorkspacePage() {
 
       <div className="ws-main">
         <div className="ws-topbar">
-          <span className="spacer" />
+          {currentSession ? (
+            <div className="ws-active-chat-header">
+              <span className="ws-active-chat-icon">💬</span>
+              <span className="ws-active-chat-title">{currentSession.title || "New analysis"}</span>
+            </div>
+          ) : (
+            <span className="spacer" />
+          )}
+          {currentSession && <span className="spacer" />}
           <nav className="ws-mode-toggle" aria-label="Provider portal sections">
             <a className="ws-mode-tab" href="/provider-portal/">
               Manage

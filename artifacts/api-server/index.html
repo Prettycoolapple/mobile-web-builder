@@ -3,6 +3,9 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    <meta name="theme-color" content="#1d3d2f" />
+    <meta name="author" content="KNH Group Ltd" />
     <title>Project Alpha | NZ Property Feasibility App &amp; Development Intelligence</title>
     <meta
       name="description"
@@ -21,6 +24,18 @@
       content="Feasibility-first property intelligence for New Zealand. Explore development potential, cost and ROI signals, and next-step professionals—built for Kiwi sections and city plans."
     />
     <meta property="og:locale" content="en_NZ" />
+    <meta property="og:site_name" content="Project Alpha" />
+    <meta property="og:image" content="https://www.projectalpha.app/favicon.png" />
+    <meta property="og:image:width" content="512" />
+    <meta property="og:image:height" content="512" />
+    <meta property="og:image:alt" content="Project Alpha — NZ property feasibility app" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Project Alpha | NZ Property Feasibility &amp; Development Intelligence" />
+    <meta
+      name="twitter:description"
+      content="Feasibility-first property intelligence for New Zealand. Zoning context, cost and ROI signals, risk prompts, and who to talk to next—built for Kiwi sections and city plans."
+    />
+    <meta name="twitter:image" content="https://www.projectalpha.app/favicon.png" />
     <link rel="icon" href="/alpha-icon.svg" type="image/svg+xml" sizes="any" />
     <link rel="icon" href="/favicon.png" type="image/png" sizes="512x512" />
     <link rel="apple-touch-icon" href="/favicon.png" />
@@ -29,20 +44,112 @@
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
-        "@type": "SoftwareApplication",
-        "name": "Project Alpha",
-        "applicationCategory": "BusinessApplication",
-        "operatingSystem": "iOS, Android, Web",
-        "description": "New Zealand property development feasibility and intelligence for addresses across NZ.",
-        "url": "https://www.projectalpha.app/",
-        "publisher": {
-          "@type": "Organization",
-          "name": "KNH Group Ltd"
-        },
-        "areaServed": {
-          "@type": "Country",
-          "name": "New Zealand"
-        }
+        "@graph": [
+          {
+            "@type": "Organization",
+            "@id": "https://www.projectalpha.app/#organization",
+            "name": "Project Alpha",
+            "legalName": "KNH Group Ltd",
+            "url": "https://www.projectalpha.app/",
+            "logo": "https://www.projectalpha.app/favicon.png",
+            "email": "admin@projectalpha.app",
+            "areaServed": { "@type": "Country", "name": "New Zealand" },
+            "contactPoint": {
+              "@type": "ContactPoint",
+              "email": "admin@projectalpha.app",
+              "contactType": "customer support",
+              "areaServed": "NZ",
+              "availableLanguage": ["en", "zh"]
+            }
+          },
+          {
+            "@type": "WebSite",
+            "@id": "https://www.projectalpha.app/#website",
+            "url": "https://www.projectalpha.app/",
+            "name": "Project Alpha",
+            "inLanguage": "en-NZ",
+            "publisher": { "@id": "https://www.projectalpha.app/#organization" }
+          },
+          {
+            "@type": "SoftwareApplication",
+            "@id": "https://www.projectalpha.app/#app",
+            "name": "Project Alpha",
+            "applicationCategory": "BusinessApplication",
+            "operatingSystem": "iOS, Android, Web",
+            "description": "Project Alpha is a New Zealand property feasibility app that blends council, title, and public listing data with AI to produce development-focused feasibility snapshots for NZ addresses — zoning context, indicative cost and ROI signals, risk prompts, and relevant professionals. Outputs are indicative only and not financial or legal advice.",
+            "url": "https://www.projectalpha.app/",
+            "downloadUrl": "https://apps.apple.com/nz/app/project-alpha/id6762080292",
+            "inLanguage": ["en-NZ", "zh"],
+            "publisher": { "@id": "https://www.projectalpha.app/#organization" },
+            "areaServed": { "@type": "Country", "name": "New Zealand" },
+            "featureList": [
+              "Site & zoning feasibility for NZ addresses",
+              "Indicative development cost and ROI scenarios",
+              "Subdivision pathway and risk prompts",
+              "Connections to architects, planners, engineers and surveyors"
+            ],
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "NZD",
+              "description": "Free to download; includes premium subscription options."
+            }
+          },
+          {
+            "@type": "FAQPage",
+            "@id": "https://www.projectalpha.app/#faq",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "What is Project Alpha?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Project Alpha is a New Zealand property feasibility app for buyers, developers, and investors. It blends council, title, and public listing data with AI to produce development-focused feasibility snapshots for NZ addresses — covering zoning context, indicative cost and ROI signals, risk prompts, and which professionals to talk to next."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Which areas of New Zealand does Project Alpha cover?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Project Alpha works for addresses across New Zealand, from Auckland and Wellington to Christchurch and growing regional centres. It is designed around NZ records and plans, including the Auckland Unitary Plan and local district plans."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Is Project Alpha financial or legal advice?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "No. Project Alpha's outputs are indicative only and are not financial, legal, planning, or valuation advice. Always obtain independent professional advice before you transact."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "How long does a feasibility snapshot take?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "A typical first feasibility pass takes about five minutes. You enter a legal address or ask a natural-language question, and Project Alpha returns a development-focused snapshot with ease, cost, and ROI scoring lenses."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Who is Project Alpha for?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Project Alpha serves buyers, developers, and investors who want fast development context, as well as sales agents and project consultants who present clearer development narratives and receive qualified referrals."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "How much does Project Alpha cost?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Project Alpha is free to download on iOS and Android, with premium subscription features available. Sales agents and service providers can register through the Sales Portal and Provider Portal."
+                }
+              }
+            ]
+          }
+        ]
       }
     </script>
   </head>
@@ -57,6 +164,7 @@
           <a href="#features" data-i18n="navFeatures">Features</a>
           <a href="#workflow" data-i18n="navWorkflow">Workflow</a>
           <a href="#professionals" data-i18n="navProfessionals">Professionals</a>
+          <a href="#faq" data-i18n="navFaq">FAQ</a>
           <a href="/sales-portal/" data-i18n="navSalesPortal">Sales Portal</a>
           <a href="/provider-portal/" data-i18n="navProviderPortal">Provider portal</a>
           <a class="button button-secondary" href="/contact/" data-i18n="navContact">Contact</a>
@@ -301,6 +409,62 @@
                   exactly when they need expert help on consenting or delivery.
                 </p>
               </article>
+            </div>
+          </div>
+        </section>
+
+        <section class="section band" id="faq" aria-label="Frequently asked questions">
+          <div class="section-inner">
+            <p class="section-kicker" data-i18n="faqKicker">FAQ</p>
+            <h2 class="section-title" data-i18n="faqTitle">Frequently asked questions about Project Alpha</h2>
+            <div class="faq-list">
+              <details class="faq-item">
+                <summary data-i18n="faqQ1">What is Project Alpha?</summary>
+                <p data-i18n="faqA1">
+                  Project Alpha is a New Zealand property feasibility app for buyers, developers, and investors. It
+                  blends council, title, and public listing data with AI to produce development-focused feasibility
+                  snapshots for NZ addresses — covering zoning context, indicative cost and ROI signals, risk prompts,
+                  and which professionals to talk to next.
+                </p>
+              </details>
+              <details class="faq-item">
+                <summary data-i18n="faqQ2">Which areas of New Zealand does Project Alpha cover?</summary>
+                <p data-i18n="faqA2">
+                  Project Alpha works for addresses across New Zealand, from Auckland and Wellington to Christchurch and
+                  growing regional centres. It is designed around NZ records and plans, including the Auckland Unitary
+                  Plan and local district plans.
+                </p>
+              </details>
+              <details class="faq-item">
+                <summary data-i18n="faqQ3">Is Project Alpha financial or legal advice?</summary>
+                <p data-i18n="faqA3">
+                  No. Project Alpha's outputs are indicative only and are not financial, legal, planning, or valuation
+                  advice. Always obtain independent professional advice before you transact.
+                </p>
+              </details>
+              <details class="faq-item">
+                <summary data-i18n="faqQ4">How long does a feasibility snapshot take?</summary>
+                <p data-i18n="faqA4">
+                  A typical first feasibility pass takes about five minutes. You enter a legal address or ask a
+                  natural-language question, and Project Alpha returns a development-focused snapshot with ease, cost,
+                  and ROI scoring lenses.
+                </p>
+              </details>
+              <details class="faq-item">
+                <summary data-i18n="faqQ5">Who is Project Alpha for?</summary>
+                <p data-i18n="faqA5">
+                  Project Alpha serves buyers, developers, and investors who want fast development context, as well as
+                  sales agents and project consultants who present clearer development narratives and receive qualified
+                  referrals.
+                </p>
+              </details>
+              <details class="faq-item">
+                <summary data-i18n="faqQ6">How much does Project Alpha cost?</summary>
+                <p data-i18n="faqA6">
+                  Project Alpha is free to download on iOS and Android, with premium subscription features available.
+                  Sales agents and service providers can register through the Sales Portal and Provider Portal.
+                </p>
+              </details>
             </div>
           </div>
         </section>
