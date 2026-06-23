@@ -134,7 +134,7 @@ router.post("/agent-contact/lookup", requireAuth, async (req: Request, res: Resp
       .where(eq(profiles.id, userId))
       .limit(1);
 
-    if (!currentUser || currentUser.role !== "general") {
+    if (!currentUser || (currentUser.role !== "general" && currentUser.role !== "service_provider")) {
       res.json({ wantsAgentContact: false });
       return;
     }

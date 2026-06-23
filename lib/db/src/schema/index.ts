@@ -18,6 +18,7 @@ export * from "./pending_provider_signups";
 export * from "./sales_agent_profiles";
 export * from "./service_provider_profiles";
 export * from "./provider_brand_kits";
+export * from "./provider_pdf_drafts";
 export * from "./user_uploads";
 export * from "./listings";
 export * from "./listing_views";

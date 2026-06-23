@@ -60,6 +60,41 @@ export function MessageBubble({ message, actions }: { message: ChatMessage; acti
     );
   }
 
+  if (type === "agent_contact" && (message.agentPhone || message.agentListingUrl)) {
+    return (
+      <div className="msg assistant">
+        <div className="agent-contact-card">
+          <div className="agent-contact-avatar">
+            {message.agentAvatarUrl ? (
+              <img src={message.agentAvatarUrl} alt="" />
+            ) : (
+              <span>{initials(message.agentName)}</span>
+            )}
+          </div>
+          <div className="agent-contact-main">
+            <div className="agent-contact-kicker">Sales agent</div>
+            <div className="agent-contact-name">{message.agentName || "Listing agent"}</div>
+            {message.agencyName && <div className="agent-contact-agency">{message.agencyName}</div>}
+            {message.propertyAddress && <div className="agent-contact-property">{message.propertyAddress}</div>}
+            <div className="agent-contact-details">
+              {message.agentPhone ? (
+                <div>
+                  <span className="agent-contact-label">Phone</span>
+                  <span className="agent-contact-phone">{message.agentPhone}</span>
+                </div>
+              ) : null}
+              {message.agentListingUrl ? (
+                <a href={message.agentListingUrl} target="_blank" rel="noreferrer">
+                  View listing
+                </a>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (type === "search") {
     const results = message.searchResults ?? [];
     return (
@@ -135,4 +170,9 @@ export function MessageBubble({ message, actions }: { message: ChatMessage; acti
       <div className="msg-bubble">{message.content}</div>
     </div>
   );
+}
+
+function initials(name?: string | null): string {
+  const parts = String(name || "Agent").trim().split(/\s+/).filter(Boolean);
+  return parts.slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "A";
 }

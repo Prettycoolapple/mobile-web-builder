@@ -78,6 +78,7 @@ export interface ChatStoreValue {
   startNewChat: () => void;
   switchSession: (id: string) => void;
   deleteSession: (id: string) => void;
+  renameSession: (id: string, title: string) => void;
   addMessage: (msg: Omit<ChatMessage, "id" | "timestamp">, sessionId?: string) => string;
   updateMessage: (messageId: string, updates: Partial<ChatMessage>, sessionId?: string) => void;
   updateLastMessage: (updates: Partial<ChatMessage>, sessionId?: string) => void;
@@ -238,6 +239,18 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       });
       syncedUpdatedAtRef.current.delete(id);
       apiDelete(`/conversations/${encodeURIComponent(id)}`).catch(() => {});
+    },
+    [persist],
+  );
+
+  const renameSession = useCallback(
+    (id: string, title: string) => {
+      const cleanTitle = title.trim() || "Untitled";
+      setSessions((prev) => {
+        const next = prev.map((s) => (s.id === id ? { ...s, title: cleanTitle, updatedAt: Date.now() } : s));
+        persist(next);
+        return next;
+      });
     },
     [persist],
   );
@@ -408,6 +421,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     startNewChat,
     switchSession,
     deleteSession,
+    renameSession,
     addMessage,
     updateMessage,
     updateLastMessage,

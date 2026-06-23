@@ -11,7 +11,8 @@
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.3.0",
-    "@workspace/api-zod": "workspace:*"
+    "@workspace/api-zod": "workspace:*",
+    "pdfjs-dist": "^6.0.227"
   },
   "devDependencies": {
     "@types/node": "catalog:",

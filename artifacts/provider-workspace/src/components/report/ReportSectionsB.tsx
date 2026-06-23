@@ -125,9 +125,9 @@ function MarketAccessPanel({ report }: { report: FeasibilityReport }) {
               ],
             ]}
           />
-          {nb.reasons.length > 0 && (
+          {visibleMarketReasons(nb.reasons).length > 0 && (
             <ul className="report-list">
-              {nb.reasons.map((r, i) => (
+              {visibleMarketReasons(nb.reasons).map((r, i) => (
                 <li key={i}>{r}</li>
               ))}
             </ul>
@@ -188,7 +188,9 @@ function StrategyCard({ strategy, recommended }: { strategy: DevelopmentStrategy
         <span className={`pill`} style={recommendationStyle(strategy.recommendation)}>
           {recommendationLabel(strategy.recommendation)}
         </span>
-        {recommended && <span className="pill" style={{ background: "var(--accent)", color: "#fff" }}>Recommended</span>}
+        {recommended && strategy.recommendation !== "recommended" && (
+          <span className="pill" style={{ background: "var(--accent)", color: "#fff" }}>Recommended</span>
+        )}
       </div>
       {strategy.rationale && <p style={{ margin: "0 0 10px", lineHeight: 1.5 }}>{strategy.rationale}</p>}
       <KeyValue
@@ -307,6 +309,15 @@ function SubHeading({ children }: { children: React.ReactNode }) {
 
 function capitalize(s: string): string {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+function shouldHideMarketReason(reason: string): boolean {
+  const normalized = reason.toLowerCase();
+  return normalized.includes("linz title-owner data was unavailable") && normalized.includes("no public-housing conclusion");
+}
+
+function visibleMarketReasons(items: string[]): string[] {
+  return items.filter((item) => item.trim().length > 0 && !shouldHideMarketReason(item));
 }
 
 function strategyStatus(strategies: DevelopmentStrategyScenario[]): SectionStatus {

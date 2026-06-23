@@ -92,7 +92,7 @@ router.get("/storage/objects/*path", requireAuth, async (req: Request, res: Resp
 
       let allowed = !!avatarMatch;
       // DM attachments: multipart uploads omit user_uploads. Allow either participant
-      // to read blobs linked from dm_messages.image_url.
+      // to read blobs linked from dm_messages.image_url or dm_messages.file_url.
       if (!allowed) {
         const [dmAccess] = await db
           .select({ id: dmMessages.id })
@@ -100,8 +100,10 @@ router.get("/storage/objects/*path", requireAuth, async (req: Request, res: Resp
           .innerJoin(dmThreads, eq(dmMessages.threadId, dmThreads.id))
           .where(
             and(
-              isNotNull(dmMessages.imageUrl),
-              eq(dmMessages.imageUrl, canonicalStorageUrl),
+              or(
+                and(isNotNull(dmMessages.imageUrl), eq(dmMessages.imageUrl, canonicalStorageUrl)),
+                and(isNotNull(dmMessages.fileUrl), eq(dmMessages.fileUrl, canonicalStorageUrl)),
+              ),
               or(eq(dmThreads.participantA, userId), eq(dmThreads.participantB, userId)),
             ),
           )

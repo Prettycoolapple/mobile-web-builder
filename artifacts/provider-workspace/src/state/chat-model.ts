@@ -76,6 +76,12 @@ export interface ChatMessage {
   provider?: ServiceProvider;
   intentType?: string;
   propertyAddress?: string;
+  agentName?: string | null;
+  agentPhone?: string | null;
+  agencyName?: string | null;
+  agentAvatarUrl?: string | null;
+  agentMatchType?: "subject" | "suburb" | null;
+  agentListingUrl?: string | null;
 }
 
 export interface Score {

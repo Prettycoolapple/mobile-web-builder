@@ -86,6 +86,19 @@ interface ChatResponse {
   suburb?: string | null;
 }
 
+interface AgentContactResponse {
+  wantsAgentContact: boolean;
+  found?: boolean;
+  isListed?: boolean;
+  matchType?: "subject" | "suburb" | null;
+  listingAddress?: string | null;
+  agentName?: string | null;
+  agentPhone?: string | null;
+  agencyName?: string | null;
+  agentAvatarUrl?: string | null;
+  listingUrl?: string | null;
+}
+
 export interface SendChatArgs {
   store: PipelineStore;
   sessionId: string;
@@ -119,6 +132,45 @@ export async function sendChat(args: SendChatArgs): Promise<void> {
   const currentReportContext = session?.currentReportGroup ?? session?.currentReport;
 
   try {
+    if (session?.currentReport && !session.currentReportGroup) {
+      const agentContact = await lookupAgentContact(session.currentReport, messages).catch(() => null);
+      if (agentContact?.wantsAgentContact) {
+        if (agentContact.found && agentContact.isListed && (agentContact.agentPhone || agentContact.listingUrl)) {
+          store.updateMessage(
+            loadingId,
+            {
+              role: "assistant",
+              content: "",
+              type: "agent_contact",
+              agentName: agentContact.agentName ?? null,
+              agentPhone: agentContact.agentPhone ?? null,
+              agencyName: agentContact.agencyName ?? null,
+              agentAvatarUrl: agentContact.agentAvatarUrl ?? null,
+              propertyAddress: agentContact.listingAddress ?? session.currentReport.address,
+              agentMatchType: agentContact.matchType ?? "subject",
+              agentListingUrl: agentContact.listingUrl ?? null,
+            },
+            sessionId,
+          );
+          return;
+        }
+
+        const shortAddress = session.currentReport.address.split(",")[0] || session.currentReport.address;
+        store.updateMessage(
+          loadingId,
+          {
+            type: "text",
+            content:
+              agentContact.isListed === false
+                ? `${shortAddress} is not currently on the market, so there is no active listing agent for this property.`
+                : "I couldn't find a callable listing agent for this property.",
+          },
+          sessionId,
+        );
+        return;
+      }
+    }
+
     const data = await apiPost<ChatResponse>(
       "/chat",
       {
@@ -292,6 +344,26 @@ function detectLoadingMode(text: string): "analyse" | "discover" | "followup" {
   if (/find|search|discover|looking for|subdivid|for sale|on the market|show me/.test(lower)) return "discover";
   if (/analys|feasibility|assess|evaluate|\d+\s+\w+\s+(road|street|ave|avenue|drive|lane|place|terrace|crescent|rd|st|dr|pl)/i.test(text)) return "analyse";
   return "followup";
+}
+
+async function lookupAgentContact(
+  report: FeasibilityReport,
+  messages: Array<{ role: "user" | "assistant"; content: string }>,
+): Promise<AgentContactResponse> {
+  const selectedListingContext =
+    report.selectedListingContext ??
+    report.propertyOverview?.selectedListingContext ??
+    null;
+  return apiPost<AgentContactResponse>(
+    "/agent-contact/lookup",
+    {
+      address: report.address,
+      messages,
+      listingUrl: selectedListingContext?.listingUrl ?? report.propertyOverview?.listingUrl ?? null,
+      selectedListingContext,
+    },
+    { timeoutMs: 30_000, redirectOn401: false },
+  );
 }
 
 // ── Full analysis (synchronous on web) ──────────────────────────────────────

@@ -26,6 +26,8 @@
     dmSocketConnected: false,
     dmRevealedPhoneUserId: null,
     providerSubscription: null,
+    pendingDmFiles: [],
+    dmAttachmentObjectUrls: [],
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -221,6 +223,7 @@
   // ── Auth view <-> placeholder dashboard ──────────────────────────────────
   function showDashboard(user) {
     state.currentUser = user || null;
+    document.body.classList.remove("provider-auth-booting");
     document.body.classList.add("provider-dashboard-active");
     const hero = $(".portal-hero");
     if (hero) hero.hidden = true;
@@ -234,6 +237,7 @@
   }
 
   function showAuth() {
+    document.body.classList.remove("provider-auth-booting");
     document.body.classList.remove("provider-dashboard-active");
     stopDmPolling();
     resetDmState();
@@ -1148,6 +1152,95 @@
     send.disabled = disabled || !hasText;
   }
 
+  function formatFileSize(bytes) {
+    const size = Number(bytes || 0);
+    if (!Number.isFinite(size) || size <= 0) return "";
+    if (size < 1024) return `${size} B`;
+    if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+    return `${(size / (1024 * 1024)).toFixed(size >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+  }
+
+  function clearDmAttachmentObjectUrls() {
+    state.dmAttachmentObjectUrls.forEach((url) => {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {
+      }
+    });
+    state.dmAttachmentObjectUrls = [];
+  }
+
+  function renderDmAttachmentConfirm() {
+    const panel = $("#provider-attachment-panel");
+    const title = $("#provider-attachment-title");
+    const list = $("#provider-attachment-list");
+    const confirm = $("#provider-attachment-confirm");
+    if (!panel || !list) return;
+    const files = state.pendingDmFiles || [];
+    panel.hidden = files.length === 0;
+    clearDmAttachmentObjectUrls();
+    list.replaceChildren();
+    if (title) title.textContent = files.length === 1 ? "Send this file?" : `Send ${files.length} files?`;
+    if (confirm) {
+      confirm.textContent = files.length === 1 ? "Send file" : "Send files";
+      confirm.disabled = files.length === 0 || state.dmSending;
+    }
+    files.forEach((file) => {
+      const item = document.createElement("div");
+      item.className = "provider-attachment-item";
+      const thumb = document.createElement("span");
+      thumb.className = "provider-attachment-thumb";
+      if (/^image\//i.test(file.type || "")) {
+        const img = document.createElement("img");
+        const url = URL.createObjectURL(file);
+        state.dmAttachmentObjectUrls.push(url);
+        img.src = url;
+        img.alt = "";
+        thumb.appendChild(img);
+      } else {
+        thumb.textContent = "PDF";
+      }
+      const meta = document.createElement("div");
+      const name = document.createElement("span");
+      name.className = "provider-attachment-name";
+      name.textContent = file.name || "Attachment";
+      const details = document.createElement("span");
+      details.className = "provider-attachment-meta";
+      details.textContent = [file.type || "File", formatFileSize(file.size)].filter(Boolean).join(" - ");
+      meta.append(name, details);
+      item.append(thumb, meta);
+      list.appendChild(item);
+    });
+    setStatus($("#provider-attachment-status"), "", null);
+  }
+
+  function openDmAttachmentConfirm(files) {
+    const thread = selectedDmThread();
+    if (!thread || state.dmSending || state.dmLoading || isDmBlocked(thread)) return;
+    state.pendingDmFiles = Array.from(files || []).filter(Boolean);
+    renderDmAttachmentConfirm();
+  }
+
+  function closeDmAttachmentConfirm() {
+    state.pendingDmFiles = [];
+    clearDmAttachmentObjectUrls();
+    renderDmAttachmentConfirm();
+  }
+
+  async function confirmDmAttachments() {
+    const files = state.pendingDmFiles.slice();
+    const thread = selectedDmThread();
+    if (!files.length || !thread || state.dmSending || state.dmLoading || isDmBlocked(thread)) return;
+    state.pendingDmFiles = [];
+    clearDmAttachmentObjectUrls();
+    renderDmAttachmentConfirm();
+    setStatus($("#provider-message-status"), files.length === 1 ? "Sending attachment..." : `Sending ${files.length} attachments...`, null);
+    for (const file of files) {
+      if (/^image\//i.test(file.type || "")) await sendDmPhoto(file);
+      else await sendDmFile(file);
+    }
+  }
+
   function revealSelectedPhone() {
     const thread = selectedDmThread();
     const userId = thread?.otherParticipant?.id;
@@ -2036,14 +2129,16 @@
     if (attachButton && photoInput) {
       attachButton.addEventListener("click", () => photoInput.click());
       photoInput.addEventListener("change", () => {
-        const file = photoInput.files && photoInput.files[0];
+        const files = Array.from(photoInput.files || []);
         photoInput.value = "";
-        if (!file) return;
-        // Images render inline; everything else (PDFs) sends as a file card.
-        if (/^image\//i.test(file.type || "")) void sendDmPhoto(file);
-        else void sendDmFile(file);
+        if (!files.length) return;
+        openDmAttachmentConfirm(files);
       });
     }
+    $$("[data-attachment-close]").forEach((button) => button.addEventListener("click", closeDmAttachmentConfirm));
+    $("#provider-attachment-confirm")?.addEventListener("click", () => {
+      void confirmDmAttachments();
+    });
     $("#provider-thread-search")?.addEventListener("input", renderDmThreads);
     $("#provider-call-link")?.addEventListener("click", revealSelectedPhone);
     $("#provider-message-back")?.addEventListener("click", () => {
@@ -2085,6 +2180,7 @@
       if (!$("#reset-panel").hidden) closeReset();
       if (!$("#consent-panel")?.hidden) closeConsentModal();
       if (!$("#paywall-panel")?.hidden) closePaywall();
+      if (!$("#provider-attachment-panel")?.hidden) closeDmAttachmentConfirm();
     });
 
     // Handle return from Stripe Checkout.
@@ -2109,7 +2205,10 @@
 
     // Resume a stored session if the token still belongs to a service provider.
     const session = getSession();
-    if (!session) return;
+    if (!session) {
+      showAuth();
+      return;
+    }
     api("/auth/me", { method: "GET", token: session.token })
       .then((data) => {
         if (data.user && (data.user.role === "service_provider" || data.user.discipline || data.user.companyName)) {

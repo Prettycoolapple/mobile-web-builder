@@ -1,6 +1,6 @@
 import { Router, type RequestHandler } from "express";
-import { eq } from "drizzle-orm";
-import { db, profiles, providerBrandKits, withDbRetry } from "@workspace/db";
+import { and, eq } from "drizzle-orm";
+import { db, profiles, providerBrandKits, providerPdfDrafts, withDbRetry } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { resolveProviderEntitlement } from "../lib/provider-entitlements";
 import { generateExecutiveSummary } from "../lib/claude";
@@ -11,6 +11,7 @@ const router = Router();
 /** Cap a data-URL / text field so a brand kit row stays sane. */
 const MAX_LOGO_CHARS = 2_000_000; // ~1.5 MB binary as base64
 const MAX_PDF_CHARS = 9_000_000; // ~6.7 MB binary; stays under the 8mb json body limit
+const MAX_DRAFT_CHARS = 400_000;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function str(v: unknown, max = 2000): string | null {
@@ -62,6 +63,21 @@ function publicBrandKit(row: typeof providerBrandKits.$inferSelect) {
     footerText: row.footerText,
     extraImageUrls: row.extraImageUrls ?? [],
   };
+}
+
+function publicPdfDraft(row: typeof providerPdfDrafts.$inferSelect) {
+  return {
+    reportKey: row.reportKey,
+    reportAddress: row.reportAddress,
+    draft: row.draftJson,
+    updatedAt: row.updatedAt?.toISOString?.() ?? row.updatedAt,
+  };
+}
+
+function cleanReportKey(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const cleaned = value.trim().slice(0, 180);
+  return cleaned ? cleaned : null;
 }
 
 /** GET /provider/brand-kit — the saved white-label kit (or null defaults). */
@@ -120,6 +136,80 @@ router.put("/provider/brand-kit", requireAuth, requireProviderAccess, async (req
   } catch (error) {
     req.log.error({ err: error }, "Failed to save brand kit");
     res.status(500).json({ error: "Failed to save brand kit", code: "BRAND_KIT_SAVE_FAILED" });
+  }
+});
+
+/** GET /reports/pdf/drafts/:reportKey — saved white-label PDF edits for one report. */
+router.get("/reports/pdf/drafts/:reportKey", requireAuth, requireProviderAccess, async (req, res) => {
+  const userId = (req as any).userId as string;
+  const reportKey = cleanReportKey(req.params.reportKey);
+  if (!reportKey) {
+    res.status(400).json({ error: "A report key is required.", code: "MISSING_REPORT_KEY" });
+    return;
+  }
+
+  try {
+    const [row] = await withDbRetry(() =>
+      db
+        .select()
+        .from(providerPdfDrafts)
+        .where(and(eq(providerPdfDrafts.userId, userId), eq(providerPdfDrafts.reportKey, reportKey)))
+        .limit(1),
+    );
+    res.json({ pdfDraft: row ? publicPdfDraft(row) : null });
+  } catch (error) {
+    req.log.error({ err: error }, "Failed to load PDF draft");
+    res.status(500).json({ error: "Failed to load PDF draft", code: "PDF_DRAFT_LOAD_FAILED" });
+  }
+});
+
+/** PUT /reports/pdf/drafts/:reportKey — upsert saved white-label PDF edits. */
+router.put("/reports/pdf/drafts/:reportKey", requireAuth, requireProviderAccess, async (req, res) => {
+  const userId = (req as any).userId as string;
+  const reportKey = cleanReportKey(req.params.reportKey);
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  if (!reportKey) {
+    res.status(400).json({ error: "A report key is required.", code: "MISSING_REPORT_KEY" });
+    return;
+  }
+
+  const draft = body.draft;
+  if (!draft || typeof draft !== "object" || Array.isArray(draft)) {
+    res.status(400).json({ error: "A PDF draft object is required.", code: "INVALID_PDF_DRAFT" });
+    return;
+  }
+  if (JSON.stringify(draft).length > MAX_DRAFT_CHARS) {
+    res.status(400).json({ error: "PDF draft is too large.", code: "PDF_DRAFT_TOO_LARGE" });
+    return;
+  }
+
+  const values = {
+    userId,
+    reportKey,
+    reportAddress: str(body.reportAddress, 500) ?? "",
+    draftJson: draft,
+    updatedAt: new Date(),
+  };
+
+  try {
+    const [row] = await withDbRetry(() =>
+      db
+        .insert(providerPdfDrafts)
+        .values(values)
+        .onConflictDoUpdate({
+          target: [providerPdfDrafts.userId, providerPdfDrafts.reportKey],
+          set: {
+            reportAddress: values.reportAddress,
+            draftJson: values.draftJson,
+            updatedAt: values.updatedAt,
+          },
+        })
+        .returning(),
+    );
+    res.json({ pdfDraft: row ? publicPdfDraft(row) : null });
+  } catch (error) {
+    req.log.error({ err: error }, "Failed to save PDF draft");
+    res.status(500).json({ error: "Failed to save PDF draft", code: "PDF_DRAFT_SAVE_FAILED" });
   }
 });
 

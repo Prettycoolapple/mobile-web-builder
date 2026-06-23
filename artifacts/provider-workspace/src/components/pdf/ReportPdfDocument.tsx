@@ -72,6 +72,16 @@ export interface PdfLayout {
   showCoverPhoto: boolean;
 }
 
+export interface PdfContentEdits {
+  fields: Record<string, string>;
+  sectionNotes: Partial<Record<SectionKey, string>>;
+}
+
+export const EMPTY_PDF_CONTENT_EDITS: PdfContentEdits = {
+  fields: {},
+  sectionNotes: {},
+};
+
 export function defaultLayout(report: FeasibilityReport): PdfLayout {
   return {
     coverTitle: "Feasibility Report",
@@ -118,13 +128,24 @@ function Bullets({ items }: { items: (string | null | undefined)[] }) {
   );
 }
 
-function Section({ title, brand, children }: { title: string; brand: string; children: ReactNode }) {
+function Section({
+  title,
+  brand,
+  note,
+  children,
+}: {
+  title: string;
+  brand: string;
+  note?: string | null;
+  children: ReactNode;
+}) {
   return (
     <View style={styles.section} wrap={false}>
       <View style={[styles.sectionTitleBar, { borderBottomColor: brand }]}>
         <Text style={[styles.sectionTitle, { marginBottom: 0, color: brand }]}>{title}</Text>
       </View>
       {children}
+      {note ? <Text style={styles.note}>{note}</Text> : null}
     </View>
   );
 }
@@ -134,15 +155,55 @@ function cap(s?: string | null): string {
   return s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ");
 }
 
+function shouldHideMarketReason(reason: string): boolean {
+  const normalized = reason.toLowerCase();
+  return normalized.includes("linz title-owner data was unavailable") && normalized.includes("no public-housing conclusion");
+}
+
+function visibleMarketReasons(items: (string | null | undefined)[]): string[] {
+  return items.filter((item): item is string => !!item && item.trim().length > 0 && !shouldHideMarketReason(item));
+}
+
+function strategyRecommendationLabel(recommendation?: string | null, recommended?: boolean): string {
+  if (recommended || recommendation === "recommended") return "Recommended";
+  return cap(recommendation);
+}
+
+function editText(edits: PdfContentEdits | undefined, key: string, fallback?: string | null): string | null {
+  const edited = edits?.fields?.[key];
+  if (typeof edited === "string") return edited.trim() ? edited : null;
+  return fallback && fallback.trim() ? fallback : null;
+}
+
+function editLines(
+  edits: PdfContentEdits | undefined,
+  key: string,
+  fallback: (string | null | undefined)[] = [],
+): string[] {
+  const edited = edits?.fields?.[key];
+  if (typeof edited === "string") {
+    return edited
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }
+  return fallback.filter((line): line is string => !!line && line.trim().length > 0);
+}
+
+function sectionNote(edits: PdfContentEdits | undefined, key: SectionKey): string | null {
+  const note = edits?.sectionNotes?.[key];
+  return note && note.trim() ? note : null;
+}
+
 // ── section renderers ────────────────────────────────────────────────────────
-function renderSection(key: SectionKey, report: FeasibilityReport, brand: string): ReactNode {
+function renderSection(key: SectionKey, report: FeasibilityReport, brand: string, edits?: PdfContentEdits): ReactNode {
   const ov = report.propertyOverview;
   const planning = report.planning;
   switch (key) {
     case "overview":
       if (!ov) return null;
       return (
-        <Section key={key} title={SECTION_LABELS.overview} brand={brand}>
+        <Section key={key} title={SECTION_LABELS.overview} brand={brand} note={sectionNote(edits, key)}>
           <KV
             rows={[
               ["Capital value", ov.cv],
@@ -164,15 +225,17 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
     case "title":
       if (!report.titleInsight?.isCrossLease) return null;
       return (
-        <Section key={key} title={SECTION_LABELS.title} brand={brand}>
-          {report.titleInsight.opportunity ? <Text style={styles.paragraph}>{report.titleInsight.opportunity}</Text> : null}
-          <Bullets items={report.titleInsight.risks ?? []} />
+        <Section key={key} title={SECTION_LABELS.title} brand={brand} note={sectionNote(edits, key)}>
+          {editText(edits, "title.opportunity", report.titleInsight.opportunity) ? (
+            <Text style={styles.paragraph}>{editText(edits, "title.opportunity", report.titleInsight.opportunity)}</Text>
+          ) : null}
+          <Bullets items={editLines(edits, "title.risks", report.titleInsight.risks ?? [])} />
         </Section>
       );
     case "schools":
       if (!report.schoolZones || report.schoolZones.length === 0) return null;
       return (
-        <Section key={key} title={SECTION_LABELS.schools} brand={brand}>
+        <Section key={key} title={SECTION_LABELS.schools} brand={brand} note={sectionNote(edits, key)}>
           {report.schoolZones.map((z, i) => (
             <View key={i} style={{ marginBottom: 6 }}>
               <Text style={{ fontFamily: "Helvetica-Bold", fontSize: 10 }}>{z.orgName ?? z.sourceLabel}</Text>
@@ -186,7 +249,7 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
     case "planning":
       if (!planning || !(planning.overlays || planning.subdivisionSummary || planning.potentialLots != null)) return null;
       return (
-        <Section key={key} title={SECTION_LABELS.planning} brand={brand}>
+        <Section key={key} title={SECTION_LABELS.planning} brand={brand} note={sectionNote(edits, key)}>
           <KV
             rows={[
               ["Zone", planning.zone ?? ov?.zone],
@@ -201,8 +264,12 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
               ["Net developable area", planning.netAreaSqm ? `${Math.round(planning.netAreaSqm)} m²` : null],
             ]}
           />
-          {planning.subdivisionSummary ? <Text style={styles.note}>{planning.subdivisionSummary}</Text> : null}
-          {planning.subdivisionPathwayNote ? <Text style={styles.note}>{planning.subdivisionPathwayNote}</Text> : null}
+          {editText(edits, "planning.subdivisionSummary", planning.subdivisionSummary) ? (
+            <Text style={styles.note}>{editText(edits, "planning.subdivisionSummary", planning.subdivisionSummary)}</Text>
+          ) : null}
+          {editText(edits, "planning.subdivisionPathwayNote", planning.subdivisionPathwayNote) ? (
+            <Text style={styles.note}>{editText(edits, "planning.subdivisionPathwayNote", planning.subdivisionPathwayNote)}</Text>
+          ) : null}
           {planning.overlays && planning.overlays.length > 0 ? (
             <View style={{ marginTop: 8 }}>
               {planning.overlays.map((o, i) => (
@@ -216,7 +283,13 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
             </View>
           ) : null}
           {planning.easements && planning.easements.length > 0 ? (
-            <Bullets items={planning.easements.map((e) => `${e.description}${e.severity ? ` (${e.severity})` : ""}`)} />
+            <Bullets
+              items={editLines(
+                edits,
+                "planning.easements",
+                planning.easements.map((e) => `${e.description}${e.severity ? ` (${e.severity})` : ""}`),
+              )}
+            />
           ) : null}
           {report.overlay_map_image_base64 ? (
             <Image style={styles.overlayMap} src={ensureDataUri(report.overlay_map_image_base64)} />
@@ -226,7 +299,7 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
     case "asbestos":
       if (!report.asbestos) return null;
       return (
-        <Section key={key} title={SECTION_LABELS.asbestos} brand={brand}>
+        <Section key={key} title={SECTION_LABELS.asbestos} brand={brand} note={sectionNote(edits, key)}>
           <KV
             rows={[
               ["Build year", report.asbestos.buildYear ?? ov?.buildYear],
@@ -235,13 +308,15 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
               ["Estimated demolition", formatRange(report.asbestos.demoCostLow, report.asbestos.demoCostHigh)],
             ]}
           />
-          {report.asbestos.notes ? <Text style={styles.note}>{report.asbestos.notes}</Text> : null}
+          {editText(edits, "asbestos.notes", report.asbestos.notes) ? (
+            <Text style={styles.note}>{editText(edits, "asbestos.notes", report.asbestos.notes)}</Text>
+          ) : null}
         </Section>
       );
     case "terrain":
       if (!report.terrain) return null;
       return (
-        <Section key={key} title={SECTION_LABELS.terrain} brand={brand}>
+        <Section key={key} title={SECTION_LABELS.terrain} brand={brand} note={sectionNote(edits, key)}>
           <KV
             rows={[
               ["Classification", cap(report.terrain.classification ?? "")],
@@ -254,7 +329,7 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
     case "infrastructure":
       if (!report.infrastructure || report.infrastructure.length === 0) return null;
       return (
-        <Section key={key} title={SECTION_LABELS.infrastructure} brand={brand}>
+        <Section key={key} title={SECTION_LABELS.infrastructure} brand={brand} note={sectionNote(edits, key)}>
           {report.infrastructure.map((svc, i) => (
             <View key={i} style={styles.kvRow}>
               <Text style={styles.kvKey}>
@@ -270,7 +345,7 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
     case "cost":
       if (!report.costItems || report.costItems.length === 0) return null;
       return (
-        <Section key={key} title={SECTION_LABELS.cost} brand={brand}>
+        <Section key={key} title={SECTION_LABELS.cost} brand={brand} note={sectionNote(edits, key)}>
           {report.costItems.map((ci, i) => (
             <View key={i} style={styles.kvRow}>
               <Text style={styles.kvKey}>{ci.label}</Text>
@@ -290,7 +365,7 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
       const nb = report.neighbourhoodContext;
       if (!tr && !nb) return null;
       return (
-        <Section key={key} title={SECTION_LABELS.market} brand={brand}>
+        <Section key={key} title={SECTION_LABELS.market} brand={brand} note={sectionNote(edits, key)}>
           {tr ? (
             <KV
               rows={[
@@ -300,7 +375,10 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
               ]}
             />
           ) : null}
-          {nb ? <Bullets items={nb.reasons} /> : null}
+          {tr?.roiInfluence?.reasons?.length ? (
+            <Bullets items={editLines(edits, "market.transportReasons", tr.roiInfluence.reasons)} />
+          ) : null}
+          {nb ? <Bullets items={editLines(edits, "market.reasons", visibleMarketReasons(nb.reasons))} /> : null}
         </Section>
       );
     }
@@ -308,7 +386,7 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
       const ctx = report.builtEnvironmentContext;
       if (!ctx || ctx.assessedProperties === 0) return null;
       return (
-        <Section key={key} title={SECTION_LABELS.builtEnv} brand={brand}>
+        <Section key={key} title={SECTION_LABELS.builtEnv} brand={brand} note={sectionNote(edits, key)}>
           <KV
             rows={[
               ["Assessed properties", String(ctx.assessedProperties)],
@@ -316,7 +394,7 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
               ["Median build year", ctx.medianBuildYear != null ? String(ctx.medianBuildYear) : null],
             ]}
           />
-          <Bullets items={ctx.reasons} />
+          <Bullets items={editLines(edits, "builtEnv.reasons", ctx.reasons)} />
         </Section>
       );
     }
@@ -324,16 +402,18 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
       const strategies = report.developmentStrategies ?? [];
       if (strategies.length === 0) return null;
       return (
-        <Section key={key} title={SECTION_LABELS.strategies} brand={brand}>
+        <Section key={key} title={SECTION_LABELS.strategies} brand={brand} note={sectionNote(edits, key)}>
           {strategies.map((s) => {
             const best = s.roiScenarios.find((x) => x.isBest) ?? s.roiScenarios[0];
+            const recommended = report.recommendedDevelopmentStrategy === s.id;
+            const rationale = editText(edits, `strategies.${s.id}.rationale`, s.rationale);
             return (
               <View key={s.id} style={{ marginBottom: 10 }}>
                 <Text style={{ fontFamily: "Helvetica-Bold", fontSize: 10.5 }}>
-                  {s.title} — {cap(s.recommendation)}
-                  {report.recommendedDevelopmentStrategy === s.id ? "  ★ Recommended" : ""}
+                  {s.title} - {strategyRecommendationLabel(s.recommendation, recommended)}
                 </Text>
-                {s.rationale ? <Text style={styles.paragraph}>{s.rationale}</Text> : null}
+                {rationale ? <Text style={styles.paragraph}>{rationale}</Text> : null}
+                <Bullets items={editLines(edits, `strategies.${s.id}.assumptions`, s.assumptions)} />
                 <KV
                   rows={[
                     ["Total cost", formatRange(s.totalCostLow, s.totalCostHigh)],
@@ -353,7 +433,7 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
       const roi = report.roiScenarios ?? [];
       if (roi.length === 0 || (report.developmentStrategies?.length ?? 0) > 0) return null;
       return (
-        <Section key={key} title={SECTION_LABELS.roi} brand={brand}>
+        <Section key={key} title={SECTION_LABELS.roi} brand={brand} note={sectionNote(edits, key)}>
           {roi.map((sc, i) => (
             <View key={i} style={{ marginBottom: 8 }}>
               <Text style={{ fontFamily: "Helvetica-Bold", fontSize: 10 }}>
@@ -377,7 +457,7 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
       const comps = (report.comparableSales ?? []).filter((c) => (c.price ?? c.price_nzd ?? 0) > 0);
       if (report.comparables_quality !== "live" || comps.length === 0) return null;
       return (
-        <Section key={key} title={SECTION_LABELS.comparables} brand={brand}>
+        <Section key={key} title={SECTION_LABELS.comparables} brand={brand} note={sectionNote(edits, key)}>
           {comps.slice(0, 8).map((c, i) => (
             <View key={i} style={styles.kvRow}>
               <Text style={styles.kvKey}>
@@ -393,8 +473,8 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
     case "risk":
       if (!report.riskSummary || report.riskSummary.length === 0) return null;
       return (
-        <Section key={key} title={SECTION_LABELS.risk} brand={brand}>
-          <Bullets items={report.riskSummary} />
+        <Section key={key} title={SECTION_LABELS.risk} brand={brand} note={sectionNote(edits, key)}>
+          <Bullets items={editLines(edits, "risk.summary", report.riskSummary)} />
         </Section>
       );
     default:
@@ -430,10 +510,12 @@ export function ReportPdfDocument({
   report,
   brandKit,
   layout,
+  contentEdits = EMPTY_PDF_CONTENT_EDITS,
 }: {
   report: FeasibilityReport;
   brandKit: BrandKit;
   layout: PdfLayout;
+  contentEdits?: PdfContentEdits;
 }) {
   const brand = safeBrandColor(brandKit.brandColor);
   const scores = report.scores ?? { ease: 0, cost: 0, roi: 0, composite: 0 };
@@ -451,7 +533,14 @@ export function ReportPdfDocument({
         {brandKit.logoUrl ? (
           <Image
             src={brandKit.logoUrl}
-            style={{ position: "absolute", left: layout.logoBox.x, top: layout.logoBox.y, width: layout.logoBox.width, objectFit: "contain" }}
+            style={{
+              position: "absolute",
+              left: layout.logoBox.x,
+              top: layout.logoBox.y,
+              width: layout.logoBox.width,
+              maxHeight: 56,
+              objectFit: "contain",
+            }}
           />
         ) : null}
 
@@ -466,7 +555,7 @@ export function ReportPdfDocument({
           ) : null}
 
           <View style={styles.preparedBy}>
-            <View>
+            <View style={styles.preparedByDetails}>
               <Text style={styles.coverSectionLabel}>Prepared by</Text>
               <Text style={styles.preparedByName}>{brandKit.companyName ?? brandKit.contactName ?? ""}</Text>
               {brandKit.contactName && brandKit.companyName ? <Text style={styles.preparedByLine}>{brandKit.contactName}</Text> : null}
@@ -475,7 +564,7 @@ export function ReportPdfDocument({
               {brandKit.website ? <Text style={styles.preparedByLine}>{brandKit.website}</Text> : null}
               {brandKit.licenceNumber ? <Text style={styles.preparedByLine}>Licence: {brandKit.licenceNumber}</Text> : null}
             </View>
-            <Text style={styles.preparedByLine}>{new Date().toLocaleDateString()}</Text>
+            <Text style={styles.preparedByDate}>{new Date().toLocaleDateString()}</Text>
           </View>
         </View>
       </Page>
@@ -488,8 +577,8 @@ export function ReportPdfDocument({
         {/* Scorecard */}
         <View style={styles.scorecard}>
           <View style={[styles.scoreBig, { backgroundColor: scoreHex(scores.composite) }]}>
-            <Text style={styles.scoreBigNum}>{formatComposite(scores.composite)}</Text>
-            <Text style={styles.scoreBigLabel}>Overall / 5</Text>
+            <Text style={styles.scoreBigNum}>{formatComposite(scores.composite)} / 5</Text>
+            <Text style={styles.scoreBigLabel}>Overall</Text>
           </View>
           <View style={styles.scoreBars}>
             {([["Ease", scores.ease], ["Cost", scores.cost], ["ROI", scores.roi]] as const).map(([label, val]) => (
@@ -510,13 +599,10 @@ export function ReportPdfDocument({
           <Text style={[styles.note, { backgroundColor: "#fbe7e7", color: "#8a2d2d" }]}>{report.redevelopmentWarning.message}</Text>
         ) : null}
 
-        {orderedSections.map((k) => renderSection(k, report, brand))}
+        {orderedSections.map((k) => renderSection(k, report, brand, contentEdits))}
 
-        {report.disclaimer ? <Text style={styles.disclaimer}>{report.disclaimer}</Text> : null}
-        {report.data_sources && Object.keys(report.data_sources).length > 0 ? (
-          <Text style={styles.disclaimer}>
-            Data sources: {Object.values(report.data_sources).filter(Boolean).join(", ")}
-          </Text>
+        {editText(contentEdits, "disclaimer", report.disclaimer) ? (
+          <Text style={styles.disclaimer}>{editText(contentEdits, "disclaimer", report.disclaimer)}</Text>
         ) : null}
       </Page>
     </Document>

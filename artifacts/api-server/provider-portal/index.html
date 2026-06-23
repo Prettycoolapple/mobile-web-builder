@@ -656,6 +656,55 @@
       .provider-message-file-name {
         overflow-wrap: anywhere;
       }
+      .provider-attachment-card {
+        width: min(560px, calc(100vw - 32px));
+      }
+      .provider-attachment-list {
+        display: grid;
+        gap: 10px;
+        margin: 18px 0;
+        max-height: min(420px, 54vh);
+        overflow-y: auto;
+      }
+      .provider-attachment-item {
+        display: grid;
+        grid-template-columns: 48px minmax(0, 1fr);
+        gap: 12px;
+        align-items: center;
+        padding: 10px;
+        border: 1px solid var(--line, #e5ded4);
+        border-radius: 8px;
+        background: #fffaf3;
+      }
+      .provider-attachment-thumb {
+        display: grid;
+        width: 48px;
+        height: 48px;
+        place-items: center;
+        overflow: hidden;
+        border-radius: 8px;
+        background: rgba(23, 63, 46, 0.08);
+        color: var(--forest, #173f2e);
+        font-size: 20px;
+        font-weight: 850;
+      }
+      .provider-attachment-thumb img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      .provider-attachment-name {
+        display: block;
+        overflow-wrap: anywhere;
+        color: var(--ink, #201915);
+        font-weight: 800;
+      }
+      .provider-attachment-meta {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted, #6b625b);
+        font-size: 12px;
+      }
       .provider-message-time {
         display: block;
         margin-top: 6px;
@@ -959,6 +1008,10 @@
       body.provider-dashboard-active .nav,
       body.provider-dashboard-active .footer {
         display: none;
+      }
+      body.provider-auth-booting .portal-hero,
+      body.provider-auth-booting #portal-auth {
+        visibility: hidden;
       }
       .provider-header-actions {
         display: none;
@@ -1362,7 +1415,7 @@
     <script defer src="/site.js"></script>
     <script defer src="/provider-portal/portal.js"></script>
   </head>
-  <body data-page="providerPortal">
+  <body data-page="providerPortal" class="provider-auth-booting">
     <div class="site-shell">
       <header class="topbar topbar--solid">
         <a class="brand" href="/" aria-label="Project Alpha home">
@@ -1647,7 +1700,7 @@
                             Messaging is currently unavailable with this user.
                           </div>
                           <div class="provider-message-compose-row">
-                            <input id="provider-message-photo" type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif,application/pdf" hidden />
+                            <input id="provider-message-photo" type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif,application/pdf" multiple hidden />
                             <button class="provider-icon-button" type="button" id="provider-message-attach" aria-label="Attach photo or PDF">＋</button>
                             <textarea id="provider-message-input" rows="1" placeholder="Write a message" disabled></textarea>
                             <button class="button button-primary" type="submit" id="provider-message-send" disabled>Send</button>
@@ -1816,6 +1869,23 @@
                 </div>
               </div>
             </div>
+          </div>
+        </section>
+
+        <section class="portal-reset" id="provider-attachment-panel" hidden>
+          <div class="portal-card portal-reset-card provider-attachment-card">
+            <button class="portal-close" type="button" data-attachment-close aria-label="Close">&times;</button>
+            <div class="portal-panel-header">
+              <p class="section-kicker">Attachments</p>
+              <h2 id="provider-attachment-title">Send files?</h2>
+              <p>Review the selected files before sending them to this conversation.</p>
+            </div>
+            <div class="provider-attachment-list" id="provider-attachment-list"></div>
+            <div class="portal-form-row portal-consent-actions">
+              <button class="button button-quiet" type="button" data-attachment-close>Cancel</button>
+              <button class="button button-primary" type="button" id="provider-attachment-confirm">Send files</button>
+            </div>
+            <p class="form-status" id="provider-attachment-status" aria-live="polite"></p>
           </div>
         </section>
 

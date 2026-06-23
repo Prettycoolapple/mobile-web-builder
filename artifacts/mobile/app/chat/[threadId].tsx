@@ -24,6 +24,7 @@ import { Image } from "expo-image";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
+import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
@@ -104,6 +105,27 @@ function normalizeImageContentType(mimeType: string | null | undefined): string 
   return normalized;
 }
 
+function normalizeFileContentType(mimeType: string | null | undefined, fileName?: string | null): string {
+  const normalized = mimeType?.split(";")[0]?.trim().toLowerCase();
+  if (normalized) return normalized;
+  const name = fileName?.toLowerCase() ?? "";
+  if (name.endsWith(".pdf")) return "application/pdf";
+  if (name.endsWith(".png")) return "image/png";
+  if (name.endsWith(".webp")) return "image/webp";
+  if (name.endsWith(".heic")) return "image/heic";
+  if (name.endsWith(".heif")) return "image/heif";
+  if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
+  return "application/octet-stream";
+}
+
+function formatFileSize(size: number | null | undefined): string {
+  if (!size || !Number.isFinite(size) || size <= 0) return "";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+  const mb = size / (1024 * 1024);
+  return `${mb >= 10 ? mb.toFixed(0) : mb.toFixed(1)} MB`;
+}
+
 function telUrl(phone: string): string {
   const normalized = phone.trim().replace(/[^\d+]/g, "");
   return `tel:${normalized || phone.trim()}`;
@@ -121,6 +143,10 @@ interface SignedDmUploadResponse {
 type LocalDmMessage = DmMessage & {
   localStatus?: "uploading" | "sending" | "failed";
 };
+
+type PendingDmAttachment =
+  | { kind: "image"; uri: string; name: string; mimeType: string; size?: number | null; asset: ImagePicker.ImagePickerAsset }
+  | { kind: "file"; uri: string; name: string; mimeType: string; size?: number | null; asset: DocumentPicker.DocumentPickerAsset };
 
 interface MessageItem {
   type: "message";
@@ -224,7 +250,7 @@ export default function ChatScreen() {
   const [inputHeight, setInputHeight] = useState(0);
   const [sending, setSending] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
-  const [pendingImages, setPendingImages] = useState<ImagePicker.ImagePickerAsset[]>([]);
+  const [pendingAttachments, setPendingAttachments] = useState<PendingDmAttachment[]>([]);
   const [viewerUri, setViewerUri] = useState<string | null>(null);
   const [actionMenuVisible, setActionMenuVisible] = useState(false);
   const [reportModalVisible, setReportModalVisible] = useState(false);
@@ -387,14 +413,14 @@ export default function ChatScreen() {
   const sendMessage = useCallback(async (
     msgBody?: string,
     imageUrl?: string,
-    options: { optimisticId?: string } = {},
+    options: { optimisticId?: string; fileUrl?: string; fileName?: string; fileMime?: string } = {},
   ) => {
     if (!threadId || !token) return;
     if (blockStatus.messagingBlocked) {
       Alert.alert(t("dm.block.title"), t("dm.block.cannot_send"));
       return;
     }
-    if (!msgBody && !imageUrl) return;
+    if (!msgBody && !imageUrl && !options.fileUrl) return;
     const isOptimisticSend = !!options.optimisticId;
     if (isOptimisticSend) {
       setMessages((prev) => prev.map((m) =>
@@ -410,7 +436,13 @@ export default function ChatScreen() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ body: msgBody ?? null, imageUrl: imageUrl ?? null }),
+        body: JSON.stringify({
+          body: msgBody ?? null,
+          imageUrl: imageUrl ?? null,
+          fileUrl: options.fileUrl ?? null,
+          fileName: options.fileName ?? null,
+          fileMime: options.fileMime ?? null,
+        }),
       });
       if (!resp.ok) {
         let code: string | undefined;
@@ -526,8 +558,7 @@ export default function ChatScreen() {
     }
   }, [openingFileId, token, t]);
 
-  // Stage selected photos for a Send/Cancel confirmation rather than firing them
-  // off immediately. Camera capture and (multi-select) library picks both land here.
+  // Stage selected attachments for confirmation rather than sending immediately.
   const pickImage = useCallback(async (useCamera: boolean) => {
     if (uploadingImage || blockStatus.messagingBlocked) return;
     let result: ImagePicker.ImagePickerResult;
@@ -552,10 +583,36 @@ export default function ChatScreen() {
       });
     }
     if (result.canceled || !result.assets?.length) return;
-    setPendingImages(result.assets);
+    setPendingAttachments(result.assets.map((asset) => ({
+      kind: "image",
+      uri: asset.uri,
+      name: asset.fileName ?? `photo_${Date.now()}.jpg`,
+      mimeType: normalizeImageContentType(asset.mimeType),
+      size: asset.fileSize ?? null,
+      asset,
+    })));
   }, [uploadingImage, blockStatus.messagingBlocked, t]);
 
-  const uploadAndSendAsset = useCallback(async (asset: ImagePicker.ImagePickerAsset) => {
+  const pickFile = useCallback(async () => {
+    if (uploadingImage || blockStatus.messagingBlocked) return;
+    const result = await DocumentPicker.getDocumentAsync({
+      type: ["application/pdf", "image/*"],
+      multiple: true,
+      copyToCacheDirectory: true,
+    });
+    if (result.canceled || !result.assets?.length) return;
+    setPendingAttachments(result.assets.map((asset) => ({
+      kind: "file",
+      uri: asset.uri,
+      name: asset.name || "attachment",
+      mimeType: normalizeFileContentType(asset.mimeType, asset.name),
+      size: asset.size ?? null,
+      asset,
+    })));
+  }, [uploadingImage, blockStatus.messagingBlocked]);
+
+  const uploadAndSendImageAsset = useCallback(async (attachment: Extract<PendingDmAttachment, { kind: "image" }>) => {
+    const asset = attachment.asset;
     const optimisticId = `local-photo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const optimisticMessage: LocalDmMessage = {
       id: optimisticId,
@@ -570,8 +627,8 @@ export default function ChatScreen() {
     setMessages((prev) => [...prev, optimisticMessage]);
     setTimeout(() => scrollToLatest(true), 50);
     try {
-      const filename = asset.fileName ?? `photo_${Date.now()}.jpg`;
-      const mimeType = normalizeImageContentType(asset.mimeType);
+      const filename = attachment.name;
+      const mimeType = attachment.mimeType;
 
       const uploadWithMultipart = async (): Promise<string | undefined> => {
         const form = new FormData();
@@ -681,23 +738,152 @@ export default function ChatScreen() {
     }
   }, [token, sendMessage, t, threadId, user?.id, scrollToLatest]);
 
-  // Upload + send every staged photo in order after the user confirms.
-  const confirmSendImages = useCallback(async () => {
-    const assets = pendingImages;
-    setPendingImages([]);
-    if (!assets.length || blockStatus.messagingBlocked) return;
+  const uploadAndSendFileAsset = useCallback(async (attachment: Extract<PendingDmAttachment, { kind: "file" }>) => {
+    const optimisticId = `local-file-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const optimisticMessage: LocalDmMessage = {
+      id: optimisticId,
+      threadId: String(threadId),
+      senderId: user?.id ?? "",
+      body: null,
+      imageUrl: null,
+      fileUrl: "#",
+      fileName: attachment.name,
+      fileMime: attachment.mimeType,
+      readAt: null,
+      createdAt: new Date().toISOString(),
+      localStatus: "uploading",
+    };
+    setMessages((prev) => [...prev, optimisticMessage]);
+    setTimeout(() => scrollToLatest(true), 50);
+    try {
+      const uploadWithMultipart = async (): Promise<string | undefined> => {
+        const form = new FormData();
+        if (Platform.OS === "web") {
+          const resp = await fetch(attachment.uri);
+          const blob = await resp.blob();
+          form.append("file", blob, attachment.name);
+        } else {
+          const rnFile: { uri: string; name: string; type: string } = {
+            uri: attachment.uri,
+            name: attachment.name,
+            type: attachment.mimeType,
+          };
+          (form as unknown as { append(k: string, v: { uri: string; name: string; type: string }): void }).append("file", rnFile);
+        }
+        const uploadResp = await fetch(`${getApiBase()}/upload/dm-file`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+          body: form,
+        });
+        const uploadJson = (await readJsonResponse(uploadResp)) as { fileUrl?: string; error?: string };
+        if (!uploadResp.ok) {
+          throw new Error(uploadJson.error ?? t("dm.error.file_upload_failed"));
+        }
+        return uploadJson.fileUrl;
+      };
+
+      const uploadWithSignedUrl = async (): Promise<string | undefined> => {
+        const info = await FileSystem.getInfoAsync(attachment.uri);
+        const size = attachment.size || (info.exists && !info.isDirectory ? info.size : 0);
+        if (!size) throw new Error("Could not read local file");
+        const signResp = await fetch(`${getApiBase()}/upload/dm-file/request-url`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            name: attachment.name,
+            size,
+            contentType: attachment.mimeType,
+          }),
+        });
+        const signJson = (await readJsonResponse(signResp)) as SignedDmUploadResponse & { error?: string; code?: string };
+        if (!signResp.ok) {
+          const err = new Error(signJson.error ?? t("dm.error.file_upload_failed"));
+          (err as Error & { code?: string }).code = signJson.code;
+          throw err;
+        }
+        const signedContentType = signJson.requiredHeaders?.["Content-Type"] ?? attachment.mimeType;
+        const uploadResult = await FileSystem.uploadAsync(signJson.uploadURL, attachment.uri, {
+          httpMethod: "PUT",
+          uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+          sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
+          headers: { "Content-Type": signedContentType },
+        });
+        if (uploadResult.status < 200 || uploadResult.status >= 300) {
+          throw new Error(t("dm.error.file_upload_failed"));
+        }
+        const completeResp = await fetch(`${getApiBase()}/upload/dm-file/complete`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ objectPath: signJson.objectPath }),
+        });
+        const completeJson = (await readJsonResponse(completeResp)) as { fileUrl?: string; error?: string };
+        if (!completeResp.ok) {
+          throw new Error(completeJson.error ?? t("dm.error.file_upload_failed"));
+        }
+        return completeJson.fileUrl ?? signJson.fileUrl;
+      };
+
+      let fileUrl: string | undefined;
+      if (Platform.OS === "web") {
+        fileUrl = await uploadWithMultipart();
+      } else {
+        try {
+          fileUrl = await uploadWithSignedUrl();
+        } catch (signedError) {
+          const code = (signedError as Error & { code?: string }).code;
+          if (code === "INVALID_FILE_TYPE" || code === "INVALID_SIZE" || code === "INVALID_NAME") {
+            throw signedError;
+          }
+          fileUrl = await uploadWithMultipart();
+        }
+      }
+      if (!fileUrl) {
+        setMessages((prev) => prev.map((m) =>
+          m.id === optimisticId ? { ...m, localStatus: "failed" } : m,
+        ));
+        Alert.alert(t("common.error"), t("dm.error.file_upload_failed"));
+        return;
+      }
+      await sendMessage(undefined, undefined, {
+        optimisticId,
+        fileUrl,
+        fileName: attachment.name,
+        fileMime: attachment.mimeType,
+      });
+    } catch (error) {
+      setMessages((prev) => prev.map((m) =>
+        m.id === optimisticId ? { ...m, localStatus: "failed" } : m,
+      ));
+      Alert.alert(
+        t("common.error"),
+        error instanceof Error && error.message ? error.message : t("dm.error.file_upload_failed"),
+      );
+    }
+  }, [token, sendMessage, t, threadId, user?.id, scrollToLatest]);
+
+  const confirmSendAttachments = useCallback(async () => {
+    const attachments = pendingAttachments;
+    setPendingAttachments([]);
+    if (!attachments.length || blockStatus.messagingBlocked) return;
     setUploadingImage(true);
     try {
-      for (const asset of assets) {
-        await uploadAndSendAsset(asset);
+      for (const attachment of attachments) {
+        if (attachment.kind === "image") await uploadAndSendImageAsset(attachment);
+        else await uploadAndSendFileAsset(attachment);
       }
     } finally {
       setUploadingImage(false);
     }
-  }, [pendingImages, blockStatus.messagingBlocked, uploadAndSendAsset]);
+  }, [pendingAttachments, blockStatus.messagingBlocked, uploadAndSendImageAsset, uploadAndSendFileAsset]);
 
-  const cancelPendingImages = useCallback(() => {
-    setPendingImages([]);
+  const cancelPendingAttachments = useCallback(() => {
+    setPendingAttachments([]);
   }, []);
 
   const toggleLike = useCallback(async (message: LocalDmMessage) => {
@@ -1168,6 +1354,17 @@ export default function ChatScreen() {
       >
         <TouchableOpacity
           style={styles.mediaBtn}
+          onPress={() => void pickFile()}
+          disabled={mediaDisabled}
+        >
+          <Feather
+            name="paperclip"
+            size={21}
+            color={mediaDisabled ? colors.mutedForeground : colors.mutedForeground}
+          />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.mediaBtn}
           onPress={() => pickImage(false)}
           disabled={mediaDisabled}
         >
@@ -1367,50 +1564,67 @@ export default function ChatScreen() {
       </Modal>
 
       <Modal
-        visible={pendingImages.length > 0}
+        visible={pendingAttachments.length > 0}
         animationType="fade"
         transparent
-        onRequestClose={cancelPendingImages}
+        onRequestClose={cancelPendingAttachments}
       >
         <View style={styles.reportModalRoot}>
           <Pressable
             style={[StyleSheet.absoluteFillObject, { backgroundColor: "rgba(0,0,0,0.5)" }]}
-            onPress={cancelPendingImages}
+            onPress={cancelPendingAttachments}
           />
           <View style={styles.reportModalCenter} pointerEvents="box-none">
             <View style={[styles.reportModalCard, { backgroundColor: colors.card }]}>
               <Text style={[styles.reportModalTitle, { color: colors.foreground }]}>
-                {pendingImages.length > 1
-                  ? t("dm.image.confirm_title_plural", { count: pendingImages.length })
-                  : t("dm.image.confirm_title")}
+                {pendingAttachments.length > 1
+                  ? t("dm.attachment.confirm_title_plural", { count: pendingAttachments.length })
+                  : t("dm.attachment.confirm_title")}
               </Text>
               <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
+                showsVerticalScrollIndicator={false}
                 style={styles.previewScroll}
-                contentContainerStyle={styles.previewRow}
+                contentContainerStyle={styles.attachmentPreviewList}
               >
-                {pendingImages.map((a) => (
-                  <Image
-                    key={a.assetId ?? a.uri}
-                    source={{ uri: a.uri }}
-                    style={styles.previewImg}
-                    contentFit="cover"
-                  />
+                {pendingAttachments.map((attachment) => (
+                  <View
+                    key={`${attachment.kind}-${attachment.uri}`}
+                    style={[styles.attachmentPreviewRow, { borderColor: colors.border, backgroundColor: colors.background }]}
+                  >
+                    {attachment.kind === "image" ? (
+                      <Image
+                        source={{ uri: attachment.uri }}
+                        style={styles.previewImg}
+                        contentFit="cover"
+                      />
+                    ) : (
+                      <View style={[styles.filePreviewIcon, { backgroundColor: colors.accent + "18" }]}>
+                        <Feather name="file-text" size={22} color={colors.accent} />
+                      </View>
+                    )}
+                    <View style={styles.attachmentPreviewMeta}>
+                      <Text numberOfLines={2} style={[styles.attachmentPreviewName, { color: colors.foreground }]}>
+                        {attachment.name}
+                      </Text>
+                      <Text style={[styles.attachmentPreviewDetail, { color: colors.mutedForeground }]}>
+                        {[attachment.mimeType, formatFileSize(attachment.size)].filter(Boolean).join(" - ")}
+                      </Text>
+                    </View>
+                  </View>
                 ))}
               </ScrollView>
               <View style={styles.reportActions}>
                 <TouchableOpacity
                   style={[styles.reportBtnSecondary, { borderColor: colors.border }]}
-                  onPress={cancelPendingImages}
+                  onPress={cancelPendingAttachments}
                 >
                   <Text style={{ color: colors.foreground }}>{t("common.cancel")}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.reportBtnPrimary, { backgroundColor: colors.accent }]}
-                  onPress={() => void confirmSendImages()}
+                  onPress={() => void confirmSendAttachments()}
                 >
-                  <Text style={styles.reportBtnPrimaryText}>{t("dm.image.send")}</Text>
+                  <Text style={styles.reportBtnPrimaryText}>{t("dm.attachment.send")}</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -1520,14 +1734,43 @@ const styles = StyleSheet.create({
   previewScroll: {
     marginBottom: 16,
   },
-  previewRow: {
-    gap: 8,
+  attachmentPreviewList: {
+    gap: 10,
     paddingVertical: 4,
   },
+  attachmentPreviewRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderRadius: 12,
+  },
   previewImg: {
-    width: 96,
-    height: 96,
+    width: 58,
+    height: 58,
     borderRadius: 10,
+  },
+  filePreviewIcon: {
+    width: 58,
+    height: 58,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  attachmentPreviewMeta: {
+    flex: 1,
+    minWidth: 0,
+  },
+  attachmentPreviewName: {
+    fontFamily: "DM_Sans_600SemiBold",
+    fontSize: 14,
+    lineHeight: 19,
+  },
+  attachmentPreviewDetail: {
+    marginTop: 3,
+    fontFamily: "DM_Sans_400Regular",
+    fontSize: 12,
   },
   bubble: {
     borderRadius: 18,
