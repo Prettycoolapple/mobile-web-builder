@@ -11,6 +11,7 @@ import { safeBrandColor } from "@/lib/pdfStyles";
 import {
   ReportPdfDocument,
   defaultLayout,
+  editableDataFields,
   EMPTY_PDF_CONTENT_EDITS,
   SECTION_LABELS,
   type PdfContentEdits,
@@ -70,9 +71,7 @@ export function ReportPdfEditor() {
   const [draftState, setDraftState] = useState<DraftSaveState>("idle");
   const [draftDirty, setDraftDirty] = useState(false);
   const [summaryLoading, setSummaryLoading] = useState(false);
-  const [busy, setBusy] = useState<"download" | "email" | "message" | null>(null);
-  const [toEmail, setToEmail] = useState("");
-  const [emailMessage, setEmailMessage] = useState("");
+  const [busy, setBusy] = useState<"download" | "message" | null>(null);
   const [status, setStatus] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [dmThreads, setDmThreads] = useState<DmThread[]>([]);
   const [dmQuery, setDmQuery] = useState("");
@@ -209,7 +208,14 @@ export function ReportPdfEditor() {
     markDraftDirty();
   };
 
-  const doc = <ReportPdfDocument report={pdfReport} brandKit={brandKit} layout={layout} contentEdits={contentEdits} />;
+  // Memoize the PDF document so the live preview only rebuilds when an input
+  // that actually changes the PDF changes — not on unrelated re-renders (autosave
+  // status flips, recipient search/selection, busy state). Without this the
+  // preview re-rendered constantly and reset the user's scroll position.
+  const doc = useMemo(
+    () => <ReportPdfDocument report={pdfReport} brandKit={brandKit} layout={layout} contentEdits={contentEdits} />,
+    [pdfReport, brandKit, layout, contentEdits],
+  );
 
   const handleSaveKit = async () => {
     try {
@@ -268,36 +274,6 @@ export function ReportPdfEditor() {
       URL.revokeObjectURL(url);
     } catch (e) {
       setStatus({ kind: "err", text: errText(e, "Could not generate the PDF.") });
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const handleEmail = async () => {
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail.trim())) {
-      setStatus({ kind: "err", text: "Enter a valid client email address." });
-      return;
-    }
-    setBusy("email");
-    setStatus(null);
-    try {
-      await savePdfDraft({ silent: true });
-      const blob = await pdf(doc).toBlob();
-      const pdfBase64 = await blobToBase64(blob);
-      await api("/reports/pdf/email", {
-        method: "POST",
-        body: JSON.stringify({
-          toEmail: toEmail.trim(),
-          message: emailMessage,
-          subject: `${layout.coverTitle} — ${report.address}`,
-          filename: fileName,
-          pdfBase64,
-        }),
-        redirectOn401: false,
-      });
-      setStatus({ kind: "ok", text: `Sent to ${toEmail.trim()}.` });
-    } catch (e) {
-      setStatus({ kind: "err", text: errText(e, "Could not send the email.") });
     } finally {
       setBusy(null);
     }
@@ -366,7 +342,9 @@ export function ReportPdfEditor() {
           </button>
         </div>
 
-        <Panel title="Cover">
+        {status && <div className={status.kind === "ok" ? "ws-ok pdf-status" : "ws-error pdf-status"}>{status.text}</div>}
+
+        <Panel title="Cover" defaultOpen>
           <Field label="Title">
             <input className="ws-input" value={layout.coverTitle} onChange={(e) => patchLayout({ coverTitle: e.target.value })} />
           </Field>
@@ -402,6 +380,8 @@ export function ReportPdfEditor() {
           onField={patchField}
           onSectionNote={patchSectionNote}
         />
+
+        <ReportDataPanel report={report} layout={layout} contentEdits={contentEdits} onField={patchField} />
 
         <Panel title="Branding">
           <Field label="Logo">
@@ -475,25 +455,12 @@ export function ReportPdfEditor() {
           ))}
         </Panel>
 
-        <Panel title="Send to client">
-          <Field label="Client email">
-            <input className="ws-input" type="email" value={toEmail} placeholder="client@example.com" onChange={(e) => setToEmail(e.target.value)} />
-          </Field>
-          <Field label="Message">
-            <textarea className="ws-input" rows={3} value={emailMessage} onChange={(e) => setEmailMessage(e.target.value)} placeholder="Optional note to your client." />
-          </Field>
-          {status && <div className={status.kind === "ok" ? "ws-ok" : "ws-error"}>{status.text}</div>}
-          <div className="pdf-actions">
+        <Panel title="Share" defaultOpen>
+          <div className="pdf-share-head">
             <button className="btn btn-quiet" onClick={handleDownload} disabled={busy !== null}>
               {busy === "download" ? "Preparing…" : "⬇ Download PDF"}
             </button>
-            <button className="btn btn-primary" onClick={handleEmail} disabled={busy !== null}>
-              {busy === "email" ? "Sending…" : "✉ Email to client"}
-            </button>
           </div>
-        </Panel>
-
-        <Panel title="Send to chat">
           <Field label="Search users">
             <input
               className="ws-input"
@@ -627,12 +594,21 @@ function CoverLogoDesigner({
   );
 }
 
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+function Panel({
+  title,
+  children,
+  defaultOpen = false,
+}: {
+  title: string;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <section className="pdf-panel">
-      <h4 className="pdf-panel-title">{title}</h4>
+    <details className="pdf-panel" open={open} onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
+      <summary className="pdf-panel-title">{title}</summary>
       {children}
-    </section>
+    </details>
   );
 }
 
@@ -649,15 +625,13 @@ function LivePdfPreview({ document: pdfDocument }: { document: ReactElement<any>
   const scrollerRef = useRef<HTMLDivElement>(null);
   const pagesRef = useRef<HTMLDivElement>(null);
   const renderTasks = useRef<RenderTask[]>([]);
+  const lastPageCount = useRef(0);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [pageCount, setPageCount] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      const scroller = scrollerRef.current;
-      const previousMax = scroller ? Math.max(1, scroller.scrollHeight - scroller.clientHeight) : 1;
-      const previousRatio = scroller ? scroller.scrollTop / previousMax : 0;
       setState("loading");
 
       void (async () => {
@@ -680,8 +654,17 @@ function LivePdfPreview({ document: pdfDocument }: { document: ReactElement<any>
           await loadingTask.destroy();
           return;
         }
+        // Capture scroll position at the LAST possible moment (the old pages are
+        // still mounted here), so an edit doesn't reset the user's view.
+        const scroller = scrollerRef.current;
+        const prevScrollTop = scroller ? scroller.scrollTop : 0;
+        const prevMax = scroller ? Math.max(1, scroller.scrollHeight - scroller.clientHeight) : 1;
+        const prevRatio = prevScrollTop / prevMax;
+        const prevPageCount = lastPageCount.current;
+
         host.replaceChildren();
         setPageCount(loadedPdf.numPages);
+        lastPageCount.current = loadedPdf.numPages;
 
         const hostWidth = Math.max(320, Math.min(920, host.clientWidth - 32));
         for (let pageNumber = 1; pageNumber <= loadedPdf.numPages; pageNumber += 1) {
@@ -719,7 +702,10 @@ function LivePdfPreview({ document: pdfDocument }: { document: ReactElement<any>
           const nextScroller = scrollerRef.current;
           if (nextScroller) {
             const nextMax = Math.max(0, nextScroller.scrollHeight - nextScroller.clientHeight);
-            nextScroller.scrollTop = previousRatio * nextMax;
+            // Same page count → restore the exact position (locked view); only
+            // fall back to a proportional restore when the layout grew/shrank.
+            nextScroller.scrollTop =
+              prevPageCount === loadedPdf.numPages ? Math.min(prevScrollTop, nextMax) : prevRatio * nextMax;
           }
           setState("ready");
         });
@@ -809,6 +795,53 @@ function ReportTextPanel({
     </Panel>
   );
 }
+function ReportDataPanel({
+  report,
+  layout,
+  contentEdits,
+  onField,
+}: {
+  report: FeasibilityReport;
+  layout: PdfLayout;
+  contentEdits: PdfContentEdits;
+  onField: (key: string, value: string) => void;
+}) {
+  const fields = editableDataFields(report);
+  const groups = layout.sectionOrder
+    .map((section) => ({ section, fields: fields.filter((f) => f.section === section) }))
+    .filter((group) => group.fields.length > 0);
+
+  return (
+    <Panel title="Report data">
+      <div className="pdf-help">Correct any of the report’s data values used in the exported PDF (e.g. capital value, areas, costs).</div>
+      {groups.length === 0 ? (
+        <div className="pdf-help">This report has no editable data fields.</div>
+      ) : (
+        groups.map((group) => (
+          <div key={group.section} className={`pdf-text-group${layout.includeSections[group.section] ? "" : " muted"}`}>
+            <div className="pdf-text-group-title">
+              <span>{SECTION_LABELS[group.section]}</span>
+              {!layout.includeSections[group.section] ? <em>Hidden from PDF</em> : null}
+            </div>
+            <div className="pdf-data-grid">
+              {group.fields.map((field) => (
+                <label key={field.key} className="pdf-data-cell">
+                  <span className="pdf-data-label">{field.label}</span>
+                  <input
+                    className="ws-input"
+                    value={contentEdits.fields[field.key] ?? field.value}
+                    onChange={(e) => onField(field.key, e.target.value)}
+                  />
+                </label>
+              ))}
+            </div>
+          </div>
+        ))
+      )}
+    </Panel>
+  );
+}
+
 type EditableTextField = {
   section: SectionKey;
   key: string;
@@ -866,13 +899,10 @@ function editableTextGroups(report: FeasibilityReport, layout: PdfLayout): Edita
 }
 
 function defaultContentEdits(report: FeasibilityReport): PdfContentEdits {
-  return {
-    fields: editableTextFields(report).reduce<Record<string, string>>((acc, field) => {
-      acc[field.key] = field.value;
-      return acc;
-    }, {}),
-    sectionNotes: {},
-  };
+  const fields: Record<string, string> = {};
+  for (const field of editableTextFields(report)) fields[field.key] = field.value;
+  for (const field of editableDataFields(report)) fields[field.key] = field.value;
+  return { fields, sectionNotes: {} };
 }
 
 function mergeContentEdits(report: FeasibilityReport, saved: Partial<PdfContentEdits> | undefined): PdfContentEdits {
@@ -991,15 +1021,6 @@ function move<T>(arr: T[], idx: number, dir: -1 | 1): T[] {
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
-}
-
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
-    reader.onerror = () => reject(reader.error ?? new Error("read failed"));
-    reader.readAsDataURL(blob);
-  });
 }
 
 async function imageUrlToPdfDataUrl(src: string): Promise<string | null> {

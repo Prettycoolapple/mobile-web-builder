@@ -161,8 +161,8 @@ const ALLOWED_LISTING_DOCUMENT_MIME_TYPES = new Set([
   "image/heif",
 ]);
 
-const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
-const MAX_IMAGE_FILE_SIZE_BYTES = 20 * 1024 * 1024;
+const MAX_FILE_SIZE_BYTES = 30 * 1024 * 1024;
+const MAX_IMAGE_FILE_SIZE_BYTES = 32 * 1024 * 1024;
 const MAX_CERT_FILE_SIZE_BYTES = 30 * 1024 * 1024;
 const MAX_DM_INLINE_IMAGE_BYTES = 2 * 1024 * 1024;
 // Listing photos can be larger than DM images (property shots are often 3-5MB).

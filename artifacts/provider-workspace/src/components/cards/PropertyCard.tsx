@@ -99,11 +99,6 @@ export function PropertyCard({ candidate, presentation, onAnalyse, analysing }: 
           <button className="btn btn-primary" onClick={() => onAnalyse(candidate)} disabled={analysing}>
             {analysing ? "Analysing…" : "Full analysis"}
           </button>
-          {!scored && candidate.listingUrl && (
-            <a className="btn btn-quiet" href={candidate.listingUrl} target="_blank" rel="noreferrer">
-              Listing ↗
-            </a>
-          )}
         </div>
       </div>
     </article>

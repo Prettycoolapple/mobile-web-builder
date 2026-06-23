@@ -103,8 +103,8 @@ function KV({ rows }: { rows: Array<[string, string | null | undefined]> }) {
   if (visible.length === 0) return null;
   return (
     <View>
-      {visible.map(([k, v]) => (
-        <View style={styles.kvRow} key={k}>
+      {visible.map(([k, v], i) => (
+        <View style={styles.kvRow} key={`${k}-${i}`}>
           <Text style={styles.kvKey}>{k}</Text>
           <Text style={styles.kvVal}>{v}</Text>
         </View>
@@ -195,31 +195,183 @@ function sectionNote(edits: PdfContentEdits | undefined, key: SectionKey): strin
   return note && note.trim() ? note : null;
 }
 
-// ── section renderers ────────────────────────────────────────────────────────
-function renderSection(key: SectionKey, report: FeasibilityReport, brand: string, edits?: PdfContentEdits): ReactNode {
+// ── editable data tables ─────────────────────────────────────────────────────
+// Every key/value data row in the report is exposed here as an editable field so
+// the PDF editor can override it. This is the SINGLE SOURCE OF TRUTH for both the
+// renderer (below) and the editor's "Report data" panel — keys must match, so
+// both read rows from this list rather than computing values independently.
+export type EditableDataField = { section: SectionKey; key: string; label: string; value: string };
+
+function slug(label: string): string {
+  return label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function dataFieldKey(section: SectionKey, label: string, keyPart?: string): string {
+  return `data.${section}.${keyPart ?? slug(label)}`;
+}
+
+// Per-item KV specs (stable keyPart → sub-label) shared between editableDataFields
+// and the nested strategy/ROI renderers.
+const STRATEGY_ROW_SPEC: Array<[string, string]> = [
+  ["total_cost", "Total cost"],
+  ["cost_per_unit", "Cost per unit"],
+  ["confidence", "Confidence"],
+  ["best_gdv", "Best-case GDV"],
+  ["best_roi", "Best-case ROI"],
+];
+const ROI_ROW_SPEC: Array<[string, string]> = [
+  ["gdv", "GDV"],
+  ["total_cost", "Total cost"],
+  ["gross_profit", "Gross profit"],
+  ["roi", "ROI"],
+  ["annualised_roi", "Annualised ROI"],
+];
+
+export function editableDataFields(report: FeasibilityReport): EditableDataField[] {
   const ov = report.propertyOverview;
   const planning = report.planning;
+  const out: EditableDataField[] = [];
+  const push = (section: SectionKey, label: string, value: string | null | undefined, keyPart?: string) => {
+    if (value == null) return;
+    const v = String(value).trim();
+    if (!v || v === "—") return;
+    out.push({ section, key: dataFieldKey(section, label, keyPart), label, value: v });
+  };
+
+  if (ov) {
+    push("overview", "Capital value", ov.cv);
+    push("overview", "Land area", ov.landArea);
+    push("overview", "Floor area", ov.floorArea);
+    push("overview", "Bedrooms", typeof ov.bedrooms === "number" && ov.bedrooms > 0 ? String(ov.bedrooms) : null);
+    push("overview", "Bathrooms", typeof ov.bathrooms === "number" && ov.bathrooms > 0 ? String(ov.bathrooms) : null);
+    push("overview", "Build year", ov.buildYear);
+    push("overview", "Property type", ov.propertyType);
+    push("overview", "Site status", ov.siteStatusLabel);
+    push("overview", "Title type", ov.titleType);
+    push("overview", "Zone", ov.zone);
+    push("overview", "Standard lots", planning?.potentialLots != null ? String(planning.standardVacantLots ?? planning.potentialLots) : null);
+    push("overview", "Listing price", ov.isOnMarket ? ov.listingPrice : null);
+  }
+
+  if (planning) {
+    push("planning", "Zone", planning.zone ?? ov?.zone);
+    push("planning", "Minimum lot size", planning.minLotSize ?? (planning.standardMinLotSize ? `${planning.standardMinLotSize} m²` : null));
+    push("planning", "Standard pathway lots", planning.standardVacantLots != null ? String(planning.standardVacantLots) : null);
+    push(
+      "planning",
+      "Design-led yield",
+      planning.designLedEligible && planning.designLedYieldRange
+        ? `${planning.designLedYieldRange.min}–${planning.designLedYieldRange.max} units (${planning.designLedConfidence ?? "low"})`
+        : null,
+    );
+    push("planning", "Net developable area", planning.netAreaSqm ? `${Math.round(planning.netAreaSqm)} m²` : null);
+  }
+
+  if (report.asbestos) {
+    push("asbestos", "Build year", report.asbestos.buildYear ?? ov?.buildYear);
+    push("asbestos", "Risk level", cap(report.asbestos.riskLevel));
+    push("asbestos", "WorkSafe notification", report.asbestos.worksafe_required ? "Likely required" : "Not flagged");
+    push("asbestos", "Estimated demolition", formatRange(report.asbestos.demoCostLow, report.asbestos.demoCostHigh));
+  }
+
+  if (report.terrain) {
+    push("terrain", "Classification", cap(report.terrain.classification ?? ""));
+    push("terrain", "Slope", report.terrain.slope ?? (report.terrain.slope_degrees != null ? `${report.terrain.slope_degrees}°` : null));
+    push("terrain", "Retaining estimate", formatRange(report.terrain.retainingCostLow, report.terrain.retainingCostHigh));
+  }
+
+  (report.infrastructure ?? []).forEach((svc, i) => {
+    const label = `${svc.name} · ${(svc.location ?? "").replace(/-/g, " ")}`;
+    push("infrastructure", label, formatRange(svc.estimatedCostLow ?? svc.estimated_cost_low, svc.estimatedCostHigh ?? svc.estimated_cost_high), String(i));
+  });
+
+  (report.costItems ?? []).forEach((ci, i) => {
+    push("cost", ci.label, formatRange(ci.low, ci.high), String(i));
+  });
+
+  const tr = report.transportContext;
+  if (tr) {
+    push("market", "Public transport", cap(tr.publicTransport.accessTier));
+    push("market", "Nearest stop", tr.publicTransport.nearestStop ? `${tr.publicTransport.nearestStop.name} · ${tr.publicTransport.nearestStop.distanceM}m` : null);
+    push("market", "City commute", tr.cityCommute.centreName ? `${tr.cityCommute.centreName}${tr.cityCommute.distanceKm != null ? ` · ${tr.cityCommute.distanceKm}km` : ""}` : null);
+  }
+
+  const ctx = report.builtEnvironmentContext;
+  if (ctx && ctx.assessedProperties !== 0) {
+    push("builtEnv", "Assessed properties", String(ctx.assessedProperties));
+    push("builtEnv", "Modern share", formatPercent(ctx.modernShare * 100));
+    push("builtEnv", "Median build year", ctx.medianBuildYear != null ? String(ctx.medianBuildYear) : null);
+  }
+
+  for (const s of report.developmentStrategies ?? []) {
+    const best = s.roiScenarios.find((x) => x.isBest) ?? s.roiScenarios[0];
+    const values: Record<string, string | null | undefined> = {
+      total_cost: formatRange(s.totalCostLow, s.totalCostHigh),
+      cost_per_unit: formatMoney(s.costPerUnitAvg),
+      confidence: formatPercent(s.confidence * 100),
+      best_gdv: best ? formatMoney(best.gdv) : null,
+      best_roi: best ? formatPercent(best.roi ?? best.roi_percent) : null,
+    };
+    for (const [keyPart, sub] of STRATEGY_ROW_SPEC) {
+      push("strategies", `${s.title} — ${sub}`, values[keyPart], `${s.id}.${keyPart}`);
+    }
+  }
+
+  if ((report.developmentStrategies?.length ?? 0) === 0) {
+    (report.roiScenarios ?? []).forEach((sc, i) => {
+      const head = `${sc.lots ? `${sc.lots} lots` : "Scenario"} · ${sc.years}yr`;
+      const values: Record<string, string | null | undefined> = {
+        gdv: formatMoney(sc.gdv),
+        total_cost: formatMoney(sc.totalCost ?? sc.total_cost_mid),
+        gross_profit: formatMoney(sc.grossProfit ?? sc.gross_profit),
+        roi: formatPercent(sc.roi ?? sc.roi_percent),
+        annualised_roi: formatPercent(sc.annualisedRoi ?? sc.annualised_roi_percent),
+      };
+      for (const [keyPart, sub] of ROI_ROW_SPEC) {
+        push("roi", `${head} — ${sub}`, values[keyPart], `${i}.${keyPart}`);
+      }
+    });
+  }
+
+  if (report.comparables_quality === "live") {
+    (report.comparableSales ?? [])
+      .filter((c) => (c.price ?? c.price_nzd ?? 0) > 0)
+      .slice(0, 8)
+      .forEach((c, i) => {
+        const label = `${c.address}${(c.saleDate ?? c.sale_date) ? ` · ${c.saleDate ?? c.sale_date}` : ""}`;
+        push("comparables", label, formatMoney(c.price ?? c.price_nzd), String(i));
+      });
+  }
+
+  return out;
+}
+
+// Resolve the final (possibly edited) value for a single data field by key.
+function dataVal(edits: PdfContentEdits | undefined, byKey: Map<string, EditableDataField>, key: string): string | null {
+  return editText(edits, key, byKey.get(key)?.value);
+}
+
+// ── section renderers ────────────────────────────────────────────────────────
+function renderSection(
+  key: SectionKey,
+  report: FeasibilityReport,
+  brand: string,
+  edits: PdfContentEdits | undefined,
+  byKey: Map<string, EditableDataField>,
+): ReactNode {
+  const ov = report.propertyOverview;
+  const planning = report.planning;
+  // KV rows for a flat section, in declaration order, with edits applied.
+  const flatRows = (section: SectionKey): Array<[string, string | null]> =>
+    [...byKey.values()]
+      .filter((f) => f.section === section)
+      .map((f) => [f.label, dataVal(edits, byKey, f.key)] as [string, string | null]);
   switch (key) {
     case "overview":
       if (!ov) return null;
       return (
         <Section key={key} title={SECTION_LABELS.overview} brand={brand} note={sectionNote(edits, key)}>
-          <KV
-            rows={[
-              ["Capital value", ov.cv],
-              ["Land area", ov.landArea],
-              ["Floor area", ov.floorArea],
-              ["Bedrooms", typeof ov.bedrooms === "number" && ov.bedrooms > 0 ? String(ov.bedrooms) : null],
-              ["Bathrooms", typeof ov.bathrooms === "number" && ov.bathrooms > 0 ? String(ov.bathrooms) : null],
-              ["Build year", ov.buildYear],
-              ["Property type", ov.propertyType],
-              ["Site status", ov.siteStatusLabel],
-              ["Title type", ov.titleType],
-              ["Zone", ov.zone],
-              ["Standard lots", planning?.potentialLots != null ? String(planning.standardVacantLots ?? planning.potentialLots) : null],
-              ["Listing price", ov.isOnMarket ? ov.listingPrice : null],
-            ]}
-          />
+          <KV rows={flatRows("overview")} />
         </Section>
       );
     case "title":
@@ -250,20 +402,7 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
       if (!planning || !(planning.overlays || planning.subdivisionSummary || planning.potentialLots != null)) return null;
       return (
         <Section key={key} title={SECTION_LABELS.planning} brand={brand} note={sectionNote(edits, key)}>
-          <KV
-            rows={[
-              ["Zone", planning.zone ?? ov?.zone],
-              ["Minimum lot size", planning.minLotSize ?? (planning.standardMinLotSize ? `${planning.standardMinLotSize} m²` : null)],
-              ["Standard pathway lots", planning.standardVacantLots != null ? String(planning.standardVacantLots) : null],
-              [
-                "Design-led yield",
-                planning.designLedEligible && planning.designLedYieldRange
-                  ? `${planning.designLedYieldRange.min}–${planning.designLedYieldRange.max} units (${planning.designLedConfidence ?? "low"})`
-                  : null,
-              ],
-              ["Net developable area", planning.netAreaSqm ? `${Math.round(planning.netAreaSqm)} m²` : null],
-            ]}
-          />
+          <KV rows={flatRows("planning")} />
           {editText(edits, "planning.subdivisionSummary", planning.subdivisionSummary) ? (
             <Text style={styles.note}>{editText(edits, "planning.subdivisionSummary", planning.subdivisionSummary)}</Text>
           ) : null}
@@ -300,14 +439,7 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
       if (!report.asbestos) return null;
       return (
         <Section key={key} title={SECTION_LABELS.asbestos} brand={brand} note={sectionNote(edits, key)}>
-          <KV
-            rows={[
-              ["Build year", report.asbestos.buildYear ?? ov?.buildYear],
-              ["Risk level", cap(report.asbestos.riskLevel)],
-              ["WorkSafe notification", report.asbestos.worksafe_required ? "Likely required" : "Not flagged"],
-              ["Estimated demolition", formatRange(report.asbestos.demoCostLow, report.asbestos.demoCostHigh)],
-            ]}
-          />
+          <KV rows={flatRows("asbestos")} />
           {editText(edits, "asbestos.notes", report.asbestos.notes) ? (
             <Text style={styles.note}>{editText(edits, "asbestos.notes", report.asbestos.notes)}</Text>
           ) : null}
@@ -317,41 +449,21 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
       if (!report.terrain) return null;
       return (
         <Section key={key} title={SECTION_LABELS.terrain} brand={brand} note={sectionNote(edits, key)}>
-          <KV
-            rows={[
-              ["Classification", cap(report.terrain.classification ?? "")],
-              ["Slope", report.terrain.slope ?? (report.terrain.slope_degrees != null ? `${report.terrain.slope_degrees}°` : null)],
-              ["Retaining estimate", formatRange(report.terrain.retainingCostLow, report.terrain.retainingCostHigh)],
-            ]}
-          />
+          <KV rows={flatRows("terrain")} />
         </Section>
       );
     case "infrastructure":
       if (!report.infrastructure || report.infrastructure.length === 0) return null;
       return (
         <Section key={key} title={SECTION_LABELS.infrastructure} brand={brand} note={sectionNote(edits, key)}>
-          {report.infrastructure.map((svc, i) => (
-            <View key={i} style={styles.kvRow}>
-              <Text style={styles.kvKey}>
-                {svc.name} · {(svc.location ?? "").replace(/-/g, " ")}
-              </Text>
-              <Text style={styles.kvVal}>
-                {formatRange(svc.estimatedCostLow ?? svc.estimated_cost_low, svc.estimatedCostHigh ?? svc.estimated_cost_high)}
-              </Text>
-            </View>
-          ))}
+          <KV rows={flatRows("infrastructure")} />
         </Section>
       );
     case "cost":
       if (!report.costItems || report.costItems.length === 0) return null;
       return (
         <Section key={key} title={SECTION_LABELS.cost} brand={brand} note={sectionNote(edits, key)}>
-          {report.costItems.map((ci, i) => (
-            <View key={i} style={styles.kvRow}>
-              <Text style={styles.kvKey}>{ci.label}</Text>
-              <Text style={styles.kvVal}>{formatRange(ci.low, ci.high)}</Text>
-            </View>
-          ))}
+          <KV rows={flatRows("cost")} />
           <View style={[styles.kvRow, { borderBottomWidth: 0, marginTop: 4 }]}>
             <Text style={{ fontFamily: "Helvetica-Bold", fontSize: 11 }}>
               Total{report.total_excludes_land ? " (excl. land)" : ""}
@@ -366,15 +478,7 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
       if (!tr && !nb) return null;
       return (
         <Section key={key} title={SECTION_LABELS.market} brand={brand} note={sectionNote(edits, key)}>
-          {tr ? (
-            <KV
-              rows={[
-                ["Public transport", cap(tr.publicTransport.accessTier)],
-                ["Nearest stop", tr.publicTransport.nearestStop ? `${tr.publicTransport.nearestStop.name} · ${tr.publicTransport.nearestStop.distanceM}m` : null],
-                ["City commute", tr.cityCommute.centreName ? `${tr.cityCommute.centreName}${tr.cityCommute.distanceKm != null ? ` · ${tr.cityCommute.distanceKm}km` : ""}` : null],
-              ]}
-            />
-          ) : null}
+          {tr ? <KV rows={flatRows("market")} /> : null}
           {tr?.roiInfluence?.reasons?.length ? (
             <Bullets items={editLines(edits, "market.transportReasons", tr.roiInfluence.reasons)} />
           ) : null}
@@ -387,13 +491,7 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
       if (!ctx || ctx.assessedProperties === 0) return null;
       return (
         <Section key={key} title={SECTION_LABELS.builtEnv} brand={brand} note={sectionNote(edits, key)}>
-          <KV
-            rows={[
-              ["Assessed properties", String(ctx.assessedProperties)],
-              ["Modern share", formatPercent(ctx.modernShare * 100)],
-              ["Median build year", ctx.medianBuildYear != null ? String(ctx.medianBuildYear) : null],
-            ]}
-          />
+          <KV rows={flatRows("builtEnv")} />
           <Bullets items={editLines(edits, "builtEnv.reasons", ctx.reasons)} />
         </Section>
       );
@@ -415,13 +513,10 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
                 {rationale ? <Text style={styles.paragraph}>{rationale}</Text> : null}
                 <Bullets items={editLines(edits, `strategies.${s.id}.assumptions`, s.assumptions)} />
                 <KV
-                  rows={[
-                    ["Total cost", formatRange(s.totalCostLow, s.totalCostHigh)],
-                    ["Cost per unit", formatMoney(s.costPerUnitAvg)],
-                    ["Confidence", formatPercent(s.confidence * 100)],
-                    ["Best-case GDV", best ? formatMoney(best.gdv) : null],
-                    ["Best-case ROI", best ? formatPercent(best.roi ?? best.roi_percent) : null],
-                  ]}
+                  rows={STRATEGY_ROW_SPEC.map(([keyPart, sub]) => [
+                    sub,
+                    dataVal(edits, byKey, `data.strategies.${s.id}.${keyPart}`),
+                  ])}
                 />
               </View>
             );
@@ -440,13 +535,10 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
                 {sc.lots ? `${sc.lots} lots` : "Scenario"} · {sc.years}yr{sc.isBest ? "  ★ Best" : ""}
               </Text>
               <KV
-                rows={[
-                  ["GDV", formatMoney(sc.gdv)],
-                  ["Total cost", formatMoney(sc.totalCost ?? sc.total_cost_mid)],
-                  ["Gross profit", formatMoney(sc.grossProfit ?? sc.gross_profit)],
-                  ["ROI", formatPercent(sc.roi ?? sc.roi_percent)],
-                  ["Annualised ROI", formatPercent(sc.annualisedRoi ?? sc.annualised_roi_percent)],
-                ]}
+                rows={ROI_ROW_SPEC.map(([keyPart, sub]) => [
+                  sub,
+                  dataVal(edits, byKey, `data.roi.${i}.${keyPart}`),
+                ])}
               />
             </View>
           ))}
@@ -458,15 +550,7 @@ function renderSection(key: SectionKey, report: FeasibilityReport, brand: string
       if (report.comparables_quality !== "live" || comps.length === 0) return null;
       return (
         <Section key={key} title={SECTION_LABELS.comparables} brand={brand} note={sectionNote(edits, key)}>
-          {comps.slice(0, 8).map((c, i) => (
-            <View key={i} style={styles.kvRow}>
-              <Text style={styles.kvKey}>
-                {c.address}
-                {c.saleDate ?? c.sale_date ? ` · ${c.saleDate ?? c.sale_date}` : ""}
-              </Text>
-              <Text style={styles.kvVal}>{formatMoney(c.price ?? c.price_nzd)}</Text>
-            </View>
-          ))}
+          <KV rows={flatRows("comparables")} />
         </Section>
       );
     }
@@ -521,6 +605,7 @@ export function ReportPdfDocument({
   const scores = report.scores ?? { ease: 0, cost: 0, roi: 0, composite: 0 };
   const photo = report.photoUrl ?? report.photoUrls?.[0];
   const orderedSections = layout.sectionOrder.filter((k) => layout.includeSections[k]);
+  const dataByKey = new Map(editableDataFields(report).map((f) => [f.key, f]));
 
   return (
     <Document title={`${layout.coverTitle} — ${report.address}`} author={brandKit.companyName ?? "Project Alpha"}>
@@ -599,7 +684,7 @@ export function ReportPdfDocument({
           <Text style={[styles.note, { backgroundColor: "#fbe7e7", color: "#8a2d2d" }]}>{report.redevelopmentWarning.message}</Text>
         ) : null}
 
-        {orderedSections.map((k) => renderSection(k, report, brand, contentEdits))}
+        {orderedSections.map((k) => renderSection(k, report, brand, contentEdits, dataByKey))}
 
         {editText(contentEdits, "disclaimer", report.disclaimer) ? (
           <Text style={styles.disclaimer}>{editText(contentEdits, "disclaimer", report.disclaimer)}</Text>

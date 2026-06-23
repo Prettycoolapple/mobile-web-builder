@@ -1122,12 +1122,69 @@ a {
   padding: 16px;
   border-bottom: 1px solid var(--line);
 }
-.pdf-panel-title {
-  margin: 0 0 12px;
+/* Collapsible panel: <summary> as the clickable header with a chevron. */
+.pdf-panel > .pdf-panel-title {
+  margin: 0;
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  user-select: none;
+}
+.pdf-panel > .pdf-panel-title::-webkit-details-marker {
+  display: none;
+}
+.pdf-panel > .pdf-panel-title::after {
+  content: "▸";
+  font-size: 11px;
+  transition: transform 0.15s ease;
+}
+.pdf-panel[open] > .pdf-panel-title::after {
+  transform: rotate(90deg);
+}
+.pdf-panel[open] > .pdf-panel-title {
+  margin-bottom: 12px;
+}
+.pdf-status {
+  margin: 0 16px 12px;
+}
+.pdf-share-head {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 10px;
+}
+.pdf-data-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 10px;
+}
+.pdf-data-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.pdf-data-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pdf-data-cell .ws-input {
+  padding: 5px 8px;
+  font-size: 12px;
+}
+@media (max-width: 640px) {
+  .pdf-data-grid {
+    grid-template-columns: 1fr;
+  }
 }
 .pdf-field {
   display: block;

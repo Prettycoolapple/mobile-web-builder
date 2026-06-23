@@ -83,11 +83,6 @@ export function MessageBubble({ message, actions }: { message: ChatMessage; acti
                   <span className="agent-contact-phone">{message.agentPhone}</span>
                 </div>
               ) : null}
-              {message.agentListingUrl ? (
-                <a href={message.agentListingUrl} target="_blank" rel="noreferrer">
-                  View listing
-                </a>
-              ) : null}
             </div>
           </div>
         </div>
