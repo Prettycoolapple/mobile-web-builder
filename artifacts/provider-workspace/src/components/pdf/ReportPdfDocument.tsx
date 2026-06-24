@@ -102,9 +102,9 @@ function KV({ rows }: { rows: Array<[string, string | null | undefined]> }) {
   const visible = rows.filter(([, v]) => v && v !== "—");
   if (visible.length === 0) return null;
   return (
-    <View>
+    <View style={styles.kvTable}>
       {visible.map(([k, v], i) => (
-        <View style={styles.kvRow} key={`${k}-${i}`}>
+        <View style={styles.kvRow} key={`${k}-${i}`} wrap={false}>
           <Text style={styles.kvKey}>{k}</Text>
           <Text style={styles.kvVal}>{v}</Text>
         </View>
@@ -140,8 +140,8 @@ function Section({
   children: ReactNode;
 }) {
   return (
-    <View style={styles.section} wrap={false}>
-      <View style={[styles.sectionTitleBar, { borderBottomColor: brand }]}>
+    <View style={styles.section}>
+      <View style={[styles.sectionTitleBar, { borderBottomColor: brand }]} wrap={false}>
         <Text style={[styles.sectionTitle, { marginBottom: 0, color: brand }]}>{title}</Text>
       </View>
       {children}
@@ -464,11 +464,11 @@ function renderSection(
       return (
         <Section key={key} title={SECTION_LABELS.cost} brand={brand} note={sectionNote(edits, key)}>
           <KV rows={flatRows("cost")} />
-          <View style={[styles.kvRow, { borderBottomWidth: 0, marginTop: 4 }]}>
-            <Text style={{ fontFamily: "Helvetica-Bold", fontSize: 11, flexGrow: 1, flexShrink: 1, flexBasis: 0, paddingRight: 10 }}>
+          <View style={[styles.kvRow, { borderBottomWidth: 0, marginTop: 4 }]} wrap={false}>
+            <Text style={styles.kvTotalKey}>
               Total{report.total_excludes_land ? " (excl. land)" : ""}
             </Text>
-            <Text style={{ fontFamily: "Helvetica-Bold", fontSize: 11, flexBasis: "42%", textAlign: "right" }}>{formatRange(report.totalCostLow, report.totalCostHigh)}</Text>
+            <Text style={styles.kvTotalVal}>{formatRange(report.totalCostLow, report.totalCostHigh)}</Text>
           </View>
         </Section>
       );
