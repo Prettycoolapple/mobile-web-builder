@@ -109,7 +109,7 @@ import { usagePeriodExpired } from "../lib/billingPeriod";
 import { resolveProviderEntitlement } from "../lib/provider-entitlements";
 import { formatTitleTypeForDisplay } from "../lib/titleDisplay";
 import { classifySiteCondition, siteStatusLabel } from "../lib/site-condition";
-import { sendPushToUser } from "../lib/expo-push";
+import { getUnreadDmBadgeCount, sendPushToUser } from "../lib/expo-push";
 import { runAfterResponse } from "../lib/vercel-wait-until";
 import { clearRecentShownForUserSuburb, getRecentShownForUser, recordShownForUser, type RecentShownListing } from "../lib/discovery-shown-memory";
 import { loadExcludedNonFreehold, persistExcludedNonFreehold } from "../lib/discovery-excluded-store";
@@ -3169,9 +3169,12 @@ async function processScreeningJob(jobId: string, log: FeasibilityLog): Promise<
     const body = locale === "zh"
       ? `您请求的「${query}」筛选已完成，请打开应用查看。`
       : `Your screening results for "${query}" are ready. Open Project Alpha to view them.`;
+    const badgeCount = (await getUnreadDmBadgeCount(job.userId)) + 1;
     void sendPushToUser(job.userId, title, body, {
       type: "screening_ready",
       jobId,
+    }, {
+      badgeCount,
     });
   } catch (err) {
     await withDbRetry(() =>
@@ -3793,9 +3796,12 @@ async function runFeasibilityAnalyseCore(args: {
         locale === "zh"
           ? `您请求的「${shortAddr}」分析已完成，请打开应用查看。`
           : `Your analysis for ${shortAddr} is ready — open the app to view it.`;
+      const badgeCount = (await getUnreadDmBadgeCount(userId)) + 1;
       void sendPushToUser(userId, pushTitle, pushBody, {
         type: "report_ready",
         searchId: savedSearchId,
+      }, {
+        badgeCount,
       }).catch((e) => log.warn({ e }, "Report-ready push failed (non-fatal)"));
     }
   }
@@ -3973,10 +3979,13 @@ async function processFeasibilityJob(jobId: string, log: FeasibilityLog): Promis
         locale === "zh"
           ? `您请求的「${shortAddr}」分析已完成，请打开应用查看。`
           : `Your analysis for ${shortAddr} is ready — open the app to view it.`;
+      const badgeCount = (await getUnreadDmBadgeCount(job.userId)) + 1;
       void sendPushToUser(job.userId, pushTitle, pushBody, {
         type: "report_ready",
         searchId: result.savedSearchId,
         jobId,
+      }, {
+        badgeCount,
       }).catch((e) => log.warn({ e }, "Report-ready push failed (non-fatal)"));
     }
   } catch (err) {

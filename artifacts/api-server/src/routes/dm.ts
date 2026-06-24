@@ -13,7 +13,7 @@ import {
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { getIo } from "../lib/socket";
-import { sendPushToUser } from "../lib/expo-push";
+import { getUnreadDmBadgeCount, sendPushToUser } from "../lib/expo-push";
 import { sendOwnerNotification } from "../lib/mailer";
 
 const router: IRouter = Router();
@@ -386,9 +386,13 @@ router.post("/dm/threads/:threadId/messages", requireAuth, async (req: Request, 
       const senderName = sender?.fullName ?? "Someone";
       const preview = msgBody ? msgBody.slice(0, 80) : fileUrl ? "📄 File" : "📷 Photo";
 
+      const badgeCount = await getUnreadDmBadgeCount(recipientId);
+
       await sendPushToUser(recipientId, senderName, preview, {
         type: "dm",
         threadId: String(threadId),
+      }, {
+        badgeCount,
       });
     } catch (pushErr) {
       req.log.warn({ pushErr }, "DM push notification failed (non-fatal)");
@@ -494,10 +498,13 @@ router.post(
             .where(eq(profiles.id, userId))
             .limit(1);
           const likerName = liker?.fullName ?? "Someone";
+          const badgeCount = await getUnreadDmBadgeCount(otherId);
           await sendPushToUser(otherId, likerName, "Liked a message", {
             type: "dm_like",
             threadId: String(threadId),
             messageId: String(messageId),
+          }, {
+            badgeCount,
           });
         } catch (pushErr) {
           req.log.warn({ pushErr }, "DM like push notification failed (non-fatal)");

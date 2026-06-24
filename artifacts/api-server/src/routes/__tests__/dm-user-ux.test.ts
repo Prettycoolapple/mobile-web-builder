@@ -16,6 +16,7 @@ const state = vi.hoisted(() => ({
 }));
 
 const sendPushToUserMock = vi.hoisted(() => vi.fn());
+const getUnreadDmBadgeCountMock = vi.hoisted(() => vi.fn(async () => 1));
 
 function table(name: string): Record<string, unknown> {
   return new Proxy({ __name: name }, {
@@ -178,7 +179,10 @@ vi.mock("../../lib/auth", () => ({
 }));
 
 vi.mock("../../lib/socket", () => ({ getIo: () => null }));
-vi.mock("../../lib/expo-push", () => ({ sendPushToUser: sendPushToUserMock }));
+vi.mock("../../lib/expo-push", () => ({
+  getUnreadDmBadgeCount: getUnreadDmBadgeCountMock,
+  sendPushToUser: sendPushToUserMock,
+}));
 vi.mock("../../lib/mailer", () => ({ sendOwnerNotification: vi.fn() }));
 
 async function withServer(routerPath: "../users" | "../dm", run: (baseUrl: string) => Promise<void>) {
@@ -209,6 +213,8 @@ beforeEach(() => {
   state.dmMessage = null;
   state.insertedMessage = null;
   state.lastRecommendationAction = null;
+  getUnreadDmBadgeCountMock.mockClear();
+  getUnreadDmBadgeCountMock.mockResolvedValue(1);
   sendPushToUserMock.mockClear();
 });
 
@@ -304,6 +310,8 @@ describe("DM push direction", () => {
     expect(sendPushToUserMock).toHaveBeenCalledWith("provider-1", "General User", "Hello", {
       type: "dm",
       threadId: "thread-1",
+    }, {
+      badgeCount: 1,
     });
   });
 
@@ -324,6 +332,8 @@ describe("DM push direction", () => {
     expect(sendPushToUserMock).toHaveBeenCalledWith("general-1", "Provider User", "Hi back", {
       type: "dm",
       threadId: "thread-1",
+    }, {
+      badgeCount: 1,
     });
   });
 
@@ -353,6 +363,8 @@ describe("DM push direction", () => {
       type: "dm_like",
       threadId: "thread-1",
       messageId: "message-1",
+    }, {
+      badgeCount: 1,
     });
   });
 });

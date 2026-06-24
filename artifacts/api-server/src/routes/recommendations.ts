@@ -10,7 +10,7 @@ import {
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { ai } from "@workspace/integrations-gemini-ai";
-import { sendExpoPush } from "../lib/expo-push";
+import { getUnreadDmBadgeCount, sendExpoPush } from "../lib/expo-push";
 
 const router: IRouter = Router();
 
@@ -578,11 +578,14 @@ router.post("/recommendations/connect", requireAuth, async (req: Request, res: R
           .where(eq(profiles.id, userId))
           .limit(1);
 
+        const badgeCount = await getUnreadDmBadgeCount(providerId);
+
         await sendExpoPush(
           providerTokens.map((t) => t.token),
           "New connection request",
           `A user wants to discuss ${propertyAddress}`,
           { type: "new_connection", address: propertyAddress, threadId: thread.id },
+          { badgeCount },
         );
       }
     } catch {}

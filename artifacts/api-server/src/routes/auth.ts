@@ -325,19 +325,41 @@ async function createProviderAccountFromPending(
 
   const existing = await db.select({ id: profiles.id }).from(profiles).where(eq(profiles.email, email)).limit(1);
   if (existing[0]) {
-    await db
-      .update(profiles)
-      .set({
-        subscriptionTier: "standard",
-        stripeCustomerId: sub.stripeCustomerId,
-        stripeSubscriptionId: sub.stripeSubscriptionId,
-        subscriptionStatus: sub.subscriptionStatus,
-        subscriptionPeriodEndAt: sub.subscriptionPeriodEndAt,
-        subscriptionCancelAtPeriodEnd: sub.subscriptionCancelAtPeriodEnd,
-        providerTrialStartedAt: null,
-        providerTrialEndsAt: null,
-      })
-      .where(eq(profiles.id, existing[0].id));
+    await db.transaction(async (tx) => {
+      await tx
+        .update(profiles)
+        .set({
+          role: "service_provider",
+          subscriptionTier: "standard",
+          stripeCustomerId: sub.stripeCustomerId,
+          stripeSubscriptionId: sub.stripeSubscriptionId,
+          subscriptionStatus: sub.subscriptionStatus,
+          subscriptionPeriodEndAt: sub.subscriptionPeriodEndAt,
+          subscriptionCancelAtPeriodEnd: sub.subscriptionCancelAtPeriodEnd,
+          providerTrialStartedAt: null,
+          providerTrialEndsAt: null,
+        })
+        .where(eq(profiles.id, existing[0].id));
+
+      await tx
+        .insert(serviceProviderProfiles)
+        .values({
+          userId: existing[0].id,
+          companyName: pending.companyName,
+          nzCompanyRegisterNumber: pending.nzCompanyRegisterNumber,
+          discipline: pending.discipline,
+          otherDiscipline: pending.otherDiscipline ?? null,
+          primaryLanguage: pending.primaryLanguage,
+          secondaryLanguage: pending.secondaryLanguage ?? null,
+          contactNumber: pending.phoneNumber,
+          languages,
+          addressStreet: pending.addressStreet ?? null,
+          addressSuburb: pending.addressSuburb ?? null,
+          addressCity: pending.addressCity ?? null,
+          addressPostcode: pending.addressPostcode ?? null,
+        })
+        .onConflictDoNothing();
+    });
     await markDone();
     return { profileId: existing[0].id, email, created: false };
   }

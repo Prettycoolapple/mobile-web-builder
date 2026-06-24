@@ -1,5 +1,5 @@
-import { db, pushTokens } from "@workspace/db";
-import { eq, inArray } from "drizzle-orm";
+import { db, dmMessages, pushTokens } from "@workspace/db";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { logger } from "./logger";
 
 interface ExpoTicket {
@@ -11,6 +11,10 @@ interface ExpoTicket {
 interface ExpoResponse {
   data?: ExpoTicket[];
   errors?: unknown;
+}
+
+interface SendExpoPushOptions {
+  badgeCount?: number;
 }
 
 // Only DeviceNotRegistered indicates a per-device token that should be pruned
@@ -39,10 +43,19 @@ export async function sendExpoPush(
   title: string,
   body: string,
   data?: Record<string, string>,
+  options?: SendExpoPushOptions,
 ): Promise<void> {
   if (tokens.length === 0) return;
 
-  const messages = tokens.map((to) => ({ to, title, body, data, sound: "default" }));
+  const badge = normaliseBadgeCount(options?.badgeCount);
+  const messages = tokens.map((to) => ({
+    to,
+    title,
+    body,
+    data,
+    sound: "default",
+    ...(badge === undefined ? {} : { badge }),
+  }));
 
   let parsed: ExpoResponse | null = null;
   try {
@@ -95,6 +108,7 @@ export async function sendPushToUser(
   title: string,
   body: string,
   data?: Record<string, string>,
+  options?: SendExpoPushOptions,
 ): Promise<void> {
   const rows = await db.select({ token: pushTokens.token }).from(pushTokens).where(eq(pushTokens.userId, userId));
   await sendExpoPush(
@@ -102,5 +116,20 @@ export async function sendPushToUser(
     title,
     body,
     data,
+    options,
   );
+}
+
+export async function getUnreadDmBadgeCount(userId: string): Promise<number> {
+  const [{ count }] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(dmMessages)
+    .where(and(isNull(dmMessages.readAt), sql`${dmMessages.senderId} != ${userId}`));
+
+  return normaliseBadgeCount(count) ?? 0;
+}
+
+function normaliseBadgeCount(count: number | undefined): number | undefined {
+  if (count === undefined || !Number.isFinite(count)) return undefined;
+  return Math.max(0, Math.min(99, Math.floor(count)));
 }

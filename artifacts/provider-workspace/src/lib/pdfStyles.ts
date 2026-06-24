@@ -75,8 +75,19 @@ export const styles = StyleSheet.create({
   runningFooterText: { fontSize: 8, color: MUTED },
 
   // Cover
-  coverPage: { fontFamily: "Helvetica", color: INK },
-  coverBand: { height: 150, paddingHorizontal: 40, paddingTop: 40, justifyContent: "center" },
+  // paddingTop = band height so flow content clears the absolutely-positioned band on
+  // page 1; both paddings also protect any overflow continuation page from the paper edge.
+  coverPage: { fontFamily: "Helvetica", color: INK, paddingTop: 150, paddingBottom: 56 },
+  coverBand: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 150,
+    paddingHorizontal: 40,
+    paddingTop: 40,
+    justifyContent: "center",
+  },
   coverBandTitle: { color: "#ffffff", fontSize: 26, fontFamily: "Helvetica-Bold" },
   coverBandSub: { color: "rgba(255,255,255,0.85)", fontSize: 12, marginTop: 6 },
   coverBody: { paddingHorizontal: 40, paddingTop: 20 },
@@ -117,13 +128,13 @@ export const styles = StyleSheet.create({
   },
   kvRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
+    alignItems: "flex-start",
     paddingVertical: 2.5,
     borderBottomWidth: 0.5,
     borderBottomColor: LINE,
   },
-  kvKey: { color: MUTED, fontSize: 10 },
-  kvVal: { fontFamily: "Helvetica-Bold", fontSize: 10, textAlign: "right" },
+  kvKey: { color: MUTED, fontSize: 10, flexGrow: 1, flexShrink: 1, flexBasis: 0, paddingRight: 10 },
+  kvVal: { fontFamily: "Helvetica-Bold", fontSize: 10, textAlign: "right", flexGrow: 0, flexShrink: 0, flexBasis: "42%" },
   listItem: { flexDirection: "row", marginBottom: 3 },
   listBullet: { width: 10, fontSize: 10, color: MUTED },
   listText: { flex: 1, fontSize: 10 },

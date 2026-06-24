@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useRef, useCallb
 import { io, Socket } from "socket.io-client";
 import { useAuth } from "./AuthContext";
 import { getApiBase, getApiOrigin } from "@/lib/api";
+import { setAppIconBadgeCountAsync } from "@/lib/appBadge";
 
 export interface DmMessage {
   id: string;
@@ -118,6 +119,10 @@ export function DmProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    void setAppIconBadgeCountAsync(unreadCount);
+  }, [unreadCount]);
+
+  useEffect(() => {
     if (!user || !token) {
       if (socketRef.current) {
         socketRef.current.disconnect();
@@ -125,6 +130,8 @@ export function DmProvider({ children }: { children: React.ReactNode }) {
         setSocket(null);
       }
       stopPolling();
+      setThreads([]);
+      setUnreadCount(0);
       return;
     }
 

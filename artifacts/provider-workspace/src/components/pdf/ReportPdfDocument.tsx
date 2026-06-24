@@ -465,10 +465,10 @@ function renderSection(
         <Section key={key} title={SECTION_LABELS.cost} brand={brand} note={sectionNote(edits, key)}>
           <KV rows={flatRows("cost")} />
           <View style={[styles.kvRow, { borderBottomWidth: 0, marginTop: 4 }]}>
-            <Text style={{ fontFamily: "Helvetica-Bold", fontSize: 11 }}>
+            <Text style={{ fontFamily: "Helvetica-Bold", fontSize: 11, flexGrow: 1, flexShrink: 1, flexBasis: 0, paddingRight: 10 }}>
               Total{report.total_excludes_land ? " (excl. land)" : ""}
             </Text>
-            <Text style={{ fontFamily: "Helvetica-Bold", fontSize: 11 }}>{formatRange(report.totalCostLow, report.totalCostHigh)}</Text>
+            <Text style={{ fontFamily: "Helvetica-Bold", fontSize: 11, flexBasis: "42%", textAlign: "right" }}>{formatRange(report.totalCostLow, report.totalCostHigh)}</Text>
           </View>
         </Section>
       );
@@ -611,6 +611,7 @@ export function ReportPdfDocument({
     <Document title={`${layout.coverTitle} — ${report.address}`} author={brandKit.companyName ?? "Project Alpha"}>
       {/* ── Cover ── */}
       <Page size="A4" style={styles.coverPage}>
+        <RunningFooter brandKit={brandKit} />
         <View style={[styles.coverBand, { backgroundColor: brand }]}>
           <Text style={styles.coverBandTitle}>{layout.coverTitle}</Text>
           {layout.coverSubtitle ? <Text style={styles.coverBandSub}>{layout.coverSubtitle}</Text> : null}

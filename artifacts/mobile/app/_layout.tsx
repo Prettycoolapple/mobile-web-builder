@@ -34,6 +34,7 @@ import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { DmProvider } from "@/context/DmContext";
 import { WatchlistProvider } from "@/context/WatchlistContext";
 import { getApiBase } from "@/lib/api";
+import { configureAppIconBadgesAsync, incrementAppIconBadgeCountAsync } from "@/lib/appBadge";
 import { parseShareTokenFromUrl, storePendingShareToken } from "@/lib/propertyShares";
 import { initializeRevenueCat, SubscriptionProvider } from "@/lib/revenuecat";
 import { LocaleProvider, LocaleSync } from "@/lib/i18n";
@@ -150,10 +151,18 @@ function NotificationSetup() {
         const { status: existing } = await Notifications.getPermissionsAsync();
         let finalStatus = existing;
         if (existing !== "granted") {
-          const { status } = await Notifications.requestPermissionsAsync();
+          const { status } = await Notifications.requestPermissionsAsync({
+            ios: {
+              allowAlert: true,
+              allowBadge: true,
+              allowSound: true,
+            },
+          });
           finalStatus = status;
         }
         if (finalStatus !== "granted") return;
+
+        await configureAppIconBadgesAsync();
 
         const tokenData = await Notifications.getExpoPushTokenAsync();
         const pushToken = tokenData.data;
@@ -200,6 +209,7 @@ function NotificationSetup() {
       const data = notification.request.content.data as Record<string, unknown> | undefined;
       const type = data && typeof data.type === "string" ? data.type : undefined;
       if (type === "report_ready" || type === "screening_ready") {
+        void incrementAppIconBadgeCountAsync();
         DeviceEventEmitter.emit("projectAlpha:backgroundJobsReady", { type });
       }
     });
