@@ -199,7 +199,7 @@ async function buildAll() {
   const deployDir = path.resolve(artifactDir, "deploy");
   await rm(deployDir, { recursive: true, force: true });
   await mkdir(deployDir, { recursive: true });
-  for (const file of ["index.html", "site.js", "styles.css", "alpha-icon.svg", "robots.txt", "sitemap.xml", "google1d94fd08f92a6db6.html"]) {
+  for (const file of ["index.html", "site.js", "styles.css", "alpha-icon.svg", "robots.txt", "sitemap.xml", "google1d94fd08f92a6db6.html", "BingSiteAuth.xml"]) {
     await copyFile(path.join(artifactDir, file), path.join(deployDir, file));
   }
   const mobileAppIconPng = path.resolve(artifactDir, "..", "mobile", "assets", "images", "icon.png");
