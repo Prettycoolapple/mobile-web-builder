@@ -2,6 +2,31 @@ import { describe, expect, it } from "vitest";
 import { sanitizeAssistantProse } from "../claude";
 
 describe("assistant prose sanitizing", () => {
+  it("removes markdown decoration from conversational replies", () => {
+    const cleaned = sanitizeAssistantProse(
+      [
+        "Great question — these are the main reasons:",
+        "",
+        "### 1. **Quiet streets**",
+        "- **Low traffic** makes walking and driving easier.",
+        "- **Flat land** is better for walkers and wheelchairs.",
+        "",
+        "In short: **these suit ageing in place**.",
+      ].join("\n"),
+    );
+
+    expect(cleaned).toBe(
+      [
+        "Great question — these are the main reasons:",
+        "Quiet streets",
+        "Low traffic makes walking and driving easier.",
+        "Flat land is better for walkers and wheelchairs.",
+        "",
+        "In short: these suit ageing in place.",
+      ].join("\n"),
+    );
+  });
+
   it("removes generic follow-up disclaimers and provider outros", () => {
     const cleaned = sanitizeAssistantProse(
       [

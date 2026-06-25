@@ -56,6 +56,12 @@ export function sanitizeAssistantProse(content: string, locale: Locale = "en"): 
     return body.startsWith("{") || body.startsWith("[") ? "" : body;
   });
   out = out.replace(/`([^`]+)`/g, "$1");
+  out = out.replace(/^\s{0,3}#{1,6}\s+/gm, "");
+  out = out.replace(/^\s*(?:[-*•]|\d+[.)])\s+/gm, "");
+  out = out.replace(/\*\*([^*\n]+)\*\*/g, "$1");
+  out = out.replace(/__([^_\n]+)__/g, "$1");
+  out = out.replace(/(^|[^\w])\*([^*\n]+)\*(?=[^\w]|$)/g, "$1$2");
+  out = out.replace(/(^|[^\w])_([^_\n]+)_(?=[^\w]|$)/g, "$1$2");
   out = out.replace(/\(\s*(?:isOnMarket|isListed|listingPrice|agentName|agentPhone|agencyName|found|source|listingUrl)\s*:\s*(?:true|false|null|undefined|"[^"]*"|'[^']*'|[^)\s,，。;；]+)\s*\)/gi, "");
   out = out.replace(/\b(?:isOnMarket|isListed|listingPrice|agentName|agentPhone|agencyName|found|source|listingUrl)\s*:\s*(?:true|false|null|undefined|"[^"]*"|'[^']*'|[^\s,，。;；)]+)/gi, "");
   out = out.replace(/\{\s*(?:isOnMarket|isListed|listingPrice|agentName|agentPhone|agencyName|found|source|listingUrl)[^{}]*\}/gi, "");

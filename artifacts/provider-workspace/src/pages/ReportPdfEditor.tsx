@@ -14,6 +14,7 @@ import {
   editableDataFields,
   EMPTY_PDF_CONTENT_EDITS,
   SECTION_LABELS,
+  sectionHasContent,
   type PdfContentEdits,
   type PdfLayout,
   type SectionKey,
@@ -76,6 +77,7 @@ export function ReportPdfEditor() {
   const [dmThreads, setDmThreads] = useState<DmThread[]>([]);
   const [dmQuery, setDmQuery] = useState("");
   const [selectedThreadIds, setSelectedThreadIds] = useState<string[]>([]);
+  const [shareDone, setShareDone] = useState<{ count: number } | null>(null);
   const draftHydrated = useRef(false);
 
   useEffect(() => {
@@ -308,7 +310,7 @@ export function ReportPdfEditor() {
         ),
       );
       setSelectedThreadIds([]);
-      setStatus({ kind: "ok", text: `PDF sent to ${selected.length} chat${selected.length === 1 ? "" : "s"}.` });
+      setShareDone({ count: selected.length });
     } catch (e) {
       setStatus({ kind: "err", text: errText(e, "Could not send the PDF to chat.") });
     } finally {
@@ -429,30 +431,40 @@ export function ReportPdfEditor() {
         </Panel>
 
         <Panel title="Sections">
-          {layout.sectionOrder.map((key, idx) => (
-            <div key={key} className="pdf-section-row">
-              <label className="ws-check" style={{ flex: 1 }}>
-                <input
-                  type="checkbox"
-                  checked={layout.includeSections[key]}
-                  onChange={(e) =>
-                    patchLayout({ includeSections: { ...layout.includeSections, [key]: e.target.checked } })
-                  }
-                />
-                {SECTION_LABELS[key]}
-              </label>
-              <button className="btn btn-ghost" disabled={idx === 0} onClick={() => patchLayout({ sectionOrder: move(layout.sectionOrder, idx, -1) })}>
-                ↑
-              </button>
-              <button
-                className="btn btn-ghost"
-                disabled={idx === layout.sectionOrder.length - 1}
-                onClick={() => patchLayout({ sectionOrder: move(layout.sectionOrder, idx, 1) })}
-              >
-                ↓
-              </button>
-            </div>
-          ))}
+          {(() => {
+            // Only sections that actually render are shown/reordered, so every move is
+            // visible in the preview. Empty sections are hidden and kept at the tail of
+            // the persisted order (their position is irrelevant — they render nothing).
+            const visible = layout.sectionOrder.filter((key) => sectionHasContent(report, key));
+            const reorder = (idx: number, dir: -1 | 1) => {
+              const nextVisible = move(visible, idx, dir);
+              const hidden = layout.sectionOrder.filter((key) => !sectionHasContent(report, key));
+              patchLayout({ sectionOrder: [...nextVisible, ...hidden] });
+            };
+            if (visible.length === 0) {
+              return <div className="pdf-help">This report has no sections to arrange.</div>;
+            }
+            return visible.map((key, idx) => (
+              <div key={key} className="pdf-section-row">
+                <label className="ws-check" style={{ flex: 1 }}>
+                  <input
+                    type="checkbox"
+                    checked={layout.includeSections[key]}
+                    onChange={(e) =>
+                      patchLayout({ includeSections: { ...layout.includeSections, [key]: e.target.checked } })
+                    }
+                  />
+                  {SECTION_LABELS[key]}
+                </label>
+                <button className="btn btn-ghost" disabled={idx === 0} onClick={() => reorder(idx, -1)}>
+                  ↑
+                </button>
+                <button className="btn btn-ghost" disabled={idx === visible.length - 1} onClick={() => reorder(idx, 1)}>
+                  ↓
+                </button>
+              </div>
+            ));
+          })()}
         </Panel>
 
         <Panel title="Share" defaultOpen>
@@ -511,6 +523,20 @@ export function ReportPdfEditor() {
       <div className="pdf-editor-preview">
         <LivePdfPreview document={doc} />
       </div>
+
+      {shareDone ? (
+        <div className="pdf-modal-backdrop" role="dialog" aria-modal="true" aria-label="Report shared">
+          <div className="pdf-modal">
+            <div className="pdf-modal-title">Report shared</div>
+            <p className="pdf-modal-body">
+              The report was shared with {shareDone.count} user{shareDone.count === 1 ? "" : "s"}.
+            </p>
+            <button className="btn btn-primary" onClick={() => setShareDone(null)} autoFocus style={{ width: "100%" }}>
+              OK
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

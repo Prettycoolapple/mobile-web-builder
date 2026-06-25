@@ -37,8 +37,8 @@ export function safeBrandColor(value: string | null | undefined): string {
 
 export const styles = StyleSheet.create({
   page: {
-    paddingTop: 64,
-    paddingBottom: 56,
+    paddingTop: 72,
+    paddingBottom: 64,
     paddingHorizontal: 40,
     fontSize: 10,
     fontFamily: "Helvetica",
@@ -48,7 +48,7 @@ export const styles = StyleSheet.create({
   // Running header / footer (fixed on every body page)
   runningHeader: {
     position: "absolute",
-    top: 24,
+    top: 32,
     left: 40,
     right: 40,
     flexDirection: "row",
@@ -62,7 +62,7 @@ export const styles = StyleSheet.create({
   runningHeaderLogo: { height: 18, objectFit: "contain" },
   runningFooter: {
     position: "absolute",
-    bottom: 24,
+    bottom: 32,
     left: 40,
     right: 40,
     flexDirection: "row",
@@ -77,7 +77,7 @@ export const styles = StyleSheet.create({
   // Cover
   // paddingTop = band height so flow content clears the absolutely-positioned band on
   // page 1; both paddings also protect any overflow continuation page from the paper edge.
-  coverPage: { fontFamily: "Helvetica", color: INK, paddingTop: 150, paddingBottom: 56 },
+  coverPage: { fontFamily: "Helvetica", color: INK, paddingTop: 150, paddingBottom: 64 },
   coverBand: {
     position: "absolute",
     top: 0,

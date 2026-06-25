@@ -352,6 +352,51 @@ function dataVal(edits: PdfContentEdits | undefined, byKey: Map<string, Editable
 }
 
 // ── section renderers ────────────────────────────────────────────────────────
+// Whether a section actually renders for this report. MUST stay in sync with the
+// `return null` guards in `renderSection` below — the editor's "Sections" panel uses
+// this so reordering only ever offers sections that are really in the PDF (WYSIWYG).
+export function sectionHasContent(report: FeasibilityReport, key: SectionKey): boolean {
+  const planning = report.planning;
+  switch (key) {
+    case "overview":
+      return !!report.propertyOverview;
+    case "title":
+      return !!report.titleInsight?.isCrossLease;
+    case "schools":
+      return !!report.schoolZones && report.schoolZones.length > 0;
+    case "planning":
+      return !!planning && !!(planning.overlays || planning.subdivisionSummary || planning.potentialLots != null);
+    case "asbestos":
+      return !!report.asbestos;
+    case "terrain":
+      return !!report.terrain;
+    case "infrastructure":
+      return !!report.infrastructure && report.infrastructure.length > 0;
+    case "cost":
+      return !!report.costItems && report.costItems.length > 0;
+    case "market":
+      return !!report.transportContext || !!report.neighbourhoodContext;
+    case "builtEnv": {
+      const ctx = report.builtEnvironmentContext;
+      return !!ctx && ctx.assessedProperties !== 0;
+    }
+    case "strategies":
+      return (report.developmentStrategies?.length ?? 0) > 0;
+    case "roi":
+      return (report.roiScenarios?.length ?? 0) > 0 && (report.developmentStrategies?.length ?? 0) === 0;
+    case "comparables":
+      return (
+        report.comparables_quality === "live" &&
+        (report.comparableSales ?? []).filter((c) => (c.price ?? c.price_nzd ?? 0) > 0).length > 0
+      );
+    case "risk":
+      return !!report.riskSummary && report.riskSummary.length > 0;
+    default:
+      return false;
+  }
+}
+
+// NOTE: the per-case `return null` guards below must mirror `sectionHasContent` above.
 function renderSection(
   key: SectionKey,
   report: FeasibilityReport,
