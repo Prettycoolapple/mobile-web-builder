@@ -13,7 +13,7 @@ import {
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { getIo } from "../lib/socket";
-import { getUnreadDmBadgeCount, sendPushToUser } from "../lib/expo-push";
+import { getUnreadAppBadgeCount, sendPushToUser } from "../lib/expo-push";
 import { sendOwnerNotification } from "../lib/mailer";
 
 const router: IRouter = Router();
@@ -386,7 +386,7 @@ router.post("/dm/threads/:threadId/messages", requireAuth, async (req: Request, 
       const senderName = sender?.fullName ?? "Someone";
       const preview = msgBody ? msgBody.slice(0, 80) : fileUrl ? "📄 File" : "📷 Photo";
 
-      const badgeCount = await getUnreadDmBadgeCount(recipientId);
+      const badgeCount = await getUnreadAppBadgeCount(recipientId);
 
       await sendPushToUser(recipientId, senderName, preview, {
         type: "dm",
@@ -498,7 +498,7 @@ router.post(
             .where(eq(profiles.id, userId))
             .limit(1);
           const likerName = liker?.fullName ?? "Someone";
-          const badgeCount = await getUnreadDmBadgeCount(otherId);
+          const badgeCount = await getUnreadAppBadgeCount(otherId);
           await sendPushToUser(otherId, likerName, "Liked a message", {
             type: "dm_like",
             threadId: String(threadId),

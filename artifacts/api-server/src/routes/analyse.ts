@@ -37,6 +37,7 @@ import { suggestNearbySuburbs } from "../lib/claude";
 import { runPropertyPipeline, hasCacheableCore, type PipelineResult } from "../lib/pipeline";
 import { normaliseDiscoveryAddressKey } from "../lib/address-key";
 import { getCachedRaw, upsertCachedRaw, bumpHitCount, backfillDerivedScores } from "../lib/property-cache";
+import { buildSitePlanForAddress } from "../lib/site-plan";
 import { SCORING_VERSION } from "../lib/card-score";
 import { noteUserActivity } from "../lib/user-activity";
 import { buildSubdivisionPathwayNote } from "../lib/lot-calculator";
@@ -109,7 +110,8 @@ import { usagePeriodExpired } from "../lib/billingPeriod";
 import { resolveProviderEntitlement } from "../lib/provider-entitlements";
 import { formatTitleTypeForDisplay } from "../lib/titleDisplay";
 import { classifySiteCondition, siteStatusLabel } from "../lib/site-condition";
-import { getUnreadDmBadgeCount, sendPushToUser } from "../lib/expo-push";
+import { sendPushToUser } from "../lib/expo-push";
+import { createNotificationItem, getUnreadAppBadgeCount } from "../lib/notification-state";
 import { runAfterResponse } from "../lib/vercel-wait-until";
 import { clearRecentShownForUserSuburb, getRecentShownForUser, recordShownForUser, type RecentShownListing } from "../lib/discovery-shown-memory";
 import { loadExcludedNonFreehold, persistExcludedNonFreehold } from "../lib/discovery-excluded-store";
@@ -3169,7 +3171,16 @@ async function processScreeningJob(jobId: string, log: FeasibilityLog): Promise<
     const body = locale === "zh"
       ? `您请求的「${query}」筛选已完成，请打开应用查看。`
       : `Your screening results for "${query}" are ready. Open Project Alpha to view them.`;
-    const badgeCount = (await getUnreadDmBadgeCount(job.userId)) + 1;
+    await createNotificationItem({
+      userId: job.userId,
+      kind: "screening_ready",
+      sourceId: jobId,
+      page: "search",
+      title,
+      body,
+      metadata: { jobId, query: job.queryText, mode },
+    });
+    const badgeCount = await getUnreadAppBadgeCount(job.userId);
     void sendPushToUser(job.userId, title, body, {
       type: "screening_ready",
       jobId,
@@ -3796,7 +3807,16 @@ async function runFeasibilityAnalyseCore(args: {
         locale === "zh"
           ? `您请求的「${shortAddr}」分析已完成，请打开应用查看。`
           : `Your analysis for ${shortAddr} is ready — open the app to view it.`;
-      const badgeCount = (await getUnreadDmBadgeCount(userId)) + 1;
+      await createNotificationItem({
+        userId,
+        kind: "report_ready",
+        sourceId: savedSearchId,
+        page: "history",
+        title: pushTitle,
+        body: pushBody,
+        metadata: { searchId: savedSearchId, address: analysisAddress },
+      });
+      const badgeCount = await getUnreadAppBadgeCount(userId);
       void sendPushToUser(userId, pushTitle, pushBody, {
         type: "report_ready",
         searchId: savedSearchId,
@@ -3979,7 +3999,16 @@ async function processFeasibilityJob(jobId: string, log: FeasibilityLog): Promis
         locale === "zh"
           ? `您请求的「${shortAddr}」分析已完成，请打开应用查看。`
           : `Your analysis for ${shortAddr} is ready — open the app to view it.`;
-      const badgeCount = (await getUnreadDmBadgeCount(job.userId)) + 1;
+      await createNotificationItem({
+        userId: job.userId,
+        kind: "report_ready",
+        sourceId: result.savedSearchId,
+        page: "history",
+        title: pushTitle,
+        body: pushBody,
+        metadata: { searchId: result.savedSearchId, jobId, address: job.analysisAddress },
+      });
+      const badgeCount = await getUnreadAppBadgeCount(job.userId);
       void sendPushToUser(job.userId, pushTitle, pushBody, {
         type: "report_ready",
         searchId: result.savedSearchId,
@@ -4506,6 +4535,120 @@ router.get("/analyse/jobs/:jobId", async (req, res) => {
 // rerun) — only photo coverage is updated.
 //
 // Rate-limited to 1 request per searchId per 60s via an in-memory map.
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function collectSitePlanAddressCandidates(report: Record<string, unknown>, rowAddress: string | null): string[] {
+  const candidates: string[] = [];
+  const add = (value: unknown) => {
+    const text = stringValue(value);
+    if (text) candidates.push(text);
+  };
+
+  add(report["address"]);
+  add(rowAddress);
+  const propertyOverview = report["propertyOverview"];
+  if (propertyOverview && typeof propertyOverview === "object") {
+    add((propertyOverview as Record<string, unknown>)["address"]);
+  }
+
+  const childAddresses = report["childAddresses"];
+  if (Array.isArray(childAddresses)) {
+    childAddresses.forEach(add);
+  }
+
+  const childReports = report["reports"];
+  if (Array.isArray(childReports)) {
+    for (const child of childReports) {
+      if (!child || typeof child !== "object") continue;
+      const childReport = child as Record<string, unknown>;
+      add(childReport["address"]);
+      const childOverview = childReport["propertyOverview"];
+      if (childOverview && typeof childOverview === "object") {
+        add((childOverview as Record<string, unknown>)["address"]);
+      }
+    }
+  }
+
+  const seen = new Set<string>();
+  return candidates.filter((address) => {
+    const key = normaliseDiscoveryAddressKey(address) || address.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function resolveSitePlanAddress(
+  report: Record<string, unknown>,
+  rowAddress: string | null,
+  requestedAddress: string | null,
+): { address: string | null; forbidden: boolean } {
+  const candidates = collectSitePlanAddressCandidates(report, rowAddress);
+  if (!requestedAddress) return { address: candidates[0] ?? null, forbidden: false };
+
+  const requestedKey = normaliseDiscoveryAddressKey(requestedAddress) || requestedAddress.toLowerCase();
+  const allowed = candidates.some((candidate) => {
+    const candidateKey = normaliseDiscoveryAddressKey(candidate) || candidate.toLowerCase();
+    return candidateKey === requestedKey;
+  });
+  return { address: allowed ? requestedAddress : null, forbidden: !allowed };
+}
+
+router.get("/analyse/:searchId/site-plan", async (req, res) => {
+  const searchId = (req.params as { searchId?: string }).searchId;
+  const uid = await getUserIdFromHeader(req);
+  if (uid === INVALID_AUTH_SESSION) {
+    rejectInvalidAuthSession(res);
+    return;
+  }
+  if (!searchId) {
+    res.status(400).json({ error: "searchId is required", code: "MISSING_SEARCH_ID" });
+    return;
+  }
+  if (!uid) {
+    res.status(401).json({ error: "Unauthorized", code: "UNAUTHORIZED" });
+    return;
+  }
+
+  try {
+    const rows = await withDbRetry(() =>
+      db
+        .select({ userId: searches.userId, resultJson: searches.resultJson, address: searches.address })
+        .from(searches)
+        .where(eq(searches.id, searchId))
+        .limit(1),
+    );
+    const row = rows[0];
+    if (!row || row.userId !== uid) {
+      res.status(404).json({ error: "Not found", code: "NOT_FOUND" });
+      return;
+    }
+
+    const report = (row.resultJson ?? {}) as Record<string, unknown>;
+    const requestedAddress = stringValue((req.query as Record<string, unknown>)["address"]);
+    const resolved = resolveSitePlanAddress(report, typeof row.address === "string" ? row.address : null, requestedAddress);
+    if (resolved.forbidden) {
+      res.status(404).json({ error: "Not found", code: "NOT_FOUND" });
+      return;
+    }
+    if (!resolved.address) {
+      res.status(400).json({ error: "Report has no address for site plan", code: "MISSING_ADDRESS" });
+      return;
+    }
+
+    const addressKey = normaliseDiscoveryAddressKey(resolved.address);
+    const cachedEntry = addressKey ? await getCachedRaw(addressKey) : null;
+    const sitePlan = await buildSitePlanForAddress(resolved.address, cachedEntry?.rawData ?? null);
+    res.setHeader("Cache-Control", "private, max-age=900");
+    res.json(sitePlan);
+  } catch (err) {
+    req.log.error({ err, searchId }, "GET /analyse/:searchId/site-plan failed");
+    res.status(500).json({ error: "Failed to load site plan", code: "SITE_PLAN_FAILED" });
+  }
+});
+
 const refreshPhotosLastRunAt = new Map<string, number>();
 const REFRESH_PHOTOS_COOLDOWN_MS = 60_000;
 

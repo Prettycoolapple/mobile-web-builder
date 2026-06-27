@@ -9,8 +9,22 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useColors } from "@/hooks/useColors";
 import { hasServiceProviderAccess, useAuth } from "@/context/AuthContext";
 import { useChat } from "@/context/ChatContext";
-import { useDm } from "@/context/DmContext";
+import { useNotifications } from "@/context/NotificationContext";
 import { useT } from "@/lib/i18n";
+
+function formatTabBadge(count: number): string | undefined {
+  if (count <= 0) return undefined;
+  return count > 99 ? "99+" : String(count);
+}
+
+function CustomTabBadge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <View style={styles.customBadge}>
+      <Text style={styles.customBadgeText}>{count > 99 ? "99+" : count}</Text>
+    </View>
+  );
+}
 
 function ClassicTabLayout({ isGuest }: { isGuest: boolean }) {
   const colors = useColors();
@@ -20,7 +34,7 @@ function ClassicTabLayout({ isGuest }: { isGuest: boolean }) {
   const isIOS = Platform.OS === "ios";
   const isWeb = Platform.OS === "web";
   const safeAreaInsets = useSafeAreaInsets();
-  const { unreadCount } = useDm();
+  const { pageCounts } = useNotifications();
   const { startNewChat, currentSession, sessions, switchSession } = useChat();
   const router = useRouter();
   const segments = useSegments();
@@ -106,6 +120,7 @@ function ClassicTabLayout({ isGuest }: { isGuest: boolean }) {
                 <Feather name="search" size={22} color={searchTint} />
               )}
               <Text style={[styles.tabLabel, { color: searchTint }]}>{t("tab.search")}</Text>
+              <CustomTabBadge count={pageCounts.search} />
             </Pressable>
           ),
         }}
@@ -115,7 +130,7 @@ function ClassicTabLayout({ isGuest }: { isGuest: boolean }) {
         options={{
           href: isGuest ? null : undefined,
           title: t("tab.messages"),
-          tabBarBadge: unreadCount > 0 ? (unreadCount > 99 ? "99+" : unreadCount) : undefined,
+          tabBarBadge: formatTabBadge(pageCounts.messages),
           tabBarBadgeStyle: { backgroundColor: colors.accent, fontSize: 10, minWidth: 18 },
           tabBarIcon: ({ color }) =>
             isIOS ? (
@@ -160,6 +175,8 @@ function ClassicTabLayout({ isGuest }: { isGuest: boolean }) {
         options={{
           href: isGuest ? null : undefined,
           title: t("tab.history"),
+          tabBarBadge: formatTabBadge(pageCounts.history),
+          tabBarBadgeStyle: { backgroundColor: colors.accent, fontSize: 10, minWidth: 18 },
           tabBarIcon: ({ color }) =>
             isIOS ? (
               <SymbolView name="clock" tintColor={color} size={24} />
@@ -211,6 +228,24 @@ const styles = StyleSheet.create({
     fontFamily: "DM_Sans_500Medium",
     fontSize: 11,
     marginTop: -2,
+  },
+  customBadge: {
+    position: "absolute",
+    top: 6,
+    right: "27%",
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 5,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#C26A2E",
+  },
+  customBadgeText: {
+    color: "#fff",
+    fontSize: 10,
+    fontFamily: "DM_Sans_600SemiBold",
+    fontVariant: ["tabular-nums"],
   },
   homeTabCell: {
     flex: 1,

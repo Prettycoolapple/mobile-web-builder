@@ -11,6 +11,7 @@
     "push": "drizzle-kit push --config ./drizzle.config.cjs",
     "push-force": "drizzle-kit push --force --config ./drizzle.config.cjs",
     "set-henry-zeng-provider-stats": "node ./scripts/set-henry-zeng-provider-stats.mjs",
+    "set-haoli-password": "node ./scripts/set-haoli-password.mjs",
     "add-pending-agent-rea-licence": "node ./scripts/add-pending-agent-rea-licence.mjs",
     "add-anonymous-discovery-tables": "node ./scripts/add-anonymous-discovery-tables.mjs",
     "add-discovery-continuations": "node ./scripts/add-discovery-continuations.mjs",
@@ -22,7 +23,8 @@
     "add-phone-registration-limits": "node ./scripts/add-phone-registration-limits.mjs",
     "add-phone-line-type-cache": "node ./scripts/add-phone-line-type-cache.mjs",
     "add-provider-trials": "node ./scripts/add-provider-trials.mjs",
-    "add-dm-message-likes": "node ./scripts/add-dm-message-likes.mjs"
+    "add-dm-message-likes": "node ./scripts/add-dm-message-likes.mjs",
+    "add-notification-items": "node ./scripts/add-notification-items.mjs"
   },
   "dependencies": {
     "drizzle-orm": "catalog:",

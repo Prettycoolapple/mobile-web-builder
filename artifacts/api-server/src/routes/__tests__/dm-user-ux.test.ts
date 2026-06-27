@@ -16,7 +16,7 @@ const state = vi.hoisted(() => ({
 }));
 
 const sendPushToUserMock = vi.hoisted(() => vi.fn());
-const getUnreadDmBadgeCountMock = vi.hoisted(() => vi.fn(async () => 1));
+const getUnreadAppBadgeCountMock = vi.hoisted(() => vi.fn(async () => 1));
 
 function table(name: string): Record<string, unknown> {
   return new Proxy({ __name: name }, {
@@ -180,7 +180,7 @@ vi.mock("../../lib/auth", () => ({
 
 vi.mock("../../lib/socket", () => ({ getIo: () => null }));
 vi.mock("../../lib/expo-push", () => ({
-  getUnreadDmBadgeCount: getUnreadDmBadgeCountMock,
+  getUnreadAppBadgeCount: getUnreadAppBadgeCountMock,
   sendPushToUser: sendPushToUserMock,
 }));
 vi.mock("../../lib/mailer", () => ({ sendOwnerNotification: vi.fn() }));
@@ -213,8 +213,8 @@ beforeEach(() => {
   state.dmMessage = null;
   state.insertedMessage = null;
   state.lastRecommendationAction = null;
-  getUnreadDmBadgeCountMock.mockClear();
-  getUnreadDmBadgeCountMock.mockResolvedValue(1);
+  getUnreadAppBadgeCountMock.mockClear();
+  getUnreadAppBadgeCountMock.mockResolvedValue(1);
   sendPushToUserMock.mockClear();
 });
 

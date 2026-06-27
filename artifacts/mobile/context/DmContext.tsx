@@ -1,8 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from "react";
 import { io, Socket } from "socket.io-client";
+import { DeviceEventEmitter } from "react-native";
 import { useAuth } from "./AuthContext";
 import { getApiBase, getApiOrigin } from "@/lib/api";
-import { setAppIconBadgeCountAsync } from "@/lib/appBadge";
 
 export interface DmMessage {
   id: string;
@@ -119,7 +119,7 @@ export function DmProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    void setAppIconBadgeCountAsync(unreadCount);
+    DeviceEventEmitter.emit("projectAlpha:notificationsChanged");
   }, [unreadCount]);
 
   useEffect(() => {

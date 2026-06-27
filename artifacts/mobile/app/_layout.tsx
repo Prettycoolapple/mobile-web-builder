@@ -32,9 +32,10 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ChatProvider } from "@/context/ChatContext";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { DmProvider } from "@/context/DmContext";
+import { NotificationProvider } from "@/context/NotificationContext";
 import { WatchlistProvider } from "@/context/WatchlistContext";
 import { getApiBase } from "@/lib/api";
-import { configureAppIconBadgesAsync, incrementAppIconBadgeCountAsync } from "@/lib/appBadge";
+import { configureAppIconBadgesAsync } from "@/lib/appBadge";
 import { parseShareTokenFromUrl, storePendingShareToken } from "@/lib/propertyShares";
 import { initializeRevenueCat, SubscriptionProvider } from "@/lib/revenuecat";
 import { LocaleProvider, LocaleSync } from "@/lib/i18n";
@@ -209,8 +210,8 @@ function NotificationSetup() {
       const data = notification.request.content.data as Record<string, unknown> | undefined;
       const type = data && typeof data.type === "string" ? data.type : undefined;
       if (type === "report_ready" || type === "screening_ready") {
-        void incrementAppIconBadgeCountAsync();
         DeviceEventEmitter.emit("projectAlpha:backgroundJobsReady", { type });
+        DeviceEventEmitter.emit("projectAlpha:notificationsChanged");
       }
     });
 
@@ -295,6 +296,7 @@ function RootLayoutNav() {
       <Stack.Screen name="add-listing" options={{ headerShown: false, presentation: "modal" }} />
       <Stack.Screen name="support" options={{ headerShown: false }} />
       <Stack.Screen name="my-listings" options={{ headerShown: false }} />
+      <Stack.Screen name="explore" options={{ headerShown: false }} />
       <Stack.Screen name="listing/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="chat/contacts" options={{ headerShown: false, presentation: "modal" }} />
       <Stack.Screen name="chat/[threadId]" options={{ headerShown: false }} />
@@ -334,18 +336,20 @@ export default function RootLayout() {
               <SplashUntilReady fontsReady={fontsReady} />
               <SubscriptionGate>
                 <DmProvider>
-                  <WatchlistProvider>
-                    <ChatProvider>
-                      <GestureHandlerRootView style={{ flex: 1 }}>
-                        <KeyboardProvider>
-                          <MetaSdkSetup />
-                          <NotificationSetup />
-                          <ShareLinkSetup />
-                          <RootLayoutNav />
-                        </KeyboardProvider>
-                      </GestureHandlerRootView>
-                    </ChatProvider>
-                  </WatchlistProvider>
+                  <NotificationProvider>
+                    <WatchlistProvider>
+                      <ChatProvider>
+                        <GestureHandlerRootView style={{ flex: 1 }}>
+                          <KeyboardProvider>
+                            <MetaSdkSetup />
+                            <NotificationSetup />
+                            <ShareLinkSetup />
+                            <RootLayoutNav />
+                          </KeyboardProvider>
+                        </GestureHandlerRootView>
+                      </ChatProvider>
+                    </WatchlistProvider>
+                  </NotificationProvider>
                 </DmProvider>
               </SubscriptionGate>
             </AuthProvider>

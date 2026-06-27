@@ -26,6 +26,7 @@ export * from "./browse_listing_cache";
 export * from "./dm_threads";
 export * from "./dm_messages";
 export * from "./push_tokens";
+export * from "./notification_items";
 export * from "./recommendations";
 export * from "./phone_verifications";
 export * from "./phone_registration_history";

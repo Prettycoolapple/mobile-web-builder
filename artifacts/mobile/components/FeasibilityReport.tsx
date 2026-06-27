@@ -26,6 +26,7 @@ import Svg, { Polygon } from "react-native-svg";
 import { LinearGradient } from "expo-linear-gradient";
 import { Feather, Ionicons } from "@expo/vector-icons";
 import { StarRating } from "@/components/StarRating";
+import { SitePlanCard } from "@/components/report/SitePlanCard";
 import { useWatchlist, type WatchlistCandidate } from "@/context/WatchlistContext";
 import { useColors } from "@/hooks/useColors";
 import { useT, translate, translateForOS, isOSChineseLocale } from "@/lib/i18n";
@@ -2554,6 +2555,7 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
   // carousel showing the new photos immediately.
   const [refreshedPhotoUrls, setRefreshedPhotoUrls] = useState<string[] | null>(null);
   const [isRefreshingPhotos, setIsRefreshingPhotos] = useState(false);
+  const [activeReportTab, setActiveReportTab] = useState<"info" | "plan">("info");
 
   const effectiveReport = useMemo<Report>(() => {
     if (!refreshedPhotoUrls || refreshedPhotoUrls.length === 0) return report;
@@ -2685,6 +2687,27 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
 
   return (
     <View style={styles.container}>
+      <View style={[styles.reportTabs, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        {(["info", "plan"] as const).map((tab) => {
+          const selected = activeReportTab === tab;
+          return (
+            <TouchableOpacity
+              key={tab}
+              style={[styles.reportTabButton, selected && { backgroundColor: colors.foreground }]}
+              onPress={() => setActiveReportTab(tab)}
+              activeOpacity={0.85}
+              accessibilityRole="tab"
+              accessibilityState={{ selected }}
+            >
+              <Text style={[styles.reportTabText, { color: selected ? colors.card : colors.mutedForeground }]}>
+                {tab === "info" ? "Info" : "Plan"}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      {activeReportTab === "info" ? (
       <View style={[styles.reportHeader, { backgroundColor: colors.headerBg }]}>
         {/* Always render the carousel — when no photo URLs resolve it shows
             a labelled placeholder rather than collapsing the hero entirely. */}
@@ -2787,6 +2810,9 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
           <ScoreSummaryRow report={report} colors={colors} hideOverall />
         )}
       </View>
+      ) : (
+        <SitePlanCard report={report} />
+      )}
 
       {(report.cv_unavailable || (report.missing_critical_fields && report.missing_critical_fields.length > 0)) && (
         <View style={[styles.warningBox, { backgroundColor: "#FEF08A20", borderColor: "#CA8A0450", borderRadius: 12, padding: 12 }]}>
@@ -3096,6 +3122,9 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
 
 const styles = StyleSheet.create({
   container: { gap: 10 },
+  reportTabs: { flexDirection: "row", borderRadius: 14, borderWidth: 1, padding: 4, gap: 4 },
+  reportTabButton: { flex: 1, minHeight: 34, borderRadius: 10, alignItems: "center", justifyContent: "center", paddingHorizontal: 10 },
+  reportTabText: { fontFamily: "DM_Sans_700Bold", fontSize: 13, lineHeight: 18 },
   reportHeader: { borderRadius: 16, overflow: "hidden" },
   reportHeaderTop: { flexDirection: "row", gap: 12, padding: 16, alignItems: "flex-start" },
   reportPhotoWrapper: { width: "100%", height: 190, position: "relative", backgroundColor: "#1C1917" },

@@ -200,6 +200,7 @@ const en: Catalog = {
   "history.today": "Today",
   "history.yesterday": "Yesterday",
   "history.days_ago": "{n} days ago",
+  "history.new_badge": "New",
 
   // Profile
   "profile.account": "Account",
@@ -799,6 +800,21 @@ const en: Catalog = {
   "provider_welcome.purchase_failed": "Purchase failed",
   "provider_welcome.try_again": "Please try again.",
 
+  // Explore
+  "explore.title": "Explore",
+  "explore.header_button": "Explore",
+  "explore.subtitle": "Top-scoring properties analysed across the community",
+  "explore.full_analysis": "Full analysis",
+  "explore.show_more": "Show more",
+  "explore.by_suburb": "Explore by suburb →",
+  "explore.empty": "No analysed properties yet. Run an analysis to start the list.",
+  "explore.load_failed": "Couldn't load properties. Pull to retry.",
+  "explore.score_ease": "Ease",
+  "explore.score_cost": "Cost",
+  "explore.score_roi": "ROI",
+  "explore.lots": "{count} potential lots",
+  "explore.suburb_prompt": "Which suburb are you interested in? Tell me and I'll find subdivision opportunities there.",
+
   // Search tab extras
   "search.listings": "Listings",
   "search.add_listing": "Add listing",
@@ -1275,6 +1291,7 @@ const zh: Catalog = {
   "history.today": "今天",
   "history.yesterday": "昨天",
   "history.days_ago": "{n} 天前",
+  "history.new_badge": "新",
 
   // Profile
   "profile.account": "账户",
@@ -1868,6 +1885,21 @@ const zh: Catalog = {
   "provider_welcome.subscription_no_activate": "订阅已开始,但账户激活失败。请稍后再试,如问题持续请联系客服。",
   "provider_welcome.purchase_failed": "购买失败",
   "provider_welcome.try_again": "请重试。",
+
+  // Explore
+  "explore.title": "探索",
+  "explore.header_button": "探索",
+  "explore.subtitle": "社区分析过的高分物业",
+  "explore.full_analysis": "完整分析",
+  "explore.show_more": "查看更多",
+  "explore.by_suburb": "按地区探索 →",
+  "explore.empty": "暂无已分析的物业。运行一次分析即可开始。",
+  "explore.load_failed": "加载失败，请下拉重试。",
+  "explore.score_ease": "难易",
+  "explore.score_cost": "成本",
+  "explore.score_roi": "回报",
+  "explore.lots": "可分 {count} 块地",
+  "explore.suburb_prompt": "您对哪个地区感兴趣？告诉我，我会为您寻找该地区的细分机会。",
 
   // Search tab extras
   "search.listings": "刊登",

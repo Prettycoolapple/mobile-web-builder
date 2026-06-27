@@ -1,4 +1,4 @@
-import { and, asc, eq, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, lt, sql } from "drizzle-orm";
 import { db, propertyCache, withDbRetry, type PropertyCacheRow } from "@workspace/db";
 import type { RawPropertyData } from "./pipeline";
 import { logger } from "./logger";
@@ -192,6 +192,36 @@ export async function listForRescan(
       .where(where)
       .orderBy(asc(propertyCache.lastRefreshedAt))
       .limit(limit),
+  );
+}
+
+/**
+ * List cached rows ranked by their persisted feasibility composite score, highest
+ * first — the data source for the public Explore page. Only rows that already
+ * carry derived scores at (or above) the current scoring version are included, so
+ * the list never surfaces stale numbers a later report would contradict. Tiebreaks
+ * on freshest-first. Volatile listing/photo fields are not stored, so callers get
+ * address + derived headline figures only.
+ */
+export async function listByScore(
+  limit: number,
+  offset: number,
+  minScoringVersion: number,
+): Promise<PropertyCacheRow[]> {
+  const compositeExpr = sql`(${propertyCache.rawData} #>> '{derived_scores,scores,composite}')`;
+  return withDbRetry(() =>
+    db
+      .select()
+      .from(propertyCache)
+      .where(
+        and(
+          sql`${compositeExpr} IS NOT NULL`,
+          sql`(${propertyCache.rawData} #>> '{derived_scores,scoringVersion}')::int >= ${minScoringVersion}`,
+        ),
+      )
+      .orderBy(desc(sql`${compositeExpr}::numeric`), desc(propertyCache.lastRefreshedAt))
+      .limit(limit)
+      .offset(offset),
   );
 }
 

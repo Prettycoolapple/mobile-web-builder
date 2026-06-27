@@ -1,6 +1,7 @@
-import { db, dmMessages, pushTokens } from "@workspace/db";
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { db, pushTokens } from "@workspace/db";
+import { eq, inArray } from "drizzle-orm";
 import { logger } from "./logger";
+import { getUnreadAppBadgeCount, getUnreadDmBadgeCount } from "./notification-state";
 
 interface ExpoTicket {
   status?: "ok" | "error";
@@ -120,14 +121,7 @@ export async function sendPushToUser(
   );
 }
 
-export async function getUnreadDmBadgeCount(userId: string): Promise<number> {
-  const [{ count }] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(dmMessages)
-    .where(and(isNull(dmMessages.readAt), sql`${dmMessages.senderId} != ${userId}`));
-
-  return normaliseBadgeCount(count) ?? 0;
-}
+export { getUnreadAppBadgeCount, getUnreadDmBadgeCount };
 
 function normaliseBadgeCount(count: number | undefined): number | undefined {
   if (count === undefined || !Number.isFinite(count)) return undefined;
