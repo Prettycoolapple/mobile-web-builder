@@ -33,6 +33,19 @@ export interface SuburbRecord {
   districtId: number;     // 223
 }
 
+export interface DistrictRecord {
+  id: string;
+  title: string;
+  slug: string;
+  fqSlug: string;
+  region: string;
+}
+
+export type RealestateLocationResolution =
+  | { status: "suburb"; suburb: SuburbRecord; original: string | null }
+  | { status: "district"; district: DistrictRecord; suburbs: SuburbRecord[]; original: string | null }
+  | { status: "invalid"; closest?: string | null };
+
 export interface FuzzySuburbMatch {
   suburb: SuburbRecord;
   alias: string;
@@ -41,16 +54,12 @@ export interface FuzzySuburbMatch {
   margin: number;
 }
 
-interface DistrictRecord {
-  id: string;
-  title: string;          // "Manukau City"
-  slug: string;           // "manukau-city"
-}
-
 interface SuburbIndex {
   byNormalisedName: Map<string, SuburbRecord>;  // "bucklands beach" → record
   byId: Map<string, SuburbRecord>;
   districts: Map<string, DistrictRecord>;
+  districtsByNormalisedName: Map<string, DistrictRecord>;
+  districtChildren: Map<string, SuburbRecord[]>;
   loadedAt: number;
 }
 
@@ -69,6 +78,72 @@ function normaliseName(s: string): string {
     .replace(/[^a-z0-9 ]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function regionFromFqSlug(fqSlug: string | null | undefined): string | null {
+  const region = String(fqSlug ?? "").split("_")[0]?.trim();
+  return region || null;
+}
+
+function addDistrictAlias(target: Map<string, DistrictRecord>, alias: string, rec: DistrictRecord): void {
+  const key = normaliseName(alias.replace(/-/g, " "));
+  if (key && !target.has(key)) target.set(key, rec);
+}
+
+const REGION_ALIASES: Record<string, string[]> = {
+  auckland: ["auckland", "auckland city", "akl"],
+  canterbury: ["canterbury", "christchurch"],
+  waikato: ["waikato", "south waikato", "hamilton"],
+  wellington: ["wellington"],
+  otago: ["otago", "dunedin", "queenstown"],
+  "bay-of-plenty": ["bay of plenty", "bop", "tauranga", "rotorua"],
+  northland: ["northland"],
+  "hawkes-bay": ["hawkes bay", "hawke's bay", "napier", "hastings"],
+  "manawatu-whanganui": ["manawatu", "whanganui", "wanganui", "palmerston north"],
+  taranaki: ["taranaki"],
+  nelson: ["nelson", "tasman"],
+  marlborough: ["marlborough"],
+  southland: ["southland", "invercargill"],
+  gisborne: ["gisborne"],
+};
+
+function mentionedRegions(text: string | null | undefined): Set<string> {
+  const normalised = normaliseName(text ?? "");
+  const regions = new Set<string>();
+  if (!normalised) return regions;
+  for (const [region, aliases] of Object.entries(REGION_ALIASES)) {
+    for (const alias of aliases) {
+      const key = normaliseName(alias);
+      if (!key) continue;
+      if (new RegExp(`\\b${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(normalised)) {
+        regions.add(region);
+        break;
+      }
+    }
+  }
+  return regions;
+}
+
+function recordRegion(rec: SuburbRecord | DistrictRecord): string | null {
+  return "region" in rec ? rec.region : regionFromFqSlug(rec.fqSlug);
+}
+
+function matchesRegionHint(rec: SuburbRecord | DistrictRecord, regions: Set<string>): boolean {
+  if (regions.size === 0) return true;
+  const region = recordRegion(rec);
+  return !!region && regions.has(region);
+}
+
+function stripRegionHints(raw: string): string {
+  let out = ` ${normaliseName(raw)} `;
+  for (const aliases of Object.values(REGION_ALIASES)) {
+    for (const alias of aliases) {
+      const key = normaliseName(alias);
+      if (!key) continue;
+      out = out.replace(new RegExp(`\\b${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi"), " ");
+    }
+  }
+  return out.replace(/\s+/g, " ").trim();
 }
 
 /**
@@ -172,12 +247,25 @@ async function loadSuburbIndex(): Promise<SuburbIndex> {
     const json = await fetchJsonWithTimeout<LocationsResponse>(url);
 
     const districts = new Map<string, DistrictRecord>();
+    const districtsByNorm = new Map<string, DistrictRecord>();
+    const districtChildren = new Map<string, SuburbRecord[]>();
     const byNorm = new Map<string, SuburbRecord>();
     const byId = new Map<string, SuburbRecord>();
 
     for (const item of json.included ?? []) {
       if (item.type === "districts") {
-        districts.set(item.id, { id: item.id, title: item.attributes.title, slug: item.attributes.slug });
+        const fqSlug = item.attributes["fq-slug"] ?? "";
+        const rec: DistrictRecord = {
+          id: item.id,
+          title: item.attributes.title,
+          slug: item.attributes.slug,
+          fqSlug,
+          region: regionFromFqSlug(fqSlug) ?? "",
+        };
+        districts.set(item.id, rec);
+        addDistrictAlias(districtsByNorm, rec.title, rec);
+        addDistrictAlias(districtsByNorm, rec.slug, rec);
+        if (rec.fqSlug) addDistrictAlias(districtsByNorm, rec.fqSlug.replace(/_/g, " "), rec);
       }
     }
 
@@ -195,6 +283,9 @@ async function loadSuburbIndex(): Promise<SuburbIndex> {
         districtId,
       };
       byId.set(rec.id, rec);
+      const children = districtChildren.get(String(districtId)) ?? [];
+      children.push(rec);
+      districtChildren.set(String(districtId), children);
 
       const aliases = new Set<string>();
       const baseNorm = normaliseName(rec.title);
@@ -213,7 +304,14 @@ async function loadSuburbIndex(): Promise<SuburbIndex> {
       }
     }
 
-    suburbIndexCache = { byNormalisedName: byNorm, byId, districts, loadedAt: Date.now() };
+    suburbIndexCache = {
+      byNormalisedName: byNorm,
+      byId,
+      districts,
+      districtsByNormalisedName: districtsByNorm,
+      districtChildren,
+      loadedAt: Date.now(),
+    };
     logger.info(
       { suburbs: byId.size, districts: districts.size, aliasKeys: byNorm.size },
       "realestate-api: suburb index loaded",
@@ -233,8 +331,8 @@ async function loadSuburbIndex(): Promise<SuburbIndex> {
 
 /**
  * Look up a suburb by free-text name. Returns null if no match.
- * Tries exact normalised match, then a small set of obvious variants,
- * then a constrained fuzzy match (edit distance ≤ 2 against any indexed alias).
+ * Tries exact normalised match, then a small set of obvious variants.
+ * Fuzzy matching lives in the region-aware resolver below.
  */
 export async function findSuburbId(name: string): Promise<SuburbRecord | null> {
   if (!name || !name.trim()) return null;
@@ -264,19 +362,9 @@ export async function findSuburbId(name: string): Promise<SuburbRecord | null> {
     if (hit) return hit;
   }
 
-  // Constrained fuzzy match: only accept ≤ 2 edits AND length within 3 chars
-  let best: SuburbRecord | null = null;
-  let bestDist = 3;
-  for (const [alias, rec] of index.byNormalisedName) {
-    if (Math.abs(alias.length - target.length) > 3) continue;
-    const d = levenshtein(alias, target);
-    if (d < bestDist) {
-      bestDist = d;
-      best = rec;
-      if (d === 0) break;
-    }
-  }
-  return best;
+  // Avoid implicit fuzzy suburb matches here; callers that need approximate
+  // matches should use the region-aware resolver below.
+  return null;
 }
 
 export async function findClosestSuburbByName(name: string): Promise<FuzzySuburbMatch | null> {
@@ -335,6 +423,130 @@ export async function findSuburbInTextViaIndex(text: string): Promise<SuburbReco
     if (re.test(normalised)) return index.byNormalisedName.get(alias) ?? null;
   }
   return null;
+}
+
+export async function getDistrictSuburbs(districtId: string, max = 80): Promise<SuburbRecord[]> {
+  if (max <= 0) return [];
+  try {
+    const index = await loadSuburbIndex();
+    return (index.districtChildren.get(String(districtId)) ?? []).slice(0, max);
+  } catch {
+    return [];
+  }
+}
+
+function locationCandidates(input: string): string[] {
+  const parts = input
+    .split(/[,/|]+|\bin\b|\bnear\b|\baround\b/gi)
+    .map((part) => stripRegionHints(part))
+    .filter(Boolean);
+  const full = stripRegionHints(input);
+  return Array.from(new Set([full, ...parts].filter((value) => value.length >= 3)));
+}
+
+export async function resolveRealestateLocation(
+  input: string | null | undefined,
+  contextText?: string | null,
+): Promise<RealestateLocationResolution | null> {
+  const raw = input?.trim();
+  if (!raw) return null;
+
+  let index: SuburbIndex;
+  try {
+    index = await loadSuburbIndex();
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "realestate-api: failed to load location index");
+    return { status: "invalid" };
+  }
+
+  const regions = mentionedRegions(`${contextText ?? ""} ${raw}`);
+  const candidates = locationCandidates(raw);
+
+  for (const candidate of candidates) {
+    const directDistrict = index.districtsByNormalisedName.get(normaliseName(candidate));
+    if (directDistrict && matchesRegionHint(directDistrict, regions)) {
+      const suburbs = index.districtChildren.get(directDistrict.id) ?? [];
+      return {
+        status: "district",
+        district: directDistrict,
+        suburbs,
+        original: normaliseName(directDistrict.title) === normaliseName(raw) ? null : raw,
+      };
+    }
+  }
+
+  for (const candidate of candidates) {
+    const directSuburb = index.byNormalisedName.get(normaliseName(candidate));
+    if (directSuburb && matchesRegionHint(directSuburb, regions)) {
+      return {
+        status: "suburb",
+        suburb: directSuburb,
+        original: normaliseName(directSuburb.title) === normaliseName(raw) ? null : raw,
+      };
+    }
+  }
+
+  const fuzzy = await findClosestSuburbByName(raw);
+  if (fuzzy && matchesRegionHint(fuzzy.suburb, regions)) {
+    const confident =
+      (fuzzy.distance <= 2 && fuzzy.similarity >= 0.82 && fuzzy.margin >= 0.05) ||
+      (regions.size > 0 && fuzzy.distance <= 2 && fuzzy.similarity >= 0.78 && fuzzy.margin >= 0.04);
+    if (confident) {
+      return { status: "suburb", suburb: fuzzy.suburb, original: raw };
+    }
+  }
+
+  return { status: "invalid", closest: fuzzy?.suburb.title ?? null };
+}
+
+export async function findLocationInTextViaIndex(text: string): Promise<RealestateLocationResolution | null> {
+  if (!text || !text.trim()) return null;
+  let index: SuburbIndex;
+  try {
+    index = await loadSuburbIndex();
+  } catch {
+    return null;
+  }
+  const regions = mentionedRegions(text);
+  const normalised = normaliseName(text);
+  const matches: Array<{ label: string; value: RealestateLocationResolution; length: number }> = [];
+
+  for (const [alias, suburb] of index.byNormalisedName) {
+    if (alias.length < 3 || !matchesRegionHint(suburb, regions)) continue;
+    const re = new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+    if (re.test(normalised)) {
+      matches.push({
+        label: alias,
+        length: alias.length,
+        value: { status: "suburb", suburb, original: null },
+      });
+    }
+  }
+
+  for (const [alias, district] of index.districtsByNormalisedName) {
+    if (alias.length < 3 || !matchesRegionHint(district, regions)) continue;
+    const re = new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+    if (re.test(normalised)) {
+      matches.push({
+        label: alias,
+        length: alias.length,
+        value: {
+          status: "district",
+          district,
+          suburbs: index.districtChildren.get(district.id) ?? [],
+          original: null,
+        },
+      });
+    }
+  }
+
+  matches.sort((a, b) => b.length - a.length || (a.value.status === "district" ? -1 : 1));
+  return matches[0]?.value ?? null;
+}
+
+export function _resetSuburbIndexCacheForTests(): void {
+  suburbIndexCache = null;
+  inflightLoad = null;
 }
 
 /**

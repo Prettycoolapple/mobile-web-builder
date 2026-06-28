@@ -1,6 +1,6 @@
 import { logger } from "./logger";
 import { geocodeAddress, type GeoResult } from "./geocode";
-import { fetchLINZParcel, type LinzParcel, type ParcelBbox } from "./linz";
+import { fetchLINZParcel, fetchLINZParcelsNear, type LinzParcel, type ParcelBbox } from "./linz";
 import type { RawPropertyData } from "./pipeline";
 
 type SharpFactory = typeof import("sharp");
@@ -100,6 +100,8 @@ type TileRange = {
 
 const TILE_SIZE = 256;
 const MAX_AERIAL_TILES = 24;
+const NEIGHBOURHOOD_CONTEXT_PAD_M = 90;
+const NEIGHBOURHOOD_CONTEXT_MIN_SPAN_M = 300;
 const AUCKLAND_MANAGEMENT_LAYERS =
   "https://mapspublic.aucklandcouncil.govt.nz/arcgis3/rest/services/NonCouncil/UnitaryPlanManagementLayers/MapServer";
 const AUCKLAND_UNDERGROUND_SERVICES =
@@ -255,6 +257,10 @@ export function paddedBounds(bounds: SitePlanBounds, padMetres = 45, minSpanMetr
   return next;
 }
 
+export function sitePlanMapBounds(bounds: SitePlanBounds): SitePlanBounds {
+  return paddedBounds(bounds, NEIGHBOURHOOD_CONTEXT_PAD_M, NEIGHBOURHOOD_CONTEXT_MIN_SPAN_M);
+}
+
 function lngToTileX(lng: number, zoom: number): number {
   return Math.floor(((lng + 180) / 360) * 2 ** zoom);
 }
@@ -330,6 +336,18 @@ async function fetchTile(url: string): Promise<Buffer | null> {
   }
 }
 
+async function fetchLinzAerialTile(key: string, zoom: number, x: number, y: number): Promise<Buffer | null> {
+  const formats = ["webp", "png", "jpeg"];
+  for (const format of formats) {
+    const url =
+      `https://basemaps.linz.govt.nz/v1/tiles/aerial/WebMercatorQuad/${zoom}/${x}/${y}.${format}` +
+      `?api=${encodeURIComponent(key)}`;
+    const tile = await fetchTile(url);
+    if (tile) return tile;
+  }
+  return null;
+}
+
 async function placeholderImage(bounds: SitePlanBounds, width = 768, height = 768): Promise<SitePlanImage> {
   const sharp = await loadSharp();
   if (!sharp) {
@@ -379,11 +397,8 @@ async function fetchLinzAerialImage(bounds: SitePlanBounds): Promise<SitePlanIma
     const tilePromises: Array<Promise<{ input: Buffer; left: number; top: number } | null>> = [];
     for (let x = range.minX; x <= range.maxX; x += 1) {
       for (let y = range.minY; y <= range.maxY; y += 1) {
-        const url =
-          `https://basemaps.linz.govt.nz/v1/tiles/aerial/WebMercatorQuad/${range.zoom}/${x}/${y}.webp` +
-          `?api=${encodeURIComponent(key)}`;
         tilePromises.push(
-          fetchTile(url).then((input) => {
+          fetchLinzAerialTile(key, range.zoom, x, y).then((input) => {
             if (!input) return null;
             return {
               input,
@@ -583,6 +598,40 @@ function boundaryLayer(parcel: LinzParcel | null): SitePlanLayer {
   };
 }
 
+export function nearbyBoundaryLayer(parcels: LinzParcel[] | null | undefined, targetParcel: LinzParcel | null): SitePlanLayer {
+  const targetParcelId = targetParcel?.parcel_id ?? null;
+  const features = (parcels ?? []).flatMap((parcel): GeoJsonFeature[] => {
+    if (targetParcelId && parcel.parcel_id === targetParcelId) return [];
+    const polygon = parcel.bbox?.polygon;
+    if (!Array.isArray(polygon) || polygon.length < 3) return [];
+    return [{
+      type: "Feature",
+      properties: {
+        label: parcel.appellation ?? parcel.parcel_id ?? "Nearby parcel",
+        parcelId: parcel.parcel_id,
+      },
+      geometry: { type: "Polygon", coordinates: [closedRing(polygon)] },
+    }];
+  });
+
+  return {
+    id: "nearby-boundaries",
+    label: "Nearby Boundaries",
+    group: "boundary",
+    defaultVisible: features.length > 0,
+    available: features.length > 0,
+    style: {
+      stroke: "#334155",
+      strokeWidth: 1.15,
+      strokeOpacity: 0.72,
+      fill: "#334155",
+      fillOpacity: 0,
+    },
+    legend: [{ label: "Nearby property boundaries", color: "#334155", kind: "polygon" }],
+    geojson: { type: "FeatureCollection", features },
+  };
+}
+
 function unavailableLayer(id: string, label: string, group: SitePlanLayerGroup, color: string): SitePlanLayer {
   return {
     id,
@@ -767,6 +816,13 @@ async function contourLayer(bounds: SitePlanBounds): Promise<SitePlanLayer> {
   }
 }
 
+function boundsRadiusMetres(bounds: SitePlanBounds): number {
+  const center = boundsCenter(bounds);
+  const latSpan = (bounds.maxLat - bounds.minLat) * 111_320;
+  const lngSpan = (bounds.maxLng - bounds.minLng) * 111_320 * Math.max(0.1, Math.cos((center.lat * Math.PI) / 180));
+  return Math.ceil(Math.max(latSpan, lngSpan) / 2);
+}
+
 function validGeo(geo: GeoResult | null | undefined): geo is GeoResult {
   return Boolean(geo && Number.isFinite(geo.lat) && Number.isFinite(geo.lng));
 }
@@ -791,11 +847,16 @@ export async function buildSitePlanForAddress(
   const geo = await resolveGeo(address, cachedRaw);
   const parcel = await resolveParcel(geo, cachedRaw);
   const coreBounds = boundsFromParcel(parcel) ?? fallbackBoundsFromCenter(geo.lat, geo.lng);
-  const mapBounds = paddedBounds(coreBounds);
+  const mapBounds = sitePlanMapBounds(coreBounds);
   const center = parcel?.bbox ? boundsCenter(parcel.bbox) : { lat: geo.lat, lng: geo.lng };
+  const nearbyRadiusM = Math.max(180, Math.min(700, Math.ceil(boundsRadiusMetres(mapBounds) * 1.35)));
 
-  const [image, planning, services, contours] = await Promise.all([
+  const [image, nearbyParcels, planning, services, contours] = await Promise.all([
     fetchLinzAerialImage(mapBounds),
+    fetchLINZParcelsNear(center.lat, center.lng, nearbyRadiusM, 120).catch((err) => {
+      logger.warn({ err: (err as Error).message }, "site-plan: LINZ nearby parcel lookup failed");
+      return null;
+    }),
     planningOverlayLayers(geo.lat, geo.lng, parcel?.bbox ?? null).catch((err) => {
       logger.warn({ err: (err as Error).message }, "site-plan: Auckland planning overlay lookup failed");
       return [] as SitePlanLayer[];
@@ -811,6 +872,7 @@ export async function buildSitePlanForAddress(
     image,
     center,
     layers: [
+      nearbyBoundaryLayer(nearbyParcels, parcel),
       boundaryLayer(parcel),
       ...planning,
       ...services,

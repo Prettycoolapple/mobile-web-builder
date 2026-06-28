@@ -6,6 +6,7 @@ import { sendOwnerNotification } from "../lib/mailer";
 import {
   getUnreadAppBadgeSummary,
   markNotificationItemRead,
+  markNotificationPageRead,
   markNotificationSourceRead,
   type NotificationPage,
 } from "../lib/notification-state";
@@ -69,6 +70,26 @@ router.patch("/notifications/items/:id/read", requireAuth, async (req: Request, 
   } catch (err) {
     req.log.error({ err }, "PATCH /notifications/items/:id/read failed");
     res.status(500).json({ error: "Failed to mark notification read" });
+  }
+});
+
+router.patch("/notifications/pages/:page/read", requireAuth, async (req: Request, res: Response) => {
+  const userId = (req as unknown as { userId: string }).userId;
+  const page = req.params.page;
+
+  if (!readablePages.has(page as NotificationPage)) {
+    res.status(400).json({ error: "page must be search or history" });
+    return;
+  }
+  const readablePage = page as Exclude<NotificationPage, "messages">;
+
+  try {
+    const readCount = await markNotificationPageRead(userId, readablePage);
+    const summary = await getUnreadAppBadgeSummary(userId);
+    res.json({ ok: true, readCount, ...summary });
+  } catch (err) {
+    req.log.error({ err }, "PATCH /notifications/pages/:page/read failed");
+    res.status(500).json({ error: "Failed to mark page notifications read" });
   }
 });
 

@@ -1,14 +1,78 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  _resetSuburbIndexCacheForTests,
   addressLineAppearsInText,
   addressesLikelyMatch,
   extractCombinedListingAddressParts,
   extractListingFactAreaSqm,
+  findLocationInTextViaIndex,
+  findSuburbId,
   looksLikeCombinedListingAddress,
   normaliseListingLandAreaSqm,
   reconcileListingBedBath,
   reconcileListingLandArea,
+  resolveRealestateLocation,
 } from "../realestate-api";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  _resetSuburbIndexCacheForTests();
+});
+
+function mockLocationDirectory() {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      data: [],
+      included: [
+        { type: "districts", id: "278", attributes: { title: "Timaru", slug: "timaru", "fq-slug": "canterbury_timaru" } },
+        { type: "districts", id: "235", attributes: { title: "South Waikato", slug: "south-waikato", "fq-slug": "waikato_south-waikato" } },
+        { type: "suburbs", id: "4151", attributes: { title: "Timaru Central", slug: "timaru-central", "fq-slug": "canterbury_timaru_timaru-central", "parent-id": 278 } },
+        { type: "suburbs", id: "3159", attributes: { title: "Gleniti", slug: "gleniti", "fq-slug": "canterbury_timaru_gleniti", "parent-id": 278 } },
+        { type: "suburbs", id: "4069", attributes: { title: "Tirau", slug: "tirau", "fq-slug": "waikato_south-waikato_tirau", "parent-id": 235 } },
+      ],
+    }),
+  } as Response);
+}
+
+describe("realestate-api location resolution", () => {
+  it("resolves Timaru as a Canterbury district, not fuzzy Tirau", async () => {
+    mockLocationDirectory();
+
+    await expect(findSuburbId("Timaru")).resolves.toBeNull();
+    const resolved = await resolveRealestateLocation("Timaru");
+
+    expect(resolved?.status).toBe("district");
+    if (resolved?.status === "district") {
+      expect(resolved.district.fqSlug).toBe("canterbury_timaru");
+      expect(resolved.suburbs.map((suburb) => suburb.title)).toEqual(["Timaru Central", "Gleniti"]);
+    }
+  });
+
+  it("honours explicit region hints when resolving close place names", async () => {
+    mockLocationDirectory();
+
+    const timaru = await resolveRealestateLocation("Timaru, Canterbury");
+    const tirau = await resolveRealestateLocation("Tirau");
+    const wrongRegion = await resolveRealestateLocation("Timaru, Waikato");
+    const contradictedExtraction = await resolveRealestateLocation("Tirau", "sections in Timaru, Canterbury");
+
+    expect(timaru?.status).toBe("district");
+    expect(tirau?.status).toBe("suburb");
+    if (tirau?.status === "suburb") expect(tirau.suburb.fqSlug).toBe("waikato_south-waikato_tirau");
+    expect(wrongRegion?.status).toBe("invalid");
+    expect(contradictedExtraction?.status).toBe("invalid");
+  });
+
+  it("finds district names inside natural language search text", async () => {
+    mockLocationDirectory();
+
+    const resolved = await findLocationInTextViaIndex("sections in Timaru, Canterbury");
+
+    expect(resolved?.status).toBe("district");
+    if (resolved?.status === "district") expect(resolved.district.title).toBe("Timaru");
+  });
+});
 
 describe("realestate-api listing land-area reconciliation", () => {
   it("uses listing-page land area when the search API returns a large outlier", () => {

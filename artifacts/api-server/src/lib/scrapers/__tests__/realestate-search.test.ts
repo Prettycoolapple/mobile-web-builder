@@ -1,5 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
-import { fetchListingBatch } from "../realestate-search";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { _resetSuburbIndexCacheForTests } from "../realestate-api";
+import { fetchListingBatch, searchRealEstateListings } from "../realestate-search";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  _resetSuburbIndexCacheForTests();
+});
 
 describe("realestate-search legacy metadata fallback", () => {
   it("does not invent a midpoint price when the listing page has no explicit price", async () => {
@@ -27,5 +33,26 @@ describe("realestate-search legacy metadata fallback", () => {
     } finally {
       fetchMock.mockRestore();
     }
+  });
+
+  it("does not run an unscoped HTML fallback when the suburb cannot be resolved", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [], included: [] }),
+    } as Response);
+
+    const result = await searchRealEstateListings({
+      suburb: "not a real place",
+      minPrice: 0,
+      maxPrice: 3_000_000,
+    });
+
+    expect(result).toMatchObject({
+      firstBatch: [],
+      remainingListings: [],
+      totalFound: 0,
+      done: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

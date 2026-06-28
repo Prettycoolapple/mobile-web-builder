@@ -1,10 +1,11 @@
-import React from "react";
-import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
+import React, { useEffect, useMemo, useState } from "react";
+import { View, Text, StyleSheet, TouchableOpacity, Image } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { StarRating } from "@/components/StarRating";
 import { useT } from "@/lib/i18n";
 import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
+import { staticMapUrlFor, streetViewUrlFor, viaImageProxy } from "@/lib/reportPhotoCache";
 
 /** Card-grade headline data returned by GET /explore (no photos/report prose). */
 export interface ExploreProperty {
@@ -17,6 +18,7 @@ export interface ExploreProperty {
   zone: string | null;
   landArea: number | null;
   potentialLots: number | null;
+  photoUrl?: string | null;
 }
 
 function scoreColor(score: number, colors: ReturnType<typeof useColors>): string {
@@ -40,6 +42,19 @@ export function ExploreCard({ property, onAnalyse }: { property: ExploreProperty
   const { t } = useT();
   const composite = typeof property.composite === "number" && property.composite > 0 ? property.composite : 0;
   const c = scoreColor(composite, colors);
+  const imageSources = useMemo(() => {
+    const urls = [
+      property.photoUrl ? viaImageProxy(property.photoUrl) : null,
+      streetViewUrlFor(property.address),
+      staticMapUrlFor(property.address),
+    ].filter((url): url is string => Boolean(url));
+    return Array.from(new Set(urls));
+  }, [property.address, property.photoUrl]);
+  const [imageIndex, setImageIndex] = useState(0);
+
+  useEffect(() => {
+    setImageIndex(0);
+  }, [imageSources.join("|")]);
 
   const chips: string[] = [];
   if (property.zone) chips.push(property.zone);
@@ -50,25 +65,41 @@ export function ExploreCard({ property, onAnalyse }: { property: ExploreProperty
 
   return (
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-      <View style={styles.topRow}>
-        <View style={styles.addressBlock}>
-          <Text style={[styles.address, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]} numberOfLines={2}>
-            {property.address}
-          </Text>
-          {property.suburb ? (
-            <Text style={[styles.suburb, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]} numberOfLines={1}>
-              {property.suburb}
-            </Text>
-          ) : null}
+      <View style={styles.heroRow}>
+        <View style={[styles.photoFrame, { backgroundColor: colors.muted }]}>
+          {imageSources[imageIndex] ? (
+            <Image
+              source={{ uri: imageSources[imageIndex] }}
+              style={styles.photo}
+              resizeMode="cover"
+              onError={() => setImageIndex((idx) => Math.min(idx + 1, imageSources.length))}
+            />
+          ) : (
+            <Feather name="image" size={22} color={colors.mutedForeground} />
+          )}
         </View>
-        {composite > 0 ? (
-          <View style={[styles.badge, { borderColor: c + "88", backgroundColor: c + "22" }]}>
-            <Text style={[styles.badgeNum, { color: c, fontFamily: "DM_Sans_700Bold" }]}>
-              {formatCompositeScoreForDisplay(composite)}
-            </Text>
-            <Text style={[styles.badgeOutOf, { color: c, fontFamily: "DM_Sans_500Medium" }]}>/5</Text>
+        <View style={styles.heroContent}>
+          <View style={styles.topRow}>
+            <View style={styles.addressBlock}>
+              <Text style={[styles.address, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]} numberOfLines={2}>
+                {property.address}
+              </Text>
+              {property.suburb ? (
+                <Text style={[styles.suburb, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]} numberOfLines={1}>
+                  {property.suburb}
+                </Text>
+              ) : null}
+            </View>
+            {composite > 0 ? (
+              <View style={[styles.badge, { borderColor: c + "88", backgroundColor: c + "22" }]}>
+                <Text style={[styles.badgeNum, { color: c, fontFamily: "DM_Sans_700Bold" }]}>
+                  {formatCompositeScoreForDisplay(composite)}
+                </Text>
+                <Text style={[styles.badgeOutOf, { color: c, fontFamily: "DM_Sans_500Medium" }]}>/5</Text>
+              </View>
+            ) : null}
           </View>
-        ) : null}
+        </View>
       </View>
 
       {chips.length > 0 ? (
@@ -103,10 +134,29 @@ const styles = StyleSheet.create({
   card: {
     borderRadius: 16,
     borderWidth: 1,
-    padding: 16,
+    padding: 12,
     marginBottom: 12,
     gap: 12,
   },
+  heroRow: {
+    flexDirection: "row",
+    gap: 12,
+    alignItems: "stretch",
+  },
+  photoFrame: {
+    width: 104,
+    height: 86,
+    borderRadius: 12,
+    overflow: "hidden",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  photo: {
+    width: "100%",
+    height: "100%",
+  },
+  heroContent: { flex: 1, minWidth: 0 },
   topRow: {
     flexDirection: "row",
     alignItems: "flex-start",

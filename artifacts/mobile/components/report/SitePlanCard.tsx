@@ -18,6 +18,7 @@ import Svg, { Circle, Polygon, Polyline } from "react-native-svg";
 import { useAuth } from "@/context/AuthContext";
 import type { FeasibilityReport as Report } from "@/context/ChatContext";
 import { useColors } from "@/hooks/useColors";
+import { translateForOS } from "@/lib/i18n";
 import { getApiBase } from "@/lib/api";
 
 type Coordinate = [number, number];
@@ -118,6 +119,57 @@ function layerColor(layer: SitePlanLayer): string {
 function isLineLayer(layer: SitePlanLayer): boolean {
   return layer.group === "services" || layer.group === "contours";
 }
+
+function layerDisplayLabel(layer: SitePlanLayer): string {
+  if (layer.id === "nearby-boundaries") return translateForOS("site_plan.layer.nearby_boundaries");
+  if (layer.id === "service-stormwater") return translateForOS("site_plan.layer.stormwater");
+  if (layer.id === "service-wastewater") return translateForOS("site_plan.layer.wastewater");
+  if (layer.id === "service-water") return translateForOS("site_plan.layer.water_supply");
+  if (layer.id === "contours") return translateForOS("site_plan.layer.contours");
+  if (layer.group === "planning") return translatePlanningLayerLabel(layer.label);
+  return layer.label;
+}
+
+function translatePlanningLayerLabel(label: string): string {
+  const normalized = label.toLowerCase().replace(/\s+/g, " ").trim();
+  const key = PLANNING_LAYER_LABEL_KEYS[normalized];
+  return key ? translateForOS(key) : label;
+}
+
+const PLANNING_LAYER_LABEL_KEYS: Record<string, string> = {
+  "heritage": "site_plan.layer.heritage",
+  "notable trees": "site_plan.layer.notable_trees",
+  "volcanic viewshaft": "site_plan.layer.volcanic_viewshaft",
+  "locally significant viewshaft": "site_plan.layer.locally_significant_viewshaft",
+  "coastal inundation": "site_plan.layer.coastal_inundation",
+  "waitakere ranges heritage": "site_plan.layer.waitakere_ranges_heritage",
+  "ridgeline protection": "site_plan.layer.ridgeline_protection",
+  "sites and places of significance to mana whenua": "site_plan.layer.mana_whenua",
+  "significant ecological area": "site_plan.layer.significant_ecological_area",
+  "wetland management area": "site_plan.layer.wetland_management_area",
+  "natural stream management area": "site_plan.layer.natural_stream_management_area",
+  "high-use stream management area": "site_plan.layer.high_use_stream_management_area",
+  "lake management area": "site_plan.layer.lake_management_area",
+  "water supply management area": "site_plan.layer.water_supply_management_area",
+  "high-use aquifer management area": "site_plan.layer.high_use_aquifer_management_area",
+  "quality-sensitive aquifer management area": "site_plan.layer.quality_sensitive_aquifer_management_area",
+  "special character area": "site_plan.layer.special_character_area",
+  "outstanding natural feature": "site_plan.layer.outstanding_natural_feature",
+  "outstanding natural landscape": "site_plan.layer.outstanding_natural_landscape",
+  "outstanding natural character": "site_plan.layer.outstanding_natural_character",
+  "high natural character": "site_plan.layer.high_natural_character",
+  "local public views": "site_plan.layer.local_public_views",
+  "height variation control": "site_plan.layer.height_variation_control",
+  "subdivision variation control": "site_plan.layer.subdivision_variation_control",
+  "parking variation control": "site_plan.layer.parking_variation_control",
+  "stormwater management area control": "site_plan.layer.stormwater_management_area_control",
+  "arterial roads control": "site_plan.layer.arterial_roads_control",
+  "building frontage control": "site_plan.layer.building_frontage_control",
+  "vehicle access restriction control": "site_plan.layer.vehicle_access_restriction_control",
+  "level crossings with sightlines control": "site_plan.layer.level_crossings_sightlines_control",
+  "emergency management area control": "site_plan.layer.emergency_management_area_control",
+  "cable protection areas control": "site_plan.layer.cable_protection_areas_control",
+};
 
 function renderLine(
   coords: Coordinate[],
@@ -256,10 +308,12 @@ function LayerToggleRow({
         </View>
         <View style={{ flex: 1 }}>
           <Text style={[styles.legendLabel, { color: colors.foreground }]} numberOfLines={1}>
-            {layer.label}
+            {layerDisplayLabel(layer)}
           </Text>
           {!layer.available ? (
-            <Text style={[styles.legendUnavailable, { color: colors.mutedForeground }]}>Unavailable</Text>
+            <Text style={[styles.legendUnavailable, { color: colors.mutedForeground }]}>
+              {translateForOS("site_plan.unavailable_short")}
+            </Text>
           ) : null}
         </View>
       </View>
@@ -352,19 +406,17 @@ export function SitePlanCard({ report }: Props) {
     ],
   }));
 
-  const resetMap = () => {
-    scale.value = withTiming(1);
-    translateX.value = withTiming(0);
-    translateY.value = withTiming(0);
-  };
-
   const toggleLayer = (id: string, next: boolean) => {
     setVisibleLayers((current) => ({ ...current, [id]: next }));
   };
 
   const visibleVectorLayers = useMemo(
-    () => query.data?.layers.filter((layer) => layer.available && visibleLayers[layer.id]) ?? [],
+    () => query.data?.layers.filter((layer) => layer.available && (layer.id === "boundary" || visibleLayers[layer.id])) ?? [],
     [query.data?.layers, visibleLayers],
+  );
+  const legendLayers = useMemo(
+    () => query.data?.layers.filter((layer) => layer.id !== "boundary") ?? [],
+    [query.data?.layers],
   );
 
   if (!searchId) {
@@ -372,7 +424,9 @@ export function SitePlanCard({ report }: Props) {
       <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
         <View style={styles.emptyState}>
           <Feather name="map" size={18} color={colors.mutedForeground} />
-          <Text style={[styles.emptyTitle, { color: colors.foreground }]}>Site plan unavailable</Text>
+          <Text style={[styles.emptyTitle, { color: colors.foreground }]}>
+            {translateForOS("site_plan.auckland_only")}
+          </Text>
         </View>
       </View>
     );
@@ -382,19 +436,20 @@ export function SitePlanCard({ report }: Props) {
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
       <View style={[styles.header, { borderBottomColor: colors.border }]}>
         <View style={{ flex: 1 }}>
-          <Text style={[styles.title, { color: colors.foreground }]}>Site Plan</Text>
-          <Text style={[styles.subtitle, { color: colors.mutedForeground }]} numberOfLines={1}>
-            {query.data?.image.attribution ?? "Loading map layers"}
+          <Text style={[styles.title, { color: colors.foreground }]}>
+            {translateForOS("site_plan.title")}
           </Text>
         </View>
         <TouchableOpacity
-          style={[styles.iconButton, { borderColor: colors.border, backgroundColor: colors.muted }]}
-          onPress={resetMap}
+          style={[styles.aiButton, { borderColor: colors.border, backgroundColor: colors.muted }]}
+          onPress={() => {}}
           activeOpacity={0.8}
           accessibilityRole="button"
-          accessibilityLabel="Reset site plan"
+          accessibilityLabel={translateForOS("site_plan.ai_subdivision")}
         >
-          <Feather name="maximize" size={15} color={colors.foreground} />
+          <Text style={[styles.aiButtonText, { color: colors.foreground }]} numberOfLines={1}>
+            {translateForOS("site_plan.ai_subdivision")}
+          </Text>
         </TouchableOpacity>
       </View>
 
@@ -406,13 +461,17 @@ export function SitePlanCard({ report }: Props) {
         ) : query.isError ? (
           <View style={styles.emptyState}>
             <Feather name="alert-circle" size={18} color={colors.mutedForeground} />
-            <Text style={[styles.emptyTitle, { color: colors.foreground }]}>Site plan unavailable</Text>
+            <Text style={[styles.emptyTitle, { color: colors.foreground }]}>
+              {translateForOS("site_plan.auckland_only")}
+            </Text>
             <TouchableOpacity
               style={[styles.retryButton, { backgroundColor: colors.foreground }]}
               onPress={() => query.refetch()}
               activeOpacity={0.85}
             >
-              <Text style={[styles.retryText, { color: colors.card }]}>Retry</Text>
+              <Text style={[styles.retryText, { color: colors.card }]}>
+                {translateForOS("site_plan.retry")}
+              </Text>
             </TouchableOpacity>
           </View>
         ) : query.data ? (
@@ -449,7 +508,7 @@ export function SitePlanCard({ report }: Props) {
 
       {query.data ? (
         <View style={[styles.legend, { borderTopColor: colors.border }]}>
-          {query.data.layers.map((layer) => (
+          {legendLayers.map((layer) => (
             <LayerToggleRow
               key={layer.id}
               layer={layer}
@@ -470,7 +529,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   header: {
-    minHeight: 62,
+    minHeight: 54,
     paddingHorizontal: 14,
     paddingVertical: 11,
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -483,19 +542,19 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 20,
   },
-  subtitle: {
-    fontFamily: "DM_Sans_400Regular",
-    fontSize: 11,
-    lineHeight: 16,
-    marginTop: 1,
-  },
-  iconButton: {
-    width: 34,
+  aiButton: {
+    minWidth: 112,
     height: 34,
     borderRadius: 17,
     borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
+    paddingHorizontal: 12,
+  },
+  aiButtonText: {
+    fontFamily: "DM_Sans_700Bold",
+    fontSize: 12,
+    lineHeight: 16,
   },
   mapViewport: {
     width: "100%",

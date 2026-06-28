@@ -2687,28 +2687,38 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
 
   return (
     <View style={styles.container}>
-      <View style={[styles.reportTabs, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        {(["info", "plan"] as const).map((tab) => {
-          const selected = activeReportTab === tab;
-          return (
-            <TouchableOpacity
-              key={tab}
-              style={[styles.reportTabButton, selected && { backgroundColor: colors.foreground }]}
-              onPress={() => setActiveReportTab(tab)}
-              activeOpacity={0.85}
-              accessibilityRole="tab"
-              accessibilityState={{ selected }}
-            >
-              <Text style={[styles.reportTabText, { color: selected ? colors.card : colors.mutedForeground }]}>
-                {tab === "info" ? "Info" : "Plan"}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+      <View style={styles.reportBookmarkStack}>
+        <View style={styles.reportTabs}>
+          {(["info", "plan"] as const).map((tab) => {
+            const selected = activeReportTab === tab;
+            const activeBg = tab === "info" ? colors.headerBg : colors.card;
+            const activeText = tab === "info" ? colors.headerText : colors.foreground;
+            return (
+              <TouchableOpacity
+                key={tab}
+                style={[
+                  styles.reportTabButton,
+                  {
+                    backgroundColor: selected ? activeBg : colors.muted,
+                    borderColor: selected ? (tab === "info" ? colors.headerBg : colors.border) : colors.border,
+                  },
+                  selected ? styles.reportTabButtonActive : styles.reportTabButtonInactive,
+                ]}
+                onPress={() => setActiveReportTab(tab)}
+                activeOpacity={0.85}
+                accessibilityRole="tab"
+                accessibilityState={{ selected }}
+              >
+                <Text style={[styles.reportTabText, { color: selected ? activeText : colors.mutedForeground }]}>
+                  {tab === "info" ? "Info" : "Plan"}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
 
-      {activeReportTab === "info" ? (
-      <View style={[styles.reportHeader, { backgroundColor: colors.headerBg }]}>
+        {activeReportTab === "info" ? (
+        <View style={[styles.reportHeader, { backgroundColor: colors.headerBg }]}>
         {/* Always render the carousel — when no photo URLs resolve it shows
             a labelled placeholder rather than collapsing the hero entirely. */}
         <ReportPhotoCarousel
@@ -2809,10 +2819,11 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
         ) : (
           <ScoreSummaryRow report={report} colors={colors} hideOverall />
         )}
+        </View>
+        ) : (
+          <SitePlanCard report={report} />
+        )}
       </View>
-      ) : (
-        <SitePlanCard report={report} />
-      )}
 
       {(report.cv_unavailable || (report.missing_critical_fields && report.missing_critical_fields.length > 0)) && (
         <View style={[styles.warningBox, { backgroundColor: "#FEF08A20", borderColor: "#CA8A0450", borderRadius: 12, padding: 12 }]}>
@@ -3122,8 +3133,11 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
 
 const styles = StyleSheet.create({
   container: { gap: 10 },
-  reportTabs: { flexDirection: "row", borderRadius: 14, borderWidth: 1, padding: 4, gap: 4 },
-  reportTabButton: { flex: 1, minHeight: 34, borderRadius: 10, alignItems: "center", justifyContent: "center", paddingHorizontal: 10 },
+  reportBookmarkStack: { gap: 0 },
+  reportTabs: { flexDirection: "row", alignItems: "flex-end", paddingHorizontal: 12, gap: 6, marginBottom: -1, zIndex: 2 },
+  reportTabButton: { minWidth: 76, minHeight: 34, borderTopLeftRadius: 10, borderTopRightRadius: 10, borderBottomLeftRadius: 0, borderBottomRightRadius: 0, borderWidth: 1, borderBottomWidth: 0, alignItems: "center", justifyContent: "center", paddingHorizontal: 16, paddingVertical: 8 },
+  reportTabButtonActive: { minHeight: 38, paddingTop: 10 },
+  reportTabButtonInactive: { minHeight: 30, paddingTop: 7, opacity: 0.92 },
   reportTabText: { fontFamily: "DM_Sans_700Bold", fontSize: 13, lineHeight: 18 },
   reportHeader: { borderRadius: 16, overflow: "hidden" },
   reportHeaderTop: { flexDirection: "row", gap: 12, padding: 16, alignItems: "flex-start" },

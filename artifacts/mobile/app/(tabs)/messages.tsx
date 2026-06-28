@@ -277,7 +277,7 @@ const styles = StyleSheet.create({
     borderBottomColor: "rgba(255,255,255,0.12)",
   },
   headerTitle: {
-    fontFamily: "DM_Sans_600SemiBold",
+    fontFamily: "SpaceGrotesk_700Bold",
     fontSize: 22,
     color: "#FAFAF9",
     letterSpacing: -0.4,

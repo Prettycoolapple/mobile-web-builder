@@ -30,6 +30,7 @@ interface NotificationContextValue {
   fetchItems: (page: Exclude<NotificationPage, "messages">) => Promise<NotificationItem[]>;
   markItemRead: (id: string) => Promise<void>;
   markSourceRead: (kind: string, sourceId: string) => Promise<void>;
+  markPageRead: (page: Exclude<NotificationPage, "messages">) => Promise<void>;
 }
 
 const emptyCounts: Record<NotificationPage, number> = {
@@ -111,6 +112,27 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     }
   }, [authHeaders, refresh, token, user]);
 
+  const markPageRead = useCallback(async (page: Exclude<NotificationPage, "messages">) => {
+    if (!token || !user) return;
+    try {
+      const resp = await fetch(`${getApiBase()}/notifications/pages/${encodeURIComponent(page)}/read`, {
+        method: "PATCH",
+        headers: authHeaders(),
+      });
+      if (!resp.ok) return;
+      const data = await resp.json() as NotificationSummary;
+      const next = {
+        total: data.total ?? 0,
+        pages: { ...emptyCounts, ...(data.pages ?? {}) },
+      };
+      setSummary(next);
+      await setAppIconBadgeCountAsync(next.total);
+    } catch {
+    } finally {
+      DeviceEventEmitter.emit("projectAlpha:notificationsChanged");
+    }
+  }, [authHeaders, token, user]);
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
@@ -141,6 +163,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         fetchItems,
         markItemRead,
         markSourceRead,
+        markPageRead,
       }}
     >
       {children}

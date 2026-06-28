@@ -29,9 +29,10 @@ import {
   extractCombinedListingAddressParts,
   fetchRealestateAgentForListingUrl,
   findSuburbInTextViaIndex,
+  findLocationInTextViaIndex,
   getDistrictSiblings,
   findSuburbId,
-  findClosestSuburbByName,
+  resolveRealestateLocation,
 } from "../lib/scrapers/realestate-api";
 import { suggestNearbySuburbs } from "../lib/claude";
 import { runPropertyPipeline, hasCacheableCore, type PipelineResult } from "../lib/pipeline";
@@ -78,7 +79,6 @@ import {
 } from "../lib/listing-cache";
 import type { ListingResult } from "../lib/scrapers/oneroof";
 import { queueBackgroundScores, getCardScores } from "../lib/analysis-cache";
-import { isHighConfidenceSuburbMatch } from "../lib/transcription-place-correction";
 import { normaliseLocale } from "../lib/prompts";
 import { terrainSlopeText, type TerrainContour } from "../lib/terrain-slope-copy";
 import { buildListingTeaser } from "../lib/listing-teaser";
@@ -1151,7 +1151,7 @@ function resolveDiscoveryPresentation(input: {
 }
 
 type DiscoverySuburbResolution =
-  | { status: "valid"; suburb: string; original: string | null }
+  | { status: "valid"; suburb: string; original: string | null; kind: "suburb" | "district" }
   | { status: "invalid"; message: string };
 
 function replaceFirstInsensitive(haystack: string, needle: string, replacement: string): string {
@@ -1164,27 +1164,37 @@ function replaceFirstInsensitive(haystack: string, needle: string, replacement: 
 async function resolveDiscoverySuburbName(
   suburb: string | null | undefined,
   locale: "en" | "zh",
+  contextText?: string | null,
 ): Promise<DiscoverySuburbResolution | null> {
   const raw = suburb?.trim();
   if (!raw) return null;
 
   const districtChildren = resolveDistrictToSuburbs(raw);
   if (districtChildren && districtChildren.length > 0) {
-    return { status: "valid", suburb: raw.toLowerCase(), original: null };
+    return { status: "valid", suburb: raw.toLowerCase(), original: null, kind: "district" };
   }
 
-  const direct = await findSuburbId(raw);
-  if (direct) {
-    const normalized = direct.title.toLowerCase();
-    return { status: "valid", suburb: normalized, original: normalized === raw.toLowerCase() ? null : raw };
+  const resolved = await resolveRealestateLocation(raw, contextText);
+  if (resolved?.status === "suburb") {
+    const normalized = resolved.suburb.title.toLowerCase();
+    return {
+      status: "valid",
+      suburb: normalized,
+      original: resolved.original ?? (normalized === raw.toLowerCase() ? null : raw),
+      kind: "suburb",
+    };
+  }
+  if (resolved?.status === "district") {
+    const normalized = resolved.district.title.toLowerCase();
+    return {
+      status: "valid",
+      suburb: normalized,
+      original: resolved.original ?? (normalized === raw.toLowerCase() ? null : raw),
+      kind: "district",
+    };
   }
 
-  const fuzzy = await findClosestSuburbByName(raw);
-  if (fuzzy && isHighConfidenceSuburbMatch(raw, fuzzy)) {
-    return { status: "valid", suburb: fuzzy.suburb.title.toLowerCase(), original: raw };
-  }
-
-  const closest = fuzzy?.suburb.title;
+  const closest = resolved?.status === "invalid" ? resolved.closest : null;
   const baseMessage = closest
     ? `I couldn't confidently match "${titleCaseSuburb(raw)}" to a NZ suburb. Did you mean ${closest}? Please check the spelling and try again.`
     : `I couldn't confidently match "${titleCaseSuburb(raw)}" to a NZ suburb. Please check the spelling and try again.`;
@@ -1792,7 +1802,10 @@ async function searchSuburbOrDistrict(args: {
   totalAvailable: number | null;
   done: boolean;
 }> {
-  const childSuburbs = resolveDistrictToSuburbs(args.suburb);
+  const liveLocation = await resolveRealestateLocation(args.suburb).catch(() => null);
+  const childSuburbs = liveLocation?.status === "district"
+    ? liveLocation.suburbs.map((suburb) => suburb.title.toLowerCase())
+    : resolveDistrictToSuburbs(args.suburb);
   if (!childSuburbs || childSuburbs.length === 0) {
     const result = await searchRealEstateListings({
       suburb: args.suburb,
@@ -2886,8 +2899,12 @@ function hasExplicitPriceConstraint(text: string): boolean {
 async function parseDiscoverParams(text: string): Promise<{ suburb: string | null; minPrice: number; maxPrice: number }> {
   // Resolve suburb against the live realestate.co.nz directory (1899 suburbs)
   // — no hand-curated list. Coverage tracks the data source automatically.
-  const hit = await findSuburbInTextViaIndex(text);
-  const suburb = hit ? hit.title.toLowerCase() : null;
+  const hit = await findLocationInTextViaIndex(text);
+  const suburb = hit?.status === "suburb"
+    ? hit.suburb.title.toLowerCase()
+    : hit?.status === "district"
+      ? hit.district.title.toLowerCase()
+      : null;
 
   const pricePatterns = [
     /under\s+\$?([0-9]+(?:\.[0-9]+)?)\s*([mk]?)/i,
@@ -3171,22 +3188,26 @@ async function processScreeningJob(jobId: string, log: FeasibilityLog): Promise<
     const body = locale === "zh"
       ? `您请求的「${query}」筛选已完成，请打开应用查看。`
       : `Your screening results for "${query}" are ready. Open Project Alpha to view them.`;
-    await createNotificationItem({
-      userId: job.userId,
-      kind: "screening_ready",
-      sourceId: jobId,
-      page: "search",
-      title,
-      body,
-      metadata: { jobId, query: job.queryText, mode },
-    });
-    const badgeCount = await getUnreadAppBadgeCount(job.userId);
-    void sendPushToUser(job.userId, title, body, {
-      type: "screening_ready",
-      jobId,
-    }, {
-      badgeCount,
-    });
+    try {
+      await createNotificationItem({
+        userId: job.userId,
+        kind: "screening_ready",
+        sourceId: jobId,
+        page: "search",
+        title,
+        body,
+        metadata: { jobId, query: job.queryText, mode },
+      });
+      const badgeCount = await getUnreadAppBadgeCount(job.userId);
+      void sendPushToUser(job.userId, title, body, {
+        type: "screening_ready",
+        jobId,
+      }, {
+        badgeCount,
+      });
+    } catch (err) {
+      log.warn({ err }, "Screening-ready notification ledger write failed (non-fatal)");
+    }
   } catch (err) {
     await withDbRetry(() =>
       db
@@ -3807,22 +3828,26 @@ async function runFeasibilityAnalyseCore(args: {
         locale === "zh"
           ? `您请求的「${shortAddr}」分析已完成，请打开应用查看。`
           : `Your analysis for ${shortAddr} is ready — open the app to view it.`;
-      await createNotificationItem({
-        userId,
-        kind: "report_ready",
-        sourceId: savedSearchId,
-        page: "history",
-        title: pushTitle,
-        body: pushBody,
-        metadata: { searchId: savedSearchId, address: analysisAddress },
-      });
-      const badgeCount = await getUnreadAppBadgeCount(userId);
-      void sendPushToUser(userId, pushTitle, pushBody, {
-        type: "report_ready",
-        searchId: savedSearchId,
-      }, {
-        badgeCount,
-      }).catch((e) => log.warn({ e }, "Report-ready push failed (non-fatal)"));
+      try {
+        await createNotificationItem({
+          userId,
+          kind: "report_ready",
+          sourceId: savedSearchId,
+          page: "history",
+          title: pushTitle,
+          body: pushBody,
+          metadata: { searchId: savedSearchId, address: analysisAddress },
+        });
+        const badgeCount = await getUnreadAppBadgeCount(userId);
+        void sendPushToUser(userId, pushTitle, pushBody, {
+          type: "report_ready",
+          searchId: savedSearchId,
+        }, {
+          badgeCount,
+        }).catch((e) => log.warn({ e }, "Report-ready push failed (non-fatal)"));
+      } catch (err) {
+        log.warn({ err }, "Report-ready notification ledger write failed (non-fatal)");
+      }
     }
   }
 
@@ -3999,23 +4024,27 @@ async function processFeasibilityJob(jobId: string, log: FeasibilityLog): Promis
         locale === "zh"
           ? `您请求的「${shortAddr}」分析已完成，请打开应用查看。`
           : `Your analysis for ${shortAddr} is ready — open the app to view it.`;
-      await createNotificationItem({
-        userId: job.userId,
-        kind: "report_ready",
-        sourceId: result.savedSearchId,
-        page: "history",
-        title: pushTitle,
-        body: pushBody,
-        metadata: { searchId: result.savedSearchId, jobId, address: job.analysisAddress },
-      });
-      const badgeCount = await getUnreadAppBadgeCount(job.userId);
-      void sendPushToUser(job.userId, pushTitle, pushBody, {
-        type: "report_ready",
-        searchId: result.savedSearchId,
-        jobId,
-      }, {
-        badgeCount,
-      }).catch((e) => log.warn({ e }, "Report-ready push failed (non-fatal)"));
+      try {
+        await createNotificationItem({
+          userId: job.userId,
+          kind: "report_ready",
+          sourceId: result.savedSearchId,
+          page: "history",
+          title: pushTitle,
+          body: pushBody,
+          metadata: { searchId: result.savedSearchId, jobId, address: job.analysisAddress },
+        });
+        const badgeCount = await getUnreadAppBadgeCount(job.userId);
+        void sendPushToUser(job.userId, pushTitle, pushBody, {
+          type: "report_ready",
+          searchId: result.savedSearchId,
+          jobId,
+        }, {
+          badgeCount,
+        }).catch((e) => log.warn({ e }, "Report-ready push failed (non-fatal)"));
+      } catch (err) {
+        log.warn({ err }, "Report-ready notification ledger write failed (non-fatal)");
+      }
     }
   } catch (err) {
     await withDbRetry(() =>
@@ -5860,8 +5889,9 @@ router.post(
           const userTextHasPrice = intent.minPrice !== null || intent.maxPrice !== null;
 
           if (!suburb) {
-            const hit = await findSuburbInTextViaIndex(userText);
-            if (hit) suburb = hit.title.toLowerCase();
+            const hit = await findLocationInTextViaIndex(userText);
+            if (hit?.status === "suburb") suburb = hit.suburb.title.toLowerCase();
+            else if (hit?.status === "district") suburb = hit.district.title.toLowerCase();
           }
           // Directional / "central" area terms (EN + zh) are Auckland-context by
           // default. Resolve them to Auckland districts so we never fall back to
@@ -5901,7 +5931,7 @@ router.post(
             }
           }
 
-          const suburbResolution = await resolveDiscoverySuburbName(suburb, chatLocale);
+          const suburbResolution = await resolveDiscoverySuburbName(suburb, chatLocale, userText);
           if (suburbResolution?.status === "invalid") {
             req.log.info({ suburb, sample: userText.slice(0, 100) }, "Discovery: invalid suburb rejected before listing search");
             res.json({ content: suburbResolution.message, mode: "text", ...providerSignal });
@@ -5999,7 +6029,7 @@ router.post(
           if (suburb && intent.additionalSuburbs.length > 0) {
             for (const extra of intent.additionalSuburbs) {
               if (userExtraSuburbs.length >= 6) break;
-              const resolved = await resolveDiscoverySuburbName(extra, chatLocale).catch(() => null);
+              const resolved = await resolveDiscoverySuburbName(extra, chatLocale, userText).catch(() => null);
               if (resolved?.status === "invalid") continue;
               const name = resolved?.status === "valid" ? resolved.suburb : extra.toLowerCase().trim();
               if (name && name !== suburb && !userExtraSuburbs.includes(name)) userExtraSuburbs.push(name);
@@ -7689,8 +7719,12 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
         // Try the user text first (most reliable), then scan the AI's response for a known suburb,
         // then try a last-resort phrase extraction from user text for unmapped suburbs.
         const { suburb: userSuburb, minPrice, maxPrice } = await parseDiscoverParams(userText);
-        const aiHit = userSuburb == null ? await findSuburbInTextViaIndex(content) : null;
-        const suburb = userSuburb ?? (aiHit ? aiHit.title.toLowerCase() : null);
+        const aiHit = userSuburb == null ? await findLocationInTextViaIndex(content) : null;
+        const suburb = userSuburb ?? (
+          aiHit?.status === "suburb" ? aiHit.suburb.title.toLowerCase()
+            : aiHit?.status === "district" ? aiHit.district.title.toLowerCase()
+              : null
+        );
         const safetyNetCriteria = buildDiscoveryCriteriaText(messages, userText, null);
         const safetyNetFollowUp = isDiscoverStreetContinuation(userText);
         const searchPresentationSafetyNet = resolveDiscoveryPresentation({

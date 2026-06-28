@@ -1,4 +1,5 @@
 import { BlurView } from "expo-blur";
+import { LinearGradient } from "expo-linear-gradient";
 import { Tabs, useRouter, useSegments } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import { Feather } from "@expo/vector-icons";
@@ -156,13 +157,18 @@ function ClassicTabLayout({ isGuest }: { isGuest: boolean }) {
               accessibilityRole="button"
               accessibilityLabel={t("tab.home")}
             >
-              <View style={[styles.homeCircle, { backgroundColor: colors.accent }]}>
+              <LinearGradient
+                colors={["#FFFFFF", colors.accent]}
+                start={{ x: 0.08, y: 0.05 }}
+                end={{ x: 0.92, y: 0.95 }}
+                style={[styles.homeCircle, { borderColor: colors.accent + "55" }]}
+              >
                 {isIOS ? (
-                  <SymbolView name="house.fill" tintColor="#fff" size={18} />
+                  <SymbolView name="house.fill" tintColor={colors.headerBg} size={18} />
                 ) : (
-                  <Feather name="home" size={18} color="#fff" />
+                  <Feather name="home" size={18} color={colors.headerBg} />
                 )}
-              </View>
+              </LinearGradient>
               <Text style={[styles.homeLabel, { color: colors.mutedForeground }]}>
                 {t("tab.home")}
               </Text>
@@ -257,6 +263,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
+    borderWidth: StyleSheet.hairlineWidth,
     alignItems: "center",
     justifyContent: "center",
   },

@@ -30,7 +30,7 @@ import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useChat, ChatMessage, FeasibilityReport, FeasibilityReportGroup, LoadingHint, PropertyCandidate, SelectedListingContext, ServiceProvider, type CandidateScoreUpdate } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
-import { useNotifications, type NotificationItem } from "@/context/NotificationContext";
+import { useNotifications } from "@/context/NotificationContext";
 
 import { ChatBubble } from "@/components/ChatBubble";
 import { ResponseRatingBar } from "@/components/ResponseRatingBar";
@@ -494,7 +494,7 @@ export default function SearchScreen() {
     setFirstLlmResponseRating,
     bumpSearchHistory,
   } = useChat();
-  const { fetchItems: fetchNotificationItems, markItemRead } = useNotifications();
+  const { markPageRead } = useNotifications();
 
   const [inputText, setInputText] = useState("");
   const [homeMode, setHomeMode] = useState<"ask" | "browse">("ask");
@@ -506,9 +506,6 @@ export default function SearchScreen() {
   const [browseLoadingMore, setBrowseLoadingMore] = useState(false);
   const [browseError, setBrowseError] = useState<string | null>(null);
   const [showPaywall, setShowPaywall] = useState(false);
-  const [searchNotificationItems, setSearchNotificationItems] = useState<NotificationItem[]>([]);
-  const [openingNotificationId, setOpeningNotificationId] = useState<string | null>(null);
-
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [messageLimitReached, setMessageLimitReached] = useState(false);
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
@@ -703,34 +700,13 @@ export default function SearchScreen() {
   }, [homeMode, browseFilters, loadBrowseListings]);
 
   const messages = currentSession?.messages || [];
-
-  const loadSearchNotificationItems = useCallback(async () => {
-    if (!user) {
-      setSearchNotificationItems([]);
-      return;
-    }
-    const items = await fetchNotificationItems("search");
-    setSearchNotificationItems(items);
-  }, [fetchNotificationItems, user]);
+  const hasSearchContent = messages.length > 0;
 
   useFocusEffect(
     useCallback(() => {
-      void loadSearchNotificationItems();
-    }, [loadSearchNotificationItems]),
+      if (user && hasSearchContent) void markPageRead("search");
+    }, [hasSearchContent, markPageRead, user]),
   );
-
-  useEffect(() => {
-    const changedSub = DeviceEventEmitter.addListener("projectAlpha:notificationsChanged", () => {
-      void loadSearchNotificationItems();
-    });
-    const jobReadySub = DeviceEventEmitter.addListener("projectAlpha:backgroundJobsReady", () => {
-      void loadSearchNotificationItems();
-    });
-    return () => {
-      changedSub.remove();
-      jobReadySub.remove();
-    };
-  }, [loadSearchNotificationItems]);
 
   const scrollToNewestMessage = useCallback(() => {
     flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
@@ -1770,78 +1746,6 @@ export default function SearchScreen() {
       }, job.sessionId);
     },
     [addMessage, replaceBackgroundAnalyseMessage, startCardScorePoll, t],
-  );
-
-  const handleOpenSearchNotification = useCallback(
-    async (item: NotificationItem) => {
-      if (item.kind !== "screening_ready" || !user?.id) return;
-      setOpeningNotificationId(item.id);
-      try {
-        const resp = await fetch(`${getApiBase()}/screening/jobs/${encodeURIComponent(item.sourceId)}`, {
-          headers: getApiHeaders(),
-        });
-        if (!resp.ok) throw new Error("Could not load screening job");
-        const data = await resp.json() as {
-          status?: string;
-          result?: unknown;
-          error?: string | null;
-        };
-        if (data.status !== "completed") {
-          Alert.alert(t("common.error"), data.error || t("search.cant_reach"));
-          return;
-        }
-
-        const storedJobs = await readBackgroundScreeningJobs();
-        const storedJob = storedJobs.find((job) => job.jobId === item.sourceId && job.userId === user.id);
-        const metadata = item.metadata && typeof item.metadata === "object"
-          ? item.metadata as { query?: unknown; mode?: unknown }
-          : {};
-        const query = storedJob?.query
-          ?? (typeof metadata.query === "string" ? metadata.query : null)
-          ?? item.body
-          ?? item.title;
-        const sessionId = storedJob?.sessionId ?? (currentSessionId ?? createSession());
-        if (storedJob?.sessionId) {
-          switchSession(storedJob.sessionId);
-        } else if ((currentSession?.messages.length ?? 0) === 0) {
-          addMessage({ role: "user", type: "text", content: query }, sessionId);
-        }
-
-        const mode = metadata.mode === "generic_listing" || metadata.mode === "scored_screening"
-          ? metadata.mode
-          : undefined;
-        renderBackgroundScreeningResult(storedJob ?? {
-          jobId: item.sourceId,
-          userId: user.id,
-          sessionId,
-          query,
-          presentation: mode,
-          createdAt: Date.now(),
-        }, data.result);
-        await removeBackgroundScreeningJob(item.sourceId).catch(() => {});
-        await markItemRead(item.id);
-        setSearchNotificationItems((prev) => prev.filter((existing) => existing.id !== item.id));
-        setTimeout(scrollToNewestMessage, 100);
-      } catch {
-        Alert.alert(t("common.error"), t("search.cant_reach"));
-      } finally {
-        setOpeningNotificationId(null);
-      }
-    },
-    [
-      addMessage,
-      createSession,
-      currentSession?.messages.length,
-      currentSessionId,
-      getApiHeaders,
-      getApiBase,
-      markItemRead,
-      renderBackgroundScreeningResult,
-      scrollToNewestMessage,
-      switchSession,
-      t,
-      user?.id,
-    ],
   );
 
   const backgroundScreeningPollInFlightRef = useRef(false);
@@ -3685,45 +3589,6 @@ export default function SearchScreen() {
     </View>
   ), [cancelRecording, colors.mutedForeground, handleRecordingPressMove, isRecording, micHoldHintOpacity, recordingCancelArmed, showMicHoldHint, startRecording, stopRecording, t]);
 
-  const renderSearchNotificationStrip = useCallback(() => {
-    if (searchNotificationItems.length === 0) return null;
-    return (
-      <View style={[styles.notificationStrip, { backgroundColor: colors.background, borderBottomColor: colors.border }]}>
-        {searchNotificationItems.map((item) => {
-          const opening = openingNotificationId === item.id;
-          return (
-            <TouchableOpacity
-              key={item.id}
-              style={[styles.notificationRow, { backgroundColor: colors.card, borderColor: colors.border }]}
-              onPress={() => handleOpenSearchNotification(item)}
-              disabled={opening}
-              activeOpacity={0.82}
-            >
-              <View style={[styles.notificationIcon, { backgroundColor: colors.accent + "18" }]}>
-                <Feather name="bell" size={14} color={colors.accent} />
-              </View>
-              <View style={styles.notificationTextWrap}>
-                <Text style={[styles.notificationTitle, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]} numberOfLines={1}>
-                  {item.title}
-                </Text>
-                {item.body ? (
-                  <Text style={[styles.notificationBody, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]} numberOfLines={1}>
-                    {item.body}
-                  </Text>
-                ) : null}
-              </View>
-              {opening ? (
-                <ActivityIndicator size="small" color={colors.accent} />
-              ) : (
-                <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
-              )}
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-    );
-  }, [colors, handleOpenSearchNotification, openingNotificationId, searchNotificationItems]);
-
   return (
     <KeyboardAvoidingView
       style={[styles.container, { backgroundColor: colors.background }]}
@@ -3833,8 +3698,6 @@ export default function SearchScreen() {
           </View>
         )}
       </View>
-
-      {renderSearchNotificationStrip()}
 
       {/* Empty / Search state */}
       {BROWSE_MODE_ENABLED && homeMode === "browse" ? (
@@ -4354,42 +4217,6 @@ const styles = StyleSheet.create({
   },
   contextBadgeText: {
     fontSize: 11,
-  },
-  notificationStrip: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    gap: 7,
-  },
-  notificationRow: {
-    minHeight: 58,
-    borderWidth: 1,
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  notificationIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: 10,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  notificationTextWrap: {
-    flex: 1,
-    minWidth: 0,
-    gap: 2,
-  },
-  notificationTitle: {
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  notificationBody: {
-    fontSize: 12,
-    lineHeight: 16,
   },
   // ── Landing / empty state ──────────────────────────────────────────
   landingContainer: {

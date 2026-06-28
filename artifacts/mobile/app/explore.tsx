@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -22,6 +22,17 @@ interface ExploreResponse {
   exhausted: boolean;
 }
 
+interface ExplorePhotoResponse {
+  photos: Array<{
+    address: string;
+    photoUrl: string | null;
+  }>;
+}
+
+function addressKey(address: string): string {
+  return address.trim().toLowerCase();
+}
+
 export default function ExploreScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -35,6 +46,8 @@ export default function ExploreScreen() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState(false);
+  const [prefetchedPage, setPrefetchedPage] = useState<ExploreResponse | null>(null);
+  const photoCacheRef = useRef<Record<string, string | null>>({});
 
   const fetchPage = useCallback(
     async (offset: number) => {
@@ -47,6 +60,49 @@ export default function ExploreScreen() {
     [getApiHeaders],
   );
 
+  const applyPhotoCache = useCallback((items: ExploreProperty[]): ExploreProperty[] => (
+    items.map((item) => {
+      const key = addressKey(item.address);
+      if (!Object.prototype.hasOwnProperty.call(photoCacheRef.current, key)) return item;
+      return { ...item, photoUrl: photoCacheRef.current[key] };
+    })
+  ), []);
+
+  const fetchPhotosForProperties = useCallback(
+    async (items: ExploreProperty[]) => {
+      const addresses = Array.from(new Set(
+        items
+          .map((item) => item.address.trim())
+          .filter((address) => address && !Object.prototype.hasOwnProperty.call(photoCacheRef.current, addressKey(address))),
+      )).slice(0, 10);
+      if (addresses.length === 0) return;
+
+      const resp = await fetch(`${getApiBase()}/explore/photos`, {
+        method: "POST",
+        headers: { ...getApiHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ addresses }),
+      });
+      if (!resp.ok) return;
+      const data = await resp.json() as ExplorePhotoResponse;
+      for (const item of data.photos ?? []) {
+        photoCacheRef.current[addressKey(item.address)] = item.photoUrl ?? null;
+      }
+      setProperties((prev) => applyPhotoCache(prev));
+      setPrefetchedPage((prev) => prev ? { ...prev, properties: applyPhotoCache(prev.properties) } : prev);
+    },
+    [applyPhotoCache, getApiHeaders],
+  );
+
+  const prefetchNextPage = useCallback(
+    async (offset: number, currentProperties: ExploreProperty[]) => {
+      const data = await fetchPage(offset);
+      setPrefetchedPage({ ...data, properties: applyPhotoCache(data.properties) });
+      void fetchPhotosForProperties([...currentProperties.slice(-5), ...data.properties]);
+      return data;
+    },
+    [applyPhotoCache, fetchPage, fetchPhotosForProperties],
+  );
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -55,9 +111,15 @@ export default function ExploreScreen() {
         setError(false);
         const data = await fetchPage(0);
         if (cancelled) return;
-        setProperties(data.properties);
+        setProperties(applyPhotoCache(data.properties));
         setNextOffset(data.nextOffset);
         setExhausted(data.exhausted);
+        setPrefetchedPage(null);
+        if (!data.exhausted) {
+          prefetchNextPage(data.nextOffset, data.properties).catch(() => {});
+        } else {
+          void fetchPhotosForProperties(data.properties);
+        }
       } catch {
         if (!cancelled) setError(true);
       } finally {
@@ -67,7 +129,7 @@ export default function ExploreScreen() {
     return () => {
       cancelled = true;
     };
-  }, [fetchPage]);
+  }, [applyPhotoCache, fetchPage, fetchPhotosForProperties, prefetchNextPage]);
 
   const handleAnalyse = useCallback(
     (address: string) => {
@@ -90,16 +152,23 @@ export default function ExploreScreen() {
     }
     try {
       setLoadingMore(true);
-      const data = await fetchPage(nextOffset);
-      setProperties((prev) => [...prev, ...data.properties]);
+      const data = prefetchedPage ?? await fetchPage(nextOffset);
+      const nextProperties = applyPhotoCache(data.properties);
+      const combined = [...properties, ...nextProperties];
+      setProperties(combined);
       setNextOffset(data.nextOffset);
       setExhausted(data.exhausted);
+      setPrefetchedPage(null);
+      void fetchPhotosForProperties(combined.slice(-10));
+      if (!data.exhausted) {
+        prefetchNextPage(data.nextOffset, combined).catch(() => {});
+      }
     } catch {
       // keep current list; the footer button stays available to retry
     } finally {
       setLoadingMore(false);
     }
-  }, [exhausted, loadingMore, nextOffset, fetchPage, router]);
+  }, [applyPhotoCache, exhausted, fetchPage, fetchPhotosForProperties, loadingMore, nextOffset, prefetchedPage, prefetchNextPage, properties, router]);
 
   const renderFooter = () => {
     if (properties.length === 0) return null;

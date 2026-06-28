@@ -130,3 +130,13 @@ export async function markNotificationSourceRead(userId: string, kind: string, s
 
   return rows.length > 0;
 }
+
+export async function markNotificationPageRead(userId: string, page: Exclude<NotificationPage, "messages">): Promise<number> {
+  const rows = await db
+    .update(notificationItems)
+    .set({ readAt: new Date() })
+    .where(and(eq(notificationItems.userId, userId), eq(notificationItems.page, page), isNull(notificationItems.readAt)))
+    .returning({ id: notificationItems.id });
+
+  return rows.length;
+}

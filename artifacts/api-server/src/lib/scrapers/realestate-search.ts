@@ -777,20 +777,7 @@ async function fetchListingUrlsFromPage(
     // (When suburbMeta is set, picking up arbitrary "featured" carousel listings from
     // unrelated suburbs would mislead the user — better to show nothing and let the
     // route fall through to the nearby-suburb fallback.)
-    if (suburbMeta) return [];
-
-    const allUrls: string[] = [];
-    for (const m of html.matchAll(/href="(\/\d+\/residential\/sale\/[^"?#]+)"/g)) {
-      const fullUrl = `https://www.realestate.co.nz${m[1]}`;
-      if (!seen.has(fullUrl) && !skipUrls.includes(fullUrl)) {
-        seen.add(fullUrl);
-        allUrls.push(fullUrl);
-      }
-    }
-    if (allUrls.length > 0) {
-      logger.info({ searchUrl, count: allUrls.length, source: label }, "realestate-search: extracted unfiltered listing URLs (no suburb meta)");
-    }
-    return allUrls;
+    return [];
   };
 
   // realestate.co.nz is a JavaScript-rendered Ember.js SPA.
@@ -897,8 +884,10 @@ export async function searchRealEstateListings(params: {
       logger.info({ suburb, resolvedTo: apiResult.suburbResolved.title }, "realestate-search: API returned no listings for resolved suburb");
       return { firstBatch: [], remainingListings: [], totalFound: 0, source: "realestate.co.nz", nextOffset: apiResult.nextOffset, totalAvailable: apiResult.totalAvailable, done: true };
     }
-    // Suburb couldn't be resolved → fall through to legacy scraper as a long-shot.
-    logger.info({ suburb }, "realestate-search: API could not resolve suburb, falling back to scraper");
+    // Suburb couldn't be resolved, so stop here instead of scraping an
+    // unscoped national page and leaking unrelated locations.
+    logger.info({ suburb }, "realestate-search: API could not resolve suburb; skipping unsafe HTML fallback");
+    return { firstBatch: [], remainingListings: [], totalFound: 0, source: "realestate.co.nz", nextOffset: 0, totalAvailable: 0, done: true };
   } catch (err) {
     logger.warn({ err: (err as Error).message, suburb }, "realestate-search: API path failed, falling back to scraper");
   }

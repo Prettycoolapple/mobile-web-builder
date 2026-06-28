@@ -10,7 +10,6 @@ import {
   ActivityIndicator,
   RefreshControl,
   Image,
-  DeviceEventEmitter,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Feather, Ionicons } from "@expo/vector-icons";
@@ -20,7 +19,7 @@ import { useColors } from "@/hooks/useColors";
 import { useChat, ChatMessage, FeasibilityReport, FeasibilityReportGroup, PropertyCandidate, SelectedListingContext } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
 import { useWatchlist, WatchlistItem } from "@/context/WatchlistContext";
-import { useNotifications, type NotificationItem } from "@/context/NotificationContext";
+import { useNotifications } from "@/context/NotificationContext";
 import { confirmRemoveFromWatchlist, notifyWatchlistError } from "@/lib/watchlist-confirm";
 import { useFocusEffect, useRouter } from "expo-router";
 import { getApiBase } from "@/lib/api";
@@ -131,12 +130,10 @@ interface HistoryItemProps {
   onTap: () => void;
   onDelete: () => void;
   isOpening: boolean;
-  isNew: boolean;
 }
 
-function HistoryItem({ item, onTap, onDelete, isOpening, isNew }: HistoryItemProps) {
+function HistoryItem({ item, onTap, onDelete, isOpening }: HistoryItemProps) {
   const colors = useColors();
-  const { t } = useT();
   const formatDate = useFormatDate();
   return (
     <TouchableOpacity
@@ -176,13 +173,6 @@ function HistoryItem({ item, onTap, onDelete, isOpening, isNew }: HistoryItemPro
       </View>
 
       <View style={styles.itemRight}>
-        {isNew ? (
-          <View style={[styles.newChip, { backgroundColor: colors.accent + "18", borderColor: colors.accent + "35" }]}>
-            <Text style={[styles.newChipText, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
-              {t("history.new_badge")}
-            </Text>
-          </View>
-        ) : null}
         {item.composite_score != null && <ScoreDot score={item.composite_score} />}
         {isOpening ? (
           <ActivityIndicator size="small" color={colors.accent} style={{ marginLeft: 4 }} />
@@ -342,7 +332,7 @@ export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
   const { sessions, openHistoryReport, openHistoryReportGroup, switchSession, deleteSession, startNewChat, searchHistoryTick } = useChat();
   const { getApiHeaders } = useAuth();
-  const { fetchItems: fetchNotificationItems, markSourceRead } = useNotifications();
+  const { markPageRead } = useNotifications();
   const { items: watchItems, loading: watchLoading, refresh: refreshWatch } = useWatchlist();
   const router = useRouter();
   const { t } = useT();
@@ -355,7 +345,6 @@ export default function HistoryScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [openingId, setOpeningId] = useState<string | null>(null);
-  const [historyNotificationItems, setHistoryNotificationItems] = useState<NotificationItem[]>([]);
   const hasLoadedRef = useRef(false);
 
   // Tapping "Analyse" on a watchlist card queues the action and sends the user
@@ -506,48 +495,15 @@ export default function HistoryScreen() {
     }
   }, [getApiHeaders]);
 
-  const loadHistoryNotifications = useCallback(async () => {
-    const items = await fetchNotificationItems("history");
-    setHistoryNotificationItems(items);
-  }, [fetchNotificationItems]);
-
-  const unreadHistorySourceIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const item of historyNotificationItems) {
-      if (item.kind === "report_ready") ids.add(item.sourceId);
-    }
-    return ids;
-  }, [historyNotificationItems]);
-
-  const markHistoryItemRead = useCallback(async (item: SearchSummary) => {
-    const sourceId = item.serverHistoryId ?? (item.id.startsWith("session:") ? null : item.id);
-    if (!sourceId || !unreadHistorySourceIds.has(sourceId)) return;
-    await markSourceRead("report_ready", sourceId);
-    setHistoryNotificationItems((prev) => prev.filter((notification) => notification.sourceId !== sourceId));
-  }, [markSourceRead, unreadHistorySourceIds]);
-
   useFocusEffect(
     useCallback(() => {
       const isRefresh = hasLoadedRef.current;
       hasLoadedRef.current = true;
       load(isRefresh);
-      void loadHistoryNotifications();
+      void markPageRead("history");
       void refreshWatch();
-    }, [load, loadHistoryNotifications, refreshWatch]),
+    }, [load, markPageRead, refreshWatch]),
   );
-
-  useEffect(() => {
-    const changedSub = DeviceEventEmitter.addListener("projectAlpha:notificationsChanged", () => {
-      void loadHistoryNotifications();
-    });
-    const jobReadySub = DeviceEventEmitter.addListener("projectAlpha:backgroundJobsReady", () => {
-      void loadHistoryNotifications();
-    });
-    return () => {
-      changedSub.remove();
-      jobReadySub.remove();
-    };
-  }, [loadHistoryNotifications]);
 
   useEffect(() => {
     if (searchHistoryTick === 0) return;
@@ -559,7 +515,6 @@ export default function HistoryScreen() {
     // every message (discover results, "show more", chat, reports) so the user
     // picks up right where they left off.
     if (item.sessionId) {
-      await markHistoryItemRead(item);
       switchSession(item.sessionId);
       router.push("/");
       return;
@@ -580,7 +535,6 @@ export default function HistoryScreen() {
       const address = data.search.address ?? item.address;
       if ((resultJson as FeasibilityReportGroup)?.kind === "combined_listing_group") {
         openHistoryReportGroup(address, withGroupHistoryMetadata(resultJson as FeasibilityReportGroup, item.id, item.created_at));
-        await markHistoryItemRead(item);
         router.push("/");
         return;
       }
@@ -590,14 +544,13 @@ export default function HistoryScreen() {
         if (zhReport) report = zhReport;
       }
       openHistoryReport(address, report);
-      await markHistoryItemRead(item);
       router.push("/");
     } catch {
       Alert.alert(t("common.error"), t("history.error_load"));
     } finally {
       setOpeningId(null);
     }
-  }, [getApiHeaders, markHistoryItemRead, openHistoryReport, openHistoryReportGroup, switchSession, router, t]);
+  }, [getApiHeaders, openHistoryReport, openHistoryReportGroup, switchSession, router, t]);
 
   const handleDelete = useCallback((item: SearchSummary) => {
     Alert.alert(
@@ -647,7 +600,7 @@ export default function HistoryScreen() {
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={[styles.header, { paddingTop: topInset, backgroundColor: colors.headerBg }]}>
         <View style={styles.headerContent}>
-          <Text style={[styles.headerTitle, { color: colors.headerText, fontFamily: "DM_Sans_600SemiBold" }]}>
+          <Text style={[styles.headerTitle, { color: colors.headerText, fontFamily: "SpaceGrotesk_700Bold" }]}>
             {t("history.title")}
           </Text>
           <TouchableOpacity
@@ -739,7 +692,6 @@ export default function HistoryScreen() {
               onTap={() => handleTap(item)}
               onDelete={() => handleDelete(item)}
               isOpening={openingId === item.id}
-              isNew={unreadHistorySourceIds.has(item.serverHistoryId ?? item.id)}
             />
           )}
           contentContainerStyle={[styles.list, { paddingBottom: bottomInset + 24 }]}
@@ -839,7 +791,7 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 20,
-    letterSpacing: -0.3,
+    letterSpacing: -0.4,
   },
   newBtn: {
     flexDirection: "row",
@@ -975,16 +927,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 6,
     flexShrink: 0,
-  },
-  newChip: {
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-  },
-  newChipText: {
-    fontSize: 11,
-    lineHeight: 14,
   },
   watchCard: {
     borderRadius: 16,
