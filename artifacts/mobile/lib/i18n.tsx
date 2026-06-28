@@ -844,6 +844,8 @@ const en: Catalog = {
 
   // Report sections (most prominent labels)
   "report.overview": "Property Overview",
+  "report.tab_info": "Info",
+  "report.tab_plan": "Plan",
   "report.scores": "Scores",
   "report.planning": "Planning",
   "report.terrain": "Terrain",
@@ -1972,6 +1974,8 @@ const zh: Catalog = {
 
   // Report
   "report.overview": "物业概览",
+  "report.tab_info": "详情",
+  "report.tab_plan": "规划",
   "report.scores": "评分",
   "report.planning": "规划",
   "report.terrain": "地形",

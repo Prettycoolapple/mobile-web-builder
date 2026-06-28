@@ -323,15 +323,32 @@ function linzBasemapsKey(): string | null {
   return process.env["LINZ_BASEMAPS_API_KEY"]?.trim() || process.env["LINZ_API_KEY"]?.trim() || null;
 }
 
+let aerialTileFailureLogged = false;
+
 async function fetchTile(url: string): Promise<Buffer | null> {
   try {
     const resp = await fetch(url, {
       headers: { Accept: "image/webp,image/png,image/*" },
       signal: AbortSignal.timeout(8000),
     });
-    if (!resp.ok) return null;
+    if (!resp.ok) {
+      if (!aerialTileFailureLogged) {
+        aerialTileFailureLogged = true;
+        // A 401/403 here almost always means the LINZ Basemaps tile API rejected the key —
+        // basemaps.linz.govt.nz needs a Basemaps-scoped key, NOT a data.linz.govt.nz key.
+        logger.warn(
+          { status: resp.status, url: url.replace(/api=[^&]+/, "api=***") },
+          "site-plan: LINZ aerial tile request failed (check LINZ_BASEMAPS_API_KEY)",
+        );
+      }
+      return null;
+    }
     return Buffer.from(await resp.arrayBuffer());
-  } catch {
+  } catch (err) {
+    if (!aerialTileFailureLogged) {
+      aerialTileFailureLogged = true;
+      logger.warn({ err: (err as Error).message }, "site-plan: LINZ aerial tile fetch threw");
+    }
     return null;
   }
 }
@@ -388,10 +405,16 @@ async function fetchLinzAerialImage(bounds: SitePlanBounds): Promise<SitePlanIma
   const range = selectLinzAerialTileRange(bounds);
   const width = range.widthTiles * TILE_SIZE;
   const height = range.heightTiles * TILE_SIZE;
-  if (!key) return placeholderImage(range.bounds, width, height);
+  if (!key) {
+    logger.warn("site-plan: no LINZ Basemaps key (set LINZ_BASEMAPS_API_KEY) — using placeholder");
+    return placeholderImage(range.bounds, width, height);
+  }
 
   const sharp = await loadSharp();
-  if (!sharp) return placeholderImage(range.bounds, width, height);
+  if (!sharp) {
+    logger.warn("site-plan: sharp unavailable in runtime — aerial cannot be composed, using placeholder");
+    return placeholderImage(range.bounds, width, height);
+  }
 
   try {
     const tilePromises: Array<Promise<{ input: Buffer; left: number; top: number } | null>> = [];
@@ -413,7 +436,13 @@ async function fetchLinzAerialImage(bounds: SitePlanBounds): Promise<SitePlanIma
     const tiles = (await Promise.all(tilePromises)).filter(
       (tile): tile is { input: Buffer; left: number; top: number } => tile !== null,
     );
-    if (tiles.length === 0) return placeholderImage(range.bounds, width, height);
+    if (tiles.length === 0) {
+      logger.warn(
+        { zoom: range.zoom, tilesRequested: tilePromises.length },
+        "site-plan: all LINZ aerial tiles failed to fetch — using placeholder",
+      );
+      return placeholderImage(range.bounds, width, height);
+    }
 
     const buffer = await sharp({
       create: {
@@ -709,7 +738,7 @@ function envelopeGeometry(bounds: SitePlanBounds): { geometry: string; geometryT
 }
 
 async function serviceLayers(bounds: SitePlanBounds): Promise<SitePlanLayer[]> {
-  const serviceBounds = paddedBounds(bounds, 80, 220);
+  const serviceBounds = paddedBounds(bounds, 200, 520);
   const geometry = envelopeGeometry(serviceBounds);
 
   const groupResults = await Promise.allSettled(
@@ -721,7 +750,7 @@ async function serviceLayers(bounds: SitePlanBounds): Promise<SitePlanLayer[]> {
             layerId: layer.id,
             geometry: geometry.geometry,
             geometryType: geometry.geometryType,
-            maxFeatures: 120,
+            maxFeatures: 220,
             timeoutMs: 9000,
           });
           return arcgisFeaturesToGeoJson(features, layer.label).features.map((feature) => ({
@@ -781,14 +810,14 @@ async function contourLayer(bounds: SitePlanBounds): Promise<SitePlanLayer> {
   const key = process.env["LINZ_API_KEY"]?.trim();
   const color = "#475569";
   if (!key) return unavailableLayer("contours", "Contours", "contours", color);
-  const contourBounds = paddedBounds(bounds, 90, 240);
+  const contourBounds = paddedBounds(bounds, 220, 560);
   const bbox = `${contourBounds.minLng},${contourBounds.minLat},${contourBounds.maxLng},${contourBounds.maxLat},EPSG:4326`;
   const url =
     `https://data.linz.govt.nz/services;key=${key}/wfs` +
     `?service=WFS&version=2.0.0&request=GetFeature` +
     `&typeNames=${LINZ_CONTOURS_LAYER}` +
     `&bbox=${encodeURIComponent(bbox)}` +
-    `&srsName=EPSG:4326&maxFeatures=80&outputFormat=application%2Fjson`;
+    `&srsName=EPSG:4326&maxFeatures=160&outputFormat=application%2Fjson`;
 
   try {
     const resp = await fetch(url, { signal: AbortSignal.timeout(9000) });
@@ -849,11 +878,15 @@ export async function buildSitePlanForAddress(
   const coreBounds = boundsFromParcel(parcel) ?? fallbackBoundsFromCenter(geo.lat, geo.lng);
   const mapBounds = sitePlanMapBounds(coreBounds);
   const center = parcel?.bbox ? boundsCenter(parcel.bbox) : { lat: geo.lat, lng: geo.lng };
-  const nearbyRadiusM = Math.max(180, Math.min(700, Math.ceil(boundsRadiusMetres(mapBounds) * 1.35)));
+  // Fetch parcels over a much larger extent than the display box so the visible (and
+  // pannable) area is fully populated with neighbouring lots and immediate neighbours are
+  // never truncated. The display bounds (sitePlanMapBounds) are intentionally left unchanged
+  // so the on-screen scrollable extent stays the same — only the fetched data coverage grows.
+  const nearbyRadiusM = Math.max(240, Math.min(1500, Math.ceil(boundsRadiusMetres(mapBounds) * 3)));
 
   const [image, nearbyParcels, planning, services, contours] = await Promise.all([
     fetchLinzAerialImage(mapBounds),
-    fetchLINZParcelsNear(center.lat, center.lng, nearbyRadiusM, 120).catch((err) => {
+    fetchLINZParcelsNear(center.lat, center.lng, nearbyRadiusM, 400).catch((err) => {
       logger.warn({ err: (err as Error).message }, "site-plan: LINZ nearby parcel lookup failed");
       return null;
     }),

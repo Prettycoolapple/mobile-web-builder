@@ -164,6 +164,32 @@ function getInfraLabel(loc: string, t: (key: string) => string): string {
   }
 }
 
+function cleanInfrastructureNote(note: string): string {
+  return note
+    .replace(/\s*[\(\uff08]\s*(?:~|approx\.?|approximately|约)\s*\d+(?:\.\d+)?\s*(?:m|metres?|meters?|米)\s*(?:from\s+[^)\uff09]+)?[\)\uff09]/gi, "")
+    .replace(/\s*[\(\uff08]\s*\d+(?:\.\d+)?\s*(?:m|metres?|meters?|米)\s*(?:from\s+[^)\uff09]+)?[\)\uff09]/gi, "")
+    .replace(/\s+([,.;，。；])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function localizeRiskSummaryItem(item: string, osChinese: boolean): string {
+  const cleaned = item.trim();
+  if (!osChinese || /[\u3400-\u9fff]/.test(cleaned)) return cleaned;
+
+  const elevatedAsbestos = cleaned.match(
+    /^Elevated asbestos risk\s*[—–-]\s*(built\s+(\d{4})|build year unknown)\s*\(1940[–-]1990 era\);\s*licensed removal required,\s*demolition cost\s*(.+?)[,;]\s*WorkSafe notification needed\.?$/i,
+  );
+  if (elevatedAsbestos) {
+    const buildYear = elevatedAsbestos[2];
+    const buildText = buildYear ? `${buildYear} 年建造` : "建造年份未知";
+    const cost = (elevatedAsbestos[3] ?? "").trim();
+    return `石棉风险高 — ${buildText}（1940–1990 年建筑期），需要持证清除，拆除费用约 ${cost}，须向 WorkSafe 申报。`;
+  }
+
+  return cleaned;
+}
+
 function hasOverlay(report: Report, keyword: string): boolean {
   const overlays = report.planning?.overlays ?? [];
   return overlays.some(
@@ -1490,7 +1516,9 @@ function InfrastructureTable({ infrastructure, colors }: { infrastructure: Infra
             <View style={{ flex: 2 }}>
               <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_600SemiBold", fontSize: 13 }}>{svc.name}</Text>
               {svc.note?.trim() ? (
-                <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, marginTop: 2 }}>{svc.note}</Text>
+                <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12, marginTop: 2 }}>
+                  {cleanInfrastructureNote(svc.note)}
+                </Text>
               ) : null}
             </View>
             <View style={{ flex: 2, alignItems: "flex-start" }}>
@@ -2309,15 +2337,19 @@ function ComparableSalesTable({ comparables, quality, colors }: {
 
 function RiskSummaryPanel({ riskSummary, colors }: { riskSummary: string[]; colors: ReturnType<typeof useColors> }) {
   const { t } = useT();
+  const osChinese = isOSChineseLocale();
   return (
     <View style={{ gap: 10 }}>
       <View style={{ gap: 8 }}>
-        {riskSummary.map((r, i) => (
-          <View key={i} style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
-            <Text style={{ fontSize: 14, marginTop: 1 }}>⚠️</Text>
-            <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 13, lineHeight: 20, flex: 1 }}>{r}</Text>
-          </View>
-        ))}
+        {riskSummary.map((r, i) => {
+          const item = localizeRiskSummaryItem(r, osChinese);
+          return (
+            <View key={i} style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
+              <Text style={{ fontSize: 14, marginTop: 1 }}>⚠️</Text>
+              <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 13, lineHeight: 20, flex: 1 }}>{item}</Text>
+            </View>
+          );
+        })}
       </View>
       <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 11, fontStyle: "italic", lineHeight: 16, marginTop: 4 }}>
         {t("report.risk_section_disclaimer")}
@@ -2688,29 +2720,30 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
   return (
     <View style={styles.container}>
       <View style={styles.reportBookmarkStack}>
-        <View style={styles.reportTabs}>
+        <View style={[styles.reportTabs, { backgroundColor: colors.muted, borderColor: colors.border }]}>
           {(["info", "plan"] as const).map((tab) => {
             const selected = activeReportTab === tab;
-            const activeBg = tab === "info" ? colors.headerBg : colors.card;
-            const activeText = tab === "info" ? colors.headerText : colors.foreground;
             return (
               <TouchableOpacity
                 key={tab}
                 style={[
                   styles.reportTabButton,
-                  {
-                    backgroundColor: selected ? activeBg : colors.muted,
-                    borderColor: selected ? (tab === "info" ? colors.headerBg : colors.border) : colors.border,
-                  },
-                  selected ? styles.reportTabButtonActive : styles.reportTabButtonInactive,
+                  selected
+                    ? [styles.reportTabButtonActive, { backgroundColor: colors.card, borderColor: colors.border }]
+                    : null,
                 ]}
                 onPress={() => setActiveReportTab(tab)}
                 activeOpacity={0.85}
                 accessibilityRole="tab"
                 accessibilityState={{ selected }}
               >
-                <Text style={[styles.reportTabText, { color: selected ? activeText : colors.mutedForeground }]}>
-                  {tab === "info" ? "Info" : "Plan"}
+                <Text
+                  style={[
+                    styles.reportTabText,
+                    { color: selected ? colors.foreground : colors.mutedForeground },
+                  ]}
+                >
+                  {tab === "info" ? t("report.tab_info") : t("report.tab_plan")}
                 </Text>
               </TouchableOpacity>
             );
@@ -3134,10 +3167,35 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
 const styles = StyleSheet.create({
   container: { gap: 10 },
   reportBookmarkStack: { gap: 0 },
-  reportTabs: { flexDirection: "row", alignItems: "flex-end", paddingHorizontal: 12, gap: 6, marginBottom: -1, zIndex: 2 },
-  reportTabButton: { minWidth: 76, minHeight: 34, borderTopLeftRadius: 10, borderTopRightRadius: 10, borderBottomLeftRadius: 0, borderBottomRightRadius: 0, borderWidth: 1, borderBottomWidth: 0, alignItems: "center", justifyContent: "center", paddingHorizontal: 16, paddingVertical: 8 },
-  reportTabButtonActive: { minHeight: 38, paddingTop: 10 },
-  reportTabButtonInactive: { minHeight: 30, paddingTop: 7, opacity: 0.92 },
+  // Segmented control sitting above the content card (no overlap with the hero photo).
+  reportTabs: {
+    flexDirection: "row",
+    alignSelf: "center",
+    gap: 4,
+    padding: 4,
+    borderRadius: 14,
+    borderWidth: 1,
+    marginHorizontal: 12,
+    marginBottom: 12,
+  },
+  reportTabButton: {
+    minWidth: 112,
+    minHeight: 36,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "transparent",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 18,
+    paddingVertical: 8,
+  },
+  reportTabButtonActive: {
+    shadowColor: "#000",
+    shadowOpacity: 0.12,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 2,
+  },
   reportTabText: { fontFamily: "DM_Sans_700Bold", fontSize: 13, lineHeight: 18 },
   reportHeader: { borderRadius: 16, overflow: "hidden" },
   reportHeaderTop: { flexDirection: "row", gap: 12, padding: 16, alignItems: "flex-start" },

@@ -54,6 +54,7 @@ const RECORDING_START_WATCHDOG_MS = 8_000;
 const RECORDING_MAX_DURATION_MS = 90_000;
 const RECORDING_STOP_TIMEOUT_MS = 5_000;
 const TRANSCRIBE_TIMEOUT_MS = 45_000;
+const SHOW_EXPLORE_HEADER_BUTTON = false;
 
 /** Prefer top-level report address, then property overview (some API payloads only set the latter). */
 function resolveReportAddress(report: FeasibilityReport | null | undefined): string {
@@ -3608,14 +3609,16 @@ export default function SearchScreen() {
             </Text>
           </View>
           <View style={styles.headerActions}>
-            <TouchableOpacity
-              style={[styles.exploreBtn, { borderColor: "rgba(250,249,246,0.22)" }]}
-              onPress={() => router.push("/explore" as never)}
-              activeOpacity={0.75}
-            >
-              <Feather name="compass" size={14} color="rgba(250,249,246,0.78)" />
-              <Text style={[styles.exploreBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>{t("explore.header_button")}</Text>
-            </TouchableOpacity>
+            {SHOW_EXPLORE_HEADER_BUTTON ? (
+              <TouchableOpacity
+                style={[styles.exploreBtn, { borderColor: "rgba(250,249,246,0.22)" }]}
+                onPress={() => router.push("/explore" as never)}
+                activeOpacity={0.75}
+              >
+                <Feather name="compass" size={14} color="rgba(250,249,246,0.78)" />
+                <Text style={[styles.exploreBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>{t("explore.header_button")}</Text>
+              </TouchableOpacity>
+            ) : null}
             {!user && (
               <TouchableOpacity
                 style={[styles.signInBtn, { borderColor: "rgba(250,249,246,0.22)" }]}

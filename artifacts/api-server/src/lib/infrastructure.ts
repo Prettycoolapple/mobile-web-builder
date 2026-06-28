@@ -302,7 +302,7 @@ function classifyPointDistance(serviceName: string, distanceM: number | null): I
       estimated_cost_low: 0,
       estimated_cost_high: 5000,
       risk: "low",
-      note: `${serviceName} service appears within the site (~${d}m from address point) - straightforward connection`,
+      note: `${serviceName} service appears within the site - straightforward connection`,
     };
   }
   if (distanceM < 35) {
@@ -312,7 +312,7 @@ function classifyPointDistance(serviceName: string, distanceM: number | null): I
       estimated_cost_low: 5000,
       estimated_cost_high: 20000,
       risk: "low",
-      note: `${serviceName} service is close to the site frontage/boundary (~${d}m) - standard council connection`,
+      note: `${serviceName} service is close to the site frontage/boundary - standard council connection`,
     };
   }
   return {
@@ -321,7 +321,7 @@ function classifyPointDistance(serviceName: string, distanceM: number | null): I
     estimated_cost_low: distanceM < 80 ? 5000 : 10000,
     estimated_cost_high: distanceM < 80 ? 25000 : 40000,
     risk: distanceM < 80 ? "low" : "moderate",
-    note: `${serviceName} service is off-site in the public network (~${d}m from address point) - verify tie-in route during design`,
+    note: `${serviceName} service is off-site in the public network - verify tie-in route during design`,
   };
 }
 
@@ -343,7 +343,7 @@ function classifyParcelDistance(
       estimated_cost_low: 5000,
       estimated_cost_high: 20000,
       risk: "low",
-      note: `${serviceName} service is at or near the parcel boundary/public frontage (~${d}m) - standard council connection, not a neighbour-land service`,
+      note: `${serviceName} service is at or near the parcel boundary/public frontage - standard council connection, not a neighbour-land service`,
     };
   }
 
@@ -357,7 +357,7 @@ function classifyParcelDistance(
       estimated_cost_low: 20000,
       estimated_cost_high: 60000,
       risk: "moderate",
-      note: `${serviceName} service appears off-site on private land (~${d}m from parcel boundary) - easement or owner approval may be required`,
+      note: `${serviceName} service appears off-site on private land - easement or owner approval may be required`,
     };
   }
 
@@ -368,7 +368,7 @@ function classifyParcelDistance(
       estimated_cost_low: distanceToBoundaryM < 50 ? 5000 : 10000,
       estimated_cost_high: distanceToBoundaryM < 50 ? 25000 : 40000,
       risk: distanceToBoundaryM < 50 ? "low" : "moderate",
-      note: `${serviceName} service is off-site in the public network (~${d}m from parcel boundary) - verify tie-in route during civil design`,
+      note: `${serviceName} service is off-site in the public network - verify tie-in route during civil design`,
     };
   }
 
@@ -379,7 +379,7 @@ function classifyParcelDistance(
       estimated_cost_low: 15000,
       estimated_cost_high: 40000,
       risk: "moderate",
-      note: `${serviceName} service is off-site (~${d}m from parcel boundary), but public-road vs neighbouring-lot context could not be confirmed automatically - verify in Auckland GeoMaps during civil design`,
+      note: `${serviceName} service is off-site, but public-road vs neighbouring-lot context could not be confirmed automatically - verify in Auckland GeoMaps during civil design`,
     };
   }
 
@@ -389,7 +389,7 @@ function classifyParcelDistance(
     estimated_cost_low: distanceToBoundaryM < 50 ? 5000 : 10000,
     estimated_cost_high: distanceToBoundaryM < 50 ? 25000 : 40000,
     risk: distanceToBoundaryM < 50 ? "low" : "moderate",
-    note: `${serviceName} service is off-site in the public network (~${d}m from parcel boundary) - verify tie-in route during civil design`,
+    note: `${serviceName} service is off-site in the public network - verify tie-in route during civil design`,
   };
 }
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -20,6 +20,10 @@ import type { FeasibilityReport as Report } from "@/context/ChatContext";
 import { useColors } from "@/hooks/useColors";
 import { translateForOS } from "@/lib/i18n";
 import { getApiBase } from "@/lib/api";
+
+// The subject parcel ("boundary") and the surrounding property boundaries ("nearby-boundaries")
+// are always drawn and not user-toggleable — they form the base context for the site plan.
+const ALWAYS_ON_LAYERS = new Set(["boundary", "nearby-boundaries"]);
 
 type Coordinate = [number, number];
 
@@ -110,6 +114,22 @@ function pointsString(coords: Coordinate[], bounds: SitePlanBounds, width: numbe
     .map((coord) => projectCoordinate(coord, bounds, width, height))
     .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
     .join(" ");
+}
+
+function collectCoordinates(features: GeoJsonFeature[]): Coordinate[] {
+  const out: Coordinate[] = [];
+  const pushRing = (ring: Coordinate[]) => {
+    for (const c of ring) if (Array.isArray(c) && c.length >= 2) out.push(c);
+  };
+  for (const feature of features) {
+    const g = feature.geometry;
+    if (g.type === "Point") out.push(g.coordinates);
+    else if (g.type === "LineString") pushRing(g.coordinates);
+    else if (g.type === "MultiLineString") g.coordinates.forEach(pushRing);
+    else if (g.type === "Polygon") g.coordinates.forEach(pushRing);
+    else if (g.type === "MultiPolygon") g.coordinates.forEach((poly) => poly.forEach(pushRing));
+  }
+  return out;
 }
 
 function layerColor(layer: SitePlanLayer): string {
@@ -322,7 +342,8 @@ function LayerToggleRow({
         disabled={disabled}
         onValueChange={(next) => onToggle(layer.id, next)}
         trackColor={{ false: colors.border, true: `${colors.accent}75` }}
-        thumbColor={visible && layer.available ? colors.accent : colors.mutedForeground}
+        thumbColor={visible && layer.available ? "#FFFFFF" : colors.mutedForeground}
+        ios_backgroundColor={colors.border}
       />
     </View>
   );
@@ -341,6 +362,8 @@ export function SitePlanCard({ report }: Props) {
   const translateY = useSharedValue(0);
   const savedX = useSharedValue(0);
   const savedY = useSharedValue(0);
+  const [canvasSize, setCanvasSize] = useState<{ width: number; height: number } | null>(null);
+  const framedRef = useRef(false);
 
   const query = useQuery({
     queryKey: ["site-plan", searchId, report.address],
@@ -365,6 +388,54 @@ export function SitePlanCard({ report }: Props) {
     }
     setVisibleLayers(next);
   }, [layersSignature, query.data]);
+
+  // Default the view to frame the analyzed parcel ("boundary") whenever the Plan tab opens, so the
+  // subject lot is centered and filling the viewport rather than showing the whole fetched extent.
+  useEffect(() => {
+    if (framedRef.current) return;
+    const data = query.data;
+    if (!data || !canvasSize) return;
+    const boundary = data.layers.find((layer) => layer.id === "boundary");
+    const coords = boundary ? collectCoordinates(boundary.geojson.features) : [];
+    if (coords.length === 0) return;
+
+    const { width: imgW, height: imgH, bounds } = data.image;
+    const pixels = coords.map((c) => projectCoordinate(c, bounds, imgW, imgH));
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [x, y] of pixels) {
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+    const cw = canvasSize.width;
+    const ch = canvasSize.height;
+    // "contain" fit factor mapping image pixels → on-screen canvas pixels.
+    const fit = Math.min(cw / imgW, ch / imgH);
+    if (!Number.isFinite(fit) || fit <= 0) return;
+
+    const parcelWCanvas = Math.max(1, (maxX - minX) * fit);
+    const parcelHCanvas = Math.max(1, (maxY - minY) * fit);
+    // Frame the parcel to ~58% of the viewport so immediate neighbours remain visible.
+    const targetFill = 0.58;
+    const nextScale = Math.max(1, Math.min(6, Math.min((cw * targetFill) / parcelWCanvas, (ch * targetFill) / parcelHCanvas)));
+
+    const parcelCenterX = (minX + maxX) / 2;
+    const parcelCenterY = (minY + maxY) / 2;
+    // Offset of the parcel centre from the image centre, in canvas pixels.
+    const dx = (parcelCenterX - imgW / 2) * fit;
+    const dy = (parcelCenterY - imgH / 2) * fit;
+    const nextX = -dx * nextScale;
+    const nextY = -dy * nextScale;
+
+    framedRef.current = true;
+    scale.value = withTiming(nextScale);
+    savedScale.value = nextScale;
+    translateX.value = withTiming(nextX);
+    translateY.value = withTiming(nextY);
+    savedX.value = nextX;
+    savedY.value = nextY;
+  }, [query.data, canvasSize, scale, savedScale, translateX, translateY, savedX, savedY]);
 
   const pinch = Gesture.Pinch()
     .onStart(() => {
@@ -411,11 +482,14 @@ export function SitePlanCard({ report }: Props) {
   };
 
   const visibleVectorLayers = useMemo(
-    () => query.data?.layers.filter((layer) => layer.available && (layer.id === "boundary" || visibleLayers[layer.id])) ?? [],
+    () =>
+      query.data?.layers.filter(
+        (layer) => layer.available && (ALWAYS_ON_LAYERS.has(layer.id) || visibleLayers[layer.id]),
+      ) ?? [],
     [query.data?.layers, visibleLayers],
   );
   const legendLayers = useMemo(
-    () => query.data?.layers.filter((layer) => layer.id !== "boundary") ?? [],
+    () => query.data?.layers.filter((layer) => !ALWAYS_ON_LAYERS.has(layer.id)) ?? [],
     [query.data?.layers],
   );
 
@@ -453,7 +527,17 @@ export function SitePlanCard({ report }: Props) {
         </TouchableOpacity>
       </View>
 
-      <View style={[styles.mapViewport, { height: planHeight, backgroundColor: colors.muted }]}>
+      <View
+        style={[styles.mapViewport, { height: planHeight, backgroundColor: colors.muted }]}
+        onLayout={(e) => {
+          const { width, height } = e.nativeEvent.layout;
+          setCanvasSize((prev) =>
+            prev && Math.abs(prev.width - width) < 1 && Math.abs(prev.height - height) < 1
+              ? prev
+              : { width, height },
+          );
+        }}
+      >
         {query.isLoading ? (
           <View style={styles.loadingOverlay}>
             <ActivityIndicator color={colors.accent} />
@@ -478,6 +562,11 @@ export function SitePlanCard({ report }: Props) {
           <GestureDetector gesture={composedGesture}>
             <Animated.View style={[styles.mapCanvas, animatedMapStyle]}>
               <Image source={{ uri: query.data.image.dataUri }} style={styles.mapImage} resizeMode="contain" />
+              {/* Slight scrim over the aerial so the vector linework (pipes/boundaries) stays
+                  legible on top of the satellite imagery (house, trees) underneath. */}
+              {query.data.image.source === "linz-basemaps" ? (
+                <View style={[StyleSheet.absoluteFill, styles.aerialScrim]} pointerEvents="none" />
+              ) : null}
               <Svg
                 style={StyleSheet.absoluteFill}
                 viewBox={`0 0 ${query.data.image.width} ${query.data.image.height}`}
@@ -569,6 +658,9 @@ const styles = StyleSheet.create({
   mapImage: {
     width: "100%",
     height: "100%",
+  },
+  aerialScrim: {
+    backgroundColor: "rgba(255,255,255,0.18)",
   },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
