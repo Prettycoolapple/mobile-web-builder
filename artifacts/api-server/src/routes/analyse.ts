@@ -28,6 +28,7 @@ import { extractNZAddress } from "../lib/address-parser";
 import {
   extractCombinedListingAddressParts,
   fetchRealestateAgentForListingUrl,
+  fetchRealestateListingByUrl,
   findSuburbInTextViaIndex,
   findLocationInTextViaIndex,
   getDistrictSiblings,
@@ -3279,6 +3280,96 @@ function selectedListingUrlFromHistory(
   return null;
 }
 
+type PastedListingResolution =
+  | { status: "none" }
+  | { status: "unsupported"; urls: string[] }
+  | { status: "unresolved"; urls: string[] }
+  | { status: "resolved"; url: string; address: string; context: SelectedListingContext };
+
+function extractUrlsFromText(text: string): string[] {
+  const matches = text.match(/https?:\/\/[^\s<>"']+/gi) ?? [];
+  return Array.from(new Set(matches.map((url) =>
+    url
+      .replace(/[)\]}。，、.!?]+$/g, "")
+      .trim(),
+  ).filter(Boolean)));
+}
+
+function isRealestateListingUrl(rawUrl: string): boolean {
+  try {
+    const url = new URL(rawUrl);
+    const host = url.hostname.toLowerCase().replace(/^www\./, "");
+    return host === "realestate.co.nz" && /\/\d+(?:\/|$)/.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function selectedListingContextFromListing(listing: ListingResult, fallbackUrl: string): SelectedListingContext {
+  return {
+    address: listing.address,
+    listingUrl: listing.listingUrl || fallbackUrl,
+    photoUrl: listing.photoUrl ?? null,
+    photoUrls: listing.photoUrls ?? (listing.photoUrl ? [listing.photoUrl] : []),
+    price: listing.price ?? null,
+    landArea: listing.landArea ?? null,
+    floorArea: listing.floorArea ?? null,
+    bedrooms: listing.bedrooms ?? null,
+    bathrooms: listing.bathrooms ?? null,
+    bedroomsApprox: listing.bedroomsApprox ?? null,
+    bathroomsApprox: listing.bathroomsApprox ?? null,
+    landAreaApprox: listing.landAreaApprox ?? null,
+    floorAreaApprox: listing.floorAreaApprox ?? null,
+    priceApprox: listing.priceApprox ?? null,
+    propertyType: listing.propertyType ?? listing.listingCategory ?? null,
+    listingTitle: listing.listingTitle ?? null,
+    source: "realestate.co.nz",
+    agentName: listing.agentName ?? null,
+    agencyName: listing.agencyName ?? null,
+    matchConfidence: "verified",
+    isActiveListing: true,
+    isCombinedListing: listing.isCombinedListing ?? null,
+    packageAddress: listing.isCombinedListing ? listing.address : null,
+    childAddresses: null,
+    aggregateFactsExcluded: listing.isCombinedListing ? true : null,
+  };
+}
+
+async function resolvePastedPropertyListing(
+  text: string,
+  log: FeasibilityLog,
+): Promise<PastedListingResolution> {
+  const urls = extractUrlsFromText(text);
+  if (urls.length === 0) return { status: "none" };
+
+  const realestateUrls = urls.filter(isRealestateListingUrl);
+  if (realestateUrls.length === 0) return { status: "unsupported", urls };
+
+  for (const url of realestateUrls) {
+    try {
+      const listing = await fetchRealestateListingByUrl(url);
+      if (listing?.address) {
+        return {
+          status: "resolved",
+          url,
+          address: listing.address,
+          context: selectedListingContextFromListing(listing, url),
+        };
+      }
+    } catch (err) {
+      log.warn({ err, url }, "Pasted listing URL resolution failed");
+    }
+  }
+
+  return { status: "unresolved", urls: realestateUrls };
+}
+
+function addressPromptForUnresolvedUrl(locale: ReturnType<typeof normaliseLocale>): string {
+  return locale === "zh"
+    ? "我无法从这个链接识别出可分析的房产地址。请粘贴完整的街道地址，或发送有效的 realestate.co.nz 房源链接。"
+    : "I could not identify a property address from that link. Please paste the full street address, or send a valid realestate.co.nz property listing link.";
+}
+
 function resolveCombinedPackage(raw: string): { packageAddress: string; childAddresses: string[] } | null {
   const parsed = extractCombinedListingAddressParts(raw);
   if (!parsed) return null;
@@ -5544,10 +5635,14 @@ router.post(
       const forceNearbyDiscovery = isNearbyDiscoveryChoice(userText);
       // Deterministic tenure opt-in from the "Show the N cross-lease" chip.
       const includeTenuresChoice = parseIncludeTenuresChoice(userText);
+      const pastedListingResolution = await resolvePastedPropertyListing(userText, req.log);
 
       const intent = await extractChatIntent(messages, reportCtx, alreadyShownFromHistory, chatLocale);
       const semanticWantsDiscovery = intent.execution === "show_listing_cards" || intent.intentCategory === "property_discovery";
-      const semanticWantsAnalysis = intent.execution === "run_feasibility_report" || intent.intentCategory === "single_property_analysis";
+      const semanticWantsAnalysis =
+        pastedListingResolution.status === "resolved" ||
+        intent.execution === "run_feasibility_report" ||
+        intent.intentCategory === "single_property_analysis";
       const mode =
         semanticWantsDiscovery ? "discover"
         : semanticWantsAnalysis ? "analyse"
@@ -5635,12 +5730,20 @@ router.post(
         }
       }
 
-      const forcedAnalyseAddressRaw = validatedIntentAddress ?? hintedAddress ?? null;
+      const forcedAnalyseAddressRaw =
+        pastedListingResolution.status === "resolved"
+          ? pastedListingResolution.address
+          : validatedIntentAddress ?? hintedAddress ?? null;
       const suppressPromoteToAnalyse =
-        isListingBrowseIntent(userText) && !hasNumberedStreetAddress(userText);
+        pastedListingResolution.status !== "resolved" &&
+        isListingBrowseIntent(userText) &&
+        !hasNumberedStreetAddress(userText);
       const forcedAnalyseAddress = suppressPromoteToAnalyse ? null : forcedAnalyseAddressRaw;
 
       let effectiveMode =
+        pastedListingResolution.status === "resolved"
+          ? "analyse"
+          :
         forcedAnalyseAddress && semanticWantsAnalysis && (mode === "discover" || (mode === "followup" && (contextualBareAddress || looksLikeStreetAddress(userText))))
           ? "analyse"
           : mode;
@@ -5721,6 +5824,20 @@ router.post(
           { address: forcedAnalyseAddress, originalMode: mode, intent_reasoning: intent.reasoning },
           "Address-like prompt detected — overriding discover intent to analyse",
         );
+      }
+
+      if (
+        (pastedListingResolution.status === "unsupported" || pastedListingResolution.status === "unresolved") &&
+        !forcedAnalyseAddress &&
+        !hasNumberedStreetAddress(userText) &&
+        !looksLikeStreetAddress(userText)
+      ) {
+        res.json({
+          content: addressPromptForUnresolvedUrl(chatLocale),
+          mode: "text",
+          ...providerSignal,
+        });
+        return;
       }
 
       if (effectiveMode === "analyse" && !chatUserId) {
@@ -7063,7 +7180,14 @@ router.post(
         // 3. extractNZAddress on prior history messages
         // 4. Raw address-like text from the user's message (last resort — strips
         //    non-address prefixes and sends the remaining tokens to the geocoder)
-        let extractedAddress: string | null = forcedAnalyseAddress ?? null;
+        const pastedSelectedListingContext =
+          pastedListingResolution.status === "resolved"
+            ? normaliseSelectedListingContext(pastedListingResolution.context)
+            : null;
+        let extractedAddress: string | null =
+          pastedListingResolution.status === "resolved"
+            ? pastedListingResolution.address
+            : forcedAnalyseAddress ?? null;
 
         if (!extractedAddress) {
           extractedAddress = await extractNZAddress(userText).catch(() => null);
@@ -7201,8 +7325,19 @@ router.post(
             req.log.info({ addressKey: chatAddressKey, marker: "PROPERTY_CACHE_HIT" }, "Property cache hit — skipping external acquisition");
           }
 
+          const chatSelectedListingContext =
+            pastedSelectedListingContext ??
+            selectedListingContextFromHistory(conversationHistory);
+          const chatPreferredListingUrl =
+            chatSelectedListingContext?.listingUrl ??
+            selectedListingUrlFromHistory(conversationHistory, analysisAddress);
+
           let pipelineResult = await runPropertyPipeline(analysisAddress, {
-            preferredRealestateListingUrl: selectedListingUrlFromHistory(conversationHistory, analysisAddress),
+            preferredRealestateListingUrl:
+              chatPreferredListingUrl && /realestate\.co\.nz/i.test(chatPreferredListingUrl)
+                ? chatPreferredListingUrl
+                : null,
+            selectedListingContext: chatSelectedListingContext,
             cachedRaw: chatCachedEntry?.rawData ?? null,
             cachedRawAcquiredAt: chatCachedEntry ? new Date(chatCachedEntry.row.lastRefreshedAt as unknown as string | Date).toISOString() : null,
           }).catch((err) => {
@@ -7219,7 +7354,11 @@ router.post(
               "Redevelopment suspected on cached data — forcing live re-acquisition",
             );
             const fresh = await runPropertyPipeline(analysisAddress, {
-              preferredRealestateListingUrl: selectedListingUrlFromHistory(conversationHistory, analysisAddress),
+              preferredRealestateListingUrl:
+                chatPreferredListingUrl && /realestate\.co\.nz/i.test(chatPreferredListingUrl)
+                  ? chatPreferredListingUrl
+                  : null,
+              selectedListingContext: chatSelectedListingContext,
               cachedRaw: null,
             }).catch((err) => {
               req.log.warn({ err }, "Forced live re-acquisition failed — keeping cached-data result");
@@ -7264,6 +7403,10 @@ router.post(
             );
 
             if (deterministicReport) {
+              applySelectedListingContextToReport(
+                deterministicReport,
+                chatSelectedListingContext ?? pipelineResult.selectedListingContext,
+              );
               const content = JSON.stringify(deterministicReport);
               let savedSearchId: string | null = null;
               let savedSearchCreatedAt: string | null = null;
@@ -7640,6 +7783,10 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                 geocode?.formatted ?? analysisAddress,
                 chatLocale,
               );
+              applySelectedListingContextToReport(
+                parsed,
+                chatSelectedListingContext ?? pipelineResult.selectedListingContext,
+              );
               content = JSON.stringify(parsed);
             } else {
               const deterministicFallback = buildDeterministicFallbackReport(
@@ -7647,6 +7794,10 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                 geocode?.formatted ?? analysisAddress,
               );
               if (deterministicFallback) {
+                applySelectedListingContextToReport(
+                  deterministicFallback,
+                  chatSelectedListingContext ?? pipelineResult.selectedListingContext,
+                );
                 content = JSON.stringify(deterministicFallback);
               } else if (rawContent.trim()) {
                 content = rawContent.trim();
