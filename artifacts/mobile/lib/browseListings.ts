@@ -43,6 +43,11 @@ export type BrowseListingFilters = {
   minPrice?: string;
   maxPrice?: string;
   bedrooms?: string;
+  bathrooms?: string;
+  minLandArea?: string;
+  minFloorArea?: string;
+  saleMethod?: string;
+  sort?: "recommended" | "newest" | "price_asc" | "price_desc" | "land_desc";
   cursor?: string | null;
   limit?: number;
 };
@@ -145,6 +150,11 @@ export async function fetchBrowseListings(headers: Record<string, string>, filte
   if (filters.minPrice?.trim()) params.set("minPrice", filters.minPrice.trim());
   if (filters.maxPrice?.trim()) params.set("maxPrice", filters.maxPrice.trim());
   if (filters.bedrooms?.trim()) params.set("bedrooms", filters.bedrooms.trim());
+  if (filters.bathrooms?.trim()) params.set("bathrooms", filters.bathrooms.trim());
+  if (filters.minLandArea?.trim()) params.set("minLandArea", filters.minLandArea.trim());
+  if (filters.minFloorArea?.trim()) params.set("minFloorArea", filters.minFloorArea.trim());
+  if (filters.saleMethod?.trim()) params.set("saleMethod", filters.saleMethod.trim());
+  if (filters.sort?.trim()) params.set("sort", filters.sort.trim());
   if (filters.cursor) params.set("cursor", filters.cursor);
   params.set("limit", String(filters.limit ?? 12));
 

@@ -70,6 +70,8 @@ type SitePlanLayer = {
   geojson: GeoJsonFeatureCollection;
 };
 
+type SitePlanAerialTile = { z: number; x: number; y: number; left: number; top: number };
+
 type SitePlanResponse = {
   image: {
     dataUri: string;
@@ -79,6 +81,8 @@ type SitePlanResponse = {
     attribution: string;
     available: boolean;
     source: "linz-basemaps" | "placeholder";
+    tileSize?: number;
+    tiles?: SitePlanAerialTile[];
   };
   center: { lat: number; lng: number };
   layers: SitePlanLayer[];
@@ -362,6 +366,11 @@ export function SitePlanCard({ report }: Props) {
   const translateY = useSharedValue(0);
   const savedX = useSharedValue(0);
   const savedY = useSharedValue(0);
+  // Base "contain" fit that scales the native-resolution canvas down into the viewport. The map
+  // content (aerial tiles + SVG linework) is laid out at the image's native pixel size so it
+  // rasterizes at high resolution; `scale` (user zoom) multiplies on top of this base. Result:
+  // crisp linework and aerial even when zoomed in.
+  const baseScale = useSharedValue(1);
   const [canvasSize, setCanvasSize] = useState<{ width: number; height: number } | null>(null);
   const framedRef = useRef(false);
 
@@ -388,6 +397,15 @@ export function SitePlanCard({ report }: Props) {
     }
     setVisibleLayers(next);
   }, [layersSignature, query.data]);
+
+  // Keep the base "contain" fit in sync with the image + viewport so the native-resolution canvas
+  // is scaled down to fit, independent of (and multiplied by) the user's zoom.
+  useEffect(() => {
+    const data = query.data;
+    if (!data || !canvasSize) return;
+    const fit = Math.min(canvasSize.width / data.image.width, canvasSize.height / data.image.height);
+    if (Number.isFinite(fit) && fit > 0) baseScale.value = fit;
+  }, [query.data, canvasSize, baseScale]);
 
   // Default the view to frame the analyzed parcel ("boundary") whenever the Plan tab opens, so the
   // subject lot is centered and filling the viewport rather than showing the whole fetched extent.
@@ -473,7 +491,7 @@ export function SitePlanCard({ report }: Props) {
     transform: [
       { translateX: translateX.value },
       { translateY: translateY.value },
-      { scale: scale.value },
+      { scale: baseScale.value * scale.value },
     ],
   }));
 
@@ -499,7 +517,7 @@ export function SitePlanCard({ report }: Props) {
         <View style={styles.emptyState}>
           <Feather name="map" size={18} color={colors.mutedForeground} />
           <Text style={[styles.emptyTitle, { color: colors.foreground }]}>
-            {translateForOS("site_plan.auckland_only")}
+            {translateForOS("site_plan.unavailable")}
           </Text>
         </View>
       </View>
@@ -546,7 +564,7 @@ export function SitePlanCard({ report }: Props) {
           <View style={styles.emptyState}>
             <Feather name="alert-circle" size={18} color={colors.mutedForeground} />
             <Text style={[styles.emptyTitle, { color: colors.foreground }]}>
-              {translateForOS("site_plan.auckland_only")}
+              {translateForOS("site_plan.load_failed")}
             </Text>
             <TouchableOpacity
               style={[styles.retryButton, { backgroundColor: colors.foreground }]}
@@ -560,8 +578,40 @@ export function SitePlanCard({ report }: Props) {
           </View>
         ) : query.data ? (
           <GestureDetector gesture={composedGesture}>
-            <Animated.View style={[styles.mapCanvas, animatedMapStyle]}>
-              <Image source={{ uri: query.data.image.dataUri }} style={styles.mapImage} resizeMode="contain" />
+            <Animated.View
+              style={[
+                styles.mapCanvas,
+                {
+                  // Lay the canvas out at the image's native pixel size, centred in the viewport.
+                  // `baseScale` (the contain-fit) in the transform scales it down to fit; this keeps
+                  // both the aerial tiles and the SVG linework crisp under zoom.
+                  width: query.data.image.width,
+                  height: query.data.image.height,
+                  left: canvasSize ? (canvasSize.width - query.data.image.width) / 2 : 0,
+                  top: canvasSize ? (canvasSize.height - query.data.image.height) / 2 : 0,
+                },
+                animatedMapStyle,
+              ]}
+            >
+              {query.data.image.source === "linz-basemaps" && query.data.image.tiles?.length ? (
+                // Aerial rendered as a grid of LINZ Basemaps tiles via the server proxy (key stays
+                // server-side, no `sharp` needed). Each tile sits at its native resolution.
+                query.data.image.tiles.map((tile) => (
+                  <Image
+                    key={`${tile.z}/${tile.x}/${tile.y}`}
+                    source={{ uri: `${getApiBase()}/tiles/aerial/${tile.z}/${tile.x}/${tile.y}` }}
+                    style={{
+                      position: "absolute",
+                      left: tile.left,
+                      top: tile.top,
+                      width: query.data.image.tileSize ?? 256,
+                      height: query.data.image.tileSize ?? 256,
+                    }}
+                  />
+                ))
+              ) : query.data.image.dataUri ? (
+                <Image source={{ uri: query.data.image.dataUri }} style={styles.mapImage} resizeMode="cover" />
+              ) : null}
               {/* Slight scrim over the aerial so the vector linework (pipes/boundaries) stays
                   legible on top of the satellite imagery (house, trees) underneath. */}
               {query.data.image.source === "linz-basemaps" ? (
@@ -652,8 +702,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   mapCanvas: {
-    width: "100%",
-    height: "100%",
+    position: "absolute",
   },
   mapImage: {
     width: "100%",

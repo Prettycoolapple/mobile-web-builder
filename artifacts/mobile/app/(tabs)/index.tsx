@@ -154,12 +154,36 @@ const APP_RATING_STATE_KEY = "@devfeasible/app-rating-state";
 const ANALYSE_DISCLAIMER_DISMISSED_KEY = "@devfeasible/analyse-disclaimer-dismissed";
 const PENDING_GUEST_ANALYSE_ACTION_KEY = "@devfeasible/pending-guest-analyse-action";
 const HOME_MODE_KEY = "@devfeasible/home-mode";
-const BROWSE_MODE_ENABLED = false;
+const BROWSE_MODE_ENABLED = true;
+const BROWSE_PAGE_SIZE = 5;
+const BROWSE_PREFETCH_LIMIT = 10;
 const APP_RATING_CHAT_THRESHOLD = 3;
 const APP_RATING_SNOOZE_MS = 14 * 24 * 60 * 60 * 1000;
 
+const DEFAULT_BROWSE_FILTERS: BrowseListingFilters = {
+  listingType: "for_sale",
+  limit: BROWSE_PAGE_SIZE,
+  sort: "recommended",
+};
+
 function getAnalyseDisclaimerDismissedKey(userId?: string | null): string {
   return userId ? `${ANALYSE_DISCLAIMER_DISMISSED_KEY}:${userId}` : ANALYSE_DISCLAIMER_DISMISSED_KEY;
+}
+
+function browseFiltersKey(filters: BrowseListingFilters): string {
+  const stable = {
+    q: filters.q?.trim() ?? "",
+    propertyType: filters.propertyType ?? "",
+    minPrice: filters.minPrice?.trim() ?? "",
+    maxPrice: filters.maxPrice?.trim() ?? "",
+    bedrooms: filters.bedrooms?.trim() ?? "",
+    bathrooms: filters.bathrooms?.trim() ?? "",
+    minLandArea: filters.minLandArea?.trim() ?? "",
+    minFloorArea: filters.minFloorArea?.trim() ?? "",
+    saleMethod: filters.saleMethod ?? "",
+    sort: filters.sort ?? "recommended",
+  };
+  return JSON.stringify(stable);
 }
 
 type PendingAnalyseAction =
@@ -499,7 +523,8 @@ export default function SearchScreen() {
 
   const [inputText, setInputText] = useState("");
   const [homeMode, setHomeMode] = useState<"ask" | "browse">("ask");
-  const [browseFilters, setBrowseFilters] = useState<BrowseListingFilters>({ listingType: "for_sale", limit: 12 });
+  const [browseFilters, setBrowseFilters] = useState<BrowseListingFilters>(DEFAULT_BROWSE_FILTERS);
+  const [appliedBrowseFilters, setAppliedBrowseFilters] = useState<BrowseListingFilters>(DEFAULT_BROWSE_FILTERS);
   const [browseListings, setBrowseListings] = useState<BrowseListing[]>([]);
   const [browseNextCursor, setBrowseNextCursor] = useState<string | null>(null);
   const [browseLoading, setBrowseLoading] = useState(false);
@@ -546,6 +571,10 @@ export default function SearchScreen() {
   const reportMessageHeightsRef = useRef<Map<string, number>>(new Map());
   const messageHeightsRef = useRef<Map<string, number>>(new Map());
   const pendingSearchScrollTargetRef = useRef<{ messageId: string; index: number } | null>(null);
+  const browseQueuedListingsRef = useRef<BrowseListing[]>([]);
+  const browsePreloadRef = useRef<{ key: string; listings: BrowseListing[]; nextCursor: string | null } | null>(null);
+  const browseLoadedKeyRef = useRef<string | null>(null);
+  const browsePreloadInFlightRef = useRef(false);
   const cardScorePollRef = useRef<{ addresses: string[]; sessionId: string; intervalId: ReturnType<typeof setInterval> | null }>({ addresses: [], sessionId: "", intervalId: null });
   const handleAnalyseRef = useRef<((address: string, selectedPhotoUrl?: string | null, selectedListingUrl?: string | null, selectedListingContext?: SelectedListingContext | null, skipAnalyseDisclaimer?: boolean, analysisKey?: string) => Promise<void>) | null>(null);
   const handleSendRef = useRef<((overrideText?: string, skipAnalyseDisclaimer?: boolean, continuePresentation?: "generic_listing" | "scored_screening", discoveryChoiceSuburb?: string, displayText?: string) => Promise<void>) | null>(null);
@@ -630,6 +659,10 @@ export default function SearchScreen() {
     AsyncStorage.setItem(HOME_MODE_KEY, homeMode).catch(() => {});
   }, [homeMode]);
 
+  useEffect(() => {
+    if (!user && homeMode === "browse") setHomeMode("ask");
+  }, [homeMode, user]);
+
   const shouldShowAnalyseDisclaimer = useCallback(
     () => !analyseDisclaimerDismissed,
     [analyseDisclaimerDismissed],
@@ -668,8 +701,20 @@ export default function SearchScreen() {
     setMessageLimitReached(used >= chatQuota.limit);
   }, [user, chatQuota]);
 
-  const loadBrowseListings = useCallback(async (options?: { refresh?: boolean; append?: boolean; cursor?: string | null }) => {
+  const loadBrowseListings = useCallback(async (options?: { refresh?: boolean; append?: boolean; cursor?: string | null; filters?: BrowseListingFilters }) => {
+    const activeFilters = {
+      ...(options?.filters ?? appliedBrowseFilters),
+      listingType: "for_sale" as const,
+      limit: options?.append ? BROWSE_PREFETCH_LIMIT : BROWSE_PREFETCH_LIMIT,
+    };
+    const activeKey = browseFiltersKey(activeFilters);
     const append = options?.append === true;
+    if (append && browseQueuedListingsRef.current.length > 0) {
+      const next = browseQueuedListingsRef.current.slice(0, BROWSE_PAGE_SIZE);
+      browseQueuedListingsRef.current = browseQueuedListingsRef.current.slice(BROWSE_PAGE_SIZE);
+      setBrowseListings((prev) => [...prev, ...next]);
+      return;
+    }
     const cursor = options?.cursor ?? null;
     if (append && !cursor) return;
     if (append) setBrowseLoadingMore(true);
@@ -678,11 +723,14 @@ export default function SearchScreen() {
     setBrowseError(null);
     try {
       const result = await fetchBrowseListings(getApiHeaders(), {
-        ...browseFilters,
+        ...activeFilters,
         cursor: append ? cursor : null,
-        limit: browseFilters.limit ?? 12,
+        limit: BROWSE_PREFETCH_LIMIT,
       });
-      setBrowseListings((prev) => append ? [...prev, ...result.listings] : result.listings);
+      const visible = result.listings.slice(0, BROWSE_PAGE_SIZE);
+      browseQueuedListingsRef.current = result.listings.slice(BROWSE_PAGE_SIZE);
+      if (!append) browseLoadedKeyRef.current = activeKey;
+      setBrowseListings((prev) => append ? [...prev, ...visible] : visible);
       setBrowseNextCursor(result.nextCursor);
     } catch (error) {
       setBrowseError(error instanceof Error ? error.message : "Could not load listings.");
@@ -691,14 +739,71 @@ export default function SearchScreen() {
       setBrowseRefreshing(false);
       setBrowseLoadingMore(false);
     }
-  }, [browseFilters, getApiHeaders]);
+  }, [appliedBrowseFilters, getApiHeaders]);
 
   useEffect(() => {
     if (!BROWSE_MODE_ENABLED) return;
     if (homeMode !== "browse") return;
+    if (browseLoadedKeyRef.current === browseFiltersKey(appliedBrowseFilters)) return;
     void loadBrowseListings();
-    // Reload when the user changes filters or switches into Browse.
-  }, [homeMode, browseFilters, loadBrowseListings]);
+  }, [homeMode, appliedBrowseFilters, loadBrowseListings]);
+
+  const preloadBrowseListings = useCallback(async () => {
+    if (!BROWSE_MODE_ENABLED || !user || browsePreloadInFlightRef.current) return;
+    browsePreloadInFlightRef.current = true;
+    const preloadFilters = { ...DEFAULT_BROWSE_FILTERS, limit: BROWSE_PREFETCH_LIMIT };
+    try {
+      const result = await fetchBrowseListings(getApiHeaders(), preloadFilters);
+      browsePreloadRef.current = {
+        key: browseFiltersKey(preloadFilters),
+        listings: result.listings,
+        nextCursor: result.nextCursor,
+      };
+    } catch {
+      // Silent: Browse can still load normally when opened.
+    } finally {
+      browsePreloadInFlightRef.current = false;
+    }
+  }, [getApiHeaders, user]);
+
+  useEffect(() => {
+    if (!BROWSE_MODE_ENABLED) return;
+    void preloadBrowseListings();
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") void preloadBrowseListings();
+    });
+    return () => sub.remove();
+  }, [preloadBrowseListings]);
+
+  const applyBrowseFilters = useCallback(() => {
+    const next = { ...browseFilters, listingType: "for_sale" as const, limit: BROWSE_PAGE_SIZE, cursor: null };
+    browseQueuedListingsRef.current = [];
+    browseLoadedKeyRef.current = null;
+    setBrowseNextCursor(null);
+    setAppliedBrowseFilters(next);
+    if (homeMode !== "browse") setHomeMode("browse");
+    else if (browseFiltersKey(next) === browseFiltersKey(appliedBrowseFilters)) void loadBrowseListings({ filters: next });
+  }, [appliedBrowseFilters, browseFilters, homeMode, loadBrowseListings]);
+
+  const openBrowseMode = useCallback(() => {
+    const defaultKey = browseFiltersKey({ ...DEFAULT_BROWSE_FILTERS, limit: BROWSE_PREFETCH_LIMIT });
+    const draftKey = browseFiltersKey(browseFilters);
+    setHomeMode("browse");
+    if (draftKey === browseFiltersKey(DEFAULT_BROWSE_FILTERS) && browsePreloadRef.current?.key === defaultKey) {
+      const preloaded = browsePreloadRef.current;
+      browseQueuedListingsRef.current = preloaded.listings.slice(BROWSE_PAGE_SIZE);
+      browseLoadedKeyRef.current = browseFiltersKey(DEFAULT_BROWSE_FILTERS);
+      setAppliedBrowseFilters(DEFAULT_BROWSE_FILTERS);
+      setBrowseListings(preloaded.listings.slice(0, BROWSE_PAGE_SIZE));
+      setBrowseNextCursor(preloaded.nextCursor);
+      return;
+    }
+    applyBrowseFilters();
+  }, [applyBrowseFilters, browseFilters]);
+
+  const openAskMode = useCallback(() => {
+    setHomeMode("ask");
+  }, []);
 
   const messages = currentSession?.messages || [];
   const hasSearchContent = messages.length > 0;
@@ -3619,6 +3724,18 @@ export default function SearchScreen() {
                 <Text style={[styles.exploreBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>{t("explore.header_button")}</Text>
               </TouchableOpacity>
             ) : null}
+            {BROWSE_MODE_ENABLED && user && (isEmpty || homeMode === "browse") ? (
+              <TouchableOpacity
+                style={[styles.browseModeBtn, { borderColor: "rgba(250,249,246,0.22)", backgroundColor: homeMode === "browse" ? colors.accent : "transparent" }]}
+                onPress={homeMode === "browse" ? openAskMode : openBrowseMode}
+                activeOpacity={0.78}
+              >
+                <Feather name={homeMode === "browse" ? "message-circle" : "list"} size={14} color={homeMode === "browse" ? "#fff" : "rgba(250,249,246,0.78)"} />
+                <Text style={[styles.browseModeBtnText, { color: homeMode === "browse" ? "#fff" : "rgba(250,249,246,0.78)", fontFamily: "DM_Sans_600SemiBold" }]}>
+                  {homeMode === "browse" ? t("browse.ask_mode") : t("browse.header_button")}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
             {!user && (
               <TouchableOpacity
                 style={[styles.signInBtn, { borderColor: "rgba(250,249,246,0.22)" }]}
@@ -3662,27 +3779,6 @@ export default function SearchScreen() {
           </View>
         </View>
 
-        {BROWSE_MODE_ENABLED && (
-          <View style={[styles.modeSwitch, { backgroundColor: "rgba(250,249,246,0.08)", borderColor: "rgba(250,249,246,0.12)" }]}>
-            {(["ask", "browse"] as const).map((mode) => {
-              const active = homeMode === mode;
-              return (
-                <TouchableOpacity
-                  key={mode}
-                  style={[styles.modeOption, active && { backgroundColor: colors.accent }]}
-                  onPress={() => setHomeMode(mode)}
-                  activeOpacity={0.8}
-                >
-                  <Feather name={mode === "ask" ? "message-circle" : "home"} size={13} color={active ? "#fff" : "rgba(250,249,246,0.72)"} />
-                  <Text style={[styles.modeText, { color: active ? "#fff" : "rgba(250,249,246,0.72)", fontFamily: "DM_Sans_600SemiBold" }]}>
-                    {mode === "ask" ? "Ask" : "Browse"}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        )}
-
         {currentSession?.currentReport && (
           <View style={[styles.contextBanner, { borderTopColor: "rgba(250,249,246,0.08)" }]}>
             <Feather name="map-pin" size={12} color={colors.accent} />
@@ -3708,19 +3804,21 @@ export default function SearchScreen() {
           <BrowseFilters
             filters={browseFilters}
             onChange={setBrowseFilters}
-            onSubmit={() => loadBrowseListings()}
+            onSubmit={applyBrowseFilters}
           />
           {browseLoading && browseListings.length === 0 ? (
             <View style={styles.browseCenter}>
               <ActivityIndicator color={colors.accent} size="large" />
+              <Text style={[styles.browseEmptyTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>{t("browse.loading")}</Text>
+              <Text style={[styles.browseEmptyText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{t("browse.loading_hint")}</Text>
             </View>
           ) : browseError && browseListings.length === 0 ? (
             <View style={styles.browseCenter}>
               <Feather name="alert-circle" size={28} color={colors.mutedForeground} />
-              <Text style={[styles.browseEmptyTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>Listings unavailable</Text>
+              <Text style={[styles.browseEmptyTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>{t("browse.unavailable")}</Text>
               <Text style={[styles.browseEmptyText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{browseError}</Text>
               <TouchableOpacity style={[styles.browseRetry, { borderColor: colors.border }]} onPress={() => loadBrowseListings()}>
-                <Text style={[styles.browseRetryText, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>Try again</Text>
+                <Text style={[styles.browseRetryText, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>{t("browse.try_again")}</Text>
               </TouchableOpacity>
             </View>
           ) : (
@@ -3746,25 +3844,25 @@ export default function SearchScreen() {
                 />
               }
               onEndReached={() => {
-                if (browseNextCursor && !browseLoadingMore) {
+                if ((browseQueuedListingsRef.current.length > 0 || browseNextCursor) && !browseLoadingMore) {
                   void loadBrowseListings({ append: true, cursor: browseNextCursor });
                 }
               }}
               onEndReachedThreshold={0.6}
               ListHeaderComponent={
                 <View style={styles.browseHeaderCopy}>
-                  <Text style={[styles.browseTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>Browse listings</Text>
+                  <Text style={[styles.browseTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>{t("browse.title")}</Text>
                   <Text style={[styles.browseSubtitle, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                    Project Alpha agent listings appear first, with curated marketplace listings filling the feed.
+                    {t("browse.subtitle")}
                   </Text>
                 </View>
               }
               ListEmptyComponent={
                 <View style={styles.browseCenter}>
                   <Feather name="search" size={30} color={colors.mutedForeground} />
-                  <Text style={[styles.browseEmptyTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>No listings found</Text>
+                  <Text style={[styles.browseEmptyTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>{t("browse.empty_title")}</Text>
                   <Text style={[styles.browseEmptyText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                    Try another suburb or loosen your filters.
+                    {t("browse.empty_body")}
                   </Text>
                 </View>
               }
@@ -4142,6 +4240,18 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "rgba(250,249,246,0.78)",
   },
+  browseModeBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderWidth: 1,
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  browseModeBtnText: {
+    fontSize: 13,
+  },
   signInBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -4179,26 +4289,6 @@ const styles = StyleSheet.create({
   newChatText: {
     fontSize: 13,
     color: "rgba(250,249,246,0.65)",
-  },
-  modeSwitch: {
-    flexDirection: "row",
-    borderWidth: 1,
-    borderRadius: 14,
-    padding: 3,
-    marginTop: 12,
-    gap: 3,
-  },
-  modeOption: {
-    flex: 1,
-    minHeight: 34,
-    borderRadius: 11,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-  },
-  modeText: {
-    fontSize: 13,
   },
   contextBanner: {
     flexDirection: "row",

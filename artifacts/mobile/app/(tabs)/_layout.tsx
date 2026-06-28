@@ -1,5 +1,4 @@
 import { BlurView } from "expo-blur";
-import { LinearGradient } from "expo-linear-gradient";
 import { Tabs, useRouter, useSegments } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import { Feather } from "@expo/vector-icons";
@@ -59,6 +58,8 @@ function ClassicTabLayout({ isGuest }: { isGuest: boolean }) {
   const onSearchScreen = leafSegment === "(tabs)";
   const searchActive = inConversation && onSearchScreen;
   const searchTint = searchActive ? colors.accent : colors.mutedForeground;
+  const homeActive = !inConversation && onSearchScreen;
+  const homeTint = homeActive ? colors.accent : colors.mutedForeground;
 
   return (
     <Tabs
@@ -147,7 +148,7 @@ function ClassicTabLayout({ isGuest }: { isGuest: boolean }) {
           title: t("tab.home"),
           tabBarButton: ({ style }) => (
             <Pressable
-              style={[style, styles.homeTabCell]}
+              style={[style, styles.tabCell]}
               onPress={() => {
                 // Fresh Home landing; prior sessions stay alive in `sessions`
                 // and are resumable via the Search tab.
@@ -155,21 +156,15 @@ function ClassicTabLayout({ isGuest }: { isGuest: boolean }) {
                 router.navigate("/(tabs)");
               }}
               accessibilityRole="button"
+              accessibilityState={{ selected: homeActive }}
               accessibilityLabel={t("tab.home")}
             >
-              <LinearGradient
-                colors={["#FFFFFF", colors.accent]}
-                start={{ x: 0.08, y: 0.05 }}
-                end={{ x: 0.92, y: 0.95 }}
-                style={[styles.homeCircle, { borderColor: colors.accent + "55" }]}
-              >
-                {isIOS ? (
-                  <SymbolView name="house.fill" tintColor={colors.headerBg} size={18} />
-                ) : (
-                  <Feather name="home" size={18} color={colors.headerBg} />
-                )}
-              </LinearGradient>
-              <Text style={[styles.homeLabel, { color: colors.mutedForeground }]}>
+              {isIOS ? (
+                <SymbolView name={homeActive ? "house.fill" : "house"} tintColor={homeTint} size={24} />
+              ) : (
+                <Feather name="home" size={22} color={homeTint} />
+              )}
+              <Text style={[styles.tabLabel, { color: homeTint }]}>
                 {t("tab.home")}
               </Text>
             </Pressable>
@@ -252,23 +247,5 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontFamily: "DM_Sans_600SemiBold",
     fontVariant: ["tabular-nums"],
-  },
-  homeTabCell: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 4,
-  },
-  homeCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    borderWidth: StyleSheet.hairlineWidth,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  homeLabel: {
-    fontFamily: "DM_Sans_500Medium",
-    fontSize: 11,
   },
 });

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { and, desc, eq, gt, gte, ilike, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, ilike, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { browseListingCache, db, listings, listingViews, profiles, salesAgentProfiles, withDbRetry } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
@@ -13,7 +13,7 @@ import { logger } from "../lib/logger";
 import { buildListingTeaser } from "../lib/listing-teaser";
 
 const router = Router();
-const BROWSE_MODE_ENABLED = false;
+const BROWSE_MODE_ENABLED = true;
 
 // ── Total-views display helpers ──────────────────────────────────────────────
 // Fake growth is computed on read (no cron): a per-listing seed plus a
@@ -101,6 +101,24 @@ type BrowseListing = {
 
 const BROWSE_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 const MAX_CURATED_TOP_UP = 8;
+const DEFAULT_BROWSE_SUBURBS = [
+  "remuera",
+  "st heliers",
+  "mt eden",
+  "epsom",
+  "papakura",
+  "henderson",
+  "albany",
+  "howick",
+  "hamilton",
+  "tauranga",
+  "wellington",
+  "christchurch",
+  "dunedin",
+  "queenstown",
+  "nelson",
+];
+const VALID_SORTS = new Set(["recommended", "newest", "price_asc", "price_desc", "land_desc"]);
 
 function cleanQuery(value: unknown): string {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
@@ -110,6 +128,48 @@ function parsePositiveInt(value: unknown): number | null {
   if (typeof value !== "string" && typeof value !== "number") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
+}
+
+function defaultBrowseSuburb(offset: number, limit: number): { suburb: string; startOffset: number } {
+  const page = Math.max(0, Math.floor(offset / Math.max(1, limit)));
+  const suburb = DEFAULT_BROWSE_SUBURBS[page % DEFAULT_BROWSE_SUBURBS.length] ?? DEFAULT_BROWSE_SUBURBS[0];
+  const cycle = Math.floor(page / DEFAULT_BROWSE_SUBURBS.length);
+  return { suburb, startOffset: cycle * limit };
+}
+
+function applyBrowseFilters(items: BrowseListing[], filters: {
+  propertyType: string;
+  bedroomsMin: number | null;
+  bathroomsMin: number | null;
+  minLandArea: number | null;
+  minFloorArea: number | null;
+  saleMethod: string;
+}): BrowseListing[] {
+  return items.filter((item) => {
+    if (filters.propertyType && item.propertyType && !item.propertyType.toLowerCase().includes(filters.propertyType.toLowerCase())) return false;
+    if (filters.bedroomsMin && (item.bedrooms ?? 0) < filters.bedroomsMin) return false;
+    if (filters.bathroomsMin && (item.bathrooms ?? 0) < filters.bathroomsMin) return false;
+    if (filters.minLandArea && (item.landAreaSqm ?? 0) < filters.minLandArea) return false;
+    if (filters.minFloorArea && (item.floorAreaSqm ?? 0) < filters.minFloorArea) return false;
+    // Curated marketplace cards do not expose method of sale consistently, so
+    // this filter is enforced for internal rows and tolerated for curated rows.
+    void filters.saleMethod;
+    return true;
+  });
+}
+
+function sortBrowseListings(items: BrowseListing[], sort: string): BrowseListing[] {
+  const sorted = [...items];
+  if (sort === "price_asc") {
+    sorted.sort((a, b) => (a.priceNzd ?? Number.MAX_SAFE_INTEGER) - (b.priceNzd ?? Number.MAX_SAFE_INTEGER));
+  } else if (sort === "price_desc") {
+    sorted.sort((a, b) => (b.priceNzd ?? 0) - (a.priceNzd ?? 0));
+  } else if (sort === "land_desc") {
+    sorted.sort((a, b) => (b.landAreaSqm ?? 0) - (a.landAreaSqm ?? 0));
+  } else if (sort === "newest") {
+    sorted.sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime());
+  }
+  return sorted;
 }
 
 function publicListingFromInternal(row: {
@@ -424,21 +484,39 @@ function publicListingFromMock(candidate: ReturnType<typeof getMockListings>[num
   };
 }
 
-async function fetchCuratedBrowseListings(query: string, needed: number, minPrice: number | null, maxPrice: number | null): Promise<BrowseListing[]> {
-  const suburb = query || "remuera";
+async function fetchCuratedBrowseListings(args: {
+  query: string;
+  needed: number;
+  minPrice: number | null;
+  maxPrice: number | null;
+  offset: number;
+  limit: number;
+  propertyType: string;
+  bedroomsMin: number | null;
+  bathroomsMin: number | null;
+  minLandArea: number | null;
+  minFloorArea: number | null;
+  saleMethod: string;
+  sort: string;
+}): Promise<BrowseListing[]> {
+  const defaultTarget = defaultBrowseSuburb(args.offset, args.limit);
+  const suburb = args.query || defaultTarget.suburb;
   try {
+    const fetchSize = Math.min(30, Math.max(args.needed * 3, args.needed));
     const result = await searchRealEstateListings({
       suburb,
-      minPrice: minPrice ?? 1,
-      maxPrice: maxPrice ?? 20_000_000,
-      firstBatchSize: needed,
+      minPrice: args.minPrice ?? 1,
+      maxPrice: args.maxPrice ?? 20_000_000,
+      firstBatchSize: fetchSize,
       includeNegotiation: true,
       fetchAllPages: false,
-      maxListings: needed,
+      maxListings: fetchSize,
+      startOffset: args.query ? args.offset : defaultTarget.startOffset,
     });
-    const scraped = [...result.firstBatch, ...result.remainingListings].slice(0, needed);
+    const scraped = [...result.firstBatch, ...result.remainingListings].slice(0, fetchSize);
     const cached = await upsertCuratedBrowseListings(scraped);
-    return cached.length ? cached : scraped.map(publicListingFromCurated);
+    const items = cached.length ? cached : scraped.map(publicListingFromCurated);
+    return sortBrowseListings(applyBrowseFilters(items, args), args.sort).slice(0, args.needed);
   } catch {
     return [];
   }
@@ -867,14 +945,30 @@ router.get("/listings", requireAuth, async (req, res) => {
   const minPrice = parsePositiveInt(req.query.minPrice);
   const maxPrice = parsePositiveInt(req.query.maxPrice);
   const bedroomsMin = parsePositiveInt(req.query.bedrooms);
-  const listingType = cleanQuery(req.query.listingType);
+  const bathroomsMin = parsePositiveInt(req.query.bathrooms);
+  const minLandArea = parsePositiveInt(req.query.minLandArea);
+  const minFloorArea = parsePositiveInt(req.query.minFloorArea);
+  const listingType = "for_sale";
   const propertyType = cleanQuery(req.query.propertyType);
+  const saleMethod = cleanQuery(req.query.saleMethod);
+  const sort = VALID_SORTS.has(cleanQuery(req.query.sort)) ? cleanQuery(req.query.sort) : "recommended";
+  const internalOrder =
+    sort === "price_asc" ? asc(listings.priceNzd)
+      : sort === "price_desc" ? desc(listings.priceNzd)
+        : sort === "land_desc" ? desc(listings.landAreaSqm)
+          : desc(listings.createdAt);
+  const cacheOrder =
+    sort === "price_asc" ? asc(browseListingCache.priceNzd)
+      : sort === "price_desc" ? desc(browseListingCache.priceNzd)
+        : sort === "land_desc" ? desc(browseListingCache.landAreaSqm)
+          : desc(browseListingCache.lastSeenAt);
 
   try {
     const filters = [
       eq(listings.status, "active" as const),
       isNull(listings.removedAt),
       isNotNull(listings.approvedAt),
+      eq(listings.listingType, "for_sale" as const),
     ];
     if (query) {
       filters.push(or(
@@ -884,15 +978,18 @@ router.get("/listings", requireAuth, async (req, res) => {
         ilike(listings.listingTitle, `%${query}%`),
       )!);
     }
-    if (listingType === "for_sale" || listingType === "for_rent") {
-      filters.push(eq(listings.listingType, listingType));
-    }
     if (propertyTypes.includes(propertyType as (typeof propertyTypes)[number])) {
       filters.push(eq(listings.propertyType, propertyType as (typeof propertyTypes)[number]));
     }
     if (minPrice) filters.push(gte(listings.priceNzd, minPrice));
     if (maxPrice) filters.push(lte(listings.priceNzd, maxPrice));
     if (bedroomsMin) filters.push(gte(listings.bedrooms, bedroomsMin));
+    if (bathroomsMin) filters.push(gte(listings.bathrooms, bathroomsMin));
+    if (minLandArea) filters.push(gte(listings.landAreaSqm, minLandArea));
+    if (minFloorArea) filters.push(gte(listings.floorAreaSqm, minFloorArea));
+    if (methodsOfSale.includes(saleMethod as (typeof methodsOfSale)[number])) {
+      filters.push(eq(listings.methodOfSale, saleMethod as (typeof methodsOfSale)[number]));
+    }
 
     const internalRows = await db
       .select({
@@ -926,7 +1023,7 @@ router.get("/listings", requireAuth, async (req, res) => {
       .innerJoin(profiles, eq(profiles.id, listings.userId))
       .leftJoin(salesAgentProfiles, eq(salesAgentProfiles.userId, listings.userId))
       .where(and(...filters))
-      .orderBy(desc(listings.createdAt))
+      .orderBy(internalOrder)
       .limit(limit)
       .offset(offset);
 
@@ -946,31 +1043,56 @@ router.get("/listings", requireAuth, async (req, res) => {
               ilike(browseListingCache.addressCity, `%${query}%`),
               ilike(browseListingCache.listingTitle, `%${query}%`),
             )! : undefined,
-            listingType === "for_sale" || listingType === "for_rent" ? eq(browseListingCache.listingType, listingType) : undefined,
+            eq(browseListingCache.listingType, "for_sale"),
             propertyType ? ilike(browseListingCache.propertyType, `%${propertyType}%`) : undefined,
             minPrice ? gte(browseListingCache.priceNzd, minPrice) : undefined,
             maxPrice ? lte(browseListingCache.priceNzd, maxPrice) : undefined,
             bedroomsMin ? gte(browseListingCache.bedrooms, bedroomsMin) : undefined,
+            bathroomsMin ? gte(browseListingCache.bathrooms, bathroomsMin) : undefined,
+            minLandArea ? gte(browseListingCache.landAreaSqm, minLandArea) : undefined,
+            minFloorArea ? gte(browseListingCache.floorAreaSqm, minFloorArea) : undefined,
           ))
-          .orderBy(desc(browseListingCache.lastSeenAt))
+          .orderBy(cacheOrder)
           .limit(cacheNeeded)
+          .offset(offset)
       : [];
-    const cached = cachedRows.map(publicListingFromCache);
+    const cached = sortBrowseListings(applyBrowseFilters(cachedRows.map(publicListingFromCache), {
+      propertyType,
+      bedroomsMin,
+      bathroomsMin,
+      minLandArea,
+      minFloorArea,
+      saleMethod,
+    }), sort);
 
     const scrapeNeeded = Math.min(MAX_CURATED_TOP_UP, Math.max(0, limit - internal.length - cached.length));
     const curated = scrapeNeeded > 0
-      ? await fetchCuratedBrowseListings(query, scrapeNeeded, minPrice, maxPrice)
+      ? await fetchCuratedBrowseListings({
+          query,
+          needed: scrapeNeeded,
+          minPrice,
+          maxPrice,
+          offset,
+          limit,
+          propertyType,
+          bedroomsMin,
+          bathroomsMin,
+          minLandArea,
+          minFloorArea,
+          saleMethod,
+          sort,
+        })
       : [];
     const samples = internal.length + cached.length + curated.length < limit
       ? getMockListings(query || undefined)
-          .slice(0, limit - internal.length - cached.length - curated.length)
+          .slice(offset, offset + limit - internal.length - cached.length - curated.length)
           .map(publicListingFromMock)
       : [];
 
-    const items = [...internal, ...cached, ...curated, ...samples].slice(0, limit);
+    const items = sortBrowseListings([...internal, ...cached, ...curated, ...samples], sort).slice(0, limit);
     res.json({
       listings: items,
-      nextCursor: internalRows.length === limit ? String(offset + internalRows.length) : null,
+      nextCursor: items.length === limit ? String(offset + limit) : null,
       sourceCounts: {
         internal: internal.length,
         cached: cached.length,

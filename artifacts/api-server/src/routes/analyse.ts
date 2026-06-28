@@ -39,7 +39,7 @@ import { suggestNearbySuburbs } from "../lib/claude";
 import { runPropertyPipeline, hasCacheableCore, type PipelineResult } from "../lib/pipeline";
 import { normaliseDiscoveryAddressKey } from "../lib/address-key";
 import { getCachedRaw, upsertCachedRaw, bumpHitCount, backfillDerivedScores } from "../lib/property-cache";
-import { buildSitePlanForAddress } from "../lib/site-plan";
+import { buildSitePlanForAddress, SitePlanNoLocationError, fetchAerialTile, type GeoHint } from "../lib/site-plan";
 import { SCORING_VERSION } from "../lib/card-score";
 import { noteUserActivity } from "../lib/user-activity";
 import { buildSubdivisionPathwayNote } from "../lib/lot-calculator";
@@ -4760,14 +4760,76 @@ router.get("/analyse/:searchId/site-plan", async (req, res) => {
 
     const addressKey = normaliseDiscoveryAddressKey(resolved.address);
     const cachedEntry = addressKey ? await getCachedRaw(addressKey) : null;
-    const sitePlan = await buildSitePlanForAddress(resolved.address, cachedEntry?.rawData ?? null);
+    // Reuse coordinates the analysis already resolved (the report), so a flaky live re-geocode
+    // never blocks the site plan for an already-analyzed property.
+    const geoHint = extractReportCoordinates(report);
+    const sitePlan = await buildSitePlanForAddress(resolved.address, cachedEntry?.rawData ?? null, geoHint);
     res.setHeader("Cache-Control", "private, max-age=900");
     res.json(sitePlan);
   } catch (err) {
+    if (err instanceof SitePlanNoLocationError) {
+      req.log.warn({ searchId }, "GET /analyse/:searchId/site-plan: no coordinates available");
+      res.status(422).json({ error: "Could not locate this property", code: "SITE_PLAN_NO_LOCATION" });
+      return;
+    }
     req.log.error({ err, searchId }, "GET /analyse/:searchId/site-plan failed");
     res.status(500).json({ error: "Failed to load site plan", code: "SITE_PLAN_FAILED" });
   }
 });
+
+/** Best-effort coordinate extraction from a saved report (resultJson). Schemas vary, so probe
+ *  the common nestings for a plausible lat/lng pair. */
+function extractReportCoordinates(report: Record<string, unknown>): GeoHint | null {
+  const candidates: unknown[] = [
+    report["geocode"],
+    report["coordinates"],
+    report["location"],
+    report["propertyOverview"],
+    report["property"],
+    report,
+  ];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const o = candidate as Record<string, unknown>;
+    const lat = Number(o["lat"] ?? o["latitude"]);
+    const lng = Number(o["lng"] ?? o["lon"] ?? o["long"] ?? o["longitude"]);
+    if (Number.isFinite(lat) && Number.isFinite(lng) && (lat !== 0 || lng !== 0)) {
+      return { lat, lng };
+    }
+  }
+  return null;
+}
+
+// Aerial tile proxy: injects the LINZ Basemaps key server-side so it never reaches the client,
+// and lets the app render aerial tiles directly (no `sharp` compositing). Public imagery, so no
+// auth — just an IP velocity cap to protect the key's quota. Tiles are heavily client-cached.
+router.get(
+  "/tiles/aerial/:z/:x/:y",
+  ipRateLimit({ name: "aerial-tiles", windowMs: minutes(1), max: 600 }),
+  async (req, res) => {
+    const params = req.params as { z?: string; x?: string; y?: string };
+    const z = Number(params.z);
+    const x = Number(params.x);
+    const y = Number(params.y);
+    if (![z, x, y].every((n) => Number.isInteger(n) && n >= 0) || z > 24) {
+      res.status(400).json({ error: "Invalid tile coordinates", code: "BAD_TILE" });
+      return;
+    }
+    try {
+      const tile = await fetchAerialTile(z, x, y);
+      if (!tile) {
+        res.status(502).json({ error: "Aerial tile unavailable", code: "AERIAL_TILE_UNAVAILABLE" });
+        return;
+      }
+      res.setHeader("Content-Type", tile.contentType);
+      res.setHeader("Cache-Control", "public, max-age=86400, immutable");
+      res.send(tile.body);
+    } catch (err) {
+      req.log.error({ err, z, x, y }, "GET /tiles/aerial failed");
+      res.status(502).json({ error: "Aerial tile unavailable", code: "AERIAL_TILE_UNAVAILABLE" });
+    }
+  },
+);
 
 const refreshPhotosLastRunAt = new Map<string, number>();
 const REFRESH_PHOTOS_COOLDOWN_MS = 60_000;

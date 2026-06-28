@@ -3,8 +3,6 @@ import { geocodeAddress, type GeoResult } from "./geocode";
 import { fetchLINZParcel, fetchLINZParcelsNear, type LinzParcel, type ParcelBbox } from "./linz";
 import type { RawPropertyData } from "./pipeline";
 
-type SharpFactory = typeof import("sharp");
-
 type GeoJsonPosition = [number, number];
 type GeoJsonGeometry =
   | { type: "Point"; coordinates: GeoJsonPosition }
@@ -31,7 +29,17 @@ export interface SitePlanBounds {
   maxLng: number;
 }
 
+export interface SitePlanAerialTile {
+  z: number;
+  x: number;
+  y: number;
+  /** Pixel offset of this tile inside the image canvas (image.width × image.height). */
+  left: number;
+  top: number;
+}
+
 export interface SitePlanImage {
+  /** Retained for backward compatibility / placeholder; empty when tiles are used. */
   dataUri: string;
   width: number;
   height: number;
@@ -39,6 +47,10 @@ export interface SitePlanImage {
   attribution: string;
   available: boolean;
   source: "linz-basemaps" | "placeholder";
+  /** Tile edge length in px (when client-rendered tiles are used). */
+  tileSize?: number;
+  /** Aerial tiles for the client to render via the /tiles/aerial proxy. */
+  tiles?: SitePlanAerialTile[];
 }
 
 export type SitePlanLayerGroup = "boundary" | "planning" | "services" | "contours";
@@ -107,9 +119,17 @@ const AUCKLAND_MANAGEMENT_LAYERS =
 const AUCKLAND_UNDERGROUND_SERVICES =
   "https://mapspublic.aucklandcouncil.govt.nz/arcgis/rest/services/LiveMaps/UndergroundServices/MapServer";
 const LINZ_CONTOURS_LAYER = "layer-50768";
+// Auckland Council LiDAR-derived contour layers (NZTM/2193, reprojected via inSR/outSR=4326).
+// Far finer than the LINZ national 20m topo layer. Tried in order (finest first); a group/empty
+// layer is skipped and we fall back to the next, then to the LINZ 20m WFS layer outside Auckland.
+const AUCKLAND_CONTOURS =
+  "https://mapspublic.aucklandcouncil.govt.nz/arcgis/rest/services/Contours/MapServer";
+const AUCKLAND_CONTOUR_LAYERS: Array<{ id: number; interval: string }> = [
+  { id: 10, interval: "0.5m" },
+  { id: 9, interval: "1m" },
+  { id: 8, interval: "2m" },
+];
 const EMPTY_GEOJSON: GeoJsonFeatureCollection = { type: "FeatureCollection", features: [] };
-const ONE_PIXEL_PNG =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
 const PLANNING_LAYER_DEFS: Array<{ name: string; layerId: number; distanceM?: number; isControl?: boolean }> = [
   { name: "Heritage", layerId: 33 },
@@ -181,20 +201,6 @@ const SERVICE_LAYER_DEFS: Array<{
     ],
   },
 ];
-
-let sharpModulePromise: Promise<SharpFactory | null> | undefined;
-
-async function loadSharp(): Promise<SharpFactory | null> {
-  if (sharpModulePromise === undefined) {
-    sharpModulePromise = import("sharp")
-      .then((mod) => mod.default)
-      .catch((err) => {
-        logger.warn({ err: (err as Error).message }, "site-plan: sharp unavailable; aerial image will use placeholder");
-        return null;
-      });
-  }
-  return sharpModulePromise;
-}
 
 function emptyFeatureCollection(): GeoJsonFeatureCollection {
   return { type: "FeatureCollection", features: [] };
@@ -325,10 +331,34 @@ function linzBasemapsKey(): string | null {
 
 let aerialTileFailureLogged = false;
 
-async function fetchTile(url: string): Promise<Buffer | null> {
+export function hasLinzBasemapsKey(): boolean {
+  return linzBasemapsKey() !== null;
+}
+
+/**
+ * Fetch a single LINZ Basemaps aerial tile with the server-held key. Used by the
+ * `/tiles/aerial/:z/:x/:y` proxy so the Basemaps key never reaches the client and `sharp`
+ * is not needed (the client renders tiles directly).
+ */
+export async function fetchAerialTile(
+  z: number,
+  x: number,
+  y: number,
+): Promise<{ body: Buffer; contentType: string } | null> {
+  const key = linzBasemapsKey();
+  if (!key) {
+    if (!aerialTileFailureLogged) {
+      aerialTileFailureLogged = true;
+      logger.warn("site-plan: no LINZ Basemaps key (set LINZ_BASEMAPS_API_KEY) — aerial tiles unavailable");
+    }
+    return null;
+  }
+  const url =
+    `https://basemaps.linz.govt.nz/v1/tiles/aerial/WebMercatorQuad/${z}/${x}/${y}.jpeg` +
+    `?api=${encodeURIComponent(key)}`;
   try {
     const resp = await fetch(url, {
-      headers: { Accept: "image/webp,image/png,image/*" },
+      headers: { Accept: "image/jpeg,image/*" },
       signal: AbortSignal.timeout(8000),
     });
     if (!resp.ok) {
@@ -337,13 +367,16 @@ async function fetchTile(url: string): Promise<Buffer | null> {
         // A 401/403 here almost always means the LINZ Basemaps tile API rejected the key —
         // basemaps.linz.govt.nz needs a Basemaps-scoped key, NOT a data.linz.govt.nz key.
         logger.warn(
-          { status: resp.status, url: url.replace(/api=[^&]+/, "api=***") },
+          { status: resp.status },
           "site-plan: LINZ aerial tile request failed (check LINZ_BASEMAPS_API_KEY)",
         );
       }
       return null;
     }
-    return Buffer.from(await resp.arrayBuffer());
+    return {
+      body: Buffer.from(await resp.arrayBuffer()),
+      contentType: resp.headers.get("content-type") ?? "image/jpeg",
+    };
   } catch (err) {
     if (!aerialTileFailureLogged) {
       aerialTileFailureLogged = true;
@@ -353,122 +386,52 @@ async function fetchTile(url: string): Promise<Buffer | null> {
   }
 }
 
-async function fetchLinzAerialTile(key: string, zoom: number, x: number, y: number): Promise<Buffer | null> {
-  const formats = ["webp", "png", "jpeg"];
-  for (const format of formats) {
-    const url =
-      `https://basemaps.linz.govt.nz/v1/tiles/aerial/WebMercatorQuad/${zoom}/${x}/${y}.${format}` +
-      `?api=${encodeURIComponent(key)}`;
-    const tile = await fetchTile(url);
-    if (tile) return tile;
-  }
-  return null;
-}
-
-async function placeholderImage(bounds: SitePlanBounds, width = 768, height = 768): Promise<SitePlanImage> {
-  const sharp = await loadSharp();
-  if (!sharp) {
+/**
+ * Describe the aerial as a grid of tiles for the client to render directly (via the proxy),
+ * instead of compositing a single raster server-side with `sharp`. Tiles are rendered at their
+ * native resolution → crisper than a recompressed/downscaled JPEG, and robust on serverless.
+ */
+function buildAerialTileGrid(bounds: SitePlanBounds): SitePlanImage {
+  const range = selectLinzAerialTileRange(bounds);
+  const width = range.widthTiles * TILE_SIZE;
+  const height = range.heightTiles * TILE_SIZE;
+  if (!hasLinzBasemapsKey()) {
+    logger.warn("site-plan: no LINZ Basemaps key (set LINZ_BASEMAPS_API_KEY) — aerial unavailable");
     return {
-      dataUri: ONE_PIXEL_PNG,
+      dataUri: "",
       width,
       height,
-      bounds,
+      bounds: range.bounds,
       attribution: "LINZ Basemaps unavailable",
       available: false,
       source: "placeholder",
     };
   }
 
-  const buffer = await sharp({
-    create: {
-      width,
-      height,
-      channels: 3,
-      background: { r: 238, g: 235, b: 229 },
-    },
-  })
-    .jpeg({ quality: 72 })
-    .toBuffer();
+  const tiles: SitePlanAerialTile[] = [];
+  for (let x = range.minX; x <= range.maxX; x += 1) {
+    for (let y = range.minY; y <= range.maxY; y += 1) {
+      tiles.push({
+        z: range.zoom,
+        x,
+        y,
+        left: (x - range.minX) * TILE_SIZE,
+        top: (y - range.minY) * TILE_SIZE,
+      });
+    }
+  }
+
   return {
-    dataUri: `data:image/jpeg;base64,${buffer.toString("base64")}`,
+    dataUri: "",
     width,
     height,
-    bounds,
-    attribution: "LINZ Basemaps unavailable",
-    available: false,
-    source: "placeholder",
+    bounds: range.bounds,
+    attribution: "Aerial imagery: LINZ Basemaps",
+    available: true,
+    source: "linz-basemaps",
+    tileSize: TILE_SIZE,
+    tiles,
   };
-}
-
-async function fetchLinzAerialImage(bounds: SitePlanBounds): Promise<SitePlanImage> {
-  const key = linzBasemapsKey();
-  const range = selectLinzAerialTileRange(bounds);
-  const width = range.widthTiles * TILE_SIZE;
-  const height = range.heightTiles * TILE_SIZE;
-  if (!key) {
-    logger.warn("site-plan: no LINZ Basemaps key (set LINZ_BASEMAPS_API_KEY) — using placeholder");
-    return placeholderImage(range.bounds, width, height);
-  }
-
-  const sharp = await loadSharp();
-  if (!sharp) {
-    logger.warn("site-plan: sharp unavailable in runtime — aerial cannot be composed, using placeholder");
-    return placeholderImage(range.bounds, width, height);
-  }
-
-  try {
-    const tilePromises: Array<Promise<{ input: Buffer; left: number; top: number } | null>> = [];
-    for (let x = range.minX; x <= range.maxX; x += 1) {
-      for (let y = range.minY; y <= range.maxY; y += 1) {
-        tilePromises.push(
-          fetchLinzAerialTile(key, range.zoom, x, y).then((input) => {
-            if (!input) return null;
-            return {
-              input,
-              left: (x - range.minX) * TILE_SIZE,
-              top: (y - range.minY) * TILE_SIZE,
-            };
-          }),
-        );
-      }
-    }
-
-    const tiles = (await Promise.all(tilePromises)).filter(
-      (tile): tile is { input: Buffer; left: number; top: number } => tile !== null,
-    );
-    if (tiles.length === 0) {
-      logger.warn(
-        { zoom: range.zoom, tilesRequested: tilePromises.length },
-        "site-plan: all LINZ aerial tiles failed to fetch — using placeholder",
-      );
-      return placeholderImage(range.bounds, width, height);
-    }
-
-    const buffer = await sharp({
-      create: {
-        width,
-        height,
-        channels: 3,
-        background: { r: 238, g: 235, b: 229 },
-      },
-    })
-      .composite(tiles)
-      .jpeg({ quality: 82, mozjpeg: true })
-      .toBuffer();
-
-    return {
-      dataUri: `data:image/jpeg;base64,${buffer.toString("base64")}`,
-      width,
-      height,
-      bounds: range.bounds,
-      attribution: "Aerial imagery: LINZ Basemaps",
-      available: true,
-      source: "linz-basemaps",
-    };
-  } catch (err) {
-    logger.warn({ err: (err as Error).message }, "site-plan: LINZ aerial composition failed");
-    return placeholderImage(range.bounds, width, height);
-  }
 }
 
 function closedRing(ring: GeoJsonPosition[]): GeoJsonPosition[] {
@@ -701,7 +664,8 @@ async function planningOverlayLayers(lat: number, lng: number, parcelBbox: Parce
         id: `planning-overlay-${def.layerId}`,
         label: def.name,
         group: "planning" as const,
-        defaultVisible: true,
+        // Off by default — user turns overlays on one at a time. Only contours default on.
+        defaultVisible: false,
         available: true,
         style: {
           stroke: color,
@@ -769,7 +733,8 @@ async function serviceLayers(bounds: SitePlanBounds): Promise<SitePlanLayer[]> {
         id: group.id,
         label: group.label,
         group: "services" as const,
-        defaultVisible: true,
+        // Off by default — user turns service/pipe overlays on one at a time.
+        defaultVisible: false,
         available: true,
         style: {
           stroke: group.color,
@@ -789,6 +754,8 @@ async function serviceLayers(bounds: SitePlanBounds): Promise<SitePlanLayer[]> {
   });
 }
 
+const CONTOUR_COLOR = "#475569";
+
 function featureCollectionFromLinzContours(value: unknown): GeoJsonFeatureCollection {
   const obj = value as { features?: Array<{ properties?: Record<string, unknown>; geometry?: GeoJsonGeometry }> };
   const features = (obj.features ?? []).flatMap((feature): GeoJsonFeature[] => {
@@ -806,10 +773,62 @@ function featureCollectionFromLinzContours(value: unknown): GeoJsonFeatureCollec
   return { type: "FeatureCollection", features };
 }
 
-async function contourLayer(bounds: SitePlanBounds): Promise<SitePlanLayer> {
+/** Pull an elevation value from arbitrary ArcGIS contour attributes (schemas vary by service). */
+function pickContourElevation(attrs: Record<string, unknown>): number | null {
+  const preferred = ["ELEVATION", "ELEV", "CONTOUR", "CONTOURVAL", "VALUE", "HEIGHT", "AMSL", "ALTITUDE", "Z"];
+  for (const key of preferred) {
+    const v = attrs[key];
+    if (v != null && Number.isFinite(Number(v))) return Number(v);
+  }
+  for (const [k, v] of Object.entries(attrs)) {
+    if (/elev|contour|height|amsl|altit/i.test(k) && v != null && Number.isFinite(Number(v))) {
+      return Number(v);
+    }
+  }
+  return null;
+}
+
+function arcgisContoursToGeoJson(features: ArcGisFeature[]): GeoJsonFeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: features.flatMap((feature): GeoJsonFeature[] => {
+      const geometry = arcgisGeometryToGeoJson(feature.geometry);
+      if (!geometry || (geometry.type !== "LineString" && geometry.type !== "MultiLineString")) return [];
+      const elevation = pickContourElevation(feature.attributes ?? {});
+      return [{
+        type: "Feature",
+        properties: {
+          label: elevation != null ? `${elevation}m contour` : "Contour",
+          elevation: elevation ?? null,
+        },
+        geometry,
+      }];
+    }),
+  };
+}
+
+function makeContourLayer(geojson: GeoJsonFeatureCollection, legendLabel: string): SitePlanLayer {
+  return {
+    id: "contours",
+    label: "Contours",
+    group: "contours",
+    defaultVisible: true,
+    available: true,
+    style: {
+      // Thin solid stroke reads better than dashes when lines are dense (fine intervals).
+      stroke: CONTOUR_COLOR,
+      strokeWidth: 0.9,
+      strokeOpacity: 0.72,
+    },
+    legend: [{ label: legendLabel, color: CONTOUR_COLOR, kind: "line" }],
+    geojson,
+  };
+}
+
+/** LINZ national 20m topo contours (WFS) — fallback outside Auckland. */
+async function linzContourLayer(bounds: SitePlanBounds): Promise<SitePlanLayer> {
   const key = process.env["LINZ_API_KEY"]?.trim();
-  const color = "#475569";
-  if (!key) return unavailableLayer("contours", "Contours", "contours", color);
+  if (!key) return unavailableLayer("contours", "Contours", "contours", CONTOUR_COLOR);
   const contourBounds = paddedBounds(bounds, 220, 560);
   const bbox = `${contourBounds.minLng},${contourBounds.minLat},${contourBounds.maxLng},${contourBounds.maxLat},EPSG:4326`;
   const url =
@@ -818,31 +837,47 @@ async function contourLayer(bounds: SitePlanBounds): Promise<SitePlanLayer> {
     `&typeNames=${LINZ_CONTOURS_LAYER}` +
     `&bbox=${encodeURIComponent(bbox)}` +
     `&srsName=EPSG:4326&maxFeatures=160&outputFormat=application%2Fjson`;
-
   try {
     const resp = await fetch(url, { signal: AbortSignal.timeout(9000) });
-    if (!resp.ok) return unavailableLayer("contours", "Contours", "contours", color);
+    if (!resp.ok) return unavailableLayer("contours", "Contours", "contours", CONTOUR_COLOR);
     const geojson = featureCollectionFromLinzContours(await resp.json());
-    if (geojson.features.length === 0) return unavailableLayer("contours", "Contours", "contours", color);
-    return {
-      id: "contours",
-      label: "Contours",
-      group: "contours",
-      defaultVisible: true,
-      available: true,
-      style: {
-        stroke: color,
-        strokeWidth: 1.5,
-        strokeOpacity: 0.76,
-        dashArray: [6, 5],
-      },
-      legend: [{ label: "Contour lines", color, kind: "line" }],
-      geojson,
-    };
+    if (geojson.features.length === 0) return unavailableLayer("contours", "Contours", "contours", CONTOUR_COLOR);
+    return makeContourLayer(geojson, "Contour lines (20m)");
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "site-plan: LINZ contour lookup failed");
-    return unavailableLayer("contours", "Contours", "contours", color);
+    return unavailableLayer("contours", "Contours", "contours", CONTOUR_COLOR);
   }
+}
+
+/**
+ * Fine LiDAR contours (0.5m default) from Auckland Council, falling back through coarser AC
+ * intervals, then to LINZ national 20m contours outside Auckland.
+ */
+async function contourLayer(bounds: SitePlanBounds): Promise<SitePlanLayer> {
+  const contourBounds = paddedBounds(bounds, 220, 560);
+  const geometry = envelopeGeometry(contourBounds);
+  for (const candidate of AUCKLAND_CONTOUR_LAYERS) {
+    try {
+      const features = await queryArcGisFeatures({
+        serviceUrl: AUCKLAND_CONTOURS,
+        layerId: candidate.id,
+        geometry: geometry.geometry,
+        geometryType: geometry.geometryType,
+        maxFeatures: 1200,
+        timeoutMs: 9000,
+      });
+      const geojson = arcgisContoursToGeoJson(features);
+      if (geojson.features.length > 0) {
+        return makeContourLayer(geojson, `Contour lines (${candidate.interval})`);
+      }
+    } catch (err) {
+      logger.warn(
+        { err: (err as Error).message, layerId: candidate.id },
+        "site-plan: Auckland contour lookup failed (trying next interval)",
+      );
+    }
+  }
+  return linzContourLayer(bounds);
 }
 
 function boundsRadiusMetres(bounds: SitePlanBounds): number {
@@ -852,13 +887,42 @@ function boundsRadiusMetres(bounds: SitePlanBounds): number {
   return Math.ceil(Math.max(latSpan, lngSpan) / 2);
 }
 
-function validGeo(geo: GeoResult | null | undefined): geo is GeoResult {
+export interface GeoHint {
+  lat: number;
+  lng: number;
+}
+
+/** Thrown when a site plan cannot be built because no coordinates are available at all. */
+export class SitePlanNoLocationError extends Error {
+  constructor(address: string) {
+    super(`Site plan has no usable coordinates for "${address}"`);
+    this.name = "SitePlanNoLocationError";
+  }
+}
+
+function validGeo(geo: { lat: number; lng: number } | null | undefined): geo is GeoResult {
   return Boolean(geo && Number.isFinite(geo.lat) && Number.isFinite(geo.lng));
 }
 
-async function resolveGeo(address: string, cachedRaw?: RawPropertyData | null): Promise<GeoResult> {
+function geoFromHint(address: string, hint: GeoHint): GeoResult {
+  return { lat: hint.lat, lng: hint.lng, formatted: address, suburb: null };
+}
+
+async function resolveGeo(
+  address: string,
+  cachedRaw?: RawPropertyData | null,
+  geoHint?: GeoHint | null,
+): Promise<GeoResult> {
+  // Prefer coordinates the analysis already resolved — avoids a flaky live re-geocode.
   if (validGeo(cachedRaw?.geocode)) return cachedRaw.geocode;
-  return geocodeAddress(address);
+  if (geoHint && validGeo(geoHint)) return geoFromHint(address, geoHint);
+  try {
+    return await geocodeAddress(address);
+  } catch (err) {
+    if (geoHint && validGeo(geoHint)) return geoFromHint(address, geoHint);
+    logger.warn({ err: (err as Error).message, address }, "site-plan: geocode failed and no coordinate hint available");
+    throw new SitePlanNoLocationError(address);
+  }
 }
 
 async function resolveParcel(geo: GeoResult, cachedRaw?: RawPropertyData | null): Promise<LinzParcel | null> {
@@ -872,8 +936,9 @@ async function resolveParcel(geo: GeoResult, cachedRaw?: RawPropertyData | null)
 export async function buildSitePlanForAddress(
   address: string,
   cachedRaw?: RawPropertyData | null,
+  geoHint?: GeoHint | null,
 ): Promise<SitePlanResponse> {
-  const geo = await resolveGeo(address, cachedRaw);
+  const geo = await resolveGeo(address, cachedRaw, geoHint);
   const parcel = await resolveParcel(geo, cachedRaw);
   const coreBounds = boundsFromParcel(parcel) ?? fallbackBoundsFromCenter(geo.lat, geo.lng);
   const mapBounds = sitePlanMapBounds(coreBounds);
@@ -885,7 +950,7 @@ export async function buildSitePlanForAddress(
   const nearbyRadiusM = Math.max(240, Math.min(1500, Math.ceil(boundsRadiusMetres(mapBounds) * 3)));
 
   const [image, nearbyParcels, planning, services, contours] = await Promise.all([
-    fetchLinzAerialImage(mapBounds),
+    Promise.resolve(buildAerialTileGrid(mapBounds)),
     fetchLINZParcelsNear(center.lat, center.lng, nearbyRadiusM, 400).catch((err) => {
       logger.warn({ err: (err as Error).message }, "site-plan: LINZ nearby parcel lookup failed");
       return null;
