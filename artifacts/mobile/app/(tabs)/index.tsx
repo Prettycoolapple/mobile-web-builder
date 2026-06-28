@@ -525,6 +525,7 @@ export default function SearchScreen() {
   const [homeMode, setHomeMode] = useState<"ask" | "browse">("ask");
   const [browseFilters, setBrowseFilters] = useState<BrowseListingFilters>(DEFAULT_BROWSE_FILTERS);
   const [appliedBrowseFilters, setAppliedBrowseFilters] = useState<BrowseListingFilters>(DEFAULT_BROWSE_FILTERS);
+  const [browseFiltersExpanded, setBrowseFiltersExpanded] = useState(false);
   const [browseListings, setBrowseListings] = useState<BrowseListing[]>([]);
   const [browseNextCursor, setBrowseNextCursor] = useState<string | null>(null);
   const [browseLoading, setBrowseLoading] = useState(false);
@@ -781,6 +782,8 @@ export default function SearchScreen() {
     browseLoadedKeyRef.current = null;
     setBrowseNextCursor(null);
     setAppliedBrowseFilters(next);
+    setBrowseFiltersExpanded(false);
+    Keyboard.dismiss();
     if (homeMode !== "browse") setHomeMode("browse");
     else if (browseFiltersKey(next) === browseFiltersKey(appliedBrowseFilters)) void loadBrowseListings({ filters: next });
   }, [appliedBrowseFilters, browseFilters, homeMode, loadBrowseListings]);
@@ -789,6 +792,7 @@ export default function SearchScreen() {
     const defaultKey = browseFiltersKey({ ...DEFAULT_BROWSE_FILTERS, limit: BROWSE_PREFETCH_LIMIT });
     const draftKey = browseFiltersKey(browseFilters);
     setHomeMode("browse");
+    setBrowseFiltersExpanded(false);
     if (draftKey === browseFiltersKey(DEFAULT_BROWSE_FILTERS) && browsePreloadRef.current?.key === defaultKey) {
       const preloaded = browsePreloadRef.current;
       browseQueuedListingsRef.current = preloaded.listings.slice(BROWSE_PAGE_SIZE);
@@ -803,6 +807,8 @@ export default function SearchScreen() {
 
   const openAskMode = useCallback(() => {
     setHomeMode("ask");
+    setBrowseFiltersExpanded(false);
+    Keyboard.dismiss();
   }, []);
 
   const messages = currentSession?.messages || [];
@@ -3766,7 +3772,7 @@ export default function SearchScreen() {
                 </TouchableOpacity>
               </>
             )}
-            {!isEmpty && (
+            {homeMode !== "browse" && !isEmpty && (
               <TouchableOpacity
                 style={[styles.newChatBtn, { borderColor: "rgba(250,249,246,0.18)" }]}
                 onPress={startNewChat}
@@ -3805,6 +3811,8 @@ export default function SearchScreen() {
             filters={browseFilters}
             onChange={setBrowseFilters}
             onSubmit={applyBrowseFilters}
+            expanded={browseFiltersExpanded}
+            onExpandedChange={setBrowseFiltersExpanded}
           />
           {browseLoading && browseListings.length === 0 ? (
             <View style={styles.browseCenter}>
@@ -3836,6 +3844,8 @@ export default function SearchScreen() {
               )}
               contentContainerStyle={styles.browseList}
               showsVerticalScrollIndicator={false}
+              keyboardDismissMode="interactive"
+              keyboardShouldPersistTaps="handled"
               refreshControl={
                 <RefreshControl
                   refreshing={browseRefreshing}
@@ -3843,6 +3853,10 @@ export default function SearchScreen() {
                   tintColor={colors.accent}
                 />
               }
+              onScrollBeginDrag={() => {
+                Keyboard.dismiss();
+                if (browseFiltersExpanded) setBrowseFiltersExpanded(false);
+              }}
               onEndReached={() => {
                 if ((browseQueuedListingsRef.current.length > 0 || browseNextCursor) && !browseLoadingMore) {
                   void loadBrowseListings({ append: true, cursor: browseNextCursor });

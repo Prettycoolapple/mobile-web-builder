@@ -7,7 +7,7 @@ import { useWatchlist } from "@/context/WatchlistContext";
 import { useColors } from "@/hooks/useColors";
 import { useT } from "@/lib/i18n";
 import { useMaybeTranslated } from "@/hooks/useMaybeTranslated";
-import { BrowseListing, isListingSponsored, resolveListingImageUrl, watchlistCandidateFromBrowse } from "@/lib/browseListings";
+import { BrowseListing, normaliseBrowseListingAgent, isListingSponsored, resolveListingImageUrl, watchlistCandidateFromBrowse } from "@/lib/browseListings";
 import { WatchlistAddedToast } from "@/components/WatchlistAddedToast";
 import { notifyWatchlistError } from "@/lib/watchlist-confirm";
 
@@ -55,10 +55,11 @@ export function BrowseListingCard({ listing, onPress, onShare }: { listing: Brow
   const { user } = useAuth();
   const { isWatched, toggle } = useWatchlist();
   const cover = resolveListingImageUrl(listing.imageUrls?.[0]);
-  const hasAgent = !!(listing.agent?.fullName || listing.agent?.agencyName || listing.agent?.avatarUrl);
-  const agentName = listing.agent?.fullName ?? t("lcard.agent_fallback");
-  const agency = listing.agent?.agencyName ?? (listing.source === "internal" ? t("lcard.agency_internal") : t("lcard.agency_curated"));
-  const agentAvatar = resolveListingImageUrl(listing.agent?.avatarUrl);
+  const agent = normaliseBrowseListingAgent(listing.agent);
+  const hasAgent = !!agent;
+  const agentName = agent?.fullName ?? t("lcard.agent_fallback");
+  const agency = agent?.agencyName ?? (listing.source === "internal" ? t("lcard.agency_internal") : null);
+  const agentAvatar = resolveListingImageUrl(agent?.avatarUrl);
   const teaserText = listing.teaser?.trim() || descriptionTeaser(listing.description);
   const fallbackDescription = `${listing.listingType === "for_sale" ? t("lcard.for_sale") : t("lcard.for_rent")} · ${propertyTypeLabel(t, listing.propertyType)}`;
   const description = useMaybeTranslated(teaserText, fallbackDescription);
@@ -154,9 +155,11 @@ export function BrowseListingCard({ listing, onPress, onShare }: { listing: Brow
               <Text style={[styles.agentName, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]} numberOfLines={1}>
                 {agentName}
               </Text>
-              <Text style={[styles.agency, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]} numberOfLines={1}>
-                {agency}
-              </Text>
+              {agency ? (
+                <Text style={[styles.agency, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]} numberOfLines={1}>
+                  {agency}
+                </Text>
+              ) : null}
             </View>
             <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
           </View>

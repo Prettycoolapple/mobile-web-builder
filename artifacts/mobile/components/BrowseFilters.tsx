@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from "react";
-import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import React, { useMemo } from "react";
+import { Keyboard, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useT } from "@/lib/i18n";
@@ -15,21 +15,32 @@ export function BrowseFilters({
   filters,
   onChange,
   onSubmit,
+  expanded,
+  onExpandedChange,
 }: {
   filters: BrowseListingFilters;
   onChange: (next: BrowseListingFilters) => void;
   onSubmit: () => void;
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
 }) {
   const colors = useColors();
   const { t } = useT();
-  const [expanded, setExpanded] = useState(false);
 
   const set = (patch: Partial<BrowseListingFilters>) => onChange({ ...filters, ...patch, cursor: null });
   const toggle = (key: keyof BrowseListingFilters, value: string) => {
     set({ [key]: filters[key] === value ? undefined : value } as Partial<BrowseListingFilters>);
   };
   const clear = () => onChange({ listingType: "for_sale", limit: filters.limit ?? 5, sort: "recommended", cursor: null });
-
+  const close = () => {
+    Keyboard.dismiss();
+    onExpandedChange(false);
+  };
+  const submit = () => {
+    Keyboard.dismiss();
+    onSubmit();
+    onExpandedChange(false);
+  };
   const activeFilters = useMemo(() => {
     const labels: string[] = [];
     if (filters.q?.trim()) labels.push(filters.q.trim());
@@ -47,7 +58,10 @@ export function BrowseFilters({
       <View style={styles.topRow}>
         <TouchableOpacity
           style={styles.expandButton}
-          onPress={() => setExpanded((value) => !value)}
+          onPress={() => {
+            Keyboard.dismiss();
+            onExpandedChange(!expanded);
+          }}
           activeOpacity={0.78}
           accessibilityRole="button"
           accessibilityLabel={expanded ? t("browse.filters_hide") : t("browse.filters_show")}
@@ -58,18 +72,28 @@ export function BrowseFilters({
           </Text>
           <Feather name={expanded ? "chevron-up" : "chevron-down"} size={16} color={colors.mutedForeground} />
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.applyBtn, { backgroundColor: colors.accent }]} onPress={onSubmit} activeOpacity={0.82}>
-          <Text style={[styles.applyText, { fontFamily: "DM_Sans_700Bold" }]}>{t("browse.apply")}</Text>
-        </TouchableOpacity>
+        {expanded ? (
+          <TouchableOpacity
+            style={[styles.iconCloseBtn, { borderColor: colors.border }]}
+            onPress={close}
+            activeOpacity={0.78}
+            accessibilityRole="button"
+            accessibilityLabel={t("common.close")}
+          >
+            <Feather name="x" size={16} color={colors.foreground} />
+          </TouchableOpacity>
+        ) : null}
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.summaryRow}>
-        {(activeFilters.length ? activeFilters : [t("browse.all_nz")]).map((label) => (
-          <View key={label} style={[styles.summaryChip, { backgroundColor: colors.muted, borderColor: colors.border }]}>
-            <Text style={[styles.summaryText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]} numberOfLines={1}>{label}</Text>
-          </View>
-        ))}
-      </ScrollView>
+      {activeFilters.length ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.summaryRow}>
+          {activeFilters.map((label) => (
+            <View key={label} style={[styles.summaryChip, { backgroundColor: colors.muted, borderColor: colors.border }]}>
+              <Text style={[styles.summaryText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]} numberOfLines={1}>{label}</Text>
+            </View>
+          ))}
+        </ScrollView>
+      ) : null}
 
       {expanded ? (
         <View style={styles.expanded}>
@@ -78,7 +102,7 @@ export function BrowseFilters({
             value={filters.q ?? ""}
             placeholder={t("browse.location_placeholder")}
             onChangeText={(q) => set({ q })}
-            onSubmitEditing={onSubmit}
+            onSubmitEditing={submit}
           />
 
           <View style={styles.twoCol}>
@@ -121,7 +145,7 @@ export function BrowseFilters({
             <TouchableOpacity style={[styles.clearBtn, { borderColor: colors.border }]} onPress={clear} activeOpacity={0.78}>
               <Text style={[styles.clearText, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>{t("browse.clear")}</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.applyLargeBtn, { backgroundColor: colors.accent }]} onPress={onSubmit} activeOpacity={0.82}>
+            <TouchableOpacity style={[styles.applyLargeBtn, { backgroundColor: colors.accent }]} onPress={submit} activeOpacity={0.82}>
               <Text style={[styles.applyText, { fontFamily: "DM_Sans_700Bold" }]}>{t("browse.apply")}</Text>
             </TouchableOpacity>
           </View>
@@ -191,13 +215,13 @@ const styles = StyleSheet.create({
   topRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   expandButton: { flex: 1, minHeight: 36, flexDirection: "row", alignItems: "center", gap: 8 },
   panelTitle: { fontSize: 15 },
-  applyBtn: { minHeight: 34, borderRadius: 11, paddingHorizontal: 13, alignItems: "center", justifyContent: "center" },
+  iconCloseBtn: { width: 34, height: 34, borderWidth: 1, borderRadius: 17, alignItems: "center", justifyContent: "center" },
   applyText: { color: "#fff", fontSize: 13 },
   summaryRow: { gap: 8, paddingRight: 6 },
   summaryChip: { maxWidth: 190, borderWidth: 1, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
   summaryText: { fontSize: 12 },
   expanded: { gap: 12 },
-  field: { minHeight: 42, borderWidth: 1, borderRadius: 12, paddingHorizontal: 11, flexDirection: "row", alignItems: "center", gap: 8 },
+  field: { flex: 1, minWidth: 0, minHeight: 42, borderWidth: 1, borderRadius: 12, paddingHorizontal: 11, flexDirection: "row", alignItems: "center", gap: 8 },
   input: { flex: 1, fontSize: 14, paddingVertical: 4 },
   twoCol: { flexDirection: "row", gap: 10 },
   section: { gap: 8 },

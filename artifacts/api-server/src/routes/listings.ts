@@ -119,9 +119,33 @@ const DEFAULT_BROWSE_SUBURBS = [
   "nelson",
 ];
 const VALID_SORTS = new Set(["recommended", "newest", "price_asc", "price_desc", "land_desc"]);
+const AGENT_PLACEHOLDER_VALUES = new Set(["listing agent", "external marketplace", "curated listing", "project alpha sample"]);
 
 function cleanQuery(value: unknown): string {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+}
+
+function cleanAgentDisplayValue(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const cleaned = value.replace(/\s+/g, " ").trim();
+  if (!cleaned) return null;
+  return AGENT_PLACEHOLDER_VALUES.has(cleaned.toLowerCase()) ? null : cleaned;
+}
+
+function normaliseCachedAgent(agent: (typeof browseListingCache.$inferSelect)["agent"]): BrowseListing["agent"] {
+  if (!agent) return null;
+  const fullName = cleanAgentDisplayValue(agent.fullName);
+  const agencyName = cleanAgentDisplayValue(agent.agencyName);
+  const avatarUrl = cleanAgentDisplayValue(agent.avatarUrl);
+  const phone = cleanAgentDisplayValue(agent.phone);
+  if (!fullName && !agencyName && !avatarUrl && !phone) return null;
+  return {
+    fullName,
+    avatarUrl,
+    agencyName,
+    phone,
+    isVerified: false,
+  };
 }
 
 function parsePositiveInt(value: unknown): number | null {
@@ -282,7 +306,7 @@ function publicListingFromCurated(listing: ListingResult): BrowseListing {
 }
 
 function publicListingFromCache(row: typeof browseListingCache.$inferSelect): BrowseListing {
-  const hasAgent = !!(row.agent?.fullName || row.agent?.agencyName || row.agent?.avatarUrl);
+  const agent = normaliseCachedAgent(row.agent);
   return {
     id: row.id,
     source: "curated",
@@ -316,13 +340,7 @@ function publicListingFromCache(row: typeof browseListingCache.$inferSelect): Br
     features: row.features,
     createdAt: row.firstSeenAt,
     // Only set agent when we have real scraped data; null hides the row entirely.
-    agent: hasAgent ? {
-      fullName: row.agent?.fullName ?? null,
-      avatarUrl: row.agent?.avatarUrl ?? null,
-      agencyName: row.agent?.agencyName ?? null,
-      phone: row.agent?.phone ?? null,
-      isVerified: false,
-    } : null,
+    agent,
   };
 }
 
@@ -417,7 +435,7 @@ async function upsertCuratedBrowseListings(listingsToCache: ListingResult[]): Pr
     description: listing.description ?? buildFactualDescription(listing),
     imageUrls: listing.photoUrls?.length ? listing.photoUrls : listing.photoUrl ? [listing.photoUrl] : [],
     features: [],
-    agent: { fullName: "Listing agent", agencyName: "External marketplace" },
+    agent: {},
     lastSeenAt: now,
     lastRefreshedAt: now,
   }));
@@ -444,7 +462,7 @@ async function upsertCuratedBrowseListings(listingsToCache: ListingResult[]): Pr
           listingTitle: sql`coalesce(excluded.listing_title, ${browseListingCache.listingTitle})`,
           description: sql`coalesce(excluded.description, ${browseListingCache.description})`,
           imageUrls: sql`case when cardinality(excluded.image_urls) > 0 then excluded.image_urls else ${browseListingCache.imageUrls} end`,
-          agent: sql`excluded.agent`,
+          agent: sql`case when ${browseListingCache.agent} is null or ${browseListingCache.agent} = '{}'::jsonb then excluded.agent else ${browseListingCache.agent} end`,
           lastSeenAt: now,
           lastRefreshedAt: now,
           refreshCount: sql`${browseListingCache.refreshCount} + 1`,
@@ -901,6 +919,19 @@ router.get("/listings/enrich", requireAuth, async (req, res) => {
   try {
     if (/realestate\.co\.nz/i.test(url)) {
       const details = await fetchRealestateListingDetailsByUrl(url);
+      const agent = normaliseCachedAgent({
+        fullName: details?.agentName ?? null,
+        agencyName: details?.agencyName ?? null,
+        avatarUrl: details?.agentAvatarUrl ?? null,
+        phone: details?.agentPhone ?? null,
+      });
+      if (agent) {
+        void db
+          .update(browseListingCache)
+          .set({ agent })
+          .where(eq(browseListingCache.externalUrl, url))
+          .catch((err) => logger.warn({ err, url }, "Failed to write agent details to listing cache"));
+      }
       // Generate an AI marketing summary from the scraped description and
       // write it back to the cache so subsequent card views show real copy.
       if (details?.description && details.description.length >= 40) {

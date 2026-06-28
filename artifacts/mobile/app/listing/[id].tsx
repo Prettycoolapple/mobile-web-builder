@@ -29,6 +29,7 @@ import {
   fetchListingEnrichment,
   fetchPublicListing,
   isListingSponsored,
+  normaliseBrowseListingAgent,
   resolveListingImageUrl,
   selectedListingContextFromBrowse,
   watchlistCandidateFromBrowse,
@@ -71,7 +72,8 @@ export default function ListingDetailScreen() {
   const [loading, setLoading] = useState(!initial);
   const [enriching, setEnriching] = useState(false);
   const [resolvingAgent, setResolvingAgent] = useState(false);
-  const agentLookupDoneRef = useRef(false);
+  const agentLookupKeyRef = useRef<string | null>(null);
+  const agentLookupSeqRef = useRef(0);
   // Translate the agent/marketplace prose to the user's OS locale (no-op for EN
   // or already-Chinese text). Called unconditionally before any early return.
   const translatedDescription = useMaybeTranslated(listing?.description ?? "");
@@ -115,6 +117,14 @@ export default function ListingDetailScreen() {
         if (!mounted || !details) return;
         setListing((current) => {
           if (!current) return current;
+          const currentAgent = normaliseBrowseListingAgent(current.agent);
+          const mergedAgent = normaliseBrowseListingAgent({
+            ...(currentAgent ?? {}),
+            fullName: details.agentName ?? currentAgent?.fullName ?? null,
+            agencyName: details.agencyName ?? currentAgent?.agencyName ?? null,
+            avatarUrl: details.agentAvatarUrl ?? currentAgent?.avatarUrl ?? null,
+            isVerified: currentAgent?.isVerified ?? false,
+          });
           return {
             ...current,
             listingTitle: details.listingTitle ?? current.listingTitle,
@@ -128,13 +138,7 @@ export default function ListingDetailScreen() {
             floorAreaSqm: details.floorAreaSqm ?? current.floorAreaSqm,
             priceNzd: details.priceNzd ?? current.priceNzd,
             priceDisplay: details.priceDisplay ?? current.priceDisplay,
-            agent: {
-              ...(current.agent ?? {}),
-              fullName: details.agentName ?? current.agent?.fullName ?? "Listing agent",
-              agencyName: details.agencyName ?? current.agent?.agencyName ?? null,
-              avatarUrl: details.agentAvatarUrl ?? current.agent?.avatarUrl ?? null,
-              isVerified: current.agent?.isVerified ?? false,
-            },
+            agent: mergedAgent,
           };
         });
       })
@@ -148,15 +152,18 @@ export default function ListingDetailScreen() {
   }, [getApiHeaders, listing]);
 
   // Resolve a callable agent (incl. phone) for curated/external listings that
-  // didn't already arrive with a number. Internal Project Alpha listings carry
-  // the agent's phone in their payload, so we never scrape for those. The ref
-  // guard ensures we only attempt the lookup once per screen (the merge below
-  // mutates `listing`, which would otherwise re-trigger this effect).
+  // didn't already arrive with a number. Keep this passive lookup short and
+  // keyed to the current listing so stale responses never update another card.
   useEffect(() => {
     if (!listing || listing.source !== "curated") return;
-    if (listing.agent?.phone || !listing.address) return;
-    if (agentLookupDoneRef.current) return;
-    agentLookupDoneRef.current = true;
+    const lookupKey = listing.externalUrl ?? listing.id;
+    const agent = normaliseBrowseListingAgent(listing.agent);
+    if (agent?.phone || !listing.address || !listing.externalUrl || agentLookupKeyRef.current === lookupKey) return;
+    agentLookupKeyRef.current = lookupKey;
+    const lookupSeq = agentLookupSeqRef.current + 1;
+    agentLookupSeqRef.current = lookupSeq;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
 
     let mounted = true;
     setResolvingAgent(true);
@@ -164,32 +171,39 @@ export default function ListingDetailScreen() {
       address: listing.address,
       listingUrl: listing.externalUrl ?? null,
       selectedListingContext: selectedListingContextFromBrowse(listing),
-    })
+    }, controller.signal)
       .then((contact) => {
-        if (!mounted || !contact) return;
+        if (!mounted || lookupSeq !== agentLookupSeqRef.current || !contact) return;
         setListing((current) => {
           if (!current) return current;
+          const currentKey = current.externalUrl ?? current.id;
+          if (currentKey !== lookupKey) return current;
+          const currentAgent = normaliseBrowseListingAgent(current.agent);
+          const mergedAgent = normaliseBrowseListingAgent({
+            ...(currentAgent ?? {}),
+            fullName: contact.agentName ?? currentAgent?.fullName ?? null,
+            agencyName: contact.agencyName ?? currentAgent?.agencyName ?? null,
+            avatarUrl: contact.agentAvatarUrl ?? currentAgent?.avatarUrl ?? null,
+            phone: contact.agentPhone ?? currentAgent?.phone ?? null,
+            isVerified: currentAgent?.isVerified ?? false,
+          });
           return {
             ...current,
-            agent: {
-              ...(current.agent ?? {}),
-              fullName: contact.agentName ?? current.agent?.fullName ?? "Listing agent",
-              agencyName: contact.agencyName ?? current.agent?.agencyName ?? null,
-              avatarUrl: contact.agentAvatarUrl ?? current.agent?.avatarUrl ?? null,
-              phone: contact.agentPhone ?? current.agent?.phone ?? null,
-              isVerified: current.agent?.isVerified ?? false,
-            },
+            agent: mergedAgent,
           };
         });
       })
       .catch(() => {})
       .finally(() => {
-        if (mounted) setResolvingAgent(false);
+        clearTimeout(timeout);
+        if (mounted && lookupSeq === agentLookupSeqRef.current) setResolvingAgent(false);
       });
     return () => {
       mounted = false;
+      clearTimeout(timeout);
+      controller.abort();
     };
-  }, [getApiHeaders, listing]);
+  }, [getApiHeaders, listing?.address, listing?.agent?.phone, listing?.externalUrl, listing?.id, listing?.source]);
 
   const handleAnalyse = useCallback(() => {
     if (!listing) return;
@@ -254,10 +268,11 @@ export default function ListingDetailScreen() {
   }
 
   const images = listing.imageUrls.map(resolveListingImageUrl).filter(Boolean) as string[];
-  const agentName = listing.agent?.fullName?.trim() || t("lcard.agent_fallback");
-  const agency = listing.agent?.agencyName ?? (listing.source === "internal" ? t("lcard.agency_internal") : t("pdp.agency_external"));
-  const agentAvatar = resolveListingImageUrl(listing.agent?.avatarUrl);
-  const agentPhone = listing.agent?.phone?.trim() || null;
+  const agent = normaliseBrowseListingAgent(listing.agent);
+  const agentName = agent?.fullName?.trim() || t("lcard.agent_fallback");
+  const agency = agent?.agencyName ?? (listing.source === "internal" ? t("lcard.agency_internal") : null);
+  const agentAvatar = resolveListingImageUrl(agent?.avatarUrl);
+  const agentPhone = agent?.phone?.trim() || null;
   const showSourceDescription = hasSourceDescription(listing);
 
   const logAgentCallEvent = () => {
@@ -265,7 +280,7 @@ export default function ListingDetailScreen() {
       void fetch(`${getApiBase()}/agent-call-event`, {
         method: "POST",
         headers: { ...getApiHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify({ agentPhone, agentName, agencyName: agency, propertyAddress: listing.address }),
+        body: JSON.stringify({ agentPhone, agentName, agencyName: agency ?? null, propertyAddress: listing.address }),
       }).catch(() => {});
     } catch {
       // swallow — logging failure must not affect the call
@@ -410,21 +425,25 @@ export default function ListingDetailScreen() {
           </View>
 
           <View style={styles.agentSection}>
-            <View style={[styles.agentCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              {agentAvatar ? (
-                <Image source={{ uri: agentAvatar }} style={styles.agentAvatarImage} />
-              ) : (
-                <View style={[styles.agentAvatar, { backgroundColor: colors.accent + "18" }]}>
-                  <Text style={[styles.agentInitial, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
-                    {agentName.trim().slice(0, 1).toUpperCase() || "A"}
-                  </Text>
+            {agent ? (
+              <View style={[styles.agentCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                {agentAvatar ? (
+                  <Image source={{ uri: agentAvatar }} style={styles.agentAvatarImage} />
+                ) : (
+                  <View style={[styles.agentAvatar, { backgroundColor: colors.accent + "18" }]}>
+                    <Text style={[styles.agentInitial, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
+                      {agentName.trim().slice(0, 1).toUpperCase() || "A"}
+                    </Text>
+                  </View>
+                )}
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.agentName, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>{agentName}</Text>
+                  {agency ? (
+                    <Text style={[styles.agency, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{agency}</Text>
+                  ) : null}
                 </View>
-              )}
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.agentName, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>{agentName}</Text>
-                <Text style={[styles.agency, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{agency}</Text>
               </View>
-            </View>
+            ) : null}
 
             {agentPhone ? (
               <View style={styles.agentActions}>

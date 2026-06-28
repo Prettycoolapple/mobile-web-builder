@@ -52,6 +52,42 @@ export type BrowseListingFilters = {
   limit?: number;
 };
 
+const AGENT_PLACEHOLDER_VALUES = new Set([
+  "listing agent",
+  "external marketplace",
+  "curated listing",
+  "project alpha sample",
+  "房源中介",
+  "外部市场房源",
+  "精选房源",
+]);
+
+function cleanAgentDisplayValue(value: string | null | undefined): string | null {
+  const cleaned = value?.replace(/\s+/g, " ").trim() ?? "";
+  if (!cleaned) return null;
+  return AGENT_PLACEHOLDER_VALUES.has(cleaned.toLowerCase()) ? null : cleaned;
+}
+
+export function normaliseBrowseListingAgent(agent: BrowseListing["agent"]): BrowseListing["agent"] {
+  if (!agent) return null;
+  const fullName = cleanAgentDisplayValue(agent.fullName);
+  const agencyName = cleanAgentDisplayValue(agent.agencyName);
+  const avatarUrl = cleanAgentDisplayValue(agent.avatarUrl);
+  const phone = cleanAgentDisplayValue(agent.phone);
+  if (!fullName && !agencyName && !avatarUrl && !phone) return null;
+  return {
+    ...agent,
+    fullName,
+    agencyName,
+    avatarUrl,
+    phone,
+  };
+}
+
+export function hasRealBrowseListingAgent(agent: BrowseListing["agent"]): boolean {
+  return !!normaliseBrowseListingAgent(agent);
+}
+
 export function resolveListingImageUrl(url: string | null | undefined): string | null {
   if (!url) return null;
   if (/^https?:\/\//i.test(url)) return url;
@@ -114,6 +150,7 @@ export function selectedListingContextFromBrowse(listing: BrowseListing) {
 }
 
 export function watchlistCandidateFromBrowse(listing: BrowseListing): WatchlistCandidate {
+  const agent = normaliseBrowseListingAgent(listing.agent);
   return {
     address: listing.address,
     price: listing.priceNzd ?? 0,
@@ -127,10 +164,10 @@ export function watchlistCandidateFromBrowse(listing: BrowseListing): WatchlistC
     listingTitle: listing.listingTitle ?? undefined,
     description: listing.description ?? undefined,
     features: listing.features ?? [],
-    agentName: listing.agent?.fullName ?? undefined,
-    agencyName: listing.agent?.agencyName ?? undefined,
-    agentAvatarUrl: listing.agent?.avatarUrl ?? undefined,
-    agentPhone: listing.agent?.phone ?? undefined,
+    agentName: agent?.fullName ?? undefined,
+    agencyName: agent?.agencyName ?? undefined,
+    agentAvatarUrl: agent?.avatarUrl ?? undefined,
+    agentPhone: agent?.phone ?? undefined,
     source: listing.source,
     internalListingId: listing.source === "internal" ? listing.id : undefined,
     isSponsored: isListingSponsored(listing),
@@ -210,11 +247,13 @@ export type ListingAgentContact = {
 export async function fetchListingAgentContact(
   headers: Record<string, string>,
   body: { address: string; listingUrl?: string | null; selectedListingContext?: unknown },
+  signal?: AbortSignal,
 ): Promise<ListingAgentContact | null> {
   const resp = await fetch(`${getApiBase()}/agent-contact/for-listing`, {
     method: "POST",
     headers: { ...headers, "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal,
   });
   const data = await resp.json().catch(() => null) as ListingAgentContact | null;
   if (!resp.ok || !data) return null;
