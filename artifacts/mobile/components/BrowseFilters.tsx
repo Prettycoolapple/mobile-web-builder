@@ -8,7 +8,6 @@ import type { BrowseListingFilters } from "@/lib/browseListings";
 const PROPERTY_TYPES = ["house", "townhouse", "apartment", "unit", "section", "rural", "other"];
 const BEDROOMS = ["1", "2", "3", "4", "5"];
 const BATHROOMS = ["1", "2", "3"];
-const SALE_METHODS = ["auction", "tender", "asking_price", "deadline_sale", "price_by_negotiation"];
 const SORTS: NonNullable<BrowseListingFilters["sort"]>[] = ["recommended", "newest", "price_asc", "price_desc", "land_desc"];
 
 export function BrowseFilters({
@@ -116,19 +115,13 @@ export function BrowseFilters({
             {BATHROOMS.map((n) => <Chip key={n} label={`${n}+`} active={filters.bathrooms === n} onPress={() => toggle("bathrooms", n)} />)}
           </Section>
 
-          <Section label={t("browse.sale_method")}>
-            {SALE_METHODS.map((method) => (
-              <Chip key={method} label={t(`browse.method_${method}`)} active={filters.saleMethod === method} onPress={() => toggle("saleMethod", method)} />
-            ))}
-          </Section>
-
           <Section label={t("browse.sort")}>
             {SORTS.map((sort) => (
               <Chip key={sort} label={t(`browse.sort_${sort}`)} active={(filters.sort ?? "recommended") === sort} onPress={() => set({ sort })} />
             ))}
           </Section>
 
-          <View style={styles.actions}>
+          <View style={[styles.actions, { borderTopColor: colors.border }]}>
             <TouchableOpacity style={[styles.clearBtn, { borderColor: colors.border }]} onPress={clear} activeOpacity={0.78}>
               <Text style={[styles.clearText, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>{t("browse.clear")}</Text>
             </TouchableOpacity>
@@ -198,7 +191,7 @@ function Chip({ label, active, onPress }: { label: string; active?: boolean; onP
 }
 
 const styles = StyleSheet.create({
-  panel: { borderWidth: 1, borderRadius: 16, padding: 12, paddingBottom: 22, gap: 10 },
+  panel: { borderWidth: 1, borderRadius: 16, padding: 12, paddingBottom: 14, gap: 10 },
   topRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   expandButton: { flex: 1, minHeight: 36, flexDirection: "row", alignItems: "center", gap: 8 },
   panelTitle: { fontSize: 15 },
@@ -216,7 +209,7 @@ const styles = StyleSheet.create({
   chipWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   chip: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8 },
   chipText: { fontSize: 12 },
-  actions: { flexDirection: "row", gap: 10, paddingTop: 10, paddingBottom: 8, marginTop: 2 },
+  actions: { flexDirection: "row", gap: 10, paddingTop: 14, marginTop: 6, borderTopWidth: StyleSheet.hairlineWidth },
   clearBtn: { flex: 1, minHeight: 40, borderWidth: 1, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   clearText: { fontSize: 13 },
   applyLargeBtn: { flex: 1, minHeight: 40, borderRadius: 12, alignItems: "center", justifyContent: "center" },

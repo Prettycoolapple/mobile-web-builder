@@ -144,6 +144,51 @@ function isLineLayer(layer: SitePlanLayer): boolean {
   return layer.group === "services" || layer.group === "contours";
 }
 
+// Service pipes (storm/waste/water) come back as line paths. Their segment endpoints are the
+// network junctions — i.e. where pipes connect, branch, or terminate (manholes / connection
+// points). We mark each unique endpoint with a small node so the connection topology reads at a
+// glance, deduping endpoints that share a location (a manhole where several pipes meet).
+function renderServiceNodes(
+  layer: SitePlanLayer,
+  bounds: SitePlanBounds,
+  width: number,
+  height: number,
+) {
+  if (layer.group !== "services") return [];
+  const endpoints: Coordinate[] = [];
+  const pushEnds = (line: Coordinate[]) => {
+    if (line.length === 0) return;
+    endpoints.push(line[0]!);
+    endpoints.push(line[line.length - 1]!);
+  };
+  for (const feature of layer.geojson.features) {
+    const g = feature.geometry;
+    if (g.type === "LineString") pushEnds(g.coordinates);
+    else if (g.type === "MultiLineString") g.coordinates.forEach(pushEnds);
+  }
+  const seen = new Set<string>();
+  const nodes: React.ReactNode[] = [];
+  endpoints.forEach((coord, index) => {
+    const [cx, cy] = projectCoordinate(coord, bounds, width, height);
+    const key = `${Math.round(cx / 5)}:${Math.round(cy / 5)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    nodes.push(
+      <Circle
+        key={`${layer.id}-node-${index}`}
+        cx={cx}
+        cy={cy}
+        r={4.5}
+        fill="#FFFFFF"
+        fillOpacity={0.96}
+        stroke={layer.style.stroke}
+        strokeWidth={2.4}
+      />,
+    );
+  });
+  return nodes;
+}
+
 function layerDisplayLabel(layer: SitePlanLayer): string {
   if (layer.id === "nearby-boundaries") return translateForOS("site_plan.layer.nearby_boundaries");
   if (layer.id === "service-stormwater") return translateForOS("site_plan.layer.stormwater");
@@ -360,6 +405,7 @@ export function SitePlanCard({ report }: Props) {
   const searchId = report.historyId ?? null;
   const planHeight = Math.min(430, Math.max(310, viewportWidth - 42));
   const [showAiSoon, setShowAiSoon] = useState(false);
+  const soonProgress = useSharedValue(0);
 
   const scale = useSharedValue(1);
   const savedScale = useSharedValue(1);
@@ -415,10 +461,11 @@ export function SitePlanCard({ report }: Props) {
   }, [aerialAssetKeys.length, aerialReady, query.data]);
 
   useEffect(() => {
+    soonProgress.value = withTiming(showAiSoon ? 1 : 0, { duration: 170 });
     if (!showAiSoon) return;
-    const timeout = setTimeout(() => setShowAiSoon(false), 1800);
+    const timeout = setTimeout(() => setShowAiSoon(false), 2600);
     return () => clearTimeout(timeout);
-  }, [showAiSoon]);
+  }, [showAiSoon, soonProgress]);
 
   const markAerialAssetLoaded = (key: string) => {
     setLoadedAerialAssets((current) => {
@@ -534,6 +581,13 @@ export function SitePlanCard({ report }: Props) {
       { scale: baseScale.value * scale.value },
     ],
   }));
+  const soonTipStyle = useAnimatedStyle(() => ({
+    opacity: soonProgress.value,
+    transform: [
+      { translateY: (1 - soonProgress.value) * -5 },
+      { scale: 0.95 + soonProgress.value * 0.05 },
+    ],
+  }));
 
   const toggleLayer = (id: string, next: boolean) => {
     setVisibleLayers((current) => ({ ...current, [id]: next }));
@@ -574,11 +628,15 @@ export function SitePlanCard({ report }: Props) {
         </View>
         <View style={styles.aiButtonWrap}>
           {showAiSoon ? (
-            <View style={[styles.comingSoonBubble, { backgroundColor: colors.foreground }]}>
-              <Text style={[styles.comingSoonText, { color: colors.card }]}>
-                {translateForOS("site_plan.coming_soon")}
-              </Text>
-            </View>
+            <Animated.View style={[styles.comingSoonTip, soonTipStyle]} pointerEvents="none">
+              <View style={[styles.comingSoonCaret, { backgroundColor: colors.accent }]} />
+              <View style={[styles.comingSoonBubble, { backgroundColor: colors.accent }]}>
+                <Feather name="clock" size={12} color="#FFFFFF" />
+                <Text style={styles.comingSoonText}>
+                  {translateForOS("site_plan.coming_soon")}
+                </Text>
+              </View>
+            </Animated.View>
           ) : null}
           <TouchableOpacity
             style={[styles.aiButton, { borderColor: colors.border, backgroundColor: colors.muted }]}
@@ -587,6 +645,7 @@ export function SitePlanCard({ report }: Props) {
             accessibilityRole="button"
             accessibilityLabel={translateForOS("site_plan.ai_subdivision")}
           >
+            <Feather name="grid" size={13} color={colors.mutedForeground} />
             <Text style={[styles.aiButtonText, { color: colors.mutedForeground }]} numberOfLines={1}>
               {translateForOS("site_plan.ai_subdivision")}
             </Text>
@@ -654,6 +713,9 @@ export function SitePlanCard({ report }: Props) {
                       top: tile.top,
                       width: query.data.image.tileSize ?? 256,
                       height: query.data.image.tileSize ?? 256,
+                      // Slightly transparent so the vector linework (pipes/boundaries/nodes) on top
+                      // stays legible against the satellite imagery.
+                      opacity: 0.82,
                     }}
                   />
                 ))
@@ -686,6 +748,14 @@ export function SitePlanCard({ report }: Props) {
                       query.data!.image.height,
                       featureIndex,
                     ),
+                  ),
+                )}
+                {visibleVectorLayers.flatMap((layer) =>
+                  renderServiceNodes(
+                    layer,
+                    query.data!.image.bounds,
+                    query.data!.image.width,
+                    query.data!.image.height,
                   ),
                 )}
               </Svg>
@@ -745,8 +815,10 @@ const styles = StyleSheet.create({
     height: 34,
     borderRadius: 17,
     borderWidth: 1,
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+    gap: 6,
     paddingHorizontal: 12,
   },
   aiButtonWrap: {
@@ -758,26 +830,41 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
   },
-  comingSoonBubble: {
+  comingSoonTip: {
     position: "absolute",
     right: 0,
     top: 40,
+    zIndex: 5,
+    alignItems: "flex-end",
+  },
+  comingSoonCaret: {
+    width: 11,
+    height: 11,
+    borderRadius: 2,
+    marginRight: 18,
+    marginBottom: -6,
+    transform: [{ rotate: "45deg" }],
+  },
+  comingSoonBubble: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
     borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    zIndex: 5,
     minWidth: 96,
-    alignItems: "center",
     shadowColor: "#000",
-    shadowOpacity: 0.14,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 5,
+    shadowOpacity: 0.16,
+    shadowRadius: 9,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 6,
   },
   comingSoonText: {
     fontFamily: "DM_Sans_700Bold",
     fontSize: 11,
     lineHeight: 14,
+    color: "#FFFFFF",
   },
   mapViewport: {
     width: "100%",
@@ -793,7 +880,7 @@ const styles = StyleSheet.create({
     height: "100%",
   },
   aerialScrim: {
-    backgroundColor: "rgba(255,255,255,0.18)",
+    backgroundColor: "rgba(255,255,255,0.12)",
   },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,

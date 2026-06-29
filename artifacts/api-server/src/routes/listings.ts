@@ -4,7 +4,6 @@ import { z } from "zod";
 import { browseListingCache, db, listings, listingViews, profiles, salesAgentProfiles, withDbRetry } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { agentCanList } from "../lib/agent-entitlements";
-import { getMockListings } from "../lib/mock-data";
 import { searchRealEstateListings } from "../lib/scrapers/realestate-search";
 import { fetchRealestateListingDetailsByUrl } from "../lib/scrapers/realestate-api";
 import type { ListingResult } from "../lib/scrapers/oneroof";
@@ -100,7 +99,18 @@ type BrowseListing = {
 };
 
 const BROWSE_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
-const MAX_CURATED_TOP_UP = 8;
+// Cap on real listings we top up per page via live scraping. Kept at/above the client's
+// prefetch window (BROWSE_PREFETCH_LIMIT = 10) so a filtered page isn't artificially short.
+const MAX_CURATED_TOP_UP = 12;
+// Incremental curated-scrape budget. When a filter is active we walk multiple suburbs/pages to
+// find real matches before giving up; bounded by request count + wall-clock so the request stays
+// responsive and we don't hammer realestate.co.nz.
+const CURATED_SCRAPE_DELAY_MS = 350;
+const CURATED_MAX_REQUESTS_FILTERED = 8;
+const CURATED_MAX_REQUESTS_UNFILTERED = 2;
+const CURATED_DEADLINE_MS = 13_000;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const DEFAULT_BROWSE_SUBURBS = [
   "remuera",
   "st heliers",
@@ -204,7 +214,6 @@ function applyBrowseFilters(items: BrowseListing[], filters: {
   bathroomsMin: number | null;
   minLandArea: number | null;
   minFloorArea: number | null;
-  saleMethod: string;
 }): BrowseListing[] {
   return items.filter((item) => {
     if (filters.propertyType && item.propertyType && !item.propertyType.toLowerCase().includes(filters.propertyType.toLowerCase())) return false;
@@ -212,9 +221,6 @@ function applyBrowseFilters(items: BrowseListing[], filters: {
     if (filters.bathroomsMin && (item.bathrooms ?? 0) < filters.bathroomsMin) return false;
     if (filters.minLandArea && (item.landAreaSqm ?? 0) < filters.minLandArea) return false;
     if (filters.minFloorArea && (item.floorAreaSqm ?? 0) < filters.minFloorArea) return false;
-    // Curated marketplace cards do not expose method of sale consistently, so
-    // this filter is enforced for internal rows and tolerated for curated rows.
-    void filters.saleMethod;
     return true;
   });
 }
@@ -577,35 +583,6 @@ async function upsertCuratedBrowseListings(listingsToCache: ListingResult[]): Pr
   return rows.map(publicListingFromCache);
 }
 
-function publicListingFromMock(candidate: ReturnType<typeof getMockListings>[number]): BrowseListing {
-  const id = `sample_${Buffer.from(candidate.address).toString("base64url").slice(0, 100)}`;
-  return {
-    id,
-    source: "curated",
-    externalUrl: null,
-    listingTitle: candidate.address.split(",")[0]?.trim() || candidate.address,
-    address: candidate.address,
-    listingType: "for_sale",
-    propertyType: "house",
-    bedrooms: null,
-    bathrooms: null,
-    garages: null,
-    landAreaSqm: candidate.landArea ?? null,
-    floorAreaSqm: null,
-    priceNzd: candidate.price,
-    priceDisplay: candidate.price ? `$${candidate.price.toLocaleString("en-NZ")}` : "Price on application",
-    description: "Sample marketplace-style listing for browsing while Project Alpha agent inventory grows.",
-    imageUrls: [],
-    features: [],
-    agent: {
-      fullName: "Project Alpha sample",
-      agencyName: "Curated listing",
-      phone: null,
-      isVerified: false,
-    },
-  };
-}
-
 async function fetchCuratedBrowseListings(args: {
   query: string;
   needed: number;
@@ -618,30 +595,81 @@ async function fetchCuratedBrowseListings(args: {
   bathroomsMin: number | null;
   minLandArea: number | null;
   minFloorArea: number | null;
-  saleMethod: string;
   sort: string;
 }): Promise<BrowseListing[]> {
+  // The upstream JSON API pages in windows of 100 and advances its offset by the full window, so
+  // we consume a whole page per request (filtering over all of it) rather than a small slice that
+  // would skip listings between pages.
+  const CURATED_PAGE_SIZE = 100;
+  const filtersActive = Boolean(
+    args.propertyType || args.bedroomsMin || args.bathroomsMin || args.minLandArea || args.minFloorArea,
+  );
+
+  // Build the ordered list of suburbs to walk. With a user query we stay on that one suburb and
+  // page through it; with no query we rotate through the default suburbs starting at this page's
+  // suburb. When a filter is active we allow walking several suburbs so we can actually find
+  // matching real listings rather than declaring "no listings" after a single suburb.
   const defaultTarget = defaultBrowseSuburb(args.offset, args.limit);
-  const suburb = args.query || defaultTarget.suburb;
-  try {
-    const fetchSize = Math.min(30, Math.max(args.needed * 3, args.needed));
-    const result = await searchRealEstateListings({
-      suburb,
-      minPrice: args.minPrice ?? 1,
-      maxPrice: args.maxPrice ?? 20_000_000,
-      firstBatchSize: fetchSize,
-      includeNegotiation: true,
-      fetchAllPages: false,
-      maxListings: fetchSize,
-      startOffset: args.query ? args.offset : defaultTarget.startOffset,
-    });
-    const scraped = [...result.firstBatch, ...result.remainingListings].slice(0, fetchSize);
-    const cached = await upsertCuratedBrowseListings(scraped);
-    const items = cached.length ? cached : scraped.map(publicListingFromCurated);
-    return sortBrowseListings(applyBrowseFilters(items, args), args.sort).slice(0, args.needed);
-  } catch {
-    return [];
+  let targets: Array<{ suburb: string; startOffset: number }>;
+  if (args.query) {
+    targets = [{ suburb: args.query, startOffset: args.offset }];
+  } else if (filtersActive) {
+    const startIdx = DEFAULT_BROWSE_SUBURBS.indexOf(defaultTarget.suburb);
+    targets = DEFAULT_BROWSE_SUBURBS
+      .slice(Math.max(0, startIdx))
+      .concat(DEFAULT_BROWSE_SUBURBS.slice(0, Math.max(0, startIdx)))
+      .map((suburb) => ({ suburb, startOffset: 0 }));
+  } else {
+    targets = [{ suburb: defaultTarget.suburb, startOffset: defaultTarget.startOffset }];
   }
+
+  const maxRequests = filtersActive ? CURATED_MAX_REQUESTS_FILTERED : CURATED_MAX_REQUESTS_UNFILTERED;
+  const deadline = Date.now() + CURATED_DEADLINE_MS;
+  const collected: BrowseListing[] = [];
+  const seen = new Set<string>();
+  let requests = 0;
+
+  // Sequential walk (await in series) — never fire scrapes in parallel, so there are no races and
+  // we stay polite to the upstream site. A short sleep between requests further avoids rate limits.
+  for (const target of targets) {
+    if (collected.length >= args.needed || requests >= maxRequests || Date.now() >= deadline) break;
+    let offset = target.startOffset;
+    let done = false;
+    while (!done && collected.length < args.needed && requests < maxRequests && Date.now() < deadline) {
+      requests += 1;
+      try {
+        const result = await searchRealEstateListings({
+          suburb: target.suburb,
+          minPrice: args.minPrice ?? 1,
+          maxPrice: args.maxPrice ?? 20_000_000,
+          firstBatchSize: CURATED_PAGE_SIZE,
+          includeNegotiation: true,
+          fetchAllPages: false,
+          maxListings: CURATED_PAGE_SIZE,
+          startOffset: offset,
+        });
+        const scraped = [...result.firstBatch, ...result.remainingListings].slice(0, CURATED_PAGE_SIZE);
+        const cached = await upsertCuratedBrowseListings(scraped);
+        const items = cached.length ? cached : scraped.map(publicListingFromCurated);
+        for (const item of applyBrowseFilters(items, args)) {
+          const key = canonicalBrowseListingKey(item);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          collected.push(item);
+        }
+        offset = result.nextOffset;
+        done = result.done || !offset;
+      } catch {
+        // One failed page shouldn't abort the whole accumulation — move to the next suburb.
+        done = true;
+      }
+      if (!done && (collected.length < args.needed) && requests < maxRequests && Date.now() < deadline) {
+        await sleep(CURATED_SCRAPE_DELAY_MS);
+      }
+    }
+  }
+
+  return sortBrowseListings(collected, args.sort).slice(0, args.needed);
 }
 
 /**
@@ -1087,7 +1115,6 @@ router.get("/listings", async (req, res) => {
   const minFloorArea = parsePositiveInt(req.query.minFloorArea);
   const listingType = "for_sale";
   const propertyType = cleanQuery(req.query.propertyType);
-  const saleMethod = cleanQuery(req.query.saleMethod);
   const sort = VALID_SORTS.has(cleanQuery(req.query.sort)) ? cleanQuery(req.query.sort) : "recommended";
   const internalOrder =
     sort === "price_asc" ? asc(listings.priceNzd)
@@ -1124,10 +1151,6 @@ router.get("/listings", async (req, res) => {
     if (bathroomsMin) filters.push(gte(listings.bathrooms, bathroomsMin));
     if (minLandArea) filters.push(gte(listings.landAreaSqm, minLandArea));
     if (minFloorArea) filters.push(gte(listings.floorAreaSqm, minFloorArea));
-    if (methodsOfSale.includes(saleMethod as (typeof methodsOfSale)[number])) {
-      filters.push(eq(listings.methodOfSale, saleMethod as (typeof methodsOfSale)[number]));
-    }
-
     const internalRows = await db
       .select({
         id: listings.id,
@@ -1199,7 +1222,6 @@ router.get("/listings", async (req, res) => {
       bathroomsMin,
       minLandArea,
       minFloorArea,
-      saleMethod,
     }), sort), new Set([...excludedKeys, ...internal.map(canonicalBrowseListingKey)]));
 
     const scrapeNeeded = Math.min(MAX_CURATED_TOP_UP, Math.max(0, limit - internal.length - cached.length));
@@ -1216,7 +1238,6 @@ router.get("/listings", async (req, res) => {
           bathroomsMin,
           minLandArea,
           minFloorArea,
-          saleMethod,
           sort,
         })
       : [];
@@ -1225,26 +1246,17 @@ router.get("/listings", async (req, res) => {
       ...internal.map(canonicalBrowseListingKey),
       ...cached.map(canonicalBrowseListingKey),
     ]));
-    const samples = internal.length + cached.length + curatedUnique.length < limit
-      ? getMockListings(query || undefined)
-          .slice(offset, offset + limit - internal.length - cached.length - curatedUnique.length + excludedKeys.size)
-          .map(publicListingFromMock)
-      : [];
-
-    const samplesUnique = dedupeBrowseListings(samples, new Set([
-      ...excludedKeys,
-      ...internal.map(canonicalBrowseListingKey),
-      ...cached.map(canonicalBrowseListingKey),
-      ...curatedUnique.map(canonicalBrowseListingKey),
-    ]));
-    const items = sortBrowseListings(dedupeBrowseListings([...internal, ...cached, ...curatedUnique, ...samplesUnique], excludedKeys), sort).slice(0, limit);
+    // Only ever surface real listings (internal + cached + live curated). When nothing matches,
+    // return an empty page so the client shows its "No listings found" empty state — never fill
+    // with mock/sample placeholders.
+    const items = sortBrowseListings(dedupeBrowseListings([...internal, ...cached, ...curatedUnique], excludedKeys), sort).slice(0, limit);
     res.json({
       listings: items,
       nextCursor: items.length === limit ? String(offset + limit) : null,
       sourceCounts: {
         internal: internal.length,
         cached: cached.length,
-        curated: curatedUnique.length + samplesUnique.length,
+        curated: curatedUnique.length,
       },
     });
   } catch (error) {
@@ -1361,18 +1373,6 @@ router.get("/listings/public/:id", async (req, res) => {
 
   const { id } = req.params;
   try {
-    if (id.startsWith("sample_")) {
-      const listing = getMockListings()
-        .map(publicListingFromMock)
-        .find((item) => item.id === id);
-      if (!listing) {
-        res.status(404).json({ error: "Listing not found.", code: "NOT_FOUND" });
-        return;
-      }
-      res.json({ listing });
-      return;
-    }
-
     const [cachedExternal] = await db
       .select()
       .from(browseListingCache)

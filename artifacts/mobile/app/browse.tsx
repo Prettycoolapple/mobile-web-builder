@@ -35,7 +35,6 @@ function browseFiltersKey(filters: BrowseListingFilters): string {
     propertyType: filters.propertyType ?? "",
     bedrooms: filters.bedrooms?.trim() ?? "",
     bathrooms: filters.bathrooms?.trim() ?? "",
-    saleMethod: filters.saleMethod ?? "",
     sort: filters.sort ?? "recommended",
   };
   return JSON.stringify(stable);
