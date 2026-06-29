@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -13,6 +13,7 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { useRouter } from "expo-router";
+import { useQueryClient } from "@tanstack/react-query";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
   runOnJS,
@@ -26,7 +27,7 @@ import Svg, { Polygon } from "react-native-svg";
 import { LinearGradient } from "expo-linear-gradient";
 import { Feather, Ionicons } from "@expo/vector-icons";
 import { StarRating } from "@/components/StarRating";
-import { SitePlanCard } from "@/components/report/SitePlanCard";
+import { prefetchSitePlanAssets, SitePlanCard } from "@/components/report/SitePlanCard";
 import { useWatchlist, type WatchlistCandidate } from "@/context/WatchlistContext";
 import { useColors } from "@/hooks/useColors";
 import { useT, translate, translateForOS, isOSChineseLocale } from "@/lib/i18n";
@@ -2576,6 +2577,7 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
   const { getApiHeaders, user } = useAuth();
   const { isWatched, toggle } = useWatchlist();
   const router = useRouter();
+  const queryClient = useQueryClient();
 
   const planningSection = overlayStatus(report);
   const asbestosStatus: "good" | "warning" | "risk" | "neutral" = report.asbestos
@@ -2676,6 +2678,14 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
       setIsRefreshingPhotos(false);
     }
   }, [report.historyId, isRefreshingPhotos, getApiHeaders]);
+
+  useEffect(() => {
+    if (!report.historyId) return;
+    void prefetchSitePlanAssets(queryClient, report.historyId, report.address, getApiHeaders()).catch(() => {
+      // The Plan tab still owns visible error and retry UI.
+    });
+  }, [queryClient, report.historyId, report.address, getApiHeaders]);
+
   const bedrooms = report.propertyOverview?.bedrooms;
   const bathrooms = report.propertyOverview?.bathrooms;
   const realComparableSales = (report.comparableSales ?? []).filter(isSourceBackedComparable);

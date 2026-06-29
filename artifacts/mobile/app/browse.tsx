@@ -4,6 +4,8 @@ import {
   AppState,
   FlatList,
   Keyboard,
+  KeyboardAvoidingView,
+  Platform,
   RefreshControl,
   StyleSheet,
   Text,
@@ -182,7 +184,11 @@ export default function BrowseScreen() {
   const canSearch = searchText.trim().length > 0;
 
   return (
-    <View style={[styles.root, { backgroundColor: colors.background }]}>
+    <KeyboardAvoidingView
+      style={[styles.root, { backgroundColor: colors.background }]}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      keyboardVerticalOffset={0}
+    >
       <View style={[styles.header, { paddingTop: insets.top + 8, backgroundColor: colors.headerBg, borderBottomColor: colors.accent + "22" }]}>
         <TouchableOpacity
           onPress={() => (router.canGoBack() ? router.back() : router.replace("/(tabs)" as never))}
@@ -310,7 +316,7 @@ export default function BrowseScreen() {
           ) : null}
         </View>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 

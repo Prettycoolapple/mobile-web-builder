@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   boundsFromParcel,
+  expandLinzAerialTileRange,
   fallbackBoundsFromCenter,
   nearbyBoundaryLayer,
   paddedBounds,
@@ -78,6 +79,23 @@ describe("site plan bounds", () => {
     expect(range.bounds.maxLng).toBeGreaterThanOrEqual(sourceBounds.maxLng);
     expect(range.bounds.minLat).toBeLessThanOrEqual(sourceBounds.minLat);
     expect(range.bounds.maxLat).toBeGreaterThanOrEqual(sourceBounds.maxLat);
+  });
+
+  it("pads aerial tile coverage around the selected site extent", () => {
+    const sourceBounds = sitePlanMapBounds(boundsFromParcel(parcel)!);
+    const range = selectLinzAerialTileRange(sourceBounds, 4);
+    const expanded = expandLinzAerialTileRange(range);
+
+    expect(expanded.zoom).toBe(range.zoom);
+    expect(expanded.minX).toBeLessThanOrEqual(range.minX);
+    expect(expanded.maxX).toBeGreaterThanOrEqual(range.maxX);
+    expect(expanded.minY).toBeLessThanOrEqual(range.minY);
+    expect(expanded.maxY).toBeGreaterThanOrEqual(range.maxY);
+    expect(expanded.widthTiles * expanded.heightTiles).toBeGreaterThanOrEqual(range.widthTiles * range.heightTiles);
+    expect(expanded.bounds.minLng).toBeLessThanOrEqual(range.bounds.minLng);
+    expect(expanded.bounds.maxLng).toBeGreaterThanOrEqual(range.bounds.maxLng);
+    expect(expanded.bounds.minLat).toBeLessThanOrEqual(range.bounds.minLat);
+    expect(expanded.bounds.maxLat).toBeGreaterThanOrEqual(range.bounds.maxLat);
   });
 
   it("expands the site plan to show neighbourhood context", () => {

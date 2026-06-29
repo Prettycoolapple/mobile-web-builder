@@ -112,6 +112,7 @@ type TileRange = {
 
 const TILE_SIZE = 256;
 const MAX_AERIAL_TILES = 24;
+const AERIAL_TILE_CONTEXT_PAD = 1;
 const NEIGHBOURHOOD_CONTEXT_PAD_M = 90;
 const NEIGHBOURHOOD_CONTEXT_MIN_SPAN_M = 300;
 const AUCKLAND_MANAGEMENT_LAYERS =
@@ -325,6 +326,36 @@ export function selectLinzAerialTileRange(bounds: SitePlanBounds, maxTiles = MAX
   };
 }
 
+function tileRangeFromEdges(zoom: number, minX: number, maxX: number, minY: number, maxY: number): TileRange {
+  return {
+    zoom,
+    minX,
+    maxX,
+    minY,
+    maxY,
+    widthTiles: maxX - minX + 1,
+    heightTiles: maxY - minY + 1,
+    bounds: {
+      minLng: tileXToLng(minX, zoom),
+      maxLng: tileXToLng(maxX + 1, zoom),
+      maxLat: tileYToLat(minY, zoom),
+      minLat: tileYToLat(maxY + 1, zoom),
+    },
+  };
+}
+
+export function expandLinzAerialTileRange(range: TileRange, padTiles = AERIAL_TILE_CONTEXT_PAD): TileRange {
+  if (padTiles <= 0) return range;
+  const limit = 2 ** range.zoom - 1;
+  return tileRangeFromEdges(
+    range.zoom,
+    Math.max(0, range.minX - padTiles),
+    Math.min(limit, range.maxX + padTiles),
+    Math.max(0, range.minY - padTiles),
+    Math.min(limit, range.maxY + padTiles),
+  );
+}
+
 function linzBasemapsKey(): string | null {
   return process.env["LINZ_BASEMAPS_API_KEY"]?.trim() || process.env["LINZ_API_KEY"]?.trim() || null;
 }
@@ -392,7 +423,7 @@ export async function fetchAerialTile(
  * native resolution → crisper than a recompressed/downscaled JPEG, and robust on serverless.
  */
 function buildAerialTileGrid(bounds: SitePlanBounds): SitePlanImage {
-  const range = selectLinzAerialTileRange(bounds);
+  const range = expandLinzAerialTileRange(selectLinzAerialTileRange(bounds));
   const width = range.widthTiles * TILE_SIZE;
   const height = range.heightTiles * TILE_SIZE;
   if (!hasLinzBasemapsKey()) {

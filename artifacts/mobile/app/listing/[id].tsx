@@ -407,50 +407,68 @@ export default function ListingDetailScreen() {
             </View>
           ) : null}
 
-          <View style={[styles.analysisCta, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <View style={{ flex: 1, gap: 4 }}>
-              <Text style={[styles.analysisTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>{t("pdp.full_analysis")}</Text>
-              <Text style={[styles.analysisCopy, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                {t("pdp.analysis_copy")}
-              </Text>
+          <View style={[styles.analysisCta, { backgroundColor: colors.accent + "10", borderColor: colors.accent + "30" }]}>
+            <View style={styles.analysisCopyWrap}>
+              <View style={[styles.analysisIcon, { backgroundColor: colors.accent + "18" }]}>
+                <Feather name="cpu" size={17} color={colors.accent} />
+              </View>
+              <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+                <Text style={[styles.analysisTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>{t("pdp.full_analysis")}</Text>
+                <Text style={[styles.analysisCopy, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                  {t("pdp.analysis_copy")}
+                </Text>
+              </View>
             </View>
-            <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: colors.accent }]} onPress={handleAnalyse} activeOpacity={0.86}>
-              <Feather name="cpu" size={17} color="#fff" />
-              <Text style={[styles.primaryText, { fontFamily: "DM_Sans_700Bold" }]}>{t("pdp.full_analysis")}</Text>
+            <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: colors.foreground }]} onPress={handleAnalyse} activeOpacity={0.86}>
+              <Feather name="cpu" size={17} color={colors.background} />
+              <Text style={[styles.primaryText, { color: colors.background, fontFamily: "DM_Sans_700Bold" }]}>{t("pdp.full_analysis")}</Text>
             </TouchableOpacity>
           </View>
 
           <View style={styles.agentSection}>
             {agent ? (
               <View style={[styles.agentCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                {agentAvatar ? (
-                  <Image source={{ uri: agentAvatar }} style={styles.agentAvatarImage} />
-                ) : (
-                  <View style={[styles.agentAvatar, { backgroundColor: colors.accent + "18" }]}>
-                    <Text style={[styles.agentInitial, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
-                      {agentName.trim().slice(0, 1).toUpperCase() || "A"}
+                <View style={styles.agentInfoRow}>
+                  {agentAvatar ? (
+                    <Image source={{ uri: agentAvatar }} style={styles.agentAvatarImage} />
+                  ) : (
+                    <View style={[styles.agentAvatar, { backgroundColor: colors.accent + "18" }]}>
+                      <Text style={[styles.agentInitial, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>
+                        {agentName.trim().slice(0, 1).toUpperCase() || "A"}
+                      </Text>
+                    </View>
+                  )}
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={[styles.agentName, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]} numberOfLines={1}>{agentName}</Text>
+                    {agency ? (
+                      <Text style={[styles.agency, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]} numberOfLines={1}>{agency}</Text>
+                    ) : null}
+                  </View>
+                </View>
+
+                {agentPhone ? (
+                  <View style={styles.agentActions}>
+                    <TouchableOpacity style={[styles.callBtn, { backgroundColor: colors.accent }]} onPress={handleCall} activeOpacity={0.85}>
+                      <Feather name="phone" size={15} color="#fff" />
+                      <Text style={[styles.callBtnText, { fontFamily: "DM_Sans_700Bold" }]}>{t("pdp.call_agent")}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.messageBtn, { backgroundColor: colors.muted, borderColor: colors.border }]} onPress={handleMessage} activeOpacity={0.85}>
+                      <Feather name="message-circle" size={15} color={colors.foreground} />
+                      <Text style={[styles.messageBtnText, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>{t("pdp.send_message")}</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : resolvingAgent ? (
+                  <View style={styles.agentResolving}>
+                    <ActivityIndicator size="small" color={colors.accent} />
+                    <Text style={[styles.agentResolvingText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                      {t("pdp.finding_number")}
                     </Text>
                   </View>
+                ) : (
+                  <Text style={[styles.agentUnavailable, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                    {t("pdp.agent_unavailable")}
+                  </Text>
                 )}
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.agentName, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>{agentName}</Text>
-                  {agency ? (
-                    <Text style={[styles.agency, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{agency}</Text>
-                  ) : null}
-                </View>
-              </View>
-            ) : null}
-
-            {agentPhone ? (
-              <View style={styles.agentActions}>
-                <TouchableOpacity style={[styles.callBtn, { backgroundColor: colors.accent }]} onPress={handleCall} activeOpacity={0.85}>
-                  <Feather name="phone" size={16} color="#fff" />
-                  <Text style={[styles.callBtnText, { fontFamily: "DM_Sans_700Bold" }]}>{t("pdp.call_agent")}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[styles.messageBtn, { borderColor: colors.accent }]} onPress={handleMessage} activeOpacity={0.85}>
-                  <Feather name="message-circle" size={16} color={colors.accent} />
-                  <Text style={[styles.messageBtnText, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>{t("pdp.send_message")}</Text>
-                </TouchableOpacity>
               </View>
             ) : resolvingAgent ? (
               <View style={styles.agentResolving}>
@@ -466,9 +484,9 @@ export default function ListingDetailScreen() {
             )}
           </View>
 
-          <TouchableOpacity style={[styles.secondaryBtn, { borderColor: colors.border }]} onPress={() => router.back()}>
-            <Feather name="arrow-left" size={17} color={colors.accent} />
-            <Text style={[styles.secondaryText, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>{t("pdp.back_to_results")}</Text>
+          <TouchableOpacity style={styles.secondaryBtn} onPress={() => router.back()}>
+            <Feather name="arrow-left" size={17} color={colors.mutedForeground} />
+            <Text style={[styles.secondaryText, { color: colors.mutedForeground, fontFamily: "DM_Sans_600SemiBold" }]}>{t("pdp.back_to_results")}</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -510,28 +528,31 @@ const styles = StyleSheet.create({
   featureWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   feature: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 7 },
   featureText: { fontSize: 12 },
-  analysisCta: { borderWidth: 1, borderRadius: 14, padding: 14, gap: 12 },
+  analysisCta: { borderWidth: 1, borderRadius: 16, padding: 14, gap: 14 },
+  analysisCopyWrap: { flexDirection: "row", alignItems: "flex-start", gap: 11 },
+  analysisIcon: { width: 34, height: 34, borderRadius: 10, alignItems: "center", justifyContent: "center", flexShrink: 0 },
   analysisTitle: { fontSize: 16 },
   analysisCopy: { fontSize: 13, lineHeight: 19 },
   agentSection: { gap: 10 },
-  agentCard: { flexDirection: "row", alignItems: "center", gap: 11, borderWidth: 1, borderRadius: 14, padding: 13 },
-  agentAvatar: { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center" },
-  agentAvatarImage: { width: 42, height: 42, borderRadius: 21 },
-  agentInitial: { fontSize: 17 },
+  agentCard: { borderWidth: 1, borderRadius: 16, padding: 13, gap: 12 },
+  agentInfoRow: { flexDirection: "row", alignItems: "center", gap: 11 },
+  agentAvatar: { width: 46, height: 46, borderRadius: 23, alignItems: "center", justifyContent: "center" },
+  agentAvatarImage: { width: 46, height: 46, borderRadius: 23 },
+  agentInitial: { fontSize: 18 },
   agentName: { fontSize: 15 },
   agency: { fontSize: 12, marginTop: 2 },
-  agentActions: { gap: 10 },
-  callBtn: { minHeight: 50, borderRadius: 14, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8 },
-  callBtnText: { color: "#fff", fontSize: 15 },
-  messageBtn: { minHeight: 50, borderRadius: 14, borderWidth: 1.5, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8 },
-  messageBtnText: { fontSize: 15 },
+  agentActions: { flexDirection: "row", gap: 9 },
+  callBtn: { flex: 1.15, minHeight: 44, borderRadius: 12, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 7, paddingHorizontal: 10 },
+  callBtnText: { color: "#fff", fontSize: 14 },
+  messageBtn: { flex: 1, minHeight: 44, borderRadius: 12, borderWidth: 1, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 7, paddingHorizontal: 10 },
+  messageBtnText: { fontSize: 14 },
   agentResolving: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 8 },
   agentResolvingText: { fontSize: 13 },
   agentUnavailable: { fontSize: 13, lineHeight: 18, paddingVertical: 8 },
   iconBtn: { width: 38, height: 38, alignItems: "center", justifyContent: "center" },
-  primaryBtn: { minHeight: 50, borderRadius: 14, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8 },
-  primaryText: { color: "#fff", fontSize: 15 },
-  secondaryBtn: { minHeight: 48, borderRadius: 14, borderWidth: 1, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8 },
-  secondaryText: { fontSize: 14 },
+  primaryBtn: { minHeight: 52, borderRadius: 13, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8 },
+  primaryText: { fontSize: 15 },
+  secondaryBtn: { minHeight: 38, alignSelf: "center", alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 7, paddingHorizontal: 10, marginTop: -2 },
+  secondaryText: { fontSize: 13 },
   emptyTitle: { fontSize: 18 },
 });

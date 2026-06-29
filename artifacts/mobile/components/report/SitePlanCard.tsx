@@ -10,7 +10,7 @@ import {
   View,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type QueryClient } from "@tanstack/react-query";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import Svg, { Circle, Polygon, Polyline } from "react-native-svg";
@@ -25,6 +25,8 @@ import { getApiBase } from "@/lib/api";
 // The subject parcel ("boundary") and the surrounding property boundaries ("nearby-boundaries")
 // are always drawn and not user-toggleable — they form the base context for the site plan.
 const ALWAYS_ON_LAYERS = new Set(["boundary", "nearby-boundaries"]);
+const SITE_PLAN_STALE_TIME_MS = 15 * 60 * 1000;
+const SITE_PLAN_GC_TIME_MS = 60 * 60 * 1000;
 
 type Coordinate = [number, number];
 
@@ -112,6 +114,12 @@ function projectCoordinate(coord: Coordinate, bounds: SitePlanBounds, width: num
   const x = ((mercatorX(lng) - west) / Math.max(1e-9, east - west)) * width;
   const y = ((mercatorY(lat) - north) / Math.max(1e-9, south - north)) * height;
   return [x, y];
+}
+
+function clampMapTranslation(value: number, contentSize: number, viewportSize: number): number {
+  "worklet";
+  const limit = Math.max(0, (contentSize - viewportSize) / 2);
+  return Math.min(limit, Math.max(-limit, value));
 }
 
 function pointsString(coords: Coordinate[], bounds: SitePlanBounds, width: number, height: number): string {
@@ -331,7 +339,15 @@ function renderFeature(
   );
 }
 
-function fetchSitePlan(searchId: string, address: string | undefined, headers: Record<string, string>): Promise<SitePlanResponse> {
+export function sitePlanQueryKey(searchId: string | null, address: string | undefined) {
+  return ["site-plan", searchId, address] as const;
+}
+
+function aerialTileUri(tile: SitePlanAerialTile): string {
+  return `${getApiBase()}/tiles/aerial/${tile.z}/${tile.x}/${tile.y}`;
+}
+
+export function fetchSitePlan(searchId: string, address: string | undefined, headers: Record<string, string>): Promise<SitePlanResponse> {
   const params = new URLSearchParams();
   if (address?.trim()) params.set("address", address.trim());
   const query = params.toString();
@@ -348,6 +364,27 @@ function fetchSitePlan(searchId: string, address: string | undefined, headers: R
     }
     return resp.json() as Promise<SitePlanResponse>;
   });
+}
+
+export async function prefetchSitePlanAssets(
+  queryClient: QueryClient,
+  searchId: string | null,
+  address: string | undefined,
+  headers: Record<string, string>,
+): Promise<SitePlanResponse | null> {
+  if (!searchId) return null;
+  const data = await queryClient.fetchQuery({
+    queryKey: sitePlanQueryKey(searchId, address),
+    staleTime: SITE_PLAN_STALE_TIME_MS,
+    gcTime: SITE_PLAN_GC_TIME_MS,
+    queryFn: () => fetchSitePlan(searchId, address, headers),
+  });
+
+  if (data.image.source === "linz-basemaps" && data.image.tiles?.length) {
+    await Promise.allSettled(data.image.tiles.map((tile) => Image.prefetch(aerialTileUri(tile))));
+  }
+
+  return data;
 }
 
 function LayerToggleRow({
@@ -415,10 +452,14 @@ export function SitePlanCard({ report }: Props) {
   const translateY = useSharedValue(0);
   const savedX = useSharedValue(0);
   const savedY = useSharedValue(0);
-  // Base "contain" fit that scales the native-resolution canvas down into the viewport. The map
+  const viewportW = useSharedValue(0);
+  const viewportH = useSharedValue(0);
+  const imageW = useSharedValue(0);
+  const imageH = useSharedValue(0);
+  // Base "cover" fit that scales the native-resolution canvas to fill the viewport. The map
   // content (aerial tiles + SVG linework) is laid out at the image's native pixel size so it
   // rasterizes at high resolution; `scale` (user zoom) multiplies on top of this base. Result:
-  // crisp linework and aerial even when zoomed in.
+  // crisp linework and aerial even when zoomed in, without blank margins at minimum zoom.
   const baseScale = useSharedValue(1);
   const [canvasSize, setCanvasSize] = useState<{ width: number; height: number } | null>(null);
   const framedRef = useRef(false);
@@ -426,10 +467,10 @@ export function SitePlanCard({ report }: Props) {
   const [aerialWaitExpired, setAerialWaitExpired] = useState(false);
 
   const query = useQuery({
-    queryKey: ["site-plan", searchId, report.address],
+    queryKey: sitePlanQueryKey(searchId, report.address),
     enabled: Boolean(searchId),
-    staleTime: 15 * 60 * 1000,
-    gcTime: 60 * 60 * 1000,
+    staleTime: SITE_PLAN_STALE_TIME_MS,
+    gcTime: SITE_PLAN_GC_TIME_MS,
     retry: 1,
     queryFn: () => fetchSitePlan(searchId!, report.address, getApiHeaders()),
   });
@@ -487,14 +528,18 @@ export function SitePlanCard({ report }: Props) {
     setVisibleLayers(next);
   }, [layersSignature, query.data]);
 
-  // Keep the base "contain" fit in sync with the image + viewport so the native-resolution canvas
-  // is scaled down to fit, independent of (and multiplied by) the user's zoom.
+  // Keep the base "cover" fit in sync with the image + viewport so the native-resolution canvas
+  // fills the visible map, independent of (and multiplied by) the user's zoom.
   useEffect(() => {
     const data = query.data;
     if (!data || !canvasSize) return;
-    const fit = Math.min(canvasSize.width / data.image.width, canvasSize.height / data.image.height);
+    viewportW.value = canvasSize.width;
+    viewportH.value = canvasSize.height;
+    imageW.value = data.image.width;
+    imageH.value = data.image.height;
+    const fit = Math.max(canvasSize.width / data.image.width, canvasSize.height / data.image.height);
     if (Number.isFinite(fit) && fit > 0) baseScale.value = fit;
-  }, [query.data, canvasSize, baseScale]);
+  }, [query.data, canvasSize, baseScale, viewportW, viewportH, imageW, imageH]);
 
   // Default the view to frame the analyzed parcel ("boundary") whenever the Plan tab opens, so the
   // subject lot is centered and filling the viewport rather than showing the whole fetched extent.
@@ -517,8 +562,8 @@ export function SitePlanCard({ report }: Props) {
     }
     const cw = canvasSize.width;
     const ch = canvasSize.height;
-    // "contain" fit factor mapping image pixels → on-screen canvas pixels.
-    const fit = Math.min(cw / imgW, ch / imgH);
+    // "cover" fit factor mapping image pixels to on-screen canvas pixels.
+    const fit = Math.max(cw / imgW, ch / imgH);
     if (!Number.isFinite(fit) || fit <= 0) return;
 
     const parcelWCanvas = Math.max(1, (maxX - minX) * fit);
@@ -532,8 +577,8 @@ export function SitePlanCard({ report }: Props) {
     // Offset of the parcel centre from the image centre, in canvas pixels.
     const dx = (parcelCenterX - imgW / 2) * fit;
     const dy = (parcelCenterY - imgH / 2) * fit;
-    const nextX = -dx * nextScale;
-    const nextY = -dy * nextScale;
+    const nextX = clampMapTranslation(-dx * nextScale, imgW * fit * nextScale, cw);
+    const nextY = clampMapTranslation(-dy * nextScale, imgH * fit * nextScale, ch);
 
     framedRef.current = true;
     scale.value = withTiming(nextScale);
@@ -550,6 +595,8 @@ export function SitePlanCard({ report }: Props) {
     })
     .onUpdate((event) => {
       scale.value = Math.min(6, Math.max(1, savedScale.value * event.scale));
+      translateX.value = clampMapTranslation(translateX.value, imageW.value * baseScale.value * scale.value, viewportW.value);
+      translateY.value = clampMapTranslation(translateY.value, imageH.value * baseScale.value * scale.value, viewportH.value);
     })
     .onEnd(() => {
       if (scale.value <= 1.02) {
@@ -565,8 +612,16 @@ export function SitePlanCard({ report }: Props) {
       savedY.value = translateY.value;
     })
     .onUpdate((event) => {
-      translateX.value = savedX.value + event.translationX;
-      translateY.value = savedY.value + event.translationY;
+      translateX.value = clampMapTranslation(
+        savedX.value + event.translationX,
+        imageW.value * baseScale.value * scale.value,
+        viewportW.value,
+      );
+      translateY.value = clampMapTranslation(
+        savedY.value + event.translationY,
+        imageH.value * baseScale.value * scale.value,
+        viewportH.value,
+      );
     })
     .onEnd(() => {
       if (scale.value <= 1.02) {
@@ -689,7 +744,7 @@ export function SitePlanCard({ report }: Props) {
                 styles.mapCanvas,
                 {
                   // Lay the canvas out at the image's native pixel size, centred in the viewport.
-                  // `baseScale` (the contain-fit) in the transform scales it down to fit; this keeps
+                  // `baseScale` (the cover-fit) in the transform scales it to fill; this keeps
                   // both the aerial tiles and the SVG linework crisp under zoom.
                   width: query.data.image.width,
                   height: query.data.image.height,
@@ -706,7 +761,7 @@ export function SitePlanCard({ report }: Props) {
                 query.data.image.tiles.map((tile) => (
                   <Image
                     key={`${tile.z}/${tile.x}/${tile.y}`}
-                    source={{ uri: `${getApiBase()}/tiles/aerial/${tile.z}/${tile.x}/${tile.y}` }}
+                    source={{ uri: aerialTileUri(tile) }}
                     onLoadEnd={() => markAerialAssetLoaded(`${tile.z}/${tile.x}/${tile.y}`)}
                     onError={() => markAerialAssetLoaded(`${tile.z}/${tile.x}/${tile.y}`)}
                     style={{
