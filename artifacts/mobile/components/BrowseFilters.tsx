@@ -198,7 +198,7 @@ function Chip({ label, active, onPress }: { label: string; active?: boolean; onP
 }
 
 const styles = StyleSheet.create({
-  panel: { borderWidth: 1, borderRadius: 16, padding: 12, paddingBottom: 14, gap: 10 },
+  panel: { borderWidth: 1, borderRadius: 16, padding: 12, paddingBottom: 22, gap: 10 },
   topRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   expandButton: { flex: 1, minHeight: 36, flexDirection: "row", alignItems: "center", gap: 8 },
   panelTitle: { fontSize: 15 },
@@ -207,7 +207,7 @@ const styles = StyleSheet.create({
   summaryRow: { gap: 8, paddingRight: 6 },
   summaryChip: { maxWidth: 190, borderWidth: 1, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
   summaryText: { fontSize: 12 },
-  expanded: { gap: 13 },
+  expanded: { gap: 13, paddingBottom: 2 },
   field: { flex: 1, minWidth: 0, minHeight: 42, borderWidth: 1, borderRadius: 12, paddingHorizontal: 11, flexDirection: "row", alignItems: "center", gap: 8 },
   input: { flex: 1, fontSize: 14, paddingVertical: 4 },
   twoCol: { flexDirection: "row", gap: 10 },
@@ -216,7 +216,7 @@ const styles = StyleSheet.create({
   chipWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   chip: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8 },
   chipText: { fontSize: 12 },
-  actions: { flexDirection: "row", gap: 10, paddingTop: 8, paddingBottom: 2 },
+  actions: { flexDirection: "row", gap: 10, paddingTop: 10, paddingBottom: 8, marginTop: 2 },
   clearBtn: { flex: 1, minHeight: 40, borderWidth: 1, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   clearText: { fontSize: 13 },
   applyLargeBtn: { flex: 1, minHeight: 40, borderRadius: 12, alignItems: "center", justifyContent: "center" },
