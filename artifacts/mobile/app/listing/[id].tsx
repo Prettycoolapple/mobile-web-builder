@@ -216,6 +216,7 @@ export default function ListingDetailScreen() {
         analysePhotoUrl: context.photoUrl ?? "",
         analyseListingUrl: context.listingUrl ?? "",
         analyseListingContext: JSON.stringify(context),
+        analyseNewChat: "1",
       },
     } as never);
   }, [listing, router]);

@@ -909,7 +909,7 @@ router.get("/listings/place-details/:placeId", requireAuth, async (req, res) => 
   }
 });
 
-router.get("/listings/enrich", requireAuth, async (req, res) => {
+router.get("/listings/enrich", async (req, res) => {
   const url = cleanQuery(req.query.url);
   if (!url || !/^https?:\/\//i.test(url)) {
     res.status(400).json({ error: "A valid listing URL is required.", code: "INVALID_LISTING_URL" });
@@ -964,7 +964,7 @@ router.get("/listings/enrich", requireAuth, async (req, res) => {
   }
 });
 
-router.get("/listings", requireAuth, async (req, res) => {
+router.get("/listings", async (req, res) => {
   if (!BROWSE_MODE_ENABLED) {
     res.status(404).json({ error: "Browse listings are temporarily disabled.", code: "BROWSE_DISABLED" });
     return;
@@ -1236,7 +1236,7 @@ router.get("/listings/my", requireAuth, async (req, res) => {
   }
 });
 
-router.get("/listings/public/:id", requireAuth, async (req, res) => {
+router.get("/listings/public/:id", async (req, res) => {
   if (!BROWSE_MODE_ENABLED) {
     res.status(404).json({ error: "Browse listings are temporarily disabled.", code: "BROWSE_DISABLED" });
     return;

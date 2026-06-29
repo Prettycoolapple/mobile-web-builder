@@ -359,6 +359,7 @@ export function SitePlanCard({ report }: Props) {
   const { width: viewportWidth } = useWindowDimensions();
   const searchId = report.historyId ?? null;
   const planHeight = Math.min(430, Math.max(310, viewportWidth - 42));
+  const [showAiSoon, setShowAiSoon] = useState(false);
 
   const scale = useSharedValue(1);
   const savedScale = useSharedValue(1);
@@ -373,6 +374,7 @@ export function SitePlanCard({ report }: Props) {
   const baseScale = useSharedValue(1);
   const [canvasSize, setCanvasSize] = useState<{ width: number; height: number } | null>(null);
   const framedRef = useRef(false);
+  const [loadedAerialAssets, setLoadedAerialAssets] = useState<Set<string>>(new Set());
 
   const query = useQuery({
     queryKey: ["site-plan", searchId, report.address],
@@ -388,6 +390,36 @@ export function SitePlanCard({ report }: Props) {
     [query.data?.layers],
   );
   const [visibleLayers, setVisibleLayers] = useState<Record<string, boolean>>({});
+  const aerialAssetKeys = useMemo(() => {
+    const image = query.data?.image;
+    if (!image) return [];
+    if (image.source === "linz-basemaps" && image.tiles?.length) {
+      return image.tiles.map((tile) => `${tile.z}/${tile.x}/${tile.y}`);
+    }
+    return image.dataUri ? ["data-uri"] : [];
+  }, [query.data?.image]);
+  const aerialReady = Boolean(query.data) && aerialAssetKeys.every((key) => loadedAerialAssets.has(key));
+  const mapReady = Boolean(query.data) && aerialReady && Boolean(canvasSize);
+
+  useEffect(() => {
+    setLoadedAerialAssets(new Set());
+    framedRef.current = false;
+  }, [query.data?.image.dataUri, query.data?.image.tiles]);
+
+  useEffect(() => {
+    if (!showAiSoon) return;
+    const timeout = setTimeout(() => setShowAiSoon(false), 1800);
+    return () => clearTimeout(timeout);
+  }, [showAiSoon]);
+
+  const markAerialAssetLoaded = (key: string) => {
+    setLoadedAerialAssets((current) => {
+      if (current.has(key)) return current;
+      const next = new Set(current);
+      next.add(key);
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (!query.data) return;
@@ -532,17 +564,26 @@ export function SitePlanCard({ report }: Props) {
             {translateForOS("site_plan.title")}
           </Text>
         </View>
-        <TouchableOpacity
-          style={[styles.aiButton, { borderColor: colors.border, backgroundColor: colors.muted }]}
-          onPress={() => {}}
-          activeOpacity={0.8}
-          accessibilityRole="button"
-          accessibilityLabel={translateForOS("site_plan.ai_subdivision")}
-        >
-          <Text style={[styles.aiButtonText, { color: colors.foreground }]} numberOfLines={1}>
-            {translateForOS("site_plan.ai_subdivision")}
-          </Text>
-        </TouchableOpacity>
+        <View style={styles.aiButtonWrap}>
+          {showAiSoon ? (
+            <View style={[styles.comingSoonBubble, { backgroundColor: colors.foreground }]}>
+              <Text style={[styles.comingSoonText, { color: colors.card }]}>
+                {translateForOS("site_plan.coming_soon")}
+              </Text>
+            </View>
+          ) : null}
+          <TouchableOpacity
+            style={[styles.aiButton, { borderColor: colors.border, backgroundColor: colors.muted }]}
+            onPress={() => setShowAiSoon(true)}
+            activeOpacity={0.72}
+            accessibilityRole="button"
+            accessibilityLabel={translateForOS("site_plan.ai_subdivision")}
+          >
+            <Text style={[styles.aiButtonText, { color: colors.mutedForeground }]} numberOfLines={1}>
+              {translateForOS("site_plan.ai_subdivision")}
+            </Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <View
@@ -556,7 +597,7 @@ export function SitePlanCard({ report }: Props) {
           );
         }}
       >
-        {query.isLoading ? (
+        {query.isLoading || (query.data && !mapReady) ? (
           <View style={styles.loadingOverlay}>
             <ActivityIndicator color={colors.accent} />
           </View>
@@ -589,6 +630,7 @@ export function SitePlanCard({ report }: Props) {
                   height: query.data.image.height,
                   left: canvasSize ? (canvasSize.width - query.data.image.width) / 2 : 0,
                   top: canvasSize ? (canvasSize.height - query.data.image.height) / 2 : 0,
+                  opacity: mapReady ? 1 : 0,
                 },
                 animatedMapStyle,
               ]}
@@ -600,6 +642,7 @@ export function SitePlanCard({ report }: Props) {
                   <Image
                     key={`${tile.z}/${tile.x}/${tile.y}`}
                     source={{ uri: `${getApiBase()}/tiles/aerial/${tile.z}/${tile.x}/${tile.y}` }}
+                    onLoadEnd={() => markAerialAssetLoaded(`${tile.z}/${tile.x}/${tile.y}`)}
                     style={{
                       position: "absolute",
                       left: tile.left,
@@ -610,7 +653,12 @@ export function SitePlanCard({ report }: Props) {
                   />
                 ))
               ) : query.data.image.dataUri ? (
-                <Image source={{ uri: query.data.image.dataUri }} style={styles.mapImage} resizeMode="cover" />
+                <Image
+                  source={{ uri: query.data.image.dataUri }}
+                  style={styles.mapImage}
+                  resizeMode="cover"
+                  onLoadEnd={() => markAerialAssetLoaded("data-uri")}
+                />
               ) : null}
               {/* Slight scrim over the aerial so the vector linework (pipes/boundaries) stays
                   legible on top of the satellite imagery (house, trees) underneath. */}
@@ -638,7 +686,7 @@ export function SitePlanCard({ report }: Props) {
             </Animated.View>
           </GestureDetector>
         ) : null}
-        {query.isFetching && !query.isLoading ? (
+        {query.isFetching && !query.isLoading && mapReady ? (
           <View style={[styles.refreshingPill, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <ActivityIndicator size="small" color={colors.accent} />
           </View>
@@ -690,10 +738,28 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 12,
   },
+  aiButtonWrap: {
+    position: "relative",
+    alignItems: "flex-end",
+  },
   aiButtonText: {
     fontFamily: "DM_Sans_700Bold",
     fontSize: 12,
     lineHeight: 16,
+  },
+  comingSoonBubble: {
+    position: "absolute",
+    right: 0,
+    bottom: 40,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    zIndex: 5,
+  },
+  comingSoonText: {
+    fontFamily: "DM_Sans_700Bold",
+    fontSize: 11,
+    lineHeight: 14,
   },
   mapViewport: {
     width: "100%",

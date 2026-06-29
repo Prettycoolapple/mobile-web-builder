@@ -174,12 +174,8 @@ function browseFiltersKey(filters: BrowseListingFilters): string {
   const stable = {
     q: filters.q?.trim() ?? "",
     propertyType: filters.propertyType ?? "",
-    minPrice: filters.minPrice?.trim() ?? "",
-    maxPrice: filters.maxPrice?.trim() ?? "",
     bedrooms: filters.bedrooms?.trim() ?? "",
     bathrooms: filters.bathrooms?.trim() ?? "",
-    minLandArea: filters.minLandArea?.trim() ?? "",
-    minFloorArea: filters.minFloorArea?.trim() ?? "",
     saleMethod: filters.saleMethod ?? "",
     sort: filters.sort ?? "recommended",
   };
@@ -496,6 +492,7 @@ export default function SearchScreen() {
     analysePhotoUrl?: string;
     analyseListingUrl?: string;
     analyseListingContext?: string;
+    analyseNewChat?: string;
     exploreAskSuburb?: string;
   }>();
   const { getApiHeaders, refreshProfile, user } = useAuth();
@@ -577,7 +574,7 @@ export default function SearchScreen() {
   const browseLoadedKeyRef = useRef<string | null>(null);
   const browsePreloadInFlightRef = useRef(false);
   const cardScorePollRef = useRef<{ addresses: string[]; sessionId: string; intervalId: ReturnType<typeof setInterval> | null }>({ addresses: [], sessionId: "", intervalId: null });
-  const handleAnalyseRef = useRef<((address: string, selectedPhotoUrl?: string | null, selectedListingUrl?: string | null, selectedListingContext?: SelectedListingContext | null, skipAnalyseDisclaimer?: boolean, analysisKey?: string) => Promise<void>) | null>(null);
+  const handleAnalyseRef = useRef<((address: string, selectedPhotoUrl?: string | null, selectedListingUrl?: string | null, selectedListingContext?: SelectedListingContext | null, skipAnalyseDisclaimer?: boolean, analysisKey?: string, forceNewSession?: boolean) => Promise<void>) | null>(null);
   const handleSendRef = useRef<((overrideText?: string, skipAnalyseDisclaimer?: boolean, continuePresentation?: "generic_listing" | "scored_screening", discoveryChoiceSuburb?: string, displayText?: string) => Promise<void>) | null>(null);
   const processedRouteAnalyseRef = useRef<string | null>(null);
   const processedShareTokenRef = useRef<string | null>(null);
@@ -659,10 +656,6 @@ export default function SearchScreen() {
     if (!BROWSE_MODE_ENABLED) return;
     AsyncStorage.setItem(HOME_MODE_KEY, homeMode).catch(() => {});
   }, [homeMode]);
-
-  useEffect(() => {
-    if (!user && homeMode === "browse") setHomeMode("ask");
-  }, [homeMode, user]);
 
   const shouldShowAnalyseDisclaimer = useCallback(
     () => !analyseDisclaimerDismissed,
@@ -750,7 +743,7 @@ export default function SearchScreen() {
   }, [homeMode, appliedBrowseFilters, loadBrowseListings]);
 
   const preloadBrowseListings = useCallback(async () => {
-    if (!BROWSE_MODE_ENABLED || !user || browsePreloadInFlightRef.current) return;
+    if (!BROWSE_MODE_ENABLED || browsePreloadInFlightRef.current) return;
     browsePreloadInFlightRef.current = true;
     const preloadFilters = { ...DEFAULT_BROWSE_FILTERS, limit: BROWSE_PREFETCH_LIMIT };
     try {
@@ -777,7 +770,16 @@ export default function SearchScreen() {
   }, [preloadBrowseListings]);
 
   const applyBrowseFilters = useCallback(() => {
-    const next = { ...browseFilters, listingType: "for_sale" as const, limit: BROWSE_PAGE_SIZE, cursor: null };
+    const next = {
+      ...browseFilters,
+      minPrice: undefined,
+      maxPrice: undefined,
+      minLandArea: undefined,
+      minFloorArea: undefined,
+      listingType: "for_sale" as const,
+      limit: BROWSE_PAGE_SIZE,
+      cursor: null,
+    };
     browseQueuedListingsRef.current = [];
     browseLoadedKeyRef.current = null;
     setBrowseNextCursor(null);
@@ -2802,6 +2804,7 @@ export default function SearchScreen() {
       selectedListingContext?: SelectedListingContext | null,
       skipAnalyseDisclaimer = false,
       analysisKey?: string,
+      forceNewSession = false,
     ) => {
       if (isLoading) return;
       if (!user) {
@@ -2816,7 +2819,7 @@ export default function SearchScreen() {
       Keyboard.dismiss();
       setAnalysingPropertyKey(analysisKey ?? (selectedListingUrl || address).trim());
 
-      const sessionId = currentSessionId ?? createSession();
+      const sessionId = forceNewSession ? createSession() : currentSessionId ?? createSession();
 
       addMessage({ role: "user", content: t("search.analyse_prefix", { address }), type: "text" }, sessionId);
       setIsLoading(true);
@@ -2824,7 +2827,7 @@ export default function SearchScreen() {
       setTimeout(scrollToNewestMessage, 80);
       setTimeout(scrollToNewestMessage, 260);
 
-      const currentMessages = currentSession?.messages ?? [];
+      const currentMessages = forceNewSession ? [] : currentSession?.messages ?? [];
       const conversationHistory = currentMessages
         .filter((m) => m.type === "text" || m.type === "report" || m.type === "report_group")
         .map((m) => ({
@@ -3034,11 +3037,12 @@ export default function SearchScreen() {
   useEffect(() => {
     const address = typeof routeParams.analyseAddress === "string" ? routeParams.analyseAddress.trim() : "";
     const key = typeof routeParams.analyseListingId === "string"
-      ? routeParams.analyseListingId
+      ? `${routeParams.analyseListingId}:${routeParams.analyseNewChat === "1" ? "new" : "current"}`
       : address;
     if (!address || !key || processedRouteAnalyseRef.current === key) return;
     processedRouteAnalyseRef.current = key;
     setHomeMode("ask");
+    if (routeParams.analyseNewChat === "1") startNewChat();
     let selectedListingContext: SelectedListingContext | null = null;
     if (typeof routeParams.analyseListingContext === "string" && routeParams.analyseListingContext.trim()) {
       try {
@@ -3052,6 +3056,9 @@ export default function SearchScreen() {
       typeof routeParams.analysePhotoUrl === "string" ? routeParams.analysePhotoUrl || null : null,
       typeof routeParams.analyseListingUrl === "string" ? routeParams.analyseListingUrl || null : null,
       selectedListingContext,
+      false,
+      undefined,
+      routeParams.analyseNewChat === "1",
     );
   }, [
     handleAnalyse,
@@ -3059,7 +3066,9 @@ export default function SearchScreen() {
     routeParams.analyseListingContext,
     routeParams.analyseListingId,
     routeParams.analyseListingUrl,
+    routeParams.analyseNewChat,
     routeParams.analysePhotoUrl,
+    startNewChat,
   ]);
 
   // Explore "Explore by suburb" hand-off: seed the assistant prompt asking which
@@ -3730,7 +3739,7 @@ export default function SearchScreen() {
                 <Text style={[styles.exploreBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>{t("explore.header_button")}</Text>
               </TouchableOpacity>
             ) : null}
-            {BROWSE_MODE_ENABLED && user && (isEmpty || homeMode === "browse") ? (
+            {BROWSE_MODE_ENABLED && (isEmpty || homeMode === "browse") ? (
               <TouchableOpacity
                 style={[styles.browseModeBtn, { borderColor: "rgba(250,249,246,0.22)", backgroundColor: homeMode === "browse" ? colors.accent : "transparent" }]}
                 onPress={homeMode === "browse" ? openAskMode : openBrowseMode}
@@ -3883,6 +3892,15 @@ export default function SearchScreen() {
               ListFooterComponent={browseLoadingMore ? <ActivityIndicator color={colors.accent} style={{ paddingVertical: 16 }} /> : null}
             />
           )}
+          {browseLoading && browseListings.length > 0 ? (
+            <View style={styles.browseLoadingOverlay} pointerEvents="auto">
+              <View style={[styles.browseLoadingCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <ActivityIndicator color={colors.accent} size="large" />
+                <Text style={[styles.browseEmptyTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>{t("browse.loading")}</Text>
+                <Text style={[styles.browseEmptyText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{t("browse.loading_hint")}</Text>
+              </View>
+            </View>
+          ) : null}
         </View>
       ) : isEmpty ? (
         <Pressable style={{ flex: 1 }} onPress={Keyboard.dismiss}>
@@ -4470,6 +4488,7 @@ const styles = StyleSheet.create({
   // ── Chat state ─────────────────────────────────────────────────────
   browseRoot: {
     flex: 1,
+    position: "relative",
     paddingHorizontal: 16,
     paddingTop: 12,
     gap: 10,
@@ -4589,6 +4608,23 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     paddingHorizontal: 22,
+  },
+  browseLoadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 20,
+    backgroundColor: "rgba(28, 25, 23, 0.34)",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+  },
+  browseLoadingCard: {
+    width: "100%",
+    maxWidth: 320,
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 20,
+    alignItems: "center",
+    gap: 8,
   },
   guestPromptCard: {
     borderWidth: 1,

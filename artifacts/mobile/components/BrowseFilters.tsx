@@ -45,11 +45,8 @@ export function BrowseFilters({
     const labels: string[] = [];
     if (filters.q?.trim()) labels.push(filters.q.trim());
     if (filters.propertyType) labels.push(t(`ptype.${filters.propertyType}`));
-    if (filters.minPrice || filters.maxPrice) labels.push(`${filters.minPrice || "$0"}-${filters.maxPrice || t("browse.any")}`);
     if (filters.bedrooms) labels.push(t("browse.bedrooms_min", { n: filters.bedrooms }));
     if (filters.bathrooms) labels.push(t("browse.bathrooms_min", { n: filters.bathrooms }));
-    if (filters.minLandArea) labels.push(t("browse.land_min", { n: filters.minLandArea }));
-    if (filters.minFloorArea) labels.push(t("browse.floor_min", { n: filters.minFloorArea }));
     return labels;
   }, [filters, t]);
 
@@ -105,11 +102,6 @@ export function BrowseFilters({
             onSubmitEditing={submit}
           />
 
-          <View style={styles.twoCol}>
-            <Field value={filters.minPrice ?? ""} placeholder={t("browse.min_price")} keyboardType="number-pad" onChangeText={(minPrice) => set({ minPrice })} />
-            <Field value={filters.maxPrice ?? ""} placeholder={t("browse.max_price")} keyboardType="number-pad" onChangeText={(maxPrice) => set({ maxPrice })} />
-          </View>
-
           <Section label={t("browse.property_type")}>
             {PROPERTY_TYPES.map((type) => (
               <Chip key={type} label={t(`ptype.${type}`)} active={filters.propertyType === type} onPress={() => toggle("propertyType", type)} />
@@ -123,11 +115,6 @@ export function BrowseFilters({
           <Section label={t("browse.bathrooms")}>
             {BATHROOMS.map((n) => <Chip key={n} label={`${n}+`} active={filters.bathrooms === n} onPress={() => toggle("bathrooms", n)} />)}
           </Section>
-
-          <View style={styles.twoCol}>
-            <Field value={filters.minLandArea ?? ""} placeholder={t("browse.min_land")} keyboardType="number-pad" onChangeText={(minLandArea) => set({ minLandArea })} />
-            <Field value={filters.minFloorArea ?? ""} placeholder={t("browse.min_floor")} keyboardType="number-pad" onChangeText={(minFloorArea) => set({ minFloorArea })} />
-          </View>
 
           <Section label={t("browse.sale_method")}>
             {SALE_METHODS.map((method) => (
