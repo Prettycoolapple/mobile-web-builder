@@ -11,6 +11,7 @@ import {
 import { requireAuth } from "../lib/auth";
 import { ai } from "@workspace/integrations-gemini-ai";
 import { getUnreadAppBadgeCount, sendExpoPush } from "../lib/expo-push";
+import { reportHasPlanningOverlayOrControl } from "../lib/planning-overlays";
 
 const router: IRouter = Router();
 
@@ -51,12 +52,27 @@ interface FeasibilityReport {
   lots?: { lots?: number };
   merged?: { zone_code?: string; land_area_sqm?: number };
   scenarios?: Array<{ viable?: boolean }>;
-  planning?: { zone_code?: string };
+  planning?: {
+    zone_code?: string;
+    overlays?: Array<{
+      name?: unknown;
+      status?: unknown;
+      detail?: unknown;
+    }>;
+  };
   potential_lots?: number;
   /** Matches mobile `DevelopmentStrategyId`: ROI / strategy panel recommendation */
   recommendedDevelopmentStrategy?: string | null;
   propertyOverview?: { titleType?: string | null };
   titleInsight?: { isCrossLease?: boolean } | null;
+}
+
+const PLANNING_CONSTRAINT_PLANNER_PROBABILITY = 0.3;
+const PLANNING_CONSTRAINT_ARCHITECT_FALLBACK_PROBABILITY = 0.15;
+const CLEAR_PLANNING_ARCHITECT_PROBABILITY = 0.25;
+
+function randomChance(probability: number): boolean {
+  return Math.random() < probability;
 }
 
 /** True when the report's title/tenure is cross-lease or stratum. */
@@ -398,68 +414,77 @@ router.post("/recommendations/check", requireAuth, async (req: Request, res: Res
       return;
     }
 
-    // Auto cross-lease promotion: every cross-lease report proactively surfaces a
-    // planner (architect/designer fallback). If no internal provider exists we
-    // return shouldRecommend:false silently — the bubble simply does not appear,
-    // and we never tell the user that none was found.
-    if (reportIsCrossLease(report)) {
-      const provider = await selectPlannerOrArchitect(excludeProviderIds);
-      if (!provider) {
-        res.json({ shouldRecommend: false, provider: null, intentType: "cross_lease", upgradeRequired });
+    const hasPlanningOverlayOrControl = reportHasPlanningOverlayOrControl(report);
+
+    if (hasPlanningOverlayOrControl) {
+      const planner = await selectServiceProvider({
+        preferredDiscipline: "planner",
+        strictDiscipline: true,
+        excludeProviderIds,
+      });
+
+      if (planner && randomChance(PLANNING_CONSTRAINT_PLANNER_PROBABILITY)) {
+        res.json({
+          shouldRecommend: true,
+          provider: planner,
+          intentType: "planning_overlay",
+          reason: "Planning overlays or controls were identified, so a planner is the priority professional",
+          allowExternalSearch: false,
+          upgradeRequired,
+        });
         return;
       }
+
+      if (!planner && randomChance(PLANNING_CONSTRAINT_ARCHITECT_FALLBACK_PROBABILITY)) {
+        const architect = await selectServiceProvider({
+          preferredDiscipline: "architect_designer",
+          strictDiscipline: true,
+          excludeProviderIds,
+        });
+        res.json({
+          shouldRecommend: architect !== null,
+          provider: architect,
+          intentType: "planning_overlay",
+          reason: "Planning overlays or controls were identified, but no planner is available; architect/designer fallback",
+          allowExternalSearch: false,
+          upgradeRequired,
+        });
+        return;
+      }
+
       res.json({
-        shouldRecommend: true,
-        provider,
-        intentType: "cross_lease",
-        reason: "Cross-lease title — a planner or architect/designer can scope a freehold conversion and its feasibility",
-        allowExternalSearch: false,
+        shouldRecommend: false,
+        provider: null,
+        intentType: "planning_overlay",
         upgradeRequired,
       });
       return;
     }
 
-    const strategy = report.recommendedDevelopmentStrategy ?? null;
-    // Only auto-surface a provider for demolish_rebuild — a concrete, high-commitment
-    // strategy where an architect/planner is clearly needed. refurbish/renovation is
-    // too speculative to push a provider without the user asking.
-    if (strategy === "demolish_rebuild") {
-      const designDisciplines = ["architect_designer", "planner"];
-      const provider = await selectServiceProvider({
-        disciplineIn: designDisciplines,
+    if (randomChance(CLEAR_PLANNING_ARCHITECT_PROBABILITY)) {
+      const architect = await selectServiceProvider({
+        preferredDiscipline: "architect_designer",
+        strictDiscipline: true,
         excludeProviderIds,
       });
       res.json({
-        shouldRecommend: provider !== null,
-        provider,
-        intentType: "newbuild",
-        reason: "Recommended development strategy (demolish & rebuild) — design / planning professional",
+        shouldRecommend: architect !== null,
+        provider: architect,
+        intentType: "design",
+        reason: "No planning overlays or controls were identified, so architect/designer is the priority professional",
         allowExternalSearch: false,
         upgradeRequired,
       });
       return;
     }
 
-    const intent = await detectDevelopmentIntent(report, conversationHistory ?? []);
-
-    if (!intent.shouldRecommend) {
-      res.json({ shouldRecommend: false, provider: null, intentType: intent.intentType, upgradeRequired });
-      return;
-    }
-
-    // Prefer DB providers; pass discipline inferred by the LLM for better matching.
-    const provider = await selectServiceProvider({
-      preferredDiscipline: normaliseProviderDiscipline(intent.suggestedDiscipline),
-      excludeProviderIds,
-    });
     res.json({
-      shouldRecommend: provider !== null,
-      provider,
-      intentType: intent.intentType,
-      reason: intent.reason,
-      allowExternalSearch: false,
+      shouldRecommend: false,
+      provider: null,
+      intentType: "design",
       upgradeRequired,
     });
+    return;
   } catch (err) {
     req.log.error({ err }, "POST /recommendations/check failed");
     res.status(500).json({ error: "Recommendation check failed" });

@@ -18,6 +18,7 @@ import Svg, { Circle, Polygon, Polyline } from "react-native-svg";
 import { useAuth } from "@/context/AuthContext";
 import type { FeasibilityReport as Report } from "@/context/ChatContext";
 import { useColors } from "@/hooks/useColors";
+import { useT } from "@/lib/i18n";
 import { translateForOS } from "@/lib/i18n";
 import { getApiBase } from "@/lib/api";
 
@@ -400,6 +401,7 @@ function LayerToggleRow({
 
 export function SitePlanCard({ report }: Props) {
   const colors = useColors();
+  const { t } = useT();
   const { getApiHeaders } = useAuth();
   const { width: viewportWidth } = useWindowDimensions();
   const searchId = report.historyId ?? null;
@@ -765,6 +767,9 @@ export function SitePlanCard({ report }: Props) {
         {query.isLoading || (query.data && !mapReady) ? (
           <View style={styles.loadingOverlay}>
             <ActivityIndicator color={colors.accent} />
+            <Text style={[styles.loadingText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+              {t("site_plan.loading")}
+            </Text>
           </View>
         ) : null}
         {query.isFetching && !query.isLoading && mapReady ? (
@@ -886,6 +891,13 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     alignItems: "center",
     justifyContent: "center",
+    gap: 10,
+  },
+  loadingText: {
+    fontSize: 12,
+    textAlign: "center",
+    paddingHorizontal: 24,
+    lineHeight: 17,
   },
   refreshingPill: {
     position: "absolute",

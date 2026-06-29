@@ -7,13 +7,13 @@ import {
   RefreshControl,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { BrowseFilters } from "@/components/BrowseFilters";
 import { BrowseListingCard } from "@/components/BrowseListingCard";
 import { useAuth } from "@/context/AuthContext";
 import { useColors } from "@/hooks/useColors";
@@ -49,7 +49,7 @@ export default function BrowseScreen() {
 
   const [filters, setFilters] = useState<BrowseListingFilters>(DEFAULT_BROWSE_FILTERS);
   const [appliedFilters, setAppliedFilters] = useState<BrowseListingFilters>(DEFAULT_BROWSE_FILTERS);
-  const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [searchText, setSearchText] = useState("");
   const [listings, setListings] = useState<BrowseListing[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -157,29 +157,29 @@ export default function BrowseScreen() {
     void loadListings();
   }, [appliedFilters, loadListings]);
 
-  const applyFilters = useCallback(() => {
-    const next = {
-      ...filters,
-      minPrice: undefined,
-      maxPrice: undefined,
-      minLandArea: undefined,
-      minFloorArea: undefined,
-      listingType: "for_sale" as const,
+  const submitSearch = useCallback((q: string) => {
+    const trimmed = q.trim();
+    const next: BrowseListingFilters = {
+      listingType: "for_sale",
       limit: BROWSE_PAGE_SIZE,
+      sort: "recommended",
+      q: trimmed || undefined,
       cursor: null,
     };
+    setFilters(next);
     queuedListingsRef.current = [];
     loadedKeyRef.current = null;
     setNextCursor(null);
     setAppliedFilters(next);
-    setFiltersExpanded(false);
     Keyboard.dismiss();
-    if (browseFiltersKey(next) === browseFiltersKey(appliedFilters)) void loadListings({ filters: next });
-  }, [appliedFilters, filters, loadListings]);
+    void loadListings({ filters: next });
+  }, [loadListings]);
 
   const goAskMode = useCallback(() => {
     router.replace("/(tabs)" as never);
   }, [router]);
+
+  const canSearch = searchText.trim().length > 0;
 
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
@@ -204,15 +204,7 @@ export default function BrowseScreen() {
         </TouchableOpacity>
       </View>
 
-      <View style={[styles.content, { paddingBottom: insets.bottom + 16 }]}>
-        <BrowseFilters
-          filters={filters}
-          onChange={setFilters}
-          onSubmit={applyFilters}
-          expanded={filtersExpanded}
-          onExpandedChange={setFiltersExpanded}
-        />
-
+      <View style={styles.listArea}>
         {loading && listings.length === 0 ? (
           <View style={styles.center}>
             <ActivityIndicator color={colors.accent} size="large" />
@@ -252,10 +244,7 @@ export default function BrowseScreen() {
                 tintColor={colors.accent}
               />
             }
-            onScrollBeginDrag={() => {
-              Keyboard.dismiss();
-              if (filtersExpanded) setFiltersExpanded(false);
-            }}
+            onScrollBeginDrag={() => Keyboard.dismiss()}
             onEndReached={() => {
               if ((queuedListingsRef.current.length > 0 || nextCursor) && !loadingMore) {
                 void loadListings({ append: true, cursor: nextCursor });
@@ -288,6 +277,39 @@ export default function BrowseScreen() {
           </View>
         ) : null}
       </View>
+
+      <View style={[styles.bottomBar, {
+        backgroundColor: colors.background,
+        borderTopColor: colors.border,
+        paddingBottom: insets.bottom + 10,
+      }]}>
+        <View style={[styles.searchWrapper, {
+          backgroundColor: colors.card,
+          borderColor: canSearch ? colors.accent + "60" : colors.border,
+          shadowColor: colors.shadow,
+        }]}>
+          <Feather name="search" size={16} color={colors.mutedForeground} style={{ marginLeft: 2 }} />
+          <TextInput
+            style={[styles.searchInput, { color: colors.foreground, fontFamily: "DM_Sans_400Regular" }]}
+            placeholder={t("browse.location_placeholder")}
+            placeholderTextColor={colors.mutedForeground}
+            value={searchText}
+            onChangeText={setSearchText}
+            onSubmitEditing={() => submitSearch(searchText)}
+            returnKeyType="search"
+            clearButtonMode="while-editing"
+          />
+          {canSearch ? (
+            <TouchableOpacity
+              style={[styles.searchBtn, { backgroundColor: colors.accent }]}
+              onPress={() => submitSearch(searchText)}
+              activeOpacity={0.8}
+            >
+              <Feather name="arrow-up" size={17} color="#fff" />
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      </View>
     </View>
   );
 }
@@ -306,7 +328,7 @@ const styles = StyleSheet.create({
   headerTitle: { flex: 1, textAlign: "center", fontSize: 18, letterSpacing: -0.3 },
   askBtn: { minHeight: 34, borderRadius: 18, paddingHorizontal: 11, flexDirection: "row", alignItems: "center", gap: 5 },
   askBtnText: { color: "#fff", fontSize: 13 },
-  content: { flex: 1, position: "relative", paddingHorizontal: 16, paddingTop: 12, gap: 12 },
+  listArea: { flex: 1, position: "relative", paddingHorizontal: 16, paddingTop: 12 },
   list: { gap: 13, paddingTop: 16, paddingBottom: 20 },
   title: { fontSize: 22, lineHeight: 28, paddingTop: 2 },
   center: { flex: 1, minHeight: 260, alignItems: "center", justifyContent: "center", paddingHorizontal: 24, gap: 10 },
@@ -323,4 +345,36 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
   },
   loadingCard: { width: "100%", maxWidth: 320, borderWidth: 1, borderRadius: 16, padding: 20, alignItems: "center", gap: 8 },
+  bottomBar: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+  },
+  searchWrapper: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1.5,
+    borderRadius: 16,
+    paddingLeft: 14,
+    paddingRight: 7,
+    paddingVertical: 7,
+    gap: 8,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 1,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    lineHeight: 22,
+    paddingVertical: 3,
+  },
+  searchBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+  },
 });
