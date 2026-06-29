@@ -297,6 +297,7 @@ function RootLayoutNav() {
       <Stack.Screen name="support" options={{ headerShown: false }} />
       <Stack.Screen name="my-listings" options={{ headerShown: false }} />
       <Stack.Screen name="explore" options={{ headerShown: false }} />
+      <Stack.Screen name="browse" options={{ headerShown: false }} />
       <Stack.Screen name="listing/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="chat/contacts" options={{ headerShown: false, presentation: "modal" }} />
       <Stack.Screen name="chat/[threadId]" options={{ headerShown: false }} />

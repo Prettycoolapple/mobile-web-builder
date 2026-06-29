@@ -50,6 +50,7 @@ export type BrowseListingFilters = {
   sort?: "recommended" | "newest" | "price_asc" | "price_desc" | "land_desc";
   cursor?: string | null;
   limit?: number;
+  excludeKeys?: string[];
 };
 
 const AGENT_PLACEHOLDER_VALUES = new Set([
@@ -82,6 +83,38 @@ export function normaliseBrowseListingAgent(agent: BrowseListing["agent"]): Brow
     avatarUrl,
     phone,
   };
+}
+
+export function canonicalBrowseListingKey(listing: Pick<BrowseListing, "id" | "address" | "externalUrl">): string {
+  const url = listing.externalUrl?.trim();
+  if (url) {
+    try {
+      const parsed = new URL(url);
+      parsed.hash = "";
+      parsed.search = "";
+      return `url:${parsed.toString().replace(/\/$/, "").toLowerCase()}`;
+    } catch {
+      return `url:${url.replace(/[?#].*$/, "").replace(/\/$/, "").toLowerCase()}`;
+    }
+  }
+  const address = listing.address
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return address ? `address:${address}` : `id:${listing.id}`;
+}
+
+export function dedupeBrowseListings<T extends BrowseListing>(items: T[], existingKeys: Iterable<string> = []): T[] {
+  const seen = new Set(existingKeys);
+  const result: T[] = [];
+  for (const item of items) {
+    const key = canonicalBrowseListingKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(item);
+  }
+  return result;
 }
 
 export function hasRealBrowseListingAgent(agent: BrowseListing["agent"]): boolean {
@@ -193,6 +226,7 @@ export async function fetchBrowseListings(headers: Record<string, string>, filte
   if (filters.saleMethod?.trim()) params.set("saleMethod", filters.saleMethod.trim());
   if (filters.sort?.trim()) params.set("sort", filters.sort.trim());
   if (filters.cursor) params.set("cursor", filters.cursor);
+  if (filters.excludeKeys?.length) params.set("exclude", filters.excludeKeys.slice(0, 80).join(","));
   params.set("limit", String(filters.limit ?? 12));
 
   const resp = await fetch(`${getApiBase()}/listings?${params.toString()}`, { headers });

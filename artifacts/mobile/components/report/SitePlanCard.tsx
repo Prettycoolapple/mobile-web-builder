@@ -375,6 +375,7 @@ export function SitePlanCard({ report }: Props) {
   const [canvasSize, setCanvasSize] = useState<{ width: number; height: number } | null>(null);
   const framedRef = useRef(false);
   const [loadedAerialAssets, setLoadedAerialAssets] = useState<Set<string>>(new Set());
+  const [aerialWaitExpired, setAerialWaitExpired] = useState(false);
 
   const query = useQuery({
     queryKey: ["site-plan", searchId, report.address],
@@ -398,13 +399,20 @@ export function SitePlanCard({ report }: Props) {
     }
     return image.dataUri ? ["data-uri"] : [];
   }, [query.data?.image]);
-  const aerialReady = Boolean(query.data) && aerialAssetKeys.every((key) => loadedAerialAssets.has(key));
+  const aerialReady = Boolean(query.data) && (aerialAssetKeys.every((key) => loadedAerialAssets.has(key)) || aerialWaitExpired);
   const mapReady = Boolean(query.data) && aerialReady && Boolean(canvasSize);
 
   useEffect(() => {
     setLoadedAerialAssets(new Set());
+    setAerialWaitExpired(false);
     framedRef.current = false;
   }, [query.data?.image.dataUri, query.data?.image.tiles]);
+
+  useEffect(() => {
+    if (!query.data || aerialAssetKeys.length === 0 || aerialReady) return;
+    const timeout = setTimeout(() => setAerialWaitExpired(true), 12_000);
+    return () => clearTimeout(timeout);
+  }, [aerialAssetKeys.length, aerialReady, query.data]);
 
   useEffect(() => {
     if (!showAiSoon) return;
@@ -597,11 +605,7 @@ export function SitePlanCard({ report }: Props) {
           );
         }}
       >
-        {query.isLoading || (query.data && !mapReady) ? (
-          <View style={styles.loadingOverlay}>
-            <ActivityIndicator color={colors.accent} />
-          </View>
-        ) : query.isError ? (
+        {query.isError ? (
           <View style={styles.emptyState}>
             <Feather name="alert-circle" size={18} color={colors.mutedForeground} />
             <Text style={[styles.emptyTitle, { color: colors.foreground }]}>
@@ -630,7 +634,7 @@ export function SitePlanCard({ report }: Props) {
                   height: query.data.image.height,
                   left: canvasSize ? (canvasSize.width - query.data.image.width) / 2 : 0,
                   top: canvasSize ? (canvasSize.height - query.data.image.height) / 2 : 0,
-                  opacity: mapReady ? 1 : 0,
+                  opacity: mapReady ? 1 : 0.01,
                 },
                 animatedMapStyle,
               ]}
@@ -643,6 +647,7 @@ export function SitePlanCard({ report }: Props) {
                     key={`${tile.z}/${tile.x}/${tile.y}`}
                     source={{ uri: `${getApiBase()}/tiles/aerial/${tile.z}/${tile.x}/${tile.y}` }}
                     onLoadEnd={() => markAerialAssetLoaded(`${tile.z}/${tile.x}/${tile.y}`)}
+                    onError={() => markAerialAssetLoaded(`${tile.z}/${tile.x}/${tile.y}`)}
                     style={{
                       position: "absolute",
                       left: tile.left,
@@ -658,6 +663,7 @@ export function SitePlanCard({ report }: Props) {
                   style={styles.mapImage}
                   resizeMode="cover"
                   onLoadEnd={() => markAerialAssetLoaded("data-uri")}
+                  onError={() => markAerialAssetLoaded("data-uri")}
                 />
               ) : null}
               {/* Slight scrim over the aerial so the vector linework (pipes/boundaries) stays
@@ -685,6 +691,11 @@ export function SitePlanCard({ report }: Props) {
               </Svg>
             </Animated.View>
           </GestureDetector>
+        ) : null}
+        {query.isLoading || (query.data && !mapReady) ? (
+          <View style={styles.loadingOverlay}>
+            <ActivityIndicator color={colors.accent} />
+          </View>
         ) : null}
         {query.isFetching && !query.isLoading && mapReady ? (
           <View style={[styles.refreshingPill, { backgroundColor: colors.card, borderColor: colors.border }]}>

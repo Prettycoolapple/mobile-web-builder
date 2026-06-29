@@ -11,7 +11,6 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
-  RefreshControl,
   Platform,
   Pressable,
   Keyboard,
@@ -35,8 +34,6 @@ import { useNotifications } from "@/context/NotificationContext";
 import { ChatBubble } from "@/components/ChatBubble";
 import { ResponseRatingBar } from "@/components/ResponseRatingBar";
 import { PaywallModal } from "@/components/PaywallModal";
-import { BrowseFilters } from "@/components/BrowseFilters";
-import { BrowseListingCard } from "@/components/BrowseListingCard";
 import { setBaseUrl } from "@workspace/api-client-react";
 import { getApiBase as resolveApiBase, getApiOrigin } from "@/lib/api";
 import { useT, isOSChineseLocale } from "@/lib/i18n";
@@ -44,7 +41,7 @@ import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
 import { normaliseAddressKey } from "@/lib/address-key";
 import { resolveChatQuota } from "@/lib/quotas";
 import { consumePendingShareToken, openShareToken } from "@/lib/propertyShares";
-import { BrowseListing, BrowseListingFilters, fetchBrowseListings, selectedListingContextFromBrowse } from "@/lib/browseListings";
+import { selectedListingContextFromBrowse } from "@/lib/browseListings";
 
 setBaseUrl(getApiOrigin() || null);
 
@@ -153,33 +150,11 @@ const BACKGROUND_SCREENING_JOBS_KEY = "@devfeasible/background-screening-jobs";
 const APP_RATING_STATE_KEY = "@devfeasible/app-rating-state";
 const ANALYSE_DISCLAIMER_DISMISSED_KEY = "@devfeasible/analyse-disclaimer-dismissed";
 const PENDING_GUEST_ANALYSE_ACTION_KEY = "@devfeasible/pending-guest-analyse-action";
-const HOME_MODE_KEY = "@devfeasible/home-mode";
-const BROWSE_MODE_ENABLED = true;
-const BROWSE_PAGE_SIZE = 5;
-const BROWSE_PREFETCH_LIMIT = 10;
 const APP_RATING_CHAT_THRESHOLD = 3;
 const APP_RATING_SNOOZE_MS = 14 * 24 * 60 * 60 * 1000;
 
-const DEFAULT_BROWSE_FILTERS: BrowseListingFilters = {
-  listingType: "for_sale",
-  limit: BROWSE_PAGE_SIZE,
-  sort: "recommended",
-};
-
 function getAnalyseDisclaimerDismissedKey(userId?: string | null): string {
   return userId ? `${ANALYSE_DISCLAIMER_DISMISSED_KEY}:${userId}` : ANALYSE_DISCLAIMER_DISMISSED_KEY;
-}
-
-function browseFiltersKey(filters: BrowseListingFilters): string {
-  const stable = {
-    q: filters.q?.trim() ?? "",
-    propertyType: filters.propertyType ?? "",
-    bedrooms: filters.bedrooms?.trim() ?? "",
-    bathrooms: filters.bathrooms?.trim() ?? "",
-    saleMethod: filters.saleMethod ?? "",
-    sort: filters.sort ?? "recommended",
-  };
-  return JSON.stringify(stable);
 }
 
 type PendingAnalyseAction =
@@ -519,16 +494,6 @@ export default function SearchScreen() {
   const { markPageRead } = useNotifications();
 
   const [inputText, setInputText] = useState("");
-  const [homeMode, setHomeMode] = useState<"ask" | "browse">("ask");
-  const [browseFilters, setBrowseFilters] = useState<BrowseListingFilters>(DEFAULT_BROWSE_FILTERS);
-  const [appliedBrowseFilters, setAppliedBrowseFilters] = useState<BrowseListingFilters>(DEFAULT_BROWSE_FILTERS);
-  const [browseFiltersExpanded, setBrowseFiltersExpanded] = useState(false);
-  const [browseListings, setBrowseListings] = useState<BrowseListing[]>([]);
-  const [browseNextCursor, setBrowseNextCursor] = useState<string | null>(null);
-  const [browseLoading, setBrowseLoading] = useState(false);
-  const [browseRefreshing, setBrowseRefreshing] = useState(false);
-  const [browseLoadingMore, setBrowseLoadingMore] = useState(false);
-  const [browseError, setBrowseError] = useState<string | null>(null);
   const [showPaywall, setShowPaywall] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [messageLimitReached, setMessageLimitReached] = useState(false);
@@ -569,10 +534,6 @@ export default function SearchScreen() {
   const reportMessageHeightsRef = useRef<Map<string, number>>(new Map());
   const messageHeightsRef = useRef<Map<string, number>>(new Map());
   const pendingSearchScrollTargetRef = useRef<{ messageId: string; index: number } | null>(null);
-  const browseQueuedListingsRef = useRef<BrowseListing[]>([]);
-  const browsePreloadRef = useRef<{ key: string; listings: BrowseListing[]; nextCursor: string | null } | null>(null);
-  const browseLoadedKeyRef = useRef<string | null>(null);
-  const browsePreloadInFlightRef = useRef(false);
   const cardScorePollRef = useRef<{ addresses: string[]; sessionId: string; intervalId: ReturnType<typeof setInterval> | null }>({ addresses: [], sessionId: "", intervalId: null });
   const handleAnalyseRef = useRef<((address: string, selectedPhotoUrl?: string | null, selectedListingUrl?: string | null, selectedListingContext?: SelectedListingContext | null, skipAnalyseDisclaimer?: boolean, analysisKey?: string, forceNewSession?: boolean) => Promise<void>) | null>(null);
   const handleSendRef = useRef<((overrideText?: string, skipAnalyseDisclaimer?: boolean, continuePresentation?: "generic_listing" | "scored_screening", discoveryChoiceSuburb?: string, displayText?: string) => Promise<void>) | null>(null);
@@ -639,24 +600,6 @@ export default function SearchScreen() {
       .catch(() => {});
   }, [user?.id]);
 
-  useEffect(() => {
-    if (!BROWSE_MODE_ENABLED) {
-      setHomeMode("ask");
-      AsyncStorage.setItem(HOME_MODE_KEY, "ask").catch(() => {});
-      return;
-    }
-    AsyncStorage.getItem(HOME_MODE_KEY)
-      .then((value) => {
-        if (value === "ask" || (BROWSE_MODE_ENABLED && value === "browse")) setHomeMode(value);
-      })
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    if (!BROWSE_MODE_ENABLED) return;
-    AsyncStorage.setItem(HOME_MODE_KEY, homeMode).catch(() => {});
-  }, [homeMode]);
-
   const shouldShowAnalyseDisclaimer = useCallback(
     () => !analyseDisclaimerDismissed,
     [analyseDisclaimerDismissed],
@@ -695,122 +638,8 @@ export default function SearchScreen() {
     setMessageLimitReached(used >= chatQuota.limit);
   }, [user, chatQuota]);
 
-  const loadBrowseListings = useCallback(async (options?: { refresh?: boolean; append?: boolean; cursor?: string | null; filters?: BrowseListingFilters }) => {
-    const activeFilters = {
-      ...(options?.filters ?? appliedBrowseFilters),
-      listingType: "for_sale" as const,
-      limit: options?.append ? BROWSE_PREFETCH_LIMIT : BROWSE_PREFETCH_LIMIT,
-    };
-    const activeKey = browseFiltersKey(activeFilters);
-    const append = options?.append === true;
-    if (append && browseQueuedListingsRef.current.length > 0) {
-      const next = browseQueuedListingsRef.current.slice(0, BROWSE_PAGE_SIZE);
-      browseQueuedListingsRef.current = browseQueuedListingsRef.current.slice(BROWSE_PAGE_SIZE);
-      setBrowseListings((prev) => [...prev, ...next]);
-      return;
-    }
-    const cursor = options?.cursor ?? null;
-    if (append && !cursor) return;
-    if (append) setBrowseLoadingMore(true);
-    else if (options?.refresh) setBrowseRefreshing(true);
-    else setBrowseLoading(true);
-    setBrowseError(null);
-    try {
-      const result = await fetchBrowseListings(getApiHeaders(), {
-        ...activeFilters,
-        cursor: append ? cursor : null,
-        limit: BROWSE_PREFETCH_LIMIT,
-      });
-      const visible = result.listings.slice(0, BROWSE_PAGE_SIZE);
-      browseQueuedListingsRef.current = result.listings.slice(BROWSE_PAGE_SIZE);
-      if (!append) browseLoadedKeyRef.current = activeKey;
-      setBrowseListings((prev) => append ? [...prev, ...visible] : visible);
-      setBrowseNextCursor(result.nextCursor);
-    } catch (error) {
-      setBrowseError(error instanceof Error ? error.message : "Could not load listings.");
-    } finally {
-      setBrowseLoading(false);
-      setBrowseRefreshing(false);
-      setBrowseLoadingMore(false);
-    }
-  }, [appliedBrowseFilters, getApiHeaders]);
-
   useEffect(() => {
-    if (!BROWSE_MODE_ENABLED) return;
-    if (homeMode !== "browse") return;
-    if (browseLoadedKeyRef.current === browseFiltersKey(appliedBrowseFilters)) return;
-    void loadBrowseListings();
-  }, [homeMode, appliedBrowseFilters, loadBrowseListings]);
-
-  const preloadBrowseListings = useCallback(async () => {
-    if (!BROWSE_MODE_ENABLED || browsePreloadInFlightRef.current) return;
-    browsePreloadInFlightRef.current = true;
-    const preloadFilters = { ...DEFAULT_BROWSE_FILTERS, limit: BROWSE_PREFETCH_LIMIT };
-    try {
-      const result = await fetchBrowseListings(getApiHeaders(), preloadFilters);
-      browsePreloadRef.current = {
-        key: browseFiltersKey(preloadFilters),
-        listings: result.listings,
-        nextCursor: result.nextCursor,
-      };
-    } catch {
-      // Silent: Browse can still load normally when opened.
-    } finally {
-      browsePreloadInFlightRef.current = false;
-    }
-  }, [getApiHeaders, user]);
-
-  useEffect(() => {
-    if (!BROWSE_MODE_ENABLED) return;
-    void preloadBrowseListings();
-    const sub = AppState.addEventListener("change", (state) => {
-      if (state === "active") void preloadBrowseListings();
-    });
-    return () => sub.remove();
-  }, [preloadBrowseListings]);
-
-  const applyBrowseFilters = useCallback(() => {
-    const next = {
-      ...browseFilters,
-      minPrice: undefined,
-      maxPrice: undefined,
-      minLandArea: undefined,
-      minFloorArea: undefined,
-      listingType: "for_sale" as const,
-      limit: BROWSE_PAGE_SIZE,
-      cursor: null,
-    };
-    browseQueuedListingsRef.current = [];
-    browseLoadedKeyRef.current = null;
-    setBrowseNextCursor(null);
-    setAppliedBrowseFilters(next);
-    setBrowseFiltersExpanded(false);
-    Keyboard.dismiss();
-    if (homeMode !== "browse") setHomeMode("browse");
-    else if (browseFiltersKey(next) === browseFiltersKey(appliedBrowseFilters)) void loadBrowseListings({ filters: next });
-  }, [appliedBrowseFilters, browseFilters, homeMode, loadBrowseListings]);
-
-  const openBrowseMode = useCallback(() => {
-    const defaultKey = browseFiltersKey({ ...DEFAULT_BROWSE_FILTERS, limit: BROWSE_PREFETCH_LIMIT });
-    const draftKey = browseFiltersKey(browseFilters);
-    setHomeMode("browse");
-    setBrowseFiltersExpanded(false);
-    if (draftKey === browseFiltersKey(DEFAULT_BROWSE_FILTERS) && browsePreloadRef.current?.key === defaultKey) {
-      const preloaded = browsePreloadRef.current;
-      browseQueuedListingsRef.current = preloaded.listings.slice(BROWSE_PAGE_SIZE);
-      browseLoadedKeyRef.current = browseFiltersKey(DEFAULT_BROWSE_FILTERS);
-      setAppliedBrowseFilters(DEFAULT_BROWSE_FILTERS);
-      setBrowseListings(preloaded.listings.slice(0, BROWSE_PAGE_SIZE));
-      setBrowseNextCursor(preloaded.nextCursor);
-      return;
-    }
-    applyBrowseFilters();
-  }, [applyBrowseFilters, browseFilters]);
-
-  const openAskMode = useCallback(() => {
-    setHomeMode("ask");
-    setBrowseFiltersExpanded(false);
-    Keyboard.dismiss();
+    AsyncStorage.removeItem("@devfeasible/home-mode").catch(() => {});
   }, []);
 
   const messages = currentSession?.messages || [];
@@ -3041,7 +2870,6 @@ export default function SearchScreen() {
       : address;
     if (!address || !key || processedRouteAnalyseRef.current === key) return;
     processedRouteAnalyseRef.current = key;
-    setHomeMode("ask");
     if (routeParams.analyseNewChat === "1") startNewChat();
     let selectedListingContext: SelectedListingContext | null = null;
     if (typeof routeParams.analyseListingContext === "string" && routeParams.analyseListingContext.trim()) {
@@ -3078,7 +2906,6 @@ export default function SearchScreen() {
     const token = typeof routeParams.exploreAskSuburb === "string" ? routeParams.exploreAskSuburb : "";
     if (!token || processedExploreAskSuburbRef.current === token) return;
     processedExploreAskSuburbRef.current = token;
-    setHomeMode("ask");
     const sessionId = currentSessionId ?? createSession();
     addMessage({ role: "assistant", content: t("explore.suburb_prompt"), type: "text" }, sessionId);
     pendingSuburbScreeningRef.current = true;
@@ -3739,15 +3566,15 @@ export default function SearchScreen() {
                 <Text style={[styles.exploreBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>{t("explore.header_button")}</Text>
               </TouchableOpacity>
             ) : null}
-            {BROWSE_MODE_ENABLED && (isEmpty || homeMode === "browse") ? (
+            {isEmpty ? (
               <TouchableOpacity
-                style={[styles.browseModeBtn, { borderColor: "rgba(250,249,246,0.22)", backgroundColor: homeMode === "browse" ? colors.accent : "transparent" }]}
-                onPress={homeMode === "browse" ? openAskMode : openBrowseMode}
+                style={[styles.browseModeBtn, { borderColor: "rgba(250,249,246,0.22)" }]}
+                onPress={() => router.push("/browse" as never)}
                 activeOpacity={0.78}
               >
-                <Feather name={homeMode === "browse" ? "message-circle" : "list"} size={14} color={homeMode === "browse" ? "#fff" : "rgba(250,249,246,0.78)"} />
-                <Text style={[styles.browseModeBtnText, { color: homeMode === "browse" ? "#fff" : "rgba(250,249,246,0.78)", fontFamily: "DM_Sans_600SemiBold" }]}>
-                  {homeMode === "browse" ? t("browse.ask_mode") : t("browse.header_button")}
+                <Feather name="list" size={14} color="rgba(250,249,246,0.78)" />
+                <Text style={[styles.browseModeBtnText, { color: "rgba(250,249,246,0.78)", fontFamily: "DM_Sans_600SemiBold" }]}>
+                  {t("browse.header_button")}
                 </Text>
               </TouchableOpacity>
             ) : null}
@@ -3781,7 +3608,7 @@ export default function SearchScreen() {
                 </TouchableOpacity>
               </>
             )}
-            {homeMode !== "browse" && !isEmpty && (
+            {!isEmpty && (
               <TouchableOpacity
                 style={[styles.newChatBtn, { borderColor: "rgba(250,249,246,0.18)" }]}
                 onPress={startNewChat}
@@ -3814,95 +3641,7 @@ export default function SearchScreen() {
       </View>
 
       {/* Empty / Search state */}
-      {BROWSE_MODE_ENABLED && homeMode === "browse" ? (
-        <View style={[styles.browseRoot, { paddingBottom: tabBarOffset }]}>
-          <BrowseFilters
-            filters={browseFilters}
-            onChange={setBrowseFilters}
-            onSubmit={applyBrowseFilters}
-            expanded={browseFiltersExpanded}
-            onExpandedChange={setBrowseFiltersExpanded}
-          />
-          {browseLoading && browseListings.length === 0 ? (
-            <View style={styles.browseCenter}>
-              <ActivityIndicator color={colors.accent} size="large" />
-              <Text style={[styles.browseEmptyTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>{t("browse.loading")}</Text>
-              <Text style={[styles.browseEmptyText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{t("browse.loading_hint")}</Text>
-            </View>
-          ) : browseError && browseListings.length === 0 ? (
-            <View style={styles.browseCenter}>
-              <Feather name="alert-circle" size={28} color={colors.mutedForeground} />
-              <Text style={[styles.browseEmptyTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>{t("browse.unavailable")}</Text>
-              <Text style={[styles.browseEmptyText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{browseError}</Text>
-              <TouchableOpacity style={[styles.browseRetry, { borderColor: colors.border }]} onPress={() => loadBrowseListings()}>
-                <Text style={[styles.browseRetryText, { color: colors.foreground, fontFamily: "DM_Sans_600SemiBold" }]}>{t("browse.try_again")}</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <FlatList
-              data={browseListings}
-              keyExtractor={(item) => item.id}
-              renderItem={({ item }) => (
-                <BrowseListingCard
-                  listing={item}
-                  onPress={() => router.push({
-                    pathname: "/listing/[id]",
-                    params: { id: item.id, preview: JSON.stringify(item) },
-                  } as never)}
-                />
-              )}
-              contentContainerStyle={styles.browseList}
-              showsVerticalScrollIndicator={false}
-              keyboardDismissMode="interactive"
-              keyboardShouldPersistTaps="handled"
-              refreshControl={
-                <RefreshControl
-                  refreshing={browseRefreshing}
-                  onRefresh={() => loadBrowseListings({ refresh: true })}
-                  tintColor={colors.accent}
-                />
-              }
-              onScrollBeginDrag={() => {
-                Keyboard.dismiss();
-                if (browseFiltersExpanded) setBrowseFiltersExpanded(false);
-              }}
-              onEndReached={() => {
-                if ((browseQueuedListingsRef.current.length > 0 || browseNextCursor) && !browseLoadingMore) {
-                  void loadBrowseListings({ append: true, cursor: browseNextCursor });
-                }
-              }}
-              onEndReachedThreshold={0.6}
-              ListHeaderComponent={
-                <View style={styles.browseHeaderCopy}>
-                  <Text style={[styles.browseTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>{t("browse.title")}</Text>
-                  <Text style={[styles.browseSubtitle, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                    {t("browse.subtitle")}
-                  </Text>
-                </View>
-              }
-              ListEmptyComponent={
-                <View style={styles.browseCenter}>
-                  <Feather name="search" size={30} color={colors.mutedForeground} />
-                  <Text style={[styles.browseEmptyTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>{t("browse.empty_title")}</Text>
-                  <Text style={[styles.browseEmptyText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                    {t("browse.empty_body")}
-                  </Text>
-                </View>
-              }
-              ListFooterComponent={browseLoadingMore ? <ActivityIndicator color={colors.accent} style={{ paddingVertical: 16 }} /> : null}
-            />
-          )}
-          {browseLoading && browseListings.length > 0 ? (
-            <View style={styles.browseLoadingOverlay} pointerEvents="auto">
-              <View style={[styles.browseLoadingCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <ActivityIndicator color={colors.accent} size="large" />
-                <Text style={[styles.browseEmptyTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>{t("browse.loading")}</Text>
-                <Text style={[styles.browseEmptyText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>{t("browse.loading_hint")}</Text>
-              </View>
-            </View>
-          ) : null}
-        </View>
-      ) : isEmpty ? (
+      {isEmpty ? (
         <Pressable style={{ flex: 1 }} onPress={Keyboard.dismiss}>
           <View style={[styles.landingContainer, { paddingBottom: tabBarOffset }]}>
             <View style={styles.landingContent}>
@@ -4486,56 +4225,6 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   // ── Chat state ─────────────────────────────────────────────────────
-  browseRoot: {
-    flex: 1,
-    position: "relative",
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    gap: 10,
-  },
-  browseList: {
-    gap: 13,
-    paddingTop: 12,
-    paddingBottom: 20,
-  },
-  browseHeaderCopy: {
-    gap: 3,
-    paddingBottom: 2,
-  },
-  browseTitle: {
-    fontSize: 22,
-    lineHeight: 28,
-  },
-  browseSubtitle: {
-    fontSize: 13,
-    lineHeight: 19,
-  },
-  browseCenter: {
-    flex: 1,
-    minHeight: 260,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 24,
-    gap: 10,
-  },
-  browseEmptyTitle: {
-    fontSize: 17,
-    textAlign: "center",
-  },
-  browseEmptyText: {
-    fontSize: 13,
-    lineHeight: 19,
-    textAlign: "center",
-  },
-  browseRetry: {
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-  },
-  browseRetryText: {
-    fontSize: 13,
-  },
   messageList: {
     gap: 4,
     paddingTop: 16,
@@ -4608,23 +4297,6 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     paddingHorizontal: 22,
-  },
-  browseLoadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 20,
-    backgroundColor: "rgba(28, 25, 23, 0.34)",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 24,
-  },
-  browseLoadingCard: {
-    width: "100%",
-    maxWidth: 320,
-    borderWidth: 1,
-    borderRadius: 16,
-    padding: 20,
-    alignItems: "center",
-    gap: 8,
   },
   guestPromptCard: {
     borderWidth: 1,

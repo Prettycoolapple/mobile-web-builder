@@ -123,6 +123,7 @@ export default function ListingDetailScreen() {
             fullName: details.agentName ?? currentAgent?.fullName ?? null,
             agencyName: details.agencyName ?? currentAgent?.agencyName ?? null,
             avatarUrl: details.agentAvatarUrl ?? currentAgent?.avatarUrl ?? null,
+            phone: details.agentPhone ?? currentAgent?.phone ?? null,
             isVerified: currentAgent?.isVerified ?? false,
           });
           return {
@@ -158,7 +159,7 @@ export default function ListingDetailScreen() {
     if (!listing || listing.source !== "curated") return;
     const lookupKey = listing.externalUrl ?? listing.id;
     const agent = normaliseBrowseListingAgent(listing.agent);
-    if (agent?.phone || !listing.address || !listing.externalUrl || agentLookupKeyRef.current === lookupKey) return;
+    if (!user || agent?.phone || !listing.address || !listing.externalUrl || agentLookupKeyRef.current === lookupKey) return;
     agentLookupKeyRef.current = lookupKey;
     const lookupSeq = agentLookupSeqRef.current + 1;
     agentLookupSeqRef.current = lookupSeq;
@@ -203,7 +204,7 @@ export default function ListingDetailScreen() {
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [getApiHeaders, listing?.address, listing?.agent?.phone, listing?.externalUrl, listing?.id, listing?.source]);
+  }, [getApiHeaders, listing?.address, listing?.agent?.phone, listing?.externalUrl, listing?.id, listing?.source, user]);
 
   const handleAnalyse = useCallback(() => {
     if (!listing) return;
@@ -308,12 +309,6 @@ export default function ListingDetailScreen() {
     const canOpen = await Linking.canOpenURL(smsUrl).catch(() => false);
     if (canOpen) await Linking.openURL(smsUrl);
     else Alert.alert(t("pdp.cant_message_title"), t("pdp.cant_message_body"));
-  };
-
-  const handleViewListing = async () => {
-    if (!listing.externalUrl) return;
-    const canOpen = await Linking.canOpenURL(listing.externalUrl).catch(() => false);
-    if (canOpen) await Linking.openURL(listing.externalUrl);
   };
 
   const descriptionMarkdownStyles = {
@@ -464,12 +459,11 @@ export default function ListingDetailScreen() {
                   {t("pdp.finding_number")}
                 </Text>
               </View>
-            ) : listing.externalUrl ? (
-              <TouchableOpacity style={[styles.messageBtn, { borderColor: colors.accent }]} onPress={handleViewListing} activeOpacity={0.85}>
-                <Feather name="external-link" size={16} color={colors.accent} />
-                <Text style={[styles.messageBtnText, { color: colors.accent, fontFamily: "DM_Sans_700Bold" }]}>{t("pdp.view_listing")}</Text>
-              </TouchableOpacity>
-            ) : null}
+            ) : (
+              <Text style={[styles.agentUnavailable, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                {t("pdp.agent_unavailable")}
+              </Text>
+            )}
           </View>
 
           <TouchableOpacity style={[styles.secondaryBtn, { borderColor: colors.border }]} onPress={() => router.back()}>
@@ -533,6 +527,7 @@ const styles = StyleSheet.create({
   messageBtnText: { fontSize: 15 },
   agentResolving: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 8 },
   agentResolvingText: { fontSize: 13 },
+  agentUnavailable: { fontSize: 13, lineHeight: 18, paddingVertical: 8 },
   iconBtn: { width: 38, height: 38, alignItems: "center", justifyContent: "center" },
   primaryBtn: { minHeight: 50, borderRadius: 14, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8 },
   primaryText: { color: "#fff", fontSize: 15 },

@@ -2588,6 +2588,7 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
   const [refreshedPhotoUrls, setRefreshedPhotoUrls] = useState<string[] | null>(null);
   const [isRefreshingPhotos, setIsRefreshingPhotos] = useState(false);
   const [activeReportTab, setActiveReportTab] = useState<"info" | "plan">("info");
+  const [hasOpenedPlanTab, setHasOpenedPlanTab] = useState(false);
 
   const effectiveReport = useMemo<Report>(() => {
     if (!refreshedPhotoUrls || refreshedPhotoUrls.length === 0) return report;
@@ -2732,7 +2733,10 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
                     ? [styles.reportTabButtonActive, { backgroundColor: colors.card, borderColor: colors.border }]
                     : null,
                 ]}
-                onPress={() => setActiveReportTab(tab)}
+                onPress={() => {
+                  setActiveReportTab(tab);
+                  if (tab === "plan") setHasOpenedPlanTab(true);
+                }}
                 activeOpacity={0.85}
                 accessibilityRole="tab"
                 accessibilityState={{ selected }}
@@ -2750,8 +2754,13 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
           })}
         </View>
 
-        {activeReportTab === "info" ? (
-        <View style={[styles.reportHeader, { backgroundColor: colors.headerBg }]}>
+        <View
+          style={[
+            styles.reportHeader,
+            { backgroundColor: colors.headerBg },
+            activeReportTab === "info" ? null : styles.hiddenReportTopCard,
+          ]}
+        >
         {/* Always render the carousel — when no photo URLs resolve it shows
             a labelled placeholder rather than collapsing the hero entirely. */}
         <ReportPhotoCarousel
@@ -2853,9 +2862,11 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
           <ScoreSummaryRow report={report} colors={colors} hideOverall />
         )}
         </View>
-        ) : (
-          <SitePlanCard report={report} />
-        )}
+        {hasOpenedPlanTab ? (
+          <View style={activeReportTab === "plan" ? null : styles.hiddenReportTopCard}>
+            <SitePlanCard report={report} />
+          </View>
+        ) : null}
       </View>
 
       {(report.cv_unavailable || (report.missing_critical_fields && report.missing_critical_fields.length > 0)) && (
@@ -3197,6 +3208,7 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   reportTabText: { fontFamily: "DM_Sans_700Bold", fontSize: 13, lineHeight: 18 },
+  hiddenReportTopCard: { display: "none" },
   reportHeader: { borderRadius: 16, overflow: "hidden" },
   reportHeaderTop: { flexDirection: "row", gap: 12, padding: 16, alignItems: "flex-start" },
   reportPhotoWrapper: { width: "100%", height: 190, position: "relative", backgroundColor: "#1C1917" },

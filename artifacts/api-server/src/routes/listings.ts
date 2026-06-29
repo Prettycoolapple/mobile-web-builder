@@ -154,6 +154,43 @@ function parsePositiveInt(value: unknown): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
 }
 
+function canonicalBrowseListingKey(listing: Pick<BrowseListing, "id" | "address" | "externalUrl">): string {
+  const url = listing.externalUrl?.trim();
+  if (url) {
+    try {
+      const parsed = new URL(url);
+      parsed.hash = "";
+      parsed.search = "";
+      return `url:${parsed.toString().replace(/\/$/, "").toLowerCase()}`;
+    } catch {
+      return `url:${url.replace(/[?#].*$/, "").replace(/\/$/, "").toLowerCase()}`;
+    }
+  }
+  const address = listing.address
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return address ? `address:${address}` : `id:${listing.id}`;
+}
+
+function parseExcludedListingKeys(value: unknown): Set<string> {
+  if (typeof value !== "string" || !value.trim()) return new Set();
+  return new Set(value.split(",").map((item) => item.trim()).filter(Boolean).slice(0, 100));
+}
+
+function dedupeBrowseListings(items: BrowseListing[], excluded = new Set<string>()): BrowseListing[] {
+  const seen = new Set(excluded);
+  const result: BrowseListing[] = [];
+  for (const item of items) {
+    const key = canonicalBrowseListingKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(item);
+  }
+  return result;
+}
+
 function defaultBrowseSuburb(offset: number, limit: number): { suburb: string; startOffset: number } {
   const page = Math.max(0, Math.floor(offset / Math.max(1, limit)));
   const suburb = DEFAULT_BROWSE_SUBURBS[page % DEFAULT_BROWSE_SUBURBS.length] ?? DEFAULT_BROWSE_SUBURBS[0];
@@ -342,6 +379,73 @@ function publicListingFromCache(row: typeof browseListingCache.$inferSelect): Br
     // Only set agent when we have real scraped data; null hides the row entirely.
     agent,
   };
+}
+
+async function hydrateCachedBrowseListing(row: typeof browseListingCache.$inferSelect): Promise<BrowseListing> {
+  const listing = publicListingFromCache(row);
+  const cachedAgent = normaliseCachedAgent(row.agent);
+  const hasCallableAgent = !!cachedAgent?.phone && (!!cachedAgent.fullName || !!cachedAgent.avatarUrl || !!cachedAgent.agencyName);
+  if (hasCallableAgent || !row.externalUrl || !/realestate\.co\.nz/i.test(row.externalUrl)) return listing;
+
+  try {
+    const details = await Promise.race([
+      fetchRealestateListingDetailsByUrl(row.externalUrl),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 6500)),
+    ]);
+    if (!details) return listing;
+
+    const agent = normaliseCachedAgent({
+      fullName: details.agentName ?? null,
+      agencyName: details.agencyName ?? null,
+      avatarUrl: details.agentAvatarUrl ?? null,
+      phone: details.agentPhone ?? null,
+    });
+    const nextListing: BrowseListing = {
+      ...listing,
+      listingTitle: details.listingTitle ?? listing.listingTitle,
+      description: details.description ?? listing.description,
+      imageUrls: details.imageUrls?.length ? details.imageUrls : listing.imageUrls,
+      propertyType: sanitisePropertyType(details.propertyType ?? null) ?? listing.propertyType,
+      bedrooms: details.bedrooms ?? listing.bedrooms,
+      bathrooms: details.bathrooms ?? listing.bathrooms,
+      landAreaSqm: details.landAreaSqm ?? listing.landAreaSqm,
+      floorAreaSqm: details.floorAreaSqm ?? listing.floorAreaSqm,
+      priceNzd: details.priceNzd ?? listing.priceNzd,
+      priceDisplay: details.priceDisplay ?? listing.priceDisplay,
+      agent: normaliseCachedAgent({
+        ...(cachedAgent ?? {}),
+        ...(agent ?? {}),
+        fullName: agent?.fullName ?? cachedAgent?.fullName ?? null,
+        agencyName: agent?.agencyName ?? cachedAgent?.agencyName ?? null,
+        avatarUrl: agent?.avatarUrl ?? cachedAgent?.avatarUrl ?? null,
+        phone: agent?.phone ?? cachedAgent?.phone ?? null,
+      }) ?? listing.agent,
+    };
+
+    void db
+      .update(browseListingCache)
+      .set({
+        ...(nextListing.agent && { agent: nextListing.agent }),
+        listingTitle: nextListing.listingTitle,
+        description: nextListing.description,
+        imageUrls: nextListing.imageUrls,
+        propertyType: nextListing.propertyType,
+        bedrooms: nextListing.bedrooms ?? null,
+        bathrooms: nextListing.bathrooms ?? null,
+        landAreaSqm: nextListing.landAreaSqm ?? null,
+        floorAreaSqm: nextListing.floorAreaSqm ?? null,
+        priceNzd: nextListing.priceNzd ?? null,
+        priceDisplay: nextListing.priceDisplay ?? null,
+        lastRefreshedAt: new Date(),
+      })
+      .where(eq(browseListingCache.id, row.id))
+      .catch((err) => logger.warn({ err, listingId: row.id }, "Failed to hydrate cached listing details"));
+
+    return nextListing;
+  } catch (err) {
+    logger.warn({ err, listingId: row.id, url: row.externalUrl }, "Failed to hydrate cached listing from public detail");
+    return listing;
+  }
 }
 
 function suburbFromAddress(address: string): string | null {
@@ -973,6 +1077,8 @@ router.get("/listings", async (req, res) => {
   const query = cleanQuery(req.query.q);
   const limit = Math.min(parsePositiveInt(req.query.limit) ?? 12, 30);
   const offset = Math.max(parsePositiveInt(req.query.cursor) ?? 0, 0);
+  const excludedKeys = parseExcludedListingKeys(req.query.exclude);
+  const fetchWindow = Math.min(60, Math.max(limit * 3, limit + excludedKeys.size));
   const minPrice = parsePositiveInt(req.query.minPrice);
   const maxPrice = parsePositiveInt(req.query.maxPrice);
   const bedroomsMin = parsePositiveInt(req.query.bedrooms);
@@ -1055,11 +1161,11 @@ router.get("/listings", async (req, res) => {
       .leftJoin(salesAgentProfiles, eq(salesAgentProfiles.userId, listings.userId))
       .where(and(...filters))
       .orderBy(internalOrder)
-      .limit(limit)
+      .limit(fetchWindow)
       .offset(offset);
 
-    const internal = internalRows.map(publicListingFromInternal);
-    const cacheNeeded = Math.max(0, limit - internal.length);
+    const internal = dedupeBrowseListings(internalRows.map(publicListingFromInternal), excludedKeys);
+    const cacheNeeded = Math.max(0, fetchWindow - internal.length);
     const freshCutoff = new Date(Date.now() - BROWSE_CACHE_TTL_MS);
     const cachedRows = cacheNeeded > 0
       ? await db
@@ -1087,14 +1193,14 @@ router.get("/listings", async (req, res) => {
           .limit(cacheNeeded)
           .offset(offset)
       : [];
-    const cached = sortBrowseListings(applyBrowseFilters(cachedRows.map(publicListingFromCache), {
+    const cached = dedupeBrowseListings(sortBrowseListings(applyBrowseFilters(cachedRows.map(publicListingFromCache), {
       propertyType,
       bedroomsMin,
       bathroomsMin,
       minLandArea,
       minFloorArea,
       saleMethod,
-    }), sort);
+    }), sort), new Set([...excludedKeys, ...internal.map(canonicalBrowseListingKey)]));
 
     const scrapeNeeded = Math.min(MAX_CURATED_TOP_UP, Math.max(0, limit - internal.length - cached.length));
     const curated = scrapeNeeded > 0
@@ -1114,20 +1220,31 @@ router.get("/listings", async (req, res) => {
           sort,
         })
       : [];
-    const samples = internal.length + cached.length + curated.length < limit
+    const curatedUnique = dedupeBrowseListings(curated, new Set([
+      ...excludedKeys,
+      ...internal.map(canonicalBrowseListingKey),
+      ...cached.map(canonicalBrowseListingKey),
+    ]));
+    const samples = internal.length + cached.length + curatedUnique.length < limit
       ? getMockListings(query || undefined)
-          .slice(offset, offset + limit - internal.length - cached.length - curated.length)
+          .slice(offset, offset + limit - internal.length - cached.length - curatedUnique.length + excludedKeys.size)
           .map(publicListingFromMock)
       : [];
 
-    const items = sortBrowseListings([...internal, ...cached, ...curated, ...samples], sort).slice(0, limit);
+    const samplesUnique = dedupeBrowseListings(samples, new Set([
+      ...excludedKeys,
+      ...internal.map(canonicalBrowseListingKey),
+      ...cached.map(canonicalBrowseListingKey),
+      ...curatedUnique.map(canonicalBrowseListingKey),
+    ]));
+    const items = sortBrowseListings(dedupeBrowseListings([...internal, ...cached, ...curatedUnique, ...samplesUnique], excludedKeys), sort).slice(0, limit);
     res.json({
       listings: items,
       nextCursor: items.length === limit ? String(offset + limit) : null,
       sourceCounts: {
         internal: internal.length,
         cached: cached.length,
-        curated: curated.length + samples.length,
+        curated: curatedUnique.length + samplesUnique.length,
       },
     });
   } catch (error) {
@@ -1266,7 +1383,7 @@ router.get("/listings/public/:id", async (req, res) => {
         .update(browseListingCache)
         .set({ hitCount: sql`${browseListingCache.hitCount} + 1` })
         .where(eq(browseListingCache.id, id));
-      res.json({ listing: publicListingFromCache(cachedExternal) });
+      res.json({ listing: await hydrateCachedBrowseListing(cachedExternal) });
       return;
     }
 
