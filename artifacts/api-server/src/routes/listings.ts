@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { and, asc, desc, eq, gt, gte, ilike, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, ilike, isNotNull, isNull, lte, or, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { browseListingCache, db, listings, listingViews, profiles, salesAgentProfiles, withDbRetry } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
@@ -10,6 +10,7 @@ import type { ListingResult } from "../lib/scrapers/oneroof";
 import { ai } from "@workspace/integrations-gemini-ai";
 import { logger } from "../lib/logger";
 import { buildListingTeaser } from "../lib/listing-teaser";
+import { browseSearchVariants, compactBrowseSearchText } from "../lib/browse-search";
 
 const router = Router();
 const BROWSE_MODE_ENABLED = true;
@@ -133,6 +134,23 @@ const AGENT_PLACEHOLDER_VALUES = new Set(["listing agent", "external marketplace
 
 function cleanQuery(value: unknown): string {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+}
+
+function browseSearchCondition(columns: AnyColumn[], query: string): SQL | undefined {
+  const variants = browseSearchVariants(query);
+  const compact = compactBrowseSearchText(query);
+  const clauses: SQL[] = [];
+  for (const variant of variants) {
+    for (const column of columns) {
+      clauses.push(ilike(column, `%${variant}%`));
+    }
+  }
+  if (compact) {
+    for (const column of columns) {
+      clauses.push(sql`regexp_replace(lower(coalesce(${column}, '')), '[^[:alnum:]]', '', 'g') like ${`%${compact}%`}`);
+    }
+  }
+  return clauses.length ? or(...clauses) : undefined;
 }
 
 function cleanAgentDisplayValue(value: unknown): string | null {
@@ -612,7 +630,7 @@ async function fetchCuratedBrowseListings(args: {
   const defaultTarget = defaultBrowseSuburb(args.offset, args.limit);
   let targets: Array<{ suburb: string; startOffset: number }>;
   if (args.query) {
-    targets = [{ suburb: args.query, startOffset: args.offset }];
+    targets = browseSearchVariants(args.query).map((suburb) => ({ suburb, startOffset: args.offset }));
   } else if (filtersActive) {
     const startIdx = DEFAULT_BROWSE_SUBURBS.indexOf(defaultTarget.suburb);
     targets = DEFAULT_BROWSE_SUBURBS
@@ -1134,13 +1152,14 @@ router.get("/listings", async (req, res) => {
       isNotNull(listings.approvedAt),
       eq(listings.listingType, "for_sale" as const),
     ];
-    if (query) {
-      filters.push(or(
-        ilike(listings.address, `%${query}%`),
-        ilike(listings.addressSuburb, `%${query}%`),
-        ilike(listings.addressCity, `%${query}%`),
-        ilike(listings.listingTitle, `%${query}%`),
-      )!);
+    const internalSearch = browseSearchCondition([
+      listings.address,
+      listings.addressSuburb,
+      listings.addressCity,
+      listings.listingTitle,
+    ], query);
+    if (internalSearch) {
+      filters.push(internalSearch);
     }
     if (propertyTypes.includes(propertyType as (typeof propertyTypes)[number])) {
       filters.push(eq(listings.propertyType, propertyType as (typeof propertyTypes)[number]));
@@ -1197,12 +1216,12 @@ router.get("/listings", async (req, res) => {
           .where(and(
             eq(browseListingCache.isActive, true),
             gt(browseListingCache.lastRefreshedAt, freshCutoff),
-            query ? or(
-              ilike(browseListingCache.address, `%${query}%`),
-              ilike(browseListingCache.addressSuburb, `%${query}%`),
-              ilike(browseListingCache.addressCity, `%${query}%`),
-              ilike(browseListingCache.listingTitle, `%${query}%`),
-            )! : undefined,
+            browseSearchCondition([
+              browseListingCache.address,
+              browseListingCache.addressSuburb,
+              browseListingCache.addressCity,
+              browseListingCache.listingTitle,
+            ], query),
             eq(browseListingCache.listingType, "for_sale"),
             propertyType ? ilike(browseListingCache.propertyType, `%${propertyType}%`) : undefined,
             minPrice ? gte(browseListingCache.priceNzd, minPrice) : undefined,

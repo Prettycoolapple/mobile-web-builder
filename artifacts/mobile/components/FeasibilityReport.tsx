@@ -2872,10 +2872,8 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
           <ScoreSummaryRow report={report} colors={colors} hideOverall />
         )}
         </View>
-        {hasOpenedPlanTab ? (
-          <View style={activeReportTab === "plan" ? null : styles.hiddenReportTopCard}>
-            <SitePlanCard report={report} />
-          </View>
+        {hasOpenedPlanTab && activeReportTab === "plan" ? (
+          <SitePlanCard key={`${report.historyId ?? report.address ?? "report"}-site-plan`} report={report} />
         ) : null}
       </View>
 
