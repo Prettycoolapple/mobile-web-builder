@@ -91,6 +91,7 @@ import {
   selectedListingContextFromHistory,
   selectedListingContextToHistoryMarker,
   selectedListingPhotoUrls,
+  reconcileSelectedListingContextWithLiveListing,
   type SelectedListingContext,
 } from "../lib/selected-listing-context";
 import { resolveActiveListingContext } from "../lib/active-listing-context";
@@ -3878,7 +3879,13 @@ async function runFeasibilityAnalyseCore(args: {
       pipelineResult.geocode?.formatted ?? analysisAddress,
       locale,
     );
-    applySelectedListingContextToReport(report, selectedContext ?? pipelineResult.selectedListingContext);
+    applySelectedListingContextToReport(
+      report,
+      reconcileSelectedListingContextWithLiveListing(
+        selectedContext ?? pipelineResult.selectedListingContext,
+        pipelineResult.realestate_listing,
+      ),
+    );
     await applyCombinedListingContextToReport(report, pipelineResult, locale);
   }
   if (!pipelineResult && selectedContext) {

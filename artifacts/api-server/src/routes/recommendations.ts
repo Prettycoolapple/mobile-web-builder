@@ -70,6 +70,11 @@ interface FeasibilityReport {
 const PLANNING_CONSTRAINT_PLANNER_PROBABILITY = 0.3;
 const PLANNING_CONSTRAINT_ARCHITECT_FALLBACK_PROBABILITY = 0.15;
 const CLEAR_PLANNING_ARCHITECT_PROBABILITY = 0.25;
+const TEMPORARILY_EXCLUDED_PROVIDER_NAMES = new Set(["hao li"]);
+
+function normaliseProviderName(value: string | null): string {
+  return (value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+}
 
 function randomChance(probability: number): boolean {
   return Math.random() < probability;
@@ -266,15 +271,17 @@ async function selectServiceProvider(options?: {
     .from(profiles)
     .innerJoin(serviceProviderProfiles, eq(serviceProviderProfiles.userId, profiles.id))
     .where(eq(profiles.role, "service_provider"))
-    // Promote less-exposed providers while still preferring verified accounts.
-    .orderBy(desc(profiles.isVerified), asc(serviceProviderProfiles.recommendationCount))
+    // Verified providers first, then higher recommendation count.
+    .orderBy(desc(profiles.isVerified), desc(serviceProviderProfiles.recommendationCount))
     .limit(80);
 
   const rows = await baseQuery;
   if (rows.length === 0) return null;
 
-  // Filter out providers already recommended in this chat round.
-  let candidates = rows.filter((r) => !exclude.has(r.id));
+  // Filter out providers already recommended in this chat round and temporary provider-level exclusions.
+  let candidates = rows.filter(
+    (r) => !exclude.has(r.id) && !TEMPORARILY_EXCLUDED_PROVIDER_NAMES.has(normaliseProviderName(r.fullName)),
+  );
 
   if (preferredDiscipline) {
     const matched = candidates.filter((r) => r.discipline === preferredDiscipline);

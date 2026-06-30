@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applySelectedListingContextToReport,
+  reconcileSelectedListingContextWithLiveListing,
   selectedListingContextFromHistory,
   selectedListingContextToHistoryMarker,
 } from "../../lib/selected-listing-context";
@@ -148,5 +149,48 @@ describe("selected listing context", () => {
       floorArea: "136m²",
       floor_area_sqm: 136,
     });
+  });
+
+  it("clears a stale selected realestate price when the live listing is negotiation", () => {
+    const report: Record<string, unknown> = {
+      propertyOverview: {
+        address: "9 Cathay Lane, Takanini, Papakura, Auckland",
+        listingPrice: null,
+        listing_price_nzd: null,
+      },
+      data_sources: {},
+    };
+
+    const reconciled = reconcileSelectedListingContextWithLiveListing(
+      {
+        address: "9 Cathay Lane, Takanini, Papakura, Auckland",
+        listingUrl: "https://www.realestate.co.nz/42986379/residential/sale/9-cathay-lane-takanini",
+        price: 3_500_000,
+        source: "curated",
+      },
+      {
+        address: "9 Cathay Lane, Takanini, Papakura, Auckland",
+        listingUrl: "https://www.realestate.co.nz/42986379/residential/sale/9-cathay-lane-takanini?source=test",
+        price: null,
+        priceText: "Negotiation",
+        landArea: 808,
+        photoUrl: null,
+        photoUrls: [],
+        zone: null,
+        bedrooms: 3,
+        bathrooms: 1,
+        listingStatus: "active",
+      },
+    );
+
+    applySelectedListingContextToReport(report, reconciled);
+
+    expect(report.propertyOverview).toMatchObject({
+      address: "9 Cathay Lane, Takanini, Papakura, Auckland",
+      listingPrice: null,
+      listing_price_nzd: null,
+      isOnMarket: true,
+    });
+    expect((report.data_sources as Record<string, string>).listing_price).toBeUndefined();
   });
 });

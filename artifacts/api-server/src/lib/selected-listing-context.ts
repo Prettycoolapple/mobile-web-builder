@@ -1,4 +1,5 @@
 import { addressLineAppearsInText, addressesLikelyMatch } from "./scrapers/realestate-api";
+import type { ListingResult } from "./scrapers/oneroof";
 
 export interface SelectedListingContext {
   address?: string | null;
@@ -246,4 +247,49 @@ export function applySelectedListingContextToReport(
     parsed.photoUrls = combined;
     parsed.photoUrl = combined[0] ?? parsed.photoUrl ?? null;
   }
+}
+
+function sameListingUrl(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  try {
+    const ua = new URL(a);
+    const ub = new URL(b);
+    ua.hash = "";
+    ua.search = "";
+    ub.hash = "";
+    ub.search = "";
+    return ua.toString().replace(/\/$/, "").toLowerCase() === ub.toString().replace(/\/$/, "").toLowerCase();
+  } catch {
+    return a.replace(/\/$/, "").toLowerCase() === b.replace(/\/$/, "").toLowerCase();
+  }
+}
+
+export function reconcileSelectedListingContextWithLiveListing(
+  ctx: SelectedListingContext | null | undefined,
+  liveListing: ListingResult | null | undefined,
+): SelectedListingContext | null {
+  if (!ctx) return null;
+  if (!liveListing?.listingUrl || !sameListingUrl(ctx.listingUrl, liveListing.listingUrl)) return ctx;
+
+  return {
+    ...ctx,
+    address: liveListing.address ?? ctx.address ?? null,
+    price: liveListing.price ?? null,
+    priceApprox: liveListing.priceApprox ?? null,
+    landArea: liveListing.landArea ?? ctx.landArea ?? null,
+    floorArea: liveListing.floorArea ?? ctx.floorArea ?? null,
+    bedrooms: liveListing.bedrooms ?? ctx.bedrooms ?? null,
+    bathrooms: liveListing.bathrooms ?? ctx.bathrooms ?? null,
+    bedroomsApprox: liveListing.bedroomsApprox ?? ctx.bedroomsApprox ?? null,
+    bathroomsApprox: liveListing.bathroomsApprox ?? ctx.bathroomsApprox ?? null,
+    landAreaApprox: liveListing.landAreaApprox ?? ctx.landAreaApprox ?? null,
+    floorAreaApprox: liveListing.floorAreaApprox ?? ctx.floorAreaApprox ?? null,
+    propertyType: liveListing.propertyType ?? liveListing.listingCategory ?? ctx.propertyType ?? null,
+    listingTitle: liveListing.listingTitle ?? ctx.listingTitle ?? null,
+    source: "realestate.co.nz",
+    matchConfidence: "verified",
+    isActiveListing: !/sold|withdrawn|expired|archived|closed/i.test(liveListing.listingStatus ?? ""),
+    isCombinedListing: liveListing.isCombinedListing ?? ctx.isCombinedListing ?? null,
+    aggregateFactsExcluded: liveListing.isCombinedListing ? true : (ctx.aggregateFactsExcluded ?? null),
+  };
 }
