@@ -640,11 +640,13 @@ export function ReportPdfDocument({
   brandKit,
   layout,
   contentEdits = EMPTY_PDF_CONTENT_EDITS,
+  sitePlanImage,
 }: {
   report: FeasibilityReport;
   brandKit: BrandKit;
   layout: PdfLayout;
   contentEdits?: PdfContentEdits;
+  sitePlanImage?: string | null;
 }) {
   const brand = safeBrandColor(brandKit.brandColor);
   const scores = report.scores ?? { ease: 0, cost: 0, roi: 0, composite: 0 };
@@ -677,6 +679,13 @@ export function ReportPdfDocument({
 
         <View style={styles.coverBody}>
           {layout.showCoverPhoto && photo ? <Image style={styles.coverPhoto} src={photo} /> : null}
+
+          {sitePlanImage ? (
+            <View style={styles.coverSitePlanBlock}>
+              <Text style={styles.coverSectionLabel}>Site plan</Text>
+              <Image style={styles.coverSitePlanImage} src={sitePlanImage} />
+            </View>
+          ) : null}
 
           {layout.executiveSummary ? (
             <View>

@@ -101,6 +101,15 @@ export const styles = StyleSheet.create({
     fontFamily: "Helvetica-Bold",
   },
   coverSummary: { fontSize: 10.5, lineHeight: 1.45, color: INK, marginBottom: 14 },
+  coverSitePlanBlock: { marginBottom: 14 },
+  coverSitePlanImage: {
+    width: "100%",
+    height: 145,
+    objectFit: "cover",
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: LINE,
+  },
   preparedBy: {
     marginTop: 6,
     borderTopWidth: 1,

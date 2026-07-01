@@ -8,6 +8,7 @@ import { getToken } from "@/lib/auth";
 import { EMPTY_BRAND_KIT, loadBrandKit, saveBrandKit, type BrandKit } from "@/lib/brandKit";
 import { getPdfExportTarget } from "@/lib/pdfExportTarget";
 import { safeBrandColor } from "@/lib/pdfStyles";
+import { renderSitePlanSnapshot, type SitePlanResponse } from "@/lib/sitePlanSnapshot";
 import {
   ReportPdfDocument,
   defaultLayout,
@@ -74,6 +75,7 @@ export function ReportPdfEditor() {
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [busy, setBusy] = useState<"download" | "message" | null>(null);
   const [status, setStatus] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [sitePlanImage, setSitePlanImage] = useState<string | null>(null);
   const [dmThreads, setDmThreads] = useState<DmThread[]>([]);
   const [dmQuery, setDmQuery] = useState("");
   const [selectedThreadIds, setSelectedThreadIds] = useState<string[]>([]);
@@ -149,6 +151,31 @@ export function ReportPdfEditor() {
     };
   }, [report]);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (!report?.historyId) {
+      setSitePlanImage(null);
+      return;
+    }
+
+    const params = new URLSearchParams();
+    if (report.address?.trim()) params.set("address", report.address.trim());
+    const path = `/analyse/${encodeURIComponent(report.historyId)}/site-plan${params.size ? `?${params}` : ""}`;
+
+    void api<SitePlanResponse>(path, { method: "GET", redirectOn401: false })
+      .then((sitePlan) => renderSitePlanSnapshot(sitePlan))
+      .then((image) => {
+        if (!cancelled) setSitePlanImage(image);
+      })
+      .catch(() => {
+        if (!cancelled) setSitePlanImage(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [report]);
+
   const savePdfDraft = useCallback(
     async (options?: { silent?: boolean }) => {
       if (!report || !reportKey || !layout) return false;
@@ -215,8 +242,16 @@ export function ReportPdfEditor() {
   // status flips, recipient search/selection, busy state). Without this the
   // preview re-rendered constantly and reset the user's scroll position.
   const doc = useMemo(
-    () => <ReportPdfDocument report={pdfReport} brandKit={brandKit} layout={layout} contentEdits={contentEdits} />,
-    [pdfReport, brandKit, layout, contentEdits],
+    () => (
+      <ReportPdfDocument
+        report={pdfReport}
+        brandKit={brandKit}
+        layout={layout}
+        contentEdits={contentEdits}
+        sitePlanImage={sitePlanImage}
+      />
+    ),
+    [pdfReport, brandKit, layout, contentEdits, sitePlanImage],
   );
 
   const handleSaveKit = async () => {

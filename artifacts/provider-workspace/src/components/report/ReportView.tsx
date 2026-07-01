@@ -4,6 +4,7 @@ import { formatArea, formatRange, formatScore, scoreColor } from "@/lib/format";
 import { ScoreRing } from "./ScoreRing";
 import { SectionCard, KeyValue, type SectionStatus } from "./SectionCard";
 import { ReportSectionsB } from "./ReportSectionsB";
+import { SitePlanCard } from "./SitePlanCard";
 
 /**
  * Full-fidelity feasibility report. Part A (this file) renders the header,
@@ -17,6 +18,7 @@ export function ReportView({ report }: { report: FeasibilityReport }) {
   const scores = report.scores ?? { ease: 0, cost: 0, roi: 0, composite: 0 };
   const photo = report.photoUrl ?? report.photoUrls?.[0];
   const [imgFailed, setImgFailed] = useState(false);
+  const [activeTab, setActiveTab] = useState<"general" | "planning">("general");
   const planning = report.planning;
 
   return (
@@ -57,7 +59,35 @@ export function ReportView({ report }: { report: FeasibilityReport }) {
         </div>
       )}
 
-      <div className="report-sections">
+      <div className="report-tabs" role="tablist" aria-label="Report sections">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "general"}
+          className={activeTab === "general" ? "active" : ""}
+          onClick={() => setActiveTab("general")}
+        >
+          General
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "planning"}
+          className={activeTab === "planning" ? "active" : ""}
+          onClick={() => setActiveTab("planning")}
+        >
+          Planning
+        </button>
+      </div>
+
+      {activeTab === "planning" && (
+        <div className="report-planning-panel" role="tabpanel" aria-label="Planning">
+          <SitePlanCard report={report} active={activeTab === "planning"} />
+        </div>
+      )}
+
+      {activeTab === "general" && (
+        <div className="report-sections" role="tabpanel" aria-label="General">
         {/* ── Overview ───────────────────────────────────────────────── */}
         {ov && (
           <SectionCard title="Property overview" icon="📍" defaultOpen>
@@ -302,7 +332,8 @@ export function ReportView({ report }: { report: FeasibilityReport }) {
             </ul>
           </SectionCard>
         )}
-      </div>
+        </div>
+      )}
 
       {report.disclaimer && (
         <div style={{ padding: "14px 20px", color: "var(--muted)", fontSize: 11.5, lineHeight: 1.5, borderTop: "1px solid var(--line)" }}>
