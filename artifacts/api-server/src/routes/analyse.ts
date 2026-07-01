@@ -85,6 +85,7 @@ import { terrainSlopeText, type TerrainContour } from "../lib/terrain-slope-copy
 import { buildListingTeaser } from "../lib/listing-teaser";
 import { prioritizeSponsoredGenericCandidates } from "../lib/sponsored-ordering";
 import { translateChatContent, translateReportNarrative, ensureChinese } from "../lib/translation";
+import { assistantTrustResponseFor } from "../lib/assistant-trust-responses";
 import {
   normaliseSelectedListingContext,
   applySelectedListingContextToReport,
@@ -5623,6 +5624,11 @@ router.post(
     try {
       const lastUserMessage = [...messages].reverse().find((m) => m.role === "user");
       const userText = lastUserMessage?.content ?? "";
+      const guardedTrustResponse = assistantTrustResponseFor(userText, chatLocale);
+      if (guardedTrustResponse) {
+        res.json({ content: sanitizeAssistantProse(guardedTrustResponse.content, chatLocale), mode: "text" });
+        return;
+      }
 
       // ─── LLM intent extraction ─────────────────────────────────────────────
       // Extract the address/suburb from the currently open report (if any) so
@@ -8309,6 +8315,12 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
   }
 
   try {
+    const guardedTrustResponse = assistantTrustResponseFor(message, chatLocale);
+    if (guardedTrustResponse) {
+      res.json({ message: sanitizeAssistantProse(guardedTrustResponse.content, chatLocale), type: "chat" });
+      return;
+    }
+
     const reply = await generateChatReply(
       message,
       conversationHistory || [],
