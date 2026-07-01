@@ -28,6 +28,33 @@ function normaliseAddressKey(address: string): string {
   return address.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
+function withHistoryMetadata(
+  report: FeasibilityReport,
+  searchId?: string | null,
+  historyCreatedAt?: string | null,
+): FeasibilityReport {
+  if (!searchId && !historyCreatedAt) return report;
+  return {
+    ...report,
+    historyId: searchId ?? report.historyId ?? null,
+    historyCreatedAt: historyCreatedAt ?? report.historyCreatedAt ?? null,
+  };
+}
+
+function withGroupHistoryMetadata(
+  group: FeasibilityReportGroup,
+  searchId?: string | null,
+  historyCreatedAt?: string | null,
+): FeasibilityReportGroup {
+  if (!searchId && !historyCreatedAt) return group;
+  return {
+    ...group,
+    historyId: searchId ?? group.historyId ?? null,
+    historyCreatedAt: historyCreatedAt ?? group.historyCreatedAt ?? null,
+    reports: group.reports.map((report) => withHistoryMetadata(report, searchId, historyCreatedAt)),
+  };
+}
+
 function serializeSearchMessageForChat(message: ChatMessage): string {
   const results = (message.searchResults ?? [])
     .map((r) => `${r.address}||${r.listingUrl ?? ""}`)
@@ -213,15 +240,17 @@ function applyChatResponse(data: ChatResponse, ctx: SendChatArgs & { loadingId: 
 
   // Direct structured fields (some /chat responses return report/reportGroup top-level).
   if (data.reportGroup && isFeasibilityReportGroup(data.reportGroup)) {
-    store.setCurrentReportGroup(data.reportGroup, sessionId);
-    store.updateMessage(loadingId, { type: "report_group", reportGroup: data.reportGroup, content: "" }, sessionId);
-    seedGroupScores(data.reportGroup, store, sessionId);
+    const group = withGroupHistoryMetadata(data.reportGroup, data.searchId, data.historyCreatedAt);
+    store.setCurrentReportGroup(group, sessionId);
+    store.updateMessage(loadingId, { type: "report_group", reportGroup: group, content: "" }, sessionId);
+    seedGroupScores(group, store, sessionId);
     return;
   }
   if (data.report && data.report.scores) {
-    store.setCurrentReport(data.report, sessionId);
-    store.updateMessage(loadingId, { type: "report", report: data.report, content: "" }, sessionId);
-    if (data.report.address) store.updateCandidateScores({ [data.report.address]: data.report.scores }, sessionId);
+    const report = withHistoryMetadata(data.report, data.searchId, data.historyCreatedAt);
+    store.setCurrentReport(report, sessionId);
+    store.updateMessage(loadingId, { type: "report", report, content: "" }, sessionId);
+    if (report.address) store.updateCandidateScores({ [report.address]: report.scores }, sessionId);
     return;
   }
 
@@ -243,9 +272,10 @@ function applyChatResponse(data: ChatResponse, ctx: SendChatArgs & { loadingId: 
   }
 
   if (isFeasibilityReportGroup(parsed)) {
-    store.setCurrentReportGroup(parsed, sessionId);
-    store.updateMessage(loadingId, { type: "report_group", reportGroup: parsed, content: "" }, sessionId);
-    seedGroupScores(parsed, store, sessionId);
+    const group = withGroupHistoryMetadata(parsed, data.searchId, data.historyCreatedAt);
+    store.setCurrentReportGroup(group, sessionId);
+    store.updateMessage(loadingId, { type: "report_group", reportGroup: group, content: "" }, sessionId);
+    seedGroupScores(group, store, sessionId);
     return;
   }
 
@@ -278,7 +308,7 @@ function applyChatResponse(data: ChatResponse, ctx: SendChatArgs & { loadingId: 
   }
 
   if (mode === "analyse" && parsed && isFeasibilityReport(parsed)) {
-    const report = parsed as FeasibilityReport;
+    const report = withHistoryMetadata(parsed as FeasibilityReport, data.searchId, data.historyCreatedAt);
     store.setCurrentReport(report, sessionId);
     store.updateMessage(loadingId, { type: "report", report, content: "" }, sessionId);
     if (report.address) store.updateCandidateScores({ [report.address]: report.scores }, sessionId);
@@ -287,7 +317,7 @@ function applyChatResponse(data: ChatResponse, ctx: SendChatArgs & { loadingId: 
 
   // Fallback: report-shaped content even when mode is unknown.
   if (isFeasibilityReport(parsed) && (parsed as FeasibilityReport).scores) {
-    const report = parsed as FeasibilityReport;
+    const report = withHistoryMetadata(parsed as FeasibilityReport, data.searchId, data.historyCreatedAt);
     store.setCurrentReport(report, sessionId);
     store.updateMessage(loadingId, { type: "report", report, content: "" }, sessionId);
     if (report.address) store.updateCandidateScores({ [report.address]: report.scores }, sessionId);
@@ -383,6 +413,7 @@ interface AnalyseResponse {
   reportGroup?: FeasibilityReportGroup;
   type?: string;
   searchId?: string | null;
+  historyCreatedAt?: string | null;
   clarificationType?: string;
   question?: string;
   options?: string[];
@@ -414,15 +445,17 @@ export async function runAnalyse(args: RunAnalyseArgs): Promise<void> {
     );
 
     if (data.reportGroup && isFeasibilityReportGroup(data.reportGroup)) {
-      store.setCurrentReportGroup(data.reportGroup, sessionId);
-      store.updateMessage(loadingId, { type: "report_group", reportGroup: data.reportGroup, content: "" }, sessionId);
-      seedGroupScores(data.reportGroup, store, sessionId);
+      const group = withGroupHistoryMetadata(data.reportGroup, data.searchId, data.historyCreatedAt);
+      store.setCurrentReportGroup(group, sessionId);
+      store.updateMessage(loadingId, { type: "report_group", reportGroup: group, content: "" }, sessionId);
+      seedGroupScores(group, store, sessionId);
       return;
     }
     if (data.report && data.report.scores) {
-      store.setCurrentReport(data.report, sessionId);
-      store.updateMessage(loadingId, { type: "report", report: data.report, content: "" }, sessionId);
-      if (data.report.address) store.updateCandidateScores({ [data.report.address]: data.report.scores }, sessionId);
+      const report = withHistoryMetadata(data.report, data.searchId, data.historyCreatedAt);
+      store.setCurrentReport(report, sessionId);
+      store.updateMessage(loadingId, { type: "report", report, content: "" }, sessionId);
+      if (report.address) store.updateCandidateScores({ [report.address]: report.scores }, sessionId);
       return;
     }
     if (data.type === "clarification" && Array.isArray(data.options) && data.options.length > 0) {
