@@ -1,9 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FeasibilityReport } from "@/state/chat-model";
 import { apiGet } from "@/lib/api";
 import type { SitePlanAerialTile, SitePlanLayer, SitePlanResponse } from "@/lib/sitePlanSnapshot";
 
 const ALWAYS_ON_LAYERS = new Set(["boundary", "nearby-boundaries"]);
+const MIN_MAP_SCALE = 1;
+const MAX_MAP_SCALE = 6;
+const PARCEL_TARGET_FILL = 0.58;
+const TILE_SEAM_OVERLAP_PX = 1;
 
 type Coordinate = [number, number];
 
@@ -53,11 +57,34 @@ function projectCoordinate(coord: Coordinate, bounds: SitePlanBounds, width: num
   return [x, y];
 }
 
+function clampMapTranslation(value: number, contentSize: number, viewportSize: number): number {
+  const limit = Math.max(0, (contentSize - viewportSize) / 2);
+  return Math.min(limit, Math.max(-limit, value));
+}
+
 function pointsString(coords: Coordinate[], bounds: SitePlanBounds, width: number, height: number): string {
   return coords
     .map((coord) => projectCoordinate(coord, bounds, width, height))
     .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
     .join(" ");
+}
+
+function collectCoordinates(features: GeoJsonFeature[]): Coordinate[] {
+  const out: Coordinate[] = [];
+  const pushLine = (line: Coordinate[]) => {
+    for (const coord of line) {
+      if (Array.isArray(coord) && coord.length >= 2) out.push(coord);
+    }
+  };
+  for (const feature of features) {
+    const geometry = feature.geometry;
+    if (geometry.type === "Point") out.push(geometry.coordinates);
+    else if (geometry.type === "LineString") pushLine(geometry.coordinates);
+    else if (geometry.type === "MultiLineString") geometry.coordinates.forEach(pushLine);
+    else if (geometry.type === "Polygon") geometry.coordinates.forEach(pushLine);
+    else if (geometry.type === "MultiPolygon") geometry.coordinates.forEach((polygon) => polygon.forEach(pushLine));
+  }
+  return out;
 }
 
 function layerColor(layer: SitePlanLayer): string {
@@ -245,11 +272,26 @@ function LayerToggleRow({
 
 export function SitePlanCard({ report, active }: { report: FeasibilityReport; active: boolean }) {
   const searchId = report.historyId ?? null;
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const framedKeyRef = useRef<string | null>(null);
+  const dragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
   const [data, setData] = useState<SitePlanResponse | null>(null);
   const [visibleLayers, setVisibleLayers] = useState<Record<string, boolean>>({});
   const [status, setStatus] = useState<"idle" | "loading" | "error" | "ready">("idle");
   const [error, setError] = useState<string | null>(null);
   const [showSoon, setShowSoon] = useState(false);
+  const [viewportSize, setViewportSize] = useState<{ width: number; height: number } | null>(null);
+  const [view, setView] = useState({ scale: 1, x: 0, y: 0 });
+
+  useEffect(() => {
+    setData(null);
+    setVisibleLayers({});
+    setStatus("idle");
+    setError(null);
+    framedKeyRef.current = null;
+    dragRef.current = null;
+    setView({ scale: 1, x: 0, y: 0 });
+  }, [searchId, report.address]);
 
   useEffect(() => {
     if (!active || !searchId || data || status === "loading") return;
@@ -274,6 +316,30 @@ export function SitePlanCard({ report, active }: { report: FeasibilityReport; ac
   }, [active, data, report.address, searchId, status]);
 
   useEffect(() => {
+    const node = viewportRef.current;
+    if (!node) return;
+    const update = () => {
+      const rect = node.getBoundingClientRect();
+      setViewportSize((current) => {
+        if (rect.width <= 0 || rect.height <= 0) return current;
+        if (current && Math.abs(current.width - rect.width) < 1 && Math.abs(current.height - rect.height) < 1) {
+          return current;
+        }
+        return { width: rect.width, height: rect.height };
+      });
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [data]);
+
+  useEffect(() => {
+    framedKeyRef.current = null;
+    setView({ scale: 1, x: 0, y: 0 });
+  }, [data?.image.width, data?.image.height, data?.image.bounds.minLat, data?.image.bounds.minLng]);
+
+  useEffect(() => {
     if (!showSoon) return;
     const timeout = setTimeout(() => setShowSoon(false), 2600);
     return () => clearTimeout(timeout);
@@ -287,9 +353,126 @@ export function SitePlanCard({ report, active }: { report: FeasibilityReport; ac
     [data?.layers, visibleLayers],
   );
   const legendLayers = useMemo(() => data?.layers.filter((layer) => !ALWAYS_ON_LAYERS.has(layer.id)) ?? [], [data]);
+  const baseScale = useMemo(() => {
+    if (!data || !viewportSize) return 1;
+    return Math.max(viewportSize.width / data.image.width, viewportSize.height / data.image.height);
+  }, [data, viewportSize]);
 
   const toggleLayer = (id: string, next: boolean) => {
     setVisibleLayers((current) => ({ ...current, [id]: next }));
+  };
+
+  useEffect(() => {
+    if (!data || !viewportSize) return;
+    setView((current) => ({
+      ...current,
+      x: clampMapTranslation(current.x, data.image.width * baseScale * current.scale, viewportSize.width),
+      y: clampMapTranslation(current.y, data.image.height * baseScale * current.scale, viewportSize.height),
+    }));
+  }, [baseScale, data, viewportSize]);
+
+  useEffect(() => {
+    if (!data || !viewportSize) return;
+    const key = `${searchId ?? "report"}:${data.image.width}:${data.image.height}:${Math.round(viewportSize.width)}:${Math.round(viewportSize.height)}`;
+    if (framedKeyRef.current === key) return;
+
+    const boundary = data.layers.find((layer) => layer.id === "boundary");
+    const coords = boundary ? collectCoordinates(boundary.geojson.features) : [];
+    if (coords.length === 0) {
+      framedKeyRef.current = key;
+      setView({ scale: 1, x: 0, y: 0 });
+      return;
+    }
+
+    const pixels = coords.map((coord) => projectCoordinate(coord, data.image.bounds, data.image.width, data.image.height));
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const [x, y] of pixels) {
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+
+    const parcelW = Math.max(1, (maxX - minX) * baseScale);
+    const parcelH = Math.max(1, (maxY - minY) * baseScale);
+    const nextScale = Math.max(
+      MIN_MAP_SCALE,
+      Math.min(MAX_MAP_SCALE, Math.min((viewportSize.width * PARCEL_TARGET_FILL) / parcelW, (viewportSize.height * PARCEL_TARGET_FILL) / parcelH)),
+    );
+    const parcelCenterX = (minX + maxX) / 2;
+    const parcelCenterY = (minY + maxY) / 2;
+    const dx = (parcelCenterX - data.image.width / 2) * baseScale;
+    const dy = (parcelCenterY - data.image.height / 2) * baseScale;
+    const contentW = data.image.width * baseScale * nextScale;
+    const contentH = data.image.height * baseScale * nextScale;
+
+    framedKeyRef.current = key;
+    setView({
+      scale: nextScale,
+      x: clampMapTranslation(-dx * nextScale, contentW, viewportSize.width),
+      y: clampMapTranslation(-dy * nextScale, contentH, viewportSize.height),
+    });
+  }, [baseScale, data, searchId, viewportSize]);
+
+  const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    if (!data || !viewportSize) return;
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const pointerX = event.clientX - rect.left - viewportSize.width / 2;
+    const pointerY = event.clientY - rect.top - viewportSize.height / 2;
+    const zoomFactor = Math.exp(-event.deltaY * 0.0012);
+    setView((current) => {
+      const nextScale = Math.max(MIN_MAP_SCALE, Math.min(MAX_MAP_SCALE, current.scale * zoomFactor));
+      if (Math.abs(nextScale - current.scale) < 0.001) return current;
+
+      const oldTotalScale = baseScale * current.scale;
+      const nextTotalScale = baseScale * nextScale;
+      const anchorX = (pointerX - current.x) / oldTotalScale;
+      const anchorY = (pointerY - current.y) / oldTotalScale;
+      const contentW = data.image.width * nextTotalScale;
+      const contentH = data.image.height * nextTotalScale;
+      const nextX = pointerX - anchorX * nextTotalScale;
+      const nextY = pointerY - anchorY * nextTotalScale;
+
+      return {
+        scale: nextScale,
+        x: clampMapTranslation(nextX, contentW, viewportSize.width),
+        y: clampMapTranslation(nextY, contentH, viewportSize.height),
+      };
+    });
+  };
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!data || !viewportSize || event.button !== 0) return;
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: view.x,
+      originY: view.y,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || !data || !viewportSize || drag.pointerId !== event.pointerId) return;
+    const contentW = data.image.width * baseScale * view.scale;
+    const contentH = data.image.height * baseScale * view.scale;
+    setView((current) => ({
+      ...current,
+      x: clampMapTranslation(drag.originX + event.clientX - drag.startX, contentW, viewportSize.width),
+      y: clampMapTranslation(drag.originY + event.clientY - drag.startY, contentH, viewportSize.height),
+    }));
+  };
+
+  const handlePointerEnd = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (dragRef.current?.pointerId === event.pointerId) {
+      dragRef.current = null;
+    }
   };
 
   if (!searchId) {
@@ -315,7 +498,15 @@ export function SitePlanCard({ report, active }: { report: FeasibilityReport; ac
         </div>
       </div>
 
-      <div className="site-plan-map">
+      <div
+        ref={viewportRef}
+        className="site-plan-map"
+        onWheel={handleWheel}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerEnd}
+        onPointerCancel={handlePointerEnd}
+      >
         {status === "loading" || status === "idle" ? (
           <div className="site-plan-empty">Loading site plan...</div>
         ) : status === "error" ? (
@@ -324,7 +515,16 @@ export function SitePlanCard({ report, active }: { report: FeasibilityReport; ac
             <span>{error}</span>
           </div>
         ) : data ? (
-          <div className="site-plan-canvas" style={{ aspectRatio: `${data.image.width} / ${data.image.height}` }}>
+          <div
+            className="site-plan-canvas"
+            style={{
+              width: data.image.width,
+              height: data.image.height,
+              left: viewportSize ? (viewportSize.width - data.image.width) / 2 : 0,
+              top: viewportSize ? (viewportSize.height - data.image.height) / 2 : 0,
+              transform: `translate3d(${view.x}px, ${view.y}px, 0) scale(${baseScale * view.scale})`,
+            }}
+          >
             {data.image.source === "linz-basemaps" && data.image.tiles?.length ? (
               data.image.tiles.map((tile) => (
                 <img
@@ -333,10 +533,10 @@ export function SitePlanCard({ report, active }: { report: FeasibilityReport; ac
                   alt=""
                   className="site-plan-tile"
                   style={{
-                    left: `${(tile.left / data.image.width) * 100}%`,
-                    top: `${(tile.top / data.image.height) * 100}%`,
-                    width: `${((data.image.tileSize ?? 256) / data.image.width) * 100}%`,
-                    height: `${((data.image.tileSize ?? 256) / data.image.height) * 100}%`,
+                    left: tile.left,
+                    top: tile.top,
+                    width: (data.image.tileSize ?? 256) + TILE_SEAM_OVERLAP_PX,
+                    height: (data.image.tileSize ?? 256) + TILE_SEAM_OVERLAP_PX,
                   }}
                 />
               ))
@@ -359,7 +559,6 @@ export function SitePlanCard({ report, active }: { report: FeasibilityReport; ac
                 renderServiceNodes(layer, data.image.bounds, data.image.width, data.image.height),
               )}
             </svg>
-            <div className="site-plan-attribution">{data.image.attribution}</div>
           </div>
         ) : null}
       </div>
