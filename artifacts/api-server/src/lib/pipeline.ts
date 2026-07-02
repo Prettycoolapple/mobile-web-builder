@@ -1630,6 +1630,9 @@ export async function runPropertyPipeline(
       scoringVersion: SCORING_VERSION,
       scores,
       scoreUnavailableReason,
+      roiPercentBest: exposedScenarios.length
+        ? Math.max(...exposedScenarios.map((s) => s.roi_percent))
+        : null,
       landArea: merged.land_area_sqm,
       zone: merged.zone_code,
       potentialLots: modelledLotResult.lots,

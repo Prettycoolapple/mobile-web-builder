@@ -1300,17 +1300,15 @@ a {
 .site-plan-swatch {
   width: 24px;
   height: 18px;
-  border: 2px solid;
-  border-radius: 4px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
 }
-.site-plan-swatch.line span {
-  width: 18px;
-  height: 3px;
-  border-radius: 999px;
+.site-plan-swatch-svg {
+  width: 28px;
+  height: 18px;
+  display: block;
 }
 .site-plan-legend-row input {
   width: 34px;

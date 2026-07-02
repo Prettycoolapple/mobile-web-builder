@@ -2,8 +2,10 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import { db, discoveryShownListings, withDbRetry } from "@workspace/db";
 
 /** Rolling window — listings not shown to the user within this many days
- * become eligible to surface again, so the pool naturally refreshes. */
-const SHOWN_WINDOW_DAYS = 30;
+ * become eligible to surface again, so the pool naturally refreshes. Set to a
+ * year so the accumulating criteria-search / discovery pool dedupes over the
+ * long horizon while data volume is still building. */
+const SHOWN_WINDOW_DAYS = 365;
 
 export interface ShownListingInput {
   addressKey: string;

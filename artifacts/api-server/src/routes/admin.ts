@@ -21,7 +21,8 @@ import { createStorageReviewToken } from "../lib/storage-review-token";
 import { getPublicAppUrl } from "../lib/env";
 import { logger } from "../lib/logger";
 import { runPropertyPipeline, hasCacheableCore } from "../lib/pipeline";
-import { listForRescan, upsertCachedRaw, countCached } from "../lib/property-cache";
+import { listForRescan, upsertCachedRaw, countCached, PIPELINE_VERSION } from "../lib/property-cache";
+import { upsertFeatureRowFromPipeline } from "../lib/property-feature-index";
 
 const router = Router();
 
@@ -1073,6 +1074,11 @@ async function runPropertyCacheRescan(opts: {
                 lng: result.geocode?.lng ?? row.lng,
                 suburb: result.suburb ?? row.suburb,
                 sourceUserId: row.sourceUserId,
+              });
+              upsertFeatureRowFromPipeline(result, {
+                addressKey: row.addressKey,
+                lastRefreshedAt: new Date(),
+                pipelineVersion: PIPELINE_VERSION,
               });
               rescanStatus.updated++;
             } else {

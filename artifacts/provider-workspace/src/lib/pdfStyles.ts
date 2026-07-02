@@ -121,10 +121,9 @@ export const styles = StyleSheet.create({
     marginRight: 12,
     marginBottom: 3,
   },
-  sitePlanLegendSwatch: {
-    width: 9,
+  sitePlanLegendGlyph: {
+    width: 14,
     height: 9,
-    borderRadius: 2,
     marginRight: 4,
   },
   sitePlanLegendLabel: { fontSize: 8, color: INK },

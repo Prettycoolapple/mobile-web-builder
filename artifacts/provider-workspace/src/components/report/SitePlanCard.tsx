@@ -35,6 +35,7 @@ type SitePlanBounds = {
   minLng: number;
   maxLng: number;
 };
+type SitePlanMarkerShape = "circle" | "triangle" | "square";
 
 function mercatorX(lng: number): number {
   return (lng + 180) / 360;
@@ -95,6 +96,14 @@ function isLineLayer(layer: SitePlanLayer): boolean {
   return layer.group === "services" || layer.group === "contours";
 }
 
+function layerLegendKind(layer: SitePlanLayer): "line" | "polygon" | "point" {
+  return layer.legend[0]?.kind ?? (isLineLayer(layer) ? "line" : "polygon");
+}
+
+function layerMarkerShape(layer: SitePlanLayer): SitePlanMarkerShape {
+  return layer.style.markerShape ?? "circle";
+}
+
 function layerDisplayLabel(layer: SitePlanLayer): string {
   if (layer.id === "nearby-boundaries") return "Nearby boundaries";
   if (layer.id === "service-stormwater") return "Stormwater";
@@ -104,8 +113,37 @@ function layerDisplayLabel(layer: SitePlanLayer): string {
   return layer.label;
 }
 
+function trianglePoints(cx: number, cy: number, radius: number): string {
+  return `${cx},${cy - radius} ${cx + radius * 0.92},${cy + radius * 0.65} ${cx - radius * 0.92},${cy + radius * 0.65}`;
+}
+
 function aerialTileUrl(tile: SitePlanAerialTile): string {
   return `/api/tiles/aerial/${tile.z}/${tile.x}/${tile.y}`;
+}
+
+function renderPointMarker(
+  layer: SitePlanLayer,
+  cx: number,
+  cy: number,
+  radius: number,
+  key: string,
+) {
+  const common = {
+    key,
+    fill: layer.style.fill ?? layer.style.stroke,
+    fillOpacity: layer.style.fillOpacity ?? 0.86,
+    stroke: "#fff",
+    strokeWidth: 1.5,
+  };
+  const shape = layerMarkerShape(layer);
+  if (shape === "triangle") {
+    return <polygon {...common} points={trianglePoints(cx, cy, radius)} strokeLinejoin="round" />;
+  }
+  if (shape === "square") {
+    const size = radius * 1.55;
+    return <rect {...common} x={cx - size / 2} y={cy - size / 2} width={size} height={size} rx={1.5} />;
+  }
+  return <circle {...common} cx={cx} cy={cy} r={radius} />;
 }
 
 function renderLine(
@@ -169,18 +207,7 @@ function renderFeature(
   const geometry = feature.geometry;
   if (geometry.type === "Point") {
     const [cx, cy] = projectCoordinate(geometry.coordinates, bounds, width, height);
-    return (
-      <circle
-        key={`${layer.id}-${featureIndex}`}
-        cx={cx}
-        cy={cy}
-        r={Math.max(5, layer.style.strokeWidth * 2)}
-        fill={layer.style.stroke}
-        fillOpacity={0.86}
-        stroke="#fff"
-        strokeWidth={1.5}
-      />
-    );
+    return renderPointMarker(layer, cx, cy, Math.max(5, layer.style.strokeWidth * 2), `${layer.id}-${featureIndex}`);
   }
   if (geometry.type === "LineString") {
     return renderLine(geometry.coordinates, layer, bounds, width, height, `${layer.id}-${featureIndex}`);
@@ -235,6 +262,59 @@ function renderServiceNodes(layer: SitePlanLayer, bounds: SitePlanBounds, width:
   return nodes;
 }
 
+function LegendGlyph({ layer }: { layer: SitePlanLayer }) {
+  const color = layerColor(layer);
+  const kind = layerLegendKind(layer);
+  const fill = layer.style.fill ?? color;
+  const dash = layer.style.dashArray?.join(",");
+  if (kind === "line") {
+    return (
+      <svg className="site-plan-swatch-svg" viewBox="0 0 28 18" aria-hidden="true">
+        <line
+          x1="3"
+          y1="9"
+          x2="25"
+          y2="9"
+          stroke={color}
+          strokeWidth="3"
+          strokeLinecap="round"
+          strokeDasharray={dash}
+        />
+      </svg>
+    );
+  }
+  if (kind === "point") {
+    const shape = layerMarkerShape(layer);
+    return (
+      <svg className="site-plan-swatch-svg" viewBox="0 0 28 18" aria-hidden="true">
+        {shape === "triangle" ? (
+          <polygon points={trianglePoints(14, 9, 7)} fill={fill} fillOpacity="0.9" stroke={color} strokeWidth="2" strokeLinejoin="round" />
+        ) : shape === "square" ? (
+          <rect x="7" y="3" width="14" height="12" rx="2" fill={fill} fillOpacity="0.9" stroke={color} strokeWidth="2" />
+        ) : (
+          <circle cx="14" cy="9" r="6" fill={fill} fillOpacity="0.9" stroke={color} strokeWidth="2" />
+        )}
+      </svg>
+    );
+  }
+  return (
+    <svg className="site-plan-swatch-svg" viewBox="0 0 28 18" aria-hidden="true">
+      <rect
+        x="4"
+        y="3"
+        width="20"
+        height="12"
+        rx="2"
+        fill={fill}
+        fillOpacity={layer.style.fillOpacity ?? 0.16}
+        stroke={color}
+        strokeWidth="2"
+        strokeDasharray={dash}
+      />
+    </svg>
+  );
+}
+
 function LayerToggleRow({
   layer,
   visible,
@@ -244,16 +324,12 @@ function LayerToggleRow({
   visible: boolean;
   onToggle: (id: string, next: boolean) => void;
 }) {
-  const color = layerColor(layer);
   const disabled = !layer.available;
   return (
     <label className={`site-plan-legend-row${disabled ? " disabled" : ""}`}>
       <span className="site-plan-legend-label">
-        <span
-          className={`site-plan-swatch${isLineLayer(layer) ? " line" : ""}`}
-          style={{ borderColor: color, backgroundColor: isLineLayer(layer) ? "transparent" : `${color}30` }}
-        >
-          {isLineLayer(layer) && <span style={{ backgroundColor: color }} />}
+        <span className="site-plan-swatch">
+          <LegendGlyph layer={layer} />
         </span>
         <span>
           <span className="site-plan-legend-title">{layerDisplayLabel(layer)}</span>

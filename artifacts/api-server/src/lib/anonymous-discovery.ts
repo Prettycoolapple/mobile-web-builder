@@ -9,7 +9,7 @@ import {
 } from "@workspace/db";
 import type { RecentShownListing, ShownListingInput } from "./discovery-shown-memory";
 
-const SHOWN_WINDOW_DAYS = 30;
+const SHOWN_WINDOW_DAYS = 365;
 const USAGE_WINDOW_HOURS = 24;
 const DEFAULT_GUEST_DAILY_LIMIT = 10;
 

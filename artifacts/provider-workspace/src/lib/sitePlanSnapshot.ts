@@ -24,6 +24,7 @@ type SitePlanBounds = {
   minLng: number;
   maxLng: number;
 };
+type SitePlanMarkerShape = "circle" | "triangle" | "square";
 
 export type SitePlanLayer = {
   id: string;
@@ -38,6 +39,7 @@ export type SitePlanLayer = {
     fill?: string;
     fillOpacity?: number;
     dashArray?: number[];
+    markerShape?: SitePlanMarkerShape;
   };
   legend: Array<{ label: string; color: string; kind: "line" | "polygon" | "point" }>;
   geojson: GeoJsonFeatureCollection;
@@ -118,6 +120,31 @@ function withAlpha(ctx: CanvasRenderingContext2D, alpha: number | undefined, dra
   ctx.globalAlpha = previous;
 }
 
+function trianglePath(ctx: CanvasRenderingContext2D, cx: number, cy: number, radius: number) {
+  ctx.moveTo(cx, cy - radius);
+  ctx.lineTo(cx + radius * 0.92, cy + radius * 0.65);
+  ctx.lineTo(cx - radius * 0.92, cy + radius * 0.65);
+  ctx.closePath();
+}
+
+function drawPointMarker(ctx: CanvasRenderingContext2D, x: number, y: number, layer: SitePlanLayer) {
+  const radius = Math.max(5, layer.style.strokeWidth * 2);
+  ctx.beginPath();
+  if (layer.style.markerShape === "triangle") {
+    trianglePath(ctx, x, y, radius);
+  } else if (layer.style.markerShape === "square") {
+    const size = radius * 1.55;
+    ctx.rect(x - size / 2, y - size / 2, size, size);
+  } else {
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+  }
+  ctx.fillStyle = layer.style.fill ?? layer.style.stroke;
+  withAlpha(ctx, layer.style.fillOpacity ?? 0.86, () => ctx.fill());
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+}
+
 function drawLine(
   ctx: CanvasRenderingContext2D,
   coords: Coordinate[],
@@ -161,7 +188,9 @@ function drawPolygon(
   withAlpha(ctx, layer.style.fillOpacity ?? 0.12, () => ctx.fill());
   ctx.strokeStyle = layer.style.stroke;
   ctx.lineWidth = layer.style.strokeWidth;
+  ctx.setLineDash(layer.style.dashArray ?? []);
   withAlpha(ctx, layer.style.strokeOpacity ?? 1, () => ctx.stroke());
+  ctx.setLineDash([]);
 }
 
 function drawFeature(
@@ -173,13 +202,7 @@ function drawFeature(
   const g = feature.geometry;
   if (g.type === "Point") {
     const [x, y] = projectCoordinate(g.coordinates, data.image.bounds, data.image.width, data.image.height);
-    ctx.beginPath();
-    ctx.arc(x, y, Math.max(5, layer.style.strokeWidth * 2), 0, Math.PI * 2);
-    ctx.fillStyle = layer.style.stroke;
-    withAlpha(ctx, 0.86, () => ctx.fill());
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
+    drawPointMarker(ctx, x, y, layer);
   } else if (g.type === "LineString") {
     drawLine(ctx, g.coordinates, layer, data);
   } else if (g.type === "MultiLineString") {
@@ -266,7 +289,16 @@ function parcelCrop(data: SitePlanResponse, outputWidth: number, outputHeight: n
   };
 }
 
-export type SitePlanLegendEntry = { label: string; color: string; kind: "line" | "polygon" | "point" };
+export type SitePlanLegendEntry = {
+  label: string;
+  color: string;
+  kind: "line" | "polygon" | "point";
+  stroke: string;
+  fill?: string;
+  fillOpacity?: number;
+  dashArray?: number[];
+  markerShape?: SitePlanMarkerShape;
+};
 
 /**
  * Legend entries for the layers actually drawn into the snapshot — every available layer that has
@@ -282,6 +314,11 @@ export function sitePlanLegendEntries(data: SitePlanResponse): SitePlanLegendEnt
         label: item?.label ?? layer.label,
         color: item?.color ?? layer.style.stroke,
         kind: item?.kind ?? (layer.group === "services" || layer.group === "contours" ? "line" : "polygon"),
+        stroke: layer.style.stroke,
+        fill: layer.style.fill,
+        fillOpacity: layer.style.fillOpacity,
+        dashArray: layer.style.dashArray,
+        markerShape: layer.style.markerShape,
       };
     });
 }

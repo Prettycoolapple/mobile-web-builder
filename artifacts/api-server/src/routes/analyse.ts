@@ -38,7 +38,10 @@ import {
 import { suggestNearbySuburbs } from "../lib/claude";
 import { runPropertyPipeline, hasCacheableCore, type PipelineResult } from "../lib/pipeline";
 import { normaliseDiscoveryAddressKey } from "../lib/address-key";
-import { getCachedRaw, upsertCachedRaw, bumpHitCount, backfillDerivedScores } from "../lib/property-cache";
+import { getCachedRaw, upsertCachedRaw, bumpHitCount, backfillDerivedScores, PIPELINE_VERSION } from "../lib/property-cache";
+import { upsertFeatureRowFromPipeline } from "../lib/property-feature-index";
+import { runCriteriaSearch, buildCriteriaSearchIntro, buildCriteriaSearchEmptyMessage } from "../lib/criteria-search";
+import { detectPropertyDataLookup, buildPropertyDataLookupAnswer } from "../lib/property-data-lookup";
 import { buildSitePlanForAddress, SitePlanNoLocationError, fetchAerialTile, type GeoHint } from "../lib/site-plan";
 import { SCORING_VERSION } from "../lib/card-score";
 import { noteUserActivity } from "../lib/user-activity";
@@ -3845,6 +3848,13 @@ async function runFeasibilityAnalyseCore(args: {
         pipelineResult.raw_property?.derived_scores
       ) {
         void backfillDerivedScores(addressKey, pipelineResult.raw_property.derived_scores);
+        // Keep the feature index in step with the backfilled scores, preserving
+        // the cache row's freshness (never revive stale data on a cache-serve).
+        upsertFeatureRowFromPipeline(pipelineResult, {
+          addressKey,
+          lastRefreshedAt: new Date(cachedEntry.row.lastRefreshedAt as unknown as string | Date),
+          pipelineVersion: cachedEntry.row.pipelineVersion,
+        });
       }
     } else if (hasCacheableCore(pipelineResult) && pipelineResult.raw_property) {
       void upsertCachedRaw({
@@ -3857,6 +3867,11 @@ async function runFeasibilityAnalyseCore(args: {
         lng: pipelineResult.geocode?.lng ?? null,
         suburb: pipelineResult.suburb ?? null,
         sourceUserId: userId,
+      });
+      upsertFeatureRowFromPipeline(pipelineResult, {
+        addressKey,
+        lastRefreshedAt: new Date(),
+        pipelineVersion: PIPELINE_VERSION,
       });
     }
   }
@@ -5991,6 +6006,30 @@ router.post(
         return;
       }
 
+      // ─── SINGLE-PROPERTY VALUE LOOKUP (Q4) ───────────────────────────────
+      // "What's the estimated market value / land area / zone of this property?"
+      // is answered instantly from the cached analysis of the OPEN report — no
+      // full re-run — with source + data age. Falls through to the normal chat
+      // reply on a cache miss (which can run the pipeline and self-heal).
+      if (effectiveMode === "followup" && reportCtx?.address) {
+        const lookupField = detectPropertyDataLookup(userText);
+        if (lookupField) {
+          try {
+            const cachedForLookup = await getCachedRaw(normaliseDiscoveryAddressKey(reportCtx.address));
+            const answer = cachedForLookup
+              ? buildPropertyDataLookupAnswer(lookupField, cachedForLookup.rawData, cachedForLookup.ageDays, reportCtx.address, chatLocale)
+              : null;
+            if (answer) {
+              req.log.info({ field: lookupField, address: reportCtx.address }, "Value lookup: answered from cache");
+              res.json({ content: answer, mode: "text", ...providerSignal });
+              return;
+            }
+          } catch (err) {
+            req.log.warn({ err }, "Value lookup failed — falling through to chat reply");
+          }
+        }
+      }
+
       if (effectiveMode === "discover") {
         try {
           let recentShownEntries: RecentShownListing[] = [];
@@ -6141,6 +6180,80 @@ router.post(
           }
 
           req.log.info({ suburb, effectiveMinPrice, effectiveMaxPrice, isFollowUp, includeNegotiation, wantsDevelopmentDiscovery, intent_reasoning: intent.reasoning }, "Discovery search started");
+
+          // ─── CRITERIA SEARCH (reverse-engineering) ───────────────────────
+          // When the intent carries structured measurable criteria (lots / slope
+          // / pipes / return), answer from the analysed-property feature index —
+          // ONE card at a time — instead of the live listing browse. Only MEASURED
+          // facts are surfaced, so we never assert an unverified physical claim.
+          // Pagination reuses the same 30-day shown memory as the rest of
+          // discovery: each shown card is recorded, so "show me another" (which
+          // re-enters here) surfaces the next unshown match.
+          if (intent.filterSpec) {
+            try {
+              const criteriaSuburbs = [suburb, ...(intent.additionalSuburbs ?? [])]
+                .filter((s): s is string => !!s && s.trim().length > 0)
+                .map((s) => s.trim().toLowerCase());
+              const { candidates: criteriaCandidates, coverage } = await runCriteriaSearch(intent.filterSpec, {
+                suburbs: criteriaSuburbs,
+                pageSize: 1,
+                excludeDiscoveryKeys: durableShownKeys.addressKeys,
+              });
+
+              if (criteriaCandidates.length > 0) {
+                const card = criteriaCandidates[0];
+                const aiIntro = buildCriteriaSearchIntro(intent.filterSpec, card, coverage, suburb, chatLocale);
+                // Record the shown card into the same 30-day shown memory the rest
+                // of discovery uses, so the next "show me another" advances.
+                const shownItem = {
+                  addressKey: normaliseDiscoveryAddressKey(card.address),
+                  listingUrl: null,
+                  address: card.address ?? null,
+                  suburb: suburb ?? null,
+                };
+                if (chatUserId) {
+                  runAfterResponse(
+                    recordShownForUser(chatUserId, [shownItem]).catch((err) =>
+                      req.log.warn({ err }, "Criteria search: failed to record shown memory"),
+                    ),
+                  );
+                } else if (anonymousIdentityHash) {
+                  runAfterResponse(
+                    recordShownForAnonymous(anonymousIdentityHash, [shownItem]).catch((err) =>
+                      req.log.warn({ err }, "Criteria search: failed to record shown memory"),
+                    ),
+                  );
+                }
+
+                const responsePayload = JSON.stringify({
+                  candidates: [card],
+                  isMockData: false,
+                  suburb: suburb ?? "",
+                  dataSource: "analysed_properties",
+                  noListings: false,
+                  aiIntro,
+                  searchPresentation: "scored_screening",
+                  continuationToken: null,
+                  criteriaSearch: true,
+                  hasMore: coverage.hasMore,
+                });
+                const translatedContent = await translateChatContent(responsePayload, "discover", chatLocale, chatTranslateTitleSchool);
+                req.log.info({ suburb, criteriaSearch: true, hasMore: coverage.hasMore }, "Criteria search: card served");
+                res.json({ content: translatedContent, mode: "discover", ...providerSignal });
+                return;
+              }
+
+              // No analysed match yet — be honest (and flag Auckland-only for
+              // lot/ROI asks). The message is already localised, so send as-is
+              // rather than fall back to an unrelated live browse.
+              const emptyMsg = buildCriteriaSearchEmptyMessage(coverage, suburb, chatLocale);
+              req.log.info({ suburb, criteriaSearch: true, empty: true }, "Criteria search: no analysed match");
+              res.json({ content: emptyMsg, mode: "text", ...providerSignal });
+              return;
+            } catch (err) {
+              req.log.warn({ err }, "Criteria search failed — falling through to normal discovery");
+            }
+          }
 
           let candidates: import("../lib/pre-screen").PropertyCandidate[] = [];
           let isMockData = false;
@@ -7455,6 +7568,11 @@ router.post(
                 pipelineResult.raw_property?.derived_scores
               ) {
                 void backfillDerivedScores(chatAddressKey, pipelineResult.raw_property.derived_scores);
+                upsertFeatureRowFromPipeline(pipelineResult, {
+                  addressKey: chatAddressKey,
+                  lastRefreshedAt: new Date(chatCachedEntry.row.lastRefreshedAt as unknown as string | Date),
+                  pipelineVersion: chatCachedEntry.row.pipelineVersion,
+                });
               }
             } else if (hasCacheableCore(pipelineResult) && pipelineResult.raw_property) {
               void upsertCachedRaw({
@@ -7467,6 +7585,11 @@ router.post(
                 lng: pipelineResult.geocode?.lng ?? null,
                 suburb: pipelineResult.suburb ?? null,
                 sourceUserId: chatUserId,
+              });
+              upsertFeatureRowFromPipeline(pipelineResult, {
+                addressKey: chatAddressKey,
+                lastRefreshedAt: new Date(),
+                pipelineVersion: PIPELINE_VERSION,
               });
             }
           }

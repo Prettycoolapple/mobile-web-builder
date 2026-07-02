@@ -24,7 +24,8 @@
     "add-phone-line-type-cache": "node ./scripts/add-phone-line-type-cache.mjs",
     "add-provider-trials": "node ./scripts/add-provider-trials.mjs",
     "add-dm-message-likes": "node ./scripts/add-dm-message-likes.mjs",
-    "add-notification-items": "node ./scripts/add-notification-items.mjs"
+    "add-notification-items": "node ./scripts/add-notification-items.mjs",
+    "add-property-feature-index": "node ./scripts/add-property-feature-index.mjs"
   },
   "dependencies": {
     "drizzle-orm": "catalog:",

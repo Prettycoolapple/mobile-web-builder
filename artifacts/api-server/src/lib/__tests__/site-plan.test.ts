@@ -5,6 +5,7 @@ import {
   fallbackBoundsFromCenter,
   nearbyBoundaryLayer,
   paddedBounds,
+  planningLayerStylePreview,
   selectLinzAerialTileRange,
   sitePlanMapBounds,
 } from "../site-plan";
@@ -119,5 +120,27 @@ describe("site plan bounds", () => {
     expect(layer.style.strokeWidth).toBeLessThan(2);
     expect(layer.geojson.features).toHaveLength(1);
     expect(layer.geojson.features[0]?.properties.parcelId).toBe(nearbyParcel.parcel_id);
+  });
+
+  it("keeps standard legend colors unique across site-plan layer families", () => {
+    const reservedColors = [
+      "#F97316",
+      "#334155",
+      "#0EA5E9",
+      "#7C3AED",
+      "#2563EB",
+      "#475569",
+    ];
+    const colors = [...reservedColors, ...planningLayerStylePreview().map((layer) => layer.color)];
+
+    expect(new Set(colors).size).toBe(colors.length);
+  });
+
+  it("styles notable trees as point markers with a distinct shape", () => {
+    const notableTrees = planningLayerStylePreview().find((layer) => layer.name === "Notable Trees");
+
+    expect(notableTrees?.kind).toBe("point");
+    expect(notableTrees?.style.markerShape).toBe("triangle");
+    expect(notableTrees?.style.fillOpacity).toBeGreaterThan(0.5);
   });
 });

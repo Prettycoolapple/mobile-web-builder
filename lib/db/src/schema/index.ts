@@ -12,6 +12,7 @@ export * from "./anonymous_usage_events";
 export * from "./discovery_continuations";
 export * from "./watchlist_items";
 export * from "./property_cache";
+export * from "./property_feature_index";
 export * from "./property_shares";
 export * from "./pending_agent_signups";
 export * from "./pending_provider_signups";

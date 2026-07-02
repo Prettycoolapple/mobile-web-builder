@@ -113,6 +113,17 @@ function normaliseZoneCode(zoneCode: string | null | undefined): string | null {
   return z;
 }
 
+/**
+ * True when `zoneCode` is a recognised Auckland Unitary Plan zone — i.e. our
+ * subdivision/lot/ROI modelling (which is AUP-specific) is trustworthy for the
+ * property. Used to gate criteria search so out-of-region rows (e.g. Waikato,
+ * which never resolve to an AUP zone) are never filtered on lot/ROI constraints.
+ */
+export function isAupZoneCode(zoneCode: string | null | undefined): boolean {
+  const z = normaliseZoneCode(zoneCode);
+  return z != null && z in ZONE_RULES;
+}
+
 function geometryLooksConstrained(bbox: DesignLedAssessmentInput["parcelBbox"]): boolean {
   if (!bbox) return false;
   const latSpan = Math.abs(bbox.maxLat - bbox.minLat);

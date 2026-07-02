@@ -1,4 +1,4 @@
-import { Document, Page, View, Text, Image } from "@react-pdf/renderer";
+import { Circle, Document, Image, Line, Page, Polygon, Rect, Svg, Text, View } from "@react-pdf/renderer";
 import type { ReactNode } from "react";
 import type { FeasibilityReport } from "@/state/chat-model";
 import {
@@ -636,6 +636,57 @@ function RunningFooter({ brandKit }: { brandKit: BrandKit }) {
   );
 }
 
+function PdfSitePlanLegendGlyph({ item }: { item: SitePlanLegendEntry }) {
+  const color = item.color ?? item.stroke;
+  const dashArray = item.dashArray?.join(" ");
+  const fill = item.fill ?? color;
+  if (item.kind === "line") {
+    return (
+      <Svg style={styles.sitePlanLegendGlyph} viewBox="0 0 28 18">
+        <Line
+          x1={3}
+          y1={9}
+          x2={25}
+          y2={9}
+          stroke={color}
+          strokeWidth={3}
+          strokeLinecap="round"
+          strokeDasharray={dashArray}
+        />
+      </Svg>
+    );
+  }
+  if (item.kind === "point") {
+    return (
+      <Svg style={styles.sitePlanLegendGlyph} viewBox="0 0 28 18">
+        {item.markerShape === "triangle" ? (
+          <Polygon points="14,2 21,15 7,15" fill={fill} fillOpacity={0.9} stroke={color} strokeWidth={2} />
+        ) : item.markerShape === "square" ? (
+          <Rect x={7} y={3} width={14} height={12} rx={2} fill={fill} fillOpacity={0.9} stroke={color} strokeWidth={2} />
+        ) : (
+          <Circle cx={14} cy={9} r={6} fill={fill} fillOpacity={0.9} stroke={color} strokeWidth={2} />
+        )}
+      </Svg>
+    );
+  }
+  return (
+    <Svg style={styles.sitePlanLegendGlyph} viewBox="0 0 28 18">
+      <Rect
+        x={4}
+        y={3}
+        width={20}
+        height={12}
+        rx={2}
+        fill={fill}
+        fillOpacity={item.fillOpacity ?? 0.16}
+        stroke={color}
+        strokeWidth={2}
+        strokeDasharray={dashArray}
+      />
+    </Svg>
+  );
+}
+
 export function ReportPdfDocument({
   report,
   brandKit,
@@ -691,7 +742,7 @@ export function ReportPdfDocument({
                 <View style={styles.sitePlanLegend}>
                   {sitePlanLegend.map((item, i) => (
                     <View style={styles.sitePlanLegendItem} key={`${item.label}-${i}`}>
-                      <View style={[styles.sitePlanLegendSwatch, { backgroundColor: item.color }]} />
+                      <PdfSitePlanLegendGlyph item={item} />
                       <Text style={styles.sitePlanLegendLabel}>{item.label}</Text>
                     </View>
                   ))}

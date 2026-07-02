@@ -157,6 +157,7 @@ export interface ChatIntent {
   requiresFreeholdTitle: boolean;  // true when the user wants a freehold / fee-simple title (triggers authoritative LINZ title screening)
   includeTenures: ("cross_lease" | "leasehold" | "unit_title")[]; // non-freehold tenures the user has EXPLICITLY opted in to seeing despite the subdivision catch (shown with a warning); [] by default
   discoveryPresentation: DiscoveryPresentation | null; // generic listings vs scored subdivision/development screening cards
+  filterSpec: SearchFilterSpec | null; // structured measurable criteria (lots/slope/pipes/roi) for reverse-search; null unless the user named measurable criteria
   isFollowUp: boolean;             // true when asking for more results from a prior search
   includeNegotiation: boolean;     // true when user doesn't require a listed price (auction, tender, POA)
   // Clarification loop
@@ -203,6 +204,7 @@ const INTENT_SCHEMA = `{
   "wantsAnotherProvider": <true when user already has a provider shown and wants to swap/replace/change it for a different one>,
   "suggestedDiscipline": "architect_designer" | "planner" | "engineer" | "quantity_surveyor" | "other" | null,
   "wideScanSubdivisionIntent": <true when user is asking for an area-wide subdivision/development sweep — see WIDE SCAN below>,
+  "filterSpec": { "minPotentialLots": <integer ≥2> | null, "maxSlopeDegrees": <number degrees> | null, "infrastructureOnParcel": ["storm"|"sewer"|"water"], "minRoiPct": <number> | null, "searchScope": "analyzed_index" | "live_market" | "both" } | null,
   "reasoning": "<1 sentence explaining your classification>"
 }`;
 
@@ -230,6 +232,15 @@ discoveryPresentation:
   generic_listing         = ordinary currently-for-sale / available / on-market browsing. Use for plain market availability searches, even if the user says "currently available", "on the market", "listings", "homes for sale", or simply wants to browse a suburb.
   scored_screening        = subdivision/development/redevelopment/yield/multi-lot opportunity screening. Use only when the user semantically asks for subdivision, development, redevelopment, yield, splitting, multiple lots, or similar opportunity analysis.
   null                    = not a property_discovery request.
+
+## STRUCTURED CRITERIA (filterSpec)
+When a property_discovery request names MEASURABLE criteria, ALSO populate filterSpec (keep discoveryPresentation="scored_screening" for these); otherwise filterSpec=null.
+  - "split into N lots" / "可分割成N套/N块" / "subdivide into N" → minPotentialLots = N (integer ≥ 2).
+  - "flat" / "基本平地/平地" → maxSlopeDegrees = 3;  "gentle/slight slope" / "坡小/缓坡" → maxSlopeDegrees = 8.
+  - services/pipes on the land/parcel: "管道都在地上" / "上下水在红线内" / "services on the parcel" → infrastructureOnParcel = ["storm","sewer"] (add "water" if water supply is named).
+  - "return/yield over X%" / "回报超过X%" → minRoiPct = X.
+  - searchScope: default "both"; "already analysed / 在你数据库里" → "analyzed_index"; "on the market now / 在售" → "live_market".
+Set filterSpec=null when the user names no measurable criteria.
 
 Critical distinction:
   The word "subdivision" alone does NOT mean show_listing_cards.
@@ -609,6 +620,121 @@ export function normaliseAdditionalSuburbs(
 }
 
 /**
+ * Structured, measurable criteria extracted from a "reverse engineering"
+ * discovery query ("flat land whose pipes are on the parcel that splits into 4
+ * lots"). Populated on the intent only when the user names such criteria; the
+ * criteria-search retrieval path (lib/criteria-search.ts) turns it into a query
+ * over the analysed-property feature index + live screening. `null` on the
+ * intent means an ordinary browse/screen with no measurable constraints.
+ */
+export interface SearchFilterSpec {
+  minPotentialLots: number | null;        // "split into 4" → 4 (integer ≥ 2)
+  maxSlopeDegrees: number | null;         // flat ≈ ≤3°, gentle ≈ ≤8°
+  infrastructureOnParcel: ("storm" | "sewer" | "water")[]; // services required ON the parcel
+  minRoiPct: number | null;               // "return over 7%" → 7
+  searchScope: "analyzed_index" | "live_market" | "both";
+}
+
+function clampLotCount(n: unknown): number | null {
+  if (typeof n !== "number" || !Number.isFinite(n)) return null;
+  const v = Math.floor(n);
+  if (v < 2) return null; // 1 lot is not a "split" — treat as no constraint
+  return Math.min(v, 50);
+}
+
+function clampPositive(n: unknown, max: number): number | null {
+  if (typeof n !== "number" || !Number.isFinite(n) || n <= 0) return null;
+  return Math.min(n, max);
+}
+
+/**
+ * Validate/clamp the LLM's filterSpec. Returns null when no measurable
+ * constraint survives — so a populated filterSpec always signals a real criteria
+ * search (the routing trigger), never an empty object.
+ */
+export function normaliseFilterSpec(raw: unknown): SearchFilterSpec | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const minPotentialLots = clampLotCount(r.minPotentialLots);
+  const maxSlopeDegrees = clampPositive(r.maxSlopeDegrees, 90);
+  const minRoiPct = clampPositive(r.minRoiPct, 1000);
+  const infrastructureOnParcel = Array.isArray(r.infrastructureOnParcel)
+    ? [
+        ...new Set(
+          r.infrastructureOnParcel.filter(
+            (s): s is "storm" | "sewer" | "water" => s === "storm" || s === "sewer" || s === "water",
+          ),
+        ),
+      ]
+    : [];
+  const scope = r.searchScope;
+  const searchScope =
+    scope === "analyzed_index" || scope === "live_market" || scope === "both" ? scope : "both";
+
+  const hasConstraint =
+    minPotentialLots != null || maxSlopeDegrees != null || minRoiPct != null || infrastructureOnParcel.length > 0;
+  if (!hasConstraint) return null;
+  return { minPotentialLots, maxSlopeDegrees, infrastructureOnParcel, minRoiPct, searchScope };
+}
+
+/**
+ * Regex fallback for the measurable criteria — used only when the LLM intent
+ * call fails (fallbackDetectIntent). Handles English + Chinese lot-count, slope,
+ * on-parcel services, and return %. Returns null when nothing is found.
+ */
+export function detectFilterSpecFromText(text: string): SearchFilterSpec | null {
+  const t = text.toLowerCase();
+
+  // Lot count: "split into 4", "4 lots", "可分割成4套/4块/4个", "细分成4"
+  let minPotentialLots: number | null = null;
+  const lotMatch =
+    t.match(/split\s+into\s+(\d+)/) ||
+    t.match(/subdivid\w*\s+into\s+(\d+)/) ||
+    t.match(/(\d+)\s*(?:standalone\s+)?lots?\b/) ||
+    text.match(/(?:分割|细分|細分|分成)\s*(?:成)?\s*(\d+)\s*(?:套|块|塊|个|個|間|间|栋|棟)?/) ||
+    text.match(/(\d+)\s*(?:套|块|塊|栋|棟)/);
+  if (lotMatch) minPotentialLots = clampLotCount(Number(lotMatch[1]));
+
+  // Slope: flat ≈ ≤3°, gentle ≈ ≤8°
+  let maxSlopeDegrees: number | null = null;
+  if (/基本平地|平地|平坦|\bflat\b/i.test(text)) maxSlopeDegrees = 3;
+  if (/坡小|缓坡|緩坡|gentle\s+slop|slight\s+slop|mild\s+slop/i.test(text)) {
+    maxSlopeDegrees = Math.max(maxSlopeDegrees ?? 0, 8);
+  }
+
+  // Services/pipes on the parcel.
+  const mentionsPipes =
+    /管道|上下水|下水|污水|雨水|管线|管線/.test(text) || /storm\s*water|stormwater|sewer|wastewater|\bpipes?\b|\bservices?\b|utilit/.test(t);
+  const onParcel =
+    /在地上|在红线内|在紅線內|红线内|紅線內|地里|地裡/.test(text) ||
+    /on[-\s]?(?:the\s+)?(?:parcel|site|land|section|property)|within\s+(?:the\s+)?(?:boundary|parcel|site)|on\s+site/.test(t);
+  const infrastructureOnParcel: ("storm" | "sewer" | "water")[] = [];
+  if (mentionsPipes && onParcel) {
+    infrastructureOnParcel.push("storm", "sewer"); // the two the queries care about
+    if (/water\s+(?:supply|main|pipe)|供水|给水|給水/.test(text)) infrastructureOnParcel.push("water");
+  }
+
+  // Return / yield %.
+  let minRoiPct: number | null = null;
+  const roiMatch =
+    text.match(/(?:return|yield|roi|回报率?|回報率?|收益率?)\D{0,6}(\d+(?:\.\d+)?)\s*%/i) ||
+    text.match(/(\d+(?:\.\d+)?)\s*%\s*(?:return|yield|roi|回报|回報|收益)/i) ||
+    text.match(/(?:over|above|超过|超過|大于|大於|高于|高於|>)\s*(\d+(?:\.\d+)?)\s*%/i);
+  if (roiMatch) minRoiPct = clampPositive(Number(roiMatch[1]), 1000);
+
+  const hasConstraint =
+    minPotentialLots != null || maxSlopeDegrees != null || minRoiPct != null || infrastructureOnParcel.length > 0;
+  if (!hasConstraint) return null;
+  return {
+    minPotentialLots,
+    maxSlopeDegrees,
+    infrastructureOnParcel: [...new Set(infrastructureOnParcel)],
+    minRoiPct,
+    searchScope: "both",
+  };
+}
+
+/**
  * Normalise the LLM's includeTenures array to the canonical tenure keys,
  * mapping common synonyms/typos (and "stratum" → unit_title) and dropping
  * anything unrecognised. Order-independent; deduped.
@@ -647,6 +773,7 @@ export async function extractChatIntent(
       wantsProviderRecommendation: false, suggestedDiscipline: null,
       wantsAnotherProvider: false,
       wideScanSubdivisionIntent: false,
+      filterSpec: null,
       reasoning: "empty messages",
     };
   }
@@ -664,6 +791,7 @@ export async function extractChatIntent(
       wantsProviderRecommendation: false, suggestedDiscipline: null,
       wantsAnotherProvider: false,
       wideScanSubdivisionIntent: false,
+      filterSpec: null,
       reasoning: "no user message",
     };
   }
@@ -763,6 +891,7 @@ ${INTENT_SCHEMA}`;
       criteria: parsed.criteria ?? null,
       requiresFreeholdTitle: Boolean(parsed.requiresFreeholdTitle),
       discoveryPresentation: parsedDiscoveryPresentation,
+      filterSpec: normaliseFilterSpec(parsed.filterSpec),
       isFollowUp: Boolean(parsed.isFollowUp),
       includeNegotiation: Boolean(parsed.includeNegotiation),
       needsClarification: Boolean(parsed.needsClarification),
@@ -784,6 +913,7 @@ ${INTENT_SCHEMA}`;
         mode: "followup",
         address: null,
         discoveryPresentation: null,
+        filterSpec: null,
         isFollowUp: false,
         includeNegotiation: false,
         needsClarification: false,
@@ -927,6 +1057,7 @@ async function fallbackDetectIntent(
     // path. The regex fallback never opts the user in to non-freehold tenures.
     includeTenures: [],
     discoveryPresentation,
+    filterSpec: mode === "discover" ? detectFilterSpecFromText(lastMessage) : null,
     isFollowUp,
     includeNegotiation: /negotiat|poa|by\s+applic|tender|auction/i.test(lowerFallback),
     needsClarification,

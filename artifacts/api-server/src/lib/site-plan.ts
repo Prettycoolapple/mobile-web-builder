@@ -54,6 +54,7 @@ export interface SitePlanImage {
 }
 
 export type SitePlanLayerGroup = "boundary" | "planning" | "services" | "contours";
+export type SitePlanMarkerShape = "circle" | "triangle" | "square";
 
 export interface SitePlanLayerStyle {
   stroke: string;
@@ -62,6 +63,7 @@ export interface SitePlanLayerStyle {
   fill?: string;
   fillOpacity?: number;
   dashArray?: number[];
+  markerShape?: SitePlanMarkerShape;
 }
 
 export interface SitePlanLegendItem {
@@ -166,6 +168,77 @@ const PLANNING_LAYER_DEFS: Array<{ name: string; layerId: number; distanceM?: nu
   { name: "Emergency Management Area Control", layerId: 59, isControl: true },
   { name: "Cable Protection Areas Control", layerId: 56, isControl: true },
 ];
+
+const PLANNING_LAYER_COLORS = [
+  "#E11D48",
+  "#16A34A",
+  "#A16207",
+  "#0891B2",
+  "#DC2626",
+  "#4D7C0F",
+  "#BE123C",
+  "#0F766E",
+  "#9333EA",
+  "#15803D",
+  "#0D9488",
+  "#0369A1",
+  "#65A30D",
+  "#1D4ED8",
+  "#7C2D12",
+  "#A21CAF",
+  "#C2410C",
+  "#047857",
+  "#B91C1C",
+  "#4338CA",
+  "#A855F7",
+  "#0E7490",
+  "#0284C7",
+  "#7E22CE",
+  "#B45309",
+  "#166534",
+  "#1E40AF",
+  "#C026D3",
+  "#9F1239",
+  "#155E75",
+  "#6D28D9",
+  "#854D0E",
+] as const;
+
+function planningLayerColor(def: { name: string; layerId: number }): string {
+  const index = PLANNING_LAYER_DEFS.findIndex((item) => item.layerId === def.layerId);
+  return PLANNING_LAYER_COLORS[Math.max(0, index) % PLANNING_LAYER_COLORS.length]!;
+}
+
+function planningLayerKind(def: { name: string }): SitePlanLegendItem["kind"] {
+  return def.name === "Notable Trees" ? "point" : "polygon";
+}
+
+export function planningLayerStylePreview(): Array<{
+  name: string;
+  layerId: number;
+  color: string;
+  kind: SitePlanLegendItem["kind"];
+  style: SitePlanLayerStyle;
+}> {
+  return PLANNING_LAYER_DEFS.map((def) => {
+    const color = planningLayerColor(def);
+    return {
+      name: def.name,
+      layerId: def.layerId,
+      color,
+      kind: planningLayerKind(def),
+      style: {
+        stroke: color,
+        strokeWidth: def.name === "Notable Trees" ? 2.6 : def.isControl ? 2.4 : 2,
+        strokeOpacity: 0.92,
+        fill: color,
+        fillOpacity: def.name === "Notable Trees" ? 0.9 : def.isControl ? 0.08 : 0.15,
+        dashArray: def.isControl ? [8, 6] : undefined,
+        markerShape: def.name === "Notable Trees" ? "triangle" : undefined,
+      },
+    };
+  });
+}
 
 const SERVICE_LAYER_DEFS: Array<{
   id: "service-stormwater" | "service-wastewater" | "service-water";
@@ -690,7 +763,9 @@ async function planningOverlayLayers(lat: number, lng: number, parcelBbox: Parce
       });
       const geojson = arcgisFeaturesToGeoJson(features, def.name);
       if (geojson.features.length === 0) return null;
-      const color = def.isControl ? "#0284C7" : "#B45309";
+      const color = planningLayerColor(def);
+      const kind = planningLayerKind(def);
+      const isPoint = kind === "point";
       return {
         id: `planning-overlay-${def.layerId}`,
         label: def.name,
@@ -700,13 +775,14 @@ async function planningOverlayLayers(lat: number, lng: number, parcelBbox: Parce
         available: true,
         style: {
           stroke: color,
-          strokeWidth: 2,
-          strokeOpacity: 0.9,
+          strokeWidth: isPoint ? 2.6 : def.isControl ? 2.4 : 2,
+          strokeOpacity: 0.92,
           fill: color,
-          fillOpacity: def.isControl ? 0.11 : 0.16,
+          fillOpacity: isPoint ? 0.9 : def.isControl ? 0.08 : 0.15,
           dashArray: def.isControl ? [8, 6] : undefined,
+          markerShape: isPoint ? "triangle" as const : undefined,
         },
-        legend: [{ label: def.name, color, kind: "polygon" as const }],
+        legend: [{ label: def.name, color, kind }],
         geojson,
       };
     }),

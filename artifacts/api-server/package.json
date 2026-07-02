@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "backfill-feature-index": "tsx src/scripts/backfill-feature-index.ts",
     "ci": "pnpm run typecheck && pnpm run test"
   },
   "dependencies": {

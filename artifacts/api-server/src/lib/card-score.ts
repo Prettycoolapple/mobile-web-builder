@@ -7,7 +7,7 @@ import type { BuiltEnvironmentContext } from "./built-environment-context";
 // global property cache under an OLD version are ignored by the screening cards
 // and recomputed/re-persisted on the next full analysis. This keeps the card and
 // the report consistent across a scoring change.
-export const SCORING_VERSION = 4;
+export const SCORING_VERSION = 5;
 
 /**
  * The real, report-grade scores computed by the full pipeline, persisted into the
@@ -19,6 +19,9 @@ export interface DerivedCardScores {
   scoringVersion: number;
   scores: ScoringResult | null;
   scoreUnavailableReason?: string | null;
+  /** Best ROI % across the exposed exit scenarios; null when no scored ROI.
+   * Persisted so the feature index can answer "return over X%" reverse queries. */
+  roiPercentBest: number | null;
   landArea: number | null;
   zone: string | null;
   potentialLots: number;
