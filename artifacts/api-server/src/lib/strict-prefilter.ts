@@ -33,8 +33,17 @@ const NON_FREEHOLD_TENURE_RE = /(cross\s*lease|unit\s*title|leasehold|stratum\s*
  *
  * Used as the first step of strict-subdivision discovery to eliminate ~40-60%
  * of a suburb queue with zero REST calls.
+ *
+ * `keepSections` relaxes ONLY the bare-land/section rejection — development
+ * discovery legitimately wants vacant/bare land (it's development stock), while
+ * the strict knock-down-then-subdivide screen does not. Every other gate
+ * (units/terraces, already-subdivided children, non-freehold tenure, new-build
+ * claims, sub-minimum verified land) applies to both.
  */
-export function strictAttributePrefilter(listing: ListingResult): PrefilterVerdict {
+export function strictAttributePrefilter(
+  listing: ListingResult,
+  opts?: { keepSections?: boolean },
+): PrefilterVerdict {
   if (looksLikeUnitOrApartmentAddress(listing.address)) {
     return { kind: "reject", reason: "apartment_or_unit_address_format" };
   }
@@ -46,7 +55,7 @@ export function strictAttributePrefilter(listing: ListingResult): PrefilterVerdi
     if (UNIT_PROPERTY_TYPE_RE.test(listing.propertyType)) {
       return { kind: "reject", reason: `property_type:${listing.propertyType.trim()}` };
     }
-    if (SECTION_PROPERTY_TYPE_RE.test(listing.propertyType)) {
+    if (!opts?.keepSections && SECTION_PROPERTY_TYPE_RE.test(listing.propertyType)) {
       return { kind: "reject", reason: `property_type:${listing.propertyType.trim()}` };
     }
   }

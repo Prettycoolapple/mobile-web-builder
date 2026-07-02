@@ -685,14 +685,18 @@ export function normaliseFilterSpec(raw: unknown): SearchFilterSpec | null {
 export function detectFilterSpecFromText(text: string): SearchFilterSpec | null {
   const t = text.toLowerCase();
 
-  // Lot count: "split into 4", "4 lots", "可分割成4套/4块/4个", "细分成4"
+  // Lot count: "split into 4", "4 lots", "可分割成4套/4块/4个", "细分成4".
+  // The bare "N套/N栋" form is only trusted alongside an explicit development/
+  // subdivision word — otherwise "看3套房" (browse 3 homes) would be hijacked
+  // into a criteria search.
   let minPotentialLots: number | null = null;
+  const hasDevContext = /开发|開發|分割|细分|細分|develop|subdiv|split/i.test(text);
   const lotMatch =
     t.match(/split\s+into\s+(\d+)/) ||
     t.match(/subdivid\w*\s+into\s+(\d+)/) ||
     t.match(/(\d+)\s*(?:standalone\s+)?lots?\b/) ||
     text.match(/(?:分割|细分|細分|分成)\s*(?:成)?\s*(\d+)\s*(?:套|块|塊|个|個|間|间|栋|棟)?/) ||
-    text.match(/(\d+)\s*(?:套|块|塊|栋|棟)/);
+    (hasDevContext ? text.match(/(\d+)\s*(?:套|块|塊|栋|棟)/) : null);
   if (lotMatch) minPotentialLots = clampLotCount(Number(lotMatch[1]));
 
   // Slope: flat ≈ ≤3°, gentle ≈ ≤8°

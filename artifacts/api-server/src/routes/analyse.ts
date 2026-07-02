@@ -20,6 +20,7 @@ import {
   isListingBrowseContinuation,
   sanitizeAssistantProse,
   resolveDelegatedDiscoverSuburb,
+  detectFilterSpecFromText,
   Message,
   type ChatIntent,
 } from "../lib/claude";
@@ -42,7 +43,7 @@ import { getCachedRaw, upsertCachedRaw, bumpHitCount, backfillDerivedScores, PIP
 import { upsertFeatureRowFromPipeline } from "../lib/property-feature-index";
 import { runCriteriaSearch, buildCriteriaSearchIntro, buildCriteriaSearchEmptyMessage } from "../lib/criteria-search";
 import { detectPropertyDataLookup, buildPropertyDataLookupAnswer } from "../lib/property-data-lookup";
-import { buildSitePlanForAddress, SitePlanNoLocationError, fetchAerialTile, type GeoHint } from "../lib/site-plan";
+import { buildSitePlanForReport, SitePlanNoLocationError, fetchAerialTile, type GeoHint } from "../lib/site-plan";
 import { SCORING_VERSION } from "../lib/card-score";
 import { noteUserActivity } from "../lib/user-activity";
 import { buildSubdivisionPathwayNote } from "../lib/lot-calculator";
@@ -1699,7 +1700,7 @@ async function prescreenPickRestoreBatch(
   cacheKey: string,
   batch: ListingResult[],
   criteria: string | null,
-  preScreenOpts?: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number; strictStandardSubdivision?: boolean; preliminarySubdivision?: boolean; verifyFreeholdTitle?: boolean; includeTenures?: ("cross_lease" | "leasehold" | "unit_title")[] },
+  preScreenOpts?: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number; strictStandardSubdivision?: boolean; preliminarySubdivision?: boolean; developmentScreening?: boolean; verifyFreeholdTitle?: boolean; includeTenures?: ("cross_lease" | "leasehold" | "unit_title")[] },
   shownAddressKeys: Set<string> = new Set(),
   n = 3,
   restoreUnpicked = true,
@@ -1911,7 +1912,7 @@ async function topUpDiscoveryCandidates(
   cacheKey: string,
   existing: PropertyCandidate[],
   criteria: string | null,
-  preScreenOpts: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number; strictStandardSubdivision?: boolean; preliminarySubdivision?: boolean; verifyFreeholdTitle?: boolean; includeTenures?: ("cross_lease" | "leasehold" | "unit_title")[] },
+  preScreenOpts: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number; strictStandardSubdivision?: boolean; preliminarySubdivision?: boolean; developmentScreening?: boolean; verifyFreeholdTitle?: boolean; includeTenures?: ("cross_lease" | "leasehold" | "unit_title")[] },
   shownAddressKeys: Set<string>,
   options: { batchSize?: number; nonStrictAttemptLimit?: number; targetCount?: number; indeterminateAccumulator?: ListingResult[] } = {},
 ): Promise<PropertyCandidate[]> {
@@ -2193,6 +2194,7 @@ async function generateContinuationCandidates(args: {
         pricePlaceholderNzd?: number;
         strictStandardSubdivision?: boolean;
         preliminarySubdivision?: boolean;
+        developmentScreening?: boolean;
         verifyFreeholdTitle?: boolean;
         includeTenures?: ("cross_lease" | "leasehold" | "unit_title")[];
       };
@@ -2511,7 +2513,7 @@ const INDETERMINATE_RETRY_DELAYS_MS = [4_000, 12_000, 30_000, 60_000, 120_000];
 async function reScreenIndeterminateListings(opts: {
   indeterminate: ListingResult[];
   criteria: string | null;
-  preScreenOpts: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number; strictStandardSubdivision?: boolean; preliminarySubdivision?: boolean; verifyFreeholdTitle?: boolean; includeTenures?: ("cross_lease" | "leasehold" | "unit_title")[] };
+  preScreenOpts: { allowMissingListingPrice?: boolean; pricePlaceholderNzd?: number; strictStandardSubdivision?: boolean; preliminarySubdivision?: boolean; developmentScreening?: boolean; verifyFreeholdTitle?: boolean; includeTenures?: ("cross_lease" | "leasehold" | "unit_title")[] };
   shownAddressKeys: Set<string>;
   targetCount: number;
   log: Logger;
@@ -4786,7 +4788,7 @@ router.get("/analyse/:searchId/site-plan", async (req, res) => {
     // Reuse coordinates the analysis already resolved (the report), so a flaky live re-geocode
     // never blocks the site plan for an already-analyzed property.
     const geoHint = extractReportCoordinates(report);
-    const sitePlan = await buildSitePlanForAddress(resolved.address, cachedEntry?.rawData ?? null, geoHint);
+    const sitePlan = await buildSitePlanForReport(resolved.address, cachedEntry?.rawData ?? null, geoHint);
     res.setHeader("Cache-Control", "private, max-age=900");
     res.json(sitePlan);
   } catch (err) {
@@ -6182,19 +6184,57 @@ router.post(
           req.log.info({ suburb, effectiveMinPrice, effectiveMaxPrice, isFollowUp, includeNegotiation, wantsDevelopmentDiscovery, intent_reasoning: intent.reasoning }, "Discovery search started");
 
           // ─── CRITERIA SEARCH (reverse-engineering) ───────────────────────
-          // When the intent carries structured measurable criteria (lots / slope
-          // / pipes / return), answer from the analysed-property feature index —
-          // ONE card at a time — instead of the live listing browse. Only MEASURED
-          // facts are surfaced, so we never assert an unverified physical claim.
-          // Pagination reuses the same 30-day shown memory as the rest of
-          // discovery: each shown card is recorded, so "show me another" (which
-          // re-enters here) surfaces the next unshown match.
-          if (intent.filterSpec) {
+          // When the user's criteria carry structured measurable constraints
+          // (lots / slope / pipes / return), answer from the analysed-property
+          // feature index — ONE card at a time — instead of the live browse. Only
+          // MEASURED facts are surfaced, so we never assert an unverified physical
+          // claim. Pagination reuses the same shown memory as the rest of
+          // discovery: each shown card is recorded, so "show me another" advances.
+          //
+          // Criteria queries usually omit the suburb, so the actual search runs a
+          // turn LATER on the suburb reply ("都可以" / a suburb name), which no
+          // longer states the criteria. Recover the filterSpec from the recent
+          // conversation so the clarification round-trip (and a bare "show me
+          // another") still runs the criteria search rather than a plain browse.
+          //
+          // When the index has no match but the ask is lot-count-only, the LIVE
+          // screening below can serve it (potentialLots is computed live): fall
+          // through with this floor and post-filter the screened candidates.
+          let criteriaLotsFloor: number | null = null;
+          // Belt-and-braces: the LLM sometimes omits filterSpec even when the
+          // message plainly states measurable criteria ("回报大于 7%"). The
+          // deterministic regex runs on the CURRENT message as a guarantee —
+          // without it, a criteria query silently degrades into a generic
+          // subdivision screening, which contradicts what the user asked.
+          let effectiveFilterSpec = intent.filterSpec ?? detectFilterSpecFromText(userText);
+          // Only recover from history on a genuine continuation (answering the
+          // suburb clarification, or "show me another") — never hijack a fresh
+          // unrelated browse that happens to follow an earlier criteria search.
+          if (!effectiveFilterSpec && (isFollowUp || Boolean(delegatedDiscoverSuburb))) {
+            let seenUserTurns = 0;
+            for (let i = messages.length - 1; i >= 0 && seenUserTurns < 3; i--) {
+              const m = messages[i];
+              if (m.role !== "user" || m.content === userText) continue;
+              seenUserTurns++;
+              const recovered = detectFilterSpecFromText(m.content ?? "");
+              if (recovered) {
+                effectiveFilterSpec = recovered;
+                break;
+              }
+            }
+          }
+          const criteriaSpec = effectiveFilterSpec;
+          if (criteriaSpec) {
             try {
-              const criteriaSuburbs = [suburb, ...(intent.additionalSuburbs ?? [])]
-                .filter((s): s is string => !!s && s.trim().length > 0)
-                .map((s) => s.trim().toLowerCase());
-              const { candidates: criteriaCandidates, coverage } = await runCriteriaSearch(intent.filterSpec, {
+              // "Anywhere" (a delegated suburb choice) searches the WHOLE analysed
+              // index; otherwise scope to the named suburb(s).
+              const criteriaSuburbs = delegatedDiscoverSuburb
+                ? []
+                : [suburb, ...(intent.additionalSuburbs ?? [])]
+                    .filter((s): s is string => !!s && s.trim().length > 0)
+                    .map((s) => s.trim().toLowerCase());
+              const displaySuburb = criteriaSuburbs.length > 0 ? suburb : null;
+              const { candidates: criteriaCandidates, coverage } = await runCriteriaSearch(criteriaSpec, {
                 suburbs: criteriaSuburbs,
                 pageSize: 1,
                 excludeDiscoveryKeys: durableShownKeys.addressKeys,
@@ -6202,7 +6242,7 @@ router.post(
 
               if (criteriaCandidates.length > 0) {
                 const card = criteriaCandidates[0];
-                const aiIntro = buildCriteriaSearchIntro(intent.filterSpec, card, coverage, suburb, chatLocale);
+                const aiIntro = buildCriteriaSearchIntro(criteriaSpec, card, coverage, displaySuburb, chatLocale);
                 // Record the shown card into the same 30-day shown memory the rest
                 // of discovery uses, so the next "show me another" advances.
                 const shownItem = {
@@ -6228,7 +6268,7 @@ router.post(
                 const responsePayload = JSON.stringify({
                   candidates: [card],
                   isMockData: false,
-                  suburb: suburb ?? "",
+                  suburb: displaySuburb ?? "",
                   dataSource: "analysed_properties",
                   noListings: false,
                   aiIntro,
@@ -6243,13 +6283,28 @@ router.post(
                 return;
               }
 
-              // No analysed match yet — be honest (and flag Auckland-only for
-              // lot/ROI asks). The message is already localised, so send as-is
-              // rather than fall back to an unrelated live browse.
-              const emptyMsg = buildCriteriaSearchEmptyMessage(coverage, suburb, chatLocale);
-              req.log.info({ suburb, criteriaSearch: true, empty: true }, "Criteria search: no analysed match");
-              res.json({ content: emptyMsg, mode: "text", ...providerSignal });
-              return;
+              // No analysed match yet. A lot-count-only ask CAN be served by the
+              // live screening below (potentialLots is computed live) — fall
+              // through with a floor instead of dead-ending. Terrain/pipes/ROI
+              // cannot be verified from a live listing, so those stay an honest
+              // empty message (with the Auckland-only caveat for lot/ROI asks).
+              const liveServable =
+                criteriaSpec.minPotentialLots != null &&
+                criteriaSpec.maxSlopeDegrees == null &&
+                criteriaSpec.infrastructureOnParcel.length === 0 &&
+                criteriaSpec.minRoiPct == null;
+              if (liveServable) {
+                criteriaLotsFloor = criteriaSpec.minPotentialLots;
+                req.log.info(
+                  { suburb, floor: criteriaLotsFloor },
+                  "Criteria search: index empty — falling through to live screening with lots floor",
+                );
+              } else {
+                const emptyMsg = buildCriteriaSearchEmptyMessage(coverage, displaySuburb, chatLocale);
+                req.log.info({ suburb, criteriaSearch: true, empty: true }, "Criteria search: no analysed match");
+                res.json({ content: emptyMsg, mode: "text", ...providerSignal });
+                return;
+              }
             } catch (err) {
               req.log.warn({ err }, "Criteria search failed — falling through to normal discovery");
             }
@@ -6385,6 +6440,11 @@ router.post(
                 : Math.max(600_000, Math.round((effectiveMinPrice + effectiveMaxPrice) / 2)),
               strictStandardSubdivision,
               preliminarySubdivision: strictStandardSubdivision,
+              // Scored non-strict discovery (development/yield asks) still gets
+              // the attribute prefilter + development gate so already-subdivided
+              // children, units/terraces, and below-minimum parcels never
+              // surface as "subdivision potential" cards.
+              developmentScreening: !plainListingBrowse && !strictStandardSubdivision,
               // screenOneFast re-checks service hours and skips the LINZ lookup
               // out of hours, so passing this through is safe year-round.
               verifyFreeholdTitle: titleScreeningWanted,
@@ -7080,6 +7140,19 @@ router.post(
             if (candidates.some((candidate) => candidate.isSponsored)) {
               dataSource = "Project Alpha + realestate.co.nz";
             }
+          }
+
+          // Lot-count criteria floor (index-empty fall-through): only show live
+          // candidates that actually model to the asked lot count — standard
+          // vacant-lot maths or design-led yield. Without this, "split into 4"
+          // would surface 2-lot cards that contradict the ask.
+          if (criteriaLotsFloor != null && candidates.length > 0) {
+            const floor = criteriaLotsFloor;
+            const before = candidates.length;
+            candidates = candidates.filter(
+              (c) => (c.potentialLots ?? 0) >= floor || (c.designLedYieldRange?.max ?? 0) >= floor,
+            );
+            req.log.info({ floor, before, after: candidates.length }, "Criteria search: applied live lots floor");
           }
 
           const noListings = candidates.length === 0;
@@ -8128,6 +8201,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
                 : Math.max(600_000, Math.round((minPrice + maxPrice) / 2)),
               strictStandardSubdivision: strictStandardSubdivisionSafetyNet,
               preliminarySubdivision: strictStandardSubdivisionSafetyNet,
+              developmentScreening: !plainListingBrowseSafetyNet && !strictStandardSubdivisionSafetyNet,
             };
             const safetyNetTargetCount = discoverPreOptsSn.strictStandardSubdivision ? 1 : 3;
             const safetyNetScreenConcurrency = discoverPreOptsSn.strictStandardSubdivision ? 1 : 5;

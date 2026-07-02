@@ -51,6 +51,20 @@ describe("strictAttributePrefilter", () => {
     expect(strictAttributePrefilter(listing({ propertyType: "Villa" })).kind).toBe("pass");
   });
 
+  it("keepSections (development mode) admits bare land but still rejects units and child lots", () => {
+    // Sections ARE development stock — pass in development mode, reject in strict.
+    expect(strictAttributePrefilter(listing({ propertyType: "Section" })).kind).toBe("reject");
+    expect(strictAttributePrefilter(listing({ propertyType: "Section" }), { keepSections: true }).kind).toBe("pass");
+    // Every other gate still applies in development mode.
+    expect(strictAttributePrefilter(listing({ propertyType: "Townhouse" }), { keepSections: true }).kind).toBe("reject");
+    expect(
+      strictAttributePrefilter(listing({ address: "32a Station Road, Takanini, Papakura, Auckland" }), { keepSections: true }).kind,
+    ).toBe("reject");
+    expect(
+      strictAttributePrefilter(listing({ address: "22B Clarice Place, Takanini, Papakura, Auckland" }), { keepSections: true }).kind,
+    ).toBe("reject");
+  });
+
   it("rejects non-freehold tenure", () => {
     expect(strictAttributePrefilter(listing({ tenureText: "Cross Lease" })).kind).toBe("reject");
     expect(strictAttributePrefilter(listing({ tenureText: "Unit Title" })).kind).toBe("reject");

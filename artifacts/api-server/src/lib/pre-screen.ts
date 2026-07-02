@@ -1,7 +1,7 @@
 import { logger } from "./logger";
 import { geocodeAddress } from "./geocode";
 import { scrapeHougarden } from "./scrapers/hougarden";
-import { fetchUnitaryPlanZone, fetchOverlays, type ZoneResult, type Overlay } from "./auckland-council";
+import type { ZoneResult, Overlay } from "./auckland-council";
 import type { ListingResult } from "./scrapers/oneroof";
 import { extractCombinedListingAddressParts } from "./scrapers/realestate-api";
 import {
@@ -11,7 +11,7 @@ import {
   type DesignLedYieldRange,
 } from "./lot-calculator";
 import { fetchLINZParcel, fetchLINZChildAddressCount, screenAddressFreehold, isLinzTitleServiceAvailable, tenureCategoryFromEstate } from "./linz";
-import { fetchPropertyHistory } from "./property-data";
+import type { PropertyHistory } from "./property-data";
 import { scrapePropertyValue } from "./scrapers/propertyvalue";
 import {
   assessPropertyEligibility,
@@ -30,6 +30,11 @@ import { strictAttributePrefilter } from "./strict-prefilter";
 import { extractListingClaims, detectRedevelopmentConflict, hasAmbiguousListingSignals } from "./listing-claims";
 import { extractListingClaimsLLM } from "./listing-claims-llm";
 import { getScreenVerdict, setScreenVerdict } from "./listing-cache";
+import {
+  fetchPlanningOverlaysForReport,
+  fetchPlanningZoneForReport,
+  fetchPropertyHistoryForReport,
+} from "./regional-planning-fetchers";
 
 export interface PropertyCandidate {
   address: string;
@@ -280,14 +285,14 @@ async function fetchScreenSourcesWithRetry(
   zone: ZoneResult | null;
   resolvedOverlays: Overlay[];
   linzParcel: Awaited<ReturnType<typeof fetchLINZParcel>> | null;
-  propertyHistory: Awaited<ReturnType<typeof fetchPropertyHistory>> | null;
+  propertyHistory: PropertyHistory | null;
   propertyValue: Awaited<ReturnType<typeof scrapePropertyValue>> | null;
   failedSources: string[];
 }> {
   let zone: ZoneResult | null = null;
   let resolvedOverlays: Overlay[] = [];
   let linzParcel: Awaited<ReturnType<typeof fetchLINZParcel>> | null = null;
-  let propertyHistory: Awaited<ReturnType<typeof fetchPropertyHistory>> | null = null;
+  let propertyHistory: PropertyHistory | null = null;
   let propertyValue: Awaited<ReturnType<typeof scrapePropertyValue>> | null = null;
   let failedSources: string[] = [];
 
@@ -311,16 +316,16 @@ async function fetchScreenSourcesWithRetry(
     const needsPropertyValue: boolean = opts.shouldFetchPropertyValue && !propertyValue;
 
     const zonePromise: Promise<ZoneResult | null> = needsZone
-      ? fetchUnitaryPlanZone(geo.lat, geo.lng)
+      ? fetchPlanningZoneForReport(geo.lat, geo.lng, listing.address)
       : Promise.resolve(zone);
     const overlaysPromise: Promise<Overlay[]> = needsOverlays
-      ? fetchOverlays(geo.lat, geo.lng)
+      ? fetchPlanningOverlaysForReport(geo.lat, geo.lng, null, { address: listing.address })
       : Promise.resolve(resolvedOverlays);
     const linzPromise: Promise<Awaited<ReturnType<typeof fetchLINZParcel>> | null> = needsLinz
       ? fetchLINZParcel(geo.lat, geo.lng)
       : Promise.resolve(linzParcel);
-    const propertyHistoryPromise: Promise<Awaited<ReturnType<typeof fetchPropertyHistory>> | null> = needsPropertyHistory
-      ? fetchPropertyHistory(listing.address, geo.lat, geo.lng)
+    const propertyHistoryPromise: Promise<PropertyHistory | null> = needsPropertyHistory
+      ? fetchPropertyHistoryForReport(listing.address, geo.lat, geo.lng)
       : Promise.resolve(propertyHistory);
     const propertyValuePromise: Promise<Awaited<ReturnType<typeof scrapePropertyValue>> | null> = needsPropertyValue
       ? scrapePropertyValue(listing.address, geo.formatted)
@@ -374,6 +379,15 @@ async function screenOneFast(
     strictStandardSubdivision?: boolean;
     preliminarySubdivision?: boolean;
     /**
+     * Scored development/opportunity discovery (the non-strict scored path).
+     * Applies the attribute prefilter (keeping bare sections — they ARE
+     * development stock) and a development-eligibility gate: already-subdivided
+     * children, unit/terrace typologies, and parcels below every viable pathway
+     * (standard 2-lot AND design-led minimums) are rejected instead of being
+     * scored and shown as "subdivision potential".
+     */
+    developmentScreening?: boolean;
+    /**
      * Verify freehold/fee-simple title against LINZ. Set only when the user's
      * intent calls for it (requiresFreeholdTitle, or any subdivision search —
      * the strict screen already requires verified freehold). Caller is
@@ -398,9 +412,12 @@ async function screenOneFast(
     }
 
     // Cheap listing-attribute prefilter — rejects ~40-60% of a suburb queue
-    // before any backend fetch when strict-subdivision discovery is on.
-    if (options?.strictStandardSubdivision) {
-      const prefilter = strictAttributePrefilter(listing);
+    // before any backend fetch. Applies to strict subdivision AND scored
+    // development discovery (development keeps bare sections — they're stock).
+    if (options?.strictStandardSubdivision || options?.developmentScreening) {
+      const prefilter = strictAttributePrefilter(listing, {
+        keepSections: !options?.strictStandardSubdivision,
+      });
       if (prefilter.kind === "reject") {
         logger.debug({ address: listing.address, reason: prefilter.reason }, "Pre-screen: strict attribute prefilter rejected listing");
         return { kind: "rejected", reason: `prefilter:${prefilter.reason}` };
@@ -658,6 +675,32 @@ async function screenOneFast(
       verifiedLand.landAreaConfidence === "verified" &&
       verifiedLand.isAlreadySubdividedChild !== true;
     const designLedPasses = designLedAssessment.designLedEligible;
+    // Development-eligibility gate for the scored non-strict path: a card
+    // presented as a development/subdivision opportunity must not be an
+    // already-subdivided child, a unit/terrace dwelling, or a parcel that fails
+    // BOTH the standard vacant-lot maths (2 × zone minimum, e.g. MHS 400 m²/lot)
+    // and the design-led pathway minimums. Softer than the strict screen (no
+    // freehold-verified or pre-2000 build-year requirement) but hard on the
+    // physically-impossible cases.
+    if (options?.developmentScreening && !options?.strictStandardSubdivision) {
+      if (verifiedLand.isAlreadySubdividedChild === true) {
+        logger.info({ address: listing.address }, "Pre-screen: development gate rejected already-subdivided child");
+        return { kind: "rejected", reason: "development_gate:already_subdivided_child" };
+      }
+      if (eligibility?.typology === "unit_apartment" || eligibility?.typology === "terrace_townhouse") {
+        logger.info({ address: listing.address, typology: eligibility.typology }, "Pre-screen: development gate rejected multi-unit typology");
+        return { kind: "rejected", reason: `development_gate:typology_${eligibility.typology}` };
+      }
+      const noViablePathway =
+        land != null && minLotSize != null && lots < 2 && !designLedPasses && !packageSubdivisionPasses;
+      if (noViablePathway) {
+        logger.info(
+          { address: listing.address, landArea: land, zone, minLotSize, lots },
+          "Pre-screen: development gate rejected parcel below every viable pathway",
+        );
+        return { kind: "rejected", reason: `development_gate:below_viable_pathway:${land}m2_min${minLotSize}` };
+      }
+    }
     if (options?.strictStandardSubdivision && !standardSubdivisionPasses && !packageSubdivisionPasses && !designLedPasses) {
       logger.info(
         {
@@ -896,6 +939,8 @@ export async function preScreenListingsFastDetailed(
     pricePlaceholderNzd?: number;
     strictStandardSubdivision?: boolean;
     preliminarySubdivision?: boolean;
+    /** Scored development discovery — attribute prefilter + development gate (see screenOneFast). */
+    developmentScreening?: boolean;
     /** Verify freehold/fee-simple title against LINZ (see screenOneFast). */
     verifyFreeholdTitle?: boolean;
     /** Non-freehold tenures the user opted in to seeing despite the subdivision catch (see screenOneFast). */
@@ -1006,6 +1051,8 @@ export async function preScreenListingsFast(
     pricePlaceholderNzd?: number;
     strictStandardSubdivision?: boolean;
     preliminarySubdivision?: boolean;
+    /** Scored development discovery — attribute prefilter + development gate (see screenOneFast). */
+    developmentScreening?: boolean;
     /** Verify freehold/fee-simple title against LINZ (see screenOneFast). */
     verifyFreeholdTitle?: boolean;
     /** Non-freehold tenures the user opted in to seeing despite the subdivision catch (see screenOneFast). */

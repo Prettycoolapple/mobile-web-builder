@@ -49,6 +49,14 @@ describe("detectFilterSpecFromText (regex fallback)", () => {
   it("extracts return percentage", () => {
     expect(detectFilterSpecFromText("What's on the market in Waikato with return over 7%")?.minRoiPct).toBe(7);
     expect(detectFilterSpecFromText("回报超过7%的房子")?.minRoiPct).toBe(7);
+    // The exact production phrasing that slipped past the LLM extractor.
+    expect(detectFilterSpecFromText("有什么可以开发的地回报大于 7%")?.minRoiPct).toBe(7);
+  });
+
+  it("only trusts a bare N套/N栋 count alongside a development/subdivision word", () => {
+    expect(detectFilterSpecFromText("可以开发3栋的地")?.minPotentialLots).toBe(3);
+    // A plain browse for "3 homes" must NOT be hijacked into a criteria search.
+    expect(detectFilterSpecFromText("看看3套房")).toBeNull();
   });
 
   it("returns null when no measurable criteria are present", () => {
