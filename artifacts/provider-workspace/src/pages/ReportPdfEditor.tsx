@@ -8,7 +8,12 @@ import { getToken } from "@/lib/auth";
 import { EMPTY_BRAND_KIT, loadBrandKit, saveBrandKit, type BrandKit } from "@/lib/brandKit";
 import { getPdfExportTarget } from "@/lib/pdfExportTarget";
 import { safeBrandColor } from "@/lib/pdfStyles";
-import { renderSitePlanSnapshot, type SitePlanResponse } from "@/lib/sitePlanSnapshot";
+import {
+  renderSitePlanSnapshot,
+  sitePlanLegendEntries,
+  type SitePlanLegendEntry,
+  type SitePlanResponse,
+} from "@/lib/sitePlanSnapshot";
 import {
   ReportPdfDocument,
   defaultLayout,
@@ -76,6 +81,7 @@ export function ReportPdfEditor() {
   const [busy, setBusy] = useState<"download" | "message" | null>(null);
   const [status, setStatus] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [sitePlanImage, setSitePlanImage] = useState<string | null>(null);
+  const [sitePlanLegend, setSitePlanLegend] = useState<SitePlanLegendEntry[]>([]);
   const [dmThreads, setDmThreads] = useState<DmThread[]>([]);
   const [dmQuery, setDmQuery] = useState("");
   const [selectedThreadIds, setSelectedThreadIds] = useState<string[]>([]);
@@ -155,6 +161,7 @@ export function ReportPdfEditor() {
     let cancelled = false;
     if (!report?.historyId) {
       setSitePlanImage(null);
+      setSitePlanLegend([]);
       return;
     }
 
@@ -163,12 +170,19 @@ export function ReportPdfEditor() {
     const path = `/analyse/${encodeURIComponent(report.historyId)}/site-plan${params.size ? `?${params}` : ""}`;
 
     void api<SitePlanResponse>(path, { method: "GET", redirectOn401: false })
-      .then((sitePlan) => renderSitePlanSnapshot(sitePlan))
-      .then((image) => {
-        if (!cancelled) setSitePlanImage(image);
+      .then(async (sitePlan) => ({
+        image: await renderSitePlanSnapshot(sitePlan),
+        legend: sitePlanLegendEntries(sitePlan),
+      }))
+      .then(({ image, legend }) => {
+        if (cancelled) return;
+        setSitePlanImage(image);
+        setSitePlanLegend(legend);
       })
       .catch(() => {
-        if (!cancelled) setSitePlanImage(null);
+        if (cancelled) return;
+        setSitePlanImage(null);
+        setSitePlanLegend([]);
       });
 
     return () => {
@@ -249,9 +263,10 @@ export function ReportPdfEditor() {
         layout={layout}
         contentEdits={contentEdits}
         sitePlanImage={sitePlanImage}
+        sitePlanLegend={sitePlanLegend}
       />
     ),
-    [pdfReport, brandKit, layout, contentEdits, sitePlanImage],
+    [pdfReport, brandKit, layout, contentEdits, sitePlanImage, sitePlanLegend],
   );
 
   const handleSaveKit = async () => {

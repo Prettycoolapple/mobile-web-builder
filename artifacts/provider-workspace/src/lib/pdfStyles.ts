@@ -110,6 +110,24 @@ export const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: LINE,
   },
+  sitePlanLegend: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginTop: 6,
+  },
+  sitePlanLegendItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginRight: 12,
+    marginBottom: 3,
+  },
+  sitePlanLegendSwatch: {
+    width: 9,
+    height: 9,
+    borderRadius: 2,
+    marginRight: 4,
+  },
+  sitePlanLegendLabel: { fontSize: 8, color: INK },
   preparedBy: {
     marginTop: 6,
     borderTopWidth: 1,

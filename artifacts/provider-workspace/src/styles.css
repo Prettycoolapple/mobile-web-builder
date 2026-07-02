@@ -1221,7 +1221,10 @@ a {
 }
 .site-plan-tile {
   object-fit: cover;
-  opacity: 0.84;
+  /* Full opacity: tiles overlap by 1px to cover sub-pixel seams, so any transparency would
+     double up on the overlap strips and draw visible darker lines between tiles. The white
+     `.site-plan-aerial-scrim` above provides the legibility wash for the vector linework. */
+  opacity: 1;
   display: block;
   backface-visibility: hidden;
 }
@@ -1240,18 +1243,6 @@ a {
 .site-plan-aerial-scrim {
   background: rgba(255, 255, 255, 0.12);
   pointer-events: none;
-}
-.site-plan-attribution {
-  position: absolute;
-  left: 8px;
-  bottom: 7px;
-  max-width: calc(100% - 16px);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.86);
-  color: var(--muted);
-  font-size: 10px;
-  line-height: 1.2;
-  padding: 4px 7px;
 }
 .site-plan-empty {
   min-height: 260px;

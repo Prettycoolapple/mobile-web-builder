@@ -417,33 +417,43 @@ export function SitePlanCard({ report, active }: { report: FeasibilityReport; ac
     });
   }, [baseScale, data, searchId, viewportSize]);
 
-  const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
-    if (!data || !viewportSize) return;
-    event.preventDefault();
-    const rect = event.currentTarget.getBoundingClientRect();
-    const pointerX = event.clientX - rect.left - viewportSize.width / 2;
-    const pointerY = event.clientY - rect.top - viewportSize.height / 2;
-    const zoomFactor = Math.exp(-event.deltaY * 0.0012);
-    setView((current) => {
-      const nextScale = Math.max(MIN_MAP_SCALE, Math.min(MAX_MAP_SCALE, current.scale * zoomFactor));
-      if (Math.abs(nextScale - current.scale) < 0.001) return current;
+  // Zoom on mouse-wheel while the cursor is over the map. React registers `onWheel` as a passive
+  // listener on its root, so `preventDefault()` there is ignored and the page scrolls instead of
+  // the map zooming. Attach a native non-passive listener so we can cancel the page scroll and
+  // keep the wheel confined to zooming this card. MIN_MAP_SCALE caps zoom-out at the fetched
+  // neighbourhood extent (the tile grid only covers the immediate surroundings, never all of NZ).
+  useEffect(() => {
+    const node = viewportRef.current;
+    if (!node || !data || !viewportSize) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const rect = node.getBoundingClientRect();
+      const pointerX = event.clientX - rect.left - viewportSize.width / 2;
+      const pointerY = event.clientY - rect.top - viewportSize.height / 2;
+      const zoomFactor = Math.exp(-event.deltaY * 0.0012);
+      setView((current) => {
+        const nextScale = Math.max(MIN_MAP_SCALE, Math.min(MAX_MAP_SCALE, current.scale * zoomFactor));
+        if (Math.abs(nextScale - current.scale) < 0.001) return current;
 
-      const oldTotalScale = baseScale * current.scale;
-      const nextTotalScale = baseScale * nextScale;
-      const anchorX = (pointerX - current.x) / oldTotalScale;
-      const anchorY = (pointerY - current.y) / oldTotalScale;
-      const contentW = data.image.width * nextTotalScale;
-      const contentH = data.image.height * nextTotalScale;
-      const nextX = pointerX - anchorX * nextTotalScale;
-      const nextY = pointerY - anchorY * nextTotalScale;
+        const oldTotalScale = baseScale * current.scale;
+        const nextTotalScale = baseScale * nextScale;
+        const anchorX = (pointerX - current.x) / oldTotalScale;
+        const anchorY = (pointerY - current.y) / oldTotalScale;
+        const contentW = data.image.width * nextTotalScale;
+        const contentH = data.image.height * nextTotalScale;
+        const nextX = pointerX - anchorX * nextTotalScale;
+        const nextY = pointerY - anchorY * nextTotalScale;
 
-      return {
-        scale: nextScale,
-        x: clampMapTranslation(nextX, contentW, viewportSize.width),
-        y: clampMapTranslation(nextY, contentH, viewportSize.height),
-      };
-    });
-  };
+        return {
+          scale: nextScale,
+          x: clampMapTranslation(nextX, contentW, viewportSize.width),
+          y: clampMapTranslation(nextY, contentH, viewportSize.height),
+        };
+      });
+    };
+    node.addEventListener("wheel", onWheel, { passive: false });
+    return () => node.removeEventListener("wheel", onWheel);
+  }, [baseScale, data, viewportSize]);
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!data || !viewportSize || event.button !== 0) return;
@@ -501,7 +511,6 @@ export function SitePlanCard({ report, active }: { report: FeasibilityReport; ac
       <div
         ref={viewportRef}
         className="site-plan-map"
-        onWheel={handleWheel}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerEnd}

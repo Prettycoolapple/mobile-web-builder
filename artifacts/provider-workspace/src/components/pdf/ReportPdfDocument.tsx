@@ -10,6 +10,7 @@ import {
   formatScore,
 } from "@/lib/format";
 import { styles, scoreHex, safeBrandColor, type BrandKit } from "@/lib/pdfStyles";
+import type { SitePlanLegendEntry } from "@/lib/sitePlanSnapshot";
 
 export type SectionKey =
   | "overview"
@@ -641,12 +642,14 @@ export function ReportPdfDocument({
   layout,
   contentEdits = EMPTY_PDF_CONTENT_EDITS,
   sitePlanImage,
+  sitePlanLegend,
 }: {
   report: FeasibilityReport;
   brandKit: BrandKit;
   layout: PdfLayout;
   contentEdits?: PdfContentEdits;
   sitePlanImage?: string | null;
+  sitePlanLegend?: SitePlanLegendEntry[];
 }) {
   const brand = safeBrandColor(brandKit.brandColor);
   const scores = report.scores ?? { ease: 0, cost: 0, roi: 0, composite: 0 };
@@ -684,6 +687,16 @@ export function ReportPdfDocument({
             <View style={styles.coverSitePlanBlock}>
               <Text style={styles.coverSectionLabel}>Site plan</Text>
               <Image style={styles.coverSitePlanImage} src={sitePlanImage} />
+              {sitePlanLegend && sitePlanLegend.length > 0 ? (
+                <View style={styles.sitePlanLegend}>
+                  {sitePlanLegend.map((item, i) => (
+                    <View style={styles.sitePlanLegendItem} key={`${item.label}-${i}`}>
+                      <View style={[styles.sitePlanLegendSwatch, { backgroundColor: item.color }]} />
+                      <Text style={styles.sitePlanLegendLabel}>{item.label}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
             </View>
           ) : null}
 

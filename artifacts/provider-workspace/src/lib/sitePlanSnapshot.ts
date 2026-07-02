@@ -266,6 +266,26 @@ function parcelCrop(data: SitePlanResponse, outputWidth: number, outputHeight: n
   };
 }
 
+export type SitePlanLegendEntry = { label: string; color: string; kind: "line" | "polygon" | "point" };
+
+/**
+ * Legend entries for the layers actually drawn into the snapshot — every available layer that has
+ * features (parcel boundary, nearby boundaries, contours, plus any planning overlays / services).
+ * Consumed by the white-label PDF so the exported site plan carries the same legend as the card.
+ */
+export function sitePlanLegendEntries(data: SitePlanResponse): SitePlanLegendEntry[] {
+  return data.layers
+    .filter((layer) => layer.available && layer.geojson.features.length > 0)
+    .map((layer) => {
+      const item = layer.legend[0];
+      return {
+        label: item?.label ?? layer.label,
+        color: item?.color ?? layer.style.stroke,
+        kind: item?.kind ?? (layer.group === "services" || layer.group === "contours" ? "line" : "polygon"),
+      };
+    });
+}
+
 export async function renderSitePlanSnapshot(data: SitePlanResponse): Promise<string> {
   const outputWidth = 1600;
   const outputHeight = 980;
@@ -290,11 +310,13 @@ export async function renderSitePlanSnapshot(data: SitePlanResponse): Promise<st
 
   if (data.image.source === "linz-basemaps" && data.image.tiles?.length) {
     const loaded = await Promise.all(data.image.tiles.map(async (tile) => ({ tile, image: await loadImage(imageUrlForTile(tile)) })));
+    const tileSize = data.image.tileSize ?? 256;
     for (const { tile, image } of loaded) {
       if (!image) continue;
-      ctx.globalAlpha = 0.84;
-      ctx.drawImage(image, tile.left, tile.top, data.image.tileSize ?? 256, data.image.tileSize ?? 256);
-      ctx.globalAlpha = 1;
+      // Draw tiles fully opaque with a 1px overlap so no seam/gap shows between them (the
+      // white wash below keeps the vector linework legible). A sub-1 alpha here would draw
+      // darker lines along the overlaps. Matches the interactive card's tile rendering.
+      ctx.drawImage(image, tile.left, tile.top, tileSize + 1, tileSize + 1);
     }
   } else if (data.image.dataUri) {
     const image = await loadImage(data.image.dataUri);
