@@ -2,6 +2,13 @@ import { logger } from "./logger";
 import { geocodeAddress, type GeoResult } from "./geocode";
 import { fetchLINZParcel, fetchLINZParcelsNear, type LinzParcel, type ParcelBbox } from "./linz";
 import type { RawPropertyData } from "./pipeline";
+import {
+  regionalPlanningProvidersEnabled,
+  resolvePlanningJurisdiction,
+  type PlanningProviderId,
+} from "./regional-planning";
+import { regionalSitePlanOverlayLayers, type RegionalSitePlanOverlayLayer } from "./regional-arcgis";
+import { regionalInfrastructureServiceLayers, type RegionalInfrastructureGroup } from "./regional-infrastructure";
 
 type GeoJsonPosition = [number, number];
 type GeoJsonGeometry =
@@ -209,8 +216,18 @@ function planningLayerColor(def: { name: string; layerId: number }): string {
   return PLANNING_LAYER_COLORS[Math.max(0, index) % PLANNING_LAYER_COLORS.length]!;
 }
 
+function regionalPlanningLayerColor(index: number): string {
+  return PLANNING_LAYER_COLORS[Math.max(0, index) % PLANNING_LAYER_COLORS.length]!;
+}
+
 function planningLayerKind(def: { name: string }): SitePlanLegendItem["kind"] {
   return def.name === "Notable Trees" ? "point" : "polygon";
+}
+
+function regionalPlanningLayerKind(def: RegionalSitePlanOverlayLayer): SitePlanLegendItem["kind"] {
+  if (def.geometryType === "point") return "point";
+  if (def.geometryType === "polyline") return "line";
+  return "polygon";
 }
 
 export function planningLayerStylePreview(): Array<{
@@ -795,6 +812,64 @@ async function planningOverlayLayers(lat: number, lng: number, parcelBbox: Parce
   return layers;
 }
 
+async function regionalPlanningOverlayLayers(
+  providerId: PlanningProviderId,
+  geo: GeoResult,
+  parcelBbox: ParcelBbox | null | undefined,
+  coreBounds: SitePlanBounds,
+): Promise<SitePlanLayer[]> {
+  const defs = regionalSitePlanOverlayLayers(providerId);
+  if (defs.length === 0) return [];
+
+  const parcelGeometry = arcgisParcelGeometry(parcelBbox);
+  const pointGeometry = { geometry: `${geo.lng},${geo.lat}`, geometryType: "esriGeometryPoint" };
+  const nearbyGeometry = envelopeGeometry(paddedBounds(coreBounds, 45, 180));
+
+  const results = await Promise.allSettled(
+    defs.map(async (def, index) => {
+      const kind = regionalPlanningLayerKind(def);
+      const queryGeometry = def.geometryType === "polygon"
+        ? (parcelGeometry ?? pointGeometry)
+        : nearbyGeometry;
+      const features = await queryArcGisFeatures({
+        serviceUrl: def.serviceUrl,
+        layerId: def.layerId,
+        geometry: queryGeometry.geometry,
+        geometryType: queryGeometry.geometryType,
+        distanceM: queryGeometry === pointGeometry ? def.distanceM : undefined,
+        maxFeatures: 80,
+      });
+      const geojson = arcgisFeaturesToGeoJson(features, def.name);
+      if (geojson.features.length === 0) return null;
+      const color = regionalPlanningLayerColor(index);
+      return {
+        id: `regional-planning-${providerId}-${def.layerId}`,
+        label: def.name,
+        group: "planning" as const,
+        defaultVisible: false,
+        available: true,
+        style: {
+          stroke: color,
+          strokeWidth: kind === "point" ? 2.6 : def.status === "control" ? 2.4 : 2,
+          strokeOpacity: 0.92,
+          fill: color,
+          fillOpacity: kind === "point" ? 0.9 : def.status === "control" ? 0.08 : 0.15,
+          dashArray: def.status === "control" ? [8, 6] : undefined,
+          markerShape: kind === "point" ? "triangle" as const : undefined,
+        },
+        legend: [{ label: def.name, color, kind }],
+        geojson,
+      };
+    }),
+  );
+
+  const layers: SitePlanLayer[] = [];
+  for (const result of results) {
+    if (result.status === "fulfilled" && result.value) layers.push(result.value);
+  }
+  return layers;
+}
+
 function envelopeGeometry(bounds: SitePlanBounds): { geometry: string; geometryType: string } {
   return {
     geometry: JSON.stringify({
@@ -859,6 +934,68 @@ async function serviceLayers(bounds: SitePlanBounds): Promise<SitePlanLayer[]> {
     const def = SERVICE_LAYER_DEFS[index]!;
     return unavailableLayer(def.id, def.label, "services", def.color);
   });
+}
+
+function regionalServiceLayerStyle(group: RegionalInfrastructureGroup): {
+  id: "service-stormwater" | "service-wastewater" | "service-water";
+  label: string;
+  color: string;
+} {
+  if (group.name === "Stormwater") return { id: "service-stormwater", label: "Stormwater", color: "#0EA5E9" };
+  if (group.name === "Wastewater") return { id: "service-wastewater", label: "Wastewater", color: "#7C3AED" };
+  return { id: "service-water", label: "Water Supply", color: "#2563EB" };
+}
+
+async function regionalServiceLayers(bounds: SitePlanBounds, providerId: PlanningProviderId): Promise<SitePlanLayer[]> {
+  const serviceBounds = paddedBounds(bounds, 200, 520);
+  const geometry = envelopeGeometry(serviceBounds);
+  const groups = regionalInfrastructureServiceLayers(providerId);
+  if (groups.length === 0) return [];
+
+  const groupResults = await Promise.allSettled(
+    groups.map(async (group) => {
+      const style = regionalServiceLayerStyle(group);
+      const layerResults = await Promise.allSettled(
+        group.layers.map(async (layer) => {
+          const features = await queryArcGisFeatures({
+            serviceUrl: group.serviceUrl,
+            layerId: layer.id,
+            geometry: geometry.geometry,
+            geometryType: geometry.geometryType,
+            maxFeatures: 220,
+            timeoutMs: 9000,
+          });
+          return arcgisFeaturesToGeoJson(features, layer.label).features.map((feature) => ({
+            ...feature,
+            properties: {
+              ...feature.properties,
+              serviceType: group.name,
+              sourceLayer: layer.label,
+              sourceOwner: group.owner,
+            },
+          }));
+        }),
+      );
+      const features = layerResults.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+      if (features.length === 0) return unavailableLayer(style.id, style.label, "services", style.color);
+      return {
+        id: style.id,
+        label: style.label,
+        group: "services" as const,
+        defaultVisible: false,
+        available: true,
+        style: {
+          stroke: style.color,
+          strokeWidth: 3,
+          strokeOpacity: 0.95,
+        },
+        legend: [{ label: style.label, color: style.color, kind: "line" as const }],
+        geojson: { type: "FeatureCollection" as const, features },
+      };
+    }),
+  );
+
+  return groupResults.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
 }
 
 const CONTOUR_COLOR = "#475569";
@@ -1084,6 +1221,69 @@ export async function buildSitePlanForAddress(
       contours,
     ],
   };
+}
+
+async function buildNationalSitePlanForGeo(
+  geo: GeoResult,
+  cachedRaw?: RawPropertyData | null,
+  providerId?: PlanningProviderId,
+): Promise<SitePlanResponse> {
+  const parcel = await resolveParcel(geo, cachedRaw);
+  const coreBounds = boundsFromParcel(parcel) ?? fallbackBoundsFromCenter(geo.lat, geo.lng);
+  const mapBounds = sitePlanMapBounds(coreBounds);
+  const center = parcel?.bbox ? boundsCenter(parcel.bbox) : { lat: geo.lat, lng: geo.lng };
+  const nearbyRadiusM = Math.max(240, Math.min(1500, Math.ceil(boundsRadiusMetres(mapBounds) * 3)));
+
+  const [image, nearbyParcels, planning, services, contours] = await Promise.all([
+    Promise.resolve(buildAerialTileGrid(mapBounds)),
+    fetchLINZParcelsNear(center.lat, center.lng, nearbyRadiusM, 400).catch((err) => {
+      logger.warn({ err: (err as Error).message }, "site-plan: LINZ nearby parcel lookup failed");
+      return null;
+    }),
+    providerId
+      ? regionalPlanningOverlayLayers(providerId, geo, parcel?.bbox ?? null, coreBounds).catch((err) => {
+          logger.warn({ err: (err as Error).message, providerId }, "site-plan: regional planning overlay lookup failed");
+          return [] as SitePlanLayer[];
+        })
+      : Promise.resolve([] as SitePlanLayer[]),
+    providerId
+      ? regionalServiceLayers(coreBounds, providerId).catch((err) => {
+          logger.warn({ err: (err as Error).message, providerId }, "site-plan: regional service lookup failed");
+          return [] as SitePlanLayer[];
+        })
+      : Promise.resolve([] as SitePlanLayer[]),
+    linzContourLayer(coreBounds),
+  ]);
+
+  return {
+    image,
+    center,
+    layers: [
+      nearbyBoundaryLayer(nearbyParcels, parcel),
+      boundaryLayer(parcel),
+      ...planning,
+      ...services,
+      contours,
+    ],
+  };
+}
+
+export async function buildSitePlanForReport(
+  address: string,
+  cachedRaw?: RawPropertyData | null,
+  geoHint?: GeoHint | null,
+): Promise<SitePlanResponse> {
+  if (!regionalPlanningProvidersEnabled()) {
+    return buildSitePlanForAddress(address, cachedRaw, geoHint);
+  }
+
+  const geo = await resolveGeo(address, cachedRaw, geoHint);
+  const jurisdiction = resolvePlanningJurisdiction({ address, lat: geo.lat, lng: geo.lng });
+  if (jurisdiction.providerId === "auckland-legacy") {
+    return buildSitePlanForAddress(address, cachedRaw, geo);
+  }
+
+  return buildNationalSitePlanForGeo(geo, cachedRaw, jurisdiction.providerId);
 }
 
 export function layerHasFeatures(layer: SitePlanLayer): boolean {

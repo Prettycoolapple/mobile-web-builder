@@ -2,9 +2,22 @@ import { logger } from "./logger";
 import { ai } from "@workspace/integrations-gemini-ai";
 import { geocodeAddress, type GeoResult } from "./geocode";
 import { fetchLINZParcel, fetchLINZTitle, fetchLINZMemorials, fetchLINZTitlesByAddressDetailed, fetchLINZChildAddressCount, estateTypeFromLrsTitles, type LinzParcel, type LinzTitle, type LinzLrsAddressTitlePreview, type LinzLrsTitlePreviewStatus, type LinzLrsTitlePreviewSource } from "./linz";
-import { fetchUnitaryPlanZone, fetchOverlaysWithConsensus, fetchContour, type ZoneResult, type Overlay, type ContourResult } from "./auckland-council";
-import { fetchPropertyHistory, checkAsbestosRisk, type PropertyHistory, type AsbestosRisk } from "./property-data";
-import { fetchInfrastructure, type InfrastructureItem } from "./infrastructure";
+import type { ZoneResult, Overlay, ContourResult } from "./auckland-council";
+import { checkAsbestosRisk, type PropertyHistory, type AsbestosRisk } from "./property-data";
+import type { InfrastructureItem } from "./infrastructure";
+import {
+  fetchInfrastructureForReport,
+  fetchPlanningOverlaysForReport,
+  fetchPlanningZoneForReport,
+  fetchPropertyHistoryForReport,
+  fetchTerrainForReport,
+} from "./regional-planning-fetchers";
+import {
+  planningProviderMetadata,
+  shouldSuppressAucklandPlanningRules,
+  type PlanningProviderMetadata,
+} from "./regional-planning";
+import { regionalPlanningRuleStatus, regionalZoneDescriptionWithRuleStatus } from "./regional-rules";
 import { scrapeHougarden, type HougardenData } from "./scrapers/hougarden";
 import { scrapeOneRoof, type OneRoofData, type ListingResult } from "./scrapers/oneroof";
 import { scrapeHomes, type HomesData } from "./scrapers/homes";
@@ -391,6 +404,9 @@ export interface RawPropertyData {
   neighbourhood_context: NeighbourhoodContext | null;
   transport_context: TransportContext | null;
   built_environment_context?: BuiltEnvironmentContext | null;
+  /** Optional regional-planning provider diagnostics. Omitted when the provider
+   * router is disabled so legacy Auckland cache payloads remain unchanged. */
+  planning_provider?: PlanningProviderMetadata | null;
   /** Official MoE enrolment-zone hits (point-in-polygon). Optional: rows cached
    * before this field existed fall back to a live lookup on serve. */
   school_zones_gis?: SchoolZoneGisHit[];
@@ -602,7 +618,7 @@ export async function runPropertyPipeline(
       "Geocoding failed — pipeline cannot continue with location-based sources",
     );
 
-    const propHistoryOnly = await timed("property_history", () => fetchPropertyHistory(address), timing);
+    const propHistoryOnly = await timed("property_history", () => fetchPropertyHistoryForReport(address), timing);
     if (propHistoryOnly.failed) failedSources.push("property_history");
 
     const asbestos = propHistoryOnly.value
@@ -675,6 +691,7 @@ export async function runPropertyPipeline(
   }
 
   const { lat, lng } = geocode;
+  const planningProvider = planningProviderMetadata({ address, lat, lng });
   const suburb = cr ? cr.suburb : await resolvePipelineSuburb(address, geocode);
   let resolvedListingContext = options.selectedListingContext ?? null;
 
@@ -713,11 +730,11 @@ export async function runPropertyPipeline(
     qvResult,
     homesResult,
   ] = await Promise.allSettled([
-    timed("zone",             () => cr ? Promise.resolve(cr.zone)             : fetchUnitaryPlanZone(lat, lng),                                               timing),
-    timed("overlays",         () => cr ? Promise.resolve(cr.overlays)         : fetchOverlaysWithConsensus(lat, lng, linzParcelData?.bbox ?? null),            timing),
-    timed("contour",          () => cr ? Promise.resolve(cr.contour)          : fetchContour(lat, lng, linzParcelData?.bbox ?? null, { landAreaSqm: linzParcelData?.area_sqm ?? null }), timing),
-    timed("property_history", () => cr ? Promise.resolve(cr.property_history) : fetchPropertyHistory(address, lat, lng),                                      timing),
-    timed("infrastructure",   () => cr ? Promise.resolve(cr.infrastructure)   : fetchInfrastructure(lat, lng, linzParcelData?.bbox ?? null, linzParcelData?.parcel_id ?? null, { landAreaSqm: linzParcelData?.area_sqm ?? null }), timing),
+    timed("zone",             () => cr ? Promise.resolve(cr.zone)             : fetchPlanningZoneForReport(lat, lng, address),                                                timing),
+    timed("overlays",         () => cr ? Promise.resolve(cr.overlays)         : fetchPlanningOverlaysForReport(lat, lng, linzParcelData?.bbox ?? null, { address, consensus: true }), timing),
+    timed("contour",          () => cr ? Promise.resolve(cr.contour)          : fetchTerrainForReport(lat, lng, linzParcelData?.bbox ?? null, { landAreaSqm: linzParcelData?.area_sqm ?? null }, address), timing),
+    timed("property_history", () => cr ? Promise.resolve(cr.property_history) : fetchPropertyHistoryForReport(address, lat, lng, linzParcelData?.area_sqm ?? null),              timing),
+    timed("infrastructure",   () => cr ? Promise.resolve(cr.infrastructure)   : fetchInfrastructureForReport(lat, lng, linzParcelData?.bbox ?? null, linzParcelData?.parcel_id ?? null, { landAreaSqm: linzParcelData?.area_sqm ?? null }, address), timing),
     timed("hougarden",        () => cr ? Promise.resolve(cr.hougarden)        : (useBrowserScrapers ? withBrowserSlot(() => scrapeHougarden(lat, lng, address)) : Promise.resolve(null)), timing),
     timed("oneroof",          () => cr ? Promise.resolve(cr.oneroof)          : (useBrowserScrapers ? withBrowserSlot(() => scrapeOneRoof(address)) : Promise.resolve(null)), timing),
     timed("propertyvalue",    () => cr ? Promise.resolve(cr.propertyValue)    : scrapePropertyValue(address, geocode!.formatted ?? address),                  timing),
@@ -764,10 +781,10 @@ export async function runPropertyPipeline(
   if (needsZoneBasedRuralInfrastructure) {
     const zoneAwareInfrastructure = await timed(
       "infrastructure_rural_zone_retry",
-      () => fetchInfrastructure(lat, lng, linzParcelData?.bbox ?? null, linzParcelData?.parcel_id ?? null, {
+      () => fetchInfrastructureForReport(lat, lng, linzParcelData?.bbox ?? null, linzParcelData?.parcel_id ?? null, {
         zoneCode: zoneCodeForInfrastructure,
         landAreaSqm: linzParcelData?.area_sqm ?? null,
-      }),
+      }, address),
       timing,
     );
     if (!zoneAwareInfrastructure.failed && zoneAwareInfrastructure.value) {
@@ -1086,6 +1103,24 @@ export async function runPropertyPipeline(
       ],
     },
   );
+  if (shouldSuppressAucklandPlanningRules(planningProvider)) {
+    const ruleStatus = regionalPlanningRuleStatus(planningProvider, zoneData);
+    if (merged.zone_code || merged.min_lot_size_sqm) {
+      logger.info(
+        {
+          providerId: planningProvider?.providerId,
+          originalZoneCode: merged.zone_code,
+          originalMinLotSizeSqm: merged.min_lot_size_sqm,
+        },
+        "Regional provider selected: suppressing Auckland-specific zone and lot-size modelling",
+      );
+    }
+    merged.zone_code = null;
+    merged.min_lot_size_sqm = null;
+    merged.zone_description = regionalZoneDescriptionWithRuleStatus(zoneData, planningProvider);
+    merged.data_sources["zone"] = "regional_provider_partial";
+    if (ruleStatus.note) merged.discrepancies.push(ruleStatus.note);
+  }
 
   // ── Photo enrichment ───────────────────────────────────────────────────
   // Feasibility report photos must be either selected/current active-listing
@@ -1614,6 +1649,7 @@ export async function runPropertyPipeline(
     contour: contourData,
     infrastructure: infrastructureData,
     property_history: propertyHistoryData,
+    ...(planningProvider ? { planning_provider: planningProvider } : {}),
     hougarden: stripScraperPhotos(hougardenData),
     oneroof: stripOneRoofVolatile(oneRoofData),
     qv: stripScraperPhotos(qvData),

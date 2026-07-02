@@ -11,6 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "backfill-feature-index": "tsx src/scripts/backfill-feature-index.ts",
+    "smoke:regional-planning": "tsx src/scripts/smoke-regional-planning.ts",
     "ci": "pnpm run typecheck && pnpm run test"
   },
   "dependencies": {

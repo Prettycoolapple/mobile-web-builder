@@ -1,6 +1,11 @@
 import { geocodeAddress } from "./geocode";
-import { fetchUnitaryPlanZone, fetchOverlays, fetchContour, type Overlay } from "./auckland-council";
+import type { Overlay } from "./auckland-council";
 import { fetchLINZParcel } from "./linz";
+import {
+  fetchPlanningOverlaysForReport,
+  fetchPlanningZoneForReport,
+  fetchTerrainForReport,
+} from "./regional-planning-fetchers";
 import {
   assessSubdivisionPathways,
   calculatePotentialLots,
@@ -70,9 +75,9 @@ export async function computeLightScore(input: LightScoreInput): Promise<LightSc
 
   const [linzResult, zoneResult, overlayResult, contourResult] = await Promise.allSettled([
     fetchLINZParcel(geo.lat, geo.lng),
-    fetchUnitaryPlanZone(geo.lat, geo.lng),
-    fetchOverlays(geo.lat, geo.lng),
-    fetchContour(geo.lat, geo.lng, null),
+    fetchPlanningZoneForReport(geo.lat, geo.lng, address),
+    fetchPlanningOverlaysForReport(geo.lat, geo.lng, null, { address }),
+    fetchTerrainForReport(geo.lat, geo.lng, null, undefined, address),
   ]);
 
   const linzParcel = linzResult.status === "fulfilled" ? linzResult.value : null;
