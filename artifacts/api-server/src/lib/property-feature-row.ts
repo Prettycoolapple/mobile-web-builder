@@ -1,7 +1,6 @@
 import type { RawPropertyData } from "./pipeline";
 import type { InfrastructureItem } from "./infrastructure";
 import type { InsertPropertyFeatureIndex } from "@workspace/db";
-import { isAupZoneCode } from "./lot-calculator";
 
 /**
  * Pure extraction: flatten a cached raw_data bundle into a property_feature_index
@@ -60,7 +59,13 @@ export function deriveFeatureRow(raw: RawPropertyData, id: FeatureRowIdentity): 
     lat: id.lat ?? null,
     lng: id.lng ?? null,
     region: null,
-    aupCovered: isAupZoneCode(zone),
+    // Region-agnostic modelling gate: the pipeline (regional-rules.ts) already
+    // nulls out `derived_scores.zone` whenever the property's region/zone isn't
+    // properly modelled for automatic yield claims (regardless of WHICH region
+    // — Auckland, or any region with its own rule pack e.g. Hamilton/Whangarei).
+    // So a present zone already means the lot count here is trustworthy; no
+    // Auckland-specific check is needed, and none should be reintroduced.
+    aupCovered: zone != null,
 
     slopeDegrees: raw.contour?.slope_degrees ?? null,
     contourClass: raw.contour?.classification ?? null,

@@ -46,9 +46,14 @@ export const propertyFeatureIndex = pgTable(
     lng: doublePrecision("lng"),
     /** Coarse region label when known (e.g. "auckland"); null until derived. */
     region: text("region"),
-    /** True when the zone is a recognised Auckland Unitary Plan zone, i.e. the
-     * subdivision/lot/ROI modelling is trustworthy. Non-AUP rows (e.g. Waikato)
-     * must NOT be filtered on lot/ROI constraints. */
+    /** True when this property's zone/lot/ROI modelling is trustworthy —
+     * region-agnostic: mirrors whether `derived_scores.zone` is non-null, which
+     * the pipeline (regional-rules.ts) already sets for ANY region with a
+     * working rule pack (Auckland, or any other region once modelled), and
+     * nulls for regions not yet supported. Column name predates multi-region
+     * support; kept to avoid a migration. Informational only — search no
+     * longer filters on it, since a null zone/lots/ROI already fails the
+     * numeric predicates naturally. */
     aupCovered: boolean("aup_covered").notNull().default(false),
 
     // Terrain — raw_data.contour (measured; scoring-version independent)

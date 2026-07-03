@@ -39,21 +39,20 @@ export interface CriteriaSearchResult {
     hasMore: boolean;
     /** The scope actually searched. */
     scope: SearchFilterSpec["searchScope"];
-    /** True when the criteria required AUP subdivision/ROI modelling (Auckland). */
-    requiresAupModelling: boolean;
   };
 }
 
 function specToFilter(spec: SearchFilterSpec, suburbs: string[]): FeatureSearchFilter {
-  const requiresAup = spec.minPotentialLots != null || spec.minRoiPct != null;
   return {
     suburbs,
     minPotentialLots: spec.minPotentialLots,
     maxSlopeDegrees: spec.maxSlopeDegrees,
     servicesOnParcel: spec.infrastructureOnParcel,
     minRoiPct: spec.minRoiPct,
-    // Lot/ROI constraints are only trustworthy inside AUP coverage (Auckland).
-    requireAupCovered: requiresAup,
+    // No separate region gate needed: the pipeline already nulls out
+    // zone/lots/ROI at the source for any property whose region isn't
+    // properly modelled (regional-rules.ts), so those rows can never satisfy
+    // the numeric predicates above regardless of which region they're in.
     // Score/lot/ROI constraints must exclude stale-formula rows.
     minScoringVersion: SCORING_VERSION,
   };
@@ -145,7 +144,6 @@ export async function runCriteriaSearch(
     coverage: {
       hasMore,
       scope: spec.searchScope,
-      requiresAupModelling: spec.minPotentialLots != null || spec.minRoiPct != null,
     },
   };
 }
@@ -190,23 +188,15 @@ export function buildCriteriaSearchIntro(
 }
 
 /**
- * Honest "no match yet" message; adds the Auckland-only caveat for lot/ROI
- * asks. Generic framing — never mentions cache/index/analysed-properties.
+ * Honest "no match yet" message. Generic framing — never mentions
+ * cache/index/analysed-properties, and never singles out a region: regional
+ * coverage varies by property (regional-rules.ts), not by a fixed area list.
  */
-export function buildCriteriaSearchEmptyMessage(
-  coverage: CriteriaSearchResult["coverage"],
-  suburb: string | null,
-  locale: string,
-): string {
+export function buildCriteriaSearchEmptyMessage(suburb: string | null, locale: string): string {
   const zh = locale === "zh";
   const area = suburb ? titleCaseSuburbLabel(suburb) : zh ? "该区域" : "that area";
-  const aup = coverage.requiresAupModelling
-    ? zh
-      ? "（细分与回报建模目前仅支持奥克兰。）"
-      : " (Subdivision & return modelling is currently Auckland-only.)"
-    : "";
   if (zh) {
-    return `暂时没有在${area}找到完全符合这些条件的房产。可以试试放宽条件，或换个区域，我也会持续更新可选房源。${aup}`;
+    return `暂时没有在${area}找到完全符合这些条件的房产。可以试试放宽条件，或换个区域，我也会持续更新可选房源。`;
   }
-  return `I couldn't find a property in ${area} matching all of those criteria right now. Try broadening the criteria or the area — I'll keep more options coming as they become available.${aup}`;
+  return `I couldn't find a property in ${area} matching all of those criteria right now. Try broadening the criteria or the area — I'll keep more options coming as they become available.`;
 }

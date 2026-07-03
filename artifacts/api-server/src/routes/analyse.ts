@@ -6300,7 +6300,7 @@ router.post(
                   "Criteria search: index empty — falling through to live screening with lots floor",
                 );
               } else {
-                const emptyMsg = buildCriteriaSearchEmptyMessage(coverage, displaySuburb, chatLocale);
+                const emptyMsg = buildCriteriaSearchEmptyMessage(displaySuburb, chatLocale);
                 req.log.info({ suburb, criteriaSearch: true, empty: true }, "Criteria search: no analysed match");
                 res.json({ content: emptyMsg, mode: "text", ...providerSignal });
                 return;

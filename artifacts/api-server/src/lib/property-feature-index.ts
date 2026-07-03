@@ -88,8 +88,6 @@ export interface FeatureSearchFilter {
   maxSlopeDegrees?: number | null;
   servicesOnParcel?: ("storm" | "sewer" | "water")[];
   minRoiPct?: number | null;
-  /** Require a recognised AUP zone — set for any lot/ROI constrained query. */
-  requireAupCovered?: boolean;
   /** Exclude rows scored under an older formula for score/lot/ROI queries. */
   minScoringVersion?: number | null;
 }
@@ -122,9 +120,6 @@ export async function searchFeatureIndex(
   }
   if (typeof filter.minRoiPct === "number") {
     conds.push(gte(propertyFeatureIndex.roiPercentBest, filter.minRoiPct));
-  }
-  if (filter.requireAupCovered) {
-    conds.push(eq(propertyFeatureIndex.aupCovered, true));
   }
 
   // Any query constraining a derived number must exclude stale-formula rows.

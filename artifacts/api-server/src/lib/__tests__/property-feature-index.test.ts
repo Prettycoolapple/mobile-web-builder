@@ -62,7 +62,12 @@ describe("deriveFeatureRow", () => {
     expect(row.cvNzd).toBeNull();
   });
 
-  it("treats boundary services as NOT on-parcel and a non-AUP zone as uncovered", () => {
+  it("treats boundary services as NOT on-parcel; a non-Auckland zone is still covered when present", () => {
+    // aupCovered is region-agnostic: the pipeline (regional-rules.ts) already
+    // nulls `zone` for any property whose region isn't properly modelled, for
+    // ANY region — not just Auckland. So a present zone (even one that isn't
+    // an Auckland Unitary Plan code, e.g. a future Hamilton/Whangarei rule
+    // pack's own zone naming) means the lot count here is trustworthy.
     const row = deriveFeatureRow(
       raw({
         contour: { slope_degrees: 22, classification: "steep" } as RawPropertyData["contour"],
@@ -71,7 +76,7 @@ describe("deriveFeatureRow", () => {
         ] as RawPropertyData["infrastructure"],
         derived_scores: {
           scoringVersion: 4,
-          zone: "RESIDENTIAL", // not an AUP code
+          zone: "HAM-RES", // e.g. a hypothetical non-Auckland regional zone code
           potentialLots: 1,
         } as RawPropertyData["derived_scores"],
       }),
@@ -81,11 +86,11 @@ describe("deriveFeatureRow", () => {
     expect(row.allServicesOnParcel).toBe(false);
     expect(row.maxInfraRisk).toBe("high");
     expect(row.contourClass).toBe("steep");
-    expect(row.aupCovered).toBe(false);
+    expect(row.aupCovered).toBe(true);
     expect(row.potentialLots).toBe(1);
   });
 
-  it("survives a bare cache row with no measured data", () => {
+  it("survives a bare cache row with no measured data (zone genuinely null → not covered)", () => {
     const row = deriveFeatureRow(raw({}), ID);
     expect(row.slopeDegrees).toBeNull();
     expect(row.contourClass).toBeNull();

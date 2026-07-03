@@ -27,7 +27,16 @@
  *     row's derived columns (lots, scores, roiPercentBest, scoringVersion)
  *     the same way, preserving last_refreshed_at.
  *
- * Idempotent (upsert), resumable (keyset pagination), safe to re-run.
+ * Concurrency model: rows are processed in SEQUENTIAL batches of `--concurrency`
+ * (default 3) via Promise.all — never more than that many in flight at once,
+ * and each property only ever touches its own row (keyed by addressKey), so
+ * there is no shared mutable state and no race condition between properties.
+ * A single property that keeps failing gets up to 4 attempts with exponential
+ * backoff (1s/2s/4s) before being counted as failed and skipped.
+ *
+ * Idempotent (upsert), resumable (keyset pagination) — a failed row is simply
+ * picked up again (and retried) on the next run, so re-running the whole
+ * script is always safe.
  *
  *   pnpm --filter @workspace/api-server recompute-derived-scores
  *   pnpm --filter @workspace/api-server recompute-derived-scores -- --concurrency=5 --limit=500
@@ -84,6 +93,35 @@ function alreadyCurrent(row: PropertyCacheRow): boolean {
   return ds?.scoringVersion === SCORING_VERSION && ds?.roiPercentBest != null;
 }
 
+const MAX_ATTEMPTS = 4; // 1 try + 3 retries
+const BASE_DELAY_MS = 1000; // 1s, 2s, 4s
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Retry a single property's recompute with exponential backoff. Transient
+ * failures (a flaky live listing lookup, a momentary comparables-fetch
+ * timeout) are the expected failure mode here — not data problems — so a
+ * short backoff is enough to ride them out before giving up on this row.
+ */
+async function withRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt === MAX_ATTEMPTS) break;
+      const delay = BASE_DELAY_MS * 2 ** (attempt - 1);
+      console.warn(`${label}: attempt ${attempt}/${MAX_ATTEMPTS} failed (${(err as Error).message}) — retrying in ${delay}ms`);
+      await sleep(delay);
+    }
+  }
+  throw lastErr;
+}
+
 async function recomputeOne(row: PropertyCacheRow): Promise<void> {
   if (!row.formattedAddress) {
     failed++;
@@ -94,10 +132,12 @@ async function recomputeOne(row: PropertyCacheRow): Promise<void> {
     return;
   }
   try {
-    const result = await runPropertyPipeline(row.formattedAddress, {
-      cachedRaw: row.rawData as RawPropertyData,
-      cachedRawAcquiredAt: (row.lastRefreshedAt as unknown as Date)?.toISOString?.() ?? null,
-    });
+    const result = await withRetry(row.addressKey, () =>
+      runPropertyPipeline(row.formattedAddress!, {
+        cachedRaw: row.rawData as RawPropertyData,
+        cachedRawAcquiredAt: (row.lastRefreshedAt as unknown as Date)?.toISOString?.() ?? null,
+      }),
+    );
     if (!hasCacheableCore(result) || !result.raw_property?.derived_scores) {
       failed++;
       return;
@@ -113,7 +153,7 @@ async function recomputeOne(row: PropertyCacheRow): Promise<void> {
     updated++;
   } catch (err) {
     failed++;
-    console.warn(`recompute failed for ${row.addressKey}: ${(err as Error).message}`);
+    console.warn(`recompute permanently failed for ${row.addressKey} after ${MAX_ATTEMPTS} attempts: ${(err as Error).message}`);
   }
 }
 
