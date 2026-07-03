@@ -166,7 +166,12 @@ function matchedAttrs(spec: SearchFilterSpec, card: CriteriaCandidate, zh: boole
   return parts.join(zh ? "；" : "; ");
 }
 
-/** Intro that MATCHES the card shown — honest about coverage and one-at-a-time. */
+/**
+ * Intro that MATCHES the card shown — honest about pacing (one at a time) and
+ * non-exhaustiveness, WITHOUT revealing the retrieval mechanism (cache/index vs
+ * live) to the user. Keep this framing generic: "here's a match", not "here's
+ * an analysed/cached property".
+ */
 export function buildCriteriaSearchIntro(
   spec: SearchFilterSpec,
   card: CriteriaCandidate,
@@ -177,14 +182,17 @@ export function buildCriteriaSearchIntro(
   const zh = locale === "zh";
   const area = suburb ? titleCaseSuburbLabel(suburb) : zh ? "该区域" : "the area";
   const attrs = matchedAttrs(spec, card, zh);
-  const more = coverage.hasMore ? (zh ? "想看下一个就说“换一个”。" : " Say “show me another” for the next match.") : "";
+  const more = coverage.hasMore ? (zh ? "想看下一个就说“换一个”。" : " Say “show me another” for the next one.") : "";
   if (zh) {
-    return `这是${area}一处已分析过、符合条件的房产：${attrs}。我是在已分析过的房产里查找的（不是该区所有房源），每次只显示一个。运行完整分析可确认细节和当前价格。${more}`;
+    return `在${area}找到一处符合条件的房产：${attrs}。为了让您逐一仔细查看，我每次只展示一个。运行完整分析可确认细节和当前价格。${more}`;
   }
-  return `Here's an analysed property in ${area} that matches: ${attrs}. I searched the properties analysed so far (not every listing in the suburb) and show them one at a time. Run the full analysis to confirm details and current pricing.${more}`;
+  return `Found a match in ${area}: ${attrs}. I show one at a time so you can review each properly. Run the full analysis to confirm details and current pricing.${more}`;
 }
 
-/** Honest "no match yet" message; adds the Auckland-only caveat for lot/ROI asks. */
+/**
+ * Honest "no match yet" message; adds the Auckland-only caveat for lot/ROI
+ * asks. Generic framing — never mentions cache/index/analysed-properties.
+ */
 export function buildCriteriaSearchEmptyMessage(
   coverage: CriteriaSearchResult["coverage"],
   suburb: string | null,
@@ -198,7 +206,7 @@ export function buildCriteriaSearchEmptyMessage(
       : " (Subdivision & return modelling is currently Auckland-only.)"
     : "";
   if (zh) {
-    return `我在已分析过的房产里，暂时没找到${area}符合这些条件的。这个搜索只覆盖已经分析过的房产——随着更多报告运行，库会不断变大。${aup}`;
+    return `暂时没有在${area}找到完全符合这些条件的房产。可以试试放宽条件，或换个区域，我也会持续更新可选房源。${aup}`;
   }
-  return `I couldn't find an analysed property in ${area} matching those criteria yet. This searches properties analysed so far — the library grows as more reports run.${aup}`;
+  return `I couldn't find a property in ${area} matching all of those criteria right now. Try broadening the criteria or the area — I'll keep more options coming as they become available.${aup}`;
 }
