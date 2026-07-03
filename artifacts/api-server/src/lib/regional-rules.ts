@@ -1,5 +1,11 @@
 import type { Overlay, ZoneResult } from "./auckland-council";
-import type { LotResult } from "./lot-calculator";
+import type {
+  DesignLedAssessmentInput,
+  DesignLedConfidence,
+  DesignLedYieldRange,
+  LotResult,
+  SubdivisionPathwayAssessment,
+} from "./lot-calculator";
 import type { PlanningProviderMetadata } from "./regional-planning";
 
 export type RegionalSubdivisionRules = "auckland_legacy" | "standard_yield_modelled" | "not_modelled";
@@ -33,12 +39,33 @@ interface RegionalRulePackEntry {
   sourceLabel: string;
   sourceUrl: string;
   caveats: string[];
+  excludedZonePattern?: RegExp;
+  blockedOverlayPatterns?: Array<{
+    pattern: RegExp;
+    caveat: string;
+  }>;
   conditionalMinimums?: Array<{
     overlayPattern: RegExp;
     minimumLotSqm: number;
     caveat: string;
   }>;
+  alternativePathway?: RegionalAlternativePathwayRule;
   roiEnabled: boolean;
+}
+
+interface RegionalAlternativePathwayRule {
+  label: string;
+  sourceLabel: string;
+  sourceUrl: string;
+  minNetAreaSqm: number;
+  sqmPerDwelling: number;
+  maxYield: number;
+  confidence: DesignLedConfidence;
+  reason: string;
+  detail: string;
+  blockedOverlayPattern?: RegExp;
+  blockedOverlayCaveat?: string;
+  extraBlocker?: (input: RegionalSubdivisionPathwayInput) => string | null;
 }
 
 export interface RegionalLotAssessment {
@@ -48,6 +75,18 @@ export interface RegionalLotAssessment {
   sourceLabel: string;
   sourceUrl: string;
   caveats: string[];
+}
+
+type RegionalPathwayOverlay = {
+  status: string;
+  name?: string | null;
+  detail?: string | null;
+};
+
+export interface RegionalSubdivisionPathwayInput extends Omit<DesignLedAssessmentInput, "overlays"> {
+  provider: Pick<PlanningProviderMetadata, "providerId" | "providerName"> | null | undefined;
+  zone: ZoneResult | null | undefined;
+  overlays?: RegionalPathwayOverlay[] | null;
 }
 
 export interface RegionalLotAssessmentInput {
@@ -84,7 +123,13 @@ const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
     caveats: [
       "Rule 23.7.2 has special cases for Historic Heritage Areas and General Residential land adjoining the Waikato Expressway.",
       "Rules 23.7.3 and 25.14 also require frontage, access, private-way, block layout and vehicle-crossing checks.",
-      "Concurrent land-use plus subdivision pathways are not used in this first-pass vacant-lot model.",
+      "Concurrent land-use plus subdivision is modelled separately as a design-led pathway, not as a standard vacant-lot yield.",
+    ],
+    blockedOverlayPatterns: [
+      {
+        pattern: /\bhistoric heritage area\b/i,
+        caveat: "Hamilton Chapter 23 excludes General Residential land within a Historic Heritage Area from this 300sqm vacant-lot standard.",
+      },
     ],
     conditionalMinimums: [
       {
@@ -93,6 +138,19 @@ const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
         caveat: "Hamilton Chapter 23 identifies a 1000sqm minimum for General Residential vacant lots adjoining the Waikato Expressway outside the Rototuna North East Residential Precinct.",
       },
     ],
+    alternativePathway: {
+      label: "Concurrent land-use and subdivision pathway",
+      sourceLabel: "Hamilton PC12 Chapter 23 Rule 23.7.1(f)",
+      sourceUrl: HAMILTON_PC12_SUBDIVISION_SOURCE,
+      minNetAreaSqm: 450,
+      sqmPerDwelling: 180,
+      maxYield: 3,
+      confidence: "low",
+      reason:
+        "Hamilton Chapter 23 allows subdivision design standards to be set aside where a fee-simple subdivision is accompanied by a concurrent land-use application for residential units and the subdivision matches the proposed layout.",
+      detail:
+        "This is a concurrent land-use plus subdivision opportunity. The lot count is capped conservatively and still depends on a buildable layout, access, private-way width, outdoor space, HIRB, services and stormwater.",
+    },
     roiEnabled: true,
   },
   {
@@ -109,6 +167,19 @@ const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
       "The 280sqm standard applies to vacant lots in the Rotokauri North Residential Precinct.",
       "Rules 23.7.4 and local structure-plan controls still require frontage, access, private-way, rear-lane and block-layout checks.",
     ],
+    alternativePathway: {
+      label: "Rotokauri North concurrent land-use pathway",
+      sourceLabel: "Hamilton PC12 Chapter 23 Rule 23.7.1(f)",
+      sourceUrl: HAMILTON_PC12_SUBDIVISION_SOURCE,
+      minNetAreaSqm: 420,
+      sqmPerDwelling: 160,
+      maxYield: 3,
+      confidence: "low",
+      reason:
+        "Hamilton's concurrent land-use pathway can support subdivision around an approved residential-unit layout, but Rotokauri North remains subject to local structure-plan and access controls.",
+      detail:
+        "This is a conservative Rotokauri North design-led flag. Confirm the structure-plan layout, rear-lane/access controls, services and residential design before relying on the yield.",
+    },
     roiEnabled: true,
   },
   {
@@ -124,8 +195,22 @@ const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
     caveats: [
       "The 1200sqm standard excludes Rotokauri North, Ruakura, Te Awa Lakes and Peacocke residential precinct rules.",
       "Rules 23.7.4 and 25.14 also require frontage, lot depth, access, private-way, block layout and vehicle-crossing checks.",
-      "Concurrent land-use plus subdivision pathways are not used in this first-pass vacant-lot model.",
+      "Concurrent land-use plus subdivision is modelled separately as a design-led pathway, not as a standard vacant-lot yield.",
     ],
+    excludedZonePattern: /\b(ruakura|te awa lakes|peacocke)\b/i,
+    alternativePathway: {
+      label: "Concurrent land-use and subdivision pathway",
+      sourceLabel: "Hamilton PC12 Chapter 23 Rule 23.7.1(f)",
+      sourceUrl: HAMILTON_PC12_SUBDIVISION_SOURCE,
+      minNetAreaSqm: 450,
+      sqmPerDwelling: 150,
+      maxYield: 3,
+      confidence: "low",
+      reason:
+        "Hamilton Chapter 23 can allow subdivision around a concurrently assessed residential-unit layout rather than the 1200sqm vacant-lot standard.",
+      detail:
+        "This is a conservative concurrent-consent flag for medium-density land. It excludes Ruakura, Te Awa Lakes and Peacocke precincts until those precinct rule packs are mapped.",
+    },
     roiEnabled: true,
   },
   {
@@ -140,8 +225,21 @@ const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
     sourceUrl: HAMILTON_PC12_SUBDIVISION_SOURCE,
     caveats: [
       "Rules 23.7.5 and 25.14 also require frontage, rear-boundary, access, private-way, block layout and vehicle-crossing checks.",
-      "Concurrent land-use plus subdivision pathways are not used in this first-pass vacant-lot model.",
+      "Concurrent land-use plus subdivision is modelled separately as a design-led pathway, not as a standard vacant-lot yield.",
     ],
+    alternativePathway: {
+      label: "Concurrent land-use and subdivision pathway",
+      sourceLabel: "Hamilton PC12 Chapter 23 Rule 23.7.1(f)",
+      sourceUrl: HAMILTON_PC12_SUBDIVISION_SOURCE,
+      minNetAreaSqm: 450,
+      sqmPerDwelling: 140,
+      maxYield: 3,
+      confidence: "low",
+      reason:
+        "Hamilton Chapter 23 can allow subdivision around a concurrently assessed residential-unit layout rather than the 1200sqm vacant-lot standard.",
+      detail:
+        "This is a conservative high-density concurrent-consent flag. Access, rear-boundary, block layout, services and built-form standards still drive the real yield.",
+    },
     roiEnabled: true,
   },
   {
@@ -166,6 +264,22 @@ const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
         caveat: "Christchurch Rule 8.6.1 uses a 300sqm minimum for HRZ/MRZ subdivision where a qualifying matter area applies.",
       },
     ],
+    alternativePathway: {
+      label: "Comprehensive residential development pathway",
+      sourceLabel: "Christchurch District Plan Chapter 8 objectives and Rule 8.6.1",
+      sourceUrl: CHRISTCHURCH_CHAPTER8_SOURCE,
+      minNetAreaSqm: 300,
+      sqmPerDwelling: 120,
+      maxYield: 3,
+      confidence: "low",
+      reason:
+        "Christchurch Chapter 8 supports integrated subdivision and comprehensive development, while HRZ/MRZ land also sits within the MDRS intensification setting.",
+      detail:
+        "This is a compact-layout opportunity flag for HRZ/MRZ land. The final lot/unit count depends on a compliant residential design, qualifying matters, access, outdoor space, sunlight, stormwater, hazards and infrastructure.",
+      blockedOverlayPattern: /\bqualifying matter\b/i,
+      blockedOverlayCaveat:
+        "A mapped qualifying matter is present, so the report keeps the conservative vacant-lot rule instead of applying a design-led uplift.",
+    },
     roiEnabled: true,
   },
   {
@@ -190,6 +304,22 @@ const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
         caveat: "Christchurch Rule 8.6.1 uses a 300sqm minimum for HRZ/MRZ subdivision where a qualifying matter area applies.",
       },
     ],
+    alternativePathway: {
+      label: "Comprehensive residential development pathway",
+      sourceLabel: "Christchurch District Plan Chapter 8 objectives and Rule 8.6.1",
+      sourceUrl: CHRISTCHURCH_CHAPTER8_SOURCE,
+      minNetAreaSqm: 300,
+      sqmPerDwelling: 130,
+      maxYield: 3,
+      confidence: "low",
+      reason:
+        "Christchurch Chapter 8 supports integrated subdivision and comprehensive development, while HRZ/MRZ land also sits within the MDRS intensification setting.",
+      detail:
+        "This is a compact-layout opportunity flag for HRZ/MRZ land. The final lot/unit count depends on a compliant residential design, qualifying matters, access, outdoor space, sunlight, stormwater, hazards and infrastructure.",
+      blockedOverlayPattern: /\bqualifying matter\b/i,
+      blockedOverlayCaveat:
+        "A mapped qualifying matter is present, so the report keeps the conservative vacant-lot rule instead of applying a design-led uplift.",
+    },
     roiEnabled: true,
   },
   {
@@ -307,6 +437,19 @@ const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
       "SUB-R6 also requires shape/building-area and other district-plan checks.",
       "Unit-title subdivision has separate 50sqm minimum-site wording and is not used for this standard vacant-lot yield model.",
     ],
+    alternativePathway: {
+      label: "Medium Density unit-title pathway",
+      sourceLabel: "Whangarei District Plan SUB-R6",
+      sourceUrl: WHANGAREI_SUBDIVISION_SOURCE,
+      minNetAreaSqm: 300,
+      sqmPerDwelling: 120,
+      maxYield: 4,
+      confidence: "low",
+      reason:
+        "Whangarei SUB-R6 provides a separate unit-title pathway with a 50sqm minimum unit-title site, but the actual unit count depends on the approved building design.",
+      detail:
+        "This is a conservative unit-title opportunity flag for Medium Density Residential land. It does not use the 50sqm legal minimum directly for ROI; it caps the first-pass yield and requires a verified building layout.",
+    },
     roiEnabled: true,
   },
   {
@@ -382,6 +525,22 @@ const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
         caveat: "QLDC Chapter 27 sets an 800sqm minimum for Lower Density Suburban Residential land at Lake Hawea South Area B.",
       },
     ],
+    alternativePathway: {
+      label: "Approved residential-unit subdivision pathway",
+      sourceLabel: "QLDC PDP Chapter 27 Rule 27.7.34",
+      sourceUrl: QLDC_SUBDIVISION_SOURCE,
+      minNetAreaSqm: 500,
+      sqmPerDwelling: 250,
+      maxYield: 3,
+      confidence: "low",
+      reason:
+        "QLDC Rule 27.7.34 can disapply the minimum allotment size in Lower Density/Suburban Residential land when a certificate of compliance or resource consent exists for the residential units.",
+      detail:
+        "This is a design-led opportunity flag only. It assumes a residential-unit design can be consented and tied to the new lots; it is not applied inside the Queenstown Airport Air Noise Boundary or Outer Control Boundary.",
+      blockedOverlayPattern: /\b(air noise boundary|outer control boundary)\b/i,
+      blockedOverlayCaveat:
+        "QLDC Rule 27.7.34 does not apply within the Queenstown Airport Air Noise Boundary or Outer Control Boundary.",
+    },
     roiEnabled: true,
   },
   {
@@ -396,9 +555,32 @@ const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
     sourceUrl: DUNEDIN_GR1_VARIATION2_SOURCE,
     caveats: [
       "Variation 2 applies the 400sqm fee-simple minimum to General Residential 1 land except within a no DCC reticulated wastewater mapped area.",
-      "Existing-house, duplex and multi-unit subdivision exemptions are not used in this first-pass vacant-lot model.",
+      "Existing-house, duplex and multi-unit subdivision exemptions are modelled separately as a design-led pathway, not as a standard vacant-lot yield.",
       "Pre-1940 demolition, stormwater/open-watercourse, access, servicing and other 2GP performance standards still require consent checks.",
     ],
+    blockedOverlayPatterns: [
+      {
+        pattern: /\bno dcc reticulated wastewater\b/i,
+        caveat: "Dunedin Variation 2 GR1 minimum-site-size rules do not apply within a no DCC reticulated wastewater mapped area.",
+      },
+    ],
+    alternativePathway: {
+      label: "Existing-house or duplex fee-simple pathway",
+      sourceLabel: "Dunedin 2GP Variation 2 GR1 subdivision exemption",
+      sourceUrl: DUNEDIN_GR1_VARIATION2_SOURCE,
+      minNetAreaSqm: 500,
+      sqmPerDwelling: 250,
+      maxYield: 2,
+      confidence: "low",
+      reason:
+        "Dunedin Variation 2 enables duplexes, multi-unit developments and existing dwellings to be subdivided fee-simple without complying with the minimum site size where performance standards are met.",
+      detail:
+        "This is a two-unit/duplex or existing-dwelling subdivision opportunity flag. Confirm setbacks, outdoor living, access, solid-waste collection, stormwater and any pre-1940 demolition/heritage rule before relying on it.",
+      extraBlocker: (input) =>
+        input.buildYear != null && input.buildYear <= 1940
+          ? "Dunedin Variation 2 requires resource consent and a heritage assessment for full demolition of buildings built on or before 1 January 1940."
+          : null,
+    },
     roiEnabled: true,
   },
   {
@@ -413,9 +595,26 @@ const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
     sourceUrl: DUNEDIN_GR2_VARIATION2_SOURCE,
     caveats: [
       "General Residential 2 fee-simple subdivision is 300sqm in the standard case, or 400sqm where a wastewater constraint mapped area applies except in Mosgiel; this model uses 400sqm until wastewater-constraint mapping is verified.",
-      "Existing-house, duplex and multi-unit subdivision exemptions are not used in this first-pass vacant-lot model.",
+      "Existing-house, duplex and multi-unit subdivision exemptions are modelled separately as a design-led pathway, not as a standard vacant-lot yield.",
       "Variation 2 mapped-area, pre-1940 demolition, landscaping, solid-waste, stormwater/open-watercourse, access and servicing checks may alter consent requirements.",
     ],
+    alternativePathway: {
+      label: "Existing-house, duplex or multi-unit fee-simple pathway",
+      sourceLabel: "Dunedin 2GP Variation 2 GR2 subdivision exemption",
+      sourceUrl: DUNEDIN_GR2_VARIATION2_SOURCE,
+      minNetAreaSqm: 500,
+      sqmPerDwelling: 250,
+      maxYield: 3,
+      confidence: "low",
+      reason:
+        "Dunedin Variation 2 enables duplexes, multi-unit developments and existing dwellings to be subdivided fee-simple without complying with the minimum site size where performance standards are met.",
+      detail:
+        "This is a compact GR2 subdivision opportunity flag. Confirm habitable-room density, landscaping, solid-waste collection, stormwater/open-watercourse setbacks, access, services and any pre-1940 demolition/heritage rule before relying on it.",
+      extraBlocker: (input) =>
+        input.buildYear != null && input.buildYear <= 1940
+          ? "Dunedin Variation 2 requires resource consent and a heritage assessment for full demolition of buildings built on or before 1 January 1940."
+          : null,
+    },
     roiEnabled: true,
   },
 ];
@@ -433,11 +632,14 @@ function findRegionalRulePack(
   const text = zoneText(zone);
   if (!text) return null;
   return REGIONAL_RULE_PACKS.find(
-    (entry) => entry.providerId === provider.providerId && entry.zonePattern.test(text),
+    (entry) =>
+      entry.providerId === provider.providerId &&
+      entry.zonePattern.test(text) &&
+      !entry.excludedZonePattern?.test(text),
   ) ?? null;
 }
 
-function overlayText(overlays: Overlay[] | null | undefined): string {
+function overlayText(overlays: Array<{ name?: string | null; detail?: string | null }> | null | undefined): string {
   return (overlays ?? [])
     .map((overlay) => `${overlay.name ?? ""} ${overlay.detail ?? ""}`)
     .join(" ")
@@ -449,7 +651,7 @@ function resolveRuleApplication(
   rule: RegionalRulePackEntry,
   netAreaSqm: number | null | undefined,
   overlays?: Overlay[] | null,
-): { effectiveMinimumLotSqm: number; caveats: string[] } {
+): { effectiveMinimumLotSqm: number; caveats: string[]; blocked: boolean } {
   let effectiveMinimum = rule.standardMinimumLotSqm;
   if (
     netAreaSqm != null &&
@@ -462,6 +664,11 @@ function resolveRuleApplication(
 
   const text = overlayText(overlays);
   const conditionalCaveats: string[] = [];
+  const blockingCaveats: string[] = [];
+  for (const blocker of rule.blockedOverlayPatterns ?? []) {
+    if (!blocker.pattern.test(text)) continue;
+    blockingCaveats.push(blocker.caveat);
+  }
   for (const condition of rule.conditionalMinimums ?? []) {
     if (!condition.overlayPattern.test(text)) continue;
     effectiveMinimum = Math.max(effectiveMinimum, condition.minimumLotSqm);
@@ -470,7 +677,8 @@ function resolveRuleApplication(
 
   return {
     effectiveMinimumLotSqm: effectiveMinimum,
-    caveats: [...rule.caveats, ...conditionalCaveats],
+    caveats: [...rule.caveats, ...conditionalCaveats, ...blockingCaveats],
+    blocked: blockingCaveats.length > 0,
   };
 }
 
@@ -510,12 +718,12 @@ export function regionalPlanningRuleStatus(
     const application = resolveRuleApplication(rulePack, landAreaSqm, overlays);
     return {
       subdivisionRules: "standard_yield_modelled",
-      modellingStatus: rulePack.roiEnabled ? "roi_enabled" : "standard_yield_enabled",
-      automaticYieldClaimsAllowed: true,
-      automaticRoiAllowed: rulePack.roiEnabled,
+      modellingStatus: rulePack.roiEnabled && !application.blocked ? "roi_enabled" : "standard_yield_enabled",
+      automaticYieldClaimsAllowed: !application.blocked,
+      automaticRoiAllowed: rulePack.roiEnabled && !application.blocked,
       regionalZoneCode: rulePack.regionalZoneCode,
       regionalZoneLabel: rulePack.zoneLabel,
-      verifiedMinimumLotSqm: application.effectiveMinimumLotSqm,
+      verifiedMinimumLotSqm: application.blocked ? null : application.effectiveMinimumLotSqm,
       sourceLabel: rulePack.sourceLabel,
       sourceUrl: rulePack.sourceUrl,
       caveats: application.caveats,
@@ -563,6 +771,7 @@ export function calculateRegionalPotentialLots(input: RegionalLotAssessmentInput
   const easementArea = Math.max(0, input.easementAreaSqm ?? 0);
   const netArea = Math.max(0, grossArea - easementArea);
   const application = resolveRuleApplication(rule, netArea, input.overlays);
+  if (application.blocked) return null;
   const minLotSqm = application.effectiveMinimumLotSqm;
   const rawLots = Math.floor((netArea + 0.000001) / minLotSqm);
   const lots = Math.max(1, Math.min(20, rawLots));
@@ -585,12 +794,141 @@ export function calculateRegionalPotentialLots(input: RegionalLotAssessmentInput
   };
 }
 
+function baseRegionalSubdivisionAssessment(
+  input: RegionalSubdivisionPathwayInput,
+): Omit<SubdivisionPathwayAssessment, "designLedEligible" | "designLedYieldRange" | "designLedConfidence" | "designLedSummary" | "designLedDetail"> {
+  const minLotSqm = input.minLotSqm && input.minLotSqm > 0 ? input.minLotSqm : null;
+  const standardVacantLots = Math.max(1, input.standardVacantLots || 1);
+  return {
+    standardVacantLots,
+    standardPathViable: !!minLotSqm && standardVacantLots >= 2,
+    standardMinLotSize: minLotSqm,
+    designLedReasons: [],
+    designLedBlockers: [],
+  };
+}
+
+function noRegionalDesignLed(
+  input: RegionalSubdivisionPathwayInput,
+  blocker?: string | null,
+): SubdivisionPathwayAssessment {
+  const base = baseRegionalSubdivisionAssessment(input);
+  if (blocker) base.designLedBlockers.push(blocker);
+  return {
+    ...base,
+    designLedEligible: false,
+    designLedYieldRange: null,
+    designLedConfidence: "none",
+    designLedSummary: null,
+    designLedDetail: null,
+  };
+}
+
+function regionalGeometryLooksConstrained(bbox: DesignLedAssessmentInput["parcelBbox"]): boolean {
+  if (!bbox) return false;
+  const latSpan = Math.abs(bbox.maxLat - bbox.minLat);
+  const lngSpan = Math.abs(bbox.maxLng - bbox.minLng);
+  if (latSpan <= 0 || lngSpan <= 0) return false;
+  const ratio = Math.max(latSpan, lngSpan) / Math.max(0.000001, Math.min(latSpan, lngSpan));
+  return ratio >= 5;
+}
+
+export function assessRegionalSubdivisionPathways(
+  input: RegionalSubdivisionPathwayInput,
+): SubdivisionPathwayAssessment | null {
+  if (!input.provider || input.provider.providerId === "auckland-legacy") return null;
+  const rule = findRegionalRulePack(input.provider, input.zone);
+  if (!rule) return null;
+  const alternative = rule.alternativePathway;
+  if (!alternative) {
+    return noRegionalDesignLed(input, "No verified regional design-led or concurrent subdivision pathway is modelled for this zone yet.");
+  }
+
+  const base = baseRegionalSubdivisionAssessment(input);
+  const blockers = base.designLedBlockers;
+  const reasons = base.designLedReasons;
+  const netAreaSqm = input.netAreaSqm && input.netAreaSqm > 0 ? input.netAreaSqm : null;
+  const overlaysText = overlayText(input.overlays);
+
+  if (netAreaSqm == null) blockers.push("Verified subject land area is required before testing the regional design-led pathway.");
+  if (input.landAreaConfidence != null && input.landAreaConfidence !== "verified") blockers.push("Land area is not verified.");
+  if (input.isAlreadySubdividedChild === true) blockers.push("Already-subdivided child titles are excluded from design-led upside screening.");
+  if (input.typology != null && input.typology !== "standalone") blockers.push("The title/typology does not read as a standalone redevelopment site.");
+  if (input.titleConfidence != null && input.titleConfidence !== "verified") blockers.push("Freehold-style title confidence is not verified.");
+  if (input.buildYear != null && input.buildYear >= 2000) blockers.push("Modern post-2000 improvements reduce first-pass redevelopment eligibility.");
+  if (alternative.blockedOverlayPattern?.test(overlaysText)) {
+    blockers.push(alternative.blockedOverlayCaveat ?? "A mapped overlay blocks this regional design-led pathway.");
+  }
+  const extraBlocker = alternative.extraBlocker?.(input);
+  if (extraBlocker) blockers.push(extraBlocker);
+  if (netAreaSqm != null && netAreaSqm < alternative.minNetAreaSqm) {
+    blockers.push(`Site area is below the ${alternative.minNetAreaSqm}sqm first-pass threshold for ${alternative.label}.`);
+  }
+
+  const confidenceDeductions: string[] = [];
+  const restrictedOverlays = (input.overlays ?? []).filter((overlay) => overlay.status === "restricted");
+  if (restrictedOverlays.length > 0) confidenceDeductions.push("Restricted overlay(s) may materially constrain the layout.");
+  if (input.slopeClass && ["steep", "very_steep"].includes(input.slopeClass)) {
+    confidenceDeductions.push("Steep terrain may reduce practical yield.");
+  }
+  if (regionalGeometryLooksConstrained(input.parcelBbox)) {
+    confidenceDeductions.push("Parcel geometry appears narrow or elongated, so access and outlook need early testing.");
+  }
+
+  if (netAreaSqm == null || blockers.length > 0) {
+    return {
+      ...base,
+      designLedEligible: false,
+      designLedYieldRange: null,
+      designLedConfidence: "none",
+      designLedSummary: null,
+      designLedDetail: null,
+    };
+  }
+
+  const estimatedMax = Math.max(1, Math.min(alternative.maxYield, Math.floor(netAreaSqm / alternative.sqmPerDwelling)));
+  if (estimatedMax <= base.standardVacantLots) {
+    blockers.push("Indicative regional design-led yield does not exceed the standard vacant-lot yield.");
+    return {
+      ...base,
+      designLedEligible: false,
+      designLedYieldRange: null,
+      designLedConfidence: "none",
+      designLedSummary: null,
+      designLedDetail: null,
+    };
+  }
+
+  const range: DesignLedYieldRange = {
+    min: Math.max(2, Math.min(base.standardVacantLots + 1, estimatedMax)),
+    max: estimatedMax,
+  };
+  const confidence: DesignLedConfidence = confidenceDeductions.length > 0 ? "low" : alternative.confidence;
+  const yieldText = range.min === range.max ? `${range.min}` : `${range.min}-${range.max}`;
+  reasons.push(
+    alternative.reason,
+    `${Math.round(netAreaSqm)}sqm verified net site area is large enough to test ${yieldText} lots/units under ${alternative.label}.`,
+    alternative.detail,
+    ...confidenceDeductions,
+  );
+
+  return {
+    ...base,
+    designLedEligible: true,
+    designLedYieldRange: range,
+    designLedConfidence: confidence,
+    designLedSummary: `Standard path: ${base.standardVacantLots} lot${base.standardVacantLots === 1 ? "" : "s"}. ${alternative.label} may unlock ${yieldText} lots/units.`,
+    designLedDetail: `${alternative.label}: ${alternative.detail} Source: ${alternative.sourceLabel}. This is an opportunity flag, not an approval prediction.`,
+  };
+}
+
 export function regionalRulePackEntries(): Array<{
   providerId: string;
   regionalZoneCode: string;
   zoneLabel: string;
   standardMinimumLotSqm: number;
   sourceLabel: string;
+  alternativePathwayLabel: string | null;
   roiEnabled: boolean;
 }> {
   return REGIONAL_RULE_PACKS.map((entry) => ({
@@ -599,6 +937,7 @@ export function regionalRulePackEntries(): Array<{
     zoneLabel: entry.zoneLabel,
     standardMinimumLotSqm: entry.standardMinimumLotSqm,
     sourceLabel: entry.sourceLabel,
+    alternativePathwayLabel: entry.alternativePathway?.label ?? null,
     roiEnabled: entry.roiEnabled,
   }));
 }

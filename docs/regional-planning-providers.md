@@ -66,12 +66,16 @@ Recommended rollout:
 ## Current rule-modelling status
 
 - Auckland: existing full Auckland path remains unchanged and is still the default when the feature flag is off.
-- Hamilton: standard vacant-lot yield and ROI are enabled for verified General Residential, Rotokauri North Residential Precinct, Medium Density Residential, and High Density Residential matches. Concurrent land-use/subdivision pathways and unverified precinct exceptions are caveated rather than modelled.
-- Christchurch: standard vacant-lot yield and ROI are enabled for verified HRZ, MRZ/RMD, RSDT, RS, Residential Banks Peninsula, Residential Hills, and Residential Large Lot matches. Residential New Neighbourhood density and comprehensive/design-led pathways are caveated rather than modelled.
-- Whangarei: standard vacant-lot yield and ROI are enabled for verified General Residential, Medium Density Residential, and Low Density Residential matches. The model uses Whangarei District Plan SUB-R5, SUB-R6, and SUB-R4 minimum-site-area rules, but still caveats shape, frontage, building-area, infrastructure, title, and consent checks.
-- Queenstown Lakes: standard vacant-lot yield and ROI are enabled for verified High Density Residential, Medium Density Residential, and Lower Density/Suburban Residential matches. Airport-noise and Lake Hawea South Area B minimum-lot exceptions are applied when the mapped overlays are returned.
-- Dunedin: standard vacant-lot yield and ROI are enabled for verified General Residential 1 and General Residential 2 matches. GR2 uses a conservative 400sqm setting until wastewater-constraint mapping is verified.
+- Hamilton: standard vacant-lot yield and ROI are enabled for verified General Residential, Rotokauri North Residential Precinct, Medium Density Residential, and High Density Residential matches. A conservative concurrent land-use/subdivision pathway is modelled for these zones; Ruakura, Te Awa Lakes and Peacocke MDRZ precincts stay facts-only until their structure-plan rules are mapped.
+- Christchurch: standard vacant-lot yield and ROI are enabled for verified HRZ, MRZ/RMD, RSDT, RS, Residential Banks Peninsula, Residential Hills, and Residential Large Lot matches. A conservative HRZ/MRZ comprehensive-development pathway is modelled only when no mapped qualifying matter is returned. Residential New Neighbourhood stays facts-only.
+- Whangarei: standard vacant-lot yield and ROI are enabled for verified General Residential, Medium Density Residential, and Low Density Residential matches. Medium Density Residential also gets a conservative unit-title opportunity flag; the model does not use the 50sqm legal minimum directly for ROI.
+- Queenstown Lakes: standard vacant-lot yield and ROI are enabled for verified High Density Residential, Medium Density Residential, and Lower Density/Suburban Residential matches. Airport-noise and Lake Hawea South Area B minimum-lot exceptions are applied when the mapped overlays are returned; the approved-residential-unit pathway is blocked inside the airport-noise/outer-control overlays.
+- Dunedin: standard vacant-lot yield and ROI are enabled for verified General Residential 1 and General Residential 2 matches. GR2 uses a conservative 400sqm setting until wastewater-constraint mapping is verified. GR1/GR2 existing-house, duplex and multi-unit subdivision exemptions are modelled as conservative design-led opportunity flags, with pre-1940 demolition risk blocking the uplift.
 - Canterbury outside Christchurch and Otago outside Dunedin/QLDC: official planning/service facts are shown where mapped; local subdivision rule packs are not yet fully modelled, so automated yield/ROI remains disabled.
+
+## Regional design-led guardrails
+
+Regional design-led/concurrent pathways are intentionally conservative. They only activate when the title/typology reads as a standalone redevelopment site, land area is verified, the property is not already an already-subdivided child title, and the pathway would exceed the standard vacant-lot yield. Restricted overlays, steep terrain, narrow parcel geometry, airport-noise controls, qualifying matters and pre-1940 demolition rules either lower confidence or block the uplift depending on the local rule.
 
 ## Regional cost profiles
 

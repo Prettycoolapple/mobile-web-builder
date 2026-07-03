@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  assessRegionalSubdivisionPathways,
   calculateRegionalPotentialLots,
   regionalRulePackEntries,
   regionalPlanningRuleStatus,
@@ -143,6 +144,61 @@ describe("regional planning rule status", () => {
     });
   });
 
+  it("flags Hamilton concurrent land-use subdivision where it can exceed vacant-lot yield", () => {
+    const provider = {
+      providerId: "hamilton" as const,
+      providerName: "Hamilton City Council planning provider",
+    };
+    const zone = {
+      zone_code: "General Residential Zone",
+      zone_description: "General Residential Zone - Hamilton District Plan Zoning",
+      min_lot_size_sqm: null,
+      raw_zone: "{}",
+    };
+    const lotResult = calculateRegionalPotentialLots({ provider, zone, landAreaSqm: 540 })!.lotResult;
+
+    const assessment = assessRegionalSubdivisionPathways({
+      provider,
+      zone,
+      netAreaSqm: lotResult.net_area_sqm,
+      zoneCode: "HCC_GRZ",
+      zoneLabel: lotResult.zone_label,
+      standardVacantLots: lotResult.lots,
+      minLotSqm: lotResult.min_lot_size,
+      typology: "standalone",
+      titleConfidence: "verified",
+      landAreaConfidence: "verified",
+      buildYear: 1965,
+    });
+
+    expect(assessment).toMatchObject({
+      designLedEligible: true,
+      designLedYieldRange: { min: 2, max: 3 },
+      designLedConfidence: "low",
+    });
+    expect(assessment?.designLedDetail).toContain("Concurrent land-use and subdivision pathway");
+  });
+
+  it("does not apply Hamilton MDRZ rule packs to excluded structure-plan precincts", () => {
+    expect(regionalPlanningRuleStatus(
+      {
+        providerId: "hamilton",
+        providerName: "Hamilton City Council planning provider",
+      },
+      {
+        zone_code: "Medium Density Residential Zone",
+        zone_description: "Ruakura Residential Precinct - Medium Density Residential Zone",
+        min_lot_size_sqm: null,
+        raw_zone: "{}",
+      },
+      1_200,
+    )).toMatchObject({
+      subdivisionRules: "not_modelled",
+      automaticYieldClaimsAllowed: false,
+      automaticRoiAllowed: false,
+    });
+  });
+
   it("enables Christchurch Medium Density yield from Chapter 8", () => {
     const provider = {
       providerId: "christchurch" as const,
@@ -238,6 +294,49 @@ describe("regional planning rule status", () => {
     });
   });
 
+  it("flags Christchurch comprehensive development only when qualifying matters do not block it", () => {
+    const provider = {
+      providerId: "christchurch" as const,
+      providerName: "Christchurch City Council planning provider",
+    };
+    const zone = {
+      zone_code: "MRZ",
+      zone_description: "Medium density residential zone - Operative - Christchurch District Plan Zone",
+      min_lot_size_sqm: null,
+      raw_zone: "{}",
+    };
+    const lotResult = calculateRegionalPotentialLots({ provider, zone, landAreaSqm: 390 })!.lotResult;
+    const baseInput = {
+      provider,
+      zone,
+      netAreaSqm: lotResult.net_area_sqm,
+      zoneCode: "CCC_MRZ",
+      zoneLabel: lotResult.zone_label,
+      standardVacantLots: lotResult.lots,
+      minLotSqm: lotResult.min_lot_size,
+      typology: "standalone" as const,
+      titleConfidence: "verified" as const,
+      landAreaConfidence: "verified" as const,
+      buildYear: 1970,
+    };
+
+    expect(assessRegionalSubdivisionPathways(baseInput)).toMatchObject({
+      designLedEligible: true,
+      designLedYieldRange: { min: 2, max: 3 },
+    });
+    expect(assessRegionalSubdivisionPathways({
+      ...baseInput,
+      overlays: [{
+        name: "Residential Density / Qualifying Matter",
+        status: "moderate",
+        detail: "Residential Density / Qualifying Matter applies - qualifying matter area.",
+      }],
+    })).toMatchObject({
+      designLedEligible: false,
+      designLedYieldRange: null,
+    });
+  });
+
   it("calculates Whangarei standard vacant-lot capacity from the local rule pack", () => {
     const result = calculateRegionalPotentialLots({
       provider: {
@@ -261,6 +360,39 @@ describe("regional planning rule status", () => {
       sqm_per_lot: 320,
     });
     expect(result?.sourceLabel).toBe("Whangarei District Plan SUB-R6");
+  });
+
+  it("flags Whangarei Medium Density unit-title opportunity without using the 50sqm minimum directly", () => {
+    const provider = {
+      providerId: "whangarei" as const,
+      providerName: "Whangarei District Council planning provider",
+    };
+    const zone = {
+      zone_code: "Medium Density Residential Zone",
+      zone_description: "Medium Density Residential Zone - Whangarei Residential Zone",
+      min_lot_size_sqm: null,
+      raw_zone: "{}",
+    };
+    const lotResult = calculateRegionalPotentialLots({ provider, zone, landAreaSqm: 720 })!.lotResult;
+    const assessment = assessRegionalSubdivisionPathways({
+      provider,
+      zone,
+      netAreaSqm: lotResult.net_area_sqm,
+      zoneCode: "WDC_MRZ",
+      zoneLabel: lotResult.zone_label,
+      standardVacantLots: lotResult.lots,
+      minLotSqm: lotResult.min_lot_size,
+      typology: "standalone",
+      titleConfidence: "verified",
+      landAreaConfidence: "verified",
+      buildYear: 1980,
+    });
+
+    expect(assessment).toMatchObject({
+      designLedEligible: true,
+      designLedYieldRange: { min: 3, max: 4 },
+    });
+    expect(assessment?.designLedDetail).toContain("unit-title opportunity");
   });
 
   it("uses Whangarei large-parent-site thresholds where the rule provides them", () => {
@@ -347,6 +479,49 @@ describe("regional planning rule status", () => {
     })?.lotResult.lots).toBe(2);
   });
 
+  it("blocks the QLDC approved-unit pathway inside airport noise overlays", () => {
+    const provider = {
+      providerId: "qldc" as const,
+      providerName: "Queenstown Lakes District Council planning provider",
+    };
+    const zone = {
+      zone_code: "17",
+      zone_description: "Suburban Residential - QLDC Proposed District Plan Zone - code 17",
+      min_lot_size_sqm: null,
+      raw_zone: "{}",
+    };
+    const lotResult = calculateRegionalPotentialLots({ provider, zone, landAreaSqm: 900 })!.lotResult;
+    const baseInput = {
+      provider,
+      zone,
+      netAreaSqm: lotResult.net_area_sqm,
+      zoneCode: "QLDC_LDSRZ",
+      zoneLabel: lotResult.zone_label,
+      standardVacantLots: lotResult.lots,
+      minLotSqm: lotResult.min_lot_size,
+      typology: "standalone" as const,
+      titleConfidence: "verified" as const,
+      landAreaConfidence: "verified" as const,
+      buildYear: 1988,
+    };
+
+    expect(assessRegionalSubdivisionPathways(baseInput)).toMatchObject({
+      designLedEligible: true,
+      designLedYieldRange: { min: 3, max: 3 },
+    });
+    expect(assessRegionalSubdivisionPathways({
+      ...baseInput,
+      overlays: [{
+        name: "Overlay Polygon",
+        status: "moderate",
+        detail: "Air Noise Boundary - Queenstown Airport Air Noise Boundary.",
+      }],
+    })).toMatchObject({
+      designLedEligible: false,
+      designLedYieldRange: null,
+    });
+  });
+
   it("enables Dunedin GR1 yield from the Variation 2 minimum site size", () => {
     const provider = {
       providerId: "dunedin" as const,
@@ -400,6 +575,43 @@ describe("regional planning rule status", () => {
     expect(result?.caveats.join(" ")).toContain("uses 400sqm until wastewater-constraint mapping is verified");
   });
 
+  it("flags Dunedin existing-house/duplex subdivision but blocks pre-1940 demolition risk", () => {
+    const provider = {
+      providerId: "dunedin" as const,
+      providerName: "Dunedin City Council planning provider",
+    };
+    const zone = {
+      zone_code: "R1",
+      zone_description: "R1 - YES - Dunedin - Dunedin District Plan Zone",
+      min_lot_size_sqm: null,
+      raw_zone: "{}",
+    };
+    const lotResult = calculateRegionalPotentialLots({ provider, zone, landAreaSqm: 650 })!.lotResult;
+    const baseInput = {
+      provider,
+      zone,
+      netAreaSqm: lotResult.net_area_sqm,
+      zoneCode: "DCC_GR1",
+      zoneLabel: lotResult.zone_label,
+      standardVacantLots: lotResult.lots,
+      minLotSqm: lotResult.min_lot_size,
+      typology: "standalone" as const,
+      titleConfidence: "verified" as const,
+      landAreaConfidence: "verified" as const,
+    };
+
+    expect(assessRegionalSubdivisionPathways({ ...baseInput, buildYear: 1960 })).toMatchObject({
+      designLedEligible: true,
+      designLedYieldRange: { min: 2, max: 2 },
+    });
+    const blocked = assessRegionalSubdivisionPathways({ ...baseInput, buildYear: 1935 });
+    expect(blocked).toMatchObject({
+      designLedEligible: false,
+      designLedYieldRange: null,
+    });
+    expect(blocked?.designLedBlockers.join(" ")).toContain("1 January 1940");
+  });
+
   it("preserves the official regional zone description while adding the rules status", () => {
     const description = regionalZoneDescriptionWithRuleStatus(
       {
@@ -444,6 +656,7 @@ describe("regional planning rule status", () => {
       providerId: "hamilton",
       regionalZoneCode: "HCC_GRZ",
       standardMinimumLotSqm: 300,
+      alternativePathwayLabel: "Concurrent land-use and subdivision pathway",
       roiEnabled: true,
     }));
     expect(entries).toContainEqual(expect.objectContaining({

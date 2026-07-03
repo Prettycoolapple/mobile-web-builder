@@ -9,12 +9,14 @@ import {
 import { planningProviderMetadata } from "./regional-planning";
 import { regionalCostProfileForProvider } from "./regional-cost-profiles";
 import {
+  assessRegionalSubdivisionPathways,
   calculateRegionalPotentialLots,
   regionalPlanningRuleStatus,
 } from "./regional-rules";
 import {
   assessSubdivisionPathways,
   calculatePotentialLots,
+  type DesignLedAssessmentInput,
   type DesignLedConfidence,
   type DesignLedYieldRange,
 } from "./lot-calculator";
@@ -126,7 +128,7 @@ export async function computeLightScore(input: LightScoreInput): Promise<LightSc
     || (input.titleConfidence != null && input.titleConfidence !== "verified")
     || (input.buildYear != null && input.buildYear >= 2000);
   const lots = forceSingleLot ? 1 : lotResult.lots;
-  const subdivisionAssessment = assessSubdivisionPathways({
+  const subdivisionAssessmentInput: DesignLedAssessmentInput = {
     netAreaSqm: land > 0 ? land : null,
     zoneCode,
     zoneLabel: lotResult.zone_label,
@@ -140,7 +142,12 @@ export async function computeLightScore(input: LightScoreInput): Promise<LightSc
     parcelBbox: linzParcel?.bbox ?? null,
     overlays,
     slopeClass: contourData?.classification ?? null,
-  });
+  };
+  const subdivisionAssessment = assessRegionalSubdivisionPathways({
+    ...subdivisionAssessmentInput,
+    provider: planningProvider,
+    zone: zoneResult.status === "fulfilled" ? zoneResult.value : null,
+  }) ?? assessSubdivisionPathways(subdivisionAssessmentInput);
 
   const minimalMerged: MergedPropertyData = {
     cv_nzd: price,

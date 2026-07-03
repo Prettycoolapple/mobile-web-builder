@@ -18,6 +18,7 @@ import {
   type PlanningProviderMetadata,
 } from "./regional-planning";
 import {
+  assessRegionalSubdivisionPathways,
   calculateRegionalPotentialLots,
   regionalPlanningRuleStatus,
   regionalZoneDescriptionWithRuleStatus,
@@ -37,6 +38,7 @@ import {
   assessSubdivisionPathways,
   calculatePotentialLots,
   buildSubdivisionPathwayNote,
+  type DesignLedAssessmentInput,
   type LotResult,
   type SubdivisionPathwayNote,
   type SubdivisionPathwayAssessment,
@@ -1435,7 +1437,7 @@ export async function runPropertyPipeline(
   const lotResult = shouldForceSingleLotForEligibility(eligibility)
     ? forceSingleLotResult(rawLotResult)
     : rawLotResult;
-  const subdivisionAssessment = assessSubdivisionPathways({
+  const subdivisionAssessmentInput: DesignLedAssessmentInput = {
     netAreaSqm: (merged.land_area_sqm == null || merged.land_area_sqm <= 0) ? null : lotResult.net_area_sqm,
     zoneCode: merged.zone_code,
     zoneLabel: lotResult.zone_label,
@@ -1449,7 +1451,12 @@ export async function runPropertyPipeline(
     parcelBbox: linzParcelData?.bbox ?? null,
     overlays: merged.overlays,
     slopeClass: merged.contour,
-  });
+  };
+  const subdivisionAssessment = assessRegionalSubdivisionPathways({
+    ...subdivisionAssessmentInput,
+    provider: planningProvider,
+    zone: zoneData,
+  }) ?? assessSubdivisionPathways(subdivisionAssessmentInput);
   const subdivisionPathway = buildSubdivisionPathwayNote(
     // Treat both null and 0 as "area unavailable" — some data sources (e.g.
     // propertyvalue.co.nz for units) return 0 rather than null when the land
