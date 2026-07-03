@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "backfill-feature-index": "tsx src/scripts/backfill-feature-index.ts",
     "recompute-derived-scores": "tsx src/scripts/recompute-derived-scores.ts",
+    "reacquire-cache": "tsx src/scripts/reacquire-cache.ts",
     "smoke:regional-planning": "tsx src/scripts/smoke-regional-planning.ts",
     "ci": "pnpm run typecheck && pnpm run test"
   },

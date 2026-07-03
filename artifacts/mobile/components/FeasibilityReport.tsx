@@ -642,11 +642,21 @@ function ScoreSummaryRow({ report, colors, hideOverall }: { report: Report; colo
   const overallColor = scoreColor(composite, colors);
   const overallDisplay = formatCompositeScoreForDisplay(composite);
   const showReasons = ease_reasons.length > 0 || roi_reasons.length > 0;
-  const verdict = buildInvestmentVerdict(ease, cost, roi, composite, locale, {
-    ease: ease_reasons,
-    cost: cost_reasons,
-    roi: roi_reasons,
-  });
+  // Real scores are on a 0.5–5.0 scale, so all-zero means the development score
+  // was suppressed (e.g. not enough recent comparable sales to model returns) —
+  // NOT a genuinely "low" property. In that case show an honest explanation
+  // rather than buildInvestmentVerdict's "planning & title" fallback (which
+  // fires whenever ease reads as 0 and misleads on the real reason).
+  const scoresUnavailable = ease === 0 && cost === 0 && roi === 0;
+  const verdict = scoresUnavailable
+    ? locale === "zh"
+      ? "暂时无法为该房产生成开发评分——通常是因为附近缺少足够的近期可比成交来测算回报。以下的房产与规划事实数据已确认。"
+      : "Development scores aren't available for this property yet — usually because there aren't enough recent comparable sales nearby to model the return. The property and planning facts below are confirmed."
+    : buildInvestmentVerdict(ease, cost, roi, composite, locale, {
+        ease: ease_reasons,
+        cost: cost_reasons,
+        roi: roi_reasons,
+      });
 
   return (
     <View style={[styles.scoresSection, { backgroundColor: (colors as any).scoreCardBg }]}>
