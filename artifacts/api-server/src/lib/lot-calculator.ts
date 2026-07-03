@@ -272,6 +272,11 @@ export interface SubdivisionPathwayNote {
   designLedDetail?: string | null;
 }
 
+export interface SubdivisionPathwayNoteOptions {
+  standardRulesLabel?: string | null;
+  jurisdictionLabel?: string | null;
+}
+
 /**
  * Produces a deterministic, accurate subdivision pathway note for NZ residential zones.
  * Used both in the LLM prompt (so the AI stops hallucinating lot counts) and as a
@@ -284,6 +289,7 @@ export function buildSubdivisionPathwayNote(
   min_lot_sqm: number,
   zone_label: string,
   assessment?: SubdivisionPathwayAssessment | null,
+  options?: SubdivisionPathwayNoteOptions,
 ): SubdivisionPathwayNote {
   const pathwayAssessment = assessment ?? assessSubdivisionPathways({
     netAreaSqm: net_area_sqm,
@@ -304,6 +310,8 @@ export function buildSubdivisionPathwayNote(
     designLedSummary: pathwayAssessment.designLedSummary,
     designLedDetail: pathwayAssessment.designLedDetail,
   };
+  const standardRulesLabel = options?.standardRulesLabel ?? "Auckland Unitary Plan standard rules";
+  const jurisdictionLabel = options?.jurisdictionLabel ?? "Auckland Council";
 
   if (!zone_code || zone_label === UNKNOWN_ZONE.label) {
     return {
@@ -341,7 +349,7 @@ export function buildSubdivisionPathwayNote(
     return {
       headline: `${lots} lots feasible under standard vacant-lot rules (${zone_label}, min ${min_lot_sqm}m²/lot).${transferRightNote ? " TDR/TTR transfer-right allowance may apply." : ""}`,
       detail: [
-        `The site (${net_area_sqm}m² net) is large enough to create ${lots} independent titles as vacant sections under Auckland Unitary Plan standard rules — each lot would be at least ${min_lot_sqm}m². A surveyor and resource consent are still required.`,
+        `The site (${net_area_sqm}m² net) is large enough to create ${lots} independent titles as vacant sections under ${standardRulesLabel} — each lot would be at least ${min_lot_sqm}m². A surveyor and resource consent are still required.`,
         pathwayAssessment.designLedEligible ? pathwayAssessment.designLedDetail : null,
         transferRightNote,
       ].filter(Boolean).join(" "),
@@ -363,7 +371,7 @@ export function buildSubdivisionPathwayNote(
     paragraphs.push(
       `However, smaller-lot subdivision (below ${min_lot_sqm}m²) may be worth testing in ${zone_label} through a joint Land Use + Subdivision consent. ` +
       `Under this pathway you commit to building designs at the same time as the subdivision. ` +
-      `Auckland Council then assesses the quality of the living environment (outdoor space, daylight, infrastructure) ` +
+      `${jurisdictionLabel} then assesses the quality of the living environment (outdoor space, daylight, infrastructure) ` +
       `rather than the raw land area alone.`,
     );
     paragraphs.push(

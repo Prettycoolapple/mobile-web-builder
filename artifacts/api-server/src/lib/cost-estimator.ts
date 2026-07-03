@@ -1,4 +1,5 @@
 import type { MergedPropertyData } from "./scrapers/merge";
+import { defaultRegionalCostProfile, type RegionalCostProfile } from "./regional-cost-profiles";
 import { classifySiteCondition } from "./site-condition";
 import { roundToNearest } from "./utils";
 
@@ -39,6 +40,8 @@ export interface CostBreakdown {
 export interface EstimateCostsOptions {
   /** Median comparable finished-house $/m² (internal floor) when available */
   market_floor_price_per_sqm?: number | null;
+  /** Region/provider-specific cost assumptions. Defaults match the current Auckland model. */
+  cost_profile?: RegionalCostProfile | null;
   /**
    * Net lot size (m²) per new-build unit after subdivision.
    * When provided the construction floor area is derived from lot size, matching
@@ -85,29 +88,28 @@ function effectiveNewBuildFloorSqm(floorFromProperty: number | null | undefined)
 function constructionRatesPerSqm(
   contour: MergedPropertyData["contour"],
   marketFloorPsm: number | null | undefined,
+  costProfile: RegionalCostProfile,
 ): { low: number; high: number } {
   const m = marketFloorPsm != null && Number.isFinite(marketFloorPsm) && marketFloorPsm > 500
     ? marketFloorPsm
     : null;
 
-  let rateLow = 2650;
-  let rateHigh = 3450;
+  let rateLow = costProfile.construction.baseLowPerSqm;
+  let rateHigh = costProfile.construction.baseHighPerSqm;
 
   if (m != null) {
-    const anchor = Math.min(5200, Math.max(2100, m * 0.34));
-    rateLow = anchor * 0.9;
-    rateHigh = anchor * 1.1;
+    const anchor = Math.min(
+      costProfile.construction.marketAnchorMax,
+      Math.max(costProfile.construction.marketAnchorMin, m * costProfile.construction.marketAnchorFactor),
+    );
+    rateLow = anchor * costProfile.construction.marketLowMultiplier;
+    rateHigh = anchor * costProfile.construction.marketHighMultiplier;
   }
 
-  if (contour === "very_steep") {
-    rateLow *= 1.28;
-    rateHigh *= 1.28;
-  } else if (contour === "steep") {
-    rateLow *= 1.18;
-    rateHigh *= 1.18;
-  } else if (contour === "moderate") {
-    rateLow *= 1.08;
-    rateHigh *= 1.08;
+  const contourMultiplier = contour ? costProfile.construction.contourMultipliers[contour] : null;
+  if (contourMultiplier) {
+    rateLow *= contourMultiplier;
+    rateHigh *= contourMultiplier;
   }
 
   return { low: rateLow, high: rateHigh };
@@ -122,18 +124,18 @@ function isLargeRuralLifestyleSite(data: MergedPropertyData): boolean {
   return land >= 10_000 || RURAL_LIFESTYLE_ZONES.has(zone);
 }
 
-function retainingBucketForContour(contour: MergedPropertyData["contour"]): {
+function retainingBucketForContour(contour: MergedPropertyData["contour"], costProfile: RegionalCostProfile): {
   low: number;
   high: number;
 } {
-  if (contour === "subtle" || contour === "gentle") return { low: 5_000, high: 25_000 };
-  if (contour === "moderate") return { low: 30_000, high: 100_000 };
-  if (contour === "steep") return { low: 100_000, high: 250_000 };
-  if (contour === "very_steep") return { low: 250_000, high: 600_000 };
+  if (contour) {
+    const bucket = costProfile.retaining.buckets[contour];
+    if (bucket) return bucket;
+  }
   return { low: 0, high: 0 };
 }
 
-function estimateLargeSiteRetaining(data: MergedPropertyData): {
+function estimateLargeSiteRetaining(data: MergedPropertyData, costProfile: RegionalCostProfile): {
   low: number;
   high: number;
   areaSqm: number | null;
@@ -166,17 +168,22 @@ function estimateLargeSiteRetaining(data: MergedPropertyData): {
   const affectedAreaSqm = Math.round(Math.max(minEnvelope, Math.min(maxEnvelope, effectiveLand * pressureRatio)));
 
   const verySteepSignal = contour === "very_steep" || p90 >= 18 || p95 >= 21;
-  const lowRate = verySteepSignal ? 240 : steepSignal ? 180 : 90;
-  const highRate = verySteepSignal ? 520 : steepSignal ? 420 : 240;
-  const ruralMultiplier = RURAL_LIFESTYLE_ZONES.has((data.zone_code ?? "").toUpperCase()) ? 1.15 : 1;
+  const rateProfile = verySteepSignal
+    ? costProfile.retaining.largeSite.verySteep
+    : steepSignal
+      ? costProfile.retaining.largeSite.steep
+      : costProfile.retaining.largeSite.moderate;
+  const lowRate = rateProfile.lowRate;
+  const highRate = rateProfile.highRate;
+  const ruralMultiplier = RURAL_LIFESTYLE_ZONES.has((data.zone_code ?? "").toUpperCase())
+    ? costProfile.retaining.largeSite.ruralLifestyleMultiplier
+    : 1;
   const calculatedLow = affectedAreaSqm * lowRate * ruralMultiplier;
   const calculatedHigh = affectedAreaSqm * highRate * ruralMultiplier;
-  const floorLow = verySteepSignal ? 350_000 : steepSignal ? 250_000 : 120_000;
-  const floorHigh = verySteepSignal ? 950_000 : steepSignal ? 750_000 : 350_000;
 
   return {
-    low: Math.max(floorLow, calculatedLow),
-    high: Math.max(floorHigh, calculatedHigh),
+    low: Math.max(rateProfile.floorLow, calculatedLow),
+    high: Math.max(rateProfile.floorHigh, calculatedHigh),
     areaSqm: affectedAreaSqm,
     adjusted: true,
   };
@@ -208,6 +215,7 @@ export function estimateCosts(
   units: number,
   options?: EstimateCostsOptions,
 ): CostBreakdown {
+  const costProfile = options?.cost_profile ?? defaultRegionalCostProfile();
   const cv = data.cv_nzd ?? null;
   const cvUnavailable = cv === null;
   const contour = data.contour ?? null;
@@ -221,21 +229,24 @@ export function estimateCosts(
   const demoVacant = !hasDwelling;
   if (hasDwelling) {
     if (asbestos === "low") {
-      demo_low = 15000; demo_high = 30000;
+      demo_low = costProfile.demolition.lowAsbestosLow;
+      demo_high = costProfile.demolition.highAsbestosLow;
     } else if (asbestos === "high") {
-      demo_low = 35000; demo_high = 80000;
+      demo_low = costProfile.demolition.lowAsbestosHigh;
+      demo_high = costProfile.demolition.highAsbestosHigh;
     } else {
-      demo_low = 20000; demo_high = 60000;
+      demo_low = costProfile.demolition.lowUnknownAsbestos;
+      demo_high = costProfile.demolition.highUnknownAsbestos;
     }
   }
 
   let retaining_low = 0;
   let retaining_high = 0;
   const retainingUnknown = contour === null;
-  const baseRetaining = retainingBucketForContour(contour);
+  const baseRetaining = retainingBucketForContour(contour, costProfile);
   retaining_low = baseRetaining.low;
   retaining_high = baseRetaining.high;
-  const largeSiteRetaining = estimateLargeSiteRetaining(data);
+  const largeSiteRetaining = estimateLargeSiteRetaining(data, costProfile);
   let retaining_area_sqm_estimate: number | null = data.retaining_area_sqm_estimate ?? null;
   let large_site_terrain_adjusted = data.large_site_terrain_adjusted ?? false;
   if (largeSiteRetaining) {
@@ -257,24 +268,28 @@ export function estimateCosts(
   const floorSqm = sqmPerLotOpt != null && Number.isFinite(sqmPerLotOpt) && sqmPerLotOpt > 0
     ? newBuildFloorSqmFromLotSize(sqmPerLotOpt)
     : effectiveNewBuildFloorSqm(data.floor_area_sqm);
-  const { low: rate_low, high: rate_high } = constructionRatesPerSqm(contour, options?.market_floor_price_per_sqm);
+  const { low: rate_low, high: rate_high } = constructionRatesPerSqm(
+    contour,
+    options?.market_floor_price_per_sqm,
+    costProfile,
+  );
 
   const construction_low  = rate_low  * floorSqm * safeUnits;
   const construction_high = rate_high * floorSqm * safeUnits;
 
-  const consents_low  = construction_low  * 0.13;
-  const consents_high = construction_high * 0.16;
+  const consents_low  = construction_low  * costProfile.consents.lowRate;
+  const consents_high = construction_high * costProfile.consents.highRate;
 
   const construction_mid = (construction_low + construction_high) / 2;
   const loan_base = (cv ?? 0) + construction_mid * 0.5;
-  const finance_low  = loan_base * 0.075 * 1.5;
-  const finance_high = loan_base * 0.075 * 2.5;
+  const finance_low  = loan_base * costProfile.finance.annualRate * costProfile.finance.lowYears;
+  const finance_high = loan_base * costProfile.finance.annualRate * costProfile.finance.highYears;
 
   const subtotal_low  = demo_low  + retaining_low  + tdrTtr.low  + services_low  + construction_low  + consents_low  + finance_low;
   const subtotal_high = demo_high + retaining_high + tdrTtr.high + services_high + construction_high + consents_high + finance_high;
 
-  const contingency_low  = subtotal_low  * 0.08;
-  const contingency_high = subtotal_high * 0.12;
+  const contingency_low  = subtotal_low  * costProfile.contingency.lowRate;
+  const contingency_high = subtotal_high * costProfile.contingency.highRate;
 
   const dev_cost_low  = subtotal_low  + contingency_low;
   const dev_cost_high = subtotal_high + contingency_high;

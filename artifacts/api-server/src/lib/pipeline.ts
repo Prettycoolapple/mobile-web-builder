@@ -17,7 +17,12 @@ import {
   shouldSuppressAucklandPlanningRules,
   type PlanningProviderMetadata,
 } from "./regional-planning";
-import { regionalPlanningRuleStatus, regionalZoneDescriptionWithRuleStatus } from "./regional-rules";
+import {
+  calculateRegionalPotentialLots,
+  regionalPlanningRuleStatus,
+  regionalZoneDescriptionWithRuleStatus,
+} from "./regional-rules";
+import { regionalCostProfileForProvider } from "./regional-cost-profiles";
 import { scrapeHougarden, type HougardenData } from "./scrapers/hougarden";
 import { scrapeOneRoof, type OneRoofData, type ListingResult } from "./scrapers/oneroof";
 import { scrapeHomes, type HomesData } from "./scrapers/homes";
@@ -1104,21 +1109,31 @@ export async function runPropertyPipeline(
     },
   );
   if (shouldSuppressAucklandPlanningRules(planningProvider)) {
-    const ruleStatus = regionalPlanningRuleStatus(planningProvider, zoneData);
+    const ruleStatus = regionalPlanningRuleStatus(planningProvider, zoneData, merged.land_area_sqm, merged.overlays);
     if (merged.zone_code || merged.min_lot_size_sqm) {
       logger.info(
         {
           providerId: planningProvider?.providerId,
           originalZoneCode: merged.zone_code,
           originalMinLotSizeSqm: merged.min_lot_size_sqm,
+          regionalZoneCode: ruleStatus.regionalZoneCode,
+          regionalMinLotSizeSqm: ruleStatus.verifiedMinimumLotSqm,
         },
-        "Regional provider selected: suppressing Auckland-specific zone and lot-size modelling",
+        "Regional provider selected: replacing Auckland-specific zone and lot-size modelling",
       );
     }
-    merged.zone_code = null;
-    merged.min_lot_size_sqm = null;
-    merged.zone_description = regionalZoneDescriptionWithRuleStatus(zoneData, planningProvider);
-    merged.data_sources["zone"] = "regional_provider_partial";
+    merged.zone_code = ruleStatus.automaticYieldClaimsAllowed ? ruleStatus.regionalZoneCode : null;
+    merged.min_lot_size_sqm = ruleStatus.automaticYieldClaimsAllowed ? ruleStatus.verifiedMinimumLotSqm : null;
+    merged.zone_description = regionalZoneDescriptionWithRuleStatus(
+      zoneData,
+      planningProvider,
+      merged.land_area_sqm,
+      merged.overlays,
+    );
+    merged.data_sources["zone"] = ruleStatus.automaticYieldClaimsAllowed
+      ? "regional_rule_pack"
+      : "regional_provider_partial";
+    if (ruleStatus.sourceLabel) merged.data_sources["min_lot_size_sqm"] = ruleStatus.sourceLabel;
     if (ruleStatus.note) merged.discrepancies.push(ruleStatus.note);
   }
 
@@ -1361,11 +1376,23 @@ export async function runPropertyPipeline(
   ];
 
   const easementAreaSqm = easementAnalysis?.total_burdening_area_sqm ?? 0;
-  const rawLotResult = calculatePotentialLots(
+  const regionalLotAssessment = calculateRegionalPotentialLots({
+    provider: planningProvider,
+    zone: zoneData,
+    landAreaSqm: merged.land_area_sqm,
+    easementAreaSqm,
+    overlays: merged.overlays,
+  });
+  const rawLotResult = regionalLotAssessment?.lotResult ?? calculatePotentialLots(
     merged.land_area_sqm ?? 0,
     merged.zone_code,
     easementAreaSqm,
   );
+  if (regionalLotAssessment) {
+    for (const caveat of regionalLotAssessment.caveats) {
+      if (!merged.discrepancies.includes(caveat)) merged.discrepancies.push(caveat);
+    }
+  }
   const eligibility = assessPropertyEligibility({
     address: geocode.formatted ?? address,
     estateType: merged.estate_type,
@@ -1434,6 +1461,12 @@ export async function runPropertyPipeline(
     lotResult.min_lot_size,
     lotResult.zone_label,
     subdivisionAssessment,
+    regionalLotAssessment
+      ? {
+          standardRulesLabel: regionalLotAssessment.sourceLabel,
+          jurisdictionLabel: planningProvider?.territorialAuthority ?? planningProvider?.providerName ?? null,
+        }
+      : undefined,
   );
   const eligibilityNote = eligibilityPlanningNote(eligibility);
   if (eligibilityNote) {
@@ -1535,9 +1568,11 @@ export async function runPropertyPipeline(
   }
 
   const marketPsm = comparablesResult.avg_price_per_sqm > 0 ? comparablesResult.avg_price_per_sqm : null;
+  const costProfile = regionalCostProfileForProvider(planningProvider?.providerId ?? "auckland-legacy");
   const costs = estimateCosts(merged, modelledLotResult.lots, {
     market_floor_price_per_sqm: marketPsm,
     sqm_per_lot: modelledLotResult.sqm_per_lot,
+    cost_profile: costProfile,
   });
 
   const strategyAssessmentPromise = assessDevelopmentStrategy({
@@ -1568,10 +1603,13 @@ export async function runPropertyPipeline(
   ]);
 
   const hasRealComparablePricing = comparablesResult.avg_sale_price > 0 || comparablesResult.avg_price_per_sqm > 0;
+  const regionalRoiAllowed = !planningProvider
+    || planningProvider.providerId === "auckland-legacy"
+    || regionalPlanningRuleStatus(planningProvider, zoneData, merged.land_area_sqm, merged.overlays).automaticRoiAllowed;
   const gdvTypologyMultiplier = 1;
   const neighbourhoodGdvMultiplier = neighbourhoodContext?.marketAdjustment.gdvMultiplier ?? 1;
   const combinedGdvMultiplier = Math.max(0.5, Math.min(1, neighbourhoodGdvMultiplier));
-  const scenarios = hasRealComparablePricing
+  const scenarios = hasRealComparablePricing && regionalRoiAllowed
     ? calculateBearBaseBullScenarios(
         costs,
         comparablesResult.avg_price_per_sqm,

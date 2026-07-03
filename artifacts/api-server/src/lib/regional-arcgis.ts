@@ -82,6 +82,7 @@ const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
     ],
     overlayLayers: [
       overlay(HAMILTON_FEATURES, 0, "Built Heritage", "point", "restricted", 15, ["NAME", "ID"]),
+      overlay(HAMILTON_FEATURES, 2, "Designation", "polygon", "control", undefined, ["Name", "ReferenceNo", "Facility", "Purpose"]),
       overlay(HAMILTON_FEATURES, 196, "Significant Archaeological Sites", "polygon", "restricted"),
       overlay(HAMILTON_FEATURES, 3, "Significant Natural Areas", "polygon", "restricted"),
       overlay(HAMILTON_FEATURES, 155, "Peacocke Significant Bat Habitat Area", "polygon", "restricted"),
@@ -129,6 +130,7 @@ const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
       overlay(CHRISTCHURCH_DISTRICT_PLAN_B, 79, "Tsunami Inundation", "polygon", "moderate"),
       overlay(CHRISTCHURCH_DISTRICT_PLAN_B, 80, "Noise Insulation", "polygon", "moderate"),
       overlay(CHRISTCHURCH_DISTRICT_PLAN_B, 85, "Water Body Setback", "polygon", "moderate"),
+      overlay(CHRISTCHURCH_DISTRICT_PLAN, 42, "Residential Density / Qualifying Matter", "polygon", "moderate", undefined, ["Category", "Location", "ScheduleReference"]),
     ],
   },
   whangarei: {
@@ -170,10 +172,10 @@ const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
       overlay(QLDC_PDP, 13, "Overlay Points", "point", "moderate", 30),
       overlay(QLDC_PDP, 15, "Heritage Protection Order", "polygon", "restricted"),
       overlay(QLDC_PDP, 16, "Archaeological Site", "polygon", "restricted"),
-      overlay(QLDC_PDP, 20, "Overlay Polygon", "polygon", "moderate"),
-      overlay(QLDC_PDP, 21, "Specific Control", "polygon", "control"),
+      overlay(QLDC_PDP, 20, "Overlay Polygon", "polygon", "moderate", undefined, ["Label", "Decription", "Value", "Location"]),
+      overlay(QLDC_PDP, 21, "Specific Control", "polygon", "control", undefined, ["ControlType", "Label", "Description"]),
       overlay(QLDC_PDP, 22, "Designation", "polygon", "control"),
-      overlay(QLDC_PDP, 23, "Development Area", "polygon", "control"),
+      overlay(QLDC_PDP, 23, "Development Area", "polygon", "control", undefined, ["DevelopmentArea", "Label", "Description"]),
     ],
   },
   dunedin: {

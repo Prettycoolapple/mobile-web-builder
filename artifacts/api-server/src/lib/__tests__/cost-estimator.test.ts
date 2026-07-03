@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { estimateCosts } from "../cost-estimator";
+import { regionalCostProfileForProvider } from "../regional-cost-profiles";
 import type { MergedPropertyData } from "../scrapers/merge";
 
 function minimal(overrides: Partial<MergedPropertyData> = {}): MergedPropertyData {
@@ -201,5 +202,26 @@ describe("estimateCosts — existing dwelling / demolition", () => {
     expect(c.tdr_ttr_required).toBe(false);
     expect(c.tdr_ttr_low).toBe(0);
     expect(c.tdr_ttr_high).toBe(0);
+  });
+
+  it("supports provider-specific cost profiles while defaulting to Auckland-equivalent values", () => {
+    const property = minimal({
+      cv_nzd: 1_000_000,
+      contour: "flat",
+      floor_area_sqm: 120,
+    });
+    const aucklandDefault = estimateCosts(property, 1);
+    const whangareiDefault = estimateCosts(property, 1, {
+      cost_profile: regionalCostProfileForProvider("whangarei"),
+    });
+    const customProfile = regionalCostProfileForProvider("whangarei");
+    customProfile.construction.baseLowPerSqm = 3_000;
+    customProfile.construction.baseHighPerSqm = 4_000;
+    const whangareiCustom = estimateCosts(property, 1, { cost_profile: customProfile });
+
+    expect(whangareiDefault.construction_low).toBe(aucklandDefault.construction_low);
+    expect(whangareiDefault.construction_high).toBe(aucklandDefault.construction_high);
+    expect(whangareiCustom.construction_low).toBeGreaterThan(whangareiDefault.construction_low);
+    expect(regionalCostProfileForProvider("unsupported").id).toBe("unsupported-default");
   });
 });

@@ -6,6 +6,12 @@ import {
   fetchPlanningZoneForReport,
   fetchTerrainForReport,
 } from "./regional-planning-fetchers";
+import { planningProviderMetadata } from "./regional-planning";
+import { regionalCostProfileForProvider } from "./regional-cost-profiles";
+import {
+  calculateRegionalPotentialLots,
+  regionalPlanningRuleStatus,
+} from "./regional-rules";
 import {
   assessSubdivisionPathways,
   calculatePotentialLots,
@@ -81,11 +87,21 @@ export async function computeLightScore(input: LightScoreInput): Promise<LightSc
   ]);
 
   const linzParcel = linzResult.status === "fulfilled" ? linzResult.value : null;
-
-  const zoneCode: string | null =
-    zoneResult.status === "fulfilled" ? (zoneResult.value?.zone_code ?? hintZone ?? null) : (hintZone ?? null);
+  const planningProvider = planningProviderMetadata({ address, lat: geo.lat, lng: geo.lng });
   const overlays: Overlay[] =
     overlayResult.status === "fulfilled" ? overlayResult.value : [];
+
+  const fetchedZoneCode: string | null =
+    zoneResult.status === "fulfilled" ? (zoneResult.value?.zone_code ?? hintZone ?? null) : (hintZone ?? null);
+  const regionalRuleStatus = regionalPlanningRuleStatus(
+    planningProvider,
+    zoneResult.status === "fulfilled" ? zoneResult.value : null,
+    listingLandArea ?? linzParcel?.area_sqm ?? null,
+    overlays,
+  );
+  const zoneCode: string | null = planningProvider && planningProvider.providerId !== "auckland-legacy"
+    ? regionalRuleStatus.regionalZoneCode
+    : fetchedZoneCode;
   const contourData = contourResult.status === "fulfilled" ? contourResult.value : null;
 
   const hasVerifiedListingArea = listingLandArea != null && landAreaConfidence === "verified";
@@ -96,7 +112,14 @@ export async function computeLightScore(input: LightScoreInput): Promise<LightSc
       : buildYear && buildYear > 1990 ? "low"
         : "unknown";
 
-  const lotResult = calculatePotentialLots(land, zoneCode, 0);
+  const regionalLotAssessment = calculateRegionalPotentialLots({
+    provider: planningProvider,
+    zone: zoneResult.status === "fulfilled" ? zoneResult.value : null,
+    landAreaSqm: land,
+    easementAreaSqm: 0,
+    overlays,
+  });
+  const lotResult = regionalLotAssessment?.lotResult ?? calculatePotentialLots(land, zoneCode, 0);
   const forceSingleLot = input.subdivisionEligible === false
     || input.isAlreadySubdividedChild === true
     || (input.typology != null && input.typology !== "standalone")
@@ -159,7 +182,10 @@ export async function computeLightScore(input: LightScoreInput): Promise<LightSc
     subdivisionRejectReason: input.subdivisionRejectReason ?? null,
   };
 
-  const costs = estimateCosts(minimalMerged, lots, { sqm_per_lot: lotResult.sqm_per_lot });
+  const costs = estimateCosts(minimalMerged, lots, {
+    sqm_per_lot: lotResult.sqm_per_lot,
+    cost_profile: regionalCostProfileForProvider(planningProvider?.providerId ?? "auckland-legacy"),
+  });
 
   const AUCKLAND_MEDIAN_PRICE_PER_SQM = 8500;
   const AUCKLAND_MEDIAN_SALE_PRICE = 900_000;
@@ -179,15 +205,20 @@ export async function computeLightScore(input: LightScoreInput): Promise<LightSc
   const gdvPricePerSqm = Math.round(AUCKLAND_MEDIAN_PRICE_PER_SQM * exitScale);
   const gdvSalePrice = Math.round(AUCKLAND_MEDIAN_SALE_PRICE * exitScale);
 
-  const scenarios = calculateBearBaseBullScenarios(
-    costs,
-    gdvPricePerSqm,
-    gdvSalePrice,
-    lots,
-    lotResult.sqm_per_lot,
-    "stable",
-    1,
-  );
+  const regionalRoiAllowed = !planningProvider
+    || planningProvider.providerId === "auckland-legacy"
+    || regionalRuleStatus.automaticRoiAllowed;
+  const scenarios = regionalRoiAllowed
+    ? calculateBearBaseBullScenarios(
+        costs,
+        gdvPricePerSqm,
+        gdvSalePrice,
+        lots,
+        lotResult.sqm_per_lot,
+        "stable",
+        1,
+      )
+    : [];
 
   const builtEnvironmentContextRaw = await fetchBuiltEnvironmentContext({
     address,
