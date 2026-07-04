@@ -116,13 +116,15 @@ function corpus(input: PropertyEligibilityInput): string {
 }
 
 function hasLotDpSignal(text: string): boolean {
-  return /\blot\s+\d+[a-z]?\b[\s\S]{0,80}\b(?:dp|deposited\s+plan)\s*\d+\b/i.test(text)
-    || /\b(?:dp|deposited\s+plan)\s*\d+\b[\s\S]{0,80}\blot\s+\d+[a-z]?\b/i.test(text);
+  return /\b(?:part\s+)?lot\s+\d+[a-z]?\b[\s\S]{0,80}\b(?:dp|deposited\s+plan|deeds\s+plan)\s*\d+\b/i.test(text)
+    || /\b(?:dp|deposited\s+plan|deeds\s+plan)\s*\d+\b[\s\S]{0,80}\b(?:part\s+)?lot\s+\d+[a-z]?\b/i.test(text);
 }
 
 function hasUnitLikeSignal(text: string): boolean {
   const normalized = text.replace(/\bsingle\s+unit\s+excluding\s+bach\b/gi, "single dwelling excluding bach");
-  return /\b(unit\s+title|stratum|body\s+corporate|body\s+corp|ownership\s+home\s+units?|home\s+unit|principal\s+unit|accessory\s+unit|apartment|flat)\b/i.test(normalized)
+  return /\b(unit\s+title|stratum|body\s+corporate|body\s+corp|ownership\s+home\s+units?|home\s+unit|principal\s+unit|accessory\s+unit|apartment)\b/i.test(normalized)
+    || /\bflat\s+[a-z0-9]+\b/i.test(normalized)
+    || /\bflat\b[\s\S]{0,80}\b(?:dp|deposited\s+plan|deeds\s+plan)\b/i.test(normalized)
     || /\bunit\s+[a-z0-9]\b/i.test(normalized);
 }
 

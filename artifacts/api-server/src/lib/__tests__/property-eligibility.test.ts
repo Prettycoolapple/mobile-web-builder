@@ -191,6 +191,51 @@ describe("property eligibility verifier", () => {
     expect(result.subdivisionEligible).toBe(true);
   });
 
+  it("does not treat fee-simple home-and-income HOUSE & FLAT wording as unit title", () => {
+    const result = assessPropertyEligibility({
+      address: "35 Clarendon Road, St Heliers, Auckland",
+      estateType: "Fee Simple",
+      propertyType: "RESIDENTIAL",
+      propertySubType: "Home & income",
+      landUsePrimary: "Multi-unit",
+      propertyImprovements: "HOUSE & FLAT",
+      propertyValueLegalDescriptions: ["Lot 2 Deposited Plan 56787"],
+      landAreaSqm: 1138,
+      floorAreaSqm: 293,
+      buildYear: 1970,
+      zoneCode: "MHU",
+      potentialLots: 3,
+      minLotSize: 300,
+    });
+
+    expect(result.typology).toBe("standalone");
+    expect(result.titleConfidence).toBe("verified");
+    expect(result.subdivisionEligible).toBe(true);
+  });
+
+  it("treats Deeds Plan lot descriptions as freehold-style title evidence", () => {
+    const result = assessPropertyEligibility({
+      address: "36 King Street, Grey Lynn, Auckland",
+      estateType: null,
+      propertyType: "RESIDENTIAL",
+      propertySubType: "Dwelling",
+      landUsePrimary: "Single Unit excluding Bach",
+      propertyImprovements: "HOUSE",
+      propertyValueLegalDescriptions: ["Part Lot 103 Deeds Plan 1378"],
+      landAreaSqm: 374,
+      floorAreaSqm: 87,
+      buildYear: 1910,
+      zoneCode: "SHZ",
+      potentialLots: 1,
+      minLotSize: 600,
+    });
+
+    expect(result.typology).toBe("standalone");
+    expect(result.titleConfidence).toBe("verified");
+    expect(result.titleIsFreehold).toBe(true);
+    expect(result.subdivisionRejectReason).toBe("insufficient_land_for_two_lots");
+  });
+
   it("rejects cross-lease or unit title even when parent parcel math works", () => {
     const result = assessPropertyEligibility({
       address: "2/10 Example Street, St Heliers, Auckland",
