@@ -237,4 +237,16 @@ export function calculateScenariosFromGdv(
   });
 }
 
+/**
+ * Total (non-annualised) roi_percent from the NEAREST exit-year horizon among a
+ * property's scenarios — deliberately not the max across horizons (which always
+ * selects the longest, most organic-growth-compounded scenario, producing
+ * inflated-looking headline numbers for multi-lot schemes) and deliberately not
+ * annualised (kept as a whole-project total return, per product decision).
+ */
+export function nearestHorizonRoiPercent(scenarios: ROIScenario[]): number | null {
+  if (scenarios.length === 0) return null;
+  return scenarios.reduce((nearest, s) => (s.years < nearest.years ? s : nearest), scenarios[0]).roi_percent;
+}
+
 export type { ROIScenario as default };

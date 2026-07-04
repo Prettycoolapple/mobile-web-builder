@@ -1158,7 +1158,7 @@ function resolveDiscoveryPresentation(input: {
 }
 
 type DiscoverySuburbResolution =
-  | { status: "valid"; suburb: string; original: string | null; kind: "suburb" | "district" }
+  | { status: "valid"; suburb: string; original: string | null; kind: "suburb" | "district" | "region" }
   | { status: "invalid"; message: string };
 
 function replaceFirstInsensitive(haystack: string, needle: string, replacement: string): string {
@@ -1200,11 +1200,20 @@ async function resolveDiscoverySuburbName(
       kind: "district",
     };
   }
+  if (resolved?.status === "region") {
+    const normalized = resolved.region.title.toLowerCase();
+    return {
+      status: "valid",
+      suburb: normalized,
+      original: resolved.original ?? (normalized === raw.toLowerCase() ? null : raw),
+      kind: "region",
+    };
+  }
 
   const closest = resolved?.status === "invalid" ? resolved.closest : null;
   const baseMessage = closest
-    ? `I couldn't confidently match "${titleCaseSuburb(raw)}" to a NZ suburb. Did you mean ${closest}? Please check the spelling and try again.`
-    : `I couldn't confidently match "${titleCaseSuburb(raw)}" to a NZ suburb. Please check the spelling and try again.`;
+    ? `I couldn't confidently match "${titleCaseSuburb(raw)}" to a NZ suburb, city, or region. Did you mean ${closest}? Please check the spelling and try again.`
+    : `I couldn't confidently match "${titleCaseSuburb(raw)}" to a NZ suburb, city, or region. Please check the spelling and try again.`;
   return {
     status: "invalid",
     message: locale === "zh" ? await ensureChinese(baseMessage) : baseMessage,
@@ -1810,8 +1819,8 @@ async function searchSuburbOrDistrict(args: {
   done: boolean;
 }> {
   const liveLocation = await resolveRealestateLocation(args.suburb).catch(() => null);
-  const childSuburbs = liveLocation?.status === "district"
-    ? liveLocation.suburbs.map((suburb) => suburb.title.toLowerCase())
+  const childSuburbs = liveLocation?.status
+    ? null
     : resolveDistrictToSuburbs(args.suburb);
   if (!childSuburbs || childSuburbs.length === 0) {
     const result = await searchRealEstateListings({
@@ -2912,6 +2921,8 @@ async function parseDiscoverParams(text: string): Promise<{ suburb: string | nul
     ? hit.suburb.title.toLowerCase()
     : hit?.status === "district"
       ? hit.district.title.toLowerCase()
+      : hit?.status === "region"
+        ? hit.region.title.toLowerCase()
       : null;
 
   const pricePatterns = [
@@ -6125,6 +6136,7 @@ router.post(
             const hit = await findLocationInTextViaIndex(userText);
             if (hit?.status === "suburb") suburb = hit.suburb.title.toLowerCase();
             else if (hit?.status === "district") suburb = hit.district.title.toLowerCase();
+            else if (hit?.status === "region") suburb = hit.region.title.toLowerCase();
           }
           // Directional / "central" area terms (EN + zh) are Auckland-context by
           // default. Resolve them to Auckland districts so we never fall back to
@@ -6227,12 +6239,19 @@ router.post(
           if (criteriaSpec) {
             try {
               // "Anywhere" (a delegated suburb choice) searches the WHOLE analysed
-              // index; otherwise scope to the named suburb(s).
+              // index; otherwise scope to the named suburb(s). A named entry may be
+              // a DISTRICT/region (e.g. "orakei", "waikato") rather than a leaf
+              // suburb — resolveDiscoverySuburbName above accepts districts but
+              // passes the literal district name through unexpanded, and no
+              // analysed property's indexed suburb is ever literally a district
+              // name. Fan each entry out via resolveDistrictToSuburbs so a
+              // district-level ask actually matches its real child suburbs.
               const criteriaSuburbs = delegatedDiscoverSuburb
                 ? []
                 : [suburb, ...(intent.additionalSuburbs ?? [])]
                     .filter((s): s is string => !!s && s.trim().length > 0)
-                    .map((s) => s.trim().toLowerCase());
+                    .map((s) => s.trim().toLowerCase())
+                    .flatMap((s) => resolveDistrictToSuburbs(s) ?? [s]);
               const displaySuburb = criteriaSuburbs.length > 0 ? suburb : null;
               const { candidates: criteriaCandidates, coverage } = await runCriteriaSearch(criteriaSpec, {
                 suburbs: criteriaSuburbs,
@@ -8145,6 +8164,7 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
         const suburb = userSuburb ?? (
           aiHit?.status === "suburb" ? aiHit.suburb.title.toLowerCase()
             : aiHit?.status === "district" ? aiHit.district.title.toLowerCase()
+              : aiHit?.status === "region" ? aiHit.region.title.toLowerCase()
               : null
         );
         const safetyNetCriteria = buildDiscoveryCriteriaText(messages, userText, null);

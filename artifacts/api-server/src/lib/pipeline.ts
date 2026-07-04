@@ -45,7 +45,7 @@ import {
 } from "./lot-calculator";
 import { estimateCosts, type CostBreakdown } from "./cost-estimator";
 import { getComparables, type ComparableSale, type ComparablesResult } from "./comparables";
-import { calculateBearBaseBullScenarios, type ROIScenario } from "./roi-calculator";
+import { calculateBearBaseBullScenarios, exitGdvTypologyDiscountFactor, nearestHorizonRoiPercent, type ROIScenario } from "./roi-calculator";
 import { selectComparableSalesForExit } from "./market-comparables";
 import { fetchNeighbourhoodContext, type NeighbourhoodContext } from "./neighbourhood-context";
 import { fetchTransportContext, type TransportContext } from "./transport-context";
@@ -1613,9 +1613,22 @@ export async function runPropertyPipeline(
   const regionalRoiAllowed = !planningProvider
     || planningProvider.providerId === "auckland-legacy"
     || regionalPlanningRuleStatus(planningProvider, zoneData, merged.land_area_sqm, merged.overlays).automaticRoiAllowed;
-  const gdvTypologyMultiplier = 1;
+  // Discounts modelled GDV for dense multi-lot schemes (THAB/MHU/MHS), since
+  // those sell as terraces/townhouses at a lower $/dwelling than the mostly
+  // standalone-dwelling comparables the suburb average is built from. Was
+  // previously hardcoded to 1 (no discount) here and never reached the ROI
+  // scenario calc below — only calculateDevelopmentStrategies got the real
+  // value — so every multi-lot ROI scenario (and roiPercentBest) was inflated.
+  const gdvTypologyMultiplier = exitGdvTypologyDiscountFactor(
+    merged.zone_code,
+    modelledLotResult.lots,
+    modelledLotResult.sqm_per_lot,
+  );
   const neighbourhoodGdvMultiplier = neighbourhoodContext?.marketAdjustment.gdvMultiplier ?? 1;
-  const combinedGdvMultiplier = Math.max(0.5, Math.min(1, neighbourhoodGdvMultiplier));
+  // Combine both discounts for the ROI scenarios; floor at 0.4 so a poor
+  // neighbourhood adjustment stacked with a dense-zone discount can't collapse
+  // GDV to an implausibly small figure.
+  const combinedGdvMultiplier = Math.max(0.4, Math.min(1, neighbourhoodGdvMultiplier * gdvTypologyMultiplier));
   const scenarios = hasRealComparablePricing && regionalRoiAllowed
     ? calculateBearBaseBullScenarios(
         costs,
@@ -1711,9 +1724,7 @@ export async function runPropertyPipeline(
       scoringVersion: SCORING_VERSION,
       scores,
       scoreUnavailableReason,
-      roiPercentBest: exposedScenarios.length
-        ? Math.max(...exposedScenarios.map((s) => s.roi_percent))
-        : null,
+      roiPercentBest: nearestHorizonRoiPercent(exposedScenarios),
       landArea: merged.land_area_sqm,
       zone: merged.zone_code,
       potentialLots: modelledLotResult.lots,

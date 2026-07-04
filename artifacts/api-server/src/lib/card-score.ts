@@ -7,7 +7,7 @@ import type { BuiltEnvironmentContext } from "./built-environment-context";
 // global property cache under an OLD version are ignored by the screening cards
 // and recomputed/re-persisted on the next full analysis. This keeps the card and
 // the report consistent across a scoring change.
-export const SCORING_VERSION = 5;
+export const SCORING_VERSION = 6;
 
 /**
  * The real, report-grade scores computed by the full pipeline, persisted into the

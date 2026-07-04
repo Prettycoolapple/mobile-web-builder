@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { calculateScenariosFromGdv, estimateNewBuildFloorSqm } from "../roi-calculator";
+import {
+  calculateBearBaseBullScenarios,
+  calculateScenariosFromGdv,
+  estimateNewBuildFloorSqm,
+  exitGdvTypologyDiscountFactor,
+  nearestHorizonRoiPercent,
+  type ROIScenario,
+} from "../roi-calculator";
 import type { CostBreakdown } from "../cost-estimator";
 
 describe("estimateNewBuildFloorSqm", () => {
@@ -91,5 +98,65 @@ describe("calculateScenariosFromGdv organic growth", () => {
     expect(gdvs[0]).toBeGreaterThan(3_000_000);
     expect(gdvs[1]).toBeGreaterThan(gdvs[0]);
     expect(gdvs[2]).toBeGreaterThan(gdvs[1]);
+  });
+
+  it("discounts GDV (and therefore roi_percent) for a dense multi-lot THAB scheme when the typology multiplier is applied", () => {
+    const discountFactor = exitGdvTypologyDiscountFactor("THAB", 7, 120);
+    expect(discountFactor).toBeLessThan(1); // sanity: THAB 7+ lots is meant to discount
+
+    const withoutDiscount = calculateBearBaseBullScenarios(
+      baseHoldCosts,
+      12_000, // avg_price_per_sqm
+      1_400_000, // avg_sale_price
+      7, // lots
+      120, // sqm_per_lot
+      "stable",
+      1, // no discount — the pre-fix hardcoded value
+    );
+    const withDiscount = calculateBearBaseBullScenarios(
+      baseHoldCosts,
+      12_000,
+      1_400_000,
+      7,
+      120,
+      "stable",
+      discountFactor,
+    );
+
+    // Same horizon, same cost base — GDV and roi_percent must both be lower once
+    // the discount is actually applied (this is the bug that was fixed: the
+    // discount previously never reached the ROI scenario calculation at all).
+    for (let i = 0; i < withoutDiscount.length; i++) {
+      expect(withDiscount[i].gdv).toBeLessThan(withoutDiscount[i].gdv);
+      expect(withDiscount[i].roi_percent).toBeLessThan(withoutDiscount[i].roi_percent);
+    }
+  });
+});
+
+describe("nearestHorizonRoiPercent", () => {
+  const scenario = (years: number, roi_percent: number): ROIScenario => ({
+    years,
+    gdv: 0,
+    total_cost_mid: 0,
+    gross_profit: 0,
+    roi_percent,
+    annualised_roi_percent: 0,
+    viable: true,
+    cases: [],
+    lots: 1,
+    sqm_per_lot: 0,
+    gdv_per_lot: 0,
+    interest_rate_outlook: "stable",
+  });
+
+  it("picks the NEAREST exit horizon's total return, not the max across horizons", () => {
+    // The longest horizon (8 years) has compounded the most and would win under
+    // a naive Math.max — that's the exact behaviour being fixed here.
+    const scenarios = [scenario(5, 40), scenario(6, 65), scenario(8, 496)];
+    expect(nearestHorizonRoiPercent(scenarios)).toBe(40);
+  });
+
+  it("returns null for no scenarios (e.g. missing comparables)", () => {
+    expect(nearestHorizonRoiPercent([])).toBeNull();
   });
 });
