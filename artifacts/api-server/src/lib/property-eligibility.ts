@@ -140,8 +140,16 @@ function hasStandaloneSignal(input: PropertyEligibilityInput, text: string): boo
     input.propertySubType,
     input.listingPropertyType,
     input.listingCategory,
+    input.landUsePrimary,
+    input.propertyImprovements,
   ].map(cleanText).join(" ").toLowerCase();
   if (/\b(house|dwelling|residential\s+dwelling|single\s+family|standalone|villa|bungalow)\b/i.test(propertyTypeText)) {
+    return true;
+  }
+  if (/\bsingle\s+unit\s+excluding\s+bach\b/i.test(propertyTypeText)) {
+    return true;
+  }
+  if (/\b(dwg|dwelling)\b/i.test(propertyTypeText) && !/\b(unit\s+title|ownership\s+home\s+units?|apartment|flat)\b/i.test(propertyTypeText)) {
     return true;
   }
   return /\b(freehold|fee\s+simple)\b/i.test(text) && hasLotDpSignal(text);

@@ -170,6 +170,27 @@ describe("property eligibility verifier", () => {
     expect(result.subdivisionEligible).toBe(true);
   });
 
+  it("treats single-unit land-use wording as standalone, not as unknown typology", () => {
+    const result = assessPropertyEligibility({
+      address: "35 Clarendon Road, St Heliers, Auckland",
+      estateType: "Freehold",
+      propertyType: "RESIDENTIAL",
+      landUsePrimary: "Single Unit excluding Bach",
+      propertyImprovements: "DWG OI",
+      landAreaSqm: 1138,
+      floorAreaSqm: 220,
+      buildYear: 1960,
+      zoneCode: "MHU",
+      potentialLots: 3,
+      minLotSize: 300,
+    });
+
+    expect(result.typology).toBe("standalone");
+    expect(result.typologyConfidence).toBe("verified");
+    expect(result.titleConfidence).toBe("verified");
+    expect(result.subdivisionEligible).toBe(true);
+  });
+
   it("rejects cross-lease or unit title even when parent parcel math works", () => {
     const result = assessPropertyEligibility({
       address: "2/10 Example Street, St Heliers, Auckland",

@@ -327,6 +327,14 @@ function withGroupHistoryMetadata(group: FeasibilityReportGroup, id: string, cre
   };
 }
 
+function withHistoryMetadata(report: FeasibilityReport, id: string, createdAt: string): FeasibilityReport {
+  return {
+    ...report,
+    historyId: report.historyId ?? id,
+    historyCreatedAt: report.historyCreatedAt ?? createdAt,
+  };
+}
+
 export default function HistoryScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -543,7 +551,7 @@ export default function HistoryScreen() {
         const zhReport = await translateReportViaApi(report, getApiHeaders());
         if (zhReport) report = zhReport;
       }
-      openHistoryReport(address, report);
+      openHistoryReport(address, withHistoryMetadata(report, item.id, item.created_at));
       router.push("/");
     } catch {
       Alert.alert(t("common.error"), t("history.error_load"));
