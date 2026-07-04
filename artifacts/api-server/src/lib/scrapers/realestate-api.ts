@@ -485,6 +485,70 @@ export async function getDistrictSuburbs(districtId: string, max = 80): Promise<
   }
 }
 
+export interface LocationSuburbExpansion {
+  scope: "suburb" | "district" | "region";
+  /** Display label for the matched location (e.g. "Waikato", "Hamilton City"). */
+  label: string;
+  /** Lowercased leaf-suburb names under the location, capped. */
+  suburbNames: string[];
+}
+
+/**
+ * Expand a location NAME (leaf suburb, district/city, or whole region) into the
+ * lowercased leaf-suburb names it contains, using the realestate.co.nz
+ * directory. Powers criteria search over the analysed-property index, whose
+ * `suburb` column only ever holds leaf-suburb names — so a region-level ask
+ * ("Waikato") must match via its member suburbs (Hamilton's suburbs etc.), for
+ * ANY NZ region, not just Auckland. Returns null when the name isn't in the
+ * directory (caller decides the fallback).
+ */
+export async function resolveLocationToSuburbNames(
+  name: string,
+  maxSuburbs = 500,
+): Promise<LocationSuburbExpansion | null> {
+  const key = normaliseName(name);
+  if (!key) return null;
+  let index: SuburbIndex;
+  try {
+    index = await loadSuburbIndex();
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "realestate-api: failed to load location index for suburb expansion");
+    return null;
+  }
+
+  // Leaf suburb wins first — mirrors resolveDistrictToSuburbs' precedence so a
+  // name that is both (e.g. "howick") keeps its narrow meaning.
+  const leaf = index.byNormalisedName.get(key);
+  if (leaf) {
+    return { scope: "suburb", label: leaf.title, suburbNames: [leaf.title.toLowerCase()] };
+  }
+
+  const district = index.districtsByNormalisedName.get(key);
+  if (district) {
+    const children = index.districtChildren.get(district.id) ?? [];
+    return {
+      scope: "district",
+      label: district.title,
+      suburbNames: children.slice(0, maxSuburbs).map((s) => s.title.toLowerCase()),
+    };
+  }
+
+  const region = index.regionsByNormalisedName.get(key);
+  if (region) {
+    const names: string[] = [];
+    for (const d of index.regionDistricts.get(region.slug) ?? []) {
+      for (const s of index.districtChildren.get(d.id) ?? []) {
+        names.push(s.title.toLowerCase());
+        if (names.length >= maxSuburbs) break;
+      }
+      if (names.length >= maxSuburbs) break;
+    }
+    return { scope: "region", label: region.title, suburbNames: names };
+  }
+
+  return null;
+}
+
 function locationCandidates(input: string): string[] {
   const rawParts = input
     .split(/[,/|]+|\bin\b|\bnear\b|\baround\b/gi)

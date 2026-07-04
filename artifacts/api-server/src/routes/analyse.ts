@@ -35,6 +35,7 @@ import {
   getDistrictSiblings,
   findSuburbId,
   resolveRealestateLocation,
+  resolveLocationToSuburbNames,
 } from "../lib/scrapers/realestate-api";
 import { suggestNearbySuburbs } from "../lib/claude";
 import { runPropertyPipeline, hasCacheableCore, type PipelineResult } from "../lib/pipeline";
@@ -6240,18 +6241,27 @@ router.post(
             try {
               // "Anywhere" (a delegated suburb choice) searches the WHOLE analysed
               // index; otherwise scope to the named suburb(s). A named entry may be
-              // a DISTRICT/region (e.g. "orakei", "waikato") rather than a leaf
-              // suburb — resolveDiscoverySuburbName above accepts districts but
-              // passes the literal district name through unexpanded, and no
-              // analysed property's indexed suburb is ever literally a district
-              // name. Fan each entry out via resolveDistrictToSuburbs so a
-              // district-level ask actually matches its real child suburbs.
-              const criteriaSuburbs = delegatedDiscoverSuburb
+              // a DISTRICT/CITY or a whole REGION ("hamilton", "waikato") rather
+              // than a leaf suburb — resolveDiscoverySuburbName above accepts
+              // those but passes the literal name through unexpanded, and no
+              // analysed property's indexed suburb is ever a district/region
+              // name. Expand each entry to its leaf-suburb names via the
+              // realestate.co.nz directory (ALL NZ regions), falling back to the
+              // static Auckland district map, then to the literal string.
+              const criteriaLocationEntries = delegatedDiscoverSuburb
                 ? []
                 : [suburb, ...(intent.additionalSuburbs ?? [])]
                     .filter((s): s is string => !!s && s.trim().length > 0)
-                    .map((s) => s.trim().toLowerCase())
-                    .flatMap((s) => resolveDistrictToSuburbs(s) ?? [s]);
+                    .map((s) => s.trim().toLowerCase());
+              const criteriaSuburbs: string[] = [];
+              for (const entry of criteriaLocationEntries) {
+                const expansion = await resolveLocationToSuburbNames(entry).catch(() => null);
+                if (expansion && expansion.suburbNames.length > 0) {
+                  criteriaSuburbs.push(...expansion.suburbNames);
+                } else {
+                  criteriaSuburbs.push(...(resolveDistrictToSuburbs(entry) ?? [entry]));
+                }
+              }
               const displaySuburb = criteriaSuburbs.length > 0 ? suburb : null;
               const { candidates: criteriaCandidates, coverage } = await runCriteriaSearch(criteriaSpec, {
                 suburbs: criteriaSuburbs,

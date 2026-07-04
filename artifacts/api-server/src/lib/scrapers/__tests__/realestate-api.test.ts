@@ -11,6 +11,7 @@ import {
   normaliseListingLandAreaSqm,
   reconcileListingBedBath,
   reconcileListingLandArea,
+  resolveLocationToSuburbNames,
   resolveRealestateLocation,
   searchListingsByName,
 } from "../realestate-api";
@@ -107,6 +108,35 @@ describe("realestate-api location resolution", () => {
     if (christchurch?.status === "district") expect(christchurch.district.title).toBe("Christchurch City");
     expect(otago?.status).toBe("region");
     if (otago?.status === "region") expect(otago.region.title).toBe("Otago");
+  });
+
+  it("expands a REGION name into every leaf-suburb name it contains (criteria search fan-out)", async () => {
+    mockLocationDirectory();
+
+    // Waikato region → South Waikato + Hamilton City districts → their suburbs.
+    const waikato = await resolveLocationToSuburbNames("Waikato");
+    expect(waikato?.scope).toBe("region");
+    expect(waikato?.label).toBe("Waikato");
+    expect(waikato?.suburbNames).toContain("tirau"); // South Waikato child
+
+    // Otago region → Clutha district → Milton.
+    const otago = await resolveLocationToSuburbNames("otago");
+    expect(otago?.scope).toBe("region");
+    expect(otago?.suburbNames).toContain("milton");
+  });
+
+  it("expands a DISTRICT/city name into its leaf suburbs, keeps a leaf suburb as itself, and returns null for unknowns", async () => {
+    mockLocationDirectory();
+
+    const timaru = await resolveLocationToSuburbNames("Timaru");
+    expect(timaru?.scope).toBe("district");
+    expect(timaru?.suburbNames).toEqual(["timaru central", "gleniti"]);
+
+    const tirau = await resolveLocationToSuburbNames("Tirau");
+    expect(tirau?.scope).toBe("suburb");
+    expect(tirau?.suburbNames).toEqual(["tirau"]);
+
+    await expect(resolveLocationToSuburbNames("not a real place xyz")).resolves.toBeNull();
   });
 
   it("finds city and region names inside natural language search text", async () => {

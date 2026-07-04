@@ -58,7 +58,10 @@ export function deriveFeatureRow(raw: RawPropertyData, id: FeatureRowIdentity): 
     formattedAddress: id.formattedAddress ?? null,
     lat: id.lat ?? null,
     lng: id.lng ?? null,
-    region: null,
+    // Provenance from the regional planning provider (e.g. "Waikato",
+    // "Northland") when the pipeline resolved one; matching still runs on
+    // leaf-suburb names so coverage isn't limited to coded providers.
+    region: raw.planning_provider?.region ?? null,
     // Region-agnostic modelling gate: the pipeline (regional-rules.ts) already
     // nulls out `derived_scores.zone` whenever the property's region/zone isn't
     // properly modelled for automatic yield claims (regardless of WHICH region
