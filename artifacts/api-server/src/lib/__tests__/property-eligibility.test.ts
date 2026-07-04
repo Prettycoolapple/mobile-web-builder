@@ -7,6 +7,92 @@ import {
 import { extractListingClaims } from "../listing-claims";
 
 describe("property eligibility verifier", () => {
+  it("keeps a LINZ-verified Fee Simple home-and-income house standalone despite council 'HOUSE & FLAT' phrasing", () => {
+    // Regression: 35 Clarendon Road, St Heliers — LINZ title NA10C/398 is Fee
+    // Simple, but Auckland Council records "HOUSE & FLAT" improvements +
+    // "Multi-unit" land use + "Home & income" sub-type. The joined corpus used
+    // to read "...flat residential..." across field boundaries and classify it
+    // as unit_apartment, suppressing all development scores.
+    const result = assessPropertyEligibility({
+      address: "35 Clarendon Road, St Heliers, Auckland 1071, New Zealand",
+      estateType: "Fee Simple",
+      verifiedEstateType: "Fee Simple",
+      legalDescription: "Lot 2 DP 56787",
+      propertyType: "RESIDENTIAL",
+      propertySubType: "Home & income",
+      propertyValueLegalDescriptions: ["Lot 2 Deposited Plan 56787"],
+      landUsePrimary: "Multi-unit",
+      propertyImprovements: "HOUSE & FLAT",
+      landAreaSqm: 1138,
+      floorAreaSqm: 241,
+      buildYear: 1970,
+      zoneCode: "SHZ",
+      potentialLots: 1,
+      minLotSize: 600,
+    });
+    expect(result.typology).not.toBe("unit_apartment");
+    expect(result.unitLikeSignal).toBe(false);
+    expect(result.crossLeaseSignal).toBe(false);
+    expect(result.titleIsFreehold).toBe(true);
+    expect(result.titleConfidence).toBe("verified");
+  });
+
+  it("does not form unit signals ACROSS corpus field boundaries", () => {
+    // Improvements ending in "FLAT" must not merge with the next field
+    // ("RESIDENTIAL") into a phantom "flat residential" phrase — and a bare
+    // "FLAT" improvements value must not pair with a DP number from a
+    // DIFFERENT field into a phantom "Flat ... Deposited Plan" title.
+    const result = assessPropertyEligibility({
+      address: "12 Example Road, Epsom, Auckland",
+      legalDescription: "Lot 3 Deposited Plan 11111",
+      propertyType: "RESIDENTIAL",
+      propertyImprovements: "DWG & FLAT",
+      landAreaSqm: 900,
+      floorAreaSqm: 200,
+      buildYear: 1955,
+      zoneCode: "MHS",
+      potentialLots: 2,
+      minLotSize: 400,
+    });
+    expect(result.typology).not.toBe("unit_apartment");
+    expect(result.unitLikeSignal).toBe(false);
+  });
+
+  it("still classifies a genuine cross-lease flat legal description as unit-like (no verified freehold)", () => {
+    const result = assessPropertyEligibility({
+      address: "36 King Street, Cambridge",
+      estateType: "Cross Lease",
+      legalDescription: "Flat 1 Deposited Plan South Auckland 42927",
+      propertyType: "House",
+      landAreaSqm: 804,
+      floorAreaSqm: 110,
+      buildYear: 1986,
+      zoneCode: "MHS",
+      potentialLots: 2,
+      minLotSize: 400,
+    });
+    expect(result.typology).toBe("unit_apartment");
+    expect(result.subdivisionRejectReason).toBe("unit_or_crosslease_signal");
+  });
+
+  it("a verified NON-freehold estate does not unlock the freehold override", () => {
+    const result = assessPropertyEligibility({
+      address: "2/8 Shared Drive, Kohimarama, Auckland",
+      estateType: "Cross Lease",
+      verifiedEstateType: "Cross Lease",
+      legalDescription: "Flat 2 Deposited Plan 33333",
+      propertyType: "House",
+      landAreaSqm: 700,
+      floorAreaSqm: 130,
+      buildYear: 1978,
+      zoneCode: "MHS",
+      potentialLots: 1,
+      minLotSize: 400,
+    });
+    expect(result.typology).toBe("unit_apartment");
+    expect(result.titleIsFreehold).toBe(false);
+  });
+
   it("treats listing-claimed townhouse as verified terrace typology", () => {
     const result = assessPropertyEligibility({
       address: "6 Riddell Road, Glendowie, Auckland",

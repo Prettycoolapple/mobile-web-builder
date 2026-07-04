@@ -816,7 +816,13 @@ function buildDeterministicFallbackReport(
   resolvedAddress: string,
 ): Record<string, unknown> | null {
   const { merged, lots, costs, scores } = pipelineResult;
-  if (!merged || !lots || !costs || !scores) return null;
+  // scores/costs are null whenever the development score is suppressed (e.g. a
+  // genuine cross-lease/unit title, or missing comparables). The report must
+  // STILL be built from the confirmed facts — otherwise the analysis degrades
+  // to prose, never saves to history, and the Plan tab (which needs the saved
+  // report's historyId) shows "Site plan isn't available". Product rule: a
+  // cross-lease may hide dev scores, but the site plan must always render.
+  if (!merged || !lots) return null;
 
   const zoneLabel = lots.zone_label || merged.zone_description || merged.zone_code || "Unknown zone";
   const minLotSize = lots.min_lot_size ? `${lots.min_lot_size}m2` : null;
@@ -829,11 +835,12 @@ function buildDeterministicFallbackReport(
       ? `Terrain is classified as ${merged.contour}; earthworks and retaining allowances should follow the measured slope rather than a suburb-level assumption.`
       : "Confirm finished levels, stormwater paths, and service tie-ins early because they can materially affect consent design.",
   ];
-  const finalRiskSeed = appendRuralTransferRightRiskIfNeeded(riskSeed, costs);
+  const finalRiskSeed = costs ? appendRuralTransferRightRiskIfNeeded(riskSeed, costs) : riskSeed;
 
   const parsed: Record<string, unknown> = {
     address: resolvedAddress,
-    scores,
+    scores: scores ?? null,
+    score_unavailable_reason: pipelineResult.raw_property?.derived_scores?.scoreUnavailableReason ?? null,
     propertyOverview: {
       address: resolvedAddress,
       cv: merged.cv_nzd != null ? `$${merged.cv_nzd.toLocaleString("en-NZ")}` : null,
@@ -875,8 +882,8 @@ function buildDeterministicFallbackReport(
     },
     potential_lots: lots.lots,
     zone_label: zoneLabel,
-    cv_unavailable: costs.cv_unavailable,
-    total_excludes_land: costs.total_excludes_land,
+    cv_unavailable: costs?.cv_unavailable ?? merged.cv_nzd == null,
+    total_excludes_land: costs?.total_excludes_land ?? false,
     missing_critical_fields: merged.missing_critical_fields ?? [],
     data_sources: merged.data_sources ?? {},
     terrain: {
@@ -884,21 +891,21 @@ function buildDeterministicFallbackReport(
       official_label: merged.contour_text ?? null,
       slope_degrees: merged.contour_slope_degrees ?? null,
       source: merged.contour_source ?? null,
-      retainingCostLow: costs.retaining_low,
-      retainingCostHigh: costs.retaining_high,
+      retainingCostLow: costs?.retaining_low ?? null,
+      retainingCostHigh: costs?.retaining_high ?? null,
       steep_area_ratio: merged.contour_steep_area_ratio ?? null,
       moderate_area_ratio: merged.contour_moderate_area_ratio ?? null,
       local_slope_p90_degrees: merged.contour_local_slope_p90_degrees ?? null,
       local_slope_p95_degrees: merged.contour_local_slope_p95_degrees ?? null,
       sample_count: merged.contour_sample_count ?? null,
-      retaining_area_sqm_estimate: costs.retaining_area_sqm_estimate ?? null,
-      large_site_terrain_adjusted: costs.large_site_terrain_adjusted ?? merged.large_site_terrain_adjusted ?? false,
+      retaining_area_sqm_estimate: costs?.retaining_area_sqm_estimate ?? null,
+      large_site_terrain_adjusted: costs?.large_site_terrain_adjusted ?? merged.large_site_terrain_adjusted ?? false,
     },
     infrastructure: pipelineResult.infrastructure,
-    costItems: buildDeterministicCostItems(costs),
-    totalCostLow: costs.total_low,
-    totalCostHigh: costs.total_high,
-    cost_per_unit_avg: costs.cost_per_unit_avg,
+    costItems: costs ? buildDeterministicCostItems(costs) : [],
+    totalCostLow: costs?.total_low ?? null,
+    totalCostHigh: costs?.total_high ?? null,
+    cost_per_unit_avg: costs?.cost_per_unit_avg ?? null,
     interest_rate_outlook: pipelineResult.scenarios[0]?.interest_rate_outlook ?? "stable",
     roiScenarios: [],
     developmentStrategies: pipelineResult.developmentStrategies ?? [],

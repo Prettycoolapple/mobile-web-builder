@@ -230,6 +230,29 @@ function normaliseLrsAddress(value: string | null | undefined): string {
     .replace(/\s+/g, " ");
 }
 
+/**
+ * Guard against same-street-name matches in a DIFFERENT town: the LRS address
+ * search runs progressively looser query variants (down to street-only, e.g.
+ * "36 King Street"), so a candidate can look "exact" for the variant while
+ * actually being e.g. "36 King Street, Cambridge" when the subject is
+ * 36 King Street, GREY LYNN. That poisoned the title tenure (a Cambridge
+ * cross-lease pair) and cascaded into a wrong unit/apartment typology, no
+ * development scores, and no site plan for the real freehold house.
+ *
+ * A candidate is locality-consistent when every one of its tokens (beyond
+ * street-type words) already appears in the ORIGINAL query — i.e. it carries no
+ * locality the subject address doesn't mention. normaliseLrsAddress() strips
+ * postcodes/"auckland"/diacritics and unifies saint→st first.
+ */
+export function lrsCandidateLocalityConsistent(originalQuery: string, candidateAddress: string): boolean {
+  const orig = normaliseLrsAddress(originalQuery);
+  const cand = normaliseLrsAddress(candidateAddress);
+  if (!orig || !cand) return false;
+  const origTokens = new Set(orig.split(" "));
+  const extras = cand.split(" ").filter((token) => !origTokens.has(token) && !STREET_TYPE_WORDS.has(token));
+  return extras.length === 0;
+}
+
 export function lrsAddressLooksExact(requested: string, candidate: string): boolean {
   const req = normaliseLrsAddress(requested);
   const cand = normaliseLrsAddress(candidate);
@@ -530,7 +553,14 @@ export async function fetchLINZTitlesByAddressDetailed(address: string): Promise
       const addressCandidates = (addressJson.data ?? [])
         .filter((item) => String(item.source ?? "").toLowerCase() === "address" && item.id != null && item.address)
         .sort((a, b) => (b.rank ?? 0) - (a.rank ?? 0));
-      const exact = addressCandidates.find((item) => lrsAddressLooksExact(query, item.address ?? ""));
+      const exact = addressCandidates.find(
+        (item) =>
+          lrsAddressLooksExact(query, item.address ?? "") &&
+          // Looser query variants strip the suburb, so exactness alone can match
+          // a same-named street in another town — validate the candidate's
+          // locality against the ORIGINAL full query as well.
+          lrsCandidateLocalityConsistent(initialQuery, item.address ?? ""),
+      );
       if (exact?.id && exact.address) {
         selected = exact;
         selectedQuery = query;

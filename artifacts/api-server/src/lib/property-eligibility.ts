@@ -95,6 +95,10 @@ function cleanText(value: unknown): string {
 }
 
 function corpus(input: PropertyEligibilityInput): string {
+  // Join with a "|" separator so a phrase can never form ACROSS field
+  // boundaries: e.g. council improvements "HOUSE & FLAT" followed by property
+  // type "RESIDENTIAL" used to read as "flat residential" in the joined text
+  // and misclassify a freehold home-and-income house as a unit/apartment.
   return [
     input.address,
     input.estateType,
@@ -112,7 +116,7 @@ function corpus(input: PropertyEligibilityInput): string {
     input.linzParcel?.legal_description,
     input.linzParcel?.topology_type,
     input.linzParcel?.title_no,
-  ].map(cleanText).filter(Boolean).join(" ").toLowerCase();
+  ].map(cleanText).filter(Boolean).join(" | ").toLowerCase();
 }
 
 function hasLotDpSignal(text: string): boolean {
@@ -121,10 +125,18 @@ function hasLotDpSignal(text: string): boolean {
 }
 
 function hasUnitLikeSignal(text: string): boolean {
-  const normalized = text.replace(/\bsingle\s+unit\s+excluding\s+bach\b/gi, "single dwelling excluding bach");
+  const normalized = text
+    .replace(/\bsingle\s+unit\s+excluding\s+bach\b/gi, "single dwelling excluding bach")
+    // Council improvements like "HOUSE & FLAT" / "DWG & FLAT" describe a
+    // standalone house with a minor/granny flat (home-and-income), not a
+    // unit/apartment title — neutralise the phrase before the flat checks.
+    .replace(/\b(?:house|dwg|dwelling)s?\s*(?:&|and)\s*(?:\d+\s*)?flats?\b/gi, "house with minor dwelling");
   return /\b(unit\s+title|stratum|body\s+corporate|body\s+corp|ownership\s+home\s+units?|home\s+unit|principal\s+unit|accessory\s+unit|apartment)\b/i.test(normalized)
     || /\bflat\s+[a-z0-9]+\b/i.test(normalized)
-    || /\bflat\b[\s\S]{0,80}\b(?:dp|deposited\s+plan|deeds\s+plan)\b/i.test(normalized)
+    // "[^|]" (not [\s\S]) so the flat…DP proximity can't bridge two different
+    // corpus fields across the "|" separator — it must occur within ONE field
+    // (a real "Flat 1 Deposited Plan 42927"-style legal description).
+    || /\bflat\b[^|]{0,80}\b(?:dp|deposited\s+plan|deeds\s+plan)\b/i.test(normalized)
     || /\bunit\s+[a-z0-9]\b/i.test(normalized);
 }
 
@@ -206,7 +218,11 @@ function inferTypology(input: PropertyEligibilityInput, text: string): {
   typology: PropertyTypology;
   typologyConfidence: PropertyEligibilityConfidence;
 } {
-  if (looksLikeUnitOrApartmentAddress(input.address) || hasUnitLikeSignal(text) || hasCrossLeaseSignal(text)) {
+  // A LINZ-verified Fee Simple estate is authoritative: it rules out unit
+  // title / cross lease / leasehold, so weaker TEXT signals (council "flat"
+  // phrasing, marketing copy) must not overrule it into unit_apartment.
+  const verifiedFreehold = titleFromVerifiedEstate(input.verifiedEstateType)?.titleIsFreehold === true;
+  if (!verifiedFreehold && (looksLikeUnitOrApartmentAddress(input.address) || hasUnitLikeSignal(text) || hasCrossLeaseSignal(text))) {
     return { typology: "unit_apartment", typologyConfidence: "verified" };
   }
   // The listing's own self-description of the dwelling ("brand new townhouses",
@@ -238,8 +254,11 @@ function hasSuspiciousUrbanLandFloorRatio(input: PropertyEligibilityInput): bool
 
 export function assessPropertyEligibility(input: PropertyEligibilityInput): PropertyEligibilityResult {
   const text = corpus(input);
-  const unitLikeSignal = looksLikeUnitOrApartmentAddress(input.address) || hasUnitLikeSignal(text);
-  const crossLeaseSignal = hasCrossLeaseSignal(text);
+  // LINZ-verified Fee Simple beats text inference for the unit/cross-lease
+  // signals too (they drive subdivision gating and parent-land suppression).
+  const verifiedFreehold = titleFromVerifiedEstate(input.verifiedEstateType)?.titleIsFreehold === true;
+  const unitLikeSignal = !verifiedFreehold && (looksLikeUnitOrApartmentAddress(input.address) || hasUnitLikeSignal(text));
+  const crossLeaseSignal = !verifiedFreehold && hasCrossLeaseSignal(text);
   // A LINZ-verified estate type wins over text inference; fall back to copy.
   const { titleConfidence, titleIsFreehold } =
     titleFromVerifiedEstate(input.verifiedEstateType) ?? inferTitleConfidence(text);

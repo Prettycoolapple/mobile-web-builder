@@ -6,6 +6,7 @@ import {
   fetchLINZTitlesByAddressDetailed,
   isLinzTitleServiceAvailable,
   lrsAddressLooksExact,
+  lrsCandidateLocalityConsistent,
   mapLinzParcelFeature,
   screenAddressFreehold,
   tenureCategoryFromEstate,
@@ -22,6 +23,38 @@ describe("lrsAddressLooksExact street-type tolerance", () => {
   it("still rejects a different street number or street name", () => {
     expect(lrsAddressLooksExact("19 Chatsworth Cres", "21 Chatsworth Crescent")).toBe(false);
     expect(lrsAddressLooksExact("19 Chatsworth Cres", "19 Cascades Road")).toBe(false);
+  });
+});
+
+describe("lrsCandidateLocalityConsistent (same street name, different town)", () => {
+  it("rejects a candidate whose locality never appears in the original query", () => {
+    // The real regression: 36 King Street, GREY LYNN matched the LRS address
+    // "36 King Street, Cambridge" via the street-only query variant, poisoning
+    // the tenure with Cambridge's cross-lease titles.
+    expect(
+      lrsCandidateLocalityConsistent("36 King Street, Grey Lynn, Auckland 1021, New Zealand", "36 King Street, Cambridge"),
+    ).toBe(false);
+  });
+
+  it("accepts the correct-suburb candidate, including Saint/St and macron variants", () => {
+    expect(
+      lrsCandidateLocalityConsistent(
+        "36, King Street, Arch Hill, Grey Lynn, Auckland, Waitematā, Auckland, 1021",
+        "36 King Street, Grey Lynn",
+      ),
+    ).toBe(true);
+    expect(
+      lrsCandidateLocalityConsistent(
+        "35 Clarendon Road, St Heliers, Auckland 1071, New Zealand",
+        "35 Clarendon Road, Saint Heliers, Auckland",
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts a candidate that is a subset of the original (street-only candidate)", () => {
+    expect(
+      lrsCandidateLocalityConsistent("8 Hampton Drive, St Heliers, Auckland", "8 Hampton Drive"),
+    ).toBe(true);
   });
 });
 

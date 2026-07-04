@@ -1313,9 +1313,18 @@ export async function runPropertyPipeline(
     "Asbestos classification (post-merge)",
   );
 
+  // LINZ LRS is the only tenure source authoritative enough to overrule text
+  // inference in the eligibility assessment (e.g. council "HOUSE & FLAT"
+  // improvements on a LINZ-verified Fee Simple home-and-income house).
+  const lrsVerifiedEstateType =
+    titleResolution.titleResolutionSource === "lrs" || titleResolution.titleResolutionSource === "lrs_cache"
+      ? merged.estate_type
+      : null;
+
   const preliminaryEligibility = assessPropertyEligibility({
     address: geocode.formatted ?? address,
     estateType: merged.estate_type,
+    verifiedEstateType: lrsVerifiedEstateType,
     legalDescription: [
       linzParcelData?.legal_description,
       linzParcelData?.appellation,
@@ -1398,6 +1407,7 @@ export async function runPropertyPipeline(
   const eligibility = assessPropertyEligibility({
     address: geocode.formatted ?? address,
     estateType: merged.estate_type,
+    verifiedEstateType: lrsVerifiedEstateType,
     legalDescription: [
       linzParcelData?.legal_description,
       linzParcelData?.appellation,
