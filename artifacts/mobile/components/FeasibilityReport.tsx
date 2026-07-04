@@ -78,6 +78,13 @@ function formatNZD(n: number | string | undefined | null): string {
   return `$${Math.round(num).toLocaleString()}`;
 }
 
+function formatSignedNZD(n: number | string | undefined | null): string {
+  const num = n == null ? NaN : Number(n);
+  if (isNaN(num)) return "—";
+  const sign = num > 0 ? "+" : num < 0 ? "-" : "";
+  return `${sign}${formatNZD(Math.abs(num))}`;
+}
+
 function formatDistanceM(m: number | null | undefined): string {
   if (m == null || !Number.isFinite(Number(m))) return "unknown";
   const n = Number(m);
@@ -1797,7 +1804,7 @@ function ROIScenarioCards({ scenarios, interestRateOutlook, comparablesQuality, 
                   <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
                     <Text style={{ color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular", fontSize: 12 }}>{t("report.profit")}</Text>
                     <Text style={{ color: profit >= 0 ? colors.success : colors.red, fontFamily: "DM_Sans_700Bold", fontSize: 12 }}>
-                      {profit >= 0 ? "+" : ""}{formatNZD(Math.abs(profit))}
+                      {formatSignedNZD(profit)}
                     </Text>
                   </View>
                 </View>

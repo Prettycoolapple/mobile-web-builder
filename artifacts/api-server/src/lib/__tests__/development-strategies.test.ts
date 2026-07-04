@@ -394,6 +394,48 @@ describe("development strategies", () => {
     expect(scenario?.total_cost_mid).toBe(3_274_000);
   });
 
+  it("calculates multi-lot rebuild GDV from every modelled lot, not only one sale", () => {
+    const threeLotResult: LotResult = {
+      ...lotResult,
+      lots: 3,
+      min_lot_size: 300,
+      zone_label: "Hamilton General Residential Zone",
+      gross_area_sqm: 900,
+      net_area_sqm: 900,
+      sqm_per_lot: 300,
+    };
+    const threeUnitCosts: CostBreakdown = {
+      ...baseCosts,
+      total_low: 3_140_000,
+      total_high: 4_290_000,
+      units: 3,
+      cost_per_unit_avg: 1_238_000,
+    };
+    const avgSalePrice = 700_000;
+    const assessment = buildFallbackDevelopmentStrategyAssessment(
+      merged({ build_year: 1965, zone_code: "HCC_GRZ", zone_description: "General Residential Zone", min_lot_size_sqm: 300 }),
+      threeLotResult,
+    );
+    const strategies = calculateDevelopmentStrategies({
+      data: merged({ build_year: 1965, zone_code: "HCC_GRZ", zone_description: "General Residential Zone", min_lot_size_sqm: 300 }),
+      baseCosts: threeUnitCosts,
+      lotResult: threeLotResult,
+      avgSalePrice,
+      avgPricePerSqm: 0,
+      interestRateOutlook: "stable",
+      assessment,
+    });
+
+    const rebuild = strategies.find((strategy) => strategy.id === "demolish_rebuild");
+    const scenario = rebuild?.roiScenarios[0];
+    const organicGrowth = Math.pow(1.02, scenario?.years ?? 0);
+    const baseYearGdv = Math.round((scenario?.gdv ?? 0) / organicGrowth);
+
+    expect(scenario?.lots).toBe(3);
+    expect(scenario?.gdv_per_lot).toBeGreaterThan(avgSalePrice);
+    expect(baseYearGdv).toBeCloseTo(avgSalePrice * 3, -3);
+  });
+
   it("models design-led max yield integrated consent costs and ROI", () => {
     const downsviewLikeData = merged({
       build_year: 1976,
