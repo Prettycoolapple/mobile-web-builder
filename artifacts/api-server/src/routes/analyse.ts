@@ -42,10 +42,10 @@ import { runPropertyPipeline, hasCacheableCore, type PipelineResult } from "../l
 import { normaliseDiscoveryAddressKey } from "../lib/address-key";
 import { getCachedRaw, upsertCachedRaw, bumpHitCount, backfillDerivedScores, PIPELINE_VERSION } from "../lib/property-cache";
 import { upsertFeatureRowFromPipeline } from "../lib/property-feature-index";
+import { shouldBackfillDerivedScores } from "../lib/derived-scores-backfill";
 import { runCriteriaSearch, buildCriteriaSearchIntro, buildCriteriaSearchEmptyMessage } from "../lib/criteria-search";
 import { detectPropertyDataLookup, buildPropertyDataLookupAnswer } from "../lib/property-data-lookup";
 import { buildSitePlanForReport, SitePlanNoLocationError, fetchAerialTile, type GeoHint } from "../lib/site-plan";
-import { SCORING_VERSION } from "../lib/card-score";
 import { noteUserActivity } from "../lib/user-activity";
 import { buildSubdivisionPathwayNote } from "../lib/lot-calculator";
 import {
@@ -3861,13 +3861,9 @@ async function runFeasibilityAnalyseCore(args: {
   if (pipelineResult && addressKey) {
     if (cachedEntry && !forcedLiveRefresh) {
       void bumpHitCount(addressKey);
-      // Backfill the real scores onto rows cached before this feature (or under an
-      // older SCORING_VERSION) so screening cards match the report — without
-      // resetting the freshness clock. Scores were just recomputed on cache-serve.
-      if (
-        cachedEntry.rawData.derived_scores?.scoringVersion !== SCORING_VERSION &&
-        pipelineResult.raw_property?.derived_scores
-      ) {
+      // Backfill real scores onto old or scoreless cached rows so screening
+      // cards match the report without resetting the raw-data freshness clock.
+      if (shouldBackfillDerivedScores(cachedEntry.rawData.derived_scores, pipelineResult.raw_property?.derived_scores)) {
         void backfillDerivedScores(addressKey, pipelineResult.raw_property.derived_scores);
         // Keep the feature index in step with the backfilled scores, preserving
         // the cache row's freshness (never revive stale data on a cache-serve).
@@ -7670,12 +7666,9 @@ router.post(
           if (pipelineResult && chatAddressKey) {
             if (chatCachedEntry && !chatForcedLiveRefresh) {
               void bumpHitCount(chatAddressKey);
-              // Backfill real scores onto pre-feature / stale-version cached rows so
-              // screening cards match the report — without resetting freshness.
-              if (
-                chatCachedEntry.rawData.derived_scores?.scoringVersion !== SCORING_VERSION &&
-                pipelineResult.raw_property?.derived_scores
-              ) {
+              // Backfill real scores onto old or scoreless cached rows so
+              // screening cards match the report without resetting freshness.
+              if (shouldBackfillDerivedScores(chatCachedEntry.rawData.derived_scores, pipelineResult.raw_property?.derived_scores)) {
                 void backfillDerivedScores(chatAddressKey, pipelineResult.raw_property.derived_scores);
                 upsertFeatureRowFromPipeline(pipelineResult, {
                   addressKey: chatAddressKey,

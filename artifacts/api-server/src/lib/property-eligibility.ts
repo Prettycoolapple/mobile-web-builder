@@ -124,15 +124,39 @@ function hasLotDpSignal(text: string): boolean {
     || /\b(?:dp|deposited\s+plan|deeds\s+plan)\s*\d+\b[\s\S]{0,80}\b(?:part\s+)?lot\s+\d+[a-z]?\b/i.test(text);
 }
 
+function hasFreeholdStyleTitleEvidence(input: PropertyEligibilityInput, text: string): boolean {
+  const verified = titleFromVerifiedEstate(input.verifiedEstateType);
+  if (verified) return verified.titleIsFreehold;
+  const stated = titleFromVerifiedEstate(input.estateType);
+  if (stated?.titleIsFreehold) return true;
+  return /\b(fee\s+simple|freehold)\b/i.test(text) || hasLotDpSignal(text);
+}
+
+function hasMinorDwellingSignal(input: PropertyEligibilityInput): boolean {
+  const propertyText = [
+    input.propertySubType,
+    input.landUsePrimary,
+    input.propertyImprovements,
+    input.propertyType,
+    input.listingPropertyType,
+    input.listingCategory,
+  ].map(cleanText).join(" ").toLowerCase();
+
+  return /\b(home\s*(?:&|and)\s*income|minor\s+dwelling|minor\s+unit|granny\s+flat|income\s+flat)\b/i.test(propertyText)
+    || /\b(?:house|dwg|dwelling)s?\s*(?:&|and)\s*(?:\d+\s*)?flats?\b/i.test(propertyText)
+    || /\bfreehold\s*(?:&|and)\s*flats?\b/i.test(propertyText);
+}
+
 function hasUnitLikeSignal(text: string): boolean {
   const normalized = text
     .replace(/\bsingle\s+unit\s+excluding\s+bach\b/gi, "single dwelling excluding bach")
     // Council improvements like "HOUSE & FLAT" / "DWG & FLAT" describe a
     // standalone house with a minor/granny flat (home-and-income), not a
     // unit/apartment title — neutralise the phrase before the flat checks.
-    .replace(/\b(?:house|dwg|dwelling)s?\s*(?:&|and)\s*(?:\d+\s*)?flats?\b/gi, "house with minor dwelling");
+    .replace(/\b(?:house|dwg|dwelling)s?\s*(?:&|and)\s*(?:\d+\s*)?flats?\b/gi, "house with minor dwelling")
+    .replace(/\bfreehold\s*(?:&|and)\s*flats?\b/gi, "freehold with minor dwelling");
   return /\b(unit\s+title|stratum|body\s+corporate|body\s+corp|ownership\s+home\s+units?|home\s+unit|principal\s+unit|accessory\s+unit|apartment)\b/i.test(normalized)
-    || /\bflat\s+[a-z0-9]+\b/i.test(normalized)
+    || /\bflat\s+(?:\d+[a-z]?|[a-z]\d?)\b/i.test(normalized)
     // "[^|]" (not [\s\S]) so the flat…DP proximity can't bridge two different
     // corpus fields across the "|" separator — it must occur within ONE field
     // (a real "Flat 1 Deposited Plan 42927"-style legal description).
@@ -164,6 +188,9 @@ function hasStandaloneSignal(input: PropertyEligibilityInput, text: string): boo
     return true;
   }
   if (/\b(dwg|dwelling)\b/i.test(propertyTypeText) && !/\b(unit\s+title|ownership\s+home\s+units?|apartment|flat)\b/i.test(propertyTypeText)) {
+    return true;
+  }
+  if (hasMinorDwellingSignal(input) && hasFreeholdStyleTitleEvidence(input, text)) {
     return true;
   }
   return /\b(freehold|fee\s+simple)\b/i.test(text) && hasLotDpSignal(text);

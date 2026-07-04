@@ -299,6 +299,74 @@ describe("property eligibility verifier", () => {
     expect(result.subdivisionEligible).toBe(true);
   });
 
+  it("treats home-and-income freehold-flat wording as standalone when LRS verification is unavailable", () => {
+    const result = assessPropertyEligibility({
+      address: "35 Clarendon Road, St Heliers, Auckland",
+      estateType: "Fee Simple",
+      legalDescription: "Lot 2 Deposited Plan 56787",
+      propertyType: "RESIDENTIAL",
+      propertySubType: "Home and income",
+      landUsePrimary: "Multi-unit",
+      propertyImprovements: "FREEHOLD & FLAT",
+      landAreaSqm: 1138,
+      floorAreaSqm: 293,
+      buildYear: 1970,
+      zoneCode: "MHU",
+      potentialLots: 3,
+      minLotSize: 300,
+    });
+
+    expect(result.unitLikeSignal).toBe(false);
+    expect(result.crossLeaseSignal).toBe(false);
+    expect(result.typology).toBe("standalone");
+    expect(result.titleConfidence).toBe("verified");
+    expect(result.subdivisionEligible).toBe(true);
+  });
+
+  it("uses Lot/DP evidence to classify DWG & FLAT as a standalone minor-dwelling property", () => {
+    const result = assessPropertyEligibility({
+      address: "35 Clarendon Road, St Heliers, Auckland",
+      legalDescription: "Lot 2 Deposited Plan 56787",
+      propertyType: "RESIDENTIAL",
+      propertySubType: "Home & income",
+      landUsePrimary: "Multi-unit",
+      propertyImprovements: "DWG & FLAT",
+      landAreaSqm: 1138,
+      floorAreaSqm: 293,
+      buildYear: 1970,
+      zoneCode: "MHU",
+      potentialLots: 3,
+      minLotSize: 300,
+    });
+
+    expect(result.unitLikeSignal).toBe(false);
+    expect(result.typology).toBe("standalone");
+    expect(result.titleConfidence).toBe("verified");
+    expect(result.subdivisionEligible).toBe(true);
+  });
+
+  it("does not treat flat residential wording as a Flat 1-style legal title", () => {
+    const result = assessPropertyEligibility({
+      address: "35 Clarendon Road, St Heliers, Auckland",
+      estateType: "Fee Simple",
+      legalDescription: "Lot 2 Deposited Plan 56787",
+      propertyType: "RESIDENTIAL",
+      propertySubType: "Home & income",
+      landUsePrimary: "Flat residential",
+      propertyImprovements: "HOUSE & FLAT",
+      landAreaSqm: 1138,
+      floorAreaSqm: 293,
+      buildYear: 1970,
+      zoneCode: "MHU",
+      potentialLots: 3,
+      minLotSize: 300,
+    });
+
+    expect(result.unitLikeSignal).toBe(false);
+    expect(result.typology).toBe("standalone");
+    expect(result.subdivisionEligible).toBe(true);
+  });
+
   it("treats Deeds Plan lot descriptions as freehold-style title evidence", () => {
     const result = assessPropertyEligibility({
       address: "36 King Street, Grey Lynn, Auckland",
