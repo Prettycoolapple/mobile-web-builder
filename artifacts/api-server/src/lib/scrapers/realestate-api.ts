@@ -41,9 +41,16 @@ export interface DistrictRecord {
   region: string;
 }
 
+export interface RegionRecord {
+  id: string;
+  title: string;
+  slug: string;
+}
+
 export type RealestateLocationResolution =
   | { status: "suburb"; suburb: SuburbRecord; original: string | null }
   | { status: "district"; district: DistrictRecord; suburbs: SuburbRecord[]; original: string | null }
+  | { status: "region"; region: RegionRecord; districts: DistrictRecord[]; original: string | null }
   | { status: "invalid"; closest?: string | null };
 
 export interface FuzzySuburbMatch {
@@ -57,8 +64,11 @@ export interface FuzzySuburbMatch {
 interface SuburbIndex {
   byNormalisedName: Map<string, SuburbRecord>;  // "bucklands beach" → record
   byId: Map<string, SuburbRecord>;
+  regions: Map<string, RegionRecord>;
+  regionsByNormalisedName: Map<string, RegionRecord>;
   districts: Map<string, DistrictRecord>;
   districtsByNormalisedName: Map<string, DistrictRecord>;
+  regionDistricts: Map<string, DistrictRecord[]>;
   districtChildren: Map<string, SuburbRecord[]>;
   loadedAt: number;
 }
@@ -90,20 +100,26 @@ function addDistrictAlias(target: Map<string, DistrictRecord>, alias: string, re
   if (key && !target.has(key)) target.set(key, rec);
 }
 
+function addRegionAlias(target: Map<string, RegionRecord>, alias: string, rec: RegionRecord): void {
+  const key = normaliseName(alias.replace(/-/g, " "));
+  if (key && !target.has(key)) target.set(key, rec);
+}
+
 const REGION_ALIASES: Record<string, string[]> = {
-  auckland: ["auckland", "auckland city", "akl"],
-  canterbury: ["canterbury", "christchurch"],
-  waikato: ["waikato", "south waikato", "hamilton"],
+  auckland: ["auckland", "auckland region", "akl"],
+  canterbury: ["canterbury", "canterbury region"],
+  waikato: ["waikato", "waikato region"],
   wellington: ["wellington"],
-  otago: ["otago", "dunedin", "queenstown"],
-  "bay-of-plenty": ["bay of plenty", "bop", "tauranga", "rotorua"],
+  otago: ["otago", "otago region"],
+  "central-otago-lakes-district": ["central otago lakes district", "lakes district"],
+  "bay-of-plenty": ["bay of plenty", "bop"],
   northland: ["northland"],
-  "hawkes-bay": ["hawkes bay", "hawke's bay", "napier", "hastings"],
-  "manawatu-whanganui": ["manawatu", "whanganui", "wanganui", "palmerston north"],
+  "hawkes-bay": ["hawkes bay", "hawke's bay"],
+  "manawatu-whanganui": ["manawatu whanganui", "manawatu / whanganui"],
   taranaki: ["taranaki"],
-  nelson: ["nelson", "tasman"],
+  nelson: ["nelson", "nelson bays", "nelson & bays"],
   marlborough: ["marlborough"],
-  southland: ["southland", "invercargill"],
+  southland: ["southland"],
   gisborne: ["gisborne"],
 };
 
@@ -143,7 +159,10 @@ function stripRegionHints(raw: string): string {
       out = out.replace(new RegExp(`\\b${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi"), " ");
     }
   }
-  return out.replace(/\s+/g, " ").trim();
+  return out
+    .replace(/\b(?:region|area|district)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**
@@ -227,7 +246,7 @@ async function fetchJsonWithFixedTimeout<T>(url: string, timeoutMs: number): Pro
 }
 
 interface LocationsResponse {
-  data: Array<{ type: string; id: string; attributes: { title: string; slug: string } }>;
+  data: Array<{ type: "regions" | string; id: string; attributes: { title: string; slug: string } }>;
   included: Array<{
     type: "districts" | "suburbs";
     id: string;
@@ -246,25 +265,53 @@ async function loadSuburbIndex(): Promise<SuburbIndex> {
     logger.info({ url }, "realestate-api: fetching suburb index");
     const json = await fetchJsonWithTimeout<LocationsResponse>(url);
 
+    const regions = new Map<string, RegionRecord>();
+    const regionsByNorm = new Map<string, RegionRecord>();
     const districts = new Map<string, DistrictRecord>();
     const districtsByNorm = new Map<string, DistrictRecord>();
+    const regionDistricts = new Map<string, DistrictRecord[]>();
     const districtChildren = new Map<string, SuburbRecord[]>();
     const byNorm = new Map<string, SuburbRecord>();
     const byId = new Map<string, SuburbRecord>();
 
+    for (const item of json.data ?? []) {
+      if (item.type !== "regions") continue;
+      const rec: RegionRecord = {
+        id: item.id,
+        title: item.attributes.title,
+        slug: item.attributes.slug,
+      };
+      regions.set(rec.slug, rec);
+      addRegionAlias(regionsByNorm, rec.title, rec);
+      addRegionAlias(regionsByNorm, rec.slug, rec);
+      for (const alias of REGION_ALIASES[rec.slug] ?? []) addRegionAlias(regionsByNorm, alias, rec);
+    }
+
     for (const item of json.included ?? []) {
       if (item.type === "districts") {
         const fqSlug = item.attributes["fq-slug"] ?? "";
+        const region = regionFromFqSlug(fqSlug) ?? "";
         const rec: DistrictRecord = {
           id: item.id,
           title: item.attributes.title,
           slug: item.attributes.slug,
           fqSlug,
-          region: regionFromFqSlug(fqSlug) ?? "",
+          region,
         };
         districts.set(item.id, rec);
+        const regionItems = regionDistricts.get(region) ?? [];
+        regionItems.push(rec);
+        regionDistricts.set(region, regionItems);
         addDistrictAlias(districtsByNorm, rec.title, rec);
         addDistrictAlias(districtsByNorm, rec.slug, rec);
+        const titleWithoutSuffix = rec.title.replace(/\s+(?:city|district)$/i, "").trim();
+        if (titleWithoutSuffix && titleWithoutSuffix !== rec.title) addDistrictAlias(districtsByNorm, titleWithoutSuffix, rec);
+        const slugWithoutSuffix = rec.slug.replace(/-(?:city|district)$/i, "").trim();
+        if (slugWithoutSuffix && slugWithoutSuffix !== rec.slug) addDistrictAlias(districtsByNorm, slugWithoutSuffix, rec);
+        if (/queenstown-lakes/i.test(rec.title)) {
+          addDistrictAlias(districtsByNorm, "queenstown lakes", rec);
+          addDistrictAlias(districtsByNorm, "qldc", rec);
+        }
         if (rec.fqSlug) addDistrictAlias(districtsByNorm, rec.fqSlug.replace(/_/g, " "), rec);
       }
     }
@@ -307,13 +354,16 @@ async function loadSuburbIndex(): Promise<SuburbIndex> {
     suburbIndexCache = {
       byNormalisedName: byNorm,
       byId,
+      regions,
+      regionsByNormalisedName: regionsByNorm,
       districts,
       districtsByNormalisedName: districtsByNorm,
+      regionDistricts,
       districtChildren,
       loadedAt: Date.now(),
     };
     logger.info(
-      { suburbs: byId.size, districts: districts.size, aliasKeys: byNorm.size },
+      { suburbs: byId.size, districts: districts.size, regions: regions.size, aliasKeys: byNorm.size },
       "realestate-api: suburb index loaded",
     );
     return suburbIndexCache;
@@ -436,12 +486,17 @@ export async function getDistrictSuburbs(districtId: string, max = 80): Promise<
 }
 
 function locationCandidates(input: string): string[] {
-  const parts = input
+  const rawParts = input
+    .split(/[,/|]+|\bin\b|\bnear\b|\baround\b/gi)
+    .map((part) => normaliseName(part))
+    .filter(Boolean);
+  const strippedParts = input
     .split(/[,/|]+|\bin\b|\bnear\b|\baround\b/gi)
     .map((part) => stripRegionHints(part))
     .filter(Boolean);
-  const full = stripRegionHints(input);
-  return Array.from(new Set([full, ...parts].filter((value) => value.length >= 3)));
+  const fullRaw = normaliseName(input);
+  const fullStripped = stripRegionHints(input);
+  return Array.from(new Set([fullRaw, fullStripped, ...rawParts, ...strippedParts].filter((value) => value.length >= 3)));
 }
 
 export async function resolveRealestateLocation(
@@ -463,7 +518,19 @@ export async function resolveRealestateLocation(
   const candidates = locationCandidates(raw);
 
   for (const candidate of candidates) {
-    const directDistrict = index.districtsByNormalisedName.get(normaliseName(candidate));
+    const candidateKey = normaliseName(candidate);
+    const directRegion = index.regionsByNormalisedName.get(candidateKey);
+    const directDistrict = index.districtsByNormalisedName.get(candidateKey);
+    const standaloneRegionPart = !!directRegion && /[,/|]/.test(raw) && candidateKey !== normaliseName(raw);
+    if (standaloneRegionPart) continue;
+    if (directRegion && (!directDistrict || /\bregion\b/i.test(candidate) || normaliseName(directRegion.title) === candidateKey || normaliseName(directRegion.slug) === candidateKey)) {
+      return {
+        status: "region",
+        region: directRegion,
+        districts: index.regionDistricts.get(directRegion.slug) ?? [],
+        original: candidateKey === normaliseName(raw) ? null : raw,
+      };
+    }
     if (directDistrict && matchesRegionHint(directDistrict, regions)) {
       const suburbs = index.districtChildren.get(directDistrict.id) ?? [];
       return {
@@ -471,6 +538,14 @@ export async function resolveRealestateLocation(
         district: directDistrict,
         suburbs,
         original: normaliseName(directDistrict.title) === normaliseName(raw) ? null : raw,
+      };
+    }
+    if (directRegion) {
+      return {
+        status: "region",
+        region: directRegion,
+        districts: index.regionDistricts.get(directRegion.slug) ?? [],
+        original: candidateKey === normaliseName(raw) ? null : raw,
       };
     }
   }
@@ -496,7 +571,8 @@ export async function resolveRealestateLocation(
     }
   }
 
-  return { status: "invalid", closest: fuzzy?.suburb.title ?? null };
+  const usefulClosest = fuzzy && fuzzy.distance <= 3 && fuzzy.similarity >= 0.72 ? fuzzy.suburb.title : null;
+  return { status: "invalid", closest: usefulClosest };
 }
 
 export async function findLocationInTextViaIndex(text: string): Promise<RealestateLocationResolution | null> {
@@ -540,7 +616,37 @@ export async function findLocationInTextViaIndex(text: string): Promise<Realesta
     }
   }
 
-  matches.sort((a, b) => b.length - a.length || (a.value.status === "district" ? -1 : 1));
+  for (const [alias, region] of index.regionsByNormalisedName) {
+    if (alias.length < 3) continue;
+    if (
+      region.slug === "auckland" &&
+      normalised !== "auckland" &&
+      !/\bauckland region\b/i.test(normalised)
+    ) {
+      continue;
+    }
+    const re = new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+    if (re.test(normalised)) {
+      matches.push({
+        label: alias,
+        length: alias.length,
+        value: {
+          status: "region",
+          region,
+          districts: index.regionDistricts.get(region.slug) ?? [],
+          original: null,
+        },
+      });
+    }
+  }
+
+  matches.sort((a, b) => {
+    const regionRankA = a.value.status === "region" ? 1 : 0;
+    const regionRankB = b.value.status === "region" ? 1 : 0;
+    return regionRankA - regionRankB
+      || b.length - a.length
+      || (a.value.status === "district" ? -1 : 1);
+  });
   return matches[0]?.value ?? null;
 }
 
@@ -923,8 +1029,11 @@ export interface ListingWindowResult {
  *    suburb isn't fetched in full up front. The returned `nextOffset`/`done`
  *    let the caller resume the next window on demand.
  */
-async function fetchListingWindow(
-  suburbId: string,
+type ListingLocationFilter = "suburb" | "district" | "region";
+
+async function fetchListingWindowForFilter(
+  filterName: ListingLocationFilter,
+  locationId: string,
   limit = 100,
   options: { fetchAllPages?: boolean; maxListings?: number; startOffset?: number; maxPages?: number } = {},
 ): Promise<ListingWindowResult> {
@@ -939,7 +1048,7 @@ async function fetchListingWindow(
   do {
     const params = new URLSearchParams();
     params.append("filter[category][]", "res_sale");
-    params.append("filter[suburb][]", suburbId);
+    params.append(`filter[${filterName}][]`, locationId);
     params.append("page[limit]", String(pageLimit));
     if (offset > 0) params.append("page[offset]", String(offset));
     // Note: the public listings API does not accept `sort`; results come back in
@@ -971,7 +1080,7 @@ async function fetchListingWindow(
     offset += pageLimit;
     pagesFetched++;
     logger.info(
-      { suburbId, total: totalResults, offset, pageMapped: mapped.length, accumulated: all.length },
+      { filterName, locationId, total: totalResults, offset, pageMapped: mapped.length, accumulated: all.length },
       "realestate-api: listings page fetched",
     );
 
@@ -989,10 +1098,18 @@ async function fetchListingWindow(
   } while (totalResults == null || offset < totalResults);
 
   logger.info(
-    { suburbId, total: totalResults, mapped: all.length, nextOffset: offset, done: exhausted, fetchAllPages: !!options.fetchAllPages },
+    { filterName, locationId, total: totalResults, mapped: all.length, nextOffset: offset, done: exhausted, fetchAllPages: !!options.fetchAllPages },
     "realestate-api: listings fetched",
   );
   return { listings: all, totalResults, nextOffset: offset, done: exhausted };
+}
+
+async function fetchListingWindow(
+  suburbId: string,
+  limit = 100,
+  options: { fetchAllPages?: boolean; maxListings?: number; startOffset?: number; maxPages?: number } = {},
+): Promise<ListingWindowResult> {
+  return fetchListingWindowForFilter("suburb", suburbId, limit, options);
 }
 
 /**
@@ -2101,15 +2218,35 @@ export async function searchListingsByName(opts: {
     maxPages,
   } = opts;
 
-  const suburb = await findSuburbId(suburbName);
-  if (!suburb) {
-    logger.info({ suburbName }, "realestate-api: suburb not found in directory");
+  const resolvedLocation = await resolveRealestateLocation(suburbName);
+  if (!resolvedLocation || resolvedLocation.status === "invalid") {
+    logger.info({ suburbName }, "realestate-api: location not found in directory");
     return { firstBatch: [], remainingListings: [], totalFound: 0, source: "realestate.co.nz/api", suburbResolved: null, nextOffset: 0, totalAvailable: null, done: true };
   }
+  const location = resolvedLocation.status === "suburb"
+    ? {
+        filterName: "suburb" as const,
+        id: resolvedLocation.suburb.id,
+        title: resolvedLocation.suburb.title,
+        fqSlug: resolvedLocation.suburb.fqSlug,
+      }
+    : resolvedLocation.status === "district"
+      ? {
+          filterName: "district" as const,
+          id: resolvedLocation.district.id,
+          title: resolvedLocation.district.title,
+          fqSlug: resolvedLocation.district.fqSlug,
+        }
+      : {
+          filterName: "region" as const,
+          id: resolvedLocation.region.id,
+          title: resolvedLocation.region.title,
+          fqSlug: resolvedLocation.region.slug,
+        };
 
   logger.info(
-    { suburbName, resolvedTo: suburb.title, suburbId: suburb.id, fqSlug: suburb.fqSlug, minPrice, maxPrice },
-    "realestate-api: resolved suburb, fetching listings",
+    { suburbName, resolvedTo: location.title, locationId: location.id, locationKind: location.filterName, fqSlug: location.fqSlug, minPrice, maxPrice },
+    "realestate-api: resolved location, fetching listings",
   );
 
   let listings: ListingResult[];
@@ -2117,17 +2254,17 @@ export async function searchListingsByName(opts: {
   let totalAvailable: number | null = null;
   let done = true;
   try {
-    const window = await fetchListingWindow(suburb.id, 100, { fetchAllPages, maxListings, startOffset, maxPages });
+    const window = await fetchListingWindowForFilter(location.filterName, location.id, 100, { fetchAllPages, maxListings, startOffset, maxPages });
     listings = window.listings;
     nextOffset = window.nextOffset;
     totalAvailable = window.totalResults;
     done = window.done;
   } catch (err) {
-    logger.warn({ err: (err as Error).message, suburbId: suburb.id }, "realestate-api: fetch failed");
+    logger.warn({ err: (err as Error).message, locationId: location.id, locationKind: location.filterName }, "realestate-api: fetch failed");
     return {
       firstBatch: [], remainingListings: [], totalFound: 0,
       source: "realestate.co.nz/api",
-      suburbResolved: { id: suburb.id, title: suburb.title, fqSlug: suburb.fqSlug },
+      suburbResolved: { id: location.id, title: location.title, fqSlug: location.fqSlug },
       nextOffset: startOffset ?? 0, totalAvailable: null, done: false,
     };
   }
@@ -2158,7 +2295,7 @@ export async function searchListingsByName(opts: {
     remainingListings: annotatedOrdered.slice(firstBatchSize),
     totalFound: annotatedOrdered.length,
     source: "realestate.co.nz/api",
-    suburbResolved: { id: suburb.id, title: suburb.title, fqSlug: suburb.fqSlug },
+    suburbResolved: { id: location.id, title: location.title, fqSlug: location.fqSlug },
     nextOffset,
     totalAvailable,
     done,

@@ -12,6 +12,7 @@ import {
   reconcileListingBedBath,
   reconcileListingLandArea,
   resolveRealestateLocation,
+  searchListingsByName,
 } from "../realestate-api";
 
 afterEach(() => {
@@ -19,19 +20,39 @@ afterEach(() => {
   _resetSuburbIndexCacheForTests();
 });
 
-function mockLocationDirectory() {
-  vi.spyOn(globalThis, "fetch").mockResolvedValue({
-    ok: true,
-    json: async () => ({
-      data: [],
+function locationDirectoryPayload() {
+  return {
+    data: [
+        { type: "regions", id: "36", attributes: { title: "Waikato", slug: "waikato" } },
+        { type: "regions", id: "45", attributes: { title: "Canterbury", slug: "canterbury" } },
+        { type: "regions", id: "46", attributes: { title: "Otago", slug: "otago" } },
+        { type: "regions", id: "50", attributes: { title: "Central Otago / Lakes District", slug: "central-otago-lakes-district" } },
+        { type: "regions", id: "35", attributes: { title: "Auckland", slug: "auckland" } },
+      ],
       included: [
         { type: "districts", id: "278", attributes: { title: "Timaru", slug: "timaru", "fq-slug": "canterbury_timaru" } },
         { type: "districts", id: "235", attributes: { title: "South Waikato", slug: "south-waikato", "fq-slug": "waikato_south-waikato" } },
+        { type: "districts", id: "237", attributes: { title: "Hamilton City", slug: "hamilton-city", "fq-slug": "waikato_hamilton-city" } },
+        { type: "districts", id: "282", attributes: { title: "Christchurch City", slug: "christchurch-city", "fq-slug": "canterbury_christchurch-city" } },
+        { type: "districts", id: "277", attributes: { title: "Waimate", slug: "waimate", "fq-slug": "canterbury_waimate" } },
+        { type: "districts", id: "286", attributes: { title: "Dunedin City", slug: "dunedin-city", "fq-slug": "otago_dunedin-city" } },
+        { type: "districts", id: "288", attributes: { title: "Queenstown-Lakes District", slug: "queenstown-lakes-district", "fq-slug": "central-otago-lakes-district_queenstown-lakes-district" } },
+        { type: "districts", id: "223", attributes: { title: "Manukau City", slug: "manukau-city", "fq-slug": "auckland_manukau-city" } },
+        { type: "districts", id: "285", attributes: { title: "Clutha", slug: "clutha", "fq-slug": "otago_clutha" } },
         { type: "suburbs", id: "4151", attributes: { title: "Timaru Central", slug: "timaru-central", "fq-slug": "canterbury_timaru_timaru-central", "parent-id": 278 } },
         { type: "suburbs", id: "3159", attributes: { title: "Gleniti", slug: "gleniti", "fq-slug": "canterbury_timaru_gleniti", "parent-id": 278 } },
         { type: "suburbs", id: "4069", attributes: { title: "Tirau", slug: "tirau", "fq-slug": "waikato_south-waikato_tirau", "parent-id": 235 } },
+        { type: "suburbs", id: "4100", attributes: { title: "Milton", slug: "milton", "fq-slug": "otago_clutha_milton", "parent-id": 285 } },
+        { type: "suburbs", id: "4101", attributes: { title: "Otaio", slug: "otaio", "fq-slug": "canterbury_waimate_otaio", "parent-id": 277 } },
+        { type: "suburbs", id: "4102", attributes: { title: "Clarks Beach", slug: "clarks-beach", "fq-slug": "auckland_manukau-city_clarks-beach", "parent-id": 223 } },
       ],
-    }),
+  };
+}
+
+function mockLocationDirectory() {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue({
+    ok: true,
+    json: async () => locationDirectoryPayload(),
   } as Response);
 }
 
@@ -71,6 +92,59 @@ describe("realestate-api location resolution", () => {
 
     expect(resolved?.status).toBe("district");
     if (resolved?.status === "district") expect(resolved.district.title).toBe("Timaru");
+  });
+
+  it("treats city and region names as real search areas instead of fuzzy suburbs", async () => {
+    mockLocationDirectory();
+
+    const hamilton = await resolveRealestateLocation("Hamilton");
+    const christchurch = await resolveRealestateLocation("Christchurch");
+    const otago = await resolveRealestateLocation("Otago");
+
+    expect(hamilton?.status).toBe("district");
+    if (hamilton?.status === "district") expect(hamilton.district.title).toBe("Hamilton City");
+    expect(christchurch?.status).toBe("district");
+    if (christchurch?.status === "district") expect(christchurch.district.title).toBe("Christchurch City");
+    expect(otago?.status).toBe("region");
+    if (otago?.status === "region") expect(otago.region.title).toBe("Otago");
+  });
+
+  it("finds city and region names inside natural language search text", async () => {
+    mockLocationDirectory();
+
+    const waikatoHamilton = await findLocationInTextViaIndex("What's on the market in Waikato Hamilton region?");
+    const christchurch = await findLocationInTextViaIndex("Anything in Christchurch");
+    const otago = await findLocationInTextViaIndex("I mean otago");
+
+    expect(waikatoHamilton?.status).toBe("district");
+    if (waikatoHamilton?.status === "district") expect(waikatoHamilton.district.title).toBe("Hamilton City");
+    expect(christchurch?.status).toBe("district");
+    if (christchurch?.status === "district") expect(christchurch.district.title).toBe("Christchurch City");
+    expect(otago?.status).toBe("region");
+    if (otago?.status === "region") expect(otago.region.title).toBe("Otago");
+  });
+
+  it("uses district and region listing filters for broader official locations", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (rawUrl) => {
+      const url = String(rawUrl);
+      if (url.includes("/locations?")) {
+        return { ok: true, json: async () => locationDirectoryPayload() } as Response;
+      }
+      if (url.includes("/listings?")) {
+        return { ok: true, json: async () => ({ data: [], meta: { totalResults: 0 } }) } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    await searchListingsByName({ suburbName: "Christchurch", minPrice: 0, maxPrice: 3_000_000 });
+    const christchurchListingUrl = String(fetchMock.mock.calls.at(-1)?.[0] ?? "");
+    expect(decodeURIComponent(christchurchListingUrl)).toContain("filter[district][]=282");
+
+    _resetSuburbIndexCacheForTests();
+    fetchMock.mockClear();
+    await searchListingsByName({ suburbName: "Otago", minPrice: 0, maxPrice: 3_000_000 });
+    const otagoListingUrl = String(fetchMock.mock.calls.at(-1)?.[0] ?? "");
+    expect(decodeURIComponent(otagoListingUrl)).toContain("filter[region][]=46");
   });
 });
 

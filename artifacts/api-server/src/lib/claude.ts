@@ -1,7 +1,7 @@
 import { ai } from "@workspace/integrations-gemini-ai";
 import { logger } from "./logger";
 import { SYSTEM_PROMPT, ANALYSE_AUGMENTATION, DISCOVER_AUGMENTATION, languageInstruction, type Locale } from "./prompts";
-import { findSuburbId, findSuburbInTextViaIndex } from "./scrapers/realestate-api";
+import { findLocationInTextViaIndex, findSuburbId, findSuburbInTextViaIndex } from "./scrapers/realestate-api";
 import type { DevelopmentStrategyAssessment, DevelopmentStrategyId, RefurbishmentScope } from "./development-strategies";
 import { hasNumberedStreetAddress, hasUnnumberedStreetLine } from "./street-address-detect";
 import {
@@ -994,10 +994,17 @@ async function fallbackDetectIntent(
   history?: Message[],
   locale: Locale = "en",
 ): Promise<ChatIntent> {
-  const directHit = await findSuburbInTextViaIndex(lastMessage);
-  // If the message is short and IS a known suburb, treat it as discover
+  const directHit = await findLocationInTextViaIndex(lastMessage);
+  const directLocationName = directHit?.status === "suburb"
+    ? directHit.suburb.title.toLowerCase()
+    : directHit?.status === "district"
+      ? directHit.district.title.toLowerCase()
+      : directHit?.status === "region"
+        ? directHit.region.title.toLowerCase()
+        : null;
+  // If the message is short and is a known suburb, city, or region, treat it as discover.
   const trimmed = lastMessage.trim();
-  const isSuburbOnly = directHit !== null
+  const isSuburbOnly = directLocationName !== null
     && trimmed.split(/\s+/).length <= 5
     && !/\b(is|are|was|were|what|where|how|find|show|search|properties|property|house|land|section)\b/i.test(trimmed);
   const mode = isSuburbOnly ? "discover" : detectMode(lastMessage);
@@ -1009,12 +1016,14 @@ async function fallbackDetectIntent(
     for (let i = history.length - 1; i >= 0 && !priorSuburb; i--) {
       const m = history[i];
       if (m.role !== "user" || m.content === lastMessage) continue;
-      const hit = await findSuburbInTextViaIndex(m.content);
-      if (hit) priorSuburb = hit.title.toLowerCase();
+      const hit = await findLocationInTextViaIndex(m.content);
+      if (hit?.status === "suburb") priorSuburb = hit.suburb.title.toLowerCase();
+      else if (hit?.status === "district") priorSuburb = hit.district.title.toLowerCase();
+      else if (hit?.status === "region") priorSuburb = hit.region.title.toLowerCase();
     }
   }
 
-  const suburb = (directHit?.title.toLowerCase() ?? null)
+  const suburb = directLocationName
     ?? priorSuburb
     ?? (mode === "discover" && reportContext?.suburb ? reportContext.suburb.toLowerCase().trim() : null);
 
