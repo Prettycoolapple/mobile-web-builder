@@ -527,7 +527,6 @@ export function developmentScoreUnavailableReason(
   if (merged.titleConfidence !== "verified") return "unverified_title";
   if (merged.typology === "unknown" || merged.typologyConfidence === "unknown") return "unverified_typology";
   if (merged.zone_code == null) return "missing_zone";
-  if (scenarios.length === 0) return "missing_roi_market_evidence";
   return null;
 }
 

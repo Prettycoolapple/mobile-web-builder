@@ -51,4 +51,8 @@ describe("developmentScoreUnavailableReason", () => {
   it("allows scores when required development inputs are present", () => {
     expect(developmentScoreUnavailableReason(merged(), costs(), scenarios)).toBeNull();
   });
+
+  it("does not suppress all development scores when ROI market evidence is missing", () => {
+    expect(developmentScoreUnavailableReason(merged(), costs(), [])).toBeNull();
+  });
 });

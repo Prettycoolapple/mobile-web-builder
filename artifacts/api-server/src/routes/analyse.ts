@@ -817,7 +817,7 @@ function buildDeterministicFallbackReport(
 ): Record<string, unknown> | null {
   const { merged, lots, costs, scores } = pipelineResult;
   // scores/costs are null whenever the development score is suppressed (e.g. a
-  // genuine cross-lease/unit title, or missing comparables). The report must
+  // genuine cross-lease/unit title). The report must
   // STILL be built from the confirmed facts — otherwise the analysis degrades
   // to prose, never saves to history, and the Plan tab (which needs the saved
   // report's historyId) shows "Site plan isn't available". Product rule: a
