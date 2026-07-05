@@ -105,6 +105,9 @@ function scenario(overrides: Partial<ROIScenario>): ROIScenario {
 const CROSS_LEASE_REASON = "Cross-lease title — co-owner consent constrains development";
 const LEASEHOLD_REASON = "Leasehold title — limited development rights vs freehold";
 
+const TITLE_UNVERIFIED_REASON = "Title verification incomplete - confirm tenure before committing to development";
+const TYPOLOGY_UNKNOWN_REASON = "Dwelling typology not fully confirmed - verify this is not a unit, cross-lease, or apartment";
+
 function builtEnvAssessment(id: string, representativeYear: number): ParcelBuildAssessment {
   const parcel: LinzParcelNearby = {
     parcel_id: id,
@@ -152,6 +155,27 @@ describe("scoreProperty — tenure", () => {
     const stratum = scoreProperty(merged({ estate_type: "Stratum in Freehold" }), baseCosts, scenarios, LOTS);
     expect(stratum.ease).toBeLessThan(freehold.ease);
     expect(stratum.ease_reasons).toContain(CROSS_LEASE_REASON);
+  });
+
+  it("keeps scoring available while flagging title and typology uncertainty", () => {
+    const verified = scoreProperty(
+      merged({ typology: "standalone", typologyConfidence: "verified", titleConfidence: "verified" }),
+      baseCosts,
+      scenarios,
+      LOTS,
+    );
+    const uncertain = scoreProperty(
+      merged({ typology: "unknown", typologyConfidence: "unknown", titleConfidence: "unknown" }),
+      baseCosts,
+      scenarios,
+      LOTS,
+    );
+
+    expect(uncertain.ease).toBeLessThan(verified.ease);
+    expect(uncertain.cost).toBeGreaterThan(0);
+    expect(uncertain.roi).toBeGreaterThan(0);
+    expect(uncertain.ease_reasons).toContain(TITLE_UNVERIFIED_REASON);
+    expect(uncertain.ease_reasons).toContain(TYPOLOGY_UNKNOWN_REASON);
   });
 
   it("lowers ease for a leasehold title with the expected reason", () => {

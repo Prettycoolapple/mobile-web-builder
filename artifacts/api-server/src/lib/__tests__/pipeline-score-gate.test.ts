@@ -44,12 +44,15 @@ describe("developmentScoreUnavailableReason", () => {
     expect(developmentScoreUnavailableReason(merged({ cv_nzd: null }), costs({ cv_unavailable: true }), scenarios)).toBe("missing_cv_nzd");
     expect(developmentScoreUnavailableReason(merged({ land_area_sqm: null }), costs(), scenarios)).toBe("missing_land_area_sqm");
     expect(developmentScoreUnavailableReason(merged({ build_year: null, build_year_range: null }), costs(), scenarios)).toBe("missing_build_year_or_decade");
-    expect(developmentScoreUnavailableReason(merged({ titleConfidence: "unknown" }), costs(), scenarios)).toBe("unverified_title");
-    expect(developmentScoreUnavailableReason(merged({ typology: "unknown", typologyConfidence: "unknown" }), costs(), scenarios)).toBe("unverified_typology");
   });
 
   it("allows scores when required development inputs are present", () => {
     expect(developmentScoreUnavailableReason(merged(), costs(), scenarios)).toBeNull();
+  });
+
+  it("keeps title and typology uncertainty as score caveats rather than suppressing all scores", () => {
+    expect(developmentScoreUnavailableReason(merged({ titleConfidence: "unknown" }), costs(), scenarios)).toBeNull();
+    expect(developmentScoreUnavailableReason(merged({ typology: "unknown", typologyConfidence: "unknown" }), costs(), scenarios)).toBeNull();
   });
 
   it("does not suppress all development scores when ROI market evidence is missing", () => {

@@ -524,8 +524,6 @@ export function developmentScoreUnavailableReason(
   if (merged.cv_nzd == null || costs.cv_unavailable) return "missing_cv_nzd";
   if (merged.contour == null) return "missing_contour";
   if (merged.build_year == null && !merged.build_year_range) return "missing_build_year_or_decade";
-  if (merged.titleConfidence !== "verified") return "unverified_title";
-  if (merged.typology === "unknown" || merged.typologyConfidence === "unknown") return "unverified_typology";
   if (merged.zone_code == null) return "missing_zone";
   return null;
 }

@@ -116,6 +116,8 @@ export function scoreProperty(
   const isFreeholdTenure = /free\s*hold|fee\s*simple/i.test(estateType);
   const isLeaseholdTenure =
     /lease(hold)?\b/i.test(estateType) && !isCrossLeaseTenure && !isFreeholdTenure;
+  const hasUnverifiedTitleConfidence = merged.titleConfidence != null && merged.titleConfidence !== "verified";
+  const hasUnknownTypology = merged.typology === "unknown" || merged.typologyConfidence === "unknown";
 
   const easeDeductions: Array<{ condition: boolean; points: number; reason: string }> = [
     {
@@ -127,6 +129,16 @@ export function scoreProperty(
       condition: isLeaseholdTenure,
       points: 1.0,
       reason: "Leasehold title — limited development rights vs freehold",
+    },
+    {
+      condition: hasUnverifiedTitleConfidence,
+      points: 0.5,
+      reason: "Title verification incomplete - confirm tenure before committing to development",
+    },
+    {
+      condition: hasUnknownTypology,
+      points: 0.5,
+      reason: "Dwelling typology not fully confirmed - verify this is not a unit, cross-lease, or apartment",
     },
     {
       condition: merged.zone_code === "SHZ",
