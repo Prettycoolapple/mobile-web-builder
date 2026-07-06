@@ -70,6 +70,7 @@ const { runPropertyPipeline, hasCacheableCore } = await import("../lib/pipeline"
 const { backfillDerivedScores } = await import("../lib/property-cache");
 const { upsertFeatureRowFromPipeline } = await import("../lib/property-feature-index");
 const { SCORING_VERSION } = await import("../lib/card-score");
+const { DWELLING_CONDITION_ASSESSMENT_VERSION } = await import("../lib/dwelling-condition");
 type RawPropertyData = import("../lib/pipeline").RawPropertyData;
 type PropertyCacheRow = import("@workspace/db").PropertyCacheRow;
 
@@ -90,7 +91,11 @@ let failed = 0;
 
 function alreadyCurrent(row: PropertyCacheRow): boolean {
   const ds = (row.rawData as RawPropertyData | null)?.derived_scores;
-  return ds?.scoringVersion === SCORING_VERSION && ds?.roiPercentBest != null;
+  return (
+    ds?.scoringVersion === SCORING_VERSION &&
+    ds?.roiPercentBest != null &&
+    ds?.dwellingCondition?.assessmentVersion === DWELLING_CONDITION_ASSESSMENT_VERSION
+  );
 }
 
 const MAX_ATTEMPTS = 4; // 1 try + 3 retries

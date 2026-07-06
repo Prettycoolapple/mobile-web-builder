@@ -46,6 +46,7 @@ import { shouldBackfillDerivedScores } from "../lib/derived-scores-backfill";
 import { runCriteriaSearch, buildCriteriaSearchIntro, buildCriteriaSearchEmptyMessage } from "../lib/criteria-search";
 import { detectPropertyDataLookup, buildPropertyDataLookupAnswer } from "../lib/property-data-lookup";
 import { buildSitePlanForReport, SitePlanNoLocationError, fetchAerialTile, type GeoHint } from "../lib/site-plan";
+import { dwellingConditionRiskBullet } from "../lib/dwelling-condition";
 import { noteUserActivity } from "../lib/user-activity";
 import { buildSubdivisionPathwayNote } from "../lib/lot-calculator";
 import {
@@ -777,6 +778,17 @@ function applyDeterministicPipelineOverrides(
     rs = [message, ...rs.filter((b) => norm(b) !== norm(message))];
   } else {
     delete parsed.redevelopmentWarning;
+  }
+
+  parsed.dwellingCondition = pipelineResult.dwellingCondition ?? null;
+  const conditionBullet = dwellingConditionRiskBullet(
+    pipelineResult.dwellingCondition,
+    lots?.lots ?? 0,
+    isZhRisks,
+  );
+  if (conditionBullet) {
+    const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim().slice(0, 56);
+    rs = [conditionBullet, ...rs.filter((b) => norm(b) !== norm(conditionBullet))];
   }
 
   if (pipelineResult.dataFreshness) {

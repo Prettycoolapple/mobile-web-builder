@@ -30,6 +30,18 @@ describe("normaliseFilterSpec", () => {
       "analyzed_index",
     );
   });
+
+  it("keeps dwelling-condition constraints even without numeric filters", () => {
+    expect(normaliseFilterSpec({ dwellingCondition: "avoid_recent_improvement" })).toMatchObject({
+      dwellingCondition: "avoid_recent_improvement",
+      searchScope: "both",
+    });
+    expect(normaliseFilterSpec({ dwellingCondition: "older_do_up", searchScope: "analyzed_index" })).toMatchObject({
+      dwellingCondition: "older_do_up",
+      searchScope: "analyzed_index",
+    });
+    expect(normaliseFilterSpec({ dwellingCondition: "fresh paint" })).toBeNull();
+  });
 });
 
 describe("detectFilterSpecFromText (regex fallback)", () => {
@@ -57,6 +69,16 @@ describe("detectFilterSpecFromText (regex fallback)", () => {
     expect(detectFilterSpecFromText("可以开发3栋的地")?.minPotentialLots).toBe(3);
     // A plain browse for "3 homes" must NOT be hijacked into a criteria search.
     expect(detectFilterSpecFromText("看看3套房")).toBeNull();
+  });
+
+  it("extracts dwelling-condition criteria", () => {
+    expect(detectFilterSpecFromText("show me older do-up sites")?.dwellingCondition).toBe("older_do_up");
+    expect(detectFilterSpecFromText("find sites that avoid renovated premium")?.dwellingCondition).toBe(
+      "avoid_recent_improvement",
+    );
+    expect(detectFilterSpecFromText("recently renovated properties in Grey Lynn")?.dwellingCondition).toBe(
+      "recent_improvement",
+    );
   });
 
   it("returns null when no measurable criteria are present", () => {

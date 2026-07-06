@@ -29,6 +29,7 @@ export interface CriteriaCandidate extends PropertyCandidate {
     slope?: "verified" | "unverified";
     servicesOnParcel?: "verified" | "unverified";
     lots?: "verified" | "modelled";
+    dwellingCondition?: "verified";
   };
 }
 
@@ -49,6 +50,13 @@ function specToFilter(spec: SearchFilterSpec, suburbs: string[]): FeatureSearchF
     maxSlopeDegrees: spec.maxSlopeDegrees,
     servicesOnParcel: spec.infrastructureOnParcel,
     minRoiPct: spec.minRoiPct,
+    recentImprovement:
+      spec.dwellingCondition === "recent_improvement"
+        ? true
+        : spec.dwellingCondition === "avoid_recent_improvement"
+          ? false
+          : null,
+    dwellingConditions: spec.dwellingCondition === "older_do_up" ? ["original", "dated"] : undefined,
     // No separate region gate needed: the pipeline already nulls out
     // zone/lots/ROI at the source for any property whose region isn't
     // properly modelled (regional-rules.ts), so those rows can never satisfy
@@ -100,6 +108,7 @@ async function hydrateCandidate(
       servicesOnParcel: spec.infrastructureOnParcel.length > 0 ? "verified" : undefined,
       // Lot yield is modelled from area + zone, not surveyed.
       lots: spec.minPotentialLots != null ? "modelled" : undefined,
+      dwellingCondition: spec.dwellingCondition != null ? "verified" : undefined,
     },
   };
 }
@@ -154,6 +163,9 @@ function titleCaseSuburbLabel(s: string): string {
 
 function matchedAttrs(spec: SearchFilterSpec, card: CriteriaCandidate, zh: boolean): string {
   const parts: string[] = [];
+  if (spec.dwellingCondition === "older_do_up") parts.push(zh ? "older/original dwelling (verified)" : "older/original dwelling (verified)");
+  if (spec.dwellingCondition === "avoid_recent_improvement") parts.push(zh ? "no recent-improvement premium flagged" : "no recent-improvement premium flagged");
+  if (spec.dwellingCondition === "recent_improvement") parts.push(zh ? "recently improved dwelling (verified)" : "recently improved dwelling (verified)");
   if (spec.minPotentialLots != null) {
     const n = card.potentialLots ?? spec.minPotentialLots;
     parts.push(zh ? `可分成约 ${n} 块（估算）` : `models to ~${n} lots`);

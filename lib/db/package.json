@@ -25,7 +25,8 @@
     "add-provider-trials": "node ./scripts/add-provider-trials.mjs",
     "add-dm-message-likes": "node ./scripts/add-dm-message-likes.mjs",
     "add-notification-items": "node ./scripts/add-notification-items.mjs",
-    "add-property-feature-index": "node ./scripts/add-property-feature-index.mjs"
+    "add-property-feature-index": "node ./scripts/add-property-feature-index.mjs",
+    "add-dwelling-condition-feature-index": "node ./scripts/add-dwelling-condition-feature-index.mjs"
   },
   "dependencies": {
     "drizzle-orm": "catalog:",

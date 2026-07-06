@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { scoreProperty } from "../scoring";
 import { buildBuiltEnvironmentContext, type ParcelBuildAssessment } from "../built-environment-context";
+import { DWELLING_CONDITION_COST_REASON, type DwellingConditionAssessment } from "../dwelling-condition";
 import type { MergedPropertyData } from "../scrapers/merge";
 import type { CostBreakdown } from "../cost-estimator";
 import type { ROIScenario } from "../roi-calculator";
@@ -129,6 +130,22 @@ function builtEnvAssessment(id: string, representativeYear: number): ParcelBuild
   };
 }
 
+function dwellingCondition(overrides: Partial<DwellingConditionAssessment> = {}): DwellingConditionAssessment {
+  return {
+    assessmentVersion: 1,
+    sourceFingerprint: "test",
+    assessedAt: "2026-01-01T00:00:00.000Z",
+    condition: "near_new",
+    recentImprovement: true,
+    additionOrExtension: false,
+    confidence: "high",
+    source: "build_year",
+    evidence: ["Built 2020; dwelling age is 6 years."],
+    costPenalty: 1,
+    ...overrides,
+  };
+}
+
 describe("scoreProperty — tenure", () => {
   const freehold = scoreProperty(merged({ estate_type: "Fee Simple" }), baseCosts, scenarios, LOTS);
   const unknown = scoreProperty(merged({ estate_type: null }), baseCosts, scenarios, LOTS);
@@ -211,6 +228,39 @@ describe("scoreProperty — cost position", () => {
 
     expect(result.cost).toBeLessThanOrEqual(2.5);
     expect(result.cost_reasons.join(" ")).toContain("relative to the estimated end value");
+  });
+});
+
+describe("scoreProperty - dwelling condition premium", () => {
+  it("lowers COST and composite for a recent dwelling when redevelopment yield is at least two lots", () => {
+    const base = scoreProperty(merged(), baseCosts, scenarios, 2);
+    const scored = scoreProperty(merged(), baseCosts, scenarios, 2, undefined, dwellingCondition());
+
+    expect(scored.cost).toBe(base.cost - 1);
+    expect(scored.composite).toBeLessThan(base.composite);
+    expect(scored.cost_reasons).toContain(DWELLING_CONDITION_COST_REASON);
+  });
+
+  it("does not apply the premium penalty when the site only models to one lot", () => {
+    const base = scoreProperty(merged(), baseCosts, scenarios, 1);
+    const scored = scoreProperty(merged(), baseCosts, scenarios, 1, undefined, dwellingCondition());
+
+    expect(scored.cost).toBe(base.cost);
+    expect(scored.cost_reasons).not.toContain(DWELLING_CONDITION_COST_REASON);
+  });
+
+  it("caps the premium deduction at one COST point", () => {
+    const base = scoreProperty(merged(), baseCosts, scenarios, 2);
+    const scored = scoreProperty(
+      merged(),
+      baseCosts,
+      scenarios,
+      2,
+      undefined,
+      dwellingCondition({ costPenalty: 999 as DwellingConditionAssessment["costPenalty"] }),
+    );
+
+    expect(base.cost - scored.cost).toBeLessThanOrEqual(1);
   });
 });
 

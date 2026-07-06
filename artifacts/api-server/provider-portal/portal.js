@@ -1526,6 +1526,18 @@
     return String(phone || "").replace(/[\s\-()]/g, "").trim();
   }
 
+  // Signup form's mobile field only collects the local-format digits (the +64
+  // prefix is a fixed, non-editable UI element) — this turns "021 123 4567" or
+  // "21 123 4567" into "+64211234567" before it ever reaches the API.
+  function nzLocalToE164(localRaw) {
+    const digits = String(localRaw || "").replace(/\D/g, "").replace(/^0+/, "");
+    return digits ? `+64${digits}` : "";
+  }
+
+  function signupPhoneE164(signupForm) {
+    return nzLocalToE164(signupForm.elements.phoneLocal.value);
+  }
+
   function resetPhoneVerification() {
     state.verificationId = null;
     state.verifiedPhone = null;
@@ -1584,9 +1596,9 @@
 
   async function sendOtp(signupForm, isResend) {
     const status = $("#signup-status");
-    const phoneNumber = normalizeNzPhone(signupForm.elements.phone.value);
+    const phoneNumber = signupPhoneE164(signupForm);
     if (!/^\+64\d{7,10}$/.test(phoneNumber)) {
-      setStatus(status, "Enter a valid New Zealand mobile number starting with +64.", "error");
+      setStatus(status, "Enter a valid New Zealand mobile number.", "error");
       return;
     }
 
@@ -1616,7 +1628,7 @@
 
   async function verifyOtp(signupForm) {
     const status = $("#signup-status");
-    const phoneNumber = normalizeNzPhone(signupForm.elements.phone.value);
+    const phoneNumber = signupPhoneE164(signupForm);
     const code = String(signupForm.elements.otpCode.value || "").trim();
     if (!state.verificationId || !phoneNumber || !code) {
       setStatus(status, "Enter the code we texted you first.", "error");
@@ -1770,9 +1782,9 @@
     const status = $("#signup-status");
     const values = formValues(form);
 
-    const phoneNumber = normalizeNzPhone(values.phone);
+    const phoneNumber = nzLocalToE164(values.phoneLocal);
     if (!/^\+64\d{7,10}$/.test(phoneNumber)) {
-      setStatus(status, "Enter a valid New Zealand mobile number starting with +64.", "error");
+      setStatus(status, "Enter a valid New Zealand mobile number.", "error");
       return;
     }
     if (!state.phoneVerificationToken || state.verifiedPhone !== phoneNumber) {
@@ -2106,8 +2118,8 @@
 
     const signupForm = $("#provider-signup-form");
     signupForm.addEventListener("submit", handleSignup);
-    signupForm.elements.phone.addEventListener("input", () => {
-      if (state.verifiedPhone && normalizeNzPhone(signupForm.elements.phone.value) !== state.verifiedPhone) {
+    signupForm.elements.phoneLocal.addEventListener("input", () => {
+      if (state.verifiedPhone && signupPhoneE164(signupForm) !== state.verifiedPhone) {
         resetPhoneVerification();
       }
     });

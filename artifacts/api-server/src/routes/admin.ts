@@ -10,6 +10,7 @@ import {
   agentCallEvents,
   chatLlmFeedback,
   dmThreads,
+  dmMessages,
   propertyCache,
   conversationSyncs,
   abuseEvents,
@@ -23,6 +24,9 @@ import { logger } from "../lib/logger";
 import { runPropertyPipeline, hasCacheableCore } from "../lib/pipeline";
 import { listForRescan, upsertCachedRaw, countCached, PIPELINE_VERSION } from "../lib/property-cache";
 import { upsertFeatureRowFromPipeline } from "../lib/property-feature-index";
+import { getIo } from "../lib/socket";
+import { sendPushToUser } from "../lib/expo-push";
+import { getUnreadAppBadgeCount } from "../lib/notification-state";
 
 const router = Router();
 
@@ -864,6 +868,256 @@ router.get("/admin/users/:userId/connections", requireAdmin, async (req, res) =>
   } catch (err) {
     req.log.error({ err }, "admin user connections list failed");
     res.status(500).json({ error: "Failed to load connections" });
+  }
+});
+
+// ============================================================
+// Message Hub — admin views/replies to DM threads on behalf of an
+// in-house/demo service-provider account (e.g. the seeded provider profiles
+// used to make the marketplace look populated before real providers join).
+// Read-only-by-id like the rest of this file: no session impersonation, the
+// admin just queries dm_threads/dm_messages scoped to a chosen providerId and
+// sends with senderId overridden to that provider.
+// ============================================================
+
+// GET /admin/message-hub/providers → pickable list of service-provider accounts
+router.get("/admin/message-hub/providers", requireAdmin, async (req, res) => {
+  try {
+    const rows = await db
+      .select({
+        id: profiles.id,
+        email: profiles.email,
+        fullName: profiles.fullName,
+        avatarUrl: profiles.avatarUrl,
+        companyName: serviceProviderProfiles.companyName,
+        discipline: serviceProviderProfiles.discipline,
+      })
+      .from(profiles)
+      .leftJoin(serviceProviderProfiles, eq(serviceProviderProfiles.userId, profiles.id))
+      .where(eq(profiles.role, "service_provider"))
+      .orderBy(asc(profiles.fullName));
+
+    res.json({
+      providers: rows.map((r) => ({
+        id: r.id,
+        email: r.email,
+        fullName: r.fullName,
+        avatarUrl: r.avatarUrl,
+        companyName: r.companyName ?? null,
+        discipline: r.discipline ?? null,
+      })),
+    });
+  } catch (err) {
+    req.log.error({ err }, "admin message-hub providers list failed");
+    res.status(500).json({ error: "Failed to load providers" });
+  }
+});
+
+// GET /admin/message-hub/providers/:providerId/threads → this provider's DM inbox
+router.get("/admin/message-hub/providers/:providerId/threads", requireAdmin, async (req, res) => {
+  const { providerId } = req.params;
+  const limit = parseLimit(req.query.limit, 30, 100);
+  const offset = parseOffset(req.query.offset);
+
+  try {
+    const threads = await db
+      .select()
+      .from(dmThreads)
+      .where(or(eq(dmThreads.participantA, providerId), eq(dmThreads.participantB, providerId)))
+      .orderBy(desc(dmThreads.lastMessageAt))
+      .limit(limit)
+      .offset(offset);
+
+    const [{ count: total }] = await db
+      .select({ count: count() })
+      .from(dmThreads)
+      .where(or(eq(dmThreads.participantA, providerId), eq(dmThreads.participantB, providerId)));
+
+    const rows = await Promise.all(
+      threads.map(async (thread) => {
+        const otherId = thread.participantA === providerId ? thread.participantB : thread.participantA;
+
+        const [other] = await db
+          .select({ id: profiles.id, email: profiles.email, fullName: profiles.fullName, avatarUrl: profiles.avatarUrl })
+          .from(profiles)
+          .where(eq(profiles.id, otherId))
+          .limit(1);
+
+        const [lastMessage] = await db
+          .select()
+          .from(dmMessages)
+          .where(eq(dmMessages.threadId, thread.id))
+          .orderBy(desc(dmMessages.createdAt))
+          .limit(1);
+
+        const [{ count: unreadCount }] = await db
+          .select({ count: count() })
+          .from(dmMessages)
+          .where(
+            and(
+              eq(dmMessages.threadId, thread.id),
+              isNull(dmMessages.readAt),
+              sql`${dmMessages.senderId} != ${providerId}`,
+            ),
+          );
+
+        return {
+          threadId: thread.id,
+          createdAt: thread.createdAt,
+          lastMessageAt: thread.lastMessageAt,
+          otherParticipant: other ?? null,
+          lastMessage: lastMessage ?? null,
+          unreadCount,
+        };
+      }),
+    );
+
+    res.json({ total, limit, offset, rows });
+  } catch (err) {
+    req.log.error({ err }, "admin message-hub thread list failed");
+    res.status(500).json({ error: "Failed to load threads" });
+  }
+});
+
+// GET /admin/message-hub/threads/:threadId/messages?providerId=… → full message history
+router.get("/admin/message-hub/threads/:threadId/messages", requireAdmin, async (req, res) => {
+  const { threadId } = req.params;
+  const providerId = String(req.query.providerId ?? "");
+  const cursor = req.query.cursor ? String(req.query.cursor) : undefined;
+  const limit = parseLimit(req.query.limit, 50, 200);
+
+  if (!providerId) {
+    res.status(400).json({ error: "providerId is required" });
+    return;
+  }
+
+  try {
+    const [thread] = await db.select().from(dmThreads).where(eq(dmThreads.id, threadId)).limit(1);
+    if (!thread || (thread.participantA !== providerId && thread.participantB !== providerId)) {
+      res.status(404).json({ error: "Thread not found for this provider" });
+      return;
+    }
+
+    const conditions = [eq(dmMessages.threadId, threadId)];
+    if (cursor) {
+      const [cursorRow] = await db
+        .select({ createdAt: dmMessages.createdAt })
+        .from(dmMessages)
+        .where(and(eq(dmMessages.id, cursor), eq(dmMessages.threadId, threadId)))
+        .limit(1);
+      if (cursorRow) conditions.push(sql`${dmMessages.createdAt} < ${cursorRow.createdAt}`);
+    }
+
+    const messages = await db
+      .select()
+      .from(dmMessages)
+      .where(and(...conditions))
+      .orderBy(desc(dmMessages.createdAt))
+      .limit(limit + 1);
+
+    const hasMore = messages.length > limit;
+    const page = hasMore ? messages.slice(0, limit) : messages;
+    const nextCursor = hasMore ? page[page.length - 1]?.id ?? null : null;
+
+    res.json({ messages: page, nextCursor });
+  } catch (err) {
+    req.log.error({ err }, "admin message-hub messages list failed");
+    res.status(500).json({ error: "Failed to load messages" });
+  }
+});
+
+// PATCH /admin/message-hub/threads/:threadId/read → clear unread badge for this provider
+router.patch("/admin/message-hub/threads/:threadId/read", requireAdmin, async (req, res) => {
+  const { threadId } = req.params;
+  const { providerId } = req.body as { providerId?: string };
+
+  if (!providerId) {
+    res.status(400).json({ error: "providerId is required" });
+    return;
+  }
+
+  try {
+    const [thread] = await db.select().from(dmThreads).where(eq(dmThreads.id, threadId)).limit(1);
+    if (!thread || (thread.participantA !== providerId && thread.participantB !== providerId)) {
+      res.status(404).json({ error: "Thread not found for this provider" });
+      return;
+    }
+
+    await db
+      .update(dmMessages)
+      .set({ readAt: new Date() })
+      .where(
+        and(
+          eq(dmMessages.threadId, threadId),
+          isNull(dmMessages.readAt),
+          sql`${dmMessages.senderId} != ${providerId}`,
+        ),
+      );
+
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "admin message-hub mark-read failed");
+    res.status(500).json({ error: "Failed to mark thread read" });
+  }
+});
+
+// POST /admin/message-hub/threads/:threadId/messages → reply as this provider
+router.post("/admin/message-hub/threads/:threadId/messages", requireAdmin, async (req, res) => {
+  const { threadId } = req.params;
+  const { providerId, body: msgBody } = req.body as { providerId?: string; body?: string };
+
+  if (!providerId) {
+    res.status(400).json({ error: "providerId is required" });
+    return;
+  }
+  const trimmed = (msgBody ?? "").trim();
+  if (!trimmed) {
+    res.status(400).json({ error: "body is required" });
+    return;
+  }
+
+  try {
+    const [thread] = await db.select().from(dmThreads).where(eq(dmThreads.id, threadId)).limit(1);
+    if (!thread || (thread.participantA !== providerId && thread.participantB !== providerId)) {
+      res.status(404).json({ error: "Thread not found for this provider" });
+      return;
+    }
+
+    const recipientId = thread.participantA === providerId ? thread.participantB : thread.participantA;
+
+    const [message] = await db
+      .insert(dmMessages)
+      .values({ threadId, senderId: providerId, body: trimmed })
+      .returning();
+
+    await db.update(dmThreads).set({ lastMessageAt: new Date() }).where(eq(dmThreads.id, threadId));
+
+    const io = getIo();
+    if (io) {
+      io.to(`user:${recipientId}`).emit("new_message", { threadId, message });
+      io.to(`user:${providerId}`).emit("new_message", { threadId, message });
+    }
+
+    try {
+      const [sender] = await db
+        .select({ fullName: profiles.fullName })
+        .from(profiles)
+        .where(eq(profiles.id, providerId))
+        .limit(1);
+      const senderName = sender?.fullName ?? "Service provider";
+      const badgeCount = await getUnreadAppBadgeCount(recipientId);
+      await sendPushToUser(recipientId, senderName, trimmed.slice(0, 80), {
+        type: "dm",
+        threadId: String(threadId),
+      }, { badgeCount });
+    } catch (pushErr) {
+      req.log.warn({ pushErr }, "Message Hub push notification failed (non-fatal)");
+    }
+
+    res.status(201).json({ message });
+  } catch (err) {
+    req.log.error({ err }, "admin message-hub send failed");
+    res.status(500).json({ error: "Failed to send message" });
   }
 });
 

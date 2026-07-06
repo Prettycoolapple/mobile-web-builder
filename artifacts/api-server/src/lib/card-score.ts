@@ -1,13 +1,14 @@
 import type { ScoringResult } from "./scoring";
 import type { DesignLedConfidence, DesignLedYieldRange } from "./lot-calculator";
 import type { BuiltEnvironmentContext } from "./built-environment-context";
+import type { DwellingConditionAssessment } from "./dwelling-condition";
 
 // Bump whenever the scoring inputs/formula change (scoring.ts, cost-estimator,
 // roi-calculator, lot-calculator) so that real report scores persisted into the
 // global property cache under an OLD version are ignored by the screening cards
 // and recomputed/re-persisted on the next full analysis. This keeps the card and
 // the report consistent across a scoring change.
-export const SCORING_VERSION = 7;
+export const SCORING_VERSION = 8;
 
 /**
  * The real, report-grade scores computed by the full pipeline, persisted into the
@@ -37,4 +38,5 @@ export interface DerivedCardScores {
   designLedSummary: string | null;
   designLedDetail: string | null;
   builtEnvironmentContext?: BuiltEnvironmentContext | null;
+  dwellingCondition?: DwellingConditionAssessment | null;
 }

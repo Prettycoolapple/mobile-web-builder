@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "provider-portal-static-preview",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["--yes", "http-server", "artifacts/api-server", "-p", "4173", "-c-1"],
+      "port": 4173
+    },
+    {
+      "name": "admin-portal-dev",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@workspace/admin-portal", "dev"],
+      "port": 5174
+    }
+  ]
+}

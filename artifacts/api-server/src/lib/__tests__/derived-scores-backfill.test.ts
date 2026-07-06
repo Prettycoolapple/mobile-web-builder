@@ -37,6 +37,22 @@ function derived(overrides: Partial<DerivedScores> = {}): DerivedScores {
   };
 }
 
+function dwellingCondition(overrides: Partial<NonNullable<DerivedScores["dwellingCondition"]>> = {}): NonNullable<DerivedScores["dwellingCondition"]> {
+  return {
+    assessmentVersion: 1,
+    sourceFingerprint: "fingerprint-a",
+    assessedAt: "2026-01-01T00:00:00.000Z",
+    condition: "renovated",
+    recentImprovement: true,
+    additionOrExtension: false,
+    confidence: "high",
+    source: "listing_text",
+    evidence: ["fully renovated throughout"],
+    costPenalty: 1,
+    ...overrides,
+  };
+}
+
 describe("shouldBackfillDerivedScores", () => {
   it("backfills missing and stale-version derived score payloads", () => {
     expect(shouldBackfillDerivedScores(null, derived())).toBe(true);
@@ -57,5 +73,17 @@ describe("shouldBackfillDerivedScores", () => {
     const current = derived();
 
     expect(shouldBackfillDerivedScores(current, { ...current })).toBe(false);
+  });
+
+  it("backfills same-version rows when dwelling condition is added or changes", () => {
+    const current = derived({ dwellingCondition: null });
+
+    expect(shouldBackfillDerivedScores(current, derived({ dwellingCondition: dwellingCondition() }))).toBe(true);
+    expect(
+      shouldBackfillDerivedScores(
+        derived({ dwellingCondition: dwellingCondition() }),
+        derived({ dwellingCondition: dwellingCondition({ sourceFingerprint: "fingerprint-b", costPenalty: 0.5 }) }),
+      ),
+    ).toBe(true);
   });
 });

@@ -45,6 +45,7 @@ function worstInfraRisk(items: InfrastructureItem[]): "low" | "moderate" | "high
  */
 export function deriveFeatureRow(raw: RawPropertyData, id: FeatureRowIdentity): InsertPropertyFeatureIndex {
   const ds = raw.derived_scores ?? null;
+  const condition = ds?.dwellingCondition ?? null;
   const infra = (raw.infrastructure ?? []) as InfrastructureItem[];
   const storm = serviceOnParcel(infra, "Stormwater");
   const sewer = serviceOnParcel(infra, "Wastewater");
@@ -91,6 +92,10 @@ export function deriveFeatureRow(raw: RawPropertyData, id: FeatureRowIdentity): 
     scoreComposite: ds?.scores?.composite ?? null,
     scoreRoi: ds?.scores?.roi ?? null,
     roiPercentBest: ds?.roiPercentBest ?? null,
+    dwellingCondition: condition?.condition ?? null,
+    recentImprovement: condition?.recentImprovement ?? null,
+    conditionConfidence: condition?.confidence ?? null,
+    conditionCostPenalty: condition?.costPenalty ?? null,
 
     scoringVersion: ds?.scoringVersion ?? null,
     pipelineVersion: id.pipelineVersion ?? null,

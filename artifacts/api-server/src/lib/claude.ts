@@ -204,7 +204,7 @@ const INTENT_SCHEMA = `{
   "wantsAnotherProvider": <true when user already has a provider shown and wants to swap/replace/change it for a different one>,
   "suggestedDiscipline": "architect_designer" | "planner" | "engineer" | "quantity_surveyor" | "other" | null,
   "wideScanSubdivisionIntent": <true when user is asking for an area-wide subdivision/development sweep — see WIDE SCAN below>,
-  "filterSpec": { "minPotentialLots": <integer ≥2> | null, "maxSlopeDegrees": <number degrees> | null, "infrastructureOnParcel": ["storm"|"sewer"|"water"], "minRoiPct": <number> | null, "searchScope": "analyzed_index" | "live_market" | "both" } | null,
+  "filterSpec": { "minPotentialLots": <integer ≥2> | null, "maxSlopeDegrees": <number degrees> | null, "infrastructureOnParcel": ["storm"|"sewer"|"water"], "minRoiPct": <number> | null, "dwellingCondition": "older_do_up" | "avoid_recent_improvement" | "recent_improvement" | null, "searchScope": "analyzed_index" | "live_market" | "both" } | null,
   "reasoning": "<1 sentence explaining your classification>"
 }`;
 
@@ -240,6 +240,7 @@ When a property_discovery request names MEASURABLE criteria, ALSO populate filte
   - services/pipes on the land/parcel: "管道都在地上" / "上下水在红线内" / "services on the parcel" → infrastructureOnParcel = ["storm","sewer"] (add "water" if water supply is named).
   - "return/yield over X%" / "回报超过X%" → minRoiPct = X.
   - searchScope: default "both"; "already analysed / 在你数据库里" → "analyzed_index"; "on the market now / 在售" → "live_market".
+For dwelling-condition criteria, set filterSpec.dwellingCondition to "older_do_up" for old/original/do-up homes, "avoid_recent_improvement" when the user wants to avoid renovated/new-build premium, and "recent_improvement" when the user asks for recently renovated/modernised homes.
 Set filterSpec=null when the user names no measurable criteria.
 
 Critical distinction:
@@ -632,7 +633,14 @@ export interface SearchFilterSpec {
   maxSlopeDegrees: number | null;         // flat ≈ ≤3°, gentle ≈ ≤8°
   infrastructureOnParcel: ("storm" | "sewer" | "water")[]; // services required ON the parcel
   minRoiPct: number | null;               // "return over 7%" → 7
+  dwellingCondition: "older_do_up" | "avoid_recent_improvement" | "recent_improvement" | null;
   searchScope: "analyzed_index" | "live_market" | "both";
+}
+
+function normaliseDwellingCondition(value: unknown): SearchFilterSpec["dwellingCondition"] {
+  return value === "older_do_up" || value === "avoid_recent_improvement" || value === "recent_improvement"
+    ? value
+    : null;
 }
 
 function clampLotCount(n: unknown): number | null {
@@ -658,6 +666,7 @@ export function normaliseFilterSpec(raw: unknown): SearchFilterSpec | null {
   const minPotentialLots = clampLotCount(r.minPotentialLots);
   const maxSlopeDegrees = clampPositive(r.maxSlopeDegrees, 90);
   const minRoiPct = clampPositive(r.minRoiPct, 1000);
+  const dwellingCondition = normaliseDwellingCondition(r.dwellingCondition);
   const infrastructureOnParcel = Array.isArray(r.infrastructureOnParcel)
     ? [
         ...new Set(
@@ -672,9 +681,13 @@ export function normaliseFilterSpec(raw: unknown): SearchFilterSpec | null {
     scope === "analyzed_index" || scope === "live_market" || scope === "both" ? scope : "both";
 
   const hasConstraint =
-    minPotentialLots != null || maxSlopeDegrees != null || minRoiPct != null || infrastructureOnParcel.length > 0;
+    minPotentialLots != null ||
+    maxSlopeDegrees != null ||
+    minRoiPct != null ||
+    infrastructureOnParcel.length > 0 ||
+    dwellingCondition != null;
   if (!hasConstraint) return null;
-  return { minPotentialLots, maxSlopeDegrees, infrastructureOnParcel, minRoiPct, searchScope };
+  return { minPotentialLots, maxSlopeDegrees, infrastructureOnParcel, minRoiPct, dwellingCondition, searchScope };
 }
 
 /**
@@ -726,14 +739,30 @@ export function detectFilterSpecFromText(text: string): SearchFilterSpec | null 
     text.match(/(?:over|above|超过|超過|大于|大於|高于|高於|>)\s*(\d+(?:\.\d+)?)\s*%/i);
   if (roiMatch) minRoiPct = clampPositive(Number(roiMatch[1]), 1000);
 
+  let dwellingCondition: SearchFilterSpec["dwellingCondition"] = null;
+  if (/\b(?:older\s+do[-\s]?up|do[-\s]?up|unrenovated|unmodernised|unmodernized|original\s+(?:home|house|dwelling|condition)|dated|tired)\b/i.test(text)) {
+    dwellingCondition = "older_do_up";
+  }
+  if (/\b(?:avoid|exclude|without|no|not)\s+(?:recent\s+)?(?:renovat\w*|moderni[sz]\w*|new[-\s]?build|near[-\s]?new|improvement\w*)\b|\b(?:avoid|exclude|no)\s+renovation\s+premium\b/i.test(text)) {
+    dwellingCondition = "avoid_recent_improvement";
+  }
+  if (/\b(?:recently|newly|fully|completely)\s+renovat\w*|\brenovated\s+throughout\b|\bmoderni[sz]ed\b|\b(?:new|consented|architectural)\s+(?:extension|addition)\b|\b(?:extended|added)\s+(?:living|bedroom|space|level|storey|story)\b/i.test(text)) {
+    dwellingCondition = "recent_improvement";
+  }
+
   const hasConstraint =
-    minPotentialLots != null || maxSlopeDegrees != null || minRoiPct != null || infrastructureOnParcel.length > 0;
+    minPotentialLots != null ||
+    maxSlopeDegrees != null ||
+    minRoiPct != null ||
+    infrastructureOnParcel.length > 0 ||
+    dwellingCondition != null;
   if (!hasConstraint) return null;
   return {
     minPotentialLots,
     maxSlopeDegrees,
     infrastructureOnParcel: [...new Set(infrastructureOnParcel)],
     minRoiPct,
+    dwellingCondition,
     searchScope: "both",
   };
 }

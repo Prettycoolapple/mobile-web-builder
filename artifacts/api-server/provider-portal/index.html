@@ -1558,8 +1558,18 @@
 
                 <label class="field">
                   Mobile number
-                  <input name="phone" type="tel" autocomplete="tel" inputmode="tel" placeholder="+64 21 123 4567" required />
-                  <span class="field-help">Enter a New Zealand mobile starting with +64. We'll text you a code to confirm it.</span>
+                  <div class="phone-input-group">
+                    <span class="phone-input-group__prefix" aria-hidden="true">+64</span>
+                    <input
+                      name="phoneLocal"
+                      type="tel"
+                      autocomplete="tel-national"
+                      inputmode="numeric"
+                      placeholder="21 123 4567"
+                      required
+                    />
+                  </div>
+                  <span class="field-help">Enter your New Zealand mobile number. We'll text you a code to confirm it.</span>
                 </label>
                 <div class="portal-form-row" id="otp-send-row">
                   <button class="button button-quiet" type="button" id="send-otp-button">Send code</button>

@@ -144,6 +144,17 @@ export async function upsertCachedRaw(args: UpsertCachedRawArgs): Promise<void> 
  */
 export async function backfillDerivedScores(addressKey: string, derivedScores: unknown): Promise<void> {
   if (!addressKey || derivedScores == null) return;
+  const incomingScoringVersion =
+    typeof (derivedScores as { scoringVersion?: unknown }).scoringVersion === "number"
+      ? (derivedScores as { scoringVersion: number }).scoringVersion
+      : null;
+  const versionGuard =
+    incomingScoringVersion == null
+      ? undefined
+      : sql`coalesce((${propertyCache.rawData} #>> '{derived_scores,scoringVersion}')::int, -1) <= ${incomingScoringVersion}`;
+  const whereClause = versionGuard
+    ? and(eq(propertyCache.addressKey, addressKey), versionGuard)
+    : eq(propertyCache.addressKey, addressKey);
   try {
     await withDbRetry(() =>
       db
@@ -151,7 +162,7 @@ export async function backfillDerivedScores(addressKey: string, derivedScores: u
         .set({
           rawData: sql`jsonb_set(${propertyCache.rawData}, '{derived_scores}', ${JSON.stringify(derivedScores)}::jsonb, true)`,
         })
-        .where(eq(propertyCache.addressKey, addressKey)),
+        .where(whereClause),
     );
   } catch (err) {
     logger.warn({ err: (err as Error).message, addressKey }, "property-cache backfillDerivedScores failed");

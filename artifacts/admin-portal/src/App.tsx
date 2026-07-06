@@ -12,6 +12,7 @@ import AgentsPage from "@/pages/Agents";
 import AgentDetailPage from "@/pages/AgentDetail";
 import ListingDetailPage from "@/pages/ListingDetail";
 import SecurityPage from "@/pages/Security";
+import MessageHubPage from "@/pages/MessageHub";
 
 export default function App() {
   return (
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="/agents" element={<AgentsPage />} />
         <Route path="/agents/:agentId" element={<AgentDetailPage />} />
         <Route path="/listings/:listingId" element={<ListingDetailPage />} />
+        <Route path="/message-hub" element={<MessageHubPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>

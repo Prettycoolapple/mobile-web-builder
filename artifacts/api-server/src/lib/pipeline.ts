@@ -84,6 +84,7 @@ import {
 import { extractListingClaims, detectRedevelopmentConflict, hasAmbiguousListingSignals, type ListingClaims } from "./listing-claims";
 import { extractListingClaimsLLM, mergeClaimsSafer } from "./listing-claims-llm";
 import { looksLikeUnitOrApartmentAddress } from "./address-patterns";
+import { assessDwellingCondition, selectedDwellingConditionPhotoUrls, type DwellingConditionAssessment } from "./dwelling-condition";
 
 const AC_PROP_MAPSERVER = "https://mapspublic.aucklandcouncil.govt.nz/arcgis3/rest/services/NonCouncil/PropertyValueInfo/MapServer";
 
@@ -458,6 +459,7 @@ export interface PipelineResult {
   neighbourhoodContext: NeighbourhoodContext | null;
   transportContext: TransportContext | null;
   builtEnvironmentContext: BuiltEnvironmentContext | null;
+  dwellingCondition: DwellingConditionAssessment | null;
   scenarios: ROIScenario[];
   developmentStrategies: DevelopmentStrategyScenario[];
   scores: ScoringResult | null;
@@ -659,6 +661,7 @@ export async function runPropertyPipeline(
       neighbourhoodContext: null,
       transportContext: null,
       builtEnvironmentContext: null,
+      dwellingCondition: null,
       scenarios: [],
       developmentStrategies: [],
       scores: null,
@@ -1664,7 +1667,33 @@ export async function runPropertyPipeline(
     subdivisionAssessment,
   });
 
-  const computedScores = scoreProperty(merged, costs, scenarios, modelledLotResult.lots, builtEnvironmentContext);
+  const dwellingPhotoUrls = realestateListingForFacts
+    ? selectedDwellingConditionPhotoUrls([
+        ...(realestateListingForFacts.photoUrls ?? []),
+        ...(realestateListingForFacts.photoUrl ? [realestateListingForFacts.photoUrl] : []),
+      ])
+    : [];
+  const dwellingConditionResult = await timed(
+    "dwelling_condition",
+    () => assessDwellingCondition({
+      address: geocode!.formatted ?? address,
+      buildYear: merged.build_year,
+      buildYearRange: merged.build_year_range,
+      listingTitle: realestateListingForFacts?.listingTitle ?? null,
+      description: realestateListingForFacts?.description ?? null,
+      features: realestateListingForFacts?.features ?? [],
+      propertyType: realestateListingForFacts?.propertyType ?? realestateListingForFacts?.listingCategory ?? null,
+      listingUrl: realestateListingForFacts?.listingUrl ?? null,
+      photoUrls: dwellingPhotoUrls,
+      cachedAssessment: cr?.derived_scores?.scoringVersion === SCORING_VERSION
+        ? cr.derived_scores.dwellingCondition ?? null
+        : null,
+    }),
+    timing,
+  );
+  const dwellingCondition = dwellingConditionResult.value ?? null;
+
+  const computedScores = scoreProperty(merged, costs, scenarios, modelledLotResult.lots, builtEnvironmentContext, dwellingCondition);
   if (neighbourhoodContext?.marketAdjustment.reason && !computedScores.roi_reasons.includes(neighbourhoodContext.marketAdjustment.reason)) {
     computedScores.roi_reasons.push(neighbourhoodContext.marketAdjustment.reason);
   }
@@ -1747,6 +1776,7 @@ export async function runPropertyPipeline(
       designLedSummary: subdivisionAssessment.designLedSummary,
       designLedDetail: subdivisionAssessment.designLedDetail,
       builtEnvironmentContext,
+      dwellingCondition,
     },
   };
 
@@ -1780,6 +1810,7 @@ export async function runPropertyPipeline(
     neighbourhoodContext,
     transportContext,
     builtEnvironmentContext,
+    dwellingCondition,
     scenarios: exposedScenarios,
     developmentStrategies: exposedDevelopmentStrategies,
     scores,

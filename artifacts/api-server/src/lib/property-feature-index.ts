@@ -88,6 +88,8 @@ export interface FeatureSearchFilter {
   maxSlopeDegrees?: number | null;
   servicesOnParcel?: ("storm" | "sewer" | "water")[];
   minRoiPct?: number | null;
+  recentImprovement?: boolean | null;
+  dwellingConditions?: string[];
   /** Exclude rows scored under an older formula for score/lot/ROI queries. */
   minScoringVersion?: number | null;
 }
@@ -121,10 +123,19 @@ export async function searchFeatureIndex(
   if (typeof filter.minRoiPct === "number") {
     conds.push(gte(propertyFeatureIndex.roiPercentBest, filter.minRoiPct));
   }
+  if (typeof filter.recentImprovement === "boolean") {
+    conds.push(eq(propertyFeatureIndex.recentImprovement, filter.recentImprovement));
+  }
+  if (filter.dwellingConditions && filter.dwellingConditions.length > 0) {
+    conds.push(sql`${propertyFeatureIndex.dwellingCondition} = ANY(${filter.dwellingConditions}::text[])`);
+  }
 
   // Any query constraining a derived number must exclude stale-formula rows.
   const constrainsDerived =
-    typeof filter.minPotentialLots === "number" || typeof filter.minRoiPct === "number";
+    typeof filter.minPotentialLots === "number" ||
+    typeof filter.minRoiPct === "number" ||
+    typeof filter.recentImprovement === "boolean" ||
+    (filter.dwellingConditions?.length ?? 0) > 0;
   if (constrainsDerived && typeof filter.minScoringVersion === "number") {
     conds.push(gte(propertyFeatureIndex.scoringVersion, filter.minScoringVersion));
   }

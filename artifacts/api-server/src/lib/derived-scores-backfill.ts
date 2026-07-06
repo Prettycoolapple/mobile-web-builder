@@ -16,6 +16,20 @@ export function shouldBackfillDerivedScores(
   if (current.scoringVersion !== next.scoringVersion) return true;
   if (current.scores == null && next.scores != null) return true;
   if (current.roiPercentBest == null && next.roiPercentBest != null) return true;
+  if (current.dwellingCondition == null && next.dwellingCondition != null) return true;
+  if (
+    current.dwellingCondition != null &&
+    next.dwellingCondition != null &&
+    (
+      current.dwellingCondition.assessmentVersion !== next.dwellingCondition.assessmentVersion ||
+      current.dwellingCondition.sourceFingerprint !== next.dwellingCondition.sourceFingerprint ||
+      current.dwellingCondition.condition !== next.dwellingCondition.condition ||
+      current.dwellingCondition.recentImprovement !== next.dwellingCondition.recentImprovement ||
+      current.dwellingCondition.costPenalty !== next.dwellingCondition.costPenalty
+    )
+  ) {
+    return true;
+  }
   if (current.scores == null && current.scoreUnavailableReason !== next.scoreUnavailableReason) return true;
   return false;
 }

@@ -3,6 +3,11 @@ import type { CostBreakdown } from "./cost-estimator";
 import type { ROIScenario } from "./roi-calculator";
 import { roundToHalf } from "./utils";
 import { builtEnvironmentScoreAdjustment, type BuiltEnvironmentContext } from "./built-environment-context";
+import {
+  DWELLING_CONDITION_COST_REASON,
+  dwellingConditionCostPenalty,
+  type DwellingConditionAssessment,
+} from "./dwelling-condition";
 
 export interface ScoringResult {
   ease: number;
@@ -110,6 +115,7 @@ export function scoreProperty(
   scenarios: ROIScenario[],
   lots: number,
   builtEnvironmentContext?: BuiltEnvironmentContext | null,
+  dwellingCondition?: DwellingConditionAssessment | null,
 ): ScoringResult {
   const estateType = (merged.estate_type ?? "").trim();
   const isCrossLeaseTenure = /cross\s*lease|stratum/i.test(estateType);
@@ -263,8 +269,11 @@ export function scoreProperty(
   const ease = roundToHalf(Math.max(0.5, 5.0 - easeDeducted));
 
   const costPosition = scoreCostPosition(costs, scenarios);
-  const cost = costPosition.score;
-  const cost_reasons = costPosition.reasons;
+  const conditionPenalty = dwellingConditionCostPenalty(dwellingCondition, lots);
+  const cost = roundToHalf(clampScore(costPosition.score - conditionPenalty));
+  const cost_reasons = conditionPenalty > 0
+    ? [...costPosition.reasons, DWELLING_CONDITION_COST_REASON]
+    : costPosition.reasons;
 
   if (scenarios.length === 0) {
     const roi = 0.5;

@@ -34,6 +34,7 @@ function baseResult(over: Partial<PipelineResult>): PipelineResult {
     neighbourhoodContext: null,
     transportContext: null,
     builtEnvironmentContext: null,
+    dwellingCondition: null,
     scenarios: [],
     developmentStrategies: [],
     scores: null,

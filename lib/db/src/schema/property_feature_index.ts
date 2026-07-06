@@ -83,6 +83,11 @@ export const propertyFeatureIndex = pgTable(
     scoreRoi: doublePrecision("score_roi"), // 0.5–5 sub-score, NOT a percentage
     roiPercentBest: doublePrecision("roi_percent_best"), // real % — null until SCORING_VERSION persists it
 
+    dwellingCondition: text("dwelling_condition"),
+    recentImprovement: boolean("recent_improvement"),
+    conditionConfidence: text("condition_confidence"),
+    conditionCostPenalty: doublePrecision("condition_cost_penalty"),
+
     // Provenance / drift control
     scoringVersion: integer("scoring_version"),
     pipelineVersion: integer("pipeline_version"),

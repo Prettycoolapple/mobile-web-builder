@@ -33,6 +33,18 @@ describe("deriveFeatureRow", () => {
           minLotSize: 400,
           roiPercentBest: 6.5,
           scores: { composite: 4.2, roi: 3.5 },
+          dwellingCondition: {
+            assessmentVersion: 1,
+            sourceFingerprint: "fingerprint",
+            assessedAt: "2026-01-01T00:00:00.000Z",
+            condition: "renovated",
+            recentImprovement: true,
+            additionOrExtension: false,
+            confidence: "high",
+            source: "listing_text",
+            evidence: ["fully renovated throughout"],
+            costPenalty: 1,
+          },
         } as RawPropertyData["derived_scores"],
         linz_title: { estate_type: "Fee Simple" } as RawPropertyData["linz_title"],
       }),
@@ -57,6 +69,10 @@ describe("deriveFeatureRow", () => {
       scoringVersion: 4,
       pipelineVersion: 3,
       roiPercentBest: 6.5, // persisted ROI % powers "return over X%" search
+      dwellingCondition: "renovated",
+      recentImprovement: true,
+      conditionConfidence: "high",
+      conditionCostPenalty: 1,
     });
     // cv is still filled by the value-lookup phase, not extraction.
     expect(row.cvNzd).toBeNull();
