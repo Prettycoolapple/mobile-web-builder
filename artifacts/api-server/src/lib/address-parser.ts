@@ -4,17 +4,19 @@ import { logger } from "./logger";
 const STREET_TYPE =
   "(?:road|street|avenue|crescent|place|drive|way|lane|terrace|parade|close|grove|rise|view|heights|ridge|court|hill|mews|quay|boulevard|highway|motorway|esplanade|mall|row|walk|path|track|rd|st|ave|cres|pl|dr|ln|tce|pde|blvd|hwy)";
 
+const STREET_NUMBER = "(?:[A-Za-z]?\\d+[A-Za-z]?\\s*/\\s*)?\\d+[A-Za-z]?";
+
 const NZ_ADDRESS_REGEX =
   new RegExp(
     // street number + street name + street type + optional locality tail
-    `\\b(\\d+[a-zA-Z]?\\s+[\\p{L}'-]+(?:\\s+[\\p{L}'-]+){0,5}\\s+${STREET_TYPE}(?:\\s+[\\p{L}'-]+){0,3})\\b`,
+    `\\b(${STREET_NUMBER}\\s+[\\p{L}'-]+(?:\\s+[\\p{L}'-]+){0,5}\\s+${STREET_TYPE}(?:\\s+[\\p{L}'-]+){0,3})\\b`,
     "iu",
   );
 
 const STREET_TYPE_REGEX = new RegExp(`\\b${STREET_TYPE}\\b`, "i");
 
 const NZ_SUBURB_CITY =
-  /(?:St Heliers|Saint Heliers|Mission Bay|Kohimarama|Orakei|Remuera|Ponsonby|Grey Lynn|Parnell|Herne Bay|Mount Eden|Sandringham|Epsom|Newmarket|Takapuna|Devonport|Birkenhead|Henderson|Manurewa|Papakura|Pukekohe|Whangarei|Hamilton|Tauranga|Wellington|Christchurch|Dunedin|Auckland|North Shore|West Auckland|South Auckland|Waitakere|Manukau|Papamoa|Silverdale|Albany|Howick|Botany|Flat Bush|Pakuranga|Mount Albert|Blockhouse Bay|New Lynn|Glen Innes|Panmure|Ellerslie|One Tree Hill|Royal Oak|Onehunga|Otahuhu|Mangere|Papatoetoe|Otara|Mellons Bay|Melons Bay|Bucklands Beach|Eastern Beach|Half Moon Bay|Beachlands|Maraetai|Cockle Bay|Shelly Park|Farm Cove|Highland Park|Sunnyhills|Dannemora|Somerville|Glendowie|Meadowbank|St Johns|Saint Johns|Point England|Stonefields|Mount Wellington|Sylvia Park|Penrose|Te Atatu|Te Atatu Peninsula|Te Atatu South|Kelston|Glen Eden|Titirangi|Green Bay|Avondale|Waterview|Point Chevalier|Westmere|Freemans Bay|Grafton|Kingsland|Morningside|Mt Roskill|Mount Roskill|Three Kings|Hillsborough|Lynfield|Waiuku|Karaka|Drury|Clevedon|Whitford|Brookby|Turanga|Orewa|Whangaparaoa|Gulf Harbour|Stanmore Bay|Red Beach|Hibiscus Coast|Millwater|Warkworth|Matakana|Snells Beach|Algies Bay|Browns Bay|Rothesay Bay|Murrays Bay|Mairangi Bay|Campbells Bay|Castor Bay|Milford|Sunnynook|Forrest Hill|Bayswater|Belmont|Hauraki|Northcote|Hillcrest|Glenfield|Beach Haven|Birkdale|Chatswood|Unsworth Heights|Pinehill|Windsor Park|Oteha|Totara Vale|Bayview|Torbay|Long Bay|Okura|Stillwater)/i;
+  /(?:St Heliers|Saint Heliers|Mission Bay|Kohimarama|Orakei|Remuera|Ponsonby|Grey Lynn|Parnell|Herne Bay|Mount Eden|Sandringham|Epsom|Newmarket|Takapuna|Devonport|Birkenhead|Henderson|Manurewa|Papakura|Pukekohe|Whangarei|Hamilton|Whitiora|Tauranga|Wellington|Christchurch|Dunedin|Auckland|North Shore|West Auckland|South Auckland|Waitakere|Manukau|Papamoa|Silverdale|Albany|Howick|Botany|Flat Bush|Pakuranga|Mount Albert|Blockhouse Bay|New Lynn|Glen Innes|Panmure|Ellerslie|One Tree Hill|Royal Oak|Onehunga|Otahuhu|Mangere|Papatoetoe|Otara|Mellons Bay|Melons Bay|Bucklands Beach|Eastern Beach|Half Moon Bay|Beachlands|Maraetai|Cockle Bay|Shelly Park|Farm Cove|Highland Park|Sunnyhills|Dannemora|Somerville|Glendowie|Meadowbank|St Johns|Saint Johns|Point England|Stonefields|Mount Wellington|Sylvia Park|Penrose|Te Atatu|Te Atatu Peninsula|Te Atatu South|Kelston|Glen Eden|Titirangi|Green Bay|Avondale|Waterview|Point Chevalier|Westmere|Freemans Bay|Grafton|Kingsland|Morningside|Mt Roskill|Mount Roskill|Three Kings|Hillsborough|Lynfield|Waiuku|Karaka|Drury|Clevedon|Whitford|Brookby|Turanga|Orewa|Whangaparaoa|Gulf Harbour|Stanmore Bay|Red Beach|Hibiscus Coast|Millwater|Warkworth|Matakana|Snells Beach|Algies Bay|Browns Bay|Rothesay Bay|Murrays Bay|Mairangi Bay|Campbells Bay|Castor Bay|Milford|Sunnynook|Forrest Hill|Bayswater|Belmont|Hauraki|Northcote|Hillcrest|Glenfield|Beach Haven|Birkdale|Chatswood|Unsworth Heights|Pinehill|Windsor Park|Oteha|Totara Vale|Bayview|Torbay|Long Bay|Okura|Stillwater)/i;
 
 function cleanAddress(raw: string): string {
   return raw
@@ -27,14 +29,14 @@ function cleanAddress(raw: string): string {
 
 function streetLineText(raw: string): string {
   const parts = raw.split(",").map((part) => part.trim()).filter(Boolean);
-  if (parts.length >= 2 && /^\d+[a-z]?$/i.test(parts[0]!)) {
+  if (parts.length >= 2 && /^(?:[a-z]?\d+[a-z]?\s*\/\s*)?\d+[a-z]?$/i.test(parts[0]!)) {
     return `${parts[0]} ${parts[1]}`;
   }
   return parts[0] ?? raw;
 }
 
 function hasNumberedStreetLine(raw: string): boolean {
-  return /^\d+[a-z]?\s+.*[\p{L}]/iu.test(streetLineText(raw));
+  return /^(?:[a-z]?\d+[a-z]?\s*\/\s*)?\d+[a-z]?\s+.*[\p{L}]/iu.test(streetLineText(raw));
 }
 
 function isPlausibleAddress(raw: string): boolean {

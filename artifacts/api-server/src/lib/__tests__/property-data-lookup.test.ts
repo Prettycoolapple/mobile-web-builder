@@ -42,8 +42,13 @@ describe("buildPropertyDataLookupAnswer", () => {
     expect(buildPropertyDataLookupAnswer("zone", withCv, 1, "12 Example Rd", "en")).toContain("MHS");
   });
 
-  it("returns null when the datum isn't cached (caller falls through)", () => {
-    expect(buildPropertyDataLookupAnswer("value", raw({}), 1, "x", "en")).toBeNull();
+  it("answers missing value lookups without exposing internal CV fields", () => {
+    const answer = buildPropertyDataLookupAnswer("value", raw({}), 1, "x", "en");
+    expect(answer).toContain("does not have enough confirmed valuation data");
+    expect(answer).not.toMatch(/cv_nzd|cv_year|null/i);
+  });
+
+  it("returns null when non-value lookup data isn't cached (caller falls through)", () => {
     expect(buildPropertyDataLookupAnswer("zone", raw({}), 1, "x", "en")).toBeNull();
   });
 });

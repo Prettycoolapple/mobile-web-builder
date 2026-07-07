@@ -9,6 +9,12 @@ import {
   isStandardSubdivisionDiscoveryIntent,
   isSubdivisionRulesInformationIntent,
 } from "./discovery-intent";
+import { detectRecentSalesIntent, isRecentSalesContinuationText } from "./recent-sales";
+import {
+  detectNearbyAmenityIntent,
+  extractNearbyAmenityTerms,
+  normaliseNearbyAmenityTerms,
+} from "./nearby-amenities";
 
 export { hasNumberedStreetAddress, hasNonStandardSalePropertyReference, hasUnnumberedStreetLine } from "./street-address-detect";
 
@@ -27,6 +33,8 @@ export interface Message {
 export type ChatMode = "analyse" | "discover" | "followup";
 export type ChatIntentCategory =
   | "property_discovery"
+  | "recent_sales_lookup"
+  | "nearby_amenity_lookup"
   | "single_property_analysis"
   | "rules_explanation"
   | "general_property_advice"
@@ -37,10 +45,13 @@ export type ChatIntentSubject =
   | "market"
   | "cost"
   | "schools"
+  | "amenities"
   | "provider"
   | "unknown";
 export type ChatIntentExecution =
   | "show_listing_cards"
+  | "show_recent_sales_table"
+  | "answer_nearby_amenities"
   | "run_feasibility_report"
   | "answer_in_chat"
   | "ask_clarifying_question";
@@ -65,6 +76,9 @@ export function sanitizeAssistantProse(content: string, locale: Locale = "en"): 
   out = out.replace(/\(\s*(?:isOnMarket|isListed|listingPrice|agentName|agentPhone|agencyName|found|source|listingUrl)\s*:\s*(?:true|false|null|undefined|"[^"]*"|'[^']*'|[^)\s,，。;；]+)\s*\)/gi, "");
   out = out.replace(/\b(?:isOnMarket|isListed|listingPrice|agentName|agentPhone|agencyName|found|source|listingUrl)\s*:\s*(?:true|false|null|undefined|"[^"]*"|'[^']*'|[^\s,，。;；)]+)/gi, "");
   out = out.replace(/\{\s*(?:isOnMarket|isListed|listingPrice|agentName|agentPhone|agencyName|found|source|listingUrl)[^{}]*\}/gi, "");
+  out = out.replace(/\(\s*(?:cv_nzd|cv_year|land_area_sqm|floor_area_sqm|build_year|zone_code|listing_price_nzd|selectedListingContext)\s*:\s*(?:true|false|null|undefined|"[^"]*"|'[^']*'|[^)\s,，。;；]+)(?:\s*[,;]\s*(?:cv_nzd|cv_year|land_area_sqm|floor_area_sqm|build_year|zone_code|listing_price_nzd|selectedListingContext)\s*:\s*(?:true|false|null|undefined|"[^"]*"|'[^']*'|[^)\s,，。;；]+))*\s*\)/gi, "");
+  out = out.replace(/\b(?:cv_nzd|cv_year|land_area_sqm|floor_area_sqm|build_year|zone_code|listing_price_nzd|selectedListingContext)\s*:\s*(?:true|false|null|undefined|"[^"]*"|'[^']*'|[^\s,，。;；)]+)/gi, "");
+  out = out.replace(/\{\s*(?:cv_nzd|cv_year|land_area_sqm|floor_area_sqm|build_year|zone_code|listing_price_nzd|selectedListingContext)[^{}]*\}/gi, "");
   out = out.replace(/\n{3,}/g, "\n\n").replace(/[ \t]{2,}/g, " ").replace(/\s+([,，。.;；])/g, "$1").trim();
 
   if (locale === "zh") {
@@ -94,6 +108,8 @@ export function sanitizeAssistantProse(content: string, locale: Locale = "en"): 
 
 /** User is browsing listings / market availability (not asking for a single-title feasibility report). */
 export function isListingBrowseIntent(message: string): boolean {
+  if (detectRecentSalesIntent(message)) return false;
+  if (detectNearbyAmenityIntent(message)) return false;
   if (
     /有什么在卖|在售|房源|挂牌|看看.*卖|哪些.*卖|什么.*在售|想买|看房|市场上有|在售房源|有卖|出售.*吗|在售的|买房|找房/i.test(message)
   ) {
@@ -118,6 +134,12 @@ export function isListingBrowseIntent(message: string): boolean {
     return true;
   }
   return false;
+}
+
+function hasExplicitAnalysisRequestText(message: string): boolean {
+  const lower = message.toLowerCase();
+  return /\b(analyse|analyze|analysis|feasibility|assess|evaluate|development\s+economics|run\s+(?:a\s+)?report|subdivid\w*|subdivision|split\s+into\s+\d|development\s+potential|developable)\b/i.test(lower) ||
+    /(?:\u5206\u6790|\u53ef\u884c\u6027|\u8bc4\u4f30|\u8a55\u4f30|\u5f00\u53d1\u7ecf\u6d4e|\u958b\u767c\u7d93\u6fdf|\u8dd1\u4e00\u4e0b\u62a5\u544a|\u8dd1\u4e00\u4e0b\u5831\u544a|\u5206\u5272|\u7ec6\u5206|\u7d30\u5206|\u5f00\u53d1\u6f5c\u529b|\u958b\u767c\u6f5b\u529b)/u.test(message);
 }
 
 /**
@@ -163,6 +185,8 @@ export interface ChatIntent {
   // Clarification loop
   needsClarification: boolean;     // true when required info is missing and a question should be returned
   clarificationQuestion: string | null; // the natural-language question to ask the user
+  // Nearby amenities
+  nearbyAmenityTerms: string[];     // raw amenity terms requested, e.g. ["schools","hospitals"]
   // Service provider recommendation
   wantsProviderRecommendation: boolean; // true when user (in any language) asks to be connected with a professional
   wantsAnotherProvider: boolean;        // true when user wants to SWAP/REPLACE the CURRENTLY shown provider card
@@ -182,9 +206,9 @@ export type DelegatedDiscoverSuburb = {
 };
 
 const INTENT_SCHEMA = `{
-  "intentCategory": "property_discovery" | "single_property_analysis" | "rules_explanation" | "general_property_advice" | "followup",
-  "subject": "subdivision" | "zoning" | "market" | "cost" | "schools" | "provider" | "unknown",
-  "execution": "show_listing_cards" | "run_feasibility_report" | "answer_in_chat" | "ask_clarifying_question",
+  "intentCategory": "property_discovery" | "recent_sales_lookup" | "nearby_amenity_lookup" | "single_property_analysis" | "rules_explanation" | "general_property_advice" | "followup",
+  "subject": "subdivision" | "zoning" | "market" | "cost" | "schools" | "amenities" | "provider" | "unknown",
+  "execution": "show_listing_cards" | "show_recent_sales_table" | "answer_nearby_amenities" | "run_feasibility_report" | "answer_in_chat" | "ask_clarifying_question",
   "confidence": <number from 0 to 1> | null,
   "mode": "analyse" | "discover" | "followup",
   "address": "<full NZ street address string> | null",
@@ -200,6 +224,7 @@ const INTENT_SCHEMA = `{
   "includeNegotiation": <true if user does not require a price (accepts auction/tender/POA), false otherwise>,
   "needsClarification": <true ONLY when required info is missing AND you cannot infer it — see rules>,
   "clarificationQuestion": "<short conversational question to ask the user> | null",
+  "nearbyAmenityTerms": ["<raw requested amenity terms, e.g. schools, hospitals, swimming pools; [] when not applicable>"],
   "wantsProviderRecommendation": <true when user asks to be connected with / referred to a professional service provider>,
   "wantsAnotherProvider": <true when user already has a provider shown and wants to swap/replace/change it for a different one>,
   "suggestedDiscipline": "architect_designer" | "planner" | "engineer" | "quantity_surveyor" | "other" | null,
@@ -214,6 +239,8 @@ First classify the user's goal semantically, then choose the execution.
 
 intentCategory:
   property_discovery      = user wants to find/show/browse/list currently available properties or listings.
+  recent_sales_lookup     = user wants recently sold / settled sales / sale-price records or comparable sold evidence in an area, usually with filters like bedrooms, bathrooms, land area, floor area, title, or a time window.
+  nearby_amenity_lookup   = user wants schools, hospitals, clinics, swimming pools, recreation centres, parks, supermarkets, pharmacies, or other local amenities near an address/current property.
   single_property_analysis = user wants a feasibility report for one specific numbered property.
   rules_explanation       = user asks about rules, requirements, process, policy, zoning, consent, or how something works.
   general_property_advice = user wants conversational property advice without listing cards or a single report.
@@ -224,6 +251,8 @@ subject:
 
 execution:
   show_listing_cards      = run property discovery and return listing cards. Use ONLY when the user's goal is to find/show/browse/list available properties.
+  show_recent_sales_table = fetch recent sold records and answer with a concise table in chat. Use when the user asks for sold prices, settled sales,成交价,成交记录,已售/售出 records, recently sold properties, or comparable sales evidence. Never use listing cards for this.
+  answer_nearby_amenities = fetch nearby amenity information and answer with a concise chat table. Use when the user asks what schools/hospitals/clinics/pools/recreation centres/etc. are near a property or address, without asking for a feasibility report.
   run_feasibility_report  = run one-property analysis. Use ONLY for a specific numbered property.
   answer_in_chat          = answer conversationally. Use for rules_explanation and general_property_advice.
   ask_clarifying_question = ask one short question because required information is missing for discovery or analysis.
@@ -244,6 +273,10 @@ For dwelling-condition criteria, set filterSpec.dwellingCondition to "older_do_u
 Set filterSpec=null when the user names no measurable criteria.
 
 Critical distinction:
+  "recently sold", "sold price", "sales records", "settled sales", "成交价", "成交记录", "已售", "售出" => recent_sales_lookup, subject=market, execution=show_recent_sales_table, mode=followup. This is NOT property_discovery and must NOT show listing cards, even if the user says "find/show/search".
+  If the user corrects you with "not listings / not for sale, I mean sold prices /成交价", preserve the prior area and filters from history and classify as recent_sales_lookup.
+  "near/nearby/around/周边/附近 + schools/hospitals/clinics/pools/recreation centres/etc." => nearby_amenity_lookup, subject=amenities (or schools when only schools), execution=answer_nearby_amenities, mode=followup. This is NOT property_discovery and must NOT show listing cards. It is also NOT a feasibility report merely because the user included a numbered address.
+  If the same message explicitly asks to analyse/run feasibility/development economics for the property AND also asks an amenity question, choose single_property_analysis + run_feasibility_report, but still populate nearbyAmenityTerms so the app can answer the amenity question after the report.
   The word "subdivision" alone does NOT mean show_listing_cards.
   "what is currently available in Saint Heliers?" => property_discovery, subject=market, execution=show_listing_cards, mode=discover, discoveryPresentation=generic_listing.
   "what's currently on the market in Highland Park?" => property_discovery, subject=market, execution=show_listing_cards, mode=discover, discoveryPresentation=generic_listing.
@@ -256,6 +289,8 @@ Critical distinction:
 
 The legacy mode field must agree with execution:
   show_listing_cards -> mode="discover"
+  show_recent_sales_table -> mode="followup"
+  answer_nearby_amenities -> mode="followup"
   run_feasibility_report -> mode="analyse"
   answer_in_chat -> mode="followup"
   ask_clarifying_question -> mode stays as the intended next action ("discover" or "analyse")
@@ -501,6 +536,8 @@ Wide-scan intent CAN be true alongside mode="discover" or mode="followup". It is
 
 const VALID_INTENT_CATEGORIES: ChatIntentCategory[] = [
   "property_discovery",
+  "recent_sales_lookup",
+  "nearby_amenity_lookup",
   "single_property_analysis",
   "rules_explanation",
   "general_property_advice",
@@ -512,11 +549,14 @@ const VALID_INTENT_SUBJECTS: ChatIntentSubject[] = [
   "market",
   "cost",
   "schools",
+  "amenities",
   "provider",
   "unknown",
 ];
 const VALID_INTENT_EXECUTIONS: ChatIntentExecution[] = [
   "show_listing_cards",
+  "show_recent_sales_table",
+  "answer_nearby_amenities",
   "run_feasibility_report",
   "answer_in_chat",
   "ask_clarifying_question",
@@ -524,6 +564,8 @@ const VALID_INTENT_EXECUTIONS: ChatIntentExecution[] = [
 
 function legacyModeFromExecution(execution: ChatIntentExecution, fallback: ChatMode): ChatMode {
   if (execution === "show_listing_cards") return "discover";
+  if (execution === "show_recent_sales_table") return "followup";
+  if (execution === "answer_nearby_amenities") return "followup";
   if (execution === "run_feasibility_report") return "analyse";
   if (execution === "answer_in_chat") return "followup";
   return fallback;
@@ -803,6 +845,7 @@ export async function extractChatIntent(
       mode: "followup", address: null, suburb: null, additionalSuburbs: [], minPrice: null, maxPrice: null,
       criteria: null, requiresFreeholdTitle: false, includeTenures: [], discoveryPresentation: null, isFollowUp: false, includeNegotiation: false,
       needsClarification: false, clarificationQuestion: null,
+      nearbyAmenityTerms: [],
       wantsProviderRecommendation: false, suggestedDiscipline: null,
       wantsAnotherProvider: false,
       wideScanSubdivisionIntent: false,
@@ -821,6 +864,7 @@ export async function extractChatIntent(
       mode: "followup", address: null, suburb: null, additionalSuburbs: [], minPrice: null, maxPrice: null,
       criteria: null, requiresFreeholdTitle: false, includeTenures: [], discoveryPresentation: null, isFollowUp: false, includeNegotiation: false,
       needsClarification: false, clarificationQuestion: null,
+      nearbyAmenityTerms: [],
       wantsProviderRecommendation: false, suggestedDiscipline: null,
       wantsAnotherProvider: false,
       wideScanSubdivisionIntent: false,
@@ -929,6 +973,7 @@ ${INTENT_SCHEMA}`;
       includeNegotiation: Boolean(parsed.includeNegotiation),
       needsClarification: Boolean(parsed.needsClarification),
       clarificationQuestion: parsed.clarificationQuestion ?? null,
+      nearbyAmenityTerms: normaliseNearbyAmenityTerms(parsed.nearbyAmenityTerms),
       wantsProviderRecommendation: Boolean(parsed.wantsProviderRecommendation),
       wantsAnotherProvider: Boolean(parsed.wantsAnotherProvider),
       suggestedDiscipline: parsed.suggestedDiscipline && VALID_DISCIPLINES.includes(parsed.suggestedDiscipline as string) ? parsed.suggestedDiscipline : null,
@@ -954,6 +999,63 @@ ${INTENT_SCHEMA}`;
         wideScanSubdivisionIntent: false,
         reasoning: intent.reasoning || "informational subdivision rules question",
       };
+    }
+
+    const recentSalesContext = messages
+      .filter((m) => m.role === "user")
+      .slice(-4)
+      .map((m) => m.content)
+      .join("\n");
+    if (
+      detectRecentSalesIntent(lastUserMessage.content) ||
+      (detectRecentSalesIntent(recentSalesContext) && isRecentSalesContinuationText(lastUserMessage.content))
+    ) {
+      intent = {
+        ...intent,
+        intentCategory: "recent_sales_lookup",
+        subject: "market",
+        execution: "show_recent_sales_table",
+        confidence: intent.confidence ?? 1,
+        mode: "followup",
+        address: null,
+        discoveryPresentation: null,
+        filterSpec: null,
+        requiresFreeholdTitle: false,
+        needsClarification: false,
+        clarificationQuestion: null,
+        nearbyAmenityTerms: [],
+        wideScanSubdivisionIntent: false,
+        reasoning: intent.reasoning || "recent sold-record lookup",
+      };
+    }
+
+    if (detectNearbyAmenityIntent(lastUserMessage.content)) {
+      const nearbyAmenityTerms = extractNearbyAmenityTerms(lastUserMessage.content);
+      if (hasExplicitAnalysisRequestText(lastUserMessage.content)) {
+        intent = {
+          ...intent,
+          nearbyAmenityTerms,
+          reasoning: intent.reasoning || "feasibility request with attached nearby amenity question",
+        };
+      } else {
+        intent = {
+          ...intent,
+          intentCategory: "nearby_amenity_lookup",
+          subject: nearbyAmenityTerms.length === 1 && nearbyAmenityTerms[0] === "schools" ? "schools" : "amenities",
+          execution: "answer_nearby_amenities",
+          confidence: intent.confidence ?? 1,
+          mode: "followup",
+          discoveryPresentation: null,
+          filterSpec: null,
+          requiresFreeholdTitle: false,
+          includeTenures: [],
+          needsClarification: false,
+          clarificationQuestion: null,
+          nearbyAmenityTerms,
+          wideScanSubdivisionIntent: false,
+          reasoning: intent.reasoning || "nearby amenity lookup",
+        };
+      }
     }
 
     // If the model chose analyse for a road/area listing query, route to discover instead.
@@ -1000,7 +1102,11 @@ ${INTENT_SCHEMA}`;
       }
     }
     // Safety: followup mode should never trigger a clarification
-    if (intent.mode === "followup") {
+    if (
+      intent.mode === "followup" &&
+      intent.execution !== "show_recent_sales_table" &&
+      intent.execution !== "answer_nearby_amenities"
+    ) {
       intent.needsClarification = false;
       intent.clarificationQuestion = null;
       intent.execution = "answer_in_chat";
@@ -1073,6 +1179,15 @@ async function fallbackDetectIntent(
       : null;
 
   const lowerFallback = lastMessage.toLowerCase();
+  const nearbyAmenityLookup = detectNearbyAmenityIntent(lastMessage) && !hasExplicitAnalysisRequestText(lastMessage);
+  const nearbyAmenityTerms = nearbyAmenityLookup ? extractNearbyAmenityTerms(lastMessage) : [];
+  const fallbackRecentSalesContext = [
+    ...(history ?? []).filter((m) => m.role === "user").slice(-4).map((m) => m.content),
+    lastMessage,
+  ].join("\n");
+  const recentSalesLookup =
+    detectRecentSalesIntent(lastMessage) ||
+    (detectRecentSalesIntent(fallbackRecentSalesContext) && isRecentSalesContinuationText(lastMessage));
   const providerKeywordsFallback = [
     "recommend", "referral", "architect", "builder", "planner", "engineer",
     "quantity surveyor", "specialist", "professional", "who can help",
@@ -1081,11 +1196,11 @@ async function fallbackDetectIntent(
   const wantsProviderRecommendation = providerKeywordsFallback.some((kw) => lowerFallback.includes(kw));
 
   return {
-    intentCategory,
-    subject,
-    execution,
+    intentCategory: recentSalesLookup ? "recent_sales_lookup" : nearbyAmenityLookup ? "nearby_amenity_lookup" : intentCategory,
+    subject: recentSalesLookup ? "market" : nearbyAmenityLookup ? (nearbyAmenityTerms.length === 1 && nearbyAmenityTerms[0] === "schools" ? "schools" : "amenities") : subject,
+    execution: recentSalesLookup ? "show_recent_sales_table" : nearbyAmenityLookup ? "answer_nearby_amenities" : execution,
     confidence: null,
-    mode,
+    mode: recentSalesLookup || nearbyAmenityLookup ? "followup" : mode,
     address: null,
     suburb,
     // The regex fallback only fires when the LLM call fails; multi-suburb
@@ -1098,14 +1213,15 @@ async function fallbackDetectIntent(
     // Opt-in is a deliberate, often conversational signal — leave it to the LLM
     // path. The regex fallback never opts the user in to non-freehold tenures.
     includeTenures: [],
-    discoveryPresentation,
-    filterSpec: mode === "discover" ? detectFilterSpecFromText(lastMessage) : null,
+    discoveryPresentation: recentSalesLookup || nearbyAmenityLookup ? null : discoveryPresentation,
+    filterSpec: !recentSalesLookup && !nearbyAmenityLookup && mode === "discover" ? detectFilterSpecFromText(lastMessage) : null,
     isFollowUp,
     includeNegotiation: /negotiat|poa|by\s+applic|tender|auction/i.test(lowerFallback),
-    needsClarification,
-    clarificationQuestion: needsClarification
+    needsClarification: recentSalesLookup || nearbyAmenityLookup ? false : needsClarification,
+    clarificationQuestion: !recentSalesLookup && !nearbyAmenityLookup && needsClarification
       ? (locale === "zh" ? "您有特别想看的郊区吗?" : "Any particular suburb in mind?")
       : null,
+    nearbyAmenityTerms,
     wantsProviderRecommendation,
     wantsAnotherProvider: false,
     suggestedDiscipline: null,
@@ -1230,6 +1346,8 @@ Return ONLY JSON:
 
 export function detectMode(lastMessage: string): ChatMode {
   const lower = lastMessage.toLowerCase().trim();
+  if (detectRecentSalesIntent(lastMessage)) return "followup";
+  if (detectNearbyAmenityIntent(lastMessage) && !hasExplicitAnalysisRequestText(lastMessage)) return "followup";
   if (isSubdivisionRulesInformationIntent(lastMessage)) return "followup";
   const numbered = hasNumberedStreetAddress(lastMessage);
   const browse = isListingBrowseIntent(lastMessage);

@@ -38,4 +38,13 @@ describe("assistant prose sanitizing", () => {
 
     expect(cleaned).toBe("The best ROI path is to hold the existing dwelling first and avoid the rebuild cost stack.");
   });
+
+  it("removes internal property-data field names from user-facing prose", () => {
+    const cleaned = sanitizeAssistantProse(
+      "The market value cannot be directly determined because council data is missing (cv_nzd: null, cv_year: null). Comparable listings are indicative only.",
+    );
+
+    expect(cleaned).not.toMatch(/cv_nzd|cv_year|null/i);
+    expect(cleaned).toBe("The market value cannot be directly determined because council data is missing. Comparable listings are indicative only.");
+  });
 });

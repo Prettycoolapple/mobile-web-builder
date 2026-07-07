@@ -116,6 +116,29 @@ describe("address clarification candidate dedupe", () => {
 
     expect(options).toEqual([]);
   });
+
+  it("keeps a slash-unit address distinct from its parent street number", () => {
+    const options = filterAddressOptionsForAnalysis("1/289 Ulster Street, Whitiora", [
+      {
+        formatted: "289 Ulster Street, Whitiora, Hamilton 3200, New Zealand",
+        lat: -37.779,
+        lng: 175.271,
+      },
+      {
+        formatted: "1/289 Ulster Street, Whitiora, Hamilton 3200, New Zealand",
+        lat: null,
+        lng: null,
+      },
+    ]);
+
+    expect(options).toEqual([
+      {
+        formatted: "1/289 Ulster Street, Whitiora, Hamilton 3200, New Zealand",
+        lat: null,
+        lng: null,
+      },
+    ]);
+  });
 });
 
 describe("multi-suburb address ambiguity", () => {

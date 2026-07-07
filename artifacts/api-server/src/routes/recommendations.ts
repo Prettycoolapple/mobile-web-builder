@@ -70,7 +70,7 @@ interface FeasibilityReport {
 const PLANNING_CONSTRAINT_PLANNER_PROBABILITY = 0.3;
 const PLANNING_CONSTRAINT_ARCHITECT_FALLBACK_PROBABILITY = 0.15;
 const CLEAR_PLANNING_ARCHITECT_PROBABILITY = 0.25;
-const TEMPORARILY_EXCLUDED_PROVIDER_NAMES = new Set(["hao li"]);
+const TEMPORARILY_EXCLUDED_PROVIDER_NAMES = new Set<string>([]);
 
 function normaliseProviderName(value: string | null): string {
   return (value ?? "").trim().replace(/\s+/g, " ").toLowerCase();

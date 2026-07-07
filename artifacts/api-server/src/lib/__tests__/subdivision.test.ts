@@ -1,22 +1,40 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { detectSubdivision, parseStreetNumberSuffix } from "../subdivision";
+import { detectSubdivision, mergeSubdivisionCorrection, parseStreetNumberSuffix } from "../subdivision";
 import { geocodeAddress } from "../geocode";
-import { fetchLINZLetterSuffixAddresses } from "../linz";
+import { fetchLINZAddressCandidates, fetchLINZLetterSuffixAddresses } from "../linz";
 
 vi.mock("../geocode", () => ({
   geocodeAddress: vi.fn(),
 }));
 
 vi.mock("../linz", () => ({
+  fetchLINZAddressCandidates: vi.fn(async () => []),
   fetchLINZLetterSuffixAddresses: vi.fn(async () => []),
+  lrsAddressLooksExact: vi.fn((requested: string, candidate: string) => {
+    const normalise = (value: string) =>
+      value
+        .toLowerCase()
+        .replace(/\bauckland\b/g, "")
+        .replace(/\b\d{4}\b/g, "")
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim();
+    const req = normalise(requested).split(" ");
+    const cand = normalise(candidate).split(" ");
+    if (req[0] !== cand[0]) return false;
+    const reqTokens = new Set(req.slice(1));
+    return cand.slice(1).filter(Boolean).every((token) => reqTokens.has(token));
+  }),
 }));
 
 const mockedGeocodeAddress = vi.mocked(geocodeAddress);
+const mockedFetchLINZAddressCandidates = vi.mocked(fetchLINZAddressCandidates);
 const mockedFetchLINZLetterSuffixAddresses = vi.mocked(fetchLINZLetterSuffixAddresses);
 
 describe("subdivision detection", () => {
   beforeEach(() => {
     mockedGeocodeAddress.mockReset();
+    mockedFetchLINZAddressCandidates.mockReset();
+    mockedFetchLINZAddressCandidates.mockResolvedValue([]);
     mockedFetchLINZLetterSuffixAddresses.mockReset();
     mockedFetchLINZLetterSuffixAddresses.mockResolvedValue([]);
   });
@@ -62,6 +80,42 @@ describe("subdivision detection", () => {
       isSubdivided: false,
       parentAddress: "66A Marine Parade, Mellons Bay",
       subLots: [],
+    });
+  });
+
+  it("lets a confirmed base address win over neighbouring LINZ suffix addresses", async () => {
+    mockedFetchLINZAddressCandidates.mockResolvedValue([
+      { address: "15 Amy Street, Ellerslie, Auckland 1051", id: "base-15", rank: 0.97 },
+    ]);
+    mockedFetchLINZLetterSuffixAddresses.mockResolvedValue([
+      { letter: "A", address: "15A Amy Street, Ellerslie, Auckland", id: "child-15a", rank: 0.71 },
+      { letter: "B", address: "15B Amy Street, Ellerslie, Auckland", id: "child-15b", rank: 0.7 },
+    ]);
+
+    await expect(detectSubdivision("15 Amy Street, Ellerslie")).resolves.toEqual({
+      isSubdivided: false,
+      parentAddress: "15 Amy Street, Ellerslie",
+      subLots: [],
+    });
+    expect(mockedFetchLINZLetterSuffixAddresses).not.toHaveBeenCalled();
+  });
+
+  it("does not count a suffixed LINZ candidate as proof the base address exists", async () => {
+    mockedFetchLINZAddressCandidates.mockResolvedValue([
+      { address: "15A Amy Street, Ellerslie, Auckland 1051", id: "child-15a", rank: 0.97 },
+    ]);
+    mockedFetchLINZLetterSuffixAddresses.mockResolvedValue([
+      { letter: "A", address: "15A Amy Street, Ellerslie, Auckland", id: "child-15a", rank: 0.71 },
+      { letter: "B", address: "15B Amy Street, Ellerslie, Auckland", id: "child-15b", rank: 0.7 },
+    ]);
+
+    await expect(detectSubdivision("15 Amy Street, Ellerslie")).resolves.toEqual({
+      isSubdivided: true,
+      parentAddress: "15 Amy Street, Ellerslie",
+      subLots: [
+        "15A Amy Street, Ellerslie, Auckland",
+        "15B Amy Street, Ellerslie, Auckland",
+      ],
     });
   });
 
@@ -149,5 +203,58 @@ describe("subdivision detection", () => {
         "42B Example Road, Auckland 1071, New Zealand",
       ],
     });
+  });
+});
+
+describe("subdivision correction merge", () => {
+  const subdivisionClarification = JSON.stringify({
+    clarificationType: "subdivision",
+    question: '"4 Inglis Street" looks like it has been subdivided into separate lots. Which one would you like me to analyse?',
+    options: ["4A Inglis Street, Mosgiel", "4B Inglis Street, Mosgiel"],
+    parentAddress: "4 Inglis Street",
+  });
+
+  it("merges a bare suburb correction with the parent street from the prior subdivision clarification", () => {
+    // Regression for the exact bug report: user typed "4 Inglis street", got
+    // asked to pick between the Mosgiel sub-lots, then replied "Birkenhead"
+    // meaning "4 Inglis Street, Birkenhead" — a different real address.
+    expect(mergeSubdivisionCorrection(subdivisionClarification, "Birkenhead")).toEqual({
+      mergedAddress: "4 Inglis Street, Birkenhead",
+    });
+  });
+
+  it("strips any suburb already attached to the parent address before merging", () => {
+    const clarification = JSON.stringify({
+      clarificationType: "subdivision",
+      parentAddress: "4 Inglis Street, Mosgiel",
+    });
+    expect(mergeSubdivisionCorrection(clarification, "Birkenhead")).toEqual({
+      mergedAddress: "4 Inglis Street, Birkenhead",
+    });
+  });
+
+  it("returns null when the previous assistant turn wasn't a subdivision clarification", () => {
+    const otherClarification = JSON.stringify({ clarificationType: "address_ambiguous", options: [] });
+    expect(mergeSubdivisionCorrection(otherClarification, "Birkenhead")).toBeNull();
+  });
+
+  it("returns null when there is no prior assistant content", () => {
+    expect(mergeSubdivisionCorrection(null, "Birkenhead")).toBeNull();
+    expect(mergeSubdivisionCorrection(undefined, "Birkenhead")).toBeNull();
+  });
+
+  it("returns null for a reply that starts with a number (the user picked a sub-lot directly)", () => {
+    expect(mergeSubdivisionCorrection(subdivisionClarification, "4A Inglis Street, Mosgiel")).toBeNull();
+  });
+
+  it("returns null for an empty or overly long reply", () => {
+    expect(mergeSubdivisionCorrection(subdivisionClarification, "   ")).toBeNull();
+    expect(
+      mergeSubdivisionCorrection(subdivisionClarification, "actually never mind show me something else entirely different"),
+    ).toBeNull();
+  });
+
+  it("returns null when the prior assistant content isn't valid JSON", () => {
+    expect(mergeSubdivisionCorrection("Here are some listings in Ponsonby.", "Birkenhead")).toBeNull();
   });
 });

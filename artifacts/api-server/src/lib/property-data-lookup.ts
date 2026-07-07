@@ -16,6 +16,9 @@ const LAND_ZH = /地块面积|土地面积|占地面积|地皮.*面积|多大.*�
 const VALUE_EN = /\bmarket value\b|\bestimated value\b|\bvaluation\b|\bcapital value\b|\bcv\b|worth\b|how much.*(worth|value)|value of this/i;
 const VALUE_ZH = /估值|市值|市场价值?|资本价值|政府估价|值多少|(这|该)(个|套|栋|處|处)?(房|房子|物业|房产).*(值|价)/;
 
+const VALUE_UNAVAILABLE_ZH =
+  "\u8fd9\u4efd\u62a5\u544a\u91cc\u6ca1\u6709\u8db3\u591f\u786e\u8ba4\u7684\u4ef7\u503c\u6570\u636e\uff0c\u6240\u4ee5\u6211\u4e0d\u4f1a\u7ed9\u51fa\u4e00\u4e2a\u770b\u4f3c\u7cbe\u786e\u7684\u5e02\u573a\u4ef7\u3002\u66f4\u53ef\u9760\u7684\u505a\u6cd5\u662f\u7ed3\u5408\u8fd1\u671f\u540c\u7c7b\u6210\u4ea4\u3001\u623f\u5c4b\u72b6\u51b5\u548c\u5f53\u524d\u6302\u724c\u53cd\u9988\u6765\u4f30\u7b97\u3002";
+
 /** Classify a followup as a specific cached-data lookup, else null. */
 export function detectPropertyDataLookup(text: string): PropertyDataField | null {
   if (ZONE_EN.test(text) || ZONE_ZH.test(text)) return "zone";
@@ -80,7 +83,11 @@ export function buildPropertyDataLookupAnswer(
 
   if (field === "value") {
     const cv = pickCv(raw, zh);
-    if (!cv) return null;
+    if (!cv) {
+      return zh
+        ? VALUE_UNAVAILABLE_ZH
+        : "The report does not have enough confirmed valuation data for me to give a reliable market value. A better estimate should be based on recent comparable sales, the property's condition, and current buyer feedback rather than a single placeholder figure.";
+    }
     const yr = cv.year ? (zh ? `（${cv.year}年）` : ` (${cv.year})`) : "";
     if (zh) {
       return `${address} 记录在案的资本价值（CV，来自${cv.source}${yr}）为 ${fmtNzd(cv.cv)}。这是估价记录，并非实时市场评估——运行完整分析可获得基于成交对比的市场估值。（数据更新于${asOf}。）`;

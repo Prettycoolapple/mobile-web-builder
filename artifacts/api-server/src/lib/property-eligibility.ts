@@ -345,7 +345,16 @@ export function shouldSuppressParentLandAreaForEligibility(result: PropertyEligi
     || result.subdivisionRejectReason === "land_area_parent_or_typology_suspect"
     || result.unitLikeSignal
     || result.crossLeaseSignal
-    || result.landAreaParentOrTypologySuspect;
+    || result.landAreaParentOrTypologySuspect
+    // A listing marketing an already-built multi-unit development means the LINZ
+    // parcel area is the shared parent-site area, not any one dwelling's land —
+    // always suppress.
+    || result.subdivisionRejectReason === "listing_claims_multi_unit_development"
+    // A new-build claim on a redeveloped parcel (old council build vs a listing
+    // marketing a brand-new dwelling) similarly points at a stale pre-demolition
+    // parent area — but guard on a non-standalone typology so a single standalone
+    // new build, which keeps its own valid freehold parcel area, is NOT suppressed.
+    || (result.subdivisionRejectReason === "listing_claims_new_build" && result.typology !== "standalone");
 }
 
 function trustedVerifiedListingArea(input: SubjectLandAreaInput): number | null {

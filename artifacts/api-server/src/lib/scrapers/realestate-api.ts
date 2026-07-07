@@ -1326,6 +1326,13 @@ function streetSegments(streetPart: string): string[] {
   return segments;
 }
 
+// Between two street numbers sharing one street name, only whitespace/commas
+// and connector words ("and", "&", "+", "/") may separate them — e.g.
+// "15 & 17 Fisherton Street" or "3, 5 and 7 Rukutai Street". Anything else
+// between the numbers (e.g. "3 lot subdivision at 13 Campbell place") means
+// the second number is not a sibling street address, just incidental prose.
+const NUMBER_GAP_CONNECTOR_RE = /^(?:\s|,|&|\+|\/)+$|^\s*and\s*$/i;
+
 function expandStreetSegment(segment: string, suffix: string): string[] {
   const lastNumber = [...segment.matchAll(/\b\d+[a-z]?\b/gi)].pop();
   if (!lastNumber || lastNumber.index == null) return [];
@@ -1334,10 +1341,17 @@ function expandStreetSegment(segment: string, suffix: string): string[] {
   if (!STREET_TYPE_RE.test(streetTail)) return [];
 
   const numberPart = segment.slice(0, lastNumber.index + lastNumber[0].length);
-  const numbers = [...numberPart.matchAll(/\b\d+[a-z]?\b/gi)].map((m) => m[0]);
-  if (numbers.length === 0) return [];
+  const numberMatches = [...numberPart.matchAll(/\b\d+[a-z]?\b/gi)];
+  if (numberMatches.length === 0) return [];
 
-  return numbers.map((n) => `${n} ${streetTail}${suffix}`.replace(/\s+,/g, ",").trim());
+  for (let i = 1; i < numberMatches.length; i++) {
+    const prev = numberMatches[i - 1];
+    const curr = numberMatches[i];
+    const gap = numberPart.slice((prev.index ?? 0) + prev[0].length, curr.index ?? 0);
+    if (!NUMBER_GAP_CONNECTOR_RE.test(gap)) return [];
+  }
+
+  return numberMatches.map((m) => `${m[0]} ${streetTail}${suffix}`.replace(/\s+,/g, ",").trim());
 }
 
 /**

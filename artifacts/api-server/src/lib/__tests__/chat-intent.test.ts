@@ -10,7 +10,9 @@ vi.mock("@workspace/integrations-gemini-ai", () => ({
 
 import { ai } from "@workspace/integrations-gemini-ai";
 import {
+  detectMode,
   extractChatIntent,
+  isListingBrowseIntent,
   isListingBrowseContinuation,
   normaliseAdditionalSuburbs,
   normaliseIncludeTenures,
@@ -25,6 +27,42 @@ function mockIntentJson(intent: Record<string, unknown>) {
 describe("chat intent extraction", () => {
   beforeEach(() => {
     mockedGenerateContent.mockReset();
+  });
+
+  it("routes nearby amenity questions to chat, not listing cards or analysis", async () => {
+    mockIntentJson({
+      intentCategory: "single_property_analysis",
+      subject: "unknown",
+      execution: "run_feasibility_report",
+      confidence: 0.6,
+      mode: "analyse",
+      address: "33 Harris Road",
+      suburb: null,
+      minPrice: null,
+      maxPrice: null,
+      criteria: "nearby schools and hospitals",
+      discoveryPresentation: null,
+      isFollowUp: false,
+      includeNegotiation: false,
+      needsClarification: false,
+      clarificationQuestion: null,
+      nearbyAmenityTerms: [],
+      wantsProviderRecommendation: false,
+      wantsAnotherProvider: false,
+      suggestedDiscipline: null,
+      wideScanSubdivisionIntent: false,
+      reasoning: "Model incorrectly saw a numbered address.",
+    });
+
+    const text = "33 Harris road \u5468\u8fb9\u6709\u4ec0\u4e48\u5b66\u6821\u533b\u9662";
+    const intent = await extractChatIntent([{ role: "user", content: text }]);
+
+    expect(intent.intentCategory).toBe("nearby_amenity_lookup");
+    expect(intent.execution).toBe("answer_nearby_amenities");
+    expect(intent.mode).toBe("followup");
+    expect(intent.nearbyAmenityTerms).toEqual(["schools", "hospitals"]);
+    expect(detectMode(text)).toBe("followup");
+    expect(isListingBrowseIntent(text)).toBe(false);
   });
 
   it("lets semantic answer-in-chat execution override a legacy discover mode", async () => {

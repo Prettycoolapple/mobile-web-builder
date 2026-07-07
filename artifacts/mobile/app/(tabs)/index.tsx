@@ -220,7 +220,31 @@ function buildTenureOfferChipMessage(
   };
 }
 
+function isRecentSalesLookupText(text: string): boolean {
+  const lowerText = text.toLowerCase();
+  return (
+    /\b(?:recently\s+sold|recent\s+sales?|sold\s+(?:price|prices|records?|properties|homes?|houses?)|sale\s+records?|sales?\s+history|sales?\s+evidence|settled\s+sales?|settlement\s+price|prices?\s+achieved|what\s+sold|has\s+sold)\b/i.test(lowerText) ||
+    /(?:\u6210\u4ea4|\u6210\u4ea4\u4ef7|\u6210\u4ea4\u50f9|\u6210\u4ea4\u8bb0\u5f55|\u6210\u4ea4\u8a18\u9304|\u5df2\u552e|\u552e\u51fa|\u5356\u51fa|\u8ce3\u51fa|\u8fd1\u671f\u552e\u4ef7|\u8fd1\u671f\u552e\u50f9|\u8fc7\u53bb.{0,8}\u6210\u4ea4|\u904e\u53bb.{0,8}\u6210\u4ea4)/u.test(text)
+  );
+}
+
+function isNearbyAmenitiesLookupText(text: string): boolean {
+  const lowerText = text.toLowerCase();
+  const nearby =
+    /\b(?:nearby|near|around|close\s+to|within|surrounding|local|in\s+the\s+area|walking\s+distance)\b/i.test(lowerText) ||
+    /(?:\u9644\u8fd1|\u5468\u8fb9|\u5468\u908a|\u5468\u56f4|\u5468\u570d|\u5468\u906d|\u65c1\u8fb9|\u65c1\u908a|\u914d\u5957)/u.test(text);
+  const amenity =
+    /\b(?:schools?|college|hospitals?|clinics?|medical\s+cent(?:re|er)|gps?|doctors?|swimming\s+pools?|recreation\s+cent(?:re|er)|recreational\s+cent(?:re|er)|leisure\s+cent(?:re|er)|sports?\s+cent(?:re|er)|parks?|gyms?|supermarkets?|pharmac(?:y|ies)|chemists?)\b/i.test(lowerText) ||
+    /(?:\u5b66\u6821|\u5b78\u6821|\u5c0f\u5b66|\u5c0f\u5b78|\u4e2d\u5b66|\u4e2d\u5b78|\u533b\u9662|\u91ab\u9662|\u8bca\u6240|\u8a3a\u6240|\u6e38\u6cf3\u6c60|\u6cf3\u6c60|\u5eb7\u4f53|\u5eb7\u9ad4|\u5a31\u4e50\u4e2d\u5fc3|\u5a1b\u6a02\u4e2d\u5fc3|\u8fd0\u52a8\u4e2d\u5fc3|\u904b\u52d5\u4e2d\u5fc3|\u4f53\u80b2\u9986|\u9ad4\u80b2\u9928|\u516c\u56ed|\u516c\u5712|\u5065\u8eab\u623f|\u8d85\u5e02|\u836f\u623f|\u85e5\u623f)/u.test(text);
+  const explicitAnalysis =
+    /\b(?:analyse|analyze|analysis|feasibility|assess|evaluate|development\s+economics|run\s+(?:a\s+)?report|subdivid\w*|subdivision|split\s+into\s+\d|development\s+potential|developable)\b/i.test(lowerText) ||
+    /(?:\u5206\u6790|\u53ef\u884c\u6027|\u8bc4\u4f30|\u8a55\u4f30|\u5f00\u53d1\u7ecf\u6d4e|\u958b\u767c\u7d93\u6fdf|\u5206\u5272|\u7ec6\u5206|\u7d30\u5206|\u5f00\u53d1\u6f5c\u529b|\u958b\u767c\u6f5b\u529b)/u.test(text);
+  return nearby && amenity && !explicitAnalysis;
+}
+
 function detectClientMode(text: string): "analyse" | "discover" | "followup" {
+  if (isNearbyAmenitiesLookupText(text)) return "followup";
+  if (isRecentSalesLookupText(text)) return "followup";
   const lowerText = text.toLowerCase();
   const isDiscoverQuery =
     lowerText.match(/find\s+|search\s+|discover\s+|looking\s+for\s+|show\s+me\s+properties|subdividable|subdivision\s+opp|development\s+sites|lifestyle\s+prop|investment\s+prop/) ||
@@ -1444,6 +1468,15 @@ export default function SearchScreen() {
     }
   }, [currentSession?.id, currentSession?.messages, currentSession?.skipFirstTurnRating, maybeTriggerAppRatingPrompt]);
 
+  const appendPostAnalysisAnswer = useCallback(
+    (answer: string | null | undefined, sessionId: string) => {
+      const content = answer?.trim();
+      if (!content) return;
+      addMessage({ role: "assistant", content, type: "text" }, sessionId);
+    },
+    [addMessage],
+  );
+
   const trackBackgroundAnalyseJob = useCallback(
     async (jobId: string | null | undefined, sessionId: string, address: string) => {
       if (!jobId || !user?.id) return;
@@ -1507,6 +1540,7 @@ export default function SearchScreen() {
             historyCreatedAt?: string | null;
             report?: FeasibilityReport | null;
             reportGroup?: FeasibilityReportGroup | null;
+            postAnalysisAnswer?: string | null;
             error?: string | null;
           };
 
@@ -1519,6 +1553,7 @@ export default function SearchScreen() {
                 setCurrentReportGroup(groupWithHistory);
               }
               replaceBackgroundAnalyseMessage(job.jobId, { role: "assistant", content: "", type: "report_group", reportGroup: groupWithHistory }, job.sessionId);
+              appendPostAnalysisAnswer(data.postAnalysisAnswer, job.sessionId);
               for (const report of groupWithHistory.reports) {
                 if (report.scores && report.address) {
                   updateCandidateScores({ [report.address]: report.scores }, job.sessionId);
@@ -1532,6 +1567,7 @@ export default function SearchScreen() {
                 setCurrentReport(reportWithHistory);
               }
               replaceBackgroundAnalyseMessage(job.jobId, { role: "assistant", content: "", type: "report", report: reportWithHistory }, job.sessionId);
+              appendPostAnalysisAnswer(data.postAnalysisAnswer, job.sessionId);
               if (reportWithHistory.scores && reportWithHistory.address) {
                 updateCandidateScores({ [reportWithHistory.address]: reportWithHistory.scores }, job.sessionId);
               }
@@ -1557,6 +1593,7 @@ export default function SearchScreen() {
     }
   }, [
     bumpSearchHistory,
+    appendPostAnalysisAnswer,
     currentSessionId,
     getApiBase,
     getApiHeaders,
@@ -2129,6 +2166,7 @@ export default function SearchScreen() {
             optionActions?: Array<"repeat_origin" | "search_nearby">;
             searchPresentation?: ChatMessage["searchPresentation"];
             suburb?: string | null;
+            postAnalysisAnswer?: string | null;
           };
 
           if (data.type === "clarification" && data.clarificationType === "subdivision" && Array.isArray(data.options) && data.options.length > 0) {
@@ -2161,6 +2199,7 @@ export default function SearchScreen() {
             const groupWithHistory = withGroupHistoryMetadata(data.reportGroup, data.searchId, data.historyCreatedAt);
             setCurrentReportGroup(groupWithHistory);
             updateLastMessage({ type: "report_group", reportGroup: groupWithHistory, content: "" }, sessionId);
+            appendPostAnalysisAnswer(data.postAnalysisAnswer, sessionId);
             for (const report of groupWithHistory.reports) {
               if (report.scores && report.address) {
                 updateCandidateScores({ [report.address]: report.scores }, sessionId);
@@ -2174,6 +2213,7 @@ export default function SearchScreen() {
             const reportWithHistory = withHistoryMetadata(data.report, data.searchId, data.historyCreatedAt);
             setCurrentReport(reportWithHistory);
             updateLastMessage({ type: "report", report: reportWithHistory, content: "" }, sessionId);
+            appendPostAnalysisAnswer(data.postAnalysisAnswer, sessionId);
             if (reportWithHistory.scores && reportWithHistory.address) {
               updateCandidateScores({ [reportWithHistory.address]: reportWithHistory.scores }, sessionId);
             }
@@ -2283,6 +2323,7 @@ export default function SearchScreen() {
             wantsProviderRecommendation?: boolean;
             wantsAnotherProvider?: boolean;
             suggestedDiscipline?: string | null;
+            postAnalysisAnswer?: string | null;
           };
           try {
             data = JSON.parse(responseText.trim()) as typeof data;
@@ -2375,6 +2416,7 @@ export default function SearchScreen() {
               const groupObj = withGroupHistoryMetadata(maybeParsed, data.searchId, data.historyCreatedAt);
               setCurrentReportGroup(groupObj);
               updateLastMessage({ type: "report_group", reportGroup: groupObj, content: "" }, sessionId);
+              appendPostAnalysisAnswer(data.postAnalysisAnswer, sessionId);
               for (const report of groupObj.reports) {
                 if (report.scores && report.address) {
                   updateCandidateScores({ [report.address]: report.scores }, sessionId);
@@ -2386,6 +2428,7 @@ export default function SearchScreen() {
               const reportObj = withHistoryMetadata(maybeParsed as unknown as FeasibilityReport, data.searchId, data.historyCreatedAt);
               setCurrentReport(reportObj);
               updateLastMessage({ type: "report", report: reportObj, content: "" }, sessionId);
+              appendPostAnalysisAnswer(data.postAnalysisAnswer, sessionId);
               if (reportObj.scores && reportObj.address) {
                 updateCandidateScores({ [reportObj.address]: reportObj.scores }, sessionId);
               }
@@ -2417,6 +2460,7 @@ export default function SearchScreen() {
               const groupObj = withGroupHistoryMetadata(maybeParsed, data.searchId, data.historyCreatedAt);
               setCurrentReportGroup(groupObj);
               updateLastMessage({ type: "report_group", reportGroup: groupObj, content: "" }, sessionId);
+              appendPostAnalysisAnswer(data.postAnalysisAnswer, sessionId);
               for (const report of groupObj.reports) {
                 if (report.scores && report.address) {
                   updateCandidateScores({ [report.address]: report.scores }, sessionId);
@@ -2428,6 +2472,7 @@ export default function SearchScreen() {
               const reportObj = withHistoryMetadata(maybeParsed as unknown as FeasibilityReport, data.searchId, data.historyCreatedAt);
               setCurrentReport(reportObj);
               updateLastMessage({ type: "report", report: reportObj, content: "" }, sessionId);
+              appendPostAnalysisAnswer(data.postAnalysisAnswer, sessionId);
               if (reportObj.scores && reportObj.address) {
                 updateCandidateScores({ [reportObj.address]: reportObj.scores }, sessionId);
               }
@@ -2583,6 +2628,7 @@ export default function SearchScreen() {
     getApiHeaders,
     refreshProfile,
     bumpSearchHistory,
+    appendPostAnalysisAnswer,
     trackBackgroundAnalyseJob,
     trackBackgroundScreeningJob,
     addProviderRecommendationOnce,
@@ -2735,6 +2781,7 @@ export default function SearchScreen() {
               optionActions?: Array<"repeat_origin" | "search_nearby">;
               searchPresentation?: ChatMessage["searchPresentation"];
               suburb?: string | null;
+              postAnalysisAnswer?: string | null;
             };
 
             if (data.type === "clarification" && data.clarificationType === "subdivision" && Array.isArray(data.options) && data.options.length > 0) {
@@ -2769,6 +2816,7 @@ export default function SearchScreen() {
               const groupWithHistory = withGroupHistoryMetadata(data.reportGroup, data.searchId, data.historyCreatedAt);
               setCurrentReportGroup(groupWithHistory);
               updateLastMessage({ type: "report_group", reportGroup: groupWithHistory, content: "" }, sessionId);
+              appendPostAnalysisAnswer(data.postAnalysisAnswer, sessionId);
               for (const report of groupWithHistory.reports) {
                 if (report.scores && report.address) {
                   updateCandidateScores({ [report.address]: report.scores }, sessionId);
@@ -2786,6 +2834,7 @@ export default function SearchScreen() {
               ) ? { ...reportWithHistory, photoUrl: selectedPhotoUrl } : reportWithHistory;
               setCurrentReport(patchedReport);
               updateLastMessage({ type: "report", report: patchedReport, content: "" }, sessionId);
+              appendPostAnalysisAnswer(data.postAnalysisAnswer, sessionId);
               if (patchedReport.scores && patchedReport.address) {
                 updateCandidateScores({ [patchedReport.address]: patchedReport.scores }, sessionId);
               }
@@ -2824,6 +2873,7 @@ export default function SearchScreen() {
       getApiHeaders,
       refreshProfile,
       bumpSearchHistory,
+      appendPostAnalysisAnswer,
       trackBackgroundAnalyseJob,
       shouldShowAnalyseDisclaimer,
       openAnalyseDisclaimer,

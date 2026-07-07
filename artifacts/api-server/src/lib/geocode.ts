@@ -27,16 +27,17 @@ type ParsedStreetNumber = {
 };
 
 function parseLeadingStreetNumber(input: string): ParsedStreetNumber | null {
-  const match = input.trim().match(/^(\d+)([a-z])?\b/i);
+  const match = input.trim().match(/^((?:[a-z]?\d+[a-z]?\s*\/\s*)?)(\d+)([a-z])?\b/i);
   if (!match) return null;
-  const base = match[1]!;
-  const suffix = (match[2] ?? "").toUpperCase();
-  return { base, suffix, full: `${base}${suffix}`.toLowerCase() };
+  const unitPrefix = (match[1] ?? "").replace(/\s+/g, "").toLowerCase();
+  const base = match[2]!;
+  const suffix = (match[3] ?? "").toUpperCase();
+  return { base, suffix, full: `${unitPrefix}${base}${suffix}`.toLowerCase() };
 }
 
 function streetNumberFromFormatted(formatted: string): string | null {
-  const match = formatted.trim().match(/^(\d+[a-z]?)(?:\b|,)/i);
-  return match ? match[1]!.toLowerCase() : null;
+  const match = formatted.trim().match(/^((?:[a-z]?\d+[a-z]?\s*\/\s*)?\d+[a-z]?)(?:\b|,)/i);
+  return match ? match[1]!.replace(/\s+/g, "").toLowerCase() : null;
 }
 
 function scoreStreetNumberMatch(input: string, candidateNumber: string | null): number {

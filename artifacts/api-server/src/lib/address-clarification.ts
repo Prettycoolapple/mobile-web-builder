@@ -1,5 +1,6 @@
 import { ai } from "@workspace/integrations-gemini-ai";
 import { nominatimSearchNz, tryGeocodeAddress } from "./geocode";
+import { fetchLINZAddressCandidates } from "./linz";
 import { logger } from "./logger";
 import type { Locale } from "./prompts";
 import { ensureChinese } from "./translation";
@@ -26,8 +27,8 @@ const DICE_THRESHOLD_AUTO = 0.74;
 const SAME_ADDRESS_DISTANCE_M = 250;
 
 function leadingStreetNumber(s: string): string | null {
-  const m = s.trim().match(/^(\d+[a-z]?)\b/i);
-  return m ? m[1].toLowerCase() : null;
+  const m = s.trim().match(/^([a-z]?\d+[a-z]?\s*\/\s*\d+[a-z]?|\d+[a-z]?)(?:\b|,)/i);
+  return m ? m[1].replace(/\s+/g, "").toLowerCase() : null;
 }
 
 function tokenizeRough(s: string): string[] {
@@ -325,6 +326,15 @@ export async function resolveAddressForAnalysis(
 
   push(geoPrimary);
   for (const g of nominatim) push(g);
+
+  try {
+    const linzCandidates = await fetchLINZAddressCandidates(trimmed, { maxResults: 5 });
+    for (const candidate of linzCandidates) {
+      push({ formatted: candidate.address, lat: null, lng: null });
+    }
+  } catch (err) {
+    logger.warn({ err }, "LINZ address candidates failed during address clarification");
+  }
 
   let deduped = filterAddressOptionsForAnalysis(trimmed, dedupeEquivalentAddressOptions(opts));
 

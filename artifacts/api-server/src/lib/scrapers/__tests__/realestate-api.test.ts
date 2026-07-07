@@ -331,6 +331,20 @@ describe("realestate-api combined listing detection", () => {
       ],
     });
   });
+
+  it("does not treat a lot-count phrase like '3 lot subdivision' as a second street number", () => {
+    // Regression: "Create a feasibility for a 3 lot subdivision at 13 Campbell
+    // place papakura" was mis-split into "3 Campbell Place" + "13 Campbell
+    // Place" because both bare numbers sat before one street name. The "3"
+    // here is not joined to "13" by a listing connector (&, and, +, /), so it
+    // must not be read as a package.
+    expect(
+      looksLikeCombinedListingAddress("Create a feasibility for a 3 lot subdivision at 13 Campbell place papakura"),
+    ).toBe(false);
+    expect(
+      extractCombinedListingAddressParts("Create a feasibility for a 3 lot subdivision at 13 Campbell place papakura"),
+    ).toBeNull();
+  });
 });
 
 describe("realestate-api address matching", () => {

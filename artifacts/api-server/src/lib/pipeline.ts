@@ -700,6 +700,9 @@ export async function runPropertyPipeline(
   const { lat, lng } = geocode;
   const planningProvider = planningProviderMetadata({ address, lat, lng });
   const suburb = cr ? cr.suburb : await resolvePipelineSuburb(address, geocode);
+  const subjectAddress = looksLikeUnitOrApartmentAddress(address)
+    ? address
+    : (geocode.formatted ?? address);
   let resolvedListingContext = options.selectedListingContext ?? null;
 
   // LINZ parcel is fetched first so its parcel polygon bbox can be passed to the contour
@@ -809,7 +812,7 @@ export async function runPropertyPipeline(
   let linzMemorialsRaw: Awaited<ReturnType<typeof fetchLINZMemorials>> = null;
   const lrsTitlePreviewResult = await timed(
     "linz_lrs_title_preview",
-    () => (cr ? Promise.resolve(cr.linz_lrs_preview_result) : fetchLINZTitlesByAddressDetailed(geocode.formatted ?? address)),
+    () => (cr ? Promise.resolve(cr.linz_lrs_preview_result) : fetchLINZTitlesByAddressDetailed(subjectAddress)),
     timing,
   );
   if (!lrsTitlePreviewResult.failed && lrsTitlePreviewResult.value) {
@@ -1050,7 +1053,7 @@ export async function runPropertyPipeline(
     async () => resolveActiveListingContext(address, {
       purpose: "feasibility",
       suburb,
-      formattedAddress: geocode.formatted ?? address,
+      formattedAddress: subjectAddress,
       preferredRealestateListingUrl: preferredRealestateListing?.listingUrl ?? options.preferredRealestateListingUrl ?? null,
       selectedListingContext: options.selectedListingContext ?? null,
       suppressSpeculativePhotoSources: isCombinedListingChild,
@@ -1206,7 +1209,7 @@ export async function runPropertyPipeline(
 
   const titleEstate = linzTitle?.estate_type?.trim() ?? null;
   const lrsTenure = estateTypeFromLrsTitles(linzLrsTitlePreview?.titles ?? []);
-  const addressHasUnitPrefix = looksLikeUnitOrApartmentAddress(geocode.formatted ?? address);
+  const addressHasUnitPrefix = looksLikeUnitOrApartmentAddress(address);
   const parcelEstate = addressHasUnitPrefix ? null : inferEstateTypeFromParcel(linzParcelData);
   // Sanitize scraped tenure text at the source: scrapers occasionally capture
   // page navigation/menu chrome instead of a tenure, which previously leaked all
@@ -1322,7 +1325,7 @@ export async function runPropertyPipeline(
       : null;
 
   const preliminaryEligibility = assessPropertyEligibility({
-    address: geocode.formatted ?? address,
+    address: subjectAddress,
     estateType: merged.estate_type,
     verifiedEstateType: lrsVerifiedEstateType,
     legalDescription: [
@@ -1405,7 +1408,7 @@ export async function runPropertyPipeline(
     }
   }
   const eligibility = assessPropertyEligibility({
-    address: geocode.formatted ?? address,
+    address: subjectAddress,
     estateType: merged.estate_type,
     verifiedEstateType: lrsVerifiedEstateType,
     legalDescription: [
@@ -1515,7 +1518,7 @@ export async function runPropertyPipeline(
     () => (cr?.built_environment_context
       ? Promise.resolve(cr.built_environment_context)
       : fetchBuiltEnvironmentContext({
-          address: geocode.formatted ?? address,
+          address: subjectAddress,
           lat,
           lng,
           subjectParcelId: linzParcelData?.parcel_id ?? null,
@@ -1543,7 +1546,7 @@ export async function runPropertyPipeline(
       () =>
         fetchSupplementListingComparables({
           suburbName: suburb,
-          excludeAddress: geocode.formatted ?? address,
+          excludeAddress: subjectAddress,
           priceHintNzd: merged.listing_price ?? merged.cv_nzd,
           landHintSqm: merged.land_area_sqm,
           minTarget: 3,
@@ -1593,7 +1596,7 @@ export async function runPropertyPipeline(
   });
 
   const strategyAssessmentPromise = assessDevelopmentStrategy({
-    address: geocode.formatted ?? address,
+    address: subjectAddress,
     build_year: merged.build_year,
     build_year_range: merged.build_year_range,
     floor_area_sqm: merged.floor_area_sqm,

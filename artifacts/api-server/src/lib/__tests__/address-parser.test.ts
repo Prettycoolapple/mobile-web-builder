@@ -30,6 +30,12 @@ describe("NZ address extraction", () => {
     );
   });
 
+  it("preserves slash-unit addresses instead of extracting the parent street number", async () => {
+    await expect(
+      extractNZAddress("1/289 Ulster Street, Whitiora. What would the expected costs be to own this property as a rental."),
+    ).resolves.toBe("1/289 Ulster Street, Whitiora");
+  });
+
   it("accepts AI-extracted numbered street lines without a conventional suffix", async () => {
     mockedGenerateContent.mockResolvedValueOnce({ text: "1 Broadway, Newmarket, Auckland" } as Awaited<ReturnType<typeof ai.models.generateContent>>);
 

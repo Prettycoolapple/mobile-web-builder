@@ -3,6 +3,7 @@ import {
   assessPropertyEligibility,
   resolveSubjectLandAreaForEligibility,
   shouldForceSingleLotForEligibility,
+  shouldSuppressParentLandAreaForEligibility,
 } from "../property-eligibility";
 import { extractListingClaims } from "../listing-claims";
 
@@ -666,5 +667,94 @@ describe("property eligibility verifier", () => {
     });
     expect(result.subdivisionEligible).toBe(false);
     expect(result.subdivisionRejectReason).toBe("insufficient_land_for_two_lots");
+  });
+});
+
+describe("redeveloped-parcel land-area suppression", () => {
+  // Regression for 7 Sultan Street, Ellerslie: an old council build (pre-2000)
+  // marketed as brand-new townhouses. LINZ still reports the whole ~2018m²
+  // pre-demolition parent parcel. The subject townhouse has no land area of its
+  // own, so the stale parent area must be suppressed rather than shown.
+  const townhouseRedevelopment = () =>
+    assessPropertyEligibility({
+      address: "7 Sultan Street, Ellerslie, Auckland",
+      estateType: "Fee Simple",
+      legalDescription: "Lot 1 Deposited Plan 12345",
+      landAreaSqm: 2018,
+      floorAreaSqm: 90,
+      buildYear: 1935,
+      zoneCode: "BMU",
+      potentialLots: 1,
+      minLotSize: 400,
+      listingClaims: extractListingClaims({
+        description: "Brand new townhouses — one of several in this boutique development.",
+      }),
+    });
+
+  it("suppresses the parent parcel land area for a redeveloped townhouse/new-build", () => {
+    const eligibility = townhouseRedevelopment();
+    expect(eligibility.typology).toBe("terrace_townhouse");
+    expect(eligibility.subdivisionRejectReason).toBe("listing_claims_new_build");
+    expect(shouldSuppressParentLandAreaForEligibility(eligibility)).toBe(true);
+
+    // No listing/PropertyValue subject area available → parent area is excluded.
+    const resolved = resolveSubjectLandAreaForEligibility({
+      eligibility,
+      currentLandAreaSqm: 2018,
+      currentLandAreaSource: "linz",
+      propertyValueLandAreaSqm: null,
+      listingLandAreaSqm: null,
+    });
+    expect(resolved.landAreaSqm).toBeNull();
+    expect(resolved.suppressedParentLandArea).toBe(true);
+  });
+
+  it("suppresses the parent area for a multi-unit development claim without a new-build signal", () => {
+    const eligibility = assessPropertyEligibility({
+      address: "10 Example Road, St Heliers, Auckland",
+      estateType: "Fee Simple",
+      legalDescription: "Lot 1 Deposited Plan 12345",
+      landAreaSqm: 1600,
+      buildYear: 1985,
+      zoneCode: "MHU",
+      potentialLots: 1,
+      minLotSize: 400,
+      listingClaims: extractListingClaims({
+        description: "Rare investment: four freehold units returning solid rent, all tenanted.",
+      }),
+    });
+    expect(eligibility.subdivisionRejectReason).toBe("listing_claims_multi_unit_development");
+    expect(shouldSuppressParentLandAreaForEligibility(eligibility)).toBe(true);
+  });
+
+  it("does NOT suppress a genuine standalone new build's own land area", () => {
+    const eligibility = assessPropertyEligibility({
+      address: "50 Example Road, Flat Bush, Auckland",
+      estateType: "Fee Simple",
+      legalDescription: "Lot 7 Deposited Plan 54321",
+      propertyType: "Residential Dwelling",
+      landAreaSqm: 420,
+      floorAreaSqm: 210,
+      buildYear: 1990,
+      zoneCode: "MHS",
+      potentialLots: 1,
+      minLotSize: 400,
+      listingClaims: extractListingClaims({
+        description: "Stunning brand new standalone home on its own freehold title.",
+      }),
+    });
+    // Reject reason is the new-build signal, but typology stays standalone …
+    expect(eligibility.typology).toBe("standalone");
+    expect(eligibility.subdivisionRejectReason).toBe("listing_claims_new_build");
+    // … so its own valid parcel area must be kept, not suppressed.
+    expect(shouldSuppressParentLandAreaForEligibility(eligibility)).toBe(false);
+    const resolved = resolveSubjectLandAreaForEligibility({
+      eligibility,
+      currentLandAreaSqm: 420,
+      currentLandAreaSource: "linz",
+      propertyValueLandAreaSqm: null,
+    });
+    expect(resolved.landAreaSqm).toBe(420);
+    expect(resolved.suppressedParentLandArea).toBe(false);
   });
 });

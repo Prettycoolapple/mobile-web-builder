@@ -1,6 +1,7 @@
 import { logger } from "./logger";
 import { geocodeAddress } from "./geocode";
-import { fetchLINZLetterSuffixAddresses } from "./linz";
+import { fetchLINZAddressCandidates, fetchLINZLetterSuffixAddresses, lrsAddressLooksExact } from "./linz";
+import type { LinzAddressSearchCandidate } from "./linz";
 
 /**
  * Subdivision detection.
@@ -16,6 +17,45 @@ export interface SubdivisionResult {
   isSubdivided: boolean;
   parentAddress: string;
   subLots: string[];
+}
+
+/**
+ * Recovers the parent street+number from a just-sent subdivision clarification
+ * (see the "clarificationType": "subdivision" JSON payload, which carries a
+ * `parentAddress` field) and merges it with a short follow-up reply that
+ * ISN'T itself a full address — e.g. the user replies "Birkenhead" after being
+ * asked to pick between "4A Inglis Street, Mosgiel" / "4B Inglis Street,
+ * Mosgiel", meaning they intended "4 Inglis Street, Birkenhead" all along.
+ *
+ * Deliberately dependency-free (no import of the address-detection helpers in
+ * claude.ts) so it stays trivially unit-testable; callers are expected to
+ * apply their own additional guards (e.g. "is this a listing-browse phrase?")
+ * before treating the result as authoritative.
+ */
+export function mergeSubdivisionCorrection(
+  lastAssistantContent: string | null | undefined,
+  currentUserText: string,
+): { mergedAddress: string } | null {
+  const trimmedReply = currentUserText.trim();
+  if (!trimmedReply || trimmedReply.split(/\s+/).length > 6) return null;
+  // A reply starting with a number is very likely the user picking one of the
+  // offered sub-lots directly (e.g. "4A Inglis Street, Mosgiel"), which the
+  // normal address-extraction path already handles correctly on its own.
+  if (/^\d/.test(trimmedReply)) return null;
+  if (!lastAssistantContent) return null;
+
+  let parsed: { clarificationType?: unknown; parentAddress?: unknown } | null = null;
+  try {
+    parsed = JSON.parse(lastAssistantContent);
+  } catch {
+    return null;
+  }
+  if (parsed?.clarificationType !== "subdivision" || typeof parsed.parentAddress !== "string") return null;
+
+  const streetLine = parsed.parentAddress.split(",")[0]?.trim();
+  if (!streetLine) return null;
+
+  return { mergedAddress: `${streetLine}, ${trimmedReply}` };
 }
 
 const LETTERS = ["A", "B", "C", "D", "E", "F"] as const;
@@ -104,6 +144,11 @@ function formattedContainsParentLot(formatted: string, number: string): boolean 
   return re.test(norm);
 }
 
+function linzCandidateContainsParentLot(candidateAddress: string, requestedAddress: string, number: string): boolean {
+  if (!lrsAddressLooksExact(requestedAddress, candidateAddress)) return false;
+  return formattedContainsParentLot(candidateAddress, number);
+}
+
 export async function detectSubdivision(address: string): Promise<SubdivisionResult> {
   const parsed = parseStreetNumberSuffix(address);
   if (!parsed || parsed.letter !== "") {
@@ -123,6 +168,20 @@ export async function detectSubdivision(address: string): Promise<SubdivisionRes
       parentAddress: address,
       subLots: confirmed,
     };
+  }
+
+  const linzParentCandidates = await fetchLINZAddressCandidates(address, { maxResults: 3 }).catch(
+    (): LinzAddressSearchCandidate[] => [],
+  );
+  const linzParentLooksValid = linzParentCandidates.some((candidate) =>
+    linzCandidateContainsParentLot(candidate.address, address, number),
+  );
+  if (linzParentLooksValid) {
+    logger.info(
+      { parent: address, source: "linz_lrs_address_search" },
+      "Subdivision skipped because base address exists",
+    );
+    return { isSubdivided: false, parentAddress: address, subLots: [] };
   }
 
   const linzSubLots = await fetchLINZLetterSuffixAddresses(address, LETTERS).catch(() => []);
