@@ -1577,7 +1577,7 @@ export default function SearchScreen() {
               }
               refreshProfile().catch(() => {});
               bumpSearchHistory();
-            } else if (data.report && data.report.scores) {
+            } else if (data.report) {
               const reportWithHistory = withHistoryMetadata(data.report, data.searchId, data.historyCreatedAt);
               if (currentSessionId === job.sessionId) {
                 setCurrentReport(reportWithHistory);
@@ -2226,7 +2226,7 @@ export default function SearchScreen() {
             bumpSearchHistory();
             return;
           }
-          if (data.report && data.report.scores) {
+          if (data.report) {
             const reportWithHistory = withHistoryMetadata(data.report, data.searchId, data.historyCreatedAt);
             setCurrentReport(reportWithHistory);
             updateLastMessage({ type: "report", report: reportWithHistory, content: "" }, sessionId);
@@ -2852,7 +2852,7 @@ export default function SearchScreen() {
               return;
             }
 
-            if (data.report && data.report.scores) {
+            if (data.report) {
               const reportWithHistory = withHistoryMetadata(data.report, data.searchId, data.historyCreatedAt);
               const patchedReport: FeasibilityReport = (
                 !data.report.photoUrl && selectedPhotoUrl

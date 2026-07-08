@@ -246,11 +246,11 @@ function applyChatResponse(data: ChatResponse, ctx: SendChatArgs & { loadingId: 
     seedGroupScores(group, store, sessionId);
     return;
   }
-  if (data.report && data.report.scores) {
+  if (data.report) {
     const report = withHistoryMetadata(data.report, data.searchId, data.historyCreatedAt);
     store.setCurrentReport(report, sessionId);
     store.updateMessage(loadingId, { type: "report", report, content: "" }, sessionId);
-    if (report.address) store.updateCandidateScores({ [report.address]: report.scores }, sessionId);
+    if (report.scores && report.address) store.updateCandidateScores({ [report.address]: report.scores }, sessionId);
     return;
   }
 
@@ -451,11 +451,11 @@ export async function runAnalyse(args: RunAnalyseArgs): Promise<void> {
       seedGroupScores(group, store, sessionId);
       return;
     }
-    if (data.report && data.report.scores) {
+    if (data.report) {
       const report = withHistoryMetadata(data.report, data.searchId, data.historyCreatedAt);
       store.setCurrentReport(report, sessionId);
       store.updateMessage(loadingId, { type: "report", report, content: "" }, sessionId);
-      if (report.address) store.updateCandidateScores({ [report.address]: report.scores }, sessionId);
+      if (report.scores && report.address) store.updateCandidateScores({ [report.address]: report.scores }, sessionId);
       return;
     }
     if (data.type === "clarification" && Array.isArray(data.options) && data.options.length > 0) {

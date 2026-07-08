@@ -413,6 +413,14 @@ function postAnalysisPayload(answers: string[]): { postAnalysisAnswer: string | 
   };
 }
 
+function analyseFallbackContent(answers: string[], locale: ReturnType<typeof normaliseLocale>): string {
+  const joined = answers.map((answer) => answer.trim()).filter(Boolean).join("\n\n");
+  if (joined) return joined;
+  return locale === "zh"
+    ? "已生成该物业的分析报告。"
+    : "I've prepared the property analysis report.";
+}
+
 function nearbyAmenityClarification(addressCandidate: string | null | undefined, locale: ReturnType<typeof normaliseLocale>): string {
   const english = addressCandidate
     ? `I could not locate ${addressCandidate} closely enough to search nearby amenities. Please include the suburb or city.`
@@ -8280,7 +8288,6 @@ router.post(
                 deterministicReport,
                 chatSelectedListingContext ?? pipelineResult.selectedListingContext,
               );
-              const content = JSON.stringify(deterministicReport);
               let savedSearchId: string | null = null;
               let savedSearchCreatedAt: string | null = null;
 
@@ -8300,11 +8307,11 @@ router.post(
                 }
               }
 
-              const translatedAnalyse = await translateChatContent(content, "analyse", chatLocale, chatTranslateTitleSchool);
               const postAnalysisAnswers = await buildPostAnalysisAnswersForReport(userText, deterministicReport, chatLocale, req.log);
               sendAnalyseResponse({
-                content: translatedAnalyse,
+                content: analyseFallbackContent(postAnalysisAnswers, chatLocale),
                 mode: "analyse",
+                report: deterministicReport,
                 searchId: savedSearchId,
                 historyCreatedAt: savedSearchCreatedAt,
                 ...postAnalysisPayload(postAnalysisAnswers),
