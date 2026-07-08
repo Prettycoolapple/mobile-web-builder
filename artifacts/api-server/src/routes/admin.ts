@@ -11,6 +11,7 @@ import {
   chatLlmFeedback,
   dmThreads,
   dmMessages,
+  watchlistItems,
   propertyCache,
   conversationSyncs,
   abuseEvents,
@@ -27,6 +28,7 @@ import { upsertFeatureRowFromPipeline } from "../lib/property-feature-index";
 import { getIo } from "../lib/socket";
 import { sendPushToUser } from "../lib/expo-push";
 import { getUnreadAppBadgeCount } from "../lib/notification-state";
+import { getWatchlistMonitorAdminStatus } from "../lib/watchlist-monitor";
 
 const router = Router();
 
@@ -810,6 +812,46 @@ router.get("/admin/users/:userId/agent-calls", requireAdmin, async (req, res) =>
   }
 });
 
+// GET /admin/users/:userId/watchlist - properties saved by this user
+router.get("/admin/users/:userId/watchlist", requireAdmin, async (req, res) => {
+  const { userId } = req.params;
+  const limit = parseLimit(req.query.limit, 20, 100);
+  const offset = parseOffset(req.query.offset);
+
+  try {
+    const rows = await db
+      .select({
+        id: watchlistItems.id,
+        createdAt: watchlistItems.createdAt,
+        address: watchlistItems.address,
+        listingUrl: watchlistItems.listingUrl,
+        priceDisplay: watchlistItems.priceDisplay,
+        propertyType: watchlistItems.propertyType,
+        bedrooms: watchlistItems.bedrooms,
+        bathrooms: watchlistItems.bathrooms,
+        landAreaSqm: watchlistItems.landAreaSqm,
+        zone: watchlistItems.zone,
+        compositeScore: watchlistItems.compositeScore,
+      })
+      .from(watchlistItems)
+      .where(eq(watchlistItems.userId, userId))
+      .orderBy(desc(watchlistItems.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    const totalResult = await db.execute<{ total: string }>(sql`
+      SELECT COUNT(*)::text AS total FROM watchlist_items WHERE user_id = ${userId}
+    `);
+    const totalRows = (totalResult as any).rows ?? totalResult;
+    const total = Number((totalRows[0] as any)?.total ?? 0);
+
+    res.json({ total, limit, offset, rows });
+  } catch (err) {
+    req.log.error({ err }, "admin user watchlist list failed");
+    res.status(500).json({ error: "Failed to load watchlist" });
+  }
+});
+
 // GET /admin/users/:userId/connections  → DM threads (service-provider connections)
 router.get("/admin/users/:userId/connections", requireAdmin, async (req, res) => {
   const { userId } = req.params;
@@ -1197,6 +1239,85 @@ router.get("/admin/stats/top-addresses", requireAdmin, async (req, res) => {
 
 // ── Global property cache — list ─────────────────────────────────────────────
 // GET /admin/property-cache?limit=50&offset=0&search=
+// GET /admin/stats/most-watched?limit=50&offset=0
+router.get("/admin/stats/most-watched", requireAdmin, async (req, res) => {
+  const limit = parseLimit(req.query.limit, 50, 200);
+  const offset = parseOffset(req.query.offset);
+
+  try {
+    const result = await db.execute<{
+      property_key: string;
+      address: string;
+      listing_url: string | null;
+      price_display: string | null;
+      property_type: string | null;
+      bedrooms: string | null;
+      bathrooms: string | null;
+      land_area_sqm: string | null;
+      zone: string | null;
+      composite_score: string | null;
+      watch_count: string;
+      user_count: string;
+      first_watched_at: string;
+      last_watched_at: string;
+    }>(sql`
+      SELECT
+        property_key,
+        (array_agg(address ORDER BY created_at DESC))[1] AS address,
+        (array_agg(listing_url ORDER BY created_at DESC))[1] AS listing_url,
+        (array_agg(price_display ORDER BY created_at DESC))[1] AS price_display,
+        (array_agg(property_type ORDER BY created_at DESC))[1] AS property_type,
+        (array_agg(bedrooms ORDER BY created_at DESC))[1]::text AS bedrooms,
+        (array_agg(bathrooms ORDER BY created_at DESC))[1]::text AS bathrooms,
+        (array_agg(land_area_sqm ORDER BY created_at DESC))[1]::text AS land_area_sqm,
+        (array_agg(zone ORDER BY created_at DESC))[1] AS zone,
+        (array_agg(composite_score ORDER BY created_at DESC))[1]::text AS composite_score,
+        COUNT(*)::text AS watch_count,
+        COUNT(DISTINCT user_id)::text AS user_count,
+        MIN(created_at) AS first_watched_at,
+        MAX(created_at) AS last_watched_at
+      FROM watchlist_items
+      GROUP BY property_key
+      ORDER BY COUNT(*) DESC, MAX(created_at) DESC, address ASC
+      LIMIT ${limit} OFFSET ${offset}
+    `);
+    const rows = (result as any).rows ?? result;
+
+    const totalResult = await db.execute<{ total: string }>(sql`
+      SELECT COUNT(*)::text AS total FROM (
+        SELECT property_key FROM watchlist_items GROUP BY property_key
+      ) t
+    `);
+    const totalRows = (totalResult as any).rows ?? totalResult;
+    const total = Number((totalRows[0] as any)?.total ?? 0);
+
+    res.json({
+      total,
+      limit,
+      offset,
+      rows: (rows as any[]).map((r) => ({
+        propertyKey: r.property_key,
+        address: r.address,
+        listingUrl: r.listing_url,
+        priceDisplay: r.price_display,
+        propertyType: r.property_type,
+        bedrooms: r.bedrooms == null ? null : Number(r.bedrooms),
+        bathrooms: r.bathrooms == null ? null : Number(r.bathrooms),
+        landAreaSqm: r.land_area_sqm == null ? null : Number(r.land_area_sqm),
+        zone: r.zone,
+        compositeScore: r.composite_score == null ? null : Number(r.composite_score),
+        watchCount: Number(r.watch_count ?? 0),
+        userCount: Number(r.user_count ?? 0),
+        firstWatchedAt: r.first_watched_at,
+        lastWatchedAt: r.last_watched_at,
+      })),
+    });
+  } catch (err) {
+    req.log.error({ err }, "admin most watched failed");
+    res.status(500).json({ error: "Failed to load most watched properties" });
+  }
+});
+
 router.get("/admin/property-cache", requireAdmin, async (req, res) => {
   const limit = parseLimit(req.query.limit, 50, 200);
   const offset = parseOffset(req.query.offset);
@@ -1386,6 +1507,16 @@ router.post("/admin/property-cache/rescan", requireAdmin, async (req, res) => {
 // GET /admin/property-cache/rescan/status
 router.get("/admin/property-cache/rescan/status", requireAdmin, (_req, res) => {
   res.json(rescanStatus);
+});
+
+// GET /admin/watchlist-monitor/status
+router.get("/admin/watchlist-monitor/status", requireAdmin, async (req, res) => {
+  try {
+    res.json(await getWatchlistMonitorAdminStatus());
+  } catch (err) {
+    req.log.error({ err }, "admin watchlist monitor status failed");
+    res.status(500).json({ error: "Failed to load watchlist monitor status" });
+  }
 });
 
 // ─── Agent management ────────────────────────────────────────────────────────
@@ -1675,6 +1806,84 @@ router.get("/admin/listings/pending-count", requireAdmin, async (_req, res) => {
 });
 
 // GET /admin/users/:userId/chats — for user detail history
+type AdminChatMessage = {
+  role: "user" | "assistant";
+  type: string;
+  content: string;
+  createdAt: string | null;
+};
+
+function adminChatTimestamp(value: unknown, fallback: unknown): string | null {
+  const raw = value ?? fallback;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    const n = Number(raw);
+    const d = Number.isFinite(n) && raw.trim().length >= 10 ? new Date(n) : new Date(raw);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  }
+  return null;
+}
+
+function adminChatContent(message: any): string | null {
+  const role = message?.role;
+  const type = typeof message?.type === "string" ? message.type : "text";
+  const content = typeof message?.content === "string" ? message.content.trim() : "";
+  if (type === "loading") return null;
+  if (role === "user") return content || null;
+  if (role !== "assistant") return null;
+
+  if (type === "report" || type === "report_group") return "report generated";
+  if (content) return content;
+  if (message?.clarification?.question) {
+    const options = Array.isArray(message.clarification.options)
+      ? message.clarification.options.filter((o: unknown) => typeof o === "string" && o.trim()).join(", ")
+      : "";
+    return options ? `${message.clarification.question} Options: ${options}` : String(message.clarification.question);
+  }
+  if (type === "search") {
+    if (typeof message?.aiIntro === "string" && message.aiIntro.trim()) return message.aiIntro.trim();
+    const count = Array.isArray(message?.searchResults) ? message.searchResults.length : null;
+    return count != null ? `Search results shown (${count})` : "Search results shown";
+  }
+  if (type === "provider_recommendation") {
+    const name =
+      typeof message?.provider?.companyName === "string" && message.provider.companyName.trim()
+        ? message.provider.companyName.trim()
+        : typeof message?.provider?.fullName === "string" && message.provider.fullName.trim()
+          ? message.provider.fullName.trim()
+          : null;
+    return name ? `Service provider recommendation shown: ${name}` : "Service provider recommendation shown";
+  }
+  if (type === "provider_upgrade_gate") return "Provider upgrade prompt shown";
+  if (type === "agent_contact") {
+    const parts = [message?.agentName, message?.agencyName, message?.agentPhone]
+      .filter((v) => typeof v === "string" && v.trim());
+    return parts.length ? `Agent contact shown: ${parts.join(" · ")}` : "Agent contact shown";
+  }
+  return null;
+}
+
+function extractAdminChatMessages(payload: any): AdminChatMessage[] {
+  if (!payload || !Array.isArray(payload.messages)) return [];
+  return payload.messages
+    .map((message: any): AdminChatMessage | null => {
+      const role = message?.role === "user" || message?.role === "assistant" ? message.role : null;
+      if (!role) return null;
+      const content = adminChatContent(message);
+      if (!content) return null;
+      return {
+        role,
+        type: typeof message?.type === "string" ? message.type : "text",
+        content,
+        createdAt: adminChatTimestamp(message?.timestamp, message?.createdAt ?? message?.id),
+      };
+    })
+    .filter((message: AdminChatMessage | null): message is AdminChatMessage => !!message);
+}
+
 router.get("/admin/users/:userId/chats", requireAdmin, async (req, res) => {
   const { userId } = req.params;
   const limit = parseLimit(req.query.limit, 10, 100);
@@ -1701,27 +1910,22 @@ router.get("/admin/users/:userId/chats", requireAdmin, async (req, res) => {
     const totalRows = (totalResult as any).rows ?? totalResult;
     const total = Number((totalRows[0] as any)?.total ?? 0);
 
-    // Parse and extract only user messages
     const processedRows = rows.map((r) => {
-      let userMessages: { content: string; createdAt?: string }[] = [];
+      let messages: AdminChatMessage[] = [];
       try {
-        const payload = r.data as any;
-        if (payload && Array.isArray(payload.messages)) {
-          userMessages = payload.messages
-            .filter((m: any) => m.role === "user" && typeof m.content === "string")
-            .map((m: any) => ({
-              content: m.content,
-              createdAt: m.createdAt || m.id,
-            }));
-        }
+        messages = extractAdminChatMessages(r.data as any);
       } catch {
         // safe fallback
       }
+      const userMessages = messages
+        .filter((m) => m.role === "user")
+        .map((m) => ({ content: m.content, createdAt: m.createdAt ?? undefined }));
       return {
         id: r.id,
         title: r.title,
         clientUpdatedAt: r.clientUpdatedAt,
         createdAt: r.createdAt,
+        messages,
         userMessages,
       };
     });

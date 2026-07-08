@@ -21,7 +21,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useWatchlist, WatchlistItem } from "@/context/WatchlistContext";
 import { useNotifications } from "@/context/NotificationContext";
 import { confirmRemoveFromWatchlist, notifyWatchlistError } from "@/lib/watchlist-confirm";
-import { useFocusEffect, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { getApiBase } from "@/lib/api";
 import { useT, getCurrentLocale } from "@/lib/i18n";
 import { translateReportViaApi } from "@/lib/translateReport";
@@ -343,6 +343,7 @@ export default function HistoryScreen() {
   const { markPageRead } = useNotifications();
   const { items: watchItems, loading: watchLoading, refresh: refreshWatch } = useWatchlist();
   const router = useRouter();
+  const routeParams = useLocalSearchParams<{ tab?: string | string[] }>();
   const { t } = useT();
 
   const topInset = Platform.OS === "web" ? 67 : insets.top;
@@ -354,6 +355,13 @@ export default function HistoryScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [openingId, setOpeningId] = useState<string | null>(null);
   const hasLoadedRef = useRef(false);
+
+  useEffect(() => {
+    const requestedTab = Array.isArray(routeParams.tab) ? routeParams.tab[0] : routeParams.tab;
+    if (requestedTab !== "watchlist") return;
+    setTab("watchlist");
+    void refreshWatch();
+  }, [routeParams.tab, refreshWatch]);
 
   // Tapping "Analyse" on a watchlist card queues the action and sends the user
   // to the Search tab, which runs it on focus.

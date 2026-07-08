@@ -201,6 +201,11 @@ function NotificationSetup() {
         router.push("/(tabs)" as never);
         return;
       }
+      if (type === "watchlist_change") {
+        DeviceEventEmitter.emit("projectAlpha:notificationsChanged");
+        router.push({ pathname: "/(tabs)/history", params: { tab: "watchlist" } } as never);
+        return;
+      }
       if (threadId) {
         router.push(`/chat/${threadId}` as never);
       }
@@ -211,6 +216,8 @@ function NotificationSetup() {
       const type = data && typeof data.type === "string" ? data.type : undefined;
       if (type === "report_ready" || type === "screening_ready") {
         DeviceEventEmitter.emit("projectAlpha:backgroundJobsReady", { type });
+      }
+      if (type === "report_ready" || type === "screening_ready" || type === "watchlist_change") {
         DeviceEventEmitter.emit("projectAlpha:notificationsChanged");
       }
     });

@@ -30,6 +30,7 @@ import translateRouter from "./translate";
 import transcribeRouter from "./transcribe";
 import watchlistRouter from "./watchlist";
 import reportPdfRouter from "./report-pdf";
+import cronRouter from "./cron";
 
 const router: IRouter = Router();
 
@@ -64,5 +65,6 @@ router.use(translateRouter);
 router.use(transcribeRouter);
 router.use(watchlistRouter);
 router.use(reportPdfRouter);
+router.use(cronRouter);
 
 export default router;

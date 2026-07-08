@@ -33,5 +33,8 @@
   ],
   "env": {
     "ENABLE_SOCKET_IO": "false"
-  }
+  },
+  "crons": [
+    { "path": "/api/cron/watchlist-monitor", "schedule": "0 18 * * *" }
+  ]
 }

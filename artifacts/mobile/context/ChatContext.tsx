@@ -712,9 +712,29 @@ function generateId(): string {
   return Date.now().toString() + Math.random().toString(36).substr(2, 9);
 }
 
+function messageHasSyncableContent(message: ChatMessage): boolean {
+  if (message.type === "loading") return false;
+  if (typeof message.content === "string" && message.content.trim().length > 0) return true;
+  if (message.type === "report" && message.report) return true;
+  if (message.type === "report_group" && message.reportGroup) return true;
+  if (message.type === "search" && ((message.searchResults?.length ?? 0) > 0 || !!message.aiIntro?.trim())) return true;
+  if (message.type === "provider_recommendation" && message.provider) return true;
+  if (message.type === "provider_upgrade_gate") return true;
+  if (message.type === "agent_contact" && (message.agentName || message.agencyName || message.agentPhone || message.agentListingUrl)) return true;
+  if (
+    (message.type === "subdivision_clarification" ||
+      message.type === "address_clarification" ||
+      message.type === "discovery_exhausted_choice") &&
+    !!message.clarification?.question
+  ) {
+    return true;
+  }
+  return false;
+}
+
 /** A session worth persisting/syncing: has at least one real (non-loading) message. */
 function sessionHasContent(s: Session): boolean {
-  return s.messages.some((m) => m.type !== "loading" && m.content.length > 0);
+  return s.messages.some(messageHasSyncableContent);
 }
 
 /** Strip on-device-only fields (file URIs invalid on other devices) before syncing. */
@@ -869,9 +889,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const saveSessions = useCallback((newSessions: Session[]) => {
     const storageKey = getStorageKey(userId);
-    const withMessages = newSessions.filter(
-      (s) => s.messages.some((m) => m.type !== "loading" && m.content.length > 0),
-    );
+    const withMessages = newSessions.filter(sessionHasContent);
     AsyncStorage.setItem(storageKey, JSON.stringify(withMessages));
   }, [userId]);
 

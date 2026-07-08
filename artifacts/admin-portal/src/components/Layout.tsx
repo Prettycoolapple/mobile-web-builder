@@ -52,6 +52,9 @@ export default function Layout() {
         <NavLink to="/message-hub" className={({ isActive }) => (isActive ? "active" : "")}>
           Message Hub
         </NavLink>
+        <NavLink to="/most-watched" className={({ isActive }) => (isActive ? "active" : "")}>
+          Most watched
+        </NavLink>
         <NavLink to="/property-cache" className={({ isActive }) => (isActive ? "active" : "")}>
           Property reports
         </NavLink>

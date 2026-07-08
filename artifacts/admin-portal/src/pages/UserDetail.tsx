@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { apiGet, apiPatch } from "@/lib/api";
 import { formatDate, relativeTime } from "@/lib/format";
 
-type Tab = "feedback" | "addresses" | "agent_calls" | "connections" | "chats";
+type Tab = "feedback" | "addresses" | "agent_calls" | "watchlist" | "connections" | "chats";
 
 interface UserDetailResponse {
   profile: {
@@ -57,6 +57,20 @@ interface AgentCallRow {
   propertyAddress: string | null;
 }
 
+interface WatchlistRow {
+  id: string;
+  createdAt: string;
+  address: string;
+  listingUrl: string | null;
+  priceDisplay: string | null;
+  propertyType: string | null;
+  bedrooms: number | null;
+  bathrooms: number | null;
+  landAreaSqm: number | null;
+  zone: string | null;
+  compositeScore: number | null;
+}
+
 interface ConnectionRow {
   threadId: string;
   connectedAt: string;
@@ -67,11 +81,19 @@ interface ConnectionRow {
   otherRole: string;
 }
 
+interface ChatMessageRow {
+  role: "user" | "assistant";
+  type: string;
+  content: string;
+  createdAt: string | null;
+}
+
 interface ChatRow {
   id: string;
   title: string;
   clientUpdatedAt: string | null;
   createdAt: string;
+  messages?: ChatMessageRow[];
   userMessages: { content: string; createdAt?: string }[];
 }
 
@@ -139,6 +161,8 @@ export default function UserDetailPage() {
   const [addressOffset, setAddressOffset] = useState(0);
   const [callList, setCallList] = useState<ListResponse<AgentCallRow> | null>(null);
   const [callOffset, setCallOffset] = useState(0);
+  const [watchlistList, setWatchlistList] = useState<ListResponse<WatchlistRow> | null>(null);
+  const [watchlistOffset, setWatchlistOffset] = useState(0);
   const [connectionList, setConnectionList] = useState<ListResponse<ConnectionRow> | null>(null);
   const [connectionOffset, setConnectionOffset] = useState(0);
   const [chatList, setChatList] = useState<ListResponse<ChatRow> | null>(null);
@@ -191,6 +215,14 @@ export default function UserDetailPage() {
       .catch(() => setConnectionList(null));
   }, [userId, connectionOffset]);
 
+  const loadWatchlist = useCallback(() => {
+    if (!userId) return;
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(watchlistOffset) });
+    apiGet<ListResponse<WatchlistRow>>(`/admin/users/${userId}/watchlist?${params}`)
+      .then(setWatchlistList)
+      .catch(() => setWatchlistList(null));
+  }, [userId, watchlistOffset]);
+
   const loadChats = useCallback(() => {
     if (!userId) return;
     const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(chatOffset) });
@@ -208,6 +240,9 @@ export default function UserDetailPage() {
   useEffect(() => {
     if (tab === "agent_calls") loadCalls();
   }, [tab, loadCalls]);
+  useEffect(() => {
+    if (tab === "watchlist") loadWatchlist();
+  }, [tab, loadWatchlist]);
   useEffect(() => {
     if (tab === "connections") loadConnections();
   }, [tab, loadConnections]);
@@ -420,6 +455,16 @@ export default function UserDetailPage() {
             >
               Agent calls{callList ? ` (${callList.total})` : ""}
             </button>
+            <button
+              className="btn ghost"
+              onClick={() => setTab("watchlist")}
+              style={{
+                fontWeight: tab === "watchlist" ? 600 : 400,
+                borderColor: tab === "watchlist" ? "var(--accent, #2563eb)" : undefined,
+              }}
+            >
+              Watchlist{watchlistList ? ` (${watchlistList.total})` : ""}
+            </button>
             {profile.role === "service_provider" && (
               <button
                 className="btn ghost"
@@ -453,6 +498,9 @@ export default function UserDetailPage() {
         )}
         {tab === "agent_calls" && (
           <CallTable list={callList} offset={callOffset} setOffset={setCallOffset} />
+        )}
+        {tab === "watchlist" && (
+          <WatchlistTable list={watchlistList} offset={watchlistOffset} setOffset={setWatchlistOffset} />
         )}
         {tab === "connections" && (
           <ConnectionsTable list={connectionList} offset={connectionOffset} setOffset={setConnectionOffset} />
@@ -616,6 +664,68 @@ function CallTable({
   );
 }
 
+function WatchlistTable({
+  list,
+  offset,
+  setOffset,
+}: {
+  list: ListResponse<WatchlistRow> | null;
+  offset: number;
+  setOffset: (n: number) => void;
+}) {
+  if (!list) return <div className="empty">Loading…</div>;
+  if (list.rows.length === 0) return <div className="empty">No saved watchlist properties yet.</div>;
+  return (
+    <>
+      <div style={{ overflowX: "auto" }}>
+        <table className="table">
+          <thead>
+            <tr>
+              <th style={{ width: 160 }}>Saved</th>
+              <th>Address</th>
+              <th style={{ width: 130 }}>Price</th>
+              <th style={{ width: 130 }}>Type</th>
+              <th style={{ width: 90 }}>Beds/Baths</th>
+              <th style={{ width: 110 }}>Land</th>
+              <th style={{ width: 150 }}>Zone</th>
+              <th style={{ width: 90, textAlign: "right" }}>Score</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.rows.map((r) => (
+              <tr key={r.id}>
+                <td title={formatDate(r.createdAt)}>{relativeTime(r.createdAt)}</td>
+                <td style={{ wordBreak: "break-word" }}>
+                  <div style={{ fontWeight: 500 }}>{r.address}</div>
+                  {r.listingUrl && (
+                    <a
+                      href={r.listingUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ display: "inline-block", marginTop: 4, color: "var(--accent, #2563eb)", fontSize: 12 }}
+                    >
+                      Open listing
+                    </a>
+                  )}
+                </td>
+                <td>{r.priceDisplay ?? "—"}</td>
+                <td>{r.propertyType ?? "—"}</td>
+                <td>{r.bedrooms ?? "—"} / {r.bathrooms ?? "—"}</td>
+                <td>{r.landAreaSqm != null ? `${r.landAreaSqm.toLocaleString()} sqm` : "—"}</td>
+                <td>{r.zone ?? "—"}</td>
+                <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                  {r.compositeScore != null ? r.compositeScore.toFixed(0) : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <Pagination total={list.total} offset={offset} setOffset={setOffset} />
+    </>
+  );
+}
+
 function ConnectionsTable({
   list,
   offset,
@@ -689,12 +799,47 @@ function ChatsTable({
                 Last active: {relativeTime(r.clientUpdatedAt || r.createdAt)}
               </div>
             </div>
-            {r.userMessages.length > 0 ? (
+            {(r.messages?.length ?? 0) > 0 ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {r.messages!.map((msg, i) => {
+                  const isAssistant = msg.role === "assistant";
+                  return (
+                    <div
+                      key={`${msg.role}-${msg.createdAt ?? i}-${i}`}
+                      style={{
+                        alignSelf: isAssistant ? "flex-start" : "flex-end",
+                        maxWidth: "86%",
+                        padding: "9px 12px",
+                        background: isAssistant ? "#f8fafc" : "#eef6ff",
+                        border: "1px solid var(--border, #d1d5db)",
+                        borderRadius: 8,
+                        fontSize: 14,
+                      }}
+                    >
+                      <div
+                        style={{
+                          color: "var(--muted)",
+                          fontSize: 11,
+                          marginBottom: 5,
+                          display: "flex",
+                          gap: 8,
+                          justifyContent: "space-between",
+                        }}
+                      >
+                        <span>{isAssistant ? "AI / LLM" : "User"} · {msg.type}</span>
+                        <span title={formatDate(msg.createdAt)}>{msg.createdAt ? formatDate(msg.createdAt) : "No timestamp"}</span>
+                      </div>
+                      <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{msg.content}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : r.userMessages.length > 0 ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {r.userMessages.map((msg, i) => (
                   <div key={i} style={{ padding: "8px 12px", background: "var(--surface, #f3f4f6)", borderRadius: 6, fontSize: 14 }}>
                     <div style={{ color: "var(--muted)", fontSize: 11, marginBottom: 4 }}>
-                      User
+                      User · {msg.createdAt ? formatDate(msg.createdAt) : "No timestamp"}
                     </div>
                     <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{msg.content}</div>
                   </div>
@@ -702,7 +847,7 @@ function ChatsTable({
               </div>
             ) : (
               <div style={{ fontSize: 13, color: "var(--muted)", fontStyle: "italic" }}>
-                No text messages from user in this session.
+                No chat messages in this session.
               </div>
             )}
           </div>

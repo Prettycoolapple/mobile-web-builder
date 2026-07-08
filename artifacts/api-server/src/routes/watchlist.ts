@@ -3,6 +3,7 @@ import { eq, and, desc } from "drizzle-orm";
 import { db, watchlistItems, withDbRetry } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { normaliseAddressKey } from "../lib/address-key";
+import { seedWatchlistMonitorStateFromItem } from "../lib/watchlist-monitor";
 
 const router = Router();
 
@@ -158,6 +159,21 @@ router.post("/watchlist/toggle", requireAuth, async (req, res) => {
         .returning(),
     );
     const item = inserted ?? rows.find((row) => row.propertyKey === propertyKey) ?? null;
+    if (item) {
+      seedWatchlistMonitorStateFromItem({
+        address: item.address,
+        listingUrl: item.listingUrl,
+        priceDisplay: item.priceDisplay,
+        propertyType: item.propertyType,
+        bedrooms: item.bedrooms,
+        bathrooms: item.bathrooms,
+        landAreaSqm: item.landAreaSqm,
+        photoUrl: item.photoUrl,
+        snapshot: item.snapshotJson,
+      }).catch((err) => {
+        req.log.warn({ err, propertyKey: item.propertyKey }, "Failed to seed watchlist monitor state");
+      });
+    }
     res.json({ watched: true, item: item ? publicWatchlistItem(item) : null, propertyKey });
   } catch (error) {
     req.log.error({ err: error }, "Failed to toggle watchlist item");
