@@ -249,6 +249,15 @@ function makeHoldExistingCostBreakdown(
     tdr_ttr_note: null,
     services_low: 0,
     services_high: 0,
+    contributions_low: 0,
+    contributions_high: 0,
+    contributions_units: 0,
+    veolia_low: 0,
+    veolia_high: 0,
+    veolia_in_zone: base.veolia_in_zone,
+    land_rate_annual: base.land_rate_annual,
+    land_rate_low: 0,
+    land_rate_high: 0,
     construction_low: 0,
     construction_high: 0,
     consents_low: 0,
@@ -307,6 +316,15 @@ function makeRefurbishCostBreakdown(
     tdr_ttr_note: null,
     services_low: 0,
     services_high: 0,
+    contributions_low: 0,
+    contributions_high: 0,
+    contributions_units: 0,
+    veolia_low: 0,
+    veolia_high: 0,
+    veolia_in_zone: base.veolia_in_zone,
+    land_rate_annual: base.land_rate_annual,
+    land_rate_low: 0,
+    land_rate_high: 0,
     construction_low: r(refurbLow),
     construction_high: r(refurbHigh),
     consents_low: r(consentsLow),
@@ -336,6 +354,8 @@ function costItemsForStrategy(id: DevelopmentStrategyId, costs: CostBreakdown): 
       { label: "Retaining Walls", low: costs.retaining_low, high: costs.retaining_high },
       { label: "TDR/TTR transfer right", low: costs.tdr_ttr_low, high: costs.tdr_ttr_high },
       { label: "Services & Infrastructure", low: costs.services_low, high: costs.services_high },
+      { label: "Development contributions (IGC + council DC)", low: costs.contributions_low, high: costs.contributions_high },
+      { label: "Veolia network charges (Papakura)", low: costs.veolia_low, high: costs.veolia_high },
     );
   } else if (id === "refurbish") {
     items.push({ label: "Refurbishment", low: costs.construction_low, high: costs.construction_high });
@@ -344,6 +364,7 @@ function costItemsForStrategy(id: DevelopmentStrategyId, costs: CostBreakdown): 
     { label: "Consents & Professionals", low: costs.consents_low, high: costs.consents_high },
     { label: "Finance / Holding", low: costs.finance_low, high: costs.finance_high },
     { label: "Contingency", low: costs.contingency_low, high: costs.contingency_high },
+    { label: "Land rate (holding)", low: costs.land_rate_low, high: costs.land_rate_high },
   );
   return items.filter((item) => item.low > 0 || item.high > 0 || item.label.startsWith("Land"));
 }

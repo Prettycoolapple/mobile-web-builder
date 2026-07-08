@@ -57,7 +57,7 @@ import {
   filterRiskSummaryRemoveIncompleteDataDisclaimerBullets,
   sanitizeReportScoresReasons,
 } from "../lib/risk-summary";
-import { ensureMinRiskSummaryBulletsFromReport, buildCrossLeaseRiskBullets, buildTitleInsight, isCrossLeaseEstate, type RiskBackfillContext } from "../lib/report-risk-backfill";
+import { ensureMinRiskSummaryBulletsFromReport, buildCrossLeaseRiskBullets, buildVeoliaRiskBullets, buildTitleInsight, isCrossLeaseEstate, type RiskBackfillContext } from "../lib/report-risk-backfill";
 import { detectSubdivision, mergeSubdivisionCorrection } from "../lib/subdivision";
 import { formatNZD } from "../lib/utils";
 import { searchRealEstateListings, resolveDistrictToSuburbs, detectDirectionalAreaTerm } from "../lib/scrapers/realestate-search";
@@ -653,6 +653,26 @@ function buildDeterministicCostItems(costs: NonNullable<PipelineResult["costs"]>
   if (costs.tdr_ttr_required) {
     items.splice(4, 0, { label: "TDR/TTR transfer right", low: costs.tdr_ttr_low ?? 0, high: costs.tdr_ttr_high ?? 0 });
   }
+  // Development contributions (IGC + council DC) apply app-wide; the Veolia line
+  // only appears inside the Papakura franchise. Insert after Services so the
+  // network-related costs read together. Both self-hide when zero.
+  const servicesIdx = items.findIndex((i) => i.label === "Services & Infrastructure");
+  const contributionItems: Array<{ label: string; low: number; high: number }> = [];
+  if ((costs.contributions_low ?? 0) > 0 || (costs.contributions_high ?? 0) > 0) {
+    contributionItems.push({ label: "Development contributions (IGC + council DC)", low: costs.contributions_low ?? 0, high: costs.contributions_high ?? 0 });
+  }
+  if (costs.veolia_in_zone && ((costs.veolia_low ?? 0) > 0 || (costs.veolia_high ?? 0) > 0)) {
+    contributionItems.push({ label: "Veolia network charges (Papakura)", low: costs.veolia_low ?? 0, high: costs.veolia_high ?? 0 });
+  }
+  if (contributionItems.length > 0) {
+    items.splice(servicesIdx + 1, 0, ...contributionItems);
+  }
+  // Land rate is a holding carry over the development horizon; label carries the annual figure.
+  if ((costs.land_rate_low ?? 0) > 0 || (costs.land_rate_high ?? 0) > 0) {
+    const annual = Math.round(costs.land_rate_annual ?? 0);
+    const annualLabel = annual > 0 ? ` (~$${annual.toLocaleString("en-NZ")}/yr)` : "";
+    items.push({ label: `Land rate (holding)${annualLabel}`, low: costs.land_rate_low ?? 0, high: costs.land_rate_high ?? 0 });
+  }
   return items;
 }
 
@@ -1072,8 +1092,22 @@ function applyDeterministicPipelineOverrides(
       risk: i.risk,
     })),
     estateType: merged?.estate_type ?? null,
+    veoliaServiceZone:
+      merged?.veolia_service_zone?.inServiceZone === true || costs?.veolia_in_zone === true,
   };
   rs = ensureMinRiskSummaryBulletsFromReport(rs, 3, backfillCtx);
+
+  // Always surface the Veolia (Papakura) private-network guidance when the site
+  // falls in the franchise area — same always-present treatment as cross-lease.
+  if (backfillCtx.veoliaServiceZone) {
+    const veoliaBullets = buildVeoliaRiskBullets(true, isZhRisks);
+    if (veoliaBullets.length > 0) {
+      const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
+      const veoliaHeads = new Set(veoliaBullets.map((b) => norm(b).slice(0, 36)));
+      const remaining = rs.filter((b) => !veoliaHeads.has(norm(b).slice(0, 36)));
+      rs = [...veoliaBullets, ...remaining];
+    }
+  }
 
   // Always surface cross-lease guidance when the title is cross-lease/stratum,
   // regardless of how many other risk bullets exist. Prepend (highest priority)

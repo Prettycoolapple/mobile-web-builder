@@ -4,7 +4,7 @@
 // the mobile UI uses them only to gate the input and render usage/warning
 // bars so users see accurate feedback before the server rejects a request.
 
-export type ChatLimitKey = "service_provider" | "general_standard" | "general_free";
+export type ChatLimitKey = "service_provider" | "general_standard" | "general_free" | "friends_family";
 
 export interface QuotaTier {
   limit: number;
@@ -13,6 +13,7 @@ export interface QuotaTier {
 
 export const CHAT_LIMITS: Record<ChatLimitKey, QuotaTier> = {
   service_provider: { limit: 900, warnAt: 840 },
+  friends_family: { limit: 9999, warnAt: 9500 },
   general_standard: { limit: 150, warnAt: 135 },
   general_free: { limit: 30, warnAt: 24 },
 };
@@ -29,8 +30,9 @@ export function resolveChatLimitKey(
   specialStatus?: string | null | undefined,
 ): ChatLimitKey {
   if (role === "service_provider") return "service_provider";
-  // Admin-granted special statuses inherit at least the standard chat quota
-  if (specialStatus === "supercharge" || specialStatus === "friends_family") return "general_standard";
+  if (specialStatus === "friends_family") return "friends_family";
+  // Admin-granted supercharge users inherit at least the standard chat quota.
+  if (specialStatus === "supercharge") return "general_standard";
   if (role === "general" && (tier === "standard" || tier === "pro")) return "general_standard";
   return "general_free";
 }

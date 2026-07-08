@@ -13,6 +13,8 @@ export interface RiskBackfillContext {
   contour: "flat" | "subtle" | "gentle" | "moderate" | "steep" | "very_steep" | null;
   infrastructure: Pick<InfrastructureItem, "name" | "location" | "risk">[];
   estateType: string | null;
+  /** True when the property falls within the Veolia (Papakura) private water network. */
+  veoliaServiceZone?: boolean;
 }
 
 function norm(s: string): string {
@@ -175,6 +177,31 @@ function crossLeaseSentence(ctx: RiskBackfillContext): string | null {
   return bullets[0] ?? null;
 }
 
+/**
+ * Veolia (Papakura) private-network risk bullets (en/zh). Returns 2 ordered
+ * bullets when the property is inside the franchise area, otherwise an empty
+ * array. Used both as backfill candidates and as always-present risk bullets.
+ * Bullet 1 = the constraint; bullet 2 = the mitigation / due-diligence step.
+ */
+export function buildVeoliaRiskBullets(inServiceZone: boolean | undefined, isZh: boolean): string[] {
+  if (!inServiceZone) return [];
+  if (isZh) {
+    return [
+      "该物业似乎位于 Veolia（Papakura）私营供水/污水管网服务区（涵盖 Papakura、Takanini、Drury、Hingaia、Karaka 等）。在此区域内，供水/污水接驳的审批与增长/接驳收费由 Veolia 而非 Watercare/奥克兰议会直接负责，且据业内反映其收费较高且难以预估，个别案例甚至要求开发商自费延伸主干管（数十万至上百万纽币），足以让已获资源许可的项目变得不可行。",
+      "关键风险：取得资源许可（Resource Consent）并不等于一定能获得管网接驳——项目可能在工程图审批（EPA）阶段因“无容量”被拒。缓解办法是在投入大额设计费之前，尽早向 Veolia/Watercare 书面确认该地块的实际接驳容量与预计收费，将其纳入可行性与资金测算。",
+    ];
+  }
+  return [
+    "This property appears to sit within the Veolia (Papakura) private water & wastewater network (covering Papakura, Takanini, Drury, Hingaia, Karaka and nearby). Inside this area, connection approval and growth/connection charging sit with Veolia rather than Watercare/Auckland Council directly, and Veolia is widely reported as charging highly and unpredictably — in some cases requiring developer-funded main extensions costing hundreds of thousands to over a million dollars, enough to make a consented scheme non-feasible.",
+    "Key risk: a resource consent does NOT guarantee a connection — schemes can be declined for 'no capacity' at Engineering Plan Approval after the design spend is committed. Mitigation: confirm the site's actual servicing capacity and likely charges in writing with Veolia/Watercare BEFORE committing major design cost, and carry that into the feasibility and funding plan.",
+  ];
+}
+
+function veoliaSentence(ctx: RiskBackfillContext): string | null {
+  const bullets = buildVeoliaRiskBullets(ctx.veoliaServiceZone, ctx.isZh);
+  return bullets[0] ?? null;
+}
+
 export interface TitleInsight {
   titleType: string;
   isCrossLease: boolean;
@@ -234,6 +261,9 @@ export function buildRiskBackfillCandidates(ctx: RiskBackfillContext): string[] 
 
   const zs = zoneSentence(ctx);
   if (zs) out.push(zs);
+
+  const vs = veoliaSentence(ctx);
+  if (vs) out.push(vs);
 
   let overlayAdds = 0;
   for (const o of ctx.overlays) {

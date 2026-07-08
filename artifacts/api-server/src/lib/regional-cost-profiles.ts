@@ -57,6 +57,39 @@ export interface RegionalCostProfile {
     lowRate: number;
     highRate: number;
   };
+  /**
+   * Development contributions charged per NET NEW dwelling: Watercare Infrastructure
+   * Growth Charge (water + wastewater) + Auckland Council development contributions
+   * (transport/reserves/community) + stormwater. Approximate, area-averaged, and
+   * tunable — actual figures vary by funding area and by year.
+   */
+  contributions: {
+    igcPerUnit: number;
+    councilDcPerUnit: number;
+    stormwaterPerUnit: number;
+    /** High-side multiplier over the summed base to reflect area/schedule variation. */
+    highMultiplier: number;
+  };
+  /**
+   * Extra, BOUNDED allowance per net new connection inside the Veolia (Papakura)
+   * franchise — covers Veolia growth/connection charges and connection-approval
+   * overhead only. Deliberately excludes worst-case forced main extensions, which
+   * are surfaced as a risk (unpredictable, project-specific) rather than modelled.
+   */
+  veolia: {
+    perLotLow: number;
+    perLotHigh: number;
+    /** Ceiling on the total Veolia high allowance so large schemes don't blow up. */
+    totalCapHigh: number;
+  };
+  /**
+   * Annual council land rates model. NZ metro councils rate on Capital Value:
+   * annual ≈ cv × rateInDollarPerCv + fixedAnnualCharges.
+   */
+  rates: {
+    rateInDollarPerCv: number;
+    fixedAnnualCharges: number;
+  };
 }
 
 const AUCKLAND_DEFAULT: Omit<RegionalCostProfile, "id" | "providerId" | "label"> = {
@@ -111,6 +144,26 @@ const AUCKLAND_DEFAULT: Omit<RegionalCostProfile, "id" | "providerId" | "label">
     lowRate: 0.08,
     highRate: 0.12,
   },
+  contributions: {
+    // Watercare IGC (water + wastewater), ~metro Auckland.
+    igcPerUnit: 13_000,
+    // Auckland Council development contributions (transport/reserves/community), area-averaged.
+    councilDcPerUnit: 15_000,
+    // Stormwater contribution, area-averaged (note: Papakura-area stormwater can run materially higher).
+    stormwaterPerUnit: 8_000,
+    highMultiplier: 1.3,
+  },
+  veolia: {
+    perLotLow: 8_000,
+    perLotHigh: 35_000,
+    totalCapHigh: 300_000,
+  },
+  rates: {
+    // Auckland residential rates in the dollar of CV (general + targeted), approximate.
+    rateInDollarPerCv: 0.0028,
+    // Fixed annual charges (waste management etc.).
+    fixedAnnualCharges: 900,
+  },
 };
 
 const PROVIDER_PROFILE_META: Record<PlanningProviderId, { id: CostProfileId; label: string }> = {
@@ -149,6 +202,9 @@ function cloneDefaultAssumptions(): Omit<RegionalCostProfile, "id" | "providerId
     consents: { ...AUCKLAND_DEFAULT.consents },
     finance: { ...AUCKLAND_DEFAULT.finance },
     contingency: { ...AUCKLAND_DEFAULT.contingency },
+    contributions: { ...AUCKLAND_DEFAULT.contributions },
+    veolia: { ...AUCKLAND_DEFAULT.veolia },
+    rates: { ...AUCKLAND_DEFAULT.rates },
   };
 }
 

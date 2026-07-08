@@ -26,16 +26,16 @@ describe("usage quotas", () => {
     expect(CHAT_LIMITS.general_free).toEqual({ limit: 30, warnAt: 24 });
     expect(CHAT_LIMITS.general_standard).toEqual({ limit: 150, warnAt: 135 });
     expect(CHAT_LIMITS.service_provider).toEqual({ limit: 900, warnAt: 840 });
+    expect(CHAT_LIMITS.friends_family).toEqual({ limit: 9999, warnAt: 9500 });
     expect(resolveChatLimitKey("general", "free")).toBe("general_free");
     expect(resolveChatLimitKey("general", "standard")).toBe("general_standard");
     expect(resolveChatLimitKey("service_provider", "pro")).toBe("service_provider");
   });
 
-  it("gives supercharge and friends_family users standard-tier chat quota", () => {
-    // Regardless of subscription tier, special-status users get standard chat limits
+  it("gives special-status users their intended chat quota", () => {
     expect(resolveChatLimitKey("general", "free", "supercharge")).toBe("general_standard");
-    expect(resolveChatLimitKey("general", "free", "friends_family")).toBe("general_standard");
+    expect(resolveChatLimitKey("general", "free", "friends_family")).toBe("friends_family");
     expect(resolveChatLimitKey("general", null, "supercharge")).toBe("general_standard");
-    expect(resolveChatLimitKey("general", null, "friends_family")).toBe("general_standard");
+    expect(resolveChatLimitKey("general", null, "friends_family")).toBe("friends_family");
   });
 });

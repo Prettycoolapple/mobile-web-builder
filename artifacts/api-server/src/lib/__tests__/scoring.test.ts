@@ -60,6 +60,15 @@ const baseCosts: CostBreakdown = {
   tdr_ttr_note: null,
   services_low: 0,
   services_high: 0,
+  contributions_low: 0,
+  contributions_high: 0,
+  contributions_units: 0,
+  veolia_low: 0,
+  veolia_high: 0,
+  veolia_in_zone: false,
+  land_rate_annual: 0,
+  land_rate_low: 0,
+  land_rate_high: 0,
   construction_low: 336_000,
   construction_high: 420_000,
   consents_low: 44_000,
@@ -200,6 +209,38 @@ describe("scoreProperty — tenure", () => {
     expect(leasehold.ease).toBeLessThan(freehold.ease);
     expect(leasehold.ease_reasons).toContain(LEASEHOLD_REASON);
     expect(leasehold.ease_reasons).not.toContain(CROSS_LEASE_REASON);
+  });
+});
+
+describe("scoreProperty — Veolia (Papakura) network", () => {
+  const VEOLIA_REASON_FRAGMENT = "Veolia (Papakura) private water network";
+
+  it("lowers ease and adds a reason when inside the Veolia service area", () => {
+    const outside = scoreProperty(merged({ estate_type: "Fee Simple" }), baseCosts, scenarios, LOTS);
+    const inside = scoreProperty(
+      merged({
+        estate_type: "Fee Simple",
+        veolia_service_zone: { inServiceZone: true, network: "papakura", source: "static_boundary_v1" },
+      }),
+      baseCosts,
+      scenarios,
+      LOTS,
+    );
+    expect(inside.ease).toBeLessThan(outside.ease);
+    expect(inside.ease_reasons.some((r) => r.includes(VEOLIA_REASON_FRAGMENT))).toBe(true);
+  });
+
+  it("does not penalise a property outside the Veolia area", () => {
+    const outside = scoreProperty(
+      merged({
+        estate_type: "Fee Simple",
+        veolia_service_zone: { inServiceZone: false, network: "papakura", source: "static_boundary_v1" },
+      }),
+      baseCosts,
+      scenarios,
+      LOTS,
+    );
+    expect(outside.ease_reasons.some((r) => r.includes(VEOLIA_REASON_FRAGMENT))).toBe(false);
   });
 });
 

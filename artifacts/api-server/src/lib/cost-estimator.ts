@@ -20,6 +20,18 @@ export interface CostBreakdown {
   tdr_ttr_note: string | null;
   services_low: number;
   services_high: number;
+  /** Development contributions (Watercare IGC + council DC + stormwater) on net new dwellings. */
+  contributions_low: number;
+  contributions_high: number;
+  contributions_units: number;
+  /** Bounded extra allowance for the Veolia (Papakura) private network; 0 when out of zone. */
+  veolia_low: number;
+  veolia_high: number;
+  veolia_in_zone: boolean;
+  /** Annual council land rates (estimated from CV) and the holding-period total over the finance horizon. */
+  land_rate_annual: number;
+  land_rate_low: number;
+  land_rate_high: number;
   construction_low: number;
   construction_high: number;
   consents_low: number;
@@ -70,6 +82,19 @@ function newBuildFloorSqmFromLotSize(sqmPerLot: number): number {
     1.00;
   const raw = footprint * storeyMultiplier;
   return Math.round(Math.min(320, Math.max(90, raw)));
+}
+
+/**
+ * Estimate annual council land rates from Capital Value. NZ metro councils rate
+ * on CV: annual ≈ cv × rateInDollarPerCv + fixedAnnualCharges. Returns 0 when CV
+ * is unavailable so downstream holding-cost math stays well-defined.
+ */
+export function estimateAnnualLandRates(
+  cv: number | null | undefined,
+  costProfile: RegionalCostProfile,
+): number {
+  if (cv == null || !Number.isFinite(cv) || cv <= 0) return 0;
+  return cv * costProfile.rates.rateInDollarPerCv + costProfile.rates.fixedAnnualCharges;
 }
 
 function effectiveNewBuildFloorSqm(floorFromProperty: number | null | undefined): number {
@@ -261,6 +286,27 @@ export function estimateCosts(
   const services_high = infra.reduce((sum, i) => sum + (i.estimated_cost_high ?? 0), 0);
   const tdrTtr = estimateRuralTransferRightCosts(data, safeUnits);
 
+  // Net new dwellings drive development contributions and the Veolia connection
+  // allowance — an existing dwelling carries an existing connection credit, so
+  // charges apply to the ADDITIONAL demand (matching how councils/Watercare levy).
+  const existingUnits = hasDwelling ? 1 : 0;
+  const newUnits = Math.max(0, safeUnits - existingUnits);
+
+  const contribBase =
+    costProfile.contributions.igcPerUnit +
+    costProfile.contributions.councilDcPerUnit +
+    costProfile.contributions.stormwaterPerUnit;
+  const contributions_low = contribBase * newUnits;
+  const contributions_high = contribBase * costProfile.contributions.highMultiplier * newUnits;
+
+  const veoliaInZone = data.veolia_service_zone?.inServiceZone === true;
+  const veolia_low = veoliaInZone ? costProfile.veolia.perLotLow * newUnits : 0;
+  const veolia_high = veoliaInZone
+    ? Math.min(costProfile.veolia.totalCapHigh, costProfile.veolia.perLotHigh * newUnits)
+    : 0;
+
+  const land_rate_annual = estimateAnnualLandRates(cv, costProfile);
+
   // Prefer lot-size-derived finished floor area so construction cost aligns with the GDV
   // estimate (estimateGdvPerLot mirrors the same likely-storeys assumption).
   // Fall back to the existing dwelling's floor area only when sqm_per_lot is absent.
@@ -285,8 +331,8 @@ export function estimateCosts(
   const finance_low  = loan_base * costProfile.finance.annualRate * costProfile.finance.lowYears;
   const finance_high = loan_base * costProfile.finance.annualRate * costProfile.finance.highYears;
 
-  const subtotal_low  = demo_low  + retaining_low  + tdrTtr.low  + services_low  + construction_low  + consents_low  + finance_low;
-  const subtotal_high = demo_high + retaining_high + tdrTtr.high + services_high + construction_high + consents_high + finance_high;
+  const subtotal_low  = demo_low  + retaining_low  + tdrTtr.low  + services_low  + contributions_low  + veolia_low  + construction_low  + consents_low  + finance_low;
+  const subtotal_high = demo_high + retaining_high + tdrTtr.high + services_high + contributions_high + veolia_high + construction_high + consents_high + finance_high;
 
   const contingency_low  = subtotal_low  * costProfile.contingency.lowRate;
   const contingency_high = subtotal_high * costProfile.contingency.highRate;
@@ -294,8 +340,13 @@ export function estimateCosts(
   const dev_cost_low  = subtotal_low  + contingency_low;
   const dev_cost_high = subtotal_high + contingency_high;
 
-  const total_low  = (cv ?? 0) + dev_cost_low;
-  const total_high = (cv ?? 0) + dev_cost_high;
+  // Land rates are a known holding carry (not an uncertain build cost), so they
+  // sit outside contingency and mirror the Finance line's holding horizon.
+  const land_rate_low  = land_rate_annual * costProfile.finance.lowYears;
+  const land_rate_high = land_rate_annual * costProfile.finance.highYears;
+
+  const total_low  = (cv ?? 0) + dev_cost_low  + land_rate_low;
+  const total_high = (cv ?? 0) + dev_cost_high + land_rate_high;
   const cost_per_unit_avg = ((total_low + total_high) / 2) / safeUnits;
 
   const r = (n: number) => roundToNearest(n, 1000);
@@ -317,6 +368,15 @@ export function estimateCosts(
     tdr_ttr_note:      tdrTtr.note,
     services_low:      r(services_low),
     services_high:     r(services_high),
+    contributions_low:  r(contributions_low),
+    contributions_high: r(contributions_high),
+    contributions_units: newUnits,
+    veolia_low:         r(veolia_low),
+    veolia_high:        r(veolia_high),
+    veolia_in_zone:     veoliaInZone,
+    land_rate_annual:   r(land_rate_annual),
+    land_rate_low:      r(land_rate_low),
+    land_rate_high:     r(land_rate_high),
     construction_low:  r(construction_low),
     construction_high: r(construction_high),
     consents_low:      r(consents_low),

@@ -139,7 +139,7 @@ async function startMetro(expoPublicDomain) {
   };
 
   metroProcess = spawn(
-    "pnpm",
+    process.platform === "win32" ? "pnpm.cmd" : "pnpm",
     [
       "exec",
       "expo",
@@ -153,6 +153,7 @@ async function startMetro(expoPublicDomain) {
       detached: false,
       cwd: projectRoot,
       env,
+      shell: process.platform === "win32",
     },
   );
 

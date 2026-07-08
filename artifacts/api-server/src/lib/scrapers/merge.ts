@@ -68,6 +68,13 @@ export interface MergedPropertyData {
   titleConfidence?: PropertyEligibilityConfidence;
   subdivisionEligible?: boolean | null;
   subdivisionRejectReason?: string | null;
+  /**
+   * Whether the property appears to fall within the Veolia (Papakura) private
+   * water & wastewater franchise area. Set from the geocoded lat/lng in the
+   * pipeline (see detectVeoliaServiceZone) — a pure function of location, so it
+   * is recomputed every serve rather than cached.
+   */
+  veolia_service_zone?: import("../veolia-service-zone").VeoliaServiceZone | null;
 }
 
 // ─── Simple "first non-null" helper ──────────────────────────────────────────

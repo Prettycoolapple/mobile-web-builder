@@ -40,6 +40,59 @@ function minimal(overrides: Partial<MergedPropertyData> = {}): MergedPropertyDat
   };
 }
 
+describe("estimateCosts — contributions, land rate & Veolia", () => {
+  it("adds development contributions on net new dwellings (app-wide)", () => {
+    // Vacant site (no existing dwelling) → all modelled units are new.
+    const c = estimateCosts(minimal({ floor_area_sqm: null, bedrooms: null }), 3);
+    expect(c.contributions_units).toBe(3);
+    // base per unit = 13k IGC + 15k council DC + 8k stormwater = 36k.
+    expect(c.contributions_low).toBe(108_000);
+    expect(c.contributions_high).toBeGreaterThan(c.contributions_low);
+  });
+
+  it("charges contributions only on ADDITIONAL units when a dwelling exists", () => {
+    const c = estimateCosts(minimal({ floor_area_sqm: 140, bedrooms: 3 }), 3);
+    // 3 modelled − 1 existing connection credit = 2 net new.
+    expect(c.contributions_units).toBe(2);
+    expect(c.contributions_low).toBe(72_000);
+  });
+
+  it("estimates annual land rates from CV and carries them over the holding horizon", () => {
+    const c = estimateCosts(minimal({ cv_nzd: 1_000_000 }), 1);
+    // 1,000,000 × 0.0028 + 900 = 3,700 → rounded 4,000/yr.
+    expect(c.land_rate_annual).toBe(4_000);
+    expect(c.land_rate_low).toBeGreaterThan(0);
+    expect(c.land_rate_high).toBeGreaterThan(c.land_rate_low);
+  });
+
+  it("zeroes land rate when CV is unavailable", () => {
+    const c = estimateCosts(minimal({ cv_nzd: null }), 1);
+    expect(c.land_rate_annual).toBe(0);
+    expect(c.land_rate_low).toBe(0);
+  });
+
+  it("adds a bounded Veolia allowance only inside the Papakura franchise", () => {
+    const out = estimateCosts(minimal({ floor_area_sqm: null, bedrooms: null }), 3);
+    expect(out.veolia_in_zone).toBe(false);
+    expect(out.veolia_low).toBe(0);
+    expect(out.veolia_high).toBe(0);
+
+    const inZone = estimateCosts(
+      minimal({
+        floor_area_sqm: null,
+        bedrooms: null,
+        veolia_service_zone: { inServiceZone: true, network: "papakura", source: "static_boundary_v1" },
+      }),
+      3,
+    );
+    expect(inZone.veolia_in_zone).toBe(true);
+    expect(inZone.veolia_low).toBe(24_000); // 8k × 3 new units
+    expect(inZone.veolia_high).toBe(105_000); // 35k × 3, under the cap
+    // Veolia allowance flows into the totals.
+    expect(inZone.total_low).toBeGreaterThan(out.total_low);
+  });
+});
+
 describe("estimateCosts — existing dwelling / demolition", () => {
   it("infers a dwelling when floor area exists but build year is unknown (non-vacant demolition budget)", () => {
     const c = estimateCosts(minimal({ floor_area_sqm: 140, build_year: null }), 1);

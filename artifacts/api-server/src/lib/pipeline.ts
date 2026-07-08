@@ -30,6 +30,7 @@ import { scrapeHomes, type HomesData } from "./scrapers/homes";
 import { scrapeQV, type QVData } from "./scrapers/qv";
 import { scrapePropertyValue, type PropertyValueData } from "./scrapers/propertyvalue";
 import { mergePropertyData, type MergedPropertyData } from "./scrapers/merge";
+import { detectVeoliaServiceZone } from "./veolia-service-zone";
 import { sanitizeTenureField } from "./titleDisplay";
 import { resolveTitleStatus } from "./title-resolution";
 import { withBrowserSlot } from "./scrapers/browser";
@@ -1116,6 +1117,9 @@ export async function runPropertyPipeline(
       ],
     },
   );
+  // Veolia (Papakura) private water network flag — pure function of the geocoded
+  // location, so recompute every serve (no external call, no cache field).
+  merged.veolia_service_zone = detectVeoliaServiceZone(lat, lng);
   if (shouldSuppressAucklandPlanningRules(planningProvider)) {
     const ruleStatus = regionalPlanningRuleStatus(planningProvider, zoneData, merged.land_area_sqm, merged.overlays);
     if (merged.zone_code || merged.min_lot_size_sqm) {

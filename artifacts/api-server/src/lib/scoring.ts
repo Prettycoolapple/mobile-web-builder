@@ -252,6 +252,11 @@ export function scoreProperty(
       reason: "Service infrastructure on neighbouring land — easement needed",
     },
     {
+      condition: merged.veolia_service_zone?.inServiceZone === true,
+      points: 0.8,
+      reason: "Within the Veolia (Papakura) private water network — connection approval sits with Veolia, growth/mains-extension charges can be high and unpredictable, and a resource consent does not guarantee servicing; confirm capacity and charges with Veolia/Watercare before committing design spend",
+    },
+    {
       condition: lots <= 1,
       points: 0.5,
       reason: "Land area limits subdivision to single dwelling",
