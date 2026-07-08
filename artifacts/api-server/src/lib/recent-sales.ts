@@ -70,7 +70,8 @@ export function detectRecentSalesIntent(text: string): boolean {
   const lower = raw.toLowerCase();
   const soldSignal =
     /\b(?:recently\s+sold|recent\s+sales?|sold\s+(?:price|prices|records?|properties|homes?|houses?)|sale\s+records?|sales?\s+history|sales?\s+evidence|settled\s+sales?|settlement\s+price|prices?\s+achieved|what\s+sold|has\s+sold)\b/i.test(lower) ||
-    /(?:\u6210\u4ea4|\u6210\u4ea4\u4ef7|\u6210\u4ea4\u50f9|\u6210\u4ea4\u8bb0\u5f55|\u6210\u4ea4\u8a18\u9304|\u5df2\u552e|\u552e\u51fa|\u5356\u51fa|\u8ce3\u51fa|\u8fd1\u671f\u552e\u4ef7|\u8fd1\u671f\u552e\u50f9|\u8fc7\u53bb.{0,8}\u6210\u4ea4|\u904e\u53bb.{0,8}\u6210\u4ea4)/u.test(raw);
+    /(?:\u6210\u4ea4|\u6210\u4ea4\u4ef7|\u6210\u4ea4\u50f9|\u6210\u4ea4\u8bb0\u5f55|\u6210\u4ea4\u8a18\u9304|\u5df2\u552e|\u552e\u51fa|\u5356\u51fa|\u8ce3\u51fa|\u8fd1\u671f\u552e\u4ef7|\u8fd1\u671f\u552e\u50f9|\u8fc7\u53bb.{0,8}\u6210\u4ea4|\u904e\u53bb.{0,8}\u6210\u4ea4|\u9500\u552e\u8bb0\u5f55|\u92b7\u552e\u8a18\u9304|\u9500\u552e\u4ef7\u683c|\u92b7\u552e\u50f9\u683c|\u51fa\u552e\u4ef7\u683c|\u51fa\u552e\u50f9\u683c|\u4ea4\u6613\u4ef7\u683c|\u4ea4\u6613\u50f9\u683c|\u4ea4\u6613\u4ef7|\u4ea4\u6613\u50f9)/u.test(raw) ||
+    /(?:\u6700\u8fd1|\u8fd1\u671f|\u8fc7\u53bb|\u904e\u53bb).{0,20}(?:\u552e\u4ef7|\u552e\u50f9|\u4ef7\u683c|\u50f9\u683c|\u51fa\u552e|\u6210\u4ea4|\u4ea4\u6613)/u.test(raw);
   if (!soldSignal) return false;
 
   const activeOnlySignal =

@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { buildDevScoreNotice, buildPostAnalysisAnswer, detectPostAnalysisIntent } from "../post-analysis-answer";
+import { buildDevScoreNotice, buildPostAnalysisAnswer, buildPostAnalysisAnswers, detectPostAnalysisIntent, detectPostAnalysisIntents } from "../post-analysis-answer";
 
 describe("post-analysis attached question detection", () => {
   it("detects rental ownership cost questions attached to an analyse prompt", () => {
     expect(
       detectPostAnalysisIntent("1/289 Ulster Street, Whitiora. What would the expected costs be to own this property as a rental."),
     ).toBe("rental_ownership_costs");
+  });
+
+  it("detects multiple attached questions in order", () => {
+    expect(
+      detectPostAnalysisIntents("1/289 Ulster Street, Whitiora. What would the expected costs be to own this property as a rental. What is the estimated market value of this property"),
+    ).toEqual(["rental_ownership_costs", "market_value_estimate"]);
   });
 
   it("ignores unrelated analysis prompts", () => {
@@ -44,6 +50,42 @@ describe("post-analysis rental cost answer", () => {
 
     expect(answer).toContain("$650,000");
     expect(answer).toContain("CV");
+  });
+});
+
+describe("post-analysis market value answer", () => {
+  it("returns a separate rental answer and market value answer when both are asked", () => {
+    const answers = buildPostAnalysisAnswers(
+      "1/289 Ulster Street, Whitiora. What would the expected costs be to own this property as a rental. What is the estimated market value of this property",
+      {
+        property_overview_snapshot: {
+          listing_price_nzd: 720_000,
+          cv_nzd: 650_000,
+        },
+        scores: { ease: 3, cost: 3, roi: 3, composite: 3 },
+      },
+      "en",
+    );
+
+    expect(answers).toHaveLength(2);
+    expect(answers[0]).toContain("Rental ownership cost");
+    expect(answers[0]).toContain("$720,000");
+    expect(answers[1]).toContain("Estimated market value");
+    expect(answers[1]).toContain("$720,000");
+    expect(answers[1]).not.toContain("cv_nzd");
+  });
+
+  it("uses CV for market value when no listing price is available without exposing code fields", () => {
+    const answer = buildPostAnalysisAnswer(
+      "What is the estimated market value of this property?",
+      { propertyOverview: { cv: "$650,000" }, scores: { ease: 3, cost: 3, roi: 3, composite: 3 } },
+      "en",
+    );
+
+    expect(answer).toContain("Estimated market value");
+    expect(answer).toContain("$650,000");
+    expect(answer).toContain("CV");
+    expect(answer).not.toContain("cv_nzd");
   });
 });
 

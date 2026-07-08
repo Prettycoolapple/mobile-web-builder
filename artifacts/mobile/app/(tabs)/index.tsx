@@ -442,6 +442,10 @@ function sanitizeForDisplay(text: string, formatErrorFallback: string): string {
   return stripped;
 }
 
+function normalizePostAnalysisAnswer(text: string): string {
+  return text.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
 /** Brief confirmation after address suggestion bubble — maps to top geocoded suggestion. */
 function isBareAffirmativeReply(raw: string): boolean {
   const trimmed = raw.trim();
@@ -544,6 +548,7 @@ export default function SearchScreen() {
   const shownRecommendationReportIds = useRef<Set<string>>(new Set());
   const lastCheckedFollowUpCount = useRef<Map<string, number>>(new Map());
   const providerRecommendationKeysRef = useRef<Set<string>>(new Set());
+  const postAnalysisAnswerKeysRef = useRef<Set<string>>(new Set());
   const prefetchingContinuationRef = useRef<Set<string>>(new Set());
   // Guards against rapid "Show more" taps firing concurrent /discovery/next
   // requests on the same continuation token (the button's disabled state only
@@ -1469,10 +1474,20 @@ export default function SearchScreen() {
   }, [currentSession?.id, currentSession?.messages, currentSession?.skipFirstTurnRating, maybeTriggerAppRatingPrompt]);
 
   const appendPostAnalysisAnswer = useCallback(
-    (answer: string | null | undefined, sessionId: string) => {
-      const content = answer?.trim();
-      if (!content) return;
-      addMessage({ role: "assistant", content, type: "text" }, sessionId);
+    (answerOrAnswers: string | string[] | null | undefined, sessionId: string) => {
+      const answers = Array.isArray(answerOrAnswers) ? answerOrAnswers : [answerOrAnswers];
+      for (const answer of answers) {
+        const content = answer?.trim();
+        if (!content) continue;
+        const normalizedContent = normalizePostAnalysisAnswer(content);
+        const key = `${sessionId}:${normalizedContent}`;
+        const alreadyVisible = sessionMessagesRef.current.some(
+          (m) => m.role === "assistant" && m.type === "text" && normalizePostAnalysisAnswer(m.content) === normalizedContent,
+        );
+        if (alreadyVisible || postAnalysisAnswerKeysRef.current.has(key)) continue;
+        postAnalysisAnswerKeysRef.current.add(key);
+        addMessage({ role: "assistant", content, type: "text" }, sessionId);
+      }
     },
     [addMessage],
   );
@@ -1541,6 +1556,7 @@ export default function SearchScreen() {
             report?: FeasibilityReport | null;
             reportGroup?: FeasibilityReportGroup | null;
             postAnalysisAnswer?: string | null;
+            postAnalysisAnswers?: string[];
             error?: string | null;
           };
 
@@ -1553,7 +1569,7 @@ export default function SearchScreen() {
                 setCurrentReportGroup(groupWithHistory);
               }
               replaceBackgroundAnalyseMessage(job.jobId, { role: "assistant", content: "", type: "report_group", reportGroup: groupWithHistory }, job.sessionId);
-              appendPostAnalysisAnswer(data.postAnalysisAnswer, job.sessionId);
+              appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, job.sessionId);
               for (const report of groupWithHistory.reports) {
                 if (report.scores && report.address) {
                   updateCandidateScores({ [report.address]: report.scores }, job.sessionId);
@@ -1567,7 +1583,7 @@ export default function SearchScreen() {
                 setCurrentReport(reportWithHistory);
               }
               replaceBackgroundAnalyseMessage(job.jobId, { role: "assistant", content: "", type: "report", report: reportWithHistory }, job.sessionId);
-              appendPostAnalysisAnswer(data.postAnalysisAnswer, job.sessionId);
+              appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, job.sessionId);
               if (reportWithHistory.scores && reportWithHistory.address) {
                 updateCandidateScores({ [reportWithHistory.address]: reportWithHistory.scores }, job.sessionId);
               }
@@ -2167,6 +2183,7 @@ export default function SearchScreen() {
             searchPresentation?: ChatMessage["searchPresentation"];
             suburb?: string | null;
             postAnalysisAnswer?: string | null;
+            postAnalysisAnswers?: string[];
           };
 
           if (data.type === "clarification" && data.clarificationType === "subdivision" && Array.isArray(data.options) && data.options.length > 0) {
@@ -2199,7 +2216,7 @@ export default function SearchScreen() {
             const groupWithHistory = withGroupHistoryMetadata(data.reportGroup, data.searchId, data.historyCreatedAt);
             setCurrentReportGroup(groupWithHistory);
             updateLastMessage({ type: "report_group", reportGroup: groupWithHistory, content: "" }, sessionId);
-            appendPostAnalysisAnswer(data.postAnalysisAnswer, sessionId);
+            appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, sessionId);
             for (const report of groupWithHistory.reports) {
               if (report.scores && report.address) {
                 updateCandidateScores({ [report.address]: report.scores }, sessionId);
@@ -2213,7 +2230,7 @@ export default function SearchScreen() {
             const reportWithHistory = withHistoryMetadata(data.report, data.searchId, data.historyCreatedAt);
             setCurrentReport(reportWithHistory);
             updateLastMessage({ type: "report", report: reportWithHistory, content: "" }, sessionId);
-            appendPostAnalysisAnswer(data.postAnalysisAnswer, sessionId);
+            appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, sessionId);
             if (reportWithHistory.scores && reportWithHistory.address) {
               updateCandidateScores({ [reportWithHistory.address]: reportWithHistory.scores }, sessionId);
             }
@@ -2324,6 +2341,7 @@ export default function SearchScreen() {
             wantsAnotherProvider?: boolean;
             suggestedDiscipline?: string | null;
             postAnalysisAnswer?: string | null;
+            postAnalysisAnswers?: string[];
           };
           try {
             data = JSON.parse(responseText.trim()) as typeof data;
@@ -2344,7 +2362,13 @@ export default function SearchScreen() {
           }
           // Both first-time recommendation and "change provider" suppress LLM text —
           // the finally block shows the provider card directly.
-          if ((data.wantsProviderRecommendation || data.wantsAnotherProvider) && user?.role === "general") {
+          if (
+            (data.wantsProviderRecommendation || data.wantsAnotherProvider) &&
+            user?.role === "general" &&
+            data.mode !== "analyse" &&
+            !(data.postAnalysisAnswers && data.postAnalysisAnswers.length > 0) &&
+            !data.postAnalysisAnswer
+          ) {
             updateLastMessage({ type: "text", content: "" }, sessionId);
             return;
           }
@@ -2416,7 +2440,7 @@ export default function SearchScreen() {
               const groupObj = withGroupHistoryMetadata(maybeParsed, data.searchId, data.historyCreatedAt);
               setCurrentReportGroup(groupObj);
               updateLastMessage({ type: "report_group", reportGroup: groupObj, content: "" }, sessionId);
-              appendPostAnalysisAnswer(data.postAnalysisAnswer, sessionId);
+              appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, sessionId);
               for (const report of groupObj.reports) {
                 if (report.scores && report.address) {
                   updateCandidateScores({ [report.address]: report.scores }, sessionId);
@@ -2428,7 +2452,7 @@ export default function SearchScreen() {
               const reportObj = withHistoryMetadata(maybeParsed as unknown as FeasibilityReport, data.searchId, data.historyCreatedAt);
               setCurrentReport(reportObj);
               updateLastMessage({ type: "report", report: reportObj, content: "" }, sessionId);
-              appendPostAnalysisAnswer(data.postAnalysisAnswer, sessionId);
+              appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, sessionId);
               if (reportObj.scores && reportObj.address) {
                 updateCandidateScores({ [reportObj.address]: reportObj.scores }, sessionId);
               }
@@ -2460,7 +2484,7 @@ export default function SearchScreen() {
               const groupObj = withGroupHistoryMetadata(maybeParsed, data.searchId, data.historyCreatedAt);
               setCurrentReportGroup(groupObj);
               updateLastMessage({ type: "report_group", reportGroup: groupObj, content: "" }, sessionId);
-              appendPostAnalysisAnswer(data.postAnalysisAnswer, sessionId);
+              appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, sessionId);
               for (const report of groupObj.reports) {
                 if (report.scores && report.address) {
                   updateCandidateScores({ [report.address]: report.scores }, sessionId);
@@ -2472,7 +2496,7 @@ export default function SearchScreen() {
               const reportObj = withHistoryMetadata(maybeParsed as unknown as FeasibilityReport, data.searchId, data.historyCreatedAt);
               setCurrentReport(reportObj);
               updateLastMessage({ type: "report", report: reportObj, content: "" }, sessionId);
-              appendPostAnalysisAnswer(data.postAnalysisAnswer, sessionId);
+              appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, sessionId);
               if (reportObj.scores && reportObj.address) {
                 updateCandidateScores({ [reportObj.address]: reportObj.scores }, sessionId);
               }
@@ -2782,6 +2806,7 @@ export default function SearchScreen() {
               searchPresentation?: ChatMessage["searchPresentation"];
               suburb?: string | null;
               postAnalysisAnswer?: string | null;
+              postAnalysisAnswers?: string[];
             };
 
             if (data.type === "clarification" && data.clarificationType === "subdivision" && Array.isArray(data.options) && data.options.length > 0) {
@@ -2816,7 +2841,7 @@ export default function SearchScreen() {
               const groupWithHistory = withGroupHistoryMetadata(data.reportGroup, data.searchId, data.historyCreatedAt);
               setCurrentReportGroup(groupWithHistory);
               updateLastMessage({ type: "report_group", reportGroup: groupWithHistory, content: "" }, sessionId);
-              appendPostAnalysisAnswer(data.postAnalysisAnswer, sessionId);
+              appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, sessionId);
               for (const report of groupWithHistory.reports) {
                 if (report.scores && report.address) {
                   updateCandidateScores({ [report.address]: report.scores }, sessionId);
@@ -2834,7 +2859,7 @@ export default function SearchScreen() {
               ) ? { ...reportWithHistory, photoUrl: selectedPhotoUrl } : reportWithHistory;
               setCurrentReport(patchedReport);
               updateLastMessage({ type: "report", report: patchedReport, content: "" }, sessionId);
-              appendPostAnalysisAnswer(data.postAnalysisAnswer, sessionId);
+              appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, sessionId);
               if (patchedReport.scores && patchedReport.address) {
                 updateCandidateScores({ [patchedReport.address]: patchedReport.scores }, sessionId);
               }

@@ -18,6 +18,8 @@ const flatBush: RecentSalesLocation = {
 describe("recent sales intent", () => {
   it("detects sold-record requests and corrections, not active listing browse", () => {
     expect(detectRecentSalesIntent("\u67e5\u4e00\u4e0b flatbush 6\uff5e7\u623f\uff0c\u5730\u5757\u9762\u79ef400\u4ee5\u4e0a\u3002\u8fd1\u671f\u552e\u4ef7")).toBe(true);
+    expect(detectRecentSalesIntent("\u6700\u8fd16\u4e2a\u6708 flatbush 6-7\u623f \u7684\u51fa\u552e\u4ef7\u683c")).toBe(true);
+    expect(detectRecentSalesIntent("flatbush 6-7\u623f \u4ea4\u6613\u4ef7\u683c")).toBe(true);
     expect(detectRecentSalesIntent("\u6211\u8981\u770b\u7684\u662f\u6210\u4ea4\u4ef7\u683c\u4e0d\u662f\u5728\u552e\u623f\u6e90")).toBe(true);
     expect(detectRecentSalesIntent("show recently sold 4 bed homes in Flat Bush")).toBe(true);
     expect(detectRecentSalesIntent("show homes for sale in Flat Bush")).toBe(false);

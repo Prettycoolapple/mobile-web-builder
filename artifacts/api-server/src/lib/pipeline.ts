@@ -720,6 +720,9 @@ export async function runPropertyPipeline(
   if (!useBrowserScrapers) {
     logger.info("Browser-backed property scrapers disabled for this runtime; using direct APIs only");
   }
+  const refreshRegionalPlanning =
+    !!planningProvider &&
+    planningProvider.providerId !== "auckland-legacy";
 
   // ─── WAVE 1: Run all data sources in parallel ─────────────────────────────
   // All 4 scrapers (Hougarden, OneRoof, QV, Homes) run simultaneously from the
@@ -740,11 +743,11 @@ export async function runPropertyPipeline(
     qvResult,
     homesResult,
   ] = await Promise.allSettled([
-    timed("zone",             () => cr ? Promise.resolve(cr.zone)             : fetchPlanningZoneForReport(lat, lng, address),                                                timing),
-    timed("overlays",         () => cr ? Promise.resolve(cr.overlays)         : fetchPlanningOverlaysForReport(lat, lng, linzParcelData?.bbox ?? null, { address, consensus: true }), timing),
+    timed("zone",             () => cr && !refreshRegionalPlanning ? Promise.resolve(cr.zone)             : fetchPlanningZoneForReport(lat, lng, address),                                                timing),
+    timed("overlays",         () => cr && !refreshRegionalPlanning ? Promise.resolve(cr.overlays)         : fetchPlanningOverlaysForReport(lat, lng, linzParcelData?.bbox ?? null, { address, consensus: true }), timing),
     timed("contour",          () => cr ? Promise.resolve(cr.contour)          : fetchTerrainForReport(lat, lng, linzParcelData?.bbox ?? null, { landAreaSqm: linzParcelData?.area_sqm ?? null }, address), timing),
     timed("property_history", () => cr ? Promise.resolve(cr.property_history) : fetchPropertyHistoryForReport(address, lat, lng, linzParcelData?.area_sqm ?? null),              timing),
-    timed("infrastructure",   () => cr ? Promise.resolve(cr.infrastructure)   : fetchInfrastructureForReport(lat, lng, linzParcelData?.bbox ?? null, linzParcelData?.parcel_id ?? null, { landAreaSqm: linzParcelData?.area_sqm ?? null }, address), timing),
+    timed("infrastructure",   () => cr && !refreshRegionalPlanning ? Promise.resolve(cr.infrastructure)   : fetchInfrastructureForReport(lat, lng, linzParcelData?.bbox ?? null, linzParcelData?.parcel_id ?? null, { landAreaSqm: linzParcelData?.area_sqm ?? null }, address), timing),
     timed("hougarden",        () => cr ? Promise.resolve(cr.hougarden)        : (useBrowserScrapers ? withBrowserSlot(() => scrapeHougarden(lat, lng, address)) : Promise.resolve(null)), timing),
     timed("oneroof",          () => cr ? Promise.resolve(cr.oneroof)          : (useBrowserScrapers ? withBrowserSlot(() => scrapeOneRoof(address)) : Promise.resolve(null)), timing),
     timed("propertyvalue",    () => cr ? Promise.resolve(cr.propertyValue)    : scrapePropertyValue(address, geocode!.formatted ?? address),                  timing),
@@ -1105,7 +1108,7 @@ export async function runPropertyPipeline(
       propertyValue: propertyValueData,
       analysed_address: geocode!.formatted ?? address,
       realestate_listing: realestateListing,
-      preferred_realestate_listing_url: preferredRealestateListing?.listingUrl ?? null,
+      preferred_realestate_listing_url: preferredRealestateListing?.listingUrl ?? options.preferredRealestateListingUrl ?? null,
       selected_listing_context: resolvedListingContext ?? null,
       realestate_photo_urls: [
         ...selectedListingPhotoUrls(resolvedListingContext),

@@ -93,7 +93,9 @@ describe("regional planning report fetchers", () => {
     ]);
   });
 
-  it("delegates to the legacy Auckland modules when the router flag is off", async () => {
+  it("delegates to the legacy Auckland modules when the router flag is explicitly off", async () => {
+    process.env[FLAG] = "false";
+
     await expect(fetchPlanningZoneForReport(-37.787, 175.279, "Hamilton")).resolves.toMatchObject({ zone_code: "MHS" });
     await expect(fetchPlanningOverlaysForReport(-37.787, 175.279, null, { address: "Hamilton", consensus: true }))
       .resolves.toEqual([{ name: "Special Character", type: "overlay" }]);
@@ -123,8 +125,6 @@ describe("regional planning report fetchers", () => {
   });
 
   it("returns partial non-Auckland planning data without calling Auckland planning or service layers", async () => {
-    process.env[FLAG] = "true";
-
     await expect(fetchPlanningZoneForReport(-37.787, 175.279, "Hamilton")).resolves.toMatchObject({
       zone_code: "Hamilton-Central-City",
       min_lot_size_sqm: null,

@@ -214,6 +214,15 @@ export function applySelectedListingContextToReport(
     overview.landArea = area(selectedListingContext.landArea);
     overview.land_area_sqm = selectedListingContext.landArea;
     existingSources.landArea_display = sourceLabel;
+  } else if (
+    allowSubjectFacts &&
+    selectedListingContext.isActiveListing === true &&
+    selectedListingContext.landArea == null
+  ) {
+    delete overview.landArea;
+    delete overview.land_area_sqm;
+    delete existingSources.landArea_display;
+    delete existingSources.land_area_sqm;
   }
   if (allowSubjectFacts && selectedListingContext.floorArea != null) {
     overview.floorArea = area(selectedListingContext.floorArea);
@@ -276,13 +285,13 @@ export function reconcileSelectedListingContextWithLiveListing(
     address: liveListing.address ?? ctx.address ?? null,
     price: liveListing.price ?? null,
     priceApprox: liveListing.priceApprox ?? null,
-    landArea: liveListing.landArea ?? ctx.landArea ?? null,
+    landArea: liveListing.landArea ?? null,
     floorArea: liveListing.floorArea ?? ctx.floorArea ?? null,
     bedrooms: liveListing.bedrooms ?? ctx.bedrooms ?? null,
     bathrooms: liveListing.bathrooms ?? ctx.bathrooms ?? null,
     bedroomsApprox: liveListing.bedroomsApprox ?? ctx.bedroomsApprox ?? null,
     bathroomsApprox: liveListing.bathroomsApprox ?? ctx.bathroomsApprox ?? null,
-    landAreaApprox: liveListing.landAreaApprox ?? ctx.landAreaApprox ?? null,
+    landAreaApprox: liveListing.landArea != null ? (liveListing.landAreaApprox ?? ctx.landAreaApprox ?? null) : null,
     floorAreaApprox: liveListing.floorAreaApprox ?? ctx.floorAreaApprox ?? null,
     propertyType: liveListing.propertyType ?? liveListing.listingCategory ?? ctx.propertyType ?? null,
     listingTitle: liveListing.listingTitle ?? ctx.listingTitle ?? null,

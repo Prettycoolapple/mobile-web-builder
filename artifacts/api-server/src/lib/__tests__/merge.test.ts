@@ -96,6 +96,53 @@ describe("mergePropertyData", () => {
     expect(merged.data_sources.listing_price).toBe("realestate.co.nz (active listing)");
   });
 
+  it("does not backfill parent parcel land when the selected active listing has no land area", () => {
+    const selectedUrl = "https://www.realestate.co.nz/43000001/residential/sale/7-sultan-street-ellerslie";
+    const merged = mergePropertyData(
+      { area_sqm: 2018 } as any,
+      null,
+      null,
+      { zone_code: "BMU", zone_description: "Business - Mixed Use Zone", min_lot_size_sqm: 0 } as any,
+      [],
+      {
+        contour: null,
+        asbestos_risk: "unknown",
+        infrastructure: [],
+        property_history: {
+          cv_nzd: null,
+          cv_year: null,
+          build_year: 1935,
+          floor_area_sqm: 90,
+          land_area_sqm: 2018,
+          property_type: "Residential Dwelling",
+          sources_confirmed: [],
+          sources_estimated: [],
+        },
+        realestate_listing: {
+          address: "7 Sultan Street, Ellerslie, Auckland",
+          price: null,
+          priceText: "By negotiation",
+          landArea: null,
+          landAreaSource: "realestate_page",
+          landAreaConfidence: "unverified",
+          listingUrl: selectedUrl,
+          photoUrl: null,
+          photoUrls: [],
+          zone: null,
+          bedrooms: 3,
+          bathrooms: 2,
+          floorArea: 90,
+          propertyType: "Townhouse",
+        },
+        preferred_realestate_listing_url: selectedUrl,
+      },
+    );
+
+    expect(merged.land_area_sqm).toBeNull();
+    expect(merged.data_sources.land_area_sqm).toBe("unavailable_selected_active_listing");
+    expect(merged.missing_critical_fields).toContain("land_area_sqm");
+  });
+
   it("passes optional terrain distribution metrics through the merged payload", () => {
     const merged = mergePropertyData(
       { area_sqm: 32_113 } as any,

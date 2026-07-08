@@ -105,7 +105,7 @@ import {
 import { resolveActiveListingContext } from "../lib/active-listing-context";
 import { resolveAddressForAnalysis } from "../lib/address-clarification";
 import { looksLikeUnitOrApartmentAddress } from "../lib/address-patterns";
-import { buildPostAnalysisAnswer } from "../lib/post-analysis-answer";
+import { buildPostAnalysisAnswers } from "../lib/post-analysis-answer";
 import { tryGeocodeAddress } from "../lib/geocode";
 import {
   buildNearbyAmenityRequest,
@@ -389,20 +389,28 @@ async function buildNearbyAmenitiesAnswer(args: {
   return args.locale === "zh" ? await ensureChinese(answer) : answer;
 }
 
-async function buildPostAnalysisAnswerForReport(
+async function buildPostAnalysisAnswersForReport(
   message: string,
   report: Record<string, unknown> | null | undefined,
   locale: ReturnType<typeof normaliseLocale>,
   log?: Logger,
-): Promise<string | null> {
-  const deterministic = buildPostAnalysisAnswer(message, report, locale);
-  if (deterministic || !report || !detectNearbyAmenityIntent(message)) return deterministic;
+): Promise<string[]> {
+  const answers = buildPostAnalysisAnswers(message, report, locale);
+  if (!report || !detectNearbyAmenityIntent(message)) return answers;
   try {
-    return await buildNearbyAmenitiesAnswer({ message, report, locale, log });
+    const nearby = await buildNearbyAmenitiesAnswer({ message, report, locale, log });
+    if (nearby) answers.push(nearby);
   } catch (err) {
     log?.warn({ err, sample: message.slice(0, 100) }, "Nearby amenities: post-analysis answer failed");
-    return null;
   }
+  return answers;
+}
+
+function postAnalysisPayload(answers: string[]): { postAnalysisAnswer: string | null; postAnalysisAnswers: string[] } {
+  return {
+    postAnalysisAnswer: answers.length > 0 ? answers.join("\n\n") : null,
+    postAnalysisAnswers: answers,
+  };
 }
 
 function nearbyAmenityClarification(addressCandidate: string | null | undefined, locale: ReturnType<typeof normaliseLocale>): string {
@@ -4986,12 +4994,13 @@ router.post(
       userId,
       addressSeed: normaliseDiscoveryAddressKey(analysisAddress),
     });
+    const postAnalysisAnswers = await buildPostAnalysisAnswersForReport(address, result.report, analyseLocale, req.log);
     res.json({
       report: result.report,
       type: "report",
       searchId: result.savedSearchId,
       historyCreatedAt: result.savedSearchCreatedAt,
-      postAnalysisAnswer: await buildPostAnalysisAnswerForReport(address, result.report, analyseLocale, req.log),
+      ...postAnalysisPayload(postAnalysisAnswers),
     });
   } catch (error) {
     req.log.error({ err: error }, "Failed to analyse property");
@@ -5052,15 +5061,16 @@ router.get("/analyse/jobs/:jobId", async (req, res) => {
           addressSeed: normaliseDiscoveryAddressKey((report?.address as string) ?? job.analysisAddress ?? ""),
         });
       }
+      const postAnalysisAnswers = !isGroup && report
+        ? await buildPostAnalysisAnswersForReport(job.queryAddress, report, job.locale === "zh" ? "zh" : "en", req.log)
+        : [];
       res.json({
         status: job.status,
         searchId: job.searchId,
         historyCreatedAt,
         report: isGroup ? null : (report ?? null),
         reportGroup: isGroup ? report : null,
-        postAnalysisAnswer: !isGroup && report
-          ? await buildPostAnalysisAnswerForReport(job.queryAddress, report, job.locale === "zh" ? "zh" : "en", req.log)
-          : null,
+        ...postAnalysisPayload(postAnalysisAnswers),
       });
       return;
     }
@@ -8257,13 +8267,13 @@ router.post(
               }
 
               const translatedAnalyse = await translateChatContent(content, "analyse", chatLocale, chatTranslateTitleSchool);
-              const postAnalysisAnswer = await buildPostAnalysisAnswerForReport(userText, deterministicReport, chatLocale, req.log);
+              const postAnalysisAnswers = await buildPostAnalysisAnswersForReport(userText, deterministicReport, chatLocale, req.log);
               sendAnalyseResponse({
                 content: translatedAnalyse,
                 mode: "analyse",
                 searchId: savedSearchId,
                 historyCreatedAt: savedSearchCreatedAt,
-                postAnalysisAnswer,
+                ...postAnalysisPayload(postAnalysisAnswers),
               });
               return;
             }
@@ -8669,15 +8679,15 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             }
 
             const translatedAnalyse = await translateChatContent(content, analyseResponseMode, chatLocale, chatTranslateTitleSchool);
-            const postAnalysisAnswer = parsedForSave != null
-              ? await buildPostAnalysisAnswerForReport(userText, parsedForSave, chatLocale, req.log)
-              : null;
+            const postAnalysisAnswers = parsedForSave != null
+              ? await buildPostAnalysisAnswersForReport(userText, parsedForSave, chatLocale, req.log)
+              : [];
             sendAnalyseResponse({
               content: translatedAnalyse,
               mode: analyseResponseMode,
               searchId: savedSearchId,
               historyCreatedAt: savedSearchCreatedAt,
-              postAnalysisAnswer,
+              ...postAnalysisPayload(postAnalysisAnswers),
             });
             return;
           }

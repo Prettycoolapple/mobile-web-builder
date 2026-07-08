@@ -193,4 +193,52 @@ describe("selected listing context", () => {
     });
     expect((report.data_sources as Record<string, string>).listing_price).toBeUndefined();
   });
+
+  it("clears stale selected land area when the current live listing publishes no land area", () => {
+    const report: Record<string, unknown> = {
+      propertyOverview: {
+        address: "7 Sultan Street, Ellerslie, Auckland",
+        landArea: "2018m²",
+        land_area_sqm: 2018,
+      },
+      data_sources: {
+        land_area_sqm: "linz",
+        landArea_display: "linz",
+      },
+    };
+
+    const reconciled = reconcileSelectedListingContextWithLiveListing(
+      {
+        address: "7 Sultan Street, Ellerslie, Auckland",
+        listingUrl: "https://www.realestate.co.nz/43000001/residential/sale/7-sultan-street-ellerslie",
+        landArea: 2018,
+        source: "realestate.co.nz",
+      },
+      {
+        address: "7 Sultan Street, Ellerslie, Auckland",
+        listingUrl: "https://www.realestate.co.nz/43000001/residential/sale/7-sultan-street-ellerslie",
+        price: null,
+        priceText: "By negotiation",
+        landArea: null,
+        floorArea: 90,
+        photoUrl: null,
+        photoUrls: [],
+        zone: null,
+        bedrooms: 3,
+        bathrooms: 2,
+        listingStatus: "active",
+      },
+    );
+
+    applySelectedListingContextToReport(report, reconciled);
+
+    expect(report.propertyOverview).not.toHaveProperty("landArea");
+    expect(report.propertyOverview).not.toHaveProperty("land_area_sqm");
+    expect(report.propertyOverview).toMatchObject({
+      floorArea: "90m²",
+      isOnMarket: true,
+    });
+    expect((report.data_sources as Record<string, string>).land_area_sqm).toBeUndefined();
+    expect((report.data_sources as Record<string, string>).landArea_display).toBeUndefined();
+  });
 });

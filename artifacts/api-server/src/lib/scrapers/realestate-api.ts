@@ -337,6 +337,10 @@ async function loadSuburbIndex(): Promise<SuburbIndex> {
       const aliases = new Set<string>();
       const baseNorm = normaliseName(rec.title);
       aliases.add(baseNorm);
+      // Users often type well-known multi-word suburbs as one token
+      // ("flatbush", "northcote point"). Keep the official spaced title as
+      // canonical, but let location extraction match the joined variant.
+      if (baseNorm.includes(" ")) aliases.add(baseNorm.replace(/\s+/g, ""));
       // Alias the spelled-out form: normaliseName converts "saint" → "st", but the
       // raw realestate.co.nz title is "Saint Heliers". Add the spelled-out form too.
       aliases.add(normaliseName(rec.title.replace(/\bSaint\b/gi, "Saint").replace(/\bMount\b/gi, "Mount")));

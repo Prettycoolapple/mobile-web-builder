@@ -809,6 +809,17 @@ export function mergePropertyData(
     }
   }
   let final_land_area_sqm = live_land_area_sqm ?? land_area_sqm;
+  if (
+    selectedRealestateListing &&
+    realestateListing?.landArea == null &&
+    final_land_area_sqm != null
+  ) {
+    discrepancies.push(
+      `Land area: selected active realestate.co.nz listing does not publish a subject land area, so parcel/council backfill (${final_land_area_sqm}m²) was excluded to avoid showing stale parent-site land.`,
+    );
+    final_land_area_sqm = null;
+    sources["land_area_sqm"] = "unavailable_selected_active_listing";
+  }
   if (hasIgnoredCombinedListing && propertyValue && propertyValueMatchesSubject) {
     if (propertyValueLandArea != null && final_land_area_sqm !== propertyValueLandArea) {
       discrepancies.push(

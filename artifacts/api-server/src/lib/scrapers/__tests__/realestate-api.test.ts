@@ -46,6 +46,7 @@ function locationDirectoryPayload() {
         { type: "suburbs", id: "4100", attributes: { title: "Milton", slug: "milton", "fq-slug": "otago_clutha_milton", "parent-id": 285 } },
         { type: "suburbs", id: "4101", attributes: { title: "Otaio", slug: "otaio", "fq-slug": "canterbury_waimate_otaio", "parent-id": 277 } },
         { type: "suburbs", id: "4102", attributes: { title: "Clarks Beach", slug: "clarks-beach", "fq-slug": "auckland_manukau-city_clarks-beach", "parent-id": 223 } },
+        { type: "suburbs", id: "4103", attributes: { title: "Flat Bush", slug: "flat-bush", "fq-slug": "auckland_manukau-city_flat-bush", "parent-id": 223 } },
       ],
   };
 }
@@ -93,6 +94,18 @@ describe("realestate-api location resolution", () => {
 
     expect(resolved?.status).toBe("district");
     if (resolved?.status === "district") expect(resolved.district.title).toBe("Timaru");
+  });
+
+  it("matches joined multi-word suburb aliases in natural language text", async () => {
+    mockLocationDirectory();
+
+    const resolved = await findLocationInTextViaIndex("最近6个月 flatbush 6-7房 的出售价格");
+
+    expect(resolved?.status).toBe("suburb");
+    if (resolved?.status === "suburb") {
+      expect(resolved.suburb.title).toBe("Flat Bush");
+      expect(resolved.suburb.fqSlug).toBe("auckland_manukau-city_flat-bush");
+    }
   });
 
   it("treats city and region names as real search areas instead of fuzzy suburbs", async () => {

@@ -15,7 +15,15 @@ describe("regional planning provider registry", () => {
     delete process.env[FLAG];
   });
 
-  it("keeps the regional provider router disabled by default", () => {
+  it("keeps the regional provider router enabled by default", () => {
+    expect(regionalPlanningProvidersEnabled()).toBe(true);
+    expect(planningProviderMetadata({ lat: -37.787, lng: 175.279, address: "Hamilton" })).toMatchObject({
+      providerId: "hamilton",
+    });
+  });
+
+  it("allows regional providers to be explicitly disabled", () => {
+    process.env[FLAG] = "false";
     expect(regionalPlanningProvidersEnabled()).toBe(false);
     expect(planningProviderMetadata({ lat: -37.787, lng: 175.279, address: "Hamilton" })).toBeNull();
   });
@@ -50,10 +58,7 @@ describe("regional planning provider registry", () => {
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "1 Ardmore Street, Wanaka" }).providerId).toBe("qldc");
   });
 
-  it("emits provider metadata only when the router flag is enabled", () => {
-    expect(planningProviderMetadata({ lat: -37.787, lng: 175.279, address: "Hamilton" })).toBeNull();
-
-    process.env[FLAG] = "true";
+  it("emits provider metadata when the router is enabled", () => {
     expect(planningProviderMetadata({ lat: -37.787, lng: 175.279, address: "Hamilton" })).toMatchObject({
       providerId: "hamilton",
       coverageStatus: "partial",

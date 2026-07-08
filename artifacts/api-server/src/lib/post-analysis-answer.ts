@@ -1,6 +1,6 @@
 import type { Locale } from "./prompts";
 
-export type PostAnalysisIntent = "rental_ownership_costs" | "subdivision_lot_feasibility";
+export type PostAnalysisIntent = "rental_ownership_costs" | "market_value_estimate" | "subdivision_lot_feasibility";
 
 const DEFAULT_INTEREST_RATE = 0.07;
 const DEFAULT_LVR = 0.8;
@@ -16,6 +16,14 @@ function hasRentalOwnershipCostIntent(message: string): boolean {
   const rentalSignal = /\b(rental|rent(?:al)?\s+property|investment\s+property|landlord|tenant|cash\s*flow|cashflow)\b/i.test(text);
   const costSignal = /\b(expected\s+costs?|costs?\s+to\s+own|own(?:ing)?\s+costs?|holding\s+costs?|outgoings?|mortgage|interest|finance|repayments?|afford|carry(?:ing)?\s+costs?)\b/i.test(text);
   return rentalSignal && costSignal;
+}
+
+function hasMarketValueIntent(message: string): boolean {
+  const text = message.toLowerCase();
+  return (
+    /\b(?:market\s+value|estimated\s+(?:market\s+)?value|property\s+value|worth|valuation|value\s+of\s+(?:this|the)\s+property|what\s+is\s+(?:it|this|the\s+property)\s+worth)\b/i.test(text) ||
+    /(?:\u5e02\u573a\u4ef7\u503c|\u5e02\u5834\u50f9\u503c|\u5e02\u503c|\u4f30\u503c|\u4ef7\u503c|\u50f9\u503c|\u503c\u591a\u5c11|\u503c\u5e7e\u591a)/u.test(message)
+  );
 }
 
 // Matches the same lot-count phrasing as claude.ts's detectFilterSpecFromText
@@ -41,8 +49,17 @@ function extractRequestedLotCount(message: string): number | null {
 
 export function detectPostAnalysisIntent(message: string): PostAnalysisIntent | null {
   if (hasRentalOwnershipCostIntent(message)) return "rental_ownership_costs";
+  if (hasMarketValueIntent(message)) return "market_value_estimate";
   if (extractRequestedLotCount(message) != null) return "subdivision_lot_feasibility";
   return null;
+}
+
+export function detectPostAnalysisIntents(message: string): PostAnalysisIntent[] {
+  const intents: PostAnalysisIntent[] = [];
+  if (hasRentalOwnershipCostIntent(message)) intents.push("rental_ownership_costs");
+  if (hasMarketValueIntent(message)) intents.push("market_value_estimate");
+  if (extractRequestedLotCount(message) != null) intents.push("subdivision_lot_feasibility");
+  return intents;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -175,6 +192,39 @@ function reportPurchaseBase(report: Record<string, unknown>): { amount: number; 
   return null;
 }
 
+function reportMarketValueBase(report: Record<string, unknown>): { amount: number; source: "listing price" | "CV" | "average comparable sale" | "estimated GDV" } | null {
+  const overviewSnapshot = asRecord(report["property_overview_snapshot"]);
+  const overview = asRecord(report["propertyOverview"]);
+  const selectedListing = asRecord(report["selectedListingContext"]);
+  const selectedOverviewListing = asRecord(overview?.["selectedListingContext"]);
+  const listing = firstNumber(
+    overviewSnapshot?.["listing_price_nzd"],
+    overview?.["listing_price_nzd"],
+    overview?.["listingPrice"],
+    report["listing_price_nzd"],
+    report["listingPrice"],
+    selectedListing?.["price"],
+    selectedOverviewListing?.["price"],
+  );
+  if (listing != null) return { amount: listing, source: "listing price" };
+
+  const cv = firstNumber(
+    overviewSnapshot?.["cv_nzd"],
+    overview?.["cv_nzd"],
+    overview?.["cv"],
+    report["cv_nzd"],
+    report["cv"],
+  );
+  if (cv != null) return { amount: cv, source: "CV" };
+
+  const avgSale = firstNumber(report["avg_sale_price"], report["averageSalePrice"], report["avgComparableSale"]);
+  if (avgSale != null) return { amount: avgSale, source: "average comparable sale" };
+
+  const best = bestRoiScenario(report);
+  if (best?.gdv != null) return { amount: best.gdv, source: "estimated GDV" };
+  return null;
+}
+
 // Builds the chat reply that automatically follows a just-generated report
 // when the user's original message described a subdivision by lot count
 // (e.g. "a 3 lot subdivision at 13 X Place") — this is what future-proofs the
@@ -242,16 +292,34 @@ function buildSubdivisionLotAnswer(
 // (rental ownership costs, N-lot subdivision feasibility). Null when the
 // message carries no such intent.
 function buildIntentAnswer(
+  intent: PostAnalysisIntent,
   message: string,
   report: Record<string, unknown>,
   locale: Locale,
 ): string | null {
-  const intent = detectPostAnalysisIntent(message);
-  if (!intent) return null;
-
   if (intent === "subdivision_lot_feasibility") {
     const requestedLots = extractRequestedLotCount(message);
     return requestedLots != null ? buildSubdivisionLotAnswer(requestedLots, report, locale) : null;
+  }
+
+  if (intent === "market_value_estimate") {
+    const base = reportMarketValueBase(report);
+    if (!base) {
+      return locale === "zh"
+        ? "\u8be5\u7269\u4e1a\u7684\u5e02\u573a\u4ef7\u503c\u76ee\u524d\u65e0\u6cd5\u4ece\u62a5\u544a\u4e2d\u76f4\u63a5\u786e\u8ba4\u3002\u5982\u679c\u9700\u8981\u66f4\u51c6\u786e\u7684\u5e02\u503c\uff0c\u5efa\u8bae\u4ee5\u8fd1\u671f\u540c\u7c7b\u6210\u4ea4\u6216\u6ce8\u518c\u4f30\u4ef7\u5e08\u8bc4\u4f30\u4e3a\u51c6\u3002"
+        : "The report does not contain enough confirmed pricing evidence to state a market value. For a tighter value, use recent comparable settled sales or a registered valuation.";
+    }
+    if (locale === "zh") {
+      const source = base.source === "listing price"
+        ? "\u6302\u724c\u4ef7"
+        : base.source === "CV"
+          ? "CV"
+          : base.source === "average comparable sale"
+            ? "\u53ef\u6bd4\u6210\u4ea4\u5747\u503c"
+            : "\u62a5\u544a\u6a21\u578b\u4f30\u7b97\u7684\u603b\u552e\u503c";
+      return `\u5e02\u573a\u4ef7\u503c\u7c97\u4f30\uff1a\u7ea6 ${formatNZD(base.amount)}\uff0c\u4f9d\u636e\u662f\u62a5\u544a\u4e2d\u7684${source}\u3002\u8fd9\u662f\u53c2\u8003\u4f30\u7b97\uff0c\u4e0d\u7b49\u540c\u4e8e\u6ce8\u518c\u4f30\u4ef7\u6216\u5b9e\u9645\u6210\u4ea4\u4ef7\u3002`;
+    }
+    return `Estimated market value: about ${formatNZD(base.amount)}, using the report's ${base.source}. Treat this as an indicative estimate, not a registered valuation or confirmed sale price.`;
   }
 
   const base = reportPurchaseBase(report);
@@ -274,15 +342,25 @@ function buildIntentAnswer(
   return `Rental ownership cost, roughly: using the report's ${base.source} of ${formatNZD(base.amount)}, allow about ${formatNZD(professionalFee)} for professional fees (1.5%). At 80% lending and 7.0% p.a., interest is about ${formatNZD(annualInterest)}/year (${formatNZD(weeklyInterest)}/week). First-year purchase + fees + interest is about ${formatNZD(firstYearCost)}, before rates, insurance, maintenance, and vacancy.`;
 }
 
+export function buildPostAnalysisAnswers(
+  message: string,
+  report: Record<string, unknown> | null | undefined,
+  locale: Locale = "en",
+): string[] {
+  if (!report) return [];
+  const parts = detectPostAnalysisIntents(message)
+    .map((intent) => buildIntentAnswer(intent, message, report, locale))
+    .filter((p): p is string => !!p);
+  const notice = buildDevScoreNotice(report, locale);
+  if (notice) parts.push(notice);
+  return parts;
+}
+
 export function buildPostAnalysisAnswer(
   message: string,
   report: Record<string, unknown> | null | undefined,
   locale: Locale = "en",
 ): string | null {
-  if (!report) return null;
-  // A message-intent answer (if any) leads; the no-development-score notice is
-  // appended after it so a single report can carry both when they co-occur.
-  const parts = [buildIntentAnswer(message, report, locale), buildDevScoreNotice(report, locale)];
-  const combined = parts.filter((p): p is string => !!p).join("\n\n");
+  const combined = buildPostAnalysisAnswers(message, report, locale).join("\n\n");
   return combined || null;
 }

@@ -92,7 +92,10 @@ function flagEnabled(value: string | undefined): boolean {
 }
 
 export function regionalPlanningProvidersEnabled(): boolean {
-  return flagEnabled(process.env["ENABLE_REGIONAL_PLANNING_PROVIDERS"]);
+  const raw = process.env["ENABLE_REGIONAL_PLANNING_PROVIDERS"];
+  const v = raw?.trim().toLowerCase();
+  if (v === "0" || v === "false" || v === "no" || v === "off") return false;
+  return raw == null || raw.trim() === "" ? true : flagEnabled(raw);
 }
 
 function normaliseAddress(value: string | null | undefined): string {
