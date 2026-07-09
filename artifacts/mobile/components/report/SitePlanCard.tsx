@@ -399,6 +399,9 @@ function LayerToggleRow({
   const colors = useColors();
   const color = layerColor(layer);
   const disabled = !layer.available;
+  const switchTrackOff = "#E7E2DC";
+  const switchTrackOn = `${colors.accent}75`;
+  const switchThumb = disabled ? "#F5F1EA" : "#FFFFFF";
   return (
     <View style={[styles.legendRow, disabled && styles.legendRowDisabled]}>
       <View style={styles.legendLabelWrap}>
@@ -428,9 +431,9 @@ function LayerToggleRow({
         value={visible && layer.available}
         disabled={disabled}
         onValueChange={(next) => onToggle(layer.id, next)}
-        trackColor={{ false: colors.border, true: `${colors.accent}75` }}
-        thumbColor={visible && layer.available ? "#FFFFFF" : colors.mutedForeground}
-        ios_backgroundColor={colors.border}
+        trackColor={{ false: switchTrackOff, true: switchTrackOn }}
+        thumbColor={switchThumb}
+        ios_backgroundColor={switchTrackOff}
       />
     </View>
   );
