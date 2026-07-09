@@ -46,6 +46,8 @@ const HAMILTON_WASTEWATER =
   "https://services1.arcgis.com/R6s0QqCMQdwKY6yp/arcgis/rest/services/Wastewater Dataset - Hamilton City Council/FeatureServer";
 const HAMILTON_STORMWATER =
   "https://services1.arcgis.com/R6s0QqCMQdwKY6yp/arcgis/rest/services/Stormwater Dataset - Hamilton City Council/FeatureServer";
+const TOP_OF_THE_SOUTH_MAPS =
+  "https://www.topofthesouthmaps.co.nz/ArcGIS/rest/services/TopoftheSouthMaps/MapServer";
 
 const REGIONAL_INFRASTRUCTURE: Partial<Record<PlanningProviderId, RegionalInfrastructureGroup[]>> = {
   hamilton: [
@@ -84,6 +86,18 @@ const REGIONAL_INFRASTRUCTURE: Partial<Record<PlanningProviderId, RegionalInfras
       [5, "Stormwater culvert"],
       [6, "Stormwater drainage"],
       [7, "Stormwater service line"],
+    ], 1000),
+  ],
+  nelson: [
+    group("Water Supply", TOP_OF_THE_SOUTH_MAPS, "Nelson City Council / Top of the South Maps", [
+      [5, "Services - Water Pipes"],
+    ]),
+    group("Wastewater", TOP_OF_THE_SOUTH_MAPS, "Nelson City Council / Top of the South Maps", [
+      [6, "Services - Wastewater Pipes"],
+    ]),
+    group("Stormwater", TOP_OF_THE_SOUTH_MAPS, "Nelson City Council / Top of the South Maps", [
+      [7, "Services - Stormwater Pipes"],
+      [8, "Services - Stormwater Drains"],
     ], 1000),
   ],
   qldc: [

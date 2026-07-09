@@ -54,12 +54,43 @@ describe("regional infrastructure fetchers", () => {
     });
   });
 
+  it("maps Nelson Top of the South service layers into three service groups", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const hasNelsonServiceLayer =
+        url.includes("/5/query") ||
+        url.includes("/6/query") ||
+        url.includes("/7/query");
+      return new Response(JSON.stringify({
+        features: hasNelsonServiceLayer
+          ? [
+              {
+                attributes: { OBJECTID: 1, Owner: "Nelson City Council" },
+                geometry: { paths: [[[173.221, -41.306], [173.222, -41.306]]] },
+              },
+            ]
+          : [],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }));
+
+    const result = await fetchRegionalInfrastructure("nelson", -41.306, 173.222, null);
+
+    expect(result).toHaveLength(3);
+    expect(result.map((item) => item.name).sort()).toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(result.every((item) => item.service_source_owner === "Nelson City Council / Top of the South Maps")).toBe(true);
+  });
+
   it("exposes mapped utility smoke targets only for configured providers", () => {
     expect(hasRegionalInfrastructureProvider("hamilton")).toBe(true);
     expect(hasRegionalInfrastructureProvider("qldc")).toBe(true);
+    expect(hasRegionalInfrastructureProvider("nelson")).toBe(true);
 
     const targets = regionalInfrastructureSmokeTargets();
     expect(targets.some((target) => target.providerId === "hamilton" && target.serviceName === "Water Supply")).toBe(true);
+    expect(targets.some((target) => target.providerId === "nelson" && target.serviceName === "Stormwater")).toBe(true);
     expect(targets.some((target) => target.providerId === "qldc" && target.serviceName === "Wastewater")).toBe(true);
     expect(targets.some((target) => target.providerId === "dunedin" && target.serviceName === "Water Supply")).toBe(true);
   });

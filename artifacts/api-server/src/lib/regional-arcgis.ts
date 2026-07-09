@@ -63,6 +63,8 @@ const CHRISTCHURCH_DISTRICT_PLAN_B =
   "https://gis.ccc.govt.nz/server/rest/services/OpenData/DistrictPlanB/FeatureServer";
 const WHANGAREI_DISTRICT_PLAN =
   "https://geo.wdc.govt.nz/server/rest/services/District_Plan_Public/MapServer";
+const TOP_OF_THE_SOUTH_MAPS =
+  "https://www.topofthesouthmaps.co.nz/ArcGIS/rest/services/TopoftheSouthMaps/MapServer";
 const QLDC_PDP =
   "https://gis.qldc.govt.nz/server/rest/services/DistrictPlan/PDP_Stage_1_2_3_Decisions/MapServer";
 const DUNEDIN_DISTRICT_PLAN =
@@ -131,6 +133,21 @@ const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
       overlay(CHRISTCHURCH_DISTRICT_PLAN_B, 80, "Noise Insulation", "polygon", "moderate"),
       overlay(CHRISTCHURCH_DISTRICT_PLAN_B, 85, "Water Body Setback", "polygon", "moderate"),
       overlay(CHRISTCHURCH_DISTRICT_PLAN, 42, "Residential Density / Qualifying Matter", "polygon", "moderate", undefined, ["Category", "Location", "ScheduleReference"]),
+    ],
+  },
+  nelson: {
+    zoneLayers: [
+      {
+        serviceUrl: TOP_OF_THE_SOUTH_MAPS,
+        layerId: 27,
+        label: "Nelson Planning Zone",
+        codeField: "ZONES",
+        nameFields: ["ZONES", "LABEL"],
+        detailFields: ["STATUS", "Council"],
+      },
+    ],
+    overlayLayers: [
+      overlay(TOP_OF_THE_SOUTH_MAPS, 28, "Planning Zone Notation", "polygon", "moderate", undefined, ["LABEL", "ZONES", "STATUS", "Council"]),
     ],
   },
   whangarei: {
@@ -357,13 +374,19 @@ export async function fetchRegionalPlanningZone(
   jurisdiction: RegionalJurisdiction,
   lat: number,
   lng: number,
+  parcelBbox?: ParcelBbox | null,
 ): Promise<ZoneResult> {
   const config = configFor(jurisdiction.providerId);
   if (!config) return partialProviderZone(jurisdiction);
 
   for (const layer of config.zoneLayers) {
     try {
-      const features = await queryArcGisAttributes(layer, lat, lng);
+      let features = parcelBbox
+        ? await queryArcGisAttributes(layer, lat, lng, { parcelBbox })
+        : [];
+      if (features.length === 0) {
+        features = await queryArcGisAttributes(layer, lat, lng);
+      }
       const attrs = features[0];
       if (!attrs) continue;
 

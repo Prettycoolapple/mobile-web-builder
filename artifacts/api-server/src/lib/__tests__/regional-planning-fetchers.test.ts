@@ -158,6 +158,30 @@ describe("regional planning report fetchers", () => {
     expect(mockedRegionalInfrastructure).toHaveBeenCalledOnce();
   });
 
+  it("passes parcel geometry through to regional zone lookups", async () => {
+    const parcelBbox = {
+      minLng: 173.22,
+      maxLng: 173.23,
+      minLat: -41.31,
+      maxLat: -41.3,
+      polygon: [
+        [173.22, -41.31],
+        [173.23, -41.31],
+        [173.23, -41.3],
+        [173.22, -41.3],
+      ] as [number, number][],
+    };
+
+    await fetchPlanningZoneForReport(-41.306, 173.222, "17 Quiet Woman Way, Monaco, Nelson", parcelBbox);
+
+    expect(mockedRegionalZone).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: "nelson" }),
+      -41.306,
+      173.222,
+      parcelBbox,
+    );
+  });
+
   it("keeps terrain available for non-Auckland reports", async () => {
     process.env[FLAG] = "true";
 

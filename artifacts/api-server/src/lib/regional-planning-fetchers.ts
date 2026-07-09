@@ -31,13 +31,14 @@ export async function fetchPlanningZoneForReport(
   lat: number,
   lng: number,
   address?: string | null,
+  parcelBbox?: ParcelBbox | null,
 ): Promise<ZoneResult> {
   if (shouldUseLegacyAuckland(lat, lng, address)) {
     return aucklandCouncil.fetchUnitaryPlanZone(lat, lng);
   }
 
   const jurisdiction = resolvePlanningJurisdiction(context(lat, lng, address));
-  return fetchRegionalPlanningZone(jurisdiction, lat, lng).catch(() => partialProviderZone(jurisdiction));
+  return fetchRegionalPlanningZone(jurisdiction, lat, lng, parcelBbox).catch(() => partialProviderZone(jurisdiction));
 }
 
 export async function fetchPlanningOverlaysForReport(

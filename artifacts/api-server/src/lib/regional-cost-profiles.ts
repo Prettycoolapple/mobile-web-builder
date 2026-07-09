@@ -5,6 +5,7 @@ export type CostProfileId =
   | "hamilton-default"
   | "christchurch-default"
   | "canterbury-default"
+  | "nelson-default"
   | "whangarei-default"
   | "qldc-default"
   | "dunedin-default"
@@ -171,6 +172,7 @@ const PROVIDER_PROFILE_META: Record<PlanningProviderId, { id: CostProfileId; lab
   hamilton: { id: "hamilton-default", label: "Hamilton default cost profile" },
   christchurch: { id: "christchurch-default", label: "Christchurch default cost profile" },
   canterbury: { id: "canterbury-default", label: "Canterbury default cost profile" },
+  nelson: { id: "nelson-default", label: "Nelson default cost profile" },
   whangarei: { id: "whangarei-default", label: "Whangarei default cost profile" },
   qldc: { id: "qldc-default", label: "Queenstown Lakes default cost profile" },
   dunedin: { id: "dunedin-default", label: "Dunedin default cost profile" },

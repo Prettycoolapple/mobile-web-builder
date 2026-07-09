@@ -34,6 +34,7 @@ describe("regional planning provider registry", () => {
       "hamilton",
       "christchurch",
       "canterbury",
+      "nelson",
       "whangarei",
       "qldc",
       "dunedin",
@@ -46,6 +47,7 @@ describe("regional planning provider registry", () => {
     expect(resolvePlanningJurisdiction({ lat: -37.787, lng: 175.279, address: "Hamilton" }).providerId).toBe("hamilton");
     expect(resolvePlanningJurisdiction({ lat: -43.532, lng: 172.636, address: "Christchurch" }).providerId).toBe("christchurch");
     expect(resolvePlanningJurisdiction({ lat: -44.397, lng: 171.254, address: "Timaru" }).providerId).toBe("canterbury");
+    expect(resolvePlanningJurisdiction({ lat: -41.306, lng: 173.222, address: "17 Quiet Woman Way, Monaco, Nelson" }).providerId).toBe("nelson");
     expect(resolvePlanningJurisdiction({ lat: -35.725, lng: 174.323, address: "Whangarei" }).providerId).toBe("whangarei");
     expect(resolvePlanningJurisdiction({ lat: -45.031, lng: 168.662, address: "Queenstown" }).providerId).toBe("qldc");
     expect(resolvePlanningJurisdiction({ lat: -45.878, lng: 170.503, address: "Dunedin" }).providerId).toBe("dunedin");
@@ -55,6 +57,7 @@ describe("regional planning provider registry", () => {
   it("uses address hints when coordinates are not enough", () => {
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "10 Victoria Street, Hamilton" }).providerId).toBe("hamilton");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "1 Bealey Avenue, Christchurch" }).providerId).toBe("christchurch");
+    expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "17 Quiet Woman Way, Monaco, Nelson" }).providerId).toBe("nelson");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "1 Ardmore Street, Wanaka" }).providerId).toBe("qldc");
   });
 
@@ -81,6 +84,7 @@ describe("regional planning provider registry", () => {
       "hamilton",
       "christchurch",
       "canterbury",
+      "nelson",
       "whangarei",
       "qldc",
       "dunedin",

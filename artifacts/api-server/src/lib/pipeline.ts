@@ -744,7 +744,7 @@ export async function runPropertyPipeline(
     qvResult,
     homesResult,
   ] = await Promise.allSettled([
-    timed("zone",             () => cr && !refreshRegionalPlanning ? Promise.resolve(cr.zone)             : fetchPlanningZoneForReport(lat, lng, address),                                                timing),
+    timed("zone",             () => cr && !refreshRegionalPlanning ? Promise.resolve(cr.zone)             : fetchPlanningZoneForReport(lat, lng, address, linzParcelData?.bbox ?? null),                             timing),
     timed("overlays",         () => cr && !refreshRegionalPlanning ? Promise.resolve(cr.overlays)         : fetchPlanningOverlaysForReport(lat, lng, linzParcelData?.bbox ?? null, { address, consensus: true }), timing),
     timed("contour",          () => cr ? Promise.resolve(cr.contour)          : fetchTerrainForReport(lat, lng, linzParcelData?.bbox ?? null, { landAreaSqm: linzParcelData?.area_sqm ?? null }, address), timing),
     timed("property_history", () => cr ? Promise.resolve(cr.property_history) : fetchPropertyHistoryForReport(address, lat, lng, linzParcelData?.area_sqm ?? null),              timing),
@@ -1404,11 +1404,22 @@ export async function runPropertyPipeline(
     easementAreaSqm,
     overlays: merged.overlays,
   });
-  const rawLotResult = regionalLotAssessment?.lotResult ?? calculatePotentialLots(
+  const baseLotResult = regionalLotAssessment?.lotResult ?? calculatePotentialLots(
     merged.land_area_sqm ?? 0,
     merged.zone_code,
     easementAreaSqm,
   );
+  const regionalZoneDisplayLabel =
+    !regionalLotAssessment &&
+    planningProvider &&
+    planningProvider.providerId !== "auckland-legacy" &&
+    zoneData?.zone_code !== "UNKNOWN" &&
+    zoneData?.zone_description?.trim()
+      ? zoneData.zone_description.trim()
+      : null;
+  const rawLotResult = regionalZoneDisplayLabel
+    ? { ...baseLotResult, zone_label: regionalZoneDisplayLabel }
+    : baseLotResult;
   if (regionalLotAssessment) {
     for (const caveat of regionalLotAssessment.caveats) {
       if (!merged.discrepancies.includes(caveat)) merged.discrepancies.push(caveat);

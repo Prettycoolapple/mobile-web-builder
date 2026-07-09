@@ -10,6 +10,7 @@ export type PlanningProviderId =
   | "hamilton"
   | "christchurch"
   | "canterbury"
+  | "nelson"
   | "whangarei"
   | "qldc"
   | "dunedin"
@@ -151,6 +152,7 @@ const AUCKLAND_BOUNDS: Bounds = { minLat: -37.35, maxLat: -36.05, minLng: 174.0,
 const HAMILTON_BOUNDS: Bounds = { minLat: -37.95, maxLat: -37.62, minLng: 175.08, maxLng: 175.43 };
 const CHRISTCHURCH_BOUNDS: Bounds = { minLat: -43.75, maxLat: -43.35, minLng: 172.35, maxLng: 173.05 };
 const CANTERBURY_BOUNDS: Bounds = { minLat: -44.95, maxLat: -42.0, minLng: 169.9, maxLng: 174.6 };
+const NELSON_BOUNDS: Bounds = { minLat: -41.45, maxLat: -41.15, minLng: 173.05, maxLng: 173.45 };
 const WHANGAREI_BOUNDS: Bounds = { minLat: -36.05, maxLat: -35.35, minLng: 173.6, maxLng: 174.75 };
 const QLDC_BOUNDS: Bounds = { minLat: -45.4, maxLat: -44.25, minLng: 168.0, maxLng: 170.05 };
 const DUNEDIN_BOUNDS: Bounds = { minLat: -46.15, maxLat: -45.55, minLng: 169.95, maxLng: 171.15 };
@@ -221,6 +223,29 @@ const providerRegistry: PlanningProvider[] = [
         /\bkaiapoi\b/,
         /\bashburton\b/,
         /\btimaru\b/,
+      ]),
+  ),
+  provider(
+    "nelson",
+    "Nelson City Council planning provider",
+    "Nelson City Council",
+    "Nelson",
+    "partial",
+    "Nelson Resource Management Plan",
+    [
+      { label: "Top of the South Planning and Services", url: "https://www.topofthesouthmaps.co.nz/ArcGIS/rest/services/TopoftheSouthMaps/MapServer" },
+    ],
+    (context) =>
+      supportsAny(context, NELSON_BOUNDS, [
+        /\bnelson\b/,
+        /\bstoke\b/,
+        /\bmonaco\b/,
+        /\btahunanui\b/,
+        /\btahuna\b/,
+        /\bthe wood\b/,
+        /\battersea\b/,
+        /\bmaitai\b/,
+        /\brichmond\b/,
       ]),
   ),
   provider(

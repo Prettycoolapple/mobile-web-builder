@@ -64,6 +64,79 @@ describe("regional ArcGIS planning fetchers", () => {
     expect(zone.raw_zone).toContain("\"Zone\":\"21\"");
   });
 
+  it("maps Nelson Top of the South planning zone fields", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/query")) {
+        return new Response(JSON.stringify({
+          features: [
+            {
+              attributes: {
+                OBJECTID: 4488,
+                ZONES: "Residential - Lower Density",
+                LABEL: null,
+                STATUS: null,
+                Council: "Nelson City Council",
+              },
+            },
+          ],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ fields: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+
+    const zone = await fetchRegionalPlanningZone(jurisdiction("nelson"), -41.306, 173.222);
+
+    expect(zone).toMatchObject({
+      zone_code: "Residential - Lower Density",
+      zone_description: expect.stringContaining("Residential - Lower Density"),
+      min_lot_size_sqm: null,
+    });
+    expect(zone.zone_description).toContain("Nelson Planning Zone");
+  });
+
+  it("tries parcel geometry before falling back to point geometry for regional zones", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/query")) {
+        const isParcelQuery = url.includes("esriGeometryPolygon");
+        return new Response(JSON.stringify({
+          features: isParcelQuery
+            ? []
+            : [
+                {
+                  attributes: {
+                    OBJECTID: 11788,
+                    ZONE: "Rural Production Zone",
+                    ePlanDisplayField: "Rural production zone",
+                  },
+                },
+              ],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ fields: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const zone = await fetchRegionalPlanningZone(jurisdiction("whangarei"), -35.754, 174.176, {
+      minLng: 174.17,
+      maxLng: 174.18,
+      minLat: -35.76,
+      maxLat: -35.75,
+      polygon: [
+        [174.17, -35.76],
+        [174.18, -35.76],
+        [174.18, -35.75],
+        [174.17, -35.75],
+      ],
+    });
+
+    expect(zone.zone_code).toBe("Rural Production Zone");
+    const queryUrls = fetchMock.mock.calls.map((call) => String(call[0])).filter((url) => url.includes("/query"));
+    expect(queryUrls[0]).toContain("esriGeometryPolygon");
+    expect(queryUrls.some((url) => url.includes("esriGeometryPoint"))).toBe(true);
+  });
+
   it("maps configured regional overlay hits into conservative report overlays", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       features: [
@@ -91,6 +164,7 @@ describe("regional ArcGIS planning fetchers", () => {
 
     expect(targets.some((target) => target.providerId === "hamilton" && target.kind === "zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "christchurch" && target.label.includes("Heritage"))).toBe(true);
+    expect(targets.some((target) => target.providerId === "nelson" && target.label === "Nelson Planning Zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "qldc" && target.kind === "zone")).toBe(true);
   });
 });
