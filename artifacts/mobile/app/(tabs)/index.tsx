@@ -2335,6 +2335,8 @@ export default function SearchScreen() {
           let data: {
             content: string;
             mode: string;
+            report?: FeasibilityReport;
+            reportGroup?: FeasibilityReportGroup;
             searchId?: string | null;
             historyCreatedAt?: string | null;
             wantsProviderRecommendation?: boolean;
@@ -2370,6 +2372,34 @@ export default function SearchScreen() {
             !data.postAnalysisAnswer
           ) {
             updateLastMessage({ type: "text", content: "" }, sessionId);
+            return;
+          }
+
+          if (data.reportGroup && isFeasibilityReportGroup(data.reportGroup)) {
+            const groupObj = withGroupHistoryMetadata(data.reportGroup, data.searchId, data.historyCreatedAt);
+            setCurrentReportGroup(groupObj);
+            updateLastMessage({ type: "report_group", reportGroup: groupObj, content: "" }, sessionId);
+            appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, sessionId);
+            for (const report of groupObj.reports) {
+              if (report.scores && report.address) {
+                updateCandidateScores({ [report.address]: report.scores }, sessionId);
+              }
+            }
+            refreshProfile().catch(() => {});
+            bumpSearchHistory();
+            return;
+          }
+
+          if (data.report) {
+            const reportObj = withHistoryMetadata(data.report, data.searchId, data.historyCreatedAt);
+            setCurrentReport(reportObj);
+            updateLastMessage({ type: "report", report: reportObj, content: "" }, sessionId);
+            appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, sessionId);
+            if (reportObj.scores && reportObj.address) {
+              updateCandidateScores({ [reportObj.address]: reportObj.scores }, sessionId);
+            }
+            refreshProfile().catch(() => {});
+            bumpSearchHistory();
             return;
           }
 

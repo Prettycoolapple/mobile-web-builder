@@ -8726,6 +8726,11 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
             sendAnalyseResponse({
               content: translatedAnalyse,
               mode: analyseResponseMode,
+              ...(parsedForSave != null
+                ? (parsedForSave["kind"] === "combined_listing_group"
+                  ? { reportGroup: parsedForSave }
+                  : { report: parsedForSave })
+                : {}),
               searchId: savedSearchId,
               historyCreatedAt: savedSearchCreatedAt,
               ...postAnalysisPayload(postAnalysisAnswers),
