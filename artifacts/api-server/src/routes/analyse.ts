@@ -106,6 +106,7 @@ import { resolveActiveListingContext } from "../lib/active-listing-context";
 import { resolveAddressForAnalysis } from "../lib/address-clarification";
 import { looksLikeUnitOrApartmentAddress } from "../lib/address-patterns";
 import { buildPostAnalysisAnswers } from "../lib/post-analysis-answer";
+import { detectProviderRecommendationIntent } from "../lib/provider-recommendation-intent";
 import { tryGeocodeAddress } from "../lib/geocode";
 import {
   buildNearbyAmenityRequest,
@@ -6187,12 +6188,21 @@ router.post(
         : intent.execution === "answer_in_chat" ? "followup"
         : intent.mode;
 
-      // Provider recommendation signal derived by the LLM from the user's message.
-      // Included in every response so the client can trigger the explicit check
-      // without relying on client-side keyword matching.
+      const deterministicProviderIntent = detectProviderRecommendationIntent(userText);
+      const wantsProviderRecommendation =
+        intent.wantsProviderRecommendation || deterministicProviderIntent.wantsProviderRecommendation;
+      const wantsAnotherProvider =
+        intent.wantsAnotherProvider || deterministicProviderIntent.wantsAnotherProvider;
+      const suggestedProviderDiscipline =
+        intent.suggestedDiscipline ?? deterministicProviderIntent.suggestedDiscipline;
+
+      // Provider recommendation signal derived from both semantic intent and
+      // deterministic follow-up phrases. Included in every response so the
+      // client can trigger the explicit check without relying on client-side
+      // keyword matching.
       const providerSignal = {
-        ...(intent.wantsProviderRecommendation ? { wantsProviderRecommendation: true, suggestedDiscipline: intent.suggestedDiscipline ?? null } : {}),
-        ...(intent.wantsAnotherProvider ? { wantsAnotherProvider: true } : {}),
+        ...(wantsProviderRecommendation ? { wantsProviderRecommendation: true, suggestedDiscipline: suggestedProviderDiscipline ?? null } : {}),
+        ...(wantsAnotherProvider ? { wantsAnotherProvider: true } : {}),
       };
       const latestAssistantText = [...messages].reverse().find((m) => m.role === "assistant")?.content ?? "";
       const recentAssistantAskedForSearchArea =
