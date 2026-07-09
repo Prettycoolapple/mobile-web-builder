@@ -1134,7 +1134,15 @@ export async function runPropertyPipeline(
         "Regional provider selected: replacing Auckland-specific zone and lot-size modelling",
       );
     }
-    merged.zone_code = ruleStatus.automaticYieldClaimsAllowed ? ruleStatus.regionalZoneCode : null;
+    const officialRegionalZoneCode =
+      zoneData?.zone_code?.trim() && zoneData.zone_code !== "UNKNOWN"
+        ? zoneData.zone_code.trim()
+        : null;
+    merged.zone_code = ruleStatus.automaticYieldClaimsAllowed
+      ? ruleStatus.regionalZoneCode
+      : ruleStatus.automaticRoiAllowed
+        ? officialRegionalZoneCode
+        : null;
     merged.min_lot_size_sqm = ruleStatus.automaticYieldClaimsAllowed ? ruleStatus.verifiedMinimumLotSqm : null;
     merged.zone_description = regionalZoneDescriptionWithRuleStatus(
       zoneData,

@@ -267,6 +267,9 @@ describe("estimateCosts — existing dwelling / demolition", () => {
     const whangareiDefault = estimateCosts(property, 1, {
       cost_profile: regionalCostProfileForProvider("whangarei"),
     });
+    const nelsonDefault = estimateCosts(property, 1, {
+      cost_profile: regionalCostProfileForProvider("nelson"),
+    });
     const customProfile = regionalCostProfileForProvider("whangarei");
     customProfile.construction.baseLowPerSqm = 3_000;
     customProfile.construction.baseHighPerSqm = 4_000;
@@ -274,7 +277,11 @@ describe("estimateCosts — existing dwelling / demolition", () => {
 
     expect(whangareiDefault.construction_low).toBe(aucklandDefault.construction_low);
     expect(whangareiDefault.construction_high).toBe(aucklandDefault.construction_high);
+    expect(nelsonDefault.construction_low).toBe(aucklandDefault.construction_low);
+    expect(nelsonDefault.construction_high).toBe(aucklandDefault.construction_high);
     expect(whangareiCustom.construction_low).toBeGreaterThan(whangareiDefault.construction_low);
+    expect(regionalCostProfileForProvider("whangarei")).toMatchObject({ id: "whangarei-default", providerId: "whangarei" });
+    expect(regionalCostProfileForProvider("nelson")).toMatchObject({ id: "nelson-default", providerId: "nelson" });
     expect(regionalCostProfileForProvider("unsupported").id).toBe("unsupported-default");
   });
 });

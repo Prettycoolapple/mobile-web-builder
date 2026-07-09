@@ -27,7 +27,7 @@ describe("regional planning rule status", () => {
     });
   });
 
-  it("blocks yield and ROI for regional providers until local rules are modelled", () => {
+  it("keeps unsupported regional providers facts-only until local rules are modelled", () => {
     expect(regionalPlanningRuleStatus({
       providerId: "qldc",
       providerName: "Queenstown Lakes District Council planning provider",
@@ -36,6 +36,48 @@ describe("regional planning rule status", () => {
       modellingStatus: "facts_only",
       automaticYieldClaimsAllowed: false,
       automaticRoiAllowed: false,
+      verifiedMinimumLotSqm: null,
+    });
+  });
+
+  it("allows interim comparable-sales ROI for Nelson without inferring yield", () => {
+    expect(regionalPlanningRuleStatus(
+      {
+        providerId: "nelson",
+        providerName: "Nelson City Council planning provider",
+      },
+      {
+        zone_code: "Residential - Lower Density",
+        zone_description: "Residential - Lower Density - Nelson Planning Zone",
+        min_lot_size_sqm: null,
+        raw_zone: "{}",
+      },
+    )).toMatchObject({
+      subdivisionRules: "not_modelled",
+      modellingStatus: "roi_enabled",
+      automaticYieldClaimsAllowed: false,
+      automaticRoiAllowed: true,
+      verifiedMinimumLotSqm: null,
+    });
+  });
+
+  it("allows interim comparable-sales ROI for non-modelled Whangarei zones without inferring yield", () => {
+    expect(regionalPlanningRuleStatus(
+      {
+        providerId: "whangarei",
+        providerName: "Whangarei District Council planning provider",
+      },
+      {
+        zone_code: "Rural Production Zone",
+        zone_description: "Rural Production Zone - Whangarei Rural Zone",
+        min_lot_size_sqm: null,
+        raw_zone: "{}",
+      },
+    )).toMatchObject({
+      subdivisionRules: "not_modelled",
+      modellingStatus: "roi_enabled",
+      automaticYieldClaimsAllowed: false,
+      automaticRoiAllowed: true,
       verifiedMinimumLotSqm: null,
     });
   });

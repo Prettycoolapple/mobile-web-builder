@@ -109,6 +109,11 @@ const DUNEDIN_GR1_VARIATION2_SOURCE =
 const DUNEDIN_GR2_VARIATION2_SOURCE =
   "https://www.dunedin.govt.nz/__data/assets/pdf_file/0011/873497/V2-General-Residential-2-Rezoning-updated.pdf";
 
+const INTERIM_COMPARABLE_ROI_PROVIDERS = new Set<PlanningProviderMetadata["providerId"]>([
+  "nelson",
+  "whangarei",
+]);
+
 const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
   {
     providerId: "hamilton",
@@ -731,18 +736,21 @@ export function regionalPlanningRuleStatus(
     };
   }
 
+  const interimComparableRoi = INTERIM_COMPARABLE_ROI_PROVIDERS.has(provider.providerId);
   return {
     subdivisionRules: "not_modelled",
-    modellingStatus: "facts_only",
+    modellingStatus: interimComparableRoi ? "roi_enabled" : "facts_only",
     automaticYieldClaimsAllowed: false,
-    automaticRoiAllowed: false,
+    automaticRoiAllowed: interimComparableRoi,
     regionalZoneCode: null,
     regionalZoneLabel: null,
     verifiedMinimumLotSqm: null,
     sourceLabel: null,
     sourceUrl: null,
     caveats: [],
-    note: `${provider.providerName} zone facts are available, but local subdivision/minimum-lot rules are not modelled yet. The report should not infer multi-lot yield or ROI automatically for this region.`,
+    note: interimComparableRoi
+      ? `${provider.providerName} zone facts are available. Interim ROI uses nearby comparable-sales GDV and the provider cost profile, but local subdivision/minimum-lot rules are not modelled yet, so the report must not infer multi-lot yield automatically for this zone.`
+      : `${provider.providerName} zone facts are available, but local subdivision/minimum-lot rules are not modelled yet. The report should not infer multi-lot yield or ROI automatically for this region.`,
   };
 }
 
