@@ -190,16 +190,16 @@ export function parseShareTokenFromUrl(url: string | null | undefined): string |
   if (!url) return null;
   try {
     const parsed = new URL(url);
-    if (parsed.protocol === "devfeasible:" && parsed.hostname === "share") {
+    if (parsed.protocol === "devfeasible:" && (parsed.hostname === "share" || parsed.hostname === "property-share")) {
       return decodeURIComponent(parsed.pathname.replace(/^\/+/, "").split("/")[0] ?? "") || null;
     }
     const parts = parsed.pathname.split("/").filter(Boolean);
-    const shareIdx = parts.indexOf("share");
+    const shareIdx = parts.findIndex((part) => part === "share" || part === "property-share");
     if (shareIdx >= 0 && parts[shareIdx + 1]) {
       return decodeURIComponent(parts[shareIdx + 1]);
     }
   } catch {
-    const match = url.match(/(?:^|\/)share\/([^/?#]+)/);
+    const match = url.match(/(?:^|\/)(?:property-)?share\/([^/?#]+)/);
     if (match?.[1]) return decodeURIComponent(match[1]);
   }
   return null;

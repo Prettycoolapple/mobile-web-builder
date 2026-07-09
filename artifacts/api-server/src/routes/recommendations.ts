@@ -106,55 +106,30 @@ async function selectPlannerOrArchitect(excludeProviderIds: string[]): Promise<S
   });
 }
 
-function fallbackDisciplinesForRequest(
-  requestedDiscipline: ProviderDiscipline | null,
-  strategySuggestsDesignProfessional: boolean,
-): ProviderDiscipline[] {
-  if (requestedDiscipline === "engineer") {
-    return ["architect_designer", "planner", "quantity_surveyor", "other"];
-  }
-  if (requestedDiscipline === "planner") {
-    return ["architect_designer", "engineer", "quantity_surveyor", "other"];
-  }
-  if (requestedDiscipline === "architect_designer") {
-    return ["planner", "engineer", "quantity_surveyor", "other"];
-  }
-  if (requestedDiscipline === "quantity_surveyor") {
-    return ["architect_designer", "planner", "engineer", "other"];
-  }
-  if (requestedDiscipline === "other") {
-    return ["architect_designer", "planner", "engineer", "quantity_surveyor"];
-  }
-  return strategySuggestsDesignProfessional
-    ? ["architect_designer", "planner", "engineer", "quantity_surveyor", "other"]
-    : [];
-}
-
 async function selectProviderForExplicitRequest(options: {
   requestedDiscipline: ProviderDiscipline | null;
   strategySuggestsDesignProfessional: boolean;
   excludeProviderIds: string[];
 }): Promise<ServiceProvider | null> {
+  // The user named a discipline (e.g. "civil engineer" → engineer). Never
+  // substitute a different role — apply the usual rotation chance within that
+  // discipline only, and let the caller surface "providers busy" when none
+  // are available.
   if (options.requestedDiscipline) {
-    const exact = await selectServiceProvider({
+    return selectServiceProvider({
       preferredDiscipline: options.requestedDiscipline,
       strictDiscipline: true,
       excludeProviderIds: options.excludeProviderIds,
     });
-    if (exact) return exact;
   }
 
-  const fallbackDisciplines = fallbackDisciplinesForRequest(
-    options.requestedDiscipline,
-    options.strategySuggestsDesignProfessional,
-  );
-  if (fallbackDisciplines.length > 0) {
-    const adjacent = await selectServiceProvider({
-      disciplineIn: fallbackDisciplines,
+  if (options.strategySuggestsDesignProfessional) {
+    const designProfessional = await selectServiceProvider({
+      disciplineIn: ["architect_designer", "planner"],
       strictDiscipline: true,
       excludeProviderIds: options.excludeProviderIds,
     });
-    if (adjacent) return adjacent;
+    if (designProfessional) return designProfessional;
   }
 
   return selectServiceProvider({

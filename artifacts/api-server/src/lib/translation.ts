@@ -633,10 +633,18 @@ export async function translateChatContent(
         return JSON.stringify(translated);
       }
     } catch {
-      // fall through to plain-text handling
+      // Malformed JSON-ish content (e.g. truncated model output). Running it
+      // through the LLM translator would garble the quotes/braces and produce
+      // pseudo-JSON that clients can neither parse into a card nor safely
+      // strip, so it would surface as raw JSON text in the chat. Return it
+      // untouched and let the client-side JSON guards handle it.
+      return content;
     }
   }
 
-  // Plain text / markdown reply
+  // Plain text / markdown reply. JSON payloads that reach here (structured
+  // modes we don't recognise) must never be LLM-translated as a whole string —
+  // that breaks their machine-parseable shape.
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) return content;
   return ensureChinese(content);
 }

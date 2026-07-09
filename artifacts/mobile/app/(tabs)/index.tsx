@@ -497,6 +497,7 @@ export default function SearchScreen() {
     analyseListingContext?: string;
     analyseNewChat?: string;
     exploreAskSuburb?: string;
+    shareCheck?: string;
   }>();
   const { getApiHeaders, refreshProfile, user } = useAuth();
   const {
@@ -3086,6 +3087,10 @@ export default function SearchScreen() {
     pendingSuburbScreeningRef.current = true;
   }, [routeParams.exploreAskSuburb, currentSessionId, createSession, addMessage, t]);
 
+  // `shareCheck` is a nonce set by the share deep-link routes; it forces this
+  // effect to re-run when a share link arrives while the chat tab is already
+  // mounted (warm start), so the pending token is consumed immediately.
+  const shareCheckNonce = routeParams.shareCheck;
   useEffect(() => {
     if (!user || isLoading) return;
 
@@ -3159,7 +3164,7 @@ export default function SearchScreen() {
     return () => {
       cancelled = true;
     };
-  }, [addMessage, createSession, currentSessionId, getApiHeaders, handleAnalyse, isLoading, router, user]);
+  }, [addMessage, createSession, currentSessionId, getApiHeaders, handleAnalyse, isLoading, router, shareCheckNonce, user]);
 
   const confirmAnalyseDisclaimer = useCallback(async () => {
     const action = pendingAnalyseActionRef.current;

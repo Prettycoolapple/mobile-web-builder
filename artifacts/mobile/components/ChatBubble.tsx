@@ -5,7 +5,7 @@ import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
-import { ChatMessage, PropertyCandidate, SelectedListingContext } from "@/context/ChatContext";
+import { ChatMessage, FeasibilityReport, FeasibilityReportGroup, PropertyCandidate, SelectedListingContext } from "@/context/ChatContext";
 import { useT } from "@/lib/i18n";
 import { BrowseListing } from "@/lib/browseListings";
 import { shareListing } from "@/lib/propertyShares";
@@ -56,6 +56,37 @@ class ReportErrorBoundaryClass extends Component<
 }
 
 const ReportErrorBoundary = ReportErrorBoundaryInner;
+
+type StructuredReportContent =
+  | { kind: "report"; report: FeasibilityReport }
+  | { kind: "report_group"; group: FeasibilityReportGroup }
+  | { kind: "unparseable_json" }
+  | null;
+
+// Final safety net for assistant *text* messages whose content is actually a
+// stringified feasibility report — e.g. history persisted by an older app
+// build, a synced conversation from another client, or an unexpected server
+// path. These must render as the proper report card, never as raw JSON text.
+function parseStructuredReportContent(content: string | null | undefined): StructuredReportContent {
+  const trimmed = (content ?? "").trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object") return null;
+    if (parsed.kind === "combined_listing_group" && Array.isArray(parsed.reports)) {
+      return { kind: "report_group", group: parsed as unknown as FeasibilityReportGroup };
+    }
+    if ("scores" in parsed || "propertyOverview" in parsed || "riskSummary" in parsed) {
+      return { kind: "report", report: parsed as unknown as FeasibilityReport };
+    }
+    return null;
+  } catch {
+    // JSON-looking but unparseable. Short snippets may just be prose that
+    // happens to use braces; anything long is machine payload that must not
+    // surface verbatim in the chat.
+    return trimmed.length > 400 ? { kind: "unparseable_json" } : null;
+  }
+}
 
 class MarkdownErrorBoundaryClass extends Component<
   { children: React.ReactNode; fallbackText: string; fallbackStyle: object },
@@ -502,6 +533,40 @@ export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, 
   // a semantic "change provider" intent is detected). Render nothing for them.
   if (!isUser && message.type === "text" && !message.content?.trim() && !message.retryText) {
     return null;
+  }
+
+  if (!isUser && message.type === "text") {
+    const structured = parseStructuredReportContent(message.content);
+    if (structured?.kind === "report") {
+      return (
+        <View style={styles.reportContainer}>
+          <ReportErrorBoundary>
+            <FeasibilityReportCard report={structured.report} onFollowUp={onFollowUp} onAnalyseProperty={onAnalyseProperty} />
+          </ReportErrorBoundary>
+        </View>
+      );
+    }
+    if (structured?.kind === "report_group") {
+      return (
+        <View style={styles.reportContainer}>
+          <ReportErrorBoundary>
+            <CombinedReportGroupCard group={structured.group} onFollowUp={onFollowUp} onAnalyseProperty={onAnalyseProperty} />
+          </ReportErrorBoundary>
+        </View>
+      );
+    }
+    if (structured?.kind === "unparseable_json") {
+      return (
+        <View style={styles.aiRow}>
+          <AiAvatar />
+          <View style={[styles.aiBubble, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Text style={{ color: colors.foreground, fontFamily: "DM_Sans_400Regular", fontSize: 15, lineHeight: 23 }}>
+              {t("search.format_error")}
+            </Text>
+          </View>
+        </View>
+      );
+    }
   }
 
   if (isUser) {

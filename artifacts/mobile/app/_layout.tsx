@@ -256,7 +256,11 @@ function ShareLinkSetup() {
   const [pendingRouteToken, setPendingRouteToken] = useState<string | null>(null);
 
   const routeToShareEntry = useCallback(() => {
-    router.replace("/(tabs)" as never);
+    // The nonce forces the (tabs) pending-share effect to re-run even when the
+    // chat tab is already mounted (warm start via universal link) — a bare
+    // replace to the same route would not re-fire it and the stored token
+    // would sit unconsumed until the next cold start.
+    router.replace({ pathname: "/(tabs)", params: { shareCheck: String(Date.now()) } } as never);
   }, [router]);
 
   const handleShareUrl = useCallback(async (url: string | null | undefined) => {

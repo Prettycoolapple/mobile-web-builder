@@ -34,5 +34,7 @@ export default function ShareTokenRoute() {
   if (user.role === "service_provider" && !hasServiceProviderAccess(user)) {
     return <Redirect href="/(onboarding)/service-provider-welcome" />;
   }
-  return <Redirect href="/(tabs)" />;
+  // Carry a nonce so the (tabs) pending-share effect re-runs even when the
+  // chat tab was already mounted before this deep link arrived.
+  return <Redirect href={{ pathname: "/(tabs)", params: { shareCheck: token || String(Date.now()) } }} />;
 }

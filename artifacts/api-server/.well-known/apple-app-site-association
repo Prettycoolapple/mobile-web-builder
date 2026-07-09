@@ -9,11 +9,16 @@
         "components": [
           {
             "/": "/share/*",
-            "comment": "Project Alpha property share links"
+            "comment": "Project Alpha property share open links"
+          },
+          {
+            "/": "/property-share/*",
+            "comment": "Project Alpha property share preview links"
           }
         ],
         "paths": [
-          "/share/*"
+          "/share/*",
+          "/property-share/*"
         ]
       }
     ]

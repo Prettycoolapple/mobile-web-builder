@@ -8326,8 +8326,17 @@ router.post(
               }
 
               const postAnalysisAnswers = await buildPostAnalysisAnswersForReport(userText, deterministicReport, chatLocale, req.log);
+              // `content` stays a stringified report so legacy clients (which
+              // render the card by parsing content JSON) keep working; zh users
+              // get the narrative translated while the JSON stays parseable.
+              const deterministicContent = await translateChatContent(
+                JSON.stringify(deterministicReport),
+                "analyse",
+                chatLocale,
+                chatTranslateTitleSchool,
+              );
               sendAnalyseResponse({
-                content: JSON.stringify(deterministicReport),
+                content: deterministicContent,
                 mode: "analyse",
                 report: deterministicReport,
                 searchId: savedSearchId,

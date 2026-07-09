@@ -13,8 +13,12 @@ const ZH_CV = "\u62a5\u544a\u4e2d\u7684 CV";
 
 function hasRentalOwnershipCostIntent(message: string): boolean {
   const text = message.toLowerCase();
-  const rentalSignal = /\b(rental|rent(?:al)?\s+property|investment\s+property|landlord|tenant|cash\s*flow|cashflow)\b/i.test(text);
-  const costSignal = /\b(expected\s+costs?|costs?\s+to\s+own|own(?:ing)?\s+costs?|holding\s+costs?|outgoings?|mortgage|interest|finance|repayments?|afford|carry(?:ing)?\s+costs?)\b/i.test(text);
+  const rentalSignal =
+    /\b(rental|rent(?:al)?\s+property|investment\s+property|landlord|tenant|cash\s*flow|cashflow)\b/i.test(text) ||
+    /(?:出租|租赁|租賃|投资房|投資房|租金)/u.test(message);
+  const costSignal =
+    /\b(expected\s+costs?|costs?\s+(?:to|of)\s+own(?:ing|ership)?|own(?:ing|ership)?\s+costs?|holding\s+costs?|outgoings?|mortgage|interest|finance|repayments?|afford|carry(?:ing)?\s+costs?)\b/i.test(text) ||
+    /(?:持有成本|成本|费用|費用|开销|開銷|贷款|貸款|利息|供楼|供樓)/u.test(message);
   return rentalSignal && costSignal;
 }
 

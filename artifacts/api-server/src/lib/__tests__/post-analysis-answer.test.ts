@@ -14,6 +14,18 @@ describe("post-analysis attached question detection", () => {
     ).toEqual(["rental_ownership_costs", "market_value_estimate"]);
   });
 
+  it("detects 'cost of owning ... as a rental property' phrasing plus market value", () => {
+    expect(
+      detectPostAnalysisIntents("What is the cost of owning 44 Grampian road st Heliers as a rental property and what is the market value estimate for this property?"),
+    ).toEqual(["rental_ownership_costs", "market_value_estimate"]);
+  });
+
+  it("detects Chinese rental holding-cost questions", () => {
+    expect(
+      detectPostAnalysisIntent("如果把奥克兰这套房子出租，持有成本大概是多少？"),
+    ).toBe("rental_ownership_costs");
+  });
+
   it("ignores unrelated analysis prompts", () => {
     expect(detectPostAnalysisIntent("Analyse 1/289 Ulster Street, Whitiora")).toBeNull();
   });
