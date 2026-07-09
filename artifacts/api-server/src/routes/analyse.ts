@@ -414,6 +414,20 @@ function postAnalysisPayload(answers: string[]): { postAnalysisAnswer: string | 
   };
 }
 
+function deterministicProviderRecommendationPayload(message: string): {
+  wantsProviderRecommendation?: true;
+  wantsAnotherProvider?: true;
+  suggestedDiscipline?: string | null;
+} {
+  const signal = detectProviderRecommendationIntent(message);
+  return {
+    ...(signal.wantsProviderRecommendation
+      ? { wantsProviderRecommendation: true as const, suggestedDiscipline: signal.suggestedDiscipline }
+      : {}),
+    ...(signal.wantsAnotherProvider ? { wantsAnotherProvider: true as const } : {}),
+  };
+}
+
 function nearbyAmenityClarification(addressCandidate: string | null | undefined, locale: ReturnType<typeof normaliseLocale>): string {
   const english = addressCandidate
     ? `I could not locate ${addressCandidate} closely enough to search nearby amenities. Please include the suburb or city.`
@@ -5036,6 +5050,7 @@ router.post(
       searchId: result.savedSearchId,
       historyCreatedAt: result.savedSearchCreatedAt,
       ...postAnalysisPayload(postAnalysisAnswers),
+      ...deterministicProviderRecommendationPayload(address),
     });
   } catch (error) {
     req.log.error({ err: error }, "Failed to analyse property");
@@ -5106,6 +5121,7 @@ router.get("/analyse/jobs/:jobId", async (req, res) => {
         report: isGroup ? null : (report ?? null),
         reportGroup: isGroup ? report : null,
         ...postAnalysisPayload(postAnalysisAnswers),
+        ...deterministicProviderRecommendationPayload(job.queryAddress),
       });
       return;
     }

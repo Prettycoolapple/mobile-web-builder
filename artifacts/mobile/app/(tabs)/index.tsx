@@ -611,6 +611,79 @@ export default function SearchScreen() {
     return true;
   }, [addMessage]);
 
+  const scheduleProviderRecommendationCheck = useCallback((args: {
+    sessionId: string;
+    report?: FeasibilityReport | null;
+    conversationHistory?: Array<{ role: string; content: string }>;
+    followUpCount?: number;
+    explicitRequest?: boolean;
+    askForOthers?: boolean;
+    preferredDiscipline?: string | null;
+    excludeProviderIds?: string[];
+    delayMs?: number;
+    showNoProviderText?: boolean;
+  }): (() => void) => {
+    const timer = setTimeout(async () => {
+      try {
+        const freshMsgs = sessionMessagesRef.current;
+        if (!args.explicitRequest && freshMsgs.some((m) => m.type === "provider_recommendation")) return;
+
+        const existingProviderIds = freshMsgs
+          .filter((m) => m.type === "provider_recommendation" && m.provider?.id)
+          .map((m) => m.provider!.id);
+        const resp = await fetch(`${getApiBase()}/recommendations/check`, {
+          method: "POST",
+          headers: getApiHeaders(),
+          body: JSON.stringify({
+            report: args.report ?? {},
+            conversationHistory: args.conversationHistory ?? [],
+            ...(typeof args.followUpCount === "number" ? { followUpCount: args.followUpCount } : {}),
+            explicitRequest: Boolean(args.explicitRequest),
+            askForOthers: Boolean(args.askForOthers),
+            preferredDiscipline: args.preferredDiscipline ?? null,
+            excludeProviderIds: args.excludeProviderIds ?? existingProviderIds,
+          }),
+        });
+        if (resp.status === 402) {
+          addMessage({
+            role: "assistant",
+            content: "",
+            type: "provider_upgrade_gate",
+          }, args.sessionId);
+          setShowPaywall(true);
+          return;
+        }
+        if (!resp.ok) return;
+        const data = await resp.json() as {
+          shouldRecommend: boolean;
+          provider: ServiceProvider | null;
+          intentType: string;
+          upgradeRequired?: boolean;
+          providersExhausted?: boolean;
+        };
+        if (data.shouldRecommend && data.provider) {
+          addProviderRecommendationOnce({
+            sessionId: args.sessionId,
+            provider: data.provider,
+            intentType: data.intentType,
+            propertyAddress: resolveReportAddress(args.report),
+          });
+          return;
+        }
+        if (args.showNoProviderText && (data.providersExhausted || (!data.shouldRecommend && !data.provider))) {
+          addMessage({
+            role: "assistant",
+            content: t("recommendations.providers_busy"),
+            type: "text",
+          }, args.sessionId);
+        }
+      } catch (err) {
+        console.log("Recommendation check failed:", err);
+      }
+    }, args.delayMs ?? 0);
+    return () => clearTimeout(timer);
+  }, [addMessage, addProviderRecommendationOnce, getApiHeaders, t]);
+
   useEffect(() => {
     const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
     const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
@@ -1557,6 +1630,9 @@ export default function SearchScreen() {
             reportGroup?: FeasibilityReportGroup | null;
             postAnalysisAnswer?: string | null;
             postAnalysisAnswers?: string[];
+            wantsProviderRecommendation?: boolean;
+            wantsAnotherProvider?: boolean;
+            suggestedDiscipline?: string | null;
             error?: string | null;
           };
 
@@ -1570,6 +1646,17 @@ export default function SearchScreen() {
               }
               replaceBackgroundAnalyseMessage(job.jobId, { role: "assistant", content: "", type: "report_group", reportGroup: groupWithHistory }, job.sessionId);
               appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, job.sessionId);
+              if (data.wantsProviderRecommendation || data.wantsAnotherProvider) {
+                scheduleProviderRecommendationCheck({
+                  sessionId: job.sessionId,
+                  report: groupWithHistory.reports[0] ?? null,
+                  explicitRequest: true,
+                  askForOthers: Boolean(data.wantsAnotherProvider),
+                  preferredDiscipline: data.suggestedDiscipline ?? null,
+                  delayMs: 700,
+                  showNoProviderText: true,
+                });
+              }
               for (const report of groupWithHistory.reports) {
                 if (report.scores && report.address) {
                   updateCandidateScores({ [report.address]: report.scores }, job.sessionId);
@@ -1584,6 +1671,17 @@ export default function SearchScreen() {
               }
               replaceBackgroundAnalyseMessage(job.jobId, { role: "assistant", content: "", type: "report", report: reportWithHistory }, job.sessionId);
               appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, job.sessionId);
+              if (data.wantsProviderRecommendation || data.wantsAnotherProvider) {
+                scheduleProviderRecommendationCheck({
+                  sessionId: job.sessionId,
+                  report: reportWithHistory,
+                  explicitRequest: true,
+                  askForOthers: Boolean(data.wantsAnotherProvider),
+                  preferredDiscipline: data.suggestedDiscipline ?? null,
+                  delayMs: 700,
+                  showNoProviderText: true,
+                });
+              }
               if (reportWithHistory.scores && reportWithHistory.address) {
                 updateCandidateScores({ [reportWithHistory.address]: reportWithHistory.scores }, job.sessionId);
               }
@@ -1615,6 +1713,7 @@ export default function SearchScreen() {
     getApiHeaders,
     replaceBackgroundAnalyseMessage,
     refreshProfile,
+    scheduleProviderRecommendationCheck,
     setCurrentReport,
     setCurrentReportGroup,
     t,
@@ -2063,6 +2162,8 @@ export default function SearchScreen() {
 
     const useBackgroundAnalyse = detectedMode === "analyse" && Boolean(user) && Platform.OS !== "web";
     const useBackgroundScreening = detectedMode === "discover" && Boolean(user) && Platform.OS !== "web";
+    let providerReportSnapshot: FeasibilityReport | null = null;
+    let deferProviderCheckUntilBackgroundResult = false;
 
     // Warms the backend in case it's cold-starting. Pings /healthz repeatedly
     // (short timeout per ping) until it responds OK or we give up. Returns true
@@ -2156,6 +2257,7 @@ export default function SearchScreen() {
           }
           if (r.status === 202) {
             const queued = await r.json().catch(() => ({} as { jobId?: string }));
+            deferProviderCheckUntilBackgroundResult = isExplicitRecommendationRequest;
             await trackBackgroundAnalyseJob(queued.jobId, sessionId, text);
             updateLastMessage({
               type: "loading",
@@ -2184,7 +2286,19 @@ export default function SearchScreen() {
             suburb?: string | null;
             postAnalysisAnswer?: string | null;
             postAnalysisAnswers?: string[];
+            wantsProviderRecommendation?: boolean;
+            wantsAnotherProvider?: boolean;
+            suggestedDiscipline?: string | null;
           };
+
+          if (data.wantsProviderRecommendation && user?.role === "general") {
+            llmWantsRecommendation = true;
+            llmSuggestedDiscipline = data.suggestedDiscipline ?? null;
+          }
+          if (data.wantsAnotherProvider && user?.role === "general") {
+            llmWantsAnotherProvider = true;
+            llmWantsRecommendation = true;
+          }
 
           if (data.type === "clarification" && data.clarificationType === "subdivision" && Array.isArray(data.options) && data.options.length > 0) {
             updateLastMessage({
@@ -2214,6 +2328,7 @@ export default function SearchScreen() {
           }
           if (data.reportGroup && isFeasibilityReportGroup(data.reportGroup)) {
             const groupWithHistory = withGroupHistoryMetadata(data.reportGroup, data.searchId, data.historyCreatedAt);
+            providerReportSnapshot = groupWithHistory.reports[0] ?? null;
             setCurrentReportGroup(groupWithHistory);
             updateLastMessage({ type: "report_group", reportGroup: groupWithHistory, content: "" }, sessionId);
             appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, sessionId);
@@ -2228,6 +2343,7 @@ export default function SearchScreen() {
           }
           if (data.report) {
             const reportWithHistory = withHistoryMetadata(data.report, data.searchId, data.historyCreatedAt);
+            providerReportSnapshot = reportWithHistory;
             setCurrentReport(reportWithHistory);
             updateLastMessage({ type: "report", report: reportWithHistory, content: "" }, sessionId);
             appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, sessionId);
@@ -2377,6 +2493,7 @@ export default function SearchScreen() {
 
           if (data.reportGroup && isFeasibilityReportGroup(data.reportGroup)) {
             const groupObj = withGroupHistoryMetadata(data.reportGroup, data.searchId, data.historyCreatedAt);
+            providerReportSnapshot = groupObj.reports[0] ?? null;
             setCurrentReportGroup(groupObj);
             updateLastMessage({ type: "report_group", reportGroup: groupObj, content: "" }, sessionId);
             appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, sessionId);
@@ -2392,6 +2509,7 @@ export default function SearchScreen() {
 
           if (data.report) {
             const reportObj = withHistoryMetadata(data.report, data.searchId, data.historyCreatedAt);
+            providerReportSnapshot = reportObj;
             setCurrentReport(reportObj);
             updateLastMessage({ type: "report", report: reportObj, content: "" }, sessionId);
             appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, sessionId);
@@ -2468,6 +2586,7 @@ export default function SearchScreen() {
           if (data.mode === "analyse") {
             if (isFeasibilityReportGroup(maybeParsed)) {
               const groupObj = withGroupHistoryMetadata(maybeParsed, data.searchId, data.historyCreatedAt);
+              providerReportSnapshot = groupObj.reports[0] ?? null;
               setCurrentReportGroup(groupObj);
               updateLastMessage({ type: "report_group", reportGroup: groupObj, content: "" }, sessionId);
               appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, sessionId);
@@ -2480,6 +2599,7 @@ export default function SearchScreen() {
               bumpSearchHistory();
             } else if (maybeParsed && isFeasibilityReport(maybeParsed)) {
               const reportObj = withHistoryMetadata(maybeParsed as unknown as FeasibilityReport, data.searchId, data.historyCreatedAt);
+              providerReportSnapshot = reportObj;
               setCurrentReport(reportObj);
               updateLastMessage({ type: "report", report: reportObj, content: "" }, sessionId);
               appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, sessionId);
@@ -2512,6 +2632,7 @@ export default function SearchScreen() {
             // but always strip any JSON before displaying.
             if (isFeasibilityReportGroup(maybeParsed)) {
               const groupObj = withGroupHistoryMetadata(maybeParsed, data.searchId, data.historyCreatedAt);
+              providerReportSnapshot = groupObj.reports[0] ?? null;
               setCurrentReportGroup(groupObj);
               updateLastMessage({ type: "report_group", reportGroup: groupObj, content: "" }, sessionId);
               appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, sessionId);
@@ -2524,6 +2645,7 @@ export default function SearchScreen() {
               bumpSearchHistory();
             } else if (isFeasibilityReport(maybeParsed)) {
               const reportObj = withHistoryMetadata(maybeParsed as unknown as FeasibilityReport, data.searchId, data.historyCreatedAt);
+              providerReportSnapshot = reportObj;
               setCurrentReport(reportObj);
               updateLastMessage({ type: "report", report: reportObj, content: "" }, sessionId);
               appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, sessionId);
@@ -2583,10 +2705,8 @@ export default function SearchScreen() {
       //   (a) keyword detection matched (fast, client-side), OR
       //   (b) the LLM detected provider recommendation intent in the chat response.
       // This covers English keywords, Chinese expressions, and nuanced phrasing alike.
-      if (isExplicitRecommendationRequest || llmWantsRecommendation) {
-        const reportSnapshot = currentReport;
-        const capturedSessionId = sessionId;
-        const capturedHeaders = headers;
+      if (!deferProviderCheckUntilBackgroundResult && (isExplicitRecommendationRequest || llmWantsRecommendation)) {
+        const reportSnapshot = providerReportSnapshot ?? currentReport;
         const capturedText = lowerText;
 
         // Discipline: prefer the LLM-derived discipline (semantically richer),
@@ -2605,66 +2725,15 @@ export default function SearchScreen() {
         // For "change provider" the loading bubble is already cleared; no need to wait for animation.
         const providerCheckDelay = llmWantsAnotherProvider ? 200 : 1200;
 
-        setTimeout(async () => {
-          try {
-            const apiBase = getApiBase();
-            const freshMsgs = sessionMessagesRef.current;
-            const resp = await fetch(`${apiBase}/recommendations/check`, {
-              method: "POST",
-              headers: capturedHeaders,
-              body: JSON.stringify({
-                report: reportSnapshot ?? {},
-                conversationHistory: [],
-                explicitRequest: true,
-                askForOthers: llmWantsAnotherProvider,
-                preferredDiscipline,
-                excludeProviderIds: freshMsgs
-                  .filter((m) => m.type === "provider_recommendation" && m.provider?.id)
-                  .map((m) => m.provider!.id),
-              }),
-            });
-            if (resp.status === 402) {
-              addMessage({
-                role: "assistant",
-                content: "",
-                type: "provider_upgrade_gate",
-              }, capturedSessionId);
-              setShowPaywall(true);
-              return;
-            }
-            if (!resp.ok) return;
-            const data = await resp.json() as {
-              shouldRecommend: boolean;
-              provider: ServiceProvider | null;
-              intentType: string;
-              upgradeRequired?: boolean;
-              providersExhausted?: boolean;
-            };
-            if (data.shouldRecommend && data.provider && data.upgradeRequired) {
-              addMessage({
-                role: "assistant",
-                content: "",
-                type: "provider_upgrade_gate",
-              }, capturedSessionId);
-              setShowPaywall(true);
-              return;
-            }
-            if (data.shouldRecommend && data.provider) {
-              addProviderRecommendationOnce({
-                sessionId: capturedSessionId,
-                provider: data.provider,
-                intentType: data.intentType,
-                propertyAddress: resolveReportAddress(reportSnapshot as FeasibilityReport | undefined),
-              });
-            } else if (data.providersExhausted || (!data.shouldRecommend && !data.provider)) {
-              addMessage({
-                role: "assistant",
-                content: t("recommendations.providers_busy"),
-                type: "text",
-              }, capturedSessionId);
-            }
-          } catch {}
-        }, providerCheckDelay);
+        scheduleProviderRecommendationCheck({
+          sessionId,
+          report: reportSnapshot,
+          explicitRequest: true,
+          askForOthers: llmWantsAnotherProvider,
+          preferredDiscipline,
+          delayMs: providerCheckDelay,
+          showNoProviderText: true,
+        });
       }
     }
   }, [
@@ -2686,6 +2755,7 @@ export default function SearchScreen() {
     trackBackgroundAnalyseJob,
     trackBackgroundScreeningJob,
     addProviderRecommendationOnce,
+    scheduleProviderRecommendationCheck,
     shouldShowAnalyseDisclaimer,
     openAnalyseDisclaimer,
     promptSignInForAnalysis,

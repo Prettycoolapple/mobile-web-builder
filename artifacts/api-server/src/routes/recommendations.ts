@@ -106,6 +106,62 @@ async function selectPlannerOrArchitect(excludeProviderIds: string[]): Promise<S
   });
 }
 
+function fallbackDisciplinesForRequest(
+  requestedDiscipline: ProviderDiscipline | null,
+  strategySuggestsDesignProfessional: boolean,
+): ProviderDiscipline[] {
+  if (requestedDiscipline === "engineer") {
+    return ["architect_designer", "planner", "quantity_surveyor", "other"];
+  }
+  if (requestedDiscipline === "planner") {
+    return ["architect_designer", "engineer", "quantity_surveyor", "other"];
+  }
+  if (requestedDiscipline === "architect_designer") {
+    return ["planner", "engineer", "quantity_surveyor", "other"];
+  }
+  if (requestedDiscipline === "quantity_surveyor") {
+    return ["architect_designer", "planner", "engineer", "other"];
+  }
+  if (requestedDiscipline === "other") {
+    return ["architect_designer", "planner", "engineer", "quantity_surveyor"];
+  }
+  return strategySuggestsDesignProfessional
+    ? ["architect_designer", "planner", "engineer", "quantity_surveyor", "other"]
+    : [];
+}
+
+async function selectProviderForExplicitRequest(options: {
+  requestedDiscipline: ProviderDiscipline | null;
+  strategySuggestsDesignProfessional: boolean;
+  excludeProviderIds: string[];
+}): Promise<ServiceProvider | null> {
+  if (options.requestedDiscipline) {
+    const exact = await selectServiceProvider({
+      preferredDiscipline: options.requestedDiscipline,
+      strictDiscipline: true,
+      excludeProviderIds: options.excludeProviderIds,
+    });
+    if (exact) return exact;
+  }
+
+  const fallbackDisciplines = fallbackDisciplinesForRequest(
+    options.requestedDiscipline,
+    options.strategySuggestsDesignProfessional,
+  );
+  if (fallbackDisciplines.length > 0) {
+    const adjacent = await selectServiceProvider({
+      disciplineIn: fallbackDisciplines,
+      strictDiscipline: true,
+      excludeProviderIds: options.excludeProviderIds,
+    });
+    if (adjacent) return adjacent;
+  }
+
+  return selectServiceProvider({
+    excludeProviderIds: options.excludeProviderIds,
+  });
+}
+
 interface Message {
   role: string;
   content: string;
@@ -380,13 +436,9 @@ router.post("/recommendations/check", requireAuth, async (req: Request, res: Res
       const strategySuggestsDesignProfessional =
         strategy === "demolish_rebuild" || strategy === "refurbish";
       const requestedDiscipline = normaliseProviderDiscipline(preferredDiscipline);
-      const disciplineIn =
-        !requestedDiscipline && strategySuggestsDesignProfessional
-          ? (["architect_designer", "planner"] as const)
-          : undefined;
-      const provider = await selectServiceProvider({
-        preferredDiscipline: requestedDiscipline,
-        ...(disciplineIn ? { disciplineIn: [...disciplineIn] } : {}),
+      const provider = await selectProviderForExplicitRequest({
+        requestedDiscipline,
+        strategySuggestsDesignProfessional,
         excludeProviderIds,
       });
       if (!provider) {
