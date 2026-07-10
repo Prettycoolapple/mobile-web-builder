@@ -104,6 +104,8 @@ const CHRISTCHURCH_CHAPTER8_SOURCE =
   "https://ccc.govt.nz/assets/Documents/The-Council/Plans-Strategies-Policies-Bylaws/Plans/district-plan/Print-Chapters/Chapter-8.pdf";
 const QLDC_SUBDIVISION_SOURCE =
   "https://www.qldc.govt.nz/media/ez5gvf4t/pdp-chapter-27-subdivision-and-development-28-mar-2024.pdf";
+const WELLINGTON_DISTRICT_PLAN_SOURCE =
+  "https://www.huttcity.govt.nz/council/district-plan";
 const DUNEDIN_GR1_VARIATION2_SOURCE =
   "https://www.dunedin.govt.nz/__data/assets/pdf_file/0012/873498/V2-Rule-Changes-in-General-Res1-and-Township-Settlement-Zones-updated.pdf";
 const DUNEDIN_GR2_VARIATION2_SOURCE =
@@ -507,7 +509,7 @@ const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
   {
     providerId: "qldc",
     regionalZoneCode: "QLDC_LDSRZ",
-    zonePattern: /\b(lower density suburban|suburban residential)\b/i,
+    zonePattern: /\b(lower density suburban|low density residential|low density suburban|suburban residential)\b/i,
     zoneLabel: "Lower Density/Suburban Residential Zone",
     standardMinimumLotSqm: 450,
     requiredShapeText: "Every site can contain a square of at least 15m by 15m.",
@@ -546,6 +548,111 @@ const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
       blockedOverlayCaveat:
         "QLDC Rule 27.7.34 does not apply within the Queenstown Airport Air Noise Boundary or Outer Control Boundary.",
     },
+    roiEnabled: true,
+  },
+  {
+    providerId: "qldc",
+    regionalZoneCode: "QLDC_LLRZ",
+    zonePattern: /\b(large lot residential|large lot suburban residential)\b/i,
+    zoneLabel: "Large Lot Residential Zone",
+    standardMinimumLotSqm: 2_000,
+    requiredShapeText: "Every site can contain a square of at least 25m by 25m.",
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "QLDC PDP Chapter 27 Rule 27.6.1",
+    sourceUrl: QLDC_SUBDIVISION_SOURCE,
+    caveats: [
+      "QLDC Large Lot Residential splits into sub-zones: the model uses the 2000sqm Large Lot Residential B minimum; Large Lot Residential A can require 4000sqm per lot.",
+      "Chapter 27 also requires minimum dimensions, access, servicing/infrastructure and location-specific checks.",
+    ],
+    roiEnabled: true,
+  },
+  // ── Wellington region residential zones ────────────────────────────────────
+  // These packs are shared across the region's councils (Wellington City, Hutt
+  // City, Upper Hutt, Porirua, Kāpiti Coast), matched on the standardised
+  // National Planning Standards residential zone names each council's district
+  // plan returns. Minimum-lot figures are indicative first-pass standards for
+  // MDRS-enabled residential land and MUST be confirmed against the specific
+  // council's operative district plan before being relied on. ROI is enabled so
+  // the report can model yield + returns using the (Auckland-seeded) Wellington
+  // cost profile, which is tunable per region in regional-cost-profiles.ts.
+  {
+    providerId: "wellington",
+    regionalZoneCode: "WLG_HDRZ",
+    zonePattern: /\bhigh density residential\b/i,
+    zoneLabel: "High Density Residential Zone",
+    standardMinimumLotSqm: 200,
+    requiredShapeText: null,
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "Wellington region district plan (High Density Residential, indicative)",
+    sourceUrl: WELLINGTON_DISTRICT_PLAN_SOURCE,
+    caveats: [
+      "Indicative first-pass minimum for MDRS-enabled High Density Residential land; confirm the exact minimum net site area and dimension controls in the relevant council's district plan.",
+      "Access, shape, hazards (fault, flood, ground-shaking), heritage, infrastructure and other performance standards still require consent checks.",
+    ],
+    roiEnabled: true,
+  },
+  {
+    providerId: "wellington",
+    regionalZoneCode: "WLG_MDRZ",
+    zonePattern: /\bmedium density residential\b|\bmedium density\b/i,
+    zoneLabel: "Medium Density Residential Zone",
+    standardMinimumLotSqm: 250,
+    requiredShapeText: null,
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "Wellington region district plan (Medium Density Residential, indicative)",
+    sourceUrl: WELLINGTON_DISTRICT_PLAN_SOURCE,
+    caveats: [
+      "Indicative first-pass minimum for MDRS-enabled Medium Density Residential land; confirm the exact minimum net site area in the relevant council's district plan.",
+      "Access, shape, hazards, heritage, infrastructure and other performance standards still require consent checks.",
+    ],
+    roiEnabled: true,
+  },
+  {
+    providerId: "wellington",
+    regionalZoneCode: "WLG_HILLRZ",
+    zonePattern: /\bhill residential\b/i,
+    zoneLabel: "Hill Residential Zone",
+    standardMinimumLotSqm: 400,
+    requiredShapeText: null,
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "Wellington region district plan (Hill Residential, indicative)",
+    sourceUrl: WELLINGTON_DISTRICT_PLAN_SOURCE,
+    caveats: [
+      "Indicative first-pass minimum for Hill Residential land; confirm the exact minimum net site area in the relevant council's district plan.",
+      "Hill/slope stability, earthworks, access and hazard (fault, flood, ground-shaking) controls materially affect real yield and cost.",
+    ],
+    roiEnabled: true,
+  },
+  {
+    providerId: "wellington",
+    regionalZoneCode: "WLG_LLRZ",
+    zonePattern: /\b(large lot residential|rural residential|rural lifestyle)\b/i,
+    zoneLabel: "Large Lot / Rural Residential Zone",
+    standardMinimumLotSqm: 1_400,
+    requiredShapeText: null,
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "Wellington region district plan (Large Lot / Rural Residential, indicative)",
+    sourceUrl: WELLINGTON_DISTRICT_PLAN_SOURCE,
+    caveats: [
+      "Indicative first-pass minimum for Large Lot / Rural Residential land; these zones often require materially larger minimum sites — confirm the exact minimum in the relevant council's district plan.",
+      "Servicing (reticulated water/wastewater vs on-site), access, hazards and rural amenity controls still require consent checks.",
+    ],
+    roiEnabled: true,
+  },
+  {
+    providerId: "wellington",
+    regionalZoneCode: "WLG_GRZ",
+    zonePattern: /\b(general residential|outer residential|inner residential|suburban residential|medium density suburban)\b/i,
+    zoneLabel: "General Residential Zone",
+    standardMinimumLotSqm: 350,
+    requiredShapeText: null,
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "Wellington region district plan (General Residential, indicative)",
+    sourceUrl: WELLINGTON_DISTRICT_PLAN_SOURCE,
+    caveats: [
+      "Indicative first-pass minimum for MDRS-enabled General Residential land; confirm the exact minimum net site area in the relevant council's district plan.",
+      "Access, shape, hazards (fault, flood, ground-shaking), heritage, infrastructure and other performance standards still require consent checks.",
+    ],
     roiEnabled: true,
   },
   {

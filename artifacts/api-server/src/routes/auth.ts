@@ -206,7 +206,7 @@ const salesAgentWebSignupSchema = z
     invitationCode: z.string().optional(),
   })
   .superRefine((data, ctx) => {
-    const phone = data.phoneNumber.replace(/[\s\-()]/g, "").trim();
+    const phone = normalizeRegistrationPhone(data.phoneNumber);
     if (!/^\+64\d{7,10}$/.test(phone)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -225,7 +225,7 @@ const salesAgentWebProfileSchema = z
     reaaLicenceNumber: z.string().min(1, "REA licence number is required."),
   })
   .superRefine((data, ctx) => {
-    const phone = data.phoneNumber.replace(/[\s\-()]/g, "").trim();
+    const phone = normalizeRegistrationPhone(data.phoneNumber);
     if (!/^\+64\d{7,10}$/.test(phone)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -253,7 +253,7 @@ const serviceProviderWebProfileSchema = z
     bio: z.string().max(1200).optional(),
   })
   .superRefine((data, ctx) => {
-    const phone = data.phoneNumber.replace(/[\s\-()]/g, "").trim();
+    const phone = normalizeRegistrationPhone(data.phoneNumber);
     if (!/^\+64\d{7,10}$/.test(phone)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -261,7 +261,7 @@ const serviceProviderWebProfileSchema = z
         path: ["phoneNumber"],
       });
     }
-    const contact = (data.contactNumber ?? "").replace(/[\s\-()]/g, "").trim();
+    const contact = normalizeRegistrationPhone(data.contactNumber ?? "");
     if (contact && !/^\+64\d{7,10}$/.test(contact)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -298,7 +298,7 @@ const serviceProviderWebSignupSchema = z
     invitationCode: z.string().optional(),
   })
   .superRefine((data, ctx) => {
-    const phone = data.phoneNumber.replace(/[\s\-()]/g, "").trim();
+    const phone = normalizeRegistrationPhone(data.phoneNumber);
     if (!/^\+64\d{7,10}$/.test(phone)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

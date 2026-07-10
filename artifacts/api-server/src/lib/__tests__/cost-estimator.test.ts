@@ -283,5 +283,23 @@ describe("estimateCosts — existing dwelling / demolition", () => {
     expect(regionalCostProfileForProvider("whangarei")).toMatchObject({ id: "whangarei-default", providerId: "whangarei" });
     expect(regionalCostProfileForProvider("nelson")).toMatchObject({ id: "nelson-default", providerId: "nelson" });
     expect(regionalCostProfileForProvider("unsupported").id).toBe("unsupported-default");
+
+    // Queenstown + Wellington ship their own editable cost modules that start
+    // life seeded from the Auckland numbers (empty override == Auckland-equal).
+    const qldcDefault = estimateCosts(property, 1, { cost_profile: regionalCostProfileForProvider("qldc") });
+    const wellingtonDefault = estimateCosts(property, 1, { cost_profile: regionalCostProfileForProvider("wellington") });
+    expect(qldcDefault.construction_low).toBe(aucklandDefault.construction_low);
+    expect(wellingtonDefault.construction_low).toBe(aucklandDefault.construction_low);
+    expect(regionalCostProfileForProvider("qldc")).toMatchObject({ id: "qldc-default", providerId: "qldc" });
+    expect(regionalCostProfileForProvider("wellington")).toMatchObject({ id: "wellington-default", providerId: "wellington" });
+
+    // Each region's profile is an independent copy — tuning one must not leak
+    // into another or into the Auckland baseline.
+    const qldcMutable = regionalCostProfileForProvider("qldc");
+    qldcMutable.construction.baseLowPerSqm = 9_999;
+    expect(regionalCostProfileForProvider("qldc").construction.baseLowPerSqm).not.toBe(9_999);
+    expect(regionalCostProfileForProvider("wellington").construction.baseLowPerSqm).toBe(
+      regionalCostProfileForProvider("auckland-legacy").construction.baseLowPerSqm,
+    );
   });
 });

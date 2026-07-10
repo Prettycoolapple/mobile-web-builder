@@ -1523,15 +1523,20 @@
 
   // ── Phone OTP (shared backend with the sales portal) ─────────────────────
   function normalizeNzPhone(phone) {
-    return String(phone || "").replace(/[\s\-()]/g, "").trim();
+    const digits = String(phone || "").replace(/\D/g, "");
+    if (!digits) return "";
+    let normalized = digits;
+    while (normalized.startsWith("6464")) normalized = normalized.slice(2);
+    if (normalized.startsWith("64")) return `+${normalized}`;
+    normalized = normalized.replace(/^0+/, "");
+    return normalized ? `+64${normalized}` : "";
   }
 
   // Signup form's mobile field only collects the local-format digits (the +64
   // prefix is a fixed, non-editable UI element) — this turns "021 123 4567" or
   // "21 123 4567" into "+64211234567" before it ever reaches the API.
   function nzLocalToE164(localRaw) {
-    const digits = String(localRaw || "").replace(/\D/g, "").replace(/^0+/, "");
-    return digits ? `+64${digits}` : "";
+    return normalizeNzPhone(localRaw);
   }
 
   function signupPhoneE164(signupForm) {

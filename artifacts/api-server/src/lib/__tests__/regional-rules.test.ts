@@ -726,4 +726,62 @@ describe("regional planning rule status", () => {
       roiEnabled: true,
     }));
   });
+
+  it("matches QLDC Low Density Residential to the Lower Density/Suburban pack", () => {
+    expect(regionalPlanningRuleStatus(
+      { providerId: "qldc", providerName: "Queenstown Lakes District Council planning provider" },
+      { zone_code: "Low Density Residential", zone_description: "Low Density Residential Zone", min_lot_size_sqm: null, raw_zone: "{}" },
+      900,
+    )).toMatchObject({
+      modellingStatus: "roi_enabled",
+      automaticRoiAllowed: true,
+      regionalZoneCode: "QLDC_LDSRZ",
+      verifiedMinimumLotSqm: 450,
+    });
+  });
+
+  it("enables ROI for the QLDC Large Lot Residential zone", () => {
+    expect(regionalPlanningRuleStatus(
+      { providerId: "qldc", providerName: "Queenstown Lakes District Council planning provider" },
+      { zone_code: "Large Lot Residential", zone_description: "Large Lot Residential Zone", min_lot_size_sqm: null, raw_zone: "{}" },
+      6_000,
+    )).toMatchObject({
+      modellingStatus: "roi_enabled",
+      automaticRoiAllowed: true,
+      regionalZoneCode: "QLDC_LLRZ",
+      verifiedMinimumLotSqm: 2_000,
+    });
+  });
+
+  it("enables ROI + dev scoring for Wellington-region residential zones", () => {
+    const wellington = { providerId: "wellington" as const, providerName: "Wellington region planning provider" };
+    // Hutt City Kelson-style Hill Residential (the screenshot property).
+    expect(regionalPlanningRuleStatus(
+      wellington,
+      { zone_code: "Hill Residential", zone_description: "Hill Residential Activity Area", min_lot_size_sqm: null, raw_zone: "{}" },
+      900,
+    )).toMatchObject({
+      subdivisionRules: "standard_yield_modelled",
+      modellingStatus: "roi_enabled",
+      automaticRoiAllowed: true,
+      regionalZoneCode: "WLG_HILLRZ",
+      verifiedMinimumLotSqm: 400,
+    });
+    // Standardised National Planning Standards names used across the region.
+    expect(regionalPlanningRuleStatus(
+      wellington,
+      { zone_code: "General Residential", zone_description: "General Residential Zone", min_lot_size_sqm: null, raw_zone: "{}" },
+      800,
+    )).toMatchObject({ regionalZoneCode: "WLG_GRZ", automaticRoiAllowed: true, verifiedMinimumLotSqm: 350 });
+    expect(regionalPlanningRuleStatus(
+      wellington,
+      { zone_code: "High Density Residential", zone_description: "High Density Residential Zone", min_lot_size_sqm: null, raw_zone: "{}" },
+      800,
+    )).toMatchObject({ regionalZoneCode: "WLG_HDRZ", automaticRoiAllowed: true, verifiedMinimumLotSqm: 200 });
+    expect(regionalPlanningRuleStatus(
+      wellington,
+      { zone_code: "Medium Density Residential", zone_description: "Medium Density Residential Zone", min_lot_size_sqm: null, raw_zone: "{}" },
+      800,
+    )).toMatchObject({ regionalZoneCode: "WLG_MDRZ", automaticRoiAllowed: true, verifiedMinimumLotSqm: 250 });
+  });
 });

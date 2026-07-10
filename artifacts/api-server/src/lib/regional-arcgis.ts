@@ -69,6 +69,14 @@ const QLDC_PDP =
   "https://gis.qldc.govt.nz/server/rest/services/DistrictPlan/PDP_Stage_1_2_3_Decisions/MapServer";
 const DUNEDIN_DISTRICT_PLAN =
   "https://apps.dunedin.govt.nz/arcgis/rest/services/Public/District_Plan/MapServer";
+const WCC_DISTRICT_PLAN =
+  "https://gis.wcc.govt.nz/arcgis/rest/services/DistrictPlan/DistrictPlan/MapServer";
+const HCC_DISTRICT_PLAN =
+  "https://maps.huttcity.govt.nz/server02/rest/services/Essentials/HCC_District_Plan/MapServer";
+const UHCC_DISTRICT_PLAN_ZONES =
+  "https://maps.upperhutt.govt.nz/arcgis/rest/services/District_Plan_Zones/MapServer";
+const KCDC_DISTRICT_PLAN_ZONES =
+  "https://maps.kapiticoast.govt.nz/server/rest/services/Public/District_Plan_Zones/MapServer";
 
 const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
   hamilton: {
@@ -193,6 +201,66 @@ const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
       overlay(QLDC_PDP, 21, "Specific Control", "polygon", "control", undefined, ["ControlType", "Label", "Description"]),
       overlay(QLDC_PDP, 22, "Designation", "polygon", "control"),
       overlay(QLDC_PDP, 23, "Development Area", "polygon", "control", undefined, ["DevelopmentArea", "Label", "Description"]),
+    ],
+  },
+  wellington: {
+    // Whole-region provider: each council runs its own district-plan service, so
+    // the zone layers are tried in order and the first that returns a polygon at
+    // the point wins. Field names were confirmed per council against each
+    // service's layer metadata. Porirua City's operative-plan zone service is not
+    // wired here yet (its GIS host was not verifiable at build time) — Porirua
+    // properties still resolve infrastructure via Wellington Water below.
+    zoneLayers: [
+      {
+        serviceUrl: WCC_DISTRICT_PLAN,
+        layerId: 59,
+        label: "Wellington City District Plan Activity Areas",
+        codeField: "dp_zone",
+        nameFields: ["dp_zone", "SubZone"],
+        detailFields: ["SubZone", "Centre_Type"],
+      },
+      {
+        serviceUrl: HCC_DISTRICT_PLAN,
+        layerId: 113,
+        label: "Hutt City District Plan Activity Areas",
+        codeField: "Activity_Area",
+        nameFields: ["Activity_Area", "Description"],
+        detailFields: ["Description", "Suburb", "Type"],
+      },
+      {
+        serviceUrl: UHCC_DISTRICT_PLAN_ZONES,
+        layerId: 0,
+        label: "Upper Hutt District Plan Zones",
+        codeField: "Zone",
+        nameFields: ["Zone"],
+        detailFields: ["Notes"],
+      },
+      {
+        serviceUrl: KCDC_DISTRICT_PLAN_ZONES,
+        layerId: 0,
+        label: "Kāpiti Coast District Plan Zones",
+        codeField: "Zone",
+        nameFields: ["Zone", "ZONE", "ZONE_NAME", "LABEL", "Description"],
+        detailFields: ["Description", "LABEL"],
+      },
+    ],
+    overlayLayers: [
+      // Wellington City hazard + heritage + control layers.
+      overlay(WCC_DISTRICT_PLAN, 48, "Flood Hazard Area", "polygon", "restricted"),
+      overlay(WCC_DISTRICT_PLAN, 49, "Fault Line Hazard Area", "polygon", "restricted"),
+      overlay(WCC_DISTRICT_PLAN, 47, "Ground Shaking Hazard Area", "polygon", "moderate"),
+      overlay(WCC_DISTRICT_PLAN, 45, "Ridgelines and Hilltops Overlay", "polygon", "moderate"),
+      overlay(WCC_DISTRICT_PLAN, 31, "Heritage Area", "polygon", "restricted"),
+      overlay(WCC_DISTRICT_PLAN, 38, "Designation", "polygon", "control"),
+      overlay(WCC_DISTRICT_PLAN, 41, "Transmission Line Buffer", "polygon", "restricted"),
+      // Hutt City hazard + heritage + control layers.
+      overlay(HCC_DISTRICT_PLAN, 130, "1-in-100-year Flood Extent", "polygon", "restricted"),
+      overlay(HCC_DISTRICT_PLAN, 6, "Wellington Fault Overlay", "polygon", "restricted"),
+      overlay(HCC_DISTRICT_PLAN, 32, "Heritage Area", "polygon", "restricted"),
+      overlay(HCC_DISTRICT_PLAN, 126, "Designation", "polygon", "control"),
+      overlay(HCC_DISTRICT_PLAN, 129, "Significant Natural Resource Site", "polygon", "restricted"),
+      overlay(HCC_DISTRICT_PLAN, 117, "National Grid Yard", "polygon", "restricted"),
+      overlay(HCC_DISTRICT_PLAN, 115, "Notable Tree", "point", "moderate", 30),
     ],
   },
   dunedin: {

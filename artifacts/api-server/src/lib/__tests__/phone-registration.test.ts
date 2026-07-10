@@ -5,6 +5,9 @@ describe("phone registration limits", () => {
     process.env.DATABASE_URL ??= "postgres://user:pass@localhost:5432/test";
     const { normalizeRegistrationPhone } = await import("../phone-registration");
     expect(normalizeRegistrationPhone("+64 21-123 (4567)")).toBe("+64211234567");
+    expect(normalizeRegistrationPhone("021 123 4567")).toBe("+64211234567");
+    expect(normalizeRegistrationPhone("64 21 123 4567")).toBe("+64211234567");
+    expect(normalizeRegistrationPhone("+64+64 21 123 4567")).toBe("+64211234567");
   });
 
   it("uses the deletion cooldown ladder before permanent ban", async () => {

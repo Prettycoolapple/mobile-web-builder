@@ -48,6 +48,13 @@ const HAMILTON_STORMWATER =
   "https://services1.arcgis.com/R6s0QqCMQdwKY6yp/arcgis/rest/services/Stormwater Dataset - Hamilton City Council/FeatureServer";
 const TOP_OF_THE_SOUTH_MAPS =
   "https://www.topofthesouthmaps.co.nz/ArcGIS/rest/services/TopoftheSouthMaps/MapServer";
+// Single regional three-waters service maintained by Wellington Water on behalf
+// of Wellington City, Hutt City, Upper Hutt, Porirua (and South Wairarapa/GWRC).
+// Kāpiti Coast is NOT a Wellington Water council, so its three-waters assets are
+// not in this service — Kāpiti properties fall back to the "no mapped service"
+// note until a Kāpiti three-waters endpoint is wired.
+const WELLINGTON_WATER_THREE_WATERS =
+  "https://gis.wellingtonwater.co.nz/server1/rest/services/Councils/All_Councils_3_Waters_Asset_Data/MapServer";
 
 const REGIONAL_INFRASTRUCTURE: Partial<Record<PlanningProviderId, RegionalInfrastructureGroup[]>> = {
   hamilton: [
@@ -131,6 +138,19 @@ const REGIONAL_INFRASTRUCTURE: Partial<Record<PlanningProviderId, RegionalInfras
       [11, "Stormwater drain pipe"],
       [12, "Stormwater mudtank pipe"],
       [13, "Stormwater miscellaneous pipe"],
+    ], 1000),
+  ],
+  wellington: [
+    group("Water Supply", WELLINGTON_WATER_THREE_WATERS, "Wellington Water", [
+      [13, "Water pipe"],
+    ]),
+    group("Wastewater", WELLINGTON_WATER_THREE_WATERS, "Wellington Water", [
+      [18, "Wastewater pipe"],
+      [19, "Wastewater connection pipe"],
+    ]),
+    group("Stormwater", WELLINGTON_WATER_THREE_WATERS, "Wellington Water", [
+      [23, "Stormwater pipe"],
+      [24, "Stormwater connection pipe"],
     ], 1000),
   ],
   christchurch: [

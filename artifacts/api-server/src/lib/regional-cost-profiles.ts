@@ -8,6 +8,7 @@ export type CostProfileId =
   | "nelson-default"
   | "whangarei-default"
   | "qldc-default"
+  | "wellington-default"
   | "dunedin-default"
   | "unsupported-default";
 
@@ -93,7 +94,9 @@ export interface RegionalCostProfile {
   };
 }
 
-const AUCKLAND_DEFAULT: Omit<RegionalCostProfile, "id" | "providerId" | "label"> = {
+export type RegionalCostAssumptions = Omit<RegionalCostProfile, "id" | "providerId" | "label">;
+
+const AUCKLAND_DEFAULT: RegionalCostAssumptions = {
   source: "auckland_default_pending_regional_rates",
   demolition: {
     lowAsbestosLow: 15_000,
@@ -167,6 +170,34 @@ const AUCKLAND_DEFAULT: Omit<RegionalCostProfile, "id" | "providerId" | "label">
   },
 };
 
+/**
+ * Region-specific cost modules. Each region starts life as a copy of the
+ * Auckland assumptions (an empty override object == "still using Auckland
+ * numbers") and can be tuned independently later without touching any other
+ * region. To make, say, Queenstown diverge from Auckland, set only the fields
+ * that differ inside `qldc` below — the rest deep-merge from AUCKLAND_DEFAULT.
+ * When a region's numbers have been verified against local rates, also set
+ * `source: "regional_verified"` in its override so the report can stop
+ * captioning them as Auckland-pending.
+ *
+ * NOTE: nested objects are merged key-by-key; arrays/records (e.g.
+ * contourMultipliers, retaining.buckets) are shallow-replaced when provided.
+ */
+type DeepPartial<T> = {
+  [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K];
+};
+
+const REGIONAL_COST_OVERRIDES: Partial<Record<PlanningProviderId, DeepPartial<RegionalCostAssumptions>>> = {
+  // ── Queenstown Lakes District ──────────────────────────────────────────────
+  // Seeded from Auckland. Tune to QLDC construction/retaining/contribution rates
+  // (alpine build premiums, QLDC development contributions, ORC land rates) here.
+  qldc: {},
+  // ── Wellington region (Wellington City, Lower/Upper Hutt, Porirua, Kāpiti) ──
+  // Seeded from Auckland. Tune to Wellington Water / council DC + GWRC/TA land
+  // rates and Wellington build costs here.
+  wellington: {},
+};
+
 const PROVIDER_PROFILE_META: Record<PlanningProviderId, { id: CostProfileId; label: string }> = {
   "auckland-legacy": { id: "auckland-default", label: "Auckland default cost profile" },
   hamilton: { id: "hamilton-default", label: "Hamilton default cost profile" },
@@ -175,6 +206,7 @@ const PROVIDER_PROFILE_META: Record<PlanningProviderId, { id: CostProfileId; lab
   nelson: { id: "nelson-default", label: "Nelson default cost profile" },
   whangarei: { id: "whangarei-default", label: "Whangarei default cost profile" },
   qldc: { id: "qldc-default", label: "Queenstown Lakes default cost profile" },
+  wellington: { id: "wellington-default", label: "Wellington region default cost profile" },
   dunedin: { id: "dunedin-default", label: "Dunedin default cost profile" },
   unsupported: { id: "unsupported-default", label: "Unsupported-region default cost profile" },
 };
@@ -210,6 +242,35 @@ function cloneDefaultAssumptions(): Omit<RegionalCostProfile, "id" | "providerId
   };
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Deep-merges a region's override onto a fresh Auckland clone. Only keys present
+ * in the override are touched, so an empty override yields the Auckland numbers
+ * verbatim. Nested plain objects recurse; everything else (numbers, arrays) is
+ * replaced by the override value.
+ */
+function applyOverride(base: Record<string, unknown>, override: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(override)) {
+    if (value === undefined) continue;
+    const current = base[key];
+    if (isPlainObject(value) && isPlainObject(current)) {
+      applyOverride(current, value);
+    } else {
+      base[key] = value;
+    }
+  }
+}
+
+function assumptionsForProvider(id: PlanningProviderId): RegionalCostAssumptions {
+  const assumptions = cloneDefaultAssumptions();
+  const override = REGIONAL_COST_OVERRIDES[id];
+  if (override) applyOverride(assumptions as unknown as Record<string, unknown>, override as Record<string, unknown>);
+  return assumptions;
+}
+
 export function defaultRegionalCostProfile(): RegionalCostProfile {
   return {
     ...cloneDefaultAssumptions(),
@@ -223,7 +284,7 @@ export function regionalCostProfileForProvider(providerId: PlanningProviderId | 
   const id = providerId ?? "auckland-legacy";
   const meta = PROVIDER_PROFILE_META[id];
   return {
-    ...cloneDefaultAssumptions(),
+    ...assumptionsForProvider(id),
     id: meta.id,
     providerId: id,
     label: meta.label,

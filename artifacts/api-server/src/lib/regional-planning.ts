@@ -13,6 +13,7 @@ export type PlanningProviderId =
   | "nelson"
   | "whangarei"
   | "qldc"
+  | "wellington"
   | "dunedin"
   | "unsupported";
 
@@ -155,6 +156,10 @@ const CANTERBURY_BOUNDS: Bounds = { minLat: -44.95, maxLat: -42.0, minLng: 169.9
 const NELSON_BOUNDS: Bounds = { minLat: -41.45, maxLat: -41.15, minLng: 173.05, maxLng: 173.45 };
 const WHANGAREI_BOUNDS: Bounds = { minLat: -36.05, maxLat: -35.35, minLng: 173.6, maxLng: 174.75 };
 const QLDC_BOUNDS: Bounds = { minLat: -45.4, maxLat: -44.25, minLng: 168.0, maxLng: 170.05 };
+// Whole Wellington region urban footprint: Kāpiti (north) down through Porirua,
+// Wellington City, and the Hutt Valley. Wairarapa territorial authorities are
+// intentionally excluded (no provider coverage yet).
+const WELLINGTON_BOUNDS: Bounds = { minLat: -41.45, maxLat: -40.70, minLng: 174.60, maxLng: 175.35 };
 const DUNEDIN_BOUNDS: Bounds = { minLat: -46.15, maxLat: -45.55, minLng: 169.95, maxLng: 171.15 };
 
 const providerRegistry: PlanningProvider[] = [
@@ -283,6 +288,44 @@ const providerRegistry: PlanningProvider[] = [
         /\barrowtown\b/,
         /\bfrankton\b/,
         /\bqueenstown lakes\b/,
+      ]),
+  ),
+  provider(
+    "wellington",
+    "Wellington region planning provider",
+    null,
+    "Wellington",
+    "partial",
+    "Wellington region district plans (Wellington City, Hutt City, Upper Hutt, Porirua, Kāpiti Coast)",
+    [
+      { label: "Wellington City District Plan", url: "https://gis.wcc.govt.nz/arcgis/rest/services/DistrictPlan/DistrictPlan/MapServer" },
+      { label: "Hutt City District Plan", url: "https://maps.huttcity.govt.nz/server02/rest/services/Essentials/HCC_District_Plan/MapServer" },
+      { label: "Upper Hutt District Plan Zones", url: "https://maps.upperhutt.govt.nz/arcgis/rest/services/District_Plan_Zones/MapServer" },
+      { label: "Kāpiti Coast District Plan Zones", url: "https://maps.kapiticoast.govt.nz/server/rest/services/Public/District_Plan_Zones/MapServer" },
+      { label: "Wellington Water regional three waters", url: "https://gis.wellingtonwater.co.nz/server1/rest/services/Councils/All_Councils_3_Waters_Asset_Data/MapServer" },
+    ],
+    (context) =>
+      supportsAny(context, WELLINGTON_BOUNDS, [
+        /\bwellington\b/,
+        /\bte whanganui[- ]a[- ]tara\b/,
+        /\blower hutt\b/,
+        /\bupper hutt\b/,
+        /\bhutt city\b/,
+        /\bpetone\b/,
+        /\bwainuiomata\b/,
+        /\bporirua\b/,
+        /\bwhitby\b/,
+        /\bparemata\b/,
+        /\btitahi bay\b/,
+        /\bkapiti\b/,
+        /\bparaparaumu\b/,
+        /\bwaikanae\b/,
+        /\botaki\b/,
+        /\btawa\b/,
+        /\bjohnsonville\b/,
+        /\bkarori\b/,
+        /\bmiramar\b/,
+        /\bnewlands\b/,
       ]),
   ),
   provider(

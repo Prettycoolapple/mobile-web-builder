@@ -242,23 +242,64 @@ function isNearbyAmenitiesLookupText(text: string): boolean {
   return nearby && amenity && !explicitAnalysis;
 }
 
+// Street-number-led words that are property attributes / measurements / filler,
+// not street names — used to reject "3 bedroom, Ponsonby" / "2m in Remuera" /
+// "5 lots, Grey Lynn" from the bare-address heuristic below.
+const NON_STREET_NUMBER_WORD =
+  /\b\d+[a-z]?\s*(?:bed|beds|bedroom|bedrooms|brm|bdrm|bath|baths|bathroom|bathrooms|car|cars|garage|garages|lot|lots|level|levels|stor(?:e?y|ies)|floor|floors|sqm|m2|m²|sq\.?m|square|hectares?|acres?|ha|million|mil|k|dollars?|percent|%|km|min|mins|minute|minutes|in|on|under|over|around|near|below|above|within|about|from|to|up|per|and|or|with)\b/i;
+
+// True when the text contains something that reads like a specific street
+// address, so the message is a single-property request (analyse) rather than
+// an area search (discover). Two tiers:
+//   1) number + name(s) + street-type suffix — e.g. "473 Riddell Road",
+//      "1/289 Ulster St" (strong signal).
+//   2) abbreviated address missing the street-type word — e.g.
+//      "473 Riddell, Glendowie": number + proper-name word(s) + comma + place.
+//      Guarded so attribute phrases ("3 bedroom, Ponsonby") never qualify.
+function looksLikeConcreteAddress(text: string): boolean {
+  const withStreetType =
+    /\d+[a-zA-Z]?(?:\s*\/\s*\d+[a-zA-Z]?)?\s+[\w']+(?:\s+[\w']+){0,4}\s+(road|street|ave|avenue|crescent|place|drive|way|lane|terrace|parade|close|grove|esplanade|quay|court|highway|boulevard|mews|rise|heights|rd|st|ave|cres|pl|dr|ln|tce|pde|blvd|hwy|ct)\b/i;
+  if (withStreetType.test(text)) return true;
+
+  if (NON_STREET_NUMBER_WORD.test(text)) return false;
+  const bareNumberNameComma =
+    /\d+[a-zA-Z]?(?:\s*\/\s*\d+[a-zA-Z]?)?\s+[a-z][\w']+(?:\s+[\w']+){0,2}\s*,\s*[a-z]/i;
+  return bareNumberNameComma.test(text);
+}
+
 function detectClientMode(text: string): "analyse" | "discover" | "followup" {
   if (isNearbyAmenitiesLookupText(text)) return "followup";
   if (isRecentSalesLookupText(text)) return "followup";
   const lowerText = text.toLowerCase();
+
+  // Explicit "show me more / find more like this / any others" continuation of a
+  // prior search stays discovery even when the text names a specific address as
+  // a reference point.
+  const isDiscoverContinuation = !!lowerText.match(
+    /any\s+(others?|more|properties|homes|houses|sections|land)|show\s+(me\s+)?more|more\s+(properties|options|results|sites)|what\s+else|anything\s+else|few\s+more|find\s+more|keep\s+looking|another\s+one|any\s+other|more\s+sites|other\s+options/,
+  );
+
+  // A concrete street address (numbered, with or without a street-type word) is a
+  // single-property request. Route it to feasibility analysis even when the
+  // message also asks about "market value" / "what it's worth" — those phrases
+  // otherwise trip the area-discovery heuristic below and misroute the request
+  // to the screening pipeline, which never answers the attached questions.
+  const hasConcreteAddress = looksLikeConcreteAddress(text);
+  if (hasConcreteAddress && !isDiscoverContinuation) return "analyse";
+
   const isDiscoverQuery =
+    isDiscoverContinuation ||
     lowerText.match(/find\s+|search\s+|discover\s+|looking\s+for\s+|show\s+me\s+properties|subdividable|subdivision\s+opp|development\s+sites|lifestyle\s+prop|investment\s+prop/) ||
-    lowerText.match(/any\s+(others?|more|properties|homes|houses|sections|land)|show\s+(me\s+)?more|more\s+(properties|options|results|sites)|what\s+else|anything\s+else|few\s+more|find\s+more|keep\s+looking|another\s+one|any\s+other|more\s+sites|other\s+options/) ||
     lowerText.match(/properties\s+(for\s+sale|on\s+sale|available|listed|in\s+)/i) ||
     lowerText.match(/(for\s+sale|on\s+sale|on\s+the\s+market)\s+in/i) ||
-    lowerText.match(/what.*market|on.*market|market.*in/i);
+    // "on the market" as a phrase is area-discovery; NOT "market value / worth /
+    // estimate" about a specific property (those are answered post-analysis).
+    lowerText.match(/\bon\s+the\s+market\b/i);
 
   if (isDiscoverQuery) return "discover";
 
   const hasAddress =
-    text.match(
-      /\d+[a-zA-Z]?(?:\s*\/\s*\d+[a-zA-Z]?)?\s+[\w']+(?:\s+[\w']+){0,4}\s+(road|street|ave|avenue|crescent|place|drive|way|lane|terrace|parade|close|grove|esplanade|quay|rd|st|ave|cres|pl|dr|ln|tce|pde|blvd|hwy)\b/i,
-    ) ||
+    hasConcreteAddress ||
     lowerText.match(/analys[ei]|feasibility|check|assess|evaluate|(?:^|[\s，。!?])(?:分析|可行性|评估)/);
 
   return hasAddress ? "analyse" : "followup";
@@ -507,6 +548,7 @@ export default function SearchScreen() {
     startNewChat,
     switchSession,
     addMessage,
+    appendAssistantTextOnce,
     updateMessage,
     updateLastMessage,
     updateLastMessageIfType,
@@ -1555,15 +1597,18 @@ export default function SearchScreen() {
         if (!content) continue;
         const normalizedContent = normalizePostAnalysisAnswer(content);
         const key = `${sessionId}:${normalizedContent}`;
-        const alreadyVisible = sessionMessagesRef.current.some(
-          (m) => m.role === "assistant" && m.type === "text" && normalizePostAnalysisAnswer(m.content) === normalizedContent,
-        );
-        if (alreadyVisible || postAnalysisAnswerKeysRef.current.has(key)) continue;
+        // Cheap in-memory early-out; the authoritative, race-proof dedup lives in
+        // appendAssistantTextOnce (runs inside the sessions state updater against
+        // the freshly-rehydrated message list). The ref alone was insufficient:
+        // it is empty after an app restart, so a persisted background-analyse job
+        // resolving on mount — before sessionMessagesRef syncs — could append the
+        // same "no development score" notice a second time.
+        if (postAnalysisAnswerKeysRef.current.has(key)) continue;
         postAnalysisAnswerKeysRef.current.add(key);
-        addMessage({ role: "assistant", content, type: "text" }, sessionId);
+        appendAssistantTextOnce(content, sessionId);
       }
     },
-    [addMessage],
+    [appendAssistantTextOnce],
   );
 
   const trackBackgroundAnalyseJob = useCallback(
@@ -1725,7 +1770,19 @@ export default function SearchScreen() {
   const renderBackgroundScreeningResult = useCallback(
     (job: BackgroundScreeningJob, result: unknown) => {
       const data = result && typeof result === "object"
-        ? result as { content?: string; mode?: string }
+        ? result as {
+            content?: string;
+            mode?: string;
+            report?: FeasibilityReport | null;
+            reportGroup?: FeasibilityReportGroup | null;
+            searchId?: string | null;
+            historyCreatedAt?: string | null;
+            postAnalysisAnswer?: string | null;
+            postAnalysisAnswers?: string[];
+            wantsProviderRecommendation?: boolean;
+            wantsAnotherProvider?: boolean;
+            suggestedDiscipline?: string | null;
+          }
         : null;
       if (!data) {
         replaceBackgroundAnalyseMessage(job.jobId, {
@@ -1734,6 +1791,61 @@ export default function SearchScreen() {
           content: t("search.cant_reach"),
           retryText: job.query,
         }, job.sessionId);
+        return;
+      }
+
+      // Defense in depth: the server's semantic intent detection can decide a
+      // message the client routed to screening is actually a single-property
+      // feasibility request (e.g. "cost of owning 12 X Rd and its market
+      // value"). Render the report as a proper report message — with history
+      // metadata so history dedup works — then answer the attached questions
+      // and run the provider check, mirroring the background-analyse path.
+      const reportFromScreening: FeasibilityReport | null =
+        data.report ?? (data.mode === "analyse" ? (extractJSON((data.content ?? "").trim()) as FeasibilityReport | null) : null);
+      if (data.reportGroup && isFeasibilityReportGroup(data.reportGroup)) {
+        const groupWithHistory = withGroupHistoryMetadata(data.reportGroup, data.searchId, data.historyCreatedAt);
+        if (currentSessionId === job.sessionId) setCurrentReportGroup(groupWithHistory);
+        replaceBackgroundAnalyseMessage(job.jobId, { role: "assistant", content: "", type: "report_group", reportGroup: groupWithHistory }, job.sessionId);
+        appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, job.sessionId);
+        if (data.wantsProviderRecommendation || data.wantsAnotherProvider) {
+          scheduleProviderRecommendationCheck({
+            sessionId: job.sessionId,
+            report: groupWithHistory.reports[0] ?? null,
+            explicitRequest: true,
+            askForOthers: Boolean(data.wantsAnotherProvider),
+            preferredDiscipline: data.suggestedDiscipline ?? null,
+            delayMs: 700,
+            showNoProviderText: true,
+          });
+        }
+        for (const report of groupWithHistory.reports) {
+          if (report.scores && report.address) updateCandidateScores({ [report.address]: report.scores }, job.sessionId);
+        }
+        refreshProfile().catch(() => {});
+        bumpSearchHistory();
+        return;
+      }
+      if (reportFromScreening && (reportFromScreening.scores || reportFromScreening.address)) {
+        const reportWithHistory = withHistoryMetadata(reportFromScreening, data.searchId, data.historyCreatedAt);
+        if (currentSessionId === job.sessionId) setCurrentReport(reportWithHistory);
+        replaceBackgroundAnalyseMessage(job.jobId, { role: "assistant", content: "", type: "report", report: reportWithHistory }, job.sessionId);
+        appendPostAnalysisAnswer(data.postAnalysisAnswers ?? data.postAnalysisAnswer, job.sessionId);
+        if (data.wantsProviderRecommendation || data.wantsAnotherProvider) {
+          scheduleProviderRecommendationCheck({
+            sessionId: job.sessionId,
+            report: reportWithHistory,
+            explicitRequest: true,
+            askForOthers: Boolean(data.wantsAnotherProvider),
+            preferredDiscipline: data.suggestedDiscipline ?? null,
+            delayMs: 700,
+            showNoProviderText: true,
+          });
+        }
+        if (reportWithHistory.scores && reportWithHistory.address) {
+          updateCandidateScores({ [reportWithHistory.address]: reportWithHistory.scores }, job.sessionId);
+        }
+        refreshProfile().catch(() => {});
+        bumpSearchHistory();
         return;
       }
 
@@ -1841,7 +1953,20 @@ export default function SearchScreen() {
         retryText: job.query,
       }, job.sessionId);
     },
-    [addMessage, replaceBackgroundAnalyseMessage, startCardScorePoll, t],
+    [
+      addMessage,
+      appendPostAnalysisAnswer,
+      bumpSearchHistory,
+      currentSessionId,
+      refreshProfile,
+      replaceBackgroundAnalyseMessage,
+      scheduleProviderRecommendationCheck,
+      setCurrentReport,
+      setCurrentReportGroup,
+      startCardScorePoll,
+      t,
+      updateCandidateScores,
+    ],
   );
 
   const backgroundScreeningPollInFlightRef = useRef(false);

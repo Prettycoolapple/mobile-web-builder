@@ -678,6 +678,15 @@ interface ChatContextValue {
   startNewChat: () => void;
   switchSession: (id: string) => void;
   addMessage: (msg: Omit<ChatMessage, "id" | "timestamp">, sessionId?: string) => void;
+  /**
+   * Appends an assistant text message only if an assistant text message with the
+   * same (whitespace/case-normalized) content is not already present in the
+   * target session. The dedup runs inside the sessions state updater so it reads
+   * the authoritative, freshly-rehydrated message list — immune to the stale
+   * in-memory ref / mount-time race that could otherwise render post-analysis
+   * answers (e.g. the "no development score" notice) twice.
+   */
+  appendAssistantTextOnce: (content: string, sessionId?: string) => void;
   updateMessage: (messageId: string, updates: Partial<ChatMessage>, sessionId?: string) => void;
   updateLastMessage: (updates: Partial<ChatMessage>, sessionId?: string) => void;
   updateLastMessageIfType: (expectedType: ChatMessage["type"], updates: Partial<ChatMessage>, sessionId?: string) => void;
@@ -1057,6 +1066,41 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           }
           return { ...s, messages: newMessages, title, updatedAt: Date.now() };
         });
+        saveSessions(updated);
+        return updated;
+      });
+    },
+    [currentSessionId, saveSessions],
+  );
+
+  const appendAssistantTextOnce = useCallback(
+    (content: string, sessionId?: string) => {
+      const trimmed = content?.trim();
+      if (!trimmed) return;
+      const normalized = trimmed.toLowerCase().replace(/\s+/g, " ");
+      setSessions((prev) => {
+        const targetId = sessionId ?? currentSessionId;
+        const target = prev.find((s) => s.id === targetId);
+        if (!target) return prev;
+        const alreadyPresent = target.messages.some(
+          (m) =>
+            m.role === "assistant" &&
+            m.type === "text" &&
+            m.content.trim().toLowerCase().replace(/\s+/g, " ") === normalized,
+        );
+        if (alreadyPresent) return prev;
+        const fullMsg: ChatMessage = {
+          role: "assistant",
+          content: trimmed,
+          type: "text",
+          id: generateId(),
+          timestamp: Date.now(),
+        };
+        const updated = prev.map((s) =>
+          s.id === targetId
+            ? { ...s, messages: [...s.messages, fullMsg], updatedAt: Date.now() }
+            : s,
+        );
         saveSessions(updated);
         return updated;
       });
@@ -1605,6 +1649,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         startNewChat,
         switchSession,
         addMessage,
+        appendAssistantTextOnce,
         updateMessage,
         updateLastMessage,
         updateLastMessageIfType,

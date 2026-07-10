@@ -27,7 +27,15 @@ const ROLE_LABELS: Record<RegistrationRole, string> = {
 };
 
 export function normalizeRegistrationPhone(raw: string): string {
-  return raw.replace(/[\s\-()]/g, "").trim();
+  const digits = raw.replace(/\D/g, "");
+  if (!digits) return "";
+
+  let normalized = digits;
+  while (normalized.startsWith("6464")) normalized = normalized.slice(2);
+  if (normalized.startsWith("64")) return `+${normalized}`;
+
+  normalized = normalized.replace(/^0+/, "");
+  return normalized ? `+64${normalized}` : "";
 }
 
 export function deletionCooldownMs(nextDeletedAccountCount: number): number | null {

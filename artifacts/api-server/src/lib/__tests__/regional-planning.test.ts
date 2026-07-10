@@ -37,6 +37,7 @@ describe("regional planning provider registry", () => {
       "nelson",
       "whangarei",
       "qldc",
+      "wellington",
       "dunedin",
       "unsupported",
     ]);
@@ -51,7 +52,8 @@ describe("regional planning provider registry", () => {
     expect(resolvePlanningJurisdiction({ lat: -35.725, lng: 174.323, address: "Whangarei" }).providerId).toBe("whangarei");
     expect(resolvePlanningJurisdiction({ lat: -45.031, lng: 168.662, address: "Queenstown" }).providerId).toBe("qldc");
     expect(resolvePlanningJurisdiction({ lat: -45.878, lng: 170.503, address: "Dunedin" }).providerId).toBe("dunedin");
-    expect(resolvePlanningJurisdiction({ lat: -41.2865, lng: 174.7762, address: "Wellington" }).providerId).toBe("unsupported");
+    expect(resolvePlanningJurisdiction({ lat: -41.2865, lng: 174.7762, address: "Wellington" }).providerId).toBe("wellington");
+    expect(resolvePlanningJurisdiction({ lat: -41.2100, lng: 174.9000, address: "345 Hebden Crescent, Kelson, Lower Hutt" }).providerId).toBe("wellington");
   });
 
   it("uses address hints when coordinates are not enough", () => {
@@ -87,6 +89,7 @@ describe("regional planning provider registry", () => {
       "nelson",
       "whangarei",
       "qldc",
+      "wellington",
       "dunedin",
     ]));
   });
