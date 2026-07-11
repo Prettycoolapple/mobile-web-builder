@@ -113,6 +113,7 @@ const DUNEDIN_GR2_VARIATION2_SOURCE =
 
 const INTERIM_COMPARABLE_ROI_PROVIDERS = new Set<PlanningProviderMetadata["providerId"]>([
   "nelson",
+  "qldc",
   "whangarei",
 ]);
 

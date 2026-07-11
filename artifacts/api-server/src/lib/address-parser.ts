@@ -27,6 +27,34 @@ function cleanAddress(raw: string): string {
     .replace(/[.;!?，。]+$/g, "");
 }
 
+function commaLocalityTail(message: string, matchEnd: number): string | null {
+  const suffix = message.slice(matchEnd);
+  if (!/^\s*,/.test(suffix)) return null;
+
+  const parts = suffix.split(",").slice(1);
+  const kept: string[] = [];
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (!trimmed) break;
+
+    const sentenceBoundary = trimmed.search(/[.;!?]/);
+    const cleaned = cleanAddress(sentenceBoundary >= 0 ? trimmed.slice(0, sentenceBoundary) : trimmed);
+    if (!cleaned) break;
+    if (
+      kept.length > 0 &&
+      /\b(?:analyse|analyze|what|why|how|can|could|would|should|please)\b/i.test(cleaned) &&
+      !/\b(?:new zealand|nz)\b/i.test(cleaned)
+    ) {
+      break;
+    }
+
+    kept.push(cleaned);
+    if (sentenceBoundary >= 0 || kept.length >= 3) break;
+  }
+
+  return kept.length ? kept.join(", ") : null;
+}
+
 function streetLineText(raw: string): string {
   const parts = raw.split(",").map((part) => part.trim()).filter(Boolean);
   if (parts.length >= 2 && /^(?:[a-z]?\d+[a-z]?\s*\/\s*)?\d+[a-z]?$/i.test(parts[0]!)) {
@@ -52,6 +80,9 @@ export async function extractNZAddress(message: string): Promise<string | null> 
   const regexMatch = message.match(NZ_ADDRESS_REGEX);
   if (regexMatch) {
     const raw = cleanAddress(regexMatch[0]);
+    const commaTail = commaLocalityTail(message, (regexMatch.index ?? 0) + regexMatch[0].length);
+    if (commaTail) return cleanAddress(`${raw}, ${commaTail}`);
+
     const suburbMatch = message.match(NZ_SUBURB_CITY);
     if (suburbMatch && !raw.toLowerCase().includes(suburbMatch[0].toLowerCase()) && STREET_TYPE_REGEX.test(raw)) {
       return cleanAddress(`${raw}, ${suburbMatch[0]}`);

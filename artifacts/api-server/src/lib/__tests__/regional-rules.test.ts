@@ -29,8 +29,8 @@ describe("regional planning rule status", () => {
 
   it("keeps unsupported regional providers facts-only until local rules are modelled", () => {
     expect(regionalPlanningRuleStatus({
-      providerId: "qldc",
-      providerName: "Queenstown Lakes District Council planning provider",
+      providerId: "christchurch",
+      providerName: "Christchurch City Council planning provider",
     })).toMatchObject({
       subdivisionRules: "not_modelled",
       modellingStatus: "facts_only",
@@ -38,6 +38,31 @@ describe("regional planning rule status", () => {
       automaticRoiAllowed: false,
       verifiedMinimumLotSqm: null,
     });
+  });
+
+  it("allows interim comparable-sales ROI for non-modelled QLDC zones without inferring yield", () => {
+    const status = regionalPlanningRuleStatus(
+      {
+        providerId: "qldc",
+        providerName: "Queenstown Lakes District Council planning provider",
+      },
+      {
+        zone_code: "Rural - Stage 1 and 2",
+        zone_description: "Rural - Stage 1 and 2 - QLDC Proposed District Plan Zone",
+        min_lot_size_sqm: null,
+        raw_zone: "{}",
+      },
+      1_200,
+    );
+
+    expect(status).toMatchObject({
+      subdivisionRules: "not_modelled",
+      modellingStatus: "roi_enabled",
+      automaticYieldClaimsAllowed: false,
+      automaticRoiAllowed: true,
+      verifiedMinimumLotSqm: null,
+    });
+    expect(status.note).toContain("local subdivision/minimum-lot rules are not modelled yet");
   });
 
   it("allows interim comparable-sales ROI for Nelson without inferring yield", () => {
