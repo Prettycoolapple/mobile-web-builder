@@ -15,6 +15,7 @@ const samples = [
   { label: "Whangarei CBD", address: "Cameron Street, Whangarei", lat: -35.725, lng: 174.323 },
   { label: "Queenstown CBD", address: "Shotover Street, Queenstown", lat: -45.031, lng: 168.662 },
   { label: "Dunedin CBD", address: "George Street, Dunedin", lat: -45.878, lng: 170.503 },
+  { label: "Lower Hutt Wainuiomata", address: "15 Parenga Street, Wainuiomata, Lower Hutt", lat: -41.285791, lng: 174.950586 },
 ];
 
 console.log(JSON.stringify({
@@ -33,6 +34,7 @@ for (const sample of samples) {
     sample: sample.label,
     providerId: jurisdiction.providerId,
     providerName: jurisdiction.providerName,
+    expectedZoneResolved: sample.label === "Lower Hutt Wainuiomata" ? zone.zone_code !== "UNKNOWN" : undefined,
     zone: {
       code: zone.zone_code,
       description: zone.zone_description,

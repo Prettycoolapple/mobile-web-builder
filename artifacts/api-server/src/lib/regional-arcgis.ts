@@ -73,6 +73,8 @@ const WCC_DISTRICT_PLAN =
   "https://gis.wcc.govt.nz/arcgis/rest/services/DistrictPlan/DistrictPlan/MapServer";
 const HCC_DISTRICT_PLAN =
   "https://maps.huttcity.govt.nz/server02/rest/services/Essentials/HCC_District_Plan/MapServer";
+const HCC_DISTRICT_PLAN_QUERY =
+  "https://maps.huttcity.govt.nz/server02/rest/services/Hutt_City_District_Plan/MapServer";
 const UHCC_DISTRICT_PLAN_ZONES =
   "https://maps.upperhutt.govt.nz/arcgis/rest/services/District_Plan_Zones/MapServer";
 const KCDC_DISTRICT_PLAN_ZONES =
@@ -220,12 +222,12 @@ const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
         detailFields: ["SubZone", "Centre_Type"],
       },
       {
-        serviceUrl: HCC_DISTRICT_PLAN,
-        layerId: 113,
+        serviceUrl: HCC_DISTRICT_PLAN_QUERY,
+        layerId: 39,
         label: "Hutt City District Plan Activity Areas",
         codeField: "Activity_Area",
         nameFields: ["Activity_Area", "Description"],
-        detailFields: ["Description", "Suburb", "Type"],
+        detailFields: ["Description", "Suburb", "Type", "Notes"],
       },
       {
         serviceUrl: UHCC_DISTRICT_PLAN_ZONES,

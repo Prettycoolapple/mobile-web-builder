@@ -425,7 +425,7 @@ export interface RawPropertyData {
   derived_scores?: DerivedCardScores;
 }
 
-export const RAW_PROPERTY_SCHEMA_VERSION = 4;
+export const RAW_PROPERTY_SCHEMA_VERSION = 5;
 
 export interface PipelineResult {
   address_input: string;
@@ -514,8 +514,8 @@ export function hasCacheableCore(r: PipelineResult): boolean {
 
 export function developmentScoreUnavailableReason(
   merged: MergedPropertyData,
-  costs: CostBreakdown,
-  scenarios: ROIScenario[],
+  _costs: CostBreakdown,
+  _scenarios: ROIScenario[],
 ): string | null {
   if (merged.typology === "unit_apartment") return "unit_or_apartment_typology";
   if (merged.subdivisionRejectReason === "unit_or_crosslease_signal" && merged.typology !== "standalone") {
@@ -524,9 +524,6 @@ export function developmentScoreUnavailableReason(
   if (merged.land_area_sqm == null || !Number.isFinite(merged.land_area_sqm) || merged.land_area_sqm <= 0) {
     return "missing_land_area_sqm";
   }
-  if (merged.cv_nzd == null || costs.cv_unavailable) return "missing_cv_nzd";
-  if (merged.contour == null) return "missing_contour";
-  if (merged.build_year == null && !merged.build_year_range) return "missing_build_year_or_decade";
   if (merged.zone_code == null) return "missing_zone";
   return null;
 }

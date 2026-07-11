@@ -137,6 +137,41 @@ describe("regional ArcGIS planning fetchers", () => {
     expect(queryUrls.some((url) => url.includes("esriGeometryPoint"))).toBe(true);
   });
 
+  it("uses the query-capable Hutt City District Plan service for Wellington-region zoning", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/DistrictPlan/DistrictPlan/MapServer/59/query")) {
+        return new Response(JSON.stringify({ features: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("/Hutt_City_District_Plan/MapServer/39/query")) {
+        return new Response(JSON.stringify({
+          features: [
+            {
+              attributes: {
+                OBJECTID: 492,
+                Activity_Area: "Medium Density Residential",
+                Description: "",
+                Suburb: null,
+                Type: null,
+                Notes: "PC56",
+              },
+            },
+          ],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ fields: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const zone = await fetchRegionalPlanningZone(jurisdiction("wellington"), -41.285791, 174.950586);
+
+    expect(zone.zone_code).toBe("Medium Density Residential");
+    expect(zone.zone_description).toContain("Medium Density Residential");
+    expect(zone.zone_description).toContain("Hutt City District Plan Activity Areas");
+    const queryUrls = fetchMock.mock.calls.map((call) => String(call[0])).filter((url) => url.includes("/query"));
+    expect(queryUrls.some((url) => url.includes("/Hutt_City_District_Plan/MapServer/39/query"))).toBe(true);
+  });
+
   it("maps configured regional overlay hits into conservative report overlays", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       features: [

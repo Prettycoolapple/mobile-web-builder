@@ -40,14 +40,20 @@ describe("developmentScoreUnavailableReason", () => {
     ).toBe("unit_or_apartment_typology");
   });
 
-  it("suppresses development scores when core property facts are missing", () => {
-    expect(developmentScoreUnavailableReason(merged({ cv_nzd: null }), costs({ cv_unavailable: true }), scenarios)).toBe("missing_cv_nzd");
+  it("suppresses development scores when the site cannot be modelled as developable land", () => {
     expect(developmentScoreUnavailableReason(merged({ land_area_sqm: null }), costs(), scenarios)).toBe("missing_land_area_sqm");
-    expect(developmentScoreUnavailableReason(merged({ build_year: null, build_year_range: null }), costs(), scenarios)).toBe("missing_build_year_or_decade");
+    expect(developmentScoreUnavailableReason(merged({ land_area_sqm: 0 }), costs(), scenarios)).toBe("missing_land_area_sqm");
+    expect(developmentScoreUnavailableReason(merged({ zone_code: null }), costs(), scenarios)).toBe("missing_zone");
   });
 
   it("allows scores when required development inputs are present", () => {
     expect(developmentScoreUnavailableReason(merged(), costs(), scenarios)).toBeNull();
+  });
+
+  it("keeps incomplete valuation, build-year, and contour data as caveats rather than suppressing all scores", () => {
+    expect(developmentScoreUnavailableReason(merged({ cv_nzd: null }), costs({ cv_unavailable: true }), scenarios)).toBeNull();
+    expect(developmentScoreUnavailableReason(merged({ contour: null }), costs(), scenarios)).toBeNull();
+    expect(developmentScoreUnavailableReason(merged({ build_year: null, build_year_range: null }), costs(), scenarios)).toBeNull();
   });
 
   it("keeps title and typology uncertainty as score caveats rather than suppressing all scores", () => {
