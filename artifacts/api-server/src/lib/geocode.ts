@@ -140,6 +140,13 @@ async function councilAddressGeocode(address: string): Promise<GeoResult | null>
   return { lat: lat!, lng: lng!, formatted, suburb: null };
 }
 
+function shouldRequireExactCouncilAddress(address: string): boolean {
+  return Boolean(
+    parseCouncilStreetAddress(address) &&
+    COUNCIL_ADDRESS_SOURCES.some((candidate) => candidate.matches.test(address)),
+  );
+}
+
 async function nominatimGeocode(address: string): Promise<GeoResult | null> {
   const query = encodeURIComponent(`${address}, New Zealand`);
   const url = `https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=5&countrycodes=nz&addressdetails=1`;
@@ -316,6 +323,7 @@ export async function tryGeocodeAddress(address: string): Promise<GeoResult | nu
   try {
     const exactCouncilAddress = await councilAddressGeocode(address);
     if (exactCouncilAddress) return exactCouncilAddress;
+    if (shouldRequireExactCouncilAddress(address)) return null;
   } catch (err) {
     logger.warn({ err, address }, "Council exact-address geocoding failed");
   }

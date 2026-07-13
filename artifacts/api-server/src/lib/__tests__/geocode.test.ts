@@ -103,6 +103,31 @@ describe("geocode address selection", () => {
     });
   });
 
+  it("does not fall through to a nearby Braemar Road address when the council has no exact street number", async () => {
+    process.env.GOOGLE_MAPS_API_KEY = "test-key";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/Geocortex/Cadastre/MapServer/1/query")) {
+        return new Response(JSON.stringify({ features: [] }), { status: 200 });
+      }
+      if (url.includes("maps.googleapis.com")) {
+        return new Response(JSON.stringify({
+          status: "OK",
+          results: [{
+            formatted_address: "1140 Braemar Road, Rotoma 3192, New Zealand",
+            geometry: { location: { lat: -38.0155, lng: 176.7193 } },
+            address_components: [{ long_name: "1140", short_name: "1140", types: ["street_number"] }],
+          }],
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(tryGeocodeAddress("1138 Braemar Road, Rotoma 3192, New Zealand")).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("resolves comma-separated Whakatane state-highway addresses through the exact council point", async () => {
     delete process.env.GOOGLE_MAPS_API_KEY;
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {

@@ -8395,8 +8395,12 @@ router.post(
               const avgComparablePsm = comparablePsms.length > 0
                 ? Math.round(comparablePsms.reduce((sum, p) => sum + p, 0) / comparablePsms.length)
                 : null;
+              const roiExitPriceSource = (merged as any).data_sources?.roi_exit_price ?? null;
+              const roiPriceBasis = roiExitPriceSource
+                ? "based on the backend's low-confidence subject listing/CV fallback because real comparable sale pricing was unavailable"
+                : "based on real fetched comparable data";
               const lotBreakdown = scenarios[0]
-                ? `${lots.lots} lots × ${scenarios[0].sqm_per_lot}m² each → estimated ~${formatNZD(scenarios[0].gdv_per_lot)} per lot (based on real fetched comparable data)`
+                ? `${lots.lots} lots × ${scenarios[0].sqm_per_lot}m² each → estimated ~${formatNZD(scenarios[0].gdv_per_lot)} per lot (${roiPriceBasis})`
                 : `${lots.lots} potential lot${lots.lots === 1 ? "" : "s"}; sale price and ROI not calculated because no real comparable sales were fetched`;
               const avgComparableSaleText = avgComparableSale != null
                 ? `$${formatNZD(avgComparableSale)}`
@@ -8474,6 +8478,7 @@ ${scenarioLines}
 
   Comparables quality: ${comparables_quality}
   Avg comparable sale: ${avgComparableSaleText}
+  ROI exit price source: ${roiExitPriceSource ?? "real fetched comparable sales"}
 
   Development strategy scenarios (computed — copy these numbers verbatim):
 ${strategyLines || "  unavailable"}
@@ -8636,7 +8641,7 @@ CRITICAL RULES:
 - If propertyOverview.siteStatus is "vacant_land" or existing dwelling detected is false: do not include demolition or asbestos-removal risk/cost, and do not describe "do nothing" or refurbishment as the recommended development action.
 - If terrain.classification is null: terrain data was unavailable — keep it null, do not guess.
 - Infrastructure location "unknown" means GIS data was unavailable — keep as "unknown", do not guess.
-- comparableSales MUST be exactly the array provided above. If it is empty, keep it empty and keep roiScenarios empty. Never invent comparable sale addresses, dates, prices, or ROI sale-price assumptions.
+- comparableSales MUST be exactly the array provided above. If it is empty, keep it empty. roiScenarios MUST still be exactly the pre-computed roiScenarios above when provided; do not delete backend-computed low-confidence CV/listing fallback ROI scenarios. Never invent comparable sale addresses, dates, prices, or ROI sale-price assumptions.
 - developmentStrategies MUST be exactly the array provided above. Do not invent strategy ROI numbers or alter the recommendedDevelopmentStrategy.
 - Fill in ALL fields. Mark truly unknown fields as null (not empty string, not 0).
 - Write riskSummary items as specific, developer-focused 1-sentence statements about THIS property. **Minimum 3 bullets** (prefer 4–5), each clearly tied to the injected zone, overlays, terrain, infrastructure, potential lots, or title — never to whether information was "available", never naming LINZ/Quotable Value/listing portals/council IT systems, and never saying data "failed to fetch" or that due diligence is required *because* automated data was missing.
@@ -8666,7 +8671,7 @@ VERIFIED PROPERTY DATA:
 ${JSON.stringify(dataSummary, null, 2)}
 
 CRITICAL: Land (CV) cost MUST be a realistic NZD estimate based on the suburb, zone, and land area — never use $0. Research current Auckland Council CV rates for the suburb.
-CRITICAL: Do not invent comparable sales or sale-price assumptions. If real comparable sales were not fetched, return comparableSales: [], comparables_quality: "unavailable", avg_sale_price: null, avgPricePerSqm: null, and roiScenarios: [].
+CRITICAL: Do not invent comparable sales. If real comparable sales were not fetched, return comparableSales: [], comparables_quality: "unavailable", avg_sale_price: null, and avgPricePerSqm: null. Keep any backend-provided roiScenarios/developmentStrategies exactly as supplied; only leave roiScenarios empty when the backend supplied none.
 
 Generate a complete FeasibilityReport JSON following your system instructions exactly. Use the fetched data as your primary source — prefer confirmed data over estimates. Where data is missing or a source failed, estimate conservatively where appropriate and describe physical/site risks in riskSummary — but NEVER mention comparable sales data, market data gaps, exit-price uncertainty, any data-source limitations, nor any language that implies the report is incomplete or unreliable because land area, zoning, or key planning facts were not captured. Return ONLY valid JSON — no markdown code fences, no other text.`;
             }
