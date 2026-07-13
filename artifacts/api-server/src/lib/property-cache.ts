@@ -2,6 +2,7 @@ import { and, asc, desc, eq, lt, sql } from "drizzle-orm";
 import { db, propertyCache, withDbRetry, type PropertyCacheRow } from "@workspace/db";
 import type { RawPropertyData } from "./pipeline";
 import { logger } from "./logger";
+import { hasRegionalPlanningZoneLayer } from "./regional-arcgis";
 
 /**
  * Global property-cache data layer. Mirrors the conventions in
@@ -23,6 +24,13 @@ export interface CachedRaw {
   ageDays: number;
 }
 
+export function cachedRawNeedsRegionalZoneRefresh(rawData: RawPropertyData): boolean {
+  const providerId = rawData.planning_provider?.providerId;
+  if (!hasRegionalPlanningZoneLayer(providerId)) return false;
+  const zoneCode = rawData.zone?.zone_code?.trim();
+  return !zoneCode || zoneCode === "UNKNOWN";
+}
+
 function freshCachedRawOrNull(row: PropertyCacheRow | undefined, context: Record<string, unknown>): CachedRaw | null {
   if (!row) return null;
   const { fresh, ageDays } = cacheRowFreshness(row);
@@ -32,7 +40,12 @@ function freshCachedRawOrNull(row: PropertyCacheRow | undefined, context: Record
     }
     return null;
   }
-  return { rawData: row.rawData as RawPropertyData, row, ageDays };
+  const rawData = row.rawData as RawPropertyData;
+  if (cachedRawNeedsRegionalZoneRefresh(rawData)) {
+    logger.info({ ...context, providerId: rawData.planning_provider?.providerId }, "property-cache: regional zone unresolved - treating as miss");
+    return null;
+  }
+  return { rawData, row, ageDays };
 }
 
 /**

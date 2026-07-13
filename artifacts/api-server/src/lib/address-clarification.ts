@@ -247,6 +247,21 @@ export function dedupeEquivalentAddressOptions(options: AddressOption[]): Addres
   return deduped;
 }
 
+async function hydrateMissingOptionCoordinates(options: AddressOption[]): Promise<AddressOption[]> {
+  return Promise.all(options.map(async (option) => {
+    if (option.lat != null && option.lng != null) return option;
+    const geocoded = await tryGeocodeAddress(option.formatted).catch(() => null);
+    if (!geocoded || leadingStreetNumber(geocoded.formatted) !== leadingStreetNumber(option.formatted)) {
+      return option;
+    }
+    return {
+      formatted: geocoded.formatted,
+      lat: geocoded.lat,
+      lng: geocoded.lng,
+    };
+  }));
+}
+
 async function llmSuggestedAddresses(raw: string): Promise<string[]> {
   const safeInput = raw.length > 320 ? raw.slice(0, 320) : raw;
 
@@ -336,7 +351,10 @@ export async function resolveAddressForAnalysis(
     logger.warn({ err }, "LINZ address candidates failed during address clarification");
   }
 
-  let deduped = filterAddressOptionsForAnalysis(trimmed, dedupeEquivalentAddressOptions(opts));
+  let deduped = filterAddressOptionsForAnalysis(
+    trimmed,
+    dedupeEquivalentAddressOptions(await hydrateMissingOptionCoordinates(opts)),
+  );
 
   if (!deduped.length) {
     const llmAdds = await llmSuggestedAddresses(trimmed);
@@ -344,7 +362,10 @@ export async function resolveAddressForAnalysis(
       const gHit = await tryGeocodeAddress(sug);
       if (gHit?.formatted) push(gHit);
     }
-    deduped = filterAddressOptionsForAnalysis(trimmed, dedupeEquivalentAddressOptions(opts));
+    deduped = filterAddressOptionsForAnalysis(
+      trimmed,
+      dedupeEquivalentAddressOptions(await hydrateMissingOptionCoordinates(opts)),
+    );
   }
 
   if (!deduped.length) return noPropertyAddressResolution(trimmed, locale);

@@ -13,6 +13,7 @@ import * as zod from "zod";
  */
 export const HealthCheckResponse = zod.object({
   status: zod.string(),
+  deploymentSha: zod.string().nullish(),
 });
 
 /**
@@ -29,6 +30,12 @@ export const AnalysePropertyBody = zod.object({
       }),
     )
     .optional(),
+  addressConfirmed: zod
+    .boolean()
+    .optional()
+    .describe(
+      "True only when the user selected this exact address from a clarification prompt",
+    ),
 });
 
 export const AnalysePropertyResponse = zod.object({
@@ -50,8 +57,6 @@ export const AnalysePropertyResponse = zod.object({
         floorArea: zod.string().optional(),
         buildYear: zod.string().optional(),
         zone: zod.string().optional(),
-        titleType: zod.string().optional().nullable(),
-        titleResolutionSource: zod.enum(["lrs", "lrs_cache", "listing", "scraped_page", "ai_snippet", "unknown"]).optional(),
         listingPrice: zod.string().optional(),
         isOnMarket: zod.boolean().optional(),
       })
@@ -61,16 +66,6 @@ export const AnalysePropertyResponse = zod.object({
         zone: zod.string().optional(),
         minLotSize: zod.string().optional(),
         potentialLots: zod.number().optional(),
-        standardVacantLots: zod.number().optional(),
-        standardPathViable: zod.boolean().optional(),
-        standardMinLotSize: zod.number().nullable().optional(),
-        designLedEligible: zod.boolean().optional(),
-        designLedYieldRange: zod.object({ min: zod.number(), max: zod.number() }).nullable().optional(),
-        designLedConfidence: zod.enum(["none", "low", "medium"]).optional(),
-        designLedReasons: zod.array(zod.string()).optional(),
-        designLedBlockers: zod.array(zod.string()).optional(),
-        designLedSummary: zod.string().nullable().optional(),
-        designLedDetail: zod.string().nullable().optional(),
         overlays: zod
           .array(
             zod.object({
@@ -147,9 +142,23 @@ export const AnalysePropertyResponse = zod.object({
           price: zod.number(),
           size: zod.number(),
           pricePerSqm: zod.number(),
-          typology: zod.enum(["standalone", "terrace_townhouse", "unit_apartment", "unknown"]).optional(),
-          distanceM: zod.number().nullable().optional(),
-          source: zod.enum(["oneroof_sold", "realestate_active_listing", "licensed_provider", "unknown"]).optional(),
+          typology: zod
+            .enum([
+              "standalone",
+              "terrace_townhouse",
+              "unit_apartment",
+              "unknown",
+            ])
+            .optional(),
+          distanceM: zod.number().nullish(),
+          source: zod
+            .enum([
+              "oneroof_sold",
+              "realestate_active_listing",
+              "licensed_provider",
+              "unknown",
+            ])
+            .optional(),
           relevanceScore: zod.number().optional(),
           selectionReason: zod.string().optional(),
         }),
@@ -179,40 +188,72 @@ export const AnalysePropertyResponse = zod.object({
         }),
         reasons: zod.array(zod.string()),
       })
-      .nullable()
-      .optional(),
+      .nullish(),
     transportContext: zod
       .object({
         publicTransport: zod.object({
-          accessTier: zod.enum(["excellent", "good", "limited", "poor", "unknown"]),
-          nearestStop: zod.object({
-            name: zod.string(),
-            mode: zod.enum(["bus", "train", "ferry", "unknown"]),
-            distanceM: zod.number(),
-            routeCount: zod.number(),
-            serviceIntensity: zod.enum(["frequent", "regular", "limited", "unknown"]),
-          }).nullable(),
-          nearestByMode: zod.array(zod.object({
-            name: zod.string(),
-            mode: zod.enum(["bus", "train", "ferry", "unknown"]),
-            distanceM: zod.number(),
-            routeCount: zod.number(),
-            serviceIntensity: zod.enum(["frequent", "regular", "limited", "unknown"]),
-          })),
+          accessTier: zod.enum([
+            "excellent",
+            "good",
+            "limited",
+            "poor",
+            "unknown",
+          ]),
+          nearestStop: zod
+            .object({
+              name: zod.string(),
+              mode: zod.enum(["bus", "train", "ferry", "unknown"]),
+              distanceM: zod.number(),
+              routeCount: zod.number(),
+              serviceIntensity: zod.enum([
+                "frequent",
+                "regular",
+                "limited",
+                "unknown",
+              ]),
+            })
+            .nullable(),
+          nearestByMode: zod.array(
+            zod.object({
+              name: zod.string(),
+              mode: zod.enum(["bus", "train", "ferry", "unknown"]),
+              distanceM: zod.number(),
+              routeCount: zod.number(),
+              serviceIntensity: zod.enum([
+                "frequent",
+                "regular",
+                "limited",
+                "unknown",
+              ]),
+            }),
+          ),
           confidence: zod.enum(["high", "medium", "low", "unknown"]),
         }),
         highwayAccess: zod.object({
           name: zod.string().nullable(),
           distanceM: zod.number().nullable(),
-          accessTier: zod.enum(["excellent", "good", "neutral", "remote", "exposureRisk", "unknown"]),
+          accessTier: zod.enum([
+            "excellent",
+            "good",
+            "neutral",
+            "remote",
+            "exposureRisk",
+            "unknown",
+          ]),
           exposureTier: zod.enum(["low", "moderate", "high", "unknown"]),
           confidence: zod.enum(["high", "medium", "low", "unknown"]),
         }),
         cityCommute: zod.object({
           centreName: zod.string().nullable(),
           distanceKm: zod.number().nullable(),
-          durationMinutes: zod.number().nullable().optional(),
-          convenienceTier: zod.enum(["excellent", "good", "limited", "poor", "unknown"]),
+          durationMinutes: zod.number().nullish(),
+          convenienceTier: zod.enum([
+            "excellent",
+            "good",
+            "limited",
+            "poor",
+            "unknown",
+          ]),
           confidence: zod.enum(["high", "medium", "low", "unknown"]),
         }),
         roiInfluence: zod.object({
@@ -221,25 +262,8 @@ export const AnalysePropertyResponse = zod.object({
           numericAdjustmentApplied: zod.literal(false),
         }),
       })
-      .nullable()
-      .optional(),
+      .nullish(),
     avgPricePerSqm: zod.number().optional(),
-    schoolZones: zod
-      .array(
-        zod.object({
-          level: zod.enum(["primary", "intermediate", "secondary"]),
-          sourceLabel: zod.string(),
-          orgName: zod.string().nullable().optional(),
-          orgType: zod.string().nullable().optional(),
-          authority: zod.string().nullable().optional(),
-          authorityCategory: zod.enum(["public", "state_integrated", "private", "unknown"]),
-          equityIndex: zod.string().nullable().optional(),
-          enrolmentScheme: zod.string().nullable().optional(),
-          roll: zod.number().nullable().optional(),
-          matched: zod.boolean(),
-        }),
-      )
-      .optional(),
     riskSummary: zod.array(zod.string()).optional(),
     disclaimer: zod.string().optional(),
   }),
@@ -395,7 +419,7 @@ export const SignUpBody = zod.union([
         role: zod.enum(["service_provider"]),
         providerData: zod.object({
           companyName: zod.string().optional(),
-          nzCompanyRegisterNumber: zod.string().optional(),
+          NZBN: zod.string().optional(),
           discipline: zod
             .enum([
               "architect_designer",

@@ -116,8 +116,20 @@ describe("hasCacheableCore", () => {
     ).toBe(false);
   });
 
+  it("does not cache a configured regional property with unresolved zoning", () => {
+    expect(hasCacheableCore(baseResult({
+      geocode: { lat: -38.0263534, lng: 176.7097369 } as never,
+      linz_parcel: { parcel_id: "onepu-parcel" } as never,
+      raw_property: {
+        planning_provider: { providerId: "whakatane" },
+        zone: { zone_code: "UNKNOWN" },
+        hougarden: { cv_nzd: 1_520_000 },
+      } as never,
+    }))).toBe(false);
+  });
+
   it("exposes a schema version", () => {
-    expect(RAW_PROPERTY_SCHEMA_VERSION).toBeGreaterThanOrEqual(1);
+    expect(RAW_PROPERTY_SCHEMA_VERSION).toBe(7);
   });
 });
 

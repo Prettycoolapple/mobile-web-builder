@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { developmentScoreUnavailableReason } from "../pipeline";
-import type { CostBreakdown } from "../cost-estimator";
+import { estimateCosts, type CostBreakdown } from "../cost-estimator";
+import { regionalCostProfileForProvider } from "../regional-cost-profiles";
+import { calculateBearBaseBullScenarios } from "../roi-calculator";
+import { scoreProperty } from "../scoring";
 import type { MergedPropertyData } from "../scrapers/merge";
 import type { ROIScenario } from "../roi-calculator";
 
@@ -63,5 +66,44 @@ describe("developmentScoreUnavailableReason", () => {
 
   it("does not suppress all development scores when ROI market evidence is missing", () => {
     expect(developmentScoreUnavailableReason(merged(), costs(), [])).toBeNull();
+  });
+
+  it("produces Whakatane costs, ROI scenarios, and development scores from the CV fallback", () => {
+    const property = merged({
+      cv_nzd: 1_520_000,
+      land_area_sqm: 42_320,
+      floor_area_sqm: 270,
+      build_year: 2009,
+      bedrooms: 4,
+      bathrooms: 2,
+      zone_code: "General Rural Zone",
+      zone_description: "General Rural Zone - Whakatane District Plan Zone",
+      contour: null,
+      overlays: [],
+      infrastructure: [],
+      estate_type: "freehold",
+    });
+    const actualCosts = estimateCosts(property, 1, {
+      sqm_per_lot: 42_320,
+      cost_profile: regionalCostProfileForProvider("whakatane"),
+    });
+    const actualScenarios = calculateBearBaseBullScenarios(
+      actualCosts,
+      0,
+      1_520_000,
+      1,
+      42_320,
+      "stable",
+    );
+    const actualScores = scoreProperty(property, actualCosts, actualScenarios, 1);
+
+    expect(actualCosts.total_high).toBeGreaterThan(actualCosts.total_low);
+    expect(actualScenarios.length).toBeGreaterThan(0);
+    expect(actualScores).toMatchObject({
+      ease: expect.any(Number),
+      cost: expect.any(Number),
+      roi: expect.any(Number),
+    });
+    expect(developmentScoreUnavailableReason(property, actualCosts, actualScenarios)).toBeNull();
   });
 });

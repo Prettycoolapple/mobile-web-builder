@@ -67,6 +67,7 @@ describe("regional planning provider registry", () => {
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "1 Ardmore Street, Wanaka" }).providerId).toBe("qldc");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "85 Whittaker Road, Koutu, Rotorua" }).providerId).toBe("rotorua");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "1134 Braemar Road, Rotoma" }).providerId).toBe("whakatane");
+    expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "2926A State Highway 30, Onepu, Whakatāne District" }).providerId).toBe("whakatane");
   });
 
   it("emits provider metadata when the router is enabled", () => {

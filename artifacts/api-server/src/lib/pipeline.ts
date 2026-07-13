@@ -86,6 +86,7 @@ import { extractListingClaims, detectRedevelopmentConflict, hasAmbiguousListingS
 import { extractListingClaimsLLM, mergeClaimsSafer } from "./listing-claims-llm";
 import { looksLikeUnitOrApartmentAddress } from "./address-patterns";
 import { assessDwellingCondition, selectedDwellingConditionPhotoUrls, type DwellingConditionAssessment } from "./dwelling-condition";
+import { hasRegionalPlanningZoneLayer } from "./regional-arcgis";
 
 const AC_PROP_MAPSERVER = "https://mapspublic.aucklandcouncil.govt.nz/arcgis3/rest/services/NonCouncil/PropertyValueInfo/MapServer";
 
@@ -425,7 +426,7 @@ export interface RawPropertyData {
   derived_scores?: DerivedCardScores;
 }
 
-export const RAW_PROPERTY_SCHEMA_VERSION = 6;
+export const RAW_PROPERTY_SCHEMA_VERSION = 7;
 
 export interface PipelineResult {
   address_input: string;
@@ -500,6 +501,12 @@ export interface PipelineResult {
  */
 export function hasCacheableCore(r: PipelineResult): boolean {
   if (!r.geocode || !r.raw_property) return false;
+  if (
+    hasRegionalPlanningZoneLayer(r.raw_property.planning_provider?.providerId) &&
+    (!r.raw_property.zone?.zone_code?.trim() || r.raw_property.zone.zone_code === "UNKNOWN")
+  ) {
+    return false;
+  }
   // Require at least one ScrapingBee-backed scraper to have returned data.
   // hougarden, oneroof, qv, and homes are all browser/ScrapingBee-dependent.
   // If all four are null, ScrapingBee credits are likely depleted — don't

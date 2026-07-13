@@ -143,7 +143,7 @@ describe("geocode address selection", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(tryGeocodeAddress("2926A, State Highway 30, Whakatane District, Bay of Plenty, 3075")).resolves.toMatchObject({
+    await expect(tryGeocodeAddress("2926A, State Highway 30, Onepu, Whakatāne District, Bay of Plenty, 3075")).resolves.toMatchObject({
       formatted: "2926A STATE HIGHWAY 30, Rotoma, New Zealand",
       lat: -38.0263534,
       lng: 176.7097369,

@@ -428,7 +428,12 @@ export function SitePlanCard({ report, active }: { report: FeasibilityReport; ac
       ) ?? [],
     [data?.layers, visibleLayers],
   );
-  const legendLayers = useMemo(() => data?.layers.filter((layer) => !ALWAYS_ON_LAYERS.has(layer.id)) ?? [], [data]);
+  const legendLayers = useMemo(
+    () => data?.layers.filter(
+      (layer) => !ALWAYS_ON_LAYERS.has(layer.id) && layer.available && layer.geojson.features.length > 0,
+    ) ?? [],
+    [data],
+  );
   const baseScale = useMemo(() => {
     if (!data || !viewportSize) return 1;
     return Math.max(viewportSize.width / data.image.width, viewportSize.height / data.image.height);

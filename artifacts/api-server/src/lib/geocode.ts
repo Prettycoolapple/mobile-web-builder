@@ -73,10 +73,22 @@ type CouncilAddressSource = {
   formatted: (attributes: Record<string, unknown>) => string | null;
 };
 
+function councilAddressMatchText(address: string): string {
+  return address
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function councilAddressSourceFor(address: string): CouncilAddressSource | undefined {
+  const matchText = councilAddressMatchText(address);
+  return COUNCIL_ADDRESS_SOURCES.find((candidate) => candidate.matches.test(matchText));
+}
+
 const COUNCIL_ADDRESS_SOURCES: CouncilAddressSource[] = [
   {
     serviceUrl: "https://gis.whakatane.govt.nz/arcgis/rest/services/Geocortex/Cadastre/MapServer/1",
-    matches: /\b(whakatane|rotoma|matata|edgecumbe|ohope|taneatua)\b/i,
+    matches: /\b(whakatane|rotoma|onepu|matata|edgecumbe|ohope|taneatua)\b/i,
     where: ({ number, suffix, road }) =>
       `HouseNumber = ${number} AND UPPER(Address_ascii) = '${number}${suffix} ${road.replaceAll("'", "''")}'`,
     formatted: (attrs) => {
@@ -113,7 +125,7 @@ function parseCouncilStreetAddress(address: string): { number: number; suffix: s
 
 async function councilAddressGeocode(address: string): Promise<GeoResult | null> {
   const parsed = parseCouncilStreetAddress(address);
-  const source = COUNCIL_ADDRESS_SOURCES.find((candidate) => candidate.matches.test(address));
+  const source = councilAddressSourceFor(address);
   if (!parsed || !source) return null;
 
   const url = new URL(`${source.serviceUrl}/query`);
@@ -143,7 +155,7 @@ async function councilAddressGeocode(address: string): Promise<GeoResult | null>
 function shouldRequireExactCouncilAddress(address: string): boolean {
   return Boolean(
     parseCouncilStreetAddress(address) &&
-    COUNCIL_ADDRESS_SOURCES.some((candidate) => candidate.matches.test(address)),
+    councilAddressSourceFor(address),
   );
 }
 

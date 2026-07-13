@@ -781,7 +781,7 @@ describe("regional planning rule status", () => {
   it("allows interim ROI for unmodelled Rotorua and Whakatane zones without yield claims", () => {
     for (const [providerId, zoneCode] of [
       ["rotorua", "RESZ1"],
-      ["whakatane", "Rural Production Zone"],
+      ["whakatane", "General Rural Zone"],
     ] as const) {
       expect(regionalPlanningRuleStatus(
         { providerId, providerName: `${providerId} planning provider` },

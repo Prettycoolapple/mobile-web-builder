@@ -164,7 +164,7 @@ function getAnalyseDisclaimerDismissedKey(userId?: string | null): string {
 
 type PendingAnalyseAction =
   | { type: "send"; text: string }
-  | { type: "analyse"; address: string; selectedPhotoUrl?: string | null; selectedListingUrl?: string | null; selectedListingContext?: SelectedListingContext | null; analysisKey?: string };
+  | { type: "analyse"; address: string; selectedPhotoUrl?: string | null; selectedListingUrl?: string | null; selectedListingContext?: SelectedListingContext | null; analysisKey?: string; addressConfirmed?: boolean };
 
 type PendingLimTitleConsent = {
   requestId: string;
@@ -620,7 +620,7 @@ export default function SearchScreen() {
   const messageHeightsRef = useRef<Map<string, number>>(new Map());
   const pendingSearchScrollTargetRef = useRef<{ messageId: string; index: number } | null>(null);
   const cardScorePollRef = useRef<{ addresses: string[]; sessionId: string; intervalId: ReturnType<typeof setInterval> | null }>({ addresses: [], sessionId: "", intervalId: null });
-  const handleAnalyseRef = useRef<((address: string, selectedPhotoUrl?: string | null, selectedListingUrl?: string | null, selectedListingContext?: SelectedListingContext | null, skipAnalyseDisclaimer?: boolean, analysisKey?: string, forceNewSession?: boolean) => Promise<void>) | null>(null);
+  const handleAnalyseRef = useRef<((address: string, selectedPhotoUrl?: string | null, selectedListingUrl?: string | null, selectedListingContext?: SelectedListingContext | null, skipAnalyseDisclaimer?: boolean, analysisKey?: string, forceNewSession?: boolean, addressConfirmed?: boolean) => Promise<void>) | null>(null);
   const handleSendRef = useRef<((overrideText?: string, skipAnalyseDisclaimer?: boolean, continuePresentation?: "generic_listing" | "scored_screening", discoveryChoiceSuburb?: string, displayText?: string) => Promise<void>) | null>(null);
   const processedRouteAnalyseRef = useRef<string | null>(null);
   const processedShareTokenRef = useRef<string | null>(null);
@@ -3191,14 +3191,15 @@ export default function SearchScreen() {
       skipAnalyseDisclaimer = false,
       analysisKey?: string,
       forceNewSession = false,
+      addressConfirmed = false,
     ) => {
       if (isLoading) return;
       if (!user) {
-        await promptSignInForAnalysis({ type: "analyse", address, selectedPhotoUrl, selectedListingUrl, selectedListingContext, analysisKey });
+        await promptSignInForAnalysis({ type: "analyse", address, selectedPhotoUrl, selectedListingUrl, selectedListingContext, analysisKey, addressConfirmed });
         return;
       }
       if (!skipAnalyseDisclaimer && shouldShowAnalyseDisclaimer()) {
-        openAnalyseDisclaimer({ type: "analyse", address, selectedPhotoUrl, selectedListingUrl, selectedListingContext, analysisKey });
+        openAnalyseDisclaimer({ type: "analyse", address, selectedPhotoUrl, selectedListingUrl, selectedListingContext, analysisKey, addressConfirmed });
         return;
       }
       setInputText("");
@@ -3245,6 +3246,7 @@ export default function SearchScreen() {
                 conversationHistory,
                 selectedListingUrl,
                 selectedListingContext,
+                addressConfirmed,
                 async: Platform.OS !== "web",
               }),
               signal: controller.signal,
@@ -3417,6 +3419,13 @@ export default function SearchScreen() {
     [handleAnalyse],
   );
 
+  const handleAddressConfirm = useCallback(
+    (address: string) => {
+      void handleAnalyse(address, null, null, null, false, undefined, false, true);
+    },
+    [handleAnalyse],
+  );
+
   const handleAnalyseProperty = useCallback(
     (address: string) => {
       startNewChat();
@@ -3566,7 +3575,7 @@ export default function SearchScreen() {
     if (action.type === "send") {
       await handleSend(action.text, true);
     } else {
-      await handleAnalyse(action.address, action.selectedPhotoUrl, action.selectedListingUrl, action.selectedListingContext, true, action.analysisKey);
+      await handleAnalyse(action.address, action.selectedPhotoUrl, action.selectedListingUrl, action.selectedListingContext, true, action.analysisKey, false, action.addressConfirmed);
     }
   }, [analyseDisclaimerDontRemind, handleAnalyse, handleSend, user?.id]);
 
@@ -3582,7 +3591,7 @@ export default function SearchScreen() {
         if (action.type === "send") {
           await handleSend(action.text);
         } else if (action.type === "analyse") {
-          await handleAnalyse(action.address, action.selectedPhotoUrl, action.selectedListingUrl, action.selectedListingContext, false, action.analysisKey);
+          await handleAnalyse(action.address, action.selectedPhotoUrl, action.selectedListingUrl, action.selectedListingContext, false, action.analysisKey, false, action.addressConfirmed);
         }
       } catch {
         // Ignore malformed stale guest actions.
@@ -3608,7 +3617,7 @@ export default function SearchScreen() {
           if (action.type === "send") {
             await handleSend(action.text);
           } else if (action.type === "analyse") {
-            await handleAnalyse(action.address, action.selectedPhotoUrl, action.selectedListingUrl, action.selectedListingContext, false, action.analysisKey);
+            await handleAnalyse(action.address, action.selectedPhotoUrl, action.selectedListingUrl, action.selectedListingContext, false, action.analysisKey, false, action.addressConfirmed);
           }
         } catch {
           // Ignore malformed stale actions.
@@ -3634,6 +3643,7 @@ export default function SearchScreen() {
             onFollowUp={handleFollowUp}
             onDiscoveryChoice={handleDiscoveryChoice}
             onAnalyse={handleCardAnalyse}
+            onAddressConfirm={handleAddressConfirm}
             onAnalyseProperty={handleAnalyseProperty}
             analysingPropertyKey={analysingPropertyKey}
             onRetry={handleSend}
@@ -3649,7 +3659,7 @@ export default function SearchScreen() {
         </View>
       );
     },
-    [handleFollowUp, handleDiscoveryChoice, handleCardAnalyse, handleAnalyseProperty, analysingPropertyKey, handleSend, handleConnect, handleDismiss, handleAgentDismiss, openLimTitleConsent, declineLimTitleOffer, handleShowMore, handleSearchResultLayout],
+    [handleFollowUp, handleDiscoveryChoice, handleCardAnalyse, handleAddressConfirm, handleAnalyseProperty, analysingPropertyKey, handleSend, handleConnect, handleDismiss, handleAgentDismiss, openLimTitleConsent, declineLimTitleOffer, handleShowMore, handleSearchResultLayout],
   );
 
   const keyExtractor = useCallback((item: ChatMessage) => item.id, []);

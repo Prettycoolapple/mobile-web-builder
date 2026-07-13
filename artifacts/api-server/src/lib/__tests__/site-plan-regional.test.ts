@@ -135,6 +135,46 @@ describe("regional site-plan wrapper", () => {
     }
   });
 
+  it("marks only the applicable Whakatane overlay available at 2926A State Highway 30", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isHighwayBuffer = url.includes("/OperativeDistrictPlanNPS_ePlan/MapServer/71/query");
+      return new Response(JSON.stringify({
+        features: isHighwayBuffer ? [{
+          attributes: { OBJECTID: 1, NAME: "State Highway Buffer" },
+          geometry: { rings: [[
+            [176.7088, -38.0270],
+            [176.7107, -38.0270],
+            [176.7107, -38.0257],
+            [176.7088, -38.0257],
+            [176.7088, -38.0270],
+          ]] },
+        }] : [],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sitePlan = await buildSitePlanForReport(
+      "2926A STATE HIGHWAY 30, Rotomā, New Zealand",
+      {
+        geocode: {
+          lat: -38.0263534,
+          lng: 176.7097369,
+          formatted: "2926A STATE HIGHWAY 30, Rotomā, New Zealand",
+          suburb: "rotoma",
+        },
+        linz_parcel: null,
+      } as RawPropertyData,
+    );
+
+    expect(sitePlan.layers.filter((layer) => layer.group === "planning" && layer.available).map((layer) => layer.label))
+      .toEqual(["State Highway Buffer"]);
+    expect(sitePlan.layers.filter((layer) => layer.group === "services").every((layer) => !layer.available)).toBe(true);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("WaterSupplyAssets"))).toBe(true);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("WasteWaterAssets"))).toBe(true);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("StormWaterAssets"))).toBe(true);
+  });
+
   afterEach(() => {
     delete process.env[FLAG];
     vi.unstubAllGlobals();

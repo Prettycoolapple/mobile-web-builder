@@ -4636,12 +4636,13 @@ router.post(
   ipRateLimit({ name: "analyse-hr", windowMs: hours(1), max: 200 }),
   userRateLimit({ name: "analyse", windowMs: minutes(1), max: 12 }),
   async (req, res) => {
-  const { address, conversationHistory, async: asyncFlag, selectedListingUrl, selectedListingContext } = req.body as {
+  const { address, conversationHistory, async: asyncFlag, selectedListingUrl, selectedListingContext, addressConfirmed } = req.body as {
     address: string;
     conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
     async?: boolean;
     selectedListingUrl?: string | null;
     selectedListingContext?: SelectedListingContext | null;
+    addressConfirmed?: boolean;
   };
   const normalisedSelectedListingContext = normaliseSelectedListingContext(selectedListingContext);
 
@@ -4947,7 +4948,9 @@ router.post(
       return;
     }
 
-    const addressResolution = await resolveAddressForAnalysis(analysisInput, analyseLocale);
+    const addressResolution = addressConfirmed
+      ? { resolvedAddress: analysisInput, clarification: null }
+      : await resolveAddressForAnalysis(analysisInput, analyseLocale);
     if (addressResolution.clarification) {
       res.json({
         type: "clarification",

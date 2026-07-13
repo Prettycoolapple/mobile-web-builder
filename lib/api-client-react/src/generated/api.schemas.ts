@@ -7,6 +7,7 @@
  */
 export interface HealthStatus {
   status: string;
+  deploymentSha?: string | null;
 }
 
 export interface LoginRequest {
@@ -53,7 +54,7 @@ export const ServiceProviderSignUpDataDiscipline = {
 
 export interface ServiceProviderSignUpData {
   companyName?: string;
-  nzCompanyRegisterNumber?: string;
+  NZBN?: string;
   discipline?: ServiceProviderSignUpDataDiscipline;
   addressStreet?: string;
   addressSuburb?: string;
@@ -157,6 +158,8 @@ export interface AnalyseRequest {
   /** The NZ property address to analyse */
   address: string;
   conversationHistory?: Message[];
+  /** True only when the user selected this exact address from a clarification prompt */
+  addressConfirmed?: boolean;
 }
 
 export interface ChatRequest {
@@ -194,9 +197,6 @@ export interface PropertyOverview {
   floorArea?: string;
   buildYear?: string;
   zone?: string;
-  /** LINZ estate / tenure label when available */
-  titleType?: string | null;
-  titleResolutionSource?: "lrs" | "lrs_cache" | "listing" | "scraped_page" | "ai_snippet" | "unknown";
   listingPrice?: string;
   isOnMarket?: boolean;
 }
@@ -302,87 +302,239 @@ export interface ROIScenario {
   isBest: boolean;
 }
 
+export type ComparableSaleTypology =
+  (typeof ComparableSaleTypology)[keyof typeof ComparableSaleTypology];
+
+export const ComparableSaleTypology = {
+  standalone: "standalone",
+  terrace_townhouse: "terrace_townhouse",
+  unit_apartment: "unit_apartment",
+  unknown: "unknown",
+} as const;
+
+export type ComparableSaleSource =
+  (typeof ComparableSaleSource)[keyof typeof ComparableSaleSource];
+
+export const ComparableSaleSource = {
+  oneroof_sold: "oneroof_sold",
+  realestate_active_listing: "realestate_active_listing",
+  licensed_provider: "licensed_provider",
+  unknown: "unknown",
+} as const;
+
 export interface ComparableSale {
   address: string;
   saleDate: string;
   price: number;
   size: number;
   pricePerSqm: number;
-  typology?: "standalone" | "terrace_townhouse" | "unit_apartment" | "unknown";
+  typology?: ComparableSaleTypology;
   distanceM?: number | null;
-  source?: "oneroof_sold" | "realestate_active_listing" | "licensed_provider" | "unknown";
+  source?: ComparableSaleSource;
   relevanceScore?: number;
   selectionReason?: string;
 }
 
+export type NeighbourhoodSignalLevel =
+  (typeof NeighbourhoodSignalLevel)[keyof typeof NeighbourhoodSignalLevel];
+
+export const NeighbourhoodSignalLevel = {
+  none: "none",
+  low: "low",
+  moderate: "moderate",
+  high: "high",
+  unknown: "unknown",
+} as const;
+
+export type NeighbourhoodSignalConfidence =
+  (typeof NeighbourhoodSignalConfidence)[keyof typeof NeighbourhoodSignalConfidence];
+
+export const NeighbourhoodSignalConfidence = {
+  high: "high",
+  medium: "medium",
+  low: "low",
+  unknown: "unknown",
+} as const;
+
 export interface NeighbourhoodSignal {
-  level: "none" | "low" | "moderate" | "high" | "unknown";
+  level: NeighbourhoodSignalLevel;
   count: number;
   assessedLots: number;
-  confidence: "high" | "medium" | "low" | "unknown";
+  confidence: NeighbourhoodSignalConfidence;
 }
+
+export type NeighbourhoodContextConfidence =
+  (typeof NeighbourhoodContextConfidence)[keyof typeof NeighbourhoodContextConfidence];
+
+export const NeighbourhoodContextConfidence = {
+  high: "high",
+  medium: "medium",
+  low: "low",
+  unknown: "unknown",
+} as const;
+
+export type NeighbourhoodContextMarketAdjustment = {
+  gdvMultiplier: number;
+  applied: boolean;
+  reason: string | null;
+};
 
 export interface NeighbourhoodContext {
   assessedLots: number;
   radiusM: number;
   publicHousingSignal: NeighbourhoodSignal;
   terraceHousingSignal: NeighbourhoodSignal;
-  confidence: "high" | "medium" | "low" | "unknown";
-  marketAdjustment: {
-    gdvMultiplier: number;
-    applied: boolean;
-    reason: string | null;
-  };
+  confidence: NeighbourhoodContextConfidence;
+  marketAdjustment: NeighbourhoodContextMarketAdjustment;
   reasons: string[];
 }
 
+export type TransportStopContextMode =
+  (typeof TransportStopContextMode)[keyof typeof TransportStopContextMode];
+
+export const TransportStopContextMode = {
+  bus: "bus",
+  train: "train",
+  ferry: "ferry",
+  unknown: "unknown",
+} as const;
+
+export type TransportStopContextServiceIntensity =
+  (typeof TransportStopContextServiceIntensity)[keyof typeof TransportStopContextServiceIntensity];
+
+export const TransportStopContextServiceIntensity = {
+  frequent: "frequent",
+  regular: "regular",
+  limited: "limited",
+  unknown: "unknown",
+} as const;
+
 export interface TransportStopContext {
   name: string;
-  mode: "bus" | "train" | "ferry" | "unknown";
+  mode: TransportStopContextMode;
   distanceM: number;
   routeCount: number;
-  serviceIntensity: "frequent" | "regular" | "limited" | "unknown";
+  serviceIntensity: TransportStopContextServiceIntensity;
 }
+
+export type TransportContextPublicTransportAccessTier =
+  (typeof TransportContextPublicTransportAccessTier)[keyof typeof TransportContextPublicTransportAccessTier];
+
+export const TransportContextPublicTransportAccessTier = {
+  excellent: "excellent",
+  good: "good",
+  limited: "limited",
+  poor: "poor",
+  unknown: "unknown",
+} as const;
+
+export type TransportContextPublicTransportConfidence =
+  (typeof TransportContextPublicTransportConfidence)[keyof typeof TransportContextPublicTransportConfidence];
+
+export const TransportContextPublicTransportConfidence = {
+  high: "high",
+  medium: "medium",
+  low: "low",
+  unknown: "unknown",
+} as const;
+
+export type TransportContextPublicTransport = {
+  accessTier: TransportContextPublicTransportAccessTier;
+  nearestStop: TransportStopContext | null;
+  nearestByMode: TransportStopContext[];
+  confidence: TransportContextPublicTransportConfidence;
+};
+
+export type TransportContextHighwayAccessAccessTier =
+  (typeof TransportContextHighwayAccessAccessTier)[keyof typeof TransportContextHighwayAccessAccessTier];
+
+export const TransportContextHighwayAccessAccessTier = {
+  excellent: "excellent",
+  good: "good",
+  neutral: "neutral",
+  remote: "remote",
+  exposureRisk: "exposureRisk",
+  unknown: "unknown",
+} as const;
+
+export type TransportContextHighwayAccessExposureTier =
+  (typeof TransportContextHighwayAccessExposureTier)[keyof typeof TransportContextHighwayAccessExposureTier];
+
+export const TransportContextHighwayAccessExposureTier = {
+  low: "low",
+  moderate: "moderate",
+  high: "high",
+  unknown: "unknown",
+} as const;
+
+export type TransportContextHighwayAccessConfidence =
+  (typeof TransportContextHighwayAccessConfidence)[keyof typeof TransportContextHighwayAccessConfidence];
+
+export const TransportContextHighwayAccessConfidence = {
+  high: "high",
+  medium: "medium",
+  low: "low",
+  unknown: "unknown",
+} as const;
+
+export type TransportContextHighwayAccess = {
+  name: string | null;
+  distanceM: number | null;
+  accessTier: TransportContextHighwayAccessAccessTier;
+  exposureTier: TransportContextHighwayAccessExposureTier;
+  confidence: TransportContextHighwayAccessConfidence;
+};
+
+export type TransportContextCityCommuteConvenienceTier =
+  (typeof TransportContextCityCommuteConvenienceTier)[keyof typeof TransportContextCityCommuteConvenienceTier];
+
+export const TransportContextCityCommuteConvenienceTier = {
+  excellent: "excellent",
+  good: "good",
+  limited: "limited",
+  poor: "poor",
+  unknown: "unknown",
+} as const;
+
+export type TransportContextCityCommuteConfidence =
+  (typeof TransportContextCityCommuteConfidence)[keyof typeof TransportContextCityCommuteConfidence];
+
+export const TransportContextCityCommuteConfidence = {
+  high: "high",
+  medium: "medium",
+  low: "low",
+  unknown: "unknown",
+} as const;
+
+export type TransportContextCityCommute = {
+  centreName: string | null;
+  distanceKm: number | null;
+  durationMinutes?: number | null;
+  convenienceTier: TransportContextCityCommuteConvenienceTier;
+  confidence: TransportContextCityCommuteConfidence;
+};
+
+export type TransportContextRoiInfluenceInfluence =
+  (typeof TransportContextRoiInfluenceInfluence)[keyof typeof TransportContextRoiInfluenceInfluence];
+
+export const TransportContextRoiInfluenceInfluence = {
+  positive: "positive",
+  neutral: "neutral",
+  negative: "negative",
+  mixed: "mixed",
+} as const;
+
+export type TransportContextRoiInfluence = {
+  influence: TransportContextRoiInfluenceInfluence;
+  reasons: string[];
+  numericAdjustmentApplied: boolean;
+};
 
 export interface TransportContext {
-  publicTransport: {
-    accessTier: "excellent" | "good" | "limited" | "poor" | "unknown";
-    nearestStop: TransportStopContext | null;
-    nearestByMode: TransportStopContext[];
-    confidence: "high" | "medium" | "low" | "unknown";
-  };
-  highwayAccess: {
-    name: string | null;
-    distanceM: number | null;
-    accessTier: "excellent" | "good" | "neutral" | "remote" | "exposureRisk" | "unknown";
-    exposureTier: "low" | "moderate" | "high" | "unknown";
-    confidence: "high" | "medium" | "low" | "unknown";
-  };
-  cityCommute: {
-    centreName: string | null;
-    distanceKm: number | null;
-    durationMinutes?: number | null;
-    convenienceTier: "excellent" | "good" | "limited" | "poor" | "unknown";
-    confidence: "high" | "medium" | "low" | "unknown";
-  };
-  roiInfluence: {
-    influence: "positive" | "neutral" | "negative" | "mixed";
-    reasons: string[];
-    numericAdjustmentApplied: false;
-  };
-}
-
-export interface SchoolZoneDetail {
-  level: "primary" | "intermediate" | "secondary";
-  sourceLabel: string;
-  orgName?: string | null;
-  orgType?: string | null;
-  authority?: string | null;
-  authorityCategory: "public" | "state_integrated" | "private" | "unknown";
-  equityIndex?: string | null;
-  enrolmentScheme?: string | null;
-  roll?: number | null;
-  matched: boolean;
+  publicTransport: TransportContextPublicTransport;
+  highwayAccess: TransportContextHighwayAccess;
+  cityCommute: TransportContextCityCommute;
+  roiInfluence: TransportContextRoiInfluence;
 }
 
 export interface FeasibilityReport {
@@ -401,7 +553,6 @@ export interface FeasibilityReport {
   neighbourhoodContext?: NeighbourhoodContext | null;
   transportContext?: TransportContext | null;
   avgPricePerSqm?: number;
-  schoolZones?: SchoolZoneDetail[];
   riskSummary?: string[];
   disclaimer?: string;
 }

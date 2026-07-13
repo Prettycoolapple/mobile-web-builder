@@ -493,12 +493,34 @@ async function queryArcGisAttributes(
     .filter((attrs): attrs is Record<string, unknown> => Boolean(attrs));
 }
 
+async function queryArcGisAttributesWithRetry(
+  layer: { serviceUrl: string; layerId: number },
+  lat: number,
+  lng: number,
+  options: Parameters<typeof queryArcGisAttributes>[3] = {},
+): Promise<Record<string, unknown>[]> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await queryArcGisAttributes(layer, lat, lng, options);
+    } catch (err) {
+      lastError = err;
+      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+  }
+  throw lastError;
+}
+
 function configFor(providerId: PlanningProviderId): RegionalArcGisConfig | null {
   return CONFIGS[providerId] ?? null;
 }
 
 export function configuredRegionalProviderIds(): PlanningProviderId[] {
   return Object.keys(CONFIGS) as PlanningProviderId[];
+}
+
+export function hasRegionalPlanningZoneLayer(providerId: PlanningProviderId | null | undefined): boolean {
+  return providerId != null && (configFor(providerId)?.zoneLayers.length ?? 0) > 0;
 }
 
 export async function fetchRegionalPlanningZone(
@@ -513,10 +535,10 @@ export async function fetchRegionalPlanningZone(
   for (const layer of config.zoneLayers) {
     try {
       let features = parcelBbox
-        ? await queryArcGisAttributes(layer, lat, lng, { parcelBbox })
+        ? await queryArcGisAttributesWithRetry(layer, lat, lng, { parcelBbox })
         : [];
       if (features.length === 0) {
-        features = await queryArcGisAttributes(layer, lat, lng);
+        features = await queryArcGisAttributesWithRetry(layer, lat, lng);
       }
       const attrs = features[0];
       if (!attrs) continue;

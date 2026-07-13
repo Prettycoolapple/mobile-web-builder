@@ -661,7 +661,9 @@ export function SitePlanCard({ report }: Props) {
     [query.data?.layers, visibleLayers],
   );
   const legendLayers = useMemo(
-    () => query.data?.layers.filter((layer) => !ALWAYS_ON_LAYERS.has(layer.id)) ?? [],
+    () => query.data?.layers.filter(
+      (layer) => !ALWAYS_ON_LAYERS.has(layer.id) && layer.available && layer.geojson.features.length > 0,
+    ) ?? [],
     [query.data?.layers],
   );
 

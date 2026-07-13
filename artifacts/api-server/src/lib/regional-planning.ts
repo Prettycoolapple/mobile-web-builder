@@ -363,6 +363,7 @@ const providerRegistry: PlanningProvider[] = [
     (context) => supportsAny(context, WHAKATANE_BOUNDS, [
       /\bwhakatane\b/,
       /\brotoma\b/,
+      /\bonepu\b/,
       /\bmatata\b/,
       /\bedgecumbe\b/,
       /\bohope\b/,

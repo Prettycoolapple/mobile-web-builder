@@ -331,6 +331,9 @@ components:
       properties:
         status:
           type: string
+        deploymentSha:
+          type: string
+          nullable: true
       required:
         - status
     LoginRequest:
@@ -561,6 +564,9 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Message"
+        addressConfirmed:
+          type: boolean
+          description: True only when the user selected this exact address from a clarification prompt
       required:
         - address
     ChatRequest:

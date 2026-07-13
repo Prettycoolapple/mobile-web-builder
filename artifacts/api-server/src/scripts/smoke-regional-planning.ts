@@ -18,7 +18,7 @@ const samples = [
   { label: "Lower Hutt Wainuiomata", address: "15 Parenga Street, Wainuiomata, Lower Hutt", lat: -41.285791, lng: 174.950586 },
   { label: "Rotorua Koutu", address: "85 Whittaker Road, Koutu, Rotorua", lat: -38.1251179, lng: 176.2437545 },
   { label: "Whakatane Rotoma", address: "1134 Braemar Road, Rotoma", lat: -38.0165820, lng: 176.7156598 },
-  { label: "Whakatane State Highway 30", address: "2926A, State Highway 30, Whakatane District", lat: -38.0263534, lng: 176.7097369 },
+  { label: "Whakatane State Highway 30", address: "2926A State Highway 30, Onepu, Whakatāne District", lat: -38.0263534, lng: 176.7097369 },
 ];
 
 console.log(JSON.stringify({
@@ -32,6 +32,14 @@ for (const sample of samples) {
   const zone = await fetchRegionalPlanningZone(jurisdiction, sample.lat, sample.lng);
   const overlays = await fetchRegionalPlanningOverlays(jurisdiction, sample.lat, sample.lng);
   const infrastructure = await fetchRegionalInfrastructure(jurisdiction.providerId, sample.lat, sample.lng);
+
+  if (sample.label === "Whakatane State Highway 30") {
+    if (jurisdiction.providerId !== "whakatane") throw new Error(`Expected Whakatane provider, got ${jurisdiction.providerId}`);
+    if (zone.zone_code !== "General Rural Zone") throw new Error(`Expected General Rural Zone, got ${zone.zone_code}`);
+    if (!overlays.some((overlay) => overlay.name === "State Highway Buffer")) {
+      throw new Error("Expected State Highway Buffer overlay at 2926A State Highway 30");
+    }
+  }
 
   console.log(JSON.stringify({
     sample: sample.label,

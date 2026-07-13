@@ -155,6 +155,7 @@ interface Props {
   onFollowUp: (question: string) => void;
   onDiscoveryChoice?: (message: ChatMessage, option: string, optionIndex: number) => void;
   onAnalyse: (address: string, photoUrl?: string | null, listingUrl?: string | null, selectedListingContext?: SelectedListingContext | null, analysisKey?: string) => void;
+  onAddressConfirm?: (address: string) => void;
   onAnalyseProperty?: (address: string) => void;
   analysingPropertyKey?: string | null;
   onRetry?: (text: string) => void;
@@ -316,7 +317,7 @@ function TypingDots() {
   );
 }
 
-export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, onAnalyseProperty, analysingPropertyKey, onRetry, onConnect, onDismiss, onAgentDismiss, onLimTitleRequest, onLimTitleDecline, onUpgrade, onShowMore, onSearchResultLayout }: Props) {
+export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, onAddressConfirm, onAnalyseProperty, analysingPropertyKey, onRetry, onConnect, onDismiss, onAgentDismiss, onLimTitleRequest, onLimTitleDecline, onUpgrade, onShowMore, onSearchResultLayout }: Props) {
   const colors = useColors();
   const { t } = useT();
   const router = useRouter();
@@ -358,7 +359,11 @@ export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, 
             {options.map((opt, i) => (
               <TouchableOpacity
                 key={i}
-                onPress={() => isDiscoveryChoice ? (onDiscoveryChoice ? onDiscoveryChoice(message, opt, i) : onFollowUp(opt)) : onAnalyse(opt)}
+                onPress={() => isDiscoveryChoice
+                  ? (onDiscoveryChoice ? onDiscoveryChoice(message, opt, i) : onFollowUp(opt))
+                  : message.type === "address_clarification" && onAddressConfirm
+                    ? onAddressConfirm(opt)
+                    : onAnalyse(opt)}
                 style={{
                   backgroundColor: colors.accent + "12",
                   borderColor: colors.accent + "55",

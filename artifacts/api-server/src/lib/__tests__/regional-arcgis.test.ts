@@ -213,6 +213,25 @@ describe("regional ArcGIS planning fetchers", () => {
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/OperativeDistrictPlanNPS_ePlan/MapServer/36/query"))).toBe(true);
   });
 
+  it("returns General Rural Zone for the Onepu State Highway 30 parcel", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/OperativeDistrictPlanNPS_ePlan/MapServer/36/query")) {
+        return new Response(JSON.stringify({ features: [{ attributes: {
+          Zone_Name: "General Rural Zone",
+        } }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ fields: [] }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const zone = await fetchRegionalPlanningZone(jurisdiction("whakatane"), -38.0263534, 176.7097369);
+
+    expect(zone.zone_code).toBe("General Rural Zone");
+    expect(zone.zone_description).toContain("General Rural Zone");
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/MapServer/36/query"))).toBe(true);
+  });
+
   it("maps configured regional overlay hits into conservative report overlays", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       features: [
