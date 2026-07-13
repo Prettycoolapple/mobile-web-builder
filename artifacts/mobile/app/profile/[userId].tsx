@@ -424,10 +424,12 @@ export default function UserProfileScreen() {
             </View>
           )}
 
-          {profile.role === "general" && memberYear && (
+          {profile.role === "general" && (memberYear || profile.roleData) && (
             <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <Text style={[styles.sectionTitle, { color: colors.foreground }]}>{t("public_profile.member_details")}</Text>
-              <InfoRow icon="calendar" label={t("public_profile.info.member_since")} value={`${memberYear}`} colors={colors} />
+              <InfoRow icon="phone" label={t("public_profile.info.contact")} value={profile.roleData?.contactNumber as string} colors={colors} />
+              <InfoRow icon="mail" label="Email" value={profile.roleData?.contactEmail as string} colors={colors} />
+              {memberYear ? <InfoRow icon="calendar" label={t("public_profile.info.member_since")} value={`${memberYear}`} colors={colors} /> : null}
             </View>
           )}
 

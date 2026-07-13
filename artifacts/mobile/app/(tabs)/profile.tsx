@@ -142,8 +142,9 @@ export default function ProfileScreen() {
   const isSupercharge = specialStatus === "supercharge";
   const hasSpecialStatus = isFriendsFamily || isSupercharge;
   const providerHasAccess = hasServiceProviderAccess(user);
-  const isStandard = user?.subscriptionTier === "pro" || user?.subscriptionTier === "standard" || providerHasAccess;
-  const planLimit = resolveReportLimit(user?.subscriptionTier, user?.role, specialStatus, providerHasAccess);
+  const agentUnlimited = user?.role === "sales_agent" && user?.agentAiUnlimited === true;
+  const isStandard = user?.subscriptionTier === "pro" || user?.subscriptionTier === "standard" || providerHasAccess || agentUnlimited;
+  const planLimit = resolveReportLimit(user?.subscriptionTier, user?.role, specialStatus, providerHasAccess, agentUnlimited);
   const usage = user?.reportsUsedThisMonth ?? 0;
   const remaining = planLimit - usage;
   const usagePct = planLimit > 0 ? Math.min((usage / planLimit) * 100, 100) : 100;
@@ -604,7 +605,7 @@ export default function ProfileScreen() {
                   {t("profile.reports_used")}
                 </Text>
                 <Text style={[styles.usageCount, { color: colors.headerText, fontFamily: "DM_Sans_700Bold" }]}>
-                  {usage}/{planLimit}
+                  {agentUnlimited ? `${usage}/Unlimited` : `${usage}/${planLimit}`}
                 </Text>
               </View>
               <View style={[styles.usageTrack, { backgroundColor: "rgba(250,250,249,0.12)" }]}>

@@ -6,6 +6,7 @@ import {
   type EntitlementAgentProfile,
   type EntitlementProfile,
 } from "../agent-entitlements";
+import { isSalesAgentFreeSignupEnabled } from "../env";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -28,6 +29,21 @@ function agentProfile(overrides: Partial<EntitlementAgentProfile> = {}): Entitle
 describe("agent entitlement helpers", () => {
   afterEach(() => {
     delete process.env.AGENT_INVITATION_CODE;
+    delete process.env.SALES_AGENT_FREE_SIGNUP_ENABLED;
+  });
+
+  it("defaults account-first sales-agent signup on and supports a reversible flag", () => {
+    expect(isSalesAgentFreeSignupEnabled()).toBe(true);
+    process.env.SALES_AGENT_FREE_SIGNUP_ENABLED = "false";
+    expect(isSalesAgentFreeSignupEnabled()).toBe(false);
+    process.env.SALES_AGENT_FREE_SIGNUP_ENABLED = "true";
+    expect(isSalesAgentFreeSignupEnabled()).toBe(true);
+  });
+
+  it("keeps a newly free registered agent off the listing and AI entitlements", () => {
+    const freeAgent = agentProfile({ listingPlan: "subscription", aiBoostExpiresAt: null });
+    expect(agentCanList(profile(), freeAgent)).toBe(false);
+    expect(agentAiUnlimited(profile(), freeAgent)).toBe(false);
   });
 
   it("treats lifetime and legacy null listing plans as allowed to list", () => {

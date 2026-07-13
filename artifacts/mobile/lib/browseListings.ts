@@ -1,5 +1,6 @@
 import { getApiBase } from "@/lib/api";
 import type { WatchlistCandidate } from "@/context/WatchlistContext";
+import type { SelectedListingContext } from "@/context/ChatContext";
 
 export type BrowseListingSource = "internal" | "curated";
 
@@ -155,7 +156,7 @@ export function isListingSponsored(listing: BrowseListing): boolean {
   return stableHashFraction(`sponsored:${seed}`) < FAKE_SPONSORED_RATE;
 }
 
-export function selectedListingContextFromBrowse(listing: BrowseListing) {
+export function selectedListingContextFromBrowse(listing: BrowseListing): SelectedListingContext {
   return {
     address: listing.address,
     listingUrl: listing.externalUrl ?? null,
@@ -174,6 +175,11 @@ export function selectedListingContextFromBrowse(listing: BrowseListing) {
     propertyType: listing.propertyType ?? null,
     listingTitle: listing.listingTitle ?? null,
     source: listing.source === "internal" ? "project-alpha" : "curated",
+    agentName: listing.agent?.fullName ?? null,
+    agentPhone: listing.agent?.phone ?? null,
+    agencyName: listing.agent?.agencyName ?? null,
+    matchConfidence: listing.source === "internal" ? "verified" : listing.agent?.phone ? "likely" : null,
+    isActiveListing: listing.listingType === "for_sale",
     isCombinedListing: null,
     packageAddress: null,
     childAddresses: null,

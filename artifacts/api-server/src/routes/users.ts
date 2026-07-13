@@ -7,6 +7,7 @@ import {
   serviceProviderProfiles,
   recommendations,
   dmThreads,
+  limTitleRequests,
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 
@@ -34,6 +35,19 @@ async function hasDmRelationship(viewerId: string, targetUserId: string): Promis
   return !!thread;
 }
 
+async function hasConsentedLeadRelationship(agentId: string, buyerId: string): Promise<boolean> {
+  const [lead] = await db
+    .select({ id: limTitleRequests.id })
+    .from(limTitleRequests)
+    .where(and(
+      eq(limTitleRequests.matchedAgentUserId, agentId),
+      eq(limTitleRequests.requesterUserId, buyerId),
+      sql`${limTitleRequests.consentedAt} IS NOT NULL`,
+    ))
+    .limit(1);
+  return Boolean(lead);
+}
+
 router.get("/users/:userId", requireAuth, async (req: Request, res: Response) => {
   const viewerId = (req as unknown as { userId: string }).userId;
   const { userId } = req.params;
@@ -47,6 +61,7 @@ router.get("/users/:userId", requireAuth, async (req: Request, res: Response) =>
         avatarUrl: profiles.avatarUrl,
         isVerified: profiles.isVerified,
         phoneNumber: profiles.phoneNumber,
+        email: profiles.email,
         createdAt: profiles.createdAt,
       })
       .from(profiles)
@@ -118,7 +133,14 @@ router.get("/users/:userId", requireAuth, async (req: Request, res: Response) =>
       if (profile.role === "general" && viewerId !== userId && profile.phoneNumber) {
         const canShareContact = await hasDmRelationship(viewerId, userId);
         if (canShareContact) {
-          roleData = { contactNumber: profile.phoneNumber };
+          // Contact-phone access predates LIM/title leads. Keep that existing DM
+          // permission working while a deployment is rolling out the new table,
+          // or when a non-lead DM is viewed in tests/local development.
+          const canShareEmail = await hasConsentedLeadRelationship(viewerId, userId).catch(() => false);
+          roleData = {
+            contactNumber: profile.phoneNumber,
+            ...(canShareEmail ? { contactEmail: profile.email } : {}),
+          };
         }
       }
     }

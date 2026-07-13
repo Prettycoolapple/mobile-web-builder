@@ -17,6 +17,7 @@ import { AnalysisProgress } from "./AnalysisProgress";
 import { ProviderRecommendationBubble } from "./ProviderRecommendationBubble";
 import { ProviderUpgradeGateBubble } from "./ProviderUpgradeGateBubble";
 import { AgentCallBubble } from "./AgentCallBubble";
+import { LimTitleOfferBubble } from "./LimTitleOfferBubble";
 
 function ReportErrorBoundaryInner({ children }: { children: React.ReactNode }) {
   const { t } = useT();
@@ -160,6 +161,8 @@ interface Props {
   onConnect?: (providerId: string) => Promise<void>;
   onDismiss?: (messageId: string) => void;
   onAgentDismiss?: (messageId: string) => void;
+  onLimTitleRequest?: (message: ChatMessage) => void;
+  onLimTitleDecline?: (message: ChatMessage) => void;
   onUpgrade?: () => void;
   onShowMore?: (message: ChatMessage) => void;
   onSearchResultLayout?: (messageId: string, index: number, layout: { y: number; height: number }) => void;
@@ -313,12 +316,16 @@ function TypingDots() {
   );
 }
 
-export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, onAnalyseProperty, analysingPropertyKey, onRetry, onConnect, onDismiss, onAgentDismiss, onUpgrade, onShowMore, onSearchResultLayout }: Props) {
+export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, onAnalyseProperty, analysingPropertyKey, onRetry, onConnect, onDismiss, onAgentDismiss, onLimTitleRequest, onLimTitleDecline, onUpgrade, onShowMore, onSearchResultLayout }: Props) {
   const colors = useColors();
   const { t } = useT();
   const router = useRouter();
   const { getApiHeaders } = useAuth();
   const isUser = message.role === "user";
+
+  if (message.type === "lim_title_offer" && message.limTitleRequestId) {
+    return <LimTitleOfferBubble message={message} onRequest={onLimTitleRequest} onDecline={onLimTitleDecline} />;
+  }
 
   if (message.type === "agent_contact" && (message.agentPhone || message.agentListingUrl)) {
     return (

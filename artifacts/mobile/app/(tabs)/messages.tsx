@@ -123,6 +123,7 @@ function ThreadRow({ thread, myId }: { thread: DmThread; myId: string }) {
       ? lastMsg.body.slice(0, 60) + "…"
       : lastMsg.body
     : t("messages.no_messages_yet");
+  const displayPreview = thread.leadSummary?.propertyAddress || preview;
   const isUnread = (thread.unreadCount || 0) > 0;
   const isMyMsg = lastMsg?.senderId === myId;
 
@@ -185,7 +186,7 @@ function ThreadRow({ thread, myId }: { thread: DmThread; myId: string }) {
             ]}
             numberOfLines={1}
           >
-            {isMyMsg && !lastMsg?.imageUrl ? t("messages.you_prefix", { preview }) : preview}
+            {thread.leadSummary ? displayPreview : isMyMsg && !lastMsg?.imageUrl ? t("messages.you_prefix", { preview: displayPreview }) : displayPreview}
           </Text>
           {isUnread && (
             <View style={[styles.unreadDot, { backgroundColor: colors.accent }]}>
@@ -242,7 +243,7 @@ export default function MessagesScreen() {
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={[styles.header, { paddingTop: insets.top + 8, backgroundColor: "#2C1F16" }]}>
-        <Text style={styles.headerTitle}>{t("messages.title")}</Text>
+        <Text style={styles.headerTitle}>{user?.role === "sales_agent" ? "Leads/messages" : t("messages.title")}</Text>
       </View>
 
       <FlatList

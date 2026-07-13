@@ -4,9 +4,16 @@ import type Stripe from "stripe";
 import { db, profiles, salesAgentProfiles } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { logger } from "../lib/logger";
-import { getStripe, subscriptionInfoFromStripe } from "../lib/stripe";
-import { getProviderPortalUrl, getStripeProviderPriceId } from "../lib/env";
+import { ACTIVE_SUBSCRIPTION_STATUSES, getStripe, subscriptionInfoFromStripe } from "../lib/stripe";
+import {
+  getProviderPortalUrl,
+  getSalesPortalUrl,
+  getStripeAgentPriceId,
+  getStripeProviderPriceId,
+} from "../lib/env";
 import { hasProviderWebEntitlement, resolveProviderEntitlement } from "../lib/provider-entitlements";
+import { agentCanList, isValidInvitationCode } from "../lib/agent-entitlements";
+import { ipRateLimit, minutes } from "../lib/rateLimit";
 
 const router = Router();
 
@@ -327,12 +334,168 @@ router.get("/subscription/agent-status", requireAuth, async (req, res) => {
       cancelAtPeriodEnd: profile?.subscriptionCancelAtPeriodEnd ?? false,
       aiBoostExpiresAt: agent.aiBoostExpiresAt ?? null,
       hasStripeSubscription: !!profile?.stripeSubscriptionId,
+      canList: agentCanList(profile ?? {}, agent),
     });
   } catch (err) {
     logger.error({ err }, "Failed to load agent subscription status");
     res.status(500).json({ error: "Failed to load subscription status" });
   }
 });
+
+/** Start Stripe checkout for an already-created free sales-agent account. */
+router.post("/subscription/agent-checkout", requireAuth, async (req, res) => {
+  const userId = (req as any).userId as string;
+  try {
+    const [profile] = await db
+      .select({
+        id: profiles.id,
+        role: profiles.role,
+        email: profiles.email,
+        fullName: profiles.fullName,
+        phoneNumber: profiles.phoneNumber,
+        stripeCustomerId: profiles.stripeCustomerId,
+        subscriptionStatus: profiles.subscriptionStatus,
+        subscriptionPeriodEndAt: profiles.subscriptionPeriodEndAt,
+      })
+      .from(profiles)
+      .where(eq(profiles.id, userId))
+      .limit(1);
+    const [agent] = await db
+      .select({ listingPlan: salesAgentProfiles.listingPlan })
+      .from(salesAgentProfiles)
+      .where(eq(salesAgentProfiles.userId, userId))
+      .limit(1);
+
+    if (!profile || profile.role !== "sales_agent" || !agent) {
+      res.status(403).json({ error: "Sales agent account required.", code: "NOT_AN_AGENT" });
+      return;
+    }
+    if (agentCanList(profile, agent)) {
+      res.status(409).json({ error: "This account can already publish listings.", code: "ALREADY_ENTITLED" });
+      return;
+    }
+
+    const stripe = getStripe();
+    let customerId = profile.stripeCustomerId;
+    if (!customerId) {
+      const found = await stripe.customers.list({ email: profile.email, limit: 1 });
+      customerId = found.data[0]?.id ?? null;
+    }
+    if (!customerId) {
+      const customer = await stripe.customers.create({
+        email: profile.email,
+        name: profile.fullName ?? undefined,
+        phone: profile.phoneNumber ?? undefined,
+      });
+      customerId = customer.id;
+    }
+    if (customerId !== profile.stripeCustomerId) {
+      await db.update(profiles).set({ stripeCustomerId: customerId }).where(eq(profiles.id, userId));
+    }
+
+    const portal = getSalesPortalUrl();
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      customer: customerId,
+      line_items: [{ price: getStripeAgentPriceId(), quantity: 1 }],
+      success_url: `${portal}?agentSubscription=success&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${portal}?agentSubscription=cancelled`,
+      metadata: { agentUserId: userId },
+      subscription_data: { metadata: { agentUserId: userId } },
+    });
+    res.json({ checkoutUrl: session.url });
+  } catch (err) {
+    logger.error({ err }, "Failed to start agent checkout");
+    res.status(500).json({ error: "Could not start checkout. Please try again.", code: "CHECKOUT_FAILED" });
+  }
+});
+
+/** Claim the authenticated agent checkout after returning from Stripe. */
+router.post("/subscription/agent-checkout/claim", requireAuth, async (req, res) => {
+  const userId = (req as any).userId as string;
+  const checkoutSessionId = typeof req.body?.checkoutSessionId === "string"
+    ? req.body.checkoutSessionId.trim()
+    : "";
+  if (!checkoutSessionId) {
+    res.status(400).json({ error: "checkoutSessionId is required", code: "MISSING_SESSION_ID" });
+    return;
+  }
+  try {
+    const session = await getStripe().checkout.sessions.retrieve(checkoutSessionId, { expand: ["subscription"] });
+    if (session.metadata?.agentUserId !== userId) {
+      res.status(403).json({ error: "This checkout session does not belong to this account.", code: "SESSION_MISMATCH" });
+      return;
+    }
+    const paid = session.payment_status === "paid" || session.status === "complete";
+    if (!paid) {
+      res.status(409).json({ error: "Payment not completed yet.", code: "PAYMENT_PENDING" });
+      return;
+    }
+    const customerId = typeof session.customer === "string" ? session.customer : session.customer?.id ?? null;
+    const subscription = session.subscription as Stripe.Subscription | null;
+    const info = subscription
+      ? subscriptionInfoFromStripe(subscription, customerId)
+      : {
+          stripeCustomerId: customerId,
+          stripeSubscriptionId: null,
+          subscriptionStatus: "active",
+          subscriptionPeriodEndAt: null,
+          subscriptionCancelAtPeriodEnd: false,
+        };
+    const active = ACTIVE_SUBSCRIPTION_STATUSES.has(info.subscriptionStatus ?? "");
+    await db.transaction(async (tx) => {
+      await tx.update(profiles).set({
+        subscriptionTier: active ? "standard" : "free",
+        stripeCustomerId: info.stripeCustomerId,
+        stripeSubscriptionId: info.stripeSubscriptionId,
+        subscriptionStatus: info.subscriptionStatus,
+        subscriptionPeriodEndAt: info.subscriptionPeriodEndAt,
+        subscriptionCancelAtPeriodEnd: info.subscriptionCancelAtPeriodEnd,
+      }).where(eq(profiles.id, userId));
+      await tx.update(salesAgentProfiles).set({ listingPlan: "subscription", aiBoostExpiresAt: null })
+        .where(eq(salesAgentProfiles.userId, userId));
+    });
+    res.json({ success: true, canList: agentCanList(info, { listingPlan: "subscription" }) });
+  } catch (err) {
+    logger.error({ err }, "Failed to claim agent checkout");
+    res.status(500).json({ error: "Could not finish subscription. Please try again.", code: "CLAIM_FAILED" });
+  }
+});
+
+/** Activate lifetime listing access for an existing agent with an invitation code. */
+router.post(
+  "/subscription/agent-invitation",
+  requireAuth,
+  ipRateLimit({ name: "agent-invitation", windowMs: minutes(15), max: 10 }),
+  async (req, res) => {
+    const userId = (req as any).userId as string;
+    const invitationCode = typeof req.body?.invitationCode === "string" ? req.body.invitationCode : "";
+    if (!isValidInvitationCode(invitationCode)) {
+      res.status(400).json({ error: "That invitation code is not valid.", code: "INVALID_INVITATION_CODE" });
+      return;
+    }
+    try {
+      const [profile] = await db.select({ role: profiles.role }).from(profiles).where(eq(profiles.id, userId)).limit(1);
+      const [agent] = await db.select({ userId: salesAgentProfiles.userId })
+        .from(salesAgentProfiles).where(eq(salesAgentProfiles.userId, userId)).limit(1);
+      if (!profile || profile.role !== "sales_agent" || !agent) {
+        res.status(403).json({ error: "Sales agent account required.", code: "NOT_AN_AGENT" });
+        return;
+      }
+      const aiBoostExpiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+      await db.transaction(async (tx) => {
+        await tx.update(profiles).set({ subscriptionTier: "free" }).where(eq(profiles.id, userId));
+        await tx.update(salesAgentProfiles)
+          .set({ listingPlan: "lifetime", aiBoostExpiresAt })
+          .where(eq(salesAgentProfiles.userId, userId));
+      });
+      res.json({ success: true, canList: true, listingPlan: "lifetime", aiBoostExpiresAt });
+    } catch (err) {
+      logger.error({ err }, "Failed to activate agent invitation");
+      res.status(500).json({ error: "Could not activate invitation. Please try again.", code: "ACTIVATION_FAILED" });
+    }
+  },
+);
 
 async function setCancelAtPeriodEnd(userId: string, cancel: boolean, res: import("express").Response) {
   const [profile] = await db

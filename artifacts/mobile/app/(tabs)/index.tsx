@@ -81,6 +81,11 @@ function selectedListingContextFromCandidate(candidate: PropertyCandidate): Sele
     propertyType: candidate.propertyType ?? null,
     listingTitle: candidate.listingTitle ?? null,
     source: candidate.source ?? null,
+    agentName: candidate.agentName ?? null,
+    agentPhone: candidate.agentPhone ?? null,
+    agencyName: candidate.agencyName ?? null,
+    matchConfidence: candidate.agentPhone ? "likely" : null,
+    isActiveListing: candidate.listingUrl ? true : null,
     isCombinedListing: candidate.isCombinedListing ?? null,
     packageAddress: candidate.packageAddress ?? null,
     childAddresses: candidate.childAddresses ?? null,
@@ -160,6 +165,13 @@ function getAnalyseDisclaimerDismissedKey(userId?: string | null): string {
 type PendingAnalyseAction =
   | { type: "send"; text: string }
   | { type: "analyse"; address: string; selectedPhotoUrl?: string | null; selectedListingUrl?: string | null; selectedListingContext?: SelectedListingContext | null; analysisKey?: string };
+
+type PendingLimTitleConsent = {
+  requestId: string;
+  propertyAddress: string;
+  agentName?: string | null;
+  agencyName?: string | null;
+};
 
 type DiscoveryNextResponse = {
   candidates?: PropertyCandidate[];
@@ -601,6 +613,7 @@ export default function SearchScreen() {
   // callbacks where the closure would otherwise hold stale captured state.
   const sessionMessagesRef = useRef<ChatMessage[]>([]);
   const checkedFollowupIds = useRef<Set<string>>(new Set());
+  const checkedLimTitleReportsRef = useRef<Set<string>>(new Set());
   const lastReportIdRef = useRef<string | null>(null);
 
   const reportMessageHeightsRef = useRef<Map<string, number>>(new Map());
@@ -622,6 +635,9 @@ export default function SearchScreen() {
   const [analyseDisclaimerDontRemind, setAnalyseDisclaimerDontRemind] = useState(false);
   const [analyseDisclaimerDismissed, setAnalyseDisclaimerDismissed] = useState(false);
   const [guestAnalysisPromptVisible, setGuestAnalysisPromptVisible] = useState(false);
+  const [pendingLimTitleConsent, setPendingLimTitleConsent] = useState<PendingLimTitleConsent | null>(null);
+  const [limTitleConsentSending, setLimTitleConsentSending] = useState(false);
+  const [limTitleConfirmationVisible, setLimTitleConfirmationVisible] = useState(false);
   const pendingAnalyseActionRef = useRef<PendingAnalyseAction | null>(null);
 
   const handlePurchaseSuccess = useCallback(() => {
@@ -904,6 +920,77 @@ export default function SearchScreen() {
     sessionMessagesRef.current = currentSession?.messages ?? [];
   });
 
+  // Evaluate the stable 15% proactive offer after a newly completed report.
+  // This appends to the current session and never creates a new History row.
+  useEffect(() => {
+    if (user?.role !== "general" || !currentSessionId || !currentSession || currentSession.skipFirstTurnRating) return;
+    if (currentSession.currentReportGroup) return;
+    const reportMessage = [...currentSession.messages].reverse().find((message) => message.type === "report" && message.report);
+    const report = reportMessage?.report;
+    if (!reportMessage || !report) return;
+    const reportKey = report.historyId ?? reportMessage.id;
+    const guardKey = `${currentSessionId}:${reportKey}`;
+    if (checkedLimTitleReportsRef.current.has(guardKey)) return;
+
+    const completedAt = report.historyCreatedAt ? Date.parse(report.historyCreatedAt) : reportMessage.timestamp;
+    if (Number.isFinite(completedAt) && Date.now() - completedAt > 15 * 60_000) {
+      checkedLimTitleReportsRef.current.add(guardKey);
+      return;
+    }
+    if (currentSession.messages.some((message) => message.type === "lim_title_offer" && message.propertyAddress === resolveReportAddress(report))) {
+      checkedLimTitleReportsRef.current.add(guardKey);
+      return;
+    }
+    checkedLimTitleReportsRef.current.add(guardKey);
+
+    const timer = setTimeout(async () => {
+      try {
+        const selectedListingContext = report.selectedListingContext
+          ?? ((report.propertyOverview as any)?.selectedListingContext as SelectedListingContext | undefined)
+          ?? null;
+        const response = await fetch(`${resolveApiBase()}/lim-title/offers/evaluate`, {
+          method: "POST",
+          headers: getApiHeaders(),
+          body: JSON.stringify({
+            reportKey,
+            reportHistoryId: report.historyId ?? null,
+            chatSessionId: currentSessionId,
+            propertyAddress: resolveReportAddress(report),
+            listingUrl: selectedListingContext?.listingUrl ?? report.propertyOverview?.listingUrl ?? null,
+            listingSource: selectedListingContext?.source ?? report.propertyOverview?.listingSource ?? null,
+            selectedListingContext,
+          }),
+        });
+        if (!response.ok) return;
+        const data = await response.json() as {
+          eligible?: boolean;
+          offer?: {
+            requestId: string;
+            propertyAddress: string;
+            agentName?: string | null;
+            agencyName?: string | null;
+          } | null;
+        };
+        if (!data.eligible || !data.offer?.requestId) return;
+        const fresh = sessionMessagesRef.current;
+        if (fresh.some((message) => message.limTitleRequestId === data.offer!.requestId)) return;
+        addMessage({
+          role: "assistant",
+          content: "",
+          type: "lim_title_offer",
+          limTitleRequestId: data.offer.requestId,
+          limTitleStatus: "offered",
+          limTitleAgentName: data.offer.agentName ?? null,
+          limTitleAgencyName: data.offer.agencyName ?? null,
+          propertyAddress: data.offer.propertyAddress,
+        }, currentSessionId);
+      } catch (error) {
+        console.log("LIM/title proactive offer check failed:", error);
+      }
+    }, 900);
+    return () => clearTimeout(timer);
+  }, [addMessage, currentSession, currentSessionId, getApiHeaders, user?.role]);
+
   useEffect(() => {
     if (user?.role !== "general") return;
     const msgs = currentSession?.messages ?? [];
@@ -1040,6 +1127,74 @@ export default function SearchScreen() {
   const handleDismiss = useCallback((messageId: string) => {
     removeMessage(messageId);
   }, [removeMessage]);
+
+  const openLimTitleConsent = useCallback((message: ChatMessage) => {
+    if (!message.limTitleRequestId || message.limTitleStatus === "requested") return;
+    setPendingLimTitleConsent({
+      requestId: message.limTitleRequestId,
+      propertyAddress: message.propertyAddress ?? "this property",
+      agentName: message.limTitleAgentName ?? null,
+      agencyName: message.limTitleAgencyName ?? null,
+    });
+  }, []);
+
+  const declineLimTitleOffer = useCallback(async (message: ChatMessage) => {
+    if (!message.limTitleRequestId) return;
+    updateMessage(message.id, { limTitleStatus: "declined" }, currentSessionId ?? undefined);
+    try {
+      await fetch(`${resolveApiBase()}/lim-title/requests/${encodeURIComponent(message.limTitleRequestId)}/decline`, {
+        method: "POST",
+        headers: getApiHeaders(),
+      });
+    } catch {
+      // The local decline keeps the prompt dismissed; the endpoint is idempotent.
+    }
+  }, [currentSessionId, getApiHeaders, updateMessage]);
+
+  const closeLimTitleConsent = useCallback(() => {
+    if (!limTitleConsentSending) setPendingLimTitleConsent(null);
+  }, [limTitleConsentSending]);
+
+  const declinePendingLimTitleConsent = useCallback(() => {
+    const pending = pendingLimTitleConsent;
+    if (!pending || limTitleConsentSending) return;
+    for (const message of sessionMessagesRef.current) {
+      if (message.limTitleRequestId === pending.requestId) {
+        updateMessage(message.id, { limTitleStatus: "declined" }, currentSessionId ?? undefined);
+      }
+    }
+    setPendingLimTitleConsent(null);
+    void fetch(`${resolveApiBase()}/lim-title/requests/${encodeURIComponent(pending.requestId)}/decline`, {
+      method: "POST",
+      headers: getApiHeaders(),
+    }).catch(() => {});
+  }, [currentSessionId, getApiHeaders, limTitleConsentSending, pendingLimTitleConsent, updateMessage]);
+
+  const confirmLimTitleConsent = useCallback(async () => {
+    const pending = pendingLimTitleConsent;
+    if (!pending || limTitleConsentSending) return;
+    setLimTitleConsentSending(true);
+    try {
+      const response = await fetch(`${resolveApiBase()}/lim-title/requests/${encodeURIComponent(pending.requestId)}/consent`, {
+        method: "POST",
+        headers: getApiHeaders(),
+      });
+      const data = await response.json().catch(() => null) as { error?: string } | null;
+      if (!response.ok) throw new Error(data?.error || "Could not send the request.");
+      for (const message of sessionMessagesRef.current) {
+        if (message.limTitleRequestId === pending.requestId) {
+          updateMessage(message.id, { limTitleStatus: "requested" }, currentSessionId ?? undefined);
+        }
+      }
+      setPendingLimTitleConsent(null);
+      setLimTitleConfirmationVisible(true);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      Alert.alert("Request not sent", error instanceof Error ? error.message : "Please try again.");
+    } finally {
+      setLimTitleConsentSending(false);
+    }
+  }, [currentSessionId, getApiHeaders, limTitleConsentSending, pendingLimTitleConsent, updateMessage]);
 
   useEffect(() => {
     if (user?.role !== "general") return;
@@ -2167,6 +2322,112 @@ export default function SearchScreen() {
       user?.role === "general" &&
       !!agentAddress &&
       !isPackageAnalysisRequest;
+
+    // LIM/title intent takes precedence over the generic "contact the agent"
+    // classifier. Explicit requests are always evaluated; an active proactive
+    // offer also lets short replies such as "yes" carry unambiguous context.
+    if (shouldLookupListingAgent && detectedMode !== "analyse") {
+      const activeOffer = [...(currentSession?.messages ?? [])].reverse().find(
+        (message) => message.type === "lim_title_offer" && message.limTitleStatus === "offered" && message.limTitleRequestId,
+      );
+      const reportMessage = [...(currentSession?.messages ?? [])].reverse().find(
+        (message) => message.type === "report" && message.report,
+      );
+      const reportKey = currentReport?.historyId ?? reportMessage?.id ?? `${sessionId}:${agentAddress}`;
+      try {
+        const conversationHistory = [
+          ...(currentSession?.messages ?? [])
+            .filter((message) => message.type === "text")
+            .slice(-7)
+            .map((message) => ({ role: message.role, content: message.content })),
+          { role: "user" as const, content: text },
+        ];
+        const intentController = new AbortController();
+        const intentTimer = setTimeout(() => intentController.abort(), 32_000);
+        const intentResponse = await fetch(`${getApiBase()}/lim-title/intent`, {
+          method: "POST",
+          headers: getApiHeaders(),
+          body: JSON.stringify({
+            requestId: activeOffer?.limTitleRequestId ?? null,
+            reportKey,
+            reportHistoryId: currentReport?.historyId ?? null,
+            chatSessionId: sessionId,
+            propertyAddress: agentAddress,
+            listingUrl: selectedListingContext?.listingUrl ?? currentReport?.propertyOverview?.listingUrl ?? null,
+            listingSource: selectedListingContext?.source ?? currentReport?.propertyOverview?.listingSource ?? null,
+            selectedListingContext,
+            messages: conversationHistory,
+          }),
+          signal: intentController.signal,
+        }).finally(() => clearTimeout(intentTimer));
+        if (intentResponse.ok) {
+          const intentData = await intentResponse.json() as {
+            intent: "positive" | "negative" | "unclear";
+            available?: boolean;
+            alreadyRequested?: boolean;
+            reason?: string;
+            offer?: {
+              requestId: string;
+              propertyAddress: string;
+              agentName?: string | null;
+              agencyName?: string | null;
+            } | null;
+          };
+          if (intentData.intent === "positive" && intentData.alreadyRequested) {
+            updateLastMessage({ type: "text", content: "Your LIM and Title request for this property has already been sent." }, sessionId);
+            setIsLoading(false);
+            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            return;
+          }
+          if (intentData.intent === "negative" && activeOffer) {
+            updateMessage(activeOffer.id, { limTitleStatus: "declined" }, sessionId);
+            updateLastMessage({ type: "text", content: "No problem — I won't send a document request." }, sessionId);
+            setIsLoading(false);
+            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            return;
+          }
+          if (intentData.intent === "positive" && intentData.offer?.requestId) {
+            const offer = intentData.offer;
+            if (activeOffer) {
+              updateLastMessage({ type: "text", content: "Please review the contact-sharing confirmation." }, sessionId);
+            } else {
+              updateLastMessage({
+                role: "assistant",
+                content: "",
+                type: "lim_title_offer",
+                limTitleRequestId: offer.requestId,
+                limTitleStatus: "offered",
+                limTitleAgentName: offer.agentName ?? null,
+                limTitleAgencyName: offer.agencyName ?? null,
+                propertyAddress: offer.propertyAddress,
+              }, sessionId);
+            }
+            setPendingLimTitleConsent({
+              requestId: offer.requestId,
+              propertyAddress: offer.propertyAddress,
+              agentName: offer.agentName ?? null,
+              agencyName: offer.agencyName ?? null,
+            });
+            setIsLoading(false);
+            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            return;
+          }
+          if (intentData.intent === "positive" && intentData.available === false) {
+            updateLastMessage({
+              type: "text",
+              content: "I couldn't find an active subject-property listing agent with an SMS-capable mobile number for this request.",
+            }, sessionId);
+            setIsLoading(false);
+            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            return;
+          }
+        }
+      } catch (error) {
+        // Intent preflight is additive. If it times out, preserve the existing
+        // chat/agent-contact flow instead of swallowing the user's message.
+        console.log("LIM/title intent check failed (falling through):", error);
+      }
+    }
 
     if (shouldLookupListingAgent) {
       try {
@@ -3379,6 +3640,8 @@ export default function SearchScreen() {
             onConnect={(providerId) => handleConnect(providerId, item.propertyAddress ?? "")}
             onDismiss={handleDismiss}
             onAgentDismiss={handleAgentDismiss}
+            onLimTitleRequest={openLimTitleConsent}
+            onLimTitleDecline={declineLimTitleOffer}
             onUpgrade={() => setShowPaywall(true)}
             onShowMore={handleShowMore}
             onSearchResultLayout={handleSearchResultLayout}
@@ -3386,7 +3649,7 @@ export default function SearchScreen() {
         </View>
       );
     },
-    [handleFollowUp, handleDiscoveryChoice, handleCardAnalyse, handleAnalyseProperty, analysingPropertyKey, handleSend, handleConnect, handleDismiss, handleAgentDismiss, handleShowMore, handleSearchResultLayout],
+    [handleFollowUp, handleDiscoveryChoice, handleCardAnalyse, handleAnalyseProperty, analysingPropertyKey, handleSend, handleConnect, handleDismiss, handleAgentDismiss, openLimTitleConsent, declineLimTitleOffer, handleShowMore, handleSearchResultLayout],
   );
 
   const keyExtractor = useCallback((item: ChatMessage) => item.id, []);
@@ -4139,6 +4402,83 @@ export default function SearchScreen() {
         </View>
       )}
 
+      <Modal
+        visible={Boolean(pendingLimTitleConsent)}
+        transparent
+        animationType="fade"
+        onRequestClose={closeLimTitleConsent}
+      >
+        <View style={styles.disclaimerModalRoot}>
+          <Pressable style={styles.disclaimerBackdrop} onPress={closeLimTitleConsent} />
+          <View style={styles.disclaimerCenter} pointerEvents="box-none">
+            <View style={[styles.disclaimerCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <View style={[styles.limTitleModalIcon, { backgroundColor: colors.accent + "18" }]}>
+                <Feather name="user-check" size={22} color={colors.accent} />
+              </View>
+              <Text style={[styles.disclaimerTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
+                Share your contact details?
+              </Text>
+              <Text style={[styles.disclaimerBody, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+                Your name, email address and mobile number will be shared with the listing agent so they can respond. Would you like to continue?
+              </Text>
+              {pendingLimTitleConsent?.propertyAddress ? (
+                <View style={[styles.limTitlePropertyRow, { backgroundColor: colors.accent + "0F" }]}>
+                  <Feather name="map-pin" size={14} color={colors.accent} />
+                  <Text style={[styles.limTitlePropertyText, { color: colors.foreground }]} numberOfLines={2}>
+                    {pendingLimTitleConsent.propertyAddress}
+                  </Text>
+                </View>
+              ) : null}
+              <View style={styles.limTitleModalActions}>
+                <TouchableOpacity
+                  style={[styles.limTitleModalButton, { borderColor: colors.border }]}
+                  onPress={declinePendingLimTitleConsent}
+                  disabled={limTitleConsentSending}
+                  activeOpacity={0.78}
+                >
+                  <Text style={[styles.limTitleModalSecondaryText, { color: colors.foreground }]}>No</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.limTitleModalButton, { backgroundColor: colors.accent, borderColor: colors.accent }]}
+                  onPress={confirmLimTitleConsent}
+                  disabled={limTitleConsentSending}
+                  activeOpacity={0.84}
+                >
+                  {limTitleConsentSending ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.limTitleModalPrimaryText}>Yes</Text>}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={limTitleConfirmationVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setLimTitleConfirmationVisible(false)}
+      >
+        <View style={styles.disclaimerModalRoot}>
+          <View style={styles.disclaimerBackdrop} />
+          <View style={styles.disclaimerCenter}>
+            <View style={[styles.disclaimerCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <View style={[styles.limTitleModalIcon, { backgroundColor: colors.accent + "18" }]}>
+                <Feather name="check-circle" size={24} color={colors.accent} />
+              </View>
+              <Text style={[styles.disclaimerTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>Request sent</Text>
+              <Text style={[styles.disclaimerBody, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>The listing agent will be in touch shortly.</Text>
+              <TouchableOpacity
+                style={[styles.disclaimerOkBtn, { backgroundColor: colors.accent }]}
+                onPress={() => setLimTitleConfirmationVisible(false)}
+                activeOpacity={0.85}
+              >
+                <Text style={[styles.disclaimerOkText, { fontFamily: "DM_Sans_600SemiBold" }]}>OK</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <PaywallModal
         visible={showPaywall}
         onClose={() => setShowPaywall(false)}
@@ -4744,5 +5084,50 @@ const styles = StyleSheet.create({
   disclaimerOkText: {
     color: "#fff",
     fontSize: 16,
+  },
+  limTitleModalIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
+  limTitlePropertyRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderRadius: 10,
+    paddingHorizontal: 11,
+    paddingVertical: 10,
+    marginTop: -6,
+    marginBottom: 16,
+  },
+  limTitlePropertyText: {
+    flex: 1,
+    fontFamily: "DM_Sans_500Medium",
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  limTitleModalActions: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  limTitleModalButton: {
+    flex: 1,
+    height: 48,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  limTitleModalPrimaryText: {
+    color: "#fff",
+    fontFamily: "DM_Sans_700Bold",
+    fontSize: 15,
+  },
+  limTitleModalSecondaryText: {
+    fontFamily: "DM_Sans_600SemiBold",
+    fontSize: 15,
   },
 });

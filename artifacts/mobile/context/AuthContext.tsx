@@ -39,6 +39,8 @@ export interface UserProfile {
   providerAccessActive?: boolean;
   providerAccessKind?: "stripe" | "trial" | "iap" | "expired_trial" | "none";
   providerAccessEndsAt?: string | null;
+  /** Sales-agent Stripe or time-limited invitation analysis entitlement. */
+  agentAiUnlimited?: boolean;
   reportsUsedThisMonth: number;
   messagesUsedThisMonth?: number;
   avatarUrl?: string | null;

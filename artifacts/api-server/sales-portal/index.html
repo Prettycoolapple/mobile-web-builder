@@ -9,7 +9,7 @@
     <title>Sales Portal for NZ Real Estate Agents | Project Alpha</title>
     <meta
       name="description"
-      content="Project Alpha Sales Portal for New Zealand real estate agents. Sign in or create your sales agent account to manage your profile and the properties you're marketing to buyers. Claim lifetime free listings and 6 months of premium app features."
+      content="Project Alpha Sales Portal for New Zealand real estate agents. Create a free account to connect with leads, use the mobile app, and manage property listings."
     />
     <link rel="canonical" href="https://www.projectalpha.app/sales-portal/" />
     <meta property="og:type" content="website" />
@@ -180,9 +180,68 @@
           grid-template-columns: 1fr;
         }
       }
+      .sales-dm-shell { display: grid; grid-template-columns: minmax(250px, 32%) 1fr; min-height: 620px; border: 1px solid rgba(32,25,21,.12); border-radius: 16px; overflow: hidden; background: #fffaf3; }
+      .sales-dm-side { border-right: 1px solid rgba(32,25,21,.12); background: rgba(255,255,255,.5); }
+      .sales-dm-side-head { padding: 18px; border-bottom: 1px solid rgba(32,25,21,.1); }
+      .sales-dm-side-head h3 { margin: 0 0 4px; }
+      .sales-dm-side-head p { margin: 0 0 12px; color: var(--muted,#7a766f); font-size: 13px; }
+      .sales-dm-search { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid rgba(32,25,21,.15); border-radius: 10px; background: #fff; font: inherit; }
+      .sales-dm-thread-list { max-height: 530px; overflow-y: auto; }
+      .sales-dm-thread { width: 100%; display: grid; grid-template-columns: 42px 1fr auto; gap: 10px; align-items: center; padding: 14px 16px; border: 0; border-bottom: 1px solid rgba(32,25,21,.08); background: transparent; color: inherit; text-align: left; cursor: pointer; }
+      .sales-dm-thread:hover,.sales-dm-thread.is-active { background: rgba(47,158,107,.09); }
+      .sales-dm-avatar { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; overflow: hidden; background: #1d6f4b; color: #fff; font-weight: 800; flex: 0 0 auto; }
+      .sales-dm-avatar img { width: 100%; height: 100%; object-fit: cover; }
+      .sales-dm-thread-copy { min-width: 0; }
+      .sales-dm-thread-name,.sales-dm-thread-preview { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .sales-dm-thread-name { font-weight: 750; }
+      .sales-dm-thread-preview { margin-top: 3px; color: var(--muted,#7a766f); font-size: 12px; }
+      .sales-dm-unread { min-width: 20px; height: 20px; padding: 0 5px; border-radius: 999px; display: grid; place-items: center; background: #1d6f4b; color: #fff; font-size: 11px; font-weight: 800; }
+      .sales-dm-chat { min-width: 0; display: grid; grid-template-rows: auto 1fr auto; }
+      .sales-dm-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border-bottom: 1px solid rgba(32,25,21,.1); }
+      .sales-dm-user { display: flex; align-items: center; gap: 10px; min-width: 0; }
+      .sales-dm-user h3,.sales-dm-user p { margin: 0; }
+      .sales-dm-user p { color: var(--muted,#7a766f); font-size: 12px; }
+      .sales-dm-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+      .sales-dm-action { border: 1px solid rgba(32,25,21,.15); border-radius: 9px; padding: 7px 9px; background: #fff; color: inherit; cursor: pointer; font: inherit; font-size: 12px; }
+      .sales-dm-list { min-height: 400px; max-height: 470px; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 10px; background: rgba(255,255,255,.55); }
+      .sales-dm-empty { margin: auto; max-width: 360px; color: var(--muted,#7a766f); text-align: center; line-height: 1.5; }
+      .sales-dm-row { display: flex; align-items: flex-end; gap: 7px; max-width: 78%; }
+      .sales-dm-row.is-mine { align-self: flex-end; flex-direction: row-reverse; }
+      .sales-dm-bubble { padding: 10px 12px; border-radius: 14px 14px 14px 4px; background: #fff; box-shadow: 0 1px 3px rgba(32,25,21,.08); overflow-wrap: anywhere; }
+      .sales-dm-row.is-mine .sales-dm-bubble { border-radius: 14px 14px 4px 14px; background: #1d6f4b; color: #fff; }
+      .sales-dm-bubble p { margin: 0; white-space: pre-wrap; }
+      .sales-dm-lead-card { border: 1px solid rgba(29,111,75,.24); background: #eef8f2; }
+      .sales-dm-lead-card strong { display: block; margin-bottom: 5px; color: #1d6f4b; }
+      .sales-dm-bubble img { display: block; max-width: min(320px,100%); max-height: 280px; border-radius: 9px; object-fit: contain; }
+      .sales-dm-file { display: flex; align-items: center; gap: 8px; color: inherit; font-weight: 700; text-decoration: none; }
+      .sales-dm-file::before { content: "PDF"; font-size: 10px; padding: 5px; border-radius: 5px; background: rgba(32,25,21,.1); }
+      .sales-dm-like { border: 0; background: transparent; color: #9a948d; cursor: pointer; padding: 3px; font-size: 17px; }
+      .sales-dm-like.is-liked { color: #d7475f; }
+      .sales-dm-time { display: block; margin-top: 5px; font-size: 10px; opacity: .7; }
+      .sales-dm-load-more { align-self: center; }
+      .sales-dm-composer { padding: 12px 16px; border-top: 1px solid rgba(32,25,21,.1); }
+      .sales-dm-compose-row { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: end; }
+      .sales-dm-compose-row textarea { min-height: 42px; max-height: 120px; resize: vertical; border: 1px solid rgba(32,25,21,.15); border-radius: 11px; padding: 10px 12px; font: inherit; }
+      .sales-dm-blocked { display: none; margin-bottom: 8px; padding: 9px 11px; border-radius: 9px; background: rgba(190,60,60,.1); color: #8d2e2e; font-size: 12px; }
+      .sales-dm-blocked.is-visible { display: block; }
+      .sales-dm-attachments { margin-top: 10px; padding: 12px; border: 1px solid rgba(32,25,21,.12); border-radius: 10px; background: #fff; }
+      .sales-dm-attachment-list { display: grid; gap: 6px; margin-bottom: 10px; font-size: 13px; }
+      .sales-dm-status { min-height: 18px; margin: 6px 0 0; color: var(--muted,#7a766f); font-size: 12px; }
+      .sales-dm-status.error { color: #a23232; }.sales-dm-status.success { color: #1d6f4b; }
+      .sales-dm-back { display: none; }
+      @media (max-width: 760px) {
+        .sales-dm-shell { grid-template-columns: 1fr; min-height: 560px; }
+        .sales-dm-side { border-right: 0; }
+        .sales-dm-shell.has-active-thread .sales-dm-side { display: none; }
+        .sales-dm-shell:not(.has-active-thread) .sales-dm-chat { display: none; }
+        .sales-dm-back { display: inline-block; }
+        .sales-dm-list { max-height: 420px; }
+        .sales-dm-actions .sales-dm-action { padding: 6px; }
+      }
     </style>
     <script defer src="/site.js"></script>
     <script defer src="/sales-portal/portal.js"></script>
+    <script defer src="/sales-portal/messages.js"></script>
   </head>
   <body data-page="salesPortal">
     <div class="site-shell">
@@ -363,6 +422,9 @@
             <button class="portal-dashboard-tab is-active" type="button" data-dashboard-target="listings" role="tab" aria-selected="true">
               My listings
             </button>
+            <button class="portal-dashboard-tab" type="button" data-dashboard-target="leads" role="tab" aria-selected="false">
+              Leads/messages <span id="sales-dm-nav-unread" hidden></span>
+            </button>
             <button class="portal-dashboard-tab" type="button" data-dashboard-target="profile" role="tab" aria-selected="false">
               Profile
             </button>
@@ -373,6 +435,49 @@
               Manage subscription
             </button>
           </div>
+
+          <section class="portal-dashboard-panel" data-dashboard-panel="leads" role="tabpanel" hidden>
+            <div class="sales-dm-shell" id="sales-dm-shell">
+              <aside class="sales-dm-side" aria-label="Lead conversations">
+                <div class="sales-dm-side-head">
+                  <h3>Leads/messages</h3>
+                  <p>Conversations with Project Alpha users who contacted you.</p>
+                  <input class="sales-dm-search" id="sales-dm-search" type="search" placeholder="Search conversations" />
+                </div>
+                <div class="sales-dm-thread-list" id="sales-dm-thread-list"></div>
+              </aside>
+              <div class="sales-dm-chat">
+                <header class="sales-dm-header">
+                  <div class="sales-dm-user">
+                    <button class="sales-dm-action sales-dm-back" id="sales-dm-back" type="button" aria-label="Back to conversations">Back</button>
+                    <span class="sales-dm-avatar" id="sales-dm-active-avatar">PA</span>
+                    <div><h3 id="sales-dm-active-name">Select a conversation</h3><p id="sales-dm-active-meta">Project Alpha user</p></div>
+                  </div>
+                  <div class="sales-dm-actions">
+                    <button class="sales-dm-action" id="sales-dm-call" type="button" hidden>Show phone</button>
+                    <button class="sales-dm-action" id="sales-dm-email" type="button" hidden>Show email</button>
+                    <button class="sales-dm-action" id="sales-dm-block" type="button" hidden>Block</button>
+                    <button class="sales-dm-action" id="sales-dm-report" type="button" hidden>Report</button>
+                  </div>
+                </header>
+                <div class="sales-dm-list" id="sales-dm-list" aria-live="polite"><div class="sales-dm-empty">Select a conversation to view and reply to messages.</div></div>
+                <form class="sales-dm-composer" id="sales-dm-form">
+                  <div class="sales-dm-blocked" id="sales-dm-blocked">Messaging is unavailable because one participant has blocked the other.</div>
+                  <div class="sales-dm-compose-row">
+                    <input id="sales-dm-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif,application/pdf" multiple hidden />
+                    <button class="sales-dm-action" type="button" id="sales-dm-attach" aria-label="Attach an image or PDF">Attach</button>
+                    <textarea id="sales-dm-input" rows="1" placeholder="Write a message" disabled></textarea>
+                    <button class="button button-primary" type="submit" id="sales-dm-send" disabled>Send</button>
+                  </div>
+                  <div class="sales-dm-attachments" id="sales-dm-attachments" hidden>
+                    <div class="sales-dm-attachment-list" id="sales-dm-attachment-list"></div>
+                    <div class="portal-form-row"><button class="button button-primary" type="button" id="sales-dm-confirm-files">Send files</button><button class="button button-quiet" type="button" id="sales-dm-cancel-files">Cancel</button></div>
+                  </div>
+                  <p class="sales-dm-status" id="sales-dm-status" aria-live="polite"></p>
+                </form>
+              </div>
+            </div>
+          </section>
 
           <section class="portal-dashboard-panel is-active" data-dashboard-panel="listings" role="tabpanel">
             <div class="portal-card">
@@ -743,9 +848,9 @@
           <div class="portal-card portal-reset-card portal-paywall-card">
             <button class="portal-close" type="button" data-paywall-close aria-label="Close">&times;</button>
             <div class="portal-panel-header">
-              <p class="section-kicker">Final step</p>
-              <h2>Activate your agent account</h2>
-              <p>Choose how to complete your registration.</p>
+              <p class="section-kicker" id="paywall-kicker">Final step</p>
+              <h2 id="paywall-heading">Activate your agent account</h2>
+              <p id="paywall-copy">Choose how to complete your registration.</p>
             </div>
 
             <div class="paywall-toggle" role="tablist" aria-label="Registration method">
@@ -756,11 +861,11 @@
             <div class="paywall-mode" data-paywall-pane="subscribe">
               <div class="paywall-price"><span class="paywall-amount">$199</span><span class="paywall-period">/ month</span></div>
               <ul class="paywall-features">
-                <li>Lifetime free property listing</li>
+                <li>Property listing while your subscription is active</li>
                 <li>Unlimited In-app AI Property search &amp; analysis</li>
                 <li>Connect with verified consultants</li>
                 <li>In-app live translation calls — 80+ languages <span class="paywall-soon">coming soon</span></li>
-                <li>Potential leads <span class="paywall-soon">coming soon</span></li>
+                <li>Qualified buyer leads and messaging</li>
               </ul>
               <button class="button button-primary portal-submit" type="button" id="paywall-subscribe-button">Subscribe with card</button>
               <p class="paywall-fineprint">You'll be redirected to our secure payment provider (Stripe) to enter your card.</p>
@@ -768,11 +873,11 @@
 
             <div class="paywall-mode" data-paywall-pane="invite" hidden>
               <ul class="paywall-features">
-                <li>Lifetime free property listing</li>
+                <li>Lifetime property listing</li>
                 <li>Unlimited In-app AI Property search &amp; analysis <span class="paywall-soon">3 months</span></li>
                 <li>Connect with verified consultants</li>
                 <li>In-app live translation calls — 80+ languages <span class="paywall-soon">coming soon</span></li>
-                <li>Potential leads <span class="paywall-soon">coming soon</span></li>
+                <li>Qualified buyer leads and messaging</li>
               </ul>
               <label class="field">
                 Invitation code
@@ -791,10 +896,10 @@
             <div class="portal-panel-header">
               <p class="section-kicker">Account ready</p>
               <h2>Welcome to Project Alpha</h2>
-              <p>Your agent account is set up. Use this portal for listing management, then move into the app for the live Project Alpha experience.</p>
+              <p>Your free agent account is set up. Use this portal for leads, messages, and listing management, then sign in to the app with the same account.</p>
             </div>
             <div class="agent-welcome-copy">
-              <p><strong>The website portal is for managing your property listings.</strong></p>
+              <p><strong>The website portal is for leads, messages, and property listings.</strong></p>
               <p>
                 The Project Alpha app is where everything else happens: property search and analysis,
                 conversations with potential leads, and access to verified consultants such as

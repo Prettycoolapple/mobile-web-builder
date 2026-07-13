@@ -27,10 +27,11 @@ import {
   getProviderPortalUrl,
   getStripeProviderPriceId,
   getProviderInvitationCode,
+  isSalesAgentFreeSignupEnabled,
 } from "../lib/env";
 import { getStripe, subscriptionInfoFromStripe } from "../lib/stripe";
 import { resolveProviderEntitlement } from "../lib/provider-entitlements";
-import { isValidInvitationCode } from "../lib/agent-entitlements";
+import { agentAiUnlimited, isValidInvitationCode } from "../lib/agent-entitlements";
 import { createAgentAccountFromPending, type AgentSubscriptionInfo } from "../lib/agent-account";
 import type Stripe from "stripe";
 import { ObjectNotFoundError, ObjectStorageService } from "../lib/objectStorage";
@@ -45,6 +46,7 @@ import {
   recordPhoneAccountDeletion,
   type PhoneRegistrationBlock,
 } from "../lib/phone-registration";
+import { claimOutstandingLimTitleLeads } from "../lib/lim-title-leads";
 
 const router = Router();
 const objectStorageService = new ObjectStorageService();
@@ -223,6 +225,7 @@ const salesAgentWebProfileSchema = z
     primaryLanguage: z.string().min(1),
     agencyName: z.string().min(1),
     reaaLicenceNumber: z.string().min(1, "REA licence number is required."),
+    phoneVerificationToken: z.string().min(1).optional(),
   })
   .superRefine((data, ctx) => {
     const phone = normalizeRegistrationPhone(data.phoneNumber);
@@ -632,6 +635,11 @@ router.post(
           languages,
           websiteUrl: agentData?.websiteUrl,
           bio: agentData?.bio,
+          // Account creation is free; publishing remains gated until this
+          // agent activates Stripe or converts the row to lifetime via an
+          // invitation code.
+          listingPlan: "subscription",
+          aiBoostExpiresAt: null,
         });
       }
 
@@ -699,6 +707,11 @@ router.post(
     recordLoginEvent(profile.id);
     // Detection only: flags account-farming from one IP. Does not affect signup.
     noteSignup({ userId: profile.id, ip: req.ip });
+    if (role === "sales_agent") {
+      runAfterResponse(claimOutstandingLimTitleLeads(profile.id, phoneTrimmed).catch((error) => {
+        req.log.warn({ error, userId: profile.id }, "Could not claim pending LIM/title leads after signup");
+      }));
+    }
 
     const providerCertObjectPath = providerData
       ? objectPathFromStorageUrl(providerData.incorporationCertUrl)
@@ -764,9 +777,10 @@ router.post("/sales-agent-web-signup", async (req, res) => {
   const agencyName = parsed.data.agencyName.trim();
   const reaaLicenceNumber = parsed.data.reaaLicenceNumber.trim();
 
-  // This endpoint is the INVITATION-code path. Agents without a valid code must
-  // complete registration via the Stripe subscribe flow (checkout/claim).
-  if (!isValidInvitationCode(parsed.data.invitationCode)) {
+  const freeSignupEnabled = isSalesAgentFreeSignupEnabled();
+  // In legacy mode this remains the invitation-code signup path. In the
+  // account-first mode the agent is created free and upgrades only on publish.
+  if (!freeSignupEnabled && !isValidInvitationCode(parsed.data.invitationCode)) {
     res.status(402).json({
       error: "A valid invitation code is required, or subscribe to complete registration.",
       code: "INVITATION_OR_SUBSCRIPTION_REQUIRED",
@@ -794,8 +808,9 @@ router.post("/sales-agent-web-signup", async (req, res) => {
     const passwordHash = await hashPassword(parsed.data.password);
     const sessionId = createSessionId();
     const languages = [primaryLanguage];
-    // Invitation agents get lifetime listing + 3 months of unlimited AI search.
-    const aiBoostExpiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+    const aiBoostExpiresAt = freeSignupEnabled
+      ? null
+      : new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
 
     const signupResult = await db.transaction(async (tx) => {
       const phoneBlock = await checkPhoneCanRegister(tx, phoneTrimmed, "sales_agent");
@@ -817,6 +832,7 @@ router.post("/sales-agent-web-signup", async (req, res) => {
           subscriptionTier: "free",
           reportsUsedThisMonth: 0,
           phoneNumber: phoneTrimmed,
+          phoneVerifiedAt: new Date(),
           activeSessionId: sessionId,
         })
         .returning({
@@ -839,7 +855,7 @@ router.post("/sales-agent-web-signup", async (req, res) => {
         languages,
         regionsCovered: [],
         propertyTypes: [],
-        listingPlan: "lifetime",
+        listingPlan: freeSignupEnabled ? "subscription" : "lifetime",
         aiBoostExpiresAt,
       });
 
@@ -887,6 +903,9 @@ router.post("/sales-agent-web-signup", async (req, res) => {
         reaaLicenceNumber,
       },
     });
+    runAfterResponse(claimOutstandingLimTitleLeads(profile.id, phoneTrimmed).catch((error) => {
+      req.log.warn({ error, userId: profile.id }, "Could not claim pending LIM/title leads after web signup");
+    }));
   } catch (error) {
     if (error instanceof Error && error.message === "PHONE_VERIFICATION_CONSUMED") {
       res.status(400).json({
@@ -1062,6 +1081,8 @@ router.post("/sales-agent-web-signup/claim", async (req, res) => {
       .select({
         agencyName: salesAgentProfiles.agencyName,
         reaaLicenceNumber: salesAgentProfiles.reaaLicenceNumber,
+        listingPlan: salesAgentProfiles.listingPlan,
+        aiBoostExpiresAt: salesAgentProfiles.aiBoostExpiresAt,
       })
       .from(salesAgentProfiles)
       .where(eq(salesAgentProfiles.userId, ensured.profileId))
@@ -1118,6 +1139,9 @@ router.patch("/sales-agent-web-profile", requireAuth, async (req, res) => {
   const agencyName = parsed.data.agencyName.trim();
   const reaaLicenceNumber = parsed.data.reaaLicenceNumber.trim();
   const languages = [primaryLanguage];
+  const requestedPhoneVerification = parsed.data.phoneVerificationToken
+    ? verifyPhoneVerificationToken(parsed.data.phoneVerificationToken, phoneNumber)
+    : null;
 
   try {
     const [agentProfile] = await db
@@ -1133,18 +1157,29 @@ router.patch("/sales-agent-web-profile", requireAuth, async (req, res) => {
 
     const updated = await db.transaction(async (tx) => {
       const [currentProfile] = await tx
-        .select({ phoneNumber: profiles.phoneNumber })
+        .select({ phoneNumber: profiles.phoneNumber, phoneVerifiedAt: profiles.phoneVerifiedAt })
         .from(profiles)
         .where(eq(profiles.id, userId))
         .limit(1);
-      if (normalizeRegistrationPhone(currentProfile?.phoneNumber ?? "") !== phoneNumber) {
+      const phoneChanged = normalizeRegistrationPhone(currentProfile?.phoneNumber ?? "") !== phoneNumber;
+      if (phoneChanged) {
+        if (!requestedPhoneVerification) {
+          return { phoneVerificationRequired: true as const };
+        }
         const phoneBlock = await checkPhoneCanRegister(tx, phoneNumber, "sales_agent", new Date(), userId);
         if (!phoneBlock.allowed) return { phoneBlock };
+        const consumed = await consumePhoneVerification(requestedPhoneVerification.vid, phoneNumber, tx);
+        if (!consumed) return { phoneConsumed: false as const };
       }
 
       const [profile] = await tx
         .update(profiles)
-        .set({ fullName, phoneNumber, languages })
+        .set({
+          fullName,
+          phoneNumber,
+          languages,
+          ...(phoneChanged ? { phoneVerifiedAt: new Date() } : {}),
+        })
         .where(eq(profiles.id, userId))
         .returning({
           id: profiles.id,
@@ -1171,6 +1206,20 @@ router.patch("/sales-agent-web-profile", requireAuth, async (req, res) => {
       sendPhoneRegistrationBlock(res, blockedUpdate);
       return;
     }
+    if ("phoneVerificationRequired" in updated) {
+      res.status(400).json({
+        error: "Verify the new mobile number before saving it.",
+        code: "PHONE_REVERIFY_REQUIRED",
+      });
+      return;
+    }
+    if ("phoneConsumed" in updated) {
+      res.status(400).json({
+        error: "Phone verification has already been used. Please request a new code.",
+        code: "PHONE_VERIFICATION_CONSUMED",
+      });
+      return;
+    }
 
     res.json({
       user: {
@@ -1180,6 +1229,9 @@ router.patch("/sales-agent-web-profile", requireAuth, async (req, res) => {
         primaryLanguage,
       },
     });
+    runAfterResponse(claimOutstandingLimTitleLeads(userId, phoneNumber).catch((error) => {
+      req.log.warn({ error, userId }, "Could not claim pending LIM/title leads after phone verification");
+    }));
   } catch (error) {
     req.log.error({ error }, "Sales-agent web profile update failed");
     res.status(500).json({ error: "Profile update failed. Please try again.", code: "PROFILE_UPDATE_FAILED" });
@@ -1560,6 +1612,8 @@ router.post(
       .select({
         agencyName: salesAgentProfiles.agencyName,
         reaaLicenceNumber: salesAgentProfiles.reaaLicenceNumber,
+        listingPlan: salesAgentProfiles.listingPlan,
+        aiBoostExpiresAt: salesAgentProfiles.aiBoostExpiresAt,
       })
       .from(salesAgentProfiles)
       .where(eq(salesAgentProfiles.userId, profile.id))
@@ -1592,6 +1646,9 @@ router.post(
         isVerified: profile.isVerified,
         specialStatus: effectiveSpecialStatus,
         specialStatusExpiresAt: effectiveSpecialStatusExpiresAt,
+        agentAiUnlimited: agentProfile
+          ? agentAiUnlimited(profile, agentProfile)
+          : false,
         ...providerAccessPayload(profile),
       },
     });
@@ -1633,6 +1690,8 @@ router.post("/sales-agent-login", async (req, res) => {
       .select({
         agencyName: salesAgentProfiles.agencyName,
         reaaLicenceNumber: salesAgentProfiles.reaaLicenceNumber,
+        listingPlan: salesAgentProfiles.listingPlan,
+        aiBoostExpiresAt: salesAgentProfiles.aiBoostExpiresAt,
       })
       .from(salesAgentProfiles)
       .where(eq(salesAgentProfiles.userId, profile.id))
@@ -1708,6 +1767,9 @@ router.post("/sales-agent-login", async (req, res) => {
         isVerified: profile.isVerified,
         specialStatus: effectiveSpecialStatus,
         specialStatusExpiresAt: effectiveSpecialStatusExpiresAt,
+        agentAiUnlimited: agentProfile
+          ? agentAiUnlimited(profile, agentProfile)
+          : false,
       },
     });
   } catch (error) {
@@ -2274,6 +2336,8 @@ router.get("/me", requireAuth, async (req, res) => {
         bio: serviceProviderProfiles.bio,
         agencyName: salesAgentProfiles.agencyName,
         reaaLicenceNumber: salesAgentProfiles.reaaLicenceNumber,
+        listingPlan: salesAgentProfiles.listingPlan,
+        aiBoostExpiresAt: salesAgentProfiles.aiBoostExpiresAt,
       })
       .from(profiles)
       .leftJoin(salesAgentProfiles, eq(salesAgentProfiles.userId, profiles.id))
@@ -2323,7 +2387,13 @@ router.get("/me", requireAuth, async (req, res) => {
       profile.specialStatusExpiresAt = null;
     }
 
-    res.json({ user: { ...profile, ...providerAccessPayload(profile) } });
+    res.json({
+      user: {
+        ...profile,
+        agentAiUnlimited: profile.role === "sales_agent" ? agentAiUnlimited(profile, profile) : false,
+        ...providerAccessPayload(profile),
+      },
+    });
   } catch (error) {
     req.log.error({ error }, "Failed to get profile");
     res.status(500).json({ error: "Failed to get profile", code: "PROFILE_FAILED" });

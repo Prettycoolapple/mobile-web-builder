@@ -11,6 +11,7 @@ import {
   Image,
   Keyboard,
   Alert,
+  Linking,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
@@ -19,7 +20,7 @@ import * as Haptics from "expo-haptics";
 import * as FileSystem from "expo-file-system/legacy";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { useAuth } from "@/context/AuthContext";
-import { getApiBase as resolveApiBase, hasExplicitApiConfiguration } from "@/lib/api";
+import { getApiBase as resolveApiBase, hasExplicitApiConfiguration, resolveAppUrl } from "@/lib/api";
 import { useColors } from "@/hooks/useColors";
 import { useT } from "@/lib/i18n";
 
@@ -149,10 +150,40 @@ export default function AddListingScreen() {
 
   const [submitting, setSubmitting] = useState(false);
   const [successVisible, setSuccessVisible] = useState(false);
+  const [listingAccess, setListingAccess] = useState<boolean | null>(null);
+  const [listingAccessError, setListingAccessError] = useState<string | null>(null);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const getApiBase = useCallback(() => resolveApiBase(), []);
+
+  const checkListingAccess = useCallback(async () => {
+    setListingAccess(null);
+    setListingAccessError(null);
+    try {
+      const response = await fetch(`${getApiBase()}/subscription/agent-status`, {
+        headers: getApiHeaders(),
+      });
+      const data = await response.json().catch(() => ({})) as { canList?: boolean; error?: string };
+      if (!response.ok) throw new Error(data.error || "Could not verify listing access.");
+      setListingAccess(data.canList === true);
+    } catch (error) {
+      setListingAccess(false);
+      setListingAccessError(error instanceof Error ? error.message : "Could not verify listing access.");
+    }
+  }, [getApiBase, getApiHeaders]);
+
+  useEffect(() => {
+    void checkListingAccess();
+  }, [checkListingAccess]);
+
+  const openListingGateway = useCallback(async () => {
+    try {
+      await Linking.openURL(resolveAppUrl("/sales-portal/?upgrade=listings"));
+    } catch {
+      Alert.alert("Could not open sales portal", "Please open the Project Alpha sales portal in your browser and sign in.");
+    }
+  }, []);
 
   useEffect(() => {
     if (!editId) return;
@@ -490,7 +521,12 @@ export default function AddListingScreen() {
       });
 
       if (!resp.ok) {
-        const err = (await resp.json()) as { error?: string };
+        const err = (await resp.json()) as { error?: string; code?: string };
+        if (err.code === "SUBSCRIPTION_REQUIRED") {
+          setListingAccess(false);
+          setListingAccessError(null);
+          return;
+        }
         Alert.alert(t("common.error"), err.error ?? t("add_listing.submit_error"));
         return;
       }
@@ -514,7 +550,7 @@ export default function AddListingScreen() {
     router.back();
   }, [router]);
 
-  if (loadingEdit) {
+  if (loadingEdit || listingAccess === null) {
     return (
       <View style={[styles.root, { backgroundColor: colors.background }]}>
         <View style={[styles.header, { paddingTop: insets.top + 8, backgroundColor: colors.headerBg, borderBottomColor: colors.accent + "22" }]}>
@@ -526,6 +562,38 @@ export default function AddListingScreen() {
         </View>
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
           <ActivityIndicator color={colors.accent} size="large" />
+        </View>
+      </View>
+    );
+  }
+
+  if (!listingAccess) {
+    return (
+      <View style={[styles.root, { backgroundColor: colors.background }]}>
+        <View style={[styles.header, { paddingTop: insets.top + 8, backgroundColor: colors.headerBg, borderBottomColor: colors.accent + "22" }]}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.headerBack} activeOpacity={0.7}>
+            <Feather name="x" size={22} color="rgba(250,249,246,0.8)" />
+          </TouchableOpacity>
+          <Text style={[styles.headerTitle, { fontFamily: "DM_Sans_700Bold", color: "#FAFAF9" }]}>Listing access</Text>
+          <View style={styles.headerSpacer} />
+        </View>
+        <View style={styles.accessGateWrap}>
+          <View style={[styles.accessGateIcon, { backgroundColor: colors.accent + "18" }]}>
+            <Feather name="lock" size={30} color={colors.accent} />
+          </View>
+          <Text style={[styles.accessGateTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>Unlock property listings</Text>
+          <Text style={[styles.accessGateBody, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
+            {listingAccessError
+              ? `${listingAccessError} You can retry below.`
+              : "Your sales-agent account is free. Subscribe with Stripe or use an invitation code in the sales portal when you are ready to publish properties."}
+          </Text>
+          <TouchableOpacity style={[styles.accessGatePrimary, { backgroundColor: colors.accent }]} onPress={openListingGateway} activeOpacity={0.85}>
+            <Text style={[styles.accessGatePrimaryText, { fontFamily: "DM_Sans_600SemiBold" }]}>Open Stripe / invitation gateway</Text>
+            <Feather name="external-link" size={17} color="#fff" />
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.accessGateSecondary, { borderColor: colors.border }]} onPress={() => void checkListingAccess()} activeOpacity={0.75}>
+            <Text style={[styles.accessGateSecondaryText, { color: colors.foreground, fontFamily: "DM_Sans_500Medium" }]}>I've activated access - check again</Text>
+          </TouchableOpacity>
         </View>
       </View>
     );
@@ -981,6 +1049,15 @@ const styles = StyleSheet.create({
   headerBack: { padding: 4, marginRight: 8 },
   headerTitle: { fontSize: 17, flex: 1, textAlign: "center" },
   headerSpacer: { width: 34 },
+
+  accessGateWrap: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 28, paddingBottom: 40 },
+  accessGateIcon: { width: 68, height: 68, borderRadius: 34, alignItems: "center", justifyContent: "center", marginBottom: 20 },
+  accessGateTitle: { fontSize: 25, textAlign: "center", marginBottom: 12 },
+  accessGateBody: { fontSize: 15, lineHeight: 23, textAlign: "center", maxWidth: 420, marginBottom: 26 },
+  accessGatePrimary: { minHeight: 52, borderRadius: 14, paddingHorizontal: 20, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 9, alignSelf: "stretch" },
+  accessGatePrimaryText: { color: "#fff", fontSize: 15 },
+  accessGateSecondary: { minHeight: 48, borderRadius: 14, borderWidth: 1, marginTop: 12, alignItems: "center", justifyContent: "center", alignSelf: "stretch", paddingHorizontal: 16 },
+  accessGateSecondaryText: { fontSize: 14 },
 
   scroll: { flex: 1 },
   scrollContent: { paddingTop: 8 },

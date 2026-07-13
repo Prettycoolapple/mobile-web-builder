@@ -1104,7 +1104,15 @@ export default function ChatScreen() {
           {showSenderName ? (
             <Text style={[styles.senderName, { color: colors.mutedForeground }]}>{otherName}</Text>
           ) : null}
-          {msg.imageUrl ? (
+          {msg.messageKind === "lim_title_request" ? (
+            <View style={[styles.leadRequestCard, { backgroundColor: colors.card, borderColor: colors.accent + "55" }]}>
+              <View style={styles.leadRequestHeading}>
+                <Feather name="file-text" size={16} color={colors.accent} />
+                <Text style={[styles.leadRequestTitle, { color: colors.accent }]}>LIM + Title request</Text>
+              </View>
+              <Text style={[styles.leadRequestBody, { color: colors.foreground }]}>{msg.body}</Text>
+            </View>
+          ) : msg.imageUrl ? (
             <TouchableOpacity
               activeOpacity={0.92}
               accessibilityRole="imagebutton"
@@ -1780,6 +1788,28 @@ const styles = StyleSheet.create({
   myBubble: { borderRadius: 18, borderBottomRightRadius: 4 },
   theirBubble: { borderRadius: 18, borderBottomLeftRadius: 4, borderWidth: 1 },
   bubbleText: { fontFamily: "DM_Sans_400Regular", fontSize: 15, lineHeight: 22 },
+  leadRequestCard: {
+    maxWidth: 280,
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 7,
+  },
+  leadRequestHeading: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  leadRequestTitle: {
+    fontFamily: "DM_Sans_700Bold",
+    fontSize: 13,
+  },
+  leadRequestBody: {
+    fontFamily: "DM_Sans_500Medium",
+    fontSize: 14,
+    lineHeight: 20,
+  },
   fileBubble: {
     flexDirection: "row",
     alignItems: "center",

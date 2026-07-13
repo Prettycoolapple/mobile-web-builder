@@ -4,6 +4,8 @@ import { consumePhoneVerification } from "../routes/otp";
 import { sendNewUserSignupNotification } from "./mailer";
 import { logger } from "./logger";
 import { checkPhoneCanRegister, normalizeRegistrationPhone } from "./phone-registration";
+import { ACTIVE_SUBSCRIPTION_STATUSES } from "./stripe";
+import { claimOutstandingLimTitleLeads } from "./lim-title-leads";
 
 export interface AgentSubscriptionInfo {
   stripeCustomerId: string | null;
@@ -56,6 +58,7 @@ export async function createAgentAccountFromPending(
     await db
       .update(profiles)
       .set({
+        subscriptionTier: ACTIVE_SUBSCRIPTION_STATUSES.has(sub.subscriptionStatus ?? "") ? "standard" : "free",
         stripeCustomerId: sub.stripeCustomerId,
         stripeSubscriptionId: sub.stripeSubscriptionId,
         subscriptionStatus: sub.subscriptionStatus,
@@ -64,6 +67,9 @@ export async function createAgentAccountFromPending(
       })
       .where(eq(profiles.id, existing.id));
     await markPendingCompleted(pending.id).catch(() => {});
+    await claimOutstandingLimTitleLeads(existing.id, phoneNumber).catch((error) => {
+      logger.warn({ error, userId: existing.id }, "Could not claim pending LIM/title leads for existing agent");
+    });
     return { profileId: existing.id, email, role: existing.role, created: false };
   }
 
@@ -92,7 +98,7 @@ export async function createAgentAccountFromPending(
           passwordHash: pending.passwordHash,
           role: "sales_agent",
           languages,
-          subscriptionTier: "free",
+          subscriptionTier: ACTIVE_SUBSCRIPTION_STATUSES.has(sub.subscriptionStatus ?? "") ? "standard" : "free",
           reportsUsedThisMonth: 0,
           phoneNumber,
           phoneVerifiedAt: new Date(),
@@ -118,6 +124,10 @@ export async function createAgentAccountFromPending(
     });
 
     await markPendingCompleted(pending.id).catch(() => {});
+
+    await claimOutstandingLimTitleLeads(profile.id, phoneNumber).catch((error) => {
+      logger.warn({ error, userId: profile.id }, "Could not claim pending LIM/title leads after paid signup");
+    });
 
     await sendNewUserSignupNotification({
       role: "sales_agent",

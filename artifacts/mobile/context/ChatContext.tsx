@@ -45,7 +45,7 @@ export interface ChatMessage {
   role: MessageRole;
   content: string;
   timestamp: number;
-  type: "text" | "report" | "report_group" | "search" | "loading" | "provider_recommendation" | "provider_upgrade_gate" | "agent_contact" | "subdivision_clarification" | "address_clarification" | "discovery_exhausted_choice";
+  type: "text" | "report" | "report_group" | "search" | "loading" | "provider_recommendation" | "provider_upgrade_gate" | "agent_contact" | "lim_title_offer" | "subdivision_clarification" | "address_clarification" | "discovery_exhausted_choice";
   clarification?: {
     question: string;
     options: string[];
@@ -95,6 +95,10 @@ export interface ChatMessage {
   agentAvatarUrl?: string | null;
   agentMatchType?: "subject" | "suburb";
   agentListingUrl?: string | null;
+  limTitleRequestId?: string;
+  limTitleStatus?: "offered" | "declined" | "requested";
+  limTitleAgentName?: string | null;
+  limTitleAgencyName?: string | null;
   backgroundJobId?: string;
 }
 
@@ -628,6 +632,11 @@ export interface SelectedListingContext {
   propertyType?: string | null;
   listingTitle?: string | null;
   source?: string | null;
+  agentName?: string | null;
+  agentPhone?: string | null;
+  agencyName?: string | null;
+  matchConfidence?: "verified" | "likely" | "unverified" | null;
+  isActiveListing?: boolean | null;
   isCombinedListing?: boolean | null;
   packageAddress?: string | null;
   childAddresses?: string[] | null;
@@ -730,6 +739,7 @@ function messageHasSyncableContent(message: ChatMessage): boolean {
   if (message.type === "provider_recommendation" && message.provider) return true;
   if (message.type === "provider_upgrade_gate") return true;
   if (message.type === "agent_contact" && (message.agentName || message.agencyName || message.agentPhone || message.agentListingUrl)) return true;
+  if (message.type === "lim_title_offer" && message.limTitleRequestId) return true;
   if (
     (message.type === "subdivision_clarification" ||
       message.type === "address_clarification" ||

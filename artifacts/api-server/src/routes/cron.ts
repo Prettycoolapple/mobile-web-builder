@@ -1,6 +1,7 @@
 import { Router, type Request } from "express";
 import { runAfterResponse } from "../lib/vercel-wait-until";
 import { runWatchlistMonitor } from "../lib/watchlist-monitor";
+import { retryDueLeadSms } from "../lib/lead-sms";
 
 const router = Router();
 
@@ -39,6 +40,20 @@ router.get("/cron/watchlist-monitor", async (req, res) => {
     }),
   );
   res.status(202).json({ ok: true, started: true });
+});
+
+router.get("/cron/lead-sms-retry", async (req, res) => {
+  if (!isCronAuthorized(req)) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  try {
+    const result = await retryDueLeadSms();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    req.log.error({ err }, "lead SMS retry cron failed");
+    res.status(500).json({ error: "Lead SMS retry failed" });
+  }
 });
 
 export default router;

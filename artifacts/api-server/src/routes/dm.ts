@@ -10,6 +10,7 @@ import {
   pushTokens,
   userBlocks,
   userReports,
+  limTitleRequests,
 } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
 import { getIo } from "../lib/socket";
@@ -237,6 +238,21 @@ router.get("/dm/threads", requireAuth, async (req: Request, res: Response) => {
             ),
           );
 
+        const leadRows = await db
+          .select({
+            id: limTitleRequests.id,
+            propertyAddress: limTitleRequests.propertyAddress,
+            requestedDocuments: limTitleRequests.requestedDocuments,
+            status: limTitleRequests.status,
+            consentedAt: limTitleRequests.consentedAt,
+          })
+          .from(limTitleRequests)
+          .where(and(
+            eq(limTitleRequests.dmThreadId, thread.id),
+            isNotNull(limTitleRequests.consentedAt),
+          ))
+          .orderBy(desc(limTitleRequests.consentedAt));
+
         const blockStatus = blockStatusForPair(userId, otherId, incidentBlocks);
 
         return {
@@ -247,6 +263,8 @@ router.get("/dm/threads", requireAuth, async (req: Request, res: Response) => {
           lastMessage: lastMessage ?? null,
           unreadCount: count,
           blockStatus,
+          leadSummary: leadRows[0] ?? null,
+          leadCount: leadRows.length,
         };
       }),
     );

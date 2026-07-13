@@ -2,6 +2,7 @@
   const API_BASE = "/api";
   const TOKEN_KEY = "projectAlphaSalesPortalToken";
   const USER_KEY = "projectAlphaSalesPortalUser";
+  const LISTING_DRAFT_KEY = "projectAlphaSalesPortalListingDraft";
   const MAX_LISTING_PHOTOS = 20;
   // Every listing photo is normalised to a uniform 4:3 landscape frame so cards
   // and the detail gallery render consistently across scraped and agent uploads.
@@ -41,6 +42,8 @@
     otpCooldownTimer: null,
     pendingSignupPayload: null,
     pendingSignupForm: null,
+    paywallContext: "signup",
+    pendingListingPublish: false,
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -179,7 +182,21 @@
     $("#portal-dashboard").hidden = false;
     fillProfileForm(user || {});
     updateAccountSummary(user || {});
-    switchDashboardTab("listings");
+    const params = new URLSearchParams(window.location.search);
+    const requestedTab = params.has("lead") ? "leads" : "listings";
+    switchDashboardTab(requestedTab);
+    if (requestedTab === "leads") {
+      // Trigger the inbox module's normal activation path as well as changing
+      // the visible tab. The short-link token itself never reveals a lead.
+      window.setTimeout(() => $('[data-dashboard-target="leads"]')?.click(), 0);
+    } else if (params.get("upgrade") === "listings") {
+      // Mobile sends gated agents here. If they had no browser session they
+      // first sign in; this same branch then opens the Stripe/invitation modal.
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete("upgrade");
+      window.history.replaceState({}, document.title, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+      window.setTimeout(() => openPaywall("listing"), 0);
+    }
     void refreshListings();
   }
 
@@ -235,6 +252,7 @@
   function switchDashboardTab(target) {
     const labels = {
       listings: "My listings",
+      leads: "Leads/messages",
       profile: "Profile",
       account: "Account",
       subscription: "Manage subscription",
@@ -1232,6 +1250,51 @@
     return payload;
   }
 
+  function saveListingDraft() {
+    const form = $("#new-listing-form");
+    if (!form) return;
+    const fields = [];
+    Array.from(form.elements).forEach((field) => {
+      if (!field.name || field.type === "file" || field.type === "button" || field.type === "submit") return;
+      fields.push({
+        name: field.name,
+        value: field.value,
+        checked: field.type === "checkbox" || field.type === "radio" ? field.checked : undefined,
+      });
+    });
+    sessionStorage.setItem(LISTING_DRAFT_KEY, JSON.stringify({ fields, step: state.listingStep }));
+  }
+
+  function restoreListingDraft() {
+    const raw = sessionStorage.getItem(LISTING_DRAFT_KEY);
+    const form = $("#new-listing-form");
+    if (!raw || !form) return false;
+    try {
+      const draft = JSON.parse(raw);
+      for (const saved of Array.isArray(draft.fields) ? draft.fields : []) {
+        const candidates = Array.from(form.elements).filter((field) => field.name === saved.name);
+        for (const field of candidates) {
+          if (field.type === "checkbox" || field.type === "radio") field.checked = !!saved.checked;
+          else field.value = saved.value ?? "";
+        }
+      }
+      const description = form.elements.description?.value || "";
+      const surface = form.querySelector('[data-rte="description"] .rte-surface');
+      if (surface) {
+        surface.textContent = description;
+        surface.classList.toggle("is-empty", !description.trim());
+      }
+      $("#new-listing-panel").hidden = false;
+      renderAddressConfirmation();
+      renderDocumentList();
+      switchListingStep(Number.isFinite(Number(draft.step)) ? Number(draft.step) : LISTING_STEPS.length - 1);
+      return true;
+    } catch {
+      sessionStorage.removeItem(LISTING_DRAFT_KEY);
+      return false;
+    }
+  }
+
   async function handleNewListing(event) {
     event.preventDefault();
     const session = getSession();
@@ -1247,6 +1310,17 @@
       setStatus(status, "Please finish the highlighted details before publishing.", "error");
       return;
     }
+    try {
+      const entitlement = await api("/subscription/agent-status", { method: "GET", token: session.token });
+      if (!entitlement.canList) {
+        state.pendingListingPublish = true;
+        openPaywall("listing");
+        return;
+      }
+    } catch (error) {
+      setStatus(status, getErrorMessage(error, "We couldn't verify listing access. Please try again."), "error");
+      return;
+    }
     const publishButton = $("#listing-create-button");
     if (publishButton) publishButton.disabled = true;
     try {
@@ -1258,6 +1332,7 @@
         token: session.token,
         body: buildListingPayload(form, imageUrls, documentUrls),
       });
+      sessionStorage.removeItem(LISTING_DRAFT_KEY);
       resetListingWizard();
       $("#new-listing-panel").hidden = true;
       await refreshListings();
@@ -1597,14 +1672,28 @@
     setStatus($("#consent-status"), "", null);
   }
 
-  function consentAndProceed() {
+  async function consentAndProceed() {
     const checkbox = /** @type {HTMLInputElement|null} */ ($("#consent-checkbox"));
     if (!checkbox || !checkbox.checked) {
       setStatus($("#consent-status"), "Please tick the checkbox to confirm you have read and agreed.", "error");
       return;
     }
     closeConsentModal();
-    openPaywall();
+    const status = $("#signup-status");
+    setStatus(status, "Creating your free account...", null);
+    try {
+      const data = await api("/auth/sales-agent-web-signup", {
+        method: "POST",
+        body: state.pendingSignupPayload,
+      });
+      await completeAgentSignupSuccess(data, state.pendingSignupForm);
+    } catch (error) {
+      if (error && error.code === "INVITATION_OR_SUBSCRIPTION_REQUIRED") {
+        openPaywall("signup");
+        return;
+      }
+      setStatus(status, getErrorMessage(error, "We couldn't create your account. Please try again."), "error");
+    }
   }
 
   // Shared success handler for both the invitation-code path and the post-Stripe
@@ -1627,9 +1716,22 @@
   }
 
   // ── Paywall (final signup step) ──────────────────────────────────────────
-  function openPaywall() {
+  function openPaywall(context) {
+    state.paywallContext = context === "listing" ? "listing" : "signup";
     const panel = $("#paywall-panel");
     if (panel) panel.hidden = false;
+    const eyebrow = $("#paywall-kicker");
+    const heading = $("#paywall-heading");
+    const copy = $("#paywall-copy");
+    if (eyebrow) eyebrow.textContent = state.paywallContext === "listing" ? "Listing access" : "Final step";
+    if (heading) heading.textContent = state.paywallContext === "listing" ? "Unlock property listings" : "Activate your agent account";
+    if (copy) copy.textContent = state.paywallContext === "listing"
+      ? "Subscribe or use an invitation code to publish this property."
+      : "Choose how to complete your registration.";
+    const inviteButton = $("#paywall-invite-button");
+    if (inviteButton) inviteButton.textContent = state.paywallContext === "listing"
+      ? "Activate listing access"
+      : "Complete registration";
     switchPaywallMode("subscribe");
     setStatus($("#paywall-status"), "", null);
   }
@@ -1667,6 +1769,31 @@
       setStatus(status, "Enter your invitation code.", "error");
       return;
     }
+    if (state.paywallContext === "listing") {
+      const session = getSession();
+      if (!session) {
+        closePaywall();
+        showAuth();
+        return;
+      }
+      setStatus(status, "Activating listing access...", null);
+      try {
+        await api("/subscription/agent-invitation", {
+          method: "POST",
+          token: session.token,
+          body: { invitationCode: code },
+        });
+        closePaywall();
+        setStatus($("#dashboard-status"), "Invitation accepted. Publishing your listing...", "success");
+        if (state.pendingListingPublish) {
+          state.pendingListingPublish = false;
+          $("#new-listing-form")?.requestSubmit();
+        }
+      } catch (error) {
+        setStatus(status, getErrorMessage(error, "That invitation code didn't work. Please check it and try again."), "error");
+      }
+      return;
+    }
     if (!state.pendingSignupPayload) {
       setStatus(status, "Please restart your signup.", "error");
       return;
@@ -1688,6 +1815,24 @@
 
   async function submitPaywallSubscribe() {
     const status = $("#paywall-status");
+    if (state.paywallContext === "listing") {
+      const session = getSession();
+      if (!session) {
+        closePaywall();
+        showAuth();
+        return;
+      }
+      saveListingDraft();
+      setStatus(status, "Starting secure checkout...", null);
+      try {
+        const data = await api("/subscription/agent-checkout", { method: "POST", token: session.token });
+        if (data && data.checkoutUrl) window.location.assign(data.checkoutUrl);
+        else setStatus(status, "Could not start checkout. Please try again.", "error");
+      } catch (error) {
+        setStatus(status, getErrorMessage(error, "Could not start checkout. Please try again."), "error");
+      }
+      return;
+    }
     if (!state.pendingSignupPayload) {
       setStatus(status, "Please restart your signup.", "error");
       return;
@@ -1713,9 +1858,41 @@
   async function handleStripeReturn() {
     const params = new URLSearchParams(window.location.search);
     const result = params.get("agentSignup");
-    if (!result) return false;
+    const subscriptionResult = params.get("agentSubscription");
+    if (!result && !subscriptionResult) return false;
     const sessionId = params.get("session_id");
     window.history.replaceState({}, document.title, window.location.pathname);
+
+    if (subscriptionResult) {
+      const session = getSession();
+      if (!session) {
+        showAuth();
+        setStatus($("#login-status"), "Sign in again to finish activating your subscription.", "error");
+        return true;
+      }
+      showDashboard(session.user);
+      if (subscriptionResult === "cancelled") {
+        restoreListingDraft();
+        setStatus($("#dashboard-status"), "Checkout was cancelled. Your listing details were restored; reselect any photos or PDFs before publishing.", "error");
+        return true;
+      }
+      if (subscriptionResult === "success" && sessionId) {
+        try {
+          const claimed = await api("/subscription/agent-checkout/claim", {
+            method: "POST",
+            token: session.token,
+            body: { checkoutSessionId: sessionId },
+          });
+          if (!claimed.canList) throw new Error("Your subscription is still activating. Please refresh in a moment.");
+          restoreListingDraft();
+          setStatus($("#dashboard-status"), "Subscription active. Your listing details were restored; reselect photos and PDFs, then publish.", "success");
+        } catch (error) {
+          restoreListingDraft();
+          setStatus($("#dashboard-status"), getErrorMessage(error, "We couldn't confirm the subscription yet. Please refresh and try again."), "error");
+        }
+        return true;
+      }
+    }
 
     if (result === "cancelled") {
       showAuth();
@@ -1768,7 +1945,7 @@
       ? "Unlimited In-app AI Property search & analysis (3 months)"
       : "Unlimited In-app AI Property search & analysis";
     const items = [
-      "Lifetime free property listing",
+      isInvite ? "Lifetime property listing" : "Property listing while your subscription is active",
       aiText,
       "Connect with verified consultants",
       "In-app live translation calls — 80+ languages (coming soon)",
@@ -1931,6 +2108,27 @@
       setStatus(status, "Enter your REA licence number.", "error");
       return;
     }
+    let phoneVerificationToken;
+    const currentPhone = normalizeNzPhone(session.user?.phoneNumber);
+    if (currentPhone && currentPhone !== phoneNumber) {
+      setStatus(status, "Verifying your new mobile number...", null);
+      try {
+        const sent = await api("/auth/send-otp", { method: "POST", body: { phone: phoneNumber } });
+        const code = window.prompt(`Enter the verification code sent to ${phoneNumber}.`);
+        if (!code) {
+          setStatus(status, "Your mobile number was not changed.", "error");
+          return;
+        }
+        const verified = await api("/auth/verify-otp", {
+          method: "POST",
+          body: { verificationId: sent.verificationId, phone: phoneNumber, code: String(code).trim() },
+        });
+        phoneVerificationToken = verified.token;
+      } catch (error) {
+        setStatus(status, getErrorMessage(error, "We couldn't verify the new mobile number."), "error");
+        return;
+      }
+    }
     setStatus(status, "Saving your changes...", null);
     try {
       const data = await api("/auth/sales-agent-web-profile", {
@@ -1942,6 +2140,7 @@
           primaryLanguage: String(values.primaryLanguage || "").trim(),
           agencyName,
           reaaLicenceNumber,
+          ...(phoneVerificationToken ? { phoneVerificationToken } : {}),
         },
       });
       let user = data.user;

@@ -77,6 +77,12 @@ app.use("/property-share", (req, res, next) => {
   router(req, res, next);
 });
 
+// Branded, short lead links used in the one-segment agent SMS.
+app.use("/l", (req, res, next) => {
+  req.url = `/l${req.url}`;
+  router(req, res, next);
+});
+
 app.use("/api", router);
 
 export default app;

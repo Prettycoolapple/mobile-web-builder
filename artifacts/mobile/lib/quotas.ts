@@ -23,6 +23,7 @@ export const STANDARD_REPORT_LIMIT = 60;
 export const SERVICE_PROVIDER_FREE_REPORT_LIMIT = 0;
 export const SUPERCHARGE_REPORT_LIMIT = 60;
 export const FRIENDS_FAMILY_REPORT_LIMIT = 9999;
+export const UNLIMITED_REPORT_LIMIT = 9999;
 
 export function resolveChatLimitKey(
   role: string | null | undefined,
@@ -52,7 +53,9 @@ export function resolveReportLimit(
   role?: string | null | undefined,
   specialStatus?: string | null | undefined,
   providerAccessActive?: boolean,
+  agentAiUnlimited?: boolean,
 ): number {
+  if (agentAiUnlimited) return UNLIMITED_REPORT_LIMIT;
   if (specialStatus === "friends_family") return FRIENDS_FAMILY_REPORT_LIMIT;
   if (specialStatus === "supercharge") return SUPERCHARGE_REPORT_LIMIT;
   if (role === "service_provider" && providerAccessActive) return STANDARD_REPORT_LIMIT;

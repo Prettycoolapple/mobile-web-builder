@@ -13,6 +13,9 @@ export interface DmMessage {
   fileUrl?: string | null;
   fileName?: string | null;
   fileMime?: string | null;
+  messageKind?: string | null;
+  metadataJson?: Record<string, unknown> | null;
+  leadRequestId?: string | null;
   likedAt?: string | null;
   likedBy?: string | null;
   readAt: string | null;
@@ -41,6 +44,14 @@ export interface DmThread {
   lastMessage: DmMessage | null;
   unreadCount: number;
   blockStatus?: DmBlockStatus;
+  leadSummary?: {
+    id: string;
+    propertyAddress: string;
+    requestedDocuments: string[];
+    status: string;
+    consentedAt: string | null;
+  } | null;
+  leadCount?: number;
 }
 
 interface DmContextValue {

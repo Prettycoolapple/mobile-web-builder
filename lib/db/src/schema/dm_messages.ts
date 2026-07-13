@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { profiles } from "./profiles";
 import { dmThreads } from "./dm_threads";
@@ -19,6 +19,11 @@ export const dmMessages = pgTable("dm_messages", {
   fileUrl: text("file_url"),
   fileName: text("file_name"),
   fileMime: text("file_mime"),
+  // Structured system cards (currently LIM/title lead requests). Older clients
+  // safely fall back to rendering `body` when they do not understand the kind.
+  messageKind: text("message_kind"),
+  metadataJson: jsonb("metadata_json").$type<Record<string, unknown>>(),
+  leadRequestId: text("lead_request_id"),
   // Message "like" reaction. In a 1:1 DM either participant may like any
   // message; we store a single like (who + when) rather than a separate
   // reactions table. likedAt null = not liked. Toggling off clears both.

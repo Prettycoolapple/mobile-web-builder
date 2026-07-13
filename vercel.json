@@ -26,6 +26,7 @@
     { "source": "/api", "destination": "/api" },
     { "source": "/property-share/(.*)", "destination": "/api" },
     { "source": "/share/(.*)", "destination": "/api" },
+    { "source": "/l/(.*)", "destination": "/api" },
     { "source": "/admin", "destination": "/admin/index.html" },
     { "source": "/admin/(.*)", "destination": "/admin/index.html" },
     { "source": "/workspace", "destination": "/workspace/index.html" },
@@ -35,6 +36,7 @@
     "ENABLE_SOCKET_IO": "false"
   },
   "crons": [
-    { "path": "/api/cron/watchlist-monitor", "schedule": "0 18 * * *" }
+    { "path": "/api/cron/watchlist-monitor", "schedule": "0 18 * * *" },
+    { "path": "/api/cron/lead-sms-retry", "schedule": "*/10 * * * *" }
   ]
 }

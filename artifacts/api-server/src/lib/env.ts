@@ -80,6 +80,45 @@ export function getTwilioPhoneNumber(): string {
   return readRequired("TWILIO_PHONE_NUMBER");
 }
 
+/** Auth token used only to validate Twilio webhook signatures. */
+export function getTwilioAuthToken(): string {
+  return readRequired("TWILIO_AUTH_TOKEN");
+}
+
+export function isLimTitleFeatureEnabled(): boolean {
+  const value = readOptional("LIM_TITLE_FEATURE_ENABLED");
+  return value ? !["0", "false", "off", "no"].includes(value.toLowerCase()) : true;
+}
+
+export function isLimTitleProactiveEnabled(): boolean {
+  const value = readOptional("LIM_TITLE_PROACTIVE_ENABLED");
+  return value ? !["0", "false", "off", "no"].includes(value.toLowerCase()) : true;
+}
+
+/** SMS is opt-in at deployment time so a code deploy cannot contact agents accidentally. */
+export function isLimTitleSmsEnabled(): boolean {
+  const value = readOptional("LIM_TITLE_SMS_ENABLED");
+  return value ? ["1", "true", "on", "yes"].includes(value.toLowerCase()) : false;
+}
+
+/**
+ * Short branded URL displayed in the one-segment lead SMS. The formatter
+ * always emits an explicit HTTPS URL so mobile clients can linkify it safely.
+ */
+export function getLeadShortBaseUrl(): string {
+  const explicit = readOptional("LEAD_SHORT_BASE_URL");
+  const value = explicit ?? `${getPublicAppUrl()}/l`;
+  return value.replace(/\/+$/, "");
+}
+
+export function getTwilioLeadStatusCallbackUrl(): string {
+  return `${getPublicAppUrl()}/api/webhooks/twilio/sms-status`;
+}
+
+export function getTwilioInboundSmsUrl(): string {
+  return `${getPublicAppUrl()}/api/webhooks/twilio/inbound`;
+}
+
 export function getGoogleCloudProjectId(): string | undefined {
   return readOptional("GOOGLE_CLOUD_PROJECT_ID") ?? undefined;
 }
@@ -87,6 +126,17 @@ export function getGoogleCloudProjectId(): string | undefined {
 /** Public URL of the static sales portal (used for Stripe Checkout return URLs). */
 export function getSalesPortalUrl(): string {
   return `${getPublicAppUrl()}/sales-portal/`;
+}
+
+/**
+ * Temporary account-first sales-agent registration mode. Enabled by default so
+ * agents can create a free account; set false to restore the legacy signup-time
+ * Stripe/invitation gate.
+ */
+export function isSalesAgentFreeSignupEnabled(): boolean {
+  const value = readOptional("SALES_AGENT_FREE_SIGNUP_ENABLED");
+  if (!value) return true;
+  return !["0", "false", "off", "no"].includes(value.toLowerCase());
 }
 
 export function getIosAppStoreUrl(): string {

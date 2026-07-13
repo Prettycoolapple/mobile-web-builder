@@ -15,6 +15,9 @@ import {
   propertyCache,
   conversationSyncs,
   abuseEvents,
+  limTitleRequests,
+  listingAgentTargets,
+  leadSmsDeliveries,
   withDbRetry,
 } from "@workspace/db";
 import { requireAdmin } from "../lib/auth";
@@ -2061,6 +2064,63 @@ router.post("/admin/abuse/flag", requireAdmin, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "admin set abuse flag failed");
     res.status(500).json({ error: "Failed to update abuse flag" });
+  }
+});
+
+router.get("/admin/lim-title-leads/summary", requireAdmin, async (req, res) => {
+  try {
+    const [requestStatuses, smsStatuses, unmatched, optedOut] = await Promise.all([
+      db.select({ status: limTitleRequests.status, count: sql<number>`count(*)::int` })
+        .from(limTitleRequests).groupBy(limTitleRequests.status),
+      db.select({ status: leadSmsDeliveries.status, count: sql<number>`count(*)::int` })
+        .from(leadSmsDeliveries).groupBy(leadSmsDeliveries.status),
+      db.select({ count: sql<number>`count(*)::int` }).from(limTitleRequests)
+        .where(and(isNotNull(limTitleRequests.consentedAt), isNull(limTitleRequests.matchedAgentUserId))),
+      db.select({ count: sql<number>`count(*)::int` }).from(listingAgentTargets)
+        .where(isNotNull(listingAgentTargets.optedOutAt)),
+    ]);
+    res.json({
+      requests: Object.fromEntries(requestStatuses.map((row) => [row.status, row.count])),
+      sms: Object.fromEntries(smsStatuses.map((row) => [row.status, row.count])),
+      unmatchedConsentedLeads: unmatched[0]?.count ?? 0,
+      optedOutAgentNumbers: optedOut[0]?.count ?? 0,
+    });
+  } catch (err) {
+    req.log.error({ err }, "admin LIM/title lead summary failed");
+    res.status(500).json({ error: "Failed to load LIM/title lead summary" });
+  }
+});
+
+router.get("/admin/lim-title-leads", requireAdmin, async (req, res) => {
+  const limit = parseLimit(req.query.limit, 50, 200);
+  try {
+    const rows = await db
+      .select({
+        id: limTitleRequests.id,
+        propertyAddress: limTitleRequests.propertyAddress,
+        status: limTitleRequests.status,
+        offerSource: limTitleRequests.offerSource,
+        requesterUserId: limTitleRequests.requesterUserId,
+        matchedAgentUserId: limTitleRequests.matchedAgentUserId,
+        agentPhone: listingAgentTargets.phoneNumber,
+        agentName: listingAgentTargets.agentName,
+        optedOutAt: listingAgentTargets.optedOutAt,
+        consentedAt: limTitleRequests.consentedAt,
+        connectedAt: limTitleRequests.connectedAt,
+        createdAt: limTitleRequests.createdAt,
+        smsStatus: leadSmsDeliveries.status,
+        smsSid: leadSmsDeliveries.twilioSid,
+        smsError: leadSmsDeliveries.lastError,
+      })
+      .from(limTitleRequests)
+      .innerJoin(listingAgentTargets, eq(listingAgentTargets.id, limTitleRequests.agentTargetId))
+      .leftJoin(leadSmsDeliveries, eq(leadSmsDeliveries.requestId, limTitleRequests.id))
+      .orderBy(desc(limTitleRequests.createdAt))
+      .limit(limit);
+    res.json({ rows, limit });
+  } catch (err) {
+    req.log.error({ err }, "admin LIM/title lead list failed");
+    res.status(500).json({ error: "Failed to load LIM/title leads" });
   }
 });
 
