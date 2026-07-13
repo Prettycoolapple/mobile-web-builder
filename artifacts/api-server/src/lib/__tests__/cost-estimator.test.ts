@@ -264,24 +264,40 @@ describe("estimateCosts — existing dwelling / demolition", () => {
       floor_area_sqm: 120,
     });
     const aucklandDefault = estimateCosts(property, 1);
+    const hamiltonDefault = estimateCosts(property, 1, {
+      cost_profile: regionalCostProfileForProvider("hamilton"),
+    });
     const whangareiDefault = estimateCosts(property, 1, {
       cost_profile: regionalCostProfileForProvider("whangarei"),
     });
     const nelsonDefault = estimateCosts(property, 1, {
       cost_profile: regionalCostProfileForProvider("nelson"),
     });
+    const rotoruaDefault = estimateCosts(property, 1, {
+      cost_profile: regionalCostProfileForProvider("rotorua"),
+    });
+    const whakataneDefault = estimateCosts(property, 1, {
+      cost_profile: regionalCostProfileForProvider("whakatane"),
+    });
     const customProfile = regionalCostProfileForProvider("whangarei");
     customProfile.construction.baseLowPerSqm = 3_000;
     customProfile.construction.baseHighPerSqm = 4_000;
     const whangareiCustom = estimateCosts(property, 1, { cost_profile: customProfile });
 
+    expect(hamiltonDefault.construction_low).toBe(aucklandDefault.construction_low);
+    expect(hamiltonDefault.construction_high).toBe(aucklandDefault.construction_high);
     expect(whangareiDefault.construction_low).toBe(aucklandDefault.construction_low);
     expect(whangareiDefault.construction_high).toBe(aucklandDefault.construction_high);
     expect(nelsonDefault.construction_low).toBe(aucklandDefault.construction_low);
     expect(nelsonDefault.construction_high).toBe(aucklandDefault.construction_high);
+    expect(rotoruaDefault.construction_low).toBe(aucklandDefault.construction_low);
+    expect(whakataneDefault.construction_high).toBe(aucklandDefault.construction_high);
     expect(whangareiCustom.construction_low).toBeGreaterThan(whangareiDefault.construction_low);
+    expect(regionalCostProfileForProvider("hamilton")).toMatchObject({ id: "hamilton-default", providerId: "hamilton" });
     expect(regionalCostProfileForProvider("whangarei")).toMatchObject({ id: "whangarei-default", providerId: "whangarei" });
     expect(regionalCostProfileForProvider("nelson")).toMatchObject({ id: "nelson-default", providerId: "nelson" });
+    expect(regionalCostProfileForProvider("rotorua")).toMatchObject({ id: "rotorua-default", providerId: "rotorua" });
+    expect(regionalCostProfileForProvider("whakatane")).toMatchObject({ id: "whakatane-default", providerId: "whakatane" });
     expect(regionalCostProfileForProvider("unsupported").id).toBe("unsupported-default");
 
     // Queenstown + Wellington ship their own editable cost modules that start

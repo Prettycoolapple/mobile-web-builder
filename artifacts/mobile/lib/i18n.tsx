@@ -1045,7 +1045,7 @@ const en: Catalog = {
   "site_plan.layer.nearby_boundaries": "Nearby property boundaries",
   "site_plan.layer.stormwater": "Stormwater",
   "site_plan.layer.wastewater": "Wastewater",
-  "site_plan.layer.water_supply": "Water supply",
+  "site_plan.layer.water_supply": "Potable water / water supply",
   "site_plan.layer.contours": "Contours",
   "site_plan.layer.heritage": "Heritage",
   "site_plan.layer.notable_trees": "Notable trees",

@@ -87,11 +87,15 @@ describe("regional infrastructure fetchers", () => {
     expect(hasRegionalInfrastructureProvider("hamilton")).toBe(true);
     expect(hasRegionalInfrastructureProvider("qldc")).toBe(true);
     expect(hasRegionalInfrastructureProvider("nelson")).toBe(true);
+    expect(hasRegionalInfrastructureProvider("rotorua")).toBe(true);
+    expect(hasRegionalInfrastructureProvider("whakatane")).toBe(true);
 
     const targets = regionalInfrastructureSmokeTargets();
     expect(targets.some((target) => target.providerId === "hamilton" && target.serviceName === "Water Supply")).toBe(true);
     expect(targets.some((target) => target.providerId === "nelson" && target.serviceName === "Stormwater")).toBe(true);
     expect(targets.some((target) => target.providerId === "qldc" && target.serviceName === "Wastewater")).toBe(true);
     expect(targets.some((target) => target.providerId === "dunedin" && target.serviceName === "Water Supply")).toBe(true);
+    expect(targets.some((target) => target.providerId === "rotorua" && target.serviceName === "Stormwater")).toBe(true);
+    expect(targets.some((target) => target.providerId === "whakatane" && target.serviceName === "Wastewater")).toBe(true);
   });
 });

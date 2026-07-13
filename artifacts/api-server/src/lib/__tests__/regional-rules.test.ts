@@ -261,9 +261,35 @@ describe("regional planning rule status", () => {
       1_200,
     )).toMatchObject({
       subdivisionRules: "not_modelled",
+      modellingStatus: "roi_enabled",
       automaticYieldClaimsAllowed: false,
-      automaticRoiAllowed: false,
+      automaticRoiAllowed: true,
     });
+  });
+
+  it("allows Hamilton Transport Corridor zones to keep zoning and interim ROI without yield claims", () => {
+    const status = regionalPlanningRuleStatus(
+      {
+        providerId: "hamilton",
+        providerName: "Hamilton City Council planning provider",
+      },
+      {
+        zone_code: "Transport Corridor Zone",
+        zone_description: "Transport Corridor Zone - Hamilton District Plan Zoning",
+        min_lot_size_sqm: null,
+        raw_zone: "{}",
+      },
+      2_920,
+    );
+
+    expect(status).toMatchObject({
+      subdivisionRules: "not_modelled",
+      modellingStatus: "roi_enabled",
+      automaticYieldClaimsAllowed: false,
+      automaticRoiAllowed: true,
+      verifiedMinimumLotSqm: null,
+    });
+    expect(status.note).toContain("Interim ROI uses nearby comparable-sales GDV");
   });
 
   it("enables Christchurch Medium Density yield from Chapter 8", () => {
@@ -750,6 +776,23 @@ describe("regional planning rule status", () => {
       standardMinimumLotSqm: 400,
       roiEnabled: true,
     }));
+  });
+
+  it("allows interim ROI for unmodelled Rotorua and Whakatane zones without yield claims", () => {
+    for (const [providerId, zoneCode] of [
+      ["rotorua", "RESZ1"],
+      ["whakatane", "Rural Production Zone"],
+    ] as const) {
+      expect(regionalPlanningRuleStatus(
+        { providerId, providerName: `${providerId} planning provider` },
+        { zone_code: zoneCode, zone_description: zoneCode, min_lot_size_sqm: null, raw_zone: "{}" },
+        1_000,
+      )).toMatchObject({
+        modellingStatus: "roi_enabled",
+        automaticRoiAllowed: true,
+        automaticYieldClaimsAllowed: false,
+      });
+    }
   });
 
   it("matches QLDC Low Density Residential to the Lower Density/Suburban pack", () => {

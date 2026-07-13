@@ -55,8 +55,50 @@ const TOP_OF_THE_SOUTH_MAPS =
 // note until a Kāpiti three-waters endpoint is wired.
 const WELLINGTON_WATER_THREE_WATERS =
   "https://gis.wellingtonwater.co.nz/server1/rest/services/Councils/All_Councils_3_Waters_Asset_Data/MapServer";
+const ROTORUA_THREE_WATERS =
+  "https://gis.rdc.govt.nz/server/rest/services/Asset/3_Waters/MapServer";
+const WHAKATANE_WATER =
+  "https://gis.whakatane.govt.nz/arcgis/rest/services/ThreeWaters/WaterSupplyAssets/MapServer";
+const WHAKATANE_WASTEWATER =
+  "https://gis.whakatane.govt.nz/arcgis/rest/services/ThreeWaters/WasteWaterAssets/MapServer";
+const WHAKATANE_STORMWATER =
+  "https://gis.whakatane.govt.nz/arcgis/rest/services/ThreeWaters/StormWaterAssets/MapServer";
 
 const REGIONAL_INFRASTRUCTURE: Partial<Record<PlanningProviderId, RegionalInfrastructureGroup[]>> = {
+  rotorua: [
+    group("Water Supply", ROTORUA_THREE_WATERS, "Rotorua Lakes Council", [
+      [95, "Water service line"],
+      [105, "Water main"],
+    ]),
+    group("Wastewater", ROTORUA_THREE_WATERS, "Rotorua Lakes Council", [
+      [335, "Wastewater service line"],
+      [345, "Wastewater main"],
+    ]),
+    group("Stormwater", ROTORUA_THREE_WATERS, "Rotorua Lakes Council", [
+      [195, "Stormwater lead"],
+      [205, "Stormwater channel"],
+      [215, "Stormwater service line"],
+      [225, "Stormwater main"],
+    ], 1000),
+  ],
+  whakatane: [
+    group("Water Supply", WHAKATANE_WATER, "Whakatane District Council", [
+      [47, "Water connection"],
+      [48, "Water main"],
+      [49, "Water rider main"],
+    ]),
+    group("Wastewater", WHAKATANE_WASTEWATER, "Whakatane District Council", [
+      [47, "Wastewater connection"],
+      [48, "Wastewater main"],
+      [49, "Wastewater rising main"],
+    ]),
+    group("Stormwater", WHAKATANE_STORMWATER, "Whakatane District Council", [
+      [44, "Stormwater connection"],
+      [45, "Stormwater main"],
+      [46, "Stormwater rising main"],
+      [47, "Stormwater open drain"],
+    ], 1000),
+  ],
   hamilton: [
     group("Water Supply", HAMILTON_WATER, "Hamilton City Council", [
       [0, "Water service line/connection"],

@@ -15,6 +15,8 @@ export type PlanningProviderId =
   | "qldc"
   | "wellington"
   | "dunedin"
+  | "rotorua"
+  | "whakatane"
   | "unsupported";
 
 export interface ProviderEndpointRef {
@@ -161,6 +163,8 @@ const QLDC_BOUNDS: Bounds = { minLat: -45.4, maxLat: -44.25, minLng: 168.0, maxL
 // intentionally excluded (no provider coverage yet).
 const WELLINGTON_BOUNDS: Bounds = { minLat: -41.45, maxLat: -40.70, minLng: 174.60, maxLng: 175.35 };
 const DUNEDIN_BOUNDS: Bounds = { minLat: -46.15, maxLat: -45.55, minLng: 169.95, maxLng: 171.15 };
+const ROTORUA_BOUNDS: Bounds = { minLat: -38.45, maxLat: -37.85, minLng: 175.85, maxLng: 176.55 };
+const WHAKATANE_BOUNDS: Bounds = { minLat: -38.35, maxLat: -37.70, minLng: 176.55, maxLng: 177.40 };
 
 const providerRegistry: PlanningProvider[] = [
   provider(
@@ -342,6 +346,49 @@ const providerRegistry: PlanningProvider[] = [
       { label: "Dunedin CityCare Utilities", url: "https://apps.dunedin.govt.nz/arcgis/rest/services/Public/CityCare/MapServer" },
     ],
     (context) => supportsAny(context, DUNEDIN_BOUNDS, [/\bdunedin\b/, /\botepoti\b/, /\bmosgiel\b/]),
+  ),
+  provider(
+    "whakatane",
+    "Whakatane District Council planning provider",
+    "Whakatane District Council",
+    "Bay of Plenty",
+    "partial",
+    "Whakatane District Plan",
+    [
+      { label: "Whakatane District Plan NPS ePlan", url: "https://gis.whakatane.govt.nz/arcgis/rest/services/Planning/OperativeDistrictPlanNPS_ePlan/MapServer" },
+      { label: "Whakatane Stormwater Assets", url: "https://gis.whakatane.govt.nz/arcgis/rest/services/ThreeWaters/StormWaterAssets/MapServer" },
+      { label: "Whakatane Wastewater Assets", url: "https://gis.whakatane.govt.nz/arcgis/rest/services/ThreeWaters/WasteWaterAssets/MapServer" },
+      { label: "Whakatane Water Supply Assets", url: "https://gis.whakatane.govt.nz/arcgis/rest/services/ThreeWaters/WaterSupplyAssets/MapServer" },
+    ],
+    (context) => supportsAny(context, WHAKATANE_BOUNDS, [
+      /\bwhakatane\b/,
+      /\brotoma\b/,
+      /\bmatata\b/,
+      /\bedgecumbe\b/,
+      /\bohope\b/,
+      /\btaneatua\b/,
+    ]),
+  ),
+  provider(
+    "rotorua",
+    "Rotorua Lakes Council planning provider",
+    "Rotorua Lakes Council",
+    "Bay of Plenty",
+    "partial",
+    "Rotorua District Plan",
+    [
+      { label: "Rotorua District Plan", url: "https://gis.rdc.govt.nz/server/rest/services/Core/DistrictPlan/MapServer" },
+      { label: "Rotorua Planning and Development", url: "https://gis.rdc.govt.nz/server/rest/services/Core/Planning_and_Development/MapServer" },
+      { label: "Rotorua Three Waters", url: "https://gis.rdc.govt.nz/server/rest/services/Asset/3_Waters/MapServer" },
+    ],
+    (context) => supportsAny(context, ROTORUA_BOUNDS, [
+      /\brotorua\b/,
+      /\bkoutu\b/,
+      /\bngongotaha\b/,
+      /\bmamaku\b/,
+      /\bokareka\b/,
+      /\breporoa\b/,
+    ]),
   ),
   provider(
     "unsupported",

@@ -112,9 +112,12 @@ const DUNEDIN_GR2_VARIATION2_SOURCE =
   "https://www.dunedin.govt.nz/__data/assets/pdf_file/0011/873497/V2-General-Residential-2-Rezoning-updated.pdf";
 
 const INTERIM_COMPARABLE_ROI_PROVIDERS = new Set<PlanningProviderMetadata["providerId"]>([
+  "hamilton",
   "nelson",
   "qldc",
   "whangarei",
+  "rotorua",
+  "whakatane",
 ]);
 
 const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [

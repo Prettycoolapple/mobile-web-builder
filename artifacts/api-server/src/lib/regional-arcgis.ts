@@ -79,6 +79,12 @@ const UHCC_DISTRICT_PLAN_ZONES =
   "https://maps.upperhutt.govt.nz/arcgis/rest/services/District_Plan_Zones/MapServer";
 const KCDC_DISTRICT_PLAN_ZONES =
   "https://maps.kapiticoast.govt.nz/server/rest/services/Public/District_Plan_Zones/MapServer";
+const ROTORUA_DISTRICT_PLAN =
+  "https://gis.rdc.govt.nz/server/rest/services/Core/DistrictPlan/MapServer";
+const ROTORUA_PLANNING =
+  "https://gis.rdc.govt.nz/server/rest/services/Core/Planning_and_Development/MapServer";
+const WHAKATANE_DISTRICT_PLAN =
+  "https://gis.whakatane.govt.nz/arcgis/rest/services/Planning/OperativeDistrictPlanNPS_ePlan/MapServer";
 
 const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
   hamilton: {
@@ -263,6 +269,61 @@ const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
       overlay(HCC_DISTRICT_PLAN, 129, "Significant Natural Resource Site", "polygon", "restricted"),
       overlay(HCC_DISTRICT_PLAN, 117, "National Grid Yard", "polygon", "restricted"),
       overlay(HCC_DISTRICT_PLAN, 115, "Notable Tree", "point", "moderate", 30),
+    ],
+  },
+  rotorua: {
+    zoneLayers: [
+      {
+        serviceUrl: ROTORUA_DISTRICT_PLAN,
+        layerId: 55,
+        label: "Rotorua District Plan Zoning",
+        codeField: "Code",
+        nameFields: ["Description", "Type", "Code"],
+        detailFields: ["Type", "Description", "OrderDesc"],
+      },
+    ],
+    overlayLayers: [
+      overlay(ROTORUA_PLANNING, 195, "Designation", "polygon", "control", undefined, ["Name", "Description", "Type"]),
+      overlay(ROTORUA_PLANNING, 225, "Precinct", "polygon", "control"),
+      overlay(ROTORUA_PLANNING, 230, "Development Area", "polygon", "control"),
+      overlay(ROTORUA_PLANNING, 25, "Notable Tree Area", "polygon", "moderate"),
+      overlay(ROTORUA_PLANNING, 90, "Outstanding Natural Feature or Landscape", "polygon", "restricted"),
+      overlay(ROTORUA_PLANNING, 95, "Significant Natural Area", "polygon", "restricted"),
+      overlay(ROTORUA_PLANNING, 115, "Airport Noise Contours", "polygon", "moderate"),
+      overlay(ROTORUA_PLANNING, 180, "Three Waters Exclusion Zone", "polygon", "restricted"),
+      overlay(ROTORUA_PLANNING, 240, "Geothermal Systems", "polygon", "restricted"),
+      overlay(ROTORUA_PLANNING, 250, "Fault Avoidance Zone", "polygon", "restricted"),
+      overlay(ROTORUA_PLANNING, 330, "Liquefaction Vulnerability", "polygon", "moderate"),
+      overlay(ROTORUA_PLANNING, 340, "Landslide Susceptibility", "polygon", "restricted"),
+      overlay(ROTORUA_PLANNING, 362, "Stormwater Flood Depth", "polygon", "restricted"),
+    ],
+  },
+  whakatane: {
+    zoneLayers: [
+      {
+        serviceUrl: WHAKATANE_DISTRICT_PLAN,
+        layerId: 36,
+        label: "Whakatane District Plan Zone",
+        codeField: "Zone_Name",
+        nameFields: ["Zone_Name"],
+        detailFields: ["Source"],
+      },
+    ],
+    overlayLayers: [
+      overlay(WHAKATANE_DISTRICT_PLAN, 8, "Designation", "polygon", "control", undefined, ["WDC_ID", "AUTHORITY", "PURPOSE", "ZONE"]),
+      overlay(WHAKATANE_DISTRICT_PLAN, 65, "Whakatane Town Centre Precinct", "polygon", "control"),
+      overlay(WHAKATANE_DISTRICT_PLAN, 68, "Development Area", "polygon", "control"),
+      overlay(WHAKATANE_DISTRICT_PLAN, 4, "Historic Heritage", "point", "restricted", 30),
+      overlay(WHAKATANE_DISTRICT_PLAN, 25, "Significant Indigenous Biodiversity Site", "polygon", "restricted"),
+      overlay(WHAKATANE_DISTRICT_PLAN, 27, "Outstanding Natural Feature or Landscape", "polygon", "restricted"),
+      overlay(WHAKATANE_DISTRICT_PLAN, 29, "Erosion Risk Zone", "polygon", "restricted"),
+      overlay(WHAKATANE_DISTRICT_PLAN, 31, "Debris Flow Policy Area", "polygon", "restricted"),
+      overlay(WHAKATANE_DISTRICT_PLAN, 35, "Inundation Risk Zone", "polygon", "restricted"),
+      overlay(WHAKATANE_DISTRICT_PLAN, 49, "Gas Transmission Pipeline Corridor", "polygon", "restricted"),
+      overlay(WHAKATANE_DISTRICT_PLAN, 50, "National Grid Transmission Line", "polyline", "restricted", 30),
+      overlay(WHAKATANE_DISTRICT_PLAN, 57, "Building Height Restriction", "polygon", "control"),
+      overlay(WHAKATANE_DISTRICT_PLAN, 71, "State Highway Buffer", "polygon", "moderate"),
+      overlay(WHAKATANE_DISTRICT_PLAN, 73, "Marae and Urupa Amenity Yard", "polygon", "restricted"),
     ],
   },
   dunedin: {

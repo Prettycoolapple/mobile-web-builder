@@ -172,6 +172,47 @@ describe("regional ArcGIS planning fetchers", () => {
     expect(queryUrls.some((url) => url.includes("/Hutt_City_District_Plan/MapServer/39/query"))).toBe(true);
   });
 
+  it("maps Rotorua Lakes Council zoning fields", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/Core/DistrictPlan/MapServer/55/query")) {
+        return new Response(JSON.stringify({ features: [{ attributes: {
+          Code: "RESZ1",
+          Type: "Residential 1 Zone",
+          Description: "Medium Density Residential Zone",
+          OrderDesc: "PC9",
+        } }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ fields: [] }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const zone = await fetchRegionalPlanningZone(jurisdiction("rotorua"), -38.1251, 176.2438);
+
+    expect(zone.zone_code).toBe("RESZ1");
+    expect(zone.zone_description).toContain("Medium Density Residential Zone");
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/Core/DistrictPlan/MapServer/55/query"))).toBe(true);
+  });
+
+  it("maps Whakatane District Plan zoning fields", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/OperativeDistrictPlanNPS_ePlan/MapServer/36/query")) {
+        return new Response(JSON.stringify({ features: [{ attributes: {
+          Zone_Name: "Rural Production Zone",
+        } }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ fields: [] }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const zone = await fetchRegionalPlanningZone(jurisdiction("whakatane"), -38.0166, 176.7157);
+
+    expect(zone.zone_code).toBe("Rural Production Zone");
+    expect(zone.zone_description).toContain("Rural Production Zone");
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/OperativeDistrictPlanNPS_ePlan/MapServer/36/query"))).toBe(true);
+  });
+
   it("maps configured regional overlay hits into conservative report overlays", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       features: [
@@ -201,5 +242,7 @@ describe("regional ArcGIS planning fetchers", () => {
     expect(targets.some((target) => target.providerId === "christchurch" && target.label.includes("Heritage"))).toBe(true);
     expect(targets.some((target) => target.providerId === "nelson" && target.label === "Nelson Planning Zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "qldc" && target.kind === "zone")).toBe(true);
+    expect(targets.some((target) => target.providerId === "rotorua" && target.kind === "zone")).toBe(true);
+    expect(targets.some((target) => target.providerId === "whakatane" && target.kind === "zone")).toBe(true);
   });
 });

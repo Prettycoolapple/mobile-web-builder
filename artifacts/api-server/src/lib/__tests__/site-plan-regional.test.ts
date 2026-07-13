@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchLINZParcelsNear } from "../linz";
+import { fetchLINZParcel, fetchLINZParcelsNear } from "../linz";
 import { buildSitePlanForReport } from "../site-plan";
+import { regionalSitePlanOverlayLayers } from "../regional-arcgis";
 import type { LinzParcel } from "../linz";
 import type { RawPropertyData } from "../pipeline";
 
@@ -43,6 +44,7 @@ describe("regional site-plan wrapper", () => {
     process.env[FLAG] = "true";
     process.env["LINZ_API_KEY"] = "";
     vi.clearAllMocks();
+    vi.mocked(fetchLINZParcel).mockResolvedValue(null);
     vi.mocked(fetchLINZParcelsNear).mockResolvedValue([]);
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ features: [] }), {
       status: 200,
@@ -63,15 +65,10 @@ describe("regional site-plan wrapper", () => {
 
     const sitePlan = await buildSitePlanForReport("10 Victoria Street, Hamilton", cachedRaw);
 
-    expect(sitePlan.layers.map((layer) => layer.group)).toEqual([
-      "boundary",
-      "boundary",
-      "services",
-      "services",
-      "services",
-      "contours",
-    ]);
-    expect(sitePlan.layers.some((layer) => layer.group === "planning")).toBe(false);
+    const planningLayers = sitePlan.layers.filter((layer) => layer.group === "planning");
+    expect(planningLayers).toHaveLength(regionalSitePlanOverlayLayers("hamilton").length);
+    expect(planningLayers.every((layer) => layer.available === false)).toBe(true);
+    expect(planningLayers.some((layer) => /designation|control|corridor/i.test(layer.label))).toBe(true);
     expect(sitePlan.layers.filter((layer) => layer.group === "services").map((layer) => layer.label).sort()).toEqual([
       "Stormwater",
       "Wastewater",
@@ -114,6 +111,28 @@ describe("regional site-plan wrapper", () => {
 
     expect(sitePlan.layers.some((layer) => layer.group === "planning")).toBe(true);
     expect(sitePlan.layers.some((layer) => layer.group === "services")).toBe(true);
+    expect(sitePlan.layers.filter((layer) => layer.group === "planning").some((layer) => layer.available)).toBe(true);
+  });
+
+  it("shows planning controls and all three service rows for Rotorua and Whakatane", async () => {
+    const samples = [
+      { providerId: "rotorua" as const, address: "85 Whittaker Road, Koutu, Rotorua", lat: -38.1251, lng: 176.2438 },
+      { providerId: "whakatane" as const, address: "1134 Braemar Road, Rotoma", lat: -38.0166, lng: 176.7157 },
+    ];
+
+    for (const sample of samples) {
+      const cachedRaw = {
+        geocode: { lat: sample.lat, lng: sample.lng, formatted: sample.address, suburb: null },
+        linz_parcel: null,
+      } as RawPropertyData;
+      const sitePlan = await buildSitePlanForReport(sample.address, cachedRaw);
+      const planning = sitePlan.layers.filter((layer) => layer.group === "planning");
+      const services = sitePlan.layers.filter((layer) => layer.group === "services");
+
+      expect(planning).toHaveLength(regionalSitePlanOverlayLayers(sample.providerId).length);
+      expect(planning.some((layer) => /designation|precinct|development|control/i.test(layer.label))).toBe(true);
+      expect(services.map((layer) => layer.label).sort()).toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    }
   });
 
   afterEach(() => {

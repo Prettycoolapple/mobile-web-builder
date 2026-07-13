@@ -425,7 +425,7 @@ export interface RawPropertyData {
   derived_scores?: DerivedCardScores;
 }
 
-export const RAW_PROPERTY_SCHEMA_VERSION = 5;
+export const RAW_PROPERTY_SCHEMA_VERSION = 6;
 
 export interface PipelineResult {
   address_input: string;
@@ -1589,6 +1589,40 @@ export async function runPropertyPipeline(
     }
   }
 
+  const regionalComparableFallback = planningProvider?.providerId === "rotorua"
+    ? "rotorua"
+    : planningProvider?.providerId === "whakatane"
+      ? "whakatane"
+      : null;
+  if (
+    regionalComparableFallback &&
+    comparablesResult.comparables.length < 3 &&
+    regionalComparableFallback.toLowerCase() !== suburb.toLowerCase()
+  ) {
+    const districtSupplement = await timed(
+      "regional_district_comparables",
+      () => fetchSupplementListingComparables({
+        suburbName: regionalComparableFallback,
+        excludeAddress: subjectAddress,
+        priceHintNzd: merged.listing_price ?? merged.cv_nzd,
+        landHintSqm: merged.land_area_sqm,
+        minTarget: 3,
+        maxResults: 8,
+      }),
+      timing,
+    );
+    if (!districtSupplement.failed && districtSupplement.value?.length) {
+      comparablesResult = getComparables(
+        suburb,
+        merged.zone_code,
+        lat,
+        lng,
+        merged.comparables.length > 0 ? merged.comparables : undefined,
+        districtSupplement.value,
+      );
+    }
+  }
+
   // Step 1 — Sequentially enrich comparable candidates with CV, build year,
   // and floor area from AC GIS. Each property is fully resolved before the next.
   if (comparablesResult.comparables.length > 0) {
@@ -1646,6 +1680,22 @@ export async function runPropertyPipeline(
   ]);
 
   const hasRealComparablePricing = comparablesResult.avg_sale_price > 0 || comparablesResult.avg_price_per_sqm > 0;
+  const regionalCvExitFallbackAllowed = planningProvider?.providerId === "rotorua"
+    || planningProvider?.providerId === "whakatane";
+  const fallbackExitSalePrice = !hasRealComparablePricing && regionalCvExitFallbackAllowed
+    ? merged.listing_price ?? merged.cv_nzd
+    : null;
+  const roiAverageSalePrice = comparablesResult.avg_sale_price > 0
+    ? comparablesResult.avg_sale_price
+    : fallbackExitSalePrice ?? 0;
+  const hasRoiExitPricing = hasRealComparablePricing || roiAverageSalePrice > 0;
+  if (fallbackExitSalePrice) {
+    merged.data_sources["roi_exit_price"] = merged.listing_price
+      ? "subject_listing_price_low_confidence"
+      : "subject_cv_low_confidence";
+    const note = "ROI exit value uses the subject listing price or CV because no credible comparable-sale pricing was available; treat the result as low confidence.";
+    if (!merged.discrepancies.includes(note)) merged.discrepancies.push(note);
+  }
   const regionalRoiAllowed = !planningProvider
     || planningProvider.providerId === "auckland-legacy"
     || regionalPlanningRuleStatus(planningProvider, zoneData, merged.land_area_sqm, merged.overlays).automaticRoiAllowed;
@@ -1665,11 +1715,11 @@ export async function runPropertyPipeline(
   // neighbourhood adjustment stacked with a dense-zone discount can't collapse
   // GDV to an implausibly small figure.
   const combinedGdvMultiplier = Math.max(0.4, Math.min(1, neighbourhoodGdvMultiplier * gdvTypologyMultiplier));
-  const scenarios = hasRealComparablePricing && regionalRoiAllowed
+  const scenarios = hasRoiExitPricing && regionalRoiAllowed
     ? calculateBearBaseBullScenarios(
         costs,
         comparablesResult.avg_price_per_sqm,
-        comparablesResult.avg_sale_price,
+        roiAverageSalePrice,
         modelledLotResult.lots,
         modelledLotResult.sqm_per_lot,
         interestRateOutlook,
@@ -1681,7 +1731,7 @@ export async function runPropertyPipeline(
     data: merged,
     baseCosts: costs,
     lotResult: modelledLotResult,
-    avgSalePrice: comparablesResult.avg_sale_price,
+    avgSalePrice: roiAverageSalePrice,
     avgPricePerSqm: comparablesResult.avg_price_per_sqm,
     interestRateOutlook,
     assessment: strategyAssessment,

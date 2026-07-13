@@ -59,6 +59,87 @@ function scoreStreetNumberMatch(input: string, candidateNumber: string | null): 
   return 0;
 }
 
+function streetNumberMatchesExactly(input: string, candidateNumber: string | null): boolean {
+  const requested = streetNumberFromFormatted(input);
+  if (!requested) return true;
+  const candidate = candidateNumber ? streetNumberFromFormatted(candidateNumber) : null;
+  return Boolean(candidate && candidate === requested);
+}
+
+type CouncilAddressSource = {
+  serviceUrl: string;
+  matches: RegExp;
+  where: (parsed: { number: number; suffix: string; road: string }) => string;
+  formatted: (attributes: Record<string, unknown>) => string | null;
+};
+
+const COUNCIL_ADDRESS_SOURCES: CouncilAddressSource[] = [
+  {
+    serviceUrl: "https://gis.whakatane.govt.nz/arcgis/rest/services/Geocortex/Cadastre/MapServer/1",
+    matches: /\b(whakatane|rotoma|matata|edgecumbe|ohope|taneatua)\b/i,
+    where: ({ number, suffix, road }) =>
+      `HouseNumber = ${number} AND UPPER(Address_ascii) = '${number}${suffix} ${road.replaceAll("'", "''")}'`,
+    formatted: (attrs) => {
+      const address = String(attrs["Address"] ?? "").trim();
+      const town = String(attrs["Town"] ?? "").trim();
+      return address ? [address, town, "New Zealand"].filter(Boolean).join(", ") : null;
+    },
+  },
+  {
+    serviceUrl: "https://gis.rdc.govt.nz/server/rest/services/Asset/3_Waters/MapServer/385",
+    matches: /\b(rotorua|koutu|ngongotaha|mamaku|okareka|reporoa)\b/i,
+    where: ({ number, suffix, road }) => {
+      const roadWithoutType = road.replace(/\s+(ROAD|STREET|AVENUE|DRIVE|PLACE|LANE|TERRACE|CRESCENT|WAY)$/i, "");
+      return `HouseNo = ${number} AND UPPER(HouseSuffix) = '${suffix}' AND UPPER(RoadName) = '${roadWithoutType.replaceAll("'", "''")}'`;
+    },
+    formatted: (attrs) => {
+      const number = `${String(attrs["HouseNo"] ?? "").trim()}${String(attrs["HouseSuffix"] ?? "").trim()}`;
+      const road = String(attrs["Road"] ?? "").trim();
+      const suburb = String(attrs["Suburb"] ?? "").trim();
+      return number && road ? [`${number} ${road}`, suburb, "Rotorua", "New Zealand"].filter(Boolean).join(", ") : null;
+    },
+  },
+];
+
+function parseCouncilStreetAddress(address: string): { number: number; suffix: string; road: string } | null {
+  const parts = address.split(",").map((part) => part.trim()).filter(Boolean);
+  const firstLine = /^\d+[a-z]?$/i.test(parts[0] ?? "") && parts[1]
+    ? `${parts[0]} ${parts[1]}`
+    : parts[0] ?? "";
+  const match = firstLine.match(/^(\d+)([a-z]?)\s+(.+)$/i);
+  if (!match) return null;
+  return { number: Number(match[1]), suffix: (match[2] ?? "").toUpperCase(), road: match[3]!.toUpperCase() };
+}
+
+async function councilAddressGeocode(address: string): Promise<GeoResult | null> {
+  const parsed = parseCouncilStreetAddress(address);
+  const source = COUNCIL_ADDRESS_SOURCES.find((candidate) => candidate.matches.test(address));
+  if (!parsed || !source) return null;
+
+  const url = new URL(`${source.serviceUrl}/query`);
+  url.searchParams.set("f", "json");
+  url.searchParams.set("where", source.where(parsed));
+  url.searchParams.set("outFields", "*");
+  url.searchParams.set("returnGeometry", "true");
+  url.searchParams.set("outSR", "4326");
+  const response = await fetch(url.toString(), { signal: AbortSignal.timeout(8000) });
+  if (!response.ok) throw new Error(`Council address lookup HTTP ${response.status}`);
+  const data = await response.json() as {
+    features?: Array<{ attributes?: Record<string, unknown>; geometry?: { x?: number; y?: number } }>;
+    error?: { message?: string };
+  };
+  if (data.error) throw new Error(`Council address lookup error: ${data.error.message ?? "unknown"}`);
+  const exact = (data.features ?? []).find((feature) => {
+    const formatted = source.formatted(feature.attributes ?? {});
+    return formatted && streetNumberMatchesExactly(address, streetNumberFromFormatted(formatted));
+  });
+  const formatted = exact ? source.formatted(exact.attributes ?? {}) : null;
+  const lat = exact?.geometry?.y;
+  const lng = exact?.geometry?.x;
+  if (!formatted || !Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat: lat!, lng: lng!, formatted, suburb: null };
+}
+
 async function nominatimGeocode(address: string): Promise<GeoResult | null> {
   const query = encodeURIComponent(`${address}, New Zealand`);
   const url = `https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=5&countrycodes=nz&addressdetails=1`;
@@ -90,6 +171,8 @@ async function nominatimGeocode(address: string): Promise<GeoResult | null> {
   if (!results || results.length === 0) return null;
 
   const best = chooseBestNominatimRow(address, results);
+  const bestNumber = best.address?.house_number ?? streetNumberFromFormatted(best.display_name);
+  if (!streetNumberMatchesExactly(address, bestNumber)) return null;
   return nominatimRowToGeo(best);
 }
 
@@ -181,7 +264,11 @@ async function googleGeocode(address: string, apiKey: string): Promise<GeoResult
 
   if (data.status !== "OK" || !data.results.length) return null;
 
-  const r = chooseBestGoogleResult(address, data.results);
+  const exactNumberResults = data.results.filter((result) =>
+    streetNumberMatchesExactly(address, googleStreetNumber(result)),
+  );
+  if (parseLeadingStreetNumber(address) && exactNumberResults.length === 0) return null;
+  const r = chooseBestGoogleResult(address, exactNumberResults.length > 0 ? exactNumberResults : data.results);
   return {
     lat: r.geometry.location.lat,
     lng: r.geometry.location.lng,
@@ -226,11 +313,18 @@ export async function tryGeocodeAddress(address: string): Promise<GeoResult | nu
   const candidates = Array.from(new Set([address.trim(), normaliseNzAddressForGeocode(address)]))
     .filter(Boolean);
 
+  try {
+    const exactCouncilAddress = await councilAddressGeocode(address);
+    if (exactCouncilAddress) return exactCouncilAddress;
+  } catch (err) {
+    logger.warn({ err, address }, "Council exact-address geocoding failed");
+  }
+
   if (googleKey) {
     for (const candidate of candidates) {
       try {
         const result = await googleGeocode(candidate, googleKey);
-        if (result) {
+        if (result && streetNumberMatchesExactly(address, streetNumberFromFormatted(result.formatted))) {
           logger.debug({ address, candidate, result }, "Geocoded via Google Maps");
           return result;
         }
@@ -242,13 +336,13 @@ export async function tryGeocodeAddress(address: string): Promise<GeoResult | nu
 
   try {
     const result = await nominatimGeocode(address);
-    if (result) return result;
+    if (result && streetNumberMatchesExactly(address, streetNumberFromFormatted(result.formatted))) return result;
   } catch (err) {
     logger.warn({ err }, "Geocode probe failed — no result");
     for (const candidate of candidates.slice(1)) {
       try {
         const result = await nominatimGeocode(candidate);
-        if (result) return result;
+        if (result && streetNumberMatchesExactly(address, streetNumberFromFormatted(result.formatted))) return result;
       } catch (fallbackErr) {
         logger.warn({ err: fallbackErr, candidate }, "Geocode normalized fallback failed");
       }
@@ -259,7 +353,7 @@ export async function tryGeocodeAddress(address: string): Promise<GeoResult | nu
   for (const candidate of candidates.slice(1)) {
     try {
       const result = await nominatimGeocode(candidate);
-      if (result) return result;
+      if (result && streetNumberMatchesExactly(address, streetNumberFromFormatted(result.formatted))) return result;
     } catch (fallbackErr) {
       logger.warn({ err: fallbackErr, candidate }, "Geocode normalized fallback failed");
     }

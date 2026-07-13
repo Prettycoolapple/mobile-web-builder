@@ -39,6 +39,8 @@ describe("regional planning provider registry", () => {
       "qldc",
       "wellington",
       "dunedin",
+      "whakatane",
+      "rotorua",
       "unsupported",
     ]);
   });
@@ -54,6 +56,8 @@ describe("regional planning provider registry", () => {
     expect(resolvePlanningJurisdiction({ lat: -45.878, lng: 170.503, address: "Dunedin" }).providerId).toBe("dunedin");
     expect(resolvePlanningJurisdiction({ lat: -41.2865, lng: 174.7762, address: "Wellington" }).providerId).toBe("wellington");
     expect(resolvePlanningJurisdiction({ lat: -41.2100, lng: 174.9000, address: "345 Hebden Crescent, Kelson, Lower Hutt" }).providerId).toBe("wellington");
+    expect(resolvePlanningJurisdiction({ lat: -38.1251, lng: 176.2438, address: "85 Whittaker Road, Koutu, Rotorua" }).providerId).toBe("rotorua");
+    expect(resolvePlanningJurisdiction({ lat: -38.0166, lng: 176.7157, address: "1134 Braemar Road, Rotoma" }).providerId).toBe("whakatane");
   });
 
   it("uses address hints when coordinates are not enough", () => {
@@ -61,6 +65,8 @@ describe("regional planning provider registry", () => {
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "1 Bealey Avenue, Christchurch" }).providerId).toBe("christchurch");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "17 Quiet Woman Way, Monaco, Nelson" }).providerId).toBe("nelson");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "1 Ardmore Street, Wanaka" }).providerId).toBe("qldc");
+    expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "85 Whittaker Road, Koutu, Rotorua" }).providerId).toBe("rotorua");
+    expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "1134 Braemar Road, Rotoma" }).providerId).toBe("whakatane");
   });
 
   it("emits provider metadata when the router is enabled", () => {
@@ -91,6 +97,8 @@ describe("regional planning provider registry", () => {
       "qldc",
       "wellington",
       "dunedin",
+      "whakatane",
+      "rotorua",
     ]));
   });
 });

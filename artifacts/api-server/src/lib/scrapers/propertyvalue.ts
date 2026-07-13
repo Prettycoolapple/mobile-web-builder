@@ -155,6 +155,7 @@ function scoreSuggestion(input: string, suggestion: Suggestion): number {
   const labelNorm = normaliseAddress(label);
   const inputNo = streetNumber(inputNorm);
   const labelNo = streetNumber(labelNorm);
+  if (inputNo && labelNo && inputNo !== labelNo) return -1;
   let score = 0;
   if (inputNo && labelNo && inputNo === labelNo) score += 20;
   if (labelNorm.includes(inputNorm) || inputNorm.includes(labelNorm)) score += 20;

@@ -10,6 +10,8 @@ export type CostProfileId =
   | "qldc-default"
   | "wellington-default"
   | "dunedin-default"
+  | "rotorua-default"
+  | "whakatane-default"
   | "unsupported-default";
 
 export type CostContourClass = "flat" | "subtle" | "gentle" | "moderate" | "steep" | "very_steep";
@@ -191,7 +193,10 @@ const REGIONAL_COST_OVERRIDES: Partial<Record<PlanningProviderId, DeepPartial<Re
   // ── Queenstown Lakes District ──────────────────────────────────────────────
   // Seeded from Auckland. Tune to QLDC construction/retaining/contribution rates
   // (alpine build premiums, QLDC development contributions, ORC land rates) here.
+  hamilton: {},
   qldc: {},
+  rotorua: {},
+  whakatane: {},
   // ── Wellington region (Wellington City, Lower/Upper Hutt, Porirua, Kāpiti) ──
   // Seeded from Auckland. Tune to Wellington Water / council DC + GWRC/TA land
   // rates and Wellington build costs here.
@@ -208,6 +213,8 @@ const PROVIDER_PROFILE_META: Record<PlanningProviderId, { id: CostProfileId; lab
   qldc: { id: "qldc-default", label: "Queenstown Lakes default cost profile" },
   wellington: { id: "wellington-default", label: "Wellington region default cost profile" },
   dunedin: { id: "dunedin-default", label: "Dunedin default cost profile" },
+  rotorua: { id: "rotorua-default", label: "Rotorua default cost profile" },
+  whakatane: { id: "whakatane-default", label: "Whakatane default cost profile" },
   unsupported: { id: "unsupported-default", label: "Unsupported-region default cost profile" },
 };
 

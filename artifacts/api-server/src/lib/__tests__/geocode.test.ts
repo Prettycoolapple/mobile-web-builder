@@ -75,6 +75,74 @@ describe("geocode address selection", () => {
       formatted: "8A Hampton Drive, St Heliers, Auckland 1071, New Zealand",
     });
   });
+
+  it("uses the exact Whakatane council address point instead of nearby 1140 Braemar Road", async () => {
+    delete process.env.GOOGLE_MAPS_API_KEY;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/Geocortex/Cadastre/MapServer/1/query")) {
+        return new Response(JSON.stringify({ features: [
+          {
+            attributes: { HouseNumber: 1134, Suffix: null, Address: "1134 BRAEMAR ROAD", Town: "Rotoma" },
+            geometry: { x: 176.7156598, y: -38.0165820 },
+          },
+          {
+            attributes: { HouseNumber: 1140, Suffix: null, Address: "1140 BRAEMAR ROAD", Town: "Rotoma" },
+            geometry: { x: 176.7193241, y: -38.0155546 },
+          },
+        ] }), { status: 200 });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(tryGeocodeAddress("1134 Braemar Road, Rotoma 3192, New Zealand")).resolves.toMatchObject({
+      formatted: "1134 BRAEMAR ROAD, Rotoma, New Zealand",
+      lat: -38.0165820,
+      lng: 176.7156598,
+    });
+  });
+
+  it("resolves comma-separated Whakatane state-highway addresses through the exact council point", async () => {
+    delete process.env.GOOGLE_MAPS_API_KEY;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/Geocortex/Cadastre/MapServer/1/query")) {
+        expect(new URL(url).searchParams.get("where")).toContain("2926A STATE HIGHWAY 30");
+        return new Response(JSON.stringify({ features: [{
+          attributes: { HouseNumber: 2926, Suffix: "A", Address: "2926A STATE HIGHWAY 30", Town: "Rotoma" },
+          geometry: { x: 176.7097369, y: -38.0263534 },
+        }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(tryGeocodeAddress("2926A, State Highway 30, Whakatane District, Bay of Plenty, 3075")).resolves.toMatchObject({
+      formatted: "2926A STATE HIGHWAY 30, Rotoma, New Zealand",
+      lat: -38.0263534,
+      lng: 176.7097369,
+    });
+  });
+
+  it("rejects a geocoder result with a different street number", async () => {
+    process.env.GOOGLE_MAPS_API_KEY = "test-key";
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("maps.googleapis.com")) {
+        return new Response(JSON.stringify({
+          status: "OK",
+          results: [{
+            formatted_address: "1140 Braemar Road, Rotoma 3192, New Zealand",
+            geometry: { location: { lat: -38.0155, lng: 176.7193 } },
+            address_components: [{ long_name: "1140", short_name: "1140", types: ["street_number"] }],
+          }],
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    }));
+
+    await expect(tryGeocodeAddress("1134 Braemar Road, Somewhere Else")).resolves.toBeNull();
+  });
 });
 
 describe("normaliseNzAddressForGeocode", () => {
