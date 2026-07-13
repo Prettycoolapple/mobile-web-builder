@@ -1,0 +1,13 @@
+attached_assets/
+artifacts/mobile/
+artifacts/mockup-sandbox/
+.canvas/
+.agents/
+.claude/
+docs/
+README.md
+replit.md
+replit.nix
+.replit
+.replitignore
+app.json
