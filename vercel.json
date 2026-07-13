@@ -36,7 +36,6 @@
     "ENABLE_SOCKET_IO": "false"
   },
   "crons": [
-    { "path": "/api/cron/watchlist-monitor", "schedule": "0 18 * * *" },
-    { "path": "/api/cron/lead-sms-retry", "schedule": "*/10 * * * *" }
+    { "path": "/api/cron/watchlist-monitor", "schedule": "0 18 * * *" }
   ]
 }
