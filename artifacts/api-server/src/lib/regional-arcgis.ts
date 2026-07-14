@@ -26,6 +26,7 @@ interface RegionalOverlayLayer {
   status: Overlay["status"];
   distanceM?: number;
   detailFields?: string[];
+  where?: string;
 }
 
 export interface RegionalSitePlanOverlayLayer {
@@ -35,6 +36,7 @@ export interface RegionalSitePlanOverlayLayer {
   geometryType: ArcGisGeometryType;
   status: Overlay["status"];
   distanceM?: number;
+  where?: string;
 }
 
 interface RegionalArcGisConfig {
@@ -85,8 +87,44 @@ const ROTORUA_PLANNING =
   "https://gis.rdc.govt.nz/server/rest/services/Core/Planning_and_Development/MapServer";
 const WHAKATANE_DISTRICT_PLAN =
   "https://gis.whakatane.govt.nz/arcgis/rest/services/Planning/OperativeDistrictPlanNPS_ePlan/MapServer";
+const SOUTHLAND_ZONING =
+  "https://gis.southlanddc.govt.nz/server/rest/services/Website_SpatialPlan_layers/MapServer";
+const SOUTHLAND_DISTRICT_PLAN =
+  "https://gis.southlanddc.govt.nz/server/rest/services/EPLAN_DISTRICT_PLAN_AGOL/FeatureServer";
+const WAIPA_DISTRICT_PLAN =
+  "https://services9.arcgis.com/OsxSXqmTWVTZQ9ie/arcgis/rest/services/WaipaDistrictPlan_Zones/FeatureServer";
+const WAIPA_QUALIFYING_MATTERS =
+  "https://services9.arcgis.com/OsxSXqmTWVTZQ9ie/arcgis/rest/services/WaipaDistrictPlan_QualifyingMatters/FeatureServer";
+const WAIPA_POLICY_OVERLAYS =
+  "https://services9.arcgis.com/OsxSXqmTWVTZQ9ie/arcgis/rest/services/WaipaDistrictPlan_Policy_Overlay_Areas/FeatureServer";
+const WAIPA_HERITAGE_AREAS =
+  "https://services9.arcgis.com/OsxSXqmTWVTZQ9ie/arcgis/rest/services/WaipaDistrictPlan_Policy_Heritage_Areas/FeatureServer";
+const WAIPA_PROTECTED_TREES =
+  "https://services9.arcgis.com/OsxSXqmTWVTZQ9ie/arcgis/rest/services/WaipaDistrictPlan_Protected_Trees_Bushstands/FeatureServer";
+const WAIPA_FLOOD_HAZARD =
+  "https://services9.arcgis.com/OsxSXqmTWVTZQ9ie/arcgis/rest/services/WaipaDistrictPlan_SpecialFeature_Area_Flood/FeatureServer";
 
 const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
+  waipa: {
+    zoneLayers: [
+      {
+        serviceUrl: WAIPA_DISTRICT_PLAN,
+        layerId: 0,
+        label: "Waipa District Plan Zone",
+        codeField: "Zone",
+        nameFields: ["Zone"],
+        detailFields: ["Type", "Reference"],
+      },
+    ],
+    overlayLayers: [
+      overlay(WAIPA_QUALIFYING_MATTERS, 0, "Infrastructure Constraint Qualifying Matter", "polygon", "restricted", undefined, ["Category", "Source", "Date"], "Category = 'Infrastructure Constraint Qualifying Matter Overlay'"),
+      overlay(WAIPA_QUALIFYING_MATTERS, 0, "Stormwater Constraint Qualifying Matter", "polygon", "restricted", undefined, ["Category", "Source", "Date"], "Category = 'Stormwater Constraint Qualifying Matter Overlay'"),
+      overlay(WAIPA_POLICY_OVERLAYS, 0, "Policy Overlay Area", "polygon", "control"),
+      overlay(WAIPA_HERITAGE_AREAS, 0, "Heritage Area", "polygon", "restricted"),
+      overlay(WAIPA_PROTECTED_TREES, 0, "Protected Tree or Bushstand", "polygon", "moderate"),
+      overlay(WAIPA_FLOOD_HAZARD, 0, "Flood Hazard Area", "polygon", "restricted"),
+    ],
+  },
   hamilton: {
     zoneLayers: [
       {
@@ -326,6 +364,33 @@ const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
       overlay(WHAKATANE_DISTRICT_PLAN, 73, "Marae and Urupa Amenity Yard", "polygon", "restricted"),
     ],
   },
+  southland: {
+    zoneLayers: [
+      zone(SOUTHLAND_ZONING, 7, "Southland General Residential Zone", "TYPE", ["TYPE", "LOCALITY"]),
+      zone(SOUTHLAND_ZONING, 8, "Southland Industrial Zone", "TYPE", ["TYPE", "LOCALITY"]),
+      zone(SOUTHLAND_ZONING, 9, "Southland General Rural Zone", "TYPE", ["TYPE", "LOCALITY"]),
+      zone(SOUTHLAND_ZONING, 10, "Southland Natural Open Space Zone", "TYPE", ["TYPE", "LOCALITY"]),
+      zone(SOUTHLAND_ZONING, 11, "Southland Large Lot Residential Zone", "TYPE", ["TYPE", "LOCALITY"]),
+      zone(SOUTHLAND_ZONING, 12, "Southland Special Purpose Zone", "TYPE", ["TYPE", "LOCALITY"]),
+    ],
+    overlayLayers: [
+      overlay(SOUTHLAND_DISTRICT_PLAN, 15, "Designation", "polygon", "control", undefined, ["DP_ID", "REQUIRING_AUTHORITY", "DESIG_PURP", "DESIG_SITE"]),
+      overlay(SOUTHLAND_DISTRICT_PLAN, 39, "Rural Settlement Area", "polygon", "control", undefined, ["LOCALITY", "TYPE"]),
+      overlay(SOUTHLAND_DISTRICT_PLAN, 40, "Commercial Precinct", "polygon", "control", undefined, ["LOCALITY", "TYPE"]),
+      overlay(SOUTHLAND_DISTRICT_PLAN, 80, "Development Area", "polygon", "control", undefined, ["LOCALITY", "TYPE"]),
+      overlay(SOUTHLAND_DISTRICT_PLAN, 73, "Flooding Inundation Overlay", "polygon", "restricted"),
+      overlay(SOUTHLAND_DISTRICT_PLAN, 4, "Coastal Hazard Overlay", "polygon", "restricted", undefined, ["Feature_Type"]),
+      overlay(SOUTHLAND_DISTRICT_PLAN, 9, "Historic Heritage Area", "polygon", "restricted", undefined, ["SITE_NO", "NAME", "LOCALITY"]),
+      overlay(SOUTHLAND_DISTRICT_PLAN, 10, "Archaeological Site", "point", "restricted", 30, ["STATUS", "NZAA_ID", "site_type"]),
+      overlay(SOUTHLAND_DISTRICT_PLAN, 31, "Outstanding Natural Feature or Landscape", "polygon", "restricted", undefined, ["LOCALITY", "TYPE"]),
+      overlay(SOUTHLAND_DISTRICT_PLAN, 30, "Visual Amenity Landscape", "polygon", "moderate", undefined, ["LOCALITY", "TYPE"]),
+      overlay(SOUTHLAND_DISTRICT_PLAN, 24, "Noise Sensitive Activity Exclusion Zone", "polygon", "moderate", undefined, ["LOCALITY", "TYPE"]),
+      overlay(SOUTHLAND_DISTRICT_PLAN, 6, "National Grid", "polyline", "restricted", 30, ["SITE", "Full_Name", "LINE_VOLTA"]),
+      overlay(SOUTHLAND_DISTRICT_PLAN, 32, "Mandeville Airfield", "polygon", "moderate", undefined, ["Label"]),
+      overlay(SOUTHLAND_DISTRICT_PLAN, 69, "Lead Contamination Area", "polygon", "restricted", undefined, ["LOCALITY", "TYPE"]),
+      overlay(SOUTHLAND_DISTRICT_PLAN, 72, "Build Restriction", "polygon", "restricted", undefined, ["LOCALITY", "TYPE"]),
+    ],
+  },
   dunedin: {
     zoneLayers: [
       {
@@ -373,8 +438,9 @@ function overlay(
   status: Overlay["status"],
   distanceM?: number,
   detailFields?: string[],
+  where?: string,
 ): RegionalOverlayLayer {
-  return { serviceUrl, layerId, name, geometryType, status, distanceM, detailFields };
+  return { serviceUrl, layerId, name, geometryType, status, distanceM, detailFields, where };
 }
 
 function layerUrl(layer: { serviceUrl: string; layerId: number }): string {
@@ -465,9 +531,11 @@ async function queryArcGisAttributes(
     parcelBbox?: ParcelBbox | null;
     distanceM?: number;
     timeoutMs?: number;
+    where?: string;
   } = {},
 ): Promise<Record<string, unknown>[]> {
   const url = new URL(`${layerUrl(layer)}/query`);
+  url.searchParams.set("where", options.where ?? "1=1");
   geometryParams(url, lat, lng, options.parcelBbox ?? null);
   url.searchParams.set("inSR", "4326");
   url.searchParams.set("spatialRel", "esriSpatialRelIntersects");
@@ -586,6 +654,7 @@ export async function fetchRegionalPlanningOverlays(
         parcelBbox: layer.geometryType === "polygon" ? parcelBbox : null,
         distanceM,
         timeoutMs: 8000,
+        where: layer.where,
       });
       const attrs = features[0];
       if (!attrs) return null;
@@ -648,5 +717,6 @@ export function regionalSitePlanOverlayLayers(providerId: PlanningProviderId): R
     geometryType: layer.geometryType,
     status: layer.status,
     distanceM: layer.distanceM,
+    where: layer.where,
   }));
 }

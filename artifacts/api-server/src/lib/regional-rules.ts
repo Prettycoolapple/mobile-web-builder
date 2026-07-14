@@ -100,6 +100,8 @@ export interface RegionalLotAssessmentInput {
 const WHANGAREI_SUBDIVISION_SOURCE = "https://eplan.wdc.govt.nz/plan/?chapter=subdivision";
 const HAMILTON_PC12_SUBDIVISION_SOURCE =
   "https://hamilton.govt.nz/assets/Uploads/Documents/Content-Documents/Property-Rates-and-Building/PC12-Growing-Up/IHP-recommendation/Clean-Change-Version/Chapters/PC12-Chapter-23-Subdivision-IPI-Recommendations-Clean-Version-November-2024.pdf";
+const WAIPA_MDRZ_SUBDIVISION_SOURCE =
+  "https://www.waipadc.govt.nz/our-services/planning-and-resource-consents/planning-updates/new-rules-for-building-homes-in-cambridge-kihikihi-and-te-awamutu/medium-density-subdivision-guide";
 const CHRISTCHURCH_CHAPTER8_SOURCE =
   "https://ccc.govt.nz/assets/Documents/The-Council/Plans-Strategies-Policies-Bylaws/Plans/district-plan/Print-Chapters/Chapter-8.pdf";
 const QLDC_SUBDIVISION_SOURCE =
@@ -113,14 +115,47 @@ const DUNEDIN_GR2_VARIATION2_SOURCE =
 
 const INTERIM_COMPARABLE_ROI_PROVIDERS = new Set<PlanningProviderMetadata["providerId"]>([
   "hamilton",
+  "waipa",
   "nelson",
   "qldc",
   "whangarei",
   "rotorua",
   "whakatane",
+  "southland",
 ]);
 
 const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
+  {
+    providerId: "waipa",
+    regionalZoneCode: "WDC_MDRZ",
+    zonePattern: /\bmedium density residential\b|\bmdrz\b/i,
+    zoneLabel: "Medium Density Residential Zone",
+    standardMinimumLotSqm: 500,
+    requiredShapeText: "Vacant lots require a 13m diameter circle or 8m by 15m rectangle, plus at least 10m frontage.",
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "Waipa District Plan PC26 Rules 15.4.1.1 and 15.4.2",
+    sourceUrl: WAIPA_MDRZ_SUBDIVISION_SOURCE,
+    caveats: [
+      "All subdivision in Waipa District requires resource consent.",
+      "The 500sqm minimum applies to new vacant lots; the vacant-lot standards also include a 1000sqm maximum, frontage, shape and vehicle-crossing controls.",
+      "The mapped infrastructure and stormwater qualifying matters require site-specific capacity, servicing and stormwater assessment.",
+      "Three or more dwellings require an Infrastructure Capacity Assessment under Rule 15.4.2.19A.",
+    ],
+    alternativePathway: {
+      label: "Subdivision around existing or concurrently consented dwellings",
+      sourceLabel: "Waipa PC26 Rules 15.4.1.1(l) and 15.4.2",
+      sourceUrl: WAIPA_MDRZ_SUBDIVISION_SOURCE,
+      minNetAreaSqm: 500,
+      sqmPerDwelling: 250,
+      maxYield: 3,
+      confidence: "low",
+      reason:
+        "PC26 removes minimum lot area, frontage and shape requirements where every proposed lot contains an existing dwelling or a dwelling in a concurrent land-use application and no vacant lot is created.",
+      detail:
+        "This is a controlled-activity pathway only when access, servicing, hazards and built-form compliance are demonstrated. The displayed yield is conservative and is not a consent outcome.",
+    },
+    roiEnabled: true,
+  },
   {
     providerId: "hamilton",
     regionalZoneCode: "HCC_GRZ",

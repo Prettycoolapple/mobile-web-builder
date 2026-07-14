@@ -426,7 +426,7 @@ export interface RawPropertyData {
   derived_scores?: DerivedCardScores;
 }
 
-export const RAW_PROPERTY_SCHEMA_VERSION = 7;
+export const RAW_PROPERTY_SCHEMA_VERSION = 11;
 
 export interface PipelineResult {
   address_input: string;
@@ -591,6 +591,13 @@ export async function runPropertyPipeline(
     /** When `cachedRaw` is supplied: the timestamp that bundle was acquired
      * (cache row's lastRefreshedAt), surfaced as `dataFreshness.acquiredAt`. */
     cachedRawAcquiredAt?: string | null;
+    /**
+     * Verified address alias used only to acquire coordinates when the canonical
+     * rating/listing address has no standalone geocoder point (for example two
+     * dwelling addresses sharing one live title). The report and all property
+     * lookups continue to use `address`.
+     */
+    geocodeFallbackAddress?: string | null;
   } = {},
 ): Promise<PipelineResult> {
   const timing: Record<string, number> = {};
@@ -619,7 +626,21 @@ export async function runPropertyPipeline(
   }
 
   let geocode: GeoResult | null = null;
-  const geoResult = await timed("geocode", () => (cr ? Promise.resolve(cr.geocode) : geocodeAddress(address)), timing);
+  const geoResult = await timed("geocode", async () => {
+    if (cr) return cr.geocode;
+    try {
+      return await geocodeAddress(address);
+    } catch (primaryError) {
+      const fallbackAddress = options.geocodeFallbackAddress?.trim();
+      if (!fallbackAddress || fallbackAddress.toLowerCase() === address.trim().toLowerCase()) throw primaryError;
+      const fallback = await geocodeAddress(fallbackAddress);
+      logger.info(
+        { address, geocodeFallbackAddress: fallbackAddress },
+        "Pipeline: canonical address geocoded through verified same-title alias",
+      );
+      return { ...fallback, formatted: address };
+    }
+  }, timing);
   geocode = geoResult.value;
 
   if (geoResult.failed || !geocode) {
@@ -820,7 +841,24 @@ export async function runPropertyPipeline(
   let linzMemorialsRaw: Awaited<ReturnType<typeof fetchLINZMemorials>> = null;
   const lrsTitlePreviewResult = await timed(
     "linz_lrs_title_preview",
-    () => (cr ? Promise.resolve(cr.linz_lrs_preview_result) : fetchLINZTitlesByAddressDetailed(subjectAddress)),
+    async () => {
+      if (cr) return cr.linz_lrs_preview_result;
+      const primary = await fetchLINZTitlesByAddressDetailed(subjectAddress);
+      const fallback = options.geocodeFallbackAddress?.trim();
+      const identityKey = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "").trim();
+      if (primary.preview || !fallback || identityKey(fallback) === identityKey(subjectAddress)) {
+        return primary;
+      }
+      const alias = await fetchLINZTitlesByAddressDetailed(fallback);
+      if (alias.preview) {
+        logger.info(
+          { address: subjectAddress, geocodeFallbackAddress: fallback, titleNo: alias.preview.titles[0]?.title_no ?? null },
+          "Pipeline: canonical address title resolved through verified same-title alias",
+        );
+        return alias;
+      }
+      return primary;
+    },
     timing,
   );
   if (!lrsTitlePreviewResult.failed && lrsTitlePreviewResult.value) {
@@ -1111,6 +1149,7 @@ export async function runPropertyPipeline(
       qv: qvData,
       homes: homesData,
       propertyValue: propertyValueData,
+      linz_lrs_title_preview: linzLrsTitlePreview,
       analysed_address: geocode!.formatted ?? address,
       realestate_listing: realestateListing,
       preferred_realestate_listing_url: preferredRealestateListing?.listingUrl ?? options.preferredRealestateListingUrl ?? null,
@@ -1600,6 +1639,8 @@ export async function runPropertyPipeline(
     ? "rotorua"
     : planningProvider?.providerId === "whakatane"
       ? "whakatane"
+      : planningProvider?.providerId === "southland"
+        ? "southland"
       : null;
   if (
     regionalComparableFallback &&
@@ -1688,7 +1729,8 @@ export async function runPropertyPipeline(
 
   const hasRealComparablePricing = comparablesResult.avg_sale_price > 0 || comparablesResult.avg_price_per_sqm > 0;
   const regionalCvExitFallbackAllowed = planningProvider?.providerId === "rotorua"
-    || planningProvider?.providerId === "whakatane";
+    || planningProvider?.providerId === "whakatane"
+    || planningProvider?.providerId === "southland";
   const fallbackExitSalePrice = !hasRealComparablePricing && regionalCvExitFallbackAllowed
     ? merged.listing_price ?? merged.cv_nzd
     : null;

@@ -232,6 +232,30 @@ describe("regional ArcGIS planning fetchers", () => {
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/MapServer/36/query"))).toBe(true);
   });
 
+  it("returns Southland's General Residential Zone for 77 Kruger Street", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/Website_SpatialPlan_layers/MapServer/7/query")) {
+        return new Response(JSON.stringify({ features: [{ attributes: {
+          OBJECTID: 11,
+          LOCALITY: "Balfour",
+          TYPE: "General Residential Zone (GRZ)",
+        } }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ features: [], fields: [] }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const zone = await fetchRegionalPlanningZone(jurisdiction("southland"), -45.8372796, 168.5815783);
+
+    expect(zone).toMatchObject({
+      zone_code: "General Residential Zone (GRZ)",
+      zone_description: expect.stringContaining("General Residential Zone (GRZ)"),
+    });
+    expect(zone.zone_description).toContain("Southland General Residential Zone");
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/Website_SpatialPlan_layers/MapServer/7/query"))).toBe(true);
+  });
+
   it("maps configured regional overlay hits into conservative report overlays", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       features: [
@@ -263,5 +287,6 @@ describe("regional ArcGIS planning fetchers", () => {
     expect(targets.some((target) => target.providerId === "qldc" && target.kind === "zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "rotorua" && target.kind === "zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "whakatane" && target.kind === "zone")).toBe(true);
+    expect(targets.some((target) => target.providerId === "southland" && target.kind === "zone")).toBe(true);
   });
 });

@@ -279,6 +279,9 @@ describe("estimateCosts — existing dwelling / demolition", () => {
     const whakataneDefault = estimateCosts(property, 1, {
       cost_profile: regionalCostProfileForProvider("whakatane"),
     });
+    const southlandDefault = estimateCosts(property, 1, {
+      cost_profile: regionalCostProfileForProvider("southland"),
+    });
     const customProfile = regionalCostProfileForProvider("whangarei");
     customProfile.construction.baseLowPerSqm = 3_000;
     customProfile.construction.baseHighPerSqm = 4_000;
@@ -292,12 +295,23 @@ describe("estimateCosts — existing dwelling / demolition", () => {
     expect(nelsonDefault.construction_high).toBe(aucklandDefault.construction_high);
     expect(rotoruaDefault.construction_low).toBe(aucklandDefault.construction_low);
     expect(whakataneDefault.construction_high).toBe(aucklandDefault.construction_high);
+    expect(southlandDefault.construction_low).toBe(aucklandDefault.construction_low);
     expect(whangareiCustom.construction_low).toBeGreaterThan(whangareiDefault.construction_low);
     expect(regionalCostProfileForProvider("hamilton")).toMatchObject({ id: "hamilton-default", providerId: "hamilton" });
+    expect(regionalCostProfileForProvider("waipa")).toMatchObject({
+      id: "waipa-default",
+      providerId: "waipa",
+      source: "auckland_default_pending_regional_rates",
+    });
     expect(regionalCostProfileForProvider("whangarei")).toMatchObject({ id: "whangarei-default", providerId: "whangarei" });
     expect(regionalCostProfileForProvider("nelson")).toMatchObject({ id: "nelson-default", providerId: "nelson" });
     expect(regionalCostProfileForProvider("rotorua")).toMatchObject({ id: "rotorua-default", providerId: "rotorua" });
     expect(regionalCostProfileForProvider("whakatane")).toMatchObject({ id: "whakatane-default", providerId: "whakatane" });
+    expect(regionalCostProfileForProvider("southland")).toMatchObject({
+      id: "southland-default",
+      providerId: "southland",
+      source: "auckland_default_pending_regional_rates",
+    });
     expect(regionalCostProfileForProvider("unsupported").id).toBe("unsupported-default");
 
     // Queenstown + Wellington ship their own editable cost modules that start

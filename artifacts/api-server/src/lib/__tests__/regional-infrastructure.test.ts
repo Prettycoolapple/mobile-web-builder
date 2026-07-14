@@ -83,12 +83,35 @@ describe("regional infrastructure fetchers", () => {
     expect(result.every((item) => item.service_source_owner === "Nelson City Council / Top of the South Maps")).toBe(true);
   });
 
+  it("returns Southland District Council's three mapped services at 77 Kruger Street", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isMappedLayer = ["/12/query", "/14/query", "/38/query", "/40/query", "/66/query"]
+        .some((suffix) => url.includes(suffix));
+      return new Response(JSON.stringify({
+        features: isMappedLayer ? [{
+          attributes: { OBJECTID: 1, Status: "IN" },
+          geometry: { paths: [[[168.5814, -45.8373], [168.5817, -45.8373]]] },
+        }] : [],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchRegionalInfrastructure("southland", -45.8372796, 168.5815783, null);
+
+    expect(result.map((item) => item.name).sort()).toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(result.every((item) => item.location !== "unknown")).toBe(true);
+    expect(result.every((item) => item.service_source_owner === "Southland District Council")).toBe(true);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/External_ThreeWaters_Layers_v2/MapServer/14/query"))).toBe(true);
+  });
+
   it("exposes mapped utility smoke targets only for configured providers", () => {
     expect(hasRegionalInfrastructureProvider("hamilton")).toBe(true);
     expect(hasRegionalInfrastructureProvider("qldc")).toBe(true);
     expect(hasRegionalInfrastructureProvider("nelson")).toBe(true);
     expect(hasRegionalInfrastructureProvider("rotorua")).toBe(true);
     expect(hasRegionalInfrastructureProvider("whakatane")).toBe(true);
+    expect(hasRegionalInfrastructureProvider("southland")).toBe(true);
 
     const targets = regionalInfrastructureSmokeTargets();
     expect(targets.some((target) => target.providerId === "hamilton" && target.serviceName === "Water Supply")).toBe(true);
@@ -97,5 +120,6 @@ describe("regional infrastructure fetchers", () => {
     expect(targets.some((target) => target.providerId === "dunedin" && target.serviceName === "Water Supply")).toBe(true);
     expect(targets.some((target) => target.providerId === "rotorua" && target.serviceName === "Stormwater")).toBe(true);
     expect(targets.some((target) => target.providerId === "whakatane" && target.serviceName === "Wastewater")).toBe(true);
+    expect(targets.some((target) => target.providerId === "southland" && target.serviceName === "Water Supply")).toBe(true);
   });
 });

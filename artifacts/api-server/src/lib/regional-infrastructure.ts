@@ -46,6 +46,12 @@ const HAMILTON_WASTEWATER =
   "https://services1.arcgis.com/R6s0QqCMQdwKY6yp/arcgis/rest/services/Wastewater Dataset - Hamilton City Council/FeatureServer";
 const HAMILTON_STORMWATER =
   "https://services1.arcgis.com/R6s0QqCMQdwKY6yp/arcgis/rest/services/Stormwater Dataset - Hamilton City Council/FeatureServer";
+const WAIPA_WATER =
+  "https://services3.arcgis.com/Oou6z70yKcGvIDxP/arcgis/rest/services/WaterSupplyPipesWaikato/FeatureServer";
+const WAIPA_WASTEWATER =
+  "https://services3.arcgis.com/Oou6z70yKcGvIDxP/arcgis/rest/services/WastewaterPipesWaikato/FeatureServer";
+const WAIPA_STORMWATER =
+  "https://services3.arcgis.com/Oou6z70yKcGvIDxP/arcgis/rest/services/StormwaterPipesWaikato/FeatureServer";
 const TOP_OF_THE_SOUTH_MAPS =
   "https://www.topofthesouthmaps.co.nz/ArcGIS/rest/services/TopoftheSouthMaps/MapServer";
 // Single regional three-waters service maintained by Wellington Water on behalf
@@ -63,8 +69,21 @@ const WHAKATANE_WASTEWATER =
   "https://gis.whakatane.govt.nz/arcgis/rest/services/ThreeWaters/WasteWaterAssets/MapServer";
 const WHAKATANE_STORMWATER =
   "https://gis.whakatane.govt.nz/arcgis/rest/services/ThreeWaters/StormWaterAssets/MapServer";
+const SOUTHLAND_THREE_WATERS =
+  "https://gis.southlanddc.govt.nz/server/rest/services/External_ThreeWaters_Layers_v2/MapServer";
 
 const REGIONAL_INFRASTRUCTURE: Partial<Record<PlanningProviderId, RegionalInfrastructureGroup[]>> = {
+  waipa: [
+    group("Water Supply", WAIPA_WATER, "Waipā District Council / Waikato OneView", [
+      [0, "Water supply pipe"],
+    ]),
+    group("Wastewater", WAIPA_WASTEWATER, "Waipā District Council / Waikato OneView", [
+      [0, "Wastewater pipe"],
+    ]),
+    group("Stormwater", WAIPA_STORMWATER, "Waipā District Council / Waikato OneView", [
+      [0, "Stormwater pipe"],
+    ], 1000),
+  ],
   rotorua: [
     group("Water Supply", ROTORUA_THREE_WATERS, "Rotorua Lakes Council", [
       [95, "Water service line"],
@@ -97,6 +116,22 @@ const REGIONAL_INFRASTRUCTURE: Partial<Record<PlanningProviderId, RegionalInfras
       [45, "Stormwater main"],
       [46, "Stormwater rising main"],
       [47, "Stormwater open drain"],
+    ], 1000),
+  ],
+  southland: [
+    group("Water Supply", SOUTHLAND_THREE_WATERS, "Southland District Council", [
+      [12, "Water supply main"],
+      [14, "Water supply service line"],
+    ]),
+    group("Wastewater", SOUTHLAND_THREE_WATERS, "Southland District Council", [
+      [38, "Wastewater main"],
+      [40, "Wastewater service line"],
+    ]),
+    group("Stormwater", SOUTHLAND_THREE_WATERS, "Southland District Council", [
+      [66, "Stormwater main"],
+      [68, "Stormwater service line"],
+      [72, "Stormwater channel"],
+      [73, "Stormwater miscellaneous line"],
     ], 1000),
   ],
   hamilton: [

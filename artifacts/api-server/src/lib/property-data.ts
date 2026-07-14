@@ -6,6 +6,10 @@ export interface PropertyHistory {
   build_year: number | null;
   floor_area_sqm: number | null;
   land_area_sqm: number | null;
+  /** Stable internal provenance used when choosing between property- and parcel-level areas. */
+  land_area_source?: string | null;
+  /** A rating unit can contain multiple cadastral parcels; a parcel cannot represent more than itself. */
+  land_area_scope?: "rating_unit" | "parcel" | null;
   property_type: string | null;
   sources_confirmed: string[];
   sources_estimated: string[];

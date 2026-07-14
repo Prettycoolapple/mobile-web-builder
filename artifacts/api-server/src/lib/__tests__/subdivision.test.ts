@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { detectSubdivision, mergeSubdivisionCorrection, parseStreetNumberSuffix } from "../subdivision";
 import { geocodeAddress } from "../geocode";
-import { fetchLINZAddressCandidates, fetchLINZLetterSuffixAddresses } from "../linz";
+import { fetchLINZAddressCandidates, fetchLINZLetterSuffixAddresses, fetchLINZTitlesByAddressDetailed } from "../linz";
 
 vi.mock("../geocode", () => ({
   geocodeAddress: vi.fn(),
@@ -10,6 +10,7 @@ vi.mock("../geocode", () => ({
 vi.mock("../linz", () => ({
   fetchLINZAddressCandidates: vi.fn(async () => []),
   fetchLINZLetterSuffixAddresses: vi.fn(async () => []),
+  fetchLINZTitlesByAddressDetailed: vi.fn(async () => ({ preview: null, status: "no_result", source: null })),
   lrsAddressLooksExact: vi.fn((requested: string, candidate: string) => {
     const normalise = (value: string) =>
       value
@@ -29,6 +30,7 @@ vi.mock("../linz", () => ({
 const mockedGeocodeAddress = vi.mocked(geocodeAddress);
 const mockedFetchLINZAddressCandidates = vi.mocked(fetchLINZAddressCandidates);
 const mockedFetchLINZLetterSuffixAddresses = vi.mocked(fetchLINZLetterSuffixAddresses);
+const mockedFetchLINZTitlesByAddressDetailed = vi.mocked(fetchLINZTitlesByAddressDetailed);
 
 describe("subdivision detection", () => {
   beforeEach(() => {
@@ -37,6 +39,8 @@ describe("subdivision detection", () => {
     mockedFetchLINZAddressCandidates.mockResolvedValue([]);
     mockedFetchLINZLetterSuffixAddresses.mockReset();
     mockedFetchLINZLetterSuffixAddresses.mockResolvedValue([]);
+    mockedFetchLINZTitlesByAddressDetailed.mockReset();
+    mockedFetchLINZTitlesByAddressDetailed.mockResolvedValue({ preview: null, status: "no_result", source: null });
   });
 
   it("parses parent and child street-number suffixes", () => {
@@ -142,6 +146,52 @@ describe("subdivision detection", () => {
         "38C Rosebank Road, Papatoetoe, Auckland",
         "38D Rosebank Road, Papatoetoe, Auckland",
       ],
+    });
+  });
+
+  it("keeps the parent canonical when suffix addresses share one live title", async () => {
+    mockedFetchLINZLetterSuffixAddresses.mockResolvedValue([
+      { letter: "A", address: "91A Thornton Road, Cambridge, Waipa", id: "1697540", rank: 0.9 },
+      { letter: "B", address: "91B Thornton Road, Cambridge, Waipa", id: "1697541", rank: 0.9 },
+    ]);
+    mockedFetchLINZTitlesByAddressDetailed.mockImplementation(async (address) => ({
+      preview: {
+        address_id: address.includes("91A") ? "1697540" : "1697541",
+        address,
+        titles: [{
+          title_no: "76331",
+          title_type: "Freehold",
+          title_status: "LIVE",
+          legal_descriptions: ["Lot 1 DP 319375"],
+          land_district: "South Auckland",
+          issue_date: null,
+          indicative_area_sqm: 1867,
+        }],
+      },
+      status: "resolved",
+      source: "live",
+    }));
+
+    await expect(detectSubdivision("91 Thornton Road, Cambridge")).resolves.toEqual({
+      isSubdivided: false,
+      parentAddress: "91 Thornton Road, Cambridge",
+      subLots: [
+        "91A Thornton Road, Cambridge, Waipa",
+        "91B Thornton Road, Cambridge, Waipa",
+      ],
+      classification: "same_title_aliases",
+      canonicalAddress: "91 Thornton Road, Cambridge",
+      geocodeFallbackAddress: "91A Thornton Road, Cambridge, Waipa",
+      sharedTitleNo: "76331",
+    });
+
+    await expect(detectSubdivision("91B Thornton Road, Cambridge")).resolves.toMatchObject({
+      isSubdivided: false,
+      parentAddress: "91 Thornton Road, Cambridge",
+      canonicalAddress: "91 Thornton Road, Cambridge",
+      geocodeFallbackAddress: "91B Thornton Road, Cambridge",
+      sharedTitleNo: "76331",
+      classification: "same_title_aliases",
     });
   });
 

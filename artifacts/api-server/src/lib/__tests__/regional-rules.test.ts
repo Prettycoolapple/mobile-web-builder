@@ -8,6 +8,44 @@ import {
 } from "../regional-rules";
 
 describe("regional planning rule status", () => {
+  it("models Waipa MDRZ vacant lots and the dwelling-associated pathway", () => {
+    const provider = {
+      providerId: "waipa" as const,
+      providerName: "Waipa District Council planning provider",
+    };
+    const zone = {
+      zone_code: "MEDIUM DENSITY RESIDENTIAL ZONE",
+      zone_description: "MEDIUM DENSITY RESIDENTIAL ZONE - Waipa District Plan Zone",
+      min_lot_size_sqm: null,
+      raw_zone: "{}",
+    };
+
+    expect(regionalPlanningRuleStatus(provider, zone, 1867)).toMatchObject({
+      modellingStatus: "roi_enabled",
+      automaticYieldClaimsAllowed: true,
+      automaticRoiAllowed: true,
+      regionalZoneCode: "WDC_MDRZ",
+      verifiedMinimumLotSqm: 500,
+    });
+    expect(calculateRegionalPotentialLots({ provider, zone, landAreaSqm: 1867 })?.lotResult.lots).toBe(3);
+    expect(assessRegionalSubdivisionPathways({
+      provider,
+      zone,
+      netAreaSqm: 1100,
+      zoneCode: "WDC_MDRZ",
+      zoneLabel: "Medium Density Residential Zone",
+      standardVacantLots: 2,
+      minLotSqm: 500,
+      typology: "standalone",
+      titleConfidence: "verified",
+      landAreaConfidence: "verified",
+      overlays: [
+        { name: "Infrastructure Constraint Qualifying Matter", status: "restricted" },
+        { name: "Stormwater Constraint Qualifying Matter", status: "restricted" },
+      ],
+    })).toMatchObject({ designLedEligible: true, designLedYieldRange: { min: 3, max: 3 }, designLedConfidence: "low" });
+  });
+
   it("allows automatic yield only for the Auckland legacy provider", () => {
     expect(regionalPlanningRuleStatus(null)).toMatchObject({
       subdivisionRules: "auckland_legacy",
@@ -778,10 +816,12 @@ describe("regional planning rule status", () => {
     }));
   });
 
-  it("allows interim ROI for unmodelled Rotorua and Whakatane zones without yield claims", () => {
+  it("allows interim ROI for unmodelled Rotorua, Whakatane, and Southland zones without yield claims", () => {
     for (const [providerId, zoneCode] of [
       ["rotorua", "RESZ1"],
       ["whakatane", "General Rural Zone"],
+      ["whakatane", "Rural Production Zone"],
+      ["southland", "General Residential Zone (GRZ)"],
     ] as const) {
       expect(regionalPlanningRuleStatus(
         { providerId, providerName: `${providerId} planning provider` },

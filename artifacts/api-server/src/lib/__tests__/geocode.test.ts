@@ -103,6 +103,32 @@ describe("geocode address selection", () => {
     });
   });
 
+  it("resolves abbreviated Braemar Rd through Whakatane even when the locality says Rotorua", async () => {
+    delete process.env.GOOGLE_MAPS_API_KEY;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("gis.rdc.govt.nz")) {
+        return new Response(JSON.stringify({ features: [] }), { status: 200 });
+      }
+      if (url.includes("/Geocortex/Cadastre/MapServer/1/query")) {
+        expect(new URL(url).searchParams.get("where")).toContain("1140 BRAEMAR ROAD");
+        return new Response(JSON.stringify({ features: [{
+          attributes: { HouseNumber: 1140, Suffix: null, Address: "1140 BRAEMAR ROAD", Town: "Rotoma" },
+          geometry: { x: 176.7193241, y: -38.0155546 },
+        }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(tryGeocodeAddress("1140 Braemar Rd, Rotorua")).resolves.toMatchObject({
+      formatted: "1140 BRAEMAR ROAD, Rotoma, New Zealand",
+      lat: -38.0155546,
+      lng: 176.7193241,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("does not fall through to a nearby Braemar Road address when the council has no exact street number", async () => {
     process.env.GOOGLE_MAPS_API_KEY = "test-key";
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -125,7 +151,8 @@ describe("geocode address selection", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(tryGeocodeAddress("1138 Braemar Road, Rotoma 3192, New Zealand")).resolves.toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("maps.googleapis.com"))).toBe(false);
   });
 
   it("resolves comma-separated Whakatane state-highway addresses through the exact council point", async () => {

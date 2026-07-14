@@ -8,6 +8,7 @@ export type CoverageStatus = "full" | "partial" | "unsupported";
 export type PlanningProviderId =
   | "auckland-legacy"
   | "hamilton"
+  | "waipa"
   | "christchurch"
   | "canterbury"
   | "nelson"
@@ -17,6 +18,7 @@ export type PlanningProviderId =
   | "dunedin"
   | "rotorua"
   | "whakatane"
+  | "southland"
   | "unsupported";
 
 export interface ProviderEndpointRef {
@@ -153,6 +155,7 @@ function provider(
 
 const AUCKLAND_BOUNDS: Bounds = { minLat: -37.35, maxLat: -36.05, minLng: 174.0, maxLng: 175.55 };
 const HAMILTON_BOUNDS: Bounds = { minLat: -37.95, maxLat: -37.62, minLng: 175.08, maxLng: 175.43 };
+const WAIPA_BOUNDS: Bounds = { minLat: -38.35, maxLat: -37.70, minLng: 174.90, maxLng: 175.80 };
 const CHRISTCHURCH_BOUNDS: Bounds = { minLat: -43.75, maxLat: -43.35, minLng: 172.35, maxLng: 173.05 };
 const CANTERBURY_BOUNDS: Bounds = { minLat: -44.95, maxLat: -42.0, minLng: 169.9, maxLng: 174.6 };
 const NELSON_BOUNDS: Bounds = { minLat: -41.45, maxLat: -41.15, minLng: 173.05, maxLng: 173.45 };
@@ -165,6 +168,28 @@ const WELLINGTON_BOUNDS: Bounds = { minLat: -41.45, maxLat: -40.70, minLng: 174.
 const DUNEDIN_BOUNDS: Bounds = { minLat: -46.15, maxLat: -45.55, minLng: 169.95, maxLng: 171.15 };
 const ROTORUA_BOUNDS: Bounds = { minLat: -38.45, maxLat: -37.85, minLng: 175.85, maxLng: 176.55 };
 const WHAKATANE_BOUNDS: Bounds = { minLat: -38.35, maxLat: -37.70, minLng: 176.55, maxLng: 177.40 };
+const SOUTHLAND_DISTRICT_BOUNDS: Bounds = { minLat: -47.35, maxLat: -44.75, minLng: 166.45, maxLng: 169.35 };
+const INVERCARGILL_CITY_BOUNDS: Bounds = { minLat: -46.55, maxLat: -46.30, minLng: 168.20, maxLng: 168.50 };
+const GORE_DISTRICT_URBAN_BOUNDS: Bounds = { minLat: -46.18, maxLat: -45.92, minLng: 168.78, maxLng: 169.18 };
+
+function supportsSouthlandDistrict(context: PlanningProviderContext): boolean {
+  if (addressHas(context, [
+    /\bsouthland district\b/,
+    /\bbalfour\b/,
+    /\blumsden\b/,
+    /\bwinton\b/,
+    /\bte anau\b/,
+    /\bmanapouri\b/,
+    /\briverton\b/,
+    /\bota(?:u|h)tau\b/,
+    /\btuatapere\b/,
+    /\bedendale\b/,
+    /\bwallacetown\b/,
+  ])) return true;
+  return inBounds(context, SOUTHLAND_DISTRICT_BOUNDS)
+    && !inBounds(context, INVERCARGILL_CITY_BOUNDS)
+    && !inBounds(context, GORE_DISTRICT_URBAN_BOUNDS);
+}
 
 const providerRegistry: PlanningProvider[] = [
   provider(
@@ -197,6 +222,31 @@ const providerRegistry: PlanningProvider[] = [
       { label: "Waikato Open Data Hub", url: "https://data-waikatolass.opendata.arcgis.com/" },
     ],
     (context) => supportsAny(context, HAMILTON_BOUNDS, [/\bhamilton\b/, /\bkirikiriroa\b/]),
+  ),
+  provider(
+    "waipa",
+    "Waipā District Council planning provider",
+    "Waipā District Council",
+    "Waikato",
+    "full",
+    "Waipā District Plan",
+    [
+      { label: "Waipā District Plan Zones", url: "https://services9.arcgis.com/OsxSXqmTWVTZQ9ie/arcgis/rest/services/WaipaDistrictPlan_Zones/FeatureServer" },
+      { label: "Waipā District Plan Qualifying Matters", url: "https://services9.arcgis.com/OsxSXqmTWVTZQ9ie/arcgis/rest/services/WaipaDistrictPlan_QualifyingMatters/FeatureServer" },
+      { label: "Waikato OneView Water Supply", url: "https://services3.arcgis.com/Oou6z70yKcGvIDxP/arcgis/rest/services/WaterSupplyPipesWaikato/FeatureServer" },
+      { label: "Waikato OneView Wastewater", url: "https://services3.arcgis.com/Oou6z70yKcGvIDxP/arcgis/rest/services/WastewaterPipesWaikato/FeatureServer" },
+      { label: "Waikato OneView Stormwater", url: "https://services3.arcgis.com/Oou6z70yKcGvIDxP/arcgis/rest/services/StormwaterPipesWaikato/FeatureServer" },
+    ],
+    (context) =>
+      addressHas(context, [
+        /\bwaipa\b/,
+        /\bcambridge\b/,
+        /\bte awamutu\b/,
+        /\bkihikihi\b/,
+        /\bpirongia\b/,
+        /\bohaupo\b/,
+        /\bkarapiro\b/,
+      ]) || (inBounds(context, WAIPA_BOUNDS) && !inBounds(context, HAMILTON_BOUNDS)),
   ),
   provider(
     "christchurch",
@@ -392,6 +442,21 @@ const providerRegistry: PlanningProvider[] = [
     ]),
   ),
   provider(
+    "southland",
+    "Southland District Council planning provider",
+    "Southland District Council",
+    "Southland",
+    "partial",
+    "Southland District Plan",
+    [
+      { label: "Southland District zoning", url: "https://gis.southlanddc.govt.nz/server/rest/services/Website_SpatialPlan_layers/MapServer" },
+      { label: "Southland District Plan overlays and controls", url: "https://gis.southlanddc.govt.nz/server/rest/services/EPLAN_DISTRICT_PLAN_AGOL/FeatureServer" },
+      { label: "Southland District property and rating data", url: "https://gis.southlanddc.govt.nz/server/rest/services/External_Property_Layers/MapServer" },
+      { label: "Southland District three waters", url: "https://gis.southlanddc.govt.nz/server/rest/services/External_ThreeWaters_Layers_v2/MapServer" },
+    ],
+    supportsSouthlandDistrict,
+  ),
+  provider(
     "unsupported",
     "Unsupported regional planning provider",
     null,
@@ -412,7 +477,14 @@ export function getPlanningProvider(id: PlanningProviderId): PlanningProvider {
 }
 
 export function resolvePlanningJurisdiction(context: PlanningProviderContext): RegionalJurisdiction {
-  const matched = providerRegistry.find((provider) => provider.id !== "unsupported" && provider.supports(context))
+  // Coordinates come from an exact geocoder/council address point and are more
+  // reliable than locality text near territorial-authority boundaries.
+  const coordinateContext = { ...context, address: null };
+  const matchedByCoordinates = providerRegistry.find(
+    (provider) => provider.id !== "unsupported" && provider.supports(coordinateContext),
+  );
+  const matched = matchedByCoordinates
+    ?? providerRegistry.find((provider) => provider.id !== "unsupported" && provider.supports(context))
     ?? getPlanningProvider("unsupported");
 
   return {
@@ -425,7 +497,9 @@ export function resolvePlanningJurisdiction(context: PlanningProviderContext): R
     endpointRefs: matched.endpointRefs,
     reason: matched.id === "unsupported"
       ? "No regional provider matched the address or conservative coordinate bounds."
-      : "Matched by conservative coordinate bounds or address hint.",
+      : matchedByCoordinates
+        ? "Matched by conservative coordinate bounds."
+        : "Matched by address hint.",
   };
 }
 
@@ -457,6 +531,8 @@ export function emptyPropertyHistory(linzAreaSqm?: number | null): PropertyHisto
     build_year: null,
     floor_area_sqm: null,
     land_area_sqm: linzAreaSqm ?? null,
+    land_area_source: linzAreaSqm ? "linz" : null,
+    land_area_scope: linzAreaSqm ? "parcel" : null,
     property_type: null,
     sources_confirmed: linzAreaSqm ? ["land_area_sqm (from LINZ parcel)"] : [],
     sources_estimated: [

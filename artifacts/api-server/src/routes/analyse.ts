@@ -4233,12 +4233,18 @@ async function runFeasibilityAnalyseCore(args: {
   userId: string | null;
   log: FeasibilityLog;
   notifyWhenReady?: boolean;
+  geocodeFallbackAddress?: string | null;
 }): Promise<{
   report: Record<string, unknown>;
   savedSearchId: string | null;
   savedSearchCreatedAt: string | null;
 }> {
   const { address, analysisAddress, locale, translateTitleSchool, conversationHistory, selectedListingUrl, selectedListingContext, userId, log } = args;
+  const identity = args.geocodeFallbackAddress
+    ? null
+    : await detectSubdivision(analysisAddress).catch(() => null);
+  const geocodeFallbackAddress = args.geocodeFallbackAddress
+    ?? (identity?.classification === "same_title_aliases" ? identity.geocodeFallbackAddress : null);
   const selectedContext =
     normaliseSelectedListingContext(selectedListingContext) ??
     selectedListingContextFromHistory(conversationHistory);
@@ -4261,6 +4267,7 @@ async function runFeasibilityAnalyseCore(args: {
     selectedListingContext: selectedContext,
     cachedRaw: cachedEntry?.rawData ?? null,
     cachedRawAcquiredAt: cachedEntry ? new Date(cachedEntry.row.lastRefreshedAt as unknown as string | Date).toISOString() : null,
+    geocodeFallbackAddress,
   }).catch((err) => {
     log.warn({ err }, "Pipeline failed during feasibility core — falling back to LLM-only report");
     return null;
@@ -4280,6 +4287,7 @@ async function runFeasibilityAnalyseCore(args: {
       preferredRealestateListingUrl,
       selectedListingContext: selectedContext,
       cachedRaw: null,
+      geocodeFallbackAddress,
     }).catch((err) => {
       log.warn({ err }, "Forced live re-acquisition failed — keeping cached-data result");
       return null;
@@ -4948,9 +4956,12 @@ router.post(
       return;
     }
 
-    const addressResolution = addressConfirmed
-      ? { resolvedAddress: analysisInput, clarification: null }
-      : await resolveAddressForAnalysis(analysisInput, analyseLocale);
+    const sameTitleAlias = subdivision?.classification === "same_title_aliases";
+    const addressResolution = sameTitleAlias
+      ? { resolvedAddress: subdivision.canonicalAddress ?? analysisInput, clarification: null }
+      : addressConfirmed
+        ? { resolvedAddress: analysisInput, clarification: null }
+        : await resolveAddressForAnalysis(analysisInput, analyseLocale);
     if (addressResolution.clarification) {
       res.json({
         type: "clarification",
@@ -5032,6 +5043,7 @@ router.post(
     const result = await runFeasibilityAnalyseCore({
       address,
       analysisAddress,
+      geocodeFallbackAddress: sameTitleAlias ? subdivision.geocodeFallbackAddress : null,
       locale: analyseLocale,
       translateTitleSchool,
       conversationHistory: analysisConversationHistory,
@@ -8166,7 +8178,10 @@ router.post(
             return;
           }
 
-          const addressResolution = await resolveAddressForAnalysis(extractedAddress, chatLocale);
+          const sameTitleAlias = subdivision?.classification === "same_title_aliases";
+          const addressResolution = sameTitleAlias
+            ? { resolvedAddress: subdivision.canonicalAddress ?? extractedAddress, clarification: null }
+            : await resolveAddressForAnalysis(extractedAddress, chatLocale);
           if (addressResolution.clarification) {
             const addressPayload = JSON.stringify(addressResolution.clarification);
             const translatedAddress = await translateChatContent(addressPayload, "clarification", chatLocale, chatTranslateTitleSchool);
@@ -8226,6 +8241,7 @@ router.post(
             selectedListingUrlFromHistory(conversationHistory, analysisAddress);
 
           let pipelineResult = await runPropertyPipeline(analysisAddress, {
+            geocodeFallbackAddress: sameTitleAlias ? subdivision.geocodeFallbackAddress : null,
             preferredRealestateListingUrl:
               chatPreferredListingUrl && /realestate\.co\.nz/i.test(chatPreferredListingUrl)
                 ? chatPreferredListingUrl
@@ -8247,6 +8263,7 @@ router.post(
               "Redevelopment suspected on cached data — forcing live re-acquisition",
             );
             const fresh = await runPropertyPipeline(analysisAddress, {
+              geocodeFallbackAddress: sameTitleAlias ? subdivision.geocodeFallbackAddress : null,
               preferredRealestateListingUrl:
                 chatPreferredListingUrl && /realestate\.co\.nz/i.test(chatPreferredListingUrl)
                   ? chatPreferredListingUrl

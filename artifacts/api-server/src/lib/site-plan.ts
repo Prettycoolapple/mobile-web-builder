@@ -653,6 +653,7 @@ async function queryArcGisFeatures(args: {
   distanceM?: number;
   maxFeatures?: number;
   timeoutMs?: number;
+  where?: string;
 }): Promise<ArcGisFeature[]> {
   const url = new URL(`${args.serviceUrl}/${args.layerId}/query`);
   url.searchParams.set("geometry", args.geometry);
@@ -660,7 +661,7 @@ async function queryArcGisFeatures(args: {
   url.searchParams.set("inSR", "4326");
   url.searchParams.set("outSR", "4326");
   url.searchParams.set("spatialRel", "esriSpatialRelIntersects");
-  url.searchParams.set("where", "1=1");
+  url.searchParams.set("where", args.where ?? "1=1");
   url.searchParams.set("outFields", "*");
   url.searchParams.set("returnGeometry", "true");
   url.searchParams.set("geometryPrecision", "7");
@@ -772,7 +773,7 @@ function unavailableRegionalPlanningLayer(
   const kind = regionalPlanningLayerKind(def);
   const isPoint = kind === "point";
   return {
-    id: `regional-planning-${providerId}-${def.layerId}`,
+    id: `regional-planning-${providerId}-${def.layerId}-${index}`,
     label: def.name,
     group: "planning",
     defaultVisible: false,
@@ -866,12 +867,13 @@ async function regionalPlanningOverlayLayers(
         geometryType: queryGeometry.geometryType,
         distanceM: queryGeometry === pointGeometry ? def.distanceM : undefined,
         maxFeatures: 80,
+        where: def.where,
       });
       const geojson = arcgisFeaturesToGeoJson(features, def.name);
       const color = regionalPlanningLayerColor(index);
       if (geojson.features.length === 0) return unavailableRegionalPlanningLayer(providerId, def, index);
       return {
-        id: `regional-planning-${providerId}-${def.layerId}`,
+        id: `regional-planning-${providerId}-${def.layerId}-${index}`,
         label: def.name,
         group: "planning" as const,
         defaultVisible: false,

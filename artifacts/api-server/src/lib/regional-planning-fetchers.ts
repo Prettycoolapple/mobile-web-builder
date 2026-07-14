@@ -8,8 +8,8 @@ import {
   fetchRegionalPlanningZone,
 } from "./regional-arcgis";
 import { fetchRegionalInfrastructure } from "./regional-infrastructure";
+import { fetchRegionalPropertyHistory } from "./regional-property-history";
 import {
-  emptyPropertyHistory,
   partialProviderZone,
   regionalPlanningProvidersEnabled,
   resolvePlanningJurisdiction,
@@ -88,7 +88,8 @@ export async function fetchPropertyHistoryForReport(
     return fetchPropertyHistory(address, lat, lng, linzAreaSqm);
   }
 
-  return emptyPropertyHistory(linzAreaSqm);
+  const jurisdiction = resolvePlanningJurisdiction(context(lat, lng, address));
+  return fetchRegionalPropertyHistory(jurisdiction.providerId, address, lat, lng, linzAreaSqm);
 }
 
 export async function fetchInfrastructureForReport(

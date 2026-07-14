@@ -1,6 +1,11 @@
 import { logger } from "./logger";
 import { geocodeAddress } from "./geocode";
-import { fetchLINZAddressCandidates, fetchLINZLetterSuffixAddresses, lrsAddressLooksExact } from "./linz";
+import {
+  fetchLINZAddressCandidates,
+  fetchLINZLetterSuffixAddresses,
+  fetchLINZTitlesByAddressDetailed,
+  lrsAddressLooksExact,
+} from "./linz";
 import type { LinzAddressSearchCandidate } from "./linz";
 
 /**
@@ -17,6 +22,15 @@ export interface SubdivisionResult {
   isSubdivided: boolean;
   parentAddress: string;
   subLots: string[];
+  /**
+   * `same_title_aliases` means LINZ has multiple address points but every one
+   * resolves to the same live record of title. Those are dwelling/address
+   * aliases, not selectable legal lots.
+   */
+  classification?: "none" | "separate_titles" | "same_title_aliases" | "unverified_multiple_addresses";
+  canonicalAddress?: string;
+  geocodeFallbackAddress?: string | null;
+  sharedTitleNo?: string | null;
 }
 
 /**
@@ -149,13 +163,77 @@ function linzCandidateContainsParentLot(candidateAddress: string, requestedAddre
   return formattedContainsParentLot(candidateAddress, number);
 }
 
+async function classifyLinzSuffixTitles(
+  parentAddress: string,
+  subLots: string[],
+): Promise<Pick<SubdivisionResult, "classification" | "canonicalAddress" | "geocodeFallbackAddress" | "sharedTitleNo">> {
+  const lookups = await Promise.all(
+    subLots.map((address) => fetchLINZTitlesByAddressDetailed(address).catch(() => null)),
+  );
+  const liveTitleSets = lookups.map((lookup) => new Set(
+    (lookup?.preview?.titles ?? [])
+      .filter((title) => /\blive\b/i.test(title.title_status ?? ""))
+      .map((title) => title.title_no.trim())
+      .filter(Boolean),
+  ));
+
+  if (liveTitleSets.every((titles) => titles.size > 0)) {
+    const common = [...liveTitleSets[0]!].filter((titleNo) =>
+      liveTitleSets.every((titles) => titles.has(titleNo)),
+    );
+    if (common.length === 1) {
+      return {
+        classification: "same_title_aliases",
+        canonicalAddress: parentAddress,
+        geocodeFallbackAddress: subLots[0] ?? null,
+        sharedTitleNo: common[0]!,
+      };
+    }
+
+    const distinct = new Set(liveTitleSets.flatMap((titles) => [...titles]));
+    if (distinct.size >= 2) {
+      return {
+        classification: "separate_titles",
+        canonicalAddress: parentAddress,
+        geocodeFallbackAddress: null,
+        sharedTitleNo: null,
+      };
+    }
+  }
+
+  return {
+    classification: "unverified_multiple_addresses",
+    canonicalAddress: parentAddress,
+    geocodeFallbackAddress: null,
+    sharedTitleNo: null,
+  };
+}
+
 export async function detectSubdivision(address: string): Promise<SubdivisionResult> {
   const parsed = parseStreetNumberSuffix(address);
-  if (!parsed || parsed.letter !== "") {
+  if (!parsed) {
     return { isSubdivided: false, parentAddress: address, subLots: [] };
   }
 
   const { number, rest } = parsed;
+  if (parsed.letter !== "") {
+    const canonicalParent = `${number} ${rest}`;
+    const siblingHits = await fetchLINZLetterSuffixAddresses(canonicalParent, LETTERS).catch(() => []);
+    if (siblingHits.length >= 2) {
+      const aliases = siblingHits.map((hit) => hit.address);
+      const identity = await classifyLinzSuffixTitles(canonicalParent, aliases);
+      if (identity.classification === "same_title_aliases") {
+        return {
+          isSubdivided: false,
+          parentAddress: canonicalParent,
+          subLots: aliases,
+          ...identity,
+          geocodeFallbackAddress: address,
+        };
+      }
+    }
+    return { isSubdivided: false, parentAddress: address, subLots: [] };
+  }
 
   const confirmed = confirmedSubdivisionFor(address, number, rest);
   if (confirmed.length > 0) {
@@ -187,9 +265,24 @@ export async function detectSubdivision(address: string): Promise<SubdivisionRes
   const linzSubLots = await fetchLINZLetterSuffixAddresses(address, LETTERS).catch(() => []);
   if (linzSubLots.length >= 2) {
     const subLots = linzSubLots.map((hit) => hit.address);
+    const identity = await classifyLinzSuffixTitles(address, subLots);
+    if (identity.classification === "same_title_aliases") {
+      logger.info(
+        { parent: address, aliases: subLots, sharedTitleNo: identity.sharedTitleNo },
+        "Multiple LINZ addresses share one live title; treating them as aliases",
+      );
+      return {
+        isSubdivided: false,
+        parentAddress: address,
+        subLots,
+        ...identity,
+      };
+    }
     logger.info(
-      { parent: address, subLots, source: "linz_lrs_address_search" },
-      "Subdivision detected",
+      { parent: address, subLots, classification: identity.classification, source: "linz_lrs_address_search" },
+      identity.classification === "separate_titles"
+        ? "Subdivision detected from distinct live titles"
+        : "Multiple addresses found but title relationship is unverified",
     );
     return {
       isSubdivided: true,

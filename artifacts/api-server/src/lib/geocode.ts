@@ -81,8 +81,21 @@ function councilAddressMatchText(address: string): string {
 }
 
 function councilAddressSourceFor(address: string): CouncilAddressSource | undefined {
+  return councilAddressSourcesFor(address)[0];
+}
+
+function councilAddressSourcesFor(address: string): CouncilAddressSource[] {
   const matchText = councilAddressMatchText(address);
-  return COUNCIL_ADDRESS_SOURCES.find((candidate) => candidate.matches.test(matchText));
+  const direct = COUNCIL_ADDRESS_SOURCES.filter((candidate) => candidate.matches.test(matchText));
+
+  // Rotorua/Rotoma labels are frequently used interchangeably by consumer
+  // geocoders around the Rotorua Lakes / Whakatane boundary. Probe both public
+  // council address layers, but still require an exact street number and road.
+  if (!/\b(rotorua|rotoma|braemar)\b/i.test(matchText)) return direct;
+  return [
+    ...direct,
+    ...COUNCIL_ADDRESS_SOURCES.filter((candidate) => !direct.includes(candidate)),
+  ];
 }
 
 const COUNCIL_ADDRESS_SOURCES: CouncilAddressSource[] = [
@@ -120,36 +133,58 @@ function parseCouncilStreetAddress(address: string): { number: number; suffix: s
     : parts[0] ?? "";
   const match = firstLine.match(/^(\d+)([a-z]?)\s+(.+)$/i);
   if (!match) return null;
-  return { number: Number(match[1]), suffix: (match[2] ?? "").toUpperCase(), road: match[3]!.toUpperCase() };
+  const road = match[3]!
+    .toUpperCase()
+    .replace(/\s+RD$/i, " ROAD")
+    .replace(/\s+ST$/i, " STREET")
+    .replace(/\s+AVE$/i, " AVENUE")
+    .replace(/\s+DR$/i, " DRIVE")
+    .replace(/\s+PL$/i, " PLACE")
+    .replace(/\s+LN$/i, " LANE")
+    .replace(/\s+CRES$/i, " CRESCENT")
+    .replace(/\s+TCE$/i, " TERRACE");
+  return { number: Number(match[1]), suffix: (match[2] ?? "").toUpperCase(), road };
 }
 
 async function councilAddressGeocode(address: string): Promise<GeoResult | null> {
   const parsed = parseCouncilStreetAddress(address);
-  const source = councilAddressSourceFor(address);
-  if (!parsed || !source) return null;
+  const sources = councilAddressSourcesFor(address);
+  if (!parsed || sources.length === 0) return null;
 
-  const url = new URL(`${source.serviceUrl}/query`);
-  url.searchParams.set("f", "json");
-  url.searchParams.set("where", source.where(parsed));
-  url.searchParams.set("outFields", "*");
-  url.searchParams.set("returnGeometry", "true");
-  url.searchParams.set("outSR", "4326");
-  const response = await fetch(url.toString(), { signal: AbortSignal.timeout(8000) });
-  if (!response.ok) throw new Error(`Council address lookup HTTP ${response.status}`);
-  const data = await response.json() as {
-    features?: Array<{ attributes?: Record<string, unknown>; geometry?: { x?: number; y?: number } }>;
-    error?: { message?: string };
-  };
-  if (data.error) throw new Error(`Council address lookup error: ${data.error.message ?? "unknown"}`);
-  const exact = (data.features ?? []).find((feature) => {
-    const formatted = source.formatted(feature.attributes ?? {});
-    return formatted && streetNumberMatchesExactly(address, streetNumberFromFormatted(formatted));
-  });
-  const formatted = exact ? source.formatted(exact.attributes ?? {}) : null;
-  const lat = exact?.geometry?.y;
-  const lng = exact?.geometry?.x;
-  if (!formatted || !Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-  return { lat: lat!, lng: lng!, formatted, suburb: null };
+  let lastError: Error | null = null;
+  for (const source of sources) {
+    try {
+      const url = new URL(`${source.serviceUrl}/query`);
+      url.searchParams.set("f", "json");
+      url.searchParams.set("where", source.where(parsed));
+      url.searchParams.set("outFields", "*");
+      url.searchParams.set("returnGeometry", "true");
+      url.searchParams.set("outSR", "4326");
+      const response = await fetch(url.toString(), { signal: AbortSignal.timeout(8000) });
+      if (!response.ok) throw new Error(`Council address lookup HTTP ${response.status}`);
+      const data = await response.json() as {
+        features?: Array<{ attributes?: Record<string, unknown>; geometry?: { x?: number; y?: number } }>;
+        error?: { message?: string };
+      };
+      if (data.error) throw new Error(`Council address lookup error: ${data.error.message ?? "unknown"}`);
+      const exact = (data.features ?? []).find((feature) => {
+        const formatted = source.formatted(feature.attributes ?? {});
+        return formatted && streetNumberMatchesExactly(address, streetNumberFromFormatted(formatted));
+      });
+      const formatted = exact ? source.formatted(exact.attributes ?? {}) : null;
+      const lat = exact?.geometry?.y;
+      const lng = exact?.geometry?.x;
+      if (formatted && Number.isFinite(lat) && Number.isFinite(lng)) {
+        return { lat: lat!, lng: lng!, formatted, suburb: null };
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      logger.warn({ err, address, serviceUrl: source.serviceUrl }, "Council exact-address source failed");
+    }
+  }
+
+  if (lastError && sources.length === 1) throw lastError;
+  return null;
 }
 
 function shouldRequireExactCouncilAddress(address: string): boolean {

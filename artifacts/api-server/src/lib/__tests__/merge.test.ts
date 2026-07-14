@@ -2,6 +2,193 @@ import { describe, expect, it } from "vitest";
 import { mergePropertyData } from "../scrapers/merge";
 
 describe("mergePropertyData", () => {
+  it("prefers the newer authoritative Whakatane council CV", () => {
+    const merged = mergePropertyData(
+      { area_sqm: 61_829 } as any,
+      null,
+      null,
+      { zone_code: "Rural Production Zone", zone_description: "Rural Production Zone" } as any,
+      [],
+      {
+        contour: null,
+        asbestos_risk: "unknown",
+        infrastructure: [],
+        property_history: {
+          cv_nzd: 1_310_000,
+          cv_year: 2025,
+          build_year: null,
+          floor_area_sqm: null,
+          land_area_sqm: 61_829,
+          property_type: null,
+          sources_confirmed: ["cv_nzd (Whakatane District Council rating GIS)"],
+          sources_estimated: [],
+        },
+        propertyValue: {
+          cv_nzd: 900_000,
+          cv_year: 2022,
+        } as any,
+      },
+    );
+
+    expect(merged.cv_nzd).toBe(1_310_000);
+    expect(merged.cv_year).toBe(2025);
+    expect(merged.data_sources.cv_nzd).toBe("whakatane_council_rating_gis");
+  });
+
+  it("uses Christchurch's complete rating unit while preserving floor area, CV, and zone", () => {
+    const merged = mergePropertyData(
+      { area_sqm: 363 } as any,
+      null,
+      null,
+      { zone_code: "Residential Medium Density", zone_description: "Medium Density Residential Zone" } as any,
+      [],
+      {
+        contour: "flat",
+        asbestos_risk: "low",
+        infrastructure: [],
+        analysed_address: "21 Defoe Place, Waltham, Christchurch",
+        linz_lrs_title_preview: {
+          address_id: "237895",
+          address: "21 Defoe Place, Waltham, Christchurch",
+          titles: [{
+            title_no: "CB22B/808",
+            title_type: "Fee Simple",
+            title_status: "Live",
+            legal_descriptions: ["Part Lot 13-14 Deposited Plan 1417"],
+            land_district: "Canterbury",
+            issue_date: null,
+            indicative_area_sqm: 548,
+          }],
+        },
+        property_history: {
+          cv_nzd: null,
+          cv_year: null,
+          build_year: null,
+          floor_area_sqm: null,
+          land_area_sqm: 552,
+          land_area_source: "christchurch_council_rating_unit",
+          land_area_scope: "rating_unit",
+          property_type: null,
+          sources_confirmed: ["land_area_sqm (Christchurch City Council rating unit GIS)"],
+          sources_estimated: [],
+        },
+        propertyValue: {
+          cv_nzd: 530_000,
+          cv_year: 2025,
+          floor_area_sqm: 120,
+          land_area_sqm: 552,
+          address_confirmed: "21 Defoe Place, Waltham, Christchurch",
+        } as any,
+      },
+    );
+
+    expect(merged.land_area_sqm).toBe(552);
+    expect(merged.data_sources.land_area_sqm).toBe("christchurch_council_rating_unit");
+    expect(merged.floor_area_sqm).toBe(120);
+    expect(merged.cv_nzd).toBe(530_000);
+    expect(merged.zone_description).toBe("Medium Density Residential Zone");
+    expect(merged.discrepancies).toEqual(expect.arrayContaining([
+      expect.stringContaining("complete property-level area"),
+    ]));
+  });
+
+  it("uses one exact live fee-simple title area when it clearly spans multiple parcels", () => {
+    const merged = mergePropertyData(
+      { area_sqm: 363 } as any,
+      null,
+      null,
+      null,
+      [],
+      {
+        contour: null,
+        asbestos_risk: "unknown",
+        infrastructure: [],
+        analysed_address: "21 Defoe Place, Waltham, Christchurch",
+        linz_lrs_title_preview: {
+          address_id: "237895",
+          address: "21 Defoe Place, Waltham, Christchurch",
+          titles: [{
+            title_no: "CB22B/808",
+            title_type: "Fee Simple",
+            title_status: "Live",
+            legal_descriptions: ["Part Lot 13-14 Deposited Plan 1417"],
+            land_district: "Canterbury",
+            issue_date: null,
+            indicative_area_sqm: 548,
+          }],
+        },
+      },
+    );
+
+    expect(merged.land_area_sqm).toBe(548);
+    expect(merged.data_sources.land_area_sqm).toBe("linz_lrs_title");
+  });
+
+  it("retains the point parcel for ordinary, multiple-title, cross-lease, and child-address cases", () => {
+    const baseTitle = {
+      title_no: "TEST/1",
+      title_status: "Live",
+      land_district: "Canterbury",
+      issue_date: null,
+      indicative_area_sqm: 552,
+    };
+    const mergeWith = (address: string, titles: any[], propertyHistory?: any) => mergePropertyData(
+      { area_sqm: 363 } as any,
+      null,
+      null,
+      null,
+      [],
+      {
+        contour: null,
+        asbestos_risk: "unknown",
+        infrastructure: [],
+        analysed_address: address,
+        linz_lrs_title_preview: { address_id: "test", address, titles },
+        property_history: propertyHistory,
+      },
+    );
+    const christchurchRatingUnit = {
+      cv_nzd: null,
+      cv_year: null,
+      build_year: null,
+      floor_area_sqm: null,
+      land_area_sqm: 552,
+      land_area_source: "christchurch_council_rating_unit",
+      land_area_scope: "rating_unit",
+      property_type: null,
+      sources_confirmed: [],
+      sources_estimated: [],
+    };
+
+    const ordinary = mergeWith("10 Example Road, Christchurch", [{
+      ...baseTitle,
+      title_type: "Fee Simple",
+      legal_descriptions: ["Lot 1 Deposited Plan 12345"],
+    }]);
+    expect(ordinary.land_area_sqm).toBe(363);
+    expect(ordinary.data_sources.land_area_sqm).toBe("linz");
+
+    const multipleTitle = mergeWith("21 Defoe Place, Christchurch", [
+      { ...baseTitle, title_no: "TEST/1", title_type: "Fee Simple", legal_descriptions: ["Lot 1 DP 1"] },
+      { ...baseTitle, title_no: "TEST/2", title_type: "Fee Simple", legal_descriptions: ["Lot 2 DP 1"] },
+    ], christchurchRatingUnit);
+    expect(multipleTitle.land_area_sqm).toBe(363);
+
+    const crossLease = mergeWith("21 Defoe Place, Christchurch", [{
+      ...baseTitle,
+      title_type: "Cross Lease",
+      legal_descriptions: ["Flat 1 Deposited Plan 12345"],
+    }], christchurchRatingUnit);
+    expect(crossLease.land_area_sqm).toBe(363);
+
+    const child = mergeWith("21A Defoe Place, Christchurch", [{
+      ...baseTitle,
+      title_type: "Fee Simple",
+      legal_descriptions: ["Part Lot 13-14 Deposited Plan 1417"],
+    }], christchurchRatingUnit);
+    expect(child.land_area_sqm).toBe(363);
+  });
+
   it("does not let an uncorroborated active listing override cadastral land or stable floor area", () => {
     const merged = mergePropertyData(
       { area_sqm: 1198 } as any,

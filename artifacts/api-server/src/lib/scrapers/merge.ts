@@ -1,5 +1,5 @@
 import { logger } from "../logger";
-import type { LinzParcel } from "../linz";
+import type { LinzLrsAddressTitlePreview, LinzParcel } from "../linz";
 import type { Overlay, ZoneResult } from "../auckland-council";
 import type { InfrastructureItem } from "../infrastructure";
 import type { HougardenData } from "./hougarden";
@@ -393,6 +393,69 @@ function analysedAddressHasChildSuffix(value: string | null | undefined): boolea
   return !!unit?.suffix;
 }
 
+function analysedAddressLooksUnitLike(value: string | null | undefined): boolean {
+  const firstLine = String(value ?? "").split(",")[0]?.trim() ?? "";
+  return (
+    analysedAddressHasChildSuffix(value) ||
+    /^(?:unit|flat|apartment|apt)\b/i.test(firstLine) ||
+    /^\d+\s*\/\s*\d+/i.test(firstLine)
+  );
+}
+
+function liveLrsTitles(preview: LinzLrsAddressTitlePreview | null | undefined) {
+  return (preview?.titles ?? []).filter((title) => /^live$/i.test(title.title_status?.trim() ?? ""));
+}
+
+function isFeeSimpleTitle(type: string | null | undefined): boolean {
+  return /^(?:fee\s*simple|freehold)$/i.test(type?.trim() ?? "");
+}
+
+function titleClearlySpansMultipleParcels(legalDescriptions: string[]): boolean {
+  if (legalDescriptions.length > 1) return true;
+  const legal = legalDescriptions.join(" ");
+  return (
+    /\b(?:lots|sections)\s+\d+/i.test(legal) ||
+    /\b(?:lot|section)\s+\d+\s*(?:-|,|&|\band\b)\s*\d+/i.test(legal)
+  );
+}
+
+function exactMultiParcelTitleArea(preview: LinzLrsAddressTitlePreview | null | undefined): number | null {
+  const live = liveLrsTitles(preview);
+  if (live.length !== 1) return null;
+  const title = live[0]!;
+  if (!isFeeSimpleTitle(title.title_type)) return null;
+  if (!titleClearlySpansMultipleParcels(title.legal_descriptions)) return null;
+  const area = title.indicative_area_sqm;
+  return area != null && Number.isFinite(area) && area >= 10 && area <= 100_000_000 ? Math.round(area) : null;
+}
+
+function titlePreviewConfirmsStandalone(preview: LinzLrsAddressTitlePreview | null | undefined): boolean | null {
+  if (!preview) return null;
+  const live = liveLrsTitles(preview);
+  if (live.length !== 1) return false;
+  return isFeeSimpleTitle(live[0]!.title_type);
+}
+
+function knownNonStandaloneProperty(
+  address: string | null | undefined,
+  realestateListing: ListingResult | null,
+  oneroof: OneRoofData | null,
+  propertyValue: PropertyValueData | null,
+): boolean {
+  if (analysedAddressLooksUnitLike(address)) return true;
+  const text = [
+    realestateListing?.propertyType,
+    realestateListing?.listingCategory,
+    realestateListing?.tenureText,
+    realestateListing?.legalDescription,
+    oneroof?.tenureText,
+    propertyValue?.property_type,
+    propertyValue?.property_sub_type,
+    ...(propertyValue?.legal_descriptions ?? []),
+  ].filter(Boolean).join(" ");
+  return /\b(unit\s*title|unit\s+[a-z]\b|accessory\s+unit|stratum|body\s+corporate|cross\s*lease|crosslease|flat|apartment)\b/i.test(text);
+}
+
 export function mergePropertyData(
   linz: LinzParcel | null,
   hougarden: HougardenData | null,
@@ -417,6 +480,7 @@ export function mergePropertyData(
     qv?: QVData | null;
     homes?: HomesData | null;
     propertyValue?: PropertyValueData | null;
+    linz_lrs_title_preview?: LinzLrsAddressTitlePreview | null;
     analysed_address?: string | null;
     /** Active address-matched listing from realestate.co.nz. */
     realestate_listing?: ListingResult | null;
@@ -484,6 +548,10 @@ export function mergePropertyData(
   }
 
   // Land area: LINZ is the authoritative cadastral measurement — always wins.
+  const propertyHistorySource = ph?.sources_confirmed.some((source) => source.includes("Whakatane District Council"))
+    ? "whakatane_council_rating_gis"
+    : "auckland_council_gis";
+
   const analysedIsChildAddress = analysedAddressHasChildSuffix(extra?.analysed_address);
   const exactChildLandCandidates: Array<[string, number | null | undefined]> = analysedIsChildAddress
     ? [
@@ -494,10 +562,53 @@ export function mergePropertyData(
       ]
     : [];
 
+  const nonStandaloneProperty = knownNonStandaloneProperty(
+    extra?.analysed_address,
+    realestateListing,
+    oneroof,
+    propertyValue,
+  );
+  const titleStandalone = titlePreviewConfirmsStandalone(extra?.linz_lrs_title_preview);
+  const hasMultipleLiveTitles = liveLrsTitles(extra?.linz_lrs_title_preview).length > 1;
+  const verifiedChristchurchRatingArea =
+    ph?.land_area_source === "christchurch_council_rating_unit" &&
+    ph.land_area_scope === "rating_unit" &&
+    !nonStandaloneProperty &&
+    !hasMultipleLiveTitles &&
+    titleStandalone !== false
+      ? ph.land_area_sqm
+      : null;
+  const verifiedMultiParcelTitleArea = !nonStandaloneProperty
+    ? exactMultiParcelTitleArea(extra?.linz_lrs_title_preview)
+    : null;
+  const landResolutionNotes: string[] = [];
+  const propertyLevelArea = verifiedChristchurchRatingArea ?? verifiedMultiParcelTitleArea;
+  const propertyLevelSource = verifiedChristchurchRatingArea != null
+    ? "christchurch_council_rating_unit"
+    : verifiedMultiParcelTitleArea != null
+      ? "linz_lrs_title"
+      : null;
+
+  if (propertyLevelArea != null && linz?.area_sqm != null && !areaClose(propertyLevelArea, linz.area_sqm, 0.1)) {
+    landResolutionNotes.push(
+      `Land area: the exact ${propertyLevelSource === "christchurch_council_rating_unit" ? "Christchurch Council rating unit" : "LINZ fee-simple title"} is ${propertyLevelArea}m² while the address point intersects one ${linz.area_sqm}m² cadastral parcel. Using the complete property-level area.`,
+    );
+  }
+  if (
+    ph?.land_area_source === "christchurch_council_rating_unit" &&
+    ph.land_area_sqm != null &&
+    verifiedChristchurchRatingArea == null
+  ) {
+    landResolutionNotes.push(
+      `Land area: Christchurch Council returned a ${ph.land_area_sqm}m² rating unit, but unit/cross-lease or multiple-title safeguards could not confirm it as this property's standalone land. The existing parcel/source value was retained.`,
+    );
+  }
+
   const land_area_sqm = first("land_area_sqm", sources,
     ...exactChildLandCandidates,
+    [propertyLevelSource ?? "property_level", propertyLevelArea],
     ["linz", linz?.area_sqm],
-    ["auckland_council_gis", ph?.land_area_sqm],
+    [ph?.land_area_source ?? "auckland_council_gis", ph?.land_area_sqm],
     ["propertyvalue", propertyValueLandArea],
     ["qv", qvLandArea],
     ["homes", homesLandArea],
@@ -508,10 +619,10 @@ export function mergePropertyData(
 
   // CV: pick the valuation with the most recent year, not just the first non-null.
   const { cv_nzd, cv_year } = bestCV(sources, [
+    { src: propertyHistorySource, cv_nzd: ph?.cv_nzd, cv_year: ph?.cv_year },
     { src: "propertyvalue",      cv_nzd: propertyValue?.cv_nzd, cv_year: propertyValue?.cv_year },
     { src: "oneroof",            cv_nzd: oneroof?.cv_nzd,  cv_year: oneroof?.cv_year },
     { src: "hougarden",          cv_nzd: hougarden?.cv_nzd, cv_year: undefined },
-    { src: "auckland_council_gis", cv_nzd: ph?.cv_nzd,     cv_year: ph?.cv_year },
     { src: "qv",                 cv_nzd: qv?.cv_nzd,       cv_year: qv?.cv_year },
     { src: "homes",              cv_nzd: homes?.cv_nzd,    cv_year: undefined },
   ]);
@@ -576,6 +687,7 @@ export function mergePropertyData(
   // the report UI and the follow-up chat can stay aligned on *why* a value
   // was chosen.
   const discrepancies: string[] = [];
+  discrepancies.push(...landResolutionNotes);
   if (buildYearResult.note) discrepancies.push(buildYearResult.note);
   if (hasIgnoredCombinedListing) {
     discrepancies.push(
