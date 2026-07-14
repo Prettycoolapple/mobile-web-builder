@@ -501,12 +501,25 @@ export interface PipelineResult {
  */
 export function hasCacheableCore(r: PipelineResult): boolean {
   if (!r.geocode || !r.raw_property) return false;
+  const providerId = r.raw_property.planning_provider?.providerId;
+  const isRegionalZoneProvider = hasRegionalPlanningZoneLayer(providerId);
   if (
-    hasRegionalPlanningZoneLayer(r.raw_property.planning_provider?.providerId) &&
+    isRegionalZoneProvider &&
     (!r.raw_property.zone?.zone_code?.trim() || r.raw_property.zone.zone_code === "UNKNOWN")
   ) {
     return false;
   }
+  const ph = r.raw_property.property_history;
+  const hasCompleteDirectRegionalCore =
+    providerId === "whakatane"
+      ? ph?.cv_nzd != null && ph.land_area_sqm != null && r.merged?.cv_nzd != null && r.merged.land_area_sqm != null
+      : providerId === "southland"
+        ? ph?.cv_nzd != null && r.merged?.cv_nzd != null
+        : providerId === "christchurch"
+          ? ph?.land_area_sqm != null && r.merged?.land_area_sqm != null
+          : false;
+  if (hasCompleteDirectRegionalCore) return true;
+
   // Require at least one ScrapingBee-backed scraper to have returned data.
   // hougarden, oneroof, qv, and homes are all browser/ScrapingBee-dependent.
   // If all four are null, ScrapingBee credits are likely depleted — don't

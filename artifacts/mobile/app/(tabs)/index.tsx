@@ -173,6 +173,13 @@ type PendingLimTitleConsent = {
   agencyName?: string | null;
 };
 
+function formatLimTitleAgentLabel(pending?: PendingLimTitleConsent | null): string {
+  const agentName = pending?.agentName?.trim();
+  const agencyName = pending?.agencyName?.trim();
+  if (agentName && agencyName) return `${agentName} at ${agencyName}`;
+  return agentName || agencyName || "the listing agent";
+}
+
 type DiscoveryNextResponse = {
   candidates?: PropertyCandidate[];
   continuationToken?: string | null;
@@ -2242,7 +2249,7 @@ export default function SearchScreen() {
       .reverse()
       .find((m) => m.type === "address_clarification" && (m.clarification?.options?.length ?? 0) > 0);
     if (pendingAddressPick?.clarification?.options?.[0] && isBareAffirmativeReply(text)) {
-      await handleAnalyseRef.current?.(pendingAddressPick.clarification.options[0]);
+      await handleAnalyseRef.current?.(pendingAddressPick.clarification.options[0], null, null, null, false, undefined, false, true);
       return;
     }
 
@@ -4429,7 +4436,7 @@ export default function SearchScreen() {
                 Share your contact details?
               </Text>
               <Text style={[styles.disclaimerBody, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                Your name, email address and mobile number will be shared with the listing agent so they can respond. Would you like to continue?
+                To request the LIM report and title, we'll share your name, email address and mobile number with {formatLimTitleAgentLabel(pendingLimTitleConsent)} so they can respond. Project Alpha may also view this request to help manage it.
               </Text>
               {pendingLimTitleConsent?.propertyAddress ? (
                 <View style={[styles.limTitlePropertyRow, { backgroundColor: colors.accent + "0F" }]}>
@@ -4446,7 +4453,7 @@ export default function SearchScreen() {
                   disabled={limTitleConsentSending}
                   activeOpacity={0.78}
                 >
-                  <Text style={[styles.limTitleModalSecondaryText, { color: colors.foreground }]}>No</Text>
+                  <Text style={[styles.limTitleModalSecondaryText, { color: colors.foreground }]}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.limTitleModalButton, { backgroundColor: colors.accent, borderColor: colors.accent }]}
@@ -4454,7 +4461,7 @@ export default function SearchScreen() {
                   disabled={limTitleConsentSending}
                   activeOpacity={0.84}
                 >
-                  {limTitleConsentSending ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.limTitleModalPrimaryText}>Yes</Text>}
+                  {limTitleConsentSending ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.limTitleModalPrimaryText}>Share details</Text>}
                 </TouchableOpacity>
               </View>
             </View>

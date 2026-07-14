@@ -764,34 +764,6 @@ function unavailableLayer(id: string, label: string, group: SitePlanLayerGroup, 
   };
 }
 
-function unavailableRegionalPlanningLayer(
-  providerId: PlanningProviderId,
-  def: RegionalSitePlanOverlayLayer,
-  index: number,
-): SitePlanLayer {
-  const color = regionalPlanningLayerColor(index);
-  const kind = regionalPlanningLayerKind(def);
-  const isPoint = kind === "point";
-  return {
-    id: `regional-planning-${providerId}-${def.layerId}-${index}`,
-    label: def.name,
-    group: "planning",
-    defaultVisible: false,
-    available: false,
-    style: {
-      stroke: color,
-      strokeWidth: isPoint ? 2.6 : def.status === "control" ? 2.4 : 2,
-      strokeOpacity: 0.92,
-      fill: color,
-      fillOpacity: isPoint ? 0.9 : def.status === "control" ? 0.08 : 0.15,
-      dashArray: def.status === "control" ? [8, 6] : undefined,
-      markerShape: isPoint ? "triangle" : undefined,
-    },
-    legend: [{ label: def.name, color, kind }],
-    geojson: emptyFeatureCollection(),
-  };
-}
-
 async function planningOverlayLayers(lat: number, lng: number, parcelBbox: ParcelBbox | null | undefined): Promise<SitePlanLayer[]> {
   const parcelGeometry = arcgisParcelGeometry(parcelBbox);
   const pointGeometry = { geometry: `${lng},${lat}`, geometryType: "esriGeometryPoint" };
@@ -871,7 +843,7 @@ async function regionalPlanningOverlayLayers(
       });
       const geojson = arcgisFeaturesToGeoJson(features, def.name);
       const color = regionalPlanningLayerColor(index);
-      if (geojson.features.length === 0) return unavailableRegionalPlanningLayer(providerId, def, index);
+      if (geojson.features.length === 0) return null;
       return {
         id: `regional-planning-${providerId}-${def.layerId}-${index}`,
         label: def.name,
@@ -894,11 +866,9 @@ async function regionalPlanningOverlayLayers(
   );
 
   const layers: SitePlanLayer[] = [];
-  for (const [index, result] of results.entries()) {
-    if (result.status === "fulfilled") {
+  for (const result of results) {
+    if (result.status === "fulfilled" && result.value) {
       layers.push(result.value);
-    } else {
-      layers.push(unavailableRegionalPlanningLayer(providerId, defs[index]!, index));
     }
   }
   return layers;

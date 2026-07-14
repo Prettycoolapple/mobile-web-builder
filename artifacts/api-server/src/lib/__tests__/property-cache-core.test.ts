@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { hasCacheableCore, RAW_PROPERTY_SCHEMA_VERSION, type PipelineResult } from "../pipeline";
+import { cachedRawNeedsRegionalPropertyHistoryRefresh, cachedRawNeedsRegionalZoneRefresh } from "../property-cache-rules";
 import { cacheRowFreshness, PIPELINE_VERSION } from "../property-cache-freshness";
 
 // Importing ../pipeline here also loads its entire dependency graph, so this test
@@ -128,8 +129,51 @@ describe("hasCacheableCore", () => {
     }))).toBe(false);
   });
 
+  it("caches a complete Whakatane direct-GIS report even when browser scrapers are disabled", () => {
+    expect(hasCacheableCore(baseResult({
+      geocode: { lat: -38.016582, lng: 176.7156598 } as never,
+      linz_parcel: { parcel_id: "braemar-1134" } as never,
+      merged: { cv_nzd: 1_310_000, land_area_sqm: 61_829 } as never,
+      raw_property: {
+        planning_provider: { providerId: "whakatane" },
+        zone: { zone_code: "Rural Production Zone" },
+        property_history: { cv_nzd: 1_310_000, land_area_sqm: 61_829 },
+        hougarden: null,
+        oneroof: null,
+        qv: null,
+        homes: null,
+      } as never,
+    }))).toBe(true);
+  });
+
   it("exposes a schema version", () => {
     expect(RAW_PROPERTY_SCHEMA_VERSION).toBe(11);
+  });
+});
+
+describe("regional property-cache completeness", () => {
+  it("refreshes stale Whakatane cache bundles missing council CV or land area", () => {
+    expect(cachedRawNeedsRegionalPropertyHistoryRefresh({
+      planning_provider: { providerId: "whakatane" },
+      property_history: { cv_nzd: null, land_area_sqm: 61_829 },
+    } as never)).toBe(true);
+
+    expect(cachedRawNeedsRegionalPropertyHistoryRefresh({
+      planning_provider: { providerId: "whakatane" },
+      property_history: { cv_nzd: 1_310_000, land_area_sqm: 61_829 },
+    } as never)).toBe(false);
+  });
+
+  it("refreshes Southland cache bundles with unresolved zoning even when provider metadata was not stored", () => {
+    expect(cachedRawNeedsRegionalZoneRefresh({
+      geocode: {
+        lat: -45.8372796,
+        lng: 168.5815783,
+        formatted: "77 Kruger Street, Balfour 9779, New Zealand",
+      },
+      zone: { zone_code: "UNKNOWN" },
+      property_history: { cv_nzd: 250_000, land_area_sqm: 2_023 },
+    } as never)).toBe(true);
   });
 });
 

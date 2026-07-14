@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchLINZParcel, fetchLINZParcelsNear } from "../linz";
 import { buildSitePlanForReport } from "../site-plan";
-import { regionalSitePlanOverlayLayers } from "../regional-arcgis";
 import type { LinzParcel } from "../linz";
 import type { RawPropertyData } from "../pipeline";
 
@@ -65,10 +64,7 @@ describe("regional site-plan wrapper", () => {
 
     const sitePlan = await buildSitePlanForReport("10 Victoria Street, Hamilton", cachedRaw);
 
-    const planningLayers = sitePlan.layers.filter((layer) => layer.group === "planning");
-    expect(planningLayers).toHaveLength(regionalSitePlanOverlayLayers("hamilton").length);
-    expect(planningLayers.every((layer) => layer.available === false)).toBe(true);
-    expect(planningLayers.some((layer) => /designation|control|corridor/i.test(layer.label))).toBe(true);
+    expect(sitePlan.layers.filter((layer) => layer.group === "planning")).toEqual([]);
     expect(sitePlan.layers.filter((layer) => layer.group === "services").map((layer) => layer.label).sort()).toEqual([
       "Stormwater",
       "Wastewater",
@@ -146,11 +142,11 @@ describe("regional site-plan wrapper", () => {
       .toEqual(["Stormwater", "Wastewater", "Water Supply"]);
     expect(sitePlan.layers.filter((layer) => layer.group === "planning" && layer.available).map((layer) => layer.label).sort())
       .toEqual(["Infrastructure Constraint Qualifying Matter", "Stormwater Constraint Qualifying Matter"]);
-    expect(sitePlan.layers.filter((layer) => layer.group === "planning" && !layer.available).length).toBeGreaterThan(0);
+    expect(sitePlan.layers.filter((layer) => layer.group === "planning" && !layer.available)).toEqual([]);
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("where=Category"))).toBe(true);
   });
 
-  it("shows planning controls and all three service rows for Rotorua and Whakatane", async () => {
+  it("omits non-applicable planning controls while keeping all three service rows for Rotorua and Whakatane", async () => {
     const samples = [
       { providerId: "rotorua" as const, address: "85 Whittaker Road, Koutu, Rotorua", lat: -38.1251, lng: 176.2438 },
       { providerId: "whakatane" as const, address: "1134 Braemar Road, Rotoma", lat: -38.0166, lng: 176.7157 },
@@ -166,8 +162,7 @@ describe("regional site-plan wrapper", () => {
       const planning = sitePlan.layers.filter((layer) => layer.group === "planning");
       const services = sitePlan.layers.filter((layer) => layer.group === "services");
 
-      expect(planning).toHaveLength(regionalSitePlanOverlayLayers(sample.providerId).length);
-      expect(planning.some((layer) => /designation|precinct|development|control/i.test(layer.label))).toBe(true);
+      expect(planning).toEqual([]);
       expect(services.map((layer) => layer.label).sort()).toEqual(["Stormwater", "Wastewater", "Water Supply"]);
     }
   });
@@ -234,7 +229,7 @@ describe("regional site-plan wrapper", () => {
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("StormWaterAssets"))).toBe(true);
   });
 
-  it("shows Southland's three applicable services and hides non-applicable controls at 77 Kruger Street", async () => {
+  it("shows Southland's three applicable services and omits non-applicable controls at 77 Kruger Street", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       const isService = url.includes("/External_ThreeWaters_Layers_v2/MapServer/");
@@ -259,8 +254,7 @@ describe("regional site-plan wrapper", () => {
 
     expect(sitePlan.layers.filter((layer) => layer.group === "services" && layer.available).map((layer) => layer.label).sort())
       .toEqual(["Stormwater", "Wastewater", "Water Supply"]);
-    expect(sitePlan.layers.filter((layer) => layer.group === "planning" && layer.available)).toEqual([]);
-    expect(sitePlan.layers.filter((layer) => layer.group === "planning").every((layer) => !layer.available)).toBe(true);
+    expect(sitePlan.layers.filter((layer) => layer.group === "planning")).toEqual([]);
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/EPLAN_DISTRICT_PLAN_AGOL/FeatureServer/15/query"))).toBe(true);
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/External_ThreeWaters_Layers_v2/MapServer/14/query"))).toBe(true);
   });
