@@ -17,14 +17,20 @@ import {
   resolveLeadListingAgent,
 } from "../lib/lim-title-leads";
 import { detectLimTitleIntent } from "../lib/lim-title-intent";
-import { isLimTitleFeatureEnabled, isLimTitleProactiveEnabled, getSalesPortalUrl } from "../lib/env";
-import { runAfterResponse } from "../lib/vercel-wait-until";
-import { queueLeadSms } from "../lib/lead-sms";
+import {
+  isLimTitleFeatureEnabled,
+  isLimTitleProactiveEnabled,
+  getSalesPortalUrl,
+} from "../lib/env";
 import { normaliseSelectedListingContext } from "../lib/selected-listing-context";
+import { claimPostReportPrompt } from "../lib/post-report-prompt-allocation";
 
 const router = Router();
 
-const listingContextSchema = z.record(z.string(), z.unknown()).nullable().optional();
+const listingContextSchema = z
+  .record(z.string(), z.unknown())
+  .nullable()
+  .optional();
 const reportContextSchema = z.object({
   reportKey: z.string().trim().min(1).max(240),
   reportHistoryId: z.string().trim().min(1).max(240),
@@ -58,36 +64,56 @@ async function verifiedReportContext(
   input: z.infer<typeof reportContextSchema>,
 ): Promise<VerifiedReportContext | null> {
   const [saved] = await db
-    .select({ id: searches.id, address: searches.address, resultJson: searches.resultJson })
+    .select({
+      id: searches.id,
+      address: searches.address,
+      resultJson: searches.resultJson,
+    })
     .from(searches)
-    .where(and(eq(searches.id, input.reportHistoryId), eq(searches.userId, userId)))
+    .where(
+      and(eq(searches.id, input.reportHistoryId), eq(searches.userId, userId)),
+    )
     .limit(1);
-  if (!saved?.resultJson || typeof saved.resultJson !== "object" || Array.isArray(saved.resultJson)) return null;
+  if (
+    !saved?.resultJson ||
+    typeof saved.resultJson !== "object" ||
+    Array.isArray(saved.resultJson)
+  )
+    return null;
 
   const report = saved.resultJson as Record<string, unknown>;
   if (report.kind === "combined_listing_group") return null;
-  const overview = report.propertyOverview && typeof report.propertyOverview === "object" && !Array.isArray(report.propertyOverview)
-    ? report.propertyOverview as Record<string, unknown>
-    : {};
+  const overview =
+    report.propertyOverview &&
+    typeof report.propertyOverview === "object" &&
+    !Array.isArray(report.propertyOverview)
+      ? (report.propertyOverview as Record<string, unknown>)
+      : {};
   const selectedListingContext = normaliseSelectedListingContext(
     report.selectedListingContext ?? overview.selectedListingContext,
   );
-  const propertyAddress = nonEmptyString(report.address)
-    ?? nonEmptyString(overview.address)
-    ?? nonEmptyString(saved.address);
+  const propertyAddress =
+    nonEmptyString(report.address) ??
+    nonEmptyString(overview.address) ??
+    nonEmptyString(saved.address);
   if (!propertyAddress) return null;
 
   return {
     reportKey: saved.id,
     reportHistoryId: saved.id,
     propertyAddress,
-    listingUrl: selectedListingContext?.listingUrl ?? nonEmptyString(overview.listingUrl),
-    listingSource: selectedListingContext?.source ?? nonEmptyString(overview.listingSource),
+    listingUrl:
+      selectedListingContext?.listingUrl ?? nonEmptyString(overview.listingUrl),
+    listingSource:
+      selectedListingContext?.source ?? nonEmptyString(overview.listingSource),
     selectedListingContext,
   };
 }
 
-async function requireGeneralUser(req: Request, res: Response): Promise<string | null> {
+async function requireGeneralUser(
+  req: Request,
+  res: Response,
+): Promise<string | null> {
   const userId = (req as unknown as { userId: string }).userId;
   const [profile] = await db
     .select({ role: profiles.role })
@@ -95,17 +121,25 @@ async function requireGeneralUser(req: Request, res: Response): Promise<string |
     .where(eq(profiles.id, userId))
     .limit(1);
   if (!profile || profile.role !== "general") {
-    res.status(403).json({ error: "This feature is available to general-user accounts.", code: "GENERAL_USER_REQUIRED" });
+    res
+      .status(403)
+      .json({
+        error: "This feature is available to general-user accounts.",
+        code: "GENERAL_USER_REQUIRED",
+      });
     return null;
   }
   return userId;
 }
 
-function offerDto(request: typeof limTitleRequests.$inferSelect, agent: {
-  agentName: string | null;
-  agencyName: string | null;
-  agentPhone: string;
-}) {
+function offerDto(
+  request: typeof limTitleRequests.$inferSelect,
+  agent: {
+    agentName: string | null;
+    agencyName: string | null;
+    agentPhone: string;
+  },
+) {
   return {
     requestId: request.id,
     status: request.status,
@@ -123,7 +157,9 @@ router.post("/lim-title/offers/evaluate", requireAuth, async (req, res) => {
   }
   const parsed = reportContextSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: "Invalid report context", details: parsed.error.issues });
+    res
+      .status(400)
+      .json({ error: "Invalid report context", details: parsed.error.issues });
     return;
   }
   const userId = await requireGeneralUser(req, res);
@@ -134,8 +170,14 @@ router.post("/lim-title/offers/evaluate", requireAuth, async (req, res) => {
     return;
   }
   const ctx = report.selectedListingContext;
-  if (ctx?.isCombinedListing || !isProactiveLimTitleSample(userId, report.reportKey)) {
-    res.json({ eligible: false, reason: ctx?.isCombinedListing ? "combined_listing" : "outside_sample" });
+  if (
+    ctx?.isCombinedListing ||
+    !isProactiveLimTitleSample(userId, report.reportKey)
+  ) {
+    res.json({
+      eligible: false,
+      reason: ctx?.isCombinedListing ? "combined_listing" : "outside_sample",
+    });
     return;
   }
 
@@ -143,17 +185,28 @@ router.post("/lim-title/offers/evaluate", requireAuth, async (req, res) => {
     const [existing] = await db
       .select({ request: limTitleRequests, target: listingAgentTargets })
       .from(limTitleRequests)
-      .innerJoin(listingAgentTargets, eq(listingAgentTargets.id, limTitleRequests.agentTargetId))
-      .where(and(eq(limTitleRequests.requesterUserId, userId), eq(limTitleRequests.reportKey, report.reportKey)))
+      .innerJoin(
+        listingAgentTargets,
+        eq(listingAgentTargets.id, limTitleRequests.agentTargetId),
+      )
+      .where(
+        and(
+          eq(limTitleRequests.requesterUserId, userId),
+          eq(limTitleRequests.reportKey, report.reportKey),
+        ),
+      )
       .limit(1);
     if (existing) {
       res.json({
         eligible: existing.request.status === "offered",
-        offer: existing.request.status === "offered" ? offerDto(existing.request, {
-          agentName: existing.target.agentName,
-          agencyName: existing.target.agencyName,
-          agentPhone: existing.target.phoneNumber,
-        }) : null,
+        offer:
+          existing.request.status === "offered"
+            ? offerDto(existing.request, {
+                agentName: existing.target.agentName,
+                agencyName: existing.target.agencyName,
+                agentPhone: existing.target.phoneNumber,
+              })
+            : null,
         reason: "already_evaluated",
       });
       return;
@@ -168,6 +221,15 @@ router.post("/lim-title/offers/evaluate", requireAuth, async (req, res) => {
       res.json({ eligible: false, reason: "no_callable_subject_agent" });
       return;
     }
+    const promptClaim = await claimPostReportPrompt({
+      requesterUserId: userId,
+      reportHistoryId: report.reportHistoryId,
+      channel: "lim_title",
+    });
+    if (promptClaim === "conflict") {
+      res.json({ eligible: false, reason: "other_proactive_prompt_selected" });
+      return;
+    }
     const request = await createOrReuseLimTitleOffer({
       requesterUserId: userId,
       agent,
@@ -180,7 +242,10 @@ router.post("/lim-title/offers/evaluate", requireAuth, async (req, res) => {
       offerSource: "proactive_15_percent",
       selectedListingContext: ctx,
     });
-    res.json({ eligible: request.status === "offered", offer: offerDto(request, agent) });
+    res.json({
+      eligible: request.status === "offered",
+      offer: offerDto(request, agent),
+    });
   } catch (error) {
     req.log.error({ error }, "LIM/title proactive evaluation failed");
     res.status(500).json({ error: "Could not evaluate the document offer" });
@@ -189,10 +254,14 @@ router.post("/lim-title/offers/evaluate", requireAuth, async (req, res) => {
 
 const intentSchema = reportContextSchema.extend({
   requestId: z.string().trim().min(1).nullable().optional(),
-  messages: z.array(z.object({
-    role: z.string().trim().min(1),
-    content: z.string().max(3000),
-  })).max(12),
+  messages: z
+    .array(
+      z.object({
+        role: z.string().trim().min(1),
+        content: z.string().max(3000),
+      }),
+    )
+    .max(12),
 });
 
 router.post("/lim-title/intent", requireAuth, async (req, res) => {
@@ -202,7 +271,9 @@ router.post("/lim-title/intent", requireAuth, async (req, res) => {
   }
   const parsed = intentSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: "Invalid intent context", details: parsed.error.issues });
+    res
+      .status(400)
+      .json({ error: "Invalid intent context", details: parsed.error.issues });
     return;
   }
   const userId = await requireGeneralUser(req, res);
@@ -211,7 +282,13 @@ router.post("/lim-title/intent", requireAuth, async (req, res) => {
   try {
     const report = await verifiedReportContext(userId, parsed.data);
     if (!report) {
-      res.status(404).json({ intent: "unclear", available: false, reason: "Saved report not found." });
+      res
+        .status(404)
+        .json({
+          intent: "unclear",
+          available: false,
+          reason: "Saved report not found.",
+        });
       return;
     }
     let activeRequest: typeof limTitleRequests.$inferSelect | null = null;
@@ -219,11 +296,13 @@ router.post("/lim-title/intent", requireAuth, async (req, res) => {
       [activeRequest] = await db
         .select()
         .from(limTitleRequests)
-        .where(and(
-          eq(limTitleRequests.id, parsed.data.requestId),
-          eq(limTitleRequests.requesterUserId, userId),
-          eq(limTitleRequests.status, "offered"),
-        ))
+        .where(
+          and(
+            eq(limTitleRequests.id, parsed.data.requestId),
+            eq(limTitleRequests.requesterUserId, userId),
+            eq(limTitleRequests.status, "offered"),
+          ),
+        )
         .limit(1);
     }
     const classified = await detectLimTitleIntent({
@@ -242,21 +321,31 @@ router.post("/lim-title/intent", requireAuth, async (req, res) => {
     }
 
     if (activeRequest) {
-      const [target] = await db.select().from(listingAgentTargets).where(eq(listingAgentTargets.id, activeRequest.agentTargetId)).limit(1);
+      const [target] = await db
+        .select()
+        .from(listingAgentTargets)
+        .where(eq(listingAgentTargets.id, activeRequest.agentTargetId))
+        .limit(1);
       res.json({
         ...classified,
-        offer: target ? offerDto(activeRequest, {
-          agentName: target.agentName,
-          agencyName: target.agencyName,
-          agentPhone: target.phoneNumber,
-        }) : null,
+        offer: target
+          ? offerDto(activeRequest, {
+              agentName: target.agentName,
+              agencyName: target.agencyName,
+              agentPhone: target.phoneNumber,
+            })
+          : null,
       });
       return;
     }
 
     const ctx = report.selectedListingContext;
     if (ctx?.isCombinedListing) {
-      res.json({ ...classified, available: false, reason: "Combined listings are not supported yet." });
+      res.json({
+        ...classified,
+        available: false,
+        reason: "Combined listings are not supported yet.",
+      });
       return;
     }
     const agent = await resolveLeadListingAgent({
@@ -265,7 +354,11 @@ router.post("/lim-title/intent", requireAuth, async (req, res) => {
       selectedListingContext: ctx,
     });
     if (!agent) {
-      res.json({ ...classified, available: false, reason: "No active listing agent with an SMS-capable mobile was found." });
+      res.json({
+        ...classified,
+        available: false,
+        reason: "No active listing agent with an SMS-capable mobile was found.",
+      });
       return;
     }
     const request = await createOrReuseLimTitleOffer({
@@ -291,43 +384,62 @@ router.post("/lim-title/intent", requireAuth, async (req, res) => {
       });
       return;
     }
-    res.json({ ...classified, available: true, alreadyRequested: false, offer: offerDto(request, agent) });
+    res.json({
+      ...classified,
+      available: true,
+      alreadyRequested: false,
+      offer: offerDto(request, agent),
+    });
   } catch (error) {
     req.log.error({ error }, "LIM/title intent classification failed");
     res.status(500).json({ error: "Could not process the document request" });
   }
 });
 
-router.post("/lim-title/requests/:requestId/decline", requireAuth, async (req, res) => {
-  const userId = await requireGeneralUser(req, res);
-  if (!userId) return;
-  const declined = await declineLimTitleOffer(req.params.requestId, userId);
-  res.status(declined ? 200 : 404).json(declined ? { status: "declined" } : { error: "Offer not found" });
-});
+router.post(
+  "/lim-title/requests/:requestId/decline",
+  requireAuth,
+  async (req, res) => {
+    const userId = await requireGeneralUser(req, res);
+    if (!userId) return;
+    const declined = await declineLimTitleOffer(req.params.requestId, userId);
+    res
+      .status(declined ? 200 : 404)
+      .json(declined ? { status: "declined" } : { error: "Offer not found" });
+  },
+);
 
-router.post("/lim-title/requests/:requestId/consent", requireAuth, async (req, res) => {
-  const userId = await requireGeneralUser(req, res);
-  if (!userId) return;
-  try {
-    const result = await consentToLimTitleRequest(req.params.requestId, userId);
-    if (!result.alreadyConsented) {
-      runAfterResponse(queueLeadSms(result.request.id).catch((error) => {
-        req.log.error({ error, requestId: result.request.id }, "Could not queue LIM/title lead SMS");
-      }));
+router.post(
+  "/lim-title/requests/:requestId/consent",
+  requireAuth,
+  async (req, res) => {
+    const userId = await requireGeneralUser(req, res);
+    if (!userId) return;
+    try {
+      const result = await consentToLimTitleRequest(
+        req.params.requestId,
+        userId,
+      );
+      res.json({
+        requestId: result.request.id,
+        status: result.request.status,
+        connected: result.connected,
+        threadId: result.threadId,
+        alreadyConsented: result.alreadyConsented,
+      });
+    } catch (error) {
+      const status =
+        Number((error as { statusCode?: number }).statusCode) || 500;
+      if (status >= 500) req.log.error({ error }, "LIM/title consent failed");
+      res
+        .status(status)
+        .json({
+          error:
+            status === 404 ? "Request not found" : "Could not send the request",
+        });
     }
-    res.json({
-      requestId: result.request.id,
-      status: result.request.status,
-      connected: result.connected,
-      threadId: result.threadId,
-      alreadyConsented: result.alreadyConsented,
-    });
-  } catch (error) {
-    const status = Number((error as { statusCode?: number }).statusCode) || 500;
-    if (status >= 500) req.log.error({ error }, "LIM/title consent failed");
-    res.status(status).json({ error: status === 404 ? "Request not found" : "Could not send the request" });
-  }
-});
+  },
+);
 
 router.get("/lim-title/requests/:requestId", requireAuth, async (req, res) => {
   const userId = (req as unknown as { userId: string }).userId;
@@ -341,10 +453,12 @@ router.get("/lim-title/requests/:requestId", requireAuth, async (req, res) => {
       connectedAt: limTitleRequests.connectedAt,
     })
     .from(limTitleRequests)
-    .where(and(
-      eq(limTitleRequests.id, req.params.requestId),
-      eq(limTitleRequests.requesterUserId, userId),
-    ))
+    .where(
+      and(
+        eq(limTitleRequests.id, req.params.requestId),
+        eq(limTitleRequests.requesterUserId, userId),
+      ),
+    )
     .limit(1);
   if (!request) {
     res.status(404).json({ error: "Request not found" });
@@ -355,7 +469,11 @@ router.get("/lim-title/requests/:requestId", requireAuth, async (req, res) => {
 
 router.get("/sales-agent/leads", requireAuth, async (req, res) => {
   const agentUserId = (req as unknown as { userId: string }).userId;
-  const [agent] = await db.select({ role: profiles.role }).from(profiles).where(eq(profiles.id, agentUserId)).limit(1);
+  const [agent] = await db
+    .select({ role: profiles.role })
+    .from(profiles)
+    .where(eq(profiles.id, agentUserId))
+    .limit(1);
   if (agent?.role !== "sales_agent") {
     res.status(403).json({ error: "Sales agent account required" });
     return;
@@ -378,10 +496,12 @@ router.get("/sales-agent/leads", requireAuth, async (req, res) => {
     })
     .from(limTitleRequests)
     .innerJoin(buyer, eq(buyer.id, limTitleRequests.requesterUserId))
-    .where(and(
-      eq(limTitleRequests.matchedAgentUserId, agentUserId),
-      isNotNull(limTitleRequests.consentedAt),
-    ))
+    .where(
+      and(
+        eq(limTitleRequests.matchedAgentUserId, agentUserId),
+        isNotNull(limTitleRequests.consentedAt),
+      ),
+    )
     .orderBy(desc(limTitleRequests.consentedAt));
   res.json({ leads });
 });
@@ -389,7 +509,9 @@ router.get("/sales-agent/leads", requireAuth, async (req, res) => {
 router.get("/l/:token", async (req, res) => {
   // The token only gives the portal a post-login hint. It never authorizes or
   // returns a lead; OTP phone matching remains the sole ownership check.
-  const token = String(req.params.token ?? "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 32);
+  const token = String(req.params.token ?? "")
+    .replace(/[^A-Za-z0-9_-]/g, "")
+    .slice(0, 32);
   const portal = new URL(getSalesPortalUrl());
   if (token) portal.searchParams.set("lead", token);
   res.redirect(302, portal.toString());

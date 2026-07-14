@@ -30,6 +30,7 @@ export * from "./browse_listing_cache";
 export * from "./listing_agent_targets";
 export * from "./lim_title_requests";
 export * from "./lead_sms_deliveries";
+export * from "./post_report_prompt_allocations";
 export * from "./dm_threads";
 export * from "./dm_messages";
 export * from "./push_tokens";

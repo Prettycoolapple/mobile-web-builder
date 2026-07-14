@@ -1,5 +1,17 @@
-import { Router } from "express";
-import { and, asc, count, desc, eq, gte, ilike, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { Router, type Request, type Response } from "express";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gte,
+  ilike,
+  isNotNull,
+  isNull,
+  or,
+  sql,
+} from "drizzle-orm";
 import {
   db,
   profiles,
@@ -26,7 +38,12 @@ import { createStorageReviewToken } from "../lib/storage-review-token";
 import { getPublicAppUrl } from "../lib/env";
 import { logger } from "../lib/logger";
 import { runPropertyPipeline, hasCacheableCore } from "../lib/pipeline";
-import { listForRescan, upsertCachedRaw, countCached, PIPELINE_VERSION } from "../lib/property-cache";
+import {
+  listForRescan,
+  upsertCachedRaw,
+  countCached,
+  PIPELINE_VERSION,
+} from "../lib/property-cache";
 import { upsertFeatureRowFromPipeline } from "../lib/property-feature-index";
 import { getIo } from "../lib/socket";
 import { sendPushToUser } from "../lib/expo-push";
@@ -53,7 +70,10 @@ function parseOffset(raw: unknown): number {
   return Math.floor(n);
 }
 
-function planLabel(tier: string | null | undefined, role: string | null | undefined): string {
+function planLabel(
+  tier: string | null | undefined,
+  role: string | null | undefined,
+): string {
   switch (tier) {
     case "pro":
       return role === "service_provider" ? "Provider Pro Plan" : "Pro Plan";
@@ -65,13 +85,17 @@ function planLabel(tier: string | null | undefined, role: string | null | undefi
   }
 }
 
-function objectPathFromStorageUrl(fileUrl: string | null | undefined): string | null {
+function objectPathFromStorageUrl(
+  fileUrl: string | null | undefined,
+): string | null {
   if (!fileUrl) return null;
   const relativeMatch = fileUrl.match(/\/api\/storage(\/objects\/[^?#]+)/);
   if (relativeMatch?.[1]) return relativeMatch[1];
   try {
     const parsed = new URL(fileUrl);
-    const absoluteMatch = parsed.pathname.match(/\/api\/storage(\/objects\/[^?#]+)/);
+    const absoluteMatch = parsed.pathname.match(
+      /\/api\/storage(\/objects\/[^?#]+)/,
+    );
     return absoluteMatch?.[1] ?? null;
   } catch {
     return null;
@@ -237,7 +261,8 @@ router.get("/admin/stats/retention/cohorts", requireAdmin, async (req, res) => {
 
 // GET /admin/users?search=&limit=&offset=
 router.get("/admin/users", requireAdmin, async (req, res) => {
-  const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+  const search =
+    typeof req.query.search === "string" ? req.query.search.trim() : "";
   const limit = parseLimit(req.query.limit);
   const offset = parseOffset(req.query.offset);
 
@@ -246,7 +271,10 @@ router.get("/admin/users", requireAdmin, async (req, res) => {
     const whereClause = search
       ? and(
           sql`${profiles.role} != 'admin'`,
-          or(ilike(profiles.email, searchPattern), ilike(profiles.fullName, searchPattern)),
+          or(
+            ilike(profiles.email, searchPattern),
+            ilike(profiles.fullName, searchPattern),
+          ),
         )
       : sql`${profiles.role} != 'admin'`;
 
@@ -266,7 +294,10 @@ router.get("/admin/users", requireAdmin, async (req, res) => {
       })
       .from(profiles)
       .where(whereClause)
-      .orderBy(sql`${profiles.lastLoginAt} DESC NULLS LAST`, desc(profiles.createdAt))
+      .orderBy(
+        sql`${profiles.lastLoginAt} DESC NULLS LAST`,
+        desc(profiles.createdAt),
+      )
       .limit(limit)
       .offset(offset);
 
@@ -296,7 +327,11 @@ router.get("/admin/users", requireAdmin, async (req, res) => {
 // GET /admin/inquiries?type=all|report|support&limit=&offset=
 router.get("/admin/inquiries", requireAdmin, async (req, res) => {
   const type =
-    req.query.type === "report" ? "report" : req.query.type === "support" ? "support" : "all";
+    req.query.type === "report"
+      ? "report"
+      : req.query.type === "support"
+        ? "support"
+        : "all";
   const limit = parseLimit(req.query.limit);
   const offset = parseOffset(req.query.offset);
 
@@ -433,7 +468,9 @@ router.get("/admin/inquiries", requireAdmin, async (req, res) => {
       }
     }
 
-    items.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+    items.sort((a, b) =>
+      a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0,
+    );
     const total = items.length;
     const paginated = items.slice(offset, offset + limit);
 
@@ -455,7 +492,8 @@ router.get("/admin/providers/pending", requireAdmin, async (req, res) => {
         phoneNumber: profiles.phoneNumber,
         createdAt: profiles.createdAt,
         companyName: serviceProviderProfiles.companyName,
-        nzCompanyRegisterNumber: serviceProviderProfiles.nzCompanyRegisterNumber,
+        nzCompanyRegisterNumber:
+          serviceProviderProfiles.nzCompanyRegisterNumber,
         discipline: serviceProviderProfiles.discipline,
         otherDiscipline: serviceProviderProfiles.otherDiscipline,
         addressStreet: serviceProviderProfiles.addressStreet,
@@ -470,8 +508,16 @@ router.get("/admin/providers/pending", requireAdmin, async (req, res) => {
         incorporationCertUrl: serviceProviderProfiles.incorporationCertUrl,
       })
       .from(profiles)
-      .innerJoin(serviceProviderProfiles, eq(serviceProviderProfiles.userId, profiles.id))
-      .where(and(eq(profiles.role, "service_provider"), eq(profiles.isVerified, false)))
+      .innerJoin(
+        serviceProviderProfiles,
+        eq(serviceProviderProfiles.userId, profiles.id),
+      )
+      .where(
+        and(
+          eq(profiles.role, "service_provider"),
+          eq(profiles.isVerified, false),
+        ),
+      )
       .orderBy(desc(profiles.createdAt));
 
     res.json({
@@ -510,77 +556,96 @@ router.get("/admin/providers/pending", requireAdmin, async (req, res) => {
 });
 
 // POST /admin/providers/:userId/verify
-router.post("/admin/providers/:userId/verify", requireAdmin, async (req, res) => {
-  const userId = req.params.userId;
-  if (!userId) {
-    res.status(400).json({ error: "userId is required" });
-    return;
-  }
-
-  try {
-    const updated = await db
-      .update(profiles)
-      .set({ isVerified: true })
-      .where(and(eq(profiles.id, userId), eq(profiles.role, "service_provider")))
-      .returning({ id: profiles.id, isVerified: profiles.isVerified });
-
-    if (updated.length === 0) {
-      res.status(404).json({ error: "Service provider not found" });
+router.post(
+  "/admin/providers/:userId/verify",
+  requireAdmin,
+  async (req, res) => {
+    const userId = req.params.userId;
+    if (!userId) {
+      res.status(400).json({ error: "userId is required" });
       return;
     }
 
-    res.json({ ok: true, userId: updated[0].id, isVerified: updated[0].isVerified });
-  } catch (err) {
-    req.log.error({ err }, "admin verify provider failed");
-    res.status(500).json({ error: "Failed to verify provider" });
-  }
-});
+    try {
+      const updated = await db
+        .update(profiles)
+        .set({ isVerified: true })
+        .where(
+          and(eq(profiles.id, userId), eq(profiles.role, "service_provider")),
+        )
+        .returning({ id: profiles.id, isVerified: profiles.isVerified });
+
+      if (updated.length === 0) {
+        res.status(404).json({ error: "Service provider not found" });
+        return;
+      }
+
+      res.json({
+        ok: true,
+        userId: updated[0].id,
+        isVerified: updated[0].isVerified,
+      });
+    } catch (err) {
+      req.log.error({ err }, "admin verify provider failed");
+      res.status(500).json({ error: "Failed to verify provider" });
+    }
+  },
+);
 
 // PATCH /admin/users/:userId/recommendation-count
 // Body: { count: number }  — sets the recommendation count for a service_provider
-router.patch("/admin/users/:userId/recommendation-count", requireAdmin, async (req, res) => {
-  const { userId } = req.params;
-  const { count } = req.body as { count?: unknown };
+router.patch(
+  "/admin/users/:userId/recommendation-count",
+  requireAdmin,
+  async (req, res) => {
+    const { userId } = req.params;
+    const { count } = req.body as { count?: unknown };
 
-  if (typeof count !== "number" || !Number.isInteger(count) || count < 0) {
-    res.status(400).json({ error: "count must be a non-negative integer" });
-    return;
-  }
-
-  try {
-    const [profile] = await db
-      .select({ role: profiles.role })
-      .from(profiles)
-      .where(eq(profiles.id, userId))
-      .limit(1);
-
-    if (!profile) {
-      res.status(404).json({ error: "User not found" });
+    if (typeof count !== "number" || !Number.isInteger(count) || count < 0) {
+      res.status(400).json({ error: "count must be a non-negative integer" });
       return;
     }
 
-    if (profile.role !== "service_provider") {
-      res.status(400).json({ error: "User is not a service provider" });
-      return;
+    try {
+      const [profile] = await db
+        .select({ role: profiles.role })
+        .from(profiles)
+        .where(eq(profiles.id, userId))
+        .limit(1);
+
+      if (!profile) {
+        res.status(404).json({ error: "User not found" });
+        return;
+      }
+
+      if (profile.role !== "service_provider") {
+        res.status(400).json({ error: "User is not a service provider" });
+        return;
+      }
+
+      const updated = await db
+        .update(serviceProviderProfiles)
+        .set({ recommendationCount: count })
+        .where(eq(serviceProviderProfiles.userId, userId))
+        .returning({
+          recommendationCount: serviceProviderProfiles.recommendationCount,
+        });
+
+      if (updated.length === 0) {
+        res.status(404).json({ error: "Service provider profile not found" });
+        return;
+      }
+
+      res.json({
+        ok: true,
+        recommendationCount: updated[0].recommendationCount,
+      });
+    } catch (err) {
+      req.log.error({ err }, "admin set recommendation count failed");
+      res.status(500).json({ error: "Failed to update recommendation count" });
     }
-
-    const updated = await db
-      .update(serviceProviderProfiles)
-      .set({ recommendationCount: count })
-      .where(eq(serviceProviderProfiles.userId, userId))
-      .returning({ recommendationCount: serviceProviderProfiles.recommendationCount });
-
-    if (updated.length === 0) {
-      res.status(404).json({ error: "Service provider profile not found" });
-      return;
-    }
-
-    res.json({ ok: true, recommendationCount: updated[0].recommendationCount });
-  } catch (err) {
-    req.log.error({ err }, "admin set recommendation count failed");
-    res.status(500).json({ error: "Failed to update recommendation count" });
-  }
-});
+  },
+);
 
 // PATCH /admin/users/:userId/status
 // Body: { status: "free" | "supercharge" | "friends_family" }
@@ -591,8 +656,16 @@ router.patch("/admin/users/:userId/status", requireAdmin, async (req, res) => {
   const { userId } = req.params;
   const { status } = req.body as { status?: unknown };
 
-  if (status !== "free" && status !== "supercharge" && status !== "friends_family") {
-    res.status(400).json({ error: 'status must be "free", "supercharge", or "friends_family"' });
+  if (
+    status !== "free" &&
+    status !== "supercharge" &&
+    status !== "friends_family"
+  ) {
+    res
+      .status(400)
+      .json({
+        error: 'status must be "free", "supercharge", or "friends_family"',
+      });
     return;
   }
 
@@ -617,7 +690,11 @@ router.patch("/admin/users/:userId/status", requireAdmin, async (req, res) => {
       .update(profiles)
       .set({ specialStatus, specialStatusExpiresAt })
       .where(eq(profiles.id, userId))
-      .returning({ id: profiles.id, specialStatus: profiles.specialStatus, specialStatusExpiresAt: profiles.specialStatusExpiresAt });
+      .returning({
+        id: profiles.id,
+        specialStatus: profiles.specialStatus,
+        specialStatusExpiresAt: profiles.specialStatusExpiresAt,
+      });
 
     if (result.length === 0) {
       res.status(404).json({ error: "User not found" });
@@ -688,8 +765,10 @@ router.get("/admin/users/:userId", requireAdmin, async (req, res) => {
     const feasibilityReports = Number(c.feasibility_reports ?? 0);
     const agentCalls = Number(c.agent_calls ?? 0);
     const thumbsDown = Number(c.thumbs_down ?? 0);
-    const callsPerReport = feasibilityReports > 0 ? agentCalls / feasibilityReports : 0;
-    const recommendationCount = c.recommendation_count != null ? Number(c.recommendation_count) : null;
+    const callsPerReport =
+      feasibilityReports > 0 ? agentCalls / feasibilityReports : 0;
+    const recommendationCount =
+      c.recommendation_count != null ? Number(c.recommendation_count) : null;
     const dmConnections = Number(c.dm_connections ?? 0);
 
     res.json({
@@ -727,7 +806,12 @@ router.get("/admin/users/:userId/feedback", requireAdmin, async (req, res) => {
         reason: chatLlmFeedback.reason,
       })
       .from(chatLlmFeedback)
-      .where(and(eq(chatLlmFeedback.userId, userId), eq(chatLlmFeedback.rating, "down")))
+      .where(
+        and(
+          eq(chatLlmFeedback.userId, userId),
+          eq(chatLlmFeedback.rating, "down"),
+        ),
+      )
       .orderBy(desc(chatLlmFeedback.createdAt))
       .limit(limit)
       .offset(offset);
@@ -781,39 +865,43 @@ router.get("/admin/users/:userId/addresses", requireAdmin, async (req, res) => {
 });
 
 // GET /admin/users/:userId/agent-calls  → agent_call_events rows
-router.get("/admin/users/:userId/agent-calls", requireAdmin, async (req, res) => {
-  const { userId } = req.params;
-  const limit = parseLimit(req.query.limit, 20, 100);
-  const offset = parseOffset(req.query.offset);
+router.get(
+  "/admin/users/:userId/agent-calls",
+  requireAdmin,
+  async (req, res) => {
+    const { userId } = req.params;
+    const limit = parseLimit(req.query.limit, 20, 100);
+    const offset = parseOffset(req.query.offset);
 
-  try {
-    const rows = await db
-      .select({
-        id: agentCallEvents.id,
-        createdAt: agentCallEvents.createdAt,
-        agentName: agentCallEvents.agentName,
-        agencyName: agentCallEvents.agencyName,
-        agentPhone: agentCallEvents.agentPhone,
-        propertyAddress: agentCallEvents.propertyAddress,
-      })
-      .from(agentCallEvents)
-      .where(eq(agentCallEvents.userId, userId))
-      .orderBy(desc(agentCallEvents.createdAt))
-      .limit(limit)
-      .offset(offset);
+    try {
+      const rows = await db
+        .select({
+          id: agentCallEvents.id,
+          createdAt: agentCallEvents.createdAt,
+          agentName: agentCallEvents.agentName,
+          agencyName: agentCallEvents.agencyName,
+          agentPhone: agentCallEvents.agentPhone,
+          propertyAddress: agentCallEvents.propertyAddress,
+        })
+        .from(agentCallEvents)
+        .where(eq(agentCallEvents.userId, userId))
+        .orderBy(desc(agentCallEvents.createdAt))
+        .limit(limit)
+        .offset(offset);
 
-    const totalResult = await db.execute<{ total: string }>(sql`
+      const totalResult = await db.execute<{ total: string }>(sql`
       SELECT COUNT(*)::text AS total FROM agent_call_events WHERE user_id = ${userId}
     `);
-    const totalRows = (totalResult as any).rows ?? totalResult;
-    const total = Number((totalRows[0] as any)?.total ?? 0);
+      const totalRows = (totalResult as any).rows ?? totalResult;
+      const total = Number((totalRows[0] as any)?.total ?? 0);
 
-    res.json({ total, limit, offset, rows });
-  } catch (err) {
-    req.log.error({ err }, "admin user agent-calls list failed");
-    res.status(500).json({ error: "Failed to load agent calls" });
-  }
-});
+      res.json({ total, limit, offset, rows });
+    } catch (err) {
+      req.log.error({ err }, "admin user agent-calls list failed");
+      res.status(500).json({ error: "Failed to load agent calls" });
+    }
+  },
+);
 
 // GET /admin/users/:userId/watchlist - properties saved by this user
 router.get("/admin/users/:userId/watchlist", requireAdmin, async (req, res) => {
@@ -856,22 +944,25 @@ router.get("/admin/users/:userId/watchlist", requireAdmin, async (req, res) => {
 });
 
 // GET /admin/users/:userId/connections  → DM threads (service-provider connections)
-router.get("/admin/users/:userId/connections", requireAdmin, async (req, res) => {
-  const { userId } = req.params;
-  const limit = parseLimit(req.query.limit, 20, 100);
-  const offset = parseOffset(req.query.offset);
+router.get(
+  "/admin/users/:userId/connections",
+  requireAdmin,
+  async (req, res) => {
+    const { userId } = req.params;
+    const limit = parseLimit(req.query.limit, 20, 100);
+    const offset = parseOffset(req.query.offset);
 
-  try {
-    // Fetch threads where this user is either participant, joined with the OTHER participant's profile.
-    const rows = await db.execute<{
-      thread_id: string;
-      connected_at: string;
-      last_message_at: string | null;
-      other_id: string;
-      other_email: string;
-      other_full_name: string | null;
-      other_role: string;
-    }>(sql`
+    try {
+      // Fetch threads where this user is either participant, joined with the OTHER participant's profile.
+      const rows = await db.execute<{
+        thread_id: string;
+        connected_at: string;
+        last_message_at: string | null;
+        other_id: string;
+        other_email: string;
+        other_full_name: string | null;
+        other_role: string;
+      }>(sql`
       SELECT
         t.id                                                            AS thread_id,
         t.created_at                                                    AS connected_at,
@@ -887,34 +978,35 @@ router.get("/admin/users/:userId/connections", requireAdmin, async (req, res) =>
       ORDER BY t.last_message_at DESC NULLS LAST, t.created_at DESC
       LIMIT ${limit} OFFSET ${offset}
     `);
-    const rawRows = (rows as any).rows ?? rows;
+      const rawRows = (rows as any).rows ?? rows;
 
-    const totalResult = await db.execute<{ total: string }>(sql`
+      const totalResult = await db.execute<{ total: string }>(sql`
       SELECT COUNT(*)::text AS total FROM dm_threads
       WHERE participant_a = ${userId} OR participant_b = ${userId}
     `);
-    const totalRows = (totalResult as any).rows ?? totalResult;
-    const total = Number((totalRows[0] as any)?.total ?? 0);
+      const totalRows = (totalResult as any).rows ?? totalResult;
+      const total = Number((totalRows[0] as any)?.total ?? 0);
 
-    res.json({
-      total,
-      limit,
-      offset,
-      rows: rawRows.map((r: any) => ({
-        threadId: r.thread_id,
-        connectedAt: r.connected_at,
-        lastMessageAt: r.last_message_at ?? null,
-        otherId: r.other_id,
-        otherEmail: r.other_email,
-        otherFullName: r.other_full_name ?? null,
-        otherRole: r.other_role,
-      })),
-    });
-  } catch (err) {
-    req.log.error({ err }, "admin user connections list failed");
-    res.status(500).json({ error: "Failed to load connections" });
-  }
-});
+      res.json({
+        total,
+        limit,
+        offset,
+        rows: rawRows.map((r: any) => ({
+          threadId: r.thread_id,
+          connectedAt: r.connected_at,
+          lastMessageAt: r.last_message_at ?? null,
+          otherId: r.other_id,
+          otherEmail: r.other_email,
+          otherFullName: r.other_full_name ?? null,
+          otherRole: r.other_role,
+        })),
+      });
+    } catch (err) {
+      req.log.error({ err }, "admin user connections list failed");
+      res.status(500).json({ error: "Failed to load connections" });
+    }
+  },
+);
 
 // ============================================================
 // Message Hub — admin views/replies to DM threads on behalf of an
@@ -938,7 +1030,10 @@ router.get("/admin/message-hub/providers", requireAdmin, async (req, res) => {
         discipline: serviceProviderProfiles.discipline,
       })
       .from(profiles)
-      .leftJoin(serviceProviderProfiles, eq(serviceProviderProfiles.userId, profiles.id))
+      .leftJoin(
+        serviceProviderProfiles,
+        eq(serviceProviderProfiles.userId, profiles.id),
+      )
       .where(eq(profiles.role, "service_provider"))
       .orderBy(asc(profiles.fullName));
 
@@ -959,16 +1054,81 @@ router.get("/admin/message-hub/providers", requireAdmin, async (req, res) => {
 });
 
 // GET /admin/message-hub/providers/:providerId/threads → this provider's DM inbox
-router.get("/admin/message-hub/providers/:providerId/threads", requireAdmin, async (req, res) => {
-  const { providerId } = req.params;
+// Role-aware account list used by the admin Message Hub. The legacy provider
+// endpoint remains available for older admin bundles.
+router.get("/admin/message-hub/accounts", requireAdmin, async (req, res) => {
+  try {
+    const rows = await db
+      .select({
+        id: profiles.id,
+        email: profiles.email,
+        fullName: profiles.fullName,
+        avatarUrl: profiles.avatarUrl,
+        role: profiles.role,
+        companyName: serviceProviderProfiles.companyName,
+        discipline: serviceProviderProfiles.discipline,
+        agencyName: salesAgentProfiles.agencyName,
+      })
+      .from(profiles)
+      .leftJoin(
+        serviceProviderProfiles,
+        eq(serviceProviderProfiles.userId, profiles.id),
+      )
+      .leftJoin(salesAgentProfiles, eq(salesAgentProfiles.userId, profiles.id))
+      .where(
+        or(
+          eq(profiles.role, "service_provider"),
+          eq(profiles.role, "sales_agent"),
+        ),
+      )
+      .orderBy(asc(profiles.role), asc(profiles.fullName));
+
+    res.json({
+      accounts: rows.map((row) => ({
+        ...row,
+        companyName: row.companyName ?? null,
+        discipline: row.discipline ?? null,
+        agencyName: row.agencyName ?? null,
+      })),
+    });
+  } catch (err) {
+    req.log.error({ err }, "admin message-hub account list failed");
+    res.status(500).json({ error: "Failed to load Message Hub accounts" });
+  }
+});
+
+async function sendMessageHubThreads(
+  req: Request,
+  res: Response,
+  accountId: string,
+  allowedRoles: Array<"service_provider" | "sales_agent">,
+): Promise<void> {
   const limit = parseLimit(req.query.limit, 30, 100);
   const offset = parseOffset(req.query.offset);
 
   try {
+    const [account] = await db
+      .select({ role: profiles.role })
+      .from(profiles)
+      .where(eq(profiles.id, accountId))
+      .limit(1);
+    if (
+      !account ||
+      !allowedRoles.includes(account.role as "service_provider" | "sales_agent")
+    ) {
+      res.status(404).json({ error: "Message Hub account not found" });
+      return;
+    }
+
     const threads = await db
       .select()
       .from(dmThreads)
-      .where(or(eq(dmThreads.participantA, providerId), eq(dmThreads.participantB, providerId)))
+      .where(
+        or(
+          eq(dmThreads.participantA, accountId),
+          eq(dmThreads.participantB, accountId),
+        ),
+      )
       .orderBy(desc(dmThreads.lastMessageAt))
       .limit(limit)
       .offset(offset);
@@ -976,14 +1136,27 @@ router.get("/admin/message-hub/providers/:providerId/threads", requireAdmin, asy
     const [{ count: total }] = await db
       .select({ count: count() })
       .from(dmThreads)
-      .where(or(eq(dmThreads.participantA, providerId), eq(dmThreads.participantB, providerId)));
+      .where(
+        or(
+          eq(dmThreads.participantA, accountId),
+          eq(dmThreads.participantB, accountId),
+        ),
+      );
 
     const rows = await Promise.all(
       threads.map(async (thread) => {
-        const otherId = thread.participantA === providerId ? thread.participantB : thread.participantA;
+        const otherId =
+          thread.participantA === accountId
+            ? thread.participantB
+            : thread.participantA;
 
         const [other] = await db
-          .select({ id: profiles.id, email: profiles.email, fullName: profiles.fullName, avatarUrl: profiles.avatarUrl })
+          .select({
+            id: profiles.id,
+            email: profiles.email,
+            fullName: profiles.fullName,
+            avatarUrl: profiles.avatarUrl,
+          })
           .from(profiles)
           .where(eq(profiles.id, otherId))
           .limit(1);
@@ -1002,7 +1175,7 @@ router.get("/admin/message-hub/providers/:providerId/threads", requireAdmin, asy
             and(
               eq(dmMessages.threadId, thread.id),
               isNull(dmMessages.readAt),
-              sql`${dmMessages.senderId} != ${providerId}`,
+              sql`${dmMessages.senderId} != ${accountId}`,
             ),
           );
 
@@ -1022,149 +1195,281 @@ router.get("/admin/message-hub/providers/:providerId/threads", requireAdmin, asy
     req.log.error({ err }, "admin message-hub thread list failed");
     res.status(500).json({ error: "Failed to load threads" });
   }
-});
+}
+
+router.get(
+  "/admin/message-hub/providers/:providerId/threads",
+  requireAdmin,
+  async (req, res) => {
+    await sendMessageHubThreads(req, res, req.params.providerId, [
+      "service_provider",
+    ]);
+  },
+);
+
+router.get(
+  "/admin/message-hub/accounts/:accountId/threads",
+  requireAdmin,
+  async (req, res) => {
+    await sendMessageHubThreads(req, res, req.params.accountId, [
+      "service_provider",
+      "sales_agent",
+    ]);
+  },
+);
 
 // GET /admin/message-hub/threads/:threadId/messages?providerId=… → full message history
-router.get("/admin/message-hub/threads/:threadId/messages", requireAdmin, async (req, res) => {
-  const { threadId } = req.params;
-  const providerId = String(req.query.providerId ?? "");
-  const cursor = req.query.cursor ? String(req.query.cursor) : undefined;
-  const limit = parseLimit(req.query.limit, 50, 200);
+router.get(
+  "/admin/message-hub/threads/:threadId/messages",
+  requireAdmin,
+  async (req, res) => {
+    const { threadId } = req.params;
+    const accountId = String(req.query.accountId ?? req.query.providerId ?? "");
+    const cursor = req.query.cursor ? String(req.query.cursor) : undefined;
+    const limit = parseLimit(req.query.limit, 50, 200);
 
-  if (!providerId) {
-    res.status(400).json({ error: "providerId is required" });
-    return;
-  }
-
-  try {
-    const [thread] = await db.select().from(dmThreads).where(eq(dmThreads.id, threadId)).limit(1);
-    if (!thread || (thread.participantA !== providerId && thread.participantB !== providerId)) {
-      res.status(404).json({ error: "Thread not found for this provider" });
+    if (!accountId) {
+      res.status(400).json({ error: "accountId is required" });
       return;
-    }
-
-    const conditions = [eq(dmMessages.threadId, threadId)];
-    if (cursor) {
-      const [cursorRow] = await db
-        .select({ createdAt: dmMessages.createdAt })
-        .from(dmMessages)
-        .where(and(eq(dmMessages.id, cursor), eq(dmMessages.threadId, threadId)))
-        .limit(1);
-      if (cursorRow) conditions.push(sql`${dmMessages.createdAt} < ${cursorRow.createdAt}`);
-    }
-
-    const messages = await db
-      .select()
-      .from(dmMessages)
-      .where(and(...conditions))
-      .orderBy(desc(dmMessages.createdAt))
-      .limit(limit + 1);
-
-    const hasMore = messages.length > limit;
-    const page = hasMore ? messages.slice(0, limit) : messages;
-    const nextCursor = hasMore ? page[page.length - 1]?.id ?? null : null;
-
-    res.json({ messages: page, nextCursor });
-  } catch (err) {
-    req.log.error({ err }, "admin message-hub messages list failed");
-    res.status(500).json({ error: "Failed to load messages" });
-  }
-});
-
-// PATCH /admin/message-hub/threads/:threadId/read → clear unread badge for this provider
-router.patch("/admin/message-hub/threads/:threadId/read", requireAdmin, async (req, res) => {
-  const { threadId } = req.params;
-  const { providerId } = req.body as { providerId?: string };
-
-  if (!providerId) {
-    res.status(400).json({ error: "providerId is required" });
-    return;
-  }
-
-  try {
-    const [thread] = await db.select().from(dmThreads).where(eq(dmThreads.id, threadId)).limit(1);
-    if (!thread || (thread.participantA !== providerId && thread.participantB !== providerId)) {
-      res.status(404).json({ error: "Thread not found for this provider" });
-      return;
-    }
-
-    await db
-      .update(dmMessages)
-      .set({ readAt: new Date() })
-      .where(
-        and(
-          eq(dmMessages.threadId, threadId),
-          isNull(dmMessages.readAt),
-          sql`${dmMessages.senderId} != ${providerId}`,
-        ),
-      );
-
-    res.json({ ok: true });
-  } catch (err) {
-    req.log.error({ err }, "admin message-hub mark-read failed");
-    res.status(500).json({ error: "Failed to mark thread read" });
-  }
-});
-
-// POST /admin/message-hub/threads/:threadId/messages → reply as this provider
-router.post("/admin/message-hub/threads/:threadId/messages", requireAdmin, async (req, res) => {
-  const { threadId } = req.params;
-  const { providerId, body: msgBody } = req.body as { providerId?: string; body?: string };
-
-  if (!providerId) {
-    res.status(400).json({ error: "providerId is required" });
-    return;
-  }
-  const trimmed = (msgBody ?? "").trim();
-  if (!trimmed) {
-    res.status(400).json({ error: "body is required" });
-    return;
-  }
-
-  try {
-    const [thread] = await db.select().from(dmThreads).where(eq(dmThreads.id, threadId)).limit(1);
-    if (!thread || (thread.participantA !== providerId && thread.participantB !== providerId)) {
-      res.status(404).json({ error: "Thread not found for this provider" });
-      return;
-    }
-
-    const recipientId = thread.participantA === providerId ? thread.participantB : thread.participantA;
-
-    const [message] = await db
-      .insert(dmMessages)
-      .values({ threadId, senderId: providerId, body: trimmed })
-      .returning();
-
-    await db.update(dmThreads).set({ lastMessageAt: new Date() }).where(eq(dmThreads.id, threadId));
-
-    const io = getIo();
-    if (io) {
-      io.to(`user:${recipientId}`).emit("new_message", { threadId, message });
-      io.to(`user:${providerId}`).emit("new_message", { threadId, message });
     }
 
     try {
-      const [sender] = await db
-        .select({ fullName: profiles.fullName })
-        .from(profiles)
-        .where(eq(profiles.id, providerId))
+      const [thread] = await db
+        .select()
+        .from(dmThreads)
+        .where(eq(dmThreads.id, threadId))
         .limit(1);
-      const senderName = sender?.fullName ?? "Service provider";
-      const badgeCount = await getUnreadAppBadgeCount(recipientId);
-      await sendPushToUser(recipientId, senderName, trimmed.slice(0, 80), {
-        type: "dm",
-        threadId: String(threadId),
-      }, { badgeCount });
-    } catch (pushErr) {
-      req.log.warn({ pushErr }, "Message Hub push notification failed (non-fatal)");
+      if (
+        !thread ||
+        (thread.participantA !== accountId && thread.participantB !== accountId)
+      ) {
+        res.status(404).json({ error: "Thread not found for this account" });
+        return;
+      }
+
+      const [account] = await db
+        .select({ role: profiles.role })
+        .from(profiles)
+        .where(eq(profiles.id, accountId))
+        .limit(1);
+      if (
+        account?.role !== "service_provider" &&
+        account?.role !== "sales_agent"
+      ) {
+        res.status(404).json({ error: "Message Hub account not found" });
+        return;
+      }
+
+      const conditions = [eq(dmMessages.threadId, threadId)];
+      if (cursor) {
+        const [cursorRow] = await db
+          .select({ createdAt: dmMessages.createdAt })
+          .from(dmMessages)
+          .where(
+            and(eq(dmMessages.id, cursor), eq(dmMessages.threadId, threadId)),
+          )
+          .limit(1);
+        if (cursorRow)
+          conditions.push(
+            sql`${dmMessages.createdAt} < ${cursorRow.createdAt}`,
+          );
+      }
+
+      const messages = await db
+        .select()
+        .from(dmMessages)
+        .where(and(...conditions))
+        .orderBy(desc(dmMessages.createdAt))
+        .limit(limit + 1);
+
+      const hasMore = messages.length > limit;
+      const page = hasMore ? messages.slice(0, limit) : messages;
+      const nextCursor = hasMore ? (page[page.length - 1]?.id ?? null) : null;
+
+      res.json({ messages: page, nextCursor });
+    } catch (err) {
+      req.log.error({ err }, "admin message-hub messages list failed");
+      res.status(500).json({ error: "Failed to load messages" });
+    }
+  },
+);
+
+// PATCH /admin/message-hub/threads/:threadId/read → clear unread badge for this provider
+router.patch(
+  "/admin/message-hub/threads/:threadId/read",
+  requireAdmin,
+  async (req, res) => {
+    const { threadId } = req.params;
+    const { providerId, accountId: bodyAccountId } = req.body as {
+      providerId?: string;
+      accountId?: string;
+    };
+    const accountId = bodyAccountId ?? providerId;
+
+    if (!accountId) {
+      res.status(400).json({ error: "accountId is required" });
+      return;
     }
 
-    res.status(201).json({ message });
-  } catch (err) {
-    req.log.error({ err }, "admin message-hub send failed");
-    res.status(500).json({ error: "Failed to send message" });
-  }
-});
+    try {
+      const [thread] = await db
+        .select()
+        .from(dmThreads)
+        .where(eq(dmThreads.id, threadId))
+        .limit(1);
+      if (
+        !thread ||
+        (thread.participantA !== accountId && thread.participantB !== accountId)
+      ) {
+        res.status(404).json({ error: "Thread not found for this account" });
+        return;
+      }
+
+      const [account] = await db
+        .select({ role: profiles.role })
+        .from(profiles)
+        .where(eq(profiles.id, accountId))
+        .limit(1);
+      if (account?.role === "sales_agent") {
+        res.json({ ok: true, readOnly: true });
+        return;
+      }
+      if (account?.role !== "service_provider") {
+        res.status(404).json({ error: "Message Hub account not found" });
+        return;
+      }
+
+      await db
+        .update(dmMessages)
+        .set({ readAt: new Date() })
+        .where(
+          and(
+            eq(dmMessages.threadId, threadId),
+            isNull(dmMessages.readAt),
+            sql`${dmMessages.senderId} != ${accountId}`,
+          ),
+        );
+
+      res.json({ ok: true });
+    } catch (err) {
+      req.log.error({ err }, "admin message-hub mark-read failed");
+      res.status(500).json({ error: "Failed to mark thread read" });
+    }
+  },
+);
+
+// POST /admin/message-hub/threads/:threadId/messages → reply as this provider
+router.post(
+  "/admin/message-hub/threads/:threadId/messages",
+  requireAdmin,
+  async (req, res) => {
+    const { threadId } = req.params;
+    const {
+      providerId,
+      accountId: bodyAccountId,
+      body: msgBody,
+    } = req.body as {
+      providerId?: string;
+      accountId?: string;
+      body?: string;
+    };
+    const accountId = bodyAccountId ?? providerId;
+
+    if (!accountId) {
+      res.status(400).json({ error: "accountId is required" });
+      return;
+    }
+    const trimmed = (msgBody ?? "").trim();
+    if (!trimmed) {
+      res.status(400).json({ error: "body is required" });
+      return;
+    }
+
+    try {
+      const [account] = await db
+        .select({ role: profiles.role })
+        .from(profiles)
+        .where(eq(profiles.id, accountId))
+        .limit(1);
+      if (account?.role === "sales_agent") {
+        res.status(403).json({
+          error:
+            "Sales-agent conversations are read-only in the admin Message Hub",
+          code: "SALES_AGENT_IMPERSONATION_FORBIDDEN",
+        });
+        return;
+      }
+      if (account?.role !== "service_provider") {
+        res.status(404).json({ error: "Message Hub account not found" });
+        return;
+      }
+
+      const [thread] = await db
+        .select()
+        .from(dmThreads)
+        .where(eq(dmThreads.id, threadId))
+        .limit(1);
+      if (
+        !thread ||
+        (thread.participantA !== accountId && thread.participantB !== accountId)
+      ) {
+        res.status(404).json({ error: "Thread not found for this account" });
+        return;
+      }
+
+      const recipientId =
+        thread.participantA === accountId
+          ? thread.participantB
+          : thread.participantA;
+
+      const [message] = await db
+        .insert(dmMessages)
+        .values({ threadId, senderId: accountId, body: trimmed })
+        .returning();
+
+      await db
+        .update(dmThreads)
+        .set({ lastMessageAt: new Date() })
+        .where(eq(dmThreads.id, threadId));
+
+      const io = getIo();
+      if (io) {
+        io.to(`user:${recipientId}`).emit("new_message", { threadId, message });
+        io.to(`user:${accountId}`).emit("new_message", { threadId, message });
+      }
+
+      try {
+        const [sender] = await db
+          .select({ fullName: profiles.fullName })
+          .from(profiles)
+          .where(eq(profiles.id, accountId))
+          .limit(1);
+        const senderName = sender?.fullName ?? "Service provider";
+        const badgeCount = await getUnreadAppBadgeCount(recipientId);
+        await sendPushToUser(
+          recipientId,
+          senderName,
+          trimmed.slice(0, 80),
+          {
+            type: "dm",
+            threadId: String(threadId),
+          },
+          { badgeCount },
+        );
+      } catch (pushErr) {
+        req.log.warn(
+          { pushErr },
+          "Message Hub push notification failed (non-fatal)",
+        );
+      }
+
+      res.status(201).json({ message });
+    } catch (err) {
+      req.log.error({ err }, "admin message-hub send failed");
+      res.status(500).json({ error: "Failed to send message" });
+    }
+  },
+);
 
 // ============================================================
 // Global stats — Dashboard tiles + top addresses
@@ -1308,7 +1613,8 @@ router.get("/admin/stats/most-watched", requireAdmin, async (req, res) => {
         bathrooms: r.bathrooms == null ? null : Number(r.bathrooms),
         landAreaSqm: r.land_area_sqm == null ? null : Number(r.land_area_sqm),
         zone: r.zone,
-        compositeScore: r.composite_score == null ? null : Number(r.composite_score),
+        compositeScore:
+          r.composite_score == null ? null : Number(r.composite_score),
         watchCount: Number(r.watch_count ?? 0),
         userCount: Number(r.user_count ?? 0),
         firstWatchedAt: r.first_watched_at,
@@ -1324,13 +1630,12 @@ router.get("/admin/stats/most-watched", requireAdmin, async (req, res) => {
 router.get("/admin/property-cache", requireAdmin, async (req, res) => {
   const limit = parseLimit(req.query.limit, 50, 200);
   const offset = parseOffset(req.query.offset);
-  const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+  const search =
+    typeof req.query.search === "string" ? req.query.search.trim() : "";
 
   try {
     const where = search
-      ? and(
-          ilike(propertyCache.formattedAddress, `%${search}%`),
-        )
+      ? and(ilike(propertyCache.formattedAddress, `%${search}%`))
       : undefined;
 
     const [rows, totalRows] = await Promise.all([
@@ -1427,7 +1732,10 @@ async function runPropertyCacheRescan(opts: {
     // infinite loop within a single run.
     const rows = await listForRescan(opts.maxRows, cutoff);
     rescanStatus.total = rows.length;
-    logger.info({ marker: "CACHE_RESCAN_START", total: rows.length, cutoff }, "Property cache rescan started");
+    logger.info(
+      { marker: "CACHE_RESCAN_START", total: rows.length, cutoff },
+      "Property cache rescan started",
+    );
 
     for (let i = 0; i < rows.length; i += opts.concurrency) {
       const slice = rows.slice(i, i + opts.concurrency);
@@ -1444,10 +1752,14 @@ async function runPropertyCacheRescan(opts: {
               await upsertCachedRaw({
                 addressKey: row.addressKey,
                 rawData: result.raw_property,
-                canonicalParcelId: result.linz_parcel?.parcel_id ?? row.canonicalParcelId,
+                canonicalParcelId:
+                  result.linz_parcel?.parcel_id ?? row.canonicalParcelId,
                 canonicalTitleId:
-                  result.linz_parcel?.title_no ?? result.linz_title?.title_no ?? row.canonicalTitleId,
-                formattedAddress: result.geocode?.formatted ?? row.formattedAddress,
+                  result.linz_parcel?.title_no ??
+                  result.linz_title?.title_no ??
+                  row.canonicalTitleId,
+                formattedAddress:
+                  result.geocode?.formatted ?? row.formattedAddress,
                 lat: result.geocode?.lat ?? row.lat,
                 lng: result.geocode?.lng ?? row.lng,
                 suburb: result.suburb ?? row.suburb,
@@ -1466,7 +1778,10 @@ async function runPropertyCacheRescan(opts: {
           } catch (err) {
             rescanStatus.failed++;
             rescanStatus.lastError = (err as Error).message;
-            logger.warn({ err: (err as Error).message, addressKey: row.addressKey }, "Property cache rescan row failed");
+            logger.warn(
+              { err: (err as Error).message, addressKey: row.addressKey },
+              "Property cache rescan row failed",
+            );
           } finally {
             rescanStatus.processed++;
           }
@@ -1489,22 +1804,40 @@ async function runPropertyCacheRescan(opts: {
   } finally {
     rescanStatus.running = false;
     rescanStatus.finishedAt = new Date().toISOString();
-    logger.info({ marker: "CACHE_RESCAN_DONE", ...rescanStatus }, "Property cache rescan complete");
+    logger.info(
+      { marker: "CACHE_RESCAN_DONE", ...rescanStatus },
+      "Property cache rescan complete",
+    );
   }
 }
 
 // POST /admin/property-cache/rescan  body: { concurrency?, maxRows?, olderThanDays? }
 router.post("/admin/property-cache/rescan", requireAdmin, async (req, res) => {
   if (rescanStatus.running) {
-    res.status(409).json({ error: "Rescan already running", status: rescanStatus });
+    res
+      .status(409)
+      .json({ error: "Rescan already running", status: rescanStatus });
     return;
   }
   const body = (req.body ?? {}) as Record<string, unknown>;
-  const concurrency = Math.min(Math.max(Math.floor(Number(body.concurrency) || 2), 1), 4);
-  const maxRows = Number(body.maxRows) > 0 ? Math.floor(Number(body.maxRows)) : 500;
-  const olderThanDays = Number(body.olderThanDays) > 0 ? Math.floor(Number(body.olderThanDays)) : null;
+  const concurrency = Math.min(
+    Math.max(Math.floor(Number(body.concurrency) || 2), 1),
+    4,
+  );
+  const maxRows =
+    Number(body.maxRows) > 0 ? Math.floor(Number(body.maxRows)) : 500;
+  const olderThanDays =
+    Number(body.olderThanDays) > 0
+      ? Math.floor(Number(body.olderThanDays))
+      : null;
   void runPropertyCacheRescan({ concurrency, maxRows, olderThanDays });
-  res.status(202).json({ ok: true, started: true, params: { concurrency, maxRows, olderThanDays } });
+  res
+    .status(202)
+    .json({
+      ok: true,
+      started: true,
+      params: { concurrency, maxRows, olderThanDays },
+    });
 });
 
 // GET /admin/property-cache/rescan/status
@@ -1513,21 +1846,28 @@ router.get("/admin/property-cache/rescan/status", requireAdmin, (_req, res) => {
 });
 
 // GET /admin/watchlist-monitor/status
-router.get("/admin/watchlist-monitor/status", requireAdmin, async (req, res) => {
-  try {
-    res.json(await getWatchlistMonitorAdminStatus());
-  } catch (err) {
-    req.log.error({ err }, "admin watchlist monitor status failed");
-    res.status(500).json({ error: "Failed to load watchlist monitor status" });
-  }
-});
+router.get(
+  "/admin/watchlist-monitor/status",
+  requireAdmin,
+  async (req, res) => {
+    try {
+      res.json(await getWatchlistMonitorAdminStatus());
+    } catch (err) {
+      req.log.error({ err }, "admin watchlist monitor status failed");
+      res
+        .status(500)
+        .json({ error: "Failed to load watchlist monitor status" });
+    }
+  },
+);
 
 // ─── Agent management ────────────────────────────────────────────────────────
 
 // GET /admin/agents?search=&limit=&offset=
 // List all sales agents with listing counts and approval stats.
 router.get("/admin/agents", requireAdmin, async (req, res) => {
-  const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+  const search =
+    typeof req.query.search === "string" ? req.query.search.trim() : "";
   const limit = parseLimit(req.query.limit, 50, 200);
   const offset = parseOffset(req.query.offset);
 
@@ -1536,7 +1876,10 @@ router.get("/admin/agents", requireAdmin, async (req, res) => {
     const whereClause = search
       ? and(
           sql`${profiles.role} = 'sales_agent'`,
-          or(ilike(profiles.email, searchPattern), ilike(profiles.fullName, searchPattern)),
+          or(
+            ilike(profiles.email, searchPattern),
+            ilike(profiles.fullName, searchPattern),
+          ),
         )
       : sql`${profiles.role} = 'sales_agent'`;
 
@@ -1595,7 +1938,9 @@ router.get("/admin/agents/:userId", requireAdmin, async (req, res) => {
       })
       .from(profiles)
       .leftJoin(salesAgentProfiles, eq(salesAgentProfiles.userId, profiles.id))
-      .where(and(eq(profiles.id, userId), sql`${profiles.role} = 'sales_agent'`));
+      .where(
+        and(eq(profiles.id, userId), sql`${profiles.role} = 'sales_agent'`),
+      );
 
     if (!profile) {
       res.status(404).json({ error: "Agent not found" });
@@ -1632,8 +1977,14 @@ router.get("/admin/agents/:userId", requireAdmin, async (req, res) => {
 // GET /admin/listings?status=pending|approved|all&search=&limit=&offset=
 // All listings across all agents, with agent info.
 router.get("/admin/listings", requireAdmin, async (req, res) => {
-  const filter = req.query.status === "approved" ? "approved" : req.query.status === "all" ? "all" : "pending";
-  const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+  const filter =
+    req.query.status === "approved"
+      ? "approved"
+      : req.query.status === "all"
+        ? "all"
+        : "pending";
+  const search =
+    typeof req.query.search === "string" ? req.query.search.trim() : "";
   const limit = parseLimit(req.query.limit, 50, 200);
   const offset = parseOffset(req.query.offset);
 
@@ -1644,7 +1995,11 @@ router.get("/admin/listings", requireAdmin, async (req, res) => {
     if (search) {
       const p = `%${search}%`;
       conditions.push(
-        or(ilike(listings.address, p), ilike(profiles.email, p), ilike(profiles.fullName, p))!,
+        or(
+          ilike(listings.address, p),
+          ilike(profiles.email, p),
+          ilike(profiles.fullName, p),
+        )!,
       );
     }
 
@@ -1669,7 +2024,10 @@ router.get("/admin/listings", requireAdmin, async (req, res) => {
       })
       .from(listings)
       .innerJoin(profiles, eq(profiles.id, listings.userId))
-      .leftJoin(salesAgentProfiles, eq(salesAgentProfiles.userId, listings.userId))
+      .leftJoin(
+        salesAgentProfiles,
+        eq(salesAgentProfiles.userId, listings.userId),
+      )
       .where(and(...conditions))
       .orderBy(desc(listings.createdAt))
       .limit(limit)
@@ -1739,7 +2097,10 @@ router.get("/admin/listings/:id", requireAdmin, async (req, res) => {
       })
       .from(listings)
       .innerJoin(profiles, eq(profiles.id, listings.userId))
-      .leftJoin(salesAgentProfiles, eq(salesAgentProfiles.userId, listings.userId))
+      .leftJoin(
+        salesAgentProfiles,
+        eq(salesAgentProfiles.userId, listings.userId),
+      )
       .where(eq(listings.id, id));
 
     if (!row) {
@@ -1824,7 +2185,10 @@ function adminChatTimestamp(value: unknown, fallback: unknown): string | null {
   }
   if (typeof raw === "string" && raw.trim()) {
     const n = Number(raw);
-    const d = Number.isFinite(n) && raw.trim().length >= 10 ? new Date(n) : new Date(raw);
+    const d =
+      Number.isFinite(n) && raw.trim().length >= 10
+        ? new Date(n)
+        : new Date(raw);
     return Number.isNaN(d.getTime()) ? null : d.toISOString();
   }
   return null;
@@ -1833,7 +2197,8 @@ function adminChatTimestamp(value: unknown, fallback: unknown): string | null {
 function adminChatContent(message: any): string | null {
   const role = message?.role;
   const type = typeof message?.type === "string" ? message.type : "text";
-  const content = typeof message?.content === "string" ? message.content.trim() : "";
+  const content =
+    typeof message?.content === "string" ? message.content.trim() : "";
   if (type === "loading") return null;
   if (role === "user") return content || null;
   if (role !== "assistant") return null;
@@ -1842,29 +2207,47 @@ function adminChatContent(message: any): string | null {
   if (content) return content;
   if (message?.clarification?.question) {
     const options = Array.isArray(message.clarification.options)
-      ? message.clarification.options.filter((o: unknown) => typeof o === "string" && o.trim()).join(", ")
+      ? message.clarification.options
+          .filter((o: unknown) => typeof o === "string" && o.trim())
+          .join(", ")
       : "";
-    return options ? `${message.clarification.question} Options: ${options}` : String(message.clarification.question);
+    return options
+      ? `${message.clarification.question} Options: ${options}`
+      : String(message.clarification.question);
   }
   if (type === "search") {
-    if (typeof message?.aiIntro === "string" && message.aiIntro.trim()) return message.aiIntro.trim();
-    const count = Array.isArray(message?.searchResults) ? message.searchResults.length : null;
-    return count != null ? `Search results shown (${count})` : "Search results shown";
+    if (typeof message?.aiIntro === "string" && message.aiIntro.trim())
+      return message.aiIntro.trim();
+    const count = Array.isArray(message?.searchResults)
+      ? message.searchResults.length
+      : null;
+    return count != null
+      ? `Search results shown (${count})`
+      : "Search results shown";
   }
   if (type === "provider_recommendation") {
     const name =
-      typeof message?.provider?.companyName === "string" && message.provider.companyName.trim()
+      typeof message?.provider?.companyName === "string" &&
+      message.provider.companyName.trim()
         ? message.provider.companyName.trim()
-        : typeof message?.provider?.fullName === "string" && message.provider.fullName.trim()
+        : typeof message?.provider?.fullName === "string" &&
+            message.provider.fullName.trim()
           ? message.provider.fullName.trim()
           : null;
-    return name ? `Service provider recommendation shown: ${name}` : "Service provider recommendation shown";
+    return name
+      ? `Service provider recommendation shown: ${name}`
+      : "Service provider recommendation shown";
   }
   if (type === "provider_upgrade_gate") return "Provider upgrade prompt shown";
   if (type === "agent_contact") {
-    const parts = [message?.agentName, message?.agencyName, message?.agentPhone]
-      .filter((v) => typeof v === "string" && v.trim());
-    return parts.length ? `Agent contact shown: ${parts.join(" · ")}` : "Agent contact shown";
+    const parts = [
+      message?.agentName,
+      message?.agencyName,
+      message?.agentPhone,
+    ].filter((v) => typeof v === "string" && v.trim());
+    return parts.length
+      ? `Agent contact shown: ${parts.join(" · ")}`
+      : "Agent contact shown";
   }
   return null;
 }
@@ -1873,7 +2256,10 @@ function extractAdminChatMessages(payload: any): AdminChatMessage[] {
   if (!payload || !Array.isArray(payload.messages)) return [];
   return payload.messages
     .map((message: any): AdminChatMessage | null => {
-      const role = message?.role === "user" || message?.role === "assistant" ? message.role : null;
+      const role =
+        message?.role === "user" || message?.role === "assistant"
+          ? message.role
+          : null;
       if (!role) return null;
       const content = adminChatContent(message);
       if (!content) return null;
@@ -1881,10 +2267,16 @@ function extractAdminChatMessages(payload: any): AdminChatMessage[] {
         role,
         type: typeof message?.type === "string" ? message.type : "text",
         content,
-        createdAt: adminChatTimestamp(message?.timestamp, message?.createdAt ?? message?.id),
+        createdAt: adminChatTimestamp(
+          message?.timestamp,
+          message?.createdAt ?? message?.id,
+        ),
       };
     })
-    .filter((message: AdminChatMessage | null): message is AdminChatMessage => !!message);
+    .filter(
+      (message: AdminChatMessage | null): message is AdminChatMessage =>
+        !!message,
+    );
 }
 
 router.get("/admin/users/:userId/chats", requireAdmin, async (req, res) => {
@@ -1922,7 +2314,10 @@ router.get("/admin/users/:userId/chats", requireAdmin, async (req, res) => {
       }
       const userMessages = messages
         .filter((m) => m.role === "user")
-        .map((m) => ({ content: m.content, createdAt: m.createdAt ?? undefined }));
+        .map((m) => ({
+          content: m.content,
+          createdAt: m.createdAt ?? undefined,
+        }));
       return {
         id: r.id,
         title: r.title,
@@ -2032,10 +2427,15 @@ router.get("/admin/abuse/suspicious", requireAdmin, async (req, res) => {
       })
       .from(abuseEvents)
       .innerJoin(profiles, eq(profiles.id, abuseEvents.userId))
-      .where(and(isNotNull(abuseEvents.userId), gte(abuseEvents.createdAt, since)))
+      .where(
+        and(isNotNull(abuseEvents.userId), gte(abuseEvents.createdAt, since)),
+      )
       .groupBy(profiles.id)
       .having(sql`coalesce(sum(${abuseEvents.weight}), 0) > 0`)
-      .orderBy(desc(sql`coalesce(sum(${abuseEvents.weight}), 0)`), desc(sql`max(${abuseEvents.createdAt})`))
+      .orderBy(
+        desc(sql`coalesce(sum(${abuseEvents.weight}), 0)`),
+        desc(sql`max(${abuseEvents.createdAt})`),
+      )
       .limit(limit);
 
     res.json({ days, limit, autoFlagScore: 10, rows });
@@ -2048,14 +2448,24 @@ router.get("/admin/abuse/suspicious", requireAdmin, async (req, res) => {
 // POST /admin/abuse/flag  — manually set/clear an account's abuse flag
 // Body: { userId: string, flag: boolean, reason?: string }
 router.post("/admin/abuse/flag", requireAdmin, async (req, res) => {
-  const { userId, flag, reason } = req.body as { userId?: unknown; flag?: unknown; reason?: unknown };
+  const { userId, flag, reason } = req.body as {
+    userId?: unknown;
+    flag?: unknown;
+    reason?: unknown;
+  };
   if (typeof userId !== "string" || !userId || typeof flag !== "boolean") {
-    res.status(400).json({ error: "userId (string) and flag (boolean) are required" });
+    res
+      .status(400)
+      .json({ error: "userId (string) and flag (boolean) are required" });
     return;
   }
 
   try {
-    const ok = await setAbuseFlag(userId, flag, typeof reason === "string" ? reason : undefined);
+    const ok = await setAbuseFlag(
+      userId,
+      flag,
+      typeof reason === "string" ? reason : undefined,
+    );
     if (!ok) {
       res.status(404).json({ error: "Account not found" });
       return;
@@ -2069,19 +2479,43 @@ router.post("/admin/abuse/flag", requireAdmin, async (req, res) => {
 
 router.get("/admin/lim-title-leads/summary", requireAdmin, async (req, res) => {
   try {
-    const [requestStatuses, smsStatuses, unmatched, optedOut] = await Promise.all([
-      db.select({ status: limTitleRequests.status, count: sql<number>`count(*)::int` })
-        .from(limTitleRequests).groupBy(limTitleRequests.status),
-      db.select({ status: leadSmsDeliveries.status, count: sql<number>`count(*)::int` })
-        .from(leadSmsDeliveries).groupBy(leadSmsDeliveries.status),
-      db.select({ count: sql<number>`count(*)::int` }).from(limTitleRequests)
-        .where(and(isNotNull(limTitleRequests.consentedAt), isNull(limTitleRequests.matchedAgentUserId))),
-      db.select({ count: sql<number>`count(*)::int` }).from(listingAgentTargets)
-        .where(isNotNull(listingAgentTargets.optedOutAt)),
-    ]);
+    const [requestStatuses, smsStatuses, unmatched, optedOut] =
+      await Promise.all([
+        db
+          .select({
+            status: limTitleRequests.status,
+            count: sql<number>`count(*)::int`,
+          })
+          .from(limTitleRequests)
+          .groupBy(limTitleRequests.status),
+        db
+          .select({
+            status: leadSmsDeliveries.status,
+            count: sql<number>`count(*)::int`,
+          })
+          .from(leadSmsDeliveries)
+          .groupBy(leadSmsDeliveries.status),
+        db
+          .select({ count: sql<number>`count(*)::int` })
+          .from(limTitleRequests)
+          .where(
+            and(
+              isNotNull(limTitleRequests.consentedAt),
+              isNull(limTitleRequests.matchedAgentUserId),
+            ),
+          ),
+        db
+          .select({ count: sql<number>`count(*)::int` })
+          .from(listingAgentTargets)
+          .where(isNotNull(listingAgentTargets.optedOutAt)),
+      ]);
     res.json({
-      requests: Object.fromEntries(requestStatuses.map((row) => [row.status, row.count])),
-      sms: Object.fromEntries(smsStatuses.map((row) => [row.status, row.count])),
+      requests: Object.fromEntries(
+        requestStatuses.map((row) => [row.status, row.count]),
+      ),
+      sms: Object.fromEntries(
+        smsStatuses.map((row) => [row.status, row.count]),
+      ),
       unmatchedConsentedLeads: unmatched[0]?.count ?? 0,
       optedOutAgentNumbers: optedOut[0]?.count ?? 0,
     });
@@ -2093,6 +2527,7 @@ router.get("/admin/lim-title-leads/summary", requireAdmin, async (req, res) => {
 
 router.get("/admin/lim-title-leads", requireAdmin, async (req, res) => {
   const limit = parseLimit(req.query.limit, 50, 200);
+  const offset = parseOffset(req.query.offset);
   try {
     const rows = await db
       .select({
@@ -2101,27 +2536,122 @@ router.get("/admin/lim-title-leads", requireAdmin, async (req, res) => {
         status: limTitleRequests.status,
         offerSource: limTitleRequests.offerSource,
         requesterUserId: limTitleRequests.requesterUserId,
+        buyerFullName: sql<string | null>`(
+          SELECT p.full_name FROM profiles p WHERE p.id = ${limTitleRequests.requesterUserId} LIMIT 1
+        )`,
+        buyerEmail: sql<string>`(
+          SELECT p.email FROM profiles p WHERE p.id = ${limTitleRequests.requesterUserId} LIMIT 1
+        )`,
+        buyerPhone: sql<string | null>`(
+          SELECT CASE WHEN p.phone_verified_at IS NOT NULL THEN p.phone_number ELSE NULL END
+          FROM profiles p WHERE p.id = ${limTitleRequests.requesterUserId} LIMIT 1
+        )`,
         matchedAgentUserId: limTitleRequests.matchedAgentUserId,
         agentPhone: listingAgentTargets.phoneNumber,
         agentName: listingAgentTargets.agentName,
-        optedOutAt: listingAgentTargets.optedOutAt,
+        registeredAgentName: sql<string | null>`(
+          SELECT p.full_name FROM profiles p WHERE p.id = ${limTitleRequests.matchedAgentUserId} LIMIT 1
+        )`,
+        dmThreadId: limTitleRequests.dmThreadId,
         consentedAt: limTitleRequests.consentedAt,
         connectedAt: limTitleRequests.connectedAt,
-        createdAt: limTitleRequests.createdAt,
-        smsStatus: leadSmsDeliveries.status,
-        smsSid: leadSmsDeliveries.twilioSid,
-        smsError: leadSmsDeliveries.lastError,
+        adminSmsSentAt: limTitleRequests.adminSmsSentAt,
+        documentsDeliveredAt: limTitleRequests.documentsDeliveredAt,
+        facilitatorMessageAt: sql<Date | null>`(
+          SELECT MIN(f.created_at)
+          FROM dm_messages f
+          WHERE f.lead_request_id = ${limTitleRequests.id}
+        )`,
+        agentRespondedAt: sql<Date | null>`(
+          SELECT MIN(reply.created_at)
+          FROM dm_messages reply
+          WHERE reply.thread_id = ${limTitleRequests.dmThreadId}
+            AND reply.sender_id = ${limTitleRequests.matchedAgentUserId}
+            AND reply.created_at > COALESCE(
+              (
+                SELECT MIN(f.created_at)
+                FROM dm_messages f
+                WHERE f.lead_request_id = ${limTitleRequests.id}
+              ),
+              ${limTitleRequests.connectedAt},
+              ${limTitleRequests.consentedAt}
+            )
+        )`,
       })
       .from(limTitleRequests)
-      .innerJoin(listingAgentTargets, eq(listingAgentTargets.id, limTitleRequests.agentTargetId))
-      .leftJoin(leadSmsDeliveries, eq(leadSmsDeliveries.requestId, limTitleRequests.id))
-      .orderBy(desc(limTitleRequests.createdAt))
-      .limit(limit);
-    res.json({ rows, limit });
+      .innerJoin(
+        listingAgentTargets,
+        eq(listingAgentTargets.id, limTitleRequests.agentTargetId),
+      )
+      .where(isNotNull(limTitleRequests.consentedAt))
+      .orderBy(desc(limTitleRequests.consentedAt))
+      .limit(limit)
+      .offset(offset);
+    const [{ total }] = await db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(limTitleRequests)
+      .where(isNotNull(limTitleRequests.consentedAt));
+    res.json({ rows, total: total ?? 0, limit, offset });
   } catch (err) {
     req.log.error({ err }, "admin LIM/title lead list failed");
     res.status(500).json({ error: "Failed to load LIM/title leads" });
   }
 });
+
+router.patch(
+  "/admin/lim-title-leads/:requestId",
+  requireAdmin,
+  async (req, res) => {
+    const { requestId } = req.params;
+    const body = (req.body ?? {}) as {
+      adminSmsSent?: unknown;
+      documentsDelivered?: unknown;
+    };
+    const hasAdminSmsSent = typeof body.adminSmsSent === "boolean";
+    const hasDocumentsDelivered = typeof body.documentsDelivered === "boolean";
+    if (!hasAdminSmsSent && !hasDocumentsDelivered) {
+      res.status(400).json({ error: "A boolean workflow status is required" });
+      return;
+    }
+
+    const now = new Date();
+    const values: {
+      adminSmsSentAt?: Date | null;
+      documentsDeliveredAt?: Date | null;
+      updatedAt: Date;
+    } = { updatedAt: now };
+    if (hasAdminSmsSent) values.adminSmsSentAt = body.adminSmsSent ? now : null;
+    if (hasDocumentsDelivered)
+      values.documentsDeliveredAt = body.documentsDelivered ? now : null;
+
+    try {
+      const [updated] = await db
+        .update(limTitleRequests)
+        .set(values)
+        .where(
+          and(
+            eq(limTitleRequests.id, requestId),
+            isNotNull(limTitleRequests.consentedAt),
+          ),
+        )
+        .returning({
+          id: limTitleRequests.id,
+          adminSmsSentAt: limTitleRequests.adminSmsSentAt,
+          documentsDeliveredAt: limTitleRequests.documentsDeliveredAt,
+        });
+      if (!updated) {
+        res.status(404).json({ error: "Consented LIM/title lead not found" });
+        return;
+      }
+      res.json({ lead: updated });
+    } catch (err) {
+      req.log.error(
+        { err, requestId },
+        "admin LIM/title workflow update failed",
+      );
+      res.status(500).json({ error: "Failed to update LIM/title lead" });
+    }
+  },
+);
 
 export default router;

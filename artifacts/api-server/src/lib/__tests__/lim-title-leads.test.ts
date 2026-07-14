@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { scrapeListingAgent } from "../scrapers/agent-contact";
-import { resolveLeadListingAgent } from "../lim-title-leads";
+import {
+  buildLimTitleFacilitatorMessage,
+  resolveLeadListingAgent,
+} from "../lim-title-leads";
 
 vi.mock("../scrapers/agent-contact", () => ({
   scrapeListingAgent: vi.fn(),
@@ -52,7 +55,10 @@ describe("LIM/title listing-agent resolution", () => {
       "1 Test Road, Auckland",
       expect.objectContaining({
         listingUrl: null,
-        selectedListingContext: expect.objectContaining({ agentPhone: null, listingUrl: null }),
+        selectedListingContext: expect.objectContaining({
+          agentPhone: null,
+          listingUrl: null,
+        }),
       }),
     );
   });
@@ -71,9 +77,19 @@ describe("LIM/title listing-agent resolution", () => {
       source: "listing-page",
     });
 
-    await expect(resolveLeadListingAgent({ address: "1 Test Road, Auckland" })).resolves.toMatchObject({
+    await expect(
+      resolveLeadListingAgent({ address: "1 Test Road, Auckland" }),
+    ).resolves.toMatchObject({
       agentPhone: "+64211234567",
       matchType: "subject",
     });
+  });
+});
+
+describe("LIM/title facilitator message", () => {
+  it("uses the buyer-authored request wording with the analyzed property", () => {
+    expect(buildLimTitleFacilitatorMessage("1 Test Road, Auckland")).toBe(
+      "Hi, I'd like to know more about 1 Test Road, Auckland. Could you please send me the LIM report and title? Thanks.",
+    );
   });
 });

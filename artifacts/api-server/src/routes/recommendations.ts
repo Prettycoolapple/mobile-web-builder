@@ -12,6 +12,7 @@ import { requireAuth } from "../lib/auth";
 import { ai } from "@workspace/integrations-gemini-ai";
 import { getUnreadAppBadgeCount, sendExpoPush } from "../lib/expo-push";
 import { reportHasPlanningOverlayOrControl } from "../lib/planning-overlays";
+import { claimPostReportPrompt } from "../lib/post-report-prompt-allocation";
 
 const router: IRouter = Router();
 
@@ -40,14 +41,18 @@ const VALID_PROVIDER_DISCIPLINES = [
 ] as const;
 type ProviderDiscipline = (typeof VALID_PROVIDER_DISCIPLINES)[number];
 
-function normaliseProviderDiscipline(value: unknown): ProviderDiscipline | null {
-  return typeof value === "string" && (VALID_PROVIDER_DISCIPLINES as readonly string[]).includes(value)
+function normaliseProviderDiscipline(
+  value: unknown,
+): ProviderDiscipline | null {
+  return typeof value === "string" &&
+    (VALID_PROVIDER_DISCIPLINES as readonly string[]).includes(value)
     ? (value as ProviderDiscipline)
     : null;
 }
 
 interface FeasibilityReport {
   address?: string;
+  historyId?: string | null;
   scores?: { ease?: number; cost?: number; roi?: number };
   lots?: { lots?: number };
   merged?: { zone_code?: string; land_area_sqm?: number };
@@ -80,6 +85,18 @@ function randomChance(probability: number): boolean {
   return Math.random() < probability;
 }
 
+async function canShowProactiveProviderPrompt(
+  userId: string,
+  report: FeasibilityReport,
+): Promise<boolean> {
+  const claim = await claimPostReportPrompt({
+    requesterUserId: userId,
+    reportHistoryId: report.historyId,
+    channel: "service_provider",
+  });
+  return claim !== "conflict";
+}
+
 /** True when the report's title/tenure is cross-lease or stratum. */
 function reportIsCrossLease(report: FeasibilityReport): boolean {
   if (report.titleInsight?.isCrossLease === true) return true;
@@ -92,7 +109,9 @@ function reportIsCrossLease(report: FeasibilityReport): boolean {
  * exists, otherwise an architect/designer, otherwise null. Never signals to the
  * caller which tier matched — the caller just gets a provider or null.
  */
-async function selectPlannerOrArchitect(excludeProviderIds: string[]): Promise<ServiceProvider | null> {
+async function selectPlannerOrArchitect(
+  excludeProviderIds: string[],
+): Promise<ServiceProvider | null> {
   const planner = await selectServiceProvider({
     preferredDiscipline: "planner",
     strictDiscipline: true,
@@ -216,14 +235,22 @@ Set "recommend": true only when there are clear, explicit signals of intent or a
     });
 
     const raw = llmResult.text?.trim() ?? "";
-    const cleaned = raw.replace(/```(?:json)?\s*/gi, "").replace(/```\s*/g, "").trim();
+    const cleaned = raw
+      .replace(/```(?:json)?\s*/gi, "")
+      .replace(/```\s*/g, "")
+      .trim();
     const parsed = JSON.parse(cleaned);
 
-    const confidence = typeof parsed.confidence === "number" ? Math.min(1, Math.max(0, parsed.confidence)) : 0.5;
+    const confidence =
+      typeof parsed.confidence === "number"
+        ? Math.min(1, Math.max(0, parsed.confidence))
+        : 0.5;
     return {
       // Require confident detection to avoid surfacing providers on weak signals.
       shouldRecommend: Boolean(parsed.recommend) && confidence >= 0.7,
-      intentType: (["subdivision", "newbuild", "renovation", "none"] as const).includes(parsed.type)
+      intentType: (
+        ["subdivision", "newbuild", "renovation", "none"] as const
+      ).includes(parsed.type)
         ? parsed.type
         : "none",
       confidence,
@@ -248,23 +275,45 @@ Set "recommend": true only when there are clear, explicit signals of intent or a
       .toLowerCase();
 
     const developerKeywords = [
-      "build", "develop", "subdivide", "architect", "builder", "engineer",
-      "construction", "consent", "townhouse", "units", "new build",
-      "设计师", "建筑师", "工程师", "开发", "建造",
+      "build",
+      "develop",
+      "subdivide",
+      "architect",
+      "builder",
+      "engineer",
+      "construction",
+      "consent",
+      "townhouse",
+      "units",
+      "new build",
+      "设计师",
+      "建筑师",
+      "工程师",
+      "开发",
+      "建造",
     ];
-    const hasKeywordIntent = developerKeywords.some((kw) => recentMessages.includes(kw));
+    const hasKeywordIntent = developerKeywords.some((kw) =>
+      recentMessages.includes(kw),
+    );
 
     if (signalCount >= 4 || (hasKeywordIntent && signalCount >= 3)) {
       return {
         shouldRecommend: true,
         intentType: signals.isSubdividable ? "subdivision" : "newbuild",
         confidence: signalCount / 5,
-        reason: "Property shows strong development potential (heuristic fallback)",
+        reason:
+          "Property shows strong development potential (heuristic fallback)",
         suggestedDiscipline: null,
       };
     }
 
-    return { shouldRecommend: false, intentType: "none", confidence: 0, reason: "", suggestedDiscipline: null };
+    return {
+      shouldRecommend: false,
+      intentType: "none",
+      confidence: 0,
+      reason: "",
+      suggestedDiscipline: null,
+    };
   }
 }
 
@@ -276,10 +325,14 @@ async function selectServiceProvider(options?: {
   /** Defaults to true for discipline filters so the DB remains the source of truth. */
   strictDiscipline?: boolean;
 }): Promise<ServiceProvider | null> {
-  const preferredDiscipline = normaliseProviderDiscipline(options?.preferredDiscipline);
+  const preferredDiscipline = normaliseProviderDiscipline(
+    options?.preferredDiscipline,
+  );
   const disciplineIn = (options?.disciplineIn ?? [])
     .map(normaliseProviderDiscipline)
-    .filter((discipline): discipline is ProviderDiscipline => discipline !== null);
+    .filter(
+      (discipline): discipline is ProviderDiscipline => discipline !== null,
+    );
   const exclude = new Set((options?.excludeProviderIds ?? []).filter(Boolean));
   const strictDiscipline = options?.strictDiscipline ?? true;
 
@@ -300,10 +353,16 @@ async function selectServiceProvider(options?: {
       secondaryLanguage: serviceProviderProfiles.secondaryLanguage,
     })
     .from(profiles)
-    .innerJoin(serviceProviderProfiles, eq(serviceProviderProfiles.userId, profiles.id))
+    .innerJoin(
+      serviceProviderProfiles,
+      eq(serviceProviderProfiles.userId, profiles.id),
+    )
     .where(eq(profiles.role, "service_provider"))
     // Verified providers first, then higher recommendation count.
-    .orderBy(desc(profiles.isVerified), desc(serviceProviderProfiles.recommendationCount))
+    .orderBy(
+      desc(profiles.isVerified),
+      desc(serviceProviderProfiles.recommendationCount),
+    )
     .limit(80);
 
   const rows = await baseQuery;
@@ -311,11 +370,17 @@ async function selectServiceProvider(options?: {
 
   // Filter out providers already recommended in this chat round and temporary provider-level exclusions.
   let candidates = rows.filter(
-    (r) => !exclude.has(r.id) && !TEMPORARILY_EXCLUDED_PROVIDER_NAMES.has(normaliseProviderName(r.fullName)),
+    (r) =>
+      !exclude.has(r.id) &&
+      !TEMPORARILY_EXCLUDED_PROVIDER_NAMES.has(
+        normaliseProviderName(r.fullName),
+      ),
   );
 
   if (preferredDiscipline) {
-    const matched = candidates.filter((r) => r.discipline === preferredDiscipline);
+    const matched = candidates.filter(
+      (r) => r.discipline === preferredDiscipline,
+    );
     if (matched.length === 0 && strictDiscipline) return null;
     if (matched.length > 0) candidates = matched;
   } else if (disciplineIn.length > 0) {
@@ -356,130 +421,209 @@ async function selectServiceProvider(options?: {
   };
 }
 
-router.post("/recommendations/check", requireAuth, async (req: Request, res: Response) => {
-  const userId = (req as any).userId as string;
+router.post(
+  "/recommendations/check",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    const userId = (req as any).userId as string;
 
-  try {
-    const [currentUser] = await db
-      .select({
-        role: profiles.role,
-        subscriptionTier: profiles.subscriptionTier,
-        specialStatus: profiles.specialStatus,
-        specialStatusExpiresAt: profiles.specialStatusExpiresAt,
-      })
-      .from(profiles)
-      .where(eq(profiles.id, userId))
-      .limit(1);
+    try {
+      const [currentUser] = await db
+        .select({
+          role: profiles.role,
+          subscriptionTier: profiles.subscriptionTier,
+          specialStatus: profiles.specialStatus,
+          specialStatusExpiresAt: profiles.specialStatusExpiresAt,
+        })
+        .from(profiles)
+        .where(eq(profiles.id, userId))
+        .limit(1);
 
-    if (!currentUser || currentUser.role !== "general") {
-      res.json({ shouldRecommend: false, provider: null });
-      return;
-    }
+      if (!currentUser || currentUser.role !== "general") {
+        res.json({ shouldRecommend: false, provider: null });
+        return;
+      }
 
-    // Provider recommendations are visible to free users as an upsell;
-    // initiating an in-app DM is gated on Standard/Pro by /recommendations/connect.
-    // Users with active special status (friends_family / supercharge) get Standard-equivalent access.
-    const tier = currentUser.subscriptionTier ?? "free";
-    const hasActiveSpecialStatus =
-      currentUser.specialStatus === "friends_family" ||
-      (currentUser.specialStatus === "supercharge" &&
-        (currentUser.specialStatusExpiresAt == null ||
-          new Date(currentUser.specialStatusExpiresAt) > new Date()));
-    const upgradeRequired = !hasActiveSpecialStatus && tier !== "standard" && tier !== "pro";
+      // Provider recommendations are visible to free users as an upsell;
+      // initiating an in-app DM is gated on Standard/Pro by /recommendations/connect.
+      // Users with active special status (friends_family / supercharge) get Standard-equivalent access.
+      const tier = currentUser.subscriptionTier ?? "free";
+      const hasActiveSpecialStatus =
+        currentUser.specialStatus === "friends_family" ||
+        (currentUser.specialStatus === "supercharge" &&
+          (currentUser.specialStatusExpiresAt == null ||
+            new Date(currentUser.specialStatusExpiresAt) > new Date()));
+      const upgradeRequired =
+        !hasActiveSpecialStatus && tier !== "standard" && tier !== "pro";
 
-    const {
-      report,
-      conversationHistory,
-      explicitRequest = false,
-      askForOthers = false,
-      preferredDiscipline,
-      excludeProviderIds = [],
-    } = req.body as {
-      report?: FeasibilityReport;
-      conversationHistory?: Message[];
-      explicitRequest?: boolean;
-      askForOthers?: boolean;
-      preferredDiscipline?: string;
-      excludeProviderIds?: string[];
-    };
+      const {
+        report,
+        conversationHistory,
+        explicitRequest = false,
+        askForOthers = false,
+        preferredDiscipline,
+        excludeProviderIds = [],
+      } = req.body as {
+        report?: FeasibilityReport;
+        conversationHistory?: Message[];
+        explicitRequest?: boolean;
+        askForOthers?: boolean;
+        preferredDiscipline?: string;
+        excludeProviderIds?: string[];
+      };
 
-    // Explicit referral request (user said "recommend someone", "any providers", etc.)
-    // — skip all gates and go straight to the database. No report required.
-    if (explicitRequest) {
-      req.log.info({ preferredDiscipline }, "Explicit recommendation request — bypassing probability and intent gates");
-      const strategy = report?.recommendedDevelopmentStrategy ?? null;
-      const strategySuggestsDesignProfessional =
-        strategy === "demolish_rebuild" || strategy === "refurbish";
-      const requestedDiscipline = normaliseProviderDiscipline(preferredDiscipline);
-      const provider = await selectProviderForExplicitRequest({
-        requestedDiscipline,
-        strategySuggestsDesignProfessional,
-        excludeProviderIds,
-      });
-      if (!provider) {
+      // Explicit referral request (user said "recommend someone", "any providers", etc.)
+      // — skip all gates and go straight to the database. No report required.
+      if (explicitRequest) {
+        req.log.info(
+          { preferredDiscipline },
+          "Explicit recommendation request — bypassing probability and intent gates",
+        );
+        const strategy = report?.recommendedDevelopmentStrategy ?? null;
+        const strategySuggestsDesignProfessional =
+          strategy === "demolish_rebuild" || strategy === "refurbish";
+        const requestedDiscipline =
+          normaliseProviderDiscipline(preferredDiscipline);
+        const provider = await selectProviderForExplicitRequest({
+          requestedDiscipline,
+          strategySuggestsDesignProfessional,
+          excludeProviderIds,
+        });
+        if (!provider) {
+          res.json({
+            shouldRecommend: false,
+            provider: null,
+            intentType: "referral",
+            reason: requestedDiscipline
+              ? "No matching internal service provider is available for the requested discipline"
+              : askForOthers || excludeProviderIds.length > 0
+                ? "Other internal service providers are currently occupied"
+                : "No matching internal service provider is available right now",
+            providersExhausted: true,
+            allowExternalSearch: false,
+            upgradeRequired,
+          });
+          return;
+        }
+        res.json({
+          shouldRecommend: provider !== null,
+          provider,
+          intentType: "referral",
+          reason: "User explicitly asked for a service provider recommendation",
+          allowExternalSearch: false,
+          upgradeRequired,
+        });
+        return;
+      }
+
+      if (!report) {
+        res
+          .status(400)
+          .json({ error: "report is required for non-explicit checks" });
+        return;
+      }
+
+      const hasPlanningOverlayOrControl =
+        reportHasPlanningOverlayOrControl(report);
+
+      if (hasPlanningOverlayOrControl) {
+        const planner = await selectServiceProvider({
+          preferredDiscipline: "planner",
+          strictDiscipline: true,
+          excludeProviderIds,
+        });
+
+        if (planner && randomChance(PLANNING_CONSTRAINT_PLANNER_PROBABILITY)) {
+          if (!(await canShowProactiveProviderPrompt(userId, report))) {
+            res.json({
+              shouldRecommend: false,
+              provider: null,
+              intentType: "planning_overlay",
+              reason: "Another proactive prompt was selected for this report",
+              upgradeRequired,
+            });
+            return;
+          }
+          res.json({
+            shouldRecommend: true,
+            provider: planner,
+            intentType: "planning_overlay",
+            reason:
+              "Planning overlays or controls were identified, so a planner is the priority professional",
+            allowExternalSearch: false,
+            upgradeRequired,
+          });
+          return;
+        }
+
+        if (
+          !planner &&
+          randomChance(PLANNING_CONSTRAINT_ARCHITECT_FALLBACK_PROBABILITY)
+        ) {
+          const architect = await selectServiceProvider({
+            preferredDiscipline: "architect_designer",
+            strictDiscipline: true,
+            excludeProviderIds,
+          });
+          if (
+            architect &&
+            !(await canShowProactiveProviderPrompt(userId, report))
+          ) {
+            res.json({
+              shouldRecommend: false,
+              provider: null,
+              intentType: "planning_overlay",
+              reason: "Another proactive prompt was selected for this report",
+              upgradeRequired,
+            });
+            return;
+          }
+          res.json({
+            shouldRecommend: architect !== null,
+            provider: architect,
+            intentType: "planning_overlay",
+            reason:
+              "Planning overlays or controls were identified, but no planner is available; architect/designer fallback",
+            allowExternalSearch: false,
+            upgradeRequired,
+          });
+          return;
+        }
+
         res.json({
           shouldRecommend: false,
           provider: null,
-          intentType: "referral",
-          reason: requestedDiscipline
-            ? "No matching internal service provider is available for the requested discipline"
-            : askForOthers || excludeProviderIds.length > 0
-              ? "Other internal service providers are currently occupied"
-              : "No matching internal service provider is available right now",
-          providersExhausted: true,
-          allowExternalSearch: false,
-          upgradeRequired,
-        });
-        return;
-      }
-      res.json({
-        shouldRecommend: provider !== null,
-        provider,
-        intentType: "referral",
-        reason: "User explicitly asked for a service provider recommendation",
-        allowExternalSearch: false,
-        upgradeRequired,
-      });
-      return;
-    }
-
-    if (!report) {
-      res.status(400).json({ error: "report is required for non-explicit checks" });
-      return;
-    }
-
-    const hasPlanningOverlayOrControl = reportHasPlanningOverlayOrControl(report);
-
-    if (hasPlanningOverlayOrControl) {
-      const planner = await selectServiceProvider({
-        preferredDiscipline: "planner",
-        strictDiscipline: true,
-        excludeProviderIds,
-      });
-
-      if (planner && randomChance(PLANNING_CONSTRAINT_PLANNER_PROBABILITY)) {
-        res.json({
-          shouldRecommend: true,
-          provider: planner,
           intentType: "planning_overlay",
-          reason: "Planning overlays or controls were identified, so a planner is the priority professional",
-          allowExternalSearch: false,
           upgradeRequired,
         });
         return;
       }
 
-      if (!planner && randomChance(PLANNING_CONSTRAINT_ARCHITECT_FALLBACK_PROBABILITY)) {
+      if (randomChance(CLEAR_PLANNING_ARCHITECT_PROBABILITY)) {
         const architect = await selectServiceProvider({
           preferredDiscipline: "architect_designer",
           strictDiscipline: true,
           excludeProviderIds,
         });
+        if (
+          architect &&
+          !(await canShowProactiveProviderPrompt(userId, report))
+        ) {
+          res.json({
+            shouldRecommend: false,
+            provider: null,
+            intentType: "design",
+            reason: "Another proactive prompt was selected for this report",
+            upgradeRequired,
+          });
+          return;
+        }
         res.json({
           shouldRecommend: architect !== null,
           provider: architect,
-          intentType: "planning_overlay",
-          reason: "Planning overlays or controls were identified, but no planner is available; architect/designer fallback",
+          intentType: "design",
+          reason:
+            "No planning overlays or controls were identified, so architect/designer is the priority professional",
           allowExternalSearch: false,
           upgradeRequired,
         });
@@ -489,171 +633,168 @@ router.post("/recommendations/check", requireAuth, async (req: Request, res: Res
       res.json({
         shouldRecommend: false,
         provider: null,
-        intentType: "planning_overlay",
-        upgradeRequired,
-      });
-      return;
-    }
-
-    if (randomChance(CLEAR_PLANNING_ARCHITECT_PROBABILITY)) {
-      const architect = await selectServiceProvider({
-        preferredDiscipline: "architect_designer",
-        strictDiscipline: true,
-        excludeProviderIds,
-      });
-      res.json({
-        shouldRecommend: architect !== null,
-        provider: architect,
         intentType: "design",
-        reason: "No planning overlays or controls were identified, so architect/designer is the priority professional",
-        allowExternalSearch: false,
         upgradeRequired,
       });
       return;
+    } catch (err) {
+      req.log.error({ err }, "POST /recommendations/check failed");
+      res.status(500).json({ error: "Recommendation check failed" });
     }
+  },
+);
 
-    res.json({
-      shouldRecommend: false,
-      provider: null,
-      intentType: "design",
-      upgradeRequired,
-    });
-    return;
-  } catch (err) {
-    req.log.error({ err }, "POST /recommendations/check failed");
-    res.status(500).json({ error: "Recommendation check failed" });
-  }
-});
+router.post(
+  "/recommendations/connect",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    const userId = (req as any).userId as string;
 
-router.post("/recommendations/connect", requireAuth, async (req: Request, res: Response) => {
-  const userId = (req as any).userId as string;
+    const { providerId, propertyAddress, report } = req.body as {
+      providerId?: string;
+      propertyAddress?: string;
+      report?: Record<string, unknown>;
+    };
 
-  const { providerId, propertyAddress, report } = req.body as {
-    providerId?: string;
-    propertyAddress?: string;
-    report?: Record<string, unknown>;
-  };
-
-  if (!providerId || !propertyAddress) {
-    res.status(400).json({ error: "providerId and propertyAddress are required" });
-    return;
-  }
-
-  try {
-    const [me] = await db
-      .select({
-        role: profiles.role,
-        subscriptionTier: profiles.subscriptionTier,
-        specialStatus: profiles.specialStatus,
-        specialStatusExpiresAt: profiles.specialStatusExpiresAt,
-      })
-      .from(profiles)
-      .where(eq(profiles.id, userId))
-      .limit(1);
-    if (!me) {
-      res.status(404).json({ error: "User not found" });
+    if (!providerId || !propertyAddress) {
+      res
+        .status(400)
+        .json({ error: "providerId and propertyAddress are required" });
       return;
-    }
-    // Only general users with a paid tier can initiate provider DMs.
-    // Sales agents and providers can always reply via the DM routes themselves.
-    // Users with active special status (friends_family / supercharge) get Standard-equivalent access.
-    if (me.role === "general") {
-      const tier = me.subscriptionTier ?? "free";
-      const hasActiveSpecialStatus =
-        me.specialStatus === "friends_family" ||
-        (me.specialStatus === "supercharge" &&
-          (me.specialStatusExpiresAt == null ||
-            new Date(me.specialStatusExpiresAt) > new Date()));
-      if (!hasActiveSpecialStatus && tier !== "standard" && tier !== "pro") {
-        res.status(402).json({ error: "Upgrade required", upgradeRequired: true });
-        return;
-      }
-    }
-
-    const [canonA, canonB] = [userId, providerId].sort();
-
-    const existing = await db
-      .select()
-      .from(dmThreads)
-      .where(and(eq(dmThreads.participantA, canonA), eq(dmThreads.participantB, canonB)))
-      .limit(1);
-
-    let thread = existing[0];
-
-    if (!thread) {
-      const [created] = await db
-        .insert(dmThreads)
-        .values({ participantA: canonA, participantB: canonB })
-        .onConflictDoNothing()
-        .returning();
-
-      if (!created) {
-        const [found] = await db
-          .select()
-          .from(dmThreads)
-          .where(and(eq(dmThreads.participantA, canonA), eq(dmThreads.participantB, canonB)))
-          .limit(1);
-        thread = found;
-      } else {
-        thread = created;
-      }
-    }
-
-    const hasMessages = await db
-      .select({ id: dmMessages.id })
-      .from(dmMessages)
-      .where(eq(dmMessages.threadId, thread.id))
-      .limit(1);
-
-    if (hasMessages.length === 0) {
-      await db.insert(dmMessages).values({
-        threadId: thread.id,
-        senderId: userId,
-        body: `📍 ${propertyAddress}`,
-      });
-
-      await db.insert(dmMessages).values({
-        threadId: thread.id,
-        senderId: userId,
-        body: "Could you please take a look at this for me and let me know if there are any development opportunities — either a subdivision or a demo for a new build?",
-      });
-
-      await db
-        .update(dmThreads)
-        .set({ lastMessageAt: new Date() })
-        .where(eq(dmThreads.id, thread.id));
     }
 
     try {
-      const providerTokens = await db
-        .select({ token: pushTokens.token })
-        .from(pushTokens)
-        .where(eq(pushTokens.userId, providerId));
-
-      if (providerTokens.length > 0) {
-        const [sender] = await db
-          .select({ fullName: profiles.fullName })
-          .from(profiles)
-          .where(eq(profiles.id, userId))
-          .limit(1);
-
-        const badgeCount = await getUnreadAppBadgeCount(providerId);
-
-        await sendExpoPush(
-          providerTokens.map((t) => t.token),
-          "New connection request",
-          `A user wants to discuss ${propertyAddress}`,
-          { type: "new_connection", address: propertyAddress, threadId: thread.id },
-          { badgeCount },
-        );
+      const [me] = await db
+        .select({
+          role: profiles.role,
+          subscriptionTier: profiles.subscriptionTier,
+          specialStatus: profiles.specialStatus,
+          specialStatusExpiresAt: profiles.specialStatusExpiresAt,
+        })
+        .from(profiles)
+        .where(eq(profiles.id, userId))
+        .limit(1);
+      if (!me) {
+        res.status(404).json({ error: "User not found" });
+        return;
       }
-    } catch {}
+      // Only general users with a paid tier can initiate provider DMs.
+      // Sales agents and providers can always reply via the DM routes themselves.
+      // Users with active special status (friends_family / supercharge) get Standard-equivalent access.
+      if (me.role === "general") {
+        const tier = me.subscriptionTier ?? "free";
+        const hasActiveSpecialStatus =
+          me.specialStatus === "friends_family" ||
+          (me.specialStatus === "supercharge" &&
+            (me.specialStatusExpiresAt == null ||
+              new Date(me.specialStatusExpiresAt) > new Date()));
+        if (!hasActiveSpecialStatus && tier !== "standard" && tier !== "pro") {
+          res
+            .status(402)
+            .json({ error: "Upgrade required", upgradeRequired: true });
+          return;
+        }
+      }
 
-    res.json({ threadId: thread.id });
-  } catch (err) {
-    req.log.error({ err }, "POST /recommendations/connect failed");
-    res.status(500).json({ error: "Connect failed" });
-  }
-});
+      const [canonA, canonB] = [userId, providerId].sort();
+
+      const existing = await db
+        .select()
+        .from(dmThreads)
+        .where(
+          and(
+            eq(dmThreads.participantA, canonA),
+            eq(dmThreads.participantB, canonB),
+          ),
+        )
+        .limit(1);
+
+      let thread = existing[0];
+
+      if (!thread) {
+        const [created] = await db
+          .insert(dmThreads)
+          .values({ participantA: canonA, participantB: canonB })
+          .onConflictDoNothing()
+          .returning();
+
+        if (!created) {
+          const [found] = await db
+            .select()
+            .from(dmThreads)
+            .where(
+              and(
+                eq(dmThreads.participantA, canonA),
+                eq(dmThreads.participantB, canonB),
+              ),
+            )
+            .limit(1);
+          thread = found;
+        } else {
+          thread = created;
+        }
+      }
+
+      const hasMessages = await db
+        .select({ id: dmMessages.id })
+        .from(dmMessages)
+        .where(eq(dmMessages.threadId, thread.id))
+        .limit(1);
+
+      if (hasMessages.length === 0) {
+        await db.insert(dmMessages).values({
+          threadId: thread.id,
+          senderId: userId,
+          body: `📍 ${propertyAddress}`,
+        });
+
+        await db.insert(dmMessages).values({
+          threadId: thread.id,
+          senderId: userId,
+          body: "Could you please take a look at this for me and let me know if there are any development opportunities — either a subdivision or a demo for a new build?",
+        });
+
+        await db
+          .update(dmThreads)
+          .set({ lastMessageAt: new Date() })
+          .where(eq(dmThreads.id, thread.id));
+      }
+
+      try {
+        const providerTokens = await db
+          .select({ token: pushTokens.token })
+          .from(pushTokens)
+          .where(eq(pushTokens.userId, providerId));
+
+        if (providerTokens.length > 0) {
+          const [sender] = await db
+            .select({ fullName: profiles.fullName })
+            .from(profiles)
+            .where(eq(profiles.id, userId))
+            .limit(1);
+
+          const badgeCount = await getUnreadAppBadgeCount(providerId);
+
+          await sendExpoPush(
+            providerTokens.map((t) => t.token),
+            "New connection request",
+            `A user wants to discuss ${propertyAddress}`,
+            {
+              type: "new_connection",
+              address: propertyAddress,
+              threadId: thread.id,
+            },
+            { badgeCount },
+          );
+        }
+      } catch {}
+
+      res.json({ threadId: thread.id });
+    } catch (err) {
+      req.log.error({ err }, "POST /recommendations/connect failed");
+      res.status(500).json({ error: "Connect failed" });
+    }
+  },
+);
 
 export default router;

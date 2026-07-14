@@ -10,8 +10,14 @@ import {
   type LimTitleRequest,
 } from "@workspace/db";
 import { normalizeRegistrationPhone } from "./phone-registration";
-import { scrapeListingAgent, type AgentContactResult } from "./scrapers/agent-contact";
-import { normaliseSelectedListingContext, type SelectedListingContext } from "./selected-listing-context";
+import {
+  scrapeListingAgent,
+  type AgentContactResult,
+} from "./scrapers/agent-contact";
+import {
+  normaliseSelectedListingContext,
+  type SelectedListingContext,
+} from "./selected-listing-context";
 import { normaliseAddressKey } from "./address-key";
 import { getIo } from "./socket";
 export {
@@ -26,6 +32,12 @@ export type ResolvedLeadAgent = AgentContactResult & {
   agentPhone: string;
   matchType: "subject";
 };
+
+export function buildLimTitleFacilitatorMessage(
+  propertyAddress: string,
+): string {
+  return `Hi, I'd like to know more about ${propertyAddress}. Could you please send me the LIM report and title? Thanks.`;
+}
 
 export function isNzSmsMobile(raw: string | null | undefined): boolean {
   if (!raw) return false;
@@ -56,18 +68,26 @@ export async function resolveLeadListingAgent(args: {
   listingUrl?: string | null;
   selectedListingContext?: SelectedListingContext | null;
 }): Promise<ResolvedLeadAgent | null> {
-  const selectedListingContext = normaliseSelectedListingContext(args.selectedListingContext);
+  const selectedListingContext = normaliseSelectedListingContext(
+    args.selectedListingContext,
+  );
   // selectedListingContext is useful for locating the exact listing, but it is
   // echoed by the client and therefore cannot be authoritative for an SMS
   // recipient. Strip its phone before the server-side lookup so a modified app
   // cannot cause Project Alpha to text an arbitrary NZ mobile number.
-  const trustedListingUrl = isTrustedLeadListingUrl(selectedListingContext?.listingUrl)
+  const trustedListingUrl = isTrustedLeadListingUrl(
+    selectedListingContext?.listingUrl,
+  )
     ? selectedListingContext!.listingUrl!
     : isTrustedLeadListingUrl(args.listingUrl)
       ? args.listingUrl!
       : null;
   const lookupContext = selectedListingContext
-    ? { ...selectedListingContext, listingUrl: trustedListingUrl, agentPhone: null }
+    ? {
+        ...selectedListingContext,
+        listingUrl: trustedListingUrl,
+        agentPhone: null,
+      }
     : null;
   const result = await Promise.race([
     scrapeListingAgent(args.address, {
@@ -75,20 +95,31 @@ export async function resolveLeadListingAgent(args: {
       listingUrl: trustedListingUrl,
       selectedListingContext: lookupContext,
     }),
-    new Promise<AgentContactResult>((resolve) => setTimeout(() => resolve({
-      found: false,
-      isListed: false,
-      matchType: null,
-      listingAddress: null,
-      agentName: null,
-      agentPhone: null,
-      agencyName: null,
-      agentAvatarUrl: null,
-      listingUrl: null,
-      source: "timeout",
-    }), 25_000)),
+    new Promise<AgentContactResult>((resolve) =>
+      setTimeout(
+        () =>
+          resolve({
+            found: false,
+            isListed: false,
+            matchType: null,
+            listingAddress: null,
+            agentName: null,
+            agentPhone: null,
+            agencyName: null,
+            agentAvatarUrl: null,
+            listingUrl: null,
+            source: "timeout",
+          }),
+        25_000,
+      ),
+    ),
   ]);
-  if (!result.found || !result.isListed || result.matchType !== "subject" || !isNzSmsMobile(result.agentPhone)) {
+  if (
+    !result.found ||
+    !result.isListed ||
+    result.matchType !== "subject" ||
+    !isNzSmsMobile(result.agentPhone)
+  ) {
     return null;
   }
   return {
@@ -98,15 +129,19 @@ export async function resolveLeadListingAgent(args: {
   };
 }
 
-async function findVerifiedAgentByPhone(phoneNumber: string): Promise<string | null> {
+async function findVerifiedAgentByPhone(
+  phoneNumber: string,
+): Promise<string | null> {
   const [agent] = await db
     .select({ id: profiles.id })
     .from(profiles)
-    .where(and(
-      eq(profiles.role, "sales_agent"),
-      eq(profiles.phoneNumber, phoneNumber),
-      isNotNull(profiles.phoneVerifiedAt),
-    ))
+    .where(
+      and(
+        eq(profiles.role, "sales_agent"),
+        eq(profiles.phoneNumber, phoneNumber),
+        isNotNull(profiles.phoneVerifiedAt),
+      ),
+    )
     .limit(1);
   return agent?.id ?? null;
 }
@@ -160,8 +195,10 @@ export async function createOrReuseLimTitleOffer(args: {
   intentReason?: string | null;
 }): Promise<LimTitleRequest> {
   const target = await upsertListingAgentTarget(args.agent);
-  const address = args.agent.listingAddress?.trim() || args.propertyAddress.trim();
-  const propertyKey = normaliseAddressKey(address) || normaliseAddressKey(args.propertyAddress);
+  const address =
+    args.agent.listingAddress?.trim() || args.propertyAddress.trim();
+  const propertyKey =
+    normaliseAddressKey(address) || normaliseAddressKey(args.propertyAddress);
   const now = new Date();
   const [inserted] = await db
     .insert(limTitleRequests)
@@ -182,7 +219,11 @@ export async function createOrReuseLimTitleOffer(args: {
       offerShownAt: now,
       metadataJson: {
         agentMatchType: "subject",
-        selectedListingContext: (args.selectedListingContext as Record<string, unknown> | null | undefined) ?? null,
+        selectedListingContext:
+          (args.selectedListingContext as
+            | Record<string, unknown>
+            | null
+            | undefined) ?? null,
         intentReason: args.intentReason ?? null,
       },
       updatedAt: now,
@@ -200,25 +241,32 @@ export async function createOrReuseLimTitleOffer(args: {
   const [existing] = await db
     .select()
     .from(limTitleRequests)
-    .where(and(
-      eq(limTitleRequests.requesterUserId, args.requesterUserId),
-      eq(limTitleRequests.agentTargetId, target.id),
-      eq(limTitleRequests.propertyKey, propertyKey),
-    ))
+    .where(
+      and(
+        eq(limTitleRequests.requesterUserId, args.requesterUserId),
+        eq(limTitleRequests.agentTargetId, target.id),
+        eq(limTitleRequests.propertyKey, propertyKey),
+      ),
+    )
     .limit(1);
   if (!existing) throw new Error("LIM_TITLE_OFFER_UPSERT_FAILED");
   return existing;
 }
 
-export async function declineLimTitleOffer(requestId: string, requesterUserId: string): Promise<boolean> {
+export async function declineLimTitleOffer(
+  requestId: string,
+  requesterUserId: string,
+): Promise<boolean> {
   const rows = await db
     .update(limTitleRequests)
     .set({ status: "declined", declinedAt: new Date(), updatedAt: new Date() })
-    .where(and(
-      eq(limTitleRequests.id, requestId),
-      eq(limTitleRequests.requesterUserId, requesterUserId),
-      eq(limTitleRequests.status, "offered"),
-    ))
+    .where(
+      and(
+        eq(limTitleRequests.id, requestId),
+        eq(limTitleRequests.requesterUserId, requesterUserId),
+        eq(limTitleRequests.status, "offered"),
+      ),
+    )
     .returning({ id: limTitleRequests.id });
   return rows.length > 0;
 }
@@ -232,13 +280,16 @@ export async function connectLimTitleRequest(requestId: string): Promise<{
   threadId: string | null;
 }> {
   const result = await db.transaction(async (tx) => {
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${requestId}, 0))`);
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${requestId}, 0))`,
+    );
     const [request] = await tx
       .select()
       .from(limTitleRequests)
       .where(eq(limTitleRequests.id, requestId))
       .limit(1);
-    if (!request?.consentedAt) return { connected: false, threadId: null, message: null, agentId: null };
+    if (!request?.consentedAt)
+      return { connected: false, threadId: null, message: null, agentId: null };
 
     const [target] = await tx
       .select()
@@ -246,21 +297,28 @@ export async function connectLimTitleRequest(requestId: string): Promise<{
       .where(eq(listingAgentTargets.id, request.agentTargetId))
       .limit(1);
     const agentId = target?.matchedAgentUserId ?? request.matchedAgentUserId;
-    if (!target || !agentId) return { connected: false, threadId: null, message: null, agentId: null };
+    if (!target || !agentId)
+      return { connected: false, threadId: null, message: null, agentId: null };
 
     const [verifiedAgent] = await tx
       .select({ id: profiles.id, phoneNumber: profiles.phoneNumber })
       .from(profiles)
-      .where(and(
-        eq(profiles.id, agentId),
-        eq(profiles.role, "sales_agent"),
-        eq(profiles.phoneNumber, target.phoneNumber),
-        isNotNull(profiles.phoneVerifiedAt),
-      ))
+      .where(
+        and(
+          eq(profiles.id, agentId),
+          eq(profiles.role, "sales_agent"),
+          eq(profiles.phoneNumber, target.phoneNumber),
+          isNotNull(profiles.phoneVerifiedAt),
+        ),
+      )
       .limit(1);
-    if (!verifiedAgent) return { connected: false, threadId: null, message: null, agentId: null };
+    if (!verifiedAgent)
+      return { connected: false, threadId: null, message: null, agentId: null };
 
-    const [participantA, participantB] = [request.requesterUserId, agentId].sort();
+    const [participantA, participantB] = [
+      request.requesterUserId,
+      agentId,
+    ].sort();
     let [thread] = await tx
       .insert(dmThreads)
       .values({ participantA, participantB })
@@ -270,7 +328,12 @@ export async function connectLimTitleRequest(requestId: string): Promise<{
       [thread] = await tx
         .select()
         .from(dmThreads)
-        .where(and(eq(dmThreads.participantA, participantA), eq(dmThreads.participantB, participantB)))
+        .where(
+          and(
+            eq(dmThreads.participantA, participantA),
+            eq(dmThreads.participantB, participantB),
+          ),
+        )
         .limit(1);
     }
     if (!thread) throw new Error("LIM_TITLE_DM_THREAD_FAILED");
@@ -286,7 +349,7 @@ export async function connectLimTitleRequest(requestId: string): Promise<{
         .values({
           threadId: thread.id,
           senderId: request.requesterUserId,
-          body: `LIM report and property Title requested for ${request.propertyAddress}.`,
+          body: buildLimTitleFacilitatorMessage(request.propertyAddress),
           messageKind: "lim_title_request",
           leadRequestId: request.id,
           metadataJson: {
@@ -300,7 +363,10 @@ export async function connectLimTitleRequest(requestId: string): Promise<{
     }
 
     const now = new Date();
-    await tx.update(dmThreads).set({ lastMessageAt: message.createdAt ?? now }).where(eq(dmThreads.id, thread.id));
+    await tx
+      .update(dmThreads)
+      .set({ lastMessageAt: message.createdAt ?? now })
+      .where(eq(dmThreads.id, thread.id));
     await tx
       .update(limTitleRequests)
       .set({
@@ -316,13 +382,22 @@ export async function connectLimTitleRequest(requestId: string): Promise<{
 
   if (result.connected && result.message && result.agentId) {
     const io = getIo();
-    io?.to(`user:${result.agentId}`).emit("new_message", { threadId: result.threadId, message: result.message });
-    io?.to(`user:${result.message.senderId}`).emit("new_message", { threadId: result.threadId, message: result.message });
+    io?.to(`user:${result.agentId}`).emit("new_message", {
+      threadId: result.threadId,
+      message: result.message,
+    });
+    io?.to(`user:${result.message.senderId}`).emit("new_message", {
+      threadId: result.threadId,
+      message: result.message,
+    });
   }
   return { connected: result.connected, threadId: result.threadId };
 }
 
-export async function consentToLimTitleRequest(requestId: string, requesterUserId: string): Promise<{
+export async function consentToLimTitleRequest(
+  requestId: string,
+  requesterUserId: string,
+): Promise<{
   request: LimTitleRequest;
   alreadyConsented: boolean;
   connected: boolean;
@@ -332,54 +407,88 @@ export async function consentToLimTitleRequest(requestId: string, requesterUserI
   const [current] = await db
     .select()
     .from(limTitleRequests)
-    .where(and(eq(limTitleRequests.id, requestId), eq(limTitleRequests.requesterUserId, requesterUserId)))
+    .where(
+      and(
+        eq(limTitleRequests.id, requestId),
+        eq(limTitleRequests.requesterUserId, requesterUserId),
+      ),
+    )
     .limit(1);
-  if (!current) throw Object.assign(new Error("Request not found"), { statusCode: 404 });
+  if (!current)
+    throw Object.assign(new Error("Request not found"), { statusCode: 404 });
   const alreadyConsented = Boolean(current.consentedAt);
   let request = current;
   if (!alreadyConsented) {
     const [updated] = await db
       .update(limTitleRequests)
-      .set({ status: current.matchedAgentUserId ? "pending_connection" : "pending_agent_claim", consentedAt: now, updatedAt: now })
-      .where(and(
-        eq(limTitleRequests.id, requestId),
-        eq(limTitleRequests.requesterUserId, requesterUserId),
-        isNull(limTitleRequests.consentedAt),
-      ))
+      .set({
+        status: current.matchedAgentUserId
+          ? "pending_connection"
+          : "pending_agent_claim",
+        consentedAt: now,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(limTitleRequests.id, requestId),
+          eq(limTitleRequests.requesterUserId, requesterUserId),
+          isNull(limTitleRequests.consentedAt),
+        ),
+      )
       .returning();
     request = updated ?? current;
   }
   const connected = await connectLimTitleRequest(requestId);
-  const [fresh] = await db.select().from(limTitleRequests).where(eq(limTitleRequests.id, requestId)).limit(1);
-  return { request: fresh ?? request, alreadyConsented, connected: connected.connected, threadId: connected.threadId };
+  const [fresh] = await db
+    .select()
+    .from(limTitleRequests)
+    .where(eq(limTitleRequests.id, requestId))
+    .limit(1);
+  return {
+    request: fresh ?? request,
+    alreadyConsented,
+    connected: connected.connected,
+    threadId: connected.threadId,
+  };
 }
 
 /** Claim every unclaimed target for an OTP-verified sales-agent phone. */
-export async function claimOutstandingLimTitleLeads(agentUserId: string, rawPhone: string): Promise<{
+export async function claimOutstandingLimTitleLeads(
+  agentUserId: string,
+  rawPhone: string,
+): Promise<{
   claimedTargets: number;
   connectedRequests: number;
 }> {
   const phoneNumber = normalizeRegistrationPhone(rawPhone);
-  if (!isNzSmsMobile(phoneNumber)) return { claimedTargets: 0, connectedRequests: 0 };
+  if (!isNzSmsMobile(phoneNumber))
+    return { claimedTargets: 0, connectedRequests: 0 };
   const [agent] = await db
     .select({ id: profiles.id })
     .from(profiles)
-    .where(and(
-      eq(profiles.id, agentUserId),
-      eq(profiles.role, "sales_agent"),
-      eq(profiles.phoneNumber, phoneNumber),
-      isNotNull(profiles.phoneVerifiedAt),
-    ))
+    .where(
+      and(
+        eq(profiles.id, agentUserId),
+        eq(profiles.role, "sales_agent"),
+        eq(profiles.phoneNumber, phoneNumber),
+        isNotNull(profiles.phoneVerifiedAt),
+      ),
+    )
     .limit(1);
   if (!agent) return { claimedTargets: 0, connectedRequests: 0 };
 
   const targets = await db
     .update(listingAgentTargets)
     .set({ matchedAgentUserId: agentUserId, updatedAt: new Date() })
-    .where(and(eq(listingAgentTargets.phoneNumber, phoneNumber), or(
-      isNull(listingAgentTargets.matchedAgentUserId),
-      eq(listingAgentTargets.matchedAgentUserId, agentUserId),
-    )))
+    .where(
+      and(
+        eq(listingAgentTargets.phoneNumber, phoneNumber),
+        or(
+          isNull(listingAgentTargets.matchedAgentUserId),
+          eq(listingAgentTargets.matchedAgentUserId, agentUserId),
+        ),
+      ),
+    )
     .returning({ id: listingAgentTargets.id });
   if (!targets.length) return { claimedTargets: 0, connectedRequests: 0 };
 
@@ -391,14 +500,17 @@ export async function claimOutstandingLimTitleLeads(agentUserId: string, rawPhon
   const requests = await db
     .select({ id: limTitleRequests.id })
     .from(limTitleRequests)
-    .where(and(
-      sql`${limTitleRequests.agentTargetId} = ANY(${targetIds}::text[])`,
-      isNotNull(limTitleRequests.consentedAt),
-      isNull(limTitleRequests.dmThreadId),
-    ));
+    .where(
+      and(
+        sql`${limTitleRequests.agentTargetId} = ANY(${targetIds}::text[])`,
+        isNotNull(limTitleRequests.consentedAt),
+        isNull(limTitleRequests.dmThreadId),
+      ),
+    );
   let connectedRequests = 0;
   for (const request of requests) {
-    if ((await connectLimTitleRequest(request.id)).connected) connectedRequests += 1;
+    if ((await connectLimTitleRequest(request.id)).connected)
+      connectedRequests += 1;
   }
   return { claimedTargets: targets.length, connectedRequests };
 }

@@ -1,4 +1,11 @@
-import { index, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import {
+  index,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { profiles } from "./profiles";
 import { listingAgentTargets } from "./listing_agent_targets";
@@ -14,17 +21,24 @@ export type LimTitleRequestMetadata = {
 export const limTitleRequests = pgTable(
   "lim_title_requests",
   {
-    id: text("id").primaryKey().default(sql`gen_random_uuid()`),
+    id: text("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
     requesterUserId: text("requester_user_id")
       .notNull()
       .references(() => profiles.id, { onDelete: "cascade" }),
     agentTargetId: text("agent_target_id")
       .notNull()
       .references(() => listingAgentTargets.id, { onDelete: "restrict" }),
-    matchedAgentUserId: text("matched_agent_user_id").references(() => profiles.id, {
+    matchedAgentUserId: text("matched_agent_user_id").references(
+      () => profiles.id,
+      {
+        onDelete: "set null",
+      },
+    ),
+    dmThreadId: text("dm_thread_id").references(() => dmThreads.id, {
       onDelete: "set null",
     }),
-    dmThreadId: text("dm_thread_id").references(() => dmThreads.id, { onDelete: "set null" }),
     claimToken: text("claim_token").notNull(),
     reportKey: text("report_key").notNull(),
     reportHistoryId: text("report_history_id"),
@@ -44,8 +58,18 @@ export const limTitleRequests = pgTable(
     declinedAt: timestamp("declined_at", { withTimezone: true }),
     consentedAt: timestamp("consented_at", { withTimezone: true }),
     connectedAt: timestamp("connected_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    /** Admin manually confirmed that the listing agent was contacted by SMS. */
+    adminSmsSentAt: timestamp("admin_sms_sent_at", { withTimezone: true }),
+    /** Admin manually confirmed that the requested documents were delivered. */
+    documentsDeliveredAt: timestamp("documents_delivered_at", {
+      withTimezone: true,
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => [
     uniqueIndex("lim_title_requests_buyer_target_property_unique").on(
@@ -54,9 +78,18 @@ export const limTitleRequests = pgTable(
       table.propertyKey,
     ),
     uniqueIndex("lim_title_requests_claim_token_unique").on(table.claimToken),
-    index("lim_title_requests_report_idx").on(table.requesterUserId, table.reportKey),
-    index("lim_title_requests_agent_status_idx").on(table.matchedAgentUserId, table.status),
-    index("lim_title_requests_target_status_idx").on(table.agentTargetId, table.status),
+    index("lim_title_requests_report_idx").on(
+      table.requesterUserId,
+      table.reportKey,
+    ),
+    index("lim_title_requests_agent_status_idx").on(
+      table.matchedAgentUserId,
+      table.status,
+    ),
+    index("lim_title_requests_target_status_idx").on(
+      table.agentTargetId,
+      table.status,
+    ),
   ],
 );
 
