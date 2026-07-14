@@ -175,6 +175,19 @@ describe("regional property-cache completeness", () => {
       property_history: { cv_nzd: 250_000, land_area_sqm: 2_023 },
     } as never)).toBe(true);
   });
+
+  it("refreshes Southland cache bundles that were previously misclassified as unsupported", () => {
+    expect(cachedRawNeedsRegionalZoneRefresh({
+      planning_provider: { providerId: "unsupported" },
+      geocode: {
+        lat: -45.8373947,
+        lng: 168.5815721,
+        formatted: "77 Kruger Street, Balfour 9779, New Zealand",
+      },
+      zone: { zone_code: "UNKNOWN" },
+      property_history: { cv_nzd: null, land_area_sqm: 2_023 },
+    } as never)).toBe(true);
+  });
 });
 
 describe("cacheRowFreshness (90-day TTL)", () => {

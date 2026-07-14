@@ -4,15 +4,15 @@ import { planningProviderMetadata, type PlanningProviderId } from "./regional-pl
 
 export function cachedPlanningProviderId(rawData: RawPropertyData): PlanningProviderId | null {
   const explicit = rawData.planning_provider?.providerId;
-  if (explicit) return explicit;
+  if (explicit && explicit !== "unsupported") return explicit;
   const lat = rawData.geocode?.lat;
   const lng = rawData.geocode?.lng;
-  if (typeof lat !== "number" || typeof lng !== "number") return null;
+  if (typeof lat !== "number" || typeof lng !== "number") return explicit ?? null;
   return planningProviderMetadata({
     lat,
     lng,
     address: rawData.geocode?.formatted ?? null,
-  })?.providerId ?? null;
+  })?.providerId ?? explicit ?? null;
 }
 
 export function cachedRawNeedsRegionalZoneRefresh(rawData: RawPropertyData): boolean {
