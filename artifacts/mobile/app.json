@@ -2,7 +2,7 @@
   "expo": {
     "name": "Project Alpha",
     "slug": "workspace",
-    "version": "2.0.8",
+    "version": "2.0.9",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "devfeasible",
@@ -16,7 +16,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "nz.devfeasible.app",
-      "buildNumber": "2.14",
+      "buildNumber": "2.15",
       "associatedDomains": [
         "applinks:projectalpha.app",
         "applinks:www.projectalpha.app"
@@ -33,7 +33,7 @@
     },
     "android": {
       "package": "nz.devfeasible.app",
-      "versionCode": 45,
+      "versionCode": 46,
       "edgeToEdgeEnabled": true,
       "blockedPermissions": [
         "android.permission.READ_MEDIA_IMAGES",
