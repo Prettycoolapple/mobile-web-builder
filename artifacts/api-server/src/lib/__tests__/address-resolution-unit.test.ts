@@ -10,12 +10,7 @@ vi.mock("@workspace/integrations-gemini-ai", () => ({
 
 vi.mock("../geocode", () => ({
   nominatimSearchNz: vi.fn(async () => []),
-  tryGeocodeAddress: vi.fn(async () => ({
-    lat: -37.779,
-    lng: 175.271,
-    formatted: "289 Ulster Street, Whitiora, Hamilton 3200, New Zealand",
-    suburb: "whitiora",
-  })),
+  tryGeocodeAddress: vi.fn(async () => null),
 }));
 
 vi.mock("../linz", () => ({
@@ -24,7 +19,7 @@ vi.mock("../linz", () => ({
 
 import { tryGeocodeAddress } from "../geocode";
 import { fetchLINZAddressCandidates } from "../linz";
-import { resolveAddressForAnalysis } from "../address-clarification";
+import { dedupeEquivalentAddressOptions, resolveAddressForAnalysis } from "../address-clarification";
 
 const mockedFetchLINZAddressCandidates = vi.mocked(fetchLINZAddressCandidates);
 const mockedTryGeocodeAddress = vi.mocked(tryGeocodeAddress);
@@ -34,12 +29,16 @@ describe("unit address resolution", () => {
     mockedFetchLINZAddressCandidates.mockReset();
     mockedFetchLINZAddressCandidates.mockResolvedValue([]);
     mockedTryGeocodeAddress.mockReset();
-    mockedTryGeocodeAddress.mockResolvedValue({
-      lat: -37.779,
-      lng: 175.271,
-      formatted: "289 Ulster Street, Whitiora, Hamilton 3200, New Zealand",
-      suburb: "whitiora",
-    });
+    mockedTryGeocodeAddress.mockImplementation(async (address) =>
+      /289\s+ulster\s+street/i.test(address)
+        ? {
+            lat: -37.779,
+            lng: 175.271,
+            formatted: "289 Ulster Street, Whitiora, Hamilton 3200, New Zealand",
+            suburb: "whitiora",
+          }
+        : null,
+    );
   });
 
   it("uses the LINZ slash-unit address when geocoding only returns the parent", async () => {
@@ -64,7 +63,9 @@ describe("unit address resolution", () => {
       formatted: "2926A STATE HIGHWAY 30, Rotomā, New Zealand",
       suburb: null,
     };
-    mockedTryGeocodeAddress.mockResolvedValue(canonical);
+    mockedTryGeocodeAddress.mockImplementation(async (address) =>
+      /2926a.*state\s+highway\s+30/i.test(address) ? canonical : null,
+    );
     mockedFetchLINZAddressCandidates.mockResolvedValue([{
       address: "2926A, State Highway 30, Whakatāne District, Bay of Plenty, 3075",
       id: "linz-2926a",
@@ -78,5 +79,30 @@ describe("unit address resolution", () => {
       resolvedAddress: canonical.formatted,
       clarification: null,
     });
+  });
+
+  it("collapses parent/child locality labels but never merges a different street number", () => {
+    const deduped = dedupeEquivalentAddressOptions([
+      {
+        formatted: "1140 Braemar Road, Rotomā, Whakatāne District, Bay of Plenty",
+        lat: null,
+        lng: null,
+      },
+      {
+        formatted: "1140 Braemar Road, Rotomā, Whakatāne",
+        lat: null,
+        lng: null,
+      },
+      {
+        formatted: "1134 Braemar Road, Rotomā, Whakatāne",
+        lat: null,
+        lng: null,
+      },
+    ]);
+
+    expect(deduped.map((option) => option.formatted)).toEqual([
+      "1140 Braemar Road, Rotomā, Whakatāne District, Bay of Plenty",
+      "1134 Braemar Road, Rotomā, Whakatāne",
+    ]);
   });
 });

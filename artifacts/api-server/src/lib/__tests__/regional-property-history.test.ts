@@ -164,6 +164,30 @@ describe("regional property history", () => {
     )).resolves.toMatchObject({ cv_nzd: 630_000, land_area_sqm: 3_435 });
   });
 
+  it("retries Whakatane by exact address text when the point misses the rating polygon", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.searchParams.has("geometry")) {
+        return new Response(JSON.stringify({ features: [] }), { status: 200 });
+      }
+      expect(url.searchParams.get("where")).toBe("UPPER(Location) LIKE '1140 BRAEMAR ROAD%'");
+      return new Response(JSON.stringify({ features: [{ attributes: {
+        Location: "1140 BRAEMAR ROAD Rotoma",
+        CapitalValue: 630_000,
+        SurveyArea: 3_435,
+      } }] }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchRegionalPropertyHistory(
+      "whakatane",
+      "1140 Braemar Rd Rotoma",
+      -38.0158,
+      176.7190,
+    )).resolves.toMatchObject({ cv_nzd: 630_000, land_area_sqm: 3_435 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("does not attach a neighbouring valuation when the exact number is absent", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       features: [{ attributes: { Location: "1140 BRAEMAR ROAD Rotoma", CapitalValue: 630_000 } }],

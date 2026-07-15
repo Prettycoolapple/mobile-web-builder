@@ -335,10 +335,10 @@ async function tryHomesGateway(address: string, formattedAddress: string): Promi
  */
 export function extractHashUrlsFromMapPage(html: string, addressNeedle: string): string[] {
   const found: string[] = [];
-  // Match /address/auckland/{suburb}/{address-slug}/{hash}
+  // Match /address/{region}/{suburb}/{address-slug}/{hash}
   // Hash: 3-12 lowercase alphanumeric chars with no hyphens (distinguishes it
   // from the address slug which always contains at least one hyphen).
-  const re = /\/address\/auckland\/[a-z0-9-]+\/[a-z0-9][a-z0-9-]+\/([a-z0-9]{3,12})(?=[^a-z0-9/]|$)/gi;
+  const re = /\/address\/[a-z0-9-]+\/[a-z0-9-]+\/[a-z0-9][a-z0-9-]+\/([a-z0-9]{3,12})(?=[^a-z0-9/]|$)/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(html)) !== null) {
     const path = m[0];
@@ -349,7 +349,7 @@ export function extractHashUrlsFromMapPage(html: string, addressNeedle: string):
 
   // homes-app-state often stores canonical property URLs without the
   // leading /address segment, e.g. "/auckland/orakei/38-te-arawa-street/yPZ5e".
-  const shortRe = /\/auckland\/[a-z0-9-]+\/[a-z0-9][a-z0-9-]+\/([a-z0-9]{3,12})(?=[^a-z0-9/]|$)/gi;
+  const shortRe = /\/[a-z0-9-]+\/[a-z0-9-]+\/[a-z0-9][a-z0-9-]+\/([a-z0-9]{3,12})(?=[^a-z0-9/]|$)/gi;
   while ((m = shortRe.exec(html)) !== null) {
     const path = m[0];
     if (addressLineAppearsInText(addressNeedle, path)) {
@@ -407,7 +407,11 @@ export function buildHomesPropertyUrls(address: string, suburb: string, formatte
     return [...new Set(v)].filter((x) => !unusableLocaleSlug(x));
   };
 
-  const parts = address.trim().split(/\s+/);
+  const formattedParts = formattedAddress.split(",").map((part) => part.trim()).filter(Boolean);
+  const streetLine = /^\d+[a-z]?$/i.test(formattedParts[0] ?? "") && formattedParts[1]
+    ? `${formattedParts[0]} ${formattedParts[1]}`
+    : formattedParts[0] || address;
+  const parts = streetLine.trim().split(/\s+/);
   const numberPart = parts[0].replace(/[^\w]/g, "").toLowerCase();
   const segSuburbSlug = localityVariants(formattedAddress.split(",")[1]?.trim() ?? "");
 
@@ -426,14 +430,47 @@ export function buildHomesPropertyUrls(address: string, suburb: string, formatte
       ? slugify(parts.slice(1, streetTypeIndex + 1).join(" "))
       : slugify(parts.slice(1, 3).join(" "));
   const addressSlug = `${numberPart}-${streetNameSlug}`;
+  const addressText = `${address} ${formattedAddress}`
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  const regionMatchers: Array<[RegExp, string]> = [
+    [/\bnorthland\b/, "northland"],
+    [/\bauckland\b/, "auckland"],
+    [/\bwaikato\b/, "waikato"],
+    [/\b(?:bay of plenty|bop)\b/, "bay-of-plenty"],
+    [/\bgisborne\b/, "gisborne"],
+    [/\bhawke'?s bay\b/, "hawkes-bay"],
+    [/\btaranaki\b/, "taranaki"],
+    [/\bmanawatu[- ]w(?:anganui|hanganui)\b/, "manawatu-whanganui"],
+    [/\bwellington\b/, "wellington"],
+    [/\btasman\b/, "tasman"],
+    [/\bnelson\b/, "nelson"],
+    [/\bmarlborough\b/, "marlborough"],
+    [/\bwest coast\b/, "west-coast"],
+    [/\bcanterbury\b/, "canterbury"],
+    [/\botago\b/, "otago"],
+    [/\bsouthland\b/, "southland"],
+  ];
+  const inferredRegion = /\b(rotoma|whakatane|rotorua)\b/.test(addressText) ? "bay-of-plenty" : null;
+  const fallbackRegion = formattedAddress
+    .split(",")
+    .slice(1)
+    .map((part) => slugify(part.replace(/\b\d{4}\b/g, "")))
+    .filter((part) => part && part !== "new-zealand")
+    .at(-1);
+  const regionSlug = regionMatchers.find(([pattern]) => pattern.test(addressText))?.[1]
+    ?? inferredRegion
+    ?? fallbackRegion;
+  if (!regionSlug) return [];
 
   for (const sub of dedup.slice(0, HOMES_SCRAPING_MAX_URL_VARIANTS)) {
-    urls.push(`https://homes.co.nz/address/auckland/${sub}/${addressSlug}`);
+    urls.push(`https://homes.co.nz/address/${regionSlug}/${sub}/${addressSlug}`);
   }
 
   if (numberPart && streetTypeIndex > 1) {
     for (const sub of dedup.slice(0, HOMES_SCRAPING_MAX_URL_VARIANTS)) {
-      urls.push(`https://homes.co.nz/map/auckland/${sub}/${streetNameSlug}/${numberPart}`);
+      urls.push(`https://homes.co.nz/map/${regionSlug}/${sub}/${streetNameSlug}/${numberPart}`);
     }
   }
   return urls;

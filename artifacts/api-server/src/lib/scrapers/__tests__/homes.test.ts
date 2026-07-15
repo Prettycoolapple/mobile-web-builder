@@ -222,4 +222,15 @@ describe("buildHomesPropertyUrls", () => {
     expect(urls).toContain("https://homes.co.nz/address/auckland/orakei/38-te-arawa-street");
     expect(urls).not.toContain("https://homes.co.nz/address/auckland/orakei/38-te-arawa");
   });
+
+  it("uses the Bay of Plenty region instead of Auckland for Rotoma", () => {
+    const urls = buildHomesPropertyUrls(
+      "1140 Braemar Rd Rotoma",
+      "Rotoma",
+      "1140 Braemar Road, Rotomā, Whakatāne District, Bay of Plenty, New Zealand",
+    );
+
+    expect(urls).toContain("https://homes.co.nz/address/bay-of-plenty/rotoma/1140-braemar-road");
+    expect(urls.some((url) => url.includes("/auckland/"))).toBe(false);
+  });
 });

@@ -757,7 +757,7 @@ export async function runPropertyPipeline(
   const interestRatePromise = assessInterestRateOutlook().catch(() => "stable" as const);
   const useBrowserScrapers = browserScrapersEnabled();
   if (!useBrowserScrapers) {
-    logger.info("Browser-backed property scrapers disabled for this runtime; using direct APIs only");
+    logger.info("Browser automation disabled for this runtime; keeping direct APIs and ScrapingBee HTTP scrapers enabled");
   }
   const refreshRegionalPlanning =
     !!planningProvider &&
@@ -787,8 +787,12 @@ export async function runPropertyPipeline(
     timed("contour",          () => cr ? Promise.resolve(cr.contour)          : fetchTerrainForReport(lat, lng, linzParcelData?.bbox ?? null, { landAreaSqm: linzParcelData?.area_sqm ?? null }, address), timing),
     timed("property_history", () => cr ? Promise.resolve(cr.property_history) : fetchPropertyHistoryForReport(address, lat, lng, linzParcelData?.area_sqm ?? null),              timing),
     timed("infrastructure",   () => cr && !refreshRegionalPlanning ? Promise.resolve(cr.infrastructure)   : fetchInfrastructureForReport(lat, lng, linzParcelData?.bbox ?? null, linzParcelData?.parcel_id ?? null, { landAreaSqm: linzParcelData?.area_sqm ?? null }, address), timing),
-    timed("hougarden",        () => cr ? Promise.resolve(cr.hougarden)        : (useBrowserScrapers ? withBrowserSlot(() => scrapeHougarden(lat, lng, address)) : Promise.resolve(null)), timing),
-    timed("oneroof",          () => cr ? Promise.resolve(cr.oneroof)          : (useBrowserScrapers ? withBrowserSlot(() => scrapeOneRoof(address)) : Promise.resolve(null)), timing),
+    timed("hougarden",        () => cr ? Promise.resolve(cr.hougarden)        : (useBrowserScrapers
+      ? withBrowserSlot(() => scrapeHougarden(lat, lng, address))
+      : scrapeHougarden(lat, lng, address, { allowBrowserFallback: false })), timing),
+    timed("oneroof",          () => cr ? Promise.resolve(cr.oneroof)          : (useBrowserScrapers
+      ? withBrowserSlot(() => scrapeOneRoof(address))
+      : scrapeOneRoof(address, { allowBrowserFallback: false })), timing),
     timed("propertyvalue",    () => cr ? Promise.resolve(cr.propertyValue)    : scrapePropertyValue(address, geocode!.formatted ?? address),                  timing),
     timed("qv",               () => cr ? Promise.resolve(cr.qv)               : (useBrowserScrapers ? withBrowserSlot(() => scrapeQV(address)) : Promise.resolve(null)), timing),
     timed("homes",            () => cr ? Promise.resolve(cr.homes)            : (useBrowserScrapers

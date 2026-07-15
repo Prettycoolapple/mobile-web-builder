@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 import { logger } from "../logger";
-import { launchBrowser, newStealthPage, randomDelay, logScrapeAttempt, isVercelServerless } from "./browser";
+import { launchBrowser, newStealthPage, randomDelay, logScrapeAttempt, isVercelServerless, hasRemoteBrowserEndpoint } from "./browser";
 import { fetchWithScrapingBee } from "./scrapingbee";
 import type { Overlay } from "../auckland-council";
 import { mapNZContour } from "./qv";
@@ -173,7 +173,14 @@ function extractDataFromText(pageText: string): Partial<HougardenData> {
 }
 
 function hasUsefulData(data: HougardenData | Partial<HougardenData>): boolean {
-  return !!(data.zone_code || (data.overlays && data.overlays.length > 0) || data.cv_nzd || data.land_area_sqm);
+  return !!(
+    data.zone_code ||
+    (data.overlays && data.overlays.length > 0) ||
+    data.cv_nzd ||
+    data.land_area_sqm ||
+    data.floor_area_sqm ||
+    data.build_year
+  );
 }
 
 const PLAYWRIGHT_TIMEOUT_MS = 16000;
@@ -231,47 +238,62 @@ async function scrapeHougardenViaBee(address: string): Promise<HougardenData | n
   return { ...emptyHougardenData(), ...extracted, scraped_at: new Date().toISOString() };
 }
 
-export async function scrapeHougarden(lat: number, lng: number, address: string): Promise<HougardenData> {
-  if (isVercelServerless()) {
+export async function scrapeHougarden(
+  lat: number,
+  lng: number,
+  address: string,
+  options: { allowBrowserFallback?: boolean } = {},
+): Promise<HougardenData> {
+  const allowBrowserFallback = options.allowBrowserFallback ?? true;
+  const beeFirst = isVercelServerless() || !allowBrowserFallback;
+  let scrapingBeeAttempted = false;
+
+  if (beeFirst) {
+    scrapingBeeAttempted = true;
     try {
-      const beeFirst = await scrapeHougardenViaBee(address);
-      if (beeFirst && hasUsefulData(beeFirst)) {
+      const beeResult = await scrapeHougardenViaBee(address);
+      if (beeResult && hasUsefulData(beeResult)) {
         logScrapeAttempt(
           "Hougarden",
           "scrapingbee",
           true,
-          `zone=${beeFirst.zone_code}, overlays=${beeFirst.overlays.length} (Vercel: Playwright unavailable)`,
+          `zone=${beeResult.zone_code}, overlays=${beeResult.overlays.length}`,
         );
-        return beeFirst;
+        return beeResult;
       }
-      logScrapeAttempt("Hougarden", "scrapingbee", false, "no useful data on Vercel — trying Playwright path anyway");
+      logScrapeAttempt("Hougarden", "scrapingbee", false, "no useful data");
     } catch (err) {
       logScrapeAttempt("Hougarden", "scrapingbee", false, String(err));
     }
   }
 
-  try {
-    const result = await Promise.race([
-      scrapeHougardenPlaywright(lat, lng, address),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Playwright timeout")), PLAYWRIGHT_TIMEOUT_MS)),
-    ]);
-    if (hasUsefulData(result)) {
-      logScrapeAttempt("Hougarden", "stealth-playwright", true, `zone=${result.zone_code}, overlays=${result.overlays.length}`);
-      return result;
+  const canUseBrowser = allowBrowserFallback && (!isVercelServerless() || hasRemoteBrowserEndpoint());
+  if (canUseBrowser) {
+    try {
+      const result = await Promise.race([
+        scrapeHougardenPlaywright(lat, lng, address),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Playwright timeout")), PLAYWRIGHT_TIMEOUT_MS)),
+      ]);
+      if (hasUsefulData(result)) {
+        logScrapeAttempt("Hougarden", "stealth-playwright", true, `zone=${result.zone_code}, overlays=${result.overlays.length}`);
+        return result;
+      }
+      logScrapeAttempt("Hougarden", "stealth-playwright", false, "no useful data extracted — trying ScrapingBee");
+    } catch (err) {
+      logScrapeAttempt("Hougarden", "stealth-playwright", false, String(err));
     }
-    logScrapeAttempt("Hougarden", "stealth-playwright", false, "no useful data extracted — trying ScrapingBee");
-  } catch (err) {
-    logScrapeAttempt("Hougarden", "stealth-playwright", false, String(err));
   }
 
-  try {
-    const result = await scrapeHougardenViaBee(address);
-    if (result) {
-      logScrapeAttempt("Hougarden", "scrapingbee", true, `zone=${result.zone_code}, overlays=${result.overlays.length}`);
-      return result;
+  if (!scrapingBeeAttempted) {
+    try {
+      const result = await scrapeHougardenViaBee(address);
+      if (result) {
+        logScrapeAttempt("Hougarden", "scrapingbee", true, `zone=${result.zone_code}, overlays=${result.overlays.length}`);
+        return result;
+      }
+    } catch (err) {
+      logScrapeAttempt("Hougarden", "scrapingbee", false, String(err));
     }
-  } catch (err) {
-    logScrapeAttempt("Hougarden", "scrapingbee", false, String(err));
   }
 
   logger.warn("Hougarden: all attempts failed — returning empty data");

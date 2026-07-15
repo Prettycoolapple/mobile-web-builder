@@ -583,7 +583,77 @@ export function applyOverviewSnapshot(
   merged: import("../lib/scrapers/merge").MergedPropertyData | null | undefined,
   resolvedAddress: string,
 ): void {
-  if (!merged) return;
+  if (!merged) {
+    const unavailableSnapshot: Record<string, unknown> = {
+      address: resolvedAddress,
+      cv: null,
+      cv_nzd: null,
+      cv_year: null,
+      landArea: null,
+      land_area_sqm: null,
+      floorArea: null,
+      floor_area_sqm: null,
+      buildYear: null,
+      build_year: null,
+      build_year_range: null,
+      propertyType: null,
+      siteStatus: "unknown",
+      siteStatusLabel: siteStatusLabel("unknown"),
+      bedrooms: null,
+      bathrooms: null,
+      zone: null,
+      zone_code: null,
+      titleType: null,
+      titleResolutionSource: "unknown",
+      typology: "unknown",
+      typologyConfidence: "unknown",
+      titleConfidence: "unknown",
+      subdivisionEligible: null,
+      subdivisionRejectReason: null,
+      listingPrice: null,
+      listing_price_nzd: null,
+      isOnMarket: false,
+      data_sources: {},
+      discrepancies: [],
+    };
+    parsed.property_overview_snapshot = unavailableSnapshot;
+
+    const existingOverview = (parsed.propertyOverview as Record<string, unknown> | undefined) ?? {};
+    parsed.propertyOverview = {
+      ...existingOverview,
+      address: resolvedAddress,
+      cv: null,
+      cv_nzd: null,
+      cv_year: null,
+      landArea: null,
+      land_area_sqm: null,
+      floorArea: null,
+      floor_area_sqm: null,
+      buildYear: null,
+      build_year: null,
+      build_year_range: null,
+      propertyType: null,
+      siteStatus: "unknown",
+      siteStatusLabel: siteStatusLabel("unknown"),
+      bedrooms: null,
+      bathrooms: null,
+      zone: null,
+      zone_code: null,
+      titleType: null,
+      titleResolutionSource: "unknown",
+      typology: "unknown",
+      typologyConfidence: "unknown",
+      titleConfidence: "unknown",
+      subdivisionEligible: null,
+      subdivisionRejectReason: null,
+      listingPrice: null,
+      listing_price_nzd: null,
+      isOnMarket: false,
+      data_sources: {},
+      discrepancies: [],
+    };
+    return;
+  }
   const fmt = (n: number) => `$${n.toLocaleString("en-NZ")}`;
   const siteCondition = classifySiteCondition(merged);
   const snapshot: Record<string, unknown> = {

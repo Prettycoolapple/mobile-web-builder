@@ -127,6 +127,46 @@ function streetKey(s: string): string | null {
   return tokens.slice(numberIdx, typeIdx + 1).join(" ");
 }
 
+const NON_DISTINGUISHING_LOCALITY_TOKENS = new Set([
+  "city",
+  "district",
+  "region",
+  "bay",
+  "of",
+  "plenty",
+  "nz",
+  "newzealand",
+]);
+
+function localityTailTokens(s: string): Set<string> {
+  const street = streetKey(s);
+  if (!street) return new Set();
+  const allTokens = tokenizeRough(s);
+  const streetTokens = tokenizeRough(street);
+  let streetStart = -1;
+  for (let i = 0; i <= allTokens.length - streetTokens.length; i++) {
+    if (streetTokens.every((token, offset) => allTokens[i + offset] === token)) {
+      streetStart = i;
+      break;
+    }
+  }
+  if (streetStart < 0) return new Set();
+  return new Set(
+    allTokens
+      .slice(streetStart + streetTokens.length)
+      .filter((token) => !NON_DISTINGUISHING_LOCALITY_TOKENS.has(token) && !/^\d{4}$/.test(token)),
+  );
+}
+
+function localityTailIsParentOrChild(a: string, b: string): boolean {
+  const aTail = localityTailTokens(a);
+  const bTail = localityTailTokens(b);
+  if (aTail.size === 0 || bTail.size === 0) return false;
+  const isSubset = (subset: Set<string>, superset: Set<string>) =>
+    [...subset].every((token) => superset.has(token));
+  return isSubset(aTail, bTail) || isSubset(bTail, aTail);
+}
+
 export function isFullStreetAddressForAnalysis(s: string): boolean {
   return streetKey(s) != null;
 }
@@ -228,10 +268,12 @@ function sameAddressCandidate(a: AddressOption, b: AddressOption): boolean {
   const streetA = streetKey(a.formatted);
   const streetB = streetKey(b.formatted);
   if (!streetA || streetA !== streetB) return false;
+  if (leadingStreetNumber(a.formatted) !== leadingStreetNumber(b.formatted)) return false;
 
   const distance = distanceMetres(a, b);
   if (distance != null) return distance <= SAME_ADDRESS_DISTANCE_M;
 
+  if (localityTailIsParentOrChild(a.formatted, b.formatted)) return true;
   return diceSimilarityTokens(a.formatted, b.formatted) >= 0.78;
 }
 

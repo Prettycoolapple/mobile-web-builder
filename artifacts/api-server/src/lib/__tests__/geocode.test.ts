@@ -129,7 +129,43 @@ describe("geocode address selection", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("does not fall through to a nearby Braemar Road address when the council has no exact street number", async () => {
+  it("falls back to Google for a comma-less rural address when both council probes miss", async () => {
+    process.env.GOOGLE_MAPS_API_KEY = "test-key";
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("gis.whakatane.govt.nz")) {
+        const where = new URL(url).searchParams.get("where") ?? "";
+        expect(where).toContain("1140 BRAEMAR ROAD");
+        expect(where).not.toContain("ROTOMA");
+        return new Response(JSON.stringify({ features: [] }), { status: 200 });
+      }
+      if (url.includes("gis.rdc.govt.nz")) {
+        return new Response(JSON.stringify({ features: [] }), { status: 200 });
+      }
+      if (url.includes("maps.googleapis.com")) {
+        return new Response(JSON.stringify({
+          status: "OK",
+          results: [{
+            formatted_address: "1140 Braemar Road, Rotomā, Whakatāne District, Bay of Plenty, New Zealand",
+            geometry: { location: { lat: -38.0155546, lng: 176.7193241 } },
+            address_components: [{ long_name: "1140", short_name: "1140", types: ["street_number"] }],
+          }],
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(tryGeocodeAddress("1140 Braemar Rd Rotoma")).resolves.toMatchObject({
+      formatted: "1140 Braemar Road, Rotomā, Whakatāne District, Bay of Plenty, New Zealand",
+      lat: -38.0155546,
+      lng: 176.7193241,
+    });
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("gis.whakatane.govt.nz"))).toBe(true);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("maps.googleapis.com"))).toBe(true);
+  });
+
+  it("does not accept a nearby Braemar Road address from fallback geocoders", async () => {
     process.env.GOOGLE_MAPS_API_KEY = "test-key";
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -151,8 +187,7 @@ describe("geocode address selection", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(tryGeocodeAddress("1138 Braemar Road, Rotoma 3192, New Zealand")).resolves.toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("maps.googleapis.com"))).toBe(false);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("maps.googleapis.com"))).toBe(true);
   });
 
   it("resolves comma-separated Whakatane state-highway addresses through the exact council point", async () => {

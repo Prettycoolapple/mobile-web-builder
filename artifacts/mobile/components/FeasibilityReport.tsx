@@ -634,6 +634,37 @@ function buildInvestmentVerdict(
   }
 }
 
+function scoreUnavailableVerdict(reason: string | null | undefined, locale: string): string {
+  const isZh = locale === "zh";
+  switch (reason) {
+    case "missing_land_area_sqm":
+      return isZh
+        ? "由于尚未确认土地面积，暂时无法计算开发评分。下方已确认的房产与规划资料仍可供参考。"
+        : "Development scores aren't available because the land area could not be confirmed. The verified property and planning facts below are still available.";
+    case "missing_zone":
+      return isZh
+        ? "由于尚未确认规划分区，暂时无法计算开发评分。下方已确认的房产资料仍可供参考。"
+        : "Development scores aren't available because the planning zone could not be confirmed. The verified property facts below are still available.";
+    case "unit_or_apartment_typology":
+      return isZh
+        ? "该房产属于单元房或公寓，系统不会将其作为独立土地分割项目计算开发评分。"
+        : "Development scores aren't produced for unit or apartment properties because they are not assessed as standalone subdivision sites.";
+    case "unit_or_crosslease_signal":
+      return isZh
+        ? "该房产的单元房或交叉租赁产权信号不符合独立土地分割评分模型，因此未生成开发评分。"
+        : "Development scores aren't produced because unit or cross-lease title signals do not fit the standalone subdivision model.";
+    case "no_comparable_sales":
+    case "missing_comparable_sales":
+      return isZh
+        ? "由于附近没有足够的近期可比成交来可靠测算回报，暂时无法生成开发评分。"
+        : "Development scores aren't available because there are not enough recent comparable sales nearby to model the return reliably.";
+    default:
+      return isZh
+        ? "由于缺少计算所需的已核实房产或规划资料，暂时无法生成开发评分。下方已确认的资料仍可供参考。"
+        : "Development scores aren't available because one or more required property or planning inputs could not be verified. The confirmed facts below are still available.";
+  }
+}
+
 function ScoreSummaryRow({ report, colors, hideOverall }: { report: Report; colors: ReturnType<typeof useColors>; hideOverall?: boolean }) {
   const { t, locale } = useT();
   const raw = report.scores ?? {};
@@ -649,16 +680,12 @@ function ScoreSummaryRow({ report, colors, hideOverall }: { report: Report; colo
   const overallColor = scoreColor(composite, colors);
   const overallDisplay = formatCompositeScoreForDisplay(composite);
   const showReasons = ease_reasons.length > 0 || roi_reasons.length > 0;
-  // Real scores are on a 0.5–5.0 scale, so all-zero means the development score
-  // was suppressed (e.g. not enough recent comparable sales to model returns) —
-  // NOT a genuinely "low" property. In that case show an honest explanation
-  // rather than buildInvestmentVerdict's "planning & title" fallback (which
-  // fires whenever ease reads as 0 and misleads on the real reason).
-  const scoresUnavailable = ease === 0 && cost === 0 && roi === 0;
+  // Real scores are on a 0.5–5.0 scale, so an explicit backend reason or the
+  // legacy all-zero shape means the score was suppressed, not genuinely low.
+  const unavailableReason = report.score_unavailable_reason;
+  const scoresUnavailable = unavailableReason != null || (ease === 0 && cost === 0 && roi === 0);
   const verdict = scoresUnavailable
-    ? locale === "zh"
-      ? "暂时无法为该房产生成开发评分——通常是因为附近缺少足够的近期可比成交来测算回报。以下的房产与规划事实数据已确认。"
-      : "Development scores aren't available for this property yet — usually because there aren't enough recent comparable sales nearby to model the return. The property and planning facts below are confirmed."
+    ? scoreUnavailableVerdict(unavailableReason, locale)
     : buildInvestmentVerdict(ease, cost, roi, composite, locale, {
         ease: ease_reasons,
         cost: cost_reasons,

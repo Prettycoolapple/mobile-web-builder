@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 import { logger } from "../logger";
-import { launchBrowser, newStealthPage, randomDelay, logScrapeAttempt, isVercelServerless } from "./browser";
+import { launchBrowser, newStealthPage, randomDelay, logScrapeAttempt, isVercelServerless, hasRemoteBrowserEndpoint } from "./browser";
 import { fetchWithScrapingBee } from "./scrapingbee";
 
 export interface ListingResult {
@@ -538,7 +538,15 @@ function extractDataFromText(pageText: string): Partial<OneRoofData> {
 }
 
 function hasUsefulData(data: OneRoofData | Partial<OneRoofData>): boolean {
-  return !!(data.cv_nzd || data.last_sale_price || data.floor_area_sqm || data.tenureText);
+  return !!(
+    data.cv_nzd ||
+    data.last_sale_price ||
+    data.floor_area_sqm ||
+    data.build_year ||
+    data.bedrooms ||
+    data.bathrooms ||
+    data.tenureText
+  );
 }
 
 const PLAYWRIGHT_TIMEOUT_MS = 16000;
@@ -634,47 +642,60 @@ async function scrapeOneRoofViaBee(address: string): Promise<OneRoofData | null>
   return hasUsefulData(extracted) || extracted.photo_urls.length > 0 ? extracted : null;
 }
 
-export async function scrapeOneRoof(address: string): Promise<OneRoofData> {
-  if (isVercelServerless()) {
+export async function scrapeOneRoof(
+  address: string,
+  options: { allowBrowserFallback?: boolean } = {},
+): Promise<OneRoofData> {
+  const allowBrowserFallback = options.allowBrowserFallback ?? true;
+  const beeFirst = isVercelServerless() || !allowBrowserFallback;
+  let scrapingBeeAttempted = false;
+
+  if (beeFirst) {
+    scrapingBeeAttempted = true;
     try {
-      const beeFirst = await scrapeOneRoofViaBee(address);
-      if (beeFirst && (hasUsefulData(beeFirst) || beeFirst.photo_urls.length > 0)) {
+      const beeResult = await scrapeOneRoofViaBee(address);
+      if (beeResult && (hasUsefulData(beeResult) || beeResult.photo_urls.length > 0)) {
         logScrapeAttempt(
           "OneRoof",
           "scrapingbee",
           true,
-          `cv=${beeFirst.cv_nzd}, comparables=${beeFirst.comparables.length} (Vercel: Playwright unavailable)`,
+          `cv=${beeResult.cv_nzd}, comparables=${beeResult.comparables.length}`,
         );
-        return beeFirst;
+        return beeResult;
       }
-      logScrapeAttempt("OneRoof", "scrapingbee", false, "no useful data on Vercel — trying Playwright path anyway");
+      logScrapeAttempt("OneRoof", "scrapingbee", false, "no useful data");
     } catch (err) {
       logScrapeAttempt("OneRoof", "scrapingbee", false, String(err));
     }
   }
 
-  try {
-    const result = await Promise.race([
-      scrapeOneRoofPlaywright(address),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Playwright timeout")), PLAYWRIGHT_TIMEOUT_MS)),
-    ]);
-    if (hasUsefulData(result) || result.photo_urls.length > 0) {
-      logScrapeAttempt("OneRoof", "stealth-playwright", true, `cv=${result.cv_nzd}, photos=${result.photo_urls.length}, comparables=${result.comparables.length}`);
-      return result;
+  const canUseBrowser = allowBrowserFallback && (!isVercelServerless() || hasRemoteBrowserEndpoint());
+  if (canUseBrowser) {
+    try {
+      const result = await Promise.race([
+        scrapeOneRoofPlaywright(address),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Playwright timeout")), PLAYWRIGHT_TIMEOUT_MS)),
+      ]);
+      if (hasUsefulData(result) || result.photo_urls.length > 0) {
+        logScrapeAttempt("OneRoof", "stealth-playwright", true, `cv=${result.cv_nzd}, photos=${result.photo_urls.length}, comparables=${result.comparables.length}`);
+        return result;
+      }
+      logScrapeAttempt("OneRoof", "stealth-playwright", false, "no useful data — trying ScrapingBee");
+    } catch (err) {
+      logScrapeAttempt("OneRoof", "stealth-playwright", false, String(err));
     }
-    logScrapeAttempt("OneRoof", "stealth-playwright", false, "no useful data — trying ScrapingBee");
-  } catch (err) {
-    logScrapeAttempt("OneRoof", "stealth-playwright", false, String(err));
   }
 
-  try {
-    const result = await scrapeOneRoofViaBee(address);
-    if (result) {
-      logScrapeAttempt("OneRoof", "scrapingbee", true, `cv=${result.cv_nzd}, comparables=${result.comparables.length}`);
-      return result;
+  if (!scrapingBeeAttempted) {
+    try {
+      const result = await scrapeOneRoofViaBee(address);
+      if (result) {
+        logScrapeAttempt("OneRoof", "scrapingbee", true, `cv=${result.cv_nzd}, comparables=${result.comparables.length}`);
+        return result;
+      }
+    } catch (err) {
+      logScrapeAttempt("OneRoof", "scrapingbee", false, String(err));
     }
-  } catch (err) {
-    logScrapeAttempt("OneRoof", "scrapingbee", false, String(err));
   }
 
   logger.warn("OneRoof: all attempts failed — returning empty data");

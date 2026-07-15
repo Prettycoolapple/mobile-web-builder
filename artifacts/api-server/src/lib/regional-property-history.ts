@@ -163,6 +163,33 @@ function streetAddressPart(value: string): string {
   return value.split(",")[0]?.trim() ?? value.trim();
 }
 
+function whakataneStreetAddressPrefix(address: string): string | null {
+  const parts = address.split(",").map((part) => part.trim()).filter(Boolean);
+  let streetLine = /^\d+[a-z]?$/i.test(parts[0] ?? "") && parts[1]
+    ? `${parts[0]} ${parts[1]}`
+    : parts[0] ?? "";
+
+  if (parts.length === 1) {
+    const stateHighway = streetLine.match(/^(\d+[a-z]?\s+(?:STATE\s+HIGHWAY|SH)\s*\d+[a-z]?)(?:\s+|$)/i);
+    const typedStreet = streetLine.match(/^(\d+[a-z]?\s+.+?\s+(?:ROAD|RD|STREET|ST|AVENUE|AVE|DRIVE|DR|PLACE|PL|LANE|LN|CRESCENT|CRES|TERRACE|TCE|WAY|CLOSE|PARADE|HIGHWAY|HWY|MOTORWAY))(?:\s+|$)/i);
+    streetLine = stateHighway?.[1] ?? typedStreet?.[1] ?? streetLine;
+  }
+
+  const normalized = normaliseStreetAddress(streetLine);
+  return /^\d+[a-z]?\s+/i.test(normalized) ? normalized.toUpperCase() : null;
+}
+
+async function queryWhakataneProperty(url: URL): Promise<ArcGisFeature[]> {
+  const response = await fetch(url.toString(), { signal: AbortSignal.timeout(9000) });
+  if (!response.ok) throw new Error(`Whakatane property lookup HTTP ${response.status}`);
+  const data = await response.json() as {
+    features?: ArcGisFeature[];
+    error?: { message?: string };
+  };
+  if (data.error) throw new Error(`Whakatane property lookup error: ${data.error.message ?? "unknown"}`);
+  return data.features ?? [];
+}
+
 function exactSouthlandAddressFeature(address: string, features: ArcGisFeature[]): ArcGisFeature | null {
   const requestedStreet = normaliseStreetAddress(streetAddressPart(address));
   if (!/^\d+[a-z]?\s+/i.test(requestedStreet)) return null;
@@ -241,15 +268,23 @@ export async function fetchRegionalPropertyHistory(
   url.searchParams.set("outFields", "Location,CapitalValue,LandValue,SurveyArea,CalculatedArea,Dwellings,LegalDescription,ValuationNumber");
   url.searchParams.set("returnGeometry", "false");
 
-  const response = await fetch(url.toString(), { signal: AbortSignal.timeout(9000) });
-  if (!response.ok) throw new Error(`Whakatane property lookup HTTP ${response.status}`);
-  const data = await response.json() as {
-    features?: ArcGisFeature[];
-    error?: { message?: string };
-  };
-  if (data.error) throw new Error(`Whakatane property lookup error: ${data.error.message ?? "unknown"}`);
+  const pointFeatures = await queryWhakataneProperty(url);
+  let feature = exactAddressFeature(address, pointFeatures);
 
-  const feature = exactAddressFeature(address, data.features ?? []);
+  // A valid rural address point can sit just outside a large or irregular
+  // rating polygon. Retry by the council's Location attribute so CV and survey
+  // area still resolve without ever accepting a neighbouring street number.
+  if (!feature) {
+    const streetPrefix = whakataneStreetAddressPrefix(address);
+    if (streetPrefix) {
+      const addressUrl = new URL(`${WHAKATANE_PROPERTY}/query`);
+      addressUrl.searchParams.set("f", "json");
+      addressUrl.searchParams.set("where", `UPPER(Location) LIKE '${sqlString(streetPrefix)}%'`);
+      addressUrl.searchParams.set("outFields", "Location,CapitalValue,LandValue,SurveyArea,CalculatedArea,Dwellings,LegalDescription,ValuationNumber");
+      addressUrl.searchParams.set("returnGeometry", "false");
+      feature = exactAddressFeature(address, await queryWhakataneProperty(addressUrl));
+    }
+  }
   const attrs = feature?.attributes;
   if (!attrs) return emptyPropertyHistory(linzAreaSqm);
 

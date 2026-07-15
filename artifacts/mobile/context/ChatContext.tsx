@@ -457,6 +457,8 @@ export interface FeasibilityReport {
   /** Server-created timestamp for history ordering when available. */
   historyCreatedAt?: string | null;
   scores: Score;
+  /** Machine-readable reason the backend could not produce development scores. */
+  score_unavailable_reason?: string | null;
   propertyOverview?: PropertyOverview;
   /** Deterministic "Land title" insight — present only for cross-lease/stratum titles. */
   titleInsight?: TitleInsight | null;

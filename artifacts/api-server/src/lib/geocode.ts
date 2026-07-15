@@ -80,10 +80,6 @@ function councilAddressMatchText(address: string): string {
     .toLowerCase();
 }
 
-function councilAddressSourceFor(address: string): CouncilAddressSource | undefined {
-  return councilAddressSourcesFor(address)[0];
-}
-
 function councilAddressSourcesFor(address: string): CouncilAddressSource[] {
   const matchText = councilAddressMatchText(address);
   const direct = COUNCIL_ADDRESS_SOURCES.filter((candidate) => candidate.matches.test(matchText));
@@ -102,8 +98,22 @@ const COUNCIL_ADDRESS_SOURCES: CouncilAddressSource[] = [
   {
     serviceUrl: "https://gis.whakatane.govt.nz/arcgis/rest/services/Geocortex/Cadastre/MapServer/1",
     matches: /\b(whakatane|rotoma|onepu|matata|edgecumbe|ohope|taneatua)\b/i,
-    where: ({ number, suffix, road }) =>
-      `HouseNumber = ${number} AND UPPER(Address_ascii) = '${number}${suffix} ${road.replaceAll("'", "''")}'`,
+    where: ({ number, suffix, road }) => {
+      const full = `${number}${suffix} ${road}`.replaceAll("'", "''");
+      const abbreviated = full
+        .replace(/ ROAD$/i, " RD")
+        .replace(/ STREET$/i, " ST")
+        .replace(/ AVENUE$/i, " AVE")
+        .replace(/ DRIVE$/i, " DR")
+        .replace(/ PLACE$/i, " PL")
+        .replace(/ LANE$/i, " LN")
+        .replace(/ CRESCENT$/i, " CRES")
+        .replace(/ TERRACE$/i, " TCE");
+      const addressPredicate = abbreviated === full
+        ? `UPPER(Address_ascii) = '${full}'`
+        : `(UPPER(Address_ascii) = '${full}' OR UPPER(Address_ascii) = '${abbreviated}')`;
+      return `HouseNumber = ${number} AND ${addressPredicate}`;
+    },
     formatted: (attrs) => {
       const address = String(attrs["Address"] ?? "").trim();
       const town = String(attrs["Town"] ?? "").trim();
@@ -128,9 +138,17 @@ const COUNCIL_ADDRESS_SOURCES: CouncilAddressSource[] = [
 
 function parseCouncilStreetAddress(address: string): { number: number; suffix: string; road: string } | null {
   const parts = address.split(",").map((part) => part.trim()).filter(Boolean);
-  const firstLine = /^\d+[a-z]?$/i.test(parts[0] ?? "") && parts[1]
+  let firstLine = /^\d+[a-z]?$/i.test(parts[0] ?? "") && parts[1]
     ? `${parts[0]} ${parts[1]}`
     : parts[0] ?? "";
+  // Rural addresses are often entered without commas (for example
+  // "1140 Braemar Rd Rotoma"). Stop at the street type before parsing so the
+  // locality is not accidentally included in the council road-name clause.
+  if (parts.length === 1) {
+    const stateHighway = firstLine.match(/^(\d+[a-z]?\s+(?:STATE\s+HIGHWAY|SH)\s*\d+[a-z]?)(?:\s+|$)/i);
+    const typedStreet = firstLine.match(/^(\d+[a-z]?\s+.+?\s+(?:ROAD|RD|STREET|ST|AVENUE|AVE|DRIVE|DR|PLACE|PL|LANE|LN|CRESCENT|CRES|TERRACE|TCE|WAY|CLOSE|PARADE|HIGHWAY|HWY|MOTORWAY))(?:\s+|$)/i);
+    firstLine = stateHighway?.[1] ?? typedStreet?.[1] ?? firstLine;
+  }
   const match = firstLine.match(/^(\d+)([a-z]?)\s+(.+)$/i);
   if (!match) return null;
   const road = match[3]!
@@ -185,13 +203,6 @@ async function councilAddressGeocode(address: string): Promise<GeoResult | null>
 
   if (lastError && sources.length === 1) throw lastError;
   return null;
-}
-
-function shouldRequireExactCouncilAddress(address: string): boolean {
-  return Boolean(
-    parseCouncilStreetAddress(address) &&
-    councilAddressSourceFor(address),
-  );
 }
 
 async function nominatimGeocode(address: string): Promise<GeoResult | null> {
@@ -370,7 +381,6 @@ export async function tryGeocodeAddress(address: string): Promise<GeoResult | nu
   try {
     const exactCouncilAddress = await councilAddressGeocode(address);
     if (exactCouncilAddress) return exactCouncilAddress;
-    if (shouldRequireExactCouncilAddress(address)) return null;
   } catch (err) {
     logger.warn({ err, address }, "Council exact-address geocoding failed");
   }
