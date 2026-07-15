@@ -188,6 +188,19 @@ describe("regional property-cache completeness", () => {
       property_history: { cv_nzd: null, land_area_sqm: 2_023 },
     } as never)).toBe(true);
   });
+
+  it("refreshes a legacy row with no stored geocode instead of silently skipping the check", () => {
+    expect(cachedRawNeedsRegionalZoneRefresh({
+      zone: { zone_code: "UNKNOWN" },
+      property_history: { cv_nzd: 250_000, land_area_sqm: 2_023 },
+    } as never)).toBe(true);
+
+    expect(cachedRawNeedsRegionalZoneRefresh({
+      geocode: {},
+      zone: { zone_code: "UNKNOWN" },
+      property_history: { cv_nzd: 250_000, land_area_sqm: 2_023 },
+    } as never)).toBe(true);
+  });
 });
 
 describe("cacheRowFreshness (90-day TTL)", () => {

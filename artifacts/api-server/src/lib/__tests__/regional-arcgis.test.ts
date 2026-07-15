@@ -278,6 +278,68 @@ describe("regional ArcGIS planning fetchers", () => {
     expect(overlays[0]?.detail).toContain("Confirm implications in the local district plan");
   });
 
+  it("returns the Wairarapa Combined District Plan zone for 78 Opaki Road", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/ResourceManagementAndPlanning/Zones/MapServer/4/query")) {
+        return new Response(JSON.stringify({
+          features: [{
+            attributes: {
+              OBJECTID: 5415,
+              ZONE_TYPE: "Residential",
+              SUB_TYPE: " ",
+              NAME: " ",
+              TLA: "MDC",
+              LOCATION: "Masterton",
+            },
+          }],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("/query")) {
+        return new Response(JSON.stringify({ features: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ fields: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchRegionalPlanningZone(jurisdiction("wairarapa"), -40.9382383, 175.6708268);
+
+    expect(result).toMatchObject({
+      zone_code: "Residential",
+      zone_description: expect.stringContaining("Wairarapa Residential Zone"),
+      min_lot_size_sqm: null,
+    });
+    expect(result.zone_description).toContain("Masterton");
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/Zones/MapServer/4/query"))).toBe(true);
+  });
+
+  it("returns the Matamata-Piako Residential Zone for 19 Centennial Avenue, Te Aroha (layer name as zone identity)", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/District_Plan_Zones/FeatureServer/4/query")) {
+        return new Response(JSON.stringify({
+          features: [{
+            attributes: { FID: 1, MSLINK: -214748364, Shape__Area: 54230.4296875, Shape__Length: 1116.7554341422256 },
+          }],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("/query")) {
+        return new Response(JSON.stringify({ features: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ fields: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchRegionalPlanningZone(jurisdiction("matamata-piako"), -37.5352280, 175.7074969);
+
+    expect(result).toMatchObject({
+      zone_code: "MPDC_RESIDENTIAL",
+      zone_description: expect.stringContaining("Residential Zone"),
+      min_lot_size_sqm: null,
+    });
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/District_Plan_Zones/FeatureServer/4/query"))).toBe(true);
+  });
+
   it("exposes smoke targets for configured regional layers", () => {
     const targets = regionalPlanningSmokeTargets();
 
@@ -285,6 +347,10 @@ describe("regional ArcGIS planning fetchers", () => {
     expect(targets.some((target) => target.providerId === "christchurch" && target.label.includes("Heritage"))).toBe(true);
     expect(targets.some((target) => target.providerId === "nelson" && target.label === "Nelson Planning Zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "qldc" && target.kind === "zone")).toBe(true);
+    expect(targets.some((target) => target.providerId === "wairarapa" && target.label === "Wairarapa Residential Zone")).toBe(true);
+    expect(targets.some((target) => target.providerId === "wairarapa" && target.label === "Faultline Hazard Area")).toBe(true);
+    expect(targets.some((target) => target.providerId === "matamata-piako" && target.label === "Residential Zone")).toBe(true);
+    expect(targets.some((target) => target.providerId === "matamata-piako" && target.label === "Flood Hazard Zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "rotorua" && target.kind === "zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "whakatane" && target.kind === "zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "southland" && target.kind === "zone")).toBe(true);

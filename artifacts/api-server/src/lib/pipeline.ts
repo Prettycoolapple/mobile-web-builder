@@ -1747,7 +1747,9 @@ export async function runPropertyPipeline(
   const hasRealComparablePricing = comparablesResult.avg_sale_price > 0 || comparablesResult.avg_price_per_sqm > 0;
   const regionalCvExitFallbackAllowed = planningProvider?.providerId === "rotorua"
     || planningProvider?.providerId === "whakatane"
-    || planningProvider?.providerId === "southland";
+    || planningProvider?.providerId === "southland"
+    || planningProvider?.providerId === "wairarapa"
+    || planningProvider?.providerId === "matamata-piako";
   const fallbackExitSalePrice = !hasRealComparablePricing && regionalCvExitFallbackAllowed
     ? merged.listing_price ?? merged.cv_nzd
     : null;

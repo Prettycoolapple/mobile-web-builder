@@ -4,11 +4,13 @@ export type CostProfileId =
   | "auckland-default"
   | "hamilton-default"
   | "waipa-default"
+  | "matamata-piako-default"
   | "christchurch-default"
   | "canterbury-default"
   | "nelson-default"
   | "whangarei-default"
   | "qldc-default"
+  | "wairarapa-default"
   | "wellington-default"
   | "dunedin-default"
   | "rotorua-default"
@@ -199,11 +201,17 @@ const REGIONAL_COST_OVERRIDES: Partial<Record<PlanningProviderId, DeepPartial<Re
   // Seeded from Auckland by request. This isolated module can be replaced with
   // Waipa-specific build, contribution and rates inputs without changing Auckland.
   waipa: {},
+  // Seeded from Auckland by request. Keep Matamata-Piako-specific build,
+  // contribution and rates inputs isolated here without changing Auckland.
+  "matamata-piako": {},
   qldc: {},
   rotorua: {},
   whakatane: {},
   // Seeded from Auckland by request. Keep Southland-specific changes isolated here.
   southland: {},
+  // Seeded from Auckland by request. Tune Wairarapa build, contribution, and
+  // council-rate assumptions here without changing the Auckland baseline.
+  wairarapa: {},
   // ── Wellington region (Wellington City, Lower/Upper Hutt, Porirua, Kāpiti) ──
   // Seeded from Auckland. Tune to Wellington Water / council DC + GWRC/TA land
   // rates and Wellington build costs here.
@@ -214,11 +222,13 @@ const PROVIDER_PROFILE_META: Record<PlanningProviderId, { id: CostProfileId; lab
   "auckland-legacy": { id: "auckland-default", label: "Auckland default cost profile" },
   hamilton: { id: "hamilton-default", label: "Hamilton default cost profile" },
   waipa: { id: "waipa-default", label: "Waipā default cost profile (Auckland assumptions)" },
+  "matamata-piako": { id: "matamata-piako-default", label: "Matamata-Piako default cost profile (Auckland assumptions)" },
   christchurch: { id: "christchurch-default", label: "Christchurch default cost profile" },
   canterbury: { id: "canterbury-default", label: "Canterbury default cost profile" },
   nelson: { id: "nelson-default", label: "Nelson default cost profile" },
   whangarei: { id: "whangarei-default", label: "Whangarei default cost profile" },
   qldc: { id: "qldc-default", label: "Queenstown Lakes default cost profile" },
+  wairarapa: { id: "wairarapa-default", label: "Wairarapa default cost profile (Auckland assumptions)" },
   wellington: { id: "wellington-default", label: "Wellington region default cost profile" },
   dunedin: { id: "dunedin-default", label: "Dunedin default cost profile" },
   rotorua: { id: "rotorua-default", label: "Rotorua default cost profile" },

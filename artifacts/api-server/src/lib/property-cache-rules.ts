@@ -16,6 +16,13 @@ export function cachedPlanningProviderId(rawData: RawPropertyData): PlanningProv
 }
 
 export function cachedRawNeedsRegionalZoneRefresh(rawData: RawPropertyData): boolean {
+  // A row with no stored geocode predates (or failed to capture) coordinates,
+  // so cachedPlanningProviderId can't compute a fresh provider id and would
+  // silently skip this check forever. Force a refresh rather than trust
+  // whatever legacy zone value (if any) is sitting in the row.
+  if (typeof rawData.geocode?.lat !== "number" || typeof rawData.geocode?.lng !== "number") {
+    return true;
+  }
   const providerId = cachedPlanningProviderId(rawData);
   if (!hasRegionalPlanningZoneLayer(providerId)) return false;
   const zoneCode = rawData.zone?.zone_code?.trim();

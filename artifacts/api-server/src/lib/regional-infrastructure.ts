@@ -71,8 +71,31 @@ const WHAKATANE_STORMWATER =
   "https://gis.whakatane.govt.nz/arcgis/rest/services/ThreeWaters/StormWaterAssets/MapServer";
 const SOUTHLAND_THREE_WATERS =
   "https://gis.southlanddc.govt.nz/server/rest/services/External_ThreeWaters_Layers_v2/MapServer";
+const WAIRARAPA_WATER =
+  "https://gis.mstn.govt.nz/arcgis/rest/services/Services/WaterPublic/MapServer";
+const WAIRARAPA_WASTEWATER =
+  "https://gis.mstn.govt.nz/arcgis/rest/services/Services/SewerPublic/MapServer";
+const WAIRARAPA_STORMWATER =
+  "https://gis.mstn.govt.nz/arcgis/rest/services/Services/StormwaterPublic/MapServer";
+const MPDC_WATER =
+  "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/Water_Line/FeatureServer";
+const MPDC_WASTEWATER =
+  "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/Wastewater_Line/FeatureServer";
+const MPDC_STORMWATER =
+  "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/Stormwater_Line/FeatureServer";
 
 const REGIONAL_INFRASTRUCTURE: Partial<Record<PlanningProviderId, RegionalInfrastructureGroup[]>> = {
+  "matamata-piako": [
+    group("Water Supply", MPDC_WATER, "Matamata-Piako District Council", [
+      [0, "Water main/service line"],
+    ]),
+    group("Wastewater", MPDC_WASTEWATER, "Matamata-Piako District Council", [
+      [0, "Wastewater main/service line"],
+    ]),
+    group("Stormwater", MPDC_STORMWATER, "Matamata-Piako District Council", [
+      [0, "Stormwater main/service line"],
+    ], 1000),
+  ],
   waipa: [
     group("Water Supply", WAIPA_WATER, "Waipā District Council / Waikato OneView", [
       [0, "Water supply pipe"],
@@ -132,6 +155,25 @@ const REGIONAL_INFRASTRUCTURE: Partial<Record<PlanningProviderId, RegionalInfras
       [68, "Stormwater service line"],
       [72, "Stormwater channel"],
       [73, "Stormwater miscellaneous line"],
+    ], 1000),
+  ],
+  wairarapa: [
+    group("Water Supply", WAIRARAPA_WATER, "Masterton / Carterton District Councils (Wairarapa Maps)", [
+      [5, "Masterton water main"],
+      [12, "Carterton water main"],
+      [11, "Carterton water lateral"],
+      [62, "Carterton rider main"],
+    ]),
+    group("Wastewater", WAIRARAPA_WASTEWATER, "Masterton / Carterton District Councils (Wairarapa Maps)", [
+      [4, "Masterton sewer main"],
+      [10, "Carterton sewer main"],
+      [9, "Carterton sewer lateral"],
+    ]),
+    group("Stormwater", WAIRARAPA_STORMWATER, "Masterton / Carterton District Councils (Wairarapa Maps)", [
+      [6, "Masterton stormwater main"],
+      [5, "Masterton watercourse"],
+      [13, "Carterton stormwater main"],
+      [12, "Carterton stormwater lateral"],
     ], 1000),
   ],
   hamilton: [

@@ -9,11 +9,13 @@ export type PlanningProviderId =
   | "auckland-legacy"
   | "hamilton"
   | "waipa"
+  | "matamata-piako"
   | "christchurch"
   | "canterbury"
   | "nelson"
   | "whangarei"
   | "qldc"
+  | "wairarapa"
   | "wellington"
   | "dunedin"
   | "rotorua"
@@ -156,14 +158,24 @@ function provider(
 const AUCKLAND_BOUNDS: Bounds = { minLat: -37.35, maxLat: -36.05, minLng: 174.0, maxLng: 175.55 };
 const HAMILTON_BOUNDS: Bounds = { minLat: -37.95, maxLat: -37.62, minLng: 175.08, maxLng: 175.43 };
 const WAIPA_BOUNDS: Bounds = { minLat: -38.35, maxLat: -37.70, minLng: 174.90, maxLng: 175.80 };
+// Matamata-Piako District: Te Aroha, Matamata, Morrinsville and the rural
+// strip between them. Overlaps Waipa's north-east corner around the
+// Matamata/Cambridge rural boundary, so this provider is registered before
+// Waipa to claim that ambiguous strip by coordinate; Cambridge and Te Awamutu
+// sit outside this box entirely and are unaffected by registration order.
+const MATAMATA_PIAKO_BOUNDS: Bounds = { minLat: -37.86, maxLat: -37.28, minLng: 175.45, maxLng: 176.02 };
 const CHRISTCHURCH_BOUNDS: Bounds = { minLat: -43.75, maxLat: -43.35, minLng: 172.35, maxLng: 173.05 };
 const CANTERBURY_BOUNDS: Bounds = { minLat: -44.95, maxLat: -42.0, minLng: 169.9, maxLng: 174.6 };
 const NELSON_BOUNDS: Bounds = { minLat: -41.45, maxLat: -41.15, minLng: 173.05, maxLng: 173.45 };
 const WHANGAREI_BOUNDS: Bounds = { minLat: -36.05, maxLat: -35.35, minLng: 173.6, maxLng: 174.75 };
 const QLDC_BOUNDS: Bounds = { minLat: -45.4, maxLat: -44.25, minLng: 168.0, maxLng: 170.05 };
+// Masterton, Carterton, and South Wairarapa share the Wairarapa Combined
+// District Plan. The small south-west overlap with Wellington contains
+// Featherston, so this provider must remain before Wellington in the registry.
+const WAIRARAPA_BOUNDS: Bounds = { minLat: -41.45, maxLat: -40.55, minLng: 175.15, maxLng: 176.30 };
 // Whole Wellington region urban footprint: Kāpiti (north) down through Porirua,
 // Wellington City, and the Hutt Valley. Wairarapa territorial authorities are
-// intentionally excluded (no provider coverage yet).
+// resolved by the Wairarapa provider registered before Wellington below.
 const WELLINGTON_BOUNDS: Bounds = { minLat: -41.45, maxLat: -40.70, minLng: 174.60, maxLng: 175.35 };
 const DUNEDIN_BOUNDS: Bounds = { minLat: -46.15, maxLat: -45.55, minLng: 169.95, maxLng: 171.15 };
 const ROTORUA_BOUNDS: Bounds = { minLat: -38.45, maxLat: -37.85, minLng: 175.85, maxLng: 176.55 };
@@ -222,6 +234,35 @@ const providerRegistry: PlanningProvider[] = [
       { label: "Waikato Open Data Hub", url: "https://data-waikatolass.opendata.arcgis.com/" },
     ],
     (context) => supportsAny(context, HAMILTON_BOUNDS, [/\bhamilton\b/, /\bkirikiriroa\b/]),
+  ),
+  provider(
+    "matamata-piako",
+    "Matamata-Piako District Council planning provider",
+    "Matamata-Piako District Council",
+    "Waikato",
+    "partial",
+    "Matamata-Piako District Plan",
+    [
+      { label: "Matamata-Piako District Plan Zones", url: "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/District_Plan_Zones/FeatureServer" },
+      { label: "Matamata-Piako Water Supply", url: "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/Water_Line/FeatureServer" },
+      { label: "Matamata-Piako Wastewater", url: "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/Wastewater_Line/FeatureServer" },
+      { label: "Matamata-Piako Stormwater", url: "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/Stormwater_Line/FeatureServer" },
+      { label: "Waikato Open Data Hub", url: "https://data-waikatolass.opendata.arcgis.com/" },
+    ],
+    (context) =>
+      addressHas(context, [
+        /\bte aroha\b/,
+        /\bmatamata\b/,
+        /\bmorrinsville\b/,
+        /\bwaharoa\b/,
+        /\bwaihou\b/,
+        /\bte poi\b/,
+        /\btahuna\b/,
+        /\bwalton\b/,
+        /\bspringdale\b/,
+        /\btatuanui\b/,
+        /\bmatamata-piako\b/,
+      ]) || inBounds(context, MATAMATA_PIAKO_BOUNDS),
   ),
   provider(
     "waipa",
@@ -342,6 +383,40 @@ const providerRegistry: PlanningProvider[] = [
         /\barrowtown\b/,
         /\bfrankton\b/,
         /\bqueenstown lakes\b/,
+      ]),
+  ),
+  provider(
+    "wairarapa",
+    "Wairarapa combined planning provider",
+    null,
+    "Wellington",
+    "partial",
+    "Wairarapa Combined District Plan",
+    [
+      { label: "Wairarapa Combined District Plan Zones", url: "https://gis.mstn.govt.nz/arcgis/rest/services/ResourceManagementAndPlanning/Zones/MapServer" },
+      { label: "Wairarapa District Plan Management Areas", url: "https://gis.mstn.govt.nz/arcgis/rest/services/ResourceManagementAndPlanning/ManagementAreas/MapServer" },
+      { label: "Wairarapa District Plan Special Features", url: "https://gis.mstn.govt.nz/arcgis/rest/services/ResourceManagementAndPlanning/SpecialFeatures/MapServer" },
+      { label: "Wairarapa Flood Zones", url: "https://gis.mstn.govt.nz/arcgis/rest/services/EmergencyManagementAndHazards/FloodZones/MapServer" },
+      { label: "Wairarapa Earthquake Hazards", url: "https://gis.mstn.govt.nz/arcgis/rest/services/EmergencyManagementAndHazards/EarthquakeHazards/MapServer" },
+      { label: "Wairarapa Liquefaction", url: "https://gis.mstn.govt.nz/arcgis/rest/services/EmergencyManagementAndHazards/Liquefaction/MapServer" },
+      { label: "Wairarapa Tsunami Evacuation Zones", url: "https://gis.mstn.govt.nz/arcgis/rest/services/EmergencyManagementAndHazards/TsunamiEvacuationZones/MapServer" },
+      { label: "Masterton and Carterton Public Water", url: "https://gis.mstn.govt.nz/arcgis/rest/services/Services/WaterPublic/MapServer" },
+      { label: "Masterton and Carterton Public Sewer", url: "https://gis.mstn.govt.nz/arcgis/rest/services/Services/SewerPublic/MapServer" },
+      { label: "Masterton and Carterton Public Stormwater", url: "https://gis.mstn.govt.nz/arcgis/rest/services/Services/StormwaterPublic/MapServer" },
+    ],
+    (context) =>
+      supportsAny(context, WAIRARAPA_BOUNDS, [
+        /\bwairarapa\b/,
+        /\bmasterton\b/,
+        /\blansdowne\b/,
+        /\bkuripuni\b/,
+        /\bsolway\b/,
+        /\bopaki\b/,
+        /\bcarterton\b/,
+        /\bgreytown\b/,
+        /\bfeatherston\b/,
+        /\bmartinborough\b/,
+        /\bcerton\b/,
       ]),
   ),
   provider(

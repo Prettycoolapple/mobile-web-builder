@@ -892,4 +892,91 @@ describe("regional planning rule status", () => {
       800,
     )).toMatchObject({ regionalZoneCode: "WLG_MDRZ", automaticRoiAllowed: true, verifiedMinimumLotSqm: 250 });
   });
+
+  it("enables indicative yield, ROI, and dev scoring for Wairarapa residential zones", () => {
+    expect(regionalPlanningRuleStatus(
+      { providerId: "wairarapa", providerName: "Wairarapa combined planning provider" },
+      {
+        zone_code: "Residential",
+        zone_description: "Residential - Wairarapa Residential Zone - Masterton",
+        min_lot_size_sqm: null,
+        raw_zone: JSON.stringify({ ZONE_TYPE: "Residential", TLA: "MDC" }),
+      },
+      821,
+    )).toMatchObject({
+      subdivisionRules: "standard_yield_modelled",
+      modellingStatus: "roi_enabled",
+      automaticYieldClaimsAllowed: true,
+      automaticRoiAllowed: true,
+      regionalZoneCode: "WRP_RESIDENTIAL",
+      verifiedMinimumLotSqm: 400,
+      sourceLabel: "Wairarapa Combined District Plan (Residential, indicative)",
+    });
+  });
+
+  it("enables yield, ROI, and dev scoring for Matamata-Piako's Residential Zone (layer-name zone code)", () => {
+    expect(regionalPlanningRuleStatus(
+      { providerId: "matamata-piako", providerName: "Matamata-Piako District Council planning provider" },
+      {
+        zone_code: "MPDC_RESIDENTIAL",
+        zone_description: "Residential Zone",
+        min_lot_size_sqm: null,
+        raw_zone: JSON.stringify({ FID: 1, MSLINK: -214748364 }),
+      },
+      607,
+    )).toMatchObject({
+      subdivisionRules: "standard_yield_modelled",
+      modellingStatus: "roi_enabled",
+      automaticYieldClaimsAllowed: true,
+      automaticRoiAllowed: true,
+      regionalZoneCode: "MPDC_RESIDENTIAL",
+      verifiedMinimumLotSqm: 500,
+      sourceLabel: "Matamata-Piako District Plan (Residential Zone, net site area)",
+    });
+  });
+
+  it("does not cross-match Matamata-Piako's Rural Residential zones to the Residential rule pack", () => {
+    expect(regionalPlanningRuleStatus(
+      { providerId: "matamata-piako", providerName: "Matamata-Piako District Council planning provider" },
+      {
+        zone_code: "MPDC_RURAL_RESIDENTIAL",
+        zone_description: "Rural Residential Zone",
+        min_lot_size_sqm: null,
+        raw_zone: JSON.stringify({ FID: 87, MSLINK: -214748354 }),
+      },
+      5_000,
+    )).toMatchObject({
+      regionalZoneCode: "MPDC_RURAL_RESIDENTIAL",
+      verifiedMinimumLotSqm: 2_500,
+      automaticRoiAllowed: true,
+    });
+
+    expect(regionalPlanningRuleStatus(
+      { providerId: "matamata-piako", providerName: "Matamata-Piako District Council planning provider" },
+      {
+        zone_code: "MPDC_RURAL_RESIDENTIAL_2",
+        zone_description: "Rural Residential 2 Zone",
+        min_lot_size_sqm: null,
+        raw_zone: JSON.stringify({ FID: 12 }),
+      },
+      5_000,
+    )).toMatchObject({
+      regionalZoneCode: "MPDC_RURAL_RESIDENTIAL",
+      verifiedMinimumLotSqm: 2_500,
+    });
+
+    expect(regionalPlanningRuleStatus(
+      { providerId: "matamata-piako", providerName: "Matamata-Piako District Council planning provider" },
+      {
+        zone_code: "MPDC_RURAL",
+        zone_description: "Rural Zone",
+        min_lot_size_sqm: null,
+        raw_zone: JSON.stringify({ FID: 3 }),
+      },
+      210_000,
+    )).toMatchObject({
+      regionalZoneCode: "MPDC_RURAL",
+      verifiedMinimumLotSqm: 200_000,
+    });
+  });
 });

@@ -282,6 +282,12 @@ describe("estimateCosts — existing dwelling / demolition", () => {
     const southlandDefault = estimateCosts(property, 1, {
       cost_profile: regionalCostProfileForProvider("southland"),
     });
+    const wairarapaDefault = estimateCosts(property, 1, {
+      cost_profile: regionalCostProfileForProvider("wairarapa"),
+    });
+    const matamataPiakoDefault = estimateCosts(property, 1, {
+      cost_profile: regionalCostProfileForProvider("matamata-piako"),
+    });
     const customProfile = regionalCostProfileForProvider("whangarei");
     customProfile.construction.baseLowPerSqm = 3_000;
     customProfile.construction.baseHighPerSqm = 4_000;
@@ -296,6 +302,10 @@ describe("estimateCosts — existing dwelling / demolition", () => {
     expect(rotoruaDefault.construction_low).toBe(aucklandDefault.construction_low);
     expect(whakataneDefault.construction_high).toBe(aucklandDefault.construction_high);
     expect(southlandDefault.construction_low).toBe(aucklandDefault.construction_low);
+    expect(wairarapaDefault.construction_low).toBe(aucklandDefault.construction_low);
+    expect(wairarapaDefault.construction_high).toBe(aucklandDefault.construction_high);
+    expect(matamataPiakoDefault.construction_low).toBe(aucklandDefault.construction_low);
+    expect(matamataPiakoDefault.construction_high).toBe(aucklandDefault.construction_high);
     expect(whangareiCustom.construction_low).toBeGreaterThan(whangareiDefault.construction_low);
     expect(regionalCostProfileForProvider("hamilton")).toMatchObject({ id: "hamilton-default", providerId: "hamilton" });
     expect(regionalCostProfileForProvider("waipa")).toMatchObject({
@@ -310,6 +320,16 @@ describe("estimateCosts — existing dwelling / demolition", () => {
     expect(regionalCostProfileForProvider("southland")).toMatchObject({
       id: "southland-default",
       providerId: "southland",
+      source: "auckland_default_pending_regional_rates",
+    });
+    expect(regionalCostProfileForProvider("wairarapa")).toMatchObject({
+      id: "wairarapa-default",
+      providerId: "wairarapa",
+      source: "auckland_default_pending_regional_rates",
+    });
+    expect(regionalCostProfileForProvider("matamata-piako")).toMatchObject({
+      id: "matamata-piako-default",
+      providerId: "matamata-piako",
       source: "auckland_default_pending_regional_rates",
     });
     expect(regionalCostProfileForProvider("unsupported").id).toBe("unsupported-default");

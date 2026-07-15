@@ -16,6 +16,13 @@ interface RegionalZoneLayer {
   codeField?: string;
   nameFields: string[];
   detailFields?: string[];
+  // Some council layers split zoning into one polygon layer per zone class
+  // with no attribute that names the zone (e.g. Matamata-Piako's
+  // District_Plan_Zones service). staticZoneCode/staticZoneName let the layer
+  // itself carry the zone identity as a fallback when no attribute-derived
+  // code/name is available.
+  staticZoneCode?: string;
+  staticZoneName?: string;
 }
 
 interface RegionalOverlayLayer {
@@ -69,6 +76,20 @@ const TOP_OF_THE_SOUTH_MAPS =
   "https://www.topofthesouthmaps.co.nz/ArcGIS/rest/services/TopoftheSouthMaps/MapServer";
 const QLDC_PDP =
   "https://gis.qldc.govt.nz/server/rest/services/DistrictPlan/PDP_Stage_1_2_3_Decisions/MapServer";
+const WAIRARAPA_ZONES =
+  "https://gis.mstn.govt.nz/arcgis/rest/services/ResourceManagementAndPlanning/Zones/MapServer";
+const WAIRARAPA_MANAGEMENT_AREAS =
+  "https://gis.mstn.govt.nz/arcgis/rest/services/ResourceManagementAndPlanning/ManagementAreas/MapServer";
+const WAIRARAPA_SPECIAL_FEATURES =
+  "https://gis.mstn.govt.nz/arcgis/rest/services/ResourceManagementAndPlanning/SpecialFeatures/MapServer";
+const WAIRARAPA_FLOOD_ZONES =
+  "https://gis.mstn.govt.nz/arcgis/rest/services/EmergencyManagementAndHazards/FloodZones/MapServer";
+const WAIRARAPA_EARTHQUAKE_HAZARDS =
+  "https://gis.mstn.govt.nz/arcgis/rest/services/EmergencyManagementAndHazards/EarthquakeHazards/MapServer";
+const WAIRARAPA_LIQUEFACTION =
+  "https://gis.mstn.govt.nz/arcgis/rest/services/EmergencyManagementAndHazards/Liquefaction/MapServer";
+const WAIRARAPA_TSUNAMI =
+  "https://gis.mstn.govt.nz/arcgis/rest/services/EmergencyManagementAndHazards/TsunamiEvacuationZones/MapServer";
 const DUNEDIN_DISTRICT_PLAN =
   "https://apps.dunedin.govt.nz/arcgis/rest/services/Public/District_Plan/MapServer";
 const WCC_DISTRICT_PLAN =
@@ -103,8 +124,52 @@ const WAIPA_PROTECTED_TREES =
   "https://services9.arcgis.com/OsxSXqmTWVTZQ9ie/arcgis/rest/services/WaipaDistrictPlan_Protected_Trees_Bushstands/FeatureServer";
 const WAIPA_FLOOD_HAZARD =
   "https://services9.arcgis.com/OsxSXqmTWVTZQ9ie/arcgis/rest/services/WaipaDistrictPlan_SpecialFeature_Area_Flood/FeatureServer";
+// Matamata-Piako District Council self-hosts its District Plan zoning and
+// overlay layers on its own ArcGIS Online org (piFyx8f2y0yspZiu).
+const MPDC_DISTRICT_PLAN_ZONES =
+  "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/District_Plan_Zones/FeatureServer";
+const MPDC_FLOOD_ZONE =
+  "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/Flood_Zone/FeatureServer";
+const MPDC_LAND_INSTABILITY =
+  "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/Land_Instability/FeatureServer";
+const MPDC_PEAT_LAND_AREA =
+  "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/Peat_Land_Area/FeatureServer";
+const MPDC_WIND_ZONES =
+  "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/Wind_Zones/FeatureServer";
+const MPDC_HERITAGE_SITES =
+  "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/Heritage_Sites/FeatureServer";
+const MPDC_WAHI_TAPU_SITES =
+  "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/W%C4%81hi_Tapu_Sites/FeatureServer";
+const MPDC_SIGNIFICANT_NATURAL_FEATURES =
+  "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/Significant_Natural_Features/FeatureServer";
 
 const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
+  "matamata-piako": {
+    // The District Plan Zones service publishes one polygon layer per zone
+    // class with no zone-name attribute (only FID/MSLINK/Shape__*) — the zone
+    // identity is the layer itself. A point query returns at most one feature,
+    // so layer order only affects lookup latency; residential/rural-residential
+    // are tried first as the most common queries.
+    zoneLayers: [
+      zoneStatic(MPDC_DISTRICT_PLAN_ZONES, 4, "Residential Zone", "MPDC_RESIDENTIAL", "Residential Zone"),
+      zoneStatic(MPDC_DISTRICT_PLAN_ZONES, 6, "Rural Residential Zone", "MPDC_RURAL_RESIDENTIAL", "Rural Residential Zone"),
+      zoneStatic(MPDC_DISTRICT_PLAN_ZONES, 5, "Rural Residential 2 Zone", "MPDC_RURAL_RESIDENTIAL_2", "Rural Residential 2 Zone"),
+      zoneStatic(MPDC_DISTRICT_PLAN_ZONES, 7, "Rural Zone", "MPDC_RURAL", "Rural Zone"),
+      zoneStatic(MPDC_DISTRICT_PLAN_ZONES, 0, "Business Zone", "MPDC_BUSINESS", "Business Zone"),
+      zoneStatic(MPDC_DISTRICT_PLAN_ZONES, 2, "Industrial Zone", "MPDC_INDUSTRIAL", "Industrial Zone"),
+      zoneStatic(MPDC_DISTRICT_PLAN_ZONES, 3, "Kaitiaki Zone", "MPDC_KAITIAKI", "Kaitiaki Zone"),
+    ],
+    overlayLayers: [
+      overlay(MPDC_DISTRICT_PLAN_ZONES, 1, "Designation", "polygon", "control"),
+      overlay(MPDC_FLOOD_ZONE, 0, "Flood Hazard Zone", "polygon", "restricted"),
+      overlay(MPDC_LAND_INSTABILITY, 0, "Land Instability Area", "polygon", "restricted"),
+      overlay(MPDC_PEAT_LAND_AREA, 0, "Peat Land Area", "polygon", "moderate"),
+      overlay(MPDC_WIND_ZONES, 0, "Wind Zone", "polygon", "control"),
+      overlay(MPDC_HERITAGE_SITES, 0, "Heritage Site", "point", "restricted", 20),
+      overlay(MPDC_WAHI_TAPU_SITES, 0, "Wāhi Tapu Site", "point", "restricted", 25),
+      overlay(MPDC_SIGNIFICANT_NATURAL_FEATURES, 0, "Significant Natural Feature", "point", "moderate", 30),
+    ],
+  },
   waipa: {
     zoneLayers: [
       {
@@ -247,6 +312,58 @@ const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
       overlay(QLDC_PDP, 21, "Specific Control", "polygon", "control", undefined, ["ControlType", "Label", "Description"]),
       overlay(QLDC_PDP, 22, "Designation", "polygon", "control"),
       overlay(QLDC_PDP, 23, "Development Area", "polygon", "control", undefined, ["DevelopmentArea", "Label", "Description"]),
+    ],
+  },
+  wairarapa: {
+    // The combined plan publishes one polygon layer per zone type. Try each
+    // queryable leaf layer until the property point intersects a zone.
+    zoneLayers: [
+      zone(WAIRARAPA_ZONES, 0, "Wairarapa Conservation Management Zone", "ZONE_TYPE", ["SUB_TYPE", "ZONE_TYPE", "NAME"], ["SUB_TYPE", "TLA", "LOCATION"]),
+      zone(WAIRARAPA_ZONES, 1, "Wairarapa Special Rural Zone", "ZONE_TYPE", ["SUB_TYPE", "ZONE_TYPE", "NAME"], ["SUB_TYPE", "TLA", "LOCATION"]),
+      zone(WAIRARAPA_ZONES, 2, "Wairarapa Commercial Zone", "ZONE_TYPE", ["SUB_TYPE", "ZONE_TYPE", "NAME"], ["SUB_TYPE", "TLA", "LOCATION"]),
+      zone(WAIRARAPA_ZONES, 3, "Wairarapa Industrial Zone", "ZONE_TYPE", ["SUB_TYPE", "ZONE_TYPE", "NAME"], ["SUB_TYPE", "TLA", "LOCATION"]),
+      zone(WAIRARAPA_ZONES, 4, "Wairarapa Residential Zone", "ZONE_TYPE", ["SUB_TYPE", "ZONE_TYPE", "NAME"], ["SUB_TYPE", "TLA", "LOCATION"]),
+      zone(WAIRARAPA_ZONES, 5, "Wairarapa Primary Production Zone", "ZONE_TYPE", ["SUB_TYPE", "ZONE_TYPE", "NAME"], ["SUB_TYPE", "TLA", "LOCATION"]),
+    ],
+    overlayLayers: [
+      overlay(WAIRARAPA_MANAGEMENT_AREAS, 0, "Flood Hazard Area", "polygon", "restricted"),
+      overlay(WAIRARAPA_MANAGEMENT_AREAS, 1, "Flood Alert Area", "polygon", "restricted"),
+      overlay(WAIRARAPA_MANAGEMENT_AREAS, 5, "Erosion Hazard Area", "polygon", "restricted"),
+      overlay(WAIRARAPA_MANAGEMENT_AREAS, 6, "Foreshore Protection Area", "polygon", "restricted"),
+      overlay(WAIRARAPA_MANAGEMENT_AREAS, 7, "Character Area or Historic Heritage Precinct", "polygon", "control"),
+      overlay(WAIRARAPA_MANAGEMENT_AREAS, 8, "Pedestrian Precinct", "polygon", "control"),
+      overlay(WAIRARAPA_MANAGEMENT_AREAS, 9, "Coastal Environment Management Area", "polygon", "control"),
+      overlay(WAIRARAPA_MANAGEMENT_AREAS, 10, "Opaki Special Management Area", "polygon", "control"),
+      overlay(WAIRARAPA_MANAGEMENT_AREAS, 11, "Urban Water Supply Protection Area", "polygon", "restricted"),
+      overlay(WAIRARAPA_MANAGEMENT_AREAS, 12, "Future Development Area", "polygon", "control"),
+      overlay(WAIRARAPA_MANAGEMENT_AREAS, 13, "Airport Obstacle Limitation Surface", "polygon", "control"),
+      overlay(WAIRARAPA_MANAGEMENT_AREAS, 14, "Air Noise Contour", "polyline", "moderate", 25),
+      overlay(WAIRARAPA_MANAGEMENT_AREAS, 15, "Character Area", "polygon", "control"),
+      overlay(WAIRARAPA_SPECIAL_FEATURES, 0, "Significant Natural Area", "polygon", "restricted"),
+      overlay(WAIRARAPA_SPECIAL_FEATURES, 1, "Outstanding Landscape", "polygon", "restricted"),
+      overlay(WAIRARAPA_SPECIAL_FEATURES, 2, "Outstanding Natural Feature", "polygon", "restricted"),
+      overlay(WAIRARAPA_SPECIAL_FEATURES, 3, "Heritage Site", "point", "restricted", 25),
+      overlay(WAIRARAPA_SPECIAL_FEATURES, 4, "Notable Tree", "point", "moderate", 30),
+      overlay(WAIRARAPA_SPECIAL_FEATURES, 5, "Tangata Whenua or Waahi Tapu Site", "point", "restricted", 25),
+      overlay(WAIRARAPA_SPECIAL_FEATURES, 6, "Geological Site", "point", "moderate", 25),
+      overlay(WAIRARAPA_SPECIAL_FEATURES, 7, "Archaeological Site", "point", "restricted", 25),
+      overlay(WAIRARAPA_SPECIAL_FEATURES, 8, "Designation", "polygon", "control"),
+      overlay(WAIRARAPA_SPECIAL_FEATURES, 9, "Park", "polygon", "control"),
+      overlay(WAIRARAPA_SPECIAL_FEATURES, 10, "Urban Rural Boundary", "polygon", "control"),
+      overlay(WAIRARAPA_SPECIAL_FEATURES, 11, "Significant Water Body", "polyline", "restricted", 25),
+      overlay(WAIRARAPA_SPECIAL_FEATURES, 12, "Rail Zone", "polygon", "control"),
+      overlay(WAIRARAPA_SPECIAL_FEATURES, 13, "Railway Line", "polyline", "moderate", 30),
+      overlay(WAIRARAPA_SPECIAL_FEATURES, 14, "High Voltage Transmission Line", "polyline", "restricted", 30),
+      overlay(WAIRARAPA_SPECIAL_FEATURES, 15, "40m Coastal Contour", "polyline", "moderate", 25),
+      overlay(WAIRARAPA_SPECIAL_FEATURES, 16, "River", "polyline", "restricted", 25),
+      overlay(WAIRARAPA_SPECIAL_FEATURES, 17, "River Parcel", "polygon", "restricted"),
+      overlay(WAIRARAPA_SPECIAL_FEATURES, 18, "Contaminated Site", "polygon", "restricted"),
+      overlay(WAIRARAPA_FLOOD_ZONES, 0, "50-year Flood Zone", "polygon", "restricted"),
+      overlay(WAIRARAPA_FLOOD_ZONES, 3, "Greytown 100-year Base Flood Extent", "polygon", "restricted"),
+      overlay(WAIRARAPA_FLOOD_ZONES, 4, "Greytown Flood Sensitive Area", "polygon", "restricted"),
+      overlay(WAIRARAPA_EARTHQUAKE_HAZARDS, 0, "Faultline Hazard Area", "polygon", "restricted"),
+      overlay(WAIRARAPA_LIQUEFACTION, 0, "Liquefaction Susceptibility", "polygon", "moderate"),
+      overlay(WAIRARAPA_TSUNAMI, 0, "Tsunami Evacuation Zone", "polygon", "moderate"),
     ],
   },
   wellington: {
@@ -443,6 +560,19 @@ function overlay(
   return { serviceUrl, layerId, name, geometryType, status, distanceM, detailFields, where };
 }
 
+// For council layers with no zone-name attribute where the layer itself is a
+// single zone class (e.g. Matamata-Piako's District_Plan_Zones service, which
+// publishes one polygon layer per zone with only FID/MSLINK/Shape__* fields).
+function zoneStatic(
+  serviceUrl: string,
+  layerId: number,
+  label: string,
+  staticZoneCode: string,
+  staticZoneName: string,
+): RegionalZoneLayer {
+  return { serviceUrl, layerId, label, nameFields: [], staticZoneCode, staticZoneName };
+}
+
 function layerUrl(layer: { serviceUrl: string; layerId: number }): string {
   return `${layer.serviceUrl}/${layer.layerId}`;
 }
@@ -614,7 +744,7 @@ export async function fetchRegionalPlanningZone(
       const metadata = await fetchLayerMetadata(layer).catch(() => ({}));
       const rawCode = stringifyValue(layer.codeField ? attrs[layer.codeField] : null);
       const decoded = decodeCodedValue(metadata, layer.codeField, layer.codeField ? attrs[layer.codeField] : null);
-      const name = decoded ?? firstText(attrs, layer.nameFields);
+      const name = decoded ?? firstText(attrs, layer.nameFields) ?? layer.staticZoneName ?? null;
       const details = uniqueTexts([
         detailFromAttributes(attrs, layer.detailFields, []),
         layer.label,
@@ -622,7 +752,7 @@ export async function fetchRegionalPlanningZone(
       ]);
 
       return {
-        zone_code: rawCode ?? name ?? "REGIONAL",
+        zone_code: rawCode ?? layer.staticZoneCode ?? name ?? "REGIONAL",
         zone_description: uniqueTexts([name, ...details]).join(" - ") || `${jurisdiction.providerName} zone`,
         min_lot_size_sqm: null,
         raw_zone: JSON.stringify(attrs),

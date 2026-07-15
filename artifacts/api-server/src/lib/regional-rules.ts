@@ -106,6 +106,9 @@ const CHRISTCHURCH_CHAPTER8_SOURCE =
   "https://ccc.govt.nz/assets/Documents/The-Council/Plans-Strategies-Policies-Bylaws/Plans/district-plan/Print-Chapters/Chapter-8.pdf";
 const QLDC_SUBDIVISION_SOURCE =
   "https://www.qldc.govt.nz/media/ez5gvf4t/pdp-chapter-27-subdivision-and-development-28-mar-2024.pdf";
+const WAIRARAPA_COMBINED_DISTRICT_PLAN_SOURCE =
+  "https://www.mstn.govt.nz/council/plans-and-strategies/plans/wairarapa-combined-district-plan";
+const MPDC_DISTRICT_PLAN_SOURCE = "https://www.mpdc.govt.nz/district-plan";
 const WELLINGTON_DISTRICT_PLAN_SOURCE =
   "https://www.huttcity.govt.nz/council/district-plan";
 const DUNEDIN_GR1_VARIATION2_SOURCE =
@@ -119,6 +122,8 @@ const INTERIM_COMPARABLE_ROI_PROVIDERS = new Set<PlanningProviderMetadata["provi
   "nelson",
   "qldc",
   "whangarei",
+  "wairarapa",
+  "matamata-piako",
   "rotorua",
   "whakatane",
   "southland",
@@ -154,6 +159,59 @@ const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
       detail:
         "This is a controlled-activity pathway only when access, servicing, hazards and built-form compliance are demonstrated. The displayed yield is conservative and is not a consent outcome.",
     },
+    roiEnabled: true,
+  },
+  // Matamata-Piako District Plan Zones has no zone-name attribute — the zone
+  // fetch (regional-arcgis.ts CONFIGS["matamata-piako"]) resolves zone_code to
+  // a static per-layer code (e.g. "MPDC_RESIDENTIAL"), so these patterns match
+  // that exact code rather than free-text zone names, avoiding any ambiguity
+  // between e.g. "MPDC_RESIDENTIAL" and "MPDC_RURAL_RESIDENTIAL".
+  {
+    providerId: "matamata-piako",
+    regionalZoneCode: "MPDC_RESIDENTIAL",
+    zonePattern: /\bMPDC_RESIDENTIAL\b/,
+    zoneLabel: "Residential Zone",
+    standardMinimumLotSqm: 500,
+    requiredShapeText: null,
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "Matamata-Piako District Plan (Residential Zone, net site area)",
+    sourceUrl: MPDC_DISTRICT_PLAN_SOURCE,
+    caveats: [
+      "500sqm net site area is the operative Residential Zone minimum; confirm frontage, shape, servicing and any qualifying-matter overlays before relying on this yield.",
+      "All subdivision in Matamata-Piako District requires resource consent.",
+    ],
+    roiEnabled: true,
+  },
+  {
+    providerId: "matamata-piako",
+    regionalZoneCode: "MPDC_RURAL_RESIDENTIAL",
+    zonePattern: /\bMPDC_RURAL_RESIDENTIAL(_2)?\b/,
+    zoneLabel: "Rural Residential Zone",
+    standardMinimumLotSqm: 2_500,
+    requiredShapeText: null,
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "Matamata-Piako District Plan (Rural Residential Zone, indicative)",
+    sourceUrl: MPDC_DISTRICT_PLAN_SOURCE,
+    caveats: [
+      "Indicative first-pass minimum only (based on the district's bonus-lot and boundary-relocation minimum of 2,500sqm); Rural Residential and Rural Residential 2 zones may carry different standard minimums that must be confirmed against the operative rules with legal effect.",
+      "All subdivision in Matamata-Piako District requires resource consent.",
+    ],
+    roiEnabled: true,
+  },
+  {
+    providerId: "matamata-piako",
+    regionalZoneCode: "MPDC_RURAL",
+    zonePattern: /\bMPDC_RURAL\b/,
+    zoneLabel: "Rural Zone",
+    standardMinimumLotSqm: 200_000,
+    requiredShapeText: null,
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "Matamata-Piako District Plan Change 42 (Rural Zone land-quality subdivision)",
+    sourceUrl: MPDC_DISTRICT_PLAN_SOURCE,
+    caveats: [
+      "Plan Change 42 uses a land-quality approach: 20ha (200,000sqm) minimum on general-quality soils, 40ha (400,000sqm) on high-quality soils, plus a small-lot/balance-lot pathway for older titles. The lower figure is used here as an indicative starting point only — confirm soil classification and the applicable rule against the operative plan.",
+      "All subdivision in Matamata-Piako District requires resource consent.",
+    ],
     roiEnabled: true,
   },
   {
@@ -614,6 +672,22 @@ const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
   // council's operative district plan before being relied on. ROI is enabled so
   // the report can model yield + returns using the (Auckland-seeded) Wellington
   // cost profile, which is tunable per region in regional-cost-profiles.ts.
+  {
+    providerId: "wairarapa",
+    regionalZoneCode: "WRP_RESIDENTIAL",
+    zonePattern: /\bresidential\b/i,
+    zoneLabel: "Residential Zone",
+    standardMinimumLotSqm: 400,
+    requiredShapeText: null,
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "Wairarapa Combined District Plan (Residential, indicative)",
+    sourceUrl: WAIRARAPA_COMBINED_DISTRICT_PLAN_SOURCE,
+    caveats: [
+      "Indicative first-pass minimum only; confirm the exact minimum net site area against the provisions with legal effect in the operative and proposed Wairarapa Combined District Plans.",
+      "Access, shape, servicing capacity, hazards, management areas, heritage and other performance standards still require site-specific consent checks.",
+    ],
+    roiEnabled: true,
+  },
   {
     providerId: "wellington",
     regionalZoneCode: "WLG_HDRZ",

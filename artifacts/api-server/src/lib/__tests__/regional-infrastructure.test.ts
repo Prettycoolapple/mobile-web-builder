@@ -105,6 +105,52 @@ describe("regional infrastructure fetchers", () => {
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/External_ThreeWaters_Layers_v2/MapServer/14/query"))).toBe(true);
   });
 
+  it("returns Masterton's three mapped Wairarapa services at 78 Opaki Road", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isMastertonLayer =
+        url.includes("/Services/WaterPublic/MapServer/5/query")
+        || url.includes("/Services/SewerPublic/MapServer/4/query")
+        || url.includes("/Services/StormwaterPublic/MapServer/6/query");
+      return new Response(JSON.stringify({
+        features: isMastertonLayer ? [{
+          attributes: { OBJECTID: 1 },
+          geometry: { paths: [[[175.6705, -40.9382], [175.671, -40.9382]]] },
+        }] : [],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchRegionalInfrastructure("wairarapa", -40.9382383, 175.6708268, null);
+
+    expect(result.map((item) => item.name).sort()).toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(result.every((item) => item.location !== "unknown")).toBe(true);
+    expect(result.every((item) => item.service_source_owner === "Masterton / Carterton District Councils (Wairarapa Maps)")).toBe(true);
+  });
+
+  it("returns Te Aroha's three mapped Matamata-Piako services at 19 Centennial Avenue", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isMpdcLayer =
+        url.includes("/Water_Line/FeatureServer/0/query")
+        || url.includes("/Wastewater_Line/FeatureServer/0/query")
+        || url.includes("/Stormwater_Line/FeatureServer/0/query");
+      return new Response(JSON.stringify({
+        features: isMpdcLayer ? [{
+          attributes: { OBJECTID: 1 },
+          geometry: { paths: [[[175.7070, -37.5352], [175.7078, -37.5352]]] },
+        }] : [],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchRegionalInfrastructure("matamata-piako", -37.5352280, 175.7074969, null);
+
+    expect(result.map((item) => item.name).sort()).toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(result.every((item) => item.location !== "unknown")).toBe(true);
+    expect(result.every((item) => item.service_source_owner === "Matamata-Piako District Council")).toBe(true);
+  });
+
   it("exposes mapped utility smoke targets only for configured providers", () => {
     expect(hasRegionalInfrastructureProvider("hamilton")).toBe(true);
     expect(hasRegionalInfrastructureProvider("qldc")).toBe(true);
@@ -112,6 +158,8 @@ describe("regional infrastructure fetchers", () => {
     expect(hasRegionalInfrastructureProvider("rotorua")).toBe(true);
     expect(hasRegionalInfrastructureProvider("whakatane")).toBe(true);
     expect(hasRegionalInfrastructureProvider("southland")).toBe(true);
+    expect(hasRegionalInfrastructureProvider("wairarapa")).toBe(true);
+    expect(hasRegionalInfrastructureProvider("matamata-piako")).toBe(true);
 
     const targets = regionalInfrastructureSmokeTargets();
     expect(targets.some((target) => target.providerId === "hamilton" && target.serviceName === "Water Supply")).toBe(true);
@@ -121,5 +169,9 @@ describe("regional infrastructure fetchers", () => {
     expect(targets.some((target) => target.providerId === "rotorua" && target.serviceName === "Stormwater")).toBe(true);
     expect(targets.some((target) => target.providerId === "whakatane" && target.serviceName === "Wastewater")).toBe(true);
     expect(targets.some((target) => target.providerId === "southland" && target.serviceName === "Water Supply")).toBe(true);
+    expect(targets.some((target) => target.providerId === "wairarapa" && target.serviceName === "Water Supply")).toBe(true);
+    expect(targets.some((target) => target.providerId === "wairarapa" && target.label === "Masterton stormwater main")).toBe(true);
+    expect(targets.some((target) => target.providerId === "matamata-piako" && target.serviceName === "Stormwater")).toBe(true);
+    expect(targets.some((target) => target.providerId === "matamata-piako" && target.label === "Stormwater main/service line")).toBe(true);
   });
 });
