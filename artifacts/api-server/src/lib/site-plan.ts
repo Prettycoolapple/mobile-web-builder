@@ -8,7 +8,6 @@ import {
   type PlanningProviderId,
 } from "./regional-planning";
 import {
-  hasVerifiedOnepuPlanningFallback,
   regionalSitePlanOverlayLayers,
   type RegionalSitePlanOverlayLayer,
 } from "./regional-arcgis";
@@ -890,43 +889,6 @@ async function regionalPlanningOverlayLayers(
     if (result.status === "fulfilled" && result.value) {
       layers.push(result.value);
     }
-  }
-  if (
-    hasVerifiedOnepuPlanningFallback(providerId, geo.lat, geo.lng)
-    && !layers.some((layer) => layer.label === "State Highway Buffer")
-  ) {
-    // The council host can be unreachable from Vercel while remaining healthy
-    // from NZ. Show a precise site marker (not a fabricated polygon boundary)
-    // so the verified control is still visible in the plan and legend.
-    const color = regionalPlanningLayerColor(12);
-    layers.push({
-      id: "regional-planning-whakatane-71-verified",
-      label: "State Highway Buffer (verified at site)",
-      group: "planning",
-      defaultVisible: false,
-      available: true,
-      style: {
-        stroke: color,
-        strokeWidth: 2.8,
-        strokeOpacity: 0.95,
-        fill: color,
-        fillOpacity: 0.9,
-        markerShape: "triangle",
-      },
-      legend: [{ label: "State Highway Buffer (verified at site)", color, kind: "point" }],
-      geojson: {
-        type: "FeatureCollection",
-        features: [{
-          type: "Feature",
-          properties: {
-            label: "State Highway Buffer applies at this site",
-            sourceLayer: "Whakatane Operative District Plan",
-            verifiedFallback: true,
-          },
-          geometry: { type: "Point", coordinates: [geo.lng, geo.lat] },
-        }],
-      },
-    });
   }
   return layers;
 }

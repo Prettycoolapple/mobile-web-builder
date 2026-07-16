@@ -251,31 +251,6 @@ describe("regional site-plan wrapper", () => {
     expect(new URL(highwayRequest!).searchParams.get("geometryType")).toBe("esriGeometryPoint");
   });
 
-  it("shows a verified Onepu highway-control marker when council geometry is unavailable", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ features: [] }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    })));
-
-    const sitePlan = await buildSitePlanForReport("2926A State Highway 30, Onepu", {
-      geocode: {
-        lat: -38.0263534,
-        lng: 176.7097369,
-        formatted: "2926A STATE HIGHWAY 30, Rotomā, New Zealand",
-        suburb: "rotoma",
-      },
-      linz_parcel: null,
-    } as RawPropertyData);
-
-    const fallback = sitePlan.layers.find((layer) => layer.id === "regional-planning-whakatane-71-verified");
-    expect(fallback?.available).toBe(true);
-    expect(fallback?.label).toBe("State Highway Buffer (verified at site)");
-    expect(fallback?.geojson.features[0]?.geometry).toEqual({
-      type: "Point",
-      coordinates: [176.7097369, -38.0263534],
-    });
-  });
-
   it("returns high-contrast contours that remain visible on a phone-sized aerial", async () => {
     process.env["LINZ_API_KEY"] = "test-linz-key";
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
