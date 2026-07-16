@@ -12,6 +12,7 @@ import {
   type RegionalSitePlanOverlayLayer,
 } from "./regional-arcgis";
 import { regionalInfrastructureServiceLayers, type RegionalInfrastructureGroup } from "./regional-infrastructure";
+import { decodeTerrariumPng, terrariumTileCoords } from "./auckland-council";
 
 type GeoJsonPosition = [number, number];
 type GeoJsonGeometry =
@@ -1103,7 +1104,7 @@ function makeContourLayer(geojson: GeoJsonFeatureCollection, legendLabel: string
 /** LINZ national 20m topo contours (WFS) — fallback outside Auckland. */
 async function linzContourLayer(bounds: SitePlanBounds): Promise<SitePlanLayer> {
   const key = process.env["LINZ_API_KEY"]?.trim();
-  if (!key) return unavailableLayer("contours", "Contours", "contours", CONTOUR_COLOR);
+  if (!key) return terrainTileContourLayer(bounds);
   const contourBounds = paddedBounds(bounds, 220, 560);
   const bbox = `${contourBounds.minLng},${contourBounds.minLat},${contourBounds.maxLng},${contourBounds.maxLat},EPSG:4326`;
   const url =
@@ -1114,12 +1115,118 @@ async function linzContourLayer(bounds: SitePlanBounds): Promise<SitePlanLayer> 
     `&srsName=EPSG:4326&maxFeatures=160&outputFormat=application%2Fjson`;
   try {
     const resp = await fetch(url, { signal: AbortSignal.timeout(9000) });
-    if (!resp.ok) return unavailableLayer("contours", "Contours", "contours", CONTOUR_COLOR);
+    if (!resp.ok) return terrainTileContourLayer(bounds);
     const geojson = featureCollectionFromLinzContours(await resp.json());
-    if (geojson.features.length === 0) return unavailableLayer("contours", "Contours", "contours", CONTOUR_COLOR);
+    if (geojson.features.length === 0) return terrainTileContourLayer(bounds);
     return makeContourLayer(geojson, "Contour lines (20m)");
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "site-plan: LINZ contour lookup failed");
+    return terrainTileContourLayer(bounds);
+  }
+}
+
+type TerrainSample = { lng: number; lat: number; elevation: number };
+
+function contourInterval(elevationRange: number): number {
+  if (elevationRange <= 2) return 0.25;
+  if (elevationRange <= 5) return 0.5;
+  if (elevationRange <= 12) return 1;
+  if (elevationRange <= 30) return 2;
+  return 5;
+}
+
+function interpolateContour(a: TerrainSample, b: TerrainSample, level: number): GeoJsonPosition {
+  const denominator = b.elevation - a.elevation;
+  const t = denominator === 0 ? 0.5 : Math.max(0, Math.min(1, (level - a.elevation) / denominator));
+  return [a.lng + (b.lng - a.lng) * t, a.lat + (b.lat - a.lat) * t];
+}
+
+function terrainGridContours(grid: TerrainSample[][]): { geojson: GeoJsonFeatureCollection; interval: number } | null {
+  const elevations = grid.flat().map((sample) => sample.elevation).filter(Number.isFinite);
+  if (elevations.length === 0) return null;
+  const min = Math.min(...elevations);
+  const max = Math.max(...elevations);
+  const range = max - min;
+  if (!Number.isFinite(range) || range < 0.05) return null;
+  let interval = contourInterval(range);
+  let firstLevel = Math.ceil(min / interval) * interval;
+  let levelCount = Math.floor((max - firstLevel) / interval) + 1;
+  if (levelCount > 24) {
+    interval *= Math.ceil(levelCount / 24);
+    firstLevel = Math.ceil(min / interval) * interval;
+    levelCount = Math.floor((max - firstLevel) / interval) + 1;
+  }
+
+  const segmentsByLevel = new Map<number, GeoJsonPosition[][]>();
+  for (let levelIndex = 0; levelIndex < levelCount; levelIndex += 1) {
+    const level = Number((firstLevel + levelIndex * interval).toFixed(3));
+    const segments: GeoJsonPosition[][] = [];
+    for (let row = 0; row < grid.length - 1; row += 1) {
+      for (let col = 0; col < grid[row]!.length - 1; col += 1) {
+        const nw = grid[row]![col]!;
+        const ne = grid[row]![col + 1]!;
+        const se = grid[row + 1]![col + 1]!;
+        const sw = grid[row + 1]![col]!;
+        const edges: Array<[TerrainSample, TerrainSample]> = [[nw, ne], [ne, se], [se, sw], [sw, nw]];
+        const intersections: GeoJsonPosition[] = [];
+        for (const [a, b] of edges) {
+          if ((a.elevation < level && b.elevation >= level) || (b.elevation < level && a.elevation >= level)) {
+            const point = interpolateContour(a, b, level);
+            if (!intersections.some((existing) => Math.abs(existing[0] - point[0]) < 1e-10 && Math.abs(existing[1] - point[1]) < 1e-10)) {
+              intersections.push(point);
+            }
+          }
+        }
+        if (intersections.length === 2) segments.push([intersections[0]!, intersections[1]!]);
+        else if (intersections.length === 4) {
+          segments.push([intersections[0]!, intersections[1]!], [intersections[2]!, intersections[3]!]);
+        }
+      }
+    }
+    if (segments.length > 0) segmentsByLevel.set(level, segments);
+  }
+
+  const features: GeoJsonFeature[] = Array.from(segmentsByLevel.entries()).map(([level, segments]) => ({
+    type: "Feature",
+    properties: { label: `${level}m contour`, elevation: level, source: "AWS Terrain Tiles (Terrarium)" },
+    geometry: { type: "MultiLineString", coordinates: segments },
+  }));
+  return features.length > 0 ? { geojson: { type: "FeatureCollection", features }, interval } : null;
+}
+
+/** Fine, nationwide terrain contours used when no LINZ 20m vector crosses the local map. */
+async function terrainTileContourLayer(bounds: SitePlanBounds): Promise<SitePlanLayer> {
+  const sampleBounds = paddedBounds(bounds, 220, 560);
+  const zoom = 15;
+  const gridSize = 33;
+  const tileCache = new Map<string, ReturnType<typeof decodeTerrariumPng>>();
+  try {
+    const grid: TerrainSample[][] = [];
+    for (let row = 0; row < gridSize; row += 1) {
+      const lat = sampleBounds.maxLat - (row / (gridSize - 1)) * (sampleBounds.maxLat - sampleBounds.minLat);
+      const samples: TerrainSample[] = [];
+      for (let col = 0; col < gridSize; col += 1) {
+        const lng = sampleBounds.minLng + (col / (gridSize - 1)) * (sampleBounds.maxLng - sampleBounds.minLng);
+        const coords = terrariumTileCoords(lat, lng, zoom);
+        const cacheKey = `${coords.tileX}/${coords.tileY}`;
+        let png = tileCache.get(cacheKey);
+        if (!png) {
+          const resp = await fetch(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${zoom}/${cacheKey}.png`, {
+            signal: AbortSignal.timeout(9000),
+          });
+          if (!resp.ok) throw new Error(`Terrarium tile HTTP ${resp.status}`);
+          png = decodeTerrariumPng(Buffer.from(await resp.arrayBuffer()));
+          tileCache.set(cacheKey, png);
+        }
+        samples.push({ lng, lat, elevation: png.terrarium(png.getPixel(coords.px, coords.py)) });
+      }
+      grid.push(samples);
+    }
+    const contours = terrainGridContours(grid);
+    if (!contours) return unavailableLayer("contours", "Contours", "contours", CONTOUR_COLOR);
+    return makeContourLayer(contours.geojson, `Terrain contours (${contours.interval}m)`);
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "site-plan: terrain contour fallback failed");
     return unavailableLayer("contours", "Contours", "contours", CONTOUR_COLOR);
   }
 }

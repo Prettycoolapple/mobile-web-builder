@@ -891,7 +891,7 @@ async function fetchElevationViaLinzLiDAR(lat: number, lng: number, parcelBbox?:
 // No API key required.
 // ---------------------------------------------------------------------------
 
-function terrariumTileCoords(lat: number, lng: number, zoom: number) {
+export function terrariumTileCoords(lat: number, lng: number, zoom: number) {
   const n = Math.pow(2, zoom);
   const x = Math.floor(((lng + 180) / 360) * n);
   const latRad = (lat * Math.PI) / 180;
@@ -906,7 +906,7 @@ function terrariumTileCoords(lat: number, lng: number, zoom: number) {
   return { tileX: x, tileY: y, px, py, pixelSizeM };
 }
 
-function decodeTerrariumPng(buf: Buffer): {
+export function decodeTerrariumPng(buf: Buffer): {
   getPixel: (x: number, y: number) => { r: number; g: number; b: number };
   terrarium: (px: { r: number; g: number; b: number }) => number;
   width: number;
