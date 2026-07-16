@@ -426,7 +426,7 @@ export interface RawPropertyData {
   derived_scores?: DerivedCardScores;
 }
 
-export const RAW_PROPERTY_SCHEMA_VERSION = 11;
+export const RAW_PROPERTY_SCHEMA_VERSION = 12;
 
 export interface PipelineResult {
   address_input: string;
