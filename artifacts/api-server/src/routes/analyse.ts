@@ -9282,7 +9282,9 @@ Generate a complete FeasibilityReport JSON following your system instructions ex
   }
 });
 
-router.get("/pipeline-test", async (req, res) => {
+// Keep the historical verbose diagnostic available without shadowing the
+// canonical /pipeline-test route registered after this router.
+router.get("/analyse/pipeline-test-debug", async (req, res) => {
   const address = (req.query["address"] as string) || "8 Hampton Drive St Heliers Auckland";
 
   req.log.info({ address }, "Pipeline test started");

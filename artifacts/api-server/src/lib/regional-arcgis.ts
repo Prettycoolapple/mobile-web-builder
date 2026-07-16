@@ -51,6 +51,8 @@ export interface RegionalSitePlanOverlayLayer {
 interface RegionalArcGisConfig {
   zoneLayers: RegionalZoneLayer[];
   overlayLayers: RegionalOverlayLayer[];
+  /** Council-specific allowance for slow server-to-server ArcGIS responses. */
+  queryTimeoutMs?: number;
 }
 
 interface ArcGisLayerMetadata {
@@ -456,6 +458,10 @@ const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
     ],
   },
   whakatane: {
+    // This council host commonly needs more than the default nine seconds
+    // when called from Vercel, even though the same point query is fast from
+    // New Zealand. Keep the wider allowance scoped to this provider.
+    queryTimeoutMs: 20_000,
     zoneLayers: [
       {
         serviceUrl: WHAKATANE_DISTRICT_PLAN,
@@ -665,6 +671,7 @@ async function queryArcGisAttributes(
     distanceM?: number;
     timeoutMs?: number;
     where?: string;
+    outFields?: string[];
   } = {},
 ): Promise<Record<string, unknown>[]> {
   const url = new URL(`${layerUrl(layer)}/query`);
@@ -672,8 +679,9 @@ async function queryArcGisAttributes(
   geometryParams(url, lat, lng, options.parcelBbox ?? null);
   url.searchParams.set("inSR", "4326");
   url.searchParams.set("spatialRel", "esriSpatialRelIntersects");
-  url.searchParams.set("outFields", "*");
+  url.searchParams.set("outFields", options.outFields?.join(",") || "*");
   url.searchParams.set("returnGeometry", "false");
+  url.searchParams.set("resultRecordCount", "1");
   url.searchParams.set("f", "json");
   if (options.distanceM != null && !options.parcelBbox) {
     url.searchParams.set("distance", String(options.distanceM));
@@ -741,9 +749,17 @@ export async function fetchRegionalPlanningZone(
       // could spend two full timeout windows on the parcel envelope and then
       // never reach the fast point query.  Only use the parcel as a fallback
       // when the address point genuinely returns no zone.
-      let features = await queryArcGisAttributesWithRetry(layer, lat, lng);
+      const queryOptions = {
+        timeoutMs: config.queryTimeoutMs,
+        outFields: uniqueTexts([
+          layer.codeField ?? null,
+          ...layer.nameFields,
+          ...(layer.detailFields ?? []),
+        ]),
+      };
+      let features = await queryArcGisAttributesWithRetry(layer, lat, lng, queryOptions);
       if (features.length === 0 && parcelBbox) {
-        features = await queryArcGisAttributesWithRetry(layer, lat, lng, { parcelBbox });
+        features = await queryArcGisAttributesWithRetry(layer, lat, lng, { ...queryOptions, parcelBbox });
       }
       const attrs = features[0];
       if (!attrs) continue;
@@ -792,6 +808,7 @@ export async function fetchRegionalPlanningOverlays(
   const settled = await Promise.allSettled(
     config.overlayLayers.map(async (layer): Promise<Overlay | null> => {
       const distanceM = layer.distanceM ?? (layer.geometryType === "polygon" ? undefined : 25);
+      const timeoutMs = config.queryTimeoutMs ?? 8000;
       // Resolve a polygon at the address point first.  On large rural parcels
       // this avoids slow envelope scans while still returning the exact
       // applicable control (such as the Onepu State Highway Buffer).  Fall
@@ -800,13 +817,13 @@ export async function fetchRegionalPlanningOverlays(
       let features = await queryArcGisAttributes(layer, lat, lng, {
         parcelBbox: null,
         distanceM,
-        timeoutMs: 8000,
+        timeoutMs,
         where: layer.where,
       });
       if (features.length === 0 && layer.geometryType === "polygon" && parcelBbox) {
         features = await queryArcGisAttributes(layer, lat, lng, {
           parcelBbox,
-          timeoutMs: 8000,
+          timeoutMs,
           where: layer.where,
         });
       }

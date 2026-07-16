@@ -829,6 +829,10 @@ async function regionalPlanningOverlayLayers(
   const results = await Promise.allSettled(
     defs.map(async (def, index) => {
       const kind = regionalPlanningLayerKind(def);
+      // Whakatane's council ArcGIS host is consistently slower from Vercel
+      // than from NZ clients. Match the planning lookup's provider-specific
+      // allowance so applicable controls can reach the map layer response.
+      const timeoutMs = providerId === "whakatane" ? 20_000 : 9_000;
       const primaryGeometry = def.geometryType === "polygon"
         ? pointGeometry
         : nearbyGeometry;
@@ -839,6 +843,7 @@ async function regionalPlanningOverlayLayers(
         geometryType: primaryGeometry.geometryType,
         distanceM: primaryGeometry === pointGeometry ? def.distanceM : undefined,
         maxFeatures: 80,
+        timeoutMs,
         where: def.where,
       });
       if (features.length === 0 && def.geometryType === "polygon" && parcelGeometry) {
@@ -848,6 +853,7 @@ async function regionalPlanningOverlayLayers(
           geometry: parcelGeometry.geometry,
           geometryType: parcelGeometry.geometryType,
           maxFeatures: 80,
+          timeoutMs,
           where: def.where,
         });
       }
