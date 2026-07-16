@@ -217,7 +217,24 @@ describe("regional site-plan wrapper", () => {
           formatted: "2926A STATE HIGHWAY 30, Rotomā, New Zealand",
           suburb: "rotoma",
         },
-        linz_parcel: null,
+        linz_parcel: {
+          parcel_id: "onepu-large-rural-parcel",
+          appellation: "Lot 1 DPS 12345",
+          area_sqm: 42_320,
+          title_no: null,
+          legal_description: "Lot 1 DPS 12345",
+          topology_type: "Primary",
+          bbox: {
+            minLng: 176.706,
+            maxLng: 176.713,
+            minLat: -38.029,
+            maxLat: -38.023,
+            polygon: [
+              [176.706, -38.029], [176.713, -38.029], [176.713, -38.023],
+              [176.706, -38.023], [176.706, -38.029],
+            ],
+          },
+        },
       } as RawPropertyData,
     );
 
@@ -227,6 +244,52 @@ describe("regional site-plan wrapper", () => {
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("WaterSupplyAssets"))).toBe(true);
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("WasteWaterAssets"))).toBe(true);
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("StormWaterAssets"))).toBe(true);
+    const highwayRequest = fetchMock.mock.calls
+      .map((call) => String(call[0]))
+      .find((url) => url.includes("/MapServer/71/query"));
+    expect(highwayRequest).toBeDefined();
+    expect(new URL(highwayRequest!).searchParams.get("geometryType")).toBe("esriGeometryPoint");
+  });
+
+  it("returns high-contrast contours that remain visible on a phone-sized aerial", async () => {
+    process.env["LINZ_API_KEY"] = "test-linz-key";
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/wfs")) {
+        return new Response(JSON.stringify({
+          type: "FeatureCollection",
+          features: [{
+            type: "Feature",
+            properties: { elevation: 120 },
+            geometry: {
+              type: "LineString",
+              coordinates: [[176.708, -38.027], [176.711, -38.025]],
+            },
+          }],
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ features: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }));
+
+    const sitePlan = await buildSitePlanForReport("2926A State Highway 30, Onepu", {
+      geocode: {
+        lat: -38.0263534,
+        lng: 176.7097369,
+        formatted: "2926A STATE HIGHWAY 30, Rotomā, New Zealand",
+        suburb: "rotoma",
+      },
+      linz_parcel: null,
+    } as RawPropertyData);
+    const contours = sitePlan.layers.find((layer) => layer.id === "contours");
+
+    expect(contours).toMatchObject({
+      available: true,
+      style: { stroke: "#FACC15", strokeWidth: 3, strokeOpacity: 0.95 },
+    });
+    expect(contours?.geojson.features).toHaveLength(1);
   });
 
   it("shows Southland's three applicable services and omits non-applicable controls at 77 Kruger Street", async () => {

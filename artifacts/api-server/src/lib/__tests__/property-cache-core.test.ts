@@ -162,6 +162,26 @@ describe("regional property-cache completeness", () => {
       planning_provider: { providerId: "whakatane" },
       property_history: { cv_nzd: 1_310_000, land_area_sqm: 61_829 },
     } as never)).toBe(false);
+
+    expect(cachedRawNeedsRegionalPropertyHistoryRefresh({
+      planning_provider: { providerId: "whakatane" },
+      property_history: { cv_nzd: null, land_area_sqm: null },
+      propertyValue: { cv_nzd: 1_520_000, land_area_sqm: 42_320 },
+    } as never)).toBe(false);
+  });
+
+  it("refreshes every unresolved regional zone spelling", () => {
+    for (const zoneCode of [null, "UNKNOWN", "Unknown zone", "REGIONAL"]) {
+      expect(cachedRawNeedsRegionalZoneRefresh({
+        planning_provider: { providerId: "whakatane" },
+        geocode: {
+          lat: -38.0263534,
+          lng: 176.7097369,
+          formatted: "2926A STATE HIGHWAY 30, Rotomā, New Zealand",
+        },
+        zone: { zone_code: zoneCode },
+      } as never)).toBe(true);
+    }
   });
 
   it("refreshes Southland cache bundles with unresolved zoning even when provider metadata was not stored", () => {

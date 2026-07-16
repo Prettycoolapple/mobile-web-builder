@@ -39,6 +39,17 @@ router.get("/pipeline-test", async (req, res) => {
             easement_area_sqm: result.lots.easement_area_sqm,
           }
         : null,
+      planning: {
+        provider_id: result.raw_property?.planning_provider?.providerId ?? null,
+        zone_code: result.zone?.zone_code ?? result.merged?.zone_code ?? null,
+        zone_description: result.zone?.zone_description ?? result.merged?.zone_description ?? null,
+        overlays: result.overlays.map((overlay) => ({ name: overlay.name, status: overlay.status })),
+      },
+      scoring: {
+        scores: result.scores,
+        roi_scenario_count: result.scenarios.length,
+        first_roi_percent: result.scenarios[0]?.roi_percent ?? null,
+      },
       timing_ms: result.timing_ms,
     };
 

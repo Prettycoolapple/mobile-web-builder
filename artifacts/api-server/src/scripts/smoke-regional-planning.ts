@@ -23,7 +23,7 @@ const samples = [
   { label: "Rotorua Koutu", address: "85 Whittaker Road, Koutu, Rotorua", lat: -38.1251179, lng: 176.2437545 },
   { label: "Whakatane Rotoma 1134", address: "1134 Braemar Road, Rotoma, Rotorua 3192", lat: -38.0165820, lng: 176.7156598, expectedCv: 1_310_000, expectedProvider: "whakatane", expectedZone: "Rural Production Zone" },
   { label: "Whakatane Rotoma 1140", address: "1140 Braemar Rd, Rotorua", lat: -38.0155546, lng: 176.7193241, expectedCv: 630_000, expectedProvider: "whakatane", expectedZone: "Rural Production Zone" },
-  { label: "Whakatane State Highway 30", address: "2926A State Highway 30, Onepu, Whakatāne District", lat: -38.0263534, lng: 176.7097369 },
+  { label: "Whakatane State Highway 30", address: "2926A State Highway 30, Onepu, Whakatāne District", lat: -38.0263534, lng: 176.7097369, expectedCv: 1_520_000, expectedProvider: "whakatane", expectedZone: "General Rural Zone" },
   { label: "Southland Balfour", address: "77 Kruger Street, Balfour, Southland 9746", lat: -45.8372796, lng: 168.5815783, expectedCv: 250_000, expectedProvider: "southland", expectedZone: "General Residential Zone (GRZ)" },
 ];
 

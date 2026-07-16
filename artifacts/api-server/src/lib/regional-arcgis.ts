@@ -23,6 +23,8 @@ interface RegionalZoneLayer {
   // code/name is available.
   staticZoneCode?: string;
   staticZoneName?: string;
+  /** False when the configured code field already contains its display name. */
+  decodeCodedValues?: boolean;
 }
 
 interface RegionalOverlayLayer {
@@ -462,6 +464,7 @@ const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
         codeField: "Zone_Name",
         nameFields: ["Zone_Name"],
         detailFields: ["Source"],
+        decodeCodedValues: false,
       },
     ],
     overlayLayers: [
@@ -732,16 +735,25 @@ export async function fetchRegionalPlanningZone(
 
   for (const layer of config.zoneLayers) {
     try {
-      let features = parcelBbox
-        ? await queryArcGisAttributesWithRetry(layer, lat, lng, { parcelBbox })
-        : [];
-      if (features.length === 0) {
-        features = await queryArcGisAttributesWithRetry(layer, lat, lng);
+      // A point-in-polygon lookup is the authoritative and cheapest way to
+      // identify the zone at the analysed address.  The previous parcel-first
+      // order made large rural parcels expensive: Whakatane's ArcGIS service
+      // could spend two full timeout windows on the parcel envelope and then
+      // never reach the fast point query.  Only use the parcel as a fallback
+      // when the address point genuinely returns no zone.
+      let features = await queryArcGisAttributesWithRetry(layer, lat, lng);
+      if (features.length === 0 && parcelBbox) {
+        features = await queryArcGisAttributesWithRetry(layer, lat, lng, { parcelBbox });
       }
       const attrs = features[0];
       if (!attrs) continue;
 
-      const metadata = await fetchLayerMetadata(layer).catch(() => ({}));
+      // No metadata request is needed when the configured name field is the
+      // code field itself (for example Whakatane's Zone_Name).  Avoiding that
+      // extra council round trip materially improves serverless reliability.
+      const metadata = layer.decodeCodedValues === false
+        ? {}
+        : await fetchLayerMetadata(layer).catch(() => ({}));
       const rawCode = stringifyValue(layer.codeField ? attrs[layer.codeField] : null);
       const decoded = decodeCodedValue(metadata, layer.codeField, layer.codeField ? attrs[layer.codeField] : null);
       const name = decoded ?? firstText(attrs, layer.nameFields) ?? layer.staticZoneName ?? null;
@@ -780,12 +792,24 @@ export async function fetchRegionalPlanningOverlays(
   const settled = await Promise.allSettled(
     config.overlayLayers.map(async (layer): Promise<Overlay | null> => {
       const distanceM = layer.distanceM ?? (layer.geometryType === "polygon" ? undefined : 25);
-      const features = await queryArcGisAttributes(layer, lat, lng, {
-        parcelBbox: layer.geometryType === "polygon" ? parcelBbox : null,
+      // Resolve a polygon at the address point first.  On large rural parcels
+      // this avoids slow envelope scans while still returning the exact
+      // applicable control (such as the Onepu State Highway Buffer).  Fall
+      // back to the whole parcel only when the point itself is not covered so
+      // controls touching another part of the parcel are still discoverable.
+      let features = await queryArcGisAttributes(layer, lat, lng, {
+        parcelBbox: null,
         distanceM,
         timeoutMs: 8000,
         where: layer.where,
       });
+      if (features.length === 0 && layer.geometryType === "polygon" && parcelBbox) {
+        features = await queryArcGisAttributes(layer, lat, lng, {
+          parcelBbox,
+          timeoutMs: 8000,
+          where: layer.where,
+        });
+      }
       const attrs = features[0];
       if (!attrs) return null;
       const detail = detailFromAttributes(attrs, layer.detailFields);

@@ -829,18 +829,28 @@ async function regionalPlanningOverlayLayers(
   const results = await Promise.allSettled(
     defs.map(async (def, index) => {
       const kind = regionalPlanningLayerKind(def);
-      const queryGeometry = def.geometryType === "polygon"
-        ? (parcelGeometry ?? pointGeometry)
+      const primaryGeometry = def.geometryType === "polygon"
+        ? pointGeometry
         : nearbyGeometry;
-      const features = await queryArcGisFeatures({
+      let features = await queryArcGisFeatures({
         serviceUrl: def.serviceUrl,
         layerId: def.layerId,
-        geometry: queryGeometry.geometry,
-        geometryType: queryGeometry.geometryType,
-        distanceM: queryGeometry === pointGeometry ? def.distanceM : undefined,
+        geometry: primaryGeometry.geometry,
+        geometryType: primaryGeometry.geometryType,
+        distanceM: primaryGeometry === pointGeometry ? def.distanceM : undefined,
         maxFeatures: 80,
         where: def.where,
       });
+      if (features.length === 0 && def.geometryType === "polygon" && parcelGeometry) {
+        features = await queryArcGisFeatures({
+          serviceUrl: def.serviceUrl,
+          layerId: def.layerId,
+          geometry: parcelGeometry.geometry,
+          geometryType: parcelGeometry.geometryType,
+          maxFeatures: 80,
+          where: def.where,
+        });
+      }
       const geojson = arcgisFeaturesToGeoJson(features, def.name);
       const color = regionalPlanningLayerColor(index);
       if (geojson.features.length === 0) return null;
@@ -1006,7 +1016,11 @@ async function regionalServiceLayers(bounds: SitePlanBounds, providerId: Plannin
   });
 }
 
-const CONTOUR_COLOR = "#475569";
+// Site-plan vectors are drawn on the native aerial canvas and then scaled down
+// to the phone viewport.  The old 0.9px dark-grey contour became a near-
+// invisible ~0.2px line on a 1536px canvas.  Use a high-contrast survey yellow
+// and a width that remains legible after the client scale transform.
+const CONTOUR_COLOR = "#FACC15";
 
 function featureCollectionFromLinzContours(value: unknown): GeoJsonFeatureCollection {
   const obj = value as { features?: Array<{ properties?: Record<string, unknown>; geometry?: GeoJsonGeometry }> };
@@ -1069,8 +1083,8 @@ function makeContourLayer(geojson: GeoJsonFeatureCollection, legendLabel: string
     style: {
       // Thin solid stroke reads better than dashes when lines are dense (fine intervals).
       stroke: CONTOUR_COLOR,
-      strokeWidth: 0.9,
-      strokeOpacity: 0.72,
+      strokeWidth: 3,
+      strokeOpacity: 0.95,
     },
     legend: [{ label: legendLabel, color: CONTOUR_COLOR, kind: "line" }],
     geojson,

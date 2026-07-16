@@ -25,15 +25,20 @@ export function cachedRawNeedsRegionalZoneRefresh(rawData: RawPropertyData): boo
   }
   const providerId = cachedPlanningProviderId(rawData);
   if (!hasRegionalPlanningZoneLayer(providerId)) return false;
-  const zoneCode = rawData.zone?.zone_code?.trim();
-  return !zoneCode || zoneCode === "UNKNOWN";
+  const zoneCode = rawData.zone?.zone_code?.trim().toLowerCase();
+  return !zoneCode || zoneCode === "unknown" || zoneCode === "unknown zone" || zoneCode === "regional";
 }
 
 export function cachedRawNeedsRegionalPropertyHistoryRefresh(rawData: RawPropertyData): boolean {
   const providerId = cachedPlanningProviderId(rawData);
   const history = rawData.property_history;
   if (providerId === "whakatane") {
-    return history?.cv_nzd == null || history.land_area_sqm == null;
+    // Whakatane's rating layer is occasionally slow from Vercel.  A complete
+    // PropertyValue record is an acceptable persisted fallback and prevents a
+    // good report from being needlessly re-acquired on every new search.
+    const cvNzd = history?.cv_nzd ?? rawData.propertyValue?.cv_nzd;
+    const landAreaSqm = history?.land_area_sqm ?? rawData.propertyValue?.land_area_sqm;
+    return cvNzd == null || landAreaSqm == null;
   }
   if (providerId === "southland") {
     return history?.cv_nzd == null;

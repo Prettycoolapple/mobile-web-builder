@@ -95,15 +95,14 @@ describe("regional ArcGIS planning fetchers", () => {
     expect(zone.zone_description).toContain("Nelson Planning Zone");
   });
 
-  it("tries parcel geometry before falling back to point geometry for regional zones", async () => {
+  it("tries point geometry before falling back to parcel geometry for regional zones", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/query")) {
         const isParcelQuery = url.includes("esriGeometryPolygon");
         return new Response(JSON.stringify({
           features: isParcelQuery
-            ? []
-            : [
+            ? [
                 {
                   attributes: {
                     OBJECTID: 11788,
@@ -111,7 +110,8 @@ describe("regional ArcGIS planning fetchers", () => {
                     ePlanDisplayField: "Rural production zone",
                   },
                 },
-              ],
+              ]
+            : [],
         }), { status: 200, headers: { "content-type": "application/json" } });
       }
       return new Response(JSON.stringify({ fields: [] }), { status: 200, headers: { "content-type": "application/json" } });
@@ -133,8 +133,8 @@ describe("regional ArcGIS planning fetchers", () => {
 
     expect(zone.zone_code).toBe("Rural Production Zone");
     const queryUrls = fetchMock.mock.calls.map((call) => String(call[0])).filter((url) => url.includes("/query"));
-    expect(queryUrls[0]).toContain("esriGeometryPolygon");
-    expect(queryUrls.some((url) => url.includes("esriGeometryPoint"))).toBe(true);
+    expect(queryUrls[0]).toContain("esriGeometryPoint");
+    expect(queryUrls.some((url) => url.includes("esriGeometryPolygon"))).toBe(true);
   });
 
   it("uses the query-capable Hutt City District Plan service for Wellington-region zoning", async () => {
@@ -225,11 +225,32 @@ describe("regional ArcGIS planning fetchers", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const zone = await fetchRegionalPlanningZone(jurisdiction("whakatane"), -38.0263534, 176.7097369);
+    const zone = await fetchRegionalPlanningZone(
+      jurisdiction("whakatane"),
+      -38.0263534,
+      176.7097369,
+      {
+        minLng: 176.706,
+        maxLng: 176.713,
+        minLat: -38.029,
+        maxLat: -38.023,
+        polygon: [
+          [176.706, -38.029],
+          [176.713, -38.029],
+          [176.713, -38.023],
+          [176.706, -38.023],
+          [176.706, -38.029],
+        ],
+      },
+    );
 
     expect(zone.zone_code).toBe("General Rural Zone");
     expect(zone.zone_description).toContain("General Rural Zone");
-    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/MapServer/36/query"))).toBe(true);
+    const zoneRequest = fetchMock.mock.calls
+      .map((call) => String(call[0]))
+      .find((url) => url.includes("/MapServer/36/query"));
+    expect(zoneRequest).toBeDefined();
+    expect(new URL(zoneRequest!).searchParams.get("geometryType")).toBe("esriGeometryPoint");
   });
 
   it("returns Southland's General Residential Zone for 77 Kruger Street", async () => {
