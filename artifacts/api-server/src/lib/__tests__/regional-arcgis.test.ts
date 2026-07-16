@@ -253,6 +253,23 @@ describe("regional ArcGIS planning fetchers", () => {
     expect(new URL(zoneRequest!).searchParams.get("geometryType")).toBe("esriGeometryPoint");
   });
 
+  it("uses the verified Onepu zone and control when the council host is unavailable", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new Error("council host timeout");
+    }));
+
+    const [zone, overlays] = await Promise.all([
+      fetchRegionalPlanningZone(jurisdiction("whakatane"), -38.0263534, 176.7097369),
+      fetchRegionalPlanningOverlays(jurisdiction("whakatane"), -38.0263534, 176.7097369),
+    ]);
+
+    expect(zone.zone_code).toBe("General Rural Zone");
+    expect(zone.zone_description).toContain("Whakatane District Plan Zone");
+    expect(overlays).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "State Highway Buffer", status: "moderate" }),
+    ]));
+  });
+
   it("returns Southland's General Residential Zone for 77 Kruger Street", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

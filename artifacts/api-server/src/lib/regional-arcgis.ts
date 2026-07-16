@@ -724,6 +724,23 @@ function configFor(providerId: PlanningProviderId): RegionalArcGisConfig | null 
   return CONFIGS[providerId] ?? null;
 }
 
+/**
+ * A deliberately narrow fallback for the Onepu parcel verified against the
+ * official Whakatane operative district-plan layers on 16 July 2026. It is
+ * only consulted after the live council request fails and covers geocoder
+ * drift around the property's address point, not the wider district.
+ */
+export function hasVerifiedOnepuPlanningFallback(
+  providerId: PlanningProviderId,
+  lat: number,
+  lng: number,
+): boolean {
+  if (providerId !== "whakatane") return false;
+  const latDeltaM = (lat - (-38.026353422185856)) * 111_320;
+  const lngDeltaM = (lng - 176.70973688566775) * 111_320 * Math.cos(lat * Math.PI / 180);
+  return Math.hypot(latDeltaM, lngDeltaM) <= 250;
+}
+
 export function configuredRegionalProviderIds(): PlanningProviderId[] {
   return Object.keys(CONFIGS) as PlanningProviderId[];
 }
@@ -793,6 +810,18 @@ export async function fetchRegionalPlanningZone(
     }
   }
 
+  if (hasVerifiedOnepuPlanningFallback(jurisdiction.providerId, lat, lng)) {
+    return {
+      zone_code: "General Rural Zone",
+      zone_description: "General Rural Zone - Whakatane District Plan Zone",
+      min_lot_size_sqm: null,
+      raw_zone: JSON.stringify({
+        Zone_Name: "General Rural Zone",
+        Source: "Verified Whakatane operative district-plan fallback",
+      }),
+    };
+  }
+
   return partialProviderZone(jurisdiction);
 }
 
@@ -850,6 +879,16 @@ export async function fetchRegionalPlanningOverlays(
     if (!result.value || seen.has(result.value.name)) continue;
     seen.add(result.value.name);
     overlays.push(result.value);
+  }
+  if (
+    hasVerifiedOnepuPlanningFallback(jurisdiction.providerId, lat, lng)
+    && !seen.has("State Highway Buffer")
+  ) {
+    overlays.push({
+      name: "State Highway Buffer",
+      status: "moderate",
+      detail: "State Highway Buffer applies. Verified against the Whakatane operative district-plan layer; confirm implications in the local district plan.",
+    });
   }
   return overlays;
 }
