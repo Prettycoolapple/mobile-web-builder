@@ -171,7 +171,10 @@ function uniqueStrings(values: Array<string | null | undefined>): string[] {
   for (const raw of values) {
     const value = raw?.trim();
     if (!value) continue;
-    const key = normaliseAddress(value);
+    // Query variants that differ only by diacritics are meaningful to upstream
+    // suggestion indexes (Rotomā vs Rotoma), so do not use the accent-folding
+    // address matcher as the de-duplication key here.
+    const key = value.toLowerCase().replace(/\s+/g, " ").trim();
     if (!key || seen.has(key)) continue;
     seen.add(key);
     result.push(value);
@@ -183,6 +186,12 @@ function buildAddressQueries(addresses: string[]): string[] {
   const variants: string[] = [];
   for (const address of addresses) {
     variants.push(address);
+
+    // Council/geocoder display names retain macrons (for example Rotomā),
+    // while PropertyValue's suggestion index commonly stores the ASCII form
+    // (Rotoma). Query both forms for every NZ address.
+    const asciiAddress = address.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+    variants.push(asciiAddress);
 
     const noNz = address
       .replace(/\bnew zealand\b/ig, "")
@@ -208,8 +217,8 @@ function buildAddressQueries(addresses: string[]): string[] {
     if (tokens.length >= 4 && streetTypeIndex > 1) {
       const street = tokens.slice(0, streetTypeIndex + 1).join(" ");
       const locality = tokens.slice(streetTypeIndex + 1).filter((t) => !/^\d{4}$/.test(t));
-      if (locality.length > 0) variants.push(`${street} ${locality[0]} Auckland`);
-      variants.push(`${street} Auckland`);
+      if (locality.length > 0) variants.push(`${street} ${locality[0]}`);
+      variants.push(street);
     }
   }
   return uniqueStrings(variants);

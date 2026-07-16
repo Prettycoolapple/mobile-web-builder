@@ -1199,9 +1199,18 @@ async function fetchRawListingsForSuburbId(
   limit = 100,
   options: { fastAddressMatch?: boolean } = {},
 ): Promise<RawListing[]> {
+  return fetchRawListingsForLocation("suburb", suburbId, limit, options);
+}
+
+async function fetchRawListingsForLocation(
+  filterName: "suburb" | "district",
+  locationId: string,
+  limit = 100,
+  options: { fastAddressMatch?: boolean } = {},
+): Promise<RawListing[]> {
   const params = new URLSearchParams();
   params.append("filter[category][]", "res_sale");
-  params.append("filter[suburb][]", suburbId);
+  params.append(`filter[${filterName}][]`, locationId);
   params.append("page[limit]", String(Math.min(limit, 100)));
 
   const url = `${PLATFORM_BASE}/listings?${params.toString()}`;
@@ -1489,6 +1498,30 @@ async function matchingRawListingInSuburb(
   }) ?? null;
 }
 
+async function matchingListingInDistrict(
+  address: string,
+  primarySuburb: SuburbRecord,
+): Promise<ListingResult | null> {
+  try {
+    const window = await fetchListingWindowForFilter(
+      "district",
+      String(primarySuburb.districtId),
+      100,
+      { fetchAllPages: true, maxListings: 800 },
+    );
+    const match = window.listings.find((listing) => addressesLikelyMatch(address, listing.address)) ?? null;
+    if (!match) return null;
+    const [annotated] = await annotateApproxFields([match]).catch(() => [match]);
+    return annotated ?? match;
+  } catch (err) {
+    logger.warn(
+      { err: (err as Error).message, districtId: primarySuburb.districtId },
+      "realestate-api: district address match failed",
+    );
+    return null;
+  }
+}
+
 async function findRawListingAcrossNearbySuburbs(
   address: string,
   primarySuburb: SuburbRecord,
@@ -1612,6 +1645,18 @@ export async function fetchRealestateListingForAddress(
 
   const primaryMatch = await matchingRawListingInSuburb(trimmed, suburb);
   if (primaryMatch) return mapAndAnnotateListing(primaryMatch, trimmed, suburb.title);
+
+  // Portal locality labels can be broader than the geocoder's locality,
+  // especially for rural addresses. A single district query is both faster
+  // and more complete than issuing one request per sibling suburb.
+  const districtMatch = await matchingListingInDistrict(trimmed, suburb);
+  if (districtMatch) {
+    logger.info(
+      { districtId: suburb.districtId, address: trimmed.slice(0, 80), listing: districtMatch.address },
+      "realestate-api: matched subject listing through district fallback",
+    );
+    return districtMatch;
+  }
 
   const rawNearbyMatch = await findRawListingAcrossNearbySuburbs(trimmed, suburb, { skipPrimary: true });
   if (rawNearbyMatch) return mapAndAnnotateListing(rawNearbyMatch.listing, trimmed, rawNearbyMatch.suburb.title);
