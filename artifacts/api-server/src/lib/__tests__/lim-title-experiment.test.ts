@@ -12,15 +12,15 @@ describe("LIM/title proactive assignment", () => {
     }
   });
 
-  it("tracks the configured 15 percent rate over a large deterministic sample", () => {
+  it("tracks the configured 30 percent rate over a large deterministic sample", () => {
     let selected = 0;
     const total = 10_000;
     for (let i = 0; i < total; i += 1) {
       if (isProactiveLimTitleSample(`user-${i}`, `report-${i}`)) selected += 1;
     }
     const observed = selected / total;
-    expect(LIM_TITLE_PROACTIVE_RATE).toBe(0.15);
-    expect(observed).toBeGreaterThan(0.135);
-    expect(observed).toBeLessThan(0.165);
+    expect(LIM_TITLE_PROACTIVE_RATE).toBe(0.3);
+    expect(observed).toBeGreaterThan(0.285);
+    expect(observed).toBeLessThan(0.315);
   });
 });

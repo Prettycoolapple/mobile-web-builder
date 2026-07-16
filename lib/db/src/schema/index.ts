@@ -15,6 +15,7 @@ export * from "./watchlist_property_states";
 export * from "./watchlist_property_events";
 export * from "./watchlist_monitor_runs";
 export * from "./property_cache";
+export * from "./site_plan_layer_cache";
 export * from "./property_feature_index";
 export * from "./property_shares";
 export * from "./pending_agent_signups";

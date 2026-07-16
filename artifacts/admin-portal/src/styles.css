@@ -95,6 +95,17 @@ button {
   font-weight: 700;
 }
 
+.mh-new-chat-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #e0393e;
+  margin: 0 8px;
+  vertical-align: middle;
+  box-shadow: 0 0 0 2px rgba(224, 57, 62, 0.25);
+}
+
 .sidebar-logout {
   margin-top: auto;
   background: transparent;

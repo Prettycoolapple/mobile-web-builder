@@ -399,13 +399,32 @@ export default function ChatScreen() {
       ));
     };
 
+    const onMessagesRead = ({ threadId: tid, messageIds, readAt }: { threadId: string; messageIds: string[]; readAt: string }) => {
+      if (tid !== threadId) return;
+      const ids = new Set(messageIds ?? []);
+      setMessages((prev) => prev.map((m) =>
+        ids.has(m.id) && !m.readAt ? { ...m, readAt } : m,
+      ));
+    };
+
+    const onFileViewed = ({ threadId: tid, message }: { threadId: string; message: DmMessage }) => {
+      if (tid !== threadId) return;
+      setMessages((prev) => prev.map((m) =>
+        m.id === message.id ? { ...m, fileViewedAt: message.fileViewedAt ?? null } : m,
+      ));
+    };
+
     socket.on("new_message", onNewMessage);
     socket.on("message_like", onMessageLike);
+    socket.on("messages_read", onMessagesRead);
+    socket.on("file_viewed", onFileViewed);
 
     return () => {
       socket.emit("leave_thread", threadId);
       socket.off("new_message", onNewMessage);
       socket.off("message_like", onMessageLike);
+      socket.off("messages_read", onMessagesRead);
+      socket.off("file_viewed", onFileViewed);
       joinedRef.current = false;
     };
   }, [socket, threadId, token, scrollToLatest]);
@@ -524,6 +543,18 @@ export default function ChatScreen() {
   }, [sendMessage]);
 
   const [openingFileId, setOpeningFileId] = useState<string | null>(null);
+
+  // Tell the server the recipient opened this attachment so the sender's
+  // clients can show "File viewed". Sender opening their own file is ignored
+  // server-side too, but skip the call entirely here.
+  const markFileViewed = useCallback((message: DmMessage) => {
+    if (!threadId || !token || message.senderId === user?.id || message.fileViewedAt) return;
+    fetch(`${getApiBase()}/dm/threads/${threadId}/messages/${message.id}/file-viewed`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    }).catch(() => null);
+  }, [threadId, token, user?.id]);
+
   const openDmFile = useCallback(async (message: DmMessage) => {
     const url = message.fileUrl;
     if (!url || openingFileId) return;
@@ -534,6 +565,7 @@ export default function ChatScreen() {
       // token to a cache file first, then hand it to the system viewer.
       if (/^(https?:|data:|file:)/i.test(url) && !/\/api\/storage\//i.test(url)) {
         await Linking.openURL(url);
+        markFileViewed(message);
         return;
       }
       const absolute = resolveDmStoredImageUri(url);
@@ -551,12 +583,13 @@ export default function ChatScreen() {
       } else {
         await Linking.openURL(result.uri);
       }
+      markFileViewed(message);
     } catch (err: any) {
       Alert.alert(t("dm.file.open_failed"), err?.message ?? t("dm.error.try_again"));
     } finally {
       setOpeningFileId(null);
     }
-  }, [openingFileId, token, t]);
+  }, [openingFileId, token, t, markFileViewed]);
 
   // Stage selected attachments for confirmation rather than sending immediately.
   const pickImage = useCallback(async (useCamera: boolean) => {
@@ -1049,6 +1082,16 @@ export default function ChatScreen() {
     const isMine = msg.senderId === user?.id;
     const liked = !!msg.likedAt;
     const isLocalMessage = msg.id.startsWith("local-");
+    // Read receipts are a sales-agent-only feature: agents can see whether the
+    // other party has read their message, or opened a file they sent.
+    const receiptLabel =
+      isMine && !isLocalMessage && user?.role === "sales_agent"
+        ? msg.fileUrl && msg.fileViewedAt
+          ? t("dm.receipt.file_viewed")
+          : msg.readAt
+            ? t("dm.receipt.read")
+            : null
+        : null;
     const likeButton = (
       <TouchableOpacity
         onPress={() => toggleLike(msg)}
@@ -1202,14 +1245,18 @@ export default function ChatScreen() {
               ) : null}
             </TouchableOpacity>
           )}
-          {isLastInGroup ? (
+          {isLastInGroup || (receiptLabel && msg.fileUrl) ? (
             <Text
               style={[
                 styles.msgTime,
                 { color: colors.mutedForeground, textAlign: isMine ? "right" : "left" },
               ]}
             >
-              {formatTime(msg.createdAt, locale)}
+              {isLastInGroup
+                ? receiptLabel
+                  ? `${formatTime(msg.createdAt, locale)} · ${receiptLabel}`
+                  : formatTime(msg.createdAt, locale)
+                : receiptLabel}
             </Text>
           ) : null}
         </View>

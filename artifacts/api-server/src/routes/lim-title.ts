@@ -426,6 +426,8 @@ router.post(
         connected: result.connected,
         threadId: result.threadId,
         alreadyConsented: result.alreadyConsented,
+        cooldownActive: result.cooldownActive,
+        nextRequestAvailableAt: result.nextRequestAvailableAt.toISOString(),
       });
     } catch (error) {
       const status =

@@ -444,17 +444,8 @@ router.post(
         return;
       }
 
-      // Provider recommendations are visible to free users as an upsell;
-      // initiating an in-app DM is gated on Standard/Pro by /recommendations/connect.
-      // Users with active special status (friends_family / supercharge) get Standard-equivalent access.
-      const tier = currentUser.subscriptionTier ?? "free";
-      const hasActiveSpecialStatus =
-        currentUser.specialStatus === "friends_family" ||
-        (currentUser.specialStatus === "supercharge" &&
-          (currentUser.specialStatusExpiresAt == null ||
-            new Date(currentUser.specialStatusExpiresAt) > new Date()));
-      const upgradeRequired =
-        !hasActiveSpecialStatus && tier !== "standard" && tier !== "pro";
+      // Provider contact is free for all users regardless of subscription tier.
+      const upgradeRequired = false;
 
       const {
         report,
@@ -665,12 +656,7 @@ router.post(
 
     try {
       const [me] = await db
-        .select({
-          role: profiles.role,
-          subscriptionTier: profiles.subscriptionTier,
-          specialStatus: profiles.specialStatus,
-          specialStatusExpiresAt: profiles.specialStatusExpiresAt,
-        })
+        .select({ role: profiles.role })
         .from(profiles)
         .where(eq(profiles.id, userId))
         .limit(1);
@@ -678,23 +664,7 @@ router.post(
         res.status(404).json({ error: "User not found" });
         return;
       }
-      // Only general users with a paid tier can initiate provider DMs.
-      // Sales agents and providers can always reply via the DM routes themselves.
-      // Users with active special status (friends_family / supercharge) get Standard-equivalent access.
-      if (me.role === "general") {
-        const tier = me.subscriptionTier ?? "free";
-        const hasActiveSpecialStatus =
-          me.specialStatus === "friends_family" ||
-          (me.specialStatus === "supercharge" &&
-            (me.specialStatusExpiresAt == null ||
-              new Date(me.specialStatusExpiresAt) > new Date()));
-        if (!hasActiveSpecialStatus && tier !== "standard" && tier !== "pro") {
-          res
-            .status(402)
-            .json({ error: "Upgrade required", upgradeRequired: true });
-          return;
-        }
-      }
+      // Provider contact is free for all users, all tiers.
 
       const [canonA, canonB] = [userId, providerId].sort();
 

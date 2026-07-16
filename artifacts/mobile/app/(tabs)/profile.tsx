@@ -13,6 +13,7 @@ import {
   TextInput,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
+import { VerifiedBadge } from "@/components/VerifiedBadge";
 import * as ImagePicker from "expo-image-picker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -370,7 +371,7 @@ export default function ProfileScreen() {
                 </Text>
                 {user?.isVerified && user.role === "service_provider" && (
                   <View style={styles.headerVerifiedBadge}>
-                    <Feather name="shield" size={11} color="#52C99A" />
+                    <VerifiedBadge size={11} />
                     <Text style={styles.headerVerifiedText}>{t("profile.verified")}</Text>
                   </View>
                 )}
@@ -714,7 +715,7 @@ export default function ProfileScreen() {
               <View style={styles.verificationRow}>
                 {user?.isVerified ? (
                   <>
-                    <Feather name="shield" size={13} color="#52C99A" />
+                    <VerifiedBadge size={13} />
                     <Text style={[styles.verificationLabel, { color: "#52C99A", fontFamily: "DM_Sans_500Medium" }]}>
                       {t("profile.account_verified")}
                     </Text>

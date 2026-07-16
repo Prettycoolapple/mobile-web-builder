@@ -123,8 +123,13 @@
     return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   }
 
+  function isWaitingOnLimTitle(thread) {
+    const lead = thread.leadSummary;
+    return !!lead && lead.status === "connected" && !lead.documentsDeliveredAt;
+  }
+
   function updateNavUnread() {
-    const count = state.threads.reduce((sum, thread) => sum + Number(thread.unreadCount || 0), 0);
+    const count = state.threads.reduce((sum, thread) => sum + (isWaitingOnLimTitle(thread) ? 1 : 0), 0);
     const el = $("#sales-dm-nav-unread");
     if (!el) return;
     el.hidden = count === 0;
@@ -211,7 +216,14 @@
     }
     const time = document.createElement("span");
     time.className = "sales-dm-time";
-    time.textContent = message.pending ? "Sending..." : formatTime(message.createdAt);
+    // Read receipts on the agent's own messages: "File viewed" once the
+    // recipient opened an attachment, otherwise "Read" once seen.
+    let receipt = "";
+    if (!message.pending && message.senderId === currentUser().id) {
+      if (message.fileUrl && message.fileViewedAt) receipt = " · File viewed";
+      else if (message.readAt) receipt = " · Read";
+    }
+    time.textContent = message.pending ? "Sending..." : `${formatTime(message.createdAt)}${receipt}`;
     bubble.appendChild(time);
     return bubble;
   }
@@ -505,6 +517,18 @@
       socket.on("connect_error", () => { state.socketConnected = false; });
       socket.on("new_message", ({ threadId, message }) => applyIncoming(threadId, message));
       socket.on("message_like", ({ threadId, message }) => {
+        if (threadId === state.selectedId) {
+          state.messages = state.messages.map((item) => item.id === message.id ? message : item);
+          renderMessages(true);
+        }
+      });
+      socket.on("messages_read", ({ threadId, messageIds, readAt }) => {
+        if (threadId !== state.selectedId) return;
+        const ids = new Set(messageIds || []);
+        state.messages = state.messages.map((item) => ids.has(item.id) && !item.readAt ? { ...item, readAt } : item);
+        renderMessages(true);
+      });
+      socket.on("file_viewed", ({ threadId, message }) => {
         if (threadId === state.selectedId) {
           state.messages = state.messages.map((item) => item.id === message.id ? message : item);
           renderMessages(true);

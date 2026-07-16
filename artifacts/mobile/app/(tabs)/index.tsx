@@ -171,6 +171,7 @@ type PendingLimTitleConsent = {
   propertyAddress: string;
   agentName?: string | null;
   agencyName?: string | null;
+  isRerequest?: boolean;
 };
 
 function formatLimTitleAgentLabel(pending?: PendingLimTitleConsent | null): string {
@@ -1136,12 +1137,24 @@ export default function SearchScreen() {
   }, [removeMessage]);
 
   const openLimTitleConsent = useCallback((message: ChatMessage) => {
-    if (!message.limTitleRequestId || message.limTitleStatus === "requested") return;
+    if (!message.limTitleRequestId) return;
+    const isRerequest = message.limTitleStatus === "requested";
+    // Once already requested, only allow reopening the confirmation after the
+    // re-request cooldown has actually elapsed (the bubble only shows the
+    // "Request again" action at that point, but guard here too in case this
+    // is ever invoked another way).
+    if (isRerequest) {
+      const availableAt = message.limTitleNextRequestAvailableAt
+        ? Date.parse(message.limTitleNextRequestAvailableAt)
+        : null;
+      if (!availableAt || Date.now() < availableAt) return;
+    }
     setPendingLimTitleConsent({
       requestId: message.limTitleRequestId,
       propertyAddress: message.propertyAddress ?? "this property",
       agentName: message.limTitleAgentName ?? null,
       agencyName: message.limTitleAgencyName ?? null,
+      isRerequest,
     });
   }, []);
 
@@ -1162,20 +1175,16 @@ export default function SearchScreen() {
     if (!limTitleConsentSending) setPendingLimTitleConsent(null);
   }, [limTitleConsentSending]);
 
+  // Cancelling the "share your details?" confirmation is just closing the
+  // popup — it must NOT count as a decline. The offer bubble stays in its
+  // "offered" (or "request again available") state so the user can tap
+  // "Yes, request them" again any time on a clear change of mind. Only the
+  // "No thanks" button on the bubble itself (declineLimTitleOffer) records an
+  // actual decline.
   const declinePendingLimTitleConsent = useCallback(() => {
-    const pending = pendingLimTitleConsent;
-    if (!pending || limTitleConsentSending) return;
-    for (const message of sessionMessagesRef.current) {
-      if (message.limTitleRequestId === pending.requestId) {
-        updateMessage(message.id, { limTitleStatus: "declined" }, currentSessionId ?? undefined);
-      }
-    }
+    if (limTitleConsentSending) return;
     setPendingLimTitleConsent(null);
-    void fetch(`${resolveApiBase()}/lim-title/requests/${encodeURIComponent(pending.requestId)}/decline`, {
-      method: "POST",
-      headers: getApiHeaders(),
-    }).catch(() => {});
-  }, [currentSessionId, getApiHeaders, limTitleConsentSending, pendingLimTitleConsent, updateMessage]);
+  }, [limTitleConsentSending]);
 
   const confirmLimTitleConsent = useCallback(async () => {
     const pending = pendingLimTitleConsent;
@@ -1186,11 +1195,25 @@ export default function SearchScreen() {
         method: "POST",
         headers: getApiHeaders(),
       });
-      const data = await response.json().catch(() => null) as { error?: string } | null;
+      const data = await response.json().catch(() => null) as {
+        error?: string;
+        cooldownActive?: boolean;
+        nextRequestAvailableAt?: string;
+      } | null;
       if (!response.ok) throw new Error(data?.error || "Could not send the request.");
+      if (data?.cooldownActive) {
+        // Shouldn't normally happen (the UI only offers "Request again" once
+        // eligible), but honour the server as the source of truth.
+        setPendingLimTitleConsent(null);
+        Alert.alert("Already sent recently", "You can send another reminder to the agent in a few hours.");
+        return;
+      }
       for (const message of sessionMessagesRef.current) {
         if (message.limTitleRequestId === pending.requestId) {
-          updateMessage(message.id, { limTitleStatus: "requested" }, currentSessionId ?? undefined);
+          updateMessage(message.id, {
+            limTitleStatus: "requested",
+            limTitleNextRequestAvailableAt: data?.nextRequestAvailableAt ?? null,
+          }, currentSessionId ?? undefined);
         }
       }
       setPendingLimTitleConsent(null);
@@ -2395,8 +2418,12 @@ export default function SearchScreen() {
           }
           if (intentData.intent === "positive" && intentData.offer?.requestId) {
             const offer = intentData.offer;
+            // Only ever surface the offer as the inline chat message with its
+            // own Yes/No buttons — the contact-sharing popup opens exclusively
+            // when the user taps "Yes, request them" on that message, never
+            // automatically alongside it.
             if (activeOffer) {
-              updateLastMessage({ type: "text", content: "Please review the contact-sharing confirmation." }, sessionId);
+              updateLastMessage({ type: "text", content: "Tap “Yes, request them” above whenever you're ready to share your details." }, sessionId);
             } else {
               updateLastMessage({
                 role: "assistant",
@@ -2409,12 +2436,6 @@ export default function SearchScreen() {
                 propertyAddress: offer.propertyAddress,
               }, sessionId);
             }
-            setPendingLimTitleConsent({
-              requestId: offer.requestId,
-              propertyAddress: offer.propertyAddress,
-              agentName: offer.agentName ?? null,
-              agencyName: offer.agencyName ?? null,
-            });
             setIsLoading(false);
             void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             return;
@@ -4433,10 +4454,12 @@ export default function SearchScreen() {
                 <Feather name="user-check" size={22} color={colors.accent} />
               </View>
               <Text style={[styles.disclaimerTitle, { color: colors.foreground, fontFamily: "DM_Sans_700Bold" }]}>
-                Share your contact details?
+                {pendingLimTitleConsent?.isRerequest ? "Send another reminder?" : "Share your contact details?"}
               </Text>
               <Text style={[styles.disclaimerBody, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-                To request the LIM report and title, we'll share your name, email address and mobile number with {formatLimTitleAgentLabel(pendingLimTitleConsent)} so they can respond. Project Alpha may also view this request to help manage it.
+                {pendingLimTitleConsent?.isRerequest
+                  ? `We'll send ${formatLimTitleAgentLabel(pendingLimTitleConsent)} another nudge that you're still hoping to hear back about the LIM report and title.`
+                  : `To request the LIM report and title, we'll share your name, email address and mobile number with ${formatLimTitleAgentLabel(pendingLimTitleConsent)} so they can respond. Project Alpha may also view this request to help manage it.`}
               </Text>
               {pendingLimTitleConsent?.propertyAddress ? (
                 <View style={[styles.limTitlePropertyRow, { backgroundColor: colors.accent + "0F" }]}>
@@ -4461,7 +4484,7 @@ export default function SearchScreen() {
                   disabled={limTitleConsentSending}
                   activeOpacity={0.84}
                 >
-                  {limTitleConsentSending ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.limTitleModalPrimaryText}>Share details</Text>}
+                  {limTitleConsentSending ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.limTitleModalPrimaryText}>{pendingLimTitleConsent?.isRerequest ? "Send reminder" : "Share details"}</Text>}
                 </TouchableOpacity>
               </View>
             </View>

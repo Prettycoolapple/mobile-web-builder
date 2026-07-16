@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 
 export const LIM_TITLE_EXPERIMENT_VERSION = "lim-title-v1";
-export const LIM_TITLE_PROACTIVE_RATE = 0.15;
+export const LIM_TITLE_PROACTIVE_RATE = 0.3;
 
 /** Stable assignment prevents refresh/reopen from rerolling the experiment. */
 export function isProactiveLimTitleSample(userId: string, reportKey: string): boolean {

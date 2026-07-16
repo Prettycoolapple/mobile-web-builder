@@ -47,6 +47,8 @@ interface ThreadRow {
 
 const THREAD_POLL_MS = 15000;
 const MESSAGE_POLL_MS = 5000;
+const NEW_CHAT_POLL_MS = 15000;
+const MH_LAST_SEEN_KEY = "admin.messageHub.lastSeenAt";
 
 export default function MessageHubPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -67,8 +69,35 @@ export default function MessageHubPage() {
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
+  const openedAtRef = useRef(new Date().toISOString());
+  const [liveNewChatsCount, setLiveNewChatsCount] = useState(0);
+
   const requestedAccountId = searchParams.get("accountId");
   const requestedThreadId = searchParams.get("threadId");
+
+  // Mark this visit as "seen" so the sidebar badge clears, and keep nudging
+  // the marker forward while the page stays open so chats that arrive during
+  // this visit don't re-trigger the badge the moment the admin navigates away.
+  useEffect(() => {
+    localStorage.setItem(MH_LAST_SEEN_KEY, openedAtRef.current);
+    let cancelled = false;
+    function poll() {
+      apiGet<{ total: number }>(
+        `/admin/message-hub/new-chats-count?since=${encodeURIComponent(openedAtRef.current)}`,
+      )
+        .then((data) => {
+          if (!cancelled) setLiveNewChatsCount(data.total);
+        })
+        .catch(() => {});
+      localStorage.setItem(MH_LAST_SEEN_KEY, new Date().toISOString());
+    }
+    const timer = window.setInterval(poll, NEW_CHAT_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      localStorage.setItem(MH_LAST_SEEN_KEY, new Date().toISOString());
+    };
+  }, []);
 
   useEffect(() => {
     apiGet<{ accounts: MessageHubAccount[] }>("/admin/message-hub/accounts")
@@ -234,10 +263,20 @@ export default function MessageHubPage() {
 
   return (
     <>
-      <h1>Message Hub</h1>
+      <h1>
+        Message Hub
+        {liveNewChatsCount > 0 && (
+          <span
+            className="mh-new-chat-dot"
+            title={`${liveNewChatsCount} new conversation${liveNewChatsCount === 1 ? "" : "s"} since you opened this page`}
+          />
+        )}
+      </h1>
       <p className="subtitle">
         Review provider and sales-agent conversations. Real sales-agent
         histories are read-only to admins.
+        {liveNewChatsCount > 0 &&
+          ` ${liveNewChatsCount} new conversation${liveNewChatsCount === 1 ? "" : "s"} started since you opened this page.`}
       </p>
 
       <div className="panel mh-filter-panel">
@@ -309,6 +348,12 @@ export default function MessageHubPage() {
               >
                 <div className="mh-thread-row">
                   <div className="mh-thread-name">
+                    {thread.createdAt > openedAtRef.current && (
+                      <span
+                        className="mh-new-chat-dot"
+                        title="New conversation"
+                      />
+                    )}
                     {thread.otherParticipant?.fullName ??
                       thread.otherParticipant?.email ??
                       "Unknown user"}

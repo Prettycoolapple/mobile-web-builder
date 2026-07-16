@@ -9,6 +9,7 @@ import {
   Alert,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
+import { VerifiedBadge } from "@/components/VerifiedBadge";
 import { ServiceProvider } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
 import { avatarImageSource, getAvatarInitials } from "@/lib/avatar";
@@ -155,7 +156,7 @@ export function ProviderRecommendationBubble({
               </Text>
               {provider.isVerified && (
                 <View style={styles.verifiedBadge}>
-                  <Feather name="shield" size={10} color="#10B981" />
+                  <VerifiedBadge size={10} />
                   <Text style={styles.verifiedText}>{t("bubble.recommend.verified")}</Text>
                 </View>
               )}

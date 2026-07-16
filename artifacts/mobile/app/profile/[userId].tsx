@@ -11,6 +11,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
+import { VerifiedBadge } from "@/components/VerifiedBadge";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
 import { useDm } from "@/context/DmContext";
@@ -287,7 +288,7 @@ export default function UserProfileScreen() {
                 </View>
                 {profile.isVerified && profile.role === "service_provider" && (
                   <View style={[styles.verifiedBadge, { backgroundColor: accentColor + "15", borderColor: accentColor + "40" }]}>
-                    <Feather name="shield" size={11} color={accentColor} />
+                    <VerifiedBadge size={11} />
                     <Text style={[styles.verifiedText, { color: accentColor }]}>{t("public_profile.verified")}</Text>
                   </View>
                 )}

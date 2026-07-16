@@ -99,6 +99,9 @@ export interface ChatMessage {
   limTitleStatus?: "offered" | "declined" | "requested";
   limTitleAgentName?: string | null;
   limTitleAgencyName?: string | null;
+  /** ISO timestamp — once past, the buyer can send another LIM/title request
+   * (cooldown after the initial "requested" state, or after a re-request). */
+  limTitleNextRequestAvailableAt?: string | null;
   backgroundJobId?: string;
 }
 

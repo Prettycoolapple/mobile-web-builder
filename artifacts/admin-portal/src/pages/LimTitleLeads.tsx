@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { apiGet, apiPatch } from "@/lib/api";
+import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { formatDate, relativeTime } from "@/lib/format";
 
 type LeadFilter = "open" | "completed" | "all";
@@ -25,6 +25,9 @@ interface LimTitleLead {
   documentsDeliveredAt: string | null;
   facilitatorMessageAt: string | null;
   agentRespondedAt: string | null;
+  lastRequestedAt: string;
+  requestCount: number;
+  isNew: boolean;
 }
 
 export default function LimTitleLeadsPage() {
@@ -51,6 +54,13 @@ export default function LimTitleLeadsPage() {
     const timer = window.setInterval(loadLeads, 15000);
     return () => window.clearInterval(timer);
   }, [loadLeads]);
+
+  useEffect(() => {
+    // Clears the sidebar badge / per-row red dots — a buyer re-requesting
+    // after the cooldown window bumps lastRequestedAt again, so simply
+    // having visited before doesn't suppress a later re-request.
+    apiPost("/admin/lim-title-leads/mark-viewed").catch(() => {});
+  }, []);
 
   const visibleLeads = useMemo(() => {
     if (!leads) return null;
@@ -153,7 +163,15 @@ export default function LimTitleLeadsPage() {
                   return (
                     <tr key={lead.id}>
                       <td title={formatDate(lead.consentedAt)}>
-                        <strong>{relativeTime(lead.consentedAt)}</strong>
+                        <strong>
+                          {lead.isNew && (
+                            <span
+                              className="mh-new-chat-dot"
+                              title="New or re-requested since you last viewed this list"
+                            />
+                          )}
+                          {relativeTime(lead.consentedAt)}
+                        </strong>
                         <div className="lead-muted">
                           {formatDate(lead.consentedAt)}
                         </div>
@@ -162,6 +180,15 @@ export default function LimTitleLeadsPage() {
                             ? "User asked"
                             : "15% prompt"}
                         </span>
+                        {lead.requestCount > 1 && (
+                          <div
+                            className="lead-muted"
+                            title={formatDate(lead.lastRequestedAt)}
+                          >
+                            Requested {lead.requestCount}× — last{" "}
+                            {relativeTime(lead.lastRequestedAt)}
+                          </div>
+                        )}
                       </td>
                       <td>
                         <strong>{lead.buyerFullName ?? "Unnamed user"}</strong>

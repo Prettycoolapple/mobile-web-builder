@@ -1,5 +1,6 @@
 import {
   index,
+  integer,
   jsonb,
   pgTable,
   text,
@@ -64,6 +65,19 @@ export const limTitleRequests = pgTable(
     documentsDeliveredAt: timestamp("documents_delivered_at", {
       withTimezone: true,
     }),
+    /** Bumped on the initial consent and on every allowed re-request (after the
+     * cooldown window). Drives the admin "new"/red-dot indicator — a fresh
+     * re-request should resurface a lead even though it was consented long
+     * ago. */
+    lastRequestedAt: timestamp("last_requested_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    /** How many times the buyer has (re)requested this — informational. */
+    requestCount: integer("request_count").default(1).notNull(),
+    /** When an admin last viewed the LIM/title leads list. A row is "new" for
+     * badge/red-dot purposes when lastRequestedAt is after this. Null means
+     * never viewed. */
+    adminViewedAt: timestamp("admin_viewed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -89,6 +103,9 @@ export const limTitleRequests = pgTable(
     index("lim_title_requests_target_status_idx").on(
       table.agentTargetId,
       table.status,
+    ),
+    index("lim_title_requests_last_requested_idx").on(
+      table.lastRequestedAt,
     ),
   ],
 );

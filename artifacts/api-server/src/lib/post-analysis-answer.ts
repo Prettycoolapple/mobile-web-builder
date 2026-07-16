@@ -163,8 +163,8 @@ export function buildDevScoreNotice(
 ): string | null {
   if (!report || !hasNoDevelopmentScore(report)) return null;
   return locale === "zh"
-    ? "该物业暂无开发评分。开发评分较低或缺失的物业，其分割或开发潜力通常较为有限——建议您联系专业开发顾问，以确认可行的方案。"
-    : "This property doesn't have a development score. Properties with a low or missing development score often have limited subdivision or development potential — we recommend getting in touch with a specialist consultant to confirm what's achievable.";
+    ? "该物业暂无开发评分。这有时是因为该地块的部分规划或物业数据暂时不足，也可能反映其分割或开发潜力较为有限——建议您联系专业开发顾问，以确认可行的方案。"
+    : "This property doesn't have a development score. Sometimes this simply means we don't yet have enough data for the site, though it can also indicate limited subdivision or development potential — we recommend getting in touch with a specialist consultant to confirm what's achievable.";
 }
 
 function reportPurchaseBase(report: Record<string, unknown>): { amount: number; source: "listing price" | "CV" } | null {

@@ -117,11 +117,9 @@ router.post("/dm/threads", requireAuth, async (req: Request, res: Response) => {
   }
 
   try {
-    // Enforce paid-tier rule: a general user can only initiate a thread with a
-    // service provider if they're on standard or pro. Sales agents and
-    // providers can always initiate, and any user can DM another general user.
+    // Provider contact is free for all users, all tiers.
     const [me, target] = await Promise.all([
-      db.select({ role: profiles.role, subscriptionTier: profiles.subscriptionTier })
+      db.select({ role: profiles.role })
         .from(profiles).where(eq(profiles.id, userId)).limit(1),
       db.select({ role: profiles.role })
         .from(profiles).where(eq(profiles.id, targetUserId)).limit(1),
@@ -131,13 +129,6 @@ router.post("/dm/threads", requireAuth, async (req: Request, res: Response) => {
     if (!meRow || !targetRow) {
       res.status(404).json({ error: "User not found" });
       return;
-    }
-    if (meRow.role === "general" && targetRow.role === "service_provider") {
-      const tier = meRow.subscriptionTier ?? "free";
-      if (tier !== "standard" && tier !== "pro") {
-        res.status(402).json({ error: "Upgrade required", upgradeRequired: true });
-        return;
-      }
     }
 
     if (await pairHasAnyBlock(userId, targetUserId)) {
@@ -245,6 +236,7 @@ router.get("/dm/threads", requireAuth, async (req: Request, res: Response) => {
             requestedDocuments: limTitleRequests.requestedDocuments,
             status: limTitleRequests.status,
             consentedAt: limTitleRequests.consentedAt,
+            documentsDeliveredAt: limTitleRequests.documentsDeliveredAt,
           })
           .from(limTitleRequests)
           .where(and(
@@ -439,16 +431,33 @@ router.patch("/dm/threads/:threadId/read", requireAuth, async (req: Request, res
       return;
     }
 
-    await db
+    const readAt = new Date();
+    const marked = await db
       .update(dmMessages)
-      .set({ readAt: new Date() })
+      .set({ readAt })
       .where(
         and(
           eq(dmMessages.threadId, threadId),
           isNull(dmMessages.readAt),
           sql`${dmMessages.senderId} != ${userId}`,
         ),
-      );
+      )
+      .returning({ id: dmMessages.id });
+
+    // Let the sender's open clients update read receipts live (shown to
+    // sales agents as "Read" under their sent messages).
+    if (marked.length > 0) {
+      const otherId =
+        thread.participantA === userId ? thread.participantB : thread.participantA;
+      const io = getIo();
+      if (io) {
+        io.to(`user:${otherId}`).emit("messages_read", {
+          threadId,
+          messageIds: marked.map((row) => row.id),
+          readAt: readAt.toISOString(),
+        });
+      }
+    }
 
     res.json({ ok: true });
   } catch (err) {
@@ -533,6 +542,68 @@ router.post(
     } catch (err) {
       req.log.error({ err }, "POST /dm/threads/:threadId/messages/:messageId/like failed");
       res.status(500).json({ error: "Failed to update like" });
+    }
+  },
+);
+
+// Recipient opened a file attachment (e.g. a LIM/title PDF). Records the first
+// view only and broadcasts so the sender's clients can show "File viewed"
+// (surfaced to sales agents).
+router.post(
+  "/dm/threads/:threadId/messages/:messageId/file-viewed",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    const userId = (req as any).userId as string;
+    const { threadId, messageId } = req.params;
+
+    try {
+      const [thread] = await db
+        .select()
+        .from(dmThreads)
+        .where(eq(dmThreads.id, threadId))
+        .limit(1);
+
+      if (!thread || (thread.participantA !== userId && thread.participantB !== userId)) {
+        res.status(403).json({ error: "Thread not found or access denied" });
+        return;
+      }
+
+      const [existing] = await db
+        .select({
+          id: dmMessages.id,
+          senderId: dmMessages.senderId,
+          fileUrl: dmMessages.fileUrl,
+          fileViewedAt: dmMessages.fileViewedAt,
+        })
+        .from(dmMessages)
+        .where(and(eq(dmMessages.id, messageId), eq(dmMessages.threadId, threadId)))
+        .limit(1);
+      if (!existing || !existing.fileUrl) {
+        res.status(404).json({ error: "File message not found" });
+        return;
+      }
+      // Only the recipient's open counts; senders opening their own file don't.
+      // Already-viewed messages keep their first-view timestamp.
+      if (existing.senderId === userId || existing.fileViewedAt) {
+        res.json({ ok: true });
+        return;
+      }
+
+      const [message] = await db
+        .update(dmMessages)
+        .set({ fileViewedAt: new Date() })
+        .where(eq(dmMessages.id, messageId))
+        .returning();
+
+      const io = getIo();
+      if (io) {
+        io.to(`user:${existing.senderId}`).emit("file_viewed", { threadId, message });
+      }
+
+      res.json({ ok: true });
+    } catch (err) {
+      req.log.error({ err }, "POST /dm/threads/:threadId/messages/:messageId/file-viewed failed");
+      res.status(500).json({ error: "Failed to record file view" });
     }
   },
 );

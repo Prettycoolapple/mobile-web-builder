@@ -419,10 +419,10 @@
           </div>
 
           <div class="portal-dashboard-nav" role="tablist" aria-label="Dashboard sections">
-            <button class="portal-dashboard-tab is-active" type="button" data-dashboard-target="listings" role="tab" aria-selected="true">
+            <button class="portal-dashboard-tab" type="button" data-dashboard-target="listings" role="tab" aria-selected="false">
               My listings
             </button>
-            <button class="portal-dashboard-tab" type="button" data-dashboard-target="leads" role="tab" aria-selected="false">
+            <button class="portal-dashboard-tab is-active" type="button" data-dashboard-target="leads" role="tab" aria-selected="true">
               Leads/messages <span id="sales-dm-nav-unread" hidden></span>
             </button>
             <button class="portal-dashboard-tab" type="button" data-dashboard-target="profile" role="tab" aria-selected="false">
@@ -436,7 +436,7 @@
             </button>
           </div>
 
-          <section class="portal-dashboard-panel" data-dashboard-panel="leads" role="tabpanel" hidden>
+          <section class="portal-dashboard-panel is-active" data-dashboard-panel="leads" role="tabpanel">
             <div class="sales-dm-shell" id="sales-dm-shell">
               <aside class="sales-dm-side" aria-label="Lead conversations">
                 <div class="sales-dm-side-head">
@@ -479,7 +479,7 @@
             </div>
           </section>
 
-          <section class="portal-dashboard-panel is-active" data-dashboard-panel="listings" role="tabpanel">
+          <section class="portal-dashboard-panel" data-dashboard-panel="listings" role="tabpanel" hidden>
             <div class="portal-card">
               <div class="portal-listings-head">
                 <div>

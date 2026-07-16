@@ -1097,6 +1097,44 @@ router.get("/admin/message-hub/accounts", requireAdmin, async (req, res) => {
   }
 });
 
+// GET /admin/message-hub/new-chats-count?since=ISO8601 → how many DM threads
+// (touching a service-provider or sales-agent account) were created after
+// `since`. Used to badge the "Message Hub" sidebar link and to flag brand-new
+// conversations while an admin already has the page open.
+router.get(
+  "/admin/message-hub/new-chats-count",
+  requireAdmin,
+  async (req, res) => {
+    const sinceParam = String(req.query.since ?? "");
+    const since = sinceParam && !Number.isNaN(Date.parse(sinceParam))
+      ? new Date(sinceParam)
+      : new Date(0);
+
+    try {
+      const result = await db.execute<{ total: string; latest: string | null }>(sql`
+        SELECT COUNT(*)::text AS total, MAX(t.created_at)::text AS latest
+        FROM dm_threads t
+        WHERE t.created_at > ${since}
+          AND (
+            EXISTS (
+              SELECT 1 FROM profiles p
+              WHERE p.id = t.participant_a AND p.role IN ('service_provider', 'sales_agent')
+            )
+            OR EXISTS (
+              SELECT 1 FROM profiles p
+              WHERE p.id = t.participant_b AND p.role IN ('service_provider', 'sales_agent')
+            )
+          )
+      `);
+      const row = ((result as any).rows ?? result)[0] ?? { total: "0", latest: null };
+      res.json({ total: Number(row.total ?? 0), latest: row.latest ?? null });
+    } catch (err) {
+      req.log.error({ err }, "admin message-hub new-chats-count failed");
+      res.status(500).json({ error: "Failed to load new chat count" });
+    }
+  },
+);
+
 async function sendMessageHubThreads(
   req: Request,
   res: Response,
@@ -2557,6 +2595,9 @@ router.get("/admin/lim-title-leads", requireAdmin, async (req, res) => {
         connectedAt: limTitleRequests.connectedAt,
         adminSmsSentAt: limTitleRequests.adminSmsSentAt,
         documentsDeliveredAt: limTitleRequests.documentsDeliveredAt,
+        lastRequestedAt: limTitleRequests.lastRequestedAt,
+        requestCount: limTitleRequests.requestCount,
+        isNew: sql<boolean>`${limTitleRequests.lastRequestedAt} > coalesce(${limTitleRequests.adminViewedAt}, 'epoch'::timestamptz)`,
         facilitatorMessageAt: sql<Date | null>`(
           SELECT MIN(f.created_at)
           FROM dm_messages f
@@ -2597,6 +2638,50 @@ router.get("/admin/lim-title-leads", requireAdmin, async (req, res) => {
     res.status(500).json({ error: "Failed to load LIM/title leads" });
   }
 });
+
+/** Sidebar badge count: consented leads whose last (re)request hasn't been
+ * viewed by an admin yet — covers both brand-new leads and buyers who
+ * re-requested after the cooldown window. */
+router.get(
+  "/admin/lim-title-leads/pending-count",
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const [{ total }] = await db
+        .select({ total: sql<number>`count(*)::int` })
+        .from(limTitleRequests)
+        .where(
+          and(
+            isNotNull(limTitleRequests.consentedAt),
+            sql`${limTitleRequests.lastRequestedAt} > coalesce(${limTitleRequests.adminViewedAt}, 'epoch'::timestamptz)`,
+          ),
+        );
+      res.json({ total: total ?? 0 });
+    } catch (err) {
+      req.log.error({ err }, "admin LIM/title pending-count failed");
+      res.status(500).json({ error: "Failed to load pending count" });
+    }
+  },
+);
+
+/** Called when the admin opens the LIM/title leads tab — clears the red-dot
+ * / badge for every currently-consented lead. */
+router.post(
+  "/admin/lim-title-leads/mark-viewed",
+  requireAdmin,
+  async (req, res) => {
+    try {
+      await db
+        .update(limTitleRequests)
+        .set({ adminViewedAt: new Date() })
+        .where(isNotNull(limTitleRequests.consentedAt));
+      res.json({ ok: true });
+    } catch (err) {
+      req.log.error({ err }, "admin LIM/title mark-viewed failed");
+      res.status(500).json({ error: "Failed to mark leads as viewed" });
+    }
+  },
+);
 
 router.patch(
   "/admin/lim-title-leads/:requestId",

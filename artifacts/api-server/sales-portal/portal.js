@@ -183,7 +183,11 @@
     fillProfileForm(user || {});
     updateAccountSummary(user || {});
     const params = new URLSearchParams(window.location.search);
-    const requestedTab = params.has("lead") ? "leads" : "listings";
+    const requestedTab = params.has("lead")
+      ? "leads"
+      : params.get("upgrade") === "listings"
+        ? "listings"
+        : "leads";
     switchDashboardTab(requestedTab);
     if (requestedTab === "leads") {
       // Trigger the inbox module's normal activation path as well as changing

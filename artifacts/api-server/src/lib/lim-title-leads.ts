@@ -250,6 +250,36 @@ export async function createOrReuseLimTitleOffer(args: {
     )
     .limit(1);
   if (!existing) throw new Error("LIM_TITLE_OFFER_UPSERT_FAILED");
+
+  // A prior "No thanks" must not permanently block the offer: if the buyer
+  // explicitly asks again in chat (organic intent), resurrect the declined
+  // row back to "offered" so the message reappears with fresh Yes/No
+  // buttons. Proactive (chance) offers never reach this branch a second time
+  // — the mobile client already skips re-evaluating once any lim_title_offer
+  // message exists for the address, and the /offers/evaluate route only
+  // reuses rows still in "offered" status.
+  if (existing.status === "declined" && args.offerSource === "organic_intent") {
+    const [revived] = await db
+      .update(limTitleRequests)
+      .set({
+        status: "offered",
+        declinedAt: null,
+        offerShownAt: now,
+        metadataJson: {
+          agentMatchType: "subject",
+          selectedListingContext:
+            (args.selectedListingContext as
+              | Record<string, unknown>
+              | null
+              | undefined) ?? null,
+          intentReason: args.intentReason ?? null,
+        },
+        updatedAt: now,
+      })
+      .where(eq(limTitleRequests.id, existing.id))
+      .returning();
+    if (revived) return revived;
+  }
   return existing;
 }
 
@@ -394,6 +424,56 @@ export async function connectLimTitleRequest(requestId: string): Promise<{
   return { connected: result.connected, threadId: result.threadId };
 }
 
+/** How long a buyer must wait before re-requesting the same LIM/title lead
+ * once already consented — lets a genuinely-still-interested buyer nudge the
+ * agent again without letting the flow be spammed. */
+export const LIM_TITLE_REREQUEST_COOLDOWN_HOURS = 6;
+
+function nextRequestAvailableAt(lastRequestedAt: Date): Date {
+  return new Date(
+    lastRequestedAt.getTime() +
+      LIM_TITLE_REREQUEST_COOLDOWN_HOURS * 60 * 60 * 1000,
+  );
+}
+
+/** Posts a short "still interested" nudge into the existing DM thread and
+ * notifies both parties over the socket, mirroring connectLimTitleRequest's
+ * notification shape. Silently no-ops if the thread isn't connected yet. */
+async function sendLimTitleReminderPing(
+  request: LimTitleRequest,
+): Promise<void> {
+  if (!request.dmThreadId || !request.matchedAgentUserId) return;
+  const [message] = await db
+    .insert(dmMessages)
+    .values({
+      threadId: request.dmThreadId,
+      senderId: request.requesterUserId,
+      body: `Reminder: I'm still hoping to get the LIM report and title for ${request.propertyAddress}. Thanks!`,
+      messageKind: "lim_title_reminder",
+      leadRequestId: request.id,
+      metadataJson: {
+        requestId: request.id,
+        propertyAddress: request.propertyAddress,
+        requestedDocuments: request.requestedDocuments,
+      },
+    })
+    .returning();
+  if (!message) return;
+  await db
+    .update(dmThreads)
+    .set({ lastMessageAt: message.createdAt })
+    .where(eq(dmThreads.id, request.dmThreadId));
+  const io = getIo();
+  io?.to(`user:${request.matchedAgentUserId}`).emit("new_message", {
+    threadId: request.dmThreadId,
+    message,
+  });
+  io?.to(`user:${request.requesterUserId}`).emit("new_message", {
+    threadId: request.dmThreadId,
+    message,
+  });
+}
+
 export async function consentToLimTitleRequest(
   requestId: string,
   requesterUserId: string,
@@ -402,6 +482,10 @@ export async function consentToLimTitleRequest(
   alreadyConsented: boolean;
   connected: boolean;
   threadId: string | null;
+  /** True when a repeat request landed inside the cooldown window — nothing
+   * was changed and the caller should tell the buyer to wait. */
+  cooldownActive: boolean;
+  nextRequestAvailableAt: Date;
 }> {
   const now = new Date();
   const [current] = await db
@@ -417,27 +501,62 @@ export async function consentToLimTitleRequest(
   if (!current)
     throw Object.assign(new Error("Request not found"), { statusCode: 404 });
   const alreadyConsented = Boolean(current.consentedAt);
-  let request = current;
-  if (!alreadyConsented) {
-    const [updated] = await db
+
+  if (alreadyConsented) {
+    const lastRequested = current.lastRequestedAt ?? current.consentedAt!;
+    const availableAt = nextRequestAvailableAt(lastRequested);
+    if (now < availableAt) {
+      return {
+        request: current,
+        alreadyConsented: true,
+        connected: Boolean(current.dmThreadId),
+        threadId: current.dmThreadId,
+        cooldownActive: true,
+        nextRequestAvailableAt: availableAt,
+      };
+    }
+    const [bumped] = await db
       .update(limTitleRequests)
       .set({
-        status: current.matchedAgentUserId
-          ? "pending_connection"
-          : "pending_agent_claim",
-        consentedAt: now,
+        lastRequestedAt: now,
+        requestCount: sql`${limTitleRequests.requestCount} + 1`,
         updatedAt: now,
       })
-      .where(
-        and(
-          eq(limTitleRequests.id, requestId),
-          eq(limTitleRequests.requesterUserId, requesterUserId),
-          isNull(limTitleRequests.consentedAt),
-        ),
-      )
+      .where(eq(limTitleRequests.id, requestId))
       .returning();
-    request = updated ?? current;
+    const request = bumped ?? current;
+    const connected = await connectLimTitleRequest(requestId);
+    if (connected.connected) await sendLimTitleReminderPing(request);
+    return {
+      request,
+      alreadyConsented: true,
+      connected: connected.connected,
+      threadId: connected.threadId,
+      cooldownActive: false,
+      nextRequestAvailableAt: nextRequestAvailableAt(now),
+    };
   }
+
+  const [updated] = await db
+    .update(limTitleRequests)
+    .set({
+      status: current.matchedAgentUserId
+        ? "pending_connection"
+        : "pending_agent_claim",
+      consentedAt: now,
+      lastRequestedAt: now,
+      requestCount: 1,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(limTitleRequests.id, requestId),
+        eq(limTitleRequests.requesterUserId, requesterUserId),
+        isNull(limTitleRequests.consentedAt),
+      ),
+    )
+    .returning();
+  const request = updated ?? current;
   const connected = await connectLimTitleRequest(requestId);
   const [fresh] = await db
     .select()
@@ -446,9 +565,11 @@ export async function consentToLimTitleRequest(
     .limit(1);
   return {
     request: fresh ?? request,
-    alreadyConsented,
+    alreadyConsented: false,
     connected: connected.connected,
     threadId: connected.threadId,
+    cooldownActive: false,
+    nextRequestAvailableAt: nextRequestAvailableAt(now),
   };
 }
 

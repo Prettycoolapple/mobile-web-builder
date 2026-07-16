@@ -492,7 +492,13 @@ export function SitePlanCard({ report }: Props) {
     return image.dataUri ? ["data-uri"] : [];
   }, [query.data?.image]);
   const aerialReady = Boolean(query.data) && (aerialAssetKeys.every((key) => loadedAerialAssets.has(key)) || aerialWaitExpired);
-  const mapReady = Boolean(query.data) && aerialReady && Boolean(canvasSize);
+  // Canvas is positioned and ready to draw vector layers (legend toggles, boundaries, service
+  // lines) as soon as we have data + a measured viewport — this must NOT wait on the aerial
+  // basemap tiles, which can take up to `aerialWaitExpired`'s 12s fallback to settle. Gating the
+  // whole canvas (including vector linework) behind aerial readiness previously meant a legend
+  // switch could flip instantly while its layer stayed invisible for seconds behind the aerial
+  // wait — the aerial image itself still fades in separately via `aerialReady`.
+  const canvasReady = Boolean(query.data) && Boolean(canvasSize);
 
   useEffect(() => {
     setLoadedAerialAssets(new Set());
@@ -755,46 +761,51 @@ export function SitePlanCard({ report }: Props) {
                   height: query.data.image.height,
                   left: canvasSize ? (canvasSize.width - query.data.image.width) / 2 : 0,
                   top: canvasSize ? (canvasSize.height - query.data.image.height) / 2 : 0,
-                  opacity: mapReady ? 1 : 0.01,
+                  opacity: canvasReady ? 1 : 0.01,
                 },
                 animatedMapStyle,
               ]}
             >
-              {query.data.image.source === "linz-basemaps" && query.data.image.tiles?.length ? (
-                // Aerial rendered as a grid of LINZ Basemaps tiles via the server proxy (key stays
-                // server-side, no `sharp` needed). Each tile sits at its native resolution.
-                query.data.image.tiles.map((tile) => (
+              {/* Aerial imagery fades in independently on its own `aerialReady` gate so slow
+                  satellite tile loads never block the vector linework (legend layers) below from
+                  rendering — those are already in memory and should reflect toggles instantly. */}
+              <View style={[StyleSheet.absoluteFill, { opacity: aerialReady ? 1 : 0 }]} pointerEvents="none">
+                {query.data.image.source === "linz-basemaps" && query.data.image.tiles?.length ? (
+                  // Aerial rendered as a grid of LINZ Basemaps tiles via the server proxy (key stays
+                  // server-side, no `sharp` needed). Each tile sits at its native resolution.
+                  query.data.image.tiles.map((tile) => (
+                    <Image
+                      key={`${tile.z}/${tile.x}/${tile.y}`}
+                      source={{ uri: aerialTileUri(tile) }}
+                      onLoadEnd={() => markAerialAssetLoaded(`${tile.z}/${tile.x}/${tile.y}`)}
+                      onError={() => markAerialAssetLoaded(`${tile.z}/${tile.x}/${tile.y}`)}
+                      style={{
+                        position: "absolute",
+                        left: tile.left,
+                        top: tile.top,
+                        width: query.data.image.tileSize ?? 256,
+                        height: query.data.image.tileSize ?? 256,
+                        // Slightly transparent so the vector linework (pipes/boundaries/nodes) on top
+                        // stays legible against the satellite imagery.
+                        opacity: 0.82,
+                      }}
+                    />
+                  ))
+                ) : query.data.image.dataUri ? (
                   <Image
-                    key={`${tile.z}/${tile.x}/${tile.y}`}
-                    source={{ uri: aerialTileUri(tile) }}
-                    onLoadEnd={() => markAerialAssetLoaded(`${tile.z}/${tile.x}/${tile.y}`)}
-                    onError={() => markAerialAssetLoaded(`${tile.z}/${tile.x}/${tile.y}`)}
-                    style={{
-                      position: "absolute",
-                      left: tile.left,
-                      top: tile.top,
-                      width: query.data.image.tileSize ?? 256,
-                      height: query.data.image.tileSize ?? 256,
-                      // Slightly transparent so the vector linework (pipes/boundaries/nodes) on top
-                      // stays legible against the satellite imagery.
-                      opacity: 0.82,
-                    }}
+                    source={{ uri: query.data.image.dataUri }}
+                    style={styles.mapImage}
+                    resizeMode="cover"
+                    onLoadEnd={() => markAerialAssetLoaded("data-uri")}
+                    onError={() => markAerialAssetLoaded("data-uri")}
                   />
-                ))
-              ) : query.data.image.dataUri ? (
-                <Image
-                  source={{ uri: query.data.image.dataUri }}
-                  style={styles.mapImage}
-                  resizeMode="cover"
-                  onLoadEnd={() => markAerialAssetLoaded("data-uri")}
-                  onError={() => markAerialAssetLoaded("data-uri")}
-                />
-              ) : null}
-              {/* Slight scrim over the aerial so the vector linework (pipes/boundaries) stays
-                  legible on top of the satellite imagery (house, trees) underneath. */}
-              {query.data.image.source === "linz-basemaps" ? (
-                <View style={[StyleSheet.absoluteFill, styles.aerialScrim]} pointerEvents="none" />
-              ) : null}
+                ) : null}
+                {/* Slight scrim over the aerial so the vector linework (pipes/boundaries) stays
+                    legible on top of the satellite imagery (house, trees) underneath. */}
+                {query.data.image.source === "linz-basemaps" ? (
+                  <View style={[StyleSheet.absoluteFill, styles.aerialScrim]} pointerEvents="none" />
+                ) : null}
+              </View>
               <Svg
                 style={StyleSheet.absoluteFill}
                 viewBox={`0 0 ${query.data.image.width} ${query.data.image.height}`}
@@ -824,7 +835,7 @@ export function SitePlanCard({ report }: Props) {
             </Animated.View>
           </GestureDetector>
         ) : null}
-        {query.isLoading || (query.data && !mapReady) ? (
+        {query.isLoading || (query.data && !canvasReady) ? (
           <View style={styles.loadingOverlay}>
             <ActivityIndicator color={colors.accent} />
             <Text style={[styles.loadingText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
@@ -832,7 +843,7 @@ export function SitePlanCard({ report }: Props) {
             </Text>
           </View>
         ) : null}
-        {query.isFetching && !query.isLoading && mapReady ? (
+        {query.isFetching && !query.isLoading && canvasReady ? (
           <View style={[styles.refreshingPill, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <ActivityIndicator size="small" color={colors.accent} />
           </View>

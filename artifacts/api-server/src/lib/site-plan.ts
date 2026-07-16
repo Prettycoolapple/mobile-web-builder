@@ -13,6 +13,7 @@ import {
 } from "./regional-arcgis";
 import { regionalInfrastructureServiceLayers, type RegionalInfrastructureGroup } from "./regional-infrastructure";
 import { decodeTerrariumPng, terrariumTileCoords } from "./auckland-council";
+import { getCachedSitePlanLayers, setCachedSitePlanLayers, sitePlanLayerCacheKey } from "./site-plan-layer-cache";
 
 type GeoJsonPosition = [number, number];
 type GeoJsonGeometry =
@@ -1315,6 +1316,24 @@ async function resolveParcel(geo: GeoResult, cachedRaw?: RawPropertyData | null)
   });
 }
 
+/**
+ * Serves the planning/services/contours layer bundle from the durable cache
+ * when available, otherwise runs the live external GIS fetch and populates
+ * the cache in the background. This is the fix for the multi-second Vercel
+ * function time spent on every Plan-tab open re-querying council ArcGIS
+ * servers that rarely change.
+ */
+async function resolveGisExtraLayers(
+  cacheKey: string,
+  fetchLive: () => Promise<SitePlanLayer[]>,
+): Promise<SitePlanLayer[]> {
+  const cached = await getCachedSitePlanLayers(cacheKey);
+  if (cached) return cached;
+  const layers = await fetchLive();
+  void setCachedSitePlanLayers(cacheKey, layers);
+  return layers;
+}
+
 export async function buildSitePlanForAddress(
   address: string,
   cachedRaw?: RawPropertyData | null,
@@ -1330,22 +1349,28 @@ export async function buildSitePlanForAddress(
   // never truncated. The display bounds (sitePlanMapBounds) are intentionally left unchanged
   // so the on-screen scrollable extent stays the same — only the fetched data coverage grows.
   const nearbyRadiusM = Math.max(240, Math.min(1500, Math.ceil(boundsRadiusMetres(mapBounds) * 3)));
+  const cacheKey = sitePlanLayerCacheKey("auckland-legacy", parcel?.parcel_id ?? null, geo.lat, geo.lng);
 
-  const [image, nearbyParcels, planning, services, contours] = await Promise.all([
+  const [image, nearbyParcels, extraLayers] = await Promise.all([
     Promise.resolve(buildAerialTileGrid(mapBounds)),
     fetchLINZParcelsNear(center.lat, center.lng, nearbyRadiusM, 400).catch((err) => {
       logger.warn({ err: (err as Error).message }, "site-plan: LINZ nearby parcel lookup failed");
       return null;
     }),
-    planningOverlayLayers(geo.lat, geo.lng, parcel?.bbox ?? null).catch((err) => {
-      logger.warn({ err: (err as Error).message }, "site-plan: Auckland planning overlay lookup failed");
-      return [] as SitePlanLayer[];
+    resolveGisExtraLayers(cacheKey, async () => {
+      const [planning, services, contours] = await Promise.all([
+        planningOverlayLayers(geo.lat, geo.lng, parcel?.bbox ?? null).catch((err) => {
+          logger.warn({ err: (err as Error).message }, "site-plan: Auckland planning overlay lookup failed");
+          return [] as SitePlanLayer[];
+        }),
+        serviceLayers(coreBounds).catch((err) => {
+          logger.warn({ err: (err as Error).message }, "site-plan: Auckland service lookup failed");
+          return SERVICE_LAYER_DEFS.map((def) => unavailableLayer(def.id, def.label, "services", def.color));
+        }),
+        contourLayer(coreBounds),
+      ]);
+      return [...planning, ...services, contours];
     }),
-    serviceLayers(coreBounds).catch((err) => {
-      logger.warn({ err: (err as Error).message }, "site-plan: Auckland service lookup failed");
-      return SERVICE_LAYER_DEFS.map((def) => unavailableLayer(def.id, def.label, "services", def.color));
-    }),
-    contourLayer(coreBounds),
   ]);
 
   return {
@@ -1354,9 +1379,7 @@ export async function buildSitePlanForAddress(
     layers: [
       nearbyBoundaryLayer(nearbyParcels, parcel),
       boundaryLayer(parcel),
-      ...planning,
-      ...services,
-      contours,
+      ...extraLayers,
     ],
   };
 }
@@ -1371,26 +1394,32 @@ async function buildNationalSitePlanForGeo(
   const mapBounds = sitePlanMapBounds(coreBounds);
   const center = parcel?.bbox ? boundsCenter(parcel.bbox) : { lat: geo.lat, lng: geo.lng };
   const nearbyRadiusM = Math.max(240, Math.min(1500, Math.ceil(boundsRadiusMetres(mapBounds) * 3)));
+  const cacheKey = sitePlanLayerCacheKey(providerId ?? null, parcel?.parcel_id ?? null, geo.lat, geo.lng);
 
-  const [image, nearbyParcels, planning, services, contours] = await Promise.all([
+  const [image, nearbyParcels, extraLayers] = await Promise.all([
     Promise.resolve(buildAerialTileGrid(mapBounds)),
     fetchLINZParcelsNear(center.lat, center.lng, nearbyRadiusM, 400).catch((err) => {
       logger.warn({ err: (err as Error).message }, "site-plan: LINZ nearby parcel lookup failed");
       return null;
     }),
-    providerId
-      ? regionalPlanningOverlayLayers(providerId, geo, parcel?.bbox ?? null, coreBounds).catch((err) => {
-          logger.warn({ err: (err as Error).message, providerId }, "site-plan: regional planning overlay lookup failed");
-          return [] as SitePlanLayer[];
-        })
-      : Promise.resolve([] as SitePlanLayer[]),
-    providerId
-      ? regionalServiceLayers(coreBounds, providerId).catch((err) => {
-          logger.warn({ err: (err as Error).message, providerId }, "site-plan: regional service lookup failed");
-          return [] as SitePlanLayer[];
-        })
-      : Promise.resolve([] as SitePlanLayer[]),
-    linzContourLayer(coreBounds),
+    resolveGisExtraLayers(cacheKey, async () => {
+      const [planning, services, contours] = await Promise.all([
+        providerId
+          ? regionalPlanningOverlayLayers(providerId, geo, parcel?.bbox ?? null, coreBounds).catch((err) => {
+              logger.warn({ err: (err as Error).message, providerId }, "site-plan: regional planning overlay lookup failed");
+              return [] as SitePlanLayer[];
+            })
+          : Promise.resolve([] as SitePlanLayer[]),
+        providerId
+          ? regionalServiceLayers(coreBounds, providerId).catch((err) => {
+              logger.warn({ err: (err as Error).message, providerId }, "site-plan: regional service lookup failed");
+              return [] as SitePlanLayer[];
+            })
+          : Promise.resolve([] as SitePlanLayer[]),
+        linzContourLayer(coreBounds),
+      ]);
+      return [...planning, ...services, contours];
+    }),
   ]);
 
   return {
@@ -1399,9 +1428,7 @@ async function buildNationalSitePlanForGeo(
     layers: [
       nearbyBoundaryLayer(nearbyParcels, parcel),
       boundaryLayer(parcel),
-      ...planning,
-      ...services,
-      contours,
+      ...extraLayers,
     ],
   };
 }

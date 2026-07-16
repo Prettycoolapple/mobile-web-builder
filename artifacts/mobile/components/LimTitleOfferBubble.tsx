@@ -15,6 +15,10 @@ export function LimTitleOfferBubble({
 }) {
   const colors = useColors();
   const status = message.limTitleStatus ?? "offered";
+  const canRequestAgain =
+    status === "requested" &&
+    Boolean(message.limTitleNextRequestAvailableAt) &&
+    Date.now() >= Date.parse(message.limTitleNextRequestAvailableAt!);
   return (
     <View style={styles.row}>
       <View style={[styles.icon, { backgroundColor: colors.accent + "18" }]}>
@@ -46,11 +50,23 @@ export function LimTitleOfferBubble({
             </TouchableOpacity>
           </View>
         ) : (
-          <View style={styles.statusRow}>
-            <Feather name={status === "requested" ? "check-circle" : "x-circle"} size={15} color={status === "requested" ? colors.accent : colors.mutedForeground} />
-            <Text style={[styles.statusText, { color: status === "requested" ? colors.accent : colors.mutedForeground }]}>
-              {status === "requested" ? "Request sent" : "Offer declined"}
-            </Text>
+          <View>
+            <View style={styles.statusRow}>
+              <Feather name={status === "requested" ? "check-circle" : "x-circle"} size={15} color={status === "requested" ? colors.accent : colors.mutedForeground} />
+              <Text style={[styles.statusText, { color: status === "requested" ? colors.accent : colors.mutedForeground }]}>
+                {status === "requested" ? "Request sent" : "Offer declined"}
+              </Text>
+            </View>
+            {canRequestAgain ? (
+              <TouchableOpacity
+                style={[styles.secondary, styles.requestAgain, { borderColor: colors.border }]}
+                onPress={() => onRequest?.(message)}
+                activeOpacity={0.78}
+                accessibilityRole="button"
+              >
+                <Text style={[styles.secondaryText, { color: colors.accent }]}>Request again</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
         )}
       </View>
@@ -71,5 +87,6 @@ const styles = StyleSheet.create({
   secondary: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 13, paddingVertical: 9 },
   secondaryText: { fontFamily: "DM_Sans_600SemiBold", fontSize: 12 },
   statusRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 },
+  requestAgain: { alignSelf: "flex-start", marginTop: 8 },
   statusText: { fontFamily: "DM_Sans_600SemiBold", fontSize: 12 },
 });
