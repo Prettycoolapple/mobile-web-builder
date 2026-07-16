@@ -4387,7 +4387,7 @@ async function runFeasibilityAnalyseCore(args: {
         });
       }
     } else if (hasCacheableCore(pipelineResult) && pipelineResult.raw_property) {
-      void upsertCachedRaw({
+      await upsertCachedRaw({
         addressKey,
         rawData: pipelineResult.raw_property,
         canonicalParcelId: pipelineResult.linz_parcel?.parcel_id ?? null,
@@ -8366,7 +8366,7 @@ router.post(
                 });
               }
             } else if (hasCacheableCore(pipelineResult) && pipelineResult.raw_property) {
-              void upsertCachedRaw({
+              await upsertCachedRaw({
                 addressKey: chatAddressKey,
                 rawData: pipelineResult.raw_property,
                 canonicalParcelId: pipelineResult.linz_parcel?.parcel_id ?? null,

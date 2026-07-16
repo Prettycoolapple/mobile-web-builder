@@ -72,6 +72,44 @@ describe("regional site-plan wrapper", () => {
     ]);
   });
 
+  it("shows current MPDC three-waters assets and the applicable wind control at 19 Centennial Avenue", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isService =
+        url.includes("/WaterLine/FeatureServer/488/query")
+        || url.includes("/WasteWaterLine/FeatureServer/33/query")
+        || url.includes("/StormWaterLine/FeatureServer/30/query");
+      const isWind = url.includes("/Wind_Zones/FeatureServer/0/query");
+      return new Response(JSON.stringify({
+        features: isService ? [{
+          attributes: { OBJECTID: 1 },
+          geometry: { paths: [[[175.7070, -37.5352], [175.7078, -37.5352]]] },
+        }] : isWind ? [{
+          attributes: { OBJECTID: 2 },
+          geometry: { rings: [[
+            [175.7070, -37.5355], [175.7080, -37.5355], [175.7080, -37.5350],
+            [175.7070, -37.5350], [175.7070, -37.5355],
+          ]] },
+        }] : [],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+
+    const sitePlan = await buildSitePlanForReport("19 Centennial Ave, Te Aroha", {
+      geocode: {
+        lat: -37.5352280,
+        lng: 175.7074969,
+        formatted: "19 Centennial Avenue, Te Aroha 3320, New Zealand",
+        suburb: "Te Aroha",
+      },
+      linz_parcel: null,
+    } as RawPropertyData);
+
+    expect(sitePlan.layers.filter((layer) => layer.group === "services" && layer.available).map((layer) => layer.label).sort())
+      .toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(sitePlan.layers.filter((layer) => layer.group === "planning" && layer.available).map((layer) => layer.label))
+      .toEqual(["Wind Zone"]);
+  });
+
   it("adds verified regional planning overlays when ArcGIS returns features", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       features: [

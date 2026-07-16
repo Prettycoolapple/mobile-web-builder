@@ -337,7 +337,7 @@ describe("regional ArcGIS planning fetchers", () => {
   it("returns the Matamata-Piako Residential Zone for 19 Centennial Avenue, Te Aroha (layer name as zone identity)", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("/District_Plan_Zones/FeatureServer/4/query")) {
+      if (url.includes("/Residential_Zone/FeatureServer/783/query")) {
         return new Response(JSON.stringify({
           features: [{
             attributes: { FID: 1, MSLINK: -214748364, Shape__Area: 54230.4296875, Shape__Length: 1116.7554341422256 },
@@ -358,7 +358,7 @@ describe("regional ArcGIS planning fetchers", () => {
       zone_description: expect.stringContaining("Residential Zone"),
       min_lot_size_sqm: null,
     });
-    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/District_Plan_Zones/FeatureServer/4/query"))).toBe(true);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/Residential_Zone/FeatureServer/783/query"))).toBe(true);
   });
 
   it("exposes smoke targets for configured regional layers", () => {

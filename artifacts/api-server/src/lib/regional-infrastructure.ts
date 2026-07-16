@@ -78,22 +78,22 @@ const WAIRARAPA_WASTEWATER =
 const WAIRARAPA_STORMWATER =
   "https://gis.mstn.govt.nz/arcgis/rest/services/Services/StormwaterPublic/MapServer";
 const MPDC_WATER =
-  "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/Water_Line/FeatureServer";
+  "https://services6.arcgis.com/EU3vB12T67eDdisL/arcgis/rest/services/WaterLine/FeatureServer";
 const MPDC_WASTEWATER =
-  "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/Wastewater_Line/FeatureServer";
+  "https://services6.arcgis.com/EU3vB12T67eDdisL/arcgis/rest/services/WasteWaterLine/FeatureServer";
 const MPDC_STORMWATER =
-  "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/Stormwater_Line/FeatureServer";
+  "https://services6.arcgis.com/EU3vB12T67eDdisL/arcgis/rest/services/StormWaterLine/FeatureServer";
 
 const REGIONAL_INFRASTRUCTURE: Partial<Record<PlanningProviderId, RegionalInfrastructureGroup[]>> = {
   "matamata-piako": [
     group("Water Supply", MPDC_WATER, "Matamata-Piako District Council", [
-      [0, "Water main/service line"],
+      [488, "Water main"],
     ]),
     group("Wastewater", MPDC_WASTEWATER, "Matamata-Piako District Council", [
-      [0, "Wastewater main/service line"],
+      [33, "Wastewater main"],
     ]),
     group("Stormwater", MPDC_STORMWATER, "Matamata-Piako District Council", [
-      [0, "Stormwater main/service line"],
+      [30, "Stormwater main"],
     ], 1000),
   ],
   waipa: [

@@ -132,9 +132,9 @@ describe("regional infrastructure fetchers", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       const isMpdcLayer =
-        url.includes("/Water_Line/FeatureServer/0/query")
-        || url.includes("/Wastewater_Line/FeatureServer/0/query")
-        || url.includes("/Stormwater_Line/FeatureServer/0/query");
+        url.includes("/WaterLine/FeatureServer/488/query")
+        || url.includes("/WasteWaterLine/FeatureServer/33/query")
+        || url.includes("/StormWaterLine/FeatureServer/30/query");
       return new Response(JSON.stringify({
         features: isMpdcLayer ? [{
           attributes: { OBJECTID: 1 },
@@ -172,6 +172,6 @@ describe("regional infrastructure fetchers", () => {
     expect(targets.some((target) => target.providerId === "wairarapa" && target.serviceName === "Water Supply")).toBe(true);
     expect(targets.some((target) => target.providerId === "wairarapa" && target.label === "Masterton stormwater main")).toBe(true);
     expect(targets.some((target) => target.providerId === "matamata-piako" && target.serviceName === "Stormwater")).toBe(true);
-    expect(targets.some((target) => target.providerId === "matamata-piako" && target.label === "Stormwater main/service line")).toBe(true);
+    expect(targets.some((target) => target.providerId === "matamata-piako" && target.label === "Stormwater main")).toBe(true);
   });
 });

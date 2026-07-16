@@ -147,7 +147,7 @@ describe("hasCacheableCore", () => {
   });
 
   it("exposes a schema version", () => {
-    expect(RAW_PROPERTY_SCHEMA_VERSION).toBe(12);
+    expect(RAW_PROPERTY_SCHEMA_VERSION).toBe(13);
   });
 });
 

@@ -128,24 +128,12 @@ const WAIPA_PROTECTED_TREES =
   "https://services9.arcgis.com/OsxSXqmTWVTZQ9ie/arcgis/rest/services/WaipaDistrictPlan_Protected_Trees_Bushstands/FeatureServer";
 const WAIPA_FLOOD_HAZARD =
   "https://services9.arcgis.com/OsxSXqmTWVTZQ9ie/arcgis/rest/services/WaipaDistrictPlan_SpecialFeature_Area_Flood/FeatureServer";
-// Matamata-Piako District Council self-hosts its District Plan zoning and
-// overlay layers on its own ArcGIS Online org (piFyx8f2y0yspZiu).
-const MPDC_DISTRICT_PLAN_ZONES =
-  "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/District_Plan_Zones/FeatureServer";
-const MPDC_FLOOD_ZONE =
-  "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/Flood_Zone/FeatureServer";
-const MPDC_LAND_INSTABILITY =
-  "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/Land_Instability/FeatureServer";
-const MPDC_PEAT_LAND_AREA =
-  "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/Peat_Land_Area/FeatureServer";
+// Matamata-Piako District Council publishes its current public-map zoning and
+// overlay layers through EU3vB12T67eDdisL. Wind zones remain on the legacy org.
+const MPDC_CURRENT = "https://services6.arcgis.com/EU3vB12T67eDdisL/arcgis/rest/services";
+const mpdcService = (name: string): string => `${MPDC_CURRENT}/${name}/FeatureServer`;
 const MPDC_WIND_ZONES =
   "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/Wind_Zones/FeatureServer";
-const MPDC_HERITAGE_SITES =
-  "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/Heritage_Sites/FeatureServer";
-const MPDC_WAHI_TAPU_SITES =
-  "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/W%C4%81hi_Tapu_Sites/FeatureServer";
-const MPDC_SIGNIFICANT_NATURAL_FEATURES =
-  "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/Significant_Natural_Features/FeatureServer";
 
 const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
   "matamata-piako": {
@@ -155,23 +143,34 @@ const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
     // so layer order only affects lookup latency; residential/rural-residential
     // are tried first as the most common queries.
     zoneLayers: [
-      zoneStatic(MPDC_DISTRICT_PLAN_ZONES, 4, "Residential Zone", "MPDC_RESIDENTIAL", "Residential Zone"),
-      zoneStatic(MPDC_DISTRICT_PLAN_ZONES, 6, "Rural Residential Zone", "MPDC_RURAL_RESIDENTIAL", "Rural Residential Zone"),
-      zoneStatic(MPDC_DISTRICT_PLAN_ZONES, 5, "Rural Residential 2 Zone", "MPDC_RURAL_RESIDENTIAL_2", "Rural Residential 2 Zone"),
-      zoneStatic(MPDC_DISTRICT_PLAN_ZONES, 7, "Rural Zone", "MPDC_RURAL", "Rural Zone"),
-      zoneStatic(MPDC_DISTRICT_PLAN_ZONES, 0, "Business Zone", "MPDC_BUSINESS", "Business Zone"),
-      zoneStatic(MPDC_DISTRICT_PLAN_ZONES, 2, "Industrial Zone", "MPDC_INDUSTRIAL", "Industrial Zone"),
-      zoneStatic(MPDC_DISTRICT_PLAN_ZONES, 3, "Kaitiaki Zone", "MPDC_KAITIAKI", "Kaitiaki Zone"),
+      zoneStatic(mpdcService("Residential_Zone"), 783, "Residential Zone", "MPDC_RESIDENTIAL", "Residential Zone"),
+      zoneStatic(mpdcService("Medium_Density_Residential_Zone"), 467, "Medium Density Residential Zone", "MPDC_MEDIUM_DENSITY_RESIDENTIAL", "Medium Density Residential Zone"),
+      zoneStatic(mpdcService("Rural_Residential_Zone"), 1031, "Rural Residential Zone", "MPDC_RURAL_RESIDENTIAL", "Rural Residential Zone"),
+      zoneStatic(mpdcService("Rural_Residential_2_Zone"), 1032, "Rural Residential 2 Zone", "MPDC_RURAL_RESIDENTIAL_2", "Rural Residential 2 Zone"),
+      zoneStatic(mpdcService("Rural_Zone"), 785, "Rural Zone", "MPDC_RURAL", "Rural Zone"),
+      zoneStatic(mpdcService("Business_Zone"), 780, "Business Zone", "MPDC_BUSINESS", "Business Zone"),
+      zoneStatic(mpdcService("General_Industrial_Zone"), 1045, "General Industrial Zone", "MPDC_INDUSTRIAL", "General Industrial Zone"),
+      zoneStatic(mpdcService("Industrial_Zone"), 1039, "Industrial Zone", "MPDC_INDUSTRIAL", "Industrial Zone"),
+      zoneStatic(mpdcService("Kaitiaki_Zone"), 789, "Kaitiaki Zone", "MPDC_KAITIAKI", "Kaitiaki Zone"),
+      zoneStatic(mpdcService("Settlement_Zone"), 1059, "Settlement Zone", "MPDC_SETTLEMENT", "Settlement Zone"),
     ],
     overlayLayers: [
-      overlay(MPDC_DISTRICT_PLAN_ZONES, 1, "Designation", "polygon", "control"),
-      overlay(MPDC_FLOOD_ZONE, 0, "Flood Hazard Zone", "polygon", "restricted"),
-      overlay(MPDC_LAND_INSTABILITY, 0, "Land Instability Area", "polygon", "restricted"),
-      overlay(MPDC_PEAT_LAND_AREA, 0, "Peat Land Area", "polygon", "moderate"),
+      overlay(mpdcService("Designation"), 420, "Designation", "polygon", "control"),
+      overlay(mpdcService("Residential_Precinct"), 468, "Residential Precinct", "polygon", "control"),
+      overlay(mpdcService("Structure_Plan_Area"), 502, "Structure Plan Area", "polygon", "control"),
+      overlay(mpdcService("Flood_Hazard"), 435, "Flood Hazard Zone", "polygon", "restricted"),
+      overlay(mpdcService("Instability_Area"), 437, "Land Instability Area", "polygon", "restricted"),
+      overlay(mpdcService("Peat_Area"), 436, "Peat Land Area", "polygon", "moderate"),
+      overlay(mpdcService("Character_Area"), 423, "Character Area", "polygon", "control"),
+      overlay(mpdcService("Infill_Housing"), 422, "Infill Housing Area", "polygon", "control"),
+      overlay(mpdcService("Future_Residential_Policy_Area"), 503, "Future Residential Policy Area", "polygon", "control"),
+      overlay(mpdcService("Gas_Pipeline_Corridor"), 445, "Gas Pipeline Corridor", "polygon", "restricted"),
+      overlay(mpdcService("Transmission_Line"), 440, "Transmission Line", "polyline", "restricted", 30, ["LINE_VOLTA", "SITE"]),
       overlay(MPDC_WIND_ZONES, 0, "Wind Zone", "polygon", "control"),
-      overlay(MPDC_HERITAGE_SITES, 0, "Heritage Site", "point", "restricted", 20),
-      overlay(MPDC_WAHI_TAPU_SITES, 0, "Wāhi Tapu Site", "point", "restricted", 25),
-      overlay(MPDC_SIGNIFICANT_NATURAL_FEATURES, 0, "Significant Natural Feature", "point", "moderate", 30),
+      overlay(mpdcService("Heritage_Site"), 457, "Heritage Site", "point", "restricted", 20, ["site_ref", "name", "location"]),
+      overlay(mpdcService("Waahi_Tapu_Site"), 497, "Wāhi Tapu Site", "point", "restricted", 25, ["site_ref", "name", "location"]),
+      overlay(mpdcService("Outstanding_or_Significant_Natural_Feature"), 456, "Significant Natural Feature", "point", "moderate", 30, ["site_label", "CommonName", "Location"]),
+      overlay(mpdcService("Protected_Tree"), 496, "Protected Tree", "point", "moderate", 30, ["TreeNumber", "CommonName", "Location"]),
     ],
   },
   waipa: {
