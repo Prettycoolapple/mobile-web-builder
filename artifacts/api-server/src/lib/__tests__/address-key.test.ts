@@ -27,6 +27,16 @@ describe("normaliseAddressKey", () => {
     expect(normaliseAddressKey("12 King Street")).not.toBe(normaliseAddressKey("12 Queen Street"));
   });
 
+  it("preserves four-digit street numbers while removing a trailing postcode", () => {
+    expect(normaliseAddressKey("1134 Braemar Road, Rotomā 3192, New Zealand")).toBe(
+      normaliseAddressKey("1134 Braemar Rd, Rotoma"),
+    );
+    expect(normaliseAddressKey("1134 Braemar Road, Rotoma")).not.toBe(
+      normaliseAddressKey("1140 Braemar Road, Rotoma"),
+    );
+    expect(normaliseAddressKey("1140 Braemar Rd, Rotoma, 3192")).toContain("1140braemarroad");
+  });
+
   it("returns empty string for blank input", () => {
     expect(normaliseAddressKey("")).toBe("");
     expect(normaliseAddressKey(null)).toBe("");

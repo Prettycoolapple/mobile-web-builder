@@ -17,7 +17,10 @@ export function normaliseAddressKey(address: string | null | undefined): string 
     .replace(/[̀-ͯ]/g, "")
     .toLowerCase()
     .replace(/\b(new zealand|nz|auckland city|auckland)\b/g, "")
-    .replace(/\b\d{4}\b/g, "")
+    // NZ postcodes are four digits at the end of an address. Do not remove a
+    // four-digit street number (for example 1134/1140 Braemar Road), otherwise
+    // neighbouring properties collapse onto the same global cache row.
+    .replace(/\b\d{4}\b(?=\s*[,;]?\s*$)/g, "")
     .replace(/\b(street|st)\b/g, "street")
     .replace(/\b(road|rd)\b/g, "road")
     .replace(/\b(avenue|ave)\b/g, "avenue")
