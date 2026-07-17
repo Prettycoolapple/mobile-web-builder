@@ -270,9 +270,6 @@ export default function UserProfileScreen() {
                 <Text style={[styles.name, { color: colors.foreground }]}>
                   {profile.fullName ?? t("common.anonymous")}
                 </Text>
-                {profile.isVerified && profile.role === "service_provider" && (
-                  <Feather name="check-circle" size={20} color={accentColor} />
-                )}
               </View>
 
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -407,7 +404,6 @@ export default function UserProfileScreen() {
                 }
                 colors={colors}
               />
-              <InfoRow icon="hash" label={t("public_profile.info.business_number")} value={profile.roleData.nzCompanyRegisterNumber as string} colors={colors} />
               <InfoRow icon="phone" label={t("public_profile.info.contact")} value={profile.roleData.contactNumber as string} colors={colors} />
               <InfoRow icon="message-circle" label={t("public_profile.info.primary_language")} value={profile.roleData.primaryLanguage as string} colors={colors} />
               <InfoRow icon="message-circle" label={t("public_profile.info.secondary_language")} value={profile.roleData.secondaryLanguage as string} colors={colors} />

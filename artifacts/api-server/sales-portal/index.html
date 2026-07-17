@@ -175,9 +175,62 @@
       .app-download-button--android {
         background: #1d6f4b;
       }
+      .dashboard-app-reminder {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 12px;
+        min-width: min(100%, 430px);
+      }
+      .dashboard-app-reminder-copy {
+        max-width: 220px;
+        margin: 0;
+        color: var(--muted, #7a766f);
+        font-size: 13px;
+        line-height: 1.35;
+        text-align: right;
+      }
+      .dashboard-app-reminder-actions {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+      .dashboard-app-link {
+        min-height: 34px;
+        padding: 0 11px;
+        border: 1px solid rgba(29, 61, 47, 0.2);
+        border-radius: 999px;
+        background: #fff;
+        color: var(--forest, #1d3d2f);
+        font-size: 12px;
+        font-weight: 800;
+        line-height: 34px;
+        text-decoration: none;
+        white-space: nowrap;
+      }
+      .dashboard-app-link:hover {
+        border-color: rgba(29, 61, 47, 0.38);
+        background: rgba(29, 61, 47, 0.06);
+      }
       @media (max-width: 640px) {
         .app-download-actions {
           grid-template-columns: 1fr;
+        }
+        .dashboard-app-reminder {
+          width: 100%;
+          align-items: flex-start;
+          justify-content: flex-start;
+          gap: 9px;
+        }
+        .dashboard-app-reminder-copy {
+          flex-basis: 100%;
+          max-width: none;
+          text-align: left;
+        }
+        .dashboard-app-reminder-actions {
+          justify-content: flex-start;
         }
       }
       .sales-dm-shell { display: grid; grid-template-columns: minmax(250px, 32%) 1fr; min-height: 620px; border: 1px solid rgba(32,25,21,.12); border-radius: 16px; overflow: hidden; background: #fffaf3; }
@@ -228,6 +281,16 @@
       .sales-dm-attachment-list { display: grid; gap: 6px; margin-bottom: 10px; font-size: 13px; }
       .sales-dm-status { min-height: 18px; margin: 6px 0 0; color: var(--muted,#7a766f); font-size: 12px; }
       .sales-dm-status.error { color: #a23232; }.sales-dm-status.success { color: #1d6f4b; }
+      .sales-dm-document-actions,.sales-dm-tag-chips,.sales-dm-tag-actions { display:flex; gap:7px; flex-wrap:wrap; margin-top:9px; }
+      .sales-dm-document-link { display:block; margin-top:7px; font-size:11px; opacity:.82; }
+      .sales-dm-change-link { border:0; padding:3px 0; background:transparent; color:inherit; text-decoration:underline; cursor:pointer; font:inherit; font-size:11px; }
+      .sales-dm-tag-overlay { position:fixed; inset:0; z-index:9999; display:grid; place-items:center; padding:20px; background:rgba(15,18,16,.58); }
+      .sales-dm-tag-sheet { width:min(560px,100%); max-height:85vh; overflow:auto; padding:22px; border-radius:16px; background:#fff; color:#201915; box-shadow:0 20px 60px rgba(0,0,0,.28); }
+      .sales-dm-tag-sheet h3,.sales-dm-tag-sheet p { margin-top:0; }
+      .sales-dm-tag-row { padding:12px 0; border-top:1px solid rgba(32,25,21,.12); }
+      .sales-dm-tag-chips button { border:1px solid rgba(32,25,21,.18); border-radius:999px; padding:7px 12px; background:#fff; cursor:pointer; }
+      .sales-dm-tag-chips button.is-selected { border-color:#1d6f4b; background:#e9f6ef; color:#15583b; font-weight:800; }
+      .sales-dm-tag-actions { justify-content:flex-end; margin-top:16px; }
       .sales-dm-back { display: none; }
       @media (max-width: 760px) {
         .sales-dm-shell { grid-template-columns: 1fr; min-height: 560px; }
@@ -415,7 +478,28 @@
               <p class="section-kicker">Your dashboard</p>
               <h2 id="dashboard-title">My listings</h2>
             </div>
-            <button class="button button-quiet" type="button" id="signout-button">Sign out</button>
+            <div class="dashboard-app-reminder">
+              <p class="dashboard-app-reminder-copy">Reply to buyers in the app too, with notifications on.</p>
+              <div class="dashboard-app-reminder-actions" aria-label="Download Project Alpha app">
+                <a
+                  class="dashboard-app-link"
+                  href="https://apps.apple.com/nz/app/project-alpha/id6762080292"
+                  target="_blank"
+                  rel="noopener"
+                >
+                  iOS
+                </a>
+                <a
+                  class="dashboard-app-link"
+                  href="https://play.google.com/store/apps/details?id=nz.devfeasible.app&hl=en"
+                  target="_blank"
+                  rel="noopener"
+                >
+                  Android
+                </a>
+              </div>
+              <button class="button button-quiet" type="button" id="signout-button">Sign out</button>
+            </div>
           </div>
 
           <div class="portal-dashboard-nav" role="tablist" aria-label="Dashboard sections">
@@ -827,6 +911,7 @@
             </div>
             <ul class="consent-list">
               <li>By registering you agree to Project Alpha's <a href="/terms/" target="_blank" rel="noopener">Terms and Conditions</a> governing how the platform may be used.</li>
+              <li>LIM and title documents you link to a property may be stored and securely reused for other authenticated buyers requesting documents for that same property.</li>
               <li>Your personal information will be collected, stored, and used in accordance with our <a href="/privacy/" target="_blank" rel="noopener">Privacy Policy</a>.</li>
               <li>Your name, agency, and contact details may be displayed to buyers who view properties you list on Project Alpha.</li>
               <li>You confirm that you are a licensed real estate agent or are acting on behalf of a licensed real estate agency.</li>

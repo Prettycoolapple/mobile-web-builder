@@ -28,10 +28,11 @@ import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/context/AuthContext";
-import { useDm, DmMessage, type DmBlockStatus } from "@/context/DmContext";
+import { useDm, DmMessage, type DmBlockStatus, type DmLead } from "@/context/DmContext";
 import { ImageViewerModal } from "@/components/ImageViewerModal";
 import { getApiBase, resolveAppUrl } from "@/lib/api";
 import { avatarImageSource, getAvatarInitials, sanitizeHeadersForImageRequest } from "@/lib/avatar";
@@ -139,6 +140,22 @@ interface SignedDmUploadResponse {
     "Content-Type"?: string;
   };
 }
+
+interface UploadedDmFile {
+  fileUrl: string;
+  objectPath?: string | null;
+  fileSize?: number | null;
+  fileHash?: string | null;
+}
+
+type LimTitleDocumentType = "lim_report" | "title" | "combined";
+type DocumentTag = {
+  leadRequestId: string;
+  documentType: LimTitleDocumentType;
+  linkMethod: "auto_single_open" | "agent_picker" | "card_upload";
+};
+
+const LIM_TITLE_REUSE_NOTICE_KEY = "@project-alpha/lim-title-reuse-notice-v1";
 
 type LocalDmMessage = DmMessage & {
   localStatus?: "uploading" | "sending" | "failed";
@@ -251,6 +268,9 @@ export default function ChatScreen() {
   const [sending, setSending] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<PendingDmAttachment[]>([]);
+  const [openLeads, setOpenLeads] = useState<DmLead[]>([]);
+  const [documentTag, setDocumentTag] = useState<DocumentTag | null>(null);
+  const [documentTagMode, setDocumentTagMode] = useState<"unset" | "selected" | "other">("unset");
   const [viewerUri, setViewerUri] = useState<string | null>(null);
   const [actionMenuVisible, setActionMenuVisible] = useState(false);
   const [reportModalVisible, setReportModalVisible] = useState(false);
@@ -287,6 +307,19 @@ export default function ChatScreen() {
       setBlockStatus(threadFromContext.blockStatus);
     }
   }, [threadFromContext]);
+
+  useEffect(() => {
+    if (!threadId || !token || user?.role !== "sales_agent") {
+      setOpenLeads([]);
+      return;
+    }
+    fetch(`${getApiBase()}/dm/threads/${threadId}/leads`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((response) => response.ok ? response.json() : { leads: [] })
+      .then((data: { leads?: DmLead[] }) => setOpenLeads(data.leads ?? []))
+      .catch(() => setOpenLeads([]));
+  }, [threadId, token, user?.role]);
 
   useEffect(() => {
     if (!otherUserId || !token) return;
@@ -399,6 +432,11 @@ export default function ChatScreen() {
       ));
     };
 
+    const onMessageUpdated = ({ threadId: tid, message }: { threadId: string; message: DmMessage }) => {
+      if (tid !== threadId) return;
+      setMessages((prev) => prev.map((item) => item.id === message.id ? message : item));
+    };
+
     const onMessagesRead = ({ threadId: tid, messageIds, readAt }: { threadId: string; messageIds: string[]; readAt: string }) => {
       if (tid !== threadId) return;
       const ids = new Set(messageIds ?? []);
@@ -416,6 +454,7 @@ export default function ChatScreen() {
 
     socket.on("new_message", onNewMessage);
     socket.on("message_like", onMessageLike);
+    socket.on("message_updated", onMessageUpdated);
     socket.on("messages_read", onMessagesRead);
     socket.on("file_viewed", onFileViewed);
 
@@ -423,6 +462,7 @@ export default function ChatScreen() {
       socket.emit("leave_thread", threadId);
       socket.off("new_message", onNewMessage);
       socket.off("message_like", onMessageLike);
+      socket.off("message_updated", onMessageUpdated);
       socket.off("messages_read", onMessagesRead);
       socket.off("file_viewed", onFileViewed);
       joinedRef.current = false;
@@ -432,7 +472,16 @@ export default function ChatScreen() {
   const sendMessage = useCallback(async (
     msgBody?: string,
     imageUrl?: string,
-    options: { optimisticId?: string; fileUrl?: string; fileName?: string; fileMime?: string } = {},
+    options: {
+      optimisticId?: string;
+      fileUrl?: string;
+      fileName?: string;
+      fileMime?: string;
+      objectPath?: string | null;
+      fileSize?: number | null;
+      fileHash?: string | null;
+      documentTag?: DocumentTag | null;
+    } = {},
   ) => {
     if (!threadId || !token) return;
     if (blockStatus.messagingBlocked) {
@@ -461,6 +510,10 @@ export default function ChatScreen() {
           fileUrl: options.fileUrl ?? null,
           fileName: options.fileName ?? null,
           fileMime: options.fileMime ?? null,
+          objectPath: options.objectPath ?? null,
+          fileSize: options.fileSize ?? null,
+          fileHash: options.fileHash ?? null,
+          ...(options.documentTag ?? {}),
         }),
       });
       if (!resp.ok) {
@@ -626,7 +679,7 @@ export default function ChatScreen() {
     })));
   }, [uploadingImage, blockStatus.messagingBlocked, t]);
 
-  const pickFile = useCallback(async () => {
+  const pickFile = useCallback(async (preboundTag?: DocumentTag) => {
     if (uploadingImage || blockStatus.messagingBlocked) return;
     const result = await DocumentPicker.getDocumentAsync({
       type: ["application/pdf", "image/*"],
@@ -634,6 +687,25 @@ export default function ChatScreen() {
       copyToCacheDirectory: true,
     });
     if (result.canceled || !result.assets?.length) return;
+    const hasPdf = result.assets.some((asset) => normalizeFileContentType(asset.mimeType, asset.name) === "application/pdf");
+    if (preboundTag) {
+      setDocumentTag(preboundTag);
+      setDocumentTagMode("selected");
+    } else if (user?.role === "sales_agent" && hasPdf && openLeads.length === 1) {
+      const lead = openLeads[0];
+      setDocumentTag({
+        leadRequestId: lead.id,
+        documentType: lead.delivered.lim_report ? "title" : "lim_report",
+        linkMethod: "auto_single_open",
+      });
+      setDocumentTagMode("selected");
+    } else if (user?.role === "sales_agent" && hasPdf && openLeads.length > 0) {
+      setDocumentTag(null);
+      setDocumentTagMode("unset");
+    } else {
+      setDocumentTag(null);
+      setDocumentTagMode("other");
+    }
     setPendingAttachments(result.assets.map((asset) => ({
       kind: "file",
       uri: asset.uri,
@@ -642,7 +714,7 @@ export default function ChatScreen() {
       size: asset.size ?? null,
       asset,
     })));
-  }, [uploadingImage, blockStatus.messagingBlocked]);
+  }, [uploadingImage, blockStatus.messagingBlocked, openLeads, user?.role]);
 
   const uploadAndSendImageAsset = useCallback(async (attachment: Extract<PendingDmAttachment, { kind: "image" }>) => {
     const asset = attachment.asset;
@@ -789,7 +861,7 @@ export default function ChatScreen() {
     setMessages((prev) => [...prev, optimisticMessage]);
     setTimeout(() => scrollToLatest(true), 50);
     try {
-      const uploadWithMultipart = async (): Promise<string | undefined> => {
+      const uploadWithMultipart = async (): Promise<UploadedDmFile | undefined> => {
         const form = new FormData();
         if (Platform.OS === "web") {
           const resp = await fetch(attachment.uri);
@@ -808,14 +880,14 @@ export default function ChatScreen() {
           headers: { Authorization: `Bearer ${token}` },
           body: form,
         });
-        const uploadJson = (await readJsonResponse(uploadResp)) as { fileUrl?: string; error?: string };
+        const uploadJson = (await readJsonResponse(uploadResp)) as Partial<UploadedDmFile> & { error?: string };
         if (!uploadResp.ok) {
           throw new Error(uploadJson.error ?? t("dm.error.file_upload_failed"));
         }
-        return uploadJson.fileUrl;
+        return uploadJson.fileUrl ? { ...uploadJson, fileUrl: uploadJson.fileUrl } : undefined;
       };
 
-      const uploadWithSignedUrl = async (): Promise<string | undefined> => {
+      const uploadWithSignedUrl = async (): Promise<UploadedDmFile | undefined> => {
         const info = await FileSystem.getInfoAsync(attachment.uri);
         const size = attachment.size || (info.exists && !info.isDirectory ? info.size : 0);
         if (!size) throw new Error("Could not read local file");
@@ -855,28 +927,32 @@ export default function ChatScreen() {
           },
           body: JSON.stringify({ objectPath: signJson.objectPath }),
         });
-        const completeJson = (await readJsonResponse(completeResp)) as { fileUrl?: string; error?: string };
+        const completeJson = (await readJsonResponse(completeResp)) as Partial<UploadedDmFile> & { error?: string };
         if (!completeResp.ok) {
           throw new Error(completeJson.error ?? t("dm.error.file_upload_failed"));
         }
-        return completeJson.fileUrl ?? signJson.fileUrl;
+        return {
+          ...completeJson,
+          fileUrl: completeJson.fileUrl ?? signJson.fileUrl,
+          objectPath: completeJson.objectPath ?? signJson.objectPath,
+        };
       };
 
-      let fileUrl: string | undefined;
+      let uploaded: UploadedDmFile | undefined;
       if (Platform.OS === "web") {
-        fileUrl = await uploadWithMultipart();
+        uploaded = await uploadWithMultipart();
       } else {
         try {
-          fileUrl = await uploadWithSignedUrl();
+          uploaded = await uploadWithSignedUrl();
         } catch (signedError) {
           const code = (signedError as Error & { code?: string }).code;
           if (code === "INVALID_FILE_TYPE" || code === "INVALID_SIZE" || code === "INVALID_NAME") {
             throw signedError;
           }
-          fileUrl = await uploadWithMultipart();
+          uploaded = await uploadWithMultipart();
         }
       }
-      if (!fileUrl) {
+      if (!uploaded?.fileUrl) {
         setMessages((prev) => prev.map((m) =>
           m.id === optimisticId ? { ...m, localStatus: "failed" } : m,
         ));
@@ -885,9 +961,13 @@ export default function ChatScreen() {
       }
       await sendMessage(undefined, undefined, {
         optimisticId,
-        fileUrl,
+        fileUrl: uploaded.fileUrl,
         fileName: attachment.name,
         fileMime: attachment.mimeType,
+        objectPath: uploaded.objectPath ?? null,
+        fileSize: uploaded.fileSize ?? attachment.size ?? null,
+        fileHash: uploaded.fileHash ?? null,
+        documentTag: attachment.mimeType === "application/pdf" && documentTagMode === "selected" ? documentTag : null,
       });
     } catch (error) {
       setMessages((prev) => prev.map((m) =>
@@ -898,12 +978,37 @@ export default function ChatScreen() {
         error instanceof Error && error.message ? error.message : t("dm.error.file_upload_failed"),
       );
     }
-  }, [token, sendMessage, t, threadId, user?.id, scrollToLatest]);
+  }, [token, sendMessage, t, threadId, user?.id, scrollToLatest, documentTag, documentTagMode]);
+
+  const ensureReuseNoticeAccepted = useCallback(async (): Promise<boolean> => {
+    const reuseNoticeKey = `${LIM_TITLE_REUSE_NOTICE_KEY}:${user?.id ?? "agent"}`;
+    const accepted = await AsyncStorage.getItem(reuseNoticeKey).catch(() => null);
+    if (accepted === "1") return true;
+    return new Promise((resolve) => {
+      Alert.alert(
+        "Property document reuse",
+        "Documents linked to a property may be securely shared with other interested buyers of that same property.",
+        [
+          { text: t("common.cancel"), style: "cancel", onPress: () => resolve(false) },
+          {
+            text: "Continue",
+            onPress: () => {
+              AsyncStorage.setItem(reuseNoticeKey, "1").catch(() => {});
+              resolve(true);
+            },
+          },
+        ],
+        { cancelable: false },
+      );
+    });
+  }, [t, user?.id]);
 
   const confirmSendAttachments = useCallback(async () => {
     const attachments = pendingAttachments;
-    setPendingAttachments([]);
     if (!attachments.length || blockStatus.messagingBlocked) return;
+    const taggedPdf = attachments.some((attachment) => attachment.kind === "file" && attachment.mimeType === "application/pdf") && documentTagMode === "selected";
+    if (taggedPdf && !(await ensureReuseNoticeAccepted())) return;
+    setPendingAttachments([]);
     setUploadingImage(true);
     try {
       for (const attachment of attachments) {
@@ -912,12 +1017,41 @@ export default function ChatScreen() {
       }
     } finally {
       setUploadingImage(false);
+      setDocumentTag(null);
+      setDocumentTagMode("unset");
     }
-  }, [pendingAttachments, blockStatus.messagingBlocked, uploadAndSendImageAsset, uploadAndSendFileAsset]);
+  }, [pendingAttachments, blockStatus.messagingBlocked, uploadAndSendImageAsset, uploadAndSendFileAsset, documentTagMode, ensureReuseNoticeAccepted]);
 
   const cancelPendingAttachments = useCallback(() => {
     setPendingAttachments([]);
+    setDocumentTag(null);
+    setDocumentTagMode("unset");
   }, []);
+
+  const changeDocumentTag = useCallback((message: DmMessage) => {
+    if (!token || !message.leadRequestId) return;
+    const apply = async (documentType: LimTitleDocumentType) => {
+      try {
+        const response = await fetch(`${getApiBase()}/dm/messages/${message.id}/tag-document`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ leadRequestId: message.leadRequestId, documentType, linkMethod: "agent_picker" }),
+        });
+        if (!response.ok) throw new Error();
+        const data = await response.json() as { message: DmMessage };
+        setMessages((current) => current.map((item) => item.id === message.id ? data.message : item));
+        fetchThreads();
+      } catch {
+        Alert.alert(t("common.error"), "Could not change the document link.");
+      }
+    };
+    Alert.alert("Change document type", "How should this PDF be linked?", [
+      { text: "LIM", onPress: () => void apply("lim_report") },
+      { text: "Title", onPress: () => void apply("title") },
+      { text: "Both", onPress: () => void apply("combined") },
+      { text: t("common.cancel"), style: "cancel" },
+    ]);
+  }, [token, fetchThreads, t]);
 
   const toggleLike = useCallback(async (message: LocalDmMessage) => {
     if (!threadId || !token || message.id.startsWith("local-")) return;
@@ -1154,6 +1288,22 @@ export default function ChatScreen() {
                 <Text style={[styles.leadRequestTitle, { color: colors.accent }]}>LIM + Title request</Text>
               </View>
               <Text style={[styles.leadRequestBody, { color: colors.foreground }]}>{msg.body}</Text>
+              {user?.role === "sales_agent" && msg.leadRequestId ? (
+                <View style={styles.leadAttachActions}>
+                  <TouchableOpacity
+                    style={[styles.leadAttachButton, { borderColor: colors.accent + "66" }]}
+                    onPress={() => void pickFile({ leadRequestId: msg.leadRequestId!, documentType: "lim_report", linkMethod: "card_upload" })}
+                  >
+                    <Text style={[styles.leadAttachButtonText, { color: colors.accent }]}>Attach LIM</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.leadAttachButton, { borderColor: colors.accent + "66" }]}
+                    onPress={() => void pickFile({ leadRequestId: msg.leadRequestId!, documentType: "title", linkMethod: "card_upload" })}
+                  >
+                    <Text style={[styles.leadAttachButtonText, { color: colors.accent }]}>Attach Title</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
             </View>
           ) : msg.imageUrl ? (
             <TouchableOpacity
@@ -1194,31 +1344,45 @@ export default function ChatScreen() {
               ) : null}
             </TouchableOpacity>
           ) : msg.fileUrl ? (
-            <TouchableOpacity
-              activeOpacity={0.85}
-              accessibilityRole="button"
-              accessibilityLabel={msg.fileName || t("dm.file.open")}
-              onPress={() => openDmFile(msg)}
-              style={[
-                styles.bubble,
-                styles.fileBubble,
-                isMine
-                  ? [styles.myBubble, { backgroundColor: colors.accent }]
-                  : [styles.theirBubble, { backgroundColor: colors.card, borderColor: colors.border }],
-              ]}
-            >
-              {openingFileId === msg.id ? (
-                <ActivityIndicator size="small" color={isMine ? "#fff" : colors.mutedForeground} />
-              ) : (
-                <Feather name="file-text" size={20} color={isMine ? "#fff" : colors.foreground} />
-              )}
-              <Text
-                numberOfLines={2}
-                style={[styles.fileName, { color: isMine ? "#fff" : colors.foreground }]}
+            <View>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel={msg.fileName || t("dm.file.open")}
+                onPress={() => openDmFile(msg)}
+                style={[
+                  styles.bubble,
+                  styles.fileBubble,
+                  isMine
+                    ? [styles.myBubble, { backgroundColor: colors.accent }]
+                    : [styles.theirBubble, { backgroundColor: colors.card, borderColor: colors.border }],
+                ]}
               >
-                {msg.fileName || t("dm.file.attachment")}
-              </Text>
-            </TouchableOpacity>
+                {openingFileId === msg.id ? (
+                  <ActivityIndicator size="small" color={isMine ? "#fff" : colors.mutedForeground} />
+                ) : (
+                  <Feather name="file-text" size={20} color={isMine ? "#fff" : colors.foreground} />
+                )}
+                <View style={{ flexShrink: 1 }}>
+                  <Text
+                    numberOfLines={2}
+                    style={[styles.fileName, { color: isMine ? "#fff" : colors.foreground }]}
+                  >
+                    {msg.fileName || t("dm.file.attachment")}
+                  </Text>
+                  {msg.messageKind === "lim_title_document" ? (
+                    <Text numberOfLines={2} style={[styles.documentLinkLabel, { color: isMine ? "rgba(255,255,255,.82)" : colors.mutedForeground }]}>
+                      {msg.metadataJson?.docType === "lim_report" ? "LIM" : msg.metadataJson?.docType === "title" ? "Title" : "LIM + Title"} · {String(msg.metadataJson?.propertyAddress || "Linked property")}
+                    </Text>
+                  ) : null}
+                </View>
+              </TouchableOpacity>
+              {isMine && user?.role === "sales_agent" && msg.messageKind === "lim_title_document" ? (
+                <TouchableOpacity onPress={() => changeDocumentTag(msg)} style={styles.changeDocumentLink}>
+                  <Text style={[styles.changeDocumentLinkText, { color: colors.mutedForeground }]}>Change link</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
           ) : (
             <TouchableOpacity
               activeOpacity={isFailedText ? 0.8 : 1}
@@ -1264,6 +1428,12 @@ export default function ChatScreen() {
       </View>
     );
   };
+
+  const hasPendingPdf = pendingAttachments.some(
+    (attachment) => attachment.kind === "file" && attachment.mimeType === "application/pdf",
+  );
+  const showDocumentTagPicker = user?.role === "sales_agent" && hasPendingPdf && (openLeads.length > 0 || !!documentTag);
+  const requiresDocumentTagChoice = showDocumentTagPicker && documentTagMode === "unset";
 
   return (
     <KeyboardAvoidingView
@@ -1636,6 +1806,51 @@ export default function ChatScreen() {
                   ? t("dm.attachment.confirm_title_plural", { count: pendingAttachments.length })
                   : t("dm.attachment.confirm_title")}
               </Text>
+              {showDocumentTagPicker ? (
+                <View style={[styles.documentTagPanel, { borderColor: colors.border }]}>
+                  <Text style={[styles.documentTagTitle, { color: colors.foreground }]}>Link PDF to a property</Text>
+                  <Text style={[styles.documentTagHelp, { color: colors.mutedForeground }]}>Choose the request and document type before sending.</Text>
+                  {openLeads.map((lead) => (
+                    <View key={lead.id} style={styles.documentTagRow}>
+                      <Text style={[styles.documentTagAddress, { color: colors.foreground }]}>{lead.propertyAddress}</Text>
+                      <View style={styles.documentTagChips}>
+                        {([
+                          ["LIM", "lim_report"],
+                          ["Title", "title"],
+                          ["Both", "combined"],
+                        ] as const).map(([label, documentType]) => {
+                          const selected = documentTagMode === "selected" && documentTag?.leadRequestId === lead.id && documentTag.documentType === documentType;
+                          return (
+                            <TouchableOpacity
+                              key={documentType}
+                              style={[
+                                styles.documentTagChip,
+                                { borderColor: selected ? colors.accent : colors.border, backgroundColor: selected ? colors.accent + "18" : colors.background },
+                              ]}
+                              onPress={() => {
+                                setDocumentTag({
+                                  leadRequestId: lead.id,
+                                  documentType,
+                                  linkMethod: openLeads.length === 1 ? "auto_single_open" : "agent_picker",
+                                });
+                                setDocumentTagMode("selected");
+                              }}
+                            >
+                              <Text style={{ color: selected ? colors.accent : colors.foreground, fontFamily: "DM_Sans_600SemiBold" }}>{label}</Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  ))}
+                  <TouchableOpacity
+                    style={[styles.otherDocumentButton, { borderColor: documentTagMode === "other" ? colors.accent : colors.border }]}
+                    onPress={() => { setDocumentTag(null); setDocumentTagMode("other"); }}
+                  >
+                    <Text style={{ color: documentTagMode === "other" ? colors.accent : colors.foreground }}>Other document (don’t link)</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
               <ScrollView
                 showsVerticalScrollIndicator={false}
                 style={styles.previewScroll}
@@ -1676,8 +1891,9 @@ export default function ChatScreen() {
                   <Text style={{ color: colors.foreground }}>{t("common.cancel")}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.reportBtnPrimary, { backgroundColor: colors.accent }]}
+                  style={[styles.reportBtnPrimary, { backgroundColor: requiresDocumentTagChoice ? colors.muted : colors.accent }]}
                   onPress={() => void confirmSendAttachments()}
+                  disabled={requiresDocumentTagChoice}
                 >
                   <Text style={styles.reportBtnPrimaryText}>{t("dm.attachment.send")}</Text>
                 </TouchableOpacity>
@@ -1857,6 +2073,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
   },
+  leadAttachActions: { flexDirection: "row", gap: 8, marginTop: 3 },
+  leadAttachButton: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
+  leadAttachButtonText: { fontFamily: "DM_Sans_600SemiBold", fontSize: 12 },
   fileBubble: {
     flexDirection: "row",
     alignItems: "center",
@@ -1869,6 +2088,17 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 19,
   },
+  documentLinkLabel: { marginTop: 3, fontFamily: "DM_Sans_400Regular", fontSize: 11, lineHeight: 15 },
+  changeDocumentLink: { alignSelf: "flex-end", paddingHorizontal: 4, paddingVertical: 4 },
+  changeDocumentLinkText: { fontFamily: "DM_Sans_500Medium", fontSize: 11, textDecorationLine: "underline" },
+  documentTagPanel: { borderWidth: 1, borderRadius: 12, padding: 12, marginTop: 10, marginBottom: 12 },
+  documentTagTitle: { fontFamily: "DM_Sans_700Bold", fontSize: 14 },
+  documentTagHelp: { fontFamily: "DM_Sans_400Regular", fontSize: 12, lineHeight: 17, marginTop: 2, marginBottom: 8 },
+  documentTagRow: { paddingVertical: 8 },
+  documentTagAddress: { fontFamily: "DM_Sans_600SemiBold", fontSize: 13, marginBottom: 7 },
+  documentTagChips: { flexDirection: "row", flexWrap: "wrap", gap: 7 },
+  documentTagChip: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 7 },
+  otherDocumentButton: { borderWidth: 1, borderRadius: 10, padding: 10, marginTop: 7, alignItems: "center" },
   textStatusRow: {
     flexDirection: "row",
     alignItems: "center",

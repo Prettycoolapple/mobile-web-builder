@@ -28,6 +28,62 @@ export {
 
 export type LimTitleOfferSource = "proactive_15_percent" | "organic_intent";
 
+export type LimTitleDeliveryState = {
+  lim_report: boolean;
+  title: boolean;
+  complete: boolean;
+};
+
+function deliveredTypesFromMessages(rows: Array<{ metadataJson: Record<string, unknown> | null }>): Set<string> {
+  const delivered = new Set<string>();
+  for (const row of rows) {
+    const docType = row.metadataJson?.docType;
+    if (docType === "combined") {
+      delivered.add("lim_report");
+      delivered.add("title");
+    } else if (docType === "lim_report" || docType === "title") {
+      delivered.add(docType);
+    }
+  }
+  return delivered;
+}
+
+/** Per-request delivery is derived from tagged DM messages, not library dedup rows. */
+export async function getLimTitleDeliveryState(requestId: string): Promise<LimTitleDeliveryState> {
+  const [request, messages] = await Promise.all([
+    db.select({ requestedDocuments: limTitleRequests.requestedDocuments })
+      .from(limTitleRequests).where(eq(limTitleRequests.id, requestId)).limit(1),
+    db.select({ metadataJson: dmMessages.metadataJson })
+      .from(dmMessages)
+      .where(and(
+        eq(dmMessages.leadRequestId, requestId),
+        eq(dmMessages.messageKind, "lim_title_document"),
+      )),
+  ]);
+  const delivered = deliveredTypesFromMessages(messages);
+  const requested = request[0]?.requestedDocuments ?? [];
+  return {
+    lim_report: delivered.has("lim_report"),
+    title: delivered.has("title"),
+    complete: requested.length > 0 && requested.every((docType) => delivered.has(docType)),
+  };
+}
+
+/** Stamp delivery once all requested document types have a linked message. */
+export async function deriveLimTitleDeliveryStatus(requestId: string): Promise<LimTitleDeliveryState> {
+  const state = await getLimTitleDeliveryState(requestId);
+  if (state.complete) {
+    const now = new Date();
+    await db.update(limTitleRequests)
+      .set({
+        documentsDeliveredAt: sql`coalesce(${limTitleRequests.documentsDeliveredAt}, ${now})`,
+        updatedAt: now,
+      })
+      .where(eq(limTitleRequests.id, requestId));
+  }
+  return state;
+}
+
 export type ResolvedLeadAgent = AgentContactResult & {
   agentPhone: string;
   matchType: "subject";

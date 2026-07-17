@@ -16,8 +16,67 @@ import { requireAuth } from "../lib/auth";
 import { getIo } from "../lib/socket";
 import { getUnreadAppBadgeCount, sendPushToUser } from "../lib/expo-push";
 import { sendOwnerNotification } from "../lib/mailer";
+import {
+  captureLimTitleDocument,
+  isLimTitleDocumentType,
+} from "../lib/lim-title-documents";
+import { getLimTitleDeliveryState } from "../lib/lim-title-leads";
+import type { PropertyDocumentLinkMethod } from "@workspace/db";
 
 const router: IRouter = Router();
+
+const DOCUMENT_LINK_METHODS = new Set<PropertyDocumentLinkMethod>([
+  "auto_single_open",
+  "agent_picker",
+  "card_upload",
+  "admin",
+]);
+
+function parseLinkMethod(value: unknown): PropertyDocumentLinkMethod {
+  return typeof value === "string" && DOCUMENT_LINK_METHODS.has(value as PropertyDocumentLinkMethod)
+    ? value as PropertyDocumentLinkMethod
+    : "agent_picker";
+}
+
+async function validateDocumentRequest(
+  requestId: string,
+  thread: typeof dmThreads.$inferSelect,
+  senderId: string,
+) {
+  const [[sender], [lead]] = await Promise.all([
+    db.select({ role: profiles.role }).from(profiles).where(eq(profiles.id, senderId)).limit(1),
+    db.select().from(limTitleRequests).where(eq(limTitleRequests.id, requestId)).limit(1),
+  ]);
+  if (!sender || sender.role !== "sales_agent" || !lead || lead.matchedAgentUserId !== senderId) return null;
+  const participantsMatch =
+    [thread.participantA, thread.participantB].includes(senderId) &&
+    [thread.participantA, thread.participantB].includes(lead.requesterUserId);
+  if (lead.dmThreadId !== thread.id && !participantsMatch) return null;
+  return lead;
+}
+
+async function leadSummaryRows(threadId: string) {
+  const rows = await db
+    .select({
+      id: limTitleRequests.id,
+      propertyKey: limTitleRequests.propertyKey,
+      propertyAddress: limTitleRequests.propertyAddress,
+      requestedDocuments: limTitleRequests.requestedDocuments,
+      status: limTitleRequests.status,
+      consentedAt: limTitleRequests.consentedAt,
+      documentsDeliveredAt: limTitleRequests.documentsDeliveredAt,
+    })
+    .from(limTitleRequests)
+    .where(and(
+      eq(limTitleRequests.dmThreadId, threadId),
+      isNotNull(limTitleRequests.consentedAt),
+    ))
+    .orderBy(desc(limTitleRequests.consentedAt));
+  return Promise.all(rows.map(async (row) => ({
+    ...row,
+    delivered: await getLimTitleDeliveryState(row.id),
+  })));
+}
 
 type BlockRow = typeof userBlocks.$inferSelect;
 
@@ -229,21 +288,7 @@ router.get("/dm/threads", requireAuth, async (req: Request, res: Response) => {
             ),
           );
 
-        const leadRows = await db
-          .select({
-            id: limTitleRequests.id,
-            propertyAddress: limTitleRequests.propertyAddress,
-            requestedDocuments: limTitleRequests.requestedDocuments,
-            status: limTitleRequests.status,
-            consentedAt: limTitleRequests.consentedAt,
-            documentsDeliveredAt: limTitleRequests.documentsDeliveredAt,
-          })
-          .from(limTitleRequests)
-          .where(and(
-            eq(limTitleRequests.dmThreadId, thread.id),
-            isNotNull(limTitleRequests.consentedAt),
-          ))
-          .orderBy(desc(limTitleRequests.consentedAt));
+        const leadRows = await leadSummaryRows(thread.id);
 
         const blockStatus = blockStatusForPair(userId, otherId, incidentBlocks);
 
@@ -256,6 +301,7 @@ router.get("/dm/threads", requireAuth, async (req: Request, res: Response) => {
           unreadCount: count,
           blockStatus,
           leadSummary: leadRows[0] ?? null,
+          leads: leadRows,
           leadCount: leadRows.length,
         };
       }),
@@ -265,6 +311,23 @@ router.get("/dm/threads", requireAuth, async (req: Request, res: Response) => {
   } catch (err) {
     req.log.error({ err }, "GET /dm/threads failed");
     res.status(500).json({ error: "Failed to fetch threads" });
+  }
+});
+
+router.get("/dm/threads/:threadId/leads", requireAuth, async (req: Request, res: Response) => {
+  const userId = (req as any).userId as string;
+  const { threadId } = req.params;
+  try {
+    const [thread] = await db.select().from(dmThreads).where(eq(dmThreads.id, threadId)).limit(1);
+    if (!thread || (thread.participantA !== userId && thread.participantB !== userId)) {
+      res.status(403).json({ error: "Thread not found or access denied" });
+      return;
+    }
+    const leads = (await leadSummaryRows(threadId)).filter((lead) => !lead.delivered.complete);
+    res.json({ leads });
+  } catch (err) {
+    req.log.error({ err }, "GET /dm/threads/:threadId/leads failed");
+    res.status(500).json({ error: "Failed to fetch document requests" });
   }
 });
 
@@ -326,12 +389,30 @@ router.get("/dm/threads/:threadId/messages", requireAuth, async (req: Request, r
 router.post("/dm/threads/:threadId/messages", requireAuth, async (req: Request, res: Response) => {
   const userId = (req as any).userId as string;
   const { threadId } = req.params;
-  const { body: msgBody, imageUrl, fileUrl, fileName, fileMime } = req.body as {
+  const {
+    body: msgBody,
+    imageUrl,
+    fileUrl,
+    fileName,
+    fileMime,
+    objectPath,
+    fileSize,
+    fileHash,
+    leadRequestId,
+    documentType,
+    linkMethod,
+  } = req.body as {
     body?: string;
     imageUrl?: string;
     fileUrl?: string;
     fileName?: string;
     fileMime?: string;
+    objectPath?: string | null;
+    fileSize?: number | null;
+    fileHash?: string | null;
+    leadRequestId?: string;
+    documentType?: string;
+    linkMethod?: string;
   };
 
   if (!msgBody && !imageUrl && !fileUrl) {
@@ -358,6 +439,19 @@ router.post("/dm/threads/:threadId/messages", requireAuth, async (req: Request, 
       return;
     }
 
+    let documentLead: typeof limTitleRequests.$inferSelect | null = null;
+    if (leadRequestId != null || documentType != null) {
+      if (!fileUrl || !leadRequestId || !isLimTitleDocumentType(documentType)) {
+        res.status(400).json({ error: "A file, leadRequestId, and valid documentType are required" });
+        return;
+      }
+      documentLead = await validateDocumentRequest(leadRequestId, thread, userId);
+      if (!documentLead) {
+        res.status(403).json({ error: "Document request not found or access denied" });
+        return;
+      }
+    }
+
     const [message] = await db
       .insert(dmMessages)
       .values({
@@ -368,8 +462,39 @@ router.post("/dm/threads/:threadId/messages", requireAuth, async (req: Request, 
         fileUrl: fileUrl ?? null,
         fileName: fileName ?? null,
         fileMime: fileMime ?? null,
+        messageKind: documentLead ? "lim_title_document" : null,
+        leadRequestId: documentLead?.id ?? null,
+        metadataJson: documentLead ? {
+          requestId: documentLead.id,
+          docType: documentType,
+          propertyKey: documentLead.propertyKey,
+          propertyAddress: documentLead.propertyAddress,
+          linkMethod: parseLinkMethod(linkMethod),
+          fileHash: fileHash?.replace(/^\"|\"$/g, "") || null,
+          objectPath: objectPath ?? null,
+          fileSize: typeof fileSize === "number" && Number.isFinite(fileSize) ? fileSize : null,
+        } : null,
       })
       .returning();
+
+    if (documentLead && fileUrl && isLimTitleDocumentType(documentType)) {
+      void captureLimTitleDocument({
+        requestId: documentLead.id,
+        messageId: message.id,
+        sourceAgentUserId: userId,
+        propertyKey: documentLead.propertyKey,
+        propertyAddress: documentLead.propertyAddress,
+        docType: documentType,
+        fileUrl,
+        objectPath,
+        fileName,
+        fileMime,
+        fileSize: typeof fileSize === "number" && Number.isFinite(fileSize) ? fileSize : null,
+        fileHash,
+        linkMethod: parseLinkMethod(linkMethod),
+        reuseConsentAt: new Date(),
+      });
+    }
 
     await db
       .update(dmThreads)
@@ -412,6 +537,79 @@ router.post("/dm/threads/:threadId/messages", requireAuth, async (req: Request, 
   } catch (err) {
     req.log.error({ err }, "POST /dm/threads/:threadId/messages failed");
     res.status(500).json({ error: "Failed to send message" });
+  }
+});
+
+router.post("/dm/messages/:messageId/tag-document", requireAuth, async (req: Request, res: Response) => {
+  const userId = (req as any).userId as string;
+  const { messageId } = req.params;
+  const { leadRequestId, documentType, linkMethod } = (req.body ?? {}) as {
+    leadRequestId?: string;
+    documentType?: string;
+    linkMethod?: string;
+  };
+  if (!leadRequestId || !isLimTitleDocumentType(documentType)) {
+    res.status(400).json({ error: "leadRequestId and a valid documentType are required" });
+    return;
+  }
+  try {
+    const [existing] = await db.select().from(dmMessages).where(eq(dmMessages.id, messageId)).limit(1);
+    if (!existing?.fileUrl || existing.senderId !== userId) {
+      res.status(404).json({ error: "File message not found" });
+      return;
+    }
+    const [thread] = await db.select().from(dmThreads).where(eq(dmThreads.id, existing.threadId)).limit(1);
+    if (!thread || (thread.participantA !== userId && thread.participantB !== userId)) {
+      res.status(403).json({ error: "Thread not found or access denied" });
+      return;
+    }
+    const lead = await validateDocumentRequest(leadRequestId, thread, userId);
+    if (!lead) {
+      res.status(403).json({ error: "Document request not found or access denied" });
+      return;
+    }
+    const existingMetadata = existing.metadataJson ?? {};
+    const existingHash = typeof existingMetadata.fileHash === "string" ? existingMetadata.fileHash : null;
+    const existingObjectPath = typeof existingMetadata.objectPath === "string" ? existingMetadata.objectPath : null;
+    const existingFileSize = typeof existingMetadata.fileSize === "number" ? existingMetadata.fileSize : null;
+    const [message] = await db.update(dmMessages).set({
+      messageKind: "lim_title_document",
+      leadRequestId: lead.id,
+      metadataJson: {
+        requestId: lead.id,
+        docType: documentType,
+        propertyKey: lead.propertyKey,
+        propertyAddress: lead.propertyAddress,
+        linkMethod: parseLinkMethod(linkMethod),
+        fileHash: existingHash,
+        objectPath: existingObjectPath,
+        fileSize: existingFileSize,
+      },
+    }).where(eq(dmMessages.id, messageId)).returning();
+    void captureLimTitleDocument({
+      requestId: lead.id,
+      messageId: message.id,
+      sourceAgentUserId: userId,
+      propertyKey: lead.propertyKey,
+      propertyAddress: lead.propertyAddress,
+      docType: documentType,
+      fileUrl: existing.fileUrl,
+      objectPath: existingObjectPath,
+      fileName: existing.fileName,
+      fileMime: existing.fileMime,
+      fileSize: existingFileSize,
+      fileHash: existingHash,
+      linkMethod: parseLinkMethod(linkMethod),
+      reuseConsentAt: new Date(),
+      replaceExistingForMessage: true,
+    });
+    const io = getIo();
+    io?.to(`user:${thread.participantA}`).emit("message_updated", { threadId: thread.id, message });
+    io?.to(`user:${thread.participantB}`).emit("message_updated", { threadId: thread.id, message });
+    res.json({ message });
+  } catch (err) {
+    req.log.error({ err }, "POST /dm/messages/:messageId/tag-document failed");
+    res.status(500).json({ error: "Failed to tag document" });
   }
 });
 

@@ -14,6 +14,7 @@
     socket: null,
     socketConnected: false,
     pollTimer: null,
+    pendingTag: null,
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -59,7 +60,7 @@
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) throw new Error(payload?.error || "Upload failed. Please try again.");
-    return payload.fileUrl;
+    return payload;
   }
 
   async function uploadAttachment(file) {
@@ -82,7 +83,7 @@
         token: token(),
         body: { objectPath: signed.objectPath },
       });
-      return completed.fileUrl;
+      return completed;
     } catch {
       return uploadMultipart(base, file);
     }
@@ -123,13 +124,32 @@
     return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   }
 
+  async function openMessageFile(message) {
+    if (!message.fileUrl || message.fileUrl === "#") return;
+    if (!message.fileUrl.startsWith("/api/storage")) {
+      window.open(message.fileUrl, "_blank", "noopener");
+      return;
+    }
+    try {
+      const response = await fetch(message.fileUrl, {
+        headers: { Authorization: `Bearer ${token()}` },
+      });
+      if (!response.ok) throw new Error("Could not open this file.");
+      const blobUrl = URL.createObjectURL(await response.blob());
+      window.open(blobUrl, "_blank", "noopener");
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+    } catch (error) { setStatus(error.message, "error"); }
+  }
+
   function isWaitingOnLimTitle(thread) {
-    const lead = thread.leadSummary;
-    return !!lead && lead.status === "connected" && !lead.documentsDeliveredAt;
+    return (thread.leads || []).reduce((count, lead) => {
+      if (lead.status !== "connected") return count;
+      return count + (lead.requestedDocuments || []).filter((docType) => !lead.delivered?.[docType]).length;
+    }, 0);
   }
 
   function updateNavUnread() {
-    const count = state.threads.reduce((sum, thread) => sum + (isWaitingOnLimTitle(thread) ? 1 : 0), 0);
+    const count = state.threads.reduce((sum, thread) => sum + isWaitingOnLimTitle(thread), 0);
     const el = $("#sales-dm-nav-unread");
     if (!el) return;
     el.hidden = count === 0;
@@ -143,7 +163,7 @@
     const query = String($("#sales-dm-search")?.value || "").trim().toLowerCase();
     const threads = state.threads.filter((thread) => {
       const who = thread.otherParticipant;
-      return !query || `${who?.fullName || ""} ${thread.leadSummary?.propertyAddress || ""} ${preview(thread.lastMessage)}`.toLowerCase().includes(query);
+      return !query || `${who?.fullName || ""} ${(thread.leads || []).map((lead) => lead.propertyAddress).join(" ")} ${preview(thread.lastMessage)}`.toLowerCase().includes(query);
     });
     if (!threads.length) {
       const empty = document.createElement("div");
@@ -192,6 +212,23 @@
       const heading = document.createElement("strong");
       heading.textContent = "LIM + Title lead";
       bubble.appendChild(heading);
+      const lead = (selectedThread()?.leads || []).find((item) => item.id === message.leadRequestId);
+      if (lead && message.senderId !== currentUser().id) {
+        const actions = document.createElement("div");
+        actions.className = "sales-dm-document-actions";
+        for (const [label, documentType] of [["Attach LIM", "lim_report"], ["Attach Title", "title"]]) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "button button-quiet";
+          button.textContent = label;
+          button.addEventListener("click", () => {
+            state.pendingTag = { leadRequestId: lead.id, documentType, linkMethod: "card_upload" };
+            $("#sales-dm-file-input")?.click();
+          });
+          actions.appendChild(button);
+        }
+        bubble.appendChild(actions);
+      }
     }
     if (message.body) {
       const body = document.createElement("p");
@@ -208,11 +245,28 @@
     if (message.fileUrl) {
       const file = document.createElement("a");
       file.className = "sales-dm-file";
-      if (message.fileUrl !== "#") file.href = message.fileUrl;
-      file.target = message.fileUrl === "#" ? "" : "_blank";
-      file.rel = "noopener";
+      file.href = message.fileUrl === "#" ? "#" : message.fileUrl;
+      file.addEventListener("click", (event) => {
+        event.preventDefault();
+        void openMessageFile(message);
+      });
       file.textContent = message.fileName || "Open PDF document";
       bubble.appendChild(file);
+      if (message.messageKind === "lim_title_document") {
+        const label = document.createElement("span");
+        label.className = "sales-dm-document-link";
+        const meta = message.metadataJson || {};
+        label.textContent = `${meta.docType === "lim_report" ? "LIM" : meta.docType === "title" ? "Title" : "LIM + Title"} · ${meta.propertyAddress || "Linked property"}`;
+        bubble.appendChild(label);
+        if (message.senderId === currentUser().id && !message.pending) {
+          const change = document.createElement("button");
+          change.type = "button";
+          change.className = "sales-dm-change-link";
+          change.textContent = "Change";
+          change.addEventListener("click", () => changeDocumentTag(message));
+          bubble.appendChild(change);
+        }
+      }
     }
     const time = document.createElement("span");
     time.className = "sales-dm-time";
@@ -418,6 +472,91 @@
     $("#sales-dm-confirm-files").textContent = state.files.length === 1 ? "Send file" : `Send ${state.files.length} files`;
   }
 
+  function openTagSheet(leads, initial) {
+    return new Promise((resolve) => {
+      let selection = initial || (leads.length === 1 ? {
+        leadRequestId: leads[0].id,
+        documentType: leads[0].delivered?.lim_report ? "title" : "lim_report",
+        linkMethod: "auto_single_open",
+      } : null);
+      const overlay = document.createElement("div");
+      overlay.className = "sales-dm-tag-overlay";
+      const sheet = document.createElement("div");
+      sheet.className = "sales-dm-tag-sheet";
+      sheet.innerHTML = '<h3>Link this PDF to a property</h3><p>This keeps LIM and title documents with the correct buyer request.</p>';
+      const choices = document.createElement("div");
+      function renderChoices() {
+        choices.replaceChildren();
+        for (const lead of leads) {
+          const row = document.createElement("div");
+          row.className = "sales-dm-tag-row";
+          const address = document.createElement("strong");
+          address.textContent = lead.propertyAddress;
+          row.appendChild(address);
+          const chips = document.createElement("div");
+          chips.className = "sales-dm-tag-chips";
+          for (const [label, documentType] of [["LIM", "lim_report"], ["Title", "title"], ["Both", "combined"]]) {
+            const chip = document.createElement("button");
+            chip.type = "button";
+            chip.textContent = label;
+            chip.className = selection?.leadRequestId === lead.id && selection?.documentType === documentType ? "is-selected" : "";
+            chip.addEventListener("click", () => {
+              selection = { leadRequestId: lead.id, documentType, linkMethod: leads.length === 1 ? "auto_single_open" : "agent_picker" };
+              renderChoices();
+            });
+            chips.appendChild(chip);
+          }
+          row.appendChild(chips);
+          choices.appendChild(row);
+        }
+      }
+      renderChoices();
+      sheet.appendChild(choices);
+      const actions = document.createElement("div");
+      actions.className = "sales-dm-tag-actions";
+      const other = document.createElement("button");
+      other.type = "button"; other.className = "button button-quiet"; other.textContent = "Other document";
+      other.addEventListener("click", () => { overlay.remove(); resolve({ untagged: true }); });
+      const cancel = document.createElement("button");
+      cancel.type = "button"; cancel.className = "button button-quiet"; cancel.textContent = "Cancel";
+      cancel.addEventListener("click", () => { overlay.remove(); resolve(null); });
+      const confirm = document.createElement("button");
+      confirm.type = "button"; confirm.className = "button button-primary"; confirm.textContent = "Confirm link";
+      confirm.addEventListener("click", () => { if (selection) { overlay.remove(); resolve(selection); } });
+      actions.append(other, cancel, confirm);
+      sheet.appendChild(actions);
+      overlay.appendChild(sheet);
+      document.body.appendChild(overlay);
+    });
+  }
+
+  function acceptReuseNotice() {
+    const key = `projectAlphaLimTitleReuseNoticeAccepted:${currentUser().id || "agent"}`;
+    if (localStorage.getItem(key) === "1") return true;
+    const accepted = window.confirm("Documents linked to a property may be securely shared with other interested buyers of that same property. Continue?");
+    if (accepted) localStorage.setItem(key, "1");
+    return accepted;
+  }
+
+  async function changeDocumentTag(message) {
+    const leads = (selectedThread()?.leads || []).filter((lead) => lead.status === "connected");
+    if (!leads.length) return;
+    const selection = await openTagSheet(leads, {
+      leadRequestId: message.leadRequestId,
+      documentType: message.metadataJson?.docType || "lim_report",
+      linkMethod: "agent_picker",
+    });
+    if (!selection || selection.untagged) return;
+    try {
+      const data = await api(`/dm/messages/${encodeURIComponent(message.id)}/tag-document`, {
+        method: "POST", token: token(), body: selection,
+      });
+      state.messages = state.messages.map((item) => item.id === message.id ? data.message : item);
+      await loadThreads(true);
+      renderMessages(true);
+    } catch (error) { setStatus(error.message, "error"); }
+  }
+
   async function sendFiles() {
     if (!state.files.length || !state.selectedId || state.sending) return;
     const files = state.files.slice();
@@ -427,6 +566,19 @@
     updateComposer();
     for (const file of files) {
       const image = /^image\//i.test(file.type || "");
+      let documentTag = null;
+      if (!image && file.type === "application/pdf") {
+        const leads = (selectedThread()?.leads || []).filter((lead) => lead.status === "connected" && !lead.delivered?.complete);
+        if (state.pendingTag) {
+          documentTag = state.pendingTag;
+          state.pendingTag = null;
+        } else if (leads.length) {
+          documentTag = await openTagSheet(leads, null);
+          if (!documentTag) continue;
+          if (documentTag.untagged) documentTag = null;
+        }
+        if (documentTag && !acceptReuseNotice()) continue;
+      }
       const localUrl = image ? URL.createObjectURL(file) : null;
       const local = {
         id: `local-${Date.now()}-${Math.random()}`,
@@ -442,10 +594,19 @@
       renderMessages();
       try {
         setStatus(`Uploading ${file.name}...`);
-        const fileUrl = await uploadAttachment(file);
+        const uploaded = await uploadAttachment(file);
+        const fileUrl = uploaded.fileUrl;
         const payload = image
           ? { imageUrl: fileUrl }
-          : { fileUrl, fileName: file.name || "attachment.pdf", fileMime: file.type || "application/pdf" };
+          : {
+              fileUrl,
+              objectPath: uploaded.objectPath ?? null,
+              fileSize: uploaded.fileSize ?? file.size,
+              fileHash: uploaded.fileHash ?? null,
+              fileName: file.name || "attachment.pdf",
+              fileMime: file.type || "application/pdf",
+              ...(documentTag || {}),
+            };
         const data = await api(`/dm/threads/${encodeURIComponent(state.selectedId)}/messages`, { method: "POST", token: token(), body: payload });
         if (localUrl) URL.revokeObjectURL(localUrl);
         state.messages = state.messages.map((message) => message.id === local.id ? data.message : message);
@@ -456,6 +617,7 @@
       }
     }
     state.sending = false;
+    state.pendingTag = null;
     await loadThreads(true);
     renderMessages();
     if (!$("#sales-dm-status").classList.contains("error")) setStatus("");
@@ -517,6 +679,12 @@
       socket.on("connect_error", () => { state.socketConnected = false; });
       socket.on("new_message", ({ threadId, message }) => applyIncoming(threadId, message));
       socket.on("message_like", ({ threadId, message }) => {
+        if (threadId === state.selectedId) {
+          state.messages = state.messages.map((item) => item.id === message.id ? message : item);
+          renderMessages(true);
+        }
+      });
+      socket.on("message_updated", ({ threadId, message }) => {
         if (threadId === state.selectedId) {
           state.messages = state.messages.map((item) => item.id === message.id ? message : item);
           renderMessages(true);

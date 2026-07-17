@@ -3,11 +3,24 @@ import { Link } from "react-router-dom";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { formatDate, relativeTime } from "@/lib/format";
 
-type LeadFilter = "open" | "completed" | "all";
+type LeadFilter = "open" | "completed" | "review" | "all";
+
+interface PropertyDocumentRow {
+  id: string;
+  canReview: boolean;
+  sourceRequestId: string | null;
+  docType: "lim_report" | "title" | "combined";
+  fileName: string | null;
+  reviewUrl: string | null;
+  verificationStatus: "pending" | "text_match" | "mismatch" | "no_text_layer" | "admin_confirmed" | "rejected";
+  issuedAt: string | null;
+  createdAt: string;
+}
 
 interface LimTitleLead {
   id: string;
   propertyAddress: string;
+  requestedDocuments: string[];
   status: string;
   offerSource: "proactive_15_percent" | "organic_intent";
   requesterUserId: string;
@@ -28,6 +41,7 @@ interface LimTitleLead {
   lastRequestedAt: string;
   requestCount: number;
   isNew: boolean;
+  documents: PropertyDocumentRow[];
 }
 
 export default function LimTitleLeadsPage() {
@@ -35,6 +49,7 @@ export default function LimTitleLeadsPage() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<LeadFilter>("open");
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [documentTargets, setDocumentTargets] = useState<Record<string, string>>({});
 
   const loadLeads = useCallback(() => {
     apiGet<{ rows: LimTitleLead[] }>("/admin/lim-title-leads?limit=200")
@@ -68,6 +83,10 @@ export default function LimTitleLeadsPage() {
       return leads.filter((lead) => !lead.documentsDeliveredAt);
     if (filter === "completed")
       return leads.filter((lead) => Boolean(lead.documentsDeliveredAt));
+    if (filter === "review")
+      return leads.filter((lead) => lead.documents.some((document) =>
+        document.verificationStatus === "mismatch" || document.verificationStatus === "no_text_layer",
+      ));
     return leads;
   }, [filter, leads]);
 
@@ -101,6 +120,23 @@ export default function LimTitleLeadsPage() {
     }
   }
 
+  async function reviewDocument(
+    document: PropertyDocumentRow,
+    body: Record<string, unknown>,
+  ) {
+    if (updatingId) return;
+    setUpdatingId(document.id);
+    setError(null);
+    try {
+      await apiPatch(`/admin/property-documents/${document.id}`, body);
+      loadLeads();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update the document");
+    } finally {
+      setUpdatingId(null);
+    }
+  }
+
   return (
     <>
       <h1>LIM/Title Leads</h1>
@@ -118,7 +154,7 @@ export default function LimTitleLeadsPage() {
             </div>
           </div>
           <div className="toggle" aria-label="Filter LIM/title leads">
-            {(["open", "completed", "all"] as LeadFilter[]).map((value) => (
+            {(["open", "completed", "review", "all"] as LeadFilter[]).map((value) => (
               <button
                 key={value}
                 className={filter === value ? "active" : ""}
@@ -244,7 +280,72 @@ export default function LimTitleLeadsPage() {
                         </span>
                       </td>
                       <td>
-                        <label className="lead-check">
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                          {lead.requestedDocuments.map((docType) => {
+                            const delivered = lead.documents.some((document) =>
+                              document.verificationStatus !== "rejected" &&
+                              (document.docType === docType || document.docType === "combined"),
+                            );
+                            return (
+                              <span key={docType} className={`lead-state ${delivered ? "good" : "waiting"}`}>
+                                {docType === "lim_report" ? "LIM" : "Title"} {delivered ? "✓" : "—"}
+                              </span>
+                            );
+                          })}
+                        </div>
+                        {lead.documents.map((document) => (
+                          <div key={document.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 7, marginTop: 7, minWidth: 230 }}>
+                            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                              {document.reviewUrl ? (
+                                <a href={document.reviewUrl} target="_blank" rel="noreferrer" className="lead-contact">
+                                  {document.fileName || (document.docType === "lim_report" ? "LIM document" : "Title document")}
+                                </a>
+                              ) : (
+                                <span>{document.fileName || "Document"}</span>
+                              )}
+                              <span className={`lead-state ${document.verificationStatus === "text_match" || document.verificationStatus === "admin_confirmed" ? "good" : "waiting"}`}>
+                                {document.verificationStatus.replaceAll("_", " ")}
+                              </span>
+                            </div>
+                            <div style={{ display: "flex", gap: 5, marginTop: 6, flexWrap: "wrap" }}>
+                              <button
+                                className="btn ghost"
+                                disabled={!document.canReview || updatingId === document.id}
+                                onClick={() => reviewDocument(document, { verificationStatus: "admin_confirmed" })}
+                              >Confirm</button>
+                              <button
+                                className="btn ghost"
+                                disabled={!document.canReview || updatingId === document.id}
+                                onClick={() => reviewDocument(document, { verificationStatus: "rejected" })}
+                              >Reject</button>
+                              <select
+                                aria-label="Move document to another request"
+                                disabled={!document.canReview}
+                                value={documentTargets[document.id] ?? ""}
+                                onChange={(event) => setDocumentTargets((current) => ({ ...current, [document.id]: event.target.value }))}
+                              >
+                                <option value="">Re-tag…</option>
+                                {leads?.map((targetLead) => ["lim_report", "title", "combined"].map((docType) => (
+                                  <option key={`${targetLead.id}-${docType}`} value={`${targetLead.id}|${docType}`}>
+                                    {targetLead.propertyAddress} · {docType === "lim_report" ? "LIM" : docType === "title" ? "Title" : "Both"}
+                                  </option>
+                                )))}
+                              </select>
+                              {documentTargets[document.id] ? (
+                                <button
+                                  className="btn ghost"
+                                  disabled={!document.canReview || updatingId === document.id}
+                                  onClick={() => {
+                                    const [requestId, documentType] = documentTargets[document.id].split("|");
+                                    void reviewDocument(document, { requestId, documentType });
+                                  }}
+                                >Apply</button>
+                              ) : null}
+                            </div>
+                          </div>
+                        ))}
+                        {!lead.documents.length && <span className="lead-muted">No linked documents</span>}
+                        <label className="lead-check" style={{ marginTop: 9 }}>
                           <input
                             type="checkbox"
                             checked={Boolean(lead.adminSmsSentAt)}
@@ -298,8 +399,8 @@ export default function LimTitleLeadsPage() {
                           />
                           <span>
                             {lead.documentsDeliveredAt
-                              ? "Delivered"
-                              : "Not delivered"}
+                              ? "Manual/automatic complete"
+                              : "Mark complete manually"}
                           </span>
                         </label>
                         {lead.documentsDeliveredAt && (

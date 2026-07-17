@@ -9,6 +9,7 @@ import {
   ilike,
   isNotNull,
   isNull,
+  inArray,
   or,
   sql,
 } from "drizzle-orm";
@@ -30,6 +31,7 @@ import {
   limTitleRequests,
   listingAgentTargets,
   leadSmsDeliveries,
+  propertyDocuments,
   withDbRetry,
 } from "@workspace/db";
 import { requireAdmin } from "../lib/auth";
@@ -49,6 +51,8 @@ import { getIo } from "../lib/socket";
 import { sendPushToUser } from "../lib/expo-push";
 import { getUnreadAppBadgeCount } from "../lib/notification-state";
 import { getWatchlistMonitorAdminStatus } from "../lib/watchlist-monitor";
+import { deriveLimTitleDeliveryStatus } from "../lib/lim-title-leads";
+import { isLimTitleDocumentType } from "../lib/lim-title-documents";
 
 const router = Router();
 
@@ -89,12 +93,13 @@ function objectPathFromStorageUrl(
   fileUrl: string | null | undefined,
 ): string | null {
   if (!fileUrl) return null;
-  const relativeMatch = fileUrl.match(/\/api\/storage(\/objects\/[^?#]+)/);
+  if (fileUrl.startsWith("/objects/") || fileUrl.startsWith("/s3/")) return fileUrl;
+  const relativeMatch = fileUrl.match(/\/api\/storage((?:\/objects|\/s3)\/[^?#]+)/);
   if (relativeMatch?.[1]) return relativeMatch[1];
   try {
     const parsed = new URL(fileUrl);
     const absoluteMatch = parsed.pathname.match(
-      /\/api\/storage(\/objects\/[^?#]+)/,
+      /\/api\/storage((?:\/objects|\/s3)\/[^?#]+)/,
     );
     return absoluteMatch?.[1] ?? null;
   } catch {
@@ -106,7 +111,10 @@ function makeReviewUrl(fileUrl: string | null | undefined): string | null {
   const objectPath = objectPathFromStorageUrl(fileUrl);
   if (!objectPath) return null;
   const token = createStorageReviewToken(objectPath);
-  return `${getPublicAppUrl()}/api/storage/review${objectPath}?token=${encodeURIComponent(token)}`;
+  const reviewPath = objectPath.startsWith("/s3/")
+    ? `/api/storage/review-s3/${objectPath.slice("/s3/".length)}`
+    : `/api/storage/review/${objectPath.slice("/objects/".length)}`;
+  return `${getPublicAppUrl()}${reviewPath}?token=${encodeURIComponent(token)}`;
 }
 
 // GET /admin/stats/signups?bucket=week|month
@@ -1083,14 +1091,34 @@ router.get("/admin/message-hub/accounts", requireAdmin, async (req, res) => {
       )
       .orderBy(asc(profiles.role), asc(profiles.fullName));
 
-    res.json({
-      accounts: rows.map((row) => ({
-        ...row,
-        companyName: row.companyName ?? null,
-        discipline: row.discipline ?? null,
-        agencyName: row.agencyName ?? null,
-      })),
-    });
+    const accounts = await Promise.all(
+      rows.map(async (row) => {
+        const [{ count: unreadCount }] = await db
+          .select({ count: count() })
+          .from(dmMessages)
+          .innerJoin(dmThreads, eq(dmMessages.threadId, dmThreads.id))
+          .where(
+            and(
+              isNull(dmMessages.readAt),
+              sql`${dmMessages.senderId} != ${row.id}`,
+              or(
+                eq(dmThreads.participantA, row.id),
+                eq(dmThreads.participantB, row.id),
+              ),
+            ),
+          );
+
+        return {
+          ...row,
+          companyName: row.companyName ?? null,
+          discipline: row.discipline ?? null,
+          agencyName: row.agencyName ?? null,
+          unreadCount,
+        };
+      }),
+    );
+
+    res.json({ accounts });
   } catch (err) {
     req.log.error({ err }, "admin message-hub account list failed");
     res.status(500).json({ error: "Failed to load Message Hub accounts" });
@@ -2570,7 +2598,9 @@ router.get("/admin/lim-title-leads", requireAdmin, async (req, res) => {
     const rows = await db
       .select({
         id: limTitleRequests.id,
+        propertyKey: limTitleRequests.propertyKey,
         propertyAddress: limTitleRequests.propertyAddress,
+        requestedDocuments: limTitleRequests.requestedDocuments,
         status: limTitleRequests.status,
         offerSource: limTitleRequests.offerSource,
         requesterUserId: limTitleRequests.requesterUserId,
@@ -2628,11 +2658,60 @@ router.get("/admin/lim-title-leads", requireAdmin, async (req, res) => {
       .orderBy(desc(limTitleRequests.consentedAt))
       .limit(limit)
       .offset(offset);
+    const requestIds = rows.map((row) => row.id);
+    const documentRows = rows.length ? await db
+      .select()
+      .from(propertyDocuments)
+      .where(or(
+        inArray(propertyDocuments.sourceRequestId, requestIds),
+        inArray(propertyDocuments.propertyKey, rows.map((row) => row.propertyKey)),
+      )) : [];
+    const deliveryMessages = rows.length ? await db
+      .select({
+        id: dmMessages.id,
+        leadRequestId: dmMessages.leadRequestId,
+        fileUrl: dmMessages.fileUrl,
+        fileName: dmMessages.fileName,
+        metadataJson: dmMessages.metadataJson,
+        createdAt: dmMessages.createdAt,
+      })
+      .from(dmMessages)
+      .where(and(
+        inArray(dmMessages.leadRequestId, requestIds),
+        eq(dmMessages.messageKind, "lim_title_document"),
+      )) : [];
+    const documentsByMessage = new Map(documentRows.filter((document) => document.sourceMessageId).map((document) => [document.sourceMessageId!, document]));
+    const documentsByHash = new Map(documentRows.filter((document) => document.fileHash).map((document) => [`${document.propertyKey}|${document.fileHash}`, document]));
+    const documentsByRequest = new Map<string, Array<Record<string, unknown>>>();
+    for (const message of deliveryMessages) {
+      if (!message.leadRequestId) continue;
+      const metadata = message.metadataJson ?? {};
+      const hashKey = typeof metadata.propertyKey === "string" && typeof metadata.fileHash === "string"
+        ? `${metadata.propertyKey}|${metadata.fileHash}` : null;
+      const document = documentsByMessage.get(message.id) ?? (hashKey ? documentsByHash.get(hashKey) : undefined);
+      const list = documentsByRequest.get(message.leadRequestId) ?? [];
+      list.push({
+        ...(document ?? {}),
+        id: document?.id ?? message.id,
+        canReview: Boolean(document),
+        sourceRequestId: message.leadRequestId,
+        docType: metadata.docType,
+        fileName: message.fileName ?? document?.fileName ?? null,
+        verificationStatus: document?.verificationStatus ?? "pending",
+        createdAt: message.createdAt,
+        reviewUrl: makeReviewUrl(document?.objectPath) ?? makeReviewUrl(message.fileUrl),
+      });
+      documentsByRequest.set(message.leadRequestId, list);
+    }
+    const enrichedRows = rows.map((row) => ({
+      ...row,
+      documents: documentsByRequest.get(row.id) ?? [],
+    }));
     const [{ total }] = await db
       .select({ total: sql<number>`count(*)::int` })
       .from(limTitleRequests)
       .where(isNotNull(limTitleRequests.consentedAt));
-    res.json({ rows, total: total ?? 0, limit, offset });
+    res.json({ rows: enrichedRows, total: total ?? 0, limit, offset });
   } catch (err) {
     req.log.error({ err }, "admin LIM/title lead list failed");
     res.status(500).json({ error: "Failed to load LIM/title leads" });
@@ -2738,5 +2817,80 @@ router.patch(
     }
   },
 );
+
+router.patch("/admin/property-documents/:documentId", requireAdmin, async (req, res) => {
+  const { documentId } = req.params;
+  const body = (req.body ?? {}) as {
+    verificationStatus?: unknown;
+    requestId?: unknown;
+    documentType?: unknown;
+  };
+  const allowedStatuses = new Set(["admin_confirmed", "rejected"]);
+  const hasStatus = typeof body.verificationStatus === "string" && allowedStatuses.has(body.verificationStatus);
+  const hasRetag = typeof body.requestId === "string" && isLimTitleDocumentType(body.documentType);
+  if (!hasStatus && !hasRetag) {
+    res.status(400).json({ error: "A review status or document tag is required" });
+    return;
+  }
+  try {
+    const [document] = await db.select().from(propertyDocuments).where(eq(propertyDocuments.id, documentId)).limit(1);
+    if (!document) {
+      res.status(404).json({ error: "Document not found" });
+      return;
+    }
+    let request: typeof limTitleRequests.$inferSelect | undefined;
+    if (hasRetag) {
+      [request] = await db.select().from(limTitleRequests).where(eq(limTitleRequests.id, body.requestId as string)).limit(1);
+      if (!request) {
+        res.status(404).json({ error: "LIM/title request not found" });
+        return;
+      }
+    }
+    const nextStatus = hasStatus
+      ? body.verificationStatus as "admin_confirmed" | "rejected"
+      : "pending";
+    const [updated] = await db.transaction(async (tx) => {
+      if (hasRetag && request && document.sourceMessageId) {
+        await tx.update(dmMessages).set({
+          messageKind: "lim_title_document",
+          leadRequestId: request.id,
+          metadataJson: {
+            requestId: request.id,
+            docType: body.documentType,
+            propertyKey: request.propertyKey,
+            propertyAddress: request.propertyAddress,
+            linkMethod: "admin",
+            fileHash: document.fileHash,
+            objectPath: document.objectPath,
+            fileSize: document.fileSize,
+          },
+        }).where(eq(dmMessages.id, document.sourceMessageId));
+      }
+      return tx.update(propertyDocuments).set({
+        ...(hasRetag && request ? {
+          propertyKey: request.propertyKey,
+          propertyAddress: request.propertyAddress,
+          docType: body.documentType as "lim_report" | "title" | "combined",
+          sourceRequestId: request.id,
+          linkMethod: "admin" as const,
+          verificationJson: null,
+          issuedAt: null,
+        } : {}),
+        verificationStatus: nextStatus,
+        updatedAt: new Date(),
+      }).where(eq(propertyDocuments.id, documentId)).returning();
+    });
+    if (hasRetag && request) {
+      void import("../lib/lim-title-doc-verify").then(({ verifyLimTitleDocument }) =>
+        verifyLimTitleDocument(updated.id),
+      );
+      void deriveLimTitleDeliveryStatus(request.id);
+    }
+    res.json({ document: { ...updated, reviewUrl: makeReviewUrl(updated.objectPath) } });
+  } catch (err) {
+    req.log.error({ err, documentId }, "admin property document update failed");
+    res.status(500).json({ error: "Failed to update document" });
+  }
+});
 
 export default router;

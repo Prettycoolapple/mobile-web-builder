@@ -15,6 +15,7 @@ interface MessageHubAccount {
   companyName: string | null;
   discipline: string | null;
   agencyName: string | null;
+  unreadCount: number;
 }
 
 interface DmMessageRow {
@@ -316,8 +317,15 @@ export default function MessageHubPage() {
                 className={`mh-account-item${account.id === selectedAccountId ? " active" : ""}`}
                 onClick={() => selectAccount(account.id)}
               >
-                <div className="mh-account-name">
-                  {account.fullName ?? account.email}
+                <div className="mh-account-row">
+                  <div className="mh-account-name">
+                    {account.fullName ?? account.email}
+                  </div>
+                  {account.unreadCount > 0 && (
+                    <span className="mh-unread-badge">
+                      {account.unreadCount}
+                    </span>
+                  )}
                 </div>
                 <div className="mh-account-sub">
                   {account.role === "sales_agent"

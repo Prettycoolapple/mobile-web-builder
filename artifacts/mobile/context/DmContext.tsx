@@ -51,8 +51,28 @@ export interface DmThread {
     requestedDocuments: string[];
     status: string;
     consentedAt: string | null;
+    documentsDeliveredAt?: string | null;
+    delivered?: LimTitleDeliveryState;
   } | null;
+  leads?: DmLead[];
   leadCount?: number;
+}
+
+export interface LimTitleDeliveryState {
+  lim_report: boolean;
+  title: boolean;
+  complete: boolean;
+}
+
+export interface DmLead {
+  id: string;
+  propertyKey: string;
+  propertyAddress: string;
+  requestedDocuments: string[];
+  status: string;
+  consentedAt: string | null;
+  documentsDeliveredAt: string | null;
+  delivered: LimTitleDeliveryState;
 }
 
 interface DmContextValue {

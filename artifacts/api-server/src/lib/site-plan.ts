@@ -1094,7 +1094,7 @@ function makeContourLayer(geojson: GeoJsonFeatureCollection, legendLabel: string
     style: {
       // Thin solid stroke reads better than dashes when lines are dense (fine intervals).
       stroke: CONTOUR_COLOR,
-      strokeWidth: 3,
+      strokeWidth: 1.6,
       strokeOpacity: 0.95,
     },
     legend: [{ label: legendLabel, color: CONTOUR_COLOR, kind: "line" }],

@@ -224,4 +224,30 @@ router.get("/storage/review/*path", async (req: Request, res: Response) => {
   }
 });
 
+// Signed, short-lived review path used by the admin portal for private S3 docs.
+router.get("/storage/review-s3/*key", async (req: Request, res: Response) => {
+  try {
+    const raw = req.params.key;
+    const key = Array.isArray(raw) ? raw.join("/") : raw;
+    const objectPath = `/s3/${key}`;
+    const token = typeof req.query.token === "string" ? req.query.token : undefined;
+    if (!verifyStorageReviewToken(token, objectPath)) {
+      res.status(403).json({ error: "Access denied", code: "FORBIDDEN" });
+      return;
+    }
+    const response = await s3StorageService.download(key, 300);
+    res.status(response.status);
+    response.headers.forEach((value, name) => res.setHeader(name, value));
+    if (response.body) {
+      const nodeStream = Readable.fromWeb(response.body as import("stream/web").ReadableStream<Uint8Array>);
+      nodeStream.pipe(res);
+    } else {
+      res.end();
+    }
+  } catch (error) {
+    req.log.error({ err: error }, "Error serving S3 review object");
+    res.status(500).json({ error: "Failed to serve file", code: "SERVE_FAILED" });
+  }
+});
+
 export default router;

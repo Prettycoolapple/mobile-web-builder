@@ -1,5 +1,6 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import multer, { MulterError } from "multer";
+import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db, userUploads, profiles } from "@workspace/db";
 import { requireAuth } from "../lib/auth";
@@ -535,12 +536,18 @@ router.post(
     try {
       if (isS3) {
         const key = s3StorageService.keyForObjectPath(objectPath)!;
-        if (!(await s3StorageService.exists(key))) {
+        const metadata = await s3StorageService.head(key).catch(() => null);
+        if (!metadata) {
           res.status(404).json({ error: "Uploaded object not found", code: "OBJECT_NOT_FOUND" });
           return;
         }
         await db.insert(userUploads).values({ userId, objectPath }).onConflictDoNothing();
-        res.json({ fileUrl: s3StorageService.fileUrlForObjectPath(objectPath), objectPath });
+        res.json({
+          fileUrl: s3StorageService.fileUrlForObjectPath(objectPath),
+          objectPath,
+          fileSize: metadata.size,
+          fileHash: metadata.etag,
+        });
         return;
       }
 
@@ -688,7 +695,12 @@ router.post(
       try {
         const { objectPath, fileUrl } = await s3StorageService.upload(buffer, mimetype, DM_FILE_NAMESPACE);
         await db.insert(userUploads).values({ userId, objectPath }).onConflictDoNothing();
-        res.status(201).json({ fileUrl, objectPath });
+        res.status(201).json({
+          fileUrl,
+          objectPath,
+          fileSize: size,
+          fileHash: createHash("md5").update(buffer).digest("hex"),
+        });
         return;
       } catch (s3Err) {
         req.log.error({ err: s3Err }, "S3 DM file upload failed — trying GCS");
@@ -700,7 +712,12 @@ router.post(
       try {
         const { objectPath } = await uploadToStorage(objectStorageService, buffer, mimetype, size, DM_FILE_NAMESPACE);
         await db.insert(userUploads).values({ userId, objectPath }).onConflictDoNothing();
-        res.status(201).json({ fileUrl: `/api/storage${objectPath}`, objectPath });
+        res.status(201).json({
+          fileUrl: `/api/storage${objectPath}`,
+          objectPath,
+          fileSize: size,
+          fileHash: createHash("md5").update(buffer).digest("hex"),
+        });
         return;
       } catch (gcsErr) {
         req.log.error({ err: gcsErr }, "GCS DM file upload failed — trying fallback");
@@ -709,7 +726,13 @@ router.post(
 
     // --- Fallback: inline data URL for small files (works for PDFs too) ---
     if (size <= MAX_DM_INLINE_IMAGE_BYTES) {
-      res.status(201).json({ fileUrl: imageDataUrl(buffer, mimetype), objectPath: null, fallback: "inline" });
+      res.status(201).json({
+        fileUrl: imageDataUrl(buffer, mimetype),
+        objectPath: null,
+        fileSize: size,
+        fileHash: createHash("md5").update(buffer).digest("hex"),
+        fallback: "inline",
+      });
       return;
     }
 
@@ -717,7 +740,13 @@ router.post(
     try {
       const { objectPath } = await objectStorageService.saveLocal(buffer, mimetype, DM_FILE_NAMESPACE);
       await db.insert(userUploads).values({ userId, objectPath }).onConflictDoNothing();
-      res.status(201).json({ fileUrl: `/api/storage${objectPath}`, objectPath, fallback: "local" });
+      res.status(201).json({
+        fileUrl: `/api/storage${objectPath}`,
+        objectPath,
+        fileSize: size,
+        fileHash: createHash("md5").update(buffer).digest("hex"),
+        fallback: "local",
+      });
       return;
     } catch (localErr) {
       req.log.error({ err: localErr }, "All DM file upload paths failed");

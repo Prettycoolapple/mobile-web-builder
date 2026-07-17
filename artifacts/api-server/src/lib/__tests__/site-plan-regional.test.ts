@@ -325,7 +325,7 @@ describe("regional site-plan wrapper", () => {
 
     expect(contours).toMatchObject({
       available: true,
-      style: { stroke: "#FACC15", strokeWidth: 3, strokeOpacity: 0.95 },
+      style: { stroke: "#FACC15", strokeWidth: 1.6, strokeOpacity: 0.95 },
     });
     expect(contours?.geojson.features).toHaveLength(1);
   });

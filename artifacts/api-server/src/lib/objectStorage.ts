@@ -549,6 +549,18 @@ export class S3StorageService {
       return false;
     }
   }
+
+  /** Read stable object metadata after a direct upload without downloading it. */
+  async head(key: string): Promise<{ size: number | null; etag: string | null }> {
+    if (!this.client) throw new Error("S3 storage is not configured");
+    const namespace = key.split("/")[0] ?? "";
+    const bucket = this.resolveBucket(namespace);
+    const result = await this.client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    return {
+      size: typeof result.ContentLength === "number" ? result.ContentLength : null,
+      etag: result.ETag?.replace(/^\"|\"$/g, "") || null,
+    };
+  }
 }
 
 export const s3StorageService = new S3StorageService();
