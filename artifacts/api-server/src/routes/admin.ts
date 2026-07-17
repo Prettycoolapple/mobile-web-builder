@@ -760,13 +760,15 @@ router.get("/admin/users/:userId", requireAdmin, async (req, res) => {
       thumbs_down: string;
       recommendation_count: string | null;
       dm_connections: string;
+      ai_subdivision_interest: string;
     }>(sql`
       SELECT
         (SELECT COUNT(*) FROM feasibility_jobs WHERE user_id = ${userId}) AS feasibility_reports,
         (SELECT COUNT(*) FROM agent_call_events WHERE user_id = ${userId}) AS agent_calls,
         (SELECT COUNT(*) FROM chat_llm_feedback WHERE user_id = ${userId} AND rating = 'down') AS thumbs_down,
         (SELECT recommendation_count FROM service_provider_profiles WHERE user_id = ${userId}) AS recommendation_count,
-        (SELECT COUNT(*) FROM dm_threads WHERE participant_a = ${userId} OR participant_b = ${userId}) AS dm_connections
+        (SELECT COUNT(*) FROM dm_threads WHERE participant_a = ${userId} OR participant_b = ${userId}) AS dm_connections,
+        (SELECT COUNT(*) FROM ai_subdivision_interest_events WHERE user_id = ${userId}) AS ai_subdivision_interest
     `);
     const countsRows = (countsResult as any).rows ?? countsResult;
     const c = (countsRows[0] ?? {}) as Record<string, string | null>;
@@ -778,6 +780,7 @@ router.get("/admin/users/:userId", requireAdmin, async (req, res) => {
     const recommendationCount =
       c.recommendation_count != null ? Number(c.recommendation_count) : null;
     const dmConnections = Number(c.dm_connections ?? 0);
+    const aiSubdivisionInterest = Number(c.ai_subdivision_interest ?? 0);
 
     res.json({
       profile: {
@@ -791,6 +794,7 @@ router.get("/admin/users/:userId", requireAdmin, async (req, res) => {
         callsPerReport,
         recommendationCount,
         dmConnections,
+        aiSubdivisionInterest,
       },
     });
   } catch (err) {
@@ -1547,18 +1551,22 @@ router.get("/admin/stats/global-counts", requireAdmin, async (req, res) => {
     const result = await db.execute<{
       total_reports: string;
       total_agent_calls: string;
+      total_ai_subdivision_interest: string;
     }>(sql`
       SELECT
         (SELECT COUNT(*) FROM feasibility_jobs) AS total_reports,
-        (SELECT COUNT(*) FROM agent_call_events) AS total_agent_calls
+        (SELECT COUNT(*) FROM agent_call_events) AS total_agent_calls,
+        (SELECT COUNT(*) FROM ai_subdivision_interest_events) AS total_ai_subdivision_interest
     `);
     const rows = (result as any).rows ?? result;
     const r = (rows[0] ?? {}) as Record<string, string>;
     const totalReports = Number(r.total_reports ?? 0);
     const totalAgentCalls = Number(r.total_agent_calls ?? 0);
+    const totalAiSubdivisionInterest = Number(r.total_ai_subdivision_interest ?? 0);
     res.json({
       totalReports,
       totalAgentCalls,
+      totalAiSubdivisionInterest,
       callsPerReport: totalReports > 0 ? totalAgentCalls / totalReports : 0,
     });
   } catch (err) {

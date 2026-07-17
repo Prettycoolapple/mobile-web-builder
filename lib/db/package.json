@@ -28,7 +28,8 @@
     "add-lim-title-leads": "node ./scripts/add-lim-title-leads.mjs",
     "add-property-documents": "node ./scripts/add-property-documents-table.mjs",
     "add-property-feature-index": "node ./scripts/add-property-feature-index.mjs",
-    "add-dwelling-condition-feature-index": "node ./scripts/add-dwelling-condition-feature-index.mjs"
+    "add-dwelling-condition-feature-index": "node ./scripts/add-dwelling-condition-feature-index.mjs",
+    "add-ai-subdivision-interest-events": "node ./scripts/add-ai-subdivision-interest-events.mjs"
   },
   "dependencies": {
     "drizzle-orm": "catalog:",

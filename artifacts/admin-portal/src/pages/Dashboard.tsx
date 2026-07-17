@@ -39,6 +39,7 @@ interface CohortRow {
 interface GlobalCounts {
   totalReports: number;
   totalAgentCalls: number;
+  totalAiSubdivisionInterest: number;
   callsPerReport: number;
 }
 
@@ -257,6 +258,15 @@ export default function DashboardPage() {
                 {globalCounts ? globalCounts.totalAgentCalls.toLocaleString() : "—"}
               </div>
               <div style={{ fontSize: 11, color: "var(--muted)" }}>Recommended-card calls only</div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 220 }}>
+              <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>
+                Holistic AI subdivision interest
+              </div>
+              <div style={{ fontSize: 32, fontWeight: 700 }}>
+                {globalCounts ? globalCounts.totalAiSubdivisionInterest.toLocaleString() : "â€”"}
+              </div>
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>All users, lifetime taps</div>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 200 }}>
               <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>

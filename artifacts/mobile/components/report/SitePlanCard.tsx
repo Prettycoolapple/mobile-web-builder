@@ -659,6 +659,20 @@ export function SitePlanCard({ report }: Props) {
     setVisibleLayers((current) => ({ ...current, [id]: next }));
   };
 
+  const recordAiSubdivisionInterest = () => {
+    setShowAiSoon(true);
+    void fetch(`${getApiBase()}/ai-subdivision-interest`, {
+      method: "POST",
+      headers: getApiHeaders(),
+      body: JSON.stringify({
+        searchId,
+        propertyAddress: report.address ?? null,
+      }),
+    }).catch(() => {
+      // Interest tracking must never interrupt the coming-soon tap feedback.
+    });
+  };
+
   const visibleVectorLayers = useMemo(
     () =>
       query.data?.layers.filter(
@@ -708,7 +722,7 @@ export function SitePlanCard({ report }: Props) {
           ) : null}
           <TouchableOpacity
             style={[styles.aiButton, { borderColor: colors.border, backgroundColor: colors.muted }]}
-            onPress={() => setShowAiSoon(true)}
+            onPress={recordAiSubdivisionInterest}
             activeOpacity={0.72}
             accessibilityRole="button"
             accessibilityLabel={translateForOS("site_plan.ai_subdivision")}

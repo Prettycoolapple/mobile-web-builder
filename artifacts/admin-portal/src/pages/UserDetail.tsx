@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { apiGet, apiPatch } from "@/lib/api";
 import { formatDate, relativeTime } from "@/lib/format";
 
-type Tab = "feedback" | "addresses" | "agent_calls" | "watchlist" | "connections" | "chats";
+type Tab = "feedback" | "addresses" | "agent_calls" | "watchlist" | "connections" | "chats" | "ai_subdivision_interest";
 
 interface UserDetailResponse {
   profile: {
@@ -30,6 +30,7 @@ interface UserDetailResponse {
     callsPerReport: number;
     recommendationCount: number | null;
     dmConnections: number;
+    aiSubdivisionInterest: number;
   };
 }
 
@@ -351,6 +352,7 @@ export default function UserDetailPage() {
         {profile.role === "service_provider" && (
           <StatTile label="DM connections" value={String(counts.dmConnections)} hint="Unique users who messaged this provider" />
         )}
+        <StatTile label="AI subdivision interest" value={String(counts.aiSubdivisionInterest)} hint="Lifetime taps" />
       </div>
 
       {/* Recommendation count editor — service providers only */}
@@ -487,6 +489,16 @@ export default function UserDetailPage() {
             >
               Chats{chatList ? ` (${chatList.total})` : ""}
             </button>
+            <button
+              className="btn ghost"
+              onClick={() => setTab("ai_subdivision_interest")}
+              style={{
+                fontWeight: tab === "ai_subdivision_interest" ? 600 : 400,
+                borderColor: tab === "ai_subdivision_interest" ? "var(--accent, #2563eb)" : undefined,
+              }}
+            >
+              AI subdivision interest ({counts.aiSubdivisionInterest})
+            </button>
           </div>
         </div>
 
@@ -508,8 +520,27 @@ export default function UserDetailPage() {
         {tab === "chats" && (
           <ChatsTable list={chatList} offset={chatOffset} setOffset={setChatOffset} />
         )}
+        {tab === "ai_subdivision_interest" && (
+          <AiSubdivisionInterestPanel count={counts.aiSubdivisionInterest} />
+        )}
       </div>
     </>
+  );
+}
+
+function AiSubdivisionInterestPanel({ count }: { count: number }) {
+  return (
+    <div style={{ padding: "0 16px 16px" }}>
+      <div className="panel" style={{ padding: 16 }}>
+        <div style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>
+          Lifetime AI subdivision interest
+        </div>
+        <div style={{ fontSize: 36, fontWeight: 700, marginTop: 4 }}>{count.toLocaleString()}</div>
+        <p style={{ margin: "6px 0 0", color: "var(--muted)", fontSize: 13 }}>
+          Total taps by this user on the grey AI subdivision button in the site plan card.
+        </p>
+      </div>
+    </div>
   );
 }
 
