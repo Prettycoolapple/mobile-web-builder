@@ -1027,10 +1027,7 @@ async function regionalServiceLayers(bounds: SitePlanBounds, providerId: Plannin
   });
 }
 
-// Site-plan vectors are drawn on the native aerial canvas and then scaled down
-// to the phone viewport.  The old 0.9px dark-grey contour became a near-
-// invisible ~0.2px line on a 1536px canvas.  Use a high-contrast survey yellow
-// and a width that remains legible after the client scale transform.
+// Contours should remain visible without competing with the parcel boundary or aerial detail.
 const CONTOUR_COLOR = "#FACC15";
 
 function featureCollectionFromLinzContours(value: unknown): GeoJsonFeatureCollection {
@@ -1092,10 +1089,10 @@ function makeContourLayer(geojson: GeoJsonFeatureCollection, legendLabel: string
     defaultVisible: true,
     available: true,
     style: {
-      // Thin solid stroke reads better than dashes when lines are dense (fine intervals).
+      // A thin, translucent solid stroke keeps dense contour intervals subtle.
       stroke: CONTOUR_COLOR,
-      strokeWidth: 1.6,
-      strokeOpacity: 0.95,
+      strokeWidth: 0.8,
+      strokeOpacity: 0.58,
     },
     legend: [{ label: legendLabel, color: CONTOUR_COLOR, kind: "line" }],
     geojson,

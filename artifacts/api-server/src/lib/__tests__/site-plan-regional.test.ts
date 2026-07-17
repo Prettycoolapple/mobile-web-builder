@@ -289,7 +289,7 @@ describe("regional site-plan wrapper", () => {
     expect(new URL(highwayRequest!).searchParams.get("geometryType")).toBe("esriGeometryPoint");
   });
 
-  it("returns high-contrast contours that remain visible on a phone-sized aerial", async () => {
+  it("returns thin, subtle contours for a phone-sized aerial", async () => {
     process.env["LINZ_API_KEY"] = "test-linz-key";
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -325,7 +325,7 @@ describe("regional site-plan wrapper", () => {
 
     expect(contours).toMatchObject({
       available: true,
-      style: { stroke: "#FACC15", strokeWidth: 1.6, strokeOpacity: 0.95 },
+      style: { stroke: "#FACC15", strokeWidth: 0.8, strokeOpacity: 0.58 },
     });
     expect(contours?.geojson.features).toHaveLength(1);
   });

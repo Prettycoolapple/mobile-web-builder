@@ -11,9 +11,16 @@ import {
   View,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { useQuery, type QueryClient } from "@tanstack/react-query";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
+import Animated, {
+  Easing,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withTiming,
+} from "react-native-reanimated";
 import Svg, { Circle, G, Polygon, Polyline } from "react-native-svg";
 
 import { useAuth } from "@/context/AuthContext";
@@ -266,14 +273,22 @@ function renderLine(
 ) {
   const points = pointsString(coords, bounds, width, height);
   if (!points) return null;
+  // Contours are context, not the focus. Cap values here as well as at the API source so older
+  // cached site-plan payloads cannot bring back the heavy, high-opacity line treatment.
+  const strokeWidth = layer.group === "contours"
+    ? Math.min(layer.style.strokeWidth, 0.8)
+    : layer.style.strokeWidth;
+  const strokeOpacity = layer.group === "contours"
+    ? Math.min(layer.style.strokeOpacity ?? 1, 0.58)
+    : layer.style.strokeOpacity ?? 1;
   return (
     <Polyline
       key={key}
       points={points}
       fill="none"
       stroke={layer.style.stroke}
-      strokeWidth={layer.style.strokeWidth}
-      strokeOpacity={layer.style.strokeOpacity ?? 1}
+      strokeWidth={strokeWidth}
+      strokeOpacity={strokeOpacity}
       strokeDasharray={layer.style.dashArray?.join(",")}
       strokeLinecap="round"
       strokeLinejoin="round"
@@ -454,6 +469,7 @@ export function SitePlanCard({ report }: Props) {
   const searchId = report.historyId ?? null;
   const planHeight = Math.min(430, Math.max(310, viewportWidth - 42));
   const [showAiModal, setShowAiModal] = useState(false);
+  const aiBreath = useSharedValue(0);
   const aiInterestEventRef = useRef<Promise<string | null> | null>(null);
 
   const scale = useSharedValue(1);
@@ -648,6 +664,18 @@ export function SitePlanCard({ report }: Props) {
       { scale: baseScale.value * scale.value },
     ],
   }));
+  const animatedAiButtonStyle = useAnimatedStyle(() => ({
+    opacity: 0.84 + aiBreath.value * 0.16,
+    transform: [{ scale: 0.985 + aiBreath.value * 0.015 }],
+  }));
+
+  useEffect(() => {
+    aiBreath.value = withRepeat(
+      withTiming(1, { duration: 1800, easing: Easing.inOut(Easing.sin) }),
+      -1,
+      true,
+    );
+  }, [aiBreath]);
   const toggleLayer = (id: string, next: boolean) => {
     setVisibleLayers((current) => ({ ...current, [id]: next }));
   };
@@ -807,18 +835,27 @@ export function SitePlanCard({ report }: Props) {
           </Text>
         </View>
         <View style={styles.aiButtonWrap}>
-          <TouchableOpacity
-            style={[styles.aiButton, { borderColor: colors.border, backgroundColor: colors.muted }]}
-            onPress={recordAiSubdivisionInterest}
-            activeOpacity={0.72}
-            accessibilityRole="button"
-            accessibilityLabel={translateForOS("site_plan.ai_subdivision")}
-          >
-            <Feather name="grid" size={13} color={colors.mutedForeground} />
-            <Text style={[styles.aiButtonText, { color: colors.mutedForeground }]} numberOfLines={1}>
-              {translateForOS("site_plan.ai_subdivision")}
-            </Text>
-          </TouchableOpacity>
+          <Animated.View style={animatedAiButtonStyle}>
+            <TouchableOpacity
+              style={styles.aiButtonTouch}
+              onPress={recordAiSubdivisionInterest}
+              activeOpacity={0.78}
+              accessibilityRole="button"
+              accessibilityLabel={translateForOS("site_plan.ai_subdivision")}
+            >
+              <LinearGradient
+                colors={["#7C3AED", "#DB2777", "#F97316"]}
+                start={{ x: 0, y: 0.15 }}
+                end={{ x: 1, y: 0.85 }}
+                style={styles.aiButton}
+              >
+                <Feather name="grid" size={13} color="#FFFFFF" />
+                <Text style={styles.aiButtonText} numberOfLines={1}>
+                  {translateForOS("site_plan.ai_subdivision")}
+                </Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </Animated.View>
         </View>
       </View>
 
@@ -978,18 +1015,27 @@ const styles = StyleSheet.create({
     minWidth: 112,
     height: 34,
     borderRadius: 17,
-    borderWidth: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
     paddingHorizontal: 12,
   },
+  aiButtonTouch: {
+    borderRadius: 17,
+    overflow: "hidden",
+    shadowColor: "#C026D3",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.28,
+    shadowRadius: 7,
+    elevation: 4,
+  },
   aiButtonWrap: {
     position: "relative",
     alignItems: "flex-end",
   },
   aiButtonText: {
+    color: "#FFFFFF",
     fontFamily: "DM_Sans_700Bold",
     fontSize: 12,
     lineHeight: 16,
