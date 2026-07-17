@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { and, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import {
   db,
   dmMessages,
@@ -673,13 +673,13 @@ export async function claimOutstandingLimTitleLeads(
   await db
     .update(limTitleRequests)
     .set({ matchedAgentUserId: agentUserId, updatedAt: new Date() })
-    .where(sql`${limTitleRequests.agentTargetId} = ANY(${targetIds}::text[])`);
+    .where(inArray(limTitleRequests.agentTargetId, targetIds));
   const requests = await db
     .select({ id: limTitleRequests.id })
     .from(limTitleRequests)
     .where(
       and(
-        sql`${limTitleRequests.agentTargetId} = ANY(${targetIds}::text[])`,
+        inArray(limTitleRequests.agentTargetId, targetIds),
         isNotNull(limTitleRequests.consentedAt),
         isNull(limTitleRequests.dmThreadId),
       ),

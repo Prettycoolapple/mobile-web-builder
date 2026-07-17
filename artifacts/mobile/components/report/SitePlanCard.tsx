@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Image,
+  InteractionManager,
   StyleSheet,
   Switch,
   Text,
@@ -13,7 +14,7 @@ import { Feather } from "@expo/vector-icons";
 import { useQuery, type QueryClient } from "@tanstack/react-query";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
-import Svg, { Circle, Polygon, Polyline } from "react-native-svg";
+import Svg, { Circle, G, Polygon, Polyline } from "react-native-svg";
 
 import { useAuth } from "@/context/AuthContext";
 import type { FeasibilityReport as Report } from "@/context/ChatContext";
@@ -94,6 +95,11 @@ type SitePlanResponse = {
 
 type Props = {
   report: Report;
+};
+
+type LayerGroupCache = {
+  key: string;
+  groups: Map<string, React.ReactNode>;
 };
 
 function mercatorX(lng: number): number {
@@ -467,6 +473,7 @@ export function SitePlanCard({ report }: Props) {
   const baseScale = useSharedValue(1);
   const [canvasSize, setCanvasSize] = useState<{ width: number; height: number } | null>(null);
   const framedRef = useRef(false);
+  const layerGroupCacheRef = useRef<LayerGroupCache>({ key: "", groups: new Map() });
   const [loadedAerialAssets, setLoadedAerialAssets] = useState<Set<string>>(new Set());
   const [aerialWaitExpired, setAerialWaitExpired] = useState(false);
 
@@ -714,6 +721,70 @@ export function SitePlanCard({ report }: Props) {
     [query.data?.layers],
   );
 
+  const layerGroupCacheKey = useMemo(() => {
+    const image = query.data?.image;
+    if (!image) return "";
+    // `dataUpdatedAt` identifies this response without retaining another copy of a potentially
+    // large data URI. The remaining fields make the image identity explicit for cached responses.
+    const imageIdentity = image.source === "linz-basemaps"
+      ? image.tiles?.map((tile) => `${tile.z}/${tile.x}/${tile.y}`).join("|") ?? "no-tiles"
+      : image.dataUri
+        ? "data-uri"
+        : "no-image";
+    return [
+      searchId ?? "no-search",
+      query.dataUpdatedAt,
+      image.source,
+      imageIdentity,
+      `${image.width}x${image.height}`,
+    ].join(":");
+  }, [query.data?.image, query.dataUpdatedAt, searchId]);
+
+  const getLayerGroup = useCallback((layer: SitePlanLayer): React.ReactNode => {
+    const image = query.data?.image;
+    if (!image) return null;
+
+    if (layerGroupCacheRef.current.key !== layerGroupCacheKey) {
+      layerGroupCacheRef.current = { key: layerGroupCacheKey, groups: new Map() };
+    }
+
+    const cachedGroup = layerGroupCacheRef.current.groups.get(layer.id);
+    if (cachedGroup) return cachedGroup;
+
+    const group = (
+      <G key={layer.id}>
+        {layer.geojson.features.map((feature, featureIndex) =>
+          renderFeature(
+            feature,
+            layer,
+            image.bounds,
+            image.width,
+            image.height,
+            featureIndex,
+          ),
+        )}
+        {renderServiceNodes(layer, image.bounds, image.width, image.height)}
+      </G>
+    );
+    layerGroupCacheRef.current.groups.set(layer.id, group);
+    return group;
+  }, [layerGroupCacheKey, query.data?.image]);
+
+  // Project hidden layers after the initial map interaction settles so their first toggle is also
+  // a cache hit. This only populates the ref; it does not trigger another render.
+  useEffect(() => {
+    const data = query.data;
+    if (!data || !canvasSize) return;
+
+    const task = InteractionManager.runAfterInteractions(() => {
+      for (const layer of data.layers) {
+        if (layer.available) getLayerGroup(layer);
+      }
+    });
+
+    return () => task.cancel();
+  }, [canvasSize, getLayerGroup, query.data]);
+
   if (!searchId) {
     return (
       <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -841,26 +912,7 @@ export function SitePlanCard({ report }: Props) {
                 viewBox={`0 0 ${query.data.image.width} ${query.data.image.height}`}
                 preserveAspectRatio="xMidYMid meet"
               >
-                {visibleVectorLayers.flatMap((layer) =>
-                  layer.geojson.features.map((feature, featureIndex) =>
-                    renderFeature(
-                      feature,
-                      layer,
-                      query.data!.image.bounds,
-                      query.data!.image.width,
-                      query.data!.image.height,
-                      featureIndex,
-                    ),
-                  ),
-                )}
-                {visibleVectorLayers.flatMap((layer) =>
-                  renderServiceNodes(
-                    layer,
-                    query.data!.image.bounds,
-                    query.data!.image.width,
-                    query.data!.image.height,
-                  ),
-                )}
+                {visibleVectorLayers.map((layer) => getLayerGroup(layer))}
               </Svg>
             </Animated.View>
           </GestureDetector>

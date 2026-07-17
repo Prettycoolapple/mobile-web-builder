@@ -702,16 +702,17 @@ router.post(
       throw new Error("PROFILE_INSERT_FAILED");
     }
 
+    if (role === "sales_agent") {
+      await claimOutstandingLimTitleLeads(profile.id, phoneTrimmed).catch((error) => {
+        req.log.warn({ error, userId: profile.id }, "Could not claim pending LIM/title leads after signup");
+      });
+    }
+
     const token = signToken(profile.id, profile.email, role, sessionId);
     res.status(201).json({ token, user: { ...profile, isVerified: false } });
     recordLoginEvent(profile.id);
     // Detection only: flags account-farming from one IP. Does not affect signup.
     noteSignup({ userId: profile.id, ip: req.ip });
-    if (role === "sales_agent") {
-      runAfterResponse(claimOutstandingLimTitleLeads(profile.id, phoneTrimmed).catch((error) => {
-        req.log.warn({ error, userId: profile.id }, "Could not claim pending LIM/title leads after signup");
-      }));
-    }
 
     const providerCertObjectPath = providerData
       ? objectPathFromStorageUrl(providerData.incorporationCertUrl)
@@ -878,6 +879,10 @@ router.post("/sales-agent-web-signup", async (req, res) => {
       throw new Error("PROFILE_INSERT_FAILED");
     }
 
+    await claimOutstandingLimTitleLeads(profile.id, phoneTrimmed).catch((error) => {
+      req.log.warn({ error, userId: profile.id }, "Could not claim pending LIM/title leads after web signup");
+    });
+
     const token = signToken(profile.id, profile.email, profile.role, sessionId);
     recordLoginEvent(profile.id);
     res.status(201).json({
@@ -903,9 +908,6 @@ router.post("/sales-agent-web-signup", async (req, res) => {
         reaaLicenceNumber,
       },
     });
-    runAfterResponse(claimOutstandingLimTitleLeads(profile.id, phoneTrimmed).catch((error) => {
-      req.log.warn({ error, userId: profile.id }, "Could not claim pending LIM/title leads after web signup");
-    }));
   } catch (error) {
     if (error instanceof Error && error.message === "PHONE_VERIFICATION_CONSUMED") {
       res.status(400).json({
@@ -1221,6 +1223,10 @@ router.patch("/sales-agent-web-profile", requireAuth, async (req, res) => {
       return;
     }
 
+    await claimOutstandingLimTitleLeads(userId, phoneNumber).catch((error) => {
+      req.log.warn({ error, userId }, "Could not claim pending LIM/title leads after phone verification");
+    });
+
     res.json({
       user: {
         ...updated.profile,
@@ -1229,9 +1235,6 @@ router.patch("/sales-agent-web-profile", requireAuth, async (req, res) => {
         primaryLanguage,
       },
     });
-    runAfterResponse(claimOutstandingLimTitleLeads(userId, phoneNumber).catch((error) => {
-      req.log.warn({ error, userId }, "Could not claim pending LIM/title leads after phone verification");
-    }));
   } catch (error) {
     req.log.error({ error }, "Sales-agent web profile update failed");
     res.status(500).json({ error: "Profile update failed. Please try again.", code: "PROFILE_UPDATE_FAILED" });

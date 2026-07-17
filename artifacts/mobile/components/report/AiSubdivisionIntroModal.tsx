@@ -179,7 +179,6 @@ const styles = StyleSheet.create({
   card: {
     width: "100%",
     maxWidth: 420,
-    minHeight: 420,
     borderRadius: 24,
     borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: 24,
@@ -211,7 +210,6 @@ const styles = StyleSheet.create({
     marginBottom: 18,
   },
   copyWrap: {
-    flex: 1,
     width: "100%",
     alignItems: "center",
   },
