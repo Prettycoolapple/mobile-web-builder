@@ -31,6 +31,8 @@ interface UserDetailResponse {
     recommendationCount: number | null;
     dmConnections: number;
     aiSubdivisionInterest: number;
+    aiSubdivisionCompletions: number;
+    aiSubdivisionCompletionRate: number;
   };
 }
 
@@ -352,7 +354,11 @@ export default function UserDetailPage() {
         {profile.role === "service_provider" && (
           <StatTile label="DM connections" value={String(counts.dmConnections)} hint="Unique users who messaged this provider" />
         )}
-        <StatTile label="AI subdivision interest" value={String(counts.aiSubdivisionInterest)} hint="Lifetime taps" />
+        <StatTile
+          label="AI subdivision completion"
+          value={`${(counts.aiSubdivisionCompletionRate * 100).toFixed(1)}%`}
+          hint={`${counts.aiSubdivisionCompletions} final OKs from ${counts.aiSubdivisionInterest} taps`}
+        />
       </div>
 
       {/* Recommendation count editor — service providers only */}
@@ -497,7 +503,7 @@ export default function UserDetailPage() {
                 borderColor: tab === "ai_subdivision_interest" ? "var(--accent, #2563eb)" : undefined,
               }}
             >
-              AI subdivision interest ({counts.aiSubdivisionInterest})
+              AI subdivision funnel ({counts.aiSubdivisionCompletions}/{counts.aiSubdivisionInterest})
             </button>
           </div>
         </div>
@@ -521,25 +527,53 @@ export default function UserDetailPage() {
           <ChatsTable list={chatList} offset={chatOffset} setOffset={setChatOffset} />
         )}
         {tab === "ai_subdivision_interest" && (
-          <AiSubdivisionInterestPanel count={counts.aiSubdivisionInterest} />
+          <AiSubdivisionInterestPanel
+            taps={counts.aiSubdivisionInterest}
+            completions={counts.aiSubdivisionCompletions}
+            completionRate={counts.aiSubdivisionCompletionRate}
+          />
         )}
       </div>
     </>
   );
 }
 
-function AiSubdivisionInterestPanel({ count }: { count: number }) {
+function AiSubdivisionInterestPanel({
+  taps,
+  completions,
+  completionRate,
+}: {
+  taps: number;
+  completions: number;
+  completionRate: number;
+}) {
   return (
     <div style={{ padding: "0 16px 16px" }}>
-      <div className="panel" style={{ padding: 16 }}>
-        <div style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>
-          Lifetime AI subdivision interest
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <div className="panel" style={{ padding: 16, minWidth: 180, flex: 1 }}>
+          <div style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>
+            Popup taps
+          </div>
+          <div style={{ fontSize: 36, fontWeight: 700, marginTop: 4 }}>{taps.toLocaleString()}</div>
         </div>
-        <div style={{ fontSize: 36, fontWeight: 700, marginTop: 4 }}>{count.toLocaleString()}</div>
-        <p style={{ margin: "6px 0 0", color: "var(--muted)", fontSize: 13 }}>
-          Total taps by this user on the grey AI subdivision button in the site plan card.
-        </p>
+        <div className="panel" style={{ padding: 16, minWidth: 180, flex: 1 }}>
+          <div style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>
+            Final OKs
+          </div>
+          <div style={{ fontSize: 36, fontWeight: 700, marginTop: 4 }}>{completions.toLocaleString()}</div>
+        </div>
+        <div className="panel" style={{ padding: 16, minWidth: 180, flex: 1 }}>
+          <div style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>
+            Completion rate
+          </div>
+          <div style={{ fontSize: 36, fontWeight: 700, marginTop: 4 }}>
+            {(completionRate * 100).toFixed(1)}%
+          </div>
+        </div>
       </div>
+      <p style={{ margin: "10px 0 0", color: "var(--muted)", fontSize: 13 }}>
+        New-popup funnel only. Completion rate is final OKs divided by AI subdivision taps.
+      </p>
     </div>
   );
 }

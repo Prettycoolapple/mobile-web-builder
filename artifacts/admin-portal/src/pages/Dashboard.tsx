@@ -40,6 +40,11 @@ interface GlobalCounts {
   totalReports: number;
   totalAgentCalls: number;
   totalAiSubdivisionInterest: number;
+  totalAiSubdivisionCompletions: number;
+  aiSubdivisionCompletionRate: number;
+  generalFreeAiSubdivisionInterest: number;
+  generalFreeAiSubdivisionCompletions: number;
+  generalFreeAiSubdivisionCompletionRate: number;
   callsPerReport: number;
 }
 
@@ -261,12 +266,29 @@ export default function DashboardPage() {
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 220 }}>
               <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>
-                Holistic AI subdivision interest
+                AI subdivision funnel
               </div>
               <div style={{ fontSize: 32, fontWeight: 700 }}>
                 {globalCounts ? globalCounts.totalAiSubdivisionInterest.toLocaleString() : "â€”"}
               </div>
-              <div style={{ fontSize: 11, color: "var(--muted)" }}>All users, lifetime taps</div>
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                {globalCounts
+                  ? `${globalCounts.totalAiSubdivisionCompletions.toLocaleString()} final OKs · ${(globalCounts.aiSubdivisionCompletionRate * 100).toFixed(1)}% completion`
+                  : "New-popup taps, final OKs, and completion"}
+              </div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 250 }}>
+              <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>
+                General free-tier funnel
+              </div>
+              <div style={{ fontSize: 32, fontWeight: 700 }}>
+                {globalCounts ? globalCounts.generalFreeAiSubdivisionInterest.toLocaleString() : "â€”"}
+              </div>
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                {globalCounts
+                  ? `${globalCounts.generalFreeAiSubdivisionCompletions.toLocaleString()} final OKs · ${(globalCounts.generalFreeAiSubdivisionCompletionRate * 100).toFixed(1)}% completion`
+                  : "Free general-user taps and final OKs"}
+              </div>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 200 }}>
               <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>

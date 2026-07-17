@@ -21,6 +21,7 @@ import { useColors } from "@/hooks/useColors";
 import { useT } from "@/lib/i18n";
 import { translateForOS } from "@/lib/i18n";
 import { getApiBase } from "@/lib/api";
+import { AiSubdivisionIntroModal } from "@/components/report/AiSubdivisionIntroModal";
 
 // The subject parcel ("boundary") and the surrounding property boundaries ("nearby-boundaries")
 // are always drawn and not user-toggleable — they form the base context for the site plan.
@@ -442,12 +443,12 @@ function LayerToggleRow({
 export function SitePlanCard({ report }: Props) {
   const colors = useColors();
   const { t } = useT();
-  const { getApiHeaders } = useAuth();
+  const { getApiHeaders, user } = useAuth();
   const { width: viewportWidth } = useWindowDimensions();
   const searchId = report.historyId ?? null;
   const planHeight = Math.min(430, Math.max(310, viewportWidth - 42));
-  const [showAiSoon, setShowAiSoon] = useState(false);
-  const soonProgress = useSharedValue(0);
+  const [showAiModal, setShowAiModal] = useState(false);
+  const aiInterestEventRef = useRef<Promise<string | null> | null>(null);
 
   const scale = useSharedValue(1);
   const savedScale = useSharedValue(1);
@@ -511,13 +512,6 @@ export function SitePlanCard({ report }: Props) {
     const timeout = setTimeout(() => setAerialWaitExpired(true), 12_000);
     return () => clearTimeout(timeout);
   }, [aerialAssetKeys.length, aerialReady, query.data]);
-
-  useEffect(() => {
-    soonProgress.value = withTiming(showAiSoon ? 1 : 0, { duration: 170 });
-    if (!showAiSoon) return;
-    const timeout = setTimeout(() => setShowAiSoon(false), 2600);
-    return () => clearTimeout(timeout);
-  }, [showAiSoon, soonProgress]);
 
   const markAerialAssetLoaded = (key: string) => {
     setLoadedAerialAssets((current) => {
@@ -647,31 +641,64 @@ export function SitePlanCard({ report }: Props) {
       { scale: baseScale.value * scale.value },
     ],
   }));
-  const soonTipStyle = useAnimatedStyle(() => ({
-    opacity: soonProgress.value,
-    transform: [
-      { translateY: (1 - soonProgress.value) * -5 },
-      { scale: 0.95 + soonProgress.value * 0.05 },
-    ],
-  }));
-
   const toggleLayer = (id: string, next: boolean) => {
     setVisibleLayers((current) => ({ ...current, [id]: next }));
   };
 
   const recordAiSubdivisionInterest = () => {
-    setShowAiSoon(true);
-    void fetch(`${getApiBase()}/ai-subdivision-interest`, {
+    setShowAiModal(true);
+    aiInterestEventRef.current = fetch(`${getApiBase()}/ai-subdivision-interest`, {
       method: "POST",
       headers: getApiHeaders(),
       body: JSON.stringify({
         searchId,
         propertyAddress: report.address ?? null,
       }),
-    }).catch(() => {
-      // Interest tracking must never interrupt the coming-soon tap feedback.
+    })
+      .then(async (response) => {
+        if (!response.ok) return null;
+        const data = await response.json() as { id?: unknown };
+        return typeof data.id === "string" ? data.id : null;
+      })
+      .catch(() => null);
+  };
+
+  const completeAiSubdivisionInterest = () => {
+    const eventPromise = aiInterestEventRef.current;
+    setShowAiModal(false);
+    aiInterestEventRef.current = null;
+    if (!eventPromise) return;
+    void eventPromise.then(async (eventId) => {
+      if (!eventId) return;
+      const url = `${getApiBase()}/ai-subdivision-interest/${encodeURIComponent(eventId)}/complete`;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const response = await fetch(url, {
+            method: "POST",
+            headers: getApiHeaders(),
+          });
+          if (response.ok || response.status === 404) return;
+        } catch {
+          // Retry once below; analytics must never interrupt the acknowledgement.
+        }
+        if (attempt === 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 500));
+        }
+      }
     });
   };
+
+  const activeSpecialStatus =
+    user?.specialStatus === "friends_family" ||
+    (user?.specialStatus === "supercharge" &&
+      (!user.specialStatusExpiresAt ||
+        new Date(user.specialStatusExpiresAt).getTime() > Date.now()));
+  const showUpgradeSlide =
+    !user ||
+    (user.role === "general" &&
+      user.subscriptionTier !== "standard" &&
+      user.subscriptionTier !== "pro" &&
+      !activeSpecialStatus);
 
   const visibleVectorLayers = useMemo(
     () =>
@@ -709,17 +736,6 @@ export function SitePlanCard({ report }: Props) {
           </Text>
         </View>
         <View style={styles.aiButtonWrap}>
-          {showAiSoon ? (
-            <Animated.View style={[styles.comingSoonTip, soonTipStyle]} pointerEvents="none">
-              <View style={[styles.comingSoonCaret, { backgroundColor: colors.accent }]} />
-              <View style={[styles.comingSoonBubble, { backgroundColor: colors.accent }]}>
-                <Feather name="clock" size={12} color="#FFFFFF" />
-                <Text style={styles.comingSoonText}>
-                  {translateForOS("site_plan.coming_soon")}
-                </Text>
-              </View>
-            </Animated.View>
-          ) : null}
           <TouchableOpacity
             style={[styles.aiButton, { borderColor: colors.border, backgroundColor: colors.muted }]}
             onPress={recordAiSubdivisionInterest}
@@ -876,6 +892,12 @@ export function SitePlanCard({ report }: Props) {
           ))}
         </View>
       ) : null}
+      <AiSubdivisionIntroModal
+        visible={showAiModal}
+        showUpgradeSlide={showUpgradeSlide}
+        onCancel={() => setShowAiModal(false)}
+        onComplete={completeAiSubdivisionInterest}
+      />
     </View>
   );
 }
@@ -919,42 +941,6 @@ const styles = StyleSheet.create({
     fontFamily: "DM_Sans_700Bold",
     fontSize: 12,
     lineHeight: 16,
-  },
-  comingSoonTip: {
-    position: "absolute",
-    right: 0,
-    top: 40,
-    zIndex: 5,
-    alignItems: "flex-end",
-  },
-  comingSoonCaret: {
-    width: 11,
-    height: 11,
-    borderRadius: 2,
-    marginRight: 18,
-    marginBottom: -6,
-    transform: [{ rotate: "45deg" }],
-  },
-  comingSoonBubble: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    minWidth: 96,
-    shadowColor: "#000",
-    shadowOpacity: 0.16,
-    shadowRadius: 9,
-    shadowOffset: { width: 0, height: 5 },
-    elevation: 6,
-  },
-  comingSoonText: {
-    fontFamily: "DM_Sans_700Bold",
-    fontSize: 11,
-    lineHeight: 14,
-    color: "#FFFFFF",
   },
   mapViewport: {
     width: "100%",
