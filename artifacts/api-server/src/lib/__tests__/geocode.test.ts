@@ -103,6 +103,53 @@ describe("geocode address selection", () => {
     });
   });
 
+  it("uses the PNCC parcel centroid for an exact Palmerston North address", async () => {
+    delete process.env.GOOGLE_MAPS_API_KEY;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/PROPERTY_PARCEL_ADDR_VIEW/FeatureServer/0/query")) {
+        const parsed = new URL(url);
+        expect(parsed.searchParams.get("where")).toBe("UPPER(FULLADDRESS) LIKE '54 MANAWATU STREET%'");
+        expect(parsed.searchParams.get("returnCentroid")).toBe("true");
+        return new Response(JSON.stringify({ features: [{
+          attributes: { FULLADDRESS: "54 MANAWATU STREET PALMERSTON NORTH" },
+          centroid: { x: 175.6412559975, y: -40.3651486422 },
+        }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(tryGeocodeAddress("54 Manawatu Street, Hokowhitu, Palmerston North")).resolves.toMatchObject({
+      formatted: "54 MANAWATU STREET PALMERSTON NORTH, New Zealand",
+      lat: -40.3651486422,
+      lng: 175.6412559975,
+    });
+  });
+
+  it("uses the MDC address point for an exact Feilding address", async () => {
+    delete process.env.GOOGLE_MAPS_API_KEY;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/MDC_PROPERTY_ADDRESSPOINTS/FeatureServer/0/query")) {
+        expect(new URL(url).searchParams.get("where"))
+          .toBe("UPPER(house_numb) = '156' AND UPPER(road_name) = 'NORTH STREET'");
+        return new Response(JSON.stringify({ features: [{
+          attributes: { addr_full: "156 North Street, Feilding" },
+          geometry: { x: 175.5782755285, y: -40.2160887709 },
+        }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(tryGeocodeAddress("156 North Street, Feilding")).resolves.toMatchObject({
+      formatted: "156 North Street, Feilding, Manawatu District, New Zealand",
+      lat: -40.2160887709,
+      lng: 175.5782755285,
+    });
+  });
+
   it("resolves abbreviated Braemar Rd through Whakatane even when the locality says Rotorua", async () => {
     delete process.env.GOOGLE_MAPS_API_KEY;
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {

@@ -69,6 +69,7 @@ function streetNumberMatchesExactly(input: string, candidateNumber: string | nul
 type CouncilAddressSource = {
   serviceUrl: string;
   matches: RegExp;
+  returnCentroid?: boolean;
   where: (parsed: { number: number; suffix: string; road: string }) => string;
   formatted: (attributes: Record<string, unknown>) => string | null;
 };
@@ -88,13 +89,41 @@ function councilAddressSourcesFor(address: string): CouncilAddressSource[] {
   // geocoders around the Rotorua Lakes / Whakatane boundary. Probe both public
   // council address layers, but still require an exact street number and road.
   if (!/\b(rotorua|rotoma|braemar)\b/i.test(matchText)) return direct;
+  const rotoruaBoundarySources = COUNCIL_ADDRESS_SOURCES.filter((candidate) =>
+    /gis\.whakatane\.govt\.nz|gis\.rdc\.govt\.nz/i.test(candidate.serviceUrl),
+  );
   return [
-    ...direct,
-    ...COUNCIL_ADDRESS_SOURCES.filter((candidate) => !direct.includes(candidate)),
+    ...direct.filter((candidate) => rotoruaBoundarySources.includes(candidate)),
+    ...rotoruaBoundarySources.filter((candidate) => !direct.includes(candidate)),
   ];
 }
 
 const COUNCIL_ADDRESS_SOURCES: CouncilAddressSource[] = [
+  {
+    serviceUrl: "https://services.arcgis.com/Fv0Tvc98QEDvQyjL/arcgis/rest/services/PROPERTY_PARCEL_ADDR_VIEW/FeatureServer/0",
+    returnCentroid: true,
+    matches: /\b(palmerston north|hokowhitu|awapuni|highbury|cloverlea|milson|kelvin grove|terrace end|west end|takaro|roslyn|aokautere|ashhurst|bunnythorpe|longburn|linton)\b/i,
+    where: ({ number, suffix, road }) => {
+      const addressPrefix = `${number}${suffix} ${road}`.replaceAll("'", "''");
+      return `UPPER(FULLADDRESS) LIKE '${addressPrefix}%'`;
+    },
+    formatted: (attrs) => {
+      const address = String(attrs["FULLADDRESS"] ?? "").trim();
+      return address ? `${address}, New Zealand` : null;
+    },
+  },
+  {
+    serviceUrl: "https://services9.arcgis.com/CzWZ8m5FuciqBibe/arcgis/rest/services/MDC_PROPERTY_ADDRESSPOINTS/FeatureServer/0",
+    matches: /\b(feilding|sanson|rongotea|halcombe|kimbolton|apiti|pohangina|cheltenham|colyton|waituna west|tangimoana|hiwinui|newbury|kairanga|glen oroua|awahuri|himatangi|aorangi|beaconsfield|ohakea|rangiotu|tiakitahuna|manawatu district|manawat[uū] district|bunnythorpe)\b/i,
+    where: ({ number, suffix, road }) => {
+      const houseNumber = `${number}${suffix}`.replaceAll("'", "''");
+      return `UPPER(house_numb) = '${houseNumber}' AND UPPER(road_name) = '${road.replaceAll("'", "''")}'`;
+    },
+    formatted: (attrs) => {
+      const address = String(attrs["addr_full"] ?? attrs["addr_label"] ?? "").trim();
+      return address ? `${address}, Manawatu District, New Zealand` : null;
+    },
+  },
   {
     serviceUrl: "https://gis.whakatane.govt.nz/arcgis/rest/services/Geocortex/Cadastre/MapServer/1",
     matches: /\b(whakatane|rotoma|onepu|matata|edgecumbe|ohope|taneatua)\b/i,
@@ -177,11 +206,16 @@ async function councilAddressGeocode(address: string): Promise<GeoResult | null>
       url.searchParams.set("where", source.where(parsed));
       url.searchParams.set("outFields", "*");
       url.searchParams.set("returnGeometry", "true");
+      if (source.returnCentroid) url.searchParams.set("returnCentroid", "true");
       url.searchParams.set("outSR", "4326");
       const response = await fetch(url.toString(), { signal: AbortSignal.timeout(8000) });
       if (!response.ok) throw new Error(`Council address lookup HTTP ${response.status}`);
       const data = await response.json() as {
-        features?: Array<{ attributes?: Record<string, unknown>; geometry?: { x?: number; y?: number } }>;
+        features?: Array<{
+          attributes?: Record<string, unknown>;
+          geometry?: { x?: number; y?: number };
+          centroid?: { x?: number; y?: number };
+        }>;
         error?: { message?: string };
       };
       if (data.error) throw new Error(`Council address lookup error: ${data.error.message ?? "unknown"}`);
@@ -190,8 +224,8 @@ async function councilAddressGeocode(address: string): Promise<GeoResult | null>
         return formatted && streetNumberMatchesExactly(address, streetNumberFromFormatted(formatted));
       });
       const formatted = exact ? source.formatted(exact.attributes ?? {}) : null;
-      const lat = exact?.geometry?.y;
-      const lng = exact?.geometry?.x;
+      const lat = exact?.geometry?.y ?? exact?.centroid?.y;
+      const lng = exact?.geometry?.x ?? exact?.centroid?.x;
       if (formatted && Number.isFinite(lat) && Number.isFinite(lng)) {
         return { lat: lat!, lng: lng!, formatted, suburb: null };
       }

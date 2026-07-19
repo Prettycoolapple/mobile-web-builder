@@ -4,6 +4,8 @@ import { classifySiteCondition } from "./site-condition";
 import { roundToNearest } from "./utils";
 
 export interface CostBreakdown {
+  /** Stable assumption-set identifier surfaced with the ROI cost model. */
+  cost_profile_id?: RegionalCostProfile["id"];
   land_cv_nzd: number | null;
   cv_unavailable: boolean;
   demo_low: number;
@@ -352,6 +354,7 @@ export function estimateCosts(
   const r = (n: number) => roundToNearest(n, 1000);
 
   return {
+    cost_profile_id:     costProfile.id,
     land_cv_nzd:       cv !== null ? r(cv) : null,
     cv_unavailable:    cvUnavailable,
     demo_low:          r(demo_low),

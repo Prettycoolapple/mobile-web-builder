@@ -961,14 +961,18 @@ async function serviceLayers(bounds: SitePlanBounds): Promise<SitePlanLayer[]> {
   });
 }
 
-function regionalServiceLayerStyle(group: RegionalInfrastructureGroup): {
+function regionalServiceLayerStyle(group: RegionalInfrastructureGroup, providerId: PlanningProviderId): {
   id: "service-stormwater" | "service-wastewater" | "service-water";
   label: string;
   color: string;
 } {
   if (group.name === "Stormwater") return { id: "service-stormwater", label: "Stormwater", color: "#0EA5E9" };
   if (group.name === "Wastewater") return { id: "service-wastewater", label: "Wastewater", color: "#7C3AED" };
-  return { id: "service-water", label: "Water Supply", color: "#2563EB" };
+  return {
+    id: "service-water",
+    label: providerId === "manawatu" ? "Potable Water" : "Water Supply",
+    color: "#2563EB",
+  };
 }
 
 async function regionalServiceLayers(bounds: SitePlanBounds, providerId: PlanningProviderId): Promise<SitePlanLayer[]> {
@@ -977,11 +981,17 @@ async function regionalServiceLayers(bounds: SitePlanBounds, providerId: Plannin
   const groups = regionalInfrastructureServiceLayers(providerId);
   if (groups.length === 0) return [];
 
+  const groupsByService = new Map<RegionalInfrastructureGroup["name"], RegionalInfrastructureGroup[]>();
+  for (const group of groups) {
+    groupsByService.set(group.name, [...(groupsByService.get(group.name) ?? []), group]);
+  }
+  const serviceGroups = [...groupsByService.values()];
+
   const groupResults = await Promise.allSettled(
-    groups.map(async (group) => {
-      const style = regionalServiceLayerStyle(group);
+    serviceGroups.map(async (matchingGroups) => {
+      const style = regionalServiceLayerStyle(matchingGroups[0]!, providerId);
       const layerResults = await Promise.allSettled(
-        group.layers.map(async (layer) => {
+        matchingGroups.flatMap((group) => group.layers.map(async (layer) => {
           const features = await queryArcGisFeatures({
             serviceUrl: group.serviceUrl,
             layerId: layer.id,
@@ -999,7 +1009,7 @@ async function regionalServiceLayers(bounds: SitePlanBounds, providerId: Plannin
               sourceOwner: group.owner,
             },
           }));
-        }),
+        })),
       );
       const features = layerResults.flatMap((result) => result.status === "fulfilled" ? result.value : []);
       if (features.length === 0) return unavailableLayer(style.id, style.label, "services", style.color);
@@ -1022,7 +1032,7 @@ async function regionalServiceLayers(bounds: SitePlanBounds, providerId: Plannin
 
   return groupResults.map((result, index) => {
     if (result.status === "fulfilled") return result.value;
-    const style = regionalServiceLayerStyle(groups[index]!);
+    const style = regionalServiceLayerStyle(serviceGroups[index]![0]!, providerId);
     return unavailableLayer(style.id, style.label, "services", style.color);
   });
 }

@@ -9,6 +9,10 @@ const CHRISTCHURCH_PROPERTY =
   "https://gis.ccc.govt.nz/server/rest/services/OpenData/Property/FeatureServer";
 const SOUTHLAND_PROPERTY =
   "https://gis.southlanddc.govt.nz/server/rest/services/External_Property_Layers/MapServer/3";
+const WESTERN_BAY_PROPERTY =
+  "https://map.westernbay.govt.nz/arcgisext/rest/services/Property/MapServer";
+const PNCC_PROPERTY_VALUATION =
+  "https://services.arcgis.com/Fv0Tvc98QEDvQyjL/arcgis/rest/services/PROPERTY_PARCEL_VALUATION_VIEW/FeatureServer/0";
 
 type ArcGisFeature = { attributes?: Record<string, unknown> };
 
@@ -20,6 +24,11 @@ type ChristchurchAddress = {
 function positiveNumber(value: unknown): number | null {
   const number = typeof value === "number" ? value : Number(String(value ?? "").replace(/[$,\s]/g, ""));
   return Number.isFinite(number) && number > 0 ? Math.round(number) : null;
+}
+
+function nonNegativeNumber(value: unknown): number | null {
+  const number = typeof value === "number" ? value : Number(String(value ?? "").replace(/[$,\s]/g, ""));
+  return Number.isFinite(number) && number >= 0 ? Math.round(number) : null;
 }
 
 function leadingStreetNumber(value: string): string | null {
@@ -247,6 +256,167 @@ async function fetchSouthlandPropertyHistory(
   }
 }
 
+function exactPnccAddressFeature(address: string, features: ArcGisFeature[]): ArcGisFeature | null {
+  const requestedStreet = normaliseStreetAddress(streetAddressPart(address));
+  if (!/^\d+[a-z]?\s+/i.test(requestedStreet)) return null;
+  return features.find((feature) => {
+    const councilStreet = normaliseStreetAddress(streetAddressPart(String(feature.attributes?.["LOCATION"] ?? "")));
+    return councilStreet === requestedStreet;
+  }) ?? null;
+}
+
+async function fetchManawatuPropertyHistory(
+  address: string,
+  lat: number,
+  lng: number,
+  linzAreaSqm?: number | null,
+): Promise<PropertyHistory> {
+  const url = new URL(`${PNCC_PROPERTY_VALUATION}/query`);
+  url.searchParams.set("f", "json");
+  url.searchParams.set("where", "1=1");
+  url.searchParams.set("geometry", `${lng},${lat}`);
+  url.searchParams.set("geometryType", "esriGeometryPoint");
+  url.searchParams.set("inSR", "4326");
+  url.searchParams.set("spatialRel", "esriSpatialRelIntersects");
+  url.searchParams.set("outFields", "LOCATION,VALUATION_NO,RATES_AREA,CURR_CAPITAL_VALUE,RATES_YEAR");
+  url.searchParams.set("returnGeometry", "false");
+
+  try {
+    const response = await fetch(url.toString(), { signal: AbortSignal.timeout(9000) });
+    if (!response.ok) throw new Error(`PNCC property lookup HTTP ${response.status}`);
+    const data = await response.json() as {
+      features?: ArcGisFeature[];
+      error?: { message?: string };
+    };
+    if (data.error) throw new Error(`PNCC property lookup error: ${data.error.message ?? "unknown"}`);
+    const attrs = exactPnccAddressFeature(address, data.features ?? [])?.attributes;
+    if (!attrs) return emptyPropertyHistory(linzAreaSqm);
+
+    const cvNzd = positiveNumber(attrs["CURR_CAPITAL_VALUE"]);
+    const councilAreaHa = Number(String(attrs["RATES_AREA"] ?? "").replace(/,/g, ""));
+    const councilAreaSqm = Number.isFinite(councilAreaHa) && councilAreaHa > 0
+      ? Math.round(councilAreaHa * 10_000)
+      : null;
+    const landAreaSqm = linzAreaSqm ?? councilAreaSqm;
+    const yearMatch = String(attrs["RATES_YEAR"] ?? "").match(/\b(19|20)\d{2}\b/);
+    const cvYear = cvNzd && yearMatch ? Number(yearMatch[0]) : null;
+
+    return {
+      cv_nzd: cvNzd,
+      cv_year: cvYear,
+      build_year: null,
+      floor_area_sqm: null,
+      land_area_sqm: landAreaSqm,
+      land_area_source: linzAreaSqm ? "linz" : "pncc_council_rating_gis",
+      land_area_scope: linzAreaSqm ? "parcel" : "rating_unit",
+      property_type: null,
+      sources_confirmed: [
+        ...(cvNzd ? ["cv_nzd (Palmerston North City Council rating GIS)"] : []),
+        ...(landAreaSqm ? [linzAreaSqm
+          ? "land_area_sqm (from LINZ parcel)"
+          : "land_area_sqm (Palmerston North City Council rating GIS)"] : []),
+      ],
+      sources_estimated: ["build_year", "floor_area_sqm", "property_type"],
+    };
+  } catch {
+    return emptyPropertyHistory(linzAreaSqm);
+  }
+}
+
+async function queryWesternBayProperty(
+  layerId: number,
+  lat: number,
+  lng: number,
+  outFields: string,
+): Promise<ArcGisFeature[]> {
+  const url = new URL(`${WESTERN_BAY_PROPERTY}/${layerId}/query`);
+  url.searchParams.set("f", "json");
+  url.searchParams.set("where", "1=1");
+  url.searchParams.set("geometry", `${lng},${lat}`);
+  url.searchParams.set("geometryType", "esriGeometryPoint");
+  url.searchParams.set("inSR", "4326");
+  url.searchParams.set("spatialRel", "esriSpatialRelIntersects");
+  url.searchParams.set("outFields", outFields);
+  url.searchParams.set("returnGeometry", "false");
+
+  const response = await fetch(url.toString(), { signal: AbortSignal.timeout(9000) });
+  if (!response.ok) throw new Error(`Western Bay property lookup HTTP ${response.status}`);
+  const data = await response.json() as {
+    features?: ArcGisFeature[];
+    error?: { message?: string };
+  };
+  if (data.error) throw new Error(`Western Bay property lookup error: ${data.error.message ?? "unknown"}`);
+  return data.features ?? [];
+}
+
+function exactWesternBayAddressFeature(address: string, features: ArcGisFeature[]): ArcGisFeature | null {
+  const requestedStreet = normaliseStreetAddress(streetAddressPart(address));
+  if (!/^\d+[a-z]?\s+/i.test(requestedStreet)) return null;
+  return features.find((feature) => {
+    const attrs = feature.attributes ?? {};
+    return [attrs["ParcelAddress"], attrs["ValuationAddress"]]
+      .some((value) => normaliseStreetAddress(streetAddressPart(String(value ?? ""))) === requestedStreet);
+  }) ?? null;
+}
+
+async function fetchWesternBayPropertyHistory(
+  address: string,
+  lat: number,
+  lng: number,
+  linzAreaSqm?: number | null,
+): Promise<PropertyHistory> {
+  try {
+    const [propertyFeatures, valuationFeatures, improvementFeatures] = await Promise.all([
+      queryWesternBayProperty(12, lat, lng, "ParcelID,ValuationID,ParcelAddress,ValuationAddress,LegalDescription,LegalArea"),
+      queryWesternBayProperty(4, lat, lng, "ValuationNumber,CapitalValue"),
+      queryWesternBayProperty(6, lat, lng, "ValuationNumber,ImprovementValue"),
+    ]);
+    const attrs = exactWesternBayAddressFeature(address, propertyFeatures)?.attributes;
+    if (!attrs) return emptyPropertyHistory(linzAreaSqm);
+
+    const valuationId = String(attrs["ValuationID"] ?? "").replace(/\D/g, "");
+    const matchedValuationAttrs = valuationFeatures.find((feature) => {
+      const candidate = String(feature.attributes?.["ValuationNumber"] ?? "").replace(/\D/g, "");
+      return valuationId.length > 0 && candidate === valuationId;
+    })?.attributes;
+    const valuationAttrs = matchedValuationAttrs
+      ?? (valuationFeatures.length === 1 ? valuationFeatures[0]?.attributes : undefined);
+    const cvNzd = positiveNumber(valuationAttrs?.["CapitalValue"]);
+    const matchedImprovementAttrs = improvementFeatures.find((feature) => {
+      const candidate = String(feature.attributes?.["ValuationNumber"] ?? "").replace(/\D/g, "");
+      return valuationId.length > 0 && candidate === valuationId;
+    })?.attributes;
+    const improvementAttrs = matchedImprovementAttrs
+      ?? (improvementFeatures.length === 1 ? improvementFeatures[0]?.attributes : undefined);
+    const improvementValueNzd = nonNegativeNumber(improvementAttrs?.["ImprovementValue"]);
+    const propertyType = cvNzd != null && improvementValueNzd === 0 ? "Vacant land / section" : null;
+    const legalAreaHa = Number(String(attrs["LegalArea"] ?? "").replace(/,/g, ""));
+    const councilAreaSqm = Number.isFinite(legalAreaHa) && legalAreaHa > 0
+      ? Math.round(legalAreaHa * 10_000)
+      : null;
+    const landAreaSqm = linzAreaSqm ?? councilAreaSqm;
+
+    return {
+      cv_nzd: cvNzd,
+      cv_year: null,
+      build_year: null,
+      floor_area_sqm: null,
+      land_area_sqm: landAreaSqm,
+      land_area_source: linzAreaSqm ? "linz" : "western_bay_council_rating_gis",
+      land_area_scope: linzAreaSqm ? "parcel" : "rating_unit",
+      property_type: propertyType,
+      sources_confirmed: [
+        ...(cvNzd ? ["cv_nzd (Western Bay of Plenty District Council rating GIS)"] : []),
+        ...(landAreaSqm ? [linzAreaSqm ? "land_area_sqm (from LINZ parcel)" : "land_area_sqm (Western Bay of Plenty District Council property GIS)"] : []),
+        ...(propertyType ? ["property_type (Western Bay of Plenty District Council zero improvement value)"] : []),
+      ],
+      sources_estimated: ["build_year", "floor_area_sqm", ...(propertyType ? [] : ["property_type"])],
+    };
+  } catch {
+    return emptyPropertyHistory(linzAreaSqm);
+  }
+}
+
 export async function fetchRegionalPropertyHistory(
   providerId: PlanningProviderId,
   address: string,
@@ -255,7 +425,9 @@ export async function fetchRegionalPropertyHistory(
   linzAreaSqm?: number | null,
 ): Promise<PropertyHistory> {
   if (providerId === "christchurch") return fetchChristchurchRatingUnit(address, linzAreaSqm);
+  if (providerId === "manawatu") return fetchManawatuPropertyHistory(address, lat, lng, linzAreaSqm);
   if (providerId === "southland") return fetchSouthlandPropertyHistory(address, lat, lng, linzAreaSqm);
+  if (providerId === "western-bay") return fetchWesternBayPropertyHistory(address, lat, lng, linzAreaSqm);
   if (providerId !== "whakatane") return emptyPropertyHistory(linzAreaSqm);
 
   const url = new URL(`${WHAKATANE_PROPERTY}/query`);

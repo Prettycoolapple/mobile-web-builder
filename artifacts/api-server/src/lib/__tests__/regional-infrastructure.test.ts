@@ -105,6 +105,60 @@ describe("regional infrastructure fetchers", () => {
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/External_ThreeWaters_Layers_v2/MapServer/14/query"))).toBe(true);
   });
 
+  it("merges PNCC and MDC feeds into one best row for each Manawatu service", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isMdc = url.includes("services9.arcgis.com/CzWZ8m5FuciqBibe");
+      return new Response(JSON.stringify({
+        features: isMdc ? [{
+          attributes: { FID: 1 },
+          geometry: { paths: [[[175.5647, -40.225], [175.5653, -40.225]]] },
+        }] : [],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+
+    const result = await fetchRegionalInfrastructure("manawatu", -40.225, 175.565, null);
+
+    expect(result).toHaveLength(3);
+    expect(result.map((item) => item.name).sort()).toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(result.every((item) => item.location !== "unknown")).toBe(true);
+    expect(result.every((item) => item.service_source_owner === "Manawatu District Council")).toBe(true);
+  });
+
+  it("returns all three Western Bay public networks for 30 Athenree Road", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      features: [{
+        attributes: { OBJECTID: 1, Status: "Operational" },
+        geometry: { paths: [[[175.9641, -37.4461], [175.9646, -37.4461]]] },
+      }],
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+
+    const result = await fetchRegionalInfrastructure("western-bay", -37.4460583, 175.9643635, null);
+    expect(result.map((item) => item.name).sort()).toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(result.every((item) => item.location !== "unknown")).toBe(true);
+    expect(result.every((item) => item.service_source_owner === "Western Bay of Plenty District Council")).toBe(true);
+  });
+
+  it("reports Pukehina water and stormwater while explicitly flagging no public wastewater scheme", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const features = url.includes("/WBP_Wastewater_REST_services/") ? [] : [{
+        attributes: { OBJECTID: 1 },
+        geometry: { paths: [[[176.4993, -37.7721], [176.4998, -37.7721]]] },
+      }];
+      return new Response(JSON.stringify({ features }), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+
+    const result = await fetchRegionalInfrastructure("western-bay", -37.7720624, 176.4995595, null);
+    expect(result.find((item) => item.name === "Water Supply")?.location).not.toBe("unknown");
+    expect(result.find((item) => item.name === "Stormwater")?.location).not.toBe("unknown");
+    expect(result.find((item) => item.name === "Wastewater")).toMatchObject({
+      location: "unknown",
+      risk: "high",
+      note: expect.stringContaining("no current plan for a public wastewater scheme"),
+    });
+  });
+
   it("returns Masterton's three mapped Wairarapa services at 78 Opaki Road", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -157,6 +211,7 @@ describe("regional infrastructure fetchers", () => {
     expect(hasRegionalInfrastructureProvider("nelson")).toBe(true);
     expect(hasRegionalInfrastructureProvider("rotorua")).toBe(true);
     expect(hasRegionalInfrastructureProvider("whakatane")).toBe(true);
+    expect(hasRegionalInfrastructureProvider("western-bay")).toBe(true);
     expect(hasRegionalInfrastructureProvider("southland")).toBe(true);
     expect(hasRegionalInfrastructureProvider("wairarapa")).toBe(true);
     expect(hasRegionalInfrastructureProvider("matamata-piako")).toBe(true);
@@ -168,6 +223,7 @@ describe("regional infrastructure fetchers", () => {
     expect(targets.some((target) => target.providerId === "dunedin" && target.serviceName === "Water Supply")).toBe(true);
     expect(targets.some((target) => target.providerId === "rotorua" && target.serviceName === "Stormwater")).toBe(true);
     expect(targets.some((target) => target.providerId === "whakatane" && target.serviceName === "Wastewater")).toBe(true);
+    expect(targets.some((target) => target.providerId === "western-bay" && target.serviceName === "Stormwater")).toBe(true);
     expect(targets.some((target) => target.providerId === "southland" && target.serviceName === "Water Supply")).toBe(true);
     expect(targets.some((target) => target.providerId === "wairarapa" && target.serviceName === "Water Supply")).toBe(true);
     expect(targets.some((target) => target.providerId === "wairarapa" && target.label === "Masterton stormwater main")).toBe(true);

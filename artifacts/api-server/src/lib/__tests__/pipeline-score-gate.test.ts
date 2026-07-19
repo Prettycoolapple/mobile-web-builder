@@ -169,4 +169,102 @@ describe("developmentScoreUnavailableReason", () => {
     expect(actualScores).toMatchObject({ ease: expect.any(Number), cost: expect.any(Number), roi: expect.any(Number) });
     expect(developmentScoreUnavailableReason(property, actualCosts, actualScenarios)).toBeNull();
   });
+
+  it("produces Athenree ROI plus development, ease, cost, and ROI scores", () => {
+    const property = merged({
+      cv_nzd: 710_000,
+      land_area_sqm: 1_012,
+      floor_area_sqm: 98,
+      build_year: 1968,
+      bedrooms: 3,
+      bathrooms: 1,
+      zone_code: "Residential",
+      zone_description: "Residential - Western Bay District Plan Zone",
+      contour: "flat",
+      overlays: [
+        { name: "Tsunami / 1 in 2500 Year Wave", status: "moderate", detail: "Yellow" },
+        { name: "Liquefaction Vulnerability", status: "moderate", detail: "Possible" },
+      ],
+      infrastructure: [
+        { name: "Water Supply", location: "boundary", risk: "low", distance_metres: 0, estimated_cost_low: 0, estimated_cost_high: 0, note: "Mapped public connection" },
+        { name: "Wastewater", location: "boundary", risk: "low", distance_metres: 0, estimated_cost_low: 0, estimated_cost_high: 0, note: "Mapped public connection" },
+        { name: "Stormwater", location: "boundary", risk: "low", distance_metres: 0, estimated_cost_low: 0, estimated_cost_high: 0, note: "Mapped public connection" },
+      ],
+      estate_type: "Fee Simple",
+    });
+    const costProfile = regionalCostProfileForProvider("western-bay");
+    const actualCosts = estimateCosts(property, 2, { sqm_per_lot: 506, cost_profile: costProfile });
+    const actualScenarios = calculateBearBaseBullScenarios(actualCosts, 0, 710_000, 2, 506, "stable");
+    const actualScores = scoreProperty(property, actualCosts, actualScenarios, 2);
+
+    expect(costProfile).toMatchObject({ id: "western-bay-default", source: "auckland_default_pending_regional_rates" });
+    expect(actualCosts.total_high).toBeGreaterThan(actualCosts.total_low);
+    expect(actualScenarios.length).toBe(3);
+    expect(actualScores).toMatchObject({
+      composite: expect.any(Number),
+      ease: expect.any(Number),
+      cost: expect.any(Number),
+      roi: expect.any(Number),
+    });
+    expect(developmentScoreUnavailableReason(property, actualCosts, actualScenarios)).toBeNull();
+  });
+
+  it("produces Manawatu costs, ROI, and all development scores with mapped public services", () => {
+    const property = merged({
+      cv_nzd: 650_000,
+      land_area_sqm: 800,
+      floor_area_sqm: 120,
+      build_year: 1975,
+      bedrooms: 3,
+      bathrooms: 1,
+      zone_code: "Residential",
+      zone_description: "Residential - Palmerston North City District Plan Zone",
+      contour: "flat",
+      overlays: [],
+      infrastructure: [
+        { name: "Water Supply", location: "boundary", risk: "low", distance_metres: 0, estimated_cost_low: 0, estimated_cost_high: 0, note: "Mapped public connection" },
+        { name: "Wastewater", location: "boundary", risk: "low", distance_metres: 0, estimated_cost_low: 0, estimated_cost_high: 0, note: "Mapped public connection" },
+        { name: "Stormwater", location: "boundary", risk: "low", distance_metres: 0, estimated_cost_low: 0, estimated_cost_high: 0, note: "Mapped public connection" },
+      ],
+      estate_type: "Fee Simple",
+    });
+    const profile = regionalCostProfileForProvider("manawatu");
+    const actualCosts = estimateCosts(property, 2, { sqm_per_lot: 400, cost_profile: profile });
+    const actualScenarios = calculateBearBaseBullScenarios(actualCosts, 0, 650_000, 2, 400, "stable");
+    const actualScores = scoreProperty(property, actualCosts, actualScenarios, 2);
+
+    expect(profile).toMatchObject({ id: "manawatu-default", source: "auckland_default_pending_regional_rates" });
+    expect(actualScenarios).toHaveLength(3);
+    expect(actualScores).toMatchObject({
+      composite: expect.any(Number),
+      ease: expect.any(Number),
+      cost: expect.any(Number),
+      roi: expect.any(Number),
+    });
+    expect(developmentScoreUnavailableReason(property, actualCosts, actualScenarios)).toBeNull();
+  });
+
+  it("produces Pukehina costs, ROI, and all development scores with the Western Bay profile", () => {
+    const property = merged({
+      cv_nzd: 1_020_000,
+      land_area_sqm: 819,
+      floor_area_sqm: 110,
+      zone_code: "WBOP_PUKEHINA_RESIDENTIAL",
+      zone_description: "Residential - Pukehina",
+      contour: "flat",
+      overlays: [{ name: "Liquefaction Vulnerability", status: "moderate", detail: "Possible" }],
+      infrastructure: [{
+        name: "Wastewater", location: "unknown", risk: "high", distance_metres: null,
+        estimated_cost_low: 20_000, estimated_cost_high: 120_000, note: "No public wastewater scheme",
+      }],
+      estate_type: "Fee Simple",
+    });
+    const profile = regionalCostProfileForProvider("western-bay");
+    const actualCosts = estimateCosts(property, 1, { sqm_per_lot: 819, cost_profile: profile });
+    const actualScenarios = calculateBearBaseBullScenarios(actualCosts, 0, 1_020_000, 1, 819, "stable");
+    const actualScores = scoreProperty(property, actualCosts, actualScenarios, 1);
+    expect(actualScenarios).toHaveLength(3);
+    expect(actualScores).toMatchObject({ composite: expect.any(Number), ease: expect.any(Number), cost: expect.any(Number), roi: expect.any(Number) });
+    expect(developmentScoreUnavailableReason(property, actualCosts, actualScenarios)).toBeNull();
+  });
 });

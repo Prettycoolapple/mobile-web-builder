@@ -165,6 +165,31 @@ function scoreSuggestion(input: string, suggestion: Suggestion): number {
   return score;
 }
 
+function localityTokens(raw: string): string[] {
+  const parts = raw.split(",").map((part) => normaliseAddress(part)).filter(Boolean);
+  if (parts.length < 2) return [];
+  const ignored = new Set([
+    "new", "zealand", "aotearoa", "city", "district", "region", "regional",
+    "north", "south", "east", "west", "manawatu", "whanganui",
+  ]);
+  // Some geocoders format the street number as its own comma-delimited part
+  // ("32, Park Road, West End, ..."). In that form both leading parts are the
+  // street identity, not locality evidence.
+  const localityStart = /^\d+[a-z]?$/.test(parts[0]!) ? 2 : 1;
+  return parts.slice(localityStart)
+    .flatMap((part) => part.split(" "))
+    .filter((token) => token.length >= 4 && !ignored.has(token) && !/^\d{4}$/.test(token));
+}
+
+function suggestionMatchesRequestedLocality(
+  requestedAddresses: string[],
+  suggestion: Suggestion,
+): boolean {
+  const labelTokens = new Set(normaliseAddress(suggestion.suggestion ?? "").split(" "));
+  const requestedLocalities = requestedAddresses.flatMap(localityTokens);
+  return requestedLocalities.length === 0 || requestedLocalities.some((token) => labelTokens.has(token));
+}
+
 function uniqueStrings(values: Array<string | null | undefined>): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
@@ -285,7 +310,8 @@ function hasUsableData(data: PropertyValueData): boolean {
 }
 
 export async function scrapePropertyValue(address: string, ...alternateAddresses: string[]): Promise<PropertyValueData | null> {
-  const queries = buildAddressQueries([address, ...alternateAddresses]);
+  const requestedAddresses = [address, ...alternateAddresses];
+  const queries = buildAddressQueries(requestedAddresses);
   const ranked: RankedSuggestion[] = [];
 
   for (const query of queries) {
@@ -301,7 +327,7 @@ export async function scrapePropertyValue(address: string, ...alternateAddresses
 
     ranked.push(
       ...suggestions
-        .filter((s) => s.propertyId != null)
+        .filter((s) => s.propertyId != null && suggestionMatchesRequestedLocality(requestedAddresses, s))
         .map((s) => ({
           suggestion: s,
           score: Math.max(

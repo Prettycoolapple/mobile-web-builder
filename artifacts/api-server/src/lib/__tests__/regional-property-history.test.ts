@@ -243,6 +243,107 @@ describe("regional property history", () => {
     expect(requestUrl.searchParams.get("geometry")).toBe("168.5815783,-45.8372796");
   });
 
+  it("returns PNCC's exact rating-unit CV and area for a Palmerston North property", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => new Response(JSON.stringify({
+      features: [
+        { attributes: { LOCATION: "3 RIMU PLACE", CURR_CAPITAL_VALUE: "$ 600000", RATES_AREA: 0.0967, RATES_YEAR: "2026/27" } },
+        { attributes: { LOCATION: "5 RIMU PLACE", CURR_CAPITAL_VALUE: "$ 550000", RATES_AREA: 0.0964, RATES_YEAR: "2026/27" } },
+      ],
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchRegionalPropertyHistory(
+      "manawatu",
+      "5 Rimu Place, Cloverlea, Palmerston North",
+      -40.3466946,
+      175.5813663,
+    )).resolves.toMatchObject({
+      cv_nzd: 550_000,
+      cv_year: 2026,
+      land_area_sqm: 964,
+      land_area_source: "pncc_council_rating_gis",
+      land_area_scope: "rating_unit",
+      sources_confirmed: expect.arrayContaining([
+        "cv_nzd (Palmerston North City Council rating GIS)",
+        "land_area_sqm (Palmerston North City Council rating GIS)",
+      ]),
+    });
+
+    const requestUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(requestUrl.pathname).toContain("/PROPERTY_PARCEL_VALUATION_VIEW/FeatureServer/0/query");
+    expect(requestUrl.searchParams.get("geometry")).toBe("175.5813663,-40.3466946");
+  });
+
+  it("does not invent council values when a Manawatu District point has no PNCC rating polygon", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ features: [] }), { status: 200 })));
+
+    await expect(fetchRegionalPropertyHistory(
+      "manawatu", "156 North Street, Feilding", -40.2160888, 175.5782755, 751,
+    )).resolves.toMatchObject({
+      cv_nzd: null,
+      land_area_sqm: 751,
+      land_area_source: "linz",
+      land_area_scope: "parcel",
+    });
+  });
+
+  it("returns Western Bay council CV and legal area for 30 Athenree Road", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      const features = url.pathname.endsWith("/12/query")
+        ? [{ attributes: {
+            ParcelID: "1019/63",
+            ValuationID: "06610-45000",
+            ParcelAddress: "30 ATHENREE ROAD",
+            ValuationAddress: "30 ATHENREE ROAD ATHENREE",
+            LegalDescription: "LOT 4 DPS 4295",
+            LegalArea: 0.1012,
+          } }]
+        : url.pathname.endsWith("/6/query")
+          ? [{ attributes: { ValuationNumber: "06610-45000", ImprovementValue: "215,000" } }]
+          : [{ attributes: { ValuationNumber: "06610-45000", CapitalValue: "710,000" } }];
+      return new Response(JSON.stringify({ features }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchRegionalPropertyHistory(
+      "western-bay",
+      "30 Athenree Road, Athenree, Bay of Plenty",
+      -37.4460583,
+      175.9643635,
+    )).resolves.toMatchObject({
+      cv_nzd: 710_000,
+      land_area_sqm: 1_012,
+      land_area_source: "western_bay_council_rating_gis",
+      sources_confirmed: expect.arrayContaining(["cv_nzd (Western Bay of Plenty District Council rating GIS)"]),
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.every((call) => String(call[0]).includes("/Property/MapServer/"))).toBe(true);
+  });
+
+  it("returns Western Bay council CV and legal area for 481 Pukehina Parade", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      return new Response(JSON.stringify({ features: url.pathname.endsWith("/12/query")
+        ? [{ attributes: { ValuationID: "06922*374*00*", ParcelAddress: "481 PUKEHINA PARADE", LegalArea: 0.0819 } }]
+        : url.pathname.endsWith("/6/query")
+          ? [{ attributes: { ValuationNumber: "0692237400", ImprovementValue: "0" } }]
+          : [{ attributes: { ValuationNumber: "0692237400", CapitalValue: "1,020,000" } }],
+      }), { status: 200 });
+    }));
+
+    await expect(fetchRegionalPropertyHistory(
+      "western-bay", "481 Pukehina Parade, Pukehina", -37.7720624, 176.4995595,
+    )).resolves.toMatchObject({
+      cv_nzd: 1_020_000,
+      land_area_sqm: 819,
+      property_type: "Vacant land / section",
+      sources_confirmed: expect.arrayContaining([
+        "property_type (Western Bay of Plenty District Council zero improvement value)",
+      ]),
+    });
+  });
+
   it("does not attach a neighbouring Southland valuation when the street address differs", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       features: [{ attributes: { Address: "75 Kruger Street,Balfour", CapitalValue: "$210000" } }],

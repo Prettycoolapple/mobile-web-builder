@@ -170,6 +170,28 @@ describe("regional property-cache completeness", () => {
     } as never)).toBe(false);
   });
 
+  it("caches and refreshes a complete Western Bay direct-GIS report", () => {
+    expect(hasCacheableCore(baseResult({
+      geocode: { lat: -37.4460583, lng: 175.9643635 } as never,
+      linz_parcel: { parcel_id: "1019/63" } as never,
+      merged: { cv_nzd: 710_000, land_area_sqm: 1_012 } as never,
+      raw_property: {
+        planning_provider: { providerId: "western-bay" },
+        zone: { zone_code: "Residential" },
+        property_history: { cv_nzd: 710_000, land_area_sqm: 1_012 },
+        hougarden: null,
+        oneroof: null,
+        qv: null,
+        homes: null,
+      } as never,
+    }))).toBe(true);
+
+    expect(cachedRawNeedsRegionalPropertyHistoryRefresh({
+      planning_provider: { providerId: "western-bay" },
+      property_history: { cv_nzd: null, land_area_sqm: 1_012 },
+    } as never)).toBe(true);
+  });
+
   it("refreshes every unresolved regional zone spelling", () => {
     for (const zoneCode of [null, "UNKNOWN", "Unknown zone", "REGIONAL"]) {
       expect(cachedRawNeedsRegionalZoneRefresh({
@@ -207,6 +229,50 @@ describe("regional property-cache completeness", () => {
       zone: { zone_code: "UNKNOWN" },
       property_history: { cv_nzd: null, land_area_sqm: 2_023 },
     } as never)).toBe(true);
+  });
+
+  it("refreshes a legacy Manawatu cache bundle that was stored as unsupported", () => {
+    expect(cachedRawNeedsRegionalZoneRefresh({
+      planning_provider: { providerId: "unsupported" },
+      geocode: {
+        lat: -40.3707993,
+        lng: 175.6055025,
+        formatted: "32 Park Road, West End, Palmerston North City, New Zealand",
+      },
+      zone: { zone_code: "UNKNOWN" },
+      property_history: { cv_nzd: 590_000, land_area_sqm: 670 },
+    } as never)).toBe(true);
+  });
+
+  it("refreshes an unsupported Manawatu bundle even when it contains a stale non-empty fallback zone", () => {
+    expect(cachedRawNeedsRegionalZoneRefresh({
+      planning_provider: { providerId: "unsupported" },
+      geocode: {
+        lat: -40.3651486422,
+        lng: 175.6412559975,
+        formatted: "54 Manawatu Street, Hokowhitu, Palmerston North",
+      },
+      zone: { zone_code: "Residential" },
+    } as never)).toBe(true);
+  });
+
+  it("refreshes incomplete PNCC council facts but accepts a complete direct rating record", () => {
+    const base = {
+      planning_provider: { providerId: "manawatu" },
+      geocode: {
+        lat: -40.3651486422,
+        lng: 175.6412559975,
+        formatted: "54 Manawatu Street, Palmerston North",
+      },
+    };
+    expect(cachedRawNeedsRegionalPropertyHistoryRefresh({
+      ...base,
+      property_history: { cv_nzd: 710_000, land_area_sqm: null },
+    } as never)).toBe(true);
+    expect(cachedRawNeedsRegionalPropertyHistoryRefresh({
+      ...base,
+      property_history: { cv_nzd: 710_000, land_area_sqm: 786 },
+    } as never)).toBe(false);
   });
 
   it("refreshes a legacy row with no stored geocode instead of silently skipping the check", () => {

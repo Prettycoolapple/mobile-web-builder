@@ -5,6 +5,7 @@ export type CostProfileId =
   | "hamilton-default"
   | "waipa-default"
   | "matamata-piako-default"
+  | "manawatu-default"
   | "christchurch-default"
   | "canterbury-default"
   | "nelson-default"
@@ -15,6 +16,7 @@ export type CostProfileId =
   | "dunedin-default"
   | "rotorua-default"
   | "whakatane-default"
+  | "western-bay-default"
   | "southland-default"
   | "unsupported-default";
 
@@ -204,9 +206,15 @@ const REGIONAL_COST_OVERRIDES: Partial<Record<PlanningProviderId, DeepPartial<Re
   // Seeded from Auckland by request. Keep Matamata-Piako-specific build,
   // contribution and rates inputs isolated here without changing Auckland.
   "matamata-piako": {},
+  // Seeded from Auckland by request. Tune Manawatu construction,
+  // contributions and rates here without changing the Auckland baseline.
+  manawatu: {},
   qldc: {},
   rotorua: {},
   whakatane: {},
+  // Seeded from Auckland by request. Tune Western Bay construction,
+  // contributions and rates here without changing the Auckland baseline.
+  "western-bay": {},
   // Seeded from Auckland by request. Keep Southland-specific changes isolated here.
   southland: {},
   // Seeded from Auckland by request. Tune Wairarapa build, contribution, and
@@ -223,6 +231,7 @@ const PROVIDER_PROFILE_META: Record<PlanningProviderId, { id: CostProfileId; lab
   hamilton: { id: "hamilton-default", label: "Hamilton default cost profile" },
   waipa: { id: "waipa-default", label: "Waipā default cost profile (Auckland assumptions)" },
   "matamata-piako": { id: "matamata-piako-default", label: "Matamata-Piako default cost profile (Auckland assumptions)" },
+  manawatu: { id: "manawatu-default", label: "Manawatu default cost profile (Auckland assumptions)" },
   christchurch: { id: "christchurch-default", label: "Christchurch default cost profile" },
   canterbury: { id: "canterbury-default", label: "Canterbury default cost profile" },
   nelson: { id: "nelson-default", label: "Nelson default cost profile" },
@@ -233,6 +242,7 @@ const PROVIDER_PROFILE_META: Record<PlanningProviderId, { id: CostProfileId; lab
   dunedin: { id: "dunedin-default", label: "Dunedin default cost profile" },
   rotorua: { id: "rotorua-default", label: "Rotorua default cost profile" },
   whakatane: { id: "whakatane-default", label: "Whakatane default cost profile" },
+  "western-bay": { id: "western-bay-default", label: "Western Bay of Plenty default cost profile (Auckland assumptions)" },
   southland: { id: "southland-default", label: "Southland District default cost profile (Auckland assumptions)" },
   unsupported: { id: "unsupported-default", label: "Unsupported-region default cost profile" },
 };

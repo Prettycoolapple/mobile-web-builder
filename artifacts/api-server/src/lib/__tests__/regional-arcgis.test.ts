@@ -253,6 +253,65 @@ describe("regional ArcGIS planning fetchers", () => {
     expect(new URL(zoneRequest!).searchParams.get("geometryType")).toBe("esriGeometryPoint");
   });
 
+  it("queries PNCC and MDC zone polygons and returns the council layer that covers the property", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isMdc = url.includes("/District_Plan_Zones/FeatureServer/0/query");
+      return new Response(JSON.stringify({
+        features: isMdc ? [{ attributes: { OBJECTID: 19, id: 4, zone: "Residential" } }] : [],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const zone = await fetchRegionalPlanningZone(jurisdiction("manawatu"), -40.225, 175.565);
+
+    expect(zone.zone_code).toBe("Residential");
+    expect(zone.zone_description).toContain("Manawatu District Plan Zone");
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/DISTRICTPLAN_PlanningZones/FeatureServer/0/query"))).toBe(true);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/District_Plan_Zones/FeatureServer/0/query"))).toBe(true);
+  });
+
+  it("maps Western Bay zoning and natural-hazard controls for Athenree", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (!url.includes("/query")) {
+        return new Response(JSON.stringify({ fields: [] }), { status: 200 });
+      }
+      if (url.includes("/District_Plan/MapServer/66/query")) {
+        return new Response(JSON.stringify({ features: [{ attributes: { CS_PAR_ZONE: "Residential" } }] }), { status: 200 });
+      }
+      if (url.includes("/Other_Natural_Hazards/MapServer/10/query")) {
+        return new Response(JSON.stringify({ features: [{ attributes: { Zone: "Orange" } }] }), { status: 200 });
+      }
+      if (url.includes("/Other_Natural_Hazards/MapServer/11/query")) {
+        return new Response(JSON.stringify({ features: [{ attributes: { Zone: "Yellow" } }] }), { status: 200 });
+      }
+      if (url.includes("/Other_Natural_Hazards/MapServer/12/query")) {
+        return new Response(JSON.stringify({ features: [{ attributes: {
+          LiquefactionVulnerabilityCatego: "Possible",
+          Detail: "Level A (Basic Desktop Assessment)",
+        } }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ features: [] }), { status: 200 });
+    }));
+
+    await expect(fetchRegionalPlanningZone(
+      jurisdiction("western-bay"), -37.4460583, 175.9643635,
+    )).resolves.toMatchObject({ zone_code: "Residential", zone_description: expect.stringContaining("Residential") });
+    await expect(fetchRegionalPlanningZone(
+      jurisdiction("western-bay"), -37.7720624, 176.4995595,
+    )).resolves.toMatchObject({ zone_code: "Residential", zone_description: expect.stringContaining("Pukehina") });
+
+    const overlays = await fetchRegionalPlanningOverlays(
+      jurisdiction("western-bay"), -37.4460583, 175.9643635, null,
+    );
+    expect(overlays).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "Tsunami / 5m Wave Height", status: "moderate" }),
+      expect.objectContaining({ name: "Tsunami / 1 in 2500 Year Wave", status: "moderate" }),
+      expect.objectContaining({ name: "Liquefaction Vulnerability", status: "moderate" }),
+    ]));
+  });
+
   it("returns Southland's General Residential Zone for 77 Kruger Street", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -372,8 +431,11 @@ describe("regional ArcGIS planning fetchers", () => {
     expect(targets.some((target) => target.providerId === "wairarapa" && target.label === "Faultline Hazard Area")).toBe(true);
     expect(targets.some((target) => target.providerId === "matamata-piako" && target.label === "Residential Zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "matamata-piako" && target.label === "Flood Hazard Zone")).toBe(true);
+    expect(targets.some((target) => target.providerId === "manawatu" && target.label === "MDC Growth Precinct 1")).toBe(true);
+    expect(targets.some((target) => target.providerId === "manawatu" && target.label === "MDC Growth Precinct 4 (Maewa)")).toBe(true);
     expect(targets.some((target) => target.providerId === "rotorua" && target.kind === "zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "whakatane" && target.kind === "zone")).toBe(true);
+    expect(targets.some((target) => target.providerId === "western-bay" && target.kind === "zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "southland" && target.kind === "zone")).toBe(true);
   });
 });

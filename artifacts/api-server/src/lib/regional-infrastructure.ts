@@ -69,6 +69,12 @@ const WHAKATANE_WASTEWATER =
   "https://gis.whakatane.govt.nz/arcgis/rest/services/ThreeWaters/WasteWaterAssets/MapServer";
 const WHAKATANE_STORMWATER =
   "https://gis.whakatane.govt.nz/arcgis/rest/services/ThreeWaters/StormWaterAssets/MapServer";
+const WESTERN_BAY_WATER =
+  "https://wslgis.water.co.nz/server/rest/services/WBP/WBP_Water_REST_Services/MapServer";
+const WESTERN_BAY_WASTEWATER =
+  "https://wslgis.water.co.nz/server/rest/services/WBP/WBP_Wastewater_REST_services/MapServer";
+const WESTERN_BAY_STORMWATER =
+  "https://wslgis.water.co.nz/server/rest/services/WBP/WBP_Stormwater_REST_Services/MapServer";
 const SOUTHLAND_THREE_WATERS =
   "https://gis.southlanddc.govt.nz/server/rest/services/External_ThreeWaters_Layers_v2/MapServer";
 const WAIRARAPA_WATER =
@@ -83,8 +89,18 @@ const MPDC_WASTEWATER =
   "https://services6.arcgis.com/EU3vB12T67eDdisL/arcgis/rest/services/WasteWaterLine/FeatureServer";
 const MPDC_STORMWATER =
   "https://services6.arcgis.com/EU3vB12T67eDdisL/arcgis/rest/services/StormWaterLine/FeatureServer";
+const PNCC_GIS = "https://services.arcgis.com/Fv0Tvc98QEDvQyjL/arcgis/rest/services";
+const MDC_GIS = "https://services9.arcgis.com/CzWZ8m5FuciqBibe/arcgis/rest/services";
 
 const REGIONAL_INFRASTRUCTURE: Partial<Record<PlanningProviderId, RegionalInfrastructureGroup[]>> = {
+  manawatu: [
+    group("Water Supply", `${PNCC_GIS}/NZVD2016_WATER_MAINS/FeatureServer`, "Palmerston North City Council", [[0, "Water main"]]),
+    group("Wastewater", `${PNCC_GIS}/NZVD2016_SEWER_MAINS/FeatureServer`, "Palmerston North City Council", [[0, "Wastewater main"]]),
+    group("Stormwater", `${PNCC_GIS}/NZVD2016_STORM_MAINS/FeatureServer`, "Palmerston North City Council", [[0, "Stormwater main"]], 1000),
+    group("Water Supply", `${MDC_GIS}/GIS_WATER_LINE_LN/FeatureServer`, "Manawatu District Council", [[0, "Water main"]]),
+    group("Wastewater", `${MDC_GIS}/GIS_WASTEWATER_LINE_LN/FeatureServer`, "Manawatu District Council", [[0, "Wastewater main"]]),
+    group("Stormwater", `${MDC_GIS}/GIS_STORMWATER_LINE_LN/FeatureServer`, "Manawatu District Council", [[0, "Stormwater main"]], 1000),
+  ],
   "matamata-piako": [
     group("Water Supply", MPDC_WATER, "Matamata-Piako District Council", [
       [488, "Water main"],
@@ -121,6 +137,18 @@ const REGIONAL_INFRASTRUCTURE: Partial<Record<PlanningProviderId, RegionalInfras
       [205, "Stormwater channel"],
       [215, "Stormwater service line"],
       [225, "Stormwater main"],
+    ], 1000),
+  ],
+  "western-bay": [
+    group("Water Supply", WESTERN_BAY_WATER, "Western Bay of Plenty District Council", [
+      [18, "Water pipe"],
+    ]),
+    group("Wastewater", WESTERN_BAY_WASTEWATER, "Western Bay of Plenty District Council", [
+      [16, "Wastewater pipe"],
+    ]),
+    group("Stormwater", WESTERN_BAY_STORMWATER, "Western Bay of Plenty District Council", [
+      [18, "Stormwater drain"],
+      [19, "Stormwater pipe"],
     ], 1000),
   ],
   whakatane: [
@@ -409,6 +437,21 @@ function missingService(group: RegionalInfrastructureGroup, searchDistanceM: num
   };
 }
 
+function chooseBetterItem(current: InfrastructureItem | undefined, next: InfrastructureItem): InfrastructureItem {
+  if (!current) return next;
+  const rank: Record<InfrastructureItem["location"], number> = {
+    "on-parcel": 0,
+    boundary: 1,
+    "public-land": 2,
+    neighbour: 3,
+    unknown: 4,
+  };
+  if (rank[next.location] !== rank[current.location]) {
+    return rank[next.location] < rank[current.location] ? next : current;
+  }
+  return (next.distance_metres ?? Infinity) < (current.distance_metres ?? Infinity) ? next : current;
+}
+
 export function hasRegionalInfrastructureProvider(providerId: PlanningProviderId): boolean {
   return Boolean(REGIONAL_INFRASTRUCTURE[providerId]?.length);
 }
@@ -464,7 +507,21 @@ export async function fetchRegionalInfrastructure(
     };
   }));
 
-  return settled.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+  const itemsByName = new Map<RegionalServiceName, InfrastructureItem>();
+  for (const item of settled.flatMap((result) => result.status === "fulfilled" ? [result.value] : [])) {
+    const serviceName = item.name as RegionalServiceName;
+    itemsByName.set(serviceName, chooseBetterItem(itemsByName.get(serviceName), item));
+  }
+  const items = [...itemsByName.values()];
+  const isPukehina = providerId === "western-bay"
+    && lat >= -37.86 && lat <= -37.70
+    && lng >= 176.40 && lng <= 176.56;
+  return items.map((item) => isPukehina && item.name === "Wastewater" && item.location === "unknown"
+    ? {
+        ...item,
+        note: "Pukehina has no mapped public wastewater connection and Western Bay of Plenty District Council has no current plan for a public wastewater scheme. Treat the property as on-site wastewater/septic until Council confirms otherwise.",
+      }
+    : item);
 }
 
 export function regionalInfrastructureSmokeTargets(): Array<{

@@ -10,6 +10,11 @@ import type { SitePlanLayer } from "./site-plan";
  * safe and avoids re-hitting slow external ArcGIS servers on every report view.
  */
 const SITE_PLAN_LAYER_CACHE_TTL_DAYS = Number(process.env.SITE_PLAN_LAYER_CACHE_TTL_DAYS ?? 90);
+const SITE_PLAN_PROVIDER_CACHE_NAMESPACE: Partial<Record<string, string>> = {
+  // Manawatu v1 includes both councils, three-water aggregation and the full
+  // rollout overlay set. Keep pre-rollout partial bundles unreachable.
+  manawatu: "manawatu-v1",
+};
 
 export function sitePlanLayerCacheKey(
   providerId: string | null | undefined,
@@ -18,9 +23,10 @@ export function sitePlanLayerCacheKey(
   lng: number,
 ): string {
   const provider = providerId ?? "auckland-legacy";
-  if (parcelId) return `${provider}:parcel:${parcelId}`;
+  const namespacedProvider = SITE_PLAN_PROVIDER_CACHE_NAMESPACE[provider] ?? provider;
+  if (parcelId) return `${namespacedProvider}:parcel:${parcelId}`;
   // Unresolved parcel: bucket by ~11m grid so nearby repeat lookups still hit.
-  return `${provider}:geo:${lat.toFixed(4)}:${lng.toFixed(4)}`;
+  return `${namespacedProvider}:geo:${lat.toFixed(4)}:${lng.toFixed(4)}`;
 }
 
 /** Best-effort cache read. Returns null on a miss, expiry, or any DB error. */

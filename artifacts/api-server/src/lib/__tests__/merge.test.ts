@@ -35,6 +35,40 @@ describe("mergePropertyData", () => {
     expect(merged.data_sources.cv_nzd).toBe("whakatane_council_rating_gis");
   });
 
+  it("preserves PNCC council provenance for the authoritative CV", () => {
+    const merged = mergePropertyData(
+      null,
+      null,
+      null,
+      { zone_code: "Residential", zone_description: "Residential - Palmerston North City District Plan Zone" } as any,
+      [],
+      {
+        contour: "flat",
+        asbestos_risk: "unknown",
+        infrastructure: [],
+        property_history: {
+          cv_nzd: 710_000,
+          cv_year: 2026,
+          build_year: null,
+          floor_area_sqm: null,
+          land_area_sqm: 786,
+          land_area_source: "pncc_council_rating_gis",
+          land_area_scope: "rating_unit",
+          property_type: null,
+          sources_confirmed: [
+            "cv_nzd (Palmerston North City Council rating GIS)",
+            "land_area_sqm (Palmerston North City Council rating GIS)",
+          ],
+          sources_estimated: [],
+        },
+      },
+    );
+
+    expect(merged.cv_nzd).toBe(710_000);
+    expect(merged.data_sources.cv_nzd).toBe("pncc_council_rating_gis");
+    expect(merged.data_sources.land_area_sqm).toBe("pncc_council_rating_gis");
+  });
+
   it("uses Christchurch's complete rating unit while preserving floor area, CV, and zone", () => {
     const merged = mergePropertyData(
       { area_sqm: 363 } as any,
@@ -1075,5 +1109,58 @@ describe("mergePropertyData", () => {
 
     expect(merged.listing_price).toBeNull();
     expect(merged.data_sources.listing_price).toBeUndefined();
+  });
+
+  it("does not let a stray bathroom turn an address-matched vacant section into a dwelling", () => {
+    const merged = mergePropertyData(
+      { area_sqm: 819 } as any,
+      null,
+      null,
+      { zone_code: "Residential", zone_description: "Residential - Pukehina" } as any,
+      [],
+      {
+        contour: "flat",
+        asbestos_risk: "unknown",
+        infrastructure: [],
+        analysed_address: "481 Pukehina Parade, Pukehina",
+        propertyValue: {
+          cv_nzd: 1_020_000,
+          lv_nzd: 1_020_000,
+          iv_nzd: null,
+          cv_year: 2025,
+          property_type: "RESIDENTIAL",
+          property_sub_type: "Vacant",
+          land_area_sqm: 819,
+          floor_area_sqm: null,
+          build_year: null,
+          bedrooms: null,
+          bathrooms: 1,
+          address_confirmed: "481 Pukehina Parade, Pukehina, 3189",
+        } as any,
+        qv: {
+          cv_nzd: 1_020_000,
+          lv_nzd: 1_020_000,
+          iv_nzd: null,
+          land_area_sqm: 819,
+          floor_area_sqm: null,
+          build_year: null,
+          bedrooms: null,
+          bathrooms: null,
+          address_confirmed: "481 Pukehina Parade, Pukehina",
+        } as any,
+      },
+    );
+
+    expect(merged).toMatchObject({
+      property_type: "Vacant land / section",
+      floor_area_sqm: null,
+      build_year: null,
+      bedrooms: null,
+      bathrooms: null,
+    });
+    expect(merged.data_sources.property_type).toBe("propertyvalue (vacant valuation record)");
+    expect(merged.discrepancies).toEqual(expect.arrayContaining([
+      expect.stringContaining("classify the property as vacant land"),
+    ]));
   });
 });

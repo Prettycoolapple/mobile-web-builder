@@ -8,6 +8,97 @@ import {
 } from "../regional-rules";
 
 describe("regional planning rule status", () => {
+  it("models PNCC and MDC residential subdivision rules with ROI enabled", () => {
+    const provider = { providerId: "manawatu" as const, providerName: "Manawatu planning provider" };
+    const pnccZone = {
+      zone_code: "Residential",
+      zone_description: "Residential - Palmerston North City District Plan Zone",
+      min_lot_size_sqm: null,
+      raw_zone: "{}",
+    };
+    const mdcZone = {
+      zone_code: "Residential",
+      zone_description: "Residential - Manawatu District Plan Zone",
+      min_lot_size_sqm: null,
+      raw_zone: "{}",
+    };
+
+    expect(regionalPlanningRuleStatus(provider, pnccZone, 800)).toMatchObject({
+      modellingStatus: "roi_enabled",
+      automaticYieldClaimsAllowed: true,
+      automaticRoiAllowed: true,
+      regionalZoneCode: "PNCC_RESIDENTIAL",
+      verifiedMinimumLotSqm: 350,
+    });
+    expect(calculateRegionalPotentialLots({ provider, zone: pnccZone, landAreaSqm: 800 })?.lotResult.lots).toBe(2);
+    expect(regionalPlanningRuleStatus(provider, mdcZone, 1100)).toMatchObject({
+      regionalZoneCode: "MDC_RESIDENTIAL",
+      verifiedMinimumLotSqm: 500,
+      automaticRoiAllowed: true,
+    });
+    expect(calculateRegionalPotentialLots({ provider, zone: mdcZone, landAreaSqm: 1100 })?.lotResult.lots).toBe(2);
+  });
+
+  it("blocks automatic MDC yield and ROI inside the deferred residential overlay", () => {
+    expect(regionalPlanningRuleStatus(
+      { providerId: "manawatu", providerName: "Manawatu planning provider" },
+      { zone_code: "Residential", zone_description: "Residential - Manawatu District Plan Zone", min_lot_size_sqm: null, raw_zone: "{}" },
+      1100,
+      [{ name: "Deferred Residential Overlay", status: "control", detail: "Applies" }],
+    )).toMatchObject({
+      automaticYieldClaimsAllowed: false,
+      automaticRoiAllowed: false,
+      verifiedMinimumLotSqm: null,
+    });
+  });
+
+  it("blocks the generic MDC rule inside a mapped growth precinct", () => {
+    expect(regionalPlanningRuleStatus(
+      { providerId: "manawatu", providerName: "Manawatu planning provider" },
+      { zone_code: "Residential", zone_description: "Residential - Manawatu District Plan Zone", min_lot_size_sqm: null, raw_zone: "{}" },
+      2_100,
+      [{ name: "MDC Growth Precinct 2", status: "control", detail: "Plan Change 45" }],
+    )).toMatchObject({
+      automaticYieldClaimsAllowed: false,
+      automaticRoiAllowed: false,
+      verifiedMinimumLotSqm: null,
+    });
+  });
+
+  it("applies mapped PNCC residential sub-area minimums", () => {
+    const provider = { providerId: "manawatu" as const, providerName: "Manawatu planning provider" };
+    const zone = {
+      zone_code: "Residential",
+      zone_description: "Residential - Palmerston North City District Plan Zone",
+      min_lot_size_sqm: null,
+      raw_zone: "{}",
+    };
+
+    expect(regionalPlanningRuleStatus(provider, zone, 1_100, [
+      { name: "Development Area", status: "control", detail: "Napier Road Residential Extension Area" },
+    ])).toMatchObject({ verifiedMinimumLotSqm: 500, automaticRoiAllowed: true });
+    expect(regionalPlanningRuleStatus(provider, zone, 1_300, [
+      { name: "Development Area", status: "control", detail: "Aokautere Development Area" },
+    ])).toMatchObject({ verifiedMinimumLotSqm: 600 });
+    expect(regionalPlanningRuleStatus(provider, zone, 2_600, [
+      { name: "Development Area", status: "control", detail: "Aokautere Development Area" },
+      { name: "District Plan Overlay", status: "control", detail: "Parklands Area" },
+    ])).toMatchObject({ verifiedMinimumLotSqm: 1_300 });
+  });
+
+  it("does not apply urban residential yield rules to PNCC rural-residential land", () => {
+    expect(regionalPlanningRuleStatus(
+      { providerId: "manawatu", providerName: "Manawatu planning provider" },
+      {
+        zone_code: "Rural Residential",
+        zone_description: "Rural Residential - Palmerston North City District Plan Zone",
+        min_lot_size_sqm: null,
+        raw_zone: "{}",
+      },
+      2_000,
+    )).toMatchObject({ subdivisionRules: "not_modelled", automaticYieldClaimsAllowed: false });
+  });
+
   it("models Waipa MDRZ vacant lots and the dwelling-associated pathway", () => {
     const provider = {
       providerId: "waipa" as const,
@@ -932,6 +1023,36 @@ describe("regional planning rule status", () => {
       regionalZoneCode: "MPDC_RESIDENTIAL",
       verifiedMinimumLotSqm: 500,
       sourceLabel: "Matamata-Piako District Plan (Residential Zone, net site area)",
+    });
+  });
+
+  it("enables Western Bay residential yield, ROI, and development scoring for Athenree", () => {
+    expect(regionalPlanningRuleStatus(
+      { providerId: "western-bay", providerName: "Western Bay of Plenty District Council planning provider" },
+      { zone_code: "Residential", zone_description: "Residential - Waihi Beach / Athenree / Katikati", min_lot_size_sqm: null, raw_zone: "{}" },
+      1_012,
+    )).toMatchObject({
+      subdivisionRules: "standard_yield_modelled",
+      modellingStatus: "roi_enabled",
+      automaticYieldClaimsAllowed: true,
+      automaticRoiAllowed: true,
+      regionalZoneCode: "WBOP_RESIDENTIAL",
+      verifiedMinimumLotSqm: 350,
+    });
+  });
+
+  it("uses the unsewered 800sqm Pukehina residential rule while retaining ROI scoring", () => {
+    expect(regionalPlanningRuleStatus(
+      { providerId: "western-bay", providerName: "Western Bay of Plenty District Council planning provider" },
+      { zone_code: "Residential", zone_description: "Residential - Pukehina - Western Bay District Plan Zone", min_lot_size_sqm: null, raw_zone: "{}" },
+      819,
+    )).toMatchObject({
+      subdivisionRules: "standard_yield_modelled",
+      modellingStatus: "roi_enabled",
+      automaticYieldClaimsAllowed: true,
+      automaticRoiAllowed: true,
+      regionalZoneCode: "WBOP_PUKEHINA_RESIDENTIAL",
+      verifiedMinimumLotSqm: 800,
     });
   });
 

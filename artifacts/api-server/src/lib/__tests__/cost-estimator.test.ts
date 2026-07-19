@@ -282,11 +282,17 @@ describe("estimateCosts — existing dwelling / demolition", () => {
     const southlandDefault = estimateCosts(property, 1, {
       cost_profile: regionalCostProfileForProvider("southland"),
     });
+    const westernBayDefault = estimateCosts(property, 1, {
+      cost_profile: regionalCostProfileForProvider("western-bay"),
+    });
     const wairarapaDefault = estimateCosts(property, 1, {
       cost_profile: regionalCostProfileForProvider("wairarapa"),
     });
     const matamataPiakoDefault = estimateCosts(property, 1, {
       cost_profile: regionalCostProfileForProvider("matamata-piako"),
+    });
+    const manawatuDefault = estimateCosts(property, 1, {
+      cost_profile: regionalCostProfileForProvider("manawatu"),
     });
     const customProfile = regionalCostProfileForProvider("whangarei");
     customProfile.construction.baseLowPerSqm = 3_000;
@@ -302,10 +308,14 @@ describe("estimateCosts — existing dwelling / demolition", () => {
     expect(rotoruaDefault.construction_low).toBe(aucklandDefault.construction_low);
     expect(whakataneDefault.construction_high).toBe(aucklandDefault.construction_high);
     expect(southlandDefault.construction_low).toBe(aucklandDefault.construction_low);
+    expect(westernBayDefault.construction_low).toBe(aucklandDefault.construction_low);
     expect(wairarapaDefault.construction_low).toBe(aucklandDefault.construction_low);
     expect(wairarapaDefault.construction_high).toBe(aucklandDefault.construction_high);
     expect(matamataPiakoDefault.construction_low).toBe(aucklandDefault.construction_low);
     expect(matamataPiakoDefault.construction_high).toBe(aucklandDefault.construction_high);
+    expect(manawatuDefault.construction_low).toBe(aucklandDefault.construction_low);
+    expect(manawatuDefault.construction_high).toBe(aucklandDefault.construction_high);
+    expect(manawatuDefault.cost_profile_id).toBe("manawatu-default");
     expect(whangareiCustom.construction_low).toBeGreaterThan(whangareiDefault.construction_low);
     expect(regionalCostProfileForProvider("hamilton")).toMatchObject({ id: "hamilton-default", providerId: "hamilton" });
     expect(regionalCostProfileForProvider("waipa")).toMatchObject({
@@ -317,6 +327,11 @@ describe("estimateCosts — existing dwelling / demolition", () => {
     expect(regionalCostProfileForProvider("nelson")).toMatchObject({ id: "nelson-default", providerId: "nelson" });
     expect(regionalCostProfileForProvider("rotorua")).toMatchObject({ id: "rotorua-default", providerId: "rotorua" });
     expect(regionalCostProfileForProvider("whakatane")).toMatchObject({ id: "whakatane-default", providerId: "whakatane" });
+    expect(regionalCostProfileForProvider("western-bay")).toMatchObject({
+      id: "western-bay-default",
+      providerId: "western-bay",
+      source: "auckland_default_pending_regional_rates",
+    });
     expect(regionalCostProfileForProvider("southland")).toMatchObject({
       id: "southland-default",
       providerId: "southland",
@@ -330,6 +345,11 @@ describe("estimateCosts — existing dwelling / demolition", () => {
     expect(regionalCostProfileForProvider("matamata-piako")).toMatchObject({
       id: "matamata-piako-default",
       providerId: "matamata-piako",
+      source: "auckland_default_pending_regional_rates",
+    });
+    expect(regionalCostProfileForProvider("manawatu")).toMatchObject({
+      id: "manawatu-default",
+      providerId: "manawatu",
       source: "auckland_default_pending_regional_rates",
     });
     expect(regionalCostProfileForProvider("unsupported").id).toBe("unsupported-default");

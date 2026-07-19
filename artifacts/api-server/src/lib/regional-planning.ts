@@ -10,6 +10,7 @@ export type PlanningProviderId =
   | "hamilton"
   | "waipa"
   | "matamata-piako"
+  | "manawatu"
   | "christchurch"
   | "canterbury"
   | "nelson"
@@ -20,6 +21,7 @@ export type PlanningProviderId =
   | "dunedin"
   | "rotorua"
   | "whakatane"
+  | "western-bay"
   | "southland"
   | "unsupported";
 
@@ -163,7 +165,16 @@ const WAIPA_BOUNDS: Bounds = { minLat: -38.35, maxLat: -37.70, minLng: 174.90, m
 // Matamata/Cambridge rural boundary, so this provider is registered before
 // Waipa to claim that ambiguous strip by coordinate; Cambridge and Te Awamutu
 // sit outside this box entirely and are unaffected by registration order.
-const MATAMATA_PIAKO_BOUNDS: Bounds = { minLat: -37.86, maxLat: -37.28, minLng: 175.45, maxLng: 176.02 };
+// Stop at the Kaimai range. Extending this rectangle to the coast incorrectly
+// routes Athenree/Waihi Beach coordinates to Matamata-Piako.
+const MATAMATA_PIAKO_BOUNDS: Bounds = { minLat: -37.86, maxLat: -37.28, minLng: 175.45, maxLng: 175.90 };
+// Core Manawatu market: Palmerston North City plus Manawatu District. Avoid a
+// single district-sized rectangle because that would also claim parts of
+// Horowhenua, Rangitikei and Tararua. These two boxes safely route the main
+// urban areas; rural properties are routed by the territorial-authority or
+// settlement text returned by the geocoder.
+const PALMERSTON_NORTH_BOUNDS: Bounds = { minLat: -40.43, maxLat: -40.25, minLng: 175.50, maxLng: 175.83 };
+const FEILDING_BOUNDS: Bounds = { minLat: -40.29, maxLat: -40.17, minLng: 175.49, maxLng: 175.65 };
 const CHRISTCHURCH_BOUNDS: Bounds = { minLat: -43.75, maxLat: -43.35, minLng: 172.35, maxLng: 173.05 };
 const CANTERBURY_BOUNDS: Bounds = { minLat: -44.95, maxLat: -42.0, minLng: 169.9, maxLng: 174.6 };
 const NELSON_BOUNDS: Bounds = { minLat: -41.45, maxLat: -41.15, minLng: 173.05, maxLng: 173.45 };
@@ -180,6 +191,17 @@ const WELLINGTON_BOUNDS: Bounds = { minLat: -41.45, maxLat: -40.70, minLng: 174.
 const DUNEDIN_BOUNDS: Bounds = { minLat: -46.15, maxLat: -45.55, minLng: 169.95, maxLng: 171.15 };
 const ROTORUA_BOUNDS: Bounds = { minLat: -38.45, maxLat: -37.85, minLng: 175.85, maxLng: 176.55 };
 const WHAKATANE_BOUNDS: Bounds = { minLat: -38.35, maxLat: -37.70, minLng: 176.55, maxLng: 177.40 };
+// Western Bay of Plenty District from Waihi Beach/Athenree through Katikati,
+// Omokoroa and Te Puke. Kept west/north of Tauranga City and clear of Rotorua.
+// Conservative northern-district envelope (Athenree, Waihi Beach, Katikati
+// and Omokoroa). A broad district rectangle would swallow Tauranga City,
+// which is an independent territorial authority surrounded by Western Bay.
+// Southern/eastern Western Bay addresses are still routed by locality hints.
+const WESTERN_BAY_BOUNDS: Bounds = { minLat: -37.67, maxLat: -37.35, minLng: 175.75, maxLng: 176.10 };
+// Eastern coastal settlements are separated from the northern district by
+// Tauranga City. Keep a second narrow envelope around Pukehina/Little Waihi so
+// Tauranga and Papamoa coordinates cannot be claimed by this provider.
+const WESTERN_BAY_PUKEHINA_BOUNDS: Bounds = { minLat: -37.86, maxLat: -37.70, minLng: 176.40, maxLng: 176.56 };
 const SOUTHLAND_DISTRICT_BOUNDS: Bounds = { minLat: -47.35, maxLat: -44.75, minLng: 166.45, maxLng: 169.35 };
 const INVERCARGILL_CITY_BOUNDS: Bounds = { minLat: -46.55, maxLat: -46.30, minLng: 168.20, maxLng: 168.50 };
 const GORE_DISTRICT_URBAN_BOUNDS: Bounds = { minLat: -46.18, maxLat: -45.92, minLng: 168.78, maxLng: 169.18 };
@@ -262,7 +284,10 @@ const providerRegistry: PlanningProvider[] = [
         /\bspringdale\b/,
         /\btatuanui\b/,
         /\bmatamata-piako\b/,
-      ]) || inBounds(context, MATAMATA_PIAKO_BOUNDS),
+      ]) || (
+        inBounds(context, MATAMATA_PIAKO_BOUNDS)
+        && !addressHas(context, [/\bwestern bay of plenty\b/, /\bathenree\b/, /\bwaihi beach\b/, /\bkatikati\b/])
+      ),
   ),
   provider(
     "waipa",
@@ -279,7 +304,7 @@ const providerRegistry: PlanningProvider[] = [
       { label: "Waikato OneView Stormwater", url: "https://services3.arcgis.com/Oou6z70yKcGvIDxP/arcgis/rest/services/StormwaterPipesWaikato/FeatureServer" },
     ],
     (context) =>
-      addressHas(context, [
+      (addressHas(context, [
         /\bwaipa\b/,
         /\bcambridge\b/,
         /\bte awamutu\b/,
@@ -287,7 +312,61 @@ const providerRegistry: PlanningProvider[] = [
         /\bpirongia\b/,
         /\bohaupo\b/,
         /\bkarapiro\b/,
-      ]) || (inBounds(context, WAIPA_BOUNDS) && !inBounds(context, HAMILTON_BOUNDS)),
+      ]) && !addressHas(context, [
+        /\bpalmerston north\b/,
+        /\bfeilding\b/,
+        /\bashhurst\b/,
+        /\bbunnythorpe\b/,
+        /\blongburn\b/,
+        /\bmanawatu district\b/,
+      ])) || (inBounds(context, WAIPA_BOUNDS) && !inBounds(context, HAMILTON_BOUNDS)),
+  ),
+  provider(
+    "manawatu",
+    "Manawatu planning provider",
+    null,
+    "Manawatu-Whanganui",
+    "full",
+    "Palmerston North City District Plan / Manawatu District Plan",
+    [
+      { label: "PNCC District Plan zones", url: "https://services.arcgis.com/Fv0Tvc98QEDvQyjL/arcgis/rest/services/DISTRICTPLAN_PlanningZones/FeatureServer" },
+      { label: "PNCC public three waters", url: "https://services.arcgis.com/Fv0Tvc98QEDvQyjL/arcgis/rest/services/NZVD2016_WATER_MAINS/FeatureServer" },
+      { label: "MDC District Plan zones", url: "https://services9.arcgis.com/CzWZ8m5FuciqBibe/arcgis/rest/services/District_Plan_Zones/FeatureServer" },
+      { label: "MDC public three waters", url: "https://services9.arcgis.com/CzWZ8m5FuciqBibe/arcgis/rest/services/GIS_WATER_LINE_LN/FeatureServer" },
+    ],
+    (context) => addressHas(context, [
+      /\bmanawatu district\b/,
+      /\bpalmerston north city\b/,
+      /\bpalmerston north\b/,
+      /\bfeilding\b/,
+      /\bashhurst\b/,
+      /\bbainesse\b/,
+      /\bbunnythorpe\b/,
+      /\bcheltenham\b/,
+      /\bcolyton\b/,
+      /\blongburn\b/,
+      /\bsanson\b/,
+      /\bhalcombe\b/,
+      /\brongotea\b/,
+      /\bhimatangi\b/,
+      /\bhiwinui\b/,
+      /\bkiwitea\b/,
+      /\bpohangina\b/,
+      /\bkimbolton\b/,
+      /\bapiti\b/,
+      /\brangiwahia\b/,
+      /\btangimoana\b/,
+      /\bwaituna west\b/,
+      /\baorangi\b/,
+      /\bawahuri\b/,
+      /\bbeaconsfield\b/,
+      /\bglen oroua\b/,
+      /\bkairanga\b/,
+      /\bnewbury\b/,
+      /\bohakea\b/,
+      /\brangiotu\b/,
+      /\btiakitahuna\b/,
+    ]) || inBounds(context, PALMERSTON_NORTH_BOUNDS) || inBounds(context, FEILDING_BOUNDS),
   ),
   provider(
     "christchurch",
@@ -471,6 +550,35 @@ const providerRegistry: PlanningProvider[] = [
       { label: "Dunedin CityCare Utilities", url: "https://apps.dunedin.govt.nz/arcgis/rest/services/Public/CityCare/MapServer" },
     ],
     (context) => supportsAny(context, DUNEDIN_BOUNDS, [/\bdunedin\b/, /\botepoti\b/, /\bmosgiel\b/]),
+  ),
+  provider(
+    "western-bay",
+    "Western Bay of Plenty District Council planning provider",
+    "Western Bay of Plenty District Council",
+    "Bay of Plenty",
+    "partial",
+    "Western Bay of Plenty Operative District Plan 2012",
+    [
+      { label: "Western Bay District Plan", url: "https://map.westernbay.govt.nz/arcgisext/rest/services/District_Plan/MapServer" },
+      { label: "Western Bay District Plan Natural Hazards", url: "https://map.westernbay.govt.nz/arcgisext/rest/services/District_Plan_Natural_Hazards/MapServer" },
+      { label: "Western Bay Other Natural Hazards", url: "https://map.westernbay.govt.nz/arcgisext/rest/services/Other_Natural_Hazards/MapServer" },
+      { label: "Western Bay Water Assets", url: "https://wslgis.water.co.nz/server/rest/services/WBP/WBP_Water_REST_Services/MapServer" },
+      { label: "Western Bay Wastewater Assets", url: "https://wslgis.water.co.nz/server/rest/services/WBP/WBP_Wastewater_REST_services/MapServer" },
+      { label: "Western Bay Stormwater Assets", url: "https://wslgis.water.co.nz/server/rest/services/WBP/WBP_Stormwater_REST_Services/MapServer" },
+    ],
+    (context) =>
+      inBounds(context, WESTERN_BAY_BOUNDS)
+      || inBounds(context, WESTERN_BAY_PUKEHINA_BOUNDS)
+      || addressHas(context, [
+        /\bwestern bay of plenty\b/,
+        /\bathenree\b/,
+        /\bwaihi beach\b/,
+        /\bkatikati\b/,
+        /\bomokoroa\b/,
+        /\bte puke\b/,
+        /\bpukehina\b/,
+        /\blittle waihi\b/,
+      ]),
   ),
   provider(
     "whakatane",

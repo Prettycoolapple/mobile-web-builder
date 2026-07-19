@@ -109,12 +109,18 @@ const QLDC_SUBDIVISION_SOURCE =
 const WAIRARAPA_COMBINED_DISTRICT_PLAN_SOURCE =
   "https://www.mstn.govt.nz/council/plans-and-strategies/plans/wairarapa-combined-district-plan";
 const MPDC_DISTRICT_PLAN_SOURCE = "https://www.mpdc.govt.nz/district-plan";
+const PNCC_SUBDIVISION_SOURCE =
+  "https://www.pncc.govt.nz/Rates-Building-Property/Property-housing/Subdivisions/Before-you-start";
+const MDC_SUBDIVISION_SOURCE =
+  "https://www.mdc.govt.nz/__data/assets/pdf_file/0020/173117/SUB-Subdivision-2.pdf";
 const WELLINGTON_DISTRICT_PLAN_SOURCE =
   "https://www.huttcity.govt.nz/council/district-plan";
 const DUNEDIN_GR1_VARIATION2_SOURCE =
   "https://www.dunedin.govt.nz/__data/assets/pdf_file/0012/873498/V2-Rule-Changes-in-General-Res1-and-Township-Settlement-Zones-updated.pdf";
 const DUNEDIN_GR2_VARIATION2_SOURCE =
   "https://www.dunedin.govt.nz/__data/assets/pdf_file/0011/873497/V2-General-Residential-2-Rezoning-updated.pdf";
+const WESTERN_BAY_SUBDIVISION_SOURCE =
+  "https://www.westernbay.govt.nz/property-rates-and-building/district-plan-and-resource-consents/district-plan";
 
 const INTERIM_COMPARABLE_ROI_PROVIDERS = new Set<PlanningProviderMetadata["providerId"]>([
   "hamilton",
@@ -124,12 +130,127 @@ const INTERIM_COMPARABLE_ROI_PROVIDERS = new Set<PlanningProviderMetadata["provi
   "whangarei",
   "wairarapa",
   "matamata-piako",
+  "manawatu",
   "rotorua",
   "whakatane",
+  "western-bay",
   "southland",
 ]);
 
 const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
+  {
+    providerId: "manawatu",
+    regionalZoneCode: "PNCC_RESIDENTIAL_500",
+    zonePattern: /^residential\b.*\bpalmerston north city district plan zone\b.*\bpncc 500sqm residential locality\b/i,
+    zoneLabel: "Palmerston North Residential Zone (Ashhurst, Bunnythorpe or Longburn)",
+    standardMinimumLotSqm: 500,
+    requiredShapeText: null,
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "PNCC District Plan Section 7 residential subdivision requirements",
+    sourceUrl: PNCC_SUBDIVISION_SOURCE,
+    caveats: [
+      "The 500sqm controlled-activity minimum applies in Ashhurst, Bunnythorpe, Longburn village and the Napier Road Extension Area; confirm the mapped sub-area before relying on yield.",
+      "Access, shape, existing buildings, hazards and three-waters capacity remain site-specific consent and engineering checks.",
+    ],
+    roiEnabled: true,
+  },
+  {
+    providerId: "manawatu",
+    regionalZoneCode: "PNCC_RESIDENTIAL",
+    zonePattern: /^residential\b.*\bpalmerston north city district plan zone\b/i,
+    excludedZonePattern: /\bpncc 500sqm residential locality\b/i,
+    zoneLabel: "Palmerston North Residential Zone",
+    standardMinimumLotSqm: 350,
+    requiredShapeText: null,
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "PNCC District Plan Section 7 residential subdivision requirements",
+    sourceUrl: PNCC_SUBDIVISION_SOURCE,
+    caveats: [
+      "The 350sqm controlled-activity minimum applies in the Palmerston North urban area; a two-lot site generally needs about 750sqm including driveway allowance.",
+      "Napier Road Extension, Ashhurst, Bunnythorpe and Longburn use a 500sqm minimum and are excluded from this rule where the locality can be identified automatically.",
+      "Access, shape, existing buildings, hazards and three-waters capacity remain site-specific consent and engineering checks.",
+    ],
+    conditionalMinimums: [
+      {
+        overlayPattern: /\bnapier road residential extension area\b/i,
+        minimumLotSqm: 500,
+        caveat: "PNCC Section 7 applies a 500sqm controlled-activity minimum in the mapped Napier Road Residential Extension Area.",
+      },
+      {
+        overlayPattern: /\baokautere development area\b/i,
+        minimumLotSqm: 600,
+        caveat: "PNCC Section 7 requires at least 400sqm of contiguous developable land per Aokautere lot and at least 600sqm average lot area; the yield screen conservatively uses 600sqm.",
+      },
+      {
+        overlayPattern: /\bparklands area\b/i,
+        minimumLotSqm: 1_300,
+        caveat: "PNCC Section 7 requires 1300sqm of contiguous developable land per lot in the Aokautere Parklands Area.",
+      },
+    ],
+    roiEnabled: true,
+  },
+  {
+    providerId: "manawatu",
+    regionalZoneCode: "MDC_RESIDENTIAL",
+    zonePattern: /^residential\b.*\bmanawatu district plan zone\b/i,
+    zoneLabel: "Manawatu District General Residential Zone",
+    standardMinimumLotSqm: 500,
+    requiredShapeText: "Each new site must be capable of containing an 18m diameter circle.",
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "Manawatu District Plan SUB-ST1 to SUB-ST10",
+    sourceUrl: MDC_SUBDIVISION_SOURCE,
+    caveats: [
+      "The existing General Residential Zone greenfield minimum is 500sqm net site area; mapped Growth Precinct density areas use different standards.",
+      "Lots under 5,000sqm must connect to reticulated wastewater, and subdivision must address stormwater neutrality, access, shape and applicable structure plans.",
+      "Infill below the standard minimum is design-led and is not included in the automatic vacant-lot yield.",
+    ],
+    blockedOverlayPatterns: [
+      {
+        pattern: /\bdeferred residential overlay\b/i,
+        caveat: "Deferred Residential land is blocked from automatic yield and ROI until the required infrastructure/staging trigger is satisfied.",
+      },
+      {
+        pattern: /\bmdc growth precinct\b/i,
+        caveat: "Mapped Manawatu growth precincts use precinct-specific density and structure-plan standards, so the generic 500sqm yield and ROI are blocked until the applicable precinct rule is modelled.",
+      },
+    ],
+    roiEnabled: true,
+  },
+  {
+    providerId: "western-bay",
+    regionalZoneCode: "WBOP_PUKEHINA_RESIDENTIAL",
+    zonePattern: /\bresidential\b.*\bpukehina\b|\bpukehina\b.*\bresidential\b/i,
+    zoneLabel: "Pukehina Residential Zone",
+    standardMinimumLotSqm: 800,
+    requiredShapeText: null,
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "Western Bay of Plenty Operative District Plan Rule 13.4.2 - other residential areas",
+    sourceUrl: WESTERN_BAY_SUBDIVISION_SOURCE,
+    caveats: [
+      "Pukehina is an unsewered 'all other residential area'; the operative first-pass minimum is 800sqm and Rules 12.4.6 and 12.4.7 also apply.",
+      "There is no current public wastewater scheme for Pukehina, so on-site wastewater capacity and regional-council requirements are critical feasibility constraints.",
+      "Access, shape, coastal and natural-hazard controls, potable water and stormwater servicing still require site-specific confirmation.",
+    ],
+    roiEnabled: true,
+  },
+  {
+    providerId: "western-bay",
+    regionalZoneCode: "WBOP_RESIDENTIAL",
+    zonePattern: /\bresidential\b.*\b(?:waihi beach|athenree|katikati)\b|\b(?:waihi beach|athenree|katikati)\b.*\bresidential\b/i,
+    excludedZonePattern: /\brural|medium density\b/i,
+    zoneLabel: "Residential Zone",
+    standardMinimumLotSqm: 350,
+    requiredShapeText: null,
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "Western Bay of Plenty Operative District Plan - Residential subdivision",
+    sourceUrl: WESTERN_BAY_SUBDIVISION_SOURCE,
+    caveats: [
+      "The 350sqm minimum is the first-pass standard for Waihi Beach, including Athenree; frontage, access, shape, natural-hazard and three-waters servicing controls still require site-specific confirmation.",
+      "A 2,000sqm minimum can apply to specified Athenree Structure Plan sites adjoining the harbour or esplanade reserve; the automated yield must not be relied on where that site-specific control applies.",
+      "All subdivision requires council approval and may require resource consent, engineering approval and infrastructure capacity confirmation.",
+    ],
+    roiEnabled: true,
+  },
   {
     providerId: "waipa",
     regionalZoneCode: "WDC_MDRZ",

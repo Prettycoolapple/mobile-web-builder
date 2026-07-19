@@ -40,4 +40,29 @@ describe("PropertyValue address resolution", () => {
       bathrooms: 2,
     });
   });
+
+  it("rejects a same-number and street match from a different city", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/suggestions")) {
+        return new Response(JSON.stringify({
+          suggestions: [{
+            propertyId: 8546351,
+            suggestion: "32 Park Road, Belmont, Lower Hutt, 5010",
+            suggestionType: "address",
+          }],
+        }), { status: 200 });
+      }
+      throw new Error(`Property detail must not be fetched for a cross-city suggestion: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await scrapePropertyValue(
+      "32 Park Road, Palmerston North",
+      "32, Park Road, West End, Palmerston North, Palmerston North City, Manawatu-Whanganui, 4412",
+    );
+
+    expect(result).toBeNull();
+    expect(fetchMock.mock.calls.every((call) => String(call[0]).includes("/suggestions"))).toBe(true);
+  });
 });

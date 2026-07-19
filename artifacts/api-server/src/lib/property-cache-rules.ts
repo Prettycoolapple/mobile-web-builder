@@ -25,6 +25,12 @@ export function cachedRawNeedsRegionalZoneRefresh(rawData: RawPropertyData): boo
   }
   const providerId = cachedPlanningProviderId(rawData);
   if (!hasRegionalPlanningZoneLayer(providerId)) return false;
+  // This provider was added after some otherwise-complete property bundles
+  // were stored. A stale non-empty fallback zone must not prevent the first
+  // live Manawatu reacquisition after deployment.
+  if (rawData.planning_provider?.providerId === "unsupported" && providerId === "manawatu") {
+    return true;
+  }
   const zoneCode = rawData.zone?.zone_code?.trim().toLowerCase();
   return !zoneCode || zoneCode === "unknown" || zoneCode === "unknown zone" || zoneCode === "regional";
 }
@@ -39,6 +45,12 @@ export function cachedRawNeedsRegionalPropertyHistoryRefresh(rawData: RawPropert
     const cvNzd = history?.cv_nzd ?? rawData.propertyValue?.cv_nzd;
     const landAreaSqm = history?.land_area_sqm ?? rawData.propertyValue?.land_area_sqm;
     return cvNzd == null || landAreaSqm == null;
+  }
+  if (providerId === "western-bay") {
+    return history?.cv_nzd == null || history.land_area_sqm == null;
+  }
+  if (providerId === "manawatu" && /\b(?:palmerston north|ashhurst|longburn)\b/i.test(rawData.geocode?.formatted ?? "")) {
+    return history?.cv_nzd == null || history.land_area_sqm == null;
   }
   if (providerId === "southland") {
     return history?.cv_nzd == null;

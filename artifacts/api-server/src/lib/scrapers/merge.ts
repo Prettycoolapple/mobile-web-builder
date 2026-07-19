@@ -548,9 +548,15 @@ export function mergePropertyData(
   }
 
   // Land area: LINZ is the authoritative cadastral measurement — always wins.
-  const propertyHistorySource = ph?.sources_confirmed.some((source) => source.includes("Whakatane District Council"))
-    ? "whakatane_council_rating_gis"
-    : "auckland_council_gis";
+  const propertyHistorySource = ph?.sources_confirmed.some((source) => source.includes("Palmerston North City Council"))
+    ? "pncc_council_rating_gis"
+    : ph?.sources_confirmed.some((source) => source.includes("Whakatane District Council"))
+      ? "whakatane_council_rating_gis"
+      : ph?.sources_confirmed.some((source) => source.includes("Southland District Council"))
+        ? "southland_council_rating_gis"
+        : ph?.sources_confirmed.some((source) => source.includes("Western Bay of Plenty District Council"))
+          ? "western_bay_council_rating_gis"
+          : "auckland_council_gis";
 
   const analysedIsChildAddress = analysedAddressHasChildSuffix(extra?.analysed_address);
   const exactChildLandCandidates: Array<[string, number | null | undefined]> = analysedIsChildAddress
@@ -639,7 +645,7 @@ export function mergePropertyData(
   let build_year = buildYearResult.build_year;
   // Keep decade/range-only records approximate instead of manufacturing an exact year.
   const rawRange = build_year == null ? (propertyValueBuildYearRange ?? qvBuildYearRange ?? homesBuildYearRange ?? null) : null;
-  const build_year_range = build_year == null ? rawRange : null;
+  let build_year_range = build_year == null ? rawRange : null;
 
   // Floor area: median of credible values.
   let floor_area_sqm = medianFloorArea(sources, [
@@ -673,11 +679,11 @@ export function mergePropertyData(
     ["oneroof", oneroofProfileBaths],
     ["propertyvalue", propertyValueBaths],
   );
-  const property_type = first("property_type", sources,
+  let property_type = first("property_type", sources,
     ["realestate.co.nz", realestateListing?.propertyType],
     ["selected_listing", extra?.selected_listing_context?.propertyType],
     ["propertyvalue", propertyValue?.property_type],
-    ["auckland_council_gis", ph?.property_type],
+    [ph?.land_area_source ?? "auckland_council_gis", ph?.property_type],
   );
   const listing_title = realestateListing?.listingTitle ?? extra?.selected_listing_context?.listingTitle ?? null;
   const listing_url = realestateListing?.listingUrl ?? extra?.selected_listing_context?.listingUrl ?? null;
@@ -689,6 +695,40 @@ export function mergePropertyData(
   const discrepancies: string[] = [];
   discrepancies.push(...landResolutionNotes);
   if (buildYearResult.note) discrepancies.push(buildYearResult.note);
+
+  // Rating feeds occasionally expose a stray bed/bath count on an otherwise
+  // clearly vacant section. Prefer the address-matched valuation classification
+  // when it says Vacant, has zero improvement value, and no active listing says
+  // a dwelling now exists. This prevents a phantom bathroom from triggering
+  // demolition and existing-house costs (481 Pukehina Parade is one example).
+  const propertyValueConfirmsVacant = propertyValueMatchesSubject
+    && /\b(?:vacant|bare\s+land|section)\b/i.test([
+      propertyValue?.property_sub_type,
+      propertyValue?.land_use_primary,
+      propertyValue?.property_improvements,
+    ].filter(Boolean).join(" "));
+  const qvDoesNotShowImprovements = !qv || (
+    qvMatchesSubject
+    && (qv.iv_nzd == null || qv.iv_nzd === 0)
+    && qv.floor_area_sqm == null
+    && qv.build_year == null
+    && qv.bedrooms == null
+    && qv.bathrooms == null
+  );
+  const hasActiveDwellingListing = !!oneroof?.listing_active || !!realestateListing;
+  if (propertyValueConfirmsVacant && qvDoesNotShowImprovements && !hasActiveDwellingListing) {
+    build_year = null;
+    build_year_range = null;
+    floor_area_sqm = null;
+    bedrooms = null;
+    bathrooms = null;
+    property_type = "Vacant land / section";
+    for (const key of ["build_year", "floor_area_sqm", "bedrooms", "bathrooms"]) delete sources[key];
+    sources["property_type"] = "propertyvalue (vacant valuation record)";
+    discrepancies.push(
+      "Address-matched valuation records classify the property as vacant land with zero improvement value, so dwelling-only fields were left unavailable.",
+    );
+  }
   if (hasIgnoredCombinedListing) {
     discrepancies.push(
       `Active realestate.co.nz listing "${realestateListingRaw.address}" appears to package multiple addresses, so its bed/bath/floor/land figures were not used for this single-property report.`,

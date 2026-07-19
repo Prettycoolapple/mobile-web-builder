@@ -511,7 +511,11 @@ export function hasCacheableCore(r: PipelineResult): boolean {
   }
   const ph = r.raw_property.property_history;
   const hasCompleteDirectRegionalCore =
-    providerId === "whakatane"
+    providerId === "manawatu"
+      ? ph?.cv_nzd != null && ph.land_area_sqm != null && r.merged?.cv_nzd != null && r.merged.land_area_sqm != null
+      : providerId === "western-bay"
+      ? ph?.cv_nzd != null && ph.land_area_sqm != null && r.merged?.cv_nzd != null && r.merged.land_area_sqm != null
+      : providerId === "whakatane"
       ? ph?.cv_nzd != null && ph.land_area_sqm != null && r.merged?.cv_nzd != null && r.merged.land_area_sqm != null
       : providerId === "southland"
         ? ph?.cv_nzd != null && r.merged?.cv_nzd != null
@@ -1213,6 +1217,7 @@ export async function runPropertyPipeline(
     merged.data_sources["zone"] = ruleStatus.automaticYieldClaimsAllowed
       ? "regional_rule_pack"
       : "regional_provider_partial";
+    merged.data_sources["overlays"] = "regional_provider_gis";
     if (ruleStatus.sourceLabel) merged.data_sources["min_lot_size_sqm"] = ruleStatus.sourceLabel;
     if (ruleStatus.note) merged.discrepancies.push(ruleStatus.note);
   }
@@ -1656,6 +1661,8 @@ export async function runPropertyPipeline(
     ? "rotorua"
     : planningProvider?.providerId === "whakatane"
       ? "whakatane"
+      : planningProvider?.providerId === "western-bay"
+        ? "western bay of plenty"
       : planningProvider?.providerId === "southland"
         ? "southland"
       : null;
@@ -1749,7 +1756,9 @@ export async function runPropertyPipeline(
     || planningProvider?.providerId === "whakatane"
     || planningProvider?.providerId === "southland"
     || planningProvider?.providerId === "wairarapa"
-    || planningProvider?.providerId === "matamata-piako";
+    || planningProvider?.providerId === "matamata-piako"
+    || planningProvider?.providerId === "manawatu"
+    || planningProvider?.providerId === "western-bay";
   const fallbackExitSalePrice = !hasRealComparablePricing && regionalCvExitFallbackAllowed
     ? merged.listing_price ?? merged.cv_nzd
     : null;

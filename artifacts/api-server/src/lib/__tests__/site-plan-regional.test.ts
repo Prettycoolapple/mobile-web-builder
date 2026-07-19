@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchLINZParcel, fetchLINZParcelsNear } from "../linz";
 import { buildSitePlanForReport } from "../site-plan";
+import { sitePlanLayerCacheKey } from "../site-plan-layer-cache";
 import type { LinzParcel } from "../linz";
 import type { RawPropertyData } from "../pipeline";
 
@@ -15,6 +16,7 @@ vi.mock("../geocode", () => ({
 
 const FLAG = "ENABLE_REGIONAL_PLANNING_PROVIDERS";
 const originalLinzApiKey = process.env["LINZ_API_KEY"];
+const originalLinzBasemapsApiKey = process.env["LINZ_BASEMAPS_API_KEY"];
 
 const parcel: LinzParcel = {
   parcel_id: "hamilton-parcel",
@@ -39,6 +41,13 @@ const parcel: LinzParcel = {
 };
 
 describe("regional site-plan wrapper", () => {
+  it("versions Manawatu layer-cache keys without changing existing provider keys", () => {
+    expect(sitePlanLayerCacheKey("manawatu", "3956493", -40.2161, 175.5783))
+      .toBe("manawatu-v1:parcel:3956493");
+    expect(sitePlanLayerCacheKey("auckland", "123", -36.85, 174.76))
+      .toBe("auckland:parcel:123");
+  });
+
   beforeEach(() => {
     process.env[FLAG] = "true";
     process.env["LINZ_API_KEY"] = "";
@@ -110,6 +119,56 @@ describe("regional site-plan wrapper", () => {
       .toEqual(["Wind Zone"]);
   });
 
+  it("returns one row per Manawatu service while combining PNCC and MDC public feeds", async () => {
+    process.env["LINZ_BASEMAPS_API_KEY"] = "test-basemaps-key";
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isMdcService = url.includes("services9.arcgis.com/CzWZ8m5FuciqBibe")
+        && /GIS_(?:WATER|WASTEWATER|STORMWATER)_LINE_LN/.test(url);
+      const isMdcControl = url.includes("/Deferred_Residential_Overlay/FeatureServer/1/query");
+      const features = isMdcService
+        ? [{ attributes: { FID: 1 }, geometry: { paths: [[[175.5647, -40.225], [175.5653, -40.225]]] } }]
+        : isMdcControl
+          ? [{ attributes: { OBJECTID: 1 }, geometry: { rings: [[
+              [175.5645, -40.2253], [175.5655, -40.2253], [175.5655, -40.2247],
+              [175.5645, -40.2247], [175.5645, -40.2253],
+            ]] } }]
+          : [];
+      return new Response(JSON.stringify({ features }), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+
+    const sitePlan = await buildSitePlanForReport("Manchester Street, Feilding", {
+      geocode: { lat: -40.225, lng: 175.565, formatted: "Manchester Street, Feilding", suburb: "Feilding" },
+      linz_parcel: {
+        parcel_id: "manawatu-acceptance-parcel",
+        appellation: "Lot 1 DP 12345",
+        area_sqm: 751,
+        title_no: "WN1/1",
+        legal_description: "Lot 1 DP 12345",
+        topology_type: "Primary",
+        bbox: {
+          minLng: 175.5647,
+          maxLng: 175.5653,
+          minLat: -40.2253,
+          maxLat: -40.2247,
+          polygon: [
+            [175.5647, -40.2253], [175.5653, -40.2253], [175.5653, -40.2247],
+            [175.5647, -40.2247], [175.5647, -40.2253],
+          ],
+        },
+      },
+    } as RawPropertyData);
+
+    expect(sitePlan.image).toMatchObject({ available: true, source: "linz-basemaps" });
+    expect(sitePlan.image.tiles?.length).toBeGreaterThan(0);
+    expect(sitePlan.layers.find((layer) => layer.label === "Parcel Boundary")).toMatchObject({ available: true });
+    expect(sitePlan.layers.filter((layer) => layer.group === "services").map((layer) => layer.label).sort())
+      .toEqual(["Potable Water", "Stormwater", "Wastewater"]);
+    expect(sitePlan.layers.filter((layer) => layer.group === "services").every((layer) => layer.available)).toBe(true);
+    expect(sitePlan.layers.filter((layer) => layer.group === "planning" && layer.available).map((layer) => layer.label))
+      .toContain("Deferred Residential Overlay");
+  });
+
   it("adds verified regional planning overlays when ArcGIS returns features", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       features: [
@@ -146,6 +205,65 @@ describe("regional site-plan wrapper", () => {
     expect(sitePlan.layers.some((layer) => layer.group === "planning")).toBe(true);
     expect(sitePlan.layers.some((layer) => layer.group === "services")).toBe(true);
     expect(sitePlan.layers.filter((layer) => layer.group === "planning").some((layer) => layer.available)).toBe(true);
+  });
+
+  it("builds Athenree Site Plan layers from Western Bay three-waters and hazard controls", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isService = /\/WBP\/WBP_(?:Water|Wastewater|Stormwater)_REST_[Ss]ervices\/MapServer\/(?:16|18|19)\/query/.test(url);
+      const isWave = /\/Other_Natural_Hazards\/MapServer\/(?:10|11)\/query/.test(url);
+      const isLiquefaction = url.includes("/Other_Natural_Hazards/MapServer/12/query");
+      const features = isService
+        ? [{ attributes: { OBJECTID: 1 }, geometry: { paths: [[[175.9641, -37.4461], [175.9646, -37.4461]]] } }]
+        : isWave || isLiquefaction
+          ? [{ attributes: { Zone: "Yellow", LiquefactionVulnerabilityCatego: "Possible" }, geometry: { rings: [[
+              [175.9638, -37.4464], [175.9648, -37.4464], [175.9648, -37.4457], [175.9638, -37.4457], [175.9638, -37.4464],
+            ]] } }]
+          : [];
+      return new Response(JSON.stringify({ features }), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+
+    const sitePlan = await buildSitePlanForReport("30 Athenree Road, Athenree", {
+      geocode: {
+        lat: -37.4460583,
+        lng: 175.9643635,
+        formatted: "30 Athenree Road, Athenree, Bay of Plenty",
+        suburb: "Athenree",
+      },
+      linz_parcel: null,
+    } as RawPropertyData);
+
+    expect(sitePlan.layers.filter((layer) => layer.group === "services" && layer.available).map((layer) => layer.label).sort())
+      .toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(sitePlan.layers.filter((layer) => layer.group === "planning" && layer.available).map((layer) => layer.label).sort())
+      .toEqual(["Liquefaction Vulnerability", "Tsunami / 1 in 2500 Year Wave", "Tsunami / 5m Wave Height"]);
+  });
+
+  it("builds Pukehina Site Plan with water, stormwater, hazard controls, and no invented sewer", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isWaterOrStormwater = /\/WBP\/WBP_(?:Water|Stormwater)_REST_[Ss]ervices\/MapServer\/(?:18|19)\/query/.test(url);
+      const isHazard = /\/Other_Natural_Hazards\/MapServer\/(?:10|11|12)\/query/.test(url);
+      const features = isWaterOrStormwater
+        ? [{ attributes: { OBJECTID: 1 }, geometry: { paths: [[[176.4993, -37.7721], [176.4998, -37.7721]]] } }]
+        : isHazard
+          ? [{ attributes: { Zone: "Yellow", LiquefactionVulnerabilityCatego: "Possible" }, geometry: { rings: [[
+              [176.4991, -37.7724], [176.4999, -37.7724], [176.4999, -37.7718], [176.4991, -37.7718], [176.4991, -37.7724],
+            ]] } }]
+          : [];
+      return new Response(JSON.stringify({ features }), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+
+    const sitePlan = await buildSitePlanForReport("481 Pukehina Parade, Pukehina", {
+      geocode: { lat: -37.7720624, lng: 176.4995595, formatted: "481 Pukehina Parade, Pukehina Beach, Western Bay of Plenty District", suburb: "Pukehina" },
+      linz_parcel: null,
+    } as RawPropertyData);
+    const services = sitePlan.layers.filter((layer) => layer.group === "services");
+    expect(services.find((layer) => layer.label === "Water Supply")?.available).toBe(true);
+    expect(services.find((layer) => layer.label === "Stormwater")?.available).toBe(true);
+    expect(services.find((layer) => layer.label === "Wastewater")?.available).toBe(false);
+    expect(sitePlan.layers.filter((layer) => layer.group === "planning" && layer.available).map((layer) => layer.label).sort())
+      .toEqual(["Liquefaction Vulnerability", "Tsunami / 1 in 2500 Year Wave", "Tsunami / 5m Wave Height"]);
   });
 
   it("returns Waipa three-waters and only marks applicable planning overlays available", async () => {
@@ -367,6 +485,11 @@ describe("regional site-plan wrapper", () => {
       delete process.env["LINZ_API_KEY"];
     } else {
       process.env["LINZ_API_KEY"] = originalLinzApiKey;
+    }
+    if (originalLinzBasemapsApiKey == null) {
+      delete process.env["LINZ_BASEMAPS_API_KEY"];
+    } else {
+      process.env["LINZ_BASEMAPS_API_KEY"] = originalLinzBasemapsApiKey;
     }
   });
 });

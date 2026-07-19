@@ -112,6 +112,12 @@ const ROTORUA_PLANNING =
   "https://gis.rdc.govt.nz/server/rest/services/Core/Planning_and_Development/MapServer";
 const WHAKATANE_DISTRICT_PLAN =
   "https://gis.whakatane.govt.nz/arcgis/rest/services/Planning/OperativeDistrictPlanNPS_ePlan/MapServer";
+const WESTERN_BAY_DISTRICT_PLAN =
+  "https://map.westernbay.govt.nz/arcgisext/rest/services/District_Plan/MapServer";
+const WESTERN_BAY_NATURAL_HAZARDS =
+  "https://map.westernbay.govt.nz/arcgisext/rest/services/District_Plan_Natural_Hazards/MapServer";
+const WESTERN_BAY_OTHER_HAZARDS =
+  "https://map.westernbay.govt.nz/arcgisext/rest/services/Other_Natural_Hazards/MapServer";
 const SOUTHLAND_ZONING =
   "https://gis.southlanddc.govt.nz/server/rest/services/Website_SpatialPlan_layers/MapServer";
 const SOUTHLAND_DISTRICT_PLAN =
@@ -134,8 +140,58 @@ const MPDC_CURRENT = "https://services6.arcgis.com/EU3vB12T67eDdisL/arcgis/rest/
 const mpdcService = (name: string): string => `${MPDC_CURRENT}/${name}/FeatureServer`;
 const MPDC_WIND_ZONES =
   "https://services9.arcgis.com/piFyx8f2y0yspZiu/arcgis/rest/services/Wind_Zones/FeatureServer";
+const PNCC_GIS = "https://services.arcgis.com/Fv0Tvc98QEDvQyjL/arcgis/rest/services";
+const pnccService = (name: string): string => `${PNCC_GIS}/${name}/FeatureServer`;
+const MDC_GIS = "https://services9.arcgis.com/CzWZ8m5FuciqBibe/arcgis/rest/services";
+const mdcService = (name: string): string => `${MDC_GIS}/${name}/FeatureServer`;
 
 const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
+  manawatu: {
+    // Query both councils. Point-in-polygon returns the authoritative layer
+    // that actually covers the property, including sites near the PNCC/MDC
+    // boundary where rectangular jurisdiction routing cannot be exact.
+    zoneLayers: [
+      {
+        serviceUrl: pnccService("DISTRICTPLAN_PlanningZones"),
+        layerId: 0,
+        label: "Palmerston North City District Plan Zone",
+        codeField: "ZONE",
+        nameFields: ["ZONE"],
+        decodeCodedValues: false,
+      },
+      {
+        serviceUrl: mdcService("District_Plan_Zones"),
+        layerId: 0,
+        label: "Manawatu District Plan Zone",
+        codeField: "zone",
+        nameFields: ["zone"],
+        detailFields: ["id"],
+        decodeCodedValues: false,
+      },
+    ],
+    overlayLayers: [
+      overlay(pnccService("DISTRICTPLAN_Overlays"), 0, "District Plan Overlay", "polygon", "control", undefined, ["DESCRIPTION"]),
+      overlay(pnccService("DISTRICTPLAN_FLOODPRONEAREAS"), 0, "Flood Prone Area", "polygon", "restricted"),
+      overlay(pnccService("PNCC_District_Plan_DISTRICTPLAN_Ponding_Areas"), 0, "Ponding Area", "polygon", "restricted", undefined, ["NAME", "AREA_DESCR", "RESTRICTION", "FLOORLEVEL"]),
+      overlay(pnccService("DISTRICTPLAN_Designations"), 0, "Designation", "polygon", "control", undefined, ["TYPE", "DESIGNUM", "DESIGNATION"]),
+      overlay(pnccService("DISTRICTPLAN_AIRPORTNOISECONTOURS"), 0, "Airport Noise Contour", "polyline", "restricted", 30, ["LEVELDAYNIGHT"]),
+      overlay(pnccService("DISTRICTPLAN_HeritageSites"), 0, "Heritage Site", "point", "restricted", 25, ["TYPE", "BLDG_OBJECT"]),
+      overlay(pnccService("PNCC_District_Plan_Development_Areas"), 0, "Development Area", "polygon", "control", undefined, ["NAME", "DESCRIPTION"]),
+      overlay(pnccService("PNCC_District_Plan_MultiUnitHousingAreas"), 0, "Multi-unit Housing Area", "polygon", "control", undefined, ["NAME", "DESCRIPTION"]),
+      overlay(mdcService("Plan_Change_60_Designations"), 0, "MDC Designation", "polygon", "control", undefined, ["RefNo", "RequiringA", "Designatio", "Designated"]),
+      overlay(mdcService("Plan_Change_65_ONFLs"), 0, "Outstanding Natural Feature or Landscape", "polygon", "restricted", undefined, ["Full_Name", "ONFL"]),
+      overlay(mdcService("Lateral_Spread"), 1, "Lateral Spread Susceptibility", "polygon", "restricted"),
+      overlay(mdcService("Palmerston_North_Airport_Air_Noise_Contours"), 0, "MDC Airport Noise Control", "polygon", "restricted"),
+      overlay(mdcService("Transmission_Lines"), 5, "National Grid Transmission Line", "polyline", "restricted", 30),
+      overlay(mdcService("Heritage_Plan_Change"), 0, "MDC Heritage Site", "point", "restricted", 25, ["Name", "CATCLASS"]),
+      overlay(mdcService("Wetlands_Lakes_Rivers"), 3, "Wetland, Lake or River", "polygon", "restricted"),
+      overlay(mdcService("Deferred_Residential_Overlay"), 1, "Deferred Residential Overlay", "polygon", "control"),
+      overlay(mdcService("Plan_Change_45_Precinct_1"), 15, "MDC Growth Precinct 1", "polygon", "control", undefined, ["Descriptio", "MapLabel"]),
+      overlay(mdcService("Plan_Change_45_Precinct_2"), 13, "MDC Growth Precinct 2", "polygon", "control", undefined, ["Descriptio", "MapLabel"]),
+      overlay(mdcService("Plan_Change_45_Precinct_3"), 11, "MDC Growth Precinct 3", "polygon", "control", undefined, ["Descriptio", "MapLabel"]),
+      overlay(mdcService("Plan_Change_51_Precinct_4"), 7, "MDC Growth Precinct 4 (Maewa)", "polygon", "control", undefined, ["Descriptio", "MapLabel"]),
+    ],
+  },
   "matamata-piako": {
     // The District Plan Zones service publishes one polygon layer per zone
     // class with no zone-name attribute (only FID/MSLINK/Shape__*) — the zone
@@ -456,6 +512,42 @@ const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
       overlay(ROTORUA_PLANNING, 362, "Stormwater Flood Depth", "polygon", "restricted"),
     ],
   },
+  "western-bay": {
+    zoneLayers: [
+      {
+        serviceUrl: WESTERN_BAY_DISTRICT_PLAN,
+        layerId: 66,
+        label: "Western Bay District Plan Zone",
+        codeField: "CS_PAR_ZONE",
+        nameFields: ["CS_PAR_ZONE"],
+        decodeCodedValues: false,
+      },
+    ],
+    overlayLayers: [
+      overlay(WESTERN_BAY_DISTRICT_PLAN, 16, "Coastal Erosion Access Yard", "polygon", "restricted", undefined, ["TAG"]),
+      overlay(WESTERN_BAY_DISTRICT_PLAN, 17, "Rural Erosion Risk", "polygon", "restricted"),
+      overlay(WESTERN_BAY_DISTRICT_PLAN, 18, "Coastal Inundation Area", "polygon", "restricted"),
+      overlay(WESTERN_BAY_DISTRICT_PLAN, 19, "Floodable Area", "polygon", "restricted"),
+      overlay(WESTERN_BAY_DISTRICT_PLAN, 21, "Landscape Management Area", "polygon", "control"),
+      overlay(WESTERN_BAY_DISTRICT_PLAN, 22, "Recommended Protection Area", "polygon", "moderate"),
+      overlay(WESTERN_BAY_DISTRICT_PLAN, 23, "Significant Ecological Feature", "polygon", "restricted"),
+      overlay(WESTERN_BAY_DISTRICT_PLAN, 24, "Land Stability Area", "polygon", "restricted"),
+      overlay(WESTERN_BAY_DISTRICT_PLAN, 25, "Viewshaft", "polygon", "control"),
+      overlay(WESTERN_BAY_DISTRICT_PLAN, 38, "Structure Plan Area", "polygon", "control"),
+      overlay(WESTERN_BAY_DISTRICT_PLAN, 51, "Designation", "polygon", "control"),
+      overlay(WESTERN_BAY_DISTRICT_PLAN, 52, "Firing Range", "polygon", "restricted"),
+      overlay(WESTERN_BAY_DISTRICT_PLAN, 55, "Limited Access Road", "polyline", "control", 20),
+      overlay(WESTERN_BAY_DISTRICT_PLAN, 65, "Electricity Transmission Buffer", "polygon", "restricted"),
+      overlay(WESTERN_BAY_NATURAL_HAZARDS, 0, "Flood Hazard", "polygon", "restricted"),
+      overlay(WESTERN_BAY_NATURAL_HAZARDS, 1, "Coastal Inundation Hazard", "polygon", "restricted"),
+      overlay(WESTERN_BAY_NATURAL_HAZARDS, 2, "Coastal Erosion Hazard", "polygon", "restricted"),
+      overlay(WESTERN_BAY_NATURAL_HAZARDS, 3, "Land Stability Hazard", "polygon", "restricted"),
+      overlay(WESTERN_BAY_OTHER_HAZARDS, 10, "Tsunami / 5m Wave Height", "polygon", "moderate", undefined, ["Zone"]),
+      overlay(WESTERN_BAY_OTHER_HAZARDS, 11, "Tsunami / 1 in 2500 Year Wave", "polygon", "moderate", undefined, ["Zone"]),
+      overlay(WESTERN_BAY_OTHER_HAZARDS, 12, "Liquefaction Vulnerability", "polygon", "moderate", undefined, ["LiquefactionVulnerabilityCatego", "Detail", "Notes"]),
+    ],
+    queryTimeoutMs: 10_000,
+  },
   whakatane: {
     // This council host commonly needs more than the default nine seconds
     // when called from Vercel, even though the same point query is fast from
@@ -723,6 +815,19 @@ function configFor(providerId: PlanningProviderId): RegionalArcGisConfig | null 
   return CONFIGS[providerId] ?? null;
 }
 
+function westernBayResidentialLocality(lat: number, lng: number): string | null {
+  if (lat >= -37.86 && lat <= -37.70 && lng >= 176.40 && lng <= 176.56) return "Pukehina";
+  if (lat >= -37.67 && lat <= -37.35 && lng >= 175.75 && lng <= 176.00) return "Waihi Beach / Athenree / Katikati";
+  return null;
+}
+
+function pnccResidentialLocality(lat: number, lng: number): string | null {
+  const isAshhurst = lat >= -40.33 && lat <= -40.25 && lng >= 175.72 && lng <= 175.82;
+  const isBunnythorpe = lat >= -40.32 && lat <= -40.26 && lng >= 175.61 && lng <= 175.68;
+  const isLongburn = lat >= -40.41 && lat <= -40.35 && lng >= 175.51 && lng <= 175.58;
+  return isAshhurst || isBunnythorpe || isLongburn ? "PNCC 500sqm residential locality" : null;
+}
+
 export function configuredRegionalProviderIds(): PlanningProviderId[] {
   return Object.keys(CONFIGS) as PlanningProviderId[];
 }
@@ -774,6 +879,8 @@ export async function fetchRegionalPlanningZone(
       const name = decoded ?? firstText(attrs, layer.nameFields) ?? layer.staticZoneName ?? null;
       const details = uniqueTexts([
         detailFromAttributes(attrs, layer.detailFields, []),
+        jurisdiction.providerId === "western-bay" ? westernBayResidentialLocality(lat, lng) : null,
+        jurisdiction.providerId === "manawatu" && layer.label.startsWith("Palmerston") ? pnccResidentialLocality(lat, lng) : null,
         layer.label,
         rawCode && decoded && rawCode !== decoded ? `code ${rawCode}` : null,
       ]);
