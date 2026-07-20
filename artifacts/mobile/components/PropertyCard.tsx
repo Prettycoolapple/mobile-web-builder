@@ -399,6 +399,14 @@ export function PropertyCard({ candidate, onAnalyse, analysingPropertyKey = null
               </Text>
             </View>
           )}
+          {candidate.screeningConfidenceReason === "local_rules_not_modelled" && (
+            <View style={[styles.tag, { backgroundColor: colors.amber + "22", flexDirection: "row", alignItems: "center", gap: 3 }]}>
+              <Feather name="info" size={10} color={colors.amber} />
+              <Text style={[styles.tagText, { color: colors.amber, fontFamily: "DM_Sans_500Medium" }]}>
+                {t("search.local_rules_unverified_chip")}
+              </Text>
+            </View>
+          )}
           {candidate.titleStatus === "verified" && !candidate.subdivisionTenureWarning && (
             <View style={[styles.tag, { backgroundColor: colors.emerald + "22", flexDirection: "row", alignItems: "center", gap: 3 }]}>
               <Feather name="check-circle" size={10} color={colors.emerald} />
@@ -462,7 +470,9 @@ export function PropertyCard({ candidate, onAnalyse, analysingPropertyKey = null
           <View style={[styles.preliminaryNote, { borderTopColor: colors.border }]}>
             <Feather name="info" size={12} color={colors.mutedForeground} />
             <Text style={[styles.preliminaryNoteText, { color: colors.mutedForeground, fontFamily: "DM_Sans_400Regular" }]}>
-              {t("search.preliminary_subdivision_note")}
+              {t(candidate.screeningConfidenceReason === "local_rules_not_modelled"
+                ? "search.local_rules_unverified_note"
+                : "search.preliminary_subdivision_note")}
             </Text>
           </View>
         ) : null}

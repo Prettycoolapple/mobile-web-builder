@@ -515,6 +515,14 @@ export function hasCacheableCore(r: PipelineResult): boolean {
       ? ph?.cv_nzd != null && ph.land_area_sqm != null && r.merged?.cv_nzd != null && r.merged.land_area_sqm != null
       : providerId === "western-bay"
       ? ph?.cv_nzd != null && ph.land_area_sqm != null && r.merged?.cv_nzd != null && r.merged.land_area_sqm != null
+      : providerId === "tauranga"
+      ? ph?.cv_nzd != null && ph.land_area_sqm != null && r.merged?.cv_nzd != null && r.merged.land_area_sqm != null
+      : providerId === "kapiti"
+        ? ph?.cv_nzd != null && ph.land_area_sqm != null && r.merged?.cv_nzd != null && r.merged.land_area_sqm != null
+      : providerId === "selwyn"
+        ? ph?.cv_nzd != null && ph.land_area_sqm != null && r.merged?.cv_nzd != null && r.merged.land_area_sqm != null
+      : providerId === "napier"
+      ? ph?.land_area_sqm != null && r.merged?.cv_nzd != null && r.merged.land_area_sqm != null
       : providerId === "whakatane"
       ? ph?.cv_nzd != null && ph.land_area_sqm != null && r.merged?.cv_nzd != null && r.merged.land_area_sqm != null
       : providerId === "southland"
@@ -1214,11 +1222,23 @@ export async function runPropertyPipeline(
       merged.land_area_sqm,
       merged.overlays,
     );
+    const regionalSourcePrefix = planningProvider?.providerId ?? "regional_provider";
     merged.data_sources["zone"] = ruleStatus.automaticYieldClaimsAllowed
-      ? "regional_rule_pack"
-      : "regional_provider_partial";
-    merged.data_sources["overlays"] = "regional_provider_gis";
-    if (ruleStatus.sourceLabel) merged.data_sources["min_lot_size_sqm"] = ruleStatus.sourceLabel;
+      ? `${regionalSourcePrefix}_rule_pack`
+      : `${regionalSourcePrefix}_council_gis`;
+    merged.data_sources["overlays"] = `${regionalSourcePrefix}_council_gis`;
+    if (
+      propertyHistoryData?.cv_nzd != null
+      && merged.cv_nzd === propertyHistoryData.cv_nzd
+    ) {
+      merged.data_sources["cv_nzd"] = `${regionalSourcePrefix}_council_rating_gis`;
+    }
+    if (ruleStatus.sourceLabel && ruleStatus.verifiedMinimumLotSqm != null) {
+      merged.data_sources["min_lot_size_sqm"] = ruleStatus.sourceLabel;
+    } else if (ruleStatus.sourceLabel) {
+      delete merged.data_sources["min_lot_size_sqm"];
+      merged.data_sources["subdivision_pathway"] = ruleStatus.sourceLabel;
+    }
     if (ruleStatus.note) merged.discrepancies.push(ruleStatus.note);
   }
 
@@ -1498,6 +1518,16 @@ export async function runPropertyPipeline(
       if (!merged.discrepancies.includes(caveat)) merged.discrepancies.push(caveat);
     }
   }
+  const eligibilityRegionalRuleStatus = regionalPlanningRuleStatus(
+    planningProvider,
+    zoneData,
+    merged.land_area_sqm,
+    merged.overlays,
+  );
+  const designLedSubdivisionPathwayVerified =
+    eligibilityRegionalRuleStatus.automaticRoiAllowed
+    && !eligibilityRegionalRuleStatus.automaticYieldClaimsAllowed
+    && eligibilityRegionalRuleStatus.sourceLabel != null;
   const eligibility = assessPropertyEligibility({
     address: subjectAddress,
     estateType: merged.estate_type,
@@ -1525,6 +1555,7 @@ export async function runPropertyPipeline(
     zoneCode: merged.zone_code,
     potentialLots: rawLotResult.lots,
     minLotSize: rawLotResult.min_lot_size,
+    designLedSubdivisionPathwayVerified,
     isCombinedListingAggregate: !!realestateListing?.isCombinedListing && !realestateListingForFacts,
     listingClaims,
   });
@@ -1663,6 +1694,14 @@ export async function runPropertyPipeline(
       ? "whakatane"
       : planningProvider?.providerId === "western-bay"
         ? "western bay of plenty"
+      : planningProvider?.providerId === "tauranga"
+        ? "tauranga"
+      : planningProvider?.providerId === "kapiti"
+        ? "paraparaumu"
+      : planningProvider?.providerId === "selwyn"
+        ? "selwyn"
+      : planningProvider?.providerId === "napier"
+        ? "napier"
       : planningProvider?.providerId === "southland"
         ? "southland"
       : null;
@@ -1758,7 +1797,11 @@ export async function runPropertyPipeline(
     || planningProvider?.providerId === "wairarapa"
     || planningProvider?.providerId === "matamata-piako"
     || planningProvider?.providerId === "manawatu"
-    || planningProvider?.providerId === "western-bay";
+    || planningProvider?.providerId === "western-bay"
+    || planningProvider?.providerId === "tauranga"
+    || planningProvider?.providerId === "kapiti"
+    || planningProvider?.providerId === "selwyn"
+    || planningProvider?.providerId === "napier";
   const fallbackExitSalePrice = !hasRealComparablePricing && regionalCvExitFallbackAllowed
     ? merged.listing_price ?? merged.cv_nzd
     : null;

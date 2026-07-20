@@ -22,6 +22,10 @@ export interface RegionalInfrastructureGroup {
   maintainer: string;
   ruralSearchDistanceM: number;
   layers: RegionalInfrastructureLayer[];
+  /** Polygon/status layers describe eligibility or a service area, not a pipe.
+   * They may establish mapped availability but must never be presented as a
+   * confirmed physical lateral or low-risk boundary connection. */
+  availabilityOnly?: boolean;
 }
 
 const WHANGAREI_WATER =
@@ -40,6 +44,14 @@ const DUNEDIN_CITYCARE =
   "https://apps.dunedin.govt.nz/arcgis/rest/services/Public/CityCare/MapServer";
 const CANTERBURY_THREE_WATERS =
   "https://services1.arcgis.com/RNxkQaMWQcgbiF98/arcgis/rest/services/Canterbury_Three_Waters_Data_2_view/FeatureServer";
+const SELWYN_WATER =
+  "https://gis.selwyn.govt.nz/arcgis/rest/services/SDC_Public/WATER_Water/MapServer";
+const SELWYN_WASTEWATER =
+  "https://gis.selwyn.govt.nz/arcgis/rest/services/SDC_Public/Water_Sewer/MapServer";
+const SELWYN_STORMWATER =
+  "https://gis.selwyn.govt.nz/arcgis/rest/services/SDC_Public/WATER_Stormwater/MapServer";
+const SELWYN_WATER_CONNECTION_SUPPLY =
+  "https://gis.selwyn.govt.nz/arcgis/rest/services/SDC_Public/Water_Connection_Supply/MapServer";
 const HAMILTON_WATER =
   "https://services1.arcgis.com/R6s0QqCMQdwKY6yp/arcgis/rest/services/Freshwater Dataset - Hamilton City Council/FeatureServer";
 const HAMILTON_WASTEWATER =
@@ -56,11 +68,10 @@ const TOP_OF_THE_SOUTH_MAPS =
   "https://www.topofthesouthmaps.co.nz/ArcGIS/rest/services/TopoftheSouthMaps/MapServer";
 // Single regional three-waters service maintained by Wellington Water on behalf
 // of Wellington City, Hutt City, Upper Hutt, Porirua (and South Wairarapa/GWRC).
-// Kāpiti Coast is NOT a Wellington Water council, so its three-waters assets are
-// not in this service — Kāpiti properties fall back to the "no mapped service"
-// note until a Kāpiti three-waters endpoint is wired.
 const WELLINGTON_WATER_THREE_WATERS =
   "https://gis.wellingtonwater.co.nz/server1/rest/services/Councils/All_Councils_3_Waters_Asset_Data/MapServer";
+const KAPITI_THREE_WATERS =
+  "https://maps.kapiticoast.govt.nz/server/rest/services/Public/Services/MapServer";
 const ROTORUA_THREE_WATERS =
   "https://gis.rdc.govt.nz/server/rest/services/Asset/3_Waters/MapServer";
 const WHAKATANE_WATER =
@@ -75,6 +86,14 @@ const WESTERN_BAY_WASTEWATER =
   "https://wslgis.water.co.nz/server/rest/services/WBP/WBP_Wastewater_REST_services/MapServer";
 const WESTERN_BAY_STORMWATER =
   "https://wslgis.water.co.nz/server/rest/services/WBP/WBP_Stormwater_REST_Services/MapServer";
+const TAURANGA_WATER =
+  "https://gis.tauranga.govt.nz/server/rest/services/Water_Supply_Common_Mapservices/MapServer";
+const TAURANGA_WASTEWATER =
+  "https://gis.tauranga.govt.nz/server/rest/services/Wastewater_Common_Mapservices/MapServer";
+const TAURANGA_STORMWATER =
+  "https://gis.tauranga.govt.nz/server/rest/services/Stormwater_Common_Mapservices/MapServer";
+const NAPIER_THREE_WATERS =
+  "https://services3.arcgis.com/N69BvCUwqSCkbIQF/ArcGIS/rest/services/717214_Napier_City_Council_layers/FeatureServer";
 const SOUTHLAND_THREE_WATERS =
   "https://gis.southlanddc.govt.nz/server/rest/services/External_ThreeWaters_Layers_v2/MapServer";
 const WAIRARAPA_WATER =
@@ -93,6 +112,44 @@ const PNCC_GIS = "https://services.arcgis.com/Fv0Tvc98QEDvQyjL/arcgis/rest/servi
 const MDC_GIS = "https://services9.arcgis.com/CzWZ8m5FuciqBibe/arcgis/rest/services";
 
 const REGIONAL_INFRASTRUCTURE: Partial<Record<PlanningProviderId, RegionalInfrastructureGroup[]>> = {
+  selwyn: [
+    group("Water Supply", SELWYN_WATER, "Selwyn Water Limited", [
+      [3, "Water point or connection"],
+      [4, "Water supply pipe"],
+    ]),
+    {
+      ...group("Water Supply", SELWYN_WATER_CONNECTION_SUPPLY, "Selwyn Water Limited", [
+        [0, "Water scheme boundary"],
+        [1, "Water connection application status"],
+        [2, "Water supply classification"],
+      ]),
+      availabilityOnly: true,
+    },
+    group("Wastewater", SELWYN_WASTEWATER, "Selwyn Water Limited", [
+      [3, "Wastewater manhole or connection"],
+      [4, "Wastewater pipe"],
+    ]),
+    group("Stormwater", SELWYN_STORMWATER, "Selwyn District Council", [
+      [1, "Stormwater area"],
+      [2, "Stormwater node or connection"],
+      [3, "Stormwater pipe or drain"],
+    ], 1000),
+  ],
+  kapiti: [
+    group("Water Supply", KAPITI_THREE_WATERS, "Kāpiti Coast District Council", [
+      [2, "Water pipe"],
+    ]),
+    group("Wastewater", KAPITI_THREE_WATERS, "Kāpiti Coast District Council", [
+      [10, "Wastewater service"],
+      [11, "Wastewater pipe"],
+    ]),
+    group("Stormwater", KAPITI_THREE_WATERS, "Kāpiti Coast District Council", [
+      [19, "Stormwater node"],
+      [20, "Stormwater service"],
+      [21, "Stormwater pipe"],
+      [22, "Stormwater channel"],
+    ], 1000),
+  ],
   manawatu: [
     group("Water Supply", `${PNCC_GIS}/NZVD2016_WATER_MAINS/FeatureServer`, "Palmerston North City Council", [[0, "Water main"]]),
     group("Wastewater", `${PNCC_GIS}/NZVD2016_SEWER_MAINS/FeatureServer`, "Palmerston North City Council", [[0, "Wastewater main"]]),
@@ -149,6 +206,28 @@ const REGIONAL_INFRASTRUCTURE: Partial<Record<PlanningProviderId, RegionalInfras
     group("Stormwater", WESTERN_BAY_STORMWATER, "Western Bay of Plenty District Council", [
       [18, "Stormwater drain"],
       [19, "Stormwater pipe"],
+    ], 1000),
+  ],
+  tauranga: [
+    group("Water Supply", TAURANGA_WATER, "Tauranga City Council", [
+      [99, "Water pipe"],
+    ]),
+    group("Wastewater", TAURANGA_WASTEWATER, "Tauranga City Council", [
+      [58, "Wastewater pipe"],
+    ]),
+    group("Stormwater", TAURANGA_STORMWATER, "Tauranga City Council", [
+      [144, "Stormwater pipe"],
+    ], 1000),
+  ],
+  napier: [
+    group("Water Supply", NAPIER_THREE_WATERS, "Napier City Council", [
+      [4, "Water pipe or service lateral"],
+    ]),
+    group("Wastewater", NAPIER_THREE_WATERS, "Napier City Council", [
+      [5, "Wastewater pipe or service lateral"],
+    ]),
+    group("Stormwater", NAPIER_THREE_WATERS, "Napier City Council", [
+      [6, "Stormwater pipe or inlet lead"],
     ], 1000),
   ],
   whakatane: [
@@ -477,6 +556,7 @@ export async function fetchRegionalInfrastructure(
       serviceGroup.ruralSearchDistanceM,
     );
     let best: ReturnType<typeof classifyInfrastructureFeatures> = null;
+    const availabilityFeatures: InfrastructureFeature[] = [];
 
     for (const layer of serviceGroup.layers) {
       const features = await queryRegionalInfrastructureLayer(
@@ -488,8 +568,35 @@ export async function fetchRegionalInfrastructure(
         searchDistanceM,
       ).catch(() => []);
       if (features.length === 0) continue;
+      if (serviceGroup.availabilityOnly) {
+        availabilityFeatures.push(...features);
+        continue;
+      }
       const classification = classifyInfrastructureFeatures(serviceGroup.name, lat, lng, features, parcelBbox);
       if (classification) best = chooseBetter(best, classification);
+    }
+
+    if (serviceGroup.availabilityOnly && availabilityFeatures.length > 0) {
+      const values = [...new Set(availabilityFeatures.flatMap((feature) => {
+        const attrs = feature.attributes ?? {};
+        return [attrs["SCHEME"], attrs["TYPE"], attrs["COMMENTS"]]
+          .map((value) => String(value ?? "").trim())
+          .filter(Boolean);
+      }))];
+      return {
+        name: serviceGroup.name,
+        // A mapped supply/status area is not a physical on-parcel asset. Keep
+        // it moderate-risk and explicitly avoid a fabricated pipe distance.
+        location: "public-land",
+        distance_metres: null,
+        estimated_cost_low: 30_000,
+        estimated_cost_high: 120_000,
+        risk: "moderate",
+        note: `Property is inside a mapped Selwyn Water supply/status area${values.length ? ` (${values.join("; ")})` : ""}. This confirms an application pathway, not an existing lateral, approval or network capacity; Selwyn Water must confirm connection conditions and charges.`,
+        search_radius_metres: searchDistanceM,
+        service_source_owner: serviceGroup.owner,
+        service_source_maintainer: serviceGroup.maintainer,
+      };
     }
 
     if (!best) return missingService(serviceGroup, searchDistanceM);

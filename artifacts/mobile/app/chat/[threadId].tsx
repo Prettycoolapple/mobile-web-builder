@@ -598,7 +598,7 @@ export default function ChatScreen() {
   const [openingFileId, setOpeningFileId] = useState<string | null>(null);
 
   // Tell the server the recipient opened this attachment so the sender's
-  // clients can show "File viewed". Sender opening their own file is ignored
+  // clients can show "File opened". Sender opening their own file is ignored
   // server-side too, but skip the call entirely here.
   const markFileViewed = useCallback((message: DmMessage) => {
     if (!threadId || !token || message.senderId === user?.id || message.fileViewedAt) return;
@@ -1216,15 +1216,15 @@ export default function ChatScreen() {
     const isMine = msg.senderId === user?.id;
     const liked = !!msg.likedAt;
     const isLocalMessage = msg.id.startsWith("local-");
-    // Read receipts are a sales-agent-only feature: agents can see whether the
-    // other party has read their message, or opened a file they sent.
+    // Delivery receipts are a sales-agent-only feature: sent, read, then file
+    // opened (for attachments). The most advanced state wins.
     const receiptLabel =
       isMine && !isLocalMessage && user?.role === "sales_agent"
         ? msg.fileUrl && msg.fileViewedAt
           ? t("dm.receipt.file_viewed")
           : msg.readAt
             ? t("dm.receipt.read")
-            : null
+            : t("dm.receipt.sent")
         : null;
     const likeButton = (
       <TouchableOpacity
@@ -1409,7 +1409,7 @@ export default function ChatScreen() {
               ) : null}
             </TouchableOpacity>
           )}
-          {isLastInGroup || (receiptLabel && msg.fileUrl) ? (
+          {isLastInGroup || receiptLabel ? (
             <Text
               style={[
                 styles.msgTime,

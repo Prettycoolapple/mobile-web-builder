@@ -976,7 +976,21 @@ function regionalServiceLayerStyle(group: RegionalInfrastructureGroup, providerI
 }
 
 async function regionalServiceLayers(bounds: SitePlanBounds, providerId: PlanningProviderId): Promise<SitePlanLayer[]> {
-  const serviceBounds = paddedBounds(bounds, 200, 520);
+  // Tauranga's dense asset layers can hit the server's record cap and timeout
+  // when the generic 520m display envelope is used. A 280m local envelope
+  // still covers the frontage and nearby streets while returning every water
+  // service reliably enough for the Site Plan card.
+  const denseTaurangaAssets = providerId === "tauranga";
+  // Selwyn's large-lot and rural-residential properties can sit several
+  // hundred metres back from the nearest public main. Keep the Plan-tab
+  // utility search aligned with the 500 m LLRZ feasibility search so a
+  // nearby public asset is not incorrectly presented as unavailable.
+  const ruralSelwynAssets = providerId === "selwyn";
+  const serviceBounds = denseTaurangaAssets
+    ? paddedBounds(bounds, 45, 280)
+    : ruralSelwynAssets
+      ? paddedBounds(bounds, 500, 1_000)
+    : paddedBounds(bounds, 200, 520);
   const geometry = envelopeGeometry(serviceBounds);
   const groups = regionalInfrastructureServiceLayers(providerId);
   if (groups.length === 0) return [];
@@ -997,7 +1011,7 @@ async function regionalServiceLayers(bounds: SitePlanBounds, providerId: Plannin
             layerId: layer.id,
             geometry: geometry.geometry,
             geometryType: geometry.geometryType,
-            maxFeatures: 220,
+            maxFeatures: denseTaurangaAssets ? 160 : 220,
             timeoutMs: 9000,
           });
           return arcgisFeaturesToGeoJson(features, layer.label).features.map((feature) => ({
@@ -1410,6 +1424,24 @@ async function buildNationalSitePlanForGeo(
       return null;
     }),
     resolveGisExtraLayers(cacheKey, async () => {
+      // Tauranga publishes planning and utility layers from the same ArcGIS
+      // host. Fetch its compact three-waters bundle first so dozens of overlay
+      // queries cannot starve a service request and leave a false unavailable
+      // row in the Site Plan card.
+      if (providerId === "tauranga") {
+        const services = await regionalServiceLayers(coreBounds, providerId).catch((err) => {
+          logger.warn({ err: (err as Error).message, providerId }, "site-plan: regional service lookup failed");
+          return [] as SitePlanLayer[];
+        });
+        const [planning, contours] = await Promise.all([
+          regionalPlanningOverlayLayers(providerId, geo, parcel?.bbox ?? null, coreBounds).catch((err) => {
+            logger.warn({ err: (err as Error).message, providerId }, "site-plan: regional planning overlay lookup failed");
+            return [] as SitePlanLayer[];
+          }),
+          linzContourLayer(coreBounds),
+        ]);
+        return [...planning, ...services, contours];
+      }
       const [planning, services, contours] = await Promise.all([
         providerId
           ? regionalPlanningOverlayLayers(providerId, geo, parcel?.bbox ?? null, coreBounds).catch((err) => {

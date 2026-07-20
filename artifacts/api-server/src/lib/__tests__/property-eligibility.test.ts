@@ -757,4 +757,22 @@ describe("redeveloped-parcel land-area suppression", () => {
     expect(resolved.landAreaSqm).toBe(420);
     expect(resolved.suppressedParentLandArea).toBe(false);
   });
+
+  it("accepts a verified design-led regional pathway without inventing a minimum lot size", () => {
+    const result = assessPropertyEligibility({
+      address: "16 Lodge Avenue, Mount Maunganui, Tauranga",
+      estateType: "Fee Simple",
+      legalDescription: "LOT 55 DPS 865",
+      propertyType: "Residential Dwelling",
+      landAreaSqm: 855,
+      floorAreaSqm: 154,
+      buildYear: 1975,
+      zoneCode: "MDRZ",
+      potentialLots: 1,
+      minLotSize: null,
+      designLedSubdivisionPathwayVerified: true,
+    });
+    expect(result.subdivisionEligible).toBe(true);
+    expect(result.subdivisionRejectReason).toBeNull();
+  });
 });

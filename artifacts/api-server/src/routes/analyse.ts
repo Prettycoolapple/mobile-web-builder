@@ -3003,11 +3003,13 @@ async function createDiscoveryContinuation(args: {
  * after the inner per-listing retries), back off and re-screen them with
  * progressively longer waits before reporting "no listings".
  *
- * Total cap ~4.5 minutes — the user's chat client can wait that long for the
- * answer to "what's subdividable in <suburb>", and the alternative is wrongly
- * telling them nothing matches when upstream APIs were just flaky.
+ * This is deliberately bounded so the durable background job always has time
+ * to persist a terminal result before the serverless invocation deadline.
  */
-const INDETERMINATE_RETRY_DELAYS_MS = [4_000, 12_000, 30_000, 60_000, 120_000];
+// Keep the retry ladder below the background job's serverless deadline. Long
+// sleeps previously allowed Vercel to terminate the worker while its row still
+// said `processing`, producing an endless loading bubble on mobile.
+const INDETERMINATE_RETRY_DELAYS_MS = [2_000, 5_000, 10_000];
 
 async function reScreenIndeterminateListings(opts: {
   indeterminate: ListingResult[];
@@ -3536,7 +3538,9 @@ function pgErrorChain(err: unknown): Array<Record<string, unknown>> {
 
 type FeasibilityLog = Pick<Logger, "warn" | "error" | "info">;
 const STALE_FEASIBILITY_JOB_MS = 10 * 60 * 1000;
-const STALE_SCREENING_JOB_MS = 10 * 60 * 1000;
+const STALE_SCREENING_JOB_MS = 4 * 60 * 1000;
+const SCREENING_JOB_RUNTIME_MS = 210 * 1000;
+const SCREENING_JOB_MAX_ATTEMPTS = 2;
 
 function isStaleFeasibilityJob(job: { status: string; updatedAt: Date | string | null }): boolean {
   if (job.status !== "processing") return false;
@@ -3548,6 +3552,10 @@ function isStaleScreeningJob(job: { status: string; updatedAt: Date | string | n
   if (job.status !== "processing") return false;
   const updatedAt = job.updatedAt ? new Date(job.updatedAt).getTime() : 0;
   return !Number.isFinite(updatedAt) || Date.now() - updatedAt > STALE_SCREENING_JOB_MS;
+}
+
+function screeningJobDeadline(): Date {
+  return new Date(Date.now() + SCREENING_JOB_RUNTIME_MS);
 }
 
 async function findReusableFeasibilityJob(args: {
@@ -3655,19 +3663,36 @@ async function createInternalTokenForUser(userId: string): Promise<string> {
 }
 
 async function processScreeningJob(jobId: string, log: FeasibilityLog): Promise<void> {
-  const rows = await withDbRetry(() =>
-    db.select().from(screeningJobs).where(eq(screeningJobs.id, jobId)).limit(1),
-  );
-  const job = rows[0];
-  if (!job) return;
-  if (job.status !== "pending" && !isStaleScreeningJob(job)) return;
-
-  await withDbRetry(() =>
+  const now = new Date();
+  const staleBefore = new Date(now.getTime() - STALE_SCREENING_JOB_MS);
+  const claimed = await withDbRetry(() =>
     db
       .update(screeningJobs)
-      .set({ status: "processing", updatedAt: new Date() })
-      .where(eq(screeningJobs.id, jobId)),
+      .set({
+        status: "processing",
+        stage: "running_discovery",
+        progress: 10,
+        attemptCount: sql`${screeningJobs.attemptCount} + 1`,
+        heartbeatAt: now,
+        deadlineAt: screeningJobDeadline(),
+        error: null,
+        updatedAt: now,
+      })
+      .where(and(
+        eq(screeningJobs.id, jobId),
+        sql`(
+          ${screeningJobs.status} = 'pending'
+          OR (
+            ${screeningJobs.status} = 'processing'
+            AND COALESCE(${screeningJobs.heartbeatAt}, ${screeningJobs.updatedAt}) < ${staleBefore}
+            AND ${screeningJobs.attemptCount} < ${SCREENING_JOB_MAX_ATTEMPTS}
+          )
+        )`,
+      ))
+      .returning(),
   );
+  const job = claimed[0];
+  if (!job) return;
 
   try {
     const payload = (job.requestPayload ?? {}) as ScreeningJobRequestPayload;
@@ -3685,7 +3710,7 @@ async function processScreeningJob(jobId: string, log: FeasibilityLog): Promise<
         ...(payload.headers?.["x-os-chinese"] ? { "x-os-chinese": payload.headers["x-os-chinese"] } : {}),
       },
       body: JSON.stringify(payload.body ?? { messages: job.conversationHistory ?? [] }),
-      signal: AbortSignal.timeout(10 * 60 * 1000),
+      signal: AbortSignal.timeout(SCREENING_JOB_RUNTIME_MS),
     });
 
     if (!response.ok) {
@@ -3709,6 +3734,9 @@ async function processScreeningJob(jobId: string, log: FeasibilityLog): Promise<
           status: "completed",
           mode,
           resultJson: result,
+          stage: "completed",
+          progress: 100,
+          heartbeatAt: new Date(),
           updatedAt: new Date(),
         })
         .where(eq(screeningJobs.id, jobId)),
@@ -3740,17 +3768,24 @@ async function processScreeningJob(jobId: string, log: FeasibilityLog): Promise<
       log.warn({ err }, "Screening-ready notification ledger write failed (non-fatal)");
     }
   } catch (err) {
+    const timedOut = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+    const status = timedOut ? "expired" : "failed";
     await withDbRetry(() =>
       db
         .update(screeningJobs)
         .set({
-          status: "failed",
-          error: err instanceof Error ? err.message : String(err),
+          status,
+          stage: timedOut ? "deadline_reached" : "failed",
+          progress: timedOut ? 95 : 100,
+          heartbeatAt: new Date(),
+          error: timedOut
+            ? "Screening took too long because one or more data sources did not respond. Please retry."
+            : err instanceof Error ? err.message : String(err),
           updatedAt: new Date(),
         })
         .where(eq(screeningJobs.id, jobId)),
     );
-    log.error({ err }, "Background screening job failed");
+    log.error({ err, status }, "Background screening job failed");
   }
 }
 
@@ -6044,6 +6079,10 @@ router.post(
           .values({
             userId,
             status: "pending",
+            stage: "queued",
+            progress: 0,
+            attemptCount: 0,
+            deadlineAt: screeningJobDeadline(),
             queryText,
             locale: screeningLocale,
             conversationHistory: messages ?? conversationHistory ?? null,
@@ -6090,7 +6129,21 @@ router.get("/screening/jobs/:jobId", async (req, res) => {
       res.status(404).json({ error: "Not found", code: "NOT_FOUND" });
       return;
     }
-    if (job.status === "pending" || isStaleScreeningJob(job)) {
+    if (job.status === "processing" && isStaleScreeningJob(job) && job.attemptCount >= SCREENING_JOB_MAX_ATTEMPTS) {
+      await withDbRetry(() =>
+        db.update(screeningJobs).set({
+          status: "expired",
+          stage: "retry_limit_reached",
+          progress: 100,
+          error: "Screening could not finish after retrying unavailable data sources.",
+          updatedAt: new Date(),
+        }).where(eq(screeningJobs.id, job.id)),
+      );
+      job.status = "expired";
+      job.stage = "retry_limit_reached";
+      job.progress = 100;
+      job.error = "Screening could not finish after retrying unavailable data sources.";
+    } else if (job.status === "pending" || isStaleScreeningJob(job)) {
       runAfterResponse(processScreeningJob(job.id, req.log));
     }
     res.json({
@@ -6098,6 +6151,11 @@ router.get("/screening/jobs/:jobId", async (req, res) => {
       mode: job.mode,
       result: job.resultJson ?? null,
       error: job.error,
+      stage: job.stage,
+      progress: job.progress,
+      attemptCount: job.attemptCount,
+      updatedAt: job.updatedAt,
+      deadlineAt: job.deadlineAt,
     });
   } catch (err) {
     req.log.error({ err }, "GET /screening/jobs/:jobId failed");

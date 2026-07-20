@@ -13,6 +13,16 @@ const WESTERN_BAY_PROPERTY =
   "https://map.westernbay.govt.nz/arcgisext/rest/services/Property/MapServer";
 const PNCC_PROPERTY_VALUATION =
   "https://services.arcgis.com/Fv0Tvc98QEDvQyjL/arcgis/rest/services/PROPERTY_PARCEL_VALUATION_VIEW/FeatureServer/0";
+const NAPIER_PROPERTY_WFS = "https://data.napier.govt.nz/geo/ows";
+const TAURANGA_ASSESSMENT =
+  "https://gis.tauranga.govt.nz/server/rest/services/Assessment/FeatureServer/2";
+const TAURANGA_CAPITAL_VALUE =
+  "https://gis.tauranga.govt.nz/server/rest/services/Capital_Value_Total_2023/FeatureServer/10";
+const KAPITI_PROPERTY =
+  "https://maps.kapiticoast.govt.nz/server/rest/services/Public/Property_Public/MapServer/0";
+const SELWYN_PROPERTY =
+  "https://gis.selwyn.govt.nz/arcgis/rest/services/SDC_Public/Property_Public/MapServer/0";
+const SELWYN_REVALUATION_YEAR = 2024;
 
 type ArcGisFeature = { attributes?: Record<string, unknown> };
 
@@ -417,6 +427,266 @@ async function fetchWesternBayPropertyHistory(
   }
 }
 
+async function fetchNapierPropertyHistory(
+  address: string,
+  lat: number,
+  lng: number,
+  linzAreaSqm?: number | null,
+): Promise<PropertyHistory> {
+  try {
+    const latPad = 60 / 111_320;
+    const lngPad = 60 / (111_320 * Math.max(0.1, Math.cos((lat * Math.PI) / 180)));
+    const url = new URL(NAPIER_PROPERTY_WFS);
+    url.searchParams.set("service", "WFS");
+    url.searchParams.set("version", "2.0.0");
+    url.searchParams.set("request", "GetFeature");
+    url.searchParams.set("typeNames", "NCC:NCS_PROPADDRESS");
+    url.searchParams.set("outputFormat", "application/json");
+    url.searchParams.set("srsName", "EPSG:4326");
+    url.searchParams.set("bbox", `${lng - lngPad},${lat - latPad},${lng + lngPad},${lat + latPad},EPSG:4326`);
+    url.searchParams.set("count", "50");
+
+    const response = await fetch(url.toString(), { signal: AbortSignal.timeout(12_000) });
+    if (!response.ok) throw new Error(`Napier property WFS HTTP ${response.status}`);
+    const data = await response.json() as {
+      features?: Array<{ properties?: Record<string, unknown> }>;
+    };
+    const requestedStreet = normaliseStreetAddress(streetAddressPart(address));
+    const feature = (data.features ?? []).find((candidate) =>
+      normaliseStreetAddress(streetAddressPart(String(candidate.properties?.["property_address"] ?? ""))) === requestedStreet
+    );
+    if (!feature?.properties) return emptyPropertyHistory(linzAreaSqm);
+
+    const registerAreaHa = Number(feature.properties["regarea"]);
+    const councilAreaSqm = Number.isFinite(registerAreaHa) && registerAreaHa > 0
+      ? Math.round(registerAreaHa * 10_000)
+      : null;
+    const landAreaSqm = linzAreaSqm ?? councilAreaSqm;
+
+    return {
+      cv_nzd: null,
+      cv_year: null,
+      build_year: null,
+      floor_area_sqm: null,
+      land_area_sqm: landAreaSqm,
+      land_area_source: linzAreaSqm ? "linz" : "napier_council_property_wfs",
+      land_area_scope: "parcel",
+      property_type: null,
+      sources_confirmed: landAreaSqm
+        ? [linzAreaSqm
+          ? "land_area_sqm (from LINZ parcel)"
+          : "land_area_sqm (Napier City Council property WFS)"]
+        : [],
+      sources_estimated: ["cv_nzd", "build_year", "floor_area_sqm", "property_type"],
+    };
+  } catch {
+    return emptyPropertyHistory(linzAreaSqm);
+  }
+}
+
+async function queryTaurangaLayer(
+  layerUrl: string,
+  params: Record<string, string>,
+): Promise<ArcGisFeature[]> {
+  const url = new URL(`${layerUrl}/query`);
+  url.searchParams.set("f", "json");
+  url.searchParams.set("returnGeometry", "false");
+  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+  const response = await fetch(url.toString(), { signal: AbortSignal.timeout(12_000) });
+  if (!response.ok) throw new Error(`Tauranga property GIS HTTP ${response.status}`);
+  const data = await response.json() as { features?: ArcGisFeature[]; error?: { message?: string } };
+  if (data.error) throw new Error(`Tauranga property GIS error: ${data.error.message ?? "unknown"}`);
+  return data.features ?? [];
+}
+
+async function fetchTaurangaPropertyHistory(
+  address: string,
+  lat: number,
+  lng: number,
+  linzAreaSqm?: number | null,
+): Promise<PropertyHistory> {
+  try {
+    const assessmentFeatures = await queryTaurangaLayer(TAURANGA_ASSESSMENT, {
+      where: "1=1",
+      geometry: `${lng},${lat}`,
+      geometryType: "esriGeometryPoint",
+      inSR: "4326",
+      spatialRel: "esriSpatialRelIntersects",
+      outFields: "LOCATIONADDRESS,SUBURB,VNZ,ValuationNumber,Shape__Area",
+    });
+    const requestedStreet = normaliseStreetAddress(streetAddressPart(address));
+    const assessment = assessmentFeatures.find((feature) =>
+      normaliseStreetAddress(streetAddressPart(String(feature.attributes?.["LOCATIONADDRESS"] ?? ""))) === requestedStreet
+    )?.attributes;
+    const vnz = String(assessment?.["VNZ"] ?? "").trim();
+    if (!assessment || !vnz) return emptyPropertyHistory(linzAreaSqm);
+
+    const valuationFeatures = await queryTaurangaLayer(TAURANGA_CAPITAL_VALUE, {
+      where: `VNZ='${sqlString(vnz)}'`,
+      outFields: "VNZ,LandArea,CV2023,LV2023,VI2023,Shape__Area",
+    });
+    const valuation = valuationFeatures.find((feature) => String(feature.attributes?.["VNZ"] ?? "").trim() === vnz)?.attributes;
+    const cvNzd = positiveNumber(valuation?.["CV2023"]);
+    const landAreaHa = Number(valuation?.["LandArea"]);
+    const shapeAreaSqm = positiveNumber(valuation?.["Shape__Area"] ?? assessment["Shape__Area"]);
+    const councilAreaSqm = Number.isFinite(landAreaHa) && landAreaHa > 0
+      ? Math.round(landAreaHa * 10_000)
+      : shapeAreaSqm;
+    const landAreaSqm = linzAreaSqm ?? councilAreaSqm;
+    const improvementValue = nonNegativeNumber(valuation?.["VI2023"]);
+    const propertyType = cvNzd != null && improvementValue === 0 ? "Vacant land / section" : null;
+
+    return {
+      cv_nzd: cvNzd,
+      cv_year: cvNzd ? 2023 : null,
+      build_year: null,
+      floor_area_sqm: null,
+      land_area_sqm: landAreaSqm,
+      land_area_source: linzAreaSqm ? "linz" : "tauranga_council_rating_gis",
+      land_area_scope: linzAreaSqm ? "parcel" : "rating_unit",
+      property_type: propertyType,
+      sources_confirmed: [
+        ...(cvNzd ? ["cv_nzd (Tauranga City Council 2023 rating valuation GIS)"] : []),
+        ...(landAreaSqm ? [linzAreaSqm
+          ? "land_area_sqm (from LINZ parcel)"
+          : "land_area_sqm (Tauranga City Council rating GIS)"] : []),
+        ...(propertyType ? ["property_type (Tauranga City Council zero improvement value)"] : []),
+      ],
+      sources_estimated: ["build_year", "floor_area_sqm", ...(propertyType ? [] : ["property_type"])],
+    };
+  } catch {
+    return emptyPropertyHistory(linzAreaSqm);
+  }
+}
+
+async function fetchKapitiPropertyHistory(
+  address: string,
+  lat: number,
+  lng: number,
+  linzAreaSqm?: number | null,
+): Promise<PropertyHistory> {
+  try {
+    const url = new URL(`${KAPITI_PROPERTY}/query`);
+    url.searchParams.set("f", "json");
+    url.searchParams.set("where", "1=1");
+    url.searchParams.set("geometry", `${lng},${lat}`);
+    url.searchParams.set("geometryType", "esriGeometryPoint");
+    url.searchParams.set("inSR", "4326");
+    url.searchParams.set("spatialRel", "esriSpatialRelIntersects");
+    url.searchParams.set("outFields", "Valuation_ID,Property_Number,Legal,Land_Value,Capital_Value,Improvements_Value,Hectares,Location,Valuation_Date,Shape_Area");
+    url.searchParams.set("returnGeometry", "false");
+
+    const response = await fetch(url.toString(), { signal: AbortSignal.timeout(12_000) });
+    if (!response.ok) throw new Error(`Kāpiti property GIS HTTP ${response.status}`);
+    const data = await response.json() as { features?: ArcGisFeature[]; error?: { message?: string } };
+    if (data.error) throw new Error(`Kāpiti property GIS error: ${data.error.message ?? "unknown"}`);
+
+    const requestedStreet = normaliseStreetAddress(streetAddressPart(address));
+    const attrs = (data.features ?? []).find((feature) =>
+      normaliseStreetAddress(streetAddressPart(String(feature.attributes?.["Location"] ?? ""))) === requestedStreet
+    )?.attributes;
+    if (!attrs) return emptyPropertyHistory(linzAreaSqm);
+
+    const cvNzd = positiveNumber(attrs["Capital_Value"]);
+    const hectares = Number(attrs["Hectares"]);
+    const shapeAreaSqm = positiveNumber(attrs["Shape_Area"]);
+    const councilAreaSqm = Number.isFinite(hectares) && hectares > 0
+      ? Math.round(hectares * 10_000)
+      : shapeAreaSqm;
+    const landAreaSqm = linzAreaSqm ?? councilAreaSqm;
+    const valuationTimestamp = Number(attrs["Valuation_Date"]);
+    const valuationYear = Number.isFinite(valuationTimestamp) && valuationTimestamp > 0
+      ? new Date(valuationTimestamp).getUTCFullYear()
+      : null;
+    const improvementValue = nonNegativeNumber(attrs["Improvements_Value"]);
+    const propertyType = cvNzd != null && improvementValue === 0 ? "Vacant land / section" : null;
+
+    return {
+      cv_nzd: cvNzd,
+      cv_year: cvNzd ? valuationYear : null,
+      build_year: null,
+      floor_area_sqm: null,
+      land_area_sqm: landAreaSqm,
+      land_area_source: linzAreaSqm ? "linz" : "kapiti_council_rating_gis",
+      land_area_scope: linzAreaSqm ? "parcel" : "rating_unit",
+      property_type: propertyType,
+      sources_confirmed: [
+        ...(cvNzd ? ["cv_nzd (Kāpiti Coast District Council rating GIS)"] : []),
+        ...(landAreaSqm ? [linzAreaSqm
+          ? "land_area_sqm (from LINZ parcel)"
+          : "land_area_sqm (Kāpiti Coast District Council rating GIS)"] : []),
+        ...(propertyType ? ["property_type (Kāpiti Coast District Council zero improvement value)"] : []),
+      ],
+      sources_estimated: ["build_year", "floor_area_sqm", ...(propertyType ? [] : ["property_type"])],
+    };
+  } catch {
+    return emptyPropertyHistory(linzAreaSqm);
+  }
+}
+
+async function fetchSelwynPropertyHistory(
+  address: string,
+  lat: number,
+  lng: number,
+  linzAreaSqm?: number | null,
+): Promise<PropertyHistory> {
+  try {
+    const url = new URL(`${SELWYN_PROPERTY}/query`);
+    url.searchParams.set("f", "json");
+    url.searchParams.set("where", "1=1");
+    url.searchParams.set("geometry", `${lng},${lat}`);
+    url.searchParams.set("geometryType", "esriGeometryPoint");
+    url.searchParams.set("inSR", "4326");
+    url.searchParams.set("spatialRel", "esriSpatialRelIntersects");
+    url.searchParams.set("outFields", "Assessment_ID,CertificateTitle,Location,FullLegal,LandValue,CapitalValue,Hectares,Shape_Area");
+    url.searchParams.set("returnGeometry", "false");
+
+    const response = await fetch(url.toString(), { signal: AbortSignal.timeout(12_000) });
+    if (!response.ok) throw new Error(`Selwyn property GIS HTTP ${response.status}`);
+    const data = await response.json() as { features?: ArcGisFeature[]; error?: { message?: string } };
+    if (data.error) throw new Error(`Selwyn property GIS error: ${data.error.message ?? "unknown"}`);
+
+    const requestedStreet = normaliseStreetAddress(streetAddressPart(address));
+    const attrs = (data.features ?? []).find((feature) =>
+      normaliseStreetAddress(streetAddressPart(String(feature.attributes?.["Location"] ?? ""))) === requestedStreet
+    )?.attributes;
+    if (!attrs) return emptyPropertyHistory(linzAreaSqm);
+
+    const cvNzd = positiveNumber(attrs["CapitalValue"]);
+    const landValue = nonNegativeNumber(attrs["LandValue"]);
+    const hectares = Number(attrs["Hectares"]);
+    const shapeAreaSqm = positiveNumber(attrs["Shape_Area"]);
+    const councilAreaSqm = Number.isFinite(hectares) && hectares > 0
+      ? Math.round(hectares * 10_000)
+      : shapeAreaSqm;
+    const landAreaSqm = linzAreaSqm ?? councilAreaSqm;
+    const propertyType = cvNzd != null && landValue != null && cvNzd === landValue
+      ? "Vacant land / section"
+      : null;
+
+    return {
+      cv_nzd: cvNzd,
+      cv_year: cvNzd ? SELWYN_REVALUATION_YEAR : null,
+      build_year: null,
+      floor_area_sqm: null,
+      land_area_sqm: landAreaSqm,
+      land_area_source: linzAreaSqm ? "linz" : "selwyn_council_rating_gis",
+      land_area_scope: linzAreaSqm ? "parcel" : "rating_unit",
+      property_type: propertyType,
+      sources_confirmed: [
+        ...(cvNzd ? ["cv_nzd (Selwyn District Council 2024 rating valuation GIS)"] : []),
+        ...(landAreaSqm ? [linzAreaSqm
+          ? "land_area_sqm (from LINZ parcel)"
+          : "land_area_sqm (Selwyn District Council rating GIS)"] : []),
+        ...(propertyType ? ["property_type (Selwyn District Council zero improvement value)"] : []),
+      ],
+      sources_estimated: ["build_year", "floor_area_sqm", ...(propertyType ? [] : ["property_type"])],
+    };
+  } catch {
+    return emptyPropertyHistory(linzAreaSqm);
+  }
+}
+
 export async function fetchRegionalPropertyHistory(
   providerId: PlanningProviderId,
   address: string,
@@ -424,10 +694,14 @@ export async function fetchRegionalPropertyHistory(
   lng: number,
   linzAreaSqm?: number | null,
 ): Promise<PropertyHistory> {
+  if (providerId === "selwyn") return fetchSelwynPropertyHistory(address, lat, lng, linzAreaSqm);
   if (providerId === "christchurch") return fetchChristchurchRatingUnit(address, linzAreaSqm);
   if (providerId === "manawatu") return fetchManawatuPropertyHistory(address, lat, lng, linzAreaSqm);
   if (providerId === "southland") return fetchSouthlandPropertyHistory(address, lat, lng, linzAreaSqm);
   if (providerId === "western-bay") return fetchWesternBayPropertyHistory(address, lat, lng, linzAreaSqm);
+  if (providerId === "tauranga") return fetchTaurangaPropertyHistory(address, lat, lng, linzAreaSqm);
+  if (providerId === "kapiti") return fetchKapitiPropertyHistory(address, lat, lng, linzAreaSqm);
+  if (providerId === "napier") return fetchNapierPropertyHistory(address, lat, lng, linzAreaSqm);
   if (providerId !== "whakatane") return emptyPropertyHistory(linzAreaSqm);
 
   const url = new URL(`${WHAKATANE_PROPERTY}/query`);

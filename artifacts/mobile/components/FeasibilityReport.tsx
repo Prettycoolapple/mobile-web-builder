@@ -2783,9 +2783,7 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
                 key={tab}
                 style={[
                   styles.reportTabButton,
-                  selected
-                    ? [styles.reportTabButtonActive, { backgroundColor: colors.card, borderColor: colors.border }]
-                    : null,
+                  selected ? styles.reportTabButtonActive : null,
                 ]}
                 onPress={() => {
                   setActiveReportTab(tab);
@@ -2794,15 +2792,33 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
                 activeOpacity={0.85}
                 accessibilityRole="tab"
                 accessibilityState={{ selected }}
+                accessibilityLabel={`${tab === "info" ? t("report.tab_info") : t("report.tab_plan")} view`}
               >
-                <Text
-                  style={[
-                    styles.reportTabText,
-                    { color: selected ? colors.foreground : colors.mutedForeground },
-                  ]}
-                >
-                  {tab === "info" ? t("report.tab_info") : t("report.tab_plan")}
-                </Text>
+                <View style={styles.reportTabContent}>
+                  <Feather
+                    name={tab === "info" ? "info" : "map"}
+                    size={15}
+                    color={selected ? "#FFFFFF" : colors.mutedForeground}
+                  />
+                  <Text
+                    style={[
+                      styles.reportTabText,
+                      { color: selected ? "#FFFFFF" : colors.mutedForeground },
+                    ]}
+                  >
+                    {tab === "info" ? t("report.tab_info") : t("report.tab_plan")}
+                  </Text>
+                  {tab === "plan" ? (
+                    <LinearGradient
+                      colors={["#7C3AED", "#DB2777", "#F97316"]}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={styles.reportTabAiBadge}
+                    >
+                      <Text style={styles.reportTabAiText}>AI</Text>
+                    </LinearGradient>
+                  ) : null}
+                </View>
               </TouchableOpacity>
             );
           })}
@@ -3230,36 +3246,41 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
 const styles = StyleSheet.create({
   container: { gap: 10 },
   reportBookmarkStack: { gap: 0 },
-  // Segmented control sitting above the content card (no overlap with the hero photo).
+  // Full-width report view switcher. The active colour and Plan's AI badge
+  // make the two views read as navigation rather than passive labels.
   reportTabs: {
     flexDirection: "row",
-    alignSelf: "center",
+    alignSelf: "stretch",
     gap: 4,
     padding: 4,
-    borderRadius: 14,
+    borderRadius: 16,
     borderWidth: 1,
-    marginHorizontal: 12,
-    marginBottom: 12,
+    marginBottom: 8,
   },
   reportTabButton: {
-    minWidth: 112,
-    minHeight: 36,
-    borderRadius: 10,
+    flex: 1,
+    minHeight: 42,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: "transparent",
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 18,
+    paddingHorizontal: 12,
     paddingVertical: 8,
   },
   reportTabButtonActive: {
+    backgroundColor: "#7C3AED",
+    borderColor: "#7C3AED",
     shadowColor: "#000",
     shadowOpacity: 0.12,
     shadowRadius: 4,
     shadowOffset: { width: 0, height: 1 },
     elevation: 2,
   },
+  reportTabContent: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7 },
   reportTabText: { fontFamily: "DM_Sans_700Bold", fontSize: 13, lineHeight: 18 },
+  reportTabAiBadge: { borderRadius: 999, paddingHorizontal: 6, paddingVertical: 2 },
+  reportTabAiText: { color: "#FFFFFF", fontFamily: "DM_Sans_700Bold", fontSize: 9, lineHeight: 11 },
   hiddenReportTopCard: { display: "none" },
   reportHeader: { borderRadius: 16, overflow: "hidden" },
   reportHeaderTop: { flexDirection: "row", gap: 12, padding: 16, alignItems: "flex-start" },

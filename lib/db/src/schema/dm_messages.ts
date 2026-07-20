@@ -31,8 +31,8 @@ export const dmMessages = pgTable("dm_messages", {
   likedBy: text("liked_by").references(() => profiles.id, { onDelete: "set null" }),
   readAt: timestamp("read_at", { withTimezone: true }),
   // Set when the recipient first opens a file attachment (e.g. a LIM/title
-  // PDF). Lets the sender — surfaced only to sales agents in the UI — see
-  // "File viewed". Null for non-file messages or unopened files.
+  // PDF). Lets the sales-agent sender and admins reviewing that conversation
+  // see "File opened". Null for non-file messages or unopened files.
   fileViewedAt: timestamp("file_viewed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });

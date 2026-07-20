@@ -74,6 +74,8 @@ const CHRISTCHURCH_DISTRICT_PLAN =
   "https://gis.ccc.govt.nz/server/rest/services/OpenData/DistrictPlan/FeatureServer";
 const CHRISTCHURCH_DISTRICT_PLAN_B =
   "https://gis.ccc.govt.nz/server/rest/services/OpenData/DistrictPlanB/FeatureServer";
+const SELWYN_DISTRICT_PLAN =
+  "https://gis.selwyn.govt.nz/arcgis/rest/services/DistrictPlan/SelwynDistrictPlan2020/MapServer";
 const WHANGAREI_DISTRICT_PLAN =
   "https://geo.wdc.govt.nz/server/rest/services/District_Plan_Public/MapServer";
 const TOP_OF_THE_SOUTH_MAPS =
@@ -106,6 +108,26 @@ const UHCC_DISTRICT_PLAN_ZONES =
   "https://maps.upperhutt.govt.nz/arcgis/rest/services/District_Plan_Zones/MapServer";
 const KCDC_DISTRICT_PLAN_ZONES =
   "https://maps.kapiticoast.govt.nz/server/rest/services/Public/District_Plan_Zones/MapServer";
+const KCDC_DISTRICT_PLAN_OVERLAYS =
+  "https://maps.kapiticoast.govt.nz/server/rest/services/Public/District_Plan_Overlays/MapServer";
+const KCDC_DISTRICT_PLAN_DESIGNATIONS =
+  "https://maps.kapiticoast.govt.nz/server/rest/services/Public/District_Plan_Designations/MapServer";
+const KCDC_DISTRICT_PLAN_MISCELLANEOUS =
+  "https://maps.kapiticoast.govt.nz/server/rest/services/Public/District_Plan_Miscellaneous/MapServer";
+const KCDC_DISTRICT_PLAN_PRECINCTS =
+  "https://maps.kapiticoast.govt.nz/server/rest/services/Public/District_Plan_Precincts/MapServer";
+const KCDC_DISTRICT_PLAN_CONTROLS =
+  "https://maps.kapiticoast.govt.nz/server/rest/services/Public/District_Plan_Specific_Controls/MapServer";
+const KCDC_FLOOD_HAZARDS =
+  "https://maps.kapiticoast.govt.nz/server/rest/services/Public/Latest_Flood_Hazards/MapServer";
+const KCDC_FLOOD_EXTENTS =
+  "https://maps.kapiticoast.govt.nz/server/rest/services/Public/Latest_Flood_Extents/MapServer";
+const KCDC_TSUNAMI =
+  "https://maps.kapiticoast.govt.nz/server/rest/services/Public/Tsunami/MapServer";
+const KCDC_WIND_AND_CORROSION =
+  "https://maps.kapiticoast.govt.nz/server/rest/services/Public/Wind_and_Corrosion/MapServer";
+const KCDC_ADAPTATION_AREAS =
+  "https://maps.kapiticoast.govt.nz/server/rest/services/Public/Adaptation_Areas/MapServer";
 const ROTORUA_DISTRICT_PLAN =
   "https://gis.rdc.govt.nz/server/rest/services/Core/DistrictPlan/MapServer";
 const ROTORUA_PLANNING =
@@ -118,6 +140,24 @@ const WESTERN_BAY_NATURAL_HAZARDS =
   "https://map.westernbay.govt.nz/arcgisext/rest/services/District_Plan_Natural_Hazards/MapServer";
 const WESTERN_BAY_OTHER_HAZARDS =
   "https://map.westernbay.govt.nz/arcgisext/rest/services/Other_Natural_Hazards/MapServer";
+const TAURANGA_DISTRICT_PLAN_BASE =
+  "https://gis.tauranga.govt.nz/server/rest/services/ePlan/ePlan_DistrictPlanBase/MapServer";
+const TAURANGA_PLAN_SECTIONS_1_TO_3 =
+  "https://gis.tauranga.govt.nz/server/rest/services/ePlan/ePlan_Sections1to3/MapServer";
+const TAURANGA_PLAN_SECTION_5 =
+  "https://gis.tauranga.govt.nz/server/rest/services/ePlan/ePlan_Section5/MapServer";
+const TAURANGA_PLAN_SECTION_7 =
+  "https://gis.tauranga.govt.nz/server/rest/services/ePlan/ePlan_Section7/MapServer";
+const TAURANGA_PLAN_SECTION_8 =
+  "https://gis.tauranga.govt.nz/server/rest/services/ePlan/ePlan_Section8/MapServer";
+const TAURANGA_PLAN_NATURAL_HAZARDS =
+  "https://gis.tauranga.govt.nz/server/rest/services/ePlan/ePlan_NaturalHazards/MapServer";
+const TAURANGA_LIQUEFACTION =
+  "https://gis.tauranga.govt.nz/server/rest/services/Liquefaction/MapServer";
+const NAPIER_OPERATIVE_DISTRICT_PLAN =
+  "https://spatial.napier.govt.nz/server/rest/services/NapierMaps/OperativeDistrictPlan_2025/MapServer";
+const HBRC_PROPERTY_HAZARDS =
+  "https://gis.hbrc.govt.nz/server/rest/services/HazardPortal/HBRC_Property_Hazards/MapServer";
 const SOUTHLAND_ZONING =
   "https://gis.southlanddc.govt.nz/server/rest/services/Website_SpatialPlan_layers/MapServer";
 const SOUTHLAND_DISTRICT_PLAN =
@@ -146,6 +186,126 @@ const MDC_GIS = "https://services9.arcgis.com/CzWZ8m5FuciqBibe/arcgis/rest/servi
 const mdcService = (name: string): string => `${MDC_GIS}/${name}/FeatureServer`;
 
 const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
+  selwyn: {
+    zoneLayers: [
+      {
+        serviceUrl: SELWYN_DISTRICT_PLAN,
+        layerId: 80,
+        label: "Selwyn District Plan Zone",
+        codeField: "Zone_ShortCode",
+        nameFields: ["Zone_Name", "Zone_Type", "Zone_ShortCode"],
+        detailFields: ["Township"],
+        decodeCodedValues: false,
+      },
+    ],
+    overlayLayers: [
+      overlay(SELWYN_DISTRICT_PLAN, 0, "Designation", "polygon", "control"),
+      overlay(SELWYN_DISTRICT_PLAN, 2, "Electricity Transmission and Distribution", "polyline", "restricted", 35),
+      overlay(SELWYN_DISTRICT_PLAN, 40, "8km Birdstrike Overlay", "polygon", "moderate"),
+      overlay(SELWYN_DISTRICT_PLAN, 39, "13km Birdstrike Overlay", "polygon", "moderate", undefined, ["Description", "Label"]),
+      overlay(SELWYN_DISTRICT_PLAN, 36, "Odour Control Overlay", "polygon", "moderate"),
+      overlay(SELWYN_DISTRICT_PLAN, 3, "Road Classification", "polyline", "control", 25),
+      overlay(SELWYN_DISTRICT_PLAN, 5, "Coastal Erosion Overlay", "polygon", "restricted"),
+      overlay(SELWYN_DISTRICT_PLAN, 6, "Coastal Inundation Overlay", "polygon", "restricted"),
+      overlay(SELWYN_DISTRICT_PLAN, 7, "Tsunami Policy Overlay", "polygon", "restricted"),
+      overlay(SELWYN_DISTRICT_PLAN, 8, "Plains Flood Management Overlay", "polygon", "restricted"),
+      overlay(SELWYN_DISTRICT_PLAN, 9, "Waimakariri Flood Management Overlay", "polygon", "restricted"),
+      overlay(SELWYN_DISTRICT_PLAN, 10, "Greendale Fault Overlay", "polygon", "restricted"),
+      overlay(SELWYN_DISTRICT_PLAN, 11, "Fault Investigation Overlay", "polygon", "restricted"),
+      overlay(SELWYN_DISTRICT_PLAN, 12, "Fault Awareness Overlay", "polygon", "restricted"),
+      overlay(SELWYN_DISTRICT_PLAN, 13, "Liquefaction Damage Unlikely Overlay", "polygon", "moderate"),
+      overlay(SELWYN_DISTRICT_PLAN, 15, "Heritage Item Overlay", "point", "restricted", 25),
+      overlay(SELWYN_DISTRICT_PLAN, 16, "Heritage Setting Overlay", "polygon", "restricted"),
+      overlay(SELWYN_DISTRICT_PLAN, 17, "Heritage Order Overlay", "polygon", "restricted"),
+      overlay(SELWYN_DISTRICT_PLAN, 18, "Notable Trees Overlay", "point", "moderate", 30),
+      overlay(SELWYN_DISTRICT_PLAN, 19, "Wahi Taonga Overlay", "polygon", "restricted"),
+      overlay(SELWYN_DISTRICT_PLAN, 20, "Wahi Tapu Overlay", "polygon", "restricted"),
+      overlay(SELWYN_DISTRICT_PLAN, 21, "Nga Wai Overlay", "polyline", "restricted", 25),
+      overlay(SELWYN_DISTRICT_PLAN, 22, "Nga Turanga Tupuna Overlay", "polygon", "restricted"),
+      overlay(SELWYN_DISTRICT_PLAN, 23, "Statutory Acknowledgement Area", "polygon", "control"),
+      overlay(SELWYN_DISTRICT_PLAN, 24, "Nohoanga Overlay", "polygon", "restricted"),
+      overlay(SELWYN_DISTRICT_PLAN, 27, "Mudfish Habitat Overlay", "polygon", "restricted"),
+      overlay(SELWYN_DISTRICT_PLAN, 28, "Crested Grebe Overlay", "polygon", "restricted"),
+      overlay(SELWYN_DISTRICT_PLAN, 29, "Indigenous Biodiversity Management Overlay", "polygon", "restricted"),
+      overlay(SELWYN_DISTRICT_PLAN, 30, "Significant Natural Areas Overlay", "polygon", "restricted"),
+      overlay(SELWYN_DISTRICT_PLAN, 32, "Outstanding Natural Landscapes", "polygon", "restricted"),
+      overlay(SELWYN_DISTRICT_PLAN, 33, "Visual Amenity Landscapes", "polygon", "moderate"),
+      overlay(SELWYN_DISTRICT_PLAN, 34, "Coastal Environment Overlay", "polygon", "restricted"),
+      overlay(SELWYN_DISTRICT_PLAN, 35, "Urban Growth Overlay", "polygon", "control"),
+      overlay(SELWYN_DISTRICT_PLAN, 53, "Observatory Lighting Control Overlay", "polygon", "control"),
+      overlay(SELWYN_DISTRICT_PLAN, 97, "Airport 50dB Noise Control Overlay", "polygon", "moderate"),
+      overlay(SELWYN_DISTRICT_PLAN, 96, "Airport 55dB Noise Control Overlay", "polygon", "restricted"),
+      overlay(SELWYN_DISTRICT_PLAN, 58, "Railway Network Noise Control Overlay", "polygon", "moderate"),
+      overlay(SELWYN_DISTRICT_PLAN, 57, "State Highway Noise Control Overlay", "polygon", "moderate"),
+      overlay(SELWYN_DISTRICT_PLAN, 86, "Air Specific Control Area", "polygon", "control"),
+      overlay(SELWYN_DISTRICT_PLAN, 60, "Access Specific Control Area", "polygon", "control"),
+      overlay(SELWYN_DISTRICT_PLAN, 87, "Alpine Design Specific Control Area", "polygon", "control"),
+      overlay(SELWYN_DISTRICT_PLAN, 88, "Ellesmere Motor Racing Club Control Area", "polygon", "control"),
+      overlay(SELWYN_DISTRICT_PLAN, 89, "Rural Density Specific Control Area", "polygon", "control"),
+      overlay(SELWYN_DISTRICT_PLAN, 45, "Development Area", "polygon", "control"),
+      overlay(SELWYN_DISTRICT_PLAN, 81, "Commercial Precinct", "polygon", "control"),
+      overlay(SELWYN_DISTRICT_PLAN, 82, "Industrial Precinct", "polygon", "control"),
+      overlay(SELWYN_DISTRICT_PLAN, 83, "Airfield Precinct", "polygon", "control"),
+      overlay(SELWYN_DISTRICT_PLAN, 84, "Rural Precinct", "polygon", "control"),
+    ],
+  },
+  tauranga: {
+    zoneLayers: [
+      {
+        serviceUrl: TAURANGA_DISTRICT_PLAN_BASE,
+        layerId: 0,
+        label: "Tauranga Operative Planning Zone",
+        codeField: "Zone",
+        nameFields: ["Description", "Zone"],
+        detailFields: ["RuleID"],
+        decodeCodedValues: false,
+      },
+    ],
+    overlayLayers: [
+      overlay(TAURANGA_PLAN_SECTIONS_1_TO_3, 3, "Limited Access Road", "polyline", "control", 35),
+      overlay(TAURANGA_PLAN_SECTIONS_1_TO_3, 5, "Designated Road or Road Widening", "polygon", "control"),
+      overlay(TAURANGA_PLAN_SECTIONS_1_TO_3, 6, "Designation", "polygon", "control"),
+      overlay(TAURANGA_PLAN_SECTIONS_1_TO_3, 7, "Built Heritage Site", "point", "restricted", 30),
+      overlay(TAURANGA_PLAN_SECTIONS_1_TO_3, 9, "Significant Archaeological Area", "polygon", "restricted"),
+      overlay(TAURANGA_PLAN_SECTIONS_1_TO_3, 10, "Significant Maori Site", "polygon", "restricted"),
+      overlay(TAURANGA_PLAN_SECTIONS_1_TO_3, 11, "Significant Group of Trees", "polygon", "moderate"),
+      overlay(TAURANGA_PLAN_SECTIONS_1_TO_3, 12, "Current Erosion Risk Zone", "polygon", "restricted"),
+      overlay(TAURANGA_PLAN_SECTIONS_1_TO_3, 13, "2060 Erosion Risk Zone", "polygon", "restricted"),
+      overlay(TAURANGA_PLAN_SECTIONS_1_TO_3, 14, "2100 Erosion Risk Zone", "polygon", "restricted"),
+      overlay(TAURANGA_PLAN_SECTIONS_1_TO_3, 17, "Flood Hazard Plan Area", "polygon", "restricted"),
+      overlay(TAURANGA_PLAN_SECTIONS_1_TO_3, 18, "Special Ecological Area Category 1", "polygon", "restricted"),
+      overlay(TAURANGA_PLAN_SECTIONS_1_TO_3, 19, "Special Ecological Area Category 2", "polygon", "restricted"),
+      overlay(TAURANGA_PLAN_SECTIONS_1_TO_3, 20, "Outstanding Natural Feature or Landscape", "polygon", "restricted"),
+      overlay(TAURANGA_PLAN_SECTIONS_1_TO_3, 21, "Important Amenity Landscape", "polygon", "moderate"),
+      overlay(TAURANGA_PLAN_SECTIONS_1_TO_3, 22, "KiwiRail Reverse Sensitivity Plan Area", "polygon", "moderate"),
+      overlay(TAURANGA_PLAN_SECTIONS_1_TO_3, 23, "NZTA Reverse Sensitivity Plan Area", "polygon", "moderate"),
+      overlay(TAURANGA_PLAN_SECTIONS_1_TO_3, 24, "High Rise Plan Area", "polygon", "control"),
+      overlay(TAURANGA_PLAN_SECTIONS_1_TO_3, 30, "Coastal Protection Area", "polygon", "restricted"),
+      overlay(TAURANGA_PLAN_SECTIONS_1_TO_3, 31, "Special Noise Rule Area", "polygon", "moderate"),
+      overlay(TAURANGA_PLAN_SECTIONS_1_TO_3, 33, "Rail Vibration Alert", "polygon", "moderate"),
+      overlay(TAURANGA_PLAN_SECTIONS_1_TO_3, 35, "Precinct", "polygon", "control"),
+      overlay(TAURANGA_PLAN_SECTION_5, 0, "Port Noise Control Boundary", "polyline", "moderate", 35),
+      overlay(TAURANGA_PLAN_SECTION_5, 1, "Airport Noise Contour", "polyline", "moderate", 35),
+      overlay(TAURANGA_PLAN_SECTION_5, 2, "Airport Noise Control Boundary", "polyline", "moderate", 35),
+      overlay(TAURANGA_PLAN_SECTION_5, 4, "Airport Height Slope and Surface", "polygon", "control", undefined, ["Height"]),
+      overlay(TAURANGA_PLAN_SECTION_5, 7, "Financial Contribution Urban Growth Area", "polygon", "control", undefined, ["InfillName", "UrbanGrowthArea", "OtherArea"]),
+      overlay(TAURANGA_PLAN_SECTION_5, 42, "Harbour Storm Surge Flood Hazard", "polygon", "restricted"),
+      overlay(TAURANGA_PLAN_SECTION_7, 0, "Viewshaft Building Elevation", "polygon", "control", undefined, ["MaxHeight", "SensitiveArea"]),
+      overlay(TAURANGA_PLAN_SECTION_7, 2, "Protected Viewshaft", "polygon", "control", undefined, ["ViewshaftNumber"]),
+      overlay(TAURANGA_PLAN_SECTION_8, 0, "Mount Maunganui North Coastal Environment", "polygon", "restricted"),
+      overlay(TAURANGA_PLAN_SECTION_8, 1, "Coastal Environment Plan Area", "polygon", "restricted"),
+      overlay(TAURANGA_PLAN_NATURAL_HAZARDS, 0, "Future Flood Reassessment Area", "polygon", "moderate"),
+      overlay(TAURANGA_PLAN_NATURAL_HAZARDS, 1, "Flood Risk", "polygon", "restricted"),
+      overlay(TAURANGA_LIQUEFACTION, 0, "Liquefaction Vulnerability", "polygon", "moderate", undefined, ["TerrainName", "LiquefactionVulnerability", "Details"]),
+      overlay(TAURANGA_LIQUEFACTION, 1, "Liquefaction Land Damage - Current 25 Year", "polygon", "moderate", undefined, ["PGA", "LandDamage"]),
+      overlay(TAURANGA_LIQUEFACTION, 2, "Liquefaction Land Damage - Current 100 Year", "polygon", "moderate", undefined, ["PGA", "LandDamage"]),
+      overlay(TAURANGA_LIQUEFACTION, 4, "Liquefaction Land Damage - Current 500 Year", "polygon", "restricted", undefined, ["PGA", "LandDamage"]),
+      overlay(TAURANGA_LIQUEFACTION, 6, "Liquefaction Land Damage - Future 25 Year", "polygon", "moderate", undefined, ["PGA", "LandDamage"]),
+      overlay(TAURANGA_LIQUEFACTION, 7, "Liquefaction Land Damage - Future 100 Year", "polygon", "moderate", undefined, ["PGA", "LandDamage"]),
+      overlay(TAURANGA_LIQUEFACTION, 9, "Liquefaction Land Damage - Future 500 Year", "polygon", "restricted", undefined, ["PGA", "LandDamage"]),
+    ],
+    queryTimeoutMs: 12_000,
+  },
   manawatu: {
     // Query both councils. Point-in-polygon returns the authoritative layer
     // that actually covers the property, including sites near the PNCC/MDC
@@ -425,8 +585,71 @@ const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
       overlay(WAIRARAPA_TSUNAMI, 0, "Tsunami Evacuation Zone", "polygon", "moderate"),
     ],
   },
+  kapiti: {
+    zoneLayers: [
+      {
+        serviceUrl: KCDC_DISTRICT_PLAN_ZONES,
+        layerId: 0,
+        label: "Kāpiti Coast District Plan Zone",
+        codeField: "Abbreviation",
+        nameFields: ["ePlan_Zone", "NPS_Zone", "PDP_ZONE"],
+        detailFields: ["PDP_ZONE", "NPS_Zone"],
+        decodeCodedValues: false,
+      },
+    ],
+    overlayLayers: [
+      overlay(KCDC_DISTRICT_PLAN_OVERLAYS, 1, "National Grid Line", "polyline", "restricted", 35),
+      overlay(KCDC_DISTRICT_PLAN_OVERLAYS, 2, "National Grid Developed Area", "polygon", "restricted"),
+      overlay(KCDC_DISTRICT_PLAN_OVERLAYS, 3, "Natural Gas Pipeline", "polyline", "restricted", 35),
+      overlay(KCDC_DISTRICT_PLAN_OVERLAYS, 8, "Water Collection Area", "polygon", "restricted"),
+      overlay(KCDC_DISTRICT_PLAN_OVERLAYS, 10, "Fault Avoidance Area", "polygon", "restricted", undefined, ["ZONE"]),
+      overlay(KCDC_DISTRICT_PLAN_OVERLAYS, 11, "District Plan Flood Hazard", "polygon", "restricted", undefined, ["ZONE"]),
+      overlay(KCDC_DISTRICT_PLAN_OVERLAYS, 19, "Ecological Site", "polygon", "restricted"),
+      overlay(KCDC_DISTRICT_PLAN_OVERLAYS, 20, "Outstanding Natural Feature or Landscape", "polygon", "restricted"),
+      overlay(KCDC_DISTRICT_PLAN_OVERLAYS, 21, "Special Amenity Landscape", "polygon", "moderate"),
+      overlay(KCDC_DISTRICT_PLAN_OVERLAYS, 22, "Area of Outstanding Natural Character", "polygon", "restricted"),
+      overlay(KCDC_DISTRICT_PLAN_OVERLAYS, 23, "Area of High Natural Character", "polygon", "restricted"),
+      overlay(KCDC_DISTRICT_PLAN_OVERLAYS, 24, "Key Indigenous Tree", "point", "restricted", 30),
+      overlay(KCDC_DISTRICT_PLAN_OVERLAYS, 25, "Geological Site", "point", "moderate", 30),
+      overlay(KCDC_DISTRICT_PLAN_OVERLAYS, 26, "Geological Area", "polygon", "moderate"),
+      overlay(KCDC_DISTRICT_PLAN_OVERLAYS, 13, "Waahi Tapu", "polygon", "restricted"),
+      overlay(KCDC_DISTRICT_PLAN_OVERLAYS, 14, "Historic Heritage Place", "point", "restricted", 30),
+      overlay(KCDC_DISTRICT_PLAN_OVERLAYS, 15, "Historic Heritage Area", "polygon", "restricted"),
+      overlay(KCDC_DISTRICT_PLAN_OVERLAYS, 16, "Notable Tree", "point", "moderate", 30),
+      overlay(KCDC_DISTRICT_PLAN_OVERLAYS, 17, "Notable Tree Area", "polygon", "moderate"),
+      overlay(KCDC_DISTRICT_PLAN_OVERLAYS, 28, "Noise Corridor", "polygon", "moderate"),
+      overlay(KCDC_DISTRICT_PLAN_OVERLAYS, 29, "Quarry Buffer", "polygon", "restricted"),
+      overlay(KCDC_DISTRICT_PLAN_OVERLAYS, 30, "Coastal Environment", "polygon", "restricted"),
+      overlay(KCDC_DISTRICT_PLAN_MISCELLANEOUS, 1, "Airport Noise Area", "polygon", "moderate"),
+      overlay(KCDC_DISTRICT_PLAN_MISCELLANEOUS, 2, "Airport Control Line", "polyline", "control", 30),
+      overlay(KCDC_DISTRICT_PLAN_MISCELLANEOUS, 3, "Airport Plan and Surface", "polygon", "control", undefined, ["Type"]),
+      overlay(KCDC_DISTRICT_PLAN_MISCELLANEOUS, 4, "Airport Potential Residential Area", "polygon", "control"),
+      overlay(KCDC_DISTRICT_PLAN_MISCELLANEOUS, 8, "River, Stream or Drain", "polyline", "restricted", 25),
+      overlay(KCDC_DISTRICT_PLAN_PRECINCTS, 0, "District Plan Precinct", "polygon", "control"),
+      overlay(KCDC_DISTRICT_PLAN_CONTROLS, 0, "Height Variation Control Area", "polygon", "control"),
+      ...Array.from({ length: 9 }, (_, layerId) =>
+        overlay(KCDC_DISTRICT_PLAN_DESIGNATIONS, layerId, "Designation", "polygon", "control")),
+      overlay(KCDC_FLOOD_HAZARDS, 0, "River Corridor", "polygon", "restricted"),
+      overlay(KCDC_FLOOD_HAZARDS, 1, "Stream Corridor", "polygon", "restricted"),
+      overlay(KCDC_FLOOD_HAZARDS, 2, "Overflow Path", "polygon", "restricted", undefined, ["ZONE"]),
+      overlay(KCDC_FLOOD_HAZARDS, 3, "Residual Overflow Path", "polygon", "moderate", undefined, ["ZONE"]),
+      overlay(KCDC_FLOOD_HAZARDS, 4, "Fill Control Area", "polygon", "restricted", undefined, ["ZONE"]),
+      overlay(KCDC_FLOOD_HAZARDS, 5, "Flood Storage Area", "polygon", "restricted", undefined, ["ZONE"]),
+      overlay(KCDC_FLOOD_HAZARDS, 6, "Ponding Area", "polygon", "restricted", undefined, ["ZONE"]),
+      overlay(KCDC_FLOOD_HAZARDS, 7, "Residual Ponding Area", "polygon", "moderate", undefined, ["ZONE"]),
+      overlay(KCDC_FLOOD_HAZARDS, 8, "Shallow Surface Flow", "polygon", "moderate", undefined, ["ZONE"]),
+      overlay(KCDC_FLOOD_EXTENTS, 0, "Greater Wellington Flood Extent", "polygon", "restricted"),
+      overlay(KCDC_FLOOD_EXTENTS, 1, "Kāpiti Coast Flood Extent", "polygon", "restricted", undefined, ["ZONE"]),
+      overlay(KCDC_TSUNAMI, 3, "Tsunami Evacuation Zone", "polygon", "restricted", undefined, ["Evac_Zone", "Info", "Heights"]),
+      overlay(KCDC_WIND_AND_CORROSION, 1, "Stainless Fixings Zone", "polygon", "moderate"),
+      overlay(KCDC_WIND_AND_CORROSION, 2, "Very High Wind Zone", "polygon", "moderate", undefined, ["ID"]),
+      overlay(KCDC_WIND_AND_CORROSION, 3, "Variable Wind Zone", "polygon", "moderate", undefined, ["ID"]),
+      overlay(KCDC_ADAPTATION_AREAS, 0, "Coastal Adaptation Area", "polygon", "control", undefined, ["Area_Name"]),
+    ],
+    queryTimeoutMs: 12_000,
+  },
   wellington: {
-    // Whole-region provider: each council runs its own district-plan service, so
+    // Wellington metro provider: each council runs its own district-plan service, so
     // the zone layers are tried in order and the first that returns a polygon at
     // the point wins. Field names were confirmed per council against each
     // service's layer metadata. Porirua City's operative-plan zone service is not
@@ -456,14 +679,6 @@ const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
         codeField: "Zone",
         nameFields: ["Zone"],
         detailFields: ["Notes"],
-      },
-      {
-        serviceUrl: KCDC_DISTRICT_PLAN_ZONES,
-        layerId: 0,
-        label: "Kāpiti Coast District Plan Zones",
-        codeField: "Zone",
-        nameFields: ["Zone", "ZONE", "ZONE_NAME", "LABEL", "Description"],
-        detailFields: ["Description", "LABEL"],
       },
     ],
     overlayLayers: [
@@ -547,6 +762,75 @@ const CONFIGS: Partial<Record<PlanningProviderId, RegionalArcGisConfig>> = {
       overlay(WESTERN_BAY_OTHER_HAZARDS, 12, "Liquefaction Vulnerability", "polygon", "moderate", undefined, ["LiquefactionVulnerabilityCatego", "Detail", "Notes"]),
     ],
     queryTimeoutMs: 10_000,
+  },
+  napier: {
+    zoneLayers: [
+      {
+        serviceUrl: NAPIER_OPERATIVE_DISTRICT_PLAN,
+        layerId: 10,
+        label: "Napier Operative District Plan 2025 Zone",
+        codeField: "Zone",
+        nameFields: ["Zone"],
+        detailFields: ["Category", "ImperviousArea"],
+        decodeCodedValues: false,
+      },
+    ],
+    overlayLayers: [
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 1, "Aircraft Noise Overlay", "polygon", "moderate"),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 2, "Amenity Precinct", "polygon", "control"),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 3, "Archaeological Site Area", "polygon", "restricted"),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 4, "Archaeological Site", "point", "restricted", 25),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 6, "Control Area", "polygon", "control"),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 37, "Control Area A", "polygon", "control"),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 7, "Control Line", "polyline", "control", 25),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 8, "Designation", "polygon", "control", undefined, ["Designation", "Purpose", "Authority"]),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 9, "Development Area", "polygon", "control"),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 11, "Heritage Item", "point", "restricted", 25),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 12, "High Land Transport Noise Boundary", "polygon", "moderate"),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 13, "Historic Heritage Overlay or Precinct", "polygon", "restricted"),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 14, "Historic Heritage Contributory Site", "polygon", "restricted"),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 15, "Indigenous Biodiversity Area", "polygon", "restricted"),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 16, "Indicative Public Access Route", "polyline", "control", 25),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 17, "Inner Port Noise Boundary", "polygon", "moderate"),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 18, "Landscape Sensitive Control Area", "polygon", "restricted"),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 19, "Meeanee Speedway Noise Boundary", "polygon", "moderate"),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 20, "Notable Tree", "point", "moderate", 25),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 22, "Outer Port Noise Boundary", "polygon", "moderate"),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 23, "Outstanding Natural Feature", "polygon", "restricted"),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 24, "Overland Flow Path", "polyline", "restricted", 40, ["NAME", "TAG", "MAXFLOW", "MAXVELOCIT"]),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 25, "Precinct", "polygon", "control"),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 26, "Hazardous Facility Risk Management Overlay", "polygon", "restricted"),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 27, "Special Character Feature", "polygon", "control"),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 28, "Special Character Landscape", "polygon", "control"),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 35, "Rail Vibration Alert Overlay", "polygon", "moderate"),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 36, "State Highway Noise Contour", "polygon", "moderate"),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 38, "Bird Strike Management Area", "polygon", "moderate"),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 33, "Statutory Acknowledgement Area", "polygon", "control", undefined, ["Iwi", "Region", "Plan_Type", "Site_Name"]),
+      overlay(NAPIER_OPERATIVE_DISTRICT_PLAN, 34, "Statutory Acknowledgement River or Tributary", "polygon", "control", undefined, ["Iwi", "Region", "Plan_Type", "Site_Name"]),
+
+      overlay(HBRC_PROPERTY_HAZARDS, 16, "Liquefaction Vulnerability", "polygon", "restricted", undefined, ["F3604_haza", "Hazard_Description", "Confidence"]),
+      overlay(HBRC_PROPERTY_HAZARDS, 17, "Liquefaction Severity - 25 Year", "polygon", "moderate", undefined, ["LSN_25y", "Hazard_Description", "Confidence"]),
+      overlay(HBRC_PROPERTY_HAZARDS, 18, "Liquefaction Severity - 100 Year", "polygon", "restricted", undefined, ["LSN_100y", "Hazard_Description", "Confidence"]),
+      overlay(HBRC_PROPERTY_HAZARDS, 19, "Liquefaction Severity - 500 Year", "polygon", "restricted", undefined, ["LSN_500y", "Hazard_Description", "Confidence"]),
+      overlay(HBRC_PROPERTY_HAZARDS, 21, "Earthquake Ground Amplification", "polygon", "moderate", undefined, ["Relative_Earthquake_Amplificati", "VALUE"]),
+      overlay(HBRC_PROPERTY_HAZARDS, 24, "Flood Risk Area", "polygon", "moderate", undefined, ["Location", "Class", "FloodLevel", "ReturnPeriod"]),
+      overlay(HBRC_PROPERTY_HAZARDS, 62, "Tsunami Near Source Inundation", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 2, "Tsunami 2500 Year Inundation", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 65, "Coastal Inundation - 2020 2% AEP", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 64, "Coastal Inundation - 2100 2% AEP", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 63, "Coastal Inundation - 2100 1% AEP", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 49, "Napier District Plan Coastal Hazard Zone", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 3, "High Landslide Risk - Stream Delivery", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 4, "High Landslide Risk", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 5, "Moderate Earthflow Risk", "polygon", "moderate"),
+      overlay(HBRC_PROPERTY_HAZARDS, 6, "Severe Earthflow Risk", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 7, "Gully Risk", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 56, "Contaminated Site - Risk Not Quantified", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 57, "Contaminated Site - Managed for Land Use", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 58, "Contaminated Site - Human Health", "polygon", "restricted"),
+      overlay(HBRC_PROPERTY_HAZARDS, 59, "Contaminated Site - Environment", "polygon", "restricted"),
+    ],
+    queryTimeoutMs: 12_000,
   },
   whakatane: {
     // This council host commonly needs more than the default nine seconds

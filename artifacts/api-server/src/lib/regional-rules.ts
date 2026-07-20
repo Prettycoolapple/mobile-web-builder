@@ -30,7 +30,7 @@ interface RegionalRulePackEntry {
   regionalZoneCode: string;
   zonePattern: RegExp;
   zoneLabel: string;
-  standardMinimumLotSqm: number;
+  standardMinimumLotSqm: number | null;
   largeParentThresholdSqm?: number;
   largeParentMinimumLotSqm?: number;
   largeParentAverageLotSqm?: number;
@@ -121,6 +121,13 @@ const DUNEDIN_GR2_VARIATION2_SOURCE =
   "https://www.dunedin.govt.nz/__data/assets/pdf_file/0011/873497/V2-General-Residential-2-Rezoning-updated.pdf";
 const WESTERN_BAY_SUBDIVISION_SOURCE =
   "https://www.westernbay.govt.nz/property-rates-and-building/district-plan-and-resource-consents/district-plan";
+const NAPIER_DISTRICT_PLAN_SOURCE = "https://eplan.napier.govt.nz/eplan2025";
+const TAURANGA_CITY_PLAN_SOURCE =
+  "https://www.tauranga.govt.nz/council/strategies-and-plans/tauranga-city-plan/how-to-use-the-city-plan";
+const KAPITI_RURAL_LIFESTYLE_SOURCE =
+  "https://www.kapiticoast.govt.nz/media/o0rhtal1/rurallifestylezone_218_20-aug-2025.pdf";
+const SELWYN_LLRZ_SUBDIVISION_SOURCE =
+  "https://www.selwyn.govt.nz/property-And-building/planning/strategies-and-plans/selwyn-district-plan/selwyn-district-plan-review/variation-to-proposed-selwyn-district-plan/variation-1-mdrs2/variationhearings/quick-links-to-notified-hearing-topics/variation-rezone-prebbleton/s42a-report/Appendix-3-Selwyn-Residential-Capacity-and-Demand-Model-IPI.pdf";
 
 const INTERIM_COMPARABLE_ROI_PROVIDERS = new Set<PlanningProviderMetadata["providerId"]>([
   "hamilton",
@@ -129,15 +136,58 @@ const INTERIM_COMPARABLE_ROI_PROVIDERS = new Set<PlanningProviderMetadata["provi
   "qldc",
   "whangarei",
   "wairarapa",
+  "kapiti",
+  "selwyn",
   "matamata-piako",
   "manawatu",
   "rotorua",
   "whakatane",
   "western-bay",
+  "tauranga",
+  "napier",
   "southland",
 ]);
 
 const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
+  {
+    providerId: "selwyn",
+    regionalZoneCode: "SDC_LLRZ",
+    zonePattern: /\b(?:llrz|large lot residential zone)\b/i,
+    zoneLabel: "Selwyn Large Lot Residential Zone",
+    standardMinimumLotSqm: 5_000,
+    requiredShapeText: "Each proposed allotment must satisfy the Selwyn Large Lot Residential Zone subdivision, access, servicing and site-shape standards.",
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "Partially Operative Selwyn District Plan Large Lot Residential Zone subdivision standard",
+    sourceUrl: SELWYN_LLRZ_SUBDIVISION_SOURCE,
+    caveats: [
+      "The district residential-capacity evidence models the Large Lot Residential Zone at a 5,000sqm plan-enabled lot size; confirm the current ePlan rule and any site-specific consent notice before relying on yield.",
+      "A gross site smaller than 5,000sqm does not support an additional standard vacant allotment in this first-pass model.",
+      "Access, existing buildings, easements, Plains Flood Management and airport bird-strike controls can further constrain development.",
+      "Mapped public water, wastewater and stormwater assets do not confirm a private lateral, legal connection right or available network capacity.",
+    ],
+    roiEnabled: true,
+  },
+  {
+    providerId: "kapiti",
+    regionalZoneCode: "KCDC_RLZ",
+    zonePattern: /\b(?:rlz|rural lifestyle zone|rural\s*-\s*residential)\b/i,
+    zoneLabel: "Kāpiti Coast Rural Lifestyle Zone",
+    // SUB-RUR-R51 requires a minimum average allotment area of 1ha and a
+    // minimum individual allotment area of 4,000sqm. The first-pass yield must
+    // therefore divide by the controlling 1ha average, not the smaller floor.
+    standardMinimumLotSqm: 10_000,
+    requiredShapeText: "Each allotment must satisfy the Rural Lifestyle Zone subdivision standards, including a minimum individual area of 4,000sqm and the applicable access, building-area and hazard requirements.",
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "Kāpiti Coast District Plan SUB-RUR-R51 Rural Lifestyle subdivision standards",
+    sourceUrl: KAPITI_RURAL_LIFESTYLE_SOURCE,
+    caveats: [
+      "The restricted-discretionary pathway requires at least 1 hectare average allotment area across the subdivision and at least 4,000sqm for every individual allotment.",
+      "This is a gross first-pass yield only. Access, shape, servicing, consent notices, existing buildings and the 1ha average can reduce the practical number of lots.",
+      "Flood, ponding, overflow-path, coastal-environment, tsunami, airport-surface and wind controls require site-specific planning and engineering review at Otaihanga.",
+      "Nearby public assets do not prove that the property has private laterals or that network capacity is available for extra allotments.",
+    ],
+    roiEnabled: true,
+  },
   {
     providerId: "manawatu",
     regionalZoneCode: "PNCC_RESIDENTIAL_500",
@@ -213,6 +263,55 @@ const REGIONAL_RULE_PACKS: RegionalRulePackEntry[] = [
         pattern: /\bmdc growth precinct\b/i,
         caveat: "Mapped Manawatu growth precincts use precinct-specific density and structure-plan standards, so the generic 500sqm yield and ROI are blocked until the applicable precinct rule is modelled.",
       },
+    ],
+    roiEnabled: true,
+  },
+  {
+    providerId: "tauranga",
+    regionalZoneCode: "TCC_MDRZ",
+    zonePattern: /\b(?:mdrz|medium density residential zone)\b/i,
+    zoneLabel: "Tauranga Medium Density Residential Zone",
+    // The operative MDRZ has no generic minimum allotment area. Keeping this
+    // null prevents the engine inventing a vacant-lot minimum; feasibility is
+    // assessed through the verified design-led/concurrent pathway below.
+    standardMinimumLotSqm: null,
+    requiredShapeText: "A vacant allotment must accommodate the applicable 8m by 15m shape factor and all access, servicing and built-form controls.",
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "Operative Tauranga City Plan Chapters 12 and 14 (Plan Change 33)",
+    sourceUrl: TAURANGA_CITY_PLAN_SOURCE,
+    caveats: [
+      "The operative Medium Density Residential Zone has no generic minimum allotment area, so no minimum-lot division is inferred automatically.",
+      "Up to three dwellings per site can be permitted only where the MDRZ built-form, outdoor-space, outlook, access, servicing and other applicable standards are met.",
+      "Subdivision around approved or concurrently assessed dwellings remains design-led and requires council consent; mapped viewshaft, airport, liquefaction and other controls can reduce practical yield.",
+      "A nearby public main does not prove that a private service connection exists or that network capacity is available for additional dwellings.",
+    ],
+    alternativePathway: {
+      label: "Tauranga MDRZ integrated land-use and subdivision pathway",
+      sourceLabel: "Operative Tauranga City Plan Chapters 12 and 14 (Plan Change 33)",
+      sourceUrl: TAURANGA_CITY_PLAN_SOURCE,
+      minNetAreaSqm: 300,
+      sqmPerDwelling: 200,
+      maxYield: 3,
+      confidence: "low",
+      reason: "The operative MDRZ permits up to three dwellings per site when all applicable performance standards are met, while subdivision is assessed against the resulting compliant layout rather than a generic minimum allotment area.",
+      detail: "The displayed maximum is a conservative design-led opportunity flag, not a minimum-site-area calculation or consent prediction. Confirm the 8m by 15m shape factor, access, outdoor space, outlook, infrastructure capacity, airport/viewshaft controls and natural hazards through a concurrent design and consent assessment.",
+    },
+    roiEnabled: true,
+  },
+  {
+    providerId: "napier",
+    regionalZoneCode: "NCC_MEDIUM_DENSITY_RESIDENTIAL",
+    zonePattern: /\bmedium density residential zone\b/i,
+    zoneLabel: "Napier Medium Density Residential Zone",
+    standardMinimumLotSqm: 350,
+    requiredShapeText: null,
+    requiredBuildingAreaSqm: null,
+    sourceLabel: "Napier Operative District Plan 2025 SUB-S1 vacant allotment standard",
+    sourceUrl: NAPIER_DISTRICT_PLAN_SOURCE,
+    caveats: [
+      "The 350sqm standard applies to newly created vacant residential allotments. Existing-unit subdivisions or concurrent land-use and subdivision applications can follow different design-led pathways.",
+      "The automatic yield is a gross first-pass screen only; access, existing dwelling placement, infrastructure capacity, overland flow, liquefaction and other mapped controls can reduce practical yield.",
+      "A nearby public main does not prove that an existing private service connection is present or has capacity for additional dwellings.",
     ],
     roiEnabled: true,
   },
@@ -997,7 +1096,7 @@ function resolveRuleApplication(
   rule: RegionalRulePackEntry,
   netAreaSqm: number | null | undefined,
   overlays?: Overlay[] | null,
-): { effectiveMinimumLotSqm: number; caveats: string[]; blocked: boolean } {
+): { effectiveMinimumLotSqm: number | null; caveats: string[]; blocked: boolean } {
   let effectiveMinimum = rule.standardMinimumLotSqm;
   if (
     netAreaSqm != null &&
@@ -1017,7 +1116,7 @@ function resolveRuleApplication(
   }
   for (const condition of rule.conditionalMinimums ?? []) {
     if (!condition.overlayPattern.test(text)) continue;
-    effectiveMinimum = Math.max(effectiveMinimum, condition.minimumLotSqm);
+    effectiveMinimum = Math.max(effectiveMinimum ?? 0, condition.minimumLotSqm);
     conditionalCaveats.push(condition.caveat);
   }
 
@@ -1031,9 +1130,12 @@ function resolveRuleApplication(
 function ruleNote(
   provider: Pick<PlanningProviderMetadata, "providerName">,
   rule: RegionalRulePackEntry,
-  effectiveMinLotSqm: number,
+  effectiveMinLotSqm: number | null,
   caveats: string[],
 ): string {
+  if (effectiveMinLotSqm == null) {
+    return `${provider.providerName} ${rule.zoneLabel} has no generic minimum allotment area. The design-led/concurrent pathway is modelled from ${rule.sourceLabel}. ${caveats.join(" ")} ROI may be shown only when title, land area, CV/acquisition value and comparables are also available.`;
+  }
   return `${provider.providerName} ${rule.zoneLabel} standard vacant-lot rule is modelled from ${rule.sourceLabel}: ${effectiveMinLotSqm}sqm per vacant site for this first-pass yield. ${caveats.join(" ")} ROI may be shown only when title, land area, CV/acquisition value and comparables are also available.`;
 }
 
@@ -1063,9 +1165,9 @@ export function regionalPlanningRuleStatus(
   if (rulePack) {
     const application = resolveRuleApplication(rulePack, landAreaSqm, overlays);
     return {
-      subdivisionRules: "standard_yield_modelled",
+      subdivisionRules: application.effectiveMinimumLotSqm == null ? "not_modelled" : "standard_yield_modelled",
       modellingStatus: rulePack.roiEnabled && !application.blocked ? "roi_enabled" : "standard_yield_enabled",
-      automaticYieldClaimsAllowed: !application.blocked,
+      automaticYieldClaimsAllowed: !application.blocked && application.effectiveMinimumLotSqm != null,
       automaticRoiAllowed: rulePack.roiEnabled && !application.blocked,
       regionalZoneCode: rulePack.regionalZoneCode,
       regionalZoneLabel: rulePack.zoneLabel,
@@ -1107,6 +1209,8 @@ export function regionalZoneDescriptionWithRuleStatus(
   const ruleStatus = regionalPlanningRuleStatus(provider, zone, landAreaSqm, overlays);
   const suffix = ruleStatus.subdivisionRules === "standard_yield_modelled" && ruleStatus.verifiedMinimumLotSqm
     ? `${provider.providerName} selected (${provider.coverageStatus} coverage). Standard vacant-lot rule pack enabled: ${ruleStatus.verifiedMinimumLotSqm}sqm per vacant site from ${ruleStatus.sourceLabel}.`
+    : ruleStatus.automaticRoiAllowed && ruleStatus.sourceLabel
+      ? `${provider.providerName} selected (${provider.coverageStatus} coverage). No generic minimum allotment area applies; design-led/concurrent pathway model enabled from ${ruleStatus.sourceLabel}.`
     : `${provider.providerName} selected (${provider.coverageStatus} coverage). Local subdivision/minimum-lot rules are not modelled yet.`;
   return base ? `${base} - ${suffix}` : suffix;
 }
@@ -1120,7 +1224,7 @@ export function calculateRegionalPotentialLots(input: RegionalLotAssessmentInput
   const easementArea = Math.max(0, input.easementAreaSqm ?? 0);
   const netArea = Math.max(0, grossArea - easementArea);
   const application = resolveRuleApplication(rule, netArea, input.overlays);
-  if (application.blocked) return null;
+  if (application.blocked || application.effectiveMinimumLotSqm == null) return null;
   const minLotSqm = application.effectiveMinimumLotSqm;
   const rawLots = Math.floor((netArea + 0.000001) / minLotSqm);
   const lots = Math.max(1, Math.min(20, rawLots));
@@ -1275,7 +1379,7 @@ export function regionalRulePackEntries(): Array<{
   providerId: string;
   regionalZoneCode: string;
   zoneLabel: string;
-  standardMinimumLotSqm: number;
+  standardMinimumLotSqm: number | null;
   sourceLabel: string;
   alternativePathwayLabel: string | null;
   roiEnabled: boolean;

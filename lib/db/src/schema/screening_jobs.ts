@@ -1,4 +1,4 @@
-import { index, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { index, integer, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { sql } from "drizzle-orm";
 import { z } from "zod/v4";
@@ -21,6 +21,11 @@ export const screeningJobs = pgTable(
     requestPayload: jsonb("request_payload").notNull().default(sql`'{}'::jsonb`),
     resultJson: jsonb("result_json"),
     error: text("error"),
+    stage: text("stage").notNull().default("queued"),
+    progress: integer("progress").notNull().default(0),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
+    deadlineAt: timestamp("deadline_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

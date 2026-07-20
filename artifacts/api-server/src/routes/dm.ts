@@ -745,8 +745,8 @@ router.post(
 );
 
 // Recipient opened a file attachment (e.g. a LIM/title PDF). Records the first
-// view only and broadcasts so the sender's clients can show "File viewed"
-// (surfaced to sales agents).
+// view only and broadcasts so the sender's clients can show "File opened".
+// Admin Message Hub clients receive the same persisted state through polling.
 router.post(
   "/dm/threads/:threadId/messages/:messageId/file-viewed",
   requireAuth,

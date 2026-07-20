@@ -35,17 +35,21 @@ describe("regional planning provider registry", () => {
       "matamata-piako",
       "waipa",
       "manawatu",
+      "selwyn",
       "christchurch",
       "canterbury",
       "nelson",
       "whangarei",
       "qldc",
       "wairarapa",
+      "kapiti",
       "wellington",
       "dunedin",
+      "tauranga",
       "western-bay",
       "whakatane",
       "rotorua",
+      "napier",
       "southland",
       "unsupported",
     ]);
@@ -77,6 +81,7 @@ describe("regional planning provider registry", () => {
     expect(resolvePlanningJurisdiction({ lat: -40.472, lng: 175.285, address: "Foxton" }).providerId).not.toBe("manawatu");
     expect(resolvePlanningJurisdiction({ lat: -40.208, lng: 176.100, address: "Dannevirke" }).providerId).not.toBe("manawatu");
     expect(resolvePlanningJurisdiction({ lat: -43.532, lng: 172.636, address: "Christchurch" }).providerId).toBe("christchurch");
+    expect(resolvePlanningJurisdiction({ lat: -43.5929461, lng: 172.5104991, address: "100 Birchs Road, Prebbleton, Selwyn District" }).providerId).toBe("selwyn");
     expect(resolvePlanningJurisdiction({ lat: -44.397, lng: 171.254, address: "Timaru" }).providerId).toBe("canterbury");
     expect(resolvePlanningJurisdiction({ lat: -41.306, lng: 173.222, address: "17 Quiet Woman Way, Monaco, Nelson" }).providerId).toBe("nelson");
     expect(resolvePlanningJurisdiction({ lat: -35.725, lng: 174.323, address: "Whangarei" }).providerId).toBe("whangarei");
@@ -86,7 +91,9 @@ describe("regional planning provider registry", () => {
     expect(resolvePlanningJurisdiction({ lat: -41.025, lng: 175.528, address: "Carterton" }).providerId).toBe("wairarapa");
     expect(resolvePlanningJurisdiction({ lat: -41.116, lng: 175.325, address: "Featherston" }).providerId).toBe("wairarapa");
     expect(resolvePlanningJurisdiction({ lat: -41.2865, lng: 174.7762, address: "Wellington" }).providerId).toBe("wellington");
+    expect(resolvePlanningJurisdiction({ lat: -40.8838658, lng: 175.0208898, address: "37 Tieko Street, Otaihanga" }).providerId).toBe("kapiti");
     expect(resolvePlanningJurisdiction({ lat: -41.2100, lng: 174.9000, address: "345 Hebden Crescent, Kelson, Lower Hutt" }).providerId).toBe("wellington");
+    expect(resolvePlanningJurisdiction({ lat: -37.6646905, lng: 176.2110862, address: "16 Lodge Avenue, Mount Maunganui, Tauranga" }).providerId).toBe("tauranga");
     expect(resolvePlanningJurisdiction({ lat: -37.4460583, lng: 175.9643635, address: "30 Athenree Road, Athenree" }).providerId).toBe("western-bay");
     expect(resolvePlanningJurisdiction({ lat: -37.7720624, lng: 176.4995595, address: "481 Pukehina Parade" }).providerId).toBe("western-bay");
     expect(resolvePlanningJurisdiction({ lat: -37.6878, lng: 176.1651, address: "Tauranga" }).providerId).not.toBe("western-bay");
@@ -94,6 +101,8 @@ describe("regional planning provider registry", () => {
     expect(resolvePlanningJurisdiction({ lat: -38.0166, lng: 176.7157, address: "1134 Braemar Road, Rotoma" }).providerId).toBe("whakatane");
     expect(resolvePlanningJurisdiction({ lat: -38.0156, lng: 176.7193, address: "1140 Braemar Road, Rotorua" }).providerId).toBe("whakatane");
     expect(resolvePlanningJurisdiction({ lat: -38.1251, lng: 176.2438, address: "85 Whittaker Road, Whakatane" }).providerId).toBe("rotorua");
+    expect(resolvePlanningJurisdiction({ lat: -39.5112541, lng: 176.8915180, address: "23 Wycliffe Street, Onekawa, Napier" }).providerId).toBe("napier");
+    expect(resolvePlanningJurisdiction({ lat: -39.638, lng: 176.849, address: "Hastings" }).providerId).not.toBe("napier");
     expect(resolvePlanningJurisdiction({ lat: -45.8372796, lng: 168.5815783, address: "77 Kruger Street, Balfour" }).providerId).toBe("southland");
     expect(resolvePlanningJurisdiction({ lat: -46.098, lng: 168.946, address: "Gore" }).providerId).toBe("unsupported");
   });
@@ -107,14 +116,18 @@ describe("regional planning provider registry", () => {
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "Manchester Street, Feilding" }).providerId).toBe("manawatu");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "Tangimoana Road, Tangimoana, Manawatu District" }).providerId).toBe("manawatu");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "1 Bealey Avenue, Christchurch" }).providerId).toBe("christchurch");
+    expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "100 Birchs Road, Prebbleton, Selwyn District" }).providerId).toBe("selwyn");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "17 Quiet Woman Way, Monaco, Nelson" }).providerId).toBe("nelson");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "1 Ardmore Street, Wanaka" }).providerId).toBe("qldc");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "78 Opaki Road, Lansdowne, Masterton" }).providerId).toBe("wairarapa");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "High Street, Carterton" }).providerId).toBe("wairarapa");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "Fitzherbert Street, Featherston" }).providerId).toBe("wairarapa");
+    expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "37 Tieko Street, Otaihanga, Kāpiti Coast" }).providerId).toBe("kapiti");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "85 Whittaker Road, Koutu, Rotorua" }).providerId).toBe("rotorua");
+    expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "16 Lodge Avenue, Mount Maunganui, Tauranga City" }).providerId).toBe("tauranga");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "30 Athenree Road, Athenree, Western Bay of Plenty" }).providerId).toBe("western-bay");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "481 Pukehina Parade, Pukehina Beach" }).providerId).toBe("western-bay");
+    expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "23 Wycliffe Street, Onekawa, Napier City" }).providerId).toBe("napier");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "1134 Braemar Road, Rotoma" }).providerId).toBe("whakatane");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "2926A State Highway 30, Onepu, Whakatāne District" }).providerId).toBe("whakatane");
     expect(resolvePlanningJurisdiction({ lat: 0, lng: 0, address: "77 Kruger Street, Balfour, Southland District" }).providerId).toBe("southland");
@@ -144,17 +157,21 @@ describe("regional planning provider registry", () => {
       "matamata-piako",
       "waipa",
       "manawatu",
+      "selwyn",
       "christchurch",
       "canterbury",
       "nelson",
       "whangarei",
       "qldc",
       "wairarapa",
+      "kapiti",
       "wellington",
       "dunedin",
+      "tauranga",
       "western-bay",
       "whakatane",
       "rotorua",
+      "napier",
       "southland",
     ]));
   });

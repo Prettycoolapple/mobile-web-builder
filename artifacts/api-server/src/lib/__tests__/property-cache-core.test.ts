@@ -192,6 +192,68 @@ describe("regional property-cache completeness", () => {
     } as never)).toBe(true);
   });
 
+  it("caches Napier reports with council land area and refreshes legacy unsupported bundles", () => {
+    expect(hasCacheableCore(baseResult({
+      geocode: { lat: -39.5112541, lng: 176.8915180 } as never,
+      linz_parcel: { parcel_id: "4208791" } as never,
+      merged: { cv_nzd: 600_000, land_area_sqm: 806 } as never,
+      raw_property: {
+        planning_provider: { providerId: "napier" },
+        zone: { zone_code: "Medium Density Residential Zone" },
+        property_history: { cv_nzd: null, land_area_sqm: 806 },
+        hougarden: null,
+        oneroof: null,
+        qv: null,
+        homes: null,
+      } as never,
+    }))).toBe(true);
+
+    expect(cachedRawNeedsRegionalZoneRefresh({
+      planning_provider: { providerId: "unsupported" },
+      geocode: {
+        lat: -39.5112541,
+        lng: 176.8915180,
+        formatted: "23 Wycliffe Street, Onekawa, Napier City, Hawke's Bay",
+      },
+      zone: { zone_code: "Residential" },
+    } as never)).toBe(true);
+
+    expect(cachedRawNeedsRegionalPropertyHistoryRefresh({
+      planning_provider: { providerId: "napier" },
+      property_history: { cv_nzd: null, land_area_sqm: null },
+    } as never)).toBe(true);
+  });
+
+  it("caches complete Tauranga council records and refreshes legacy unsupported bundles", () => {
+    expect(hasCacheableCore(baseResult({
+      geocode: { lat: -37.6646905, lng: 176.2110862 } as never,
+      linz_parcel: { parcel_id: "4365084" } as never,
+      merged: { cv_nzd: 1_580_000, land_area_sqm: 855 } as never,
+      raw_property: {
+        planning_provider: { providerId: "tauranga" },
+        zone: { zone_code: "MDRZ" },
+        property_history: { cv_nzd: 1_580_000, land_area_sqm: 855 },
+        hougarden: null,
+        oneroof: null,
+        qv: null,
+        homes: null,
+      } as never,
+    }))).toBe(true);
+    expect(cachedRawNeedsRegionalZoneRefresh({
+      planning_provider: { providerId: "unsupported" },
+      geocode: {
+        lat: -37.6646905,
+        lng: 176.2110862,
+        formatted: "16 Lodge Avenue, Mount Maunganui, Tauranga City, Bay of Plenty",
+      },
+      zone: { zone_code: "Unknown zone" },
+    } as never)).toBe(true);
+    expect(cachedRawNeedsRegionalPropertyHistoryRefresh({
+      planning_provider: { providerId: "tauranga" },
+      property_history: { cv_nzd: null, land_area_sqm: 855 },
+    } as never)).toBe(true);
+  });
+
   it("refreshes every unresolved regional zone spelling", () => {
     for (const zoneCode of [null, "UNKNOWN", "Unknown zone", "REGIONAL"]) {
       expect(cachedRawNeedsRegionalZoneRefresh({
@@ -256,6 +318,27 @@ describe("regional property-cache completeness", () => {
     } as never)).toBe(true);
   });
 
+  it("migrates legacy Wellington Kāpiti rows and refreshes incomplete council facts", () => {
+    const legacy = {
+      planning_provider: { providerId: "wellington" },
+      geocode: {
+        lat: -40.8838658,
+        lng: 175.0208898,
+        formatted: "37 Tieko Street, Otaihanga, Kāpiti Coast District, Wellington",
+      },
+      zone: { zone_code: "Unknown zone" },
+    };
+    expect(cachedRawNeedsRegionalZoneRefresh(legacy as never)).toBe(true);
+    expect(cachedRawNeedsRegionalPropertyHistoryRefresh({
+      ...legacy,
+      property_history: { cv_nzd: null, land_area_sqm: 39_122 },
+    } as never)).toBe(true);
+    expect(cachedRawNeedsRegionalPropertyHistoryRefresh({
+      ...legacy,
+      property_history: { cv_nzd: 950_000, land_area_sqm: 39_122 },
+    } as never)).toBe(false);
+  });
+
   it("refreshes incomplete PNCC council facts but accepts a complete direct rating record", () => {
     const base = {
       planning_provider: { providerId: "manawatu" },
@@ -273,6 +356,29 @@ describe("regional property-cache completeness", () => {
       ...base,
       property_history: { cv_nzd: 710_000, land_area_sqm: 786 },
     } as never)).toBe(false);
+  });
+
+  it("migrates legacy Christchurch/Canterbury Selwyn rows and requires complete council facts", () => {
+    for (const legacyProvider of ["christchurch", "canterbury"] as const) {
+      const legacy = {
+        planning_provider: { providerId: legacyProvider },
+        geocode: {
+          lat: -43.5929461,
+          lng: 172.5104991,
+          formatted: "100 Birchs Road, Prebbleton, Selwyn District, Canterbury",
+        },
+        zone: { zone_code: "Unknown zone" },
+      };
+      expect(cachedRawNeedsRegionalZoneRefresh(legacy as never)).toBe(true);
+      expect(cachedRawNeedsRegionalPropertyHistoryRefresh({
+        ...legacy,
+        property_history: { cv_nzd: null, land_area_sqm: 4_621 },
+      } as never)).toBe(true);
+      expect(cachedRawNeedsRegionalPropertyHistoryRefresh({
+        ...legacy,
+        property_history: { cv_nzd: 1_590_000, land_area_sqm: 4_621 },
+      } as never)).toBe(false);
+    }
   });
 
   it("refreshes a legacy row with no stored geocode instead of silently skipping the check", () => {

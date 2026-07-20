@@ -368,3 +368,58 @@ describe("DM push direction", () => {
     });
   });
 });
+
+describe("DM file-open receipts", () => {
+  it("records the first recipient file open", async () => {
+    state.userId = "general-1";
+    state.dmThread = {
+      id: "thread-1",
+      participantA: "general-1",
+      participantB: "agent-1",
+    };
+    state.dmMessage = {
+      id: "message-1",
+      threadId: "thread-1",
+      senderId: "agent-1",
+      fileUrl: "/api/storage/lim.pdf",
+      fileViewedAt: null,
+    };
+
+    await withServer("../dm", async (baseUrl) => {
+      const resp = await fetch(
+        `${baseUrl}/dm/threads/thread-1/messages/message-1/file-viewed`,
+        { method: "POST" },
+      );
+      expect(resp.status).toBe(200);
+      await expect(resp.json()).resolves.toEqual({ ok: true });
+    });
+
+    expect(state.dmMessage?.fileViewedAt).toBeInstanceOf(Date);
+  });
+
+  it("does not count the sender opening their own file", async () => {
+    state.userId = "agent-1";
+    state.dmThread = {
+      id: "thread-1",
+      participantA: "general-1",
+      participantB: "agent-1",
+    };
+    state.dmMessage = {
+      id: "message-1",
+      threadId: "thread-1",
+      senderId: "agent-1",
+      fileUrl: "/api/storage/lim.pdf",
+      fileViewedAt: null,
+    };
+
+    await withServer("../dm", async (baseUrl) => {
+      const resp = await fetch(
+        `${baseUrl}/dm/threads/thread-1/messages/message-1/file-viewed`,
+        { method: "POST" },
+      );
+      expect(resp.status).toBe(200);
+    });
+
+    expect(state.dmMessage?.fileViewedAt).toBeNull();
+  });
+});

@@ -742,11 +742,39 @@ button {
 
 .mh-message-meta {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: 12px;
   margin-top: 7px;
   font-size: 10px;
   opacity: 0.7;
+}
+
+.mh-receipt {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.mh-receipt::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.mh-receipt.read,
+.mh-receipt.opened {
+  opacity: 1;
+}
+
+.mh-receipt.opened {
+  color: #fff7d6;
 }
 
 .mh-readonly-badge {

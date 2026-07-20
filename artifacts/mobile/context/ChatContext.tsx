@@ -611,6 +611,9 @@ export interface PropertyCandidate {
   /** Listing claims conflicted with council records — parcel likely redeveloped. */
   redevelopmentSuspected?: boolean;
   screeningStatus?: "preliminary" | "verified";
+  screeningConfidenceReason?: "local_rules_not_modelled" | "source_data_incomplete";
+  planningProviderId?: string;
+  planningProviderName?: string;
   screeningNotes?: string[];
   builtEnvironmentContext?: BuiltEnvironmentContext | null;
   isCombinedListing?: boolean;

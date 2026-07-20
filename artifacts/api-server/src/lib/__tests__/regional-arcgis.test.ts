@@ -336,6 +336,57 @@ describe("regional ArcGIS planning fetchers", () => {
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/Website_SpatialPlan_layers/MapServer/7/query"))).toBe(true);
   });
 
+  it("maps Napier's operative zone and HBRC hazards for 23 Wycliffe Street", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/OperativeDistrictPlan_2025/MapServer/10/query")) {
+        return new Response(JSON.stringify({ features: [{ attributes: {
+          Zone: "Medium Density Residential Zone",
+          Category: "Residential Environment",
+          ImperviousArea: "70",
+        } }] }), { status: 200 });
+      }
+      if (url.includes("/OperativeDistrictPlan_2025/MapServer/24/query")) {
+        return new Response(JSON.stringify({ features: [{ attributes: { NAME: "C801", TAG: "WDT" } }] }), { status: 200 });
+      }
+      if (url.includes("/HBRC_Property_Hazards/MapServer/16/query")) {
+        return new Response(JSON.stringify({ features: [{ attributes: {
+          F3604_haza: "High",
+          Hazard_Description: "Liquefaction damage is possible - High liquefaction vulnerability",
+        } }] }), { status: 200 });
+      }
+      if (url.includes("/HBRC_Property_Hazards/MapServer/21/query")) {
+        return new Response(JSON.stringify({ features: [{ attributes: {
+          Relative_Earthquake_Amplificati: "Unconsolidated swamp, estuarine and lagoonal deposits and reclaimed land",
+        } }] }), { status: 200 });
+      }
+      if (url.includes("/HBRC_Property_Hazards/MapServer/24/query")) {
+        return new Response(JSON.stringify({ features: [{ attributes: {
+          Location: "Napier/Meeanee",
+          Class: "Low risk areas",
+        } }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ features: [], fields: [] }), { status: 200 });
+    }));
+
+    await expect(fetchRegionalPlanningZone(
+      jurisdiction("napier"), -39.5112541, 176.8915180,
+    )).resolves.toMatchObject({
+      zone_code: "Medium Density Residential Zone",
+      zone_description: expect.stringContaining("Residential Environment"),
+    });
+
+    const overlays = await fetchRegionalPlanningOverlays(
+      jurisdiction("napier"), -39.5112541, 176.8915180, null,
+    );
+    expect(overlays).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "Overland Flow Path", status: "restricted" }),
+      expect.objectContaining({ name: "Liquefaction Vulnerability", status: "restricted", detail: expect.stringContaining("High") }),
+      expect.objectContaining({ name: "Earthquake Ground Amplification", status: "moderate" }),
+      expect.objectContaining({ name: "Flood Risk Area", detail: expect.stringContaining("Low risk areas") }),
+    ]));
+  });
+
   it("maps configured regional overlay hits into conservative report overlays", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       features: [
@@ -356,6 +407,37 @@ describe("regional ArcGIS planning fetchers", () => {
       status: "restricted",
     });
     expect(overlays[0]?.detail).toContain("Confirm implications in the local district plan");
+  });
+
+  it("maps Tauranga's operative MDRZ and applicable Mount Maunganui controls", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const features = url.includes("/ePlan_DistrictPlanBase/MapServer/0/query")
+        ? [{ attributes: { Zone: "MDRZ", Description: "Medium Density Residential Zone", RuleID: 41 } }]
+        : url.includes("/ePlan_Section5/MapServer/4/query")
+          ? [{ attributes: { Height: "49" } }]
+          : url.includes("/ePlan_Section7/MapServer/0/query")
+            ? [{ attributes: { MaxHeight: 11 } }]
+            : url.includes("/Liquefaction/MapServer/0/query")
+              ? [{ attributes: { TerrainName: "Fixed Foredunes", LiquefactionVulnerability: "Possible", Details: "Level B" } }]
+              : [];
+      return new Response(JSON.stringify({ features, fields: [] }), { status: 200 });
+    }));
+
+    await expect(fetchRegionalPlanningZone(
+      jurisdiction("tauranga"), -37.6646905, 176.2110862,
+    )).resolves.toMatchObject({
+      zone_code: "MDRZ",
+      zone_description: expect.stringContaining("Medium Density Residential Zone"),
+    });
+    const overlays = await fetchRegionalPlanningOverlays(
+      jurisdiction("tauranga"), -37.6646905, 176.2110862, null,
+    );
+    expect(overlays).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "Airport Height Slope and Surface", status: "control" }),
+      expect.objectContaining({ name: "Viewshaft Building Elevation", status: "control" }),
+      expect.objectContaining({ name: "Liquefaction Vulnerability", status: "moderate" }),
+    ]));
   });
 
   it("returns the Wairarapa Combined District Plan zone for 78 Opaki Road", async () => {
@@ -391,6 +473,66 @@ describe("regional ArcGIS planning fetchers", () => {
     });
     expect(result.zone_description).toContain("Masterton");
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/Zones/MapServer/4/query"))).toBe(true);
+  });
+
+  it("uses Kāpiti's current zone fields and returns RLZ for 37 Tieko Street", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isZone = url.includes("/District_Plan_Zones/MapServer/0/query");
+      const isFlood = url.includes("/Latest_Flood_Hazards/MapServer/6/query");
+      return new Response(JSON.stringify({
+        features: isZone ? [{ attributes: {
+          Abbreviation: "RLZ",
+          ePlan_Zone: "Rural Lifestyle Zone",
+          NPS_Zone: "Rural Lifestyle Zone",
+          PDP_ZONE: "Rural - Residential",
+        } }] : isFlood ? [{ attributes: { ZONE: "Ponding" } }] : [],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+
+    await expect(fetchRegionalPlanningZone(
+      jurisdiction("kapiti"), -40.8838658, 175.0208898,
+    )).resolves.toMatchObject({
+      zone_code: "RLZ",
+      zone_description: expect.stringContaining("Rural Lifestyle Zone"),
+    });
+    await expect(fetchRegionalPlanningOverlays(
+      jurisdiction("kapiti"), -40.8838658, 175.0208898, null,
+    )).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "Ponding Area", status: "restricted" }),
+    ]));
+  });
+
+  it("returns Selwyn LLRZ and applicable Prebbleton controls for 100 Birchs Road", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const features = url.includes("/SelwynDistrictPlan2020/MapServer/80/query")
+        ? [{ attributes: {
+            Zone_Name: "Large lot residential zone",
+            Zone_ShortCode: "LLRZ",
+            Township: "Prebbleton",
+            Zone_Type: "Large lot residential zone",
+          } }]
+        : url.includes("/SelwynDistrictPlan2020/MapServer/39/query")
+          ? [{ attributes: { Description: "13km Buffer", Label: "13km Bird Strike Risk Overlay" } }]
+          : url.includes("/SelwynDistrictPlan2020/MapServer/8/query")
+            ? [{ attributes: { Name: "Plains Flood Management" } }]
+            : [];
+      return new Response(JSON.stringify({ features, fields: [] }), { status: 200 });
+    }));
+
+    await expect(fetchRegionalPlanningZone(
+      jurisdiction("selwyn"), -43.5929461, 172.5104991,
+    )).resolves.toMatchObject({
+      zone_code: "LLRZ",
+      zone_description: expect.stringContaining("Large lot residential zone"),
+    });
+    await expect(fetchRegionalPlanningOverlays(
+      jurisdiction("selwyn"), -43.5929461, 172.5104991, null,
+    )).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "13km Birdstrike Overlay", status: "moderate" }),
+      expect.objectContaining({ name: "Plains Flood Management Overlay", status: "restricted" }),
+    ]));
   });
 
   it("returns the Matamata-Piako Residential Zone for 19 Centennial Avenue, Te Aroha (layer name as zone identity)", async () => {
@@ -429,6 +571,10 @@ describe("regional ArcGIS planning fetchers", () => {
     expect(targets.some((target) => target.providerId === "qldc" && target.kind === "zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "wairarapa" && target.label === "Wairarapa Residential Zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "wairarapa" && target.label === "Faultline Hazard Area")).toBe(true);
+    expect(targets.some((target) => target.providerId === "kapiti" && target.kind === "zone")).toBe(true);
+    expect(targets.some((target) => target.providerId === "kapiti" && target.label === "Ponding Area")).toBe(true);
+    expect(targets.some((target) => target.providerId === "selwyn" && target.kind === "zone")).toBe(true);
+    expect(targets.some((target) => target.providerId === "selwyn" && target.label === "Plains Flood Management Overlay")).toBe(true);
     expect(targets.some((target) => target.providerId === "matamata-piako" && target.label === "Residential Zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "matamata-piako" && target.label === "Flood Hazard Zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "manawatu" && target.label === "MDC Growth Precinct 1")).toBe(true);
@@ -436,6 +582,8 @@ describe("regional ArcGIS planning fetchers", () => {
     expect(targets.some((target) => target.providerId === "rotorua" && target.kind === "zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "whakatane" && target.kind === "zone")).toBe(true);
     expect(targets.some((target) => target.providerId === "western-bay" && target.kind === "zone")).toBe(true);
+    expect(targets.some((target) => target.providerId === "napier" && target.kind === "zone")).toBe(true);
+    expect(targets.some((target) => target.providerId === "napier" && target.label === "Liquefaction Vulnerability")).toBe(true);
     expect(targets.some((target) => target.providerId === "southland" && target.kind === "zone")).toBe(true);
   });
 });

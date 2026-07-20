@@ -35,6 +35,12 @@ export interface PropertyEligibilityInput {
   zoneCode?: string | null;
   potentialLots?: number | null;
   minLotSize?: number | null;
+  /**
+   * The operative regional pathway is verified but intentionally has no
+   * generic minimum-lot standard (for example Tauranga MDRZ). In this case
+   * eligibility is decided by the separately modelled design-led pathway.
+   */
+  designLedSubdivisionPathwayVerified?: boolean;
   isCombinedListingAggregate?: boolean | null;
   /**
    * Discovery opt-in: the user has explicitly asked to include this non-freehold
@@ -314,8 +320,8 @@ export function assessPropertyEligibility(input: PropertyEligibilityInput): Prop
   else if (input.isCombinedListingAggregate) subdivisionRejectReason = "combined_listing_aggregate";
   else if (input.buildYear == null) subdivisionRejectReason = "build_year_unknown";
   else if (!buildYearEligible) subdivisionRejectReason = "post_2000_build";
-  else if (!input.zoneCode || !input.minLotSize || input.minLotSize <= 0) subdivisionRejectReason = "zone_or_min_lot_unknown";
-  else if ((input.potentialLots ?? 0) < 2) subdivisionRejectReason = "insufficient_land_for_two_lots";
+  else if (!input.designLedSubdivisionPathwayVerified && (!input.zoneCode || !input.minLotSize || input.minLotSize <= 0)) subdivisionRejectReason = "zone_or_min_lot_unknown";
+  else if (!input.designLedSubdivisionPathwayVerified && (input.potentialLots ?? 0) < 2) subdivisionRejectReason = "insufficient_land_for_two_lots";
 
   return {
     typology,

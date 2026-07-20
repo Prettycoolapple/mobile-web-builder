@@ -266,6 +266,52 @@ describe("regional site-plan wrapper", () => {
       .toEqual(["Liquefaction Vulnerability", "Tsunami / 1 in 2500 Year Wave", "Tsunami / 5m Wave Height"]);
   });
 
+  it("builds Wycliffe Site Plan with Napier services and applicable planning hazards", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isService = /717214_Napier_City_Council_layers\/FeatureServer\/(?:4|5|6)\/query/.test(url);
+      const isFlowPath = url.includes("/OperativeDistrictPlan_2025/MapServer/24/query");
+      const isHazard = /HBRC_Property_Hazards\/MapServer\/(?:16|21|24)\/query/.test(url);
+      const features = isService
+        ? [{ attributes: { FID: 1, ALLOW_CON: "Yes" }, geometry: { paths: [[[176.8913, -39.5114], [176.8919, -39.5110]]] } }]
+        : isFlowPath
+          ? [{ attributes: { NAME: "C801" }, geometry: { paths: [[[176.8913, -39.5114], [176.8919, -39.5110]]] } }]
+        : isHazard
+          ? [{ attributes: {
+              NAME: "C801",
+              F3604_haza: "High",
+              Hazard_Description: "High liquefaction vulnerability",
+              Relative_Earthquake_Amplificati: "Unconsolidated and reclaimed land",
+              Class: "Low risk areas",
+            }, geometry: { rings: [[
+              [176.8910, -39.5116], [176.8920, -39.5116], [176.8920, -39.5109],
+              [176.8910, -39.5109], [176.8910, -39.5116],
+            ]] } }]
+          : [];
+      return new Response(JSON.stringify({ features }), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+
+    const sitePlan = await buildSitePlanForReport("23 Wycliffe Street, Onekawa, Napier", {
+      geocode: {
+        lat: -39.5112541,
+        lng: 176.8915180,
+        formatted: "23 Wycliffe Street, Onekawa, Napier City, Hawke's Bay",
+        suburb: "Onekawa",
+      },
+      linz_parcel: null,
+    } as RawPropertyData);
+
+    expect(sitePlan.layers.filter((layer) => layer.group === "services" && layer.available).map((layer) => layer.label).sort())
+      .toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(sitePlan.layers.filter((layer) => layer.group === "planning" && layer.available).map((layer) => layer.label))
+      .toEqual(expect.arrayContaining([
+        "Overland Flow Path",
+        "Liquefaction Vulnerability",
+        "Earthquake Ground Amplification",
+        "Flood Risk Area",
+      ]));
+  });
+
   it("returns Waipa three-waters and only marks applicable planning overlays available", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -300,6 +346,78 @@ describe("regional site-plan wrapper", () => {
       .toEqual(["Infrastructure Constraint Qualifying Matter", "Stormwater Constraint Qualifying Matter"]);
     expect(sitePlan.layers.filter((layer) => layer.group === "planning" && !layer.available)).toEqual([]);
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("where=Category"))).toBe(true);
+  });
+
+  it("returns Tauranga three-waters and applicable controls for 16 Lodge Avenue", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isService = /Water_Supply_Common_Mapservices|Wastewater_Common_Mapservices|Stormwater_Common_Mapservices/.test(url);
+      const isAirport = url.includes("/ePlan_Section5/MapServer/4/query");
+      const isViewshaft = url.includes("/ePlan_Section7/MapServer/0/query");
+      const isLiquefaction = url.includes("/Liquefaction/MapServer/0/query");
+      const features = isService
+        ? [{ attributes: { OBJECTID: 1 }, geometry: { paths: [[[176.2108, -37.6647], [176.2114, -37.6647]]] } }]
+        : isAirport || isViewshaft || isLiquefaction
+          ? [{ attributes: { Height: 49, MaxHeight: 11, LiquefactionVulnerability: "Possible" }, geometry: { rings: [[
+              [176.2106, -37.6650], [176.2116, -37.6650], [176.2116, -37.6643],
+              [176.2106, -37.6643], [176.2106, -37.6650],
+            ]] } }]
+          : [];
+      return new Response(JSON.stringify({ features }), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+
+    const sitePlan = await buildSitePlanForReport("16 Lodge Avenue, Mount Maunganui, Tauranga", {
+      geocode: {
+        lat: -37.6646905,
+        lng: 176.2110862,
+        formatted: "16 Lodge Avenue, Omanu, Mount Maunganui, Tauranga City, Bay of Plenty",
+        suburb: "Mount Maunganui",
+      },
+      linz_parcel: null,
+    } as RawPropertyData);
+
+    expect(sitePlan.layers.filter((layer) => layer.group === "services" && layer.available).map((layer) => layer.label).sort())
+      .toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(sitePlan.layers.filter((layer) => layer.group === "planning" && layer.available).map((layer) => layer.label))
+      .toEqual(expect.arrayContaining([
+        "Airport Height Slope and Surface",
+        "Viewshaft Building Elevation",
+        "Liquefaction Vulnerability",
+      ]));
+  });
+
+  it("returns Kāpiti three-waters and applicable controls for 37 Tieko Street", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isService = url.includes("/Public/Services/MapServer/");
+      const isFlood = url.includes("/Latest_Flood_Hazards/MapServer/6/query");
+      const isCoastal = url.includes("/District_Plan_Overlays/MapServer/30/query");
+      const isAirport = url.includes("/District_Plan_Miscellaneous/MapServer/3/query");
+      const features = isService
+        ? [{ attributes: { OBJECTID: 1 }, geometry: { paths: [[[175.0205, -40.8839], [175.0212, -40.8839]]] } }]
+        : isFlood || isCoastal || isAirport
+          ? [{ attributes: { ZONE: "Ponding", Type: "Horizontal Surface 50m A.M.S.L" }, geometry: { rings: [[
+              [175.0186, -40.8842], [175.0216, -40.8842], [175.0216, -40.8811],
+              [175.0186, -40.8811], [175.0186, -40.8842],
+            ]] } }]
+          : [];
+      return new Response(JSON.stringify({ features }), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+
+    const sitePlan = await buildSitePlanForReport("37 Tieko Street, Otaihanga, Kāpiti Coast", {
+      geocode: {
+        lat: -40.8838658,
+        lng: 175.0208898,
+        formatted: "37 Tieko Street, Otaihanga, Paraparaumu, Kāpiti Coast District, Wellington",
+        suburb: "Otaihanga",
+      },
+      linz_parcel: null,
+    } as RawPropertyData);
+
+    expect(sitePlan.layers.filter((layer) => layer.group === "services" && layer.available).map((layer) => layer.label).sort())
+      .toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(sitePlan.layers.filter((layer) => layer.group === "planning" && layer.available).map((layer) => layer.label))
+      .toEqual(expect.arrayContaining(["Ponding Area", "Coastal Environment", "Airport Plan and Surface"]));
   });
 
   it("omits non-applicable planning controls while keeping all three service rows for Rotorua and Whakatane", async () => {
@@ -405,6 +523,68 @@ describe("regional site-plan wrapper", () => {
       .find((url) => url.includes("/MapServer/71/query"));
     expect(highwayRequest).toBeDefined();
     expect(new URL(highwayRequest!).searchParams.get("geometryType")).toBe("esriGeometryPoint");
+  });
+
+  it("shows Selwyn public services and applicable district-plan controls at 100 Birchs Road", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isService = url.includes("/SDC_Public/WATER_Water/MapServer/")
+        || url.includes("/SDC_Public/Water_Sewer/MapServer/")
+        || url.includes("/SDC_Public/WATER_Stormwater/MapServer/");
+      const isBirdstrike = url.includes("/SelwynDistrictPlan2020/MapServer/39/query");
+      const isFlood = url.includes("/SelwynDistrictPlan2020/MapServer/8/query");
+      const features = isService ? [{
+        attributes: { OBJECTID: 1, STATUS: "IN SERVICE" },
+        geometry: { paths: [[[172.5097, -43.5930], [172.5108, -43.5930]]] },
+      }] : isBirdstrike || isFlood ? [{
+        attributes: isBirdstrike ? { Label: "13km Bird Strike Risk Overlay" } : { Name: "Plains Flood Management" },
+        geometry: { rings: [[
+          [172.5095, -43.5934], [172.5109, -43.5934], [172.5109, -43.5923],
+          [172.5095, -43.5923], [172.5095, -43.5934],
+        ]] },
+      }] : [];
+      return new Response(JSON.stringify({ features, fields: [] }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sitePlan = await buildSitePlanForReport("100 Birchs Road, Prebbleton", {
+      geocode: {
+        lat: -43.5929461,
+        lng: 172.5104991,
+        formatted: "100 Birchs Road, Prebbleton, Selwyn District, Canterbury",
+        suburb: "Prebbleton",
+      },
+      linz_parcel: {
+        parcel_id: "7702456",
+        appellation: "Lot 7 DP 494658",
+        area_sqm: 4_621,
+        title_no: "724483",
+        legal_description: "Lot 7 DP 494658",
+        topology_type: "Primary",
+        bbox: {
+          minLng: 172.50972, maxLng: 172.51064, minLat: -43.59321, maxLat: -43.59247,
+          polygon: [
+            [172.50972, -43.59321], [172.51064, -43.59321], [172.51064, -43.59247],
+            [172.50972, -43.59247], [172.50972, -43.59321],
+          ],
+        },
+      },
+    } as RawPropertyData);
+
+    expect(sitePlan.layers.filter((layer) => layer.group === "services" && layer.available).map((layer) => layer.label).sort())
+      .toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(sitePlan.layers.filter((layer) => layer.group === "planning" && layer.available).map((layer) => layer.label))
+      .toEqual(expect.arrayContaining(["13km Birdstrike Overlay", "Plains Flood Management Overlay"]));
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/SDC_Public/Water_Sewer/MapServer/4/query"))).toBe(true);
+    const wastewaterRequest = fetchMock.mock.calls
+      .map((call) => String(call[0]))
+      .find((url) => url.includes("/SDC_Public/Water_Sewer/MapServer/4/query"));
+    const envelope = JSON.parse(String(new URL(wastewaterRequest!).searchParams.get("geometry"))) as {
+      xmin: number; ymin: number; xmax: number; ymax: number;
+    };
+    expect((envelope.ymax - envelope.ymin) * 111_320).toBeGreaterThanOrEqual(1_000);
+    expect((envelope.xmax - envelope.xmin) * 111_320 * Math.cos((-43.5929461 * Math.PI) / 180))
+      .toBeGreaterThanOrEqual(1_000);
   });
 
   it("returns thin, subtle contours for a phone-sized aerial", async () => {

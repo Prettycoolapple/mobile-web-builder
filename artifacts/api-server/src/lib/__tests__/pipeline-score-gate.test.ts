@@ -267,4 +267,158 @@ describe("developmentScoreUnavailableReason", () => {
     expect(actualScores).toMatchObject({ composite: expect.any(Number), ease: expect.any(Number), cost: expect.any(Number), roi: expect.any(Number) });
     expect(developmentScoreUnavailableReason(property, actualCosts, actualScenarios)).toBeNull();
   });
+
+  it("produces Wycliffe costs, ROI, and all development scores with the Napier profile", () => {
+    const property = merged({
+      cv_nzd: 600_000,
+      land_area_sqm: 806,
+      floor_area_sqm: 110,
+      build_year: 1960,
+      bedrooms: 3,
+      bathrooms: 1,
+      zone_code: "Medium Density Residential Zone",
+      zone_description: "Medium Density Residential Zone - Residential Environment",
+      contour: "flat",
+      overlays: [
+        { name: "Liquefaction Vulnerability", status: "restricted", detail: "High" },
+        { name: "Flood Risk Area", status: "moderate", detail: "Low risk areas" },
+      ],
+      infrastructure: [
+        { name: "Water Supply", location: "boundary", risk: "low", distance_metres: 10, estimated_cost_low: 0, estimated_cost_high: 0, note: "Mapped public pipe" },
+        { name: "Wastewater", location: "boundary", risk: "low", distance_metres: 10, estimated_cost_low: 0, estimated_cost_high: 0, note: "Mapped public pipe" },
+        { name: "Stormwater", location: "boundary", risk: "low", distance_metres: 10, estimated_cost_low: 0, estimated_cost_high: 0, note: "Mapped public pipe" },
+      ],
+      estate_type: "Fee Simple",
+    });
+    const profile = regionalCostProfileForProvider("napier");
+    const actualCosts = estimateCosts(property, 2, { sqm_per_lot: 403, cost_profile: profile });
+    const actualScenarios = calculateBearBaseBullScenarios(actualCosts, 0, 600_000, 2, 403, "stable");
+    const actualScores = scoreProperty(property, actualCosts, actualScenarios, 2);
+
+    expect(profile).toMatchObject({ id: "napier-default", source: "auckland_default_pending_regional_rates" });
+    expect(actualCosts.total_high).toBeGreaterThan(actualCosts.total_low);
+    expect(actualScenarios).toHaveLength(3);
+    expect(actualScores).toMatchObject({
+      composite: expect.any(Number),
+      ease: expect.any(Number),
+      cost: expect.any(Number),
+      roi: expect.any(Number),
+    });
+    expect(developmentScoreUnavailableReason(property, actualCosts, actualScenarios)).toBeNull();
+  });
+
+  it("produces Lodge Avenue costs, ROI, and all scores with the isolated Tauranga profile", () => {
+    const property = merged({
+      cv_nzd: 1_580_000,
+      land_area_sqm: 855,
+      floor_area_sqm: 154,
+      build_year: 1975,
+      bedrooms: 2,
+      zone_code: "MDRZ",
+      zone_description: "Medium Density Residential Zone",
+      contour: "flat",
+      overlays: [
+        { name: "Viewshaft Building Elevation", status: "control", detail: "MaxHeight: 11" },
+        { name: "Liquefaction Vulnerability", status: "moderate", detail: "Possible" },
+      ],
+      infrastructure: [
+        { name: "Water Supply", location: "boundary", risk: "low", distance_metres: 5, estimated_cost_low: 0, estimated_cost_high: 0, note: "Mapped public pipe" },
+        { name: "Wastewater", location: "boundary", risk: "low", distance_metres: 5, estimated_cost_low: 0, estimated_cost_high: 0, note: "Mapped public pipe" },
+        { name: "Stormwater", location: "boundary", risk: "low", distance_metres: 5, estimated_cost_low: 0, estimated_cost_high: 0, note: "Mapped public pipe" },
+      ],
+      estate_type: "Fee Simple",
+    });
+    const profile = regionalCostProfileForProvider("tauranga");
+    const actualCosts = estimateCosts(property, 3, { sqm_per_lot: 285, cost_profile: profile });
+    const actualScenarios = calculateBearBaseBullScenarios(actualCosts, 0, 1_580_000, 3, 285, "stable");
+    const actualScores = scoreProperty(property, actualCosts, actualScenarios, 3);
+    expect(profile).toMatchObject({ id: "tauranga-default", source: "auckland_default_pending_regional_rates" });
+    expect(actualCosts.total_high).toBeGreaterThan(actualCosts.total_low);
+    expect(actualScenarios).toHaveLength(3);
+    expect(actualScores).toMatchObject({
+      composite: expect.any(Number),
+      ease: expect.any(Number),
+      cost: expect.any(Number),
+      roi: expect.any(Number),
+    });
+    expect(developmentScoreUnavailableReason(property, actualCosts, actualScenarios)).toBeNull();
+  });
+
+  it("produces Tieko Street costs, ROI, and all scores with the isolated Kāpiti profile", () => {
+    const property = merged({
+      cv_nzd: 950_000,
+      land_area_sqm: 39_122,
+      floor_area_sqm: 180,
+      build_year: 1990,
+      bedrooms: 4,
+      bathrooms: 2,
+      zone_code: "RLZ",
+      zone_description: "Rural Lifestyle Zone",
+      contour: "flat",
+      overlays: [
+        { name: "Ponding Area", status: "restricted", detail: "Ponding" },
+        { name: "Coastal Environment", status: "restricted", detail: "Applies" },
+        { name: "Airport Plan and Surface", status: "control", detail: "Horizontal Surface 50m A.M.S.L" },
+      ],
+      infrastructure: [
+        { name: "Water Supply", location: "boundary", risk: "low", distance_metres: 17, estimated_cost_low: 5_000, estimated_cost_high: 20_000, note: "Mapped public pipe" },
+        { name: "Wastewater", location: "public-land", risk: "moderate", distance_metres: 125, estimated_cost_low: 10_000, estimated_cost_high: 40_000, note: "Mapped public pipe" },
+        { name: "Stormwater", location: "public-land", risk: "moderate", distance_metres: 173, estimated_cost_low: 10_000, estimated_cost_high: 40_000, note: "Mapped public pipe" },
+      ],
+      estate_type: "Fee Simple",
+    });
+    const profile = regionalCostProfileForProvider("kapiti");
+    const actualCosts = estimateCosts(property, 3, { sqm_per_lot: 13_041, cost_profile: profile });
+    const actualScenarios = calculateBearBaseBullScenarios(actualCosts, 0, 950_000, 3, 13_041, "stable");
+    const actualScores = scoreProperty(property, actualCosts, actualScenarios, 3);
+    expect(profile).toMatchObject({ id: "kapiti-default", source: "auckland_default_pending_regional_rates" });
+    expect(actualCosts.total_high).toBeGreaterThan(actualCosts.total_low);
+    expect(actualScenarios).toHaveLength(3);
+    expect(actualScores).toMatchObject({
+      composite: expect.any(Number),
+      ease: expect.any(Number),
+      cost: expect.any(Number),
+      roi: expect.any(Number),
+    });
+    expect(developmentScoreUnavailableReason(property, actualCosts, actualScenarios)).toBeNull();
+  });
+
+  it("produces Birchs Road costs, ROI, and all scores with the isolated Selwyn profile", () => {
+    const property = merged({
+      cv_nzd: 1_590_000,
+      cv_year: 2024,
+      land_area_sqm: 4_621,
+      floor_area_sqm: 180,
+      build_year: 1975,
+      bedrooms: 3,
+      bathrooms: 2,
+      zone_code: "LLRZ",
+      zone_description: "Large lot residential zone - Prebbleton",
+      contour: "flat",
+      overlays: [
+        { name: "Plains Flood Management Overlay", status: "restricted", detail: "Applies" },
+        { name: "13km Birdstrike Overlay", status: "moderate", detail: "13km Buffer" },
+      ],
+      infrastructure: [
+        { name: "Water Supply", location: "boundary", risk: "low", distance_metres: 10, estimated_cost_low: 0, estimated_cost_high: 0, note: "Mapped public pipe" },
+        { name: "Wastewater", location: "boundary", risk: "low", distance_metres: 10, estimated_cost_low: 0, estimated_cost_high: 0, note: "Mapped public pipe" },
+        { name: "Stormwater", location: "boundary", risk: "low", distance_metres: 10, estimated_cost_low: 0, estimated_cost_high: 0, note: "Mapped public pipe" },
+      ],
+      estate_type: "Fee Simple",
+    });
+    const profile = regionalCostProfileForProvider("selwyn");
+    const actualCosts = estimateCosts(property, 1, { sqm_per_lot: 4_621, cost_profile: profile });
+    const actualScenarios = calculateBearBaseBullScenarios(actualCosts, 0, 1_590_000, 1, 4_621, "stable");
+    const actualScores = scoreProperty(property, actualCosts, actualScenarios, 1);
+    expect(profile).toMatchObject({ id: "selwyn-default", source: "auckland_default_pending_regional_rates" });
+    expect(actualCosts.total_high).toBeGreaterThan(actualCosts.total_low);
+    expect(actualScenarios).toHaveLength(3);
+    expect(actualScores).toMatchObject({
+      composite: expect.any(Number),
+      ease: expect.any(Number),
+      cost: expect.any(Number),
+      roi: expect.any(Number),
+    });
+    expect(developmentScoreUnavailableReason(property, actualCosts, actualScenarios)).toBeNull();
+  });
 });

@@ -29,6 +29,8 @@ interface DmMessageRow {
   fileMime: string | null;
   likedAt: string | null;
   likedBy: string | null;
+  readAt: string | null;
+  fileViewedAt: string | null;
   createdAt: string;
 }
 
@@ -419,6 +421,22 @@ export default function MessageHubPage() {
                   )}
                   {messages?.map((message) => {
                     const fromAccount = message.senderId === selectedAccountId;
+                    const receipt =
+                      selectedAccount?.role === "sales_agent" && fromAccount
+                        ? message.fileUrl && message.fileViewedAt
+                          ? {
+                              label: "File opened",
+                              tone: "opened",
+                              at: message.fileViewedAt,
+                            }
+                          : message.readAt
+                            ? {
+                                label: "Read",
+                                tone: "read",
+                                at: message.readAt,
+                              }
+                            : { label: "Sent", tone: "sent", at: null }
+                        : null;
                     return (
                       <div
                         key={message.id}
@@ -459,6 +477,18 @@ export default function MessageHubPage() {
                                 title={`Liked ${formatDate(message.likedAt)}`}
                               >
                                 ♥ Liked
+                              </span>
+                            )}
+                            {receipt && (
+                              <span
+                                className={`mh-receipt ${receipt.tone}`}
+                                title={
+                                  receipt.at
+                                    ? `${receipt.label} ${formatDate(receipt.at)}`
+                                    : "The recipient has not read this message yet"
+                                }
+                              >
+                                {receipt.label}
                               </span>
                             )}
                           </div>

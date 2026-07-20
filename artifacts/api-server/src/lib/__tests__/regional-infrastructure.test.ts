@@ -139,6 +139,41 @@ describe("regional infrastructure fetchers", () => {
     expect(result.every((item) => item.service_source_owner === "Western Bay of Plenty District Council")).toBe(true);
   });
 
+  it("returns all three Napier public networks for 23 Wycliffe Street", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isNapierLayer = ["/4/query", "/5/query", "/6/query"].some((suffix) => url.includes(suffix));
+      return new Response(JSON.stringify({
+        features: isNapierLayer ? [{
+          attributes: { FID: 1, ALLOW_CON: "Yes" },
+          geometry: { paths: [[[176.8914, -39.5112], [176.8917, -39.5112]]] },
+        }] : [],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchRegionalInfrastructure("napier", -39.5112541, 176.8915180, null);
+
+    expect(result.map((item) => item.name).sort()).toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(result.every((item) => item.location !== "unknown")).toBe(true);
+    expect(result.every((item) => item.service_source_owner === "Napier City Council")).toBe(true);
+    expect(fetchMock.mock.calls.every((call) => String(call[0]).includes("717214_Napier_City_Council_layers"))).toBe(true);
+  });
+
+  it("returns all three Tauranga public networks for 16 Lodge Avenue", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      features: [{
+        attributes: { OBJECTID: 1, Status: "In Service" },
+        geometry: { paths: [[[176.2109, -37.6647], [176.2113, -37.6647]]] },
+      }],
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+
+    const result = await fetchRegionalInfrastructure("tauranga", -37.6646905, 176.2110862, null);
+    expect(result.map((item) => item.name).sort()).toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(result.every((item) => item.location !== "unknown")).toBe(true);
+    expect(result.every((item) => item.service_source_owner === "Tauranga City Council")).toBe(true);
+  });
+
   it("reports Pukehina water and stormwater while explicitly flagging no public wastewater scheme", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -182,6 +217,48 @@ describe("regional infrastructure fetchers", () => {
     expect(result.every((item) => item.service_source_owner === "Masterton / Carterton District Councils (Wairarapa Maps)")).toBe(true);
   });
 
+  it("returns Kāpiti Coast three-waters assets for 37 Tieko Street", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isKapitiService = [2, 10, 11, 19, 20, 21, 22]
+        .some((id) => url.includes(`/Public/Services/MapServer/${id}/query`));
+      return new Response(JSON.stringify({
+        features: isKapitiService ? [{
+          attributes: { OBJECTID: 1 },
+          geometry: { paths: [[[175.0207, -40.8839], [175.0211, -40.8839]]] },
+        }] : [],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+
+    const result = await fetchRegionalInfrastructure("kapiti", -40.8838658, 175.0208898, null);
+
+    expect(result.map((item) => item.name).sort()).toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(result.every((item) => item.location !== "unknown")).toBe(true);
+    expect(result.every((item) => item.service_source_owner === "Kāpiti Coast District Council")).toBe(true);
+  });
+
+  it("returns Selwyn Water and council three-waters assets for 100 Birchs Road", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const isSelwynService = url.includes("/SDC_Public/WATER_Water/MapServer/")
+        || url.includes("/SDC_Public/Water_Sewer/MapServer/")
+        || url.includes("/SDC_Public/WATER_Stormwater/MapServer/");
+      return new Response(JSON.stringify({
+        features: isSelwynService ? [{
+          attributes: { OBJECTID: 1, STATUS: "IN SERVICE" },
+          geometry: { paths: [[[172.5102, -43.5930], [172.5108, -43.5930]]] },
+        }] : [],
+      }), { status: 200 });
+    }));
+
+    const result = await fetchRegionalInfrastructure("selwyn", -43.5929461, 172.5104991, null);
+    expect(result.map((item) => item.name).sort()).toEqual(["Stormwater", "Wastewater", "Water Supply"]);
+    expect(result.every((item) => item.location !== "unknown")).toBe(true);
+    expect(result.find((item) => item.name === "Water Supply")?.service_source_owner).toBe("Selwyn Water Limited");
+    expect(result.find((item) => item.name === "Wastewater")?.service_source_owner).toBe("Selwyn Water Limited");
+    expect(result.find((item) => item.name === "Stormwater")?.service_source_owner).toBe("Selwyn District Council");
+  });
+
   it("returns Te Aroha's three mapped Matamata-Piako services at 19 Centennial Avenue", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -212,8 +289,12 @@ describe("regional infrastructure fetchers", () => {
     expect(hasRegionalInfrastructureProvider("rotorua")).toBe(true);
     expect(hasRegionalInfrastructureProvider("whakatane")).toBe(true);
     expect(hasRegionalInfrastructureProvider("western-bay")).toBe(true);
+    expect(hasRegionalInfrastructureProvider("tauranga")).toBe(true);
     expect(hasRegionalInfrastructureProvider("southland")).toBe(true);
+    expect(hasRegionalInfrastructureProvider("napier")).toBe(true);
     expect(hasRegionalInfrastructureProvider("wairarapa")).toBe(true);
+    expect(hasRegionalInfrastructureProvider("kapiti")).toBe(true);
+    expect(hasRegionalInfrastructureProvider("selwyn")).toBe(true);
     expect(hasRegionalInfrastructureProvider("matamata-piako")).toBe(true);
 
     const targets = regionalInfrastructureSmokeTargets();
@@ -224,9 +305,14 @@ describe("regional infrastructure fetchers", () => {
     expect(targets.some((target) => target.providerId === "rotorua" && target.serviceName === "Stormwater")).toBe(true);
     expect(targets.some((target) => target.providerId === "whakatane" && target.serviceName === "Wastewater")).toBe(true);
     expect(targets.some((target) => target.providerId === "western-bay" && target.serviceName === "Stormwater")).toBe(true);
+    expect(targets.some((target) => target.providerId === "tauranga" && target.serviceName === "Water Supply")).toBe(true);
     expect(targets.some((target) => target.providerId === "southland" && target.serviceName === "Water Supply")).toBe(true);
+    expect(targets.some((target) => target.providerId === "napier" && target.serviceName === "Wastewater")).toBe(true);
     expect(targets.some((target) => target.providerId === "wairarapa" && target.serviceName === "Water Supply")).toBe(true);
     expect(targets.some((target) => target.providerId === "wairarapa" && target.label === "Masterton stormwater main")).toBe(true);
+    expect(targets.some((target) => target.providerId === "kapiti" && target.serviceName === "Water Supply")).toBe(true);
+    expect(targets.some((target) => target.providerId === "kapiti" && target.label === "Stormwater pipe")).toBe(true);
+    expect(targets.some((target) => target.providerId === "selwyn" && target.label === "Water supply pipe")).toBe(true);
     expect(targets.some((target) => target.providerId === "matamata-piako" && target.serviceName === "Stormwater")).toBe(true);
     expect(targets.some((target) => target.providerId === "matamata-piako" && target.label === "Stormwater main")).toBe(true);
   });

@@ -35,6 +35,12 @@ import {
   fetchPlanningZoneForReport,
   fetchPropertyHistoryForReport,
 } from "./regional-planning-fetchers";
+import { planningProviderMetadata } from "./regional-planning";
+import {
+  assessRegionalSubdivisionPathways,
+  calculateRegionalPotentialLots,
+  regionalPlanningRuleStatus,
+} from "./regional-rules";
 
 export interface PropertyCandidate {
   address: string;
@@ -133,6 +139,10 @@ export interface PropertyCandidate {
    */
   redevelopmentSuspected?: boolean;
   screeningStatus?: "preliminary" | "verified";
+  /** Why this card is preliminary. Absent for a verified council-rule screen. */
+  screeningConfidenceReason?: "local_rules_not_modelled" | "source_data_incomplete";
+  planningProviderId?: string;
+  planningProviderName?: string;
   screeningNotes?: string[];
   isCombinedListing?: boolean;
   packageAddress?: string;
@@ -497,7 +507,25 @@ async function screenOneFast(
       preliminarySubdivision: options?.preliminarySubdivision === true,
     });
 
-    const zone = zoneRecord?.zone_code ?? null;
+    const planningProvider = planningProviderMetadata({
+      address: listing.address,
+      lat: geo.lat,
+      lng: geo.lng,
+    });
+    const regionalRuleStatus = regionalPlanningRuleStatus(
+      planningProvider,
+      zoneRecord,
+      listing.landArea ?? linzParcel?.area_sqm ?? propertyValue?.land_area_sqm ?? null,
+      resolvedOverlays,
+    );
+    const isRegionalProvider = Boolean(planningProvider && planningProvider.providerId !== "auckland-legacy");
+    const localRulesModelled = !isRegionalProvider
+      || regionalRuleStatus.automaticYieldClaimsAllowed
+      || (regionalRuleStatus.automaticRoiAllowed && regionalRuleStatus.sourceLabel != null);
+    const preliminaryLocalRules = isRegionalProvider && !localRulesModelled;
+    const zone = isRegionalProvider
+      ? (regionalRuleStatus.regionalZoneCode ?? zoneRecord?.zone_code ?? null)
+      : (zoneRecord?.zone_code ?? null);
 
     // Council/valuation sources lag redevelopment — a listing-stated
     // completion year is the only build year that knows about the new
@@ -596,7 +624,22 @@ async function screenOneFast(
     }
     if (!price) return { kind: "rejected", reason: "no_price" };
 
-    const { lots, minLotSize } = estimateLotCapacity(zone, land ?? null);
+    const regionalLotAssessment = calculateRegionalPotentialLots({
+      provider: planningProvider,
+      zone: zoneRecord,
+      landAreaSqm: land ?? null,
+      easementAreaSqm: 0,
+      overlays: resolvedOverlays,
+    });
+    const fallbackCapacity = estimateLotCapacity(zone, land ?? null);
+    const lots = regionalLotAssessment?.lotResult.lots ?? fallbackCapacity.lots;
+    const minLotSize = regionalLotAssessment?.lotResult.min_lot_size
+      ? regionalLotAssessment.lotResult.min_lot_size
+      : fallbackCapacity.minLotSize;
+    const designLedSubdivisionPathwayVerified =
+      regionalRuleStatus.automaticRoiAllowed
+      && !regionalRuleStatus.automaticYieldClaimsAllowed
+      && regionalRuleStatus.sourceLabel != null;
     const packageParts = extractCombinedListingAddressParts(listing.address);
     const eligibility = assessPropertyEligibility({
           address: listing.address,
@@ -623,6 +666,7 @@ async function screenOneFast(
           zoneCode: zone,
           potentialLots: lots,
           minLotSize,
+          designLedSubdivisionPathwayVerified,
           isCombinedListingAggregate: listing.isCombinedListing,
           listingClaims: claims,
         });
@@ -655,9 +699,10 @@ async function screenOneFast(
       buildYear: claims.completionYear ?? propertyHistory?.build_year ?? null,
       tenureWaived: waiveTenureForSubdivision != null,
     });
-    const designLedAssessment = assessSubdivisionPathways({
+    const subdivisionPathwayInput = {
       netAreaSqm: land ?? null,
       zoneCode: normaliseZoneForLotCapacity(zone),
+      zoneLabel: zoneRecord?.zone_description ?? null,
       standardVacantLots: lots,
       minLotSqm: minLotSize,
       typology: eligibility?.typology,
@@ -667,7 +712,12 @@ async function screenOneFast(
       buildYear: resolvedBuildYear,
       parcelBbox: linzParcel?.bbox ?? null,
       overlays: resolvedOverlays,
-    });
+    };
+    const designLedAssessment = assessRegionalSubdivisionPathways({
+      ...subdivisionPathwayInput,
+      provider: planningProvider,
+      zone: zoneRecord,
+    }) ?? assessSubdivisionPathways(subdivisionPathwayInput);
     const packageSubdivisionPasses =
       Boolean(packageParts) &&
       lots >= 2 &&
@@ -701,7 +751,14 @@ async function screenOneFast(
         return { kind: "rejected", reason: `development_gate:below_viable_pathway:${land}m2_min${minLotSize}` };
       }
     }
-    if (options?.strictStandardSubdivision && !standardSubdivisionPasses && !packageSubdivisionPasses && !designLedPasses) {
+    const preliminaryNationwidePass =
+      preliminaryLocalRules
+      && verifiedLand.landAreaConfidence === "verified"
+      && verifiedLand.isAlreadySubdividedChild !== true
+      && eligibility?.typology === "standalone"
+      && (eligibility?.titleConfidence === "verified" || titleStatus === "unverified")
+      && (resolvedBuildYear == null || resolvedBuildYear < 2000);
+    if (options?.strictStandardSubdivision && !standardSubdivisionPasses && !packageSubdivisionPasses && !designLedPasses && !preliminaryNationwidePass) {
       logger.info(
         {
           address: listing.address,
@@ -737,7 +794,7 @@ async function screenOneFast(
         const haveAnyBuildYear = resolvedBuildYear != null;
         const isIndeterminate =
           (!options?.preliminarySubdivision && !haveAnyBuildYear) ||
-          !zone ||
+          (!zone && !preliminaryLocalRules) ||
           verifiedLand.landAreaConfidence !== "verified" ||
           eligibility?.typology === "unknown" ||
           eligibility?.titleConfidence === "unknown";
@@ -776,7 +833,12 @@ async function screenOneFast(
       }
     }
 
-    const scores = quickScore(zone, resolvedOverlays, land ?? null, price);
+    // For councils without a modelled local rule pack, keep the score deliberately
+    // neutral on yield. It is still useful for ranking title/land/price candidates,
+    // but must not smuggle Auckland lot assumptions into a nationwide result.
+    const scores = preliminaryLocalRules
+      ? quickScore(null, resolvedOverlays, null, price)
+      : quickScore(zone, resolvedOverlays, land ?? null, price);
 
     const candidate: PropertyCandidate = {
       address: listing.address,
@@ -785,11 +847,11 @@ async function screenOneFast(
       zone: zone ?? undefined,
       scores,
       briefSummary: makeSummary(zone, lots, minLotSize, resolvedOverlays, land ?? null, designLedAssessment),
-      potentialLots: lots,
-      minLotSize: minLotSize ?? undefined,
-      standardVacantLots: designLedAssessment.standardVacantLots,
-      standardPathViable: standardSubdivisionPasses || packageSubdivisionPasses,
-      standardMinLotSize: designLedAssessment.standardMinLotSize,
+      potentialLots: preliminaryLocalRules ? undefined : lots,
+      minLotSize: preliminaryLocalRules ? undefined : (minLotSize ?? undefined),
+      standardVacantLots: preliminaryLocalRules ? undefined : designLedAssessment.standardVacantLots,
+      standardPathViable: preliminaryLocalRules ? false : (standardSubdivisionPasses || packageSubdivisionPasses),
+      standardMinLotSize: preliminaryLocalRules ? null : designLedAssessment.standardMinLotSize,
       designLedEligible: designLedAssessment.designLedEligible,
       designLedYieldRange: designLedAssessment.designLedYieldRange,
       designLedConfidence: designLedAssessment.designLedConfidence,
@@ -831,7 +893,10 @@ async function screenOneFast(
       subdivisionRejectReason: packageParts ? "combined_listing_aggregate" : eligibility?.subdivisionRejectReason,
       buildYear: resolvedBuildYear,
       redevelopmentSuspected: redevelopment.suspected || undefined,
-      screeningStatus: options?.preliminarySubdivision ? "preliminary" : "verified",
+      screeningStatus: preliminaryLocalRules || options?.preliminarySubdivision ? "preliminary" : "verified",
+      screeningConfidenceReason: preliminaryLocalRules ? "local_rules_not_modelled" : undefined,
+      planningProviderId: planningProvider?.providerId,
+      planningProviderName: planningProvider?.providerName,
       screeningNotes: [
         ...(waiveTenureForSubdivision === "cross_lease"
           ? ["Cross-lease title — it can't be subdivided on its own. Acquiring the neighbouring cross-lease unit(s) and converting the shared title to freehold can unlock subdivision potential."]
@@ -841,6 +906,8 @@ async function screenOneFast(
           : []),
         ...(designLedPasses && !standardSubdivisionPasses && !packageSubdivisionPasses
           ? ["Design-led consent opportunity; standard vacant-lot screen remains conservative."]
+          : preliminaryLocalRules
+            ? ["Preliminary opportunity screen only; local subdivision rules are not modelled for this council yet, so no local-rule-dependent yield is claimed."]
           : options?.preliminarySubdivision
             ? ["Preliminary active-listing subdivision screen; build year is checked in the full analysis."]
             : ["Verified pre-screen."]),

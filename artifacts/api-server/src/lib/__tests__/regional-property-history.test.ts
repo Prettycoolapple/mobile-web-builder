@@ -4,6 +4,35 @@ import { fetchRegionalPropertyHistory } from "../regional-property-history";
 describe("regional property history", () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it("returns Selwyn's exact council rating record for 100 Birchs Road", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      features: [{ attributes: {
+        Assessment_ID: "2355235600",
+        CertificateTitle: "724483",
+        Location: "100 Birchs Road",
+        FullLegal: "Lot 7 DP 494658",
+        LandValue: 860_000,
+        CapitalValue: 1_590_000,
+        Hectares: 0.4621,
+        Shape_Area: 4618.48,
+      } }],
+    }), { status: 200 })));
+
+    await expect(fetchRegionalPropertyHistory(
+      "selwyn", "100 Birchs Road, Prebbleton, Selwyn District", -43.5929461, 172.5104991,
+    )).resolves.toMatchObject({
+      cv_nzd: 1_590_000,
+      cv_year: 2024,
+      land_area_sqm: 4_621,
+      land_area_source: "selwyn_council_rating_gis",
+      land_area_scope: "rating_unit",
+      sources_confirmed: expect.arrayContaining([
+        "cv_nzd (Selwyn District Council 2024 rating valuation GIS)",
+        "land_area_sqm (Selwyn District Council rating GIS)",
+      ]),
+    });
+  });
+
   it("returns Christchurch's complete exact-address rating unit for a multi-parcel property", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input));
@@ -356,5 +385,87 @@ describe("regional property history", () => {
       168.5815783,
       2_023,
     )).resolves.toMatchObject({ cv_nzd: null, land_area_sqm: 2_023 });
+  });
+
+  it("uses an exact Napier council address record without accepting a neighbour", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => new Response(JSON.stringify({
+      features: [
+        { properties: { property_address: "21 Wycliffe Street", regarea: 0.0710 } },
+        { properties: { property_address: "23 Wycliffe Street", regarea: 0.0806 } },
+      ],
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchRegionalPropertyHistory(
+      "napier",
+      "23 Wycliffe Street, Onekawa, Napier",
+      -39.5112541,
+      176.8915180,
+    )).resolves.toMatchObject({
+      land_area_sqm: 806,
+      land_area_source: "napier_council_property_wfs",
+      land_area_scope: "parcel",
+      cv_nzd: null,
+    });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("typeNames=NCC%3ANCS_PROPADDRESS");
+  });
+
+  it("uses Tauranga's exact assessment and 2023 valuation records", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const features = url.includes("/Assessment/FeatureServer/2/query")
+        ? [
+            { attributes: { LOCATIONADDRESS: "14 LODGE AVENUE", VNZ: "0677213500", Shape__Area: 700 } },
+            { attributes: { LOCATIONADDRESS: "16 LODGE AVENUE", SUBURB: "Mount Maunganui", VNZ: "0677213600", ValuationNumber: "06772-136-00", Shape__Area: 856.9 } },
+          ]
+        : [{ attributes: { VNZ: "0677213600", LandArea: 0.0855, CV2023: 1_580_000, LV2023: 1_550_000, VI2023: 30_000, Shape__Area: 856.9 } }];
+      return new Response(JSON.stringify({ features }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchRegionalPropertyHistory(
+      "tauranga",
+      "16 Lodge Avenue, Mount Maunganui, Tauranga",
+      -37.6646905,
+      176.2110862,
+    )).resolves.toMatchObject({
+      cv_nzd: 1_580_000,
+      cv_year: 2023,
+      land_area_sqm: 855,
+      land_area_source: "tauranga_council_rating_gis",
+      land_area_scope: "rating_unit",
+    });
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("VNZ%3D%270677213600%27");
+  });
+
+  it("uses Kāpiti's exact rating polygon for 37 Tieko Street", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      features: [
+        { attributes: { Location: "35 Tieko Street, Paraparaumu", Capital_Value: 800_000, Hectares: 0.5 } },
+        { attributes: {
+          Valuation_ID: "1526029202",
+          Location: "37 Tieko Street, Paraparaumu",
+          Capital_Value: 950_000,
+          Land_Value: 710_000,
+          Improvements_Value: 240_000,
+          Hectares: 3.9122,
+          Valuation_Date: Date.UTC(2023, 7, 1),
+          Legal: "Lot 3 DP 378541",
+        } },
+      ],
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+
+    await expect(fetchRegionalPropertyHistory(
+      "kapiti",
+      "37 Tieko Street, Otaihanga, Paraparaumu",
+      -40.8838658,
+      175.0208898,
+    )).resolves.toMatchObject({
+      cv_nzd: 950_000,
+      cv_year: 2023,
+      land_area_sqm: 39_122,
+      land_area_source: "kapiti_council_rating_gis",
+      land_area_scope: "rating_unit",
+    });
   });
 });

@@ -8,6 +8,7 @@ import { scrapePropertyValue } from "../scrapers/propertyvalue";
 import { fetchPropertyHistory } from "../property-data";
 import { clearScreenVerdictCache } from "../listing-cache";
 import type { ListingResult } from "../scrapers/oneroof";
+import * as regionalPlanningFetchers from "../regional-planning-fetchers";
 
 vi.mock("../geocode", () => ({ geocodeAddress: vi.fn() }));
 vi.mock("../auckland-council", () => ({
@@ -214,6 +215,111 @@ describe("strict subdivision pre-screening", () => {
     expect(results[0].designLedEligible).toBe(true);
     expect(results[0].designLedYieldRange).toEqual({ min: 2, max: 4 });
     expect(results[0].screeningNotes?.[0]).toContain("Design-led consent opportunity");
+  });
+
+  it("uses Tauranga MDRZ's regional design-led pathway without inventing a minimum lot size", async () => {
+    mockedGeocode.mockResolvedValue({
+      lat: -37.6646905,
+      lng: 176.2110862,
+      formatted: "16 Lodge Avenue, Mount Maunganui, Tauranga",
+      suburb: "mount maunganui",
+    });
+    const zoneSpy = vi.spyOn(regionalPlanningFetchers, "fetchPlanningZoneForReport").mockResolvedValue({
+      zone_code: "Medium Density Residential Zone",
+      zone_description: "Tauranga Medium Density Residential Zone",
+      min_lot_size_sqm: null,
+      raw_zone: "Medium Density Residential Zone",
+    } as any);
+    const overlaySpy = vi.spyOn(regionalPlanningFetchers, "fetchPlanningOverlaysForReport").mockResolvedValue([]);
+    try {
+      const results = await preScreenListingsFast([
+        listing({
+          address: "16 Lodge Avenue, Mount Maunganui, Tauranga",
+          landArea: 700,
+          lat: -37.6646905,
+          lng: 176.2110862,
+        }),
+      ], 1, null, {
+        allowMissingListingPrice: true,
+        strictStandardSubdivision: true,
+        preliminarySubdivision: true,
+      });
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        planningProviderId: "tauranga",
+        screeningStatus: "preliminary",
+        minLotSize: undefined,
+        designLedEligible: true,
+      });
+      expect(results[0].designLedYieldRange?.max).toBeGreaterThanOrEqual(2);
+    } finally {
+      zoneSpy.mockRestore();
+      overlaySpy.mockRestore();
+    }
+  });
+
+  it("returns a neutral preliminary card when a NZ council rule pack is not modelled", async () => {
+    mockedGeocode.mockResolvedValue({
+      lat: -39.0556,
+      lng: 174.0752,
+      formatted: "10 Example Road, New Plymouth, Taranaki",
+      suburb: "new plymouth",
+    });
+    const zoneSpy = vi.spyOn(regionalPlanningFetchers, "fetchPlanningZoneForReport").mockResolvedValue({
+      zone_code: "UNKNOWN",
+      zone_description: "Unknown - no regional planning provider is enabled for this address.",
+      min_lot_size_sqm: null,
+      raw_zone: null,
+    } as any);
+    const overlaySpy = vi.spyOn(regionalPlanningFetchers, "fetchPlanningOverlaysForReport").mockResolvedValue([]);
+    const historySpy = vi.spyOn(regionalPlanningFetchers, "fetchPropertyHistoryForReport").mockResolvedValue({
+      cv_nzd: 520_000,
+      cv_year: 2023,
+      build_year: 1965,
+      floor_area_sqm: 120,
+      land_area_sqm: 900,
+      property_type: "Residential Dwelling",
+      sources_confirmed: [],
+      sources_estimated: [],
+    } as any);
+    mockedPropertyValue.mockResolvedValueOnce({
+      build_year: 1965,
+      floor_area_sqm: 120,
+      land_area_sqm: 900,
+      property_type: "Residential Dwelling",
+      legal_descriptions: ["Lot 1 DP 12345"],
+    } as any);
+
+    try {
+      const results = await preScreenListingsFast([
+        listing({
+          address: "10 Example Road, New Plymouth, Taranaki",
+          price: 650_000,
+          landArea: 900,
+          lat: -39.0556,
+          lng: 174.0752,
+        }),
+      ], 1, null, {
+        allowMissingListingPrice: true,
+        strictStandardSubdivision: true,
+        preliminarySubdivision: true,
+      });
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        planningProviderId: "unsupported",
+        screeningStatus: "preliminary",
+        screeningConfidenceReason: "local_rules_not_modelled",
+        potentialLots: undefined,
+        minLotSize: undefined,
+      });
+      expect(results[0].scores.composite).toBeGreaterThan(0);
+    } finally {
+      zoneSpy.mockRestore();
+      overlaySpy.mockRestore();
+      historySpy.mockRestore();
+    }
   });
 
   it("returns a preliminary strict subdivision candidate without waiting for build year", async () => {

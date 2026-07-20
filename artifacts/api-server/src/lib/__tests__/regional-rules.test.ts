@@ -1056,6 +1056,122 @@ describe("regional planning rule status", () => {
     });
   });
 
+  it("enables Napier medium-density yield, ROI, and development scoring", () => {
+    const provider = { providerId: "napier" as const, providerName: "Napier City Council planning provider" };
+    const zone = {
+      zone_code: "Medium Density Residential Zone",
+      zone_description: "Medium Density Residential Zone - Residential Environment",
+      min_lot_size_sqm: null,
+      raw_zone: "{}",
+    };
+    expect(regionalPlanningRuleStatus(provider, zone, 806)).toMatchObject({
+      subdivisionRules: "standard_yield_modelled",
+      modellingStatus: "roi_enabled",
+      automaticYieldClaimsAllowed: true,
+      automaticRoiAllowed: true,
+      regionalZoneCode: "NCC_MEDIUM_DENSITY_RESIDENTIAL",
+      verifiedMinimumLotSqm: 350,
+    });
+    expect(calculateRegionalPotentialLots({
+      provider,
+      zone,
+      landAreaSqm: 806,
+      overlays: [],
+    })).toMatchObject({
+      effectiveMinimumLotSqm: 350,
+      lotResult: { lots: 2, sqm_per_lot: 403, min_lot_size: 350 },
+    });
+  });
+
+  it("models Tauranga MDRZ through the no-minimum design-led pathway with ROI enabled", () => {
+    const provider = { providerId: "tauranga" as const, providerName: "Tauranga City Council planning provider" };
+    const zone = {
+      zone_code: "MDRZ",
+      zone_description: "Medium Density Residential Zone",
+      min_lot_size_sqm: null,
+      raw_zone: "{}",
+    };
+    expect(regionalPlanningRuleStatus(provider, zone, 855)).toMatchObject({
+      subdivisionRules: "not_modelled",
+      modellingStatus: "roi_enabled",
+      automaticYieldClaimsAllowed: false,
+      automaticRoiAllowed: true,
+      regionalZoneCode: "TCC_MDRZ",
+      verifiedMinimumLotSqm: null,
+    });
+    expect(calculateRegionalPotentialLots({ provider, zone, landAreaSqm: 855, overlays: [] })).toBeNull();
+    expect(assessRegionalSubdivisionPathways({
+      provider,
+      zone,
+      netAreaSqm: 855,
+      zoneCode: "MDRZ",
+      zoneLabel: "Medium Density Residential Zone",
+      standardVacantLots: 1,
+      minLotSqm: null,
+      typology: "standalone",
+      titleConfidence: "verified",
+      landAreaConfidence: "verified",
+      isAlreadySubdividedChild: false,
+      buildYear: 1975,
+      parcelBbox: null,
+      overlays: [],
+      slopeClass: "flat",
+    })).toMatchObject({
+      designLedEligible: true,
+      designLedYieldRange: { min: 2, max: 3 },
+      designLedConfidence: "low",
+    });
+  });
+
+  it("models Kāpiti RLZ using the controlling 1ha average allotment standard", () => {
+    const provider = { providerId: "kapiti" as const, providerName: "Kāpiti Coast District Council planning provider" };
+    const zone = {
+      zone_code: "RLZ",
+      zone_description: "Rural Lifestyle Zone - Rural - Residential",
+      min_lot_size_sqm: null,
+      raw_zone: "{}",
+    };
+    expect(regionalPlanningRuleStatus(provider, zone, 39_122)).toMatchObject({
+      subdivisionRules: "standard_yield_modelled",
+      modellingStatus: "roi_enabled",
+      automaticYieldClaimsAllowed: true,
+      automaticRoiAllowed: true,
+      regionalZoneCode: "KCDC_RLZ",
+      verifiedMinimumLotSqm: 10_000,
+    });
+    expect(calculateRegionalPotentialLots({
+      provider,
+      zone,
+      landAreaSqm: 39_122,
+      overlays: [{ name: "Ponding Area", status: "restricted", detail: "Ponding applies" }],
+    })).toMatchObject({
+      effectiveMinimumLotSqm: 10_000,
+      lotResult: { lots: 3, sqm_per_lot: 13_041, min_lot_size: 10_000 },
+    });
+  });
+
+  it("models Selwyn LLRZ at 5,000sqm and retains ROI for an undersized existing site", () => {
+    const provider = { providerId: "selwyn" as const, providerName: "Selwyn District Council planning provider" };
+    const zone = {
+      zone_code: "LLRZ",
+      zone_description: "Large lot residential zone - Prebbleton",
+      min_lot_size_sqm: null,
+      raw_zone: "{}",
+    };
+    expect(regionalPlanningRuleStatus(provider, zone, 4_621)).toMatchObject({
+      subdivisionRules: "standard_yield_modelled",
+      modellingStatus: "roi_enabled",
+      automaticYieldClaimsAllowed: true,
+      automaticRoiAllowed: true,
+      regionalZoneCode: "SDC_LLRZ",
+      verifiedMinimumLotSqm: 5_000,
+    });
+    expect(calculateRegionalPotentialLots({ provider, zone, landAreaSqm: 4_621, overlays: [] })).toMatchObject({
+      effectiveMinimumLotSqm: 5_000,
+      lotResult: { lots: 1, sqm_per_lot: 4_621, min_lot_size: 5_000 },
+    });
+  });
+
   it("does not cross-match Matamata-Piako's Rural Residential zones to the Residential rule pack", () => {
     expect(regionalPlanningRuleStatus(
       { providerId: "matamata-piako", providerName: "Matamata-Piako District Council planning provider" },

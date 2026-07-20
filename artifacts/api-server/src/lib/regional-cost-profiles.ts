@@ -6,17 +6,21 @@ export type CostProfileId =
   | "waipa-default"
   | "matamata-piako-default"
   | "manawatu-default"
+  | "selwyn-default"
   | "christchurch-default"
   | "canterbury-default"
   | "nelson-default"
   | "whangarei-default"
   | "qldc-default"
   | "wairarapa-default"
+  | "kapiti-default"
   | "wellington-default"
   | "dunedin-default"
   | "rotorua-default"
   | "whakatane-default"
   | "western-bay-default"
+  | "tauranga-default"
+  | "napier-default"
   | "southland-default"
   | "unsupported-default";
 
@@ -209,17 +213,29 @@ const REGIONAL_COST_OVERRIDES: Partial<Record<PlanningProviderId, DeepPartial<Re
   // Seeded from Auckland by request. Tune Manawatu construction,
   // contributions and rates here without changing the Auckland baseline.
   manawatu: {},
+  // Seeded from Auckland by request. Tune Selwyn build, Selwyn Water
+  // connection/development contributions and council-rate inputs here later.
+  selwyn: {},
   qldc: {},
   rotorua: {},
   whakatane: {},
   // Seeded from Auckland by request. Tune Western Bay construction,
   // contributions and rates here without changing the Auckland baseline.
   "western-bay": {},
+  // Seeded from Auckland by request. Tune Tauranga build, development
+  // contributions and council-rate assumptions here without changing Auckland.
+  tauranga: {},
+  // Seeded from Auckland by request. Tune Napier construction, development
+  // contributions and council-rate assumptions here without changing Auckland.
+  napier: {},
   // Seeded from Auckland by request. Keep Southland-specific changes isolated here.
   southland: {},
   // Seeded from Auckland by request. Tune Wairarapa build, contribution, and
   // council-rate assumptions here without changing the Auckland baseline.
   wairarapa: {},
+  // Seeded from Auckland by request. Tune Kāpiti construction, development
+  // contributions and council-rate assumptions independently here.
+  kapiti: {},
   // ── Wellington region (Wellington City, Lower/Upper Hutt, Porirua, Kāpiti) ──
   // Seeded from Auckland. Tune to Wellington Water / council DC + GWRC/TA land
   // rates and Wellington build costs here.
@@ -232,17 +248,21 @@ const PROVIDER_PROFILE_META: Record<PlanningProviderId, { id: CostProfileId; lab
   waipa: { id: "waipa-default", label: "Waipā default cost profile (Auckland assumptions)" },
   "matamata-piako": { id: "matamata-piako-default", label: "Matamata-Piako default cost profile (Auckland assumptions)" },
   manawatu: { id: "manawatu-default", label: "Manawatu default cost profile (Auckland assumptions)" },
+  selwyn: { id: "selwyn-default", label: "Selwyn District default cost profile (Auckland assumptions)" },
   christchurch: { id: "christchurch-default", label: "Christchurch default cost profile" },
   canterbury: { id: "canterbury-default", label: "Canterbury default cost profile" },
   nelson: { id: "nelson-default", label: "Nelson default cost profile" },
   whangarei: { id: "whangarei-default", label: "Whangarei default cost profile" },
   qldc: { id: "qldc-default", label: "Queenstown Lakes default cost profile" },
   wairarapa: { id: "wairarapa-default", label: "Wairarapa default cost profile (Auckland assumptions)" },
+  kapiti: { id: "kapiti-default", label: "Kāpiti Coast default cost profile (Auckland assumptions)" },
   wellington: { id: "wellington-default", label: "Wellington region default cost profile" },
   dunedin: { id: "dunedin-default", label: "Dunedin default cost profile" },
   rotorua: { id: "rotorua-default", label: "Rotorua default cost profile" },
   whakatane: { id: "whakatane-default", label: "Whakatane default cost profile" },
   "western-bay": { id: "western-bay-default", label: "Western Bay of Plenty default cost profile (Auckland assumptions)" },
+  tauranga: { id: "tauranga-default", label: "Tauranga City default cost profile (Auckland assumptions)" },
+  napier: { id: "napier-default", label: "Napier City default cost profile (Auckland assumptions)" },
   southland: { id: "southland-default", label: "Southland District default cost profile (Auckland assumptions)" },
   unsupported: { id: "unsupported-default", label: "Unsupported-region default cost profile" },
 };

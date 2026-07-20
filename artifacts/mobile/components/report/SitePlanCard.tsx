@@ -15,8 +15,10 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useQuery, type QueryClient } from "@tanstack/react-query";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
+  cancelAnimation,
   Easing,
   useAnimatedStyle,
+  useReducedMotion,
   useSharedValue,
   withRepeat,
   withTiming,
@@ -470,6 +472,7 @@ export function SitePlanCard({ report }: Props) {
   const planHeight = Math.min(430, Math.max(310, viewportWidth - 42));
   const [showAiModal, setShowAiModal] = useState(false);
   const aiBreath = useSharedValue(0);
+  const reduceMotion = useReducedMotion();
   const aiInterestEventRef = useRef<Promise<string | null> | null>(null);
 
   const scale = useSharedValue(1);
@@ -665,17 +668,24 @@ export function SitePlanCard({ report }: Props) {
     ],
   }));
   const animatedAiButtonStyle = useAnimatedStyle(() => ({
-    opacity: 0.84 + aiBreath.value * 0.16,
-    transform: [{ scale: 0.985 + aiBreath.value * 0.015 }],
+    transform: [{ scale: 0.985 + aiBreath.value * 0.025 }],
+    shadowOpacity: 0.2 + aiBreath.value * 0.34,
+    shadowRadius: 5 + aiBreath.value * 7,
+    elevation: 4 + aiBreath.value * 4,
   }));
 
   useEffect(() => {
+    if (reduceMotion) {
+      aiBreath.value = 1;
+      return () => cancelAnimation(aiBreath);
+    }
     aiBreath.value = withRepeat(
-      withTiming(1, { duration: 1800, easing: Easing.inOut(Easing.sin) }),
+      withTiming(1, { duration: 1600, easing: Easing.inOut(Easing.sin) }),
       -1,
       true,
     );
-  }, [aiBreath]);
+    return () => cancelAnimation(aiBreath);
+  }, [aiBreath, reduceMotion]);
   const toggleLayer = (id: string, next: boolean) => {
     setVisibleLayers((current) => ({ ...current, [id]: next }));
   };
@@ -835,7 +845,7 @@ export function SitePlanCard({ report }: Props) {
           </Text>
         </View>
         <View style={styles.aiButtonWrap}>
-          <Animated.View style={animatedAiButtonStyle}>
+          <Animated.View style={[styles.aiButtonGlow, animatedAiButtonStyle]}>
             <TouchableOpacity
               style={styles.aiButtonTouch}
               onPress={recordAiSubdivisionInterest}
@@ -844,15 +854,22 @@ export function SitePlanCard({ report }: Props) {
               accessibilityLabel={translateForOS("site_plan.ai_subdivision")}
             >
               <LinearGradient
-                colors={["#7C3AED", "#DB2777", "#F97316"]}
+                colors={["#C4B5FD", "#F9A8D4", "#FDBA74", "#C4B5FD"]}
                 start={{ x: 0, y: 0.15 }}
                 end={{ x: 1, y: 0.85 }}
-                style={styles.aiButton}
+                style={styles.aiButtonBorder}
               >
-                <Feather name="grid" size={13} color="#FFFFFF" />
-                <Text style={styles.aiButtonText} numberOfLines={1}>
-                  {translateForOS("site_plan.ai_subdivision")}
-                </Text>
+                <LinearGradient
+                  colors={["#7C3AED", "#DB2777", "#F97316"]}
+                  start={{ x: 0, y: 0.15 }}
+                  end={{ x: 1, y: 0.85 }}
+                  style={styles.aiButton}
+                >
+                  <Feather name="grid" size={13} color="#FFFFFF" />
+                  <Text style={styles.aiButtonText} numberOfLines={1}>
+                    {translateForOS("site_plan.ai_subdivision")}
+                  </Text>
+                </LinearGradient>
               </LinearGradient>
             </TouchableOpacity>
           </Animated.View>
@@ -1021,14 +1038,18 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingHorizontal: 12,
   },
+  aiButtonBorder: {
+    borderRadius: 20,
+    padding: 2,
+  },
   aiButtonTouch: {
-    borderRadius: 17,
+    borderRadius: 20,
     overflow: "hidden",
+  },
+  aiButtonGlow: {
+    borderRadius: 20,
     shadowColor: "#C026D3",
     shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.28,
-    shadowRadius: 7,
-    elevation: 4,
   },
   aiButtonWrap: {
     position: "relative",

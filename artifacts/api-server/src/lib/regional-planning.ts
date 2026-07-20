@@ -11,17 +11,21 @@ export type PlanningProviderId =
   | "waipa"
   | "matamata-piako"
   | "manawatu"
+  | "selwyn"
   | "christchurch"
   | "canterbury"
   | "nelson"
   | "whangarei"
   | "qldc"
   | "wairarapa"
+  | "kapiti"
   | "wellington"
   | "dunedin"
   | "rotorua"
   | "whakatane"
   | "western-bay"
+  | "tauranga"
+  | "napier"
   | "southland"
   | "unsupported";
 
@@ -175,6 +179,12 @@ const MATAMATA_PIAKO_BOUNDS: Bounds = { minLat: -37.86, maxLat: -37.28, minLng: 
 // settlement text returned by the geocoder.
 const PALMERSTON_NORTH_BOUNDS: Bounds = { minLat: -40.43, maxLat: -40.25, minLng: 175.50, maxLng: 175.83 };
 const FEILDING_BOUNDS: Bounds = { minLat: -40.29, maxLat: -40.17, minLng: 175.49, maxLng: 175.65 };
+// Selwyn District wraps around Christchurch's western and southern edge. Use
+// conservative envelopes for its main urban growth settlements and rely on the
+// geocoder's "Selwyn District" address component for the remaining rural area.
+// This provider must be registered before Christchurch and Canterbury.
+const SELWYN_PREBBLETON_BOUNDS: Bounds = { minLat: -43.66, maxLat: -43.54, minLng: 172.42, maxLng: 172.58 };
+const SELWYN_LINCOLN_ROLLESTON_BOUNDS: Bounds = { minLat: -43.74, maxLat: -43.53, minLng: 172.28, maxLng: 172.54 };
 const CHRISTCHURCH_BOUNDS: Bounds = { minLat: -43.75, maxLat: -43.35, minLng: 172.35, maxLng: 173.05 };
 const CANTERBURY_BOUNDS: Bounds = { minLat: -44.95, maxLat: -42.0, minLng: 169.9, maxLng: 174.6 };
 const NELSON_BOUNDS: Bounds = { minLat: -41.45, maxLat: -41.15, minLng: 173.05, maxLng: 173.45 };
@@ -184,9 +194,13 @@ const QLDC_BOUNDS: Bounds = { minLat: -45.4, maxLat: -44.25, minLng: 168.0, maxL
 // District Plan. The small south-west overlap with Wellington contains
 // Featherston, so this provider must remain before Wellington in the registry.
 const WAIRARAPA_BOUNDS: Bounds = { minLat: -41.45, maxLat: -40.55, minLng: 175.15, maxLng: 176.30 };
-// Whole Wellington region urban footprint: Kāpiti (north) down through Porirua,
-// Wellington City, and the Hutt Valley. Wairarapa territorial authorities are
-// resolved by the Wairarapa provider registered before Wellington below.
+// Kāpiti Coast District from Paekākāriki to north of Ōtaki. This provider is
+// registered before the wider Wellington-region provider because their
+// coordinate envelopes necessarily overlap around the district boundary.
+const KAPITI_BOUNDS: Bounds = { minLat: -41.10, maxLat: -40.68, minLng: 174.82, maxLng: 175.25 };
+// Wider Wellington metro footprint through Porirua, Wellington City and the
+// Hutt Valley. Kāpiti and Wairarapa are resolved by dedicated providers that
+// are registered before Wellington below.
 const WELLINGTON_BOUNDS: Bounds = { minLat: -41.45, maxLat: -40.70, minLng: 174.60, maxLng: 175.35 };
 const DUNEDIN_BOUNDS: Bounds = { minLat: -46.15, maxLat: -45.55, minLng: 169.95, maxLng: 171.15 };
 const ROTORUA_BOUNDS: Bounds = { minLat: -38.45, maxLat: -37.85, minLng: 175.85, maxLng: 176.55 };
@@ -202,6 +216,16 @@ const WESTERN_BAY_BOUNDS: Bounds = { minLat: -37.67, maxLat: -37.35, minLng: 175
 // Tauranga City. Keep a second narrow envelope around Pukehina/Little Waihi so
 // Tauranga and Papamoa coordinates cannot be claimed by this provider.
 const WESTERN_BAY_PUKEHINA_BOUNDS: Bounds = { minLat: -37.86, maxLat: -37.70, minLng: 176.40, maxLng: 176.56 };
+// Tauranga City has a narrow, irregular urban footprint. These conservative
+// urban envelopes cover Mount Maunganui/Papamoa and the central/southern city
+// without claiming the neighbouring Western Bay settlements.
+const TAURANGA_MOUNT_PAPAMOA_BOUNDS: Bounds = { minLat: -37.775, maxLat: -37.60, minLng: 176.15, maxLng: 176.35 };
+const TAURANGA_CENTRAL_BOUNDS: Bounds = { minLat: -37.80, maxLat: -37.62, minLng: 176.075, maxLng: 176.22 };
+const TAURANGA_SOUTH_BOUNDS: Bounds = { minLat: -37.89, maxLat: -37.74, minLng: 176.07, maxLng: 176.22 };
+// Napier City is a compact territorial authority immediately north-east of
+// Hastings. Keep the coordinate envelope conservative at the shared boundary;
+// exact geocoder locality/TA text covers the remaining northern rural area.
+const NAPIER_CITY_BOUNDS: Bounds = { minLat: -39.58, maxLat: -39.35, minLng: 176.78, maxLng: 176.99 };
 const SOUTHLAND_DISTRICT_BOUNDS: Bounds = { minLat: -47.35, maxLat: -44.75, minLng: 166.45, maxLng: 169.35 };
 const INVERCARGILL_CITY_BOUNDS: Bounds = { minLat: -46.55, maxLat: -46.30, minLng: 168.20, maxLng: 168.50 };
 const GORE_DISTRICT_URBAN_BOUNDS: Bounds = { minLat: -46.18, maxLat: -45.92, minLng: 168.78, maxLng: 169.18 };
@@ -369,6 +393,36 @@ const providerRegistry: PlanningProvider[] = [
     ]) || inBounds(context, PALMERSTON_NORTH_BOUNDS) || inBounds(context, FEILDING_BOUNDS),
   ),
   provider(
+    "selwyn",
+    "Selwyn District Council planning provider",
+    "Selwyn District Council",
+    "Canterbury",
+    "full",
+    "Partially Operative Selwyn District Plan",
+    [
+      { label: "Selwyn District Plan zones and overlays", url: "https://gis.selwyn.govt.nz/arcgis/rest/services/DistrictPlan/SelwynDistrictPlan2020/MapServer" },
+      { label: "Selwyn public property and rating data", url: "https://gis.selwyn.govt.nz/arcgis/rest/services/SDC_Public/Property_Public/MapServer" },
+      { label: "Selwyn public water assets", url: "https://gis.selwyn.govt.nz/arcgis/rest/services/SDC_Public/WATER_Water/MapServer" },
+      { label: "Selwyn water scheme and connection status", url: "https://gis.selwyn.govt.nz/arcgis/rest/services/SDC_Public/Water_Connection_Supply/MapServer" },
+      { label: "Selwyn public wastewater assets", url: "https://gis.selwyn.govt.nz/arcgis/rest/services/SDC_Public/Water_Sewer/MapServer" },
+      { label: "Selwyn public stormwater assets", url: "https://gis.selwyn.govt.nz/arcgis/rest/services/SDC_Public/WATER_Stormwater/MapServer" },
+    ],
+    (context) =>
+      addressHas(context, [
+        /\bselwyn district\b/,
+        /\bprebbleton\b/,
+        /\brolleston\b/,
+        /\blincoln\b/,
+        /\bwest melton\b/,
+        /\bdarfield\b/,
+        /\bleeston\b/,
+        /\bsouthbridge\b/,
+        /\bhororata\b/,
+        /\bkirwee\b/,
+        /\bspringfield\b/,
+      ]) || inBounds(context, SELWYN_PREBBLETON_BOUNDS) || inBounds(context, SELWYN_LINCOLN_ROLLESTON_BOUNDS),
+  ),
+  provider(
     "christchurch",
     "Christchurch City Council planning provider",
     "Christchurch City Council",
@@ -499,17 +553,42 @@ const providerRegistry: PlanningProvider[] = [
       ]),
   ),
   provider(
+    "kapiti",
+    "Kāpiti Coast District Council planning provider",
+    "Kāpiti Coast District Council",
+    "Wellington",
+    "full",
+    "Kāpiti Coast District Plan 2021",
+    [
+      { label: "Kāpiti Coast District Plan Zones", url: "https://maps.kapiticoast.govt.nz/server/rest/services/Public/District_Plan_Zones/MapServer" },
+      { label: "Kāpiti Coast District Plan Overlays", url: "https://maps.kapiticoast.govt.nz/server/rest/services/Public/District_Plan_Overlays/MapServer" },
+      { label: "Kāpiti Coast public property and rating data", url: "https://maps.kapiticoast.govt.nz/server/rest/services/Public/Property_Public/MapServer" },
+      { label: "Kāpiti Coast public three-waters assets", url: "https://maps.kapiticoast.govt.nz/server/rest/services/Public/Services/MapServer" },
+    ],
+    (context) =>
+      supportsAny(context, KAPITI_BOUNDS, [
+        /\bkapiti(?: coast)?\b/,
+        /\bparaparaumu\b/,
+        /\botaihanga\b/,
+        /\bwaikanae\b/,
+        /\botaki\b/,
+        /\bpaekakariki\b/,
+        /\braumati\b/,
+        /\bte horo\b/,
+        /\bpeka peka\b/,
+      ]),
+  ),
+  provider(
     "wellington",
     "Wellington region planning provider",
     null,
     "Wellington",
     "partial",
-    "Wellington region district plans (Wellington City, Hutt City, Upper Hutt, Porirua, Kāpiti Coast)",
+    "Wellington metropolitan district plans (Wellington City, Hutt City, Upper Hutt and Porirua)",
     [
       { label: "Wellington City District Plan", url: "https://gis.wcc.govt.nz/arcgis/rest/services/DistrictPlan/DistrictPlan/MapServer" },
       { label: "Hutt City District Plan", url: "https://maps.huttcity.govt.nz/server02/rest/services/Essentials/HCC_District_Plan/MapServer" },
       { label: "Upper Hutt District Plan Zones", url: "https://maps.upperhutt.govt.nz/arcgis/rest/services/District_Plan_Zones/MapServer" },
-      { label: "Kāpiti Coast District Plan Zones", url: "https://maps.kapiticoast.govt.nz/server/rest/services/Public/District_Plan_Zones/MapServer" },
       { label: "Wellington Water regional three waters", url: "https://gis.wellingtonwater.co.nz/server1/rest/services/Councils/All_Councils_3_Waters_Asset_Data/MapServer" },
     ],
     (context) =>
@@ -525,10 +604,6 @@ const providerRegistry: PlanningProvider[] = [
         /\bwhitby\b/,
         /\bparemata\b/,
         /\btitahi bay\b/,
-        /\bkapiti\b/,
-        /\bparaparaumu\b/,
-        /\bwaikanae\b/,
-        /\botaki\b/,
         /\btawa\b/,
         /\bjohnsonville\b/,
         /\bkarori\b/,
@@ -550,6 +625,46 @@ const providerRegistry: PlanningProvider[] = [
       { label: "Dunedin CityCare Utilities", url: "https://apps.dunedin.govt.nz/arcgis/rest/services/Public/CityCare/MapServer" },
     ],
     (context) => supportsAny(context, DUNEDIN_BOUNDS, [/\bdunedin\b/, /\botepoti\b/, /\bmosgiel\b/]),
+  ),
+  provider(
+    "tauranga",
+    "Tauranga City Council planning provider",
+    "Tauranga City Council",
+    "Bay of Plenty",
+    "partial",
+    "Operative Tauranga City Plan",
+    [
+      { label: "Tauranga operative planning zones", url: "https://gis.tauranga.govt.nz/server/rest/services/ePlan/ePlan_DistrictPlanBase/MapServer" },
+      { label: "Tauranga operative City Plan controls", url: "https://gis.tauranga.govt.nz/server/rest/services/ePlan/ePlan_Sections1to3/MapServer" },
+      { label: "Tauranga public property and valuation data", url: "https://gis.tauranga.govt.nz/server/rest/services/Assessment/FeatureServer" },
+      { label: "Tauranga public three-waters assets", url: "https://gis.tauranga.govt.nz/server/rest/services/Utilities_Multiple/MapServer" },
+    ],
+    (context) => {
+      if (addressHas(context, [
+        /\bwestern bay of plenty\b/,
+        /\bathenree\b/,
+        /\bwaihi beach\b/,
+        /\bkatikati\b/,
+        /\bomokoroa\b/,
+        /\bte puke\b/,
+        /\bpukehina\b/,
+      ])) return false;
+      return inBounds(context, TAURANGA_MOUNT_PAPAMOA_BOUNDS)
+        || inBounds(context, TAURANGA_CENTRAL_BOUNDS)
+        || inBounds(context, TAURANGA_SOUTH_BOUNDS)
+        || addressHas(context, [
+          /\btauranga city\b/,
+          /\btauranga\b/,
+          /\bmount maunganui\b/,
+          /\bmt maunganui\b/,
+          /\bpapamoa\b/,
+          /\bomanu\b/,
+          /\bbethlehem\b/,
+          /\bwelcome bay\b/,
+          /\btauriko\b/,
+          /\bpyes pa\b/,
+        ]);
+    },
   ),
   provider(
     "western-bay",
@@ -622,6 +737,32 @@ const providerRegistry: PlanningProvider[] = [
       /\bmamaku\b/,
       /\bokareka\b/,
       /\breporoa\b/,
+    ]),
+  ),
+  provider(
+    "napier",
+    "Napier City Council planning provider",
+    "Napier City Council",
+    "Hawke's Bay",
+    "partial",
+    "Napier Operative District Plan 2025",
+    [
+      { label: "Napier Operative District Plan 2025", url: "https://spatial.napier.govt.nz/server/rest/services/NapierMaps/OperativeDistrictPlan_2025/MapServer" },
+      { label: "Napier public property and parcel WFS", url: "https://data.napier.govt.nz/geo/ows" },
+      { label: "Napier public three-waters assets", url: "https://services3.arcgis.com/N69BvCUwqSCkbIQF/ArcGIS/rest/services/717214_Napier_City_Council_layers/FeatureServer" },
+      { label: "Hawke's Bay Regional Council property hazards", url: "https://gis.hbrc.govt.nz/server/rest/services/HazardPortal/HBRC_Property_Hazards/MapServer" },
+    ],
+    (context) => supportsAny(context, NAPIER_CITY_BOUNDS, [
+      /\bnapier city\b/,
+      /\bnapier\b/,
+      /\bonekawa\b/,
+      /\btaradale\b/,
+      /\bmaraenui\b/,
+      /\btamatea\b/,
+      /\bgreenmeadows\b/,
+      /\bporaiti\b/,
+      /\bbay view\b/,
+      /\bahuriri\b/,
     ]),
   ),
   provider(

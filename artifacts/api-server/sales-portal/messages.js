@@ -128,6 +128,9 @@
     if (!message.fileUrl || message.fileUrl === "#") return;
     if (!message.fileUrl.startsWith("/api/storage")) {
       window.open(message.fileUrl, "_blank", "noopener");
+      await api(`/dm/threads/${encodeURIComponent(message.threadId || state.selectedId)}/messages/${encodeURIComponent(message.id)}/file-viewed`, {
+        method: "POST", token: token(),
+      }).catch(() => null);
       return;
     }
     try {
@@ -138,6 +141,9 @@
       const blobUrl = URL.createObjectURL(await response.blob());
       window.open(blobUrl, "_blank", "noopener");
       window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+      await api(`/dm/threads/${encodeURIComponent(message.threadId || state.selectedId)}/messages/${encodeURIComponent(message.id)}/file-viewed`, {
+        method: "POST", token: token(),
+      }).catch(() => null);
     } catch (error) { setStatus(error.message, "error"); }
   }
 
@@ -270,12 +276,13 @@
     }
     const time = document.createElement("span");
     time.className = "sales-dm-time";
-    // Read receipts on the agent's own messages: "File viewed" once the
-    // recipient opened an attachment, otherwise "Read" once seen.
+    // Explicit delivery state on the agent's own messages. File-opened takes
+    // priority over the conversation-level read receipt.
     let receipt = "";
     if (!message.pending && message.senderId === currentUser().id) {
-      if (message.fileUrl && message.fileViewedAt) receipt = " · File viewed";
+      if (message.fileUrl && message.fileViewedAt) receipt = " · File opened";
       else if (message.readAt) receipt = " · Read";
+      else receipt = " · Sent";
     }
     time.textContent = message.pending ? "Sending..." : `${formatTime(message.createdAt)}${receipt}`;
     bubble.appendChild(time);

@@ -150,6 +150,8 @@ type BackgroundScreeningJob = {
   createdAt: number;
 };
 
+const BACKGROUND_SCREENING_CLIENT_DEADLINE_MS = 15 * 60 * 1000;
+
 const BACKGROUND_ANALYSE_JOBS_KEY = "@devfeasible/background-analyse-jobs";
 const BACKGROUND_SCREENING_JOBS_KEY = "@devfeasible/background-screening-jobs";
 const APP_RATING_STATE_KEY = "@devfeasible/app-rating-state";
@@ -2166,22 +2168,48 @@ export default function SearchScreen() {
           await removeBackgroundScreeningJob(job.jobId);
           continue;
         }
+        if (Date.now() - job.createdAt > BACKGROUND_SCREENING_CLIENT_DEADLINE_MS) {
+          await removeBackgroundScreeningJob(job.jobId);
+          resolvedBackgroundJobIdsRef.current.add(job.jobId);
+          replaceBackgroundAnalyseMessage(job.jobId, {
+            role: "assistant",
+            type: "text",
+            content: t("search.slow_data"),
+            retryText: job.query,
+          }, job.sessionId);
+          continue;
+        }
         try {
           const resp = await fetch(`${getApiBase()}/screening/jobs/${job.jobId}`, {
             headers: getApiHeaders(),
           });
-          if (!resp.ok) continue;
+          if (!resp.ok) {
+            if (resp.status === 401 || resp.status === 404) {
+              await removeBackgroundScreeningJob(job.jobId);
+              resolvedBackgroundJobIdsRef.current.add(job.jobId);
+              replaceBackgroundAnalyseMessage(job.jobId, {
+                role: "assistant",
+                type: "text",
+                content: resp.status === 401 ? t("search.session_expired") : t("search.cant_reach"),
+                retryText: job.query,
+              }, job.sessionId);
+            }
+            continue;
+          }
           const data = await resp.json() as {
             status: string;
             result?: unknown;
             error?: string | null;
+            stage?: string | null;
+            progress?: number | null;
+            attemptCount?: number | null;
           };
 
-          if (data.status === "completed") {
+          if (data.status === "completed" || data.status === "partial") {
             await removeBackgroundScreeningJob(job.jobId);
             resolvedBackgroundJobIdsRef.current.add(job.jobId);
             renderBackgroundScreeningResult(job, data.result);
-          } else if (data.status === "failed") {
+          } else if (data.status === "failed" || data.status === "expired") {
             await removeBackgroundScreeningJob(job.jobId);
             resolvedBackgroundJobIdsRef.current.add(job.jobId);
             replaceBackgroundAnalyseMessage(job.jobId, {
@@ -2189,6 +2217,18 @@ export default function SearchScreen() {
               type: "text",
               content: data.error || t("search.cant_reach"),
               retryText: job.query,
+            }, job.sessionId);
+          } else if (data.status === "pending" || data.status === "processing") {
+            const progress = typeof data.progress === "number" ? Math.max(0, Math.min(99, data.progress)) : null;
+            replaceBackgroundAnalyseMessage(job.jobId, {
+              role: "assistant",
+              content: "",
+              type: "loading",
+              loadingMode: "discover",
+              retryLabel: progress != null
+                ? `${t("search.screening_background")} (${progress}%)`
+                : t("search.screening_background"),
+              backgroundJobId: job.jobId,
             }, job.sessionId);
           }
         } catch {
@@ -2226,7 +2266,7 @@ export default function SearchScreen() {
         void pollBackgroundAnalyseJobs();
         void pollBackgroundScreeningJobs();
       }
-    }, 30000);
+    }, 10000);
     return () => {
       jobReadySub.remove();
       appStateSub.remove();
