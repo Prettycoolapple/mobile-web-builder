@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  Image,
   Modal,
   Platform,
   ScrollView,
@@ -49,25 +48,17 @@ function NativeDemoVideo() {
   useEffect(() => {
     player.currentTime = 0;
     player.play();
-    return () => player.pause();
   }, [player]);
 
   return (
-    <>
-      <Image
-        source={DEMO_POSTER}
-        style={StyleSheet.absoluteFill}
-        resizeMode="contain"
-      />
-      <VideoView
-        style={[StyleSheet.absoluteFill, styles.demoVideo]}
-        player={player}
-        contentFit="contain"
-        nativeControls={false}
-        allowsFullscreen={false}
-        allowsPictureInPicture={false}
-      />
-    </>
+    <VideoView
+      style={StyleSheet.absoluteFill}
+      player={player}
+      contentFit="contain"
+      nativeControls={false}
+      allowsFullscreen={false}
+      allowsPictureInPicture={false}
+    />
   );
 }
 
@@ -207,13 +198,7 @@ export function AiSubdivisionIntroModal({
                     })
                   ) : visible ? (
                     <NativeDemoVideo />
-                  ) : (
-                    <Image
-                      source={DEMO_POSTER}
-                      style={StyleSheet.absoluteFill}
-                      resizeMode="contain"
-                    />
-                  )}
+                  ) : null}
                 </View>
               ) : null}
               {step === "planning" ? (
@@ -421,9 +406,6 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     overflow: "hidden",
     marginTop: 18,
-  },
-  demoVideo: {
-    zIndex: 1,
   },
   note: {
     flexDirection: "row",
