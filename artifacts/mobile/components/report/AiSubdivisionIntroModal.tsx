@@ -40,31 +40,33 @@ const DEMO_POSTER_URI = Asset.fromModule(DEMO_POSTER).uri;
 const DEMO_ASPECT = 1596 / 1270;
 
 function NativeDemoVideo() {
-  const [firstFrameRendered, setFirstFrameRendered] = useState(false);
   const player = useVideoPlayer(DEMO_VIDEO, (videoPlayer) => {
     videoPlayer.loop = true;
     videoPlayer.muted = true;
     videoPlayer.play();
   });
 
+  useEffect(() => {
+    player.currentTime = 0;
+    player.play();
+    return () => player.pause();
+  }, [player]);
+
   return (
     <>
-      <VideoView
+      <Image
+        source={DEMO_POSTER}
         style={StyleSheet.absoluteFill}
+        resizeMode="contain"
+      />
+      <VideoView
+        style={[StyleSheet.absoluteFill, styles.demoVideo]}
         player={player}
         contentFit="contain"
         nativeControls={false}
         allowsFullscreen={false}
         allowsPictureInPicture={false}
-        onFirstFrameRender={() => setFirstFrameRendered(true)}
       />
-      {!firstFrameRendered ? (
-        <Image
-          source={DEMO_POSTER}
-          style={StyleSheet.absoluteFill}
-          resizeMode="contain"
-        />
-      ) : null}
     </>
   );
 }
@@ -419,6 +421,9 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     overflow: "hidden",
     marginTop: 18,
+  },
+  demoVideo: {
+    zIndex: 1,
   },
   note: {
     flexDirection: "row",
