@@ -50,7 +50,6 @@ export function AiSubdivisionIntroModal({
   const { height: winHeight } = useWindowDimensions();
   const [stepIndex, setStepIndex] = useState(0);
   const [showPaymentConfirmation, setShowPaymentConfirmation] = useState(false);
-  const [demoVideoReady, setDemoVideoReady] = useState(false);
   const steps = useMemo<StepId[]>(
     () =>
       showUpgradeSlide
@@ -69,22 +68,16 @@ export function AiSubdivisionIntroModal({
   const step = steps[Math.min(stepIndex, steps.length - 1)] ?? "planning";
   const isFinal = step === "launch";
 
-  // Mounted (and pre-buffering) as soon as this component renders, regardless of `visible` —
-  // the parent keeps this modal mounted permanently, so by the time the user taps the button
-  // the player has long since decoded frame 0. We deliberately don't call play() here: play/pause
-  // is driven below by whether slide 1 is actually on screen, so the video never runs unseen.
+  // Created (and playing) as soon as this component renders, regardless of `visible` — the
+  // parent keeps this modal mounted permanently, so the player has long since been decoding
+  // and looping by the time the user taps the button. VideoView (mounted only once the native
+  // Modal is visible) attaches to this already-playing player, so it shows a live frame the
+  // instant it appears instead of waiting on its own cold start.
   const demoPlayer = useVideoPlayer(DEMO_VIDEO, (p) => {
     p.loop = true;
     p.muted = true;
+    p.play();
   });
-
-  useEffect(() => {
-    if (Platform.OS === "web") return;
-    const sub = demoPlayer.addListener("statusChange", ({ status }) => {
-      if (status === "readyToPlay") setDemoVideoReady(true);
-    });
-    return () => sub.remove();
-  }, [demoPlayer]);
 
   useEffect(() => {
     if (Platform.OS === "web") return;
@@ -106,13 +99,8 @@ export function AiSubdivisionIntroModal({
       : t("site_plan.ai_modal.next");
 
   const standardFeatures = [
-    t("paywall.f1"),
+    t("site_plan.ai_modal.upgrade.f1"),
     t("feature.private_search"),
-    t("paywall.f2"),
-    t("paywall.f3"),
-    t("paywall.f4"),
-    t("paywall.f5"),
-    t("paywall.f6"),
   ];
 
   const handlePrimary = () => {
@@ -214,10 +202,7 @@ export function AiSubdivisionIntroModal({
                         resizeMode="contain"
                       />
                       <VideoView
-                        style={[
-                          StyleSheet.absoluteFill,
-                          { opacity: demoVideoReady ? 1 : 0 },
-                        ]}
+                        style={StyleSheet.absoluteFill}
                         player={demoPlayer}
                         contentFit="contain"
                         nativeControls={false}
