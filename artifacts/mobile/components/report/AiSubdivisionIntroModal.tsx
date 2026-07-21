@@ -10,7 +10,7 @@ import {
   View,
 } from "react-native";
 import { Asset } from "expo-asset";
-import { useVideoPlayer, VideoView } from "expo-video";
+import { ResizeMode, Video } from "expo-av";
 import { Feather } from "@expo/vector-icons";
 
 import { useColors } from "@/hooks/useColors";
@@ -38,26 +38,43 @@ const DEMO_VIDEO_URI = Asset.fromModule(DEMO_VIDEO).uri;
 const DEMO_POSTER_URI = Asset.fromModule(DEMO_POSTER).uri;
 const DEMO_ASPECT = 1596 / 1270;
 
-function NativeDemoVideo() {
-  const player = useVideoPlayer(DEMO_VIDEO, (videoPlayer) => {
-    videoPlayer.loop = true;
-    videoPlayer.muted = true;
-    videoPlayer.play();
-  });
+function NativeDemoVideo({
+  shouldPlay,
+  fallbackLabel,
+  fallbackColor,
+}: {
+  shouldPlay: boolean;
+  fallbackLabel: string;
+  fallbackColor: string;
+}) {
+  const [playbackFailed, setPlaybackFailed] = useState(false);
 
   useEffect(() => {
-    player.currentTime = 0;
-    player.play();
-  }, [player]);
+    if (shouldPlay) setPlaybackFailed(false);
+  }, [shouldPlay]);
+
+  if (playbackFailed) {
+    return (
+      <View style={styles.videoFallback}>
+        <Feather name="alert-circle" size={20} color={fallbackColor} />
+        <Text style={[styles.videoFallbackText, { color: fallbackColor }]}>
+          {fallbackLabel}
+        </Text>
+      </View>
+    );
+  }
 
   return (
-    <VideoView
+    <Video
+      source={DEMO_VIDEO}
       style={StyleSheet.absoluteFill}
-      player={player}
-      contentFit="contain"
-      nativeControls={false}
-      allowsFullscreen={false}
-      allowsPictureInPicture={false}
+      resizeMode={ResizeMode.COVER}
+      shouldPlay={shouldPlay}
+      positionMillis={shouldPlay ? 0 : undefined}
+      isLooping
+      isMuted
+      useNativeControls={false}
+      onError={() => setPlaybackFailed(true)}
     />
   );
 }
@@ -182,23 +199,29 @@ export function AiSubdivisionIntroModal({
                   accessibilityLabel={t("site_plan.ai_modal.planning.demo_alt")}
                 >
                   {Platform.OS === "web" ? (
-                    React.createElement("video", {
-                      src: DEMO_VIDEO_URI,
-                      poster: DEMO_POSTER_URI,
-                      autoPlay: true,
-                      muted: true,
-                      loop: true,
-                      playsInline: true,
-                      preload: "auto",
-                      style: {
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "contain",
-                      },
-                    })
-                  ) : visible ? (
-                    <NativeDemoVideo />
-                  ) : null}
+                    visible ? (
+                      React.createElement("video", {
+                        src: DEMO_VIDEO_URI,
+                        poster: DEMO_POSTER_URI,
+                        autoPlay: true,
+                        muted: true,
+                        loop: true,
+                        playsInline: true,
+                        preload: "auto",
+                        style: {
+                          width: "100%",
+                          height: "100%",
+                          objectFit: "cover",
+                        },
+                      })
+                    ) : null
+                  ) : (
+                    <NativeDemoVideo
+                      shouldPlay={visible}
+                      fallbackLabel={t("site_plan.ai_modal.planning.video_unavailable")}
+                      fallbackColor={colors.mutedForeground}
+                    />
+                  )}
                 </View>
               ) : null}
               {step === "planning" ? (
@@ -406,6 +429,19 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     overflow: "hidden",
     marginTop: 18,
+  },
+  videoFallback: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    padding: 16,
+  },
+  videoFallbackText: {
+    fontFamily: "DM_Sans_500Medium",
+    fontSize: 12,
+    lineHeight: 17,
+    textAlign: "center",
   },
   note: {
     flexDirection: "row",
