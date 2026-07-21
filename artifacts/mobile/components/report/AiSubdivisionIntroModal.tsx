@@ -39,6 +39,36 @@ const DEMO_VIDEO_URI = Asset.fromModule(DEMO_VIDEO).uri;
 const DEMO_POSTER_URI = Asset.fromModule(DEMO_POSTER).uri;
 const DEMO_ASPECT = 1596 / 1270;
 
+function NativeDemoVideo() {
+  const [firstFrameRendered, setFirstFrameRendered] = useState(false);
+  const player = useVideoPlayer(DEMO_VIDEO, (videoPlayer) => {
+    videoPlayer.loop = true;
+    videoPlayer.muted = true;
+    videoPlayer.play();
+  });
+
+  return (
+    <>
+      <VideoView
+        style={StyleSheet.absoluteFill}
+        player={player}
+        contentFit="contain"
+        nativeControls={false}
+        allowsFullscreen={false}
+        allowsPictureInPicture={false}
+        onFirstFrameRender={() => setFirstFrameRendered(true)}
+      />
+      {!firstFrameRendered ? (
+        <Image
+          source={DEMO_POSTER}
+          style={StyleSheet.absoluteFill}
+          resizeMode="contain"
+        />
+      ) : null}
+    </>
+  );
+}
+
 export function AiSubdivisionIntroModal({
   visible,
   showUpgradeSlide,
@@ -67,27 +97,6 @@ export function AiSubdivisionIntroModal({
 
   const step = steps[Math.min(stepIndex, steps.length - 1)] ?? "planning";
   const isFinal = step === "launch";
-
-  // Created (and playing) as soon as this component renders, regardless of `visible` — the
-  // parent keeps this modal mounted permanently, so the player has long since been decoding
-  // and looping by the time the user taps the button. VideoView (mounted only once the native
-  // Modal is visible) attaches to this already-playing player, so it shows a live frame the
-  // instant it appears instead of waiting on its own cold start.
-  const demoPlayer = useVideoPlayer(DEMO_VIDEO, (p) => {
-    p.loop = true;
-    p.muted = true;
-    p.play();
-  });
-
-  useEffect(() => {
-    if (Platform.OS === "web") return;
-    if (visible && step === "planning") {
-      demoPlayer.currentTime = 0;
-      demoPlayer.play();
-    } else {
-      demoPlayer.pause();
-    }
-  }, [visible, step, demoPlayer]);
 
   const demoMediaMaxHeight = Math.max(150, Math.min(300, winHeight * 0.3));
   const title = t(`site_plan.ai_modal.${step}.title`);
@@ -194,22 +203,14 @@ export function AiSubdivisionIntroModal({
                         objectFit: "contain",
                       },
                     })
+                  ) : visible ? (
+                    <NativeDemoVideo />
                   ) : (
-                    <>
-                      <Image
-                        source={DEMO_POSTER}
-                        style={StyleSheet.absoluteFill}
-                        resizeMode="contain"
-                      />
-                      <VideoView
-                        style={StyleSheet.absoluteFill}
-                        player={demoPlayer}
-                        contentFit="contain"
-                        nativeControls={false}
-                        allowsFullscreen={false}
-                        allowsPictureInPicture={false}
-                      />
-                    </>
+                    <Image
+                      source={DEMO_POSTER}
+                      style={StyleSheet.absoluteFill}
+                      resizeMode="contain"
+                    />
                   )}
                 </View>
               ) : null}
