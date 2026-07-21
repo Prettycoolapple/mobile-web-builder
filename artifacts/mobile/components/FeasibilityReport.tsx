@@ -2783,7 +2783,12 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
                 key={tab}
                 style={[
                   styles.reportTabButton,
-                  selected ? styles.reportTabButtonActive : null,
+                  selected
+                    ? [
+                        styles.reportTabButtonActive,
+                        { backgroundColor: colors.accent, borderColor: colors.accent },
+                      ]
+                    : null,
                 ]}
                 onPress={() => {
                   setActiveReportTab(tab);
@@ -2798,12 +2803,16 @@ export function FeasibilityReportCard({ report, onFollowUp, onAnalyseProperty }:
                   <Feather
                     name={tab === "info" ? "info" : "map"}
                     size={15}
-                    color={selected ? "#FFFFFF" : colors.mutedForeground}
+                    color={selected ? colors.accentForeground : colors.mutedForeground}
                   />
                   <Text
                     style={[
                       styles.reportTabText,
-                      { color: selected ? "#FFFFFF" : colors.mutedForeground },
+                      {
+                        color: selected
+                          ? colors.accentForeground
+                          : colors.mutedForeground,
+                      },
                     ]}
                   >
                     {tab === "info" ? t("report.tab_info") : t("report.tab_plan")}
@@ -3269,8 +3278,6 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   reportTabButtonActive: {
-    backgroundColor: "#7C3AED",
-    borderColor: "#7C3AED",
     shadowColor: "#000",
     shadowOpacity: 0.12,
     shadowRadius: 4,

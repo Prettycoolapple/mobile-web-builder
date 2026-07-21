@@ -2,6 +2,30 @@ import type { RawPropertyData } from "./pipeline";
 import { hasRegionalPlanningZoneLayer } from "./regional-arcgis";
 import { planningProviderMetadata, type PlanningProviderId } from "./regional-planning";
 
+const CURRENT_SITE_CLASSIFICATION_VERSION = 2;
+
+export function cachedRawNeedsSiteClassificationRefresh(rawData: RawPropertyData): boolean {
+  if ((rawData.site_classification_version ?? 0) >= CURRENT_SITE_CLASSIFICATION_VERSION) return false;
+  const propertyValue = rawData.propertyValue;
+  if (!propertyValue) return false;
+
+  const saysVacant = /\b(?:vacant|bare\s+land|section)\b/i.test([
+    propertyValue.property_sub_type,
+    propertyValue.land_use_primary,
+    propertyValue.property_improvements,
+  ].filter(Boolean).join(" "));
+  if (!saysVacant) return false;
+
+  const improvements = propertyValue.property_improvements?.trim() ?? "";
+  return (
+    (propertyValue.iv_nzd != null && propertyValue.iv_nzd > 0) ||
+    propertyValue.build_year != null ||
+    (propertyValue.floor_area_sqm != null && propertyValue.floor_area_sqm >= 30) ||
+    (propertyValue.bedrooms != null && propertyValue.bedrooms > 0) ||
+    /\b(?:DWG|dwelling|house|home)\b/i.test(improvements)
+  );
+}
+
 export function cachedPlanningProviderId(rawData: RawPropertyData): PlanningProviderId | null {
   const explicit = rawData.planning_provider?.providerId;
   // Kāpiti was historically folded into the generic Wellington provider.

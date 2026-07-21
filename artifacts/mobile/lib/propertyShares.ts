@@ -11,6 +11,16 @@ import type { BrowseListing } from "@/lib/browseListings";
 
 export const PENDING_SHARE_TOKEN_KEY = "@devfeasible/pending-share-token";
 
+// AsyncStorage has no compare-and-swap primitive. Serializing mutations keeps
+// a just-arrived second link from being removed by acknowledgement of the first.
+let pendingShareMutationQueue: Promise<void> = Promise.resolve();
+
+function enqueuePendingShareMutation<T>(mutation: () => Promise<T>): Promise<T> {
+  const result = pendingShareMutationQueue.then(mutation, mutation);
+  pendingShareMutationQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
+
 type ApiHeaders = Record<string, string>;
 
 type ShareResponse = {
@@ -206,13 +216,29 @@ export function parseShareTokenFromUrl(url: string | null | undefined): string |
 }
 
 export async function storePendingShareToken(token: string): Promise<void> {
-  await AsyncStorage.setItem(PENDING_SHARE_TOKEN_KEY, token);
+  await enqueuePendingShareMutation(() => AsyncStorage.setItem(PENDING_SHARE_TOKEN_KEY, token));
 }
 
-export async function consumePendingShareToken(): Promise<string | null> {
-  const token = await AsyncStorage.getItem(PENDING_SHARE_TOKEN_KEY);
-  if (token) await AsyncStorage.removeItem(PENDING_SHARE_TOKEN_KEY);
-  return token;
+/**
+ * Read without removing. A received share must remain durable while auth,
+ * navigation, or another chat request is still starting up.
+ */
+export async function getPendingShareToken(): Promise<string | null> {
+  await pendingShareMutationQueue;
+  return AsyncStorage.getItem(PENDING_SHARE_TOKEN_KEY);
+}
+
+/**
+ * Only clear the token that was actually handed to analysis. If another share
+ * arrives while the first one is being opened, its newer token is preserved.
+ */
+export async function clearPendingShareToken(expectedToken: string): Promise<boolean> {
+  return enqueuePendingShareMutation(async () => {
+    const currentToken = await AsyncStorage.getItem(PENDING_SHARE_TOKEN_KEY);
+    if (currentToken !== expectedToken) return false;
+    await AsyncStorage.removeItem(PENDING_SHARE_TOKEN_KEY);
+    return true;
+  });
 }
 
 export async function openShareToken(token: string, headers: ApiHeaders): Promise<OpenedPropertyShare> {

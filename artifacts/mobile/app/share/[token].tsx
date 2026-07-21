@@ -30,7 +30,11 @@ export default function ShareTokenRoute() {
 
   if (!stored || isLoading) return null;
 
-  if (!user) return <Redirect href="/(auth)/welcome" />;
+  // The Search screen owns the existing sign-in/create-account prompt and
+  // keeps this token durable until authentication succeeds.
+  if (!user) {
+    return <Redirect href={{ pathname: "/(tabs)", params: { shareCheck: token || String(Date.now()) } }} />;
+  }
   if (user.role === "service_provider" && !hasServiceProviderAccess(user)) {
     return <Redirect href="/(onboarding)/service-provider-welcome" />;
   }

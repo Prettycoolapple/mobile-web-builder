@@ -302,6 +302,56 @@ function shouldUseLiveAreaOverride(
   return { use: !!corroborator, corroborator };
 }
 
+function positiveRoomCount(value: number | null | undefined): number | null {
+  return value != null && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function roomCountConsensus(
+  label: "Bedrooms" | "Bathrooms",
+  current: number | null,
+  currentSource: string | undefined,
+  candidates: Array<{ src: string; value: number | null | undefined }>,
+): { value: number | null; source: string | null; note: string | null } {
+  const votes = candidates.flatMap((candidate) => {
+    const value = positiveRoomCount(candidate.value);
+    return value == null ? [] : [{ src: candidate.src, value }];
+  });
+  if (votes.length < 2) return { value: current, source: null, note: null };
+
+  const tally = new Map<number, number>();
+  for (const vote of votes) tally.set(vote.value, (tally.get(vote.value) ?? 0) + 1);
+  if (tally.size < 2) return { value: current, source: null, note: null };
+
+  const ranked = [...tally.entries()].sort((a, b) => b[1] - a[1]);
+  const [consensusValue, consensusCount] = ranked[0]!;
+  const runnerUpCount = ranked[1]?.[1] ?? 0;
+  // A tie retains the existing source precedence. Only a strict modal result
+  // is strong enough to replace a subject-matched off-market profile value.
+  if (consensusCount <= runnerUpCount) return { value: current, source: null, note: null };
+
+  const voteSummary = ranked
+    .map(([value, count]) => `${count} source${count === 1 ? "" : "s"}: ${value}`)
+    .join(", ");
+  const selectedSource = current === consensusValue ? null : "consensus";
+  return {
+    value: consensusValue,
+    source: selectedSource,
+    note: `${label}: address-matched off-market records disagree (${voteSummary}). Using the ${consensusCount}/${votes.length} source consensus of ${consensusValue}.`,
+  };
+}
+
+function propertyValueHasStrongDwellingEvidence(propertyValue: PropertyValueData | null): boolean {
+  if (!propertyValue) return false;
+  const improvements = propertyValue.property_improvements?.trim() ?? "";
+  return (
+    (propertyValue.iv_nzd != null && propertyValue.iv_nzd > 0) ||
+    propertyValue.build_year != null ||
+    (propertyValue.floor_area_sqm != null && propertyValue.floor_area_sqm >= 30) ||
+    (propertyValue.bedrooms != null && propertyValue.bedrooms > 0) ||
+    /\b(?:DWG|dwelling|house|home)\b/i.test(improvements)
+  );
+}
+
 function hasUnitOrCrossLeaseListingSignal(listing: ListingResult | null): boolean {
   if (!listing) return false;
   const text = [
@@ -707,7 +757,7 @@ export function mergePropertyData(
       propertyValue?.land_use_primary,
       propertyValue?.property_improvements,
     ].filter(Boolean).join(" "));
-  const qvDoesNotShowImprovements = !qv || (
+  const qvConfirmsNoImprovements = !!qv && (
     qvMatchesSubject
     && (qv.iv_nzd == null || qv.iv_nzd === 0)
     && qv.floor_area_sqm == null
@@ -716,7 +766,12 @@ export function mergePropertyData(
     && qv.bathrooms == null
   );
   const hasActiveDwellingListing = !!oneroof?.listing_active || !!realestateListing;
-  if (propertyValueConfirmsVacant && qvDoesNotShowImprovements && !hasActiveDwellingListing) {
+  if (
+    propertyValueConfirmsVacant &&
+    !propertyValueHasStrongDwellingEvidence(propertyValue) &&
+    qvConfirmsNoImprovements &&
+    !hasActiveDwellingListing
+  ) {
     build_year = null;
     build_year_range = null;
     floor_area_sqm = null;
@@ -1001,82 +1056,29 @@ export function mergePropertyData(
     }
   }
 
-  // Cross-source bedroom consensus check.
-  // Individual scrapers (OneRoof, Homes) derive bedroom counts via text-parsing which
-  // can occasionally misfire (e.g. OCR/layout shift on a 6-bedroom page returns 5).
-  // When ≥3 sources report a non-null count AND the modal value differs from what we
-  // selected above, correct to the consensus. Ties (equal vote counts) break in favour
-  // of the HIGHER count — agents almost never overstate bedrooms, but text parsers can
-  // clip one off.
-  if (bedrooms != null) {
-    const bedroomVotes = [
-      oneroof?.bedrooms,
-      realestateListing?.bedrooms,
-      propertyValueBeds,
-      homesBeds,
-      qvBeds,
-    ].filter((v): v is number => v != null && v > 0);
+  // Active listing facts have already won above. For off-market profiles use
+  // a strict modal result across address-matched sources, making the answer
+  // stable when one scraper is temporarily unavailable or parses a bad value.
+  if (!hasActiveDwellingListing) {
+    const bedroomConsensus = roomCountConsensus("Bedrooms", bedrooms, sources["bedrooms"], [
+      { src: "homes", value: homesBeds },
+      { src: "qv", value: qvBeds },
+      { src: "oneroof", value: oneroofProfileBeds },
+      { src: "propertyvalue", value: propertyValueBeds },
+    ]);
+    if (bedroomConsensus.note) discrepancies.push(bedroomConsensus.note);
+    if (bedroomConsensus.source) sources["bedrooms"] = bedroomConsensus.source;
+    bedrooms = bedroomConsensus.value;
 
-    if (bedroomVotes.length >= 2) {
-      const tally = new Map<number, number>();
-      for (const v of bedroomVotes) tally.set(v, (tally.get(v) ?? 0) + 1);
-      const sorted = [...tally.entries()].sort((a, b) => b[1] - a[1]);
-      const [consensusValue, consensusCount] = sorted[0];
-      const currentCount = tally.get(bedrooms) ?? 0;
-      if (
-        consensusValue !== bedrooms &&
-        consensusCount > currentCount &&
-        !["homes", "qv"].includes(sources["bedrooms"] ?? "")
-      ) {
-        logger.info(
-          { current: bedrooms, corrected: consensusValue, consensusCount, currentCount, total: bedroomVotes.length },
-          "Merge: cross-source consensus corrects bedroom count",
-        );
-        discrepancies.push(
-          `Bedrooms: ${consensusCount}/${bedroomVotes.length} sources report ${consensusValue} (initial pick was ${bedrooms} from ${sources["bedrooms"] ?? "unknown"}). Corrected to consensus.`,
-        );
-        bedrooms = consensusValue;
-        sources["bedrooms"] = "consensus";
-      }
-    }
-  }
-
-  // Cross-source bathroom consensus check.
-  // Bathroom counts are just as prone to stale record drift as bedroom counts
-  // on public property pages. Unlike bedrooms, ties do not break upward:
-  // an inflated bathroom count is more common when a scraper lands on a nearby
-  // unit/renovated record, so require a strictly stronger vote before changing.
-  if (bathrooms != null) {
-    const bathroomVotes = [
-      oneroof?.bathrooms,
-      realestateListing?.bathrooms,
-      propertyValueBaths,
-      homesBaths,
-      qvBaths,
-    ].filter((v): v is number => v != null && v > 0);
-
-    if (bathroomVotes.length >= 2) {
-      const tally = new Map<number, number>();
-      for (const v of bathroomVotes) tally.set(v, (tally.get(v) ?? 0) + 1);
-      const sorted = [...tally.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0]);
-      const [consensusValue, consensusCount] = sorted[0];
-      const currentCount = tally.get(bathrooms) ?? 0;
-      if (
-        consensusValue !== bathrooms &&
-        consensusCount > currentCount &&
-        !["homes", "qv"].includes(sources["bathrooms"] ?? "")
-      ) {
-        logger.info(
-          { current: bathrooms, corrected: consensusValue, consensusCount, currentCount, total: bathroomVotes.length },
-          "Merge: cross-source consensus corrects bathroom count",
-        );
-        discrepancies.push(
-          `Bathrooms: ${consensusCount}/${bathroomVotes.length} sources report ${consensusValue} (initial pick was ${bathrooms} from ${sources["bathrooms"] ?? "unknown"}). Corrected to consensus.`,
-        );
-        bathrooms = consensusValue;
-        sources["bathrooms"] = "consensus";
-      }
-    }
+    const bathroomConsensus = roomCountConsensus("Bathrooms", bathrooms, sources["bathrooms"], [
+      { src: "homes", value: homesBaths },
+      { src: "qv", value: qvBaths },
+      { src: "oneroof", value: oneroofProfileBaths },
+      { src: "propertyvalue", value: propertyValueBaths },
+    ]);
+    if (bathroomConsensus.note) discrepancies.push(bathroomConsensus.note);
+    if (bathroomConsensus.source) sources["bathrooms"] = bathroomConsensus.source;
+    bathrooms = bathroomConsensus.value;
   }
 
   // OneRoof property page often shows the year agents use in marketing; prefer it when it

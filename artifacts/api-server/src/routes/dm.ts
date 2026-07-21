@@ -664,9 +664,10 @@ router.patch("/dm/threads/:threadId/read", requireAuth, async (req: Request, res
   }
 });
 
-// Toggle a "like" reaction on a single message. Either participant of the
-// thread may like/unlike any message (their own or the other person's). The
-// updated message is broadcast to both users so the heart stays in sync.
+// Toggle a single "like" reaction on a message. Either participant may add a
+// like to an unliked message, but only the participant recorded in likedBy may
+// remove it. Conditional updates prevent a concurrent request from replacing
+// another participant's reaction.
 router.post(
   "/dm/threads/:threadId/messages/:messageId/like",
   requireAuth,
@@ -674,6 +675,11 @@ router.post(
     const userId = (req as any).userId as string;
     const { threadId, messageId } = req.params;
     const { liked } = req.body as { liked?: boolean };
+
+    if (typeof liked !== "boolean") {
+      res.status(400).json({ error: "liked must be a boolean" });
+      return;
+    }
 
     try {
       const [thread] = await db
@@ -688,12 +694,21 @@ router.post(
       }
 
       const [existing] = await db
-        .select({ id: dmMessages.id })
+        .select({
+          id: dmMessages.id,
+          likedAt: dmMessages.likedAt,
+          likedBy: dmMessages.likedBy,
+        })
         .from(dmMessages)
         .where(and(eq(dmMessages.id, messageId), eq(dmMessages.threadId, threadId)))
         .limit(1);
       if (!existing) {
         res.status(404).json({ error: "Message not found" });
+        return;
+      }
+
+      if (existing.likedAt && existing.likedBy !== userId) {
+        res.status(409).json({ error: "Only the person who liked this message can change the like" });
         return;
       }
 
@@ -704,8 +719,21 @@ router.post(
             ? { likedAt: new Date(), likedBy: userId }
             : { likedAt: null, likedBy: null },
         )
-        .where(eq(dmMessages.id, messageId))
+        .where(
+          and(
+            eq(dmMessages.id, messageId),
+            eq(dmMessages.threadId, threadId),
+            liked
+              ? or(isNull(dmMessages.likedAt), eq(dmMessages.likedBy, userId))
+              : eq(dmMessages.likedBy, userId),
+          ),
+        )
         .returning();
+
+      if (!message) {
+        res.status(409).json({ error: "The like was changed by the other participant" });
+        return;
+      }
 
       const otherId =
         thread.participantA === userId ? thread.participantB : thread.participantA;

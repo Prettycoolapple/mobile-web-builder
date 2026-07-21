@@ -322,6 +322,7 @@ export default function ChatScreen() {
   }, [threadId, token, user?.role]);
 
   useEffect(() => {
+    setOtherPhone(null);
     if (!otherUserId || !token) return;
     fetch(`${getApiBase()}/users/${otherUserId}`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -1055,6 +1056,7 @@ export default function ChatScreen() {
 
   const toggleLike = useCallback(async (message: LocalDmMessage) => {
     if (!threadId || !token || message.id.startsWith("local-")) return;
+    if (message.likedAt && message.likedBy !== user?.id) return;
     const nextLiked = !message.likedAt;
     const prevLikedAt = message.likedAt ?? null;
     const prevLikedBy = message.likedBy ?? null;
@@ -1215,6 +1217,8 @@ export default function ChatScreen() {
     const { data: msg, isFirstInGroup, isLastInGroup } = item;
     const isMine = msg.senderId === user?.id;
     const liked = !!msg.likedAt;
+    const likeOwnedByCurrentUser = liked && msg.likedBy === user?.id;
+    const likeOwnedByOtherUser = liked && !likeOwnedByCurrentUser;
     const isLocalMessage = msg.id.startsWith("local-");
     // Delivery receipts are a sales-agent-only feature: sent, read, then file
     // opened (for attachments). The most advanced state wins.
@@ -1229,11 +1233,17 @@ export default function ChatScreen() {
     const likeButton = (
       <TouchableOpacity
         onPress={() => toggleLike(msg)}
-        disabled={isLocalMessage}
+        disabled={isLocalMessage || likeOwnedByOtherUser}
         hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
         style={styles.likeBtn}
         accessibilityRole="button"
-        accessibilityLabel={liked ? t("dm.unlike.a11y") : t("dm.like.a11y")}
+        accessibilityLabel={
+          likeOwnedByOtherUser
+            ? t("dm.like.other_a11y")
+            : liked
+              ? t("dm.unlike.a11y")
+              : t("dm.like.a11y")
+        }
       >
         <Text
           style={[

@@ -95,6 +95,10 @@ router.get("/users/:userId", requireAuth, async (req: Request, res: Response) =>
         .where(eq(salesAgentProfiles.userId, userId))
         .limit(1);
       if (agent) {
+        const canShareContact =
+          viewerId !== userId && profile.phoneNumber
+            ? await hasDmRelationship(viewerId, userId)
+            : false;
         roleData = {
           agencyName: agent.agencyName,
           reaaLicenceNumber: agent.reaaLicenceNumber,
@@ -103,6 +107,7 @@ router.get("/users/:userId", requireAuth, async (req: Request, res: Response) =>
           propertyTypes: agent.propertyTypes,
           websiteUrl: agent.websiteUrl,
           bio: agent.bio,
+          ...(canShareContact ? { contactNumber: profile.phoneNumber } : {}),
         };
       }
       recommendationCount = await countRecommendationsForUser(userId);

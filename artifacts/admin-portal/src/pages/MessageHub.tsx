@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useSearchParams } from "react-router-dom";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { formatDate, relativeTime } from "@/lib/format";
@@ -70,7 +77,9 @@ export default function MessageHubPage() {
   const [messagesError, setMessagesError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const conversationBodyRef = useRef<HTMLDivElement | null>(null);
+  const conversationAtBottomRef = useRef(true);
+  const scrollAfterNextLoadRef = useRef(true);
 
   const openedAtRef = useRef(new Date().toISOString());
   const [liveNewChatsCount, setLiveNewChatsCount] = useState(0);
@@ -148,6 +157,8 @@ export default function MessageHubPage() {
   }
 
   function selectThread(threadId: string) {
+    conversationAtBottomRef.current = true;
+    scrollAfterNextLoadRef.current = true;
     setSelectedThreadId(threadId);
     const params = new URLSearchParams(searchParams);
     if (selectedAccountId) params.set("accountId", selectedAccountId);
@@ -212,6 +223,8 @@ export default function MessageHubPage() {
 
   useEffect(() => {
     if (!selectedThreadId || !selectedAccountId) return;
+    conversationAtBottomRef.current = true;
+    scrollAfterNextLoadRef.current = true;
     setMessages(null);
     loadMessages();
     if (selectedAccount?.role === "service_provider") {
@@ -228,8 +241,14 @@ export default function MessageHubPage() {
     loadMessages,
   ]);
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ block: "end" });
+  useLayoutEffect(() => {
+    const body = conversationBodyRef.current;
+    if (!messages || !body) return;
+    if (scrollAfterNextLoadRef.current || conversationAtBottomRef.current) {
+      body.scrollTop = body.scrollHeight;
+      conversationAtBottomRef.current = true;
+    }
+    scrollAfterNextLoadRef.current = false;
   }, [messages]);
 
   async function handleSend() {
@@ -412,7 +431,16 @@ export default function MessageHubPage() {
                     <span className="mh-readonly-badge">Read-only</span>
                   )}
                 </div>
-                <div className="mh-conversation-body">
+                <div
+                  ref={conversationBodyRef}
+                  className="mh-conversation-body"
+                  onScroll={(event) => {
+                    const body = event.currentTarget;
+                    conversationAtBottomRef.current =
+                      body.scrollHeight - body.scrollTop - body.clientHeight <
+                      80;
+                  }}
+                >
                   {messagesError && (
                     <div className="empty">{messagesError}</div>
                   )}
@@ -496,7 +524,6 @@ export default function MessageHubPage() {
                       </div>
                     );
                   })}
-                  <div ref={messagesEndRef} />
                 </div>
                 {selectedAccount?.role === "service_provider" ? (
                   <div className="mh-composer">

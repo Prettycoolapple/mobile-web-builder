@@ -24,6 +24,33 @@ describe("property share previews", () => {
     expect(shareUrl("abc123", request())).toBe("https://www.projectalpha.app/property-share/abc123");
   });
 
+  it("preserves the analysis address in every property-card share payload", () => {
+    const address = "10 Example Road, Auckland";
+    const candidate = buildShare({
+      kind: "candidate",
+      address,
+      candidate: { address, briefSummary: "Candidate card" },
+    });
+    const listing = buildShare({
+      kind: "listing",
+      address,
+      listing: { address, teaser: "Subdivision screening card" },
+    });
+    const report = buildShare({
+      kind: "report",
+      address,
+      summary: { score: 4.2 },
+    });
+
+    expect(candidate.payloadJson).toMatchObject({ kind: "candidate", address });
+    expect(listing.payloadJson).toMatchObject({ kind: "listing", address });
+    expect(report.payloadJson).toMatchObject({
+      kind: "report",
+      address,
+      rerun: { address },
+    });
+  });
+
   it("uses listing teaser text for the social description", () => {
     const share = buildShare({
       kind: "listing",

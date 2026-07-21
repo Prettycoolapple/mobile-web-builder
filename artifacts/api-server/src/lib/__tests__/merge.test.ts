@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { mergePropertyData } from "../scrapers/merge";
+import { classifySiteCondition } from "../site-condition";
 
 describe("mergePropertyData", () => {
   it("prefers the newer authoritative Whakatane council CV", () => {
@@ -709,6 +710,9 @@ describe("mergePropertyData", () => {
     expect(merged.bathrooms).toBe(1);
     expect(merged.data_sources.bedrooms).toBe("homes");
     expect(merged.data_sources.bathrooms).toBe("homes");
+    expect(merged.discrepancies).toEqual(expect.arrayContaining([
+      expect.stringContaining("Bathrooms: address-matched off-market records disagree"),
+    ]));
   });
 
   it("keeps exact Homes profile bed/bath ahead of stale unlisted records", () => {
@@ -780,9 +784,12 @@ describe("mergePropertyData", () => {
     );
 
     expect(merged.bedrooms).toBe(3);
-    expect(merged.bathrooms).toBe(1);
+    expect(merged.bathrooms).toBe(2);
     expect(merged.data_sources.bedrooms).toBe("homes");
-    expect(merged.data_sources.bathrooms).toBe("homes");
+    expect(merged.data_sources.bathrooms).toBe("consensus");
+    expect(merged.discrepancies).toEqual(expect.arrayContaining([
+      expect.stringContaining("Bathrooms: address-matched off-market records disagree"),
+    ]));
   });
 
   it("does not use non-listing property-record photos as feasibility report fallbacks", () => {
@@ -1109,6 +1116,95 @@ describe("mergePropertyData", () => {
 
     expect(merged.listing_price).toBeNull();
     expect(merged.data_sources.listing_price).toBeUndefined();
+  });
+
+  it("keeps confirmed Stainton dwelling facts when its valuation subtype misleadingly says vacant", () => {
+    const merged = mergePropertyData(
+      null,
+      null,
+      null,
+      { zone_code: "MHS", zone_description: "Mixed Housing Suburban", min_lot_size_sqm: 400 } as any,
+      [],
+      {
+        contour: "flat",
+        asbestos_risk: "high",
+        infrastructure: [],
+        analysed_address: "14 Stainton Place, Otara, Auckland",
+        propertyValue: {
+          cv_nzd: 880_000,
+          lv_nzd: 840_000,
+          iv_nzd: 40_000,
+          cv_year: 2024,
+          property_type: "RESIDENTIAL",
+          property_sub_type: "Vacant land multiple housing",
+          legal_descriptions: ["Lot 216 Deposited Plan 48768"],
+          land_use_primary: null,
+          property_improvements: "DWG OBS OI",
+          land_area_sqm: 1_067,
+          floor_area_sqm: 103,
+          build_year: 1962,
+          build_year_range: null,
+          bedrooms: 3,
+          bathrooms: 1,
+          listing_active: false,
+          photo_urls: [],
+          address_confirmed: "14 Stainton Place, Otara, Auckland, 2023",
+          property_id: 4_594_296,
+        },
+        qv: null,
+      },
+    );
+
+    expect(merged).toMatchObject({
+      property_type: "RESIDENTIAL",
+      floor_area_sqm: 103,
+      build_year: 1962,
+      bedrooms: 3,
+      bathrooms: 1,
+    });
+    expect(classifySiteCondition(merged)).toMatchObject({
+      siteStatus: "has_dwelling",
+      hasExistingDwelling: true,
+    });
+    expect(merged.discrepancies).not.toEqual(expect.arrayContaining([
+      expect.stringContaining("classify the property as vacant land"),
+    ]));
+  });
+
+  it("uses address-matched off-market consensus for Stainton's conflicting bathroom count", () => {
+    const merged = mergePropertyData(
+      null,
+      null,
+      null,
+      { zone_code: "MHS", zone_description: "Mixed Housing Suburban", min_lot_size_sqm: 400 } as any,
+      [],
+      {
+        contour: "flat",
+        asbestos_risk: "high",
+        infrastructure: [],
+        analysed_address: "14 Stainton Place, Otara, Auckland",
+        propertyValue: {
+          property_type: "RESIDENTIAL", land_area_sqm: 1_067, floor_area_sqm: 103,
+          build_year: 1962, bedrooms: 3, bathrooms: 1,
+          address_confirmed: "14 Stainton Place, Otara, Auckland, 2023",
+        } as any,
+        homes: {
+          land_area_sqm: 1_067, floor_area_sqm: 103, bedrooms: 3, bathrooms: 1,
+          address_confirmed: "14 Stainton Place, Otara, Auckland",
+        } as any,
+        qv: {
+          land_area_sqm: 1_067, floor_area_sqm: 103, bedrooms: 3, bathrooms: 3,
+          address_confirmed: "14 Stainton Place, Otara, Auckland",
+        } as any,
+      },
+    );
+
+    expect(merged.bedrooms).toBe(3);
+    expect(merged.bathrooms).toBe(1);
+    expect(merged.data_sources.bathrooms).toBe("homes");
+    expect(merged.discrepancies).toEqual(expect.arrayContaining([
+      expect.stringContaining("Bathrooms: address-matched off-market records disagree"),
+    ]));
   });
 
   it("does not let a stray bathroom turn an address-matched vacant section into a dwelling", () => {

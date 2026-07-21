@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo } from "react";
 import { Alert, Image, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Feather, Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -8,7 +8,6 @@ import { useColors } from "@/hooks/useColors";
 import { useT } from "@/lib/i18n";
 import { useMaybeTranslated } from "@/hooks/useMaybeTranslated";
 import { BrowseListing, normaliseBrowseListingAgent, isListingSponsored, resolveListingImageUrl, watchlistCandidateFromBrowse } from "@/lib/browseListings";
-import { WatchlistAddedToast } from "@/components/WatchlistAddedToast";
 import { notifyWatchlistError } from "@/lib/watchlist-confirm";
 
 const PROPERTY_TYPE_KEYS = new Set([
@@ -65,7 +64,6 @@ export function BrowseListingCard({ listing, onPress, onShare }: { listing: Brow
   const description = useMaybeTranslated(teaserText, fallbackDescription);
   const watchCandidate = useMemo(() => watchlistCandidateFromBrowse(listing), [listing]);
   const watched = isWatched(watchCandidate);
-  const [watchToastTrigger, setWatchToastTrigger] = useState(0);
 
   const promptSignInForWatchlist = useCallback(() => {
     const goLogin = () => router.push("/(auth)/login" as never);
@@ -88,7 +86,6 @@ export function BrowseListingCard({ listing, onPress, onShare }: { listing: Brow
     }
     const result = await toggle(watchCandidate);
     if (result.error) notifyWatchlistError(t);
-    else if (result.watched) setWatchToastTrigger((value) => value + 1);
   }, [user, promptSignInForWatchlist, t, toggle, watchCandidate]);
 
   return (
@@ -169,7 +166,6 @@ export function BrowseListingCard({ listing, onPress, onShare }: { listing: Brow
           </View>
         )}
       </View>
-      <WatchlistAddedToast trigger={watchToastTrigger} />
     </TouchableOpacity>
   );
 }

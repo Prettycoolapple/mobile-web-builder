@@ -95,6 +95,27 @@ describe("lot calculator", () => {
     expect(assessment.designLedYieldRange).toEqual({ min: 3, max: 4 });
   });
 
+  it("keeps Stainton's two standard lots separate from the preliminary 3-4 lot design-led range", () => {
+    const standard = calculatePotentialLots(1_067, "MHS");
+    const assessment = assessSubdivisionPathways({
+      netAreaSqm: standard.net_area_sqm,
+      zoneCode: "MHS",
+      zoneLabel: standard.zone_label,
+      standardVacantLots: standard.lots,
+      minLotSqm: standard.min_lot_size,
+      typology: "standalone",
+      titleConfidence: "verified",
+      landAreaConfidence: "verified",
+      isAlreadySubdividedChild: false,
+      buildYear: 1962,
+    });
+
+    expect(standard.lots).toBe(2);
+    expect(assessment.standardVacantLots).toBe(2);
+    expect(assessment.designLedEligible).toBe(true);
+    expect(assessment.designLedYieldRange).toEqual({ min: 3, max: 4 });
+  });
+
   it("does not flag design-led upside for unit/apartment, child-title, or unverified-land cases", () => {
     const base = {
       netAreaSqm: 620,

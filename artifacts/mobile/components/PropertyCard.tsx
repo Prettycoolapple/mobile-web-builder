@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, Image, Animated, Alert, Platform } from "react-native";
 import { Feather, Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -7,7 +7,6 @@ import { useAuth } from "@/context/AuthContext";
 import { PropertyCandidate, SelectedListingContext } from "@/context/ChatContext";
 import { useWatchlist } from "@/context/WatchlistContext";
 import { StarRating } from "@/components/StarRating";
-import { WatchlistAddedToast } from "@/components/WatchlistAddedToast";
 import { useT } from "@/lib/i18n";
 import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
 import { shareCandidate } from "@/lib/propertyShares";
@@ -141,7 +140,6 @@ export function PropertyCard({ candidate, onAnalyse, analysingPropertyKey = null
   const colors = useColors();
   const { getApiHeaders, user } = useAuth();
   const { isWatched, toggle } = useWatchlist();
-  const [watchToastTrigger, setWatchToastTrigger] = useState(0);
   const router = useRouter();
   const { t } = useT();
   const watched = isWatched(candidate);
@@ -249,7 +247,6 @@ export function PropertyCard({ candidate, onAnalyse, analysingPropertyKey = null
     if (watched && !(await confirmRemoveFromWatchlist(t))) return;
     const result = await toggle(candidate);
     if (result.error) notifyWatchlistError(t);
-    else if (result.watched) setWatchToastTrigger((value) => value + 1);
   };
 
   return (
@@ -495,7 +492,6 @@ export function PropertyCard({ candidate, onAnalyse, analysingPropertyKey = null
         </Text>
         <Feather name={isAnalysisGenerating ? "clock" : "arrow-right"} size={14} color={isAnalysisGenerating ? colors.mutedForeground : "#fff"} />
       </TouchableOpacity>
-      <WatchlistAddedToast trigger={watchToastTrigger} />
     </View>
   );
 }

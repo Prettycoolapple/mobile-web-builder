@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { hasCacheableCore, RAW_PROPERTY_SCHEMA_VERSION, type PipelineResult } from "../pipeline";
-import { cachedRawNeedsRegionalPropertyHistoryRefresh, cachedRawNeedsRegionalZoneRefresh } from "../property-cache-rules";
+import {
+  cachedRawNeedsRegionalPropertyHistoryRefresh,
+  cachedRawNeedsRegionalZoneRefresh,
+  cachedRawNeedsSiteClassificationRefresh,
+} from "../property-cache-rules";
 import { cacheRowFreshness, PIPELINE_VERSION } from "../property-cache-freshness";
 
 // Importing ../pipeline here also loads its entire dependency graph, so this test
@@ -392,6 +396,41 @@ describe("regional property-cache completeness", () => {
       zone: { zone_code: "UNKNOWN" },
       property_history: { cv_nzd: 250_000, land_area_sqm: 2_023 },
     } as never)).toBe(true);
+  });
+
+  it("refreshes contradictory legacy vacant classifications once, then accepts evidence-version 2", () => {
+    const legacy = {
+      schema_version: RAW_PROPERTY_SCHEMA_VERSION,
+      propertyValue: {
+        property_type: "RESIDENTIAL",
+        property_sub_type: "Vacant land multiple housing",
+        property_improvements: "DWG OBS OI",
+        iv_nzd: 40_000,
+        build_year: 1962,
+        floor_area_sqm: 103,
+        bedrooms: 3,
+      },
+    };
+    expect(cachedRawNeedsSiteClassificationRefresh(legacy as never)).toBe(true);
+    expect(cachedRawNeedsSiteClassificationRefresh({
+      ...legacy,
+      site_classification_version: 2,
+    } as never)).toBe(false);
+  });
+
+  it("does not invalidate a genuine legacy vacant section without dwelling evidence", () => {
+    expect(cachedRawNeedsSiteClassificationRefresh({
+      schema_version: RAW_PROPERTY_SCHEMA_VERSION,
+      propertyValue: {
+        property_type: "RESIDENTIAL",
+        property_sub_type: "Vacant",
+        property_improvements: null,
+        iv_nzd: 0,
+        build_year: null,
+        floor_area_sqm: null,
+        bedrooms: null,
+      },
+    } as never)).toBe(false);
   });
 });
 

@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
   recommendationExists: false,
   recommendationCount: 0,
   providerRecommendationCount: 0,
+  salesAgentProfile: null as Record<string, unknown> | null,
   hasDmThread: false,
   dmThread: null as Record<string, unknown> | null,
   dmMessage: null as Record<string, unknown> | null,
@@ -59,6 +60,10 @@ function resolveSelect(t: unknown, selection: unknown): unknown[] {
       return [{ count: state.recommendationCount }];
     }
     return state.recommendationExists ? [{ id: "recommendation-1" }] : [];
+  }
+
+  if (name === "salesAgentProfiles") {
+    return state.salesAgentProfile ? [state.salesAgentProfile] : [];
   }
 
   if (name === "dmThreads") {
@@ -208,6 +213,7 @@ beforeEach(() => {
   state.recommendationExists = false;
   state.recommendationCount = 0;
   state.providerRecommendationCount = 0;
+  state.salesAgentProfile = null;
   state.hasDmThread = false;
   state.dmThread = null;
   state.dmMessage = null;
@@ -290,6 +296,50 @@ describe("public profile recommendation and contact UX", () => {
       expect(body.roleData?.contactNumber).toBeUndefined();
     });
   });
+
+  it("exposes a sales agent's call number to an existing DM participant", async () => {
+    state.userId = "general-1";
+    state.profileQueue = [{
+      id: "agent-1",
+      fullName: "Sales Agent",
+      role: "sales_agent",
+      avatarUrl: null,
+      isVerified: true,
+      phoneNumber: "+64211112222",
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    }];
+    state.salesAgentProfile = { userId: "agent-1", agencyName: "Alpha Realty" };
+    state.hasDmThread = true;
+
+    await withServer("../users", async (baseUrl) => {
+      const resp = await fetch(`${baseUrl}/users/agent-1`);
+      expect(resp.status).toBe(200);
+      const body = await resp.json() as { roleData?: { contactNumber?: string } };
+      expect(body.roleData?.contactNumber).toBe("+64211112222");
+    });
+  });
+
+  it("does not expose a sales agent's call number without a DM relationship", async () => {
+    state.userId = "general-1";
+    state.profileQueue = [{
+      id: "agent-1",
+      fullName: "Sales Agent",
+      role: "sales_agent",
+      avatarUrl: null,
+      isVerified: true,
+      phoneNumber: "+64211112222",
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    }];
+    state.salesAgentProfile = { userId: "agent-1", agencyName: "Alpha Realty" };
+    state.hasDmThread = false;
+
+    await withServer("../users", async (baseUrl) => {
+      const resp = await fetch(`${baseUrl}/users/agent-1`);
+      expect(resp.status).toBe(200);
+      const body = await resp.json() as { roleData?: { contactNumber?: string } };
+      expect(body.roleData?.contactNumber).toBeUndefined();
+    });
+  });
 });
 
 describe("DM push direction", () => {
@@ -366,6 +416,55 @@ describe("DM push direction", () => {
     }, {
       badgeCount: 1,
     });
+  });
+
+  it("allows only the like owner to remove a like", async () => {
+    state.userId = "provider-1";
+    state.dmThread = { id: "thread-1", participantA: "general-1", participantB: "provider-1" };
+    state.dmMessage = {
+      id: "message-1",
+      threadId: "thread-1",
+      senderId: "general-1",
+      likedAt: new Date("2026-07-01T00:00:00.000Z"),
+      likedBy: "provider-1",
+    };
+
+    await withServer("../dm", async (baseUrl) => {
+      const resp = await fetch(`${baseUrl}/dm/threads/thread-1/messages/message-1/like`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ liked: false }),
+      });
+      expect(resp.status).toBe(200);
+    });
+
+    expect(state.dmMessage?.likedAt).toBeNull();
+    expect(state.dmMessage?.likedBy).toBeNull();
+  });
+
+  it("rejects removing or replacing the other participant's like", async () => {
+    state.userId = "provider-1";
+    state.dmThread = { id: "thread-1", participantA: "general-1", participantB: "provider-1" };
+    state.dmMessage = {
+      id: "message-1",
+      threadId: "thread-1",
+      senderId: "provider-1",
+      likedAt: new Date("2026-07-01T00:00:00.000Z"),
+      likedBy: "general-1",
+    };
+
+    await withServer("../dm", async (baseUrl) => {
+      for (const liked of [false, true]) {
+        const resp = await fetch(`${baseUrl}/dm/threads/thread-1/messages/message-1/like`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ liked }),
+        });
+        expect(resp.status).toBe(409);
+      }
+    });
+
+    expect(state.dmMessage?.likedBy).toBe("general-1");
   });
 });
 

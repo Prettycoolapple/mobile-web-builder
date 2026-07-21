@@ -4,6 +4,7 @@ import type { RawPropertyData } from "./pipeline";
 import { logger } from "./logger";
 import {
   cachedPlanningProviderId,
+  cachedRawNeedsSiteClassificationRefresh,
   cachedRawNeedsRegionalPropertyHistoryRefresh,
   cachedRawNeedsRegionalZoneRefresh,
 } from "./property-cache-rules";
@@ -38,6 +39,10 @@ function freshCachedRawOrNull(row: PropertyCacheRow | undefined, context: Record
     return null;
   }
   const rawData = row.rawData as RawPropertyData;
+  if (cachedRawNeedsSiteClassificationRefresh(rawData)) {
+    logger.info({ ...context }, "property-cache: contradictory legacy site classification - treating as miss");
+    return null;
+  }
   if (cachedRawNeedsRegionalZoneRefresh(rawData)) {
     logger.info({ ...context, providerId: cachedPlanningProviderId(rawData) }, "property-cache: regional zone unresolved - treating as miss");
     return null;

@@ -3,6 +3,7 @@ import { AppState } from "react-native";
 import { useAuth } from "./AuthContext";
 import { getApiBase } from "@/lib/api";
 import { normaliseAddressKey } from "@/lib/address-key";
+import { WatchlistSavedModal } from "@/components/WatchlistSavedModal";
 import type { PropertyCandidate } from "./ChatContext";
 
 /** Anything we can save: a full candidate, or a lighter shape built from a report. */
@@ -112,6 +113,7 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
   const [watchedKeys, setWatchedKeys] = useState<Set<string>>(new Set());
   const [watchedAddressKeys, setWatchedAddressKeys] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
+  const [showSavedPopup, setShowSavedPopup] = useState(false);
   // Guards against a stale GET (from a previous user) overwriting newer state.
   const requestSeqRef = useRef(0);
   const pendingToggleRef = useRef<Map<string, { watched: boolean; item?: WatchlistItem }>>(new Map());
@@ -256,6 +258,7 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
           });
         }
         if (serverWatched !== nextWatched) void refresh();
+        if (nextWatched && serverWatched) setShowSavedPopup(true);
         return { watched: serverWatched };
       } catch {
         pendingToggleRef.current.delete(key);
@@ -294,7 +297,15 @@ export function WatchlistProvider({ children }: { children: React.ReactNode }) {
     [items, loading, isWatched, isKeyWatched, toggle, refresh],
   );
 
-  return <WatchlistContext.Provider value={value}>{children}</WatchlistContext.Provider>;
+  return (
+    <WatchlistContext.Provider value={value}>
+      {children}
+      <WatchlistSavedModal
+        visible={showSavedPopup}
+        onClose={() => setShowSavedPopup(false)}
+      />
+    </WatchlistContext.Provider>
+  );
 }
 
 export function useWatchlist(): WatchlistContextValue {

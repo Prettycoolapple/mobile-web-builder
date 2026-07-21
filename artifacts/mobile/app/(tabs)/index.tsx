@@ -40,7 +40,11 @@ import { useT, isOSChineseLocale } from "@/lib/i18n";
 import { formatCompositeScoreForDisplay } from "@/lib/compositeScoreDisplay";
 import { normaliseAddressKey } from "@/lib/address-key";
 import { resolveChatQuota } from "@/lib/quotas";
-import { consumePendingShareToken, openShareToken } from "@/lib/propertyShares";
+import {
+  clearPendingShareToken,
+  getPendingShareToken,
+  openShareToken,
+} from "@/lib/propertyShares";
 import { selectedListingContextFromBrowse } from "@/lib/browseListings";
 
 setBaseUrl(getApiOrigin() || null);
@@ -597,6 +601,7 @@ export default function SearchScreen() {
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
   const isLoadingRef = useRef(isLoading);
+  const authUserRef = useRef(user);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const recordingStartYRef = useRef<number | null>(null);
   const recordingCurrentYRef = useRef<number | null>(null);
@@ -633,7 +638,9 @@ export default function SearchScreen() {
   const handleAnalyseRef = useRef<((address: string, selectedPhotoUrl?: string | null, selectedListingUrl?: string | null, selectedListingContext?: SelectedListingContext | null, skipAnalyseDisclaimer?: boolean, analysisKey?: string, forceNewSession?: boolean, addressConfirmed?: boolean) => Promise<void>) | null>(null);
   const handleSendRef = useRef<((overrideText?: string, skipAnalyseDisclaimer?: boolean, continuePresentation?: "generic_listing" | "scored_screening", discoveryChoiceSuburb?: string, displayText?: string) => Promise<void>) | null>(null);
   const processedRouteAnalyseRef = useRef<string | null>(null);
-  const processedShareTokenRef = useRef<string | null>(null);
+  const openingShareTokenRef = useRef<string | null>(null);
+  const promptedGuestShareRef = useRef<string | null>(null);
+  const searchScreenMountedRef = useRef(true);
   // Set when the Explore page hands off "Explore by suburb": the next user message
   // is the suburb name, which we route into subdivision-intent screening.
   const pendingSuburbScreeningRef = useRef(false);
@@ -764,6 +771,17 @@ export default function SearchScreen() {
   useEffect(() => {
     isLoadingRef.current = isLoading;
   }, [isLoading]);
+
+  useEffect(() => {
+    authUserRef.current = user;
+  }, [user]);
+
+  useEffect(() => {
+    searchScreenMountedRef.current = true;
+    return () => {
+      searchScreenMountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     AsyncStorage.getItem(getAnalyseDisclaimerDismissedKey(user?.id))
@@ -3554,19 +3572,38 @@ export default function SearchScreen() {
   // effect to re-run when a share link arrives while the chat tab is already
   // mounted (warm start), so the pending token is consumed immediately.
   const shareCheckNonce = routeParams.shareCheck;
+  const [shareDrainTick, setShareDrainTick] = useState(0);
   useEffect(() => {
-    if (!user || isLoading) return;
-
-    let cancelled = false;
+    if (isLoading || openingShareTokenRef.current) return;
 
     async function openPendingShare() {
-      const token = await consumePendingShareToken();
-      if (!token || processedShareTokenRef.current === token) return;
-      processedShareTokenRef.current = token;
+      const token = await getPendingShareToken().catch(() => null);
+      if (!token || !searchScreenMountedRef.current) return;
+
+      // Feasibility analysis requires an account. Keep the share token intact
+      // while the existing auth prompt sends the recipient through login or
+      // signup; the user transition re-runs this effect afterwards.
+      if (!user) {
+        const promptKey = `${token}:${String(shareCheckNonce ?? "initial")}`;
+        if (promptedGuestShareRef.current !== promptKey) {
+          promptedGuestShareRef.current = promptKey;
+          // A shared property is the authoritative post-login action. Prevent
+          // an older guest analysis request from racing it after authentication.
+          await AsyncStorage.removeItem(PENDING_GUEST_ANALYSE_ACTION_KEY).catch(() => {});
+          setGuestAnalysisPromptVisible(true);
+        }
+        return;
+      }
+
+      const runSharedAnalysis = handleAnalyseRef.current;
+      if (!runSharedAnalysis) return;
+
+      promptedGuestShareRef.current = null;
+      openingShareTokenRef.current = token;
 
       try {
         const share = await openShareToken(token, getApiHeaders());
-        if (cancelled) return;
+        if (!searchScreenMountedRef.current || !authUserRef.current || isLoadingRef.current) return;
 
         if (share.kind === "candidate") {
           const rawCandidate = share.payload.candidate as PropertyCandidate;
@@ -3575,59 +3612,74 @@ export default function SearchScreen() {
             address: rawCandidate.address || share.address,
             scores: rawCandidate.scores ?? { ease: 0, cost: 0, roi: 0, composite: 0 },
           };
-          await handleAnalyse(
+          void runSharedAnalysis(
             candidate.address,
             candidate.photoUrl ?? candidate.photoUrls?.[0] ?? null,
             candidate.listingUrl ?? null,
             selectedListingContextFromCandidate(candidate),
             true,
             candidate.listingUrl ?? candidate.address,
+            true,
           );
-          return;
-        }
-
-        if (share.kind === "listing") {
+        } else if (share.kind === "listing") {
           const listing = {
             ...share.payload.listing,
             address: share.payload.listing.address || share.address,
           };
           const listingContext = selectedListingContextFromBrowse(listing);
-          await handleAnalyse(
+          void runSharedAnalysis(
             listing.address,
             listingContext.photoUrl ?? null,
             listingContext.listingUrl ?? null,
             listingContext,
             true,
             listingContext.listingUrl ?? listing.id ?? listing.address,
+            true,
           );
-          return;
+        } else {
+          const rerun = share.payload.rerun;
+          void runSharedAnalysis(
+            rerun.address || share.address,
+            rerun.selectedPhotoUrl ?? null,
+            rerun.selectedListingUrl ?? null,
+            rerun.selectedListingContext ?? null,
+            true,
+            undefined,
+            true,
+          );
         }
 
-        const rerun = share.payload.rerun;
-        await handleAnalyse(
-          rerun.address || share.address,
-          rerun.selectedPhotoUrl ?? null,
-          rerun.selectedListingUrl ?? null,
-          rerun.selectedListingContext ?? null,
-          true,
-        );
+        // handleAnalyse executes synchronously through session creation and
+        // loading-message insertion before returning its promise. Clearing here
+        // therefore acknowledges only a share that has entered a fresh chat.
+        await clearPendingShareToken(token).catch(() => false);
       } catch {
-        if (cancelled) return;
+        if (!searchScreenMountedRef.current || !authUserRef.current) return;
         const sessionId = currentSessionId ?? createSession();
         addMessage({
           role: "assistant",
           content: "This shared property link could not be opened. It may have expired.",
           type: "text",
         }, sessionId);
+      } finally {
+        if (openingShareTokenRef.current === token) {
+          openingShareTokenRef.current = null;
+        }
+        // Drain again in case a second link arrived while this token was being
+        // fetched. clearPendingShareToken deliberately preserves that new token.
+        const queuedToken = await getPendingShareToken().catch(() => null);
+        if (
+          searchScreenMountedRef.current
+          && queuedToken
+          && (queuedToken !== token || !authUserRef.current)
+        ) {
+          setShareDrainTick((value) => value + 1);
+        }
       }
     }
 
     void openPendingShare();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [addMessage, createSession, currentSessionId, getApiHeaders, handleAnalyse, isLoading, router, shareCheckNonce, user]);
+  }, [addMessage, createSession, currentSessionId, getApiHeaders, isLoading, shareCheckNonce, shareDrainTick, user]);
 
   const confirmAnalyseDisclaimer = useCallback(async () => {
     const action = pendingAnalyseActionRef.current;
@@ -3651,6 +3703,7 @@ export default function SearchScreen() {
     if (!user) return;
     let cancelled = false;
     (async () => {
+      if (await getPendingShareToken().catch(() => null)) return;
       const raw = await AsyncStorage.getItem(PENDING_GUEST_ANALYSE_ACTION_KEY).catch(() => null);
       if (!raw || cancelled) return;
       await AsyncStorage.removeItem(PENDING_GUEST_ANALYSE_ACTION_KEY).catch(() => {});
@@ -3677,6 +3730,7 @@ export default function SearchScreen() {
       if (!user) return;
       let cancelled = false;
       (async () => {
+        if (await getPendingShareToken().catch(() => null)) return;
         const raw = await AsyncStorage.getItem(PENDING_GUEST_ANALYSE_ACTION_KEY).catch(() => null);
         if (!raw || cancelled) return;
         await AsyncStorage.removeItem(PENDING_GUEST_ANALYSE_ACTION_KEY).catch(() => {});

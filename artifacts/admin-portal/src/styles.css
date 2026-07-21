@@ -573,12 +573,16 @@ button {
   display: grid;
   grid-template-columns: 220px 280px 1fr;
   height: 640px;
+  min-height: 0;
 }
 
 .mh-accounts,
 .mh-threads {
   border-right: 1px solid var(--line);
   overflow-y: auto;
+  min-height: 0;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .mh-column-title {
@@ -679,6 +683,8 @@ button {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .mh-conversation-header {
@@ -689,7 +695,10 @@ button {
 
 .mh-conversation-body {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   padding: 16px 20px;
   display: flex;
   flex-direction: column;

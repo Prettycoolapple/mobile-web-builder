@@ -391,6 +391,8 @@ Return ONLY a JSON array of ${maxSelect} zero-based indices, e.g. [0, 3, 5]. No 
  */
 export interface RawPropertyData {
   schema_version: number;
+  /** Version of the evidence rules used to distinguish vacant land from an existing dwelling. */
+  site_classification_version?: number;
   geocode: GeoResult;
   suburb: string;
   linz_parcel: LinzParcel | null;
@@ -427,6 +429,7 @@ export interface RawPropertyData {
 }
 
 export const RAW_PROPERTY_SCHEMA_VERSION = 13;
+export const SITE_CLASSIFICATION_VERSION = 2;
 
 export interface PipelineResult {
   address_input: string;
@@ -1924,6 +1927,7 @@ export async function runPropertyPipeline(
   // fields are stripped here; they are always refetched live on serve.
   const rawProperty: RawPropertyData = {
     schema_version: RAW_PROPERTY_SCHEMA_VERSION,
+    site_classification_version: SITE_CLASSIFICATION_VERSION,
     geocode: geocode!,
     suburb,
     linz_parcel: linzParcelData,
