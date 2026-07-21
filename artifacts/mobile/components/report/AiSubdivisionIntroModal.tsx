@@ -1,12 +1,17 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  Image,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from "react-native";
+import { Asset } from "expo-asset";
+import { useVideoPlayer, VideoView } from "expo-video";
 import { Feather } from "@expo/vector-icons";
 
 import { useColors } from "@/hooks/useColors";
@@ -28,6 +33,12 @@ const STEP_ICONS: Record<StepId, keyof typeof Feather.glyphMap> = {
   launch: "calendar",
 };
 
+const DEMO_VIDEO = require("../../assets/videos/ai-subdivision.mp4");
+const DEMO_POSTER = require("../../assets/videos/ai-subdivision-poster.jpg");
+const DEMO_VIDEO_URI = Asset.fromModule(DEMO_VIDEO).uri;
+const DEMO_POSTER_URI = Asset.fromModule(DEMO_POSTER).uri;
+const DEMO_ASPECT = 1596 / 1270;
+
 export function AiSubdivisionIntroModal({
   visible,
   showUpgradeSlide,
@@ -36,8 +47,10 @@ export function AiSubdivisionIntroModal({
 }: Props) {
   const colors = useColors();
   const { t } = useT();
+  const { height: winHeight } = useWindowDimensions();
   const [stepIndex, setStepIndex] = useState(0);
   const [showPaymentConfirmation, setShowPaymentConfirmation] = useState(false);
+  const [demoVideoReady, setDemoVideoReady] = useState(false);
   const steps = useMemo<StepId[]>(
     () =>
       showUpgradeSlide
@@ -55,6 +68,35 @@ export function AiSubdivisionIntroModal({
 
   const step = steps[Math.min(stepIndex, steps.length - 1)] ?? "planning";
   const isFinal = step === "launch";
+
+  // Mounted (and pre-buffering) as soon as this component renders, regardless of `visible` —
+  // the parent keeps this modal mounted permanently, so by the time the user taps the button
+  // the player has long since decoded frame 0. We deliberately don't call play() here: play/pause
+  // is driven below by whether slide 1 is actually on screen, so the video never runs unseen.
+  const demoPlayer = useVideoPlayer(DEMO_VIDEO, (p) => {
+    p.loop = true;
+    p.muted = true;
+  });
+
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+    const sub = demoPlayer.addListener("statusChange", ({ status }) => {
+      if (status === "readyToPlay") setDemoVideoReady(true);
+    });
+    return () => sub.remove();
+  }, [demoPlayer]);
+
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+    if (visible && step === "planning") {
+      demoPlayer.currentTime = 0;
+      demoPlayer.play();
+    } else {
+      demoPlayer.pause();
+    }
+  }, [visible, step, demoPlayer]);
+
+  const demoMediaMaxHeight = Math.max(150, Math.min(300, winHeight * 0.3));
   const title = t(`site_plan.ai_modal.${step}.title`);
   const body = t(`site_plan.ai_modal.${step}.body`);
   const primaryLabel = isFinal
@@ -137,6 +179,55 @@ export function AiSubdivisionIntroModal({
               <Text style={[styles.body, { color: colors.mutedForeground }]}>
                 {body}
               </Text>
+              {step === "planning" ? (
+                <View
+                  style={[
+                    styles.demoMediaWrap,
+                    {
+                      maxWidth: demoMediaMaxHeight * DEMO_ASPECT,
+                      backgroundColor: colors.muted,
+                    },
+                  ]}
+                  accessible
+                  accessibilityLabel={t("site_plan.ai_modal.planning.demo_alt")}
+                >
+                  {Platform.OS === "web" ? (
+                    React.createElement("video", {
+                      src: DEMO_VIDEO_URI,
+                      poster: DEMO_POSTER_URI,
+                      autoPlay: true,
+                      muted: true,
+                      loop: true,
+                      playsInline: true,
+                      preload: "auto",
+                      style: {
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "contain",
+                      },
+                    })
+                  ) : (
+                    <>
+                      <Image
+                        source={DEMO_POSTER}
+                        style={StyleSheet.absoluteFill}
+                        resizeMode="contain"
+                      />
+                      <VideoView
+                        style={[
+                          StyleSheet.absoluteFill,
+                          { opacity: demoVideoReady ? 1 : 0 },
+                        ]}
+                        player={demoPlayer}
+                        contentFit="contain"
+                        nativeControls={false}
+                        allowsFullscreen={false}
+                        allowsPictureInPicture={false}
+                      />
+                    </>
+                  )}
+                </View>
+              ) : null}
               {step === "planning" ? (
                 <View
                   style={[
@@ -334,6 +425,14 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     textAlign: "center",
     marginTop: 10,
+  },
+  demoMediaWrap: {
+    alignSelf: "center",
+    width: "100%",
+    aspectRatio: DEMO_ASPECT,
+    borderRadius: 16,
+    overflow: "hidden",
+    marginTop: 18,
   },
   note: {
     flexDirection: "row",
