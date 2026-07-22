@@ -13,6 +13,23 @@ module.exports = ({ config }) => {
   if (!hasLocalization) {
     plugins = [...plugins, "expo-localization"];
   }
+  const hasBuildProperties = plugins.some(
+    (e) => (Array.isArray(e) ? e[0] : e) === "expo-build-properties",
+  );
+  if (!hasBuildProperties) {
+    plugins = [
+      ...plugins,
+      [
+        "expo-build-properties",
+        {
+          android: {
+            enableMinifyInReleaseBuilds: true,
+            enableShrinkResourcesInReleaseBuilds: true,
+          },
+        },
+      ],
+    ];
+  }
   return {
     ...config,
     plugins,

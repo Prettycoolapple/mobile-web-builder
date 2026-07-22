@@ -33,7 +33,7 @@
     },
     "android": {
       "package": "nz.devfeasible.app",
-      "versionCode": 59,
+      "versionCode": 60,
       "edgeToEdgeEnabled": true,
       "blockedPermissions": [
         "android.permission.READ_MEDIA_IMAGES",
