@@ -15,7 +15,7 @@
     { "source": "/support/", "destination": "/contact", "permanent": true },
     { "source": "/sales-portal", "destination": "/sales-portal/", "permanent": true },
     {
-      "source": "/((?!\\.well-known/).*)",
+      "source": "/((?!api/|\\.well-known/).*)",
       "has": [{ "type": "host", "value": "projectalpha.app" }],
       "destination": "https://www.projectalpha.app/$1",
       "permanent": false

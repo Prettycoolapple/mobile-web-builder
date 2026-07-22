@@ -36,6 +36,41 @@ function detectNewsLanguage(value: string): Language | null {
   return null;
 }
 
+const NEWS_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+const MAX_NEWS_IMAGE_BYTES = 25 * 1024 * 1024;
+const MAX_NEWS_SOURCE_IMAGE_BYTES = 60 * 1024 * 1024;
+
+async function prepareNewsImage(file: File): Promise<File> {
+  const contentType = file.type.toLowerCase();
+  if (!NEWS_IMAGE_TYPES.has(contentType)) throw new Error(`${file.name}: use JPEG, PNG, WebP, or GIF. HEIC photos must first be exported as JPEG.`);
+  if (file.size > MAX_NEWS_SOURCE_IMAGE_BYTES) throw new Error(`${file.name}: the original image is larger than 60 MB.`);
+  if (contentType === "image/gif") {
+    if (file.size > MAX_NEWS_IMAGE_BYTES) throw new Error(`${file.name}: animated GIFs must be 25 MB or smaller.`);
+    return file;
+  }
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, 2400 / Math.max(bitmap.width, bitmap.height));
+    if (scale === 1 && file.size <= 4 * 1024 * 1024) { bitmap.close(); return file; }
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) { bitmap.close(); return file; }
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height); bitmap.close();
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/webp", 0.86));
+    if (!blob) {
+      if (file.size > MAX_NEWS_IMAGE_BYTES) throw new Error(`${file.name}: the browser could not resize this image.`);
+      return file;
+    }
+    if (blob.size > MAX_NEWS_IMAGE_BYTES) throw new Error(`${file.name}: the resized image is still larger than 25 MB.`);
+    return new File([blob], file.name.replace(/\.[^.]+$/, "") + ".webp", { type: "image/webp", lastModified: file.lastModified });
+  } catch {
+    if (file.size > MAX_NEWS_IMAGE_BYTES) throw new Error(`${file.name}: the browser could not resize this image below 25 MB.`);
+    return file;
+  }
+}
+
 function MarkdownPreview({ value }: { value: string }) {
   return <div className="news-markdown-preview">{value.split(/\n{2,}/).map((block, index) => {
     if (block.startsWith("### ")) return <h3 key={index}>{block.slice(4)}</h3>;
@@ -106,6 +141,8 @@ function NotificationComposer({ postId, bulkEnabled, onChanged }: { postId: stri
   const [translating, setTranslating] = useState(false);
   const [sending, setSending] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [uploadingImages, setUploadingImages] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState("");
   const [previewLanguage, setPreviewLanguage] = useState<Language>("en");
   const loadedRef = useRef(false);
   const dirtyRef = useRef(false);
@@ -237,15 +274,21 @@ function NotificationComposer({ postId, bulkEnabled, onChanged }: { postId: stri
   async function uploadImages(files: FileList | null) {
     if (!post || !files) return;
     const saved = await save(true); if (!saved) return;
-    for (const file of Array.from(files).slice(0, 10 - post.images.length)) {
+    const selected = Array.from(files).slice(0, 10 - post.images.length);
+    setUploadingImages(true); setError("");
+    for (let index = 0; index < selected.length; index += 1) {
+      const originalFile = selected[index]!;
       try {
+        setUploadProgress(`Preparing image ${index + 1} of ${selected.length}…`);
+        const file = await prepareNewsImage(originalFile);
+        setUploadProgress(`Uploading image ${index + 1} of ${selected.length}…`);
         const ticket = await apiPost<{ uploadUrl: string; objectPath: string }>(`/admin/news-posts/${post.id}/images/upload-url`, { contentType: file.type, byteSize: file.size });
         const response = await fetch(ticket.uploadUrl, { method: "PUT", headers: { "Content-Type": file.type }, body: file });
         if (!response.ok) throw new Error("Storage upload failed");
         await apiPost(`/admin/news-posts/${post.id}/images`, { objectPath: ticket.objectPath, contentType: file.type, byteSize: file.size });
-      } catch (err) { setError(err instanceof Error ? err.message : `Failed to upload ${file.name}`); break; }
+      } catch (err) { setError(err instanceof Error ? err.message : `Failed to upload ${originalFile.name}`); break; }
     }
-    await load();
+    setUploadProgress(""); setUploadingImages(false); await load();
   }
 
   async function send() {
@@ -310,7 +353,8 @@ function NotificationComposer({ postId, bulkEnabled, onChanged }: { postId: stri
       {post.audience === "specific_user" && <label>Test user email<input type="email" value={post.targetEmail ?? ""} disabled={!isDraft} placeholder="user@example.com" onChange={(event) => update({ targetEmail: event.target.value })} /></label>}
       <label>Source title <span>{post[sourceTitleKey].length}/120</span><input maxLength={120} disabled={!isDraft} value={post[sourceTitleKey]} onChange={(event) => update({ [sourceTitleKey]: event.target.value } as Partial<PostDetail>, true)} /></label>
       <label>Translated title<input maxLength={120} disabled={!isDraft} value={post[translatedTitleKey]} onChange={(event) => update({ [translatedTitleKey]: event.target.value, translationStale: false } as Partial<PostDetail>)} /></label>
-      <div className="section-title-row"><h3>Article blocks</h3>{isDraft && <div className="news-block-add-actions"><button className="btn-secondary" onClick={addTextBlock}>Add text</button><label className="image-upload-button">Add images<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden onChange={(event) => void uploadImages(event.target.files)} /></label></div>}</div>
+      <div className="section-title-row"><h3>Article blocks</h3>{isDraft && <div className="news-block-add-actions"><button className="btn-secondary" onClick={addTextBlock}>Add text</button><label className={`image-upload-button${uploadingImages ? " disabled" : ""}`}>{uploadingImages ? "Uploading…" : "Add images"}<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple disabled={uploadingImages} hidden onChange={(event) => { void uploadImages(event.target.files); event.currentTarget.value = ""; }} /></label></div>}</div>
+      {uploadProgress && <p className="news-upload-progress">{uploadProgress}</p>}
       <div className="news-block-list">{post.blocks.map((block, index) => <div className="news-block-card" key={block.id}>
         <div className="news-block-card-header"><strong>{block.type === "text" ? `Text ${index + 1}` : `Image ${index + 1}`}</strong>{isDraft && <span className="image-actions"><button disabled={index === 0} onClick={() => moveBlock(index, -1)}>↑</button><button disabled={index === post.blocks.length - 1} onClick={() => moveBlock(index, 1)}>↓</button><button onClick={() => void removeBlock(block)}>Remove</button></span>}</div>
         {block.type === "image" ? <AuthenticatedImage image={{ ...(post.images.find((image) => image.id === block.imageId) ?? { id: block.imageId, objectPath: "", contentType: "", byteSize: 0, sortOrder: index }), url: block.url }} /> : <>
@@ -321,11 +365,11 @@ function NotificationComposer({ postId, bulkEnabled, onChanged }: { postId: stri
       </div>)}</div>
       {isDraft && <button className="btn-secondary translate-button" onClick={() => void translate()} disabled={translating}>{translating ? "Translating…" : `Generate ${effectiveSourceLanguage === "en" ? "Chinese" : "English"} translation`}</button>}
       {post.translationStale && <p className="translation-warning">Translation needs regeneration or review before sending.</p>}
-    </section><aside className="news-preview-panel"><div className="preview-tabs"><button className={previewLanguage === "en" ? "active" : ""} onClick={() => setPreviewLanguage("en")}>English</button><button className={previewLanguage === "zh" ? "active" : ""} onClick={() => setPreviewLanguage("zh")}>中文</button></div><div className="push-preview"><small>PUSH NOTIFICATION</small><strong>Project Alpha</strong><p>{previewTitle || "Your post title will appear here"}</p><em>Only the title is sent. Readers open the app for the article.</em></div><article className="article-preview"><h1>{previewTitle || "Untitled post"}</h1>{post.blocks.map((block) => block.type === "text" ? <MarkdownPreview key={block.id} value={(previewLanguage === "en" ? block.textEn : block.textZh) || "Your text preview will appear here."} /> : <AuthenticatedImage key={block.id} image={{ ...(post.images.find((image) => image.id === block.imageId) ?? { id: block.imageId, objectPath: "", contentType: "", byteSize: 0, sortOrder: 0 }), url: block.url }} />)}</article></aside></div>
+    </section><aside className="news-preview-panel"><div className="preview-tabs"><button className={previewLanguage === "en" ? "active" : ""} onClick={() => setPreviewLanguage("en")}>English</button><button className={previewLanguage === "zh" ? "active" : ""} onClick={() => setPreviewLanguage("zh")}>中文</button></div><div className="push-preview"><small>PUSH NOTIFICATION</small><strong>Project Alpha</strong><p>{previewTitle || "Your post title will appear here"}</p><em>Only the title is sent. Readers open the app for the article.</em></div><article className="article-preview"><h1>{previewTitle || "Untitled post"}</h1>{post.blocks.map((block) => block.type === "text" ? <MarkdownPreview key={block.id} value={(previewLanguage === "en" ? block.textEn : block.textZh) || "Your text preview will appear here."} /> : <AuthenticatedImage key={block.id} article image={{ ...(post.images.find((image) => image.id === block.imageId) ?? { id: block.imageId, objectPath: "", contentType: "", byteSize: 0, sortOrder: 0 }), url: block.url }} />)}</article></aside></div>
   </div>;
 }
 
-function AuthenticatedImage({ image }: { image: PostImage }) {
+function AuthenticatedImage({ image, article = false }: { image: PostImage; article?: boolean }) {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     let objectUrl: string | null = null; let cancelled = false;
@@ -335,7 +379,8 @@ function AuthenticatedImage({ image }: { image: PostImage }) {
       .then((blob) => { if (!cancelled) { objectUrl = URL.createObjectURL(blob); setUrl(objectUrl); } }).catch(() => undefined);
     return () => { cancelled = true; if (objectUrl) URL.revokeObjectURL(objectUrl); };
   }, [image.url]);
-  return url ? <img src={url} alt="Post attachment" className="news-image-thumb" /> : <div className="news-image-thumb placeholder" />;
+  const className = article ? "news-image-article" : "news-image-thumb";
+  return url ? <img src={url} alt="Post attachment" className={className} /> : <div className={`${className} placeholder`} />;
 }
 
 function AnalyticsStrip({ post }: { post: PostDetail }) {

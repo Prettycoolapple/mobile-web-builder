@@ -29,17 +29,20 @@ export default function NewsFeedScreen() {
   const [posts, setPosts] = useState<FeedPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const imageHeaders = getApiHeaders();
 
   const load = useCallback(async (refresh = false) => {
     if (refresh) setRefreshing(true); else setLoading(true);
     try {
       const response = await fetch(`${getApiBase()}/news?limit=50`, { headers: getApiHeaders() });
-      if (!response.ok) throw new Error("load failed");
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error || `News request failed (${response.status})`);
+      }
       const data = await response.json() as { posts?: FeedPost[] };
-      setPosts(data.posts ?? []); setError(false); void refreshUnread();
-    } catch { setError(true); }
+      setPosts(data.posts ?? []); setError(null); void refreshUnread();
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "News could not be loaded"); }
     finally { setLoading(false); setRefreshing(false); }
   }, [getApiHeaders, refreshUnread]);
 
@@ -54,7 +57,7 @@ export default function NewsFeedScreen() {
       <Pressable onPress={() => router.canGoBack() ? router.back() : router.replace("/(tabs)" as never)} style={styles.headerButton} accessibilityRole="button" accessibilityLabel={t("common.back")}><Feather name="arrow-left" size={22} color="#FAFAF9" /></Pressable>
       <Text style={styles.headerTitle}>{t("news.title")}</Text><View style={styles.headerButton} />
     </View>
-    {loading && posts.length === 0 ? <View style={styles.center}><ActivityIndicator size="large" color={colors.accent} /></View> : error && posts.length === 0 ? <View style={styles.center}><Feather name="wifi-off" size={30} color={colors.mutedForeground} /><Text style={[styles.emptyTitle, { color: colors.foreground }]}>{t("news.load_failed")}</Text><Pressable onPress={() => void load()}><Text style={[styles.retry, { color: colors.accent }]}>{t("common.retry")}</Text></Pressable></View> :
+    {loading && posts.length === 0 ? <View style={styles.center}><ActivityIndicator size="large" color={colors.accent} /></View> : error && posts.length === 0 ? <View style={styles.center}><Feather name="wifi-off" size={30} color={colors.mutedForeground} /><Text style={[styles.emptyTitle, { color: colors.foreground }]}>{t("news.load_failed")}</Text><Text style={[styles.errorDetail, { color: colors.mutedForeground }]}>{error}</Text><Pressable onPress={() => void load()}><Text style={[styles.retry, { color: colors.accent }]}>{t("common.retry")}</Text></Pressable></View> :
       <FlatList
         data={remaining}
         keyExtractor={(item) => item.id}
@@ -82,6 +85,7 @@ const styles = StyleSheet.create({
   center: { flex: 1, minHeight: 320, alignItems: "center", justifyContent: "center", padding: 28, gap: 10 },
   emptyTitle: { fontFamily: "DM_Sans_700Bold", fontSize: 18, textAlign: "center" },
   emptyBody: { fontFamily: "DM_Sans_400Regular", fontSize: 14, textAlign: "center" }, retry: { fontFamily: "DM_Sans_700Bold", fontSize: 15 },
+  errorDetail: { fontFamily: "DM_Sans_400Regular", fontSize: 13, lineHeight: 18, textAlign: "center" },
   featuredRow: { flexDirection: "row", gap: 3, paddingBottom: 14 },
   featuredCard: { height: Math.min(255, width * 0.62), overflow: "hidden", position: "relative" },
   featuredPrimary: { flex: 1.65 }, featuredSecondary: { flex: 1 }, featuredSingle: { flex: 1, marginHorizontal: 12, borderRadius: 14 },

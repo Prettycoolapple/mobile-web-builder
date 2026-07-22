@@ -17,6 +17,7 @@ function normalizeOrigin(value: string): string {
 
 function normalizeApiBase(value: string): string {
   const url = new URL(/^https?:\/\//i.test(value) ? value : `https://${value}`);
+  if (url.hostname.toLowerCase() === "projectalpha.app") url.hostname = "www.projectalpha.app";
   assertNotSupabaseUrl(url);
   const pathname = url.pathname.replace(/\/+$/, "");
   url.pathname = pathname.endsWith("/api") ? pathname : `${pathname}/api`;

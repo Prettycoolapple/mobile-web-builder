@@ -64,6 +64,10 @@ describe("guest news identity", () => {
     expect(policy).toContain("article.audience='everyone'");
     expect(policy).toContain("news_post_recipients");
     expect(policy).not.toContain("paid_general");
+    const firstParameterPolicy = canAccessNewsSql("article", 1);
+    expect(firstParameterPolicy).toContain("$1::boolean");
+    expect(firstParameterPolicy).toContain("$2::text");
+    expect(firstParameterPolicy).toContain("$3::text");
   });
 
   it("allows deleting drafts and specific-user tests but protects sent bulk posts", () => {

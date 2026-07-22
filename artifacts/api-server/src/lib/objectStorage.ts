@@ -1,5 +1,5 @@
 import { Storage, File } from "@google-cloud/storage";
-import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand, PutBucketCorsCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand, DeleteObjectCommand, PutBucketCorsCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Readable } from "stream";
 import { randomUUID } from "crypto";
@@ -336,7 +336,11 @@ async function signObjectURL({
 
 // Namespaces that must go into the private bucket (sensitive documents).
 // Everything else (listing-images, avatars, dm-images) uses the public bucket.
-const PRIVATE_NAMESPACES = new Set(["listing-documents", "provider-certificates"]);
+const PRIVATE_NAMESPACES = new Set(["listing-documents", "provider-certificates", "news"]);
+
+function isPrivateNamespace(namespace: string): boolean {
+  return PRIVATE_NAMESPACES.has(namespace.split("/")[0] ?? namespace);
+}
 
 /** Extract a bucket name from a Supabase/S3 object URL (last path segment). */
 function bucketFromUrl(url: string): string {
@@ -404,7 +408,7 @@ export class S3StorageService {
 
   /** Resolve which bucket a given namespace should use. */
   private resolveBucket(namespace: string): string {
-    return PRIVATE_NAMESPACES.has(namespace) && this.privateBucket
+    return isPrivateNamespace(namespace) && this.privateBucket
       ? this.privateBucket
       : this.publicBucket;
   }
@@ -430,7 +434,7 @@ export class S3StorageService {
     if (!this.client) throw new Error("S3 storage is not configured");
 
     const bucket = this.resolveBucket(namespace);
-    const isPrivate = PRIVATE_NAMESPACES.has(namespace);
+    const isPrivate = isPrivateNamespace(namespace);
     const ext = mimetype.split("/")[1]?.split(";")[0]?.replace("jpeg", "jpg") || "bin";
     const key = `${namespace}/${randomUUID()}.${ext}`;
 
@@ -495,7 +499,7 @@ export class S3StorageService {
   fileUrlForObjectPath(objectPath: string): string {
     const key = this.keyForObjectPath(objectPath) ?? "";
     const namespace = key.split("/")[0] ?? "";
-    const isPrivate = PRIVATE_NAMESPACES.has(namespace);
+    const isPrivate = isPrivateNamespace(namespace);
     return !isPrivate && this.publicUrl ? `${this.publicUrl}/${key}` : `/api/storage/s3/${key}`;
   }
 
@@ -581,6 +585,13 @@ export class S3StorageService {
       size: typeof result.ContentLength === "number" ? result.ContentLength : null,
       etag: result.ETag?.replace(/^\"|\"$/g, "") || null,
     };
+  }
+
+  async delete(key: string): Promise<void> {
+    if (!this.client) return;
+    const namespace = key.split("/")[0] ?? "";
+    const bucket = this.resolveBucket(namespace);
+    await this.client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
   }
 }
 

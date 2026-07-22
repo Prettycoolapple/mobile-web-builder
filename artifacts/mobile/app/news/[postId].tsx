@@ -14,6 +14,21 @@ type ArticleBlock = { type: "text"; text: string } | { type: "image"; imageId: s
 interface Article { id: string; title: string; body: string; publishedAt: string; blocks: ArticleBlock[] }
 function assetUrl(path: string): string { return `${getApiBase().replace(/\/api$/, "")}${path}`; }
 
+function ArticleImage({ uri, headers }: { uri: string; headers: Record<string, string> }) {
+  const [aspectRatio, setAspectRatio] = useState(1.45);
+  return <Image
+    source={{ uri, headers }}
+    style={[styles.image, { aspectRatio }]}
+    contentFit="contain"
+    transition={180}
+    onLoad={(event) => {
+      const width = Number(event.source?.width) || 0;
+      const height = Number(event.source?.height) || 0;
+      if (width > 0 && height > 0) setAspectRatio(Math.min(3, Math.max(0.45, width / height)));
+    }}
+  />;
+}
+
 export default function NewsArticleScreen() {
   const { postId, source } = useLocalSearchParams<{ postId: string; source?: string }>();
   const router = useRouter(); const insets = useSafeAreaInsets(); const colors = useColors(); const { locale, t } = useT();
@@ -55,7 +70,7 @@ export default function NewsArticleScreen() {
         <Text style={[styles.title, { color: colors.foreground }]}>{post.title}</Text><View style={[styles.rule, { backgroundColor: colors.border }]} />
         {post.blocks.map((block, index) => block.type === "text"
           ? <View key={`text-${index}`} style={styles.textBlock}><Markdown style={markdownStyles}>{block.text}</Markdown></View>
-          : <Image key={`${block.imageId}-${index}`} source={{ uri: assetUrl(block.url), headers: getApiHeaders() }} style={styles.image} contentFit="cover" transition={180} />)}
+          : <ArticleImage key={`${block.imageId}-${index}`} uri={assetUrl(block.url)} headers={getApiHeaders()} />)}
       </ScrollView>}
   </View>;
 }
@@ -65,5 +80,5 @@ const styles = StyleSheet.create({
   headerButton: { width: 40, height: 40, alignItems: "center", justifyContent: "center" }, headerTitle: { flex: 1, textAlign: "center", color: "#FAFAF9", fontFamily: "DM_Sans_700Bold", fontSize: 17 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, padding: 28 }, error: { fontFamily: "DM_Sans_600SemiBold", fontSize: 17, textAlign: "center" }, backText: { fontFamily: "DM_Sans_700Bold" },
   content: { paddingHorizontal: 20, paddingTop: 24 }, date: { fontFamily: "DM_Sans_600SemiBold", fontSize: 13, marginBottom: 10 }, title: { fontFamily: "Fraunces_600SemiBold", fontSize: 31, lineHeight: 38 }, rule: { height: StyleSheet.hairlineWidth, marginVertical: 22 },
-  textBlock: { marginBottom: 14 }, image: { width: "100%", aspectRatio: 1.45, borderRadius: 12, marginVertical: 12, backgroundColor: "#ddd" },
+  textBlock: { marginBottom: 14 }, image: { width: "100%", borderRadius: 12, marginVertical: 12, backgroundColor: "#ddd" },
 });

@@ -69,6 +69,10 @@ create table if not exists news_post_blocks (
   unique(post_id, image_id)
 );
 
+alter table news_post_images drop constraint if exists news_post_images_byte_size_check;
+alter table news_post_images add constraint news_post_images_byte_size_check
+  check (byte_size > 0 and byte_size <= 26214400);
+
 -- Backfill legacy posts as body first, then their existing ordered images.
 insert into news_post_blocks(post_id, block_type, sort_order, text_en, text_zh)
 select p.id, 'text', 0, p.body_en, p.body_zh

@@ -11,6 +11,18 @@ type ExpoTicket = {
 const SEND_URL = "https://exp.host/--/api/v2/push/send";
 const RECEIPT_URL = "https://exp.host/--/api/v2/push/getReceipts";
 
+export function buildNewsPushMessage(row: {
+  token: string; locale: string; titleEn: string; titleZh: string; postId: string;
+}) {
+  return {
+    to: row.token,
+    title: "Project Alpha",
+    body: row.locale === "zh" ? row.titleZh : row.titleEn,
+    sound: "default",
+    data: { type: "news_post", postId: row.postId },
+  };
+}
+
 export async function runNewsDispatch(): Promise<{ claimed: number; accepted: number; failed: number }> {
   // An expired in-flight lease is intentionally not retried: Expo has no
   // idempotency key, so a worker crash after acceptance would otherwise risk a
@@ -61,12 +73,7 @@ export async function runNewsDispatch(): Promise<{ claimed: number; accepted: nu
     const response = await fetch(SEND_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(rows.map((row) => ({
-        to: row.token,
-        title: row.locale === "zh" ? row.titleZh : row.titleEn,
-        sound: "default",
-        data: { type: "news_post", postId: row.postId },
-      }))),
+      body: JSON.stringify(rows.map(buildNewsPushMessage)),
     });
     if (!response.ok) {
       const message = (await response.text()).slice(0, 500);

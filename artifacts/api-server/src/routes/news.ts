@@ -4,7 +4,7 @@ import { pool } from "@workspace/db";
 import { optionalAuth, requireAdmin } from "../lib/auth";
 import { getAnonymousInstallHash } from "../lib/anonymous-discovery";
 import { hitRateLimit, ipRateLimit, minutes } from "../lib/rateLimit";
-import { ObjectNotFoundError, ObjectStorageService } from "../lib/objectStorage";
+import { ObjectNotFoundError, ObjectStorageService, s3StorageService } from "../lib/objectStorage";
 import { translateNewsPost, type NewsLanguage } from "../lib/news-translation";
 import { runAfterResponse } from "../lib/vercel-wait-until";
 import { runNewsDispatch, runNewsReceiptCheck } from "../lib/news-push";
@@ -14,6 +14,7 @@ const router = Router();
 const storage = new ObjectStorageService();
 const AUDIENCES = new Set(["specific_user", "everyone", "paid_general", "sales_agent", "service_provider"]);
 const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+const MAX_NEWS_IMAGE_BYTES = 25 * 1024 * 1024;
 const EXPO_TOKEN_RE = /^(ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]+\]$/;
 const publicNewsLimit = ipRateLimit({ name: "news-public", max: 300, windowMs: minutes(5) });
 
@@ -48,7 +49,11 @@ function sendNewsSetupError(res: Response, error: unknown): boolean {
 
 async function deleteNewsObjects(paths: string[], req: Request): Promise<void> {
   await Promise.all(paths.map(async (objectPath) => {
-    try { await storage.deleteObjectEntity(objectPath); }
+    try {
+      const s3Key = s3StorageService.keyForObjectPath(objectPath);
+      if (s3Key) await s3StorageService.delete(s3Key);
+      else await storage.deleteObjectEntity(objectPath);
+    }
     catch (error) { req.log.warn({ error, objectPath }, "Could not remove deleted news image object"); }
   }));
 }
@@ -273,11 +278,15 @@ router.post("/admin/news-posts/:postId/translate", requireAdmin, async (req, res
 router.post("/admin/news-posts/:postId/images/upload-url", requireAdmin, async (req, res) => {
   const contentType = String(req.body?.contentType ?? "");
   const byteSize = Number(req.body?.byteSize);
-  if (!IMAGE_TYPES.has(contentType) || !Number.isInteger(byteSize) || byteSize <= 0 || byteSize > 10 * 1024 * 1024) return void res.status(400).json({ error: "Unsupported image or size" });
+  if (!IMAGE_TYPES.has(contentType) || !Number.isInteger(byteSize) || byteSize <= 0 || byteSize > MAX_NEWS_IMAGE_BYTES) return void res.status(400).json({ error: "Use a JPEG, PNG, WebP, or GIF image up to 25 MB" });
   const count = await pool.query<{ count: string }>(`select count(i.id)::text count from news_posts p left join news_post_images i on i.post_id=p.id where p.id=$1 and p.status='draft' group by p.id`, [req.params.postId]);
   if (!count.rows[0]) return void res.status(404).json({ error: "Draft not found" });
   if (Number(count.rows[0].count) >= 10) return void res.status(400).json({ error: "A post can contain at most 10 images" });
   try {
+    if (s3StorageService.isConfigured) {
+      const upload = await s3StorageService.getPresignedUploadUrl({ contentType, namespace: `news/${req.params.postId}` });
+      return void res.json({ uploadUrl: upload.uploadURL, objectPath: upload.objectPath });
+    }
     const uploadUrl = await storage.getObjectEntityUploadURL({ contentType, namespace: `news/${req.params.postId}` });
     res.json({ uploadUrl, objectPath: storage.normalizeObjectEntityPath(uploadUrl) });
   } catch (error) {
@@ -289,7 +298,8 @@ router.post("/admin/news-posts/:postId/images/upload-url", requireAdmin, async (
 router.post("/admin/news-posts/:postId/images", requireAdmin, async (req, res) => {
   const { objectPath, contentType } = req.body ?? {};
   const byteSize = Number(req.body?.byteSize);
-  if (typeof objectPath !== "string" || !objectPath.startsWith("/objects/") || !IMAGE_TYPES.has(contentType) || !Number.isInteger(byteSize) || byteSize <= 0 || byteSize > 10 * 1024 * 1024) return void res.status(400).json({ error: "Invalid image metadata" });
+  const expectedS3Prefix = `/s3/news/${req.params.postId}/`;
+  if (typeof objectPath !== "string" || (!objectPath.startsWith("/objects/") && !objectPath.startsWith(expectedS3Prefix)) || !IMAGE_TYPES.has(contentType) || !Number.isInteger(byteSize) || byteSize <= 0 || byteSize > MAX_NEWS_IMAGE_BYTES) return void res.status(400).json({ error: "Invalid image metadata" });
   const client = await pool.connect();
   try {
     await client.query("begin");
@@ -298,6 +308,13 @@ router.post("/admin/news-posts/:postId/images", requireAdmin, async (req, res) =
     if (!draft.rows[0]) { await client.query("rollback"); return void res.status(404).json({ error: "Draft not found" }); }
     const count = await client.query<{ count: string }>(`select count(*)::text count from news_post_images where post_id=$1`, [req.params.postId]);
     if (Number(count.rows[0]?.count ?? 0) >= 10) { await client.query("rollback"); return void res.status(400).json({ error: "A post can contain at most 10 images" }); }
+    const s3Key = s3StorageService.keyForObjectPath(objectPath);
+    if (s3Key) {
+      const uploaded = await s3StorageService.head(s3Key);
+      if (uploaded.size == null || uploaded.size <= 0 || uploaded.size > MAX_NEWS_IMAGE_BYTES) {
+        await client.query("rollback"); return void res.status(400).json({ error: "Uploaded image size could not be verified" });
+      }
+    }
     const image = await client.query(
       `insert into news_post_images(post_id,object_path,content_type,byte_size,sort_order)
        select $1,$2,$3,$4,coalesce(max(sort_order)+1,0) from news_post_images where post_id=$1 returning *`,
@@ -541,8 +558,8 @@ router.post("/news/push-token", async (req, res) => {
 async function latestVisibleSequence(viewer: NewsViewer): Promise<number> {
   const result = await pool.query<{ sequence: number | null }>(
     `select max(p.published_sequence)::integer sequence from news_posts p
-     where p.published_at is not null and p.archived_at is null and ${canAccessNewsSql("p")}`,
-    [null, viewer.isAdmin, viewer.userId, viewer.guestSessionId],
+     where p.published_at is not null and p.archived_at is null and ${canAccessNewsSql("p", 1)}`,
+    [viewer.isAdmin, viewer.userId, viewer.guestSessionId],
   );
   return Number(result.rows[0]?.sequence ?? 0);
 }
@@ -592,18 +609,18 @@ router.get("/news", async (req, res) => {
     const locale = req.get("x-locale")?.toLowerCase().startsWith("zh") ? "zh" : "en";
     const result = await pool.query(
       `select p.id,p.published_at,p.published_sequence,
-        case when $5='zh' then p.title_zh else p.title_en end title,
-        left(coalesce((select string_agg(case when $5='zh' then b.text_zh else b.text_en end,' ' order by b.sort_order)
+        case when $4='zh' then p.title_zh else p.title_en end title,
+        left(coalesce((select string_agg(case when $4='zh' then b.text_zh else b.text_en end,' ' order by b.sort_order)
           from news_post_blocks b where b.post_id=p.id and b.block_type='text'),
-          case when $5='zh' then p.body_zh else p.body_en end),240) excerpt,
+          case when $4='zh' then p.body_zh else p.body_en end),240) excerpt,
         coalesce((select b.image_id from news_post_blocks b where b.post_id=p.id and b.block_type='image' order by b.sort_order limit 1),
           (select i.id from news_post_images i where i.post_id=p.id order by i.sort_order limit 1)) hero_image_id,
         (select count(*)::integer from news_post_images i where i.post_id=p.id) image_count
        from news_posts p
-       where p.published_at is not null and p.archived_at is null and ${canAccessNewsSql("p")}
-         and ($6::timestamptz is null or p.published_at<$6)
-       order by p.published_sequence desc,p.published_at desc limit $7`,
-      [null, viewer.isAdmin, viewer.userId, viewer.guestSessionId, locale, before, limit],
+       where p.published_at is not null and p.archived_at is null and ${canAccessNewsSql("p", 1)}
+         and ($5::timestamptz is null or p.published_at<$5)
+       order by p.published_sequence desc,p.published_at desc limit $6`,
+      [viewer.isAdmin, viewer.userId, viewer.guestSessionId, locale, before, limit],
     );
     res.json({
       posts: result.rows.map((row) => ({
@@ -719,6 +736,13 @@ router.get("/news/:postId/images/:imageId", async (req: Request, res: Response) 
       [req.params.imageId, req.params.postId, viewer.isAdmin, viewer.userId, viewer.guestSessionId],
     );
     if (!allowed.rows[0]) return void res.status(404).end();
+    const s3Key = s3StorageService.keyForObjectPath(allowed.rows[0].object_path);
+    if (s3Key) {
+      const response = await s3StorageService.download(s3Key);
+      res.status(response.status); response.headers.forEach((value, key) => res.setHeader(key, value));
+      if (response.body) { const { Readable } = await import("node:stream"); Readable.fromWeb(response.body as import("node:stream/web").ReadableStream<Uint8Array>).pipe(res); } else res.end();
+      return;
+    }
     if (storage.isLocal) {
       const local = storage.readLocalFile(allowed.rows[0].object_path);
       res.setHeader("Content-Type", local.contentType); res.setHeader("Content-Length", local.size); local.stream.pipe(res); return;

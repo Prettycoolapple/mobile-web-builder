@@ -189,12 +189,15 @@ export async function lockActiveGuestNewsViewer(
   }
 }
 
-export function canAccessNewsSql(alias = "p"): string {
+export function canAccessNewsSql(alias = "p", firstParameter = 2): string {
+  const adminParameter = `$${firstParameter}`;
+  const userParameter = `$${firstParameter + 1}`;
+  const guestParameter = `$${firstParameter + 2}`;
   return `(
-    $2::boolean
-    or ($3::text is not null and (${alias}.audience='everyone' or exists(
-      select 1 from news_post_recipients ar where ar.post_id=${alias}.id and ar.user_id=$3
+    ${adminParameter}::boolean
+    or (${userParameter}::text is not null and (${alias}.audience='everyone' or exists(
+      select 1 from news_post_recipients ar where ar.post_id=${alias}.id and ar.user_id=${userParameter}
     )))
-    or ($4::text is not null and ${alias}.audience='everyone')
+    or (${guestParameter}::text is not null and ${alias}.audience='everyone')
   )`;
 }

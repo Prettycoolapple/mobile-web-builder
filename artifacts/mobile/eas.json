@@ -23,7 +23,9 @@
     },
     "production": {
       "env": {
-        "EXPO_PUBLIC_ENABLE_SOCKETS": "false"
+        "EXPO_PUBLIC_ENABLE_SOCKETS": "false",
+        "EXPO_PUBLIC_API_URL": "https://www.projectalpha.app/api",
+        "EXPO_PUBLIC_APP_URL": "https://www.projectalpha.app"
       },
       "ios": {
         "credentialsSource": "remote"
