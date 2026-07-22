@@ -34,6 +34,7 @@ import reportPdfRouter from "./report-pdf";
 import cronRouter from "./cron";
 import limTitleRouter from "./lim-title";
 import twilioWebhooksRouter from "./twilio-webhooks";
+import newsRouter from "./news";
 
 const router: IRouter = Router();
 
@@ -72,5 +73,6 @@ router.use(reportPdfRouter);
 router.use(cronRouter);
 router.use(limTitleRouter);
 router.use(twilioWebhooksRouter);
+router.use(newsRouter);
 
 export default router;

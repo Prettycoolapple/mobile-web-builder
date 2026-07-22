@@ -16,8 +16,9 @@ import {
   Fraunces_700Bold,
 } from "@expo-google-fonts/fraunces";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { requestTrackingPermissionsAsync } from "expo-tracking-transparency";
-import { Stack, useRouter } from "expo-router";
+import { Stack, useRouter, useSegments } from "expo-router";
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
 import * as Notifications from "expo-notifications";
@@ -33,12 +34,13 @@ import { ChatProvider } from "@/context/ChatContext";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { DmProvider } from "@/context/DmContext";
 import { NotificationProvider } from "@/context/NotificationContext";
+import { NewsProvider } from "@/context/NewsContext";
 import { WatchlistProvider } from "@/context/WatchlistContext";
 import { getApiBase } from "@/lib/api";
 import { configureAppIconBadgesAsync } from "@/lib/appBadge";
 import { parseShareTokenFromUrl, storePendingShareToken } from "@/lib/propertyShares";
 import { initializeRevenueCat, SubscriptionProvider } from "@/lib/revenuecat";
-import { LocaleProvider, LocaleSync } from "@/lib/i18n";
+import { getCurrentLocale, LocaleProvider, LocaleSync } from "@/lib/i18n";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -136,22 +138,31 @@ function SplashUntilReady({ fontsReady }: { fontsReady: boolean }) {
 }
 
 function NotificationSetup() {
-  const { token, user } = useAuth();
+  const { getApiHeaders, isLoading, anonymousInstallId, newsGuestSessionId } = useAuth();
   const router = useRouter();
+  const segments = useSegments();
   const notificationListener = useRef<Notifications.EventSubscription | null>(null);
   const responseListener = useRef<Notifications.EventSubscription | null>(null);
   const checkedInitialNotificationRef = useRef(false);
   const handledNotificationIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    if (!user || !token) return;
+    if (isLoading || !anonymousInstallId || !newsGuestSessionId) return;
+    const segmentNames = segments.map(String);
+    const leaf = segmentNames[segmentNames.length - 1];
+    const onHome = segmentNames.includes("(tabs)") && (leaf === "(tabs)" || leaf === "index" || leaf === "home");
 
     async function registerPushToken() {
       if (Platform.OS === "web") return;
       try {
+        await fetch(`${getApiBase()}/news/session`, { method: "POST", headers: getApiHeaders(), body: "{}" });
         const { status: existing } = await Notifications.getPermissionsAsync();
         let finalStatus = existing;
         if (existing !== "granted") {
+          if (!onHome) return;
+          const promptKey = "@devfeasible/news_push_permission_requested";
+          if (await AsyncStorage.getItem(promptKey)) return;
+          await AsyncStorage.setItem(promptKey, "1");
           const { status } = await Notifications.requestPermissionsAsync({
             ios: {
               allowAlert: true,
@@ -169,13 +180,10 @@ function NotificationSetup() {
         const pushToken = tokenData.data;
         const platform = Platform.OS === "ios" ? "ios" : "android";
 
-        await fetch(`${getApiBase()}/dm/push-token`, {
+        await fetch(`${getApiBase()}/news/push-token`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ token: pushToken, platform }),
+          headers: getApiHeaders(),
+          body: JSON.stringify({ token: pushToken, platform, locale: getCurrentLocale() }),
         });
       } catch {
       }
@@ -206,6 +214,16 @@ function NotificationSetup() {
         router.push({ pathname: "/(tabs)/history", params: { tab: "watchlist" } } as never);
         return;
       }
+      if (type === "news_post") {
+        const postId = typeof data.postId === "string" ? data.postId : undefined;
+        if (!postId) return;
+        void fetch(`${getApiBase()}/news/${encodeURIComponent(postId)}/push-open`, {
+          method: "POST",
+          headers: getApiHeaders(),
+        }).catch(() => undefined);
+        router.push({ pathname: "/news/[postId]", params: { postId, source: "push" } } as never);
+        return;
+      }
       if (threadId) {
         router.push(`/chat/${threadId}` as never);
       }
@@ -220,6 +238,7 @@ function NotificationSetup() {
       if (type === "report_ready" || type === "screening_ready" || type === "watchlist_change") {
         DeviceEventEmitter.emit("projectAlpha:notificationsChanged");
       }
+      if (type === "news_post") DeviceEventEmitter.emit("projectAlpha:newsChanged");
     });
 
     responseListener.current = Notifications.addNotificationResponseReceivedListener((response) => {
@@ -244,7 +263,7 @@ function NotificationSetup() {
       notificationListener.current?.remove();
       responseListener.current?.remove();
     };
-  }, [user, token, router]);
+  }, [anonymousInstallId, getApiHeaders, isLoading, newsGuestSessionId, router, segments]);
 
   return null;
 }
@@ -313,6 +332,8 @@ function RootLayoutNav() {
       <Stack.Screen name="chat/contacts" options={{ headerShown: false, presentation: "modal" }} />
       <Stack.Screen name="chat/[threadId]" options={{ headerShown: false }} />
       <Stack.Screen name="profile/[userId]" options={{ headerShown: false }} />
+      <Stack.Screen name="news/[postId]" options={{ headerShown: false }} />
+      <Stack.Screen name="news/index" options={{ headerShown: false }} />
     </Stack>
   );
 }
@@ -349,18 +370,20 @@ export default function RootLayout() {
               <SubscriptionGate>
                 <DmProvider>
                   <NotificationProvider>
-                    <WatchlistProvider>
-                      <ChatProvider>
-                        <GestureHandlerRootView style={{ flex: 1 }}>
-                          <KeyboardProvider>
-                            <MetaSdkSetup />
-                            <NotificationSetup />
-                            <ShareLinkSetup />
-                            <RootLayoutNav />
-                          </KeyboardProvider>
-                        </GestureHandlerRootView>
-                      </ChatProvider>
-                    </WatchlistProvider>
+                    <NewsProvider>
+                      <WatchlistProvider>
+                        <ChatProvider>
+                          <GestureHandlerRootView style={{ flex: 1 }}>
+                            <KeyboardProvider>
+                              <MetaSdkSetup />
+                              <NotificationSetup />
+                              <ShareLinkSetup />
+                              <RootLayoutNav />
+                            </KeyboardProvider>
+                          </GestureHandlerRootView>
+                        </ChatProvider>
+                      </WatchlistProvider>
+                    </NewsProvider>
                   </NotificationProvider>
                 </DmProvider>
               </SubscriptionGate>

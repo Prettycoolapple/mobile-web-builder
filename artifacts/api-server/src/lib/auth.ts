@@ -93,6 +93,33 @@ export const requireAuth: RequestHandler = async (req, res, next) => {
   next();
 };
 
+/**
+ * Resolve a valid bearer token when present, while allowing genuinely
+ * anonymous callers through. An invalid/expired bearer is never downgraded to
+ * guest access because that could hide session-replacement errors.
+ */
+export const optionalAuth: RequestHandler = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return next();
+  if (!authHeader.startsWith("Bearer ")) {
+    res.status(401).json({ error: "Invalid authorization header", code: "UNAUTHORIZED" });
+    return;
+  }
+  try {
+    const payload = await verifyActiveToken(authHeader.slice(7));
+    if (!payload) {
+      res.status(401).json({ error: "This account is now signed in on another device.", code: "SESSION_REPLACED" });
+      return;
+    }
+    (req as any).userId = payload.sub;
+    (req as any).userEmail = payload.email;
+    (req as any).role = payload.role ?? "general";
+    next();
+  } catch {
+    res.status(401).json({ error: "Could not validate session", code: "INVALID_TOKEN" });
+  }
+};
+
 export const requireAdmin: RequestHandler = (req, res, next) => {
   requireAuth(req, res, () => {
     if ((req as any).role !== "admin") {

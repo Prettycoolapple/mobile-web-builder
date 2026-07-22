@@ -161,6 +161,12 @@ export default function Layout() {
           )}
         </NavLink>
         <NavLink
+          to="/notifications"
+          className={({ isActive }) => (isActive ? "active" : "")}
+        >
+          Create notifications
+        </NavLink>
+        <NavLink
           to="/most-watched"
           className={({ isActive }) => (isActive ? "active" : "")}
         >

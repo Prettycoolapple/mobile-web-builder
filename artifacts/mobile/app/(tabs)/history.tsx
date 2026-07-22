@@ -20,6 +20,7 @@ import { useChat, ChatMessage, FeasibilityReport, FeasibilityReportGroup, Proper
 import { useAuth } from "@/context/AuthContext";
 import { useWatchlist, WatchlistItem } from "@/context/WatchlistContext";
 import { useNotifications } from "@/context/NotificationContext";
+import { NewsBellButton } from "@/components/NewsBellButton";
 import { confirmRemoveFromWatchlist, notifyWatchlistError } from "@/lib/watchlist-confirm";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { getApiBase } from "@/lib/api";
@@ -624,14 +625,17 @@ export default function HistoryScreen() {
           <Text style={[styles.headerTitle, { color: colors.headerText, fontFamily: "SpaceGrotesk_700Bold" }]}>
             {t("history.title")}
           </Text>
-          <TouchableOpacity
-            style={[styles.newBtn, { backgroundColor: colors.accent }]}
-            onPress={handleNew}
-            activeOpacity={0.8}
-          >
-            <Feather name="plus" size={15} color="#fff" />
-            <Text style={[styles.newBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>{t("history.new")}</Text>
-          </TouchableOpacity>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+            <NewsBellButton />
+            <TouchableOpacity
+              style={[styles.newBtn, { backgroundColor: colors.accent }]}
+              onPress={handleNew}
+              activeOpacity={0.8}
+            >
+              <Feather name="plus" size={15} color="#fff" />
+              <Text style={[styles.newBtnText, { fontFamily: "DM_Sans_600SemiBold" }]}>{t("history.new")}</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
 

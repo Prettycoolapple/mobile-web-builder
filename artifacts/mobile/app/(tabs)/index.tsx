@@ -30,6 +30,7 @@ import { useColors } from "@/hooks/useColors";
 import { useChat, ChatMessage, FeasibilityReport, FeasibilityReportGroup, LoadingHint, PropertyCandidate, SelectedListingContext, ServiceProvider, type CandidateScoreUpdate } from "@/context/ChatContext";
 import { useAuth } from "@/context/AuthContext";
 import { useNotifications } from "@/context/NotificationContext";
+import { NewsBellButton } from "@/components/NewsBellButton";
 
 import { ChatBubble } from "@/components/ChatBubble";
 import { ResponseRatingBar } from "@/components/ResponseRatingBar";
@@ -4256,6 +4257,7 @@ export default function SearchScreen() {
             </Text>
           </View>
           <View style={styles.headerActions}>
+            <NewsBellButton />
             {SHOW_EXPLORE_HEADER_BUTTON ? (
               <TouchableOpacity
                 style={[styles.exploreBtn, { borderColor: "rgba(250,249,246,0.22)" }]}
@@ -4739,7 +4741,7 @@ export default function SearchScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   topBar: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 14,
     paddingBottom: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
@@ -4753,16 +4755,18 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
+    flexShrink: 1,
   },
   appName: {
     fontSize: 17,
     color: "#FAFAF9",
     letterSpacing: -0.3,
+    flexShrink: 1,
   },
   headerActions: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 4,
   },
   myListingsBtn: {
     flexDirection: "row",

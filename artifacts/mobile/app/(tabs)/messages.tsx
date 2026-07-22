@@ -17,6 +17,7 @@ import { useColors } from "@/hooks/useColors";
 import { useDm, DmThread } from "@/context/DmContext";
 import { useAuth } from "@/context/AuthContext";
 import { useT } from "@/lib/i18n";
+import { NewsBellButton } from "@/components/NewsBellButton";
 import { avatarImageSource, getAvatarInitials } from "@/lib/avatar";
 
 function useTimeAgo() {
@@ -242,8 +243,9 @@ export default function MessagesScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <View style={[styles.header, { paddingTop: insets.top + 8, backgroundColor: "#2C1F16" }]}>
+      <View style={[styles.header, { paddingTop: insets.top + 8, backgroundColor: "#2C1F16", flexDirection: "row", alignItems: "center", justifyContent: "space-between" }]}>
         <Text style={styles.headerTitle}>{user?.role === "sales_agent" ? "Leads/messages" : t("messages.title")}</Text>
+        <NewsBellButton />
       </View>
 
       <FlatList

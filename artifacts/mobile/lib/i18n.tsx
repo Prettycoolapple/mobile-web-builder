@@ -29,6 +29,16 @@ const en: Catalog = {
   "tab.home": "Home",
   "tab.history": "History",
   "tab.account": "Account",
+  "tab.news": "News",
+  "news.title": "News",
+  "news.subtitle": "Market updates and insights from Project Alpha",
+  "news.empty": "No news posts yet.",
+  "news.empty_body": "New market updates will appear here.",
+  "news.load_failed": "Could not load the news right now.",
+  "news.article": "News article",
+  "news.open": "Open news",
+  "news.read_more": "Read article",
+  "news.load_error": "Could not load news. Pull down to try again.",
 
   // Welcome
   "welcome.eyebrow": "NEW ZEALAND · RESIDENTIAL",
@@ -1240,6 +1250,16 @@ const zh: Catalog = {
   "tab.home": "主页",
   "tab.history": "历史",
   "tab.account": "账户",
+  "tab.news": "资讯",
+  "news.title": "资讯",
+  "news.subtitle": "Project Alpha 市场动态与洞察",
+  "news.empty": "暂无资讯。",
+  "news.empty_body": "新的市场动态将在这里显示。",
+  "news.load_failed": "暂时无法加载资讯。",
+  "news.article": "资讯详情",
+  "news.open": "打开资讯",
+  "news.read_more": "阅读全文",
+  "news.load_error": "无法加载资讯，请下拉重试。",
 
   // Welcome
   "welcome.eyebrow": "新西兰 · 民宅开发",

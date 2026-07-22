@@ -24,6 +24,7 @@ import { avatarImageSource, getAvatarInitials } from "@/lib/avatar";
 import { getApiBase } from "@/lib/api";
 import { WORLD_LANGUAGES } from "@/lib/languages";
 import { useT } from "@/lib/i18n";
+import { NewsBellButton } from "@/components/NewsBellButton";
 import { STANDARD_REPORT_LIMIT, resolveReportLimit } from "@/lib/quotas";
 
 type PlanFeatureItem = { text: string; included: boolean };
@@ -382,6 +383,7 @@ export default function ProfileScreen() {
                 </Text>
               )}
             </View>
+            <View style={{ marginLeft: "auto" }}><NewsBellButton /></View>
           </View>
         </View>
       </View>

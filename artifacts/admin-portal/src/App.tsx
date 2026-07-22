@@ -15,6 +15,7 @@ import SecurityPage from "@/pages/Security";
 import MessageHubPage from "@/pages/MessageHub";
 import MostWatchedPage from "@/pages/MostWatched";
 import LimTitleLeadsPage from "@/pages/LimTitleLeads";
+import NotificationsPage from "@/pages/Notifications";
 
 export default function App() {
   return (
@@ -40,6 +41,8 @@ export default function App() {
         <Route path="/message-hub" element={<MessageHubPage />} />
         <Route path="/lim-title-leads" element={<LimTitleLeadsPage />} />
         <Route path="/most-watched" element={<MostWatchedPage />} />
+        <Route path="/notifications" element={<NotificationsPage />} />
+        <Route path="/notifications/:postId" element={<NotificationsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>

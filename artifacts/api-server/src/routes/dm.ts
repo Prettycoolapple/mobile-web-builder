@@ -997,7 +997,7 @@ router.post("/dm/report", requireAuth, async (req: Request, res: Response) => {
 
 router.post("/dm/push-token", requireAuth, async (req: Request, res: Response) => {
   const userId = (req as any).userId as string;
-  const { token, platform } = req.body as { token?: string; platform?: string };
+  const { token, platform, locale } = req.body as { token?: string; platform?: string; locale?: string };
 
   if (!token || !platform) {
     res.status(400).json({ error: "token and platform are required" });
@@ -1007,10 +1007,10 @@ router.post("/dm/push-token", requireAuth, async (req: Request, res: Response) =
   try {
     await db
       .insert(pushTokens)
-      .values({ userId, token, platform })
+      .values({ userId, token, platform, locale: locale === "zh" ? "zh" : locale === "en" ? "en" : null })
       .onConflictDoUpdate({
         target: pushTokens.token,
-        set: { userId, platform, updatedAt: new Date() },
+        set: { userId, guestSessionId: null, platform, locale: locale === "zh" ? "zh" : locale === "en" ? "en" : null, updatedAt: new Date() },
       });
 
     res.json({ ok: true });

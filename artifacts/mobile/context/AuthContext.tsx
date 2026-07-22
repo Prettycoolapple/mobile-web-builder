@@ -227,6 +227,8 @@ interface AuthContextValue {
     fileName: string,
     tokenOverride?: string,
   ) => Promise<{ fileUrl: string }>;
+  anonymousInstallId: string | null;
+  newsGuestSessionId: string | null;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -234,6 +236,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 const STORAGE_KEY_TOKEN = "@devfeasible/auth_token";
 const STORAGE_KEY_USER = "@devfeasible/auth_user";
 const STORAGE_KEY_ANONYMOUS_INSTALL_ID = "@devfeasible/anonymous_install_id";
+const STORAGE_KEY_NEWS_GUEST_SESSION_ID = "@devfeasible/news_guest_session_id";
 const ACTIVITY_PING_INTERVAL_MS = 5 * 60 * 1000;
 
 function createAnonymousInstallId(): string {
@@ -241,11 +244,17 @@ function createAnonymousInstallId(): string {
   return `anon_${Date.now().toString(36)}_${random}`;
 }
 
+function createNewsGuestSessionId(): string {
+  const random = `${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+  return `ng_${Date.now().toString(36)}_${random}`;
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient();
   const [user, setUser] = useState<UserProfile | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [anonymousInstallId, setAnonymousInstallId] = useState<string | null>(null);
+  const [newsGuestSessionId, setNewsGuestSessionId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubscriptionIdentityReady, setIsSubscriptionIdentityReady] = useState(false);
   /** Throttle repair sync when paid tier is missing `subscriptionPeriodEndAt` (e.g. legacy row or failed sync). */
@@ -275,6 +284,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [resetSubscriptionCache]);
 
+  const rotateNewsGuestSession = useCallback(async () => {
+    const next = createNewsGuestSessionId();
+    setNewsGuestSessionId(next);
+    await AsyncStorage.setItem(STORAGE_KEY_NEWS_GUEST_SESSION_ID, next);
+  }, []);
+
   const clearLocalAuth = useCallback(async () => {
     lastSubscriptionPeriodRepairAtRef.current = null;
     setToken(null);
@@ -282,22 +297,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await Promise.all([
       AsyncStorage.removeItem(STORAGE_KEY_TOKEN),
       AsyncStorage.removeItem(STORAGE_KEY_USER),
+      rotateNewsGuestSession(),
     ]);
     await switchRevenueCatIdentity(null);
-  }, [switchRevenueCatIdentity]);
+  }, [rotateNewsGuestSession, switchRevenueCatIdentity]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         let installId = await AsyncStorage.getItem(STORAGE_KEY_ANONYMOUS_INSTALL_ID);
+        let guestSessionId = await AsyncStorage.getItem(STORAGE_KEY_NEWS_GUEST_SESSION_ID);
         if (!installId) {
           installId = createAnonymousInstallId();
           await AsyncStorage.setItem(STORAGE_KEY_ANONYMOUS_INSTALL_ID, installId);
         }
-        if (!cancelled) setAnonymousInstallId(installId);
+        if (!guestSessionId) {
+          guestSessionId = createNewsGuestSessionId();
+          await AsyncStorage.setItem(STORAGE_KEY_NEWS_GUEST_SESSION_ID, guestSessionId);
+        }
+        if (!cancelled) {
+          setAnonymousInstallId(installId);
+          setNewsGuestSessionId(guestSessionId);
+        }
       } catch {
-        if (!cancelled) setAnonymousInstallId(createAnonymousInstallId());
+        if (!cancelled) {
+          setAnonymousInstallId(createAnonymousInstallId());
+          setNewsGuestSessionId(createNewsGuestSessionId());
+        }
       }
     })();
     return () => { cancelled = true; };
@@ -460,6 +487,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signUp = useCallback(async (data: SignUpData): Promise<{ token: string }> => {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (anonymousInstallId) headers["X-Anonymous-Install-Id"] = anonymousInstallId;
+    if (newsGuestSessionId) headers["X-News-Guest-Session-Id"] = newsGuestSessionId;
     const resp = await fetch(`${getApiBase()}/auth/signup`, {
       method: "POST",
       headers,
@@ -483,12 +511,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // RevenueCat identity switch to fully complete before returning.
     await switchRevenueCatIdentity(profile.id);
     return { token: json.token };
-  }, [anonymousInstallId, persistAuth, switchRevenueCatIdentity]);
+  }, [anonymousInstallId, newsGuestSessionId, persistAuth, switchRevenueCatIdentity]);
 
   const signIn = useCallback(async (email: string, password: string): Promise<UserProfile> => {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (anonymousInstallId) headers["X-Anonymous-Install-Id"] = anonymousInstallId;
+    if (newsGuestSessionId) headers["X-News-Guest-Session-Id"] = newsGuestSessionId;
     const resp = await fetch(`${getApiBase()}/auth/login`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({ email, password }),
     });
     const data = (await readResponseJson(resp)) as { token: string; user: UserProfile & { role?: UserRole; languages?: string[] }; error?: string };
@@ -503,7 +534,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // RevenueCat identity switch to fully complete before returning.
     await switchRevenueCatIdentity(profile.id);
     return profile;
-  }, [persistAuth, switchRevenueCatIdentity]);
+  }, [anonymousInstallId, newsGuestSessionId, persistAuth, switchRevenueCatIdentity]);
 
   const requestPasswordReset = useCallback(async (email: string): Promise<void> => {
     const resp = await fetch(`${getApiBase()}/auth/password-reset/request`, {
@@ -537,17 +568,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const getApiHeaders = useCallback((): Record<string, string> => {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    } else if (anonymousInstallId) {
-      headers["X-Anonymous-Install-Id"] = anonymousInstallId;
-    }
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    if (anonymousInstallId) headers["X-Anonymous-Install-Id"] = anonymousInstallId;
+    if (newsGuestSessionId) headers["X-News-Guest-Session-Id"] = newsGuestSessionId;
     const locale = getCurrentLocale();
     headers["Accept-Language"] = locale === "zh" ? "zh-CN" : "en-NZ";
     headers["X-Locale"] = locale;
     headers["X-OS-Chinese"] = isOSChineseLocale() ? "1" : "0";
     return headers;
-  }, [anonymousInstallId, token]);
+  }, [anonymousInstallId, newsGuestSessionId, token]);
 
   const uploadIncorporationCert = useCallback(async (
     fileUri: string,
@@ -756,7 +785,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider value={{
-      user, token, isLoading,
+      user, token, isLoading, anonymousInstallId, newsGuestSessionId,
       isSubscriptionIdentityReady,
       signUp, signIn, requestPasswordReset, resetPassword, signOut,
       refreshProfile, getApiHeaders,

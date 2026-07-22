@@ -2,6 +2,7 @@ import { Router, type Request } from "express";
 import { runAfterResponse } from "../lib/vercel-wait-until";
 import { runWatchlistMonitor } from "../lib/watchlist-monitor";
 import { retryDueLeadSms } from "../lib/lead-sms";
+import { runNewsWorkers } from "./news";
 
 const router = Router();
 
@@ -53,6 +54,19 @@ router.get("/cron/lead-sms-retry", async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "lead SMS retry cron failed");
     res.status(500).json({ error: "Lead SMS retry failed" });
+  }
+});
+
+router.get("/cron/news-dispatch", async (req, res) => {
+  if (!isCronAuthorized(req)) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  try {
+    res.json({ ok: true, ...(await runNewsWorkers()) });
+  } catch (err) {
+    req.log.error({ err }, "News dispatch cron failed");
+    res.status(500).json({ error: "News dispatch failed" });
   }
 });
 
