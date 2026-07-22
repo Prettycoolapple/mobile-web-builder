@@ -371,16 +371,21 @@ function NotificationComposer({ postId, bulkEnabled, onChanged }: { postId: stri
 
 function AuthenticatedImage({ image, article = false }: { image: PostImage; article?: boolean }) {
   const [url, setUrl] = useState<string | null>(null);
+  const [state, setState] = useState<"loading" | "loaded" | "error">("loading");
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let objectUrl: string | null = null; let cancelled = false;
+    setState("loading"); setUrl(null);
     const token = getToken();
     fetch(image.url, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
-      .then((response) => { if (!response.ok) throw new Error(); return response.blob(); })
-      .then((blob) => { if (!cancelled) { objectUrl = URL.createObjectURL(blob); setUrl(objectUrl); } }).catch(() => undefined);
+      .then((response) => { if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.blob(); })
+      .then((blob) => { if (!cancelled) { objectUrl = URL.createObjectURL(blob); setUrl(objectUrl); setState("loaded"); } })
+      .catch(() => { if (!cancelled) setState("error"); });
     return () => { cancelled = true; if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [image.url]);
+  }, [attempt, image.url]);
   const className = article ? "news-image-article" : "news-image-thumb";
-  return url ? <img src={url} alt="Post attachment" className={className} /> : <div className={`${className} placeholder`} />;
+  if (state === "error") return <div className={`${className} news-image-error`}><span>Preview could not load.</span><button type="button" onClick={() => setAttempt((value) => value + 1)}>Retry</button></div>;
+  return url ? <img src={url} alt="Post attachment" className={className} /> : <div className={`${className} placeholder`}><span>Loading image…</span></div>;
 }
 
 function AnalyticsStrip({ post }: { post: PostDetail }) {

@@ -68,6 +68,10 @@ describe("guest news identity", () => {
     expect(firstParameterPolicy).toContain("$1::boolean");
     expect(firstParameterPolicy).toContain("$2::text");
     expect(firstParameterPolicy).toContain("$3::text");
+    const imageParameterPolicy = canAccessNewsSql("article", 3);
+    expect(imageParameterPolicy).toContain("$3::boolean");
+    expect(imageParameterPolicy).toContain("$4::text");
+    expect(imageParameterPolicy).toContain("$5::text");
   });
 
   it("allows deleting drafts and specific-user tests but protects sent bulk posts", () => {

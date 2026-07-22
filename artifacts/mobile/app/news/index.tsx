@@ -1,7 +1,8 @@
 import { Feather } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Image } from "expo-image";
 import { useFocusEffect, useRouter } from "expo-router";
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Dimensions, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "@/context/AuthContext";
@@ -24,16 +25,22 @@ export default function NewsFeedScreen() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
   const { t, locale } = useT();
-  const { getApiHeaders } = useAuth();
+  const { getApiHeaders, user, newsGuestSessionId } = useAuth();
   const { refreshUnread } = useNews();
   const [posts, setPosts] = useState<FeedPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const postsRef = useRef<FeedPost[]>([]);
+  const hydratedCacheKeyRef = useRef<string | null>(null);
   const imageHeaders = getApiHeaders();
+  const cacheKey = useMemo(() => {
+    const viewer = user?.id ? `user_${user.id}` : newsGuestSessionId ? `guest_${newsGuestSessionId}` : null;
+    return viewer ? `@devfeasible/news_feed/${viewer}/${locale}` : null;
+  }, [locale, newsGuestSessionId, user?.id]);
 
-  const load = useCallback(async (refresh = false) => {
-    if (refresh) setRefreshing(true); else setLoading(true);
+  const load = useCallback(async (refresh = false, background = false) => {
+    if (refresh) setRefreshing(true); else if (!background && postsRef.current.length === 0) setLoading(true);
     try {
       const response = await fetch(`${getApiBase()}/news?limit=50`, { headers: getApiHeaders() });
       if (!response.ok) {
@@ -41,12 +48,35 @@ export default function NewsFeedScreen() {
         throw new Error(payload?.error || `News request failed (${response.status})`);
       }
       const data = await response.json() as { posts?: FeedPost[] };
-      setPosts(data.posts ?? []); setError(null); void refreshUnread();
+      const nextPosts = data.posts ?? [];
+      postsRef.current = nextPosts; setPosts(nextPosts); setError(null); void refreshUnread();
+      if (cacheKey) void AsyncStorage.setItem(cacheKey, JSON.stringify({ posts: nextPosts, savedAt: Date.now() })).catch(() => undefined);
     } catch (caught) { setError(caught instanceof Error ? caught.message : "News could not be loaded"); }
     finally { setLoading(false); setRefreshing(false); }
-  }, [getApiHeaders, refreshUnread]);
+  }, [cacheKey, getApiHeaders, refreshUnread]);
 
-  useFocusEffect(useCallback(() => { void load(); }, [load]));
+  useFocusEffect(useCallback(() => {
+    let active = true;
+    async function hydrateAndRefresh() {
+      // An empty feed is still a valid cached result. Remembering that prevents
+      // the full-page spinner from returning on every focus for new accounts.
+      let hasCachedResult = Boolean(cacheKey && hydratedCacheKeyRef.current === cacheKey) || postsRef.current.length > 0;
+      if (cacheKey && hydratedCacheKeyRef.current !== cacheKey) {
+        hydratedCacheKeyRef.current = cacheKey;
+        postsRef.current = []; setPosts([]); setLoading(true);
+        try {
+          const raw = await AsyncStorage.getItem(cacheKey);
+          const cached = raw ? JSON.parse(raw) as { posts?: FeedPost[] } : null;
+          if (active && Array.isArray(cached?.posts)) {
+            postsRef.current = cached.posts; setPosts(cached.posts); setLoading(false); hasCachedResult = true;
+          }
+        } catch { /* A corrupt cache falls through to the network. */ }
+      }
+      if (active) void load(false, hasCachedResult);
+    }
+    void hydrateAndRefresh();
+    return () => { active = false; };
+  }, [cacheKey, load]));
   const featured = posts.slice(0, Math.min(2, posts.length));
   const remaining = posts.slice(featured.length);
   const open = (id: string) => router.push({ pathname: "/news/[postId]", params: { postId: id, source: "feed" } } as never);
@@ -64,12 +94,12 @@ export default function NewsFeedScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load(true)} tintColor={colors.accent} />}
         contentContainerStyle={{ paddingBottom: insets.bottom + 32 }}
         ListHeaderComponent={featured.length ? <View style={styles.featuredRow}>{featured.map((post, index) => <Pressable key={post.id} onPress={() => open(post.id)} style={({ pressed }) => [styles.featuredCard, featured.length === 1 ? styles.featuredSingle : index === 0 ? styles.featuredPrimary : styles.featuredSecondary, { backgroundColor: colors.card, opacity: pressed ? 0.8 : 1 }]}>
-          {post.heroImageUrl ? <Image source={{ uri: assetUrl(post.heroImageUrl), headers: imageHeaders }} style={StyleSheet.absoluteFill} contentFit="cover" transition={180} /> : <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.accent + "22" }]} />}
+          {post.heroImageUrl ? <Image source={{ uri: assetUrl(post.heroImageUrl), headers: imageHeaders }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" transition={180} /> : <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.accent + "22" }]} />}
           <View style={styles.featuredShade} /><View style={styles.featuredText}><Text style={styles.featuredDate}>{date(post.publishedAt)}</Text><Text numberOfLines={featured.length === 1 ? 3 : 4} style={styles.featuredTitle}>{post.title}</Text></View>
         </Pressable>)}</View> : null}
         renderItem={({ item }) => <Pressable onPress={() => open(item.id)} style={({ pressed }) => [styles.row, { borderBottomColor: colors.border, opacity: pressed ? 0.7 : 1 }]}>
           <View style={styles.rowText}><Text style={[styles.rowDate, { color: colors.accent }]}>{date(item.publishedAt)}</Text><Text numberOfLines={3} style={[styles.rowTitle, { color: colors.foreground }]}>{item.title}</Text><Text numberOfLines={2} style={[styles.excerpt, { color: colors.mutedForeground }]}>{item.excerpt}</Text></View>
-          {item.heroImageUrl && <Image source={{ uri: assetUrl(item.heroImageUrl), headers: imageHeaders }} style={styles.thumbnail} contentFit="cover" transition={150} />}
+          {item.heroImageUrl && <Image source={{ uri: assetUrl(item.heroImageUrl), headers: imageHeaders }} style={styles.thumbnail} contentFit="cover" cachePolicy="memory-disk" transition={150} />}
         </Pressable>}
         ListEmptyComponent={<View style={styles.center}><Feather name="bell" size={32} color={colors.mutedForeground} /><Text style={[styles.emptyTitle, { color: colors.foreground }]}>{t("news.empty")}</Text><Text style={[styles.emptyBody, { color: colors.mutedForeground }]}>{t("news.empty_body")}</Text></View>}
       />}

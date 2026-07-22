@@ -18,6 +18,10 @@ const colors = {
     secondary: "#F0ECE6",
     secondaryForeground: "#1C1917",
 
+    userBubble: "#F6E3DA",
+    userBubbleBorder: "#EAD0C1",
+    userBubbleForeground: "#5A3524",
+
     border: "#E8E3DC",
     input: "#E8E3DC",
 
@@ -64,6 +68,10 @@ const colors = {
 
     secondary: "#2E2824",
     secondaryForeground: "#FAFAF9",
+
+    userBubble: "#3D2C24",
+    userBubbleBorder: "#4E3A2E",
+    userBubbleForeground: "#F0DCCC",
 
     border: "#3D3530",
     input: "#3D3530",

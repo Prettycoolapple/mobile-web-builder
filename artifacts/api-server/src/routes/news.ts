@@ -522,7 +522,7 @@ router.use("/news", optionalAuth, publicNewsLimit, guestInstallationLimit);
 
 router.post("/news/session", async (req, res) => {
   try {
-    const viewer = await resolveNewsViewer(req);
+    const viewer = await resolveNewsViewer(req, true);
     res.json({ ok: true, viewerType: viewer.userId ? "user" : "guest" });
   } catch (error) { viewerError(res, error); }
 });
@@ -732,7 +732,9 @@ router.get("/news/:postId/images/:imageId", async (req: Request, res: Response) 
     const viewer = await resolveNewsViewer(req);
     const allowed = await pool.query<{ object_path: string }>(
       `select i.object_path from news_post_images i join news_posts p on p.id=i.post_id
-       where i.id=$1 and i.post_id=$2 and p.published_at is not null and p.archived_at is null and ${canAccessNewsSql("p")}`,
+       where i.id=$1 and i.post_id=$2 and (
+         $3::boolean or (p.published_at is not null and p.archived_at is null and ${canAccessNewsSql("p", 3)})
+       )`,
       [req.params.imageId, req.params.postId, viewer.isAdmin, viewer.userId, viewer.guestSessionId],
     );
     if (!allowed.rows[0]) return void res.status(404).end();

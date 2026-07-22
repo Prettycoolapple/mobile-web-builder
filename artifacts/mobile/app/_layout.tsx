@@ -138,24 +138,36 @@ function SplashUntilReady({ fontsReady }: { fontsReady: boolean }) {
 }
 
 function NotificationSetup() {
-  const { getApiHeaders, isLoading, anonymousInstallId, newsGuestSessionId } = useAuth();
+  const { getApiHeaders, isLoading, anonymousInstallId, newsGuestSessionId, user } = useAuth();
   const router = useRouter();
   const segments = useSegments();
   const notificationListener = useRef<Notifications.EventSubscription | null>(null);
   const responseListener = useRef<Notifications.EventSubscription | null>(null);
   const checkedInitialNotificationRef = useRef(false);
   const handledNotificationIdsRef = useRef<Set<string>>(new Set());
+  const syncedNewsIdentityRef = useRef<string | null>(null);
+  const registeredPushIdentityRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (isLoading || !anonymousInstallId || !newsGuestSessionId) return;
     const segmentNames = segments.map(String);
     const leaf = segmentNames[segmentNames.length - 1];
     const onHome = segmentNames.includes("(tabs)") && (leaf === "(tabs)" || leaf === "index" || leaf === "home");
+    const newsIdentity = user?.id ? `user:${user.id}:${newsGuestSessionId}` : `guest:${newsGuestSessionId}`;
 
     async function registerPushToken() {
       if (Platform.OS === "web") return;
       try {
-        await fetch(`${getApiBase()}/news/session`, { method: "POST", headers: getApiHeaders(), body: "{}" });
+        if (syncedNewsIdentityRef.current !== newsIdentity) {
+          // Claim/merge a guest session once when identity changes, rather than
+          // repeating that transaction on every navigation event.
+          syncedNewsIdentityRef.current = newsIdentity;
+          const sessionResponse = await fetch(`${getApiBase()}/news/session`, { method: "POST", headers: getApiHeaders(), body: "{}" });
+          if (!sessionResponse.ok) {
+            if (syncedNewsIdentityRef.current === newsIdentity) syncedNewsIdentityRef.current = null;
+            return;
+          }
+        }
         const { status: existing } = await Notifications.getPermissionsAsync();
         let finalStatus = existing;
         if (existing !== "granted") {
@@ -174,18 +186,27 @@ function NotificationSetup() {
         }
         if (finalStatus !== "granted") return;
 
+        const registrationIdentity = `${newsIdentity}:${getCurrentLocale()}`;
+        if (registeredPushIdentityRef.current === registrationIdentity) return;
+        registeredPushIdentityRef.current = registrationIdentity;
+
         await configureAppIconBadgesAsync();
 
         const tokenData = await Notifications.getExpoPushTokenAsync();
         const pushToken = tokenData.data;
         const platform = Platform.OS === "ios" ? "ios" : "android";
 
-        await fetch(`${getApiBase()}/news/push-token`, {
+        const registrationResponse = await fetch(`${getApiBase()}/news/push-token`, {
           method: "POST",
           headers: getApiHeaders(),
           body: JSON.stringify({ token: pushToken, platform, locale: getCurrentLocale() }),
         });
+        if (!registrationResponse.ok && registeredPushIdentityRef.current === registrationIdentity) {
+          registeredPushIdentityRef.current = null;
+        }
       } catch {
+        if (syncedNewsIdentityRef.current === newsIdentity) syncedNewsIdentityRef.current = null;
+        registeredPushIdentityRef.current = null;
       }
     }
 
@@ -263,7 +284,7 @@ function NotificationSetup() {
       notificationListener.current?.remove();
       responseListener.current?.remove();
     };
-  }, [anonymousInstallId, getApiHeaders, isLoading, newsGuestSessionId, router, segments]);
+  }, [anonymousInstallId, getApiHeaders, isLoading, newsGuestSessionId, router, segments, user?.id]);
 
   return null;
 }

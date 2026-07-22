@@ -1,7 +1,8 @@
 import { Feather } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Image } from "expo-image";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, AppState, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import Markdown from "react-native-markdown-display";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -21,6 +22,7 @@ function ArticleImage({ uri, headers }: { uri: string; headers: Record<string, s
     style={[styles.image, { aspectRatio }]}
     contentFit="contain"
     transition={180}
+    cachePolicy="memory-disk"
     onLoad={(event) => {
       const width = Number(event.source?.width) || 0;
       const height = Number(event.source?.height) || 0;
@@ -32,10 +34,14 @@ function ArticleImage({ uri, headers }: { uri: string; headers: Record<string, s
 export default function NewsArticleScreen() {
   const { postId, source } = useLocalSearchParams<{ postId: string; source?: string }>();
   const router = useRouter(); const insets = useSafeAreaInsets(); const colors = useColors(); const { locale, t } = useT();
-  const { getApiHeaders } = useAuth();
+  const { getApiHeaders, user, newsGuestSessionId } = useAuth();
   const [post, setPost] = useState<Article | null>(null); const [error, setError] = useState(false);
   const sessionId = useRef(`news-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const activeMs = useRef(0); const activeSince = useRef<number | null>(null); const articleLoaded = useRef(false); const entrySource = source === "push" ? "push" : "feed";
+  const articleCacheKey = useMemo(() => {
+    const viewer = user?.id ? `user_${user.id}` : newsGuestSessionId ? `guest_${newsGuestSessionId}` : null;
+    return viewer && postId ? `@devfeasible/news_article/${viewer}/${locale}/${postId}` : null;
+  }, [locale, newsGuestSessionId, postId, user?.id]);
 
   const accrue = useCallback(() => { if (activeSince.current != null) { activeMs.current += Date.now() - activeSince.current; activeSince.current = null; } }, []);
   const heartbeat = useCallback((ended = false) => {
@@ -49,11 +55,49 @@ export default function NewsArticleScreen() {
   useEffect(() => {
     if (!postId) return;
     let cancelled = false;
-    fetch(`${getApiBase()}/news/${encodeURIComponent(postId)}`, { headers: getApiHeaders() })
-      .then(async (response) => { if (!response.ok) throw new Error(); return response.json() as Promise<Article>; })
-      .then((value) => { if (!cancelled) { setPost(value); setError(false); articleLoaded.current = true; activeSince.current = Date.now(); } }).catch(() => { if (!cancelled) setError(true); });
+    setPost(null);
+    setError(false);
+    articleLoaded.current = false;
+    activeMs.current = 0;
+    activeSince.current = null;
+    sessionId.current = `news-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    async function hydrateAndRefresh() {
+      if (articleCacheKey) {
+        try {
+          const raw = await AsyncStorage.getItem(articleCacheKey);
+          const cached = raw ? JSON.parse(raw) as { article?: Article } : null;
+          if (!cancelled && cached?.article) {
+            setPost(cached.article); setError(false); articleLoaded.current = true;
+            if (activeSince.current == null) activeSince.current = Date.now();
+          }
+        } catch { /* Ignore corrupt cached articles. */ }
+      }
+      try {
+        const response = await fetch(`${getApiBase()}/news/${encodeURIComponent(postId)}`, { headers: getApiHeaders() });
+        if (!response.ok) {
+          if (response.status === 404) {
+            if (articleCacheKey) await AsyncStorage.removeItem(articleCacheKey).catch(() => undefined);
+            if (!cancelled) {
+              setPost(null);
+              setError(true);
+              articleLoaded.current = false;
+              activeSince.current = null;
+            }
+            return;
+          }
+          throw new Error();
+        }
+        const value = await response.json() as Article;
+        if (!cancelled) {
+          setPost(value); setError(false); articleLoaded.current = true;
+          if (activeSince.current == null) activeSince.current = Date.now();
+          if (articleCacheKey) void AsyncStorage.setItem(articleCacheKey, JSON.stringify({ article: value, savedAt: Date.now() })).catch(() => undefined);
+        }
+      } catch { if (!cancelled && !articleLoaded.current) setError(true); }
+    }
+    void hydrateAndRefresh();
     return () => { cancelled = true; };
-  }, [getApiHeaders, postId]);
+  }, [articleCacheKey, getApiHeaders, postId]);
   useEffect(() => {
     const timer = setInterval(() => heartbeat(false), 5000);
     const app = AppState.addEventListener("change", (state) => { if (state === "active" && articleLoaded.current) activeSince.current = Date.now(); else heartbeat(false); });

@@ -589,8 +589,8 @@ export function ChatBubble({ message, onFollowUp, onDiscoveryChoice, onAnalyse, 
     return (
       <TouchableWithoutFeedback onLongPress={handleLongPress}>
         <View style={styles.userRow}>
-          <View style={[styles.userBubble, { backgroundColor: colors.accent }]}>
-            <Text style={[styles.userText, { fontFamily: "DM_Sans_400Regular" }]}>
+          <View style={[styles.userBubble, { backgroundColor: colors.userBubble, borderColor: colors.userBubbleBorder }]}>
+            <Text style={[styles.userText, { color: colors.userBubbleForeground, fontFamily: "DM_Sans_400Regular" }]}>
               {message.content}
             </Text>
           </View>
@@ -703,12 +703,12 @@ const styles = StyleSheet.create({
     maxWidth: "78%",
     borderRadius: 18,
     borderBottomRightRadius: 5,
+    borderWidth: 1,
     paddingHorizontal: 16,
     paddingVertical: 11,
   },
   userText: {
     fontSize: 15,
-    color: "#fff",
     lineHeight: 22,
   },
   aiRow: {

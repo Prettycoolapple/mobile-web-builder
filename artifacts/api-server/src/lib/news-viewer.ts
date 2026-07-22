@@ -136,7 +136,7 @@ async function ensureGuestSession(req: Request): Promise<NewsViewer> {
   };
 }
 
-export async function resolveNewsViewer(req: Request, mergeGuest = true): Promise<NewsViewer> {
+export async function resolveNewsViewer(req: Request, mergeGuest = false): Promise<NewsViewer> {
   const authenticatedUserId = (req as Request & { userId?: string }).userId ?? null;
   if (!authenticatedUserId) return ensureGuestSession(req);
 
