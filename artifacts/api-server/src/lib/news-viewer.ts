@@ -24,6 +24,10 @@ export function clampNewsSeenSequence(requested: unknown, latestVisible: number)
   return Math.min(normalized, Math.max(0, latestVisible));
 }
 
+export function canPermanentlyDeleteNewsPost(status: string, audience: string): boolean {
+  return status === "draft" || audience === "specific_user";
+}
+
 function guestIdFromRequest(req: Request): string | null {
   const value = req.get("x-news-guest-session-id")?.trim() ?? "";
   return GUEST_ID_RE.test(value) ? value : null;

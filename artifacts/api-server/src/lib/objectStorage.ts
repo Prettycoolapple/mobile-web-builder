@@ -249,6 +249,27 @@ export class ObjectStorageService {
     }
     return objectFile;
   }
+
+  async deleteObjectEntity(objectPath: string): Promise<void> {
+    if (!objectPath.startsWith("/objects/")) {
+      throw new Error(`Invalid object path: must start with /objects/ (got: ${objectPath})`);
+    }
+    const entityId = objectPath.slice("/objects/".length);
+    if (isLocalStorageMode) {
+      const uploadRoot = path.resolve(LOCAL_UPLOAD_DIR);
+      const filePath = path.resolve(uploadRoot, entityId);
+      if (filePath !== uploadRoot && !filePath.startsWith(`${uploadRoot}${path.sep}`)) {
+        throw new Error("Invalid local object path");
+      }
+      fs.rmSync(filePath, { force: true });
+      fs.rmSync(`${filePath}.meta`, { force: true });
+      return;
+    }
+
+    const fullPath = `${this.getPrivateObjectDir().replace(/\/$/, "")}/${entityId}`;
+    const { bucketName, objectName } = parseObjectPath(fullPath);
+    await objectStorageClient!.bucket(bucketName).file(objectName).delete({ ignoreNotFound: true });
+  }
 }
 
 function parseObjectPath(path: string): {

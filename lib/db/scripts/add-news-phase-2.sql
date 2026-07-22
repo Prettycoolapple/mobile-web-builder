@@ -3,6 +3,12 @@ begin;
 
 create sequence if not exists news_post_publish_sequence;
 alter table news_posts add column if not exists published_sequence integer;
+alter table news_posts add column if not exists target_email text;
+alter table news_posts drop constraint if exists news_posts_target_email_length_check;
+alter table news_posts add constraint news_posts_target_email_length_check
+  check (target_email is null or char_length(target_email) <= 320);
+update news_posts p set target_email=lower(pr.email)
+from profiles pr where p.target_user_id=pr.id and p.target_email is null;
 update news_posts
 set published_sequence = nextval('news_post_publish_sequence')
 where published_at is not null and published_sequence is null;

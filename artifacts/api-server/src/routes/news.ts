@@ -8,7 +8,7 @@ import { ObjectNotFoundError, ObjectStorageService } from "../lib/objectStorage"
 import { translateNewsPost, type NewsLanguage } from "../lib/news-translation";
 import { runAfterResponse } from "../lib/vercel-wait-until";
 import { runNewsDispatch, runNewsReceiptCheck } from "../lib/news-push";
-import { canAccessNewsSql, clampNewsSeenSequence, lockActiveGuestNewsViewer, newsOwnerValues, resolveNewsViewer, type NewsViewer } from "../lib/news-viewer";
+import { canAccessNewsSql, canPermanentlyDeleteNewsPost, clampNewsSeenSequence, lockActiveGuestNewsViewer, newsOwnerValues, resolveNewsViewer, type NewsViewer } from "../lib/news-viewer";
 
 const router = Router();
 const storage = new ObjectStorageService();
@@ -34,6 +34,23 @@ async function guestInstallationLimit(req: Request, res: Response, next: NextFun
 function viewerError(res: Response, error: unknown): void {
   const status = Number((error as { status?: number })?.status) || 401;
   res.status(status).json({ error: error instanceof Error ? error.message : "Guest identity is required", code: "GUEST_IDENTITY_REQUIRED" });
+}
+
+function sendNewsSetupError(res: Response, error: unknown): boolean {
+  const code = String((error as { code?: unknown })?.code ?? "");
+  if (code !== "42P01" && code !== "42703") return false;
+  res.status(503).json({
+    error: "News database setup is incomplete. Run add-news-phase-2.sql in Supabase SQL Editor, then redeploy.",
+    code: "NEWS_PHASE_2_MIGRATION_REQUIRED",
+  });
+  return true;
+}
+
+async function deleteNewsObjects(paths: string[], req: Request): Promise<void> {
+  await Promise.all(paths.map(async (objectPath) => {
+    try { await storage.deleteObjectEntity(objectPath); }
+    catch (error) { req.log.warn({ error, objectPath }, "Could not remove deleted news image object"); }
+  }));
 }
 
 type AdminBlockInput = {
@@ -75,7 +92,7 @@ function adminPost(row: Record<string, unknown>) {
     bodyZh: row.body_zh,
     audience: row.audience,
     targetUserId: row.target_user_id,
-    targetEmail: row.target_email ?? null,
+    targetEmail: row.resolved_target_email ?? row.target_email ?? null,
     translationStale: row.translation_stale,
     contentRevision: row.content_revision,
     createdAt: row.created_at,
@@ -96,7 +113,7 @@ function adminPost(row: Record<string, unknown>) {
 }
 
 const ADMIN_POST_SELECT = `
-  select p.*, target.email as target_email,
+  select p.*, coalesce(p.target_email,target.email) as resolved_target_email,
     (select count(*) from news_post_recipients r where r.post_id=p.id) as audience_users,
     (select count(*) from news_post_guest_recipients gr where gr.post_id=p.id) as guest_audience,
     (select count(*) from news_post_deliveries d where d.post_id=p.id) as devices,
@@ -121,6 +138,7 @@ router.get("/admin/news-posts", requireAdmin, async (req, res) => {
     res.json({ posts: result.rows.map(adminPost), bulkSendEnabled: process.env.NEWS_BULK_SEND_ENABLED === "true" });
   } catch (error) {
     req.log.error({ error }, "Admin news list failed");
+    if (sendNewsSetupError(res, error)) return;
     res.status(500).json({ error: "Failed to load news posts" });
   }
 });
@@ -140,6 +158,7 @@ router.post("/admin/news-posts", requireAdmin, async (req, res) => {
   } catch (error) {
     await client.query("rollback").catch(() => undefined);
     req.log.error({ error }, "Admin news create failed");
+    if (sendNewsSetupError(res, error)) return;
     res.status(500).json({ error: "Failed to create draft" });
   } finally {
     client.release();
@@ -183,11 +202,12 @@ router.patch("/admin/news-posts/:postId", requireAdmin, async (req, res) => {
     return void res.status(400).json({ error: "Titles are required and limited to 120 characters" });
   }
   let targetUserId: string | null = null;
+  let targetEmail: string | null = null;
   if (audience === "specific_user") {
-    if (typeof req.body.targetEmail !== "string" || !req.body.targetEmail.trim()) return void res.status(400).json({ error: "Enter a target email" });
+    if (typeof req.body.targetEmail !== "string" || req.body.targetEmail.trim().length > 320) return void res.status(400).json({ error: "Enter a valid target email" });
+    targetEmail = req.body.targetEmail.trim().toLowerCase() || null;
     const target = await pool.query<{ id: string }>(`select id from profiles where lower(email)=lower($1) and role <> 'admin' limit 1`, [req.body.targetEmail.trim()]);
-    if (!target.rows[0]) return void res.status(400).json({ error: "No non-admin user has that email address" });
-    targetUserId = target.rows[0].id;
+    targetUserId = target.rows[0]?.id ?? null;
   }
   const imageIds = blocks.flatMap((block) => block.type === "image" && block.imageId ? [block.imageId] : []);
   const bodyEn = blocks.filter((block) => block.type === "text").map((block) => block.textEn ?? "").join("\n\n");
@@ -205,9 +225,9 @@ router.patch("/admin/news-posts/:postId", requireAdmin, async (req, res) => {
     }
     const result = await client.query(
       `update news_posts set source_language=$3,title_en=$4,body_en=$5,title_zh=$6,body_zh=$7,
-       audience=$8,target_user_id=$9,translation_stale=$10,content_revision=content_revision+1,updated_at=now()
+       audience=$8,target_user_id=$9,target_email=$10,translation_stale=$11,content_revision=content_revision+1,updated_at=now()
        where id=$1 and status='draft' and content_revision=$2 returning *`,
-      [req.params.postId, revision, sourceLanguage, req.body.titleEn, bodyEn, req.body.titleZh, bodyZh, audience, targetUserId, req.body.translationStale !== false],
+      [req.params.postId, revision, sourceLanguage, req.body.titleEn, bodyEn, req.body.titleZh, bodyZh, audience, targetUserId, targetEmail, req.body.translationStale !== false],
     );
     if (!result.rows[0]) {
       await client.query("rollback");
@@ -319,12 +339,40 @@ router.delete("/admin/news-posts/:postId/images/:imageId", requireAdmin, async (
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const result = await client.query(`delete from news_post_images where id=$1 and post_id=$2 and exists(select 1 from news_posts where id=$2 and status='draft') returning id`, [req.params.imageId, req.params.postId]);
+    const result = await client.query<{ id: string; object_path: string }>(`delete from news_post_images where id=$1 and post_id=$2 and exists(select 1 from news_posts where id=$2 and status='draft') returning id,object_path`, [req.params.imageId, req.params.postId]);
     if (!result.rows[0]) { await client.query("rollback"); return void res.status(404).json({ error: "Draft image not found" }); }
     await client.query(`update news_posts set content_revision=content_revision+1,updated_at=now() where id=$1`, [req.params.postId]);
-    await client.query("commit"); res.json({ ok: true });
+    await client.query("commit");
+    runAfterResponse(deleteNewsObjects([result.rows[0].object_path], req));
+    res.json({ ok: true });
   } catch (error) {
     await client.query("rollback").catch(() => undefined); req.log.error({ error }, "News image removal failed"); res.status(500).json({ error: "Could not remove image" });
+  } finally { client.release(); }
+});
+
+router.delete("/admin/news-posts/:postId", requireAdmin, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await client.query("select pg_advisory_xact_lock(hashtext($1))", [req.params.postId]);
+    const post = await client.query<{ status: string; audience: string }>(
+      `select status,audience from news_posts where id=$1 for update`,
+      [req.params.postId],
+    );
+    if (!post.rows[0]) { await client.query("rollback"); return void res.status(404).json({ error: "Post not found" }); }
+    if (!canPermanentlyDeleteNewsPost(post.rows[0].status, post.rows[0].audience)) {
+      await client.query("rollback");
+      return void res.status(409).json({ error: "Sent bulk posts cannot be permanently deleted. Archive the post instead." });
+    }
+    const images = await client.query<{ object_path: string }>(`select object_path from news_post_images where post_id=$1`, [req.params.postId]);
+    await client.query(`delete from news_posts where id=$1`, [req.params.postId]);
+    await client.query("commit");
+    runAfterResponse(deleteNewsObjects(images.rows.map((row) => row.object_path), req));
+    res.json({ ok: true });
+  } catch (error) {
+    await client.query("rollback").catch(() => undefined);
+    req.log.error({ error }, "Admin news delete failed");
+    res.status(500).json({ error: "Failed to delete test post" });
   } finally { client.release(); }
 });
 
@@ -335,7 +383,7 @@ async function audienceCounts(postId: string) {
   }>(`
     with post as (select * from news_posts where id=$1), eligible as (
       select p.id from profiles p,post n where p.role<>'admin' and (
-        (n.audience='specific_user' and p.id=n.target_user_id) or n.audience='everyone' or
+        (n.audience='specific_user' and (p.id=n.target_user_id or (n.target_user_id is null and lower(p.email)=lower(n.target_email)))) or n.audience='everyone' or
         (n.audience='paid_general' and p.role='general' and p.subscription_tier in ('standard','pro')) or
         (n.audience='sales_agent' and p.role='sales_agent') or
         (n.audience='service_provider' and p.role='service_provider')
@@ -388,13 +436,25 @@ router.post("/admin/news-posts/:postId/send", requireAdmin, async (req, res) => 
       await client.query("rollback"); return void res.status(400).json({ error: "Complete and confirm both languages before sending" });
     }
     if (post.audience !== "specific_user" && process.env.NEWS_BULK_SEND_ENABLED !== "true") { await client.query("rollback"); return void res.status(403).json({ error: "Bulk sending is disabled until the mobile news reader is released", code: "BULK_DISABLED" }); }
-    if (post.audience === "specific_user" && !post.target_user_id) { await client.query("rollback"); return void res.status(400).json({ error: "Choose a valid test user" }); }
+    let resolvedTargetUserId: string | null = post.target_user_id;
+    if (post.audience === "specific_user" && !resolvedTargetUserId) {
+      const target = await client.query<{ id: string }>(
+        `select id from profiles where lower(email)=lower($1) and role <> 'admin' limit 1`,
+        [post.target_email ?? ""],
+      );
+      resolvedTargetUserId = target.rows[0]?.id ?? null;
+      if (!resolvedTargetUserId) {
+        await client.query("rollback");
+        return void res.status(400).json({ error: "No non-admin account has that test email address. Check the email or sign into that test account once first." });
+      }
+      await client.query(`update news_posts set target_user_id=$2 where id=$1`, [post.id, resolvedTargetUserId]);
+    }
     await client.query(`insert into news_post_recipients(post_id,user_id)
       select $1,p.id from profiles p where p.role<>'admin' and (
         ($2='specific_user' and p.id=$3) or $2='everyone' or
         ($2='paid_general' and p.role='general' and p.subscription_tier in ('standard','pro')) or
         ($2='sales_agent' and p.role='sales_agent') or ($2='service_provider' and p.role='service_provider')
-      ) on conflict do nothing`, [post.id, post.audience, post.target_user_id]);
+      ) on conflict do nothing`, [post.id, post.audience, resolvedTargetUserId]);
     await client.query(`insert into news_post_deliveries(post_id,user_id,guest_session_id,push_token_id,locale)
       select $1,r.user_id,null,t.id,coalesce(t.locale,'en')
       from news_post_recipients r join push_tokens t on t.user_id=r.user_id where r.post_id=$1

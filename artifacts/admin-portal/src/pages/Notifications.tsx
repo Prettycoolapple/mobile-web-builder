@@ -28,6 +28,14 @@ function formatDate(value: string | null): string {
   return value ? new Date(value).toLocaleString("en-NZ", { dateStyle: "medium", timeStyle: "short" }) : "—";
 }
 
+function detectNewsLanguage(value: string): Language | null {
+  const chineseCharacters = value.match(/[\u3400-\u4dbf\u4e00-\u9fff]/g)?.length ?? 0;
+  const latinCharacters = value.match(/[A-Za-z]/g)?.length ?? 0;
+  if (chineseCharacters >= 4 && chineseCharacters >= latinCharacters * 0.25) return "zh";
+  if (latinCharacters >= 4 && latinCharacters > chineseCharacters * 2) return "en";
+  return null;
+}
+
 function MarkdownPreview({ value }: { value: string }) {
   return <div className="news-markdown-preview">{value.split(/\n{2,}/).map((block, index) => {
     if (block.startsWith("### ")) return <h3 key={index}>{block.slice(4)}</h3>;
@@ -53,6 +61,16 @@ export default function NotificationsPage() {
     finally { setLoading(false); }
   }, []);
   useEffect(() => { void loadList(); }, [loadList]);
+  async function deleteTestPost(post: PostSummary) {
+    const sentWarning = post.publishedAt
+      ? " The push notification already delivered to the test user cannot be recalled, but opening it afterward will show that the post is unavailable."
+      : "";
+    if (!window.confirm(`Permanently delete \"${post.titleEn || post.titleZh || "Untitled draft"}\"?${sentWarning}`)) return;
+    try {
+      await apiDelete(`/admin/news-posts/${post.id}`);
+      await loadList();
+    } catch (err) { setError(err instanceof Error ? err.message : "Failed to delete test post"); }
+  }
   useEffect(() => {
     if (postId !== "new") return;
     let cancelled = false;
@@ -68,51 +86,69 @@ export default function NotificationsPage() {
     {error && <div className="error-banner">{error}</div>}
     {!bulkEnabled && <div className="news-info-banner">Bulk audiences are protected until the mobile news reader is released. Specific-user test sends are available.</div>}
     {loading ? <p>Loading posts…</p> : posts.length === 0 ? <div className="empty-state">No posts yet. Create a draft to begin.</div> :
-      <div className="news-table-wrap"><table className="news-table"><thead><tr><th>Post</th><th>Audience</th><th>Status</th><th>Sent</th><th>Accounts + guests / devices</th><th>Push handoffs</th><th>Push opens</th><th>Readers</th><th>Avg. read</th></tr></thead>
+      <div className="news-table-wrap"><table className="news-table"><thead><tr><th>Post</th><th>Audience</th><th>Status</th><th>Sent</th><th>Accounts + guests / devices</th><th>Push handoffs</th><th>Push opens</th><th>Readers</th><th>Avg. read</th><th>Actions</th></tr></thead>
         <tbody>{posts.map((post) => <tr key={post.id}>
           <td><Link to={`/notifications/${post.id}`} className="news-title-link">{post.titleEn || post.titleZh || "Untitled draft"}</Link><small>{formatDate(post.createdAt)}</small></td>
           <td>{AUDIENCE_LABELS[post.audience]}</td><td><span className={`news-status ${post.status}`}>{post.status.replace("_", " ")}</span></td>
           <td>{formatDate(post.publishedAt)}</td><td>{(post.audienceUsers + post.guestAudience).toLocaleString()} / {post.devices.toLocaleString()}</td>
           <td>{post.pushHandoffs.toLocaleString()}</td><td>{post.pushOpens.toLocaleString()}</td><td>{post.readers.toLocaleString()}</td><td>{Math.round(post.averageReadSeconds)}s</td>
+          <td>{(post.status === "draft" || post.audience === "specific_user") && <button className="btn-danger-quiet" onClick={() => void deleteTestPost(post)}>Delete</button>}</td>
         </tr>)}</tbody></table></div>}
   </div>;
 }
 
 function NotificationComposer({ postId, bulkEnabled, onChanged }: { postId: string; bulkEnabled: boolean; onChanged: () => Promise<void> }) {
+  const navigate = useNavigate();
   const [post, setPost] = useState<PostDetail | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
   const [translating, setTranslating] = useState(false);
   const [sending, setSending] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [previewLanguage, setPreviewLanguage] = useState<Language>("en");
   const loadedRef = useRef(false);
   const dirtyRef = useRef(false);
+  const editVersionRef = useRef(0);
+  const savingRef = useRef(false);
+  const deletingRef = useRef(false);
   const textareas = useRef<Record<string, HTMLTextAreaElement | null>>({});
 
   const load = useCallback(async () => {
-    try { const data = await apiGet<PostDetail>(`/admin/news-posts/${postId}`); setPost(data); setError(""); loadedRef.current = true; dirtyRef.current = false; }
+    try { const data = await apiGet<PostDetail>(`/admin/news-posts/${postId}`); setPost(data); setError(""); loadedRef.current = true; dirtyRef.current = false; editVersionRef.current = 0; }
     catch (err) { setError(err instanceof Error ? err.message : "Failed to load post"); }
   }, [postId]);
   useEffect(() => { void load(); }, [load]);
 
   const save = useCallback(async (silent = false): Promise<PostDetail | null> => {
-    if (!post || post.status !== "draft" || !dirtyRef.current) return post;
+    if (!post || deletingRef.current || post.status !== "draft" || !dirtyRef.current) return post;
+    if (savingRef.current) return null;
+    const snapshot = post;
+    const saveVersion = editVersionRef.current;
+    savingRef.current = true;
     setSaving(true);
     try {
-      const saved = await apiPatch<PostSummary>(`/admin/news-posts/${post.id}`, {
-        sourceLanguage: post.sourceLanguage, titleEn: post.titleEn, titleZh: post.titleZh,
-        audience: post.audience, targetEmail: post.targetEmail, translationStale: post.translationStale,
-        contentRevision: post.contentRevision,
-        blocks: post.blocks.map((block) => block.type === "text"
+      const saved = await apiPatch<PostSummary>(`/admin/news-posts/${snapshot.id}`, {
+        sourceLanguage: snapshot.sourceLanguage, titleEn: snapshot.titleEn, titleZh: snapshot.titleZh,
+        audience: snapshot.audience, targetEmail: snapshot.targetEmail, translationStale: snapshot.translationStale,
+        contentRevision: snapshot.contentRevision,
+        blocks: snapshot.blocks.map((block) => block.type === "text"
           ? { type: "text", textEn: block.textEn, textZh: block.textZh }
           : { type: "image", imageId: block.imageId }),
       });
-      dirtyRef.current = false;
-      const next = { ...post, ...saved };
-      setPost(next); if (!silent) setNotice("Draft saved"); setError(""); await onChanged(); return next;
+      const changedWhileSaving = editVersionRef.current !== saveVersion;
+      if (changedWhileSaving) {
+        dirtyRef.current = true;
+        setPost((current) => current ? { ...current, contentRevision: saved.contentRevision, updatedAt: saved.updatedAt } : current);
+      } else {
+        dirtyRef.current = false;
+        setPost({ ...snapshot, ...saved });
+        if (!silent) setNotice("Draft saved");
+      }
+      setError(""); await onChanged();
+      return changedWhileSaving ? null : { ...snapshot, ...saved };
     } catch (err) { setError(err instanceof Error ? err.message : "Save failed"); return null; }
-    finally { setSaving(false); }
+    finally { savingRef.current = false; setSaving(false); }
   }, [post, onChanged]);
 
   useEffect(() => {
@@ -122,7 +158,7 @@ function NotificationComposer({ postId, bulkEnabled, onChanged }: { postId: stri
   }, [post, save]);
 
   function update(patch: Partial<PostDetail>, sourceChanged = false) {
-    dirtyRef.current = true; setNotice("");
+    editVersionRef.current += 1; dirtyRef.current = true; setNotice("");
     setPost((current) => current ? { ...current, ...patch, translationStale: sourceChanged ? true : (patch.translationStale ?? current.translationStale) } : current);
   }
   function updateBlock(id: string, patch: Partial<Extract<PostBlock, { type: "text" }>>, sourceChanged = false) {
@@ -138,6 +174,26 @@ function NotificationComposer({ postId, bulkEnabled, onChanged }: { postId: stri
     if (!post) return;
     update({ blocks: [...post.blocks, { id: `new-${crypto.randomUUID()}`, type: "text", textEn: "", textZh: "" }] }, true);
   }
+  function changeSourceLanguage(nextLanguage: Language) {
+    if (!post || nextLanguage === post.sourceLanguage) return;
+    const previousLanguage = post.sourceLanguage;
+    const previousTitle = previousLanguage === "en" ? post.titleEn : post.titleZh;
+    const nextTitle = nextLanguage === "en" ? post.titleEn : post.titleZh;
+    const blocks = post.blocks.map((block) => {
+      if (block.type !== "text") return block;
+      const previousText = previousLanguage === "en" ? block.textEn : block.textZh;
+      const nextText = nextLanguage === "en" ? block.textEn : block.textZh;
+      if (!previousText.trim() || nextText.trim()) return block;
+      return { ...block, ...(nextLanguage === "en" ? { textEn: previousText } : { textZh: previousText }) };
+    });
+    update({
+      sourceLanguage: nextLanguage,
+      blocks,
+      ...(!nextTitle.trim() && previousTitle.trim()
+        ? (nextLanguage === "en" ? { titleEn: previousTitle } : { titleZh: previousTitle })
+        : {}),
+    }, true);
+  }
   async function removeBlock(block: PostBlock) {
     if (!post) return;
     if (block.type === "image") { await apiDelete(`/admin/news-posts/${postId}/images/${block.imageId}`); await load(); return; }
@@ -147,19 +203,33 @@ function NotificationComposer({ postId, bulkEnabled, onChanged }: { postId: stri
 
   async function translate() {
     if (!post) return;
-    const title = post.sourceLanguage === "en" ? post.titleEn : post.titleZh;
+    const selectedLanguage = post.sourceLanguage;
+    const title = selectedLanguage === "en" ? post.titleEn : post.titleZh;
     const textBlocks = post.blocks.filter((block): block is Extract<PostBlock, { type: "text" }> => block.type === "text");
-    const texts = textBlocks.map((block) => post.sourceLanguage === "en" ? block.textEn : block.textZh);
+    const texts = textBlocks.map((block) => selectedLanguage === "en" ? block.textEn : block.textZh);
     if (!title.trim() || texts.length === 0 || texts.some((text) => !text.trim())) { setError("Complete the source title and every source text block first."); return; }
+    const detectedLanguage = detectNewsLanguage([title, ...texts].join("\n"));
+    const sourceLanguage = detectedLanguage ?? selectedLanguage;
     setTranslating(true);
     try {
-      const result = await apiPost<{ title: string; texts: string[] }>(`/admin/news-posts/${post.id}/translate`, { sourceLanguage: post.sourceLanguage, title, texts });
+      const result = await apiPost<{ title: string; texts: string[] }>(`/admin/news-posts/${post.id}/translate`, { sourceLanguage, title, texts });
       const translatedById = new Map(textBlocks.map((block, index) => [block.id, result.texts[index] ?? ""]));
       const blocks = post.blocks.map((block) => block.type === "text"
-        ? { ...block, ...(post.sourceLanguage === "en" ? { textZh: translatedById.get(block.id) ?? "" } : { textEn: translatedById.get(block.id) ?? "" }) }
+        ? { ...block, ...(sourceLanguage === "en"
+          ? { textEn: texts[textBlocks.findIndex((item) => item.id === block.id)] ?? block.textEn, textZh: translatedById.get(block.id) ?? "" }
+          : { textZh: texts[textBlocks.findIndex((item) => item.id === block.id)] ?? block.textZh, textEn: translatedById.get(block.id) ?? "" }) }
         : block);
-      update({ blocks, ...(post.sourceLanguage === "en" ? { titleZh: result.title } : { titleEn: result.title }), translationStale: false });
-      setPreviewLanguage(post.sourceLanguage === "en" ? "zh" : "en"); setNotice("Translation generated. Review every block before sending."); setError("");
+      update({
+        sourceLanguage,
+        blocks,
+        ...(sourceLanguage === "en" ? { titleEn: title, titleZh: result.title } : { titleZh: title, titleEn: result.title }),
+        translationStale: false,
+      });
+      setPreviewLanguage(sourceLanguage === "en" ? "zh" : "en");
+      setNotice(detectedLanguage && detectedLanguage !== selectedLanguage
+        ? `${detectedLanguage === "zh" ? "Chinese" : "English"} was detected and the original-language setting was corrected. Review the translation before sending.`
+        : "Translation generated. Review every block before sending.");
+      setError("");
     } catch (err) { setError(err instanceof Error ? err.message : "Translation failed"); }
     finally { setTranslating(false); }
   }
@@ -193,6 +263,24 @@ function NotificationComposer({ postId, bulkEnabled, onChanged }: { postId: stri
     finally { setSending(false); }
   }
 
+  async function deletePost() {
+    if (!post) return;
+    const sentWarning = post.publishedAt
+      ? " The delivered push cannot be recalled, but the article will no longer open."
+      : "";
+    if (!window.confirm(`Permanently delete this ${post.status === "draft" ? "draft" : "specific-user test post"}?${sentWarning}`)) return;
+    deletingRef.current = true; dirtyRef.current = false; loadedRef.current = false; setDeleting(true);
+    try {
+      await apiDelete(`/admin/news-posts/${post.id}`);
+      await onChanged();
+      navigate("/notifications", { replace: true });
+    } catch (err) {
+      deletingRef.current = false; loadedRef.current = true;
+      setError(err instanceof Error ? err.message : "Failed to delete test post");
+      setDeleting(false);
+    }
+  }
+
   function insertMarkdown(block: Extract<PostBlock, { type: "text" }>, before: string, after = before) {
     if (!post) return;
     const textarea = textareas.current[block.id];
@@ -206,13 +294,19 @@ function NotificationComposer({ postId, bulkEnabled, onChanged }: { postId: stri
   const sourceTitleKey = post.sourceLanguage === "en" ? "titleEn" : "titleZh";
   const translatedTitleKey = post.sourceLanguage === "en" ? "titleZh" : "titleEn";
   const previewTitle = previewLanguage === "en" ? post.titleEn : post.titleZh;
+  const sourceTextBlocks = post.blocks.filter((block): block is Extract<PostBlock, { type: "text" }> => block.type === "text");
+  const detectedSourceLanguage = detectNewsLanguage([
+    post.sourceLanguage === "en" ? post.titleEn : post.titleZh,
+    ...sourceTextBlocks.map((block) => post.sourceLanguage === "en" ? block.textEn : block.textZh),
+  ].join("\n"));
+  const effectiveSourceLanguage = detectedSourceLanguage ?? post.sourceLanguage;
 
   return <div className="news-admin-page">
-    <div className="news-composer-header"><div><Link to="/notifications" className="back-link">← All posts</Link><h1>{isDraft ? "Create notification" : previewTitle || "Post"}</h1></div><div className="news-header-actions">{isDraft && <><button className="btn-secondary" onClick={() => void save()} disabled={saving}>{saving ? "Saving…" : "Save draft"}</button><button className="btn-primary" onClick={() => void send()} disabled={sending || post.translationStale}>{sending ? "Sending…" : "Send"}</button></>}</div></div>
+    <div className="news-composer-header"><div><Link to="/notifications" className="back-link">← All posts</Link><h1>{isDraft ? "Create notification" : previewTitle || "Post"}</h1></div><div className="news-header-actions">{(isDraft || post.audience === "specific_user") && <button className="btn-danger-quiet" onClick={() => void deletePost()} disabled={deleting}>{deleting ? "Deleting…" : "Delete test post"}</button>}{isDraft && <><button className="btn-secondary" onClick={() => void save()} disabled={saving || deleting}>{saving ? "Saving…" : "Save draft"}</button><button className="btn-primary" onClick={() => void send()} disabled={saving || sending || deleting || post.translationStale}>{sending ? "Sending…" : "Send"}</button></>}</div></div>
     {error && <div className="error-banner">{error}</div>}{notice && <div className="success-banner">{notice}</div>}
     {!isDraft && <AnalyticsStrip post={post} />}
     <div className="news-composer-grid"><section className="news-editor-panel">
-      <div className="form-row"><label>Source language<select value={post.sourceLanguage} disabled={!isDraft} onChange={(event) => update({ sourceLanguage: event.target.value as Language }, true)}><option value="en">English</option><option value="zh">Simplified Chinese</option></select></label><label>Audience<select value={post.audience} disabled={!isDraft} onChange={(event) => update({ audience: event.target.value as Audience, targetEmail: event.target.value === "specific_user" ? post.targetEmail : null })}>{(Object.keys(AUDIENCE_LABELS) as Audience[]).map((audience) => <option key={audience} value={audience} disabled={audience !== "specific_user" && !bulkEnabled}>{AUDIENCE_LABELS[audience]}{audience !== "specific_user" && !bulkEnabled ? " — locked" : ""}</option>)}</select></label></div>
+      <div className="form-row"><label>Original language<select value={post.sourceLanguage} disabled={!isDraft} onChange={(event) => changeSourceLanguage(event.target.value as Language)}><option value="en">English</option><option value="zh">Simplified Chinese</option></select>{detectedSourceLanguage && detectedSourceLanguage !== post.sourceLanguage && <small className="news-language-detected">{detectedSourceLanguage === "zh" ? "Chinese" : "English"} detected — translation will correct this automatically.</small>}</label><label>Audience<select value={post.audience} disabled={!isDraft} onChange={(event) => update({ audience: event.target.value as Audience, targetEmail: event.target.value === "specific_user" ? post.targetEmail : null })}>{(Object.keys(AUDIENCE_LABELS) as Audience[]).map((audience) => <option key={audience} value={audience} disabled={audience !== "specific_user" && !bulkEnabled}>{AUDIENCE_LABELS[audience]}{audience !== "specific_user" && !bulkEnabled ? " — locked" : ""}</option>)}</select></label></div>
       {post.audience === "specific_user" && <label>Test user email<input type="email" value={post.targetEmail ?? ""} disabled={!isDraft} placeholder="user@example.com" onChange={(event) => update({ targetEmail: event.target.value })} /></label>}
       <label>Source title <span>{post[sourceTitleKey].length}/120</span><input maxLength={120} disabled={!isDraft} value={post[sourceTitleKey]} onChange={(event) => update({ [sourceTitleKey]: event.target.value } as Partial<PostDetail>, true)} /></label>
       <label>Translated title<input maxLength={120} disabled={!isDraft} value={post[translatedTitleKey]} onChange={(event) => update({ [translatedTitleKey]: event.target.value, translationStale: false } as Partial<PostDetail>)} /></label>
@@ -225,7 +319,7 @@ function NotificationComposer({ postId, bulkEnabled, onChanged }: { postId: stri
           <label>Translated text<textarea className="news-body-input translated" maxLength={20000} disabled={!isDraft} value={post.sourceLanguage === "en" ? block.textZh : block.textEn} onChange={(event) => { updateBlock(block.id, post.sourceLanguage === "en" ? { textZh: event.target.value } : { textEn: event.target.value }); update({ translationStale: false }); }} /></label>
         </>}
       </div>)}</div>
-      {isDraft && <button className="btn-secondary translate-button" onClick={() => void translate()} disabled={translating}>{translating ? "Translating…" : `Generate ${post.sourceLanguage === "en" ? "Chinese" : "English"} translation`}</button>}
+      {isDraft && <button className="btn-secondary translate-button" onClick={() => void translate()} disabled={translating}>{translating ? "Translating…" : `Generate ${effectiveSourceLanguage === "en" ? "Chinese" : "English"} translation`}</button>}
       {post.translationStale && <p className="translation-warning">Translation needs regeneration or review before sending.</p>}
     </section><aside className="news-preview-panel"><div className="preview-tabs"><button className={previewLanguage === "en" ? "active" : ""} onClick={() => setPreviewLanguage("en")}>English</button><button className={previewLanguage === "zh" ? "active" : ""} onClick={() => setPreviewLanguage("zh")}>中文</button></div><div className="push-preview"><small>PUSH NOTIFICATION</small><strong>Project Alpha</strong><p>{previewTitle || "Your post title will appear here"}</p><em>Only the title is sent. Readers open the app for the article.</em></div><article className="article-preview"><h1>{previewTitle || "Untitled post"}</h1>{post.blocks.map((block) => block.type === "text" ? <MarkdownPreview key={block.id} value={(previewLanguage === "en" ? block.textEn : block.textZh) || "Your text preview will appear here."} /> : <AuthenticatedImage key={block.id} image={{ ...(post.images.find((image) => image.id === block.imageId) ?? { id: block.imageId, objectPath: "", contentType: "", byteSize: 0, sortOrder: 0 }), url: block.url }} />)}</article></aside></div>
   </div>;

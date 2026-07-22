@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const poolMocks = vi.hoisted(() => ({ connect: vi.fn(), query: vi.fn() }));
 vi.mock("@workspace/db", () => ({ pool: poolMocks }));
 
-import { canAccessNewsSql, lockActiveGuestNewsViewer, mergeGuestNewsActivity } from "../news-viewer";
+import { canAccessNewsSql, canPermanentlyDeleteNewsPost, lockActiveGuestNewsViewer, mergeGuestNewsActivity } from "../news-viewer";
 
 describe("guest news identity", () => {
   beforeEach(() => { poolMocks.connect.mockReset(); poolMocks.query.mockReset(); });
@@ -64,5 +64,12 @@ describe("guest news identity", () => {
     expect(policy).toContain("article.audience='everyone'");
     expect(policy).toContain("news_post_recipients");
     expect(policy).not.toContain("paid_general");
+  });
+
+  it("allows deleting drafts and specific-user tests but protects sent bulk posts", () => {
+    expect(canPermanentlyDeleteNewsPost("draft", "everyone")).toBe(true);
+    expect(canPermanentlyDeleteNewsPost("sent", "specific_user")).toBe(true);
+    expect(canPermanentlyDeleteNewsPost("sent", "everyone")).toBe(false);
+    expect(canPermanentlyDeleteNewsPost("archived", "paid_general")).toBe(false);
   });
 });

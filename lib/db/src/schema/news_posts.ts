@@ -27,6 +27,7 @@ export const newsPosts = pgTable(
     bodyZh: text("body_zh").notNull().default(""),
     audience: text("audience").notNull().default("specific_user"),
     targetUserId: text("target_user_id").references(() => profiles.id, { onDelete: "restrict" }),
+    targetEmail: text("target_email"),
     translationStale: boolean("translation_stale").notNull().default(true),
     contentRevision: integer("content_revision").notNull().default(1),
     sendIdempotencyKey: text("send_idempotency_key").unique(),
