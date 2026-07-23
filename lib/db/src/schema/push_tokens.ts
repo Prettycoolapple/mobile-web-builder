@@ -13,6 +13,8 @@ export const pushTokens = pgTable(
     platform: text("platform").notNull(),
     /** OS-derived content locale. Null until an updated app re-registers the token. */
     locale: text("locale"),
+    /** Set only by app builds that implement the News feed and deep links. */
+    newsCapableAt: timestamp("news_capable_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

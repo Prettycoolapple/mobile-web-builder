@@ -14,6 +14,13 @@ import { profiles } from "./profiles";
 import { pushTokens } from "./push_tokens";
 import { newsGuestSessions } from "./news_guests";
 
+export const newsReleaseBatches = pgTable("news_release_batches", {
+  idempotencyKey: text("idempotency_key").primaryKey(),
+  releasedBy: text("released_by").notNull().references(() => profiles.id, { onDelete: "restrict" }),
+  postCount: integer("post_count").notNull(),
+  releasedAt: timestamp("released_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const newsPosts = pgTable(
   "news_posts",
   {
@@ -37,6 +44,10 @@ export const newsPosts = pgTable(
     publishedAt: timestamp("published_at", { withTimezone: true }),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
     publishedSequence: integer("published_sequence").unique(),
+    stagedAt: timestamp("staged_at", { withTimezone: true }),
+    releasedAt: timestamp("released_at", { withTimezone: true }),
+    publicationMode: text("publication_mode").notNull().default("push"),
+    releaseBatchId: text("release_batch_id").references(() => newsReleaseBatches.idempotencyKey, { onDelete: "restrict" }),
   },
   (table) => [index("news_posts_status_created_idx").on(table.status, table.createdAt)],
 );

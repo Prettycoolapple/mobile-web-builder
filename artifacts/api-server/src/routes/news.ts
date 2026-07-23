@@ -8,6 +8,7 @@ import { ObjectNotFoundError, ObjectStorageService, s3StorageService } from "../
 import { translateNewsPost, type NewsLanguage } from "../lib/news-translation";
 import { runAfterResponse } from "../lib/vercel-wait-until";
 import { runNewsDispatch, runNewsReceiptCheck } from "../lib/news-push";
+import { loadNewsReadinessStats, newsPostReadinessError, releaseStagedNewsPosts } from "../lib/news-publication";
 import { canAccessNewsSql, canPermanentlyDeleteNewsPost, clampNewsSeenSequence, lockActiveGuestNewsViewer, newsOwnerValues, resolveNewsViewer, type NewsViewer } from "../lib/news-viewer";
 
 const router = Router();
@@ -41,8 +42,8 @@ function sendNewsSetupError(res: Response, error: unknown): boolean {
   const code = String((error as { code?: unknown })?.code ?? "");
   if (code !== "42P01" && code !== "42703") return false;
   res.status(503).json({
-    error: "News database setup is incomplete. Run add-news-phase-2.sql in Supabase SQL Editor, then redeploy.",
-    code: "NEWS_PHASE_2_MIGRATION_REQUIRED",
+    error: "News database setup is incomplete. Run the latest News SQL migrations in Supabase SQL Editor, then redeploy.",
+    code: "NEWS_MIGRATION_REQUIRED",
   });
   return true;
 }
@@ -104,6 +105,10 @@ function adminPost(row: Record<string, unknown>) {
     updatedAt: row.updated_at,
     publishedAt: row.published_at,
     archivedAt: row.archived_at,
+    stagedAt: row.staged_at,
+    releasedAt: row.released_at,
+    publicationMode: row.publication_mode ?? "push",
+    releaseBatchId: row.release_batch_id,
     audienceUsers: Number(row.audience_users ?? 0),
     guestAudience: Number(row.guest_audience ?? 0),
     devices: Number(row.devices ?? 0),
@@ -139,8 +144,16 @@ const ADMIN_POST_SELECT = `
 
 router.get("/admin/news-posts", requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query(`${ADMIN_POST_SELECT} order by p.created_at desc limit 200`);
-    res.json({ posts: result.rows.map(adminPost), bulkSendEnabled: process.env.NEWS_BULK_SEND_ENABLED === "true" });
+    const [result, staged] = await Promise.all([
+      pool.query(`${ADMIN_POST_SELECT} order by p.created_at desc limit 200`),
+      pool.query<{ count: string }>(`select count(*)::text count from news_posts where status='draft' and staged_at is not null`),
+    ]);
+    const stagedCount = Number(staged.rows[0]?.count ?? 0);
+    res.json({
+      posts: result.rows.map(adminPost),
+      stagedCount,
+      bulkSendEnabled: process.env.NEWS_BULK_SEND_ENABLED === "true",
+    });
   } catch (error) {
     req.log.error({ error }, "Admin news list failed");
     if (sendNewsSetupError(res, error)) return;
@@ -231,12 +244,12 @@ router.patch("/admin/news-posts/:postId", requireAdmin, async (req, res) => {
     const result = await client.query(
       `update news_posts set source_language=$3,title_en=$4,body_en=$5,title_zh=$6,body_zh=$7,
        audience=$8,target_user_id=$9,target_email=$10,translation_stale=$11,content_revision=content_revision+1,updated_at=now()
-       where id=$1 and status='draft' and content_revision=$2 returning *`,
+       where id=$1 and status='draft' and staged_at is null and content_revision=$2 returning *`,
       [req.params.postId, revision, sourceLanguage, req.body.titleEn, bodyEn, req.body.titleZh, bodyZh, audience, targetUserId, targetEmail, req.body.translationStale !== false],
     );
     if (!result.rows[0]) {
       await client.query("rollback");
-      return void res.status(409).json({ error: "Draft changed in another session. Refresh before saving.", code: "REVISION_CONFLICT" });
+      return void res.status(409).json({ error: "Draft changed, was staged, or was edited in another session. Refresh before saving.", code: "REVISION_CONFLICT" });
     }
     await client.query(`delete from news_post_blocks where post_id=$1`, [req.params.postId]);
     for (let index = 0; index < blocks.length; index += 1) {
@@ -279,7 +292,7 @@ router.post("/admin/news-posts/:postId/images/upload-url", requireAdmin, async (
   const contentType = String(req.body?.contentType ?? "");
   const byteSize = Number(req.body?.byteSize);
   if (!IMAGE_TYPES.has(contentType) || !Number.isInteger(byteSize) || byteSize <= 0 || byteSize > MAX_NEWS_IMAGE_BYTES) return void res.status(400).json({ error: "Use a JPEG, PNG, WebP, or GIF image up to 25 MB" });
-  const count = await pool.query<{ count: string }>(`select count(i.id)::text count from news_posts p left join news_post_images i on i.post_id=p.id where p.id=$1 and p.status='draft' group by p.id`, [req.params.postId]);
+  const count = await pool.query<{ count: string }>(`select count(i.id)::text count from news_posts p left join news_post_images i on i.post_id=p.id where p.id=$1 and p.status='draft' and p.staged_at is null group by p.id`, [req.params.postId]);
   if (!count.rows[0]) return void res.status(404).json({ error: "Draft not found" });
   if (Number(count.rows[0].count) >= 10) return void res.status(400).json({ error: "A post can contain at most 10 images" });
   try {
@@ -304,7 +317,7 @@ router.post("/admin/news-posts/:postId/images", requireAdmin, async (req, res) =
   try {
     await client.query("begin");
     await client.query("select pg_advisory_xact_lock(hashtext($1))", [req.params.postId]);
-    const draft = await client.query(`select id from news_posts where id=$1 and status='draft'`, [req.params.postId]);
+    const draft = await client.query(`select id from news_posts where id=$1 and status='draft' and staged_at is null`, [req.params.postId]);
     if (!draft.rows[0]) { await client.query("rollback"); return void res.status(404).json({ error: "Draft not found" }); }
     const count = await client.query<{ count: string }>(`select count(*)::text count from news_post_images where post_id=$1`, [req.params.postId]);
     if (Number(count.rows[0]?.count ?? 0) >= 10) { await client.query("rollback"); return void res.status(400).json({ error: "A post can contain at most 10 images" }); }
@@ -340,7 +353,7 @@ router.patch("/admin/news-posts/:postId/images/reorder", requireAdmin, async (re
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const existing = await client.query<{ id: string }>(`select i.id from news_post_images i join news_posts p on p.id=i.post_id where i.post_id=$1 and p.status='draft' order by i.sort_order for update of i`, [req.params.postId]);
+    const existing = await client.query<{ id: string }>(`select i.id from news_post_images i join news_posts p on p.id=i.post_id where i.post_id=$1 and p.status='draft' and p.staged_at is null order by i.sort_order for update of i`, [req.params.postId]);
     if (ids.length !== existing.rows.length || new Set(ids).size !== ids.length || ids.some((id) => !existing.rows.some((row) => row.id === id))) {
       await client.query("rollback"); return void res.status(400).json({ error: "Image order must include every attached image exactly once" });
     }
@@ -356,7 +369,7 @@ router.delete("/admin/news-posts/:postId/images/:imageId", requireAdmin, async (
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const result = await client.query<{ id: string; object_path: string }>(`delete from news_post_images where id=$1 and post_id=$2 and exists(select 1 from news_posts where id=$2 and status='draft') returning id,object_path`, [req.params.imageId, req.params.postId]);
+    const result = await client.query<{ id: string; object_path: string }>(`delete from news_post_images where id=$1 and post_id=$2 and exists(select 1 from news_posts where id=$2 and status='draft' and staged_at is null) returning id,object_path`, [req.params.imageId, req.params.postId]);
     if (!result.rows[0]) { await client.query("rollback"); return void res.status(404).json({ error: "Draft image not found" }); }
     await client.query(`update news_posts set content_revision=content_revision+1,updated_at=now() where id=$1`, [req.params.postId]);
     await client.query("commit");
@@ -364,6 +377,96 @@ router.delete("/admin/news-posts/:postId/images/:imageId", requireAdmin, async (
     res.json({ ok: true });
   } catch (error) {
     await client.query("rollback").catch(() => undefined); req.log.error({ error }, "News image removal failed"); res.status(500).json({ error: "Could not remove image" });
+  } finally { client.release(); }
+});
+
+router.post("/admin/news-posts/:postId/stage", requireAdmin, async (req, res) => {
+  const revision = Number(req.body?.contentRevision);
+  if (!Number.isInteger(revision)) return void res.status(400).json({ error: "Content revision is required" });
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await client.query("select pg_advisory_xact_lock(hashtext('news-staged-launch-release'))");
+    await client.query("select pg_advisory_xact_lock(hashtext($1))", [req.params.postId]);
+    const locked = await client.query(`select * from news_posts where id=$1 for update`, [req.params.postId]);
+    const post = locked.rows[0];
+    if (!post) { await client.query("rollback"); return void res.status(404).json({ error: "Post not found" }); }
+    if (post.status !== "draft" || post.content_revision !== revision) {
+      await client.query("rollback");
+      return void res.status(409).json({ error: "Draft changed or is no longer editable. Refresh before staging." });
+    }
+    if (post.audience !== "everyone") {
+      await client.query("rollback");
+      return void res.status(400).json({ error: "Only Everyone posts can be staged for the launch backlog" });
+    }
+    const stats = await loadNewsReadinessStats(
+      (text, values) => client.query(text, values),
+      post.id,
+    );
+    const readinessError = newsPostReadinessError(post, stats);
+    if (readinessError) {
+      await client.query("rollback");
+      return void res.status(400).json({ error: readinessError });
+    }
+    const staged = await client.query(
+      `update news_posts set staged_at=coalesce(staged_at,now()),updated_at=now()
+       where id=$1 returning *`,
+      [post.id],
+    );
+    await client.query("commit");
+    res.json(adminPost(staged.rows[0]));
+  } catch (error) {
+    await client.query("rollback").catch(() => undefined);
+    req.log.error({ error }, "News post staging failed");
+    if (sendNewsSetupError(res, error)) return;
+    res.status(500).json({ error: "Failed to stage post" });
+  } finally { client.release(); }
+});
+
+router.post("/admin/news-posts/:postId/unstage", requireAdmin, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await client.query("select pg_advisory_xact_lock(hashtext('news-staged-launch-release'))");
+    const result = await client.query(
+      `update news_posts set staged_at=null,updated_at=now()
+       where id=$1 and status='draft' returning *`,
+      [req.params.postId],
+    );
+    if (!result.rows[0]) {
+      await client.query("rollback");
+      return void res.status(404).json({ error: "Staged draft not found" });
+    }
+    await client.query("commit");
+    res.json(adminPost(result.rows[0]));
+  } catch (error) {
+    await client.query("rollback").catch(() => undefined);
+    req.log.error({ error }, "News post unstaging failed");
+    if (sendNewsSetupError(res, error)) return;
+    res.status(500).json({ error: "Failed to return post to draft" });
+  } finally { client.release(); }
+});
+
+router.post("/admin/news-posts/release-staged", requireAdmin, async (req, res) => {
+  const idempotencyKey = typeof req.body?.idempotencyKey === "string" ? req.body.idempotencyKey.trim() : "";
+  if (idempotencyKey.length < 8 || idempotencyKey.length > 200) {
+    return void res.status(400).json({ error: "A valid idempotency key is required" });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const result = await releaseStagedNewsPosts(
+      (text, values) => client.query(text, values),
+      { idempotencyKey, releasedBy: userId(req) },
+    );
+    await client.query("commit");
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    await client.query("rollback").catch(() => undefined);
+    req.log.error({ error }, "Staged News release failed");
+    if (sendNewsSetupError(res, error)) return;
+    const status = Number((error as { status?: number })?.status) || 500;
+    res.status(status).json({ error: error instanceof Error ? error.message : "Failed to release staged posts" });
   } finally { client.release(); }
 });
 
@@ -410,11 +513,11 @@ async function audienceCounts(postId: string) {
     )
     select
       (select count(*) from eligible)::text users,
-      (select count(t.id) from push_tokens t join eligible e on e.id=t.user_id)::text user_devices,
-      (select count(*) from eligible e where not exists(select 1 from push_tokens t where t.user_id=e.id))::text users_without_devices,
+      (select count(t.id) from push_tokens t join eligible e on e.id=t.user_id where t.news_capable_at is not null)::text user_devices,
+      (select count(*) from eligible e where not exists(select 1 from push_tokens t where t.user_id=e.id and t.news_capable_at is not null))::text users_without_devices,
       (select count(*) from guests)::text guests,
-      (select count(t.id) from push_tokens t join guests g on g.id=t.guest_session_id)::text guest_devices,
-      (select count(*) from guests g where not exists(select 1 from push_tokens t where t.guest_session_id=g.id))::text guests_without_devices
+      (select count(t.id) from push_tokens t join guests g on g.id=t.guest_session_id where t.news_capable_at is not null)::text guest_devices,
+      (select count(*) from guests g where not exists(select 1 from push_tokens t where t.guest_session_id=g.id and t.news_capable_at is not null))::text guests_without_devices
   `, [postId]);
   const row = result.rows[0];
   return {
@@ -431,7 +534,11 @@ async function audienceCounts(postId: string) {
 
 router.post("/admin/news-posts/:postId/preflight", requireAdmin, async (req, res) => {
   try { res.json(await audienceCounts(req.params.postId)); }
-  catch (error) { req.log.error({ error }, "News preflight failed"); res.status(500).json({ error: "Preflight failed" }); }
+  catch (error) {
+    req.log.error({ error }, "News preflight failed");
+    if (sendNewsSetupError(res, error)) return;
+    res.status(500).json({ error: "Preflight failed" });
+  }
 });
 
 router.post("/admin/news-posts/:postId/send", requireAdmin, async (req, res) => {
@@ -446,11 +553,17 @@ router.post("/admin/news-posts/:postId/send", requireAdmin, async (req, res) => 
     if (!post) { await client.query("rollback"); return void res.status(404).json({ error: "Post not found" }); }
     if (post.send_idempotency_key === key && post.status !== "draft") { await client.query("commit"); return void res.json({ ok: true, postId: post.id, status: post.status }); }
     if (post.status !== "draft" || post.content_revision !== revision) { await client.query("rollback"); return void res.status(409).json({ error: "Draft changed or was already sent" }); }
-    const invalidBlocks = await client.query<{ count: string }>(`select count(*)::text count from news_post_blocks where post_id=$1 and block_type='text' and (btrim(coalesce(text_en,''))='' or btrim(coalesce(text_zh,''))='')`, [post.id]);
-    const blockCount = await client.query<{ count: string }>(`select count(*)::text count from news_post_blocks where post_id=$1`, [post.id]);
-    const textBlockCount = await client.query<{ count: string }>(`select count(*)::text count from news_post_blocks where post_id=$1 and block_type='text'`, [post.id]);
-    if (post.translation_stale || !post.title_en.trim() || !post.title_zh.trim() || Number(blockCount.rows[0]?.count ?? 0) === 0 || Number(textBlockCount.rows[0]?.count ?? 0) === 0 || Number(invalidBlocks.rows[0]?.count ?? 0) > 0) {
-      await client.query("rollback"); return void res.status(400).json({ error: "Complete and confirm both languages before sending" });
+    if (post.staged_at) {
+      await client.query("rollback");
+      return void res.status(409).json({ error: "Return this post to draft before sending it with push" });
+    }
+    const stats = await loadNewsReadinessStats(
+      (text, values) => client.query(text, values),
+      post.id,
+    );
+    const readinessError = newsPostReadinessError(post, stats);
+    if (readinessError) {
+      await client.query("rollback"); return void res.status(400).json({ error: readinessError });
     }
     if (post.audience !== "specific_user" && process.env.NEWS_BULK_SEND_ENABLED !== "true") { await client.query("rollback"); return void res.status(403).json({ error: "Bulk sending is disabled until the mobile news reader is released", code: "BULK_DISABLED" }); }
     let resolvedTargetUserId: string | null = post.target_user_id;
@@ -474,7 +587,8 @@ router.post("/admin/news-posts/:postId/send", requireAdmin, async (req, res) => 
       ) on conflict do nothing`, [post.id, post.audience, resolvedTargetUserId]);
     await client.query(`insert into news_post_deliveries(post_id,user_id,guest_session_id,push_token_id,locale)
       select $1,r.user_id,null,t.id,coalesce(t.locale,'en')
-      from news_post_recipients r join push_tokens t on t.user_id=r.user_id where r.post_id=$1
+      from news_post_recipients r join push_tokens t on t.user_id=r.user_id
+      where r.post_id=$1 and t.news_capable_at is not null
       on conflict(post_id,push_token_id) do nothing`, [post.id]);
     if (post.audience === "everyone") {
       await client.query(`insert into news_post_guest_recipients(post_id,guest_session_id)
@@ -483,13 +597,14 @@ router.post("/admin/news-posts/:postId/send", requireAdmin, async (req, res) => 
       await client.query(`insert into news_post_deliveries(post_id,user_id,guest_session_id,push_token_id,locale)
         select $1,null,g.guest_session_id,t.id,coalesce(t.locale,'en')
         from news_post_guest_recipients g join push_tokens t on t.guest_session_id=g.guest_session_id
-        where g.post_id=$1
+        where g.post_id=$1 and t.news_capable_at is not null
         on conflict(post_id,push_token_id) do nothing`, [post.id]);
     }
     const deliveryCount = await client.query<{ count: string }>(`select count(*)::text count from news_post_deliveries where post_id=$1`, [post.id]);
     const hasDevices = Number(deliveryCount.rows[0]?.count ?? 0) > 0;
     await client.query(
       `update news_posts set status=$3,send_idempotency_key=$2,send_started_at=now(),published_at=now(),
+       released_at=now(),publication_mode='push',
        published_sequence=nextval('news_post_publish_sequence'),updated_at=now() where id=$1`,
       [post.id, key, hasDevices ? "queued" : "sent"],
     );
@@ -500,13 +615,14 @@ router.post("/admin/news-posts/:postId/send", requireAdmin, async (req, res) => 
   } catch (error) {
     await client.query("rollback").catch(() => undefined);
     req.log.error({ error }, "Admin news send failed");
+    if (sendNewsSetupError(res, error)) return;
     res.status(500).json({ error: "Failed to queue post" });
   } finally { client.release(); }
 });
 
 router.post("/admin/news-posts/:postId/archive", requireAdmin, async (req, res) => {
   const archive = req.body?.archive !== false;
-  const result = await pool.query(`update news_posts set status=case when $2 then 'archived' else case when published_at is null then 'draft' else 'sent' end end,archived_at=case when $2 then now() else null end,updated_at=now() where id=$1 returning status`, [req.params.postId, archive]);
+  const result = await pool.query(`update news_posts set status=case when $2 then 'archived' else case when published_at is null then 'draft' else 'sent' end end,archived_at=case when $2 then now() else null end,staged_at=case when $2 then null else staged_at end,updated_at=now() where id=$1 returning status`, [req.params.postId, archive]);
   if (!result.rows[0]) return void res.status(404).json({ error: "Post not found" });
   res.json({ ok: true, status: result.rows[0].status });
 });
@@ -524,7 +640,10 @@ router.post("/news/session", async (req, res) => {
   try {
     const viewer = await resolveNewsViewer(req, true);
     res.json({ ok: true, viewerType: viewer.userId ? "user" : "guest" });
-  } catch (error) { viewerError(res, error); }
+  } catch (error) {
+    if (sendNewsSetupError(res, error)) return;
+    viewerError(res, error);
+  }
 });
 
 router.post("/news/push-token", async (req, res) => {
@@ -540,10 +659,10 @@ router.post("/news/push-token", async (req, res) => {
       await client.query("begin");
       await lockActiveGuestNewsViewer(client, viewer);
       await client.query(
-        `insert into push_tokens(user_id,guest_session_id,token,platform,locale,updated_at)
-         values($1,$2,$3,$4,$5,now())
+        `insert into push_tokens(user_id,guest_session_id,token,platform,locale,news_capable_at,updated_at)
+         values($1,$2,$3,$4,$5,now(),now())
          on conflict(token) do update set user_id=excluded.user_id,guest_session_id=excluded.guest_session_id,
-           platform=excluded.platform,locale=excluded.locale,updated_at=now()`,
+           platform=excluded.platform,locale=excluded.locale,news_capable_at=now(),updated_at=now()`,
         [ownerUserId, ownerGuestId, token, platform, locale],
       );
       await client.query("commit");
@@ -552,7 +671,10 @@ router.post("/news/push-token", async (req, res) => {
       throw error;
     } finally { client.release(); }
     res.json({ ok: true });
-  } catch (error) { viewerError(res, error); }
+  } catch (error) {
+    if (sendNewsSetupError(res, error)) return;
+    viewerError(res, error);
+  }
 });
 
 async function latestVisibleSequence(viewer: NewsViewer): Promise<number> {

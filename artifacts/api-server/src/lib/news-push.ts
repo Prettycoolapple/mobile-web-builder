@@ -24,6 +24,18 @@ export function buildNewsPushMessage(row: {
 }
 
 export async function runNewsDispatch(): Promise<{ claimed: number; accepted: number; failed: number }> {
+  // Tokens registered only by legacy app builds must never receive News pushes:
+  // those builds cannot open the News route. Mark any legacy queued rows as
+  // skipped so old deployments cannot leave a post permanently queued.
+  await pool.query(`
+    update news_post_deliveries d set
+      status='skipped',
+      last_error_code='NEWS_BUILD_REQUIRED',
+      last_error_message='The device has not registered from a News-capable app build'
+    from push_tokens t
+    where d.push_token_id=t.id and d.status='queued' and t.news_capable_at is null
+  `);
+  await refreshPostStatuses();
   // An expired in-flight lease is intentionally not retried: Expo has no
   // idempotency key, so a worker crash after acceptance would otherwise risk a
   // duplicate notification. Admins can explicitly requeue these unknown rows.
@@ -39,7 +51,7 @@ export async function runNewsDispatch(): Promise<{ claimed: number; accepted: nu
         select d.id
         from news_post_deliveries d
         join push_tokens t on t.id = d.push_token_id
-        where d.status = 'queued'
+        where d.status = 'queued' and t.news_capable_at is not null
         order by d.created_at
         for update of d skip locked
         limit 100
