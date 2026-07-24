@@ -3,6 +3,7 @@ import { Router, type NextFunction, type Request, type Response } from "express"
 import { pool } from "@workspace/db";
 import { optionalAuth, requireAdmin } from "../lib/auth";
 import { getAnonymousInstallHash } from "../lib/anonymous-discovery";
+import { getAllowedOrigins } from "../lib/env";
 import { hitRateLimit, ipRateLimit, minutes } from "../lib/rateLimit";
 import { ObjectNotFoundError, ObjectStorageService, s3StorageService } from "../lib/objectStorage";
 import { translateNewsPost, type NewsLanguage } from "../lib/news-translation";
@@ -18,6 +19,20 @@ const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif
 const MAX_NEWS_IMAGE_BYTES = 25 * 1024 * 1024;
 const EXPO_TOKEN_RE = /^(ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]+\]$/;
 const publicNewsLimit = ipRateLimit({ name: "news-public", max: 300, windowMs: minutes(5) });
+let newsStorageCorsPromise: Promise<void> | null = null;
+
+async function ensureNewsStorageCors(): Promise<void> {
+  if (!s3StorageService.isConfigured) return;
+  if (!newsStorageCorsPromise) {
+    newsStorageCorsPromise = s3StorageService.configureCors(getAllowedOrigins())
+      .then(() => undefined)
+      .catch((error) => {
+        newsStorageCorsPromise = null;
+        throw error;
+      });
+  }
+  await newsStorageCorsPromise;
+}
 
 function userId(req: Request): string {
   return (req as Request & { userId: string }).userId;
@@ -297,6 +312,11 @@ router.post("/admin/news-posts/:postId/images/upload-url", requireAdmin, async (
   if (Number(count.rows[0].count) >= 10) return void res.status(400).json({ error: "A post can contain at most 10 images" });
   try {
     if (s3StorageService.isConfigured) {
+      try {
+        await ensureNewsStorageCors();
+      } catch (error) {
+        req.log.warn({ error }, "Could not verify News image storage CORS before upload");
+      }
       const upload = await s3StorageService.getPresignedUploadUrl({ contentType, namespace: `news/${req.params.postId}` });
       return void res.json({ uploadUrl: upload.uploadURL, objectPath: upload.objectPath });
     }
@@ -602,6 +622,13 @@ router.post("/admin/news-posts/:postId/send", requireAdmin, async (req, res) => 
     }
     const deliveryCount = await client.query<{ count: string }>(`select count(*)::text count from news_post_deliveries where post_id=$1`, [post.id]);
     const hasDevices = Number(deliveryCount.rows[0]?.count ?? 0) > 0;
+    if (post.audience === "specific_user" && !hasDevices) {
+      await client.query("rollback");
+      return void res.status(409).json({
+        error: "This account has no News-capable push device. Open the latest app, sign in with this email, allow notifications, then try again.",
+        code: "NO_NEWS_CAPABLE_DEVICE",
+      });
+    }
     await client.query(
       `update news_posts set status=$3,send_idempotency_key=$2,send_started_at=now(),published_at=now(),
        released_at=now(),publication_mode='push',

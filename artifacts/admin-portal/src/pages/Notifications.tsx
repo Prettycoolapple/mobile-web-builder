@@ -298,22 +298,64 @@ function NotificationComposer({ postId, bulkEnabled, onChanged }: { postId: stri
 
   async function uploadImages(files: FileList | null) {
     if (!post || !files) return;
-    const saved = await save(true); if (!saved) return;
-    const selected = Array.from(files).slice(0, 10 - post.images.length);
-    setUploadingImages(true); setError("");
+    const remainingSlots = 10 - post.images.length;
+    if (remainingSlots <= 0) {
+      setError("A post can contain at most 10 images. Remove an image before adding another.");
+      return;
+    }
+    const selected = Array.from(files).slice(0, remainingSlots);
+    if (selected.length === 0) return;
+    setUploadingImages(true); setError(""); setUploadProgress("Saving the draft before upload…");
+    for (let attempt = 0; savingRef.current && attempt < 100; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 100));
+    }
+    if (savingRef.current) {
+      setUploadingImages(false); setUploadProgress("");
+      setError("The draft is still saving. Wait a moment, then add the image again.");
+      return;
+    }
+    const saved = await save(true);
+    if (!saved) {
+      setUploadingImages(false); setUploadProgress("");
+      setError("The draft changed while it was saving. Wait for “Saved”, then add the image again.");
+      return;
+    }
+    let uploadedCount = 0;
+    let uploadError = "";
     for (let index = 0; index < selected.length; index += 1) {
       const originalFile = selected[index]!;
       try {
-        setUploadProgress(`Preparing image ${index + 1} of ${selected.length}…`);
+        setUploadProgress(`Preparing ${originalFile.name} (${index + 1} of ${selected.length})…`);
         const file = await prepareNewsImage(originalFile);
-        setUploadProgress(`Uploading image ${index + 1} of ${selected.length}…`);
+        setUploadProgress(`Uploading ${originalFile.name} (${index + 1} of ${selected.length})…`);
         const ticket = await apiPost<{ uploadUrl: string; objectPath: string }>(`/admin/news-posts/${post.id}/images/upload-url`, { contentType: file.type, byteSize: file.size });
-        const response = await fetch(ticket.uploadUrl, { method: "PUT", headers: { "Content-Type": file.type }, body: file });
-        if (!response.ok) throw new Error("Storage upload failed");
+        let response: Response;
+        try {
+          response = await fetch(ticket.uploadUrl, {
+            method: "PUT",
+            headers: { "Content-Type": file.type },
+            body: file,
+            signal: AbortSignal.timeout(120_000),
+          });
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "TimeoutError") {
+            throw new Error(`${originalFile.name}: upload timed out. Check your connection and try again.`);
+          }
+          throw new Error(`${originalFile.name}: the browser could not reach image storage. Storage upload access may need configuration.`);
+        }
+        if (!response.ok) throw new Error(`${originalFile.name}: storage rejected the upload (HTTP ${response.status}).`);
         await apiPost(`/admin/news-posts/${post.id}/images`, { objectPath: ticket.objectPath, contentType: file.type, byteSize: file.size });
-      } catch (err) { setError(err instanceof Error ? err.message : `Failed to upload ${originalFile.name}`); break; }
+        uploadedCount += 1;
+      } catch (err) {
+        uploadError = err instanceof Error ? err.message : `Failed to upload ${originalFile.name}`;
+        break;
+      }
     }
-    setUploadProgress(""); setUploadingImages(false); await load();
+    setUploadProgress("");
+    setUploadingImages(false);
+    if (uploadedCount > 0) await load();
+    if (uploadError) setError(uploadError);
+    else setNotice(`${uploadedCount} image${uploadedCount === 1 ? "" : "s"} uploaded and added to the preview.`);
   }
 
   async function send() {
@@ -322,6 +364,10 @@ function NotificationComposer({ postId, bulkEnabled, onChanged }: { postId: stri
       const counts = await apiPost<{ users: number; guestInstallations: number; devices: number; noDevices: number }>(`/admin/news-posts/${postId}/preflight`);
       const recipients = counts.users + counts.guestInstallations;
       if (recipients === 0) { setError("This audience contains no recipients."); return; }
+      if (saved.audience === "specific_user" && counts.devices === 0) {
+        setError("This account has no News-capable push device. Open the latest app, sign in with this email, allow notifications, then return here and send again.");
+        return;
+      }
       const guestText = saved.audience === "everyone" ? ` This includes ${counts.guestInstallations} guest installation(s).` : "";
       if (!window.confirm(`Send this post to ${recipients} account/guest recipient(s) across ${counts.devices} News-capable device(s)?${guestText} ${counts.noDevices} recipient(s) are on an old build or have no News-capable push device. This cannot be edited after sending.`)) return;
       setSending(true);

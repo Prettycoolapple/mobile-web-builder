@@ -18,6 +18,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { requestTrackingPermissionsAsync } from "expo-tracking-transparency";
+import Constants from "expo-constants";
 import { Stack, useRouter, useSegments } from "expo-router";
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
@@ -154,6 +155,16 @@ function NotificationSetup() {
     const leaf = segmentNames[segmentNames.length - 1];
     const onHome = segmentNames.includes("(tabs)") && (leaf === "(tabs)" || leaf === "index" || leaf === "home");
     const newsIdentity = user?.id ? `user:${user.id}:${newsGuestSessionId}` : `guest:${newsGuestSessionId}`;
+    let cancelled = false;
+    let registrationRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function scheduleRegistrationRetry() {
+      if (cancelled || registrationRetryTimer) return;
+      registrationRetryTimer = setTimeout(() => {
+        registrationRetryTimer = null;
+        void registerPushToken();
+      }, 15_000);
+    }
 
     async function registerPushToken() {
       if (Platform.OS === "web") return;
@@ -165,6 +176,7 @@ function NotificationSetup() {
           const sessionResponse = await fetch(`${getApiBase()}/news/session`, { method: "POST", headers: getApiHeaders(), body: "{}" });
           if (!sessionResponse.ok) {
             if (syncedNewsIdentityRef.current === newsIdentity) syncedNewsIdentityRef.current = null;
+            scheduleRegistrationRetry();
             return;
           }
         }
@@ -192,7 +204,9 @@ function NotificationSetup() {
 
         await configureAppIconBadgesAsync();
 
-        const tokenData = await Notifications.getExpoPushTokenAsync();
+        const projectId = Constants.easConfig?.projectId ?? Constants.expoConfig?.extra?.eas?.projectId;
+        if (!projectId) throw new Error("EAS project ID is unavailable");
+        const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
         const pushToken = tokenData.data;
         const platform = Platform.OS === "ios" ? "ios" : "android";
 
@@ -203,14 +217,19 @@ function NotificationSetup() {
         });
         if (!registrationResponse.ok && registeredPushIdentityRef.current === registrationIdentity) {
           registeredPushIdentityRef.current = null;
+          scheduleRegistrationRetry();
         }
       } catch {
         if (syncedNewsIdentityRef.current === newsIdentity) syncedNewsIdentityRef.current = null;
         registeredPushIdentityRef.current = null;
+        scheduleRegistrationRetry();
       }
     }
 
-    registerPushToken();
+    void registerPushToken();
+    const appStateSubscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") void registerPushToken();
+    });
 
     const openFromNotificationData = (data: Record<string, unknown> | undefined, notificationId?: string) => {
       if (!data || typeof data !== "object") return;
@@ -281,6 +300,9 @@ function NotificationSetup() {
     }
 
     return () => {
+      cancelled = true;
+      if (registrationRetryTimer) clearTimeout(registrationRetryTimer);
+      appStateSubscription.remove();
       notificationListener.current?.remove();
       responseListener.current?.remove();
     };
