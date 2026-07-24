@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  isInitialBootstrapRoute,
   isPendingNewsDestination,
   parsePendingNewsNavigation,
   pendingNewsNavigationFromData,
@@ -32,5 +33,12 @@ describe("News notification navigation", () => {
     assert.equal(isPendingNewsDestination("/news/post-123", "post-123"), true);
     assert.equal(isPendingNewsDestination("/news/post-123/", "post-123"), true);
     assert.equal(isPendingNewsDestination("/news", "post-123"), false);
+  });
+
+  it("distinguishes the root bootstrap route from the tabs home route", () => {
+    assert.equal(isInitialBootstrapRoute([]), true);
+    assert.equal(isInitialBootstrapRoute(["index"]), true);
+    assert.equal(isInitialBootstrapRoute(["(tabs)"]), false);
+    assert.equal(isInitialBootstrapRoute(["(auth)", "welcome"]), false);
   });
 });

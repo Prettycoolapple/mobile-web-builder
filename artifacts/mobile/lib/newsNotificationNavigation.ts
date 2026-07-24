@@ -44,3 +44,7 @@ export function isPendingNewsDestination(pathname: string, postId: string): bool
   const normalizedPath = pathname.replace(/\/+$/, "");
   return normalizedPath === `/news/${postId}`;
 }
+
+export function isInitialBootstrapRoute(segments: readonly string[]): boolean {
+  return segments.length === 0 || (segments.length === 1 && segments[0] === "index");
+}

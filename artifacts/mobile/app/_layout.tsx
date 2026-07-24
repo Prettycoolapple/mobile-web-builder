@@ -43,6 +43,7 @@ import { parseShareTokenFromUrl, storePendingShareToken } from "@/lib/propertySh
 import { initializeRevenueCat, SubscriptionProvider } from "@/lib/revenuecat";
 import { getCurrentLocale, LocaleProvider, LocaleSync } from "@/lib/i18n";
 import {
+  isInitialBootstrapRoute,
   isPendingNewsDestination,
   parsePendingNewsNavigation,
   pendingNewsNavigationFromData,
@@ -157,6 +158,7 @@ function NotificationSetup() {
   const syncedNewsIdentityRef = useRef<string | null>(null);
   const registeredPushIdentityRef = useRef<string | null>(null);
   const pushOpenLoggedRef = useRef<Set<string>>(new Set());
+  const newsDestinationStableRef = useRef<{ postId: string; since: number } | null>(null);
   const [pendingNewsNavigation, setPendingNewsNavigation] = useState<PendingNewsNavigation | null>(null);
   const [pendingNavigationHydrated, setPendingNavigationHydrated] = useState(false);
   const [navigationAttempt, setNavigationAttempt] = useState(0);
@@ -170,6 +172,7 @@ function NotificationSetup() {
     if (!pending) return false;
     if (pending.notificationId && handledNotificationIdsRef.current.has(pending.notificationId)) return true;
     if (pending.notificationId) handledNotificationIdsRef.current.add(pending.notificationId);
+    newsDestinationStableRef.current = null;
     setPendingNewsNavigation(pending);
     setNavigationAttempt(0);
     void AsyncStorage.setItem(PENDING_NEWS_NAVIGATION_KEY, JSON.stringify(pending))
@@ -215,10 +218,24 @@ function NotificationSetup() {
       || !newsGuestSessionId
       || !pendingNavigationHydrated
       || !pendingNewsNavigation
-      || pathname === "/"
+      || isInitialBootstrapRoute(segments.map(String))
     ) return;
 
     if (isPendingNewsDestination(pathname, pendingNewsNavigation.postId)) {
+      const stable = newsDestinationStableRef.current;
+      if (!stable || stable.postId !== pendingNewsNavigation.postId) {
+        newsDestinationStableRef.current = { postId: pendingNewsNavigation.postId, since: Date.now() };
+        const stableTimer = setTimeout(() => setNavigationAttempt((attempt) => attempt + 1), 2_000);
+        return () => clearTimeout(stableTimer);
+      }
+      const stableForMs = Date.now() - stable.since;
+      if (stableForMs < 2_000) {
+        const stableTimer = setTimeout(
+          () => setNavigationAttempt((attempt) => attempt + 1),
+          2_000 - stableForMs,
+        );
+        return () => clearTimeout(stableTimer);
+      }
       const trackingKey = pendingNewsNavigation.notificationId ?? `${pendingNewsNavigation.postId}:${pendingNewsNavigation.queuedAt}`;
       if (!pushOpenLoggedRef.current.has(trackingKey)) {
         pushOpenLoggedRef.current.add(trackingKey);
@@ -233,6 +250,7 @@ function NotificationSetup() {
       return;
     }
 
+    newsDestinationStableRef.current = null;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     const routeTimer = setTimeout(() => {
       router.replace({
@@ -256,6 +274,7 @@ function NotificationSetup() {
     pendingNavigationHydrated,
     pendingNewsNavigation,
     router,
+    segments,
   ]);
 
   useEffect(() => {
