@@ -19,7 +19,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { requestTrackingPermissionsAsync } from "expo-tracking-transparency";
 import Constants from "expo-constants";
-import { Stack, useRouter, useSegments } from "expo-router";
+import { Stack, usePathname, useRouter, useSegments } from "expo-router";
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
 import * as Notifications from "expo-notifications";
@@ -42,6 +42,13 @@ import { configureAppIconBadgesAsync } from "@/lib/appBadge";
 import { parseShareTokenFromUrl, storePendingShareToken } from "@/lib/propertyShares";
 import { initializeRevenueCat, SubscriptionProvider } from "@/lib/revenuecat";
 import { getCurrentLocale, LocaleProvider, LocaleSync } from "@/lib/i18n";
+import {
+  isPendingNewsDestination,
+  parsePendingNewsNavigation,
+  pendingNewsNavigationFromData,
+  PENDING_NEWS_NAVIGATION_KEY,
+  type PendingNewsNavigation,
+} from "@/lib/newsNotificationNavigation";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -141,6 +148,7 @@ function SplashUntilReady({ fontsReady }: { fontsReady: boolean }) {
 function NotificationSetup() {
   const { getApiHeaders, isLoading, anonymousInstallId, newsGuestSessionId, user } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
   const segments = useSegments();
   const notificationListener = useRef<Notifications.EventSubscription | null>(null);
   const responseListener = useRef<Notifications.EventSubscription | null>(null);
@@ -148,6 +156,107 @@ function NotificationSetup() {
   const handledNotificationIdsRef = useRef<Set<string>>(new Set());
   const syncedNewsIdentityRef = useRef<string | null>(null);
   const registeredPushIdentityRef = useRef<string | null>(null);
+  const pushOpenLoggedRef = useRef<Set<string>>(new Set());
+  const [pendingNewsNavigation, setPendingNewsNavigation] = useState<PendingNewsNavigation | null>(null);
+  const [pendingNavigationHydrated, setPendingNavigationHydrated] = useState(false);
+  const [navigationAttempt, setNavigationAttempt] = useState(0);
+  const [pendingInitialNotification, setPendingInitialNotification] = useState<{
+    data: Record<string, unknown>;
+    notificationId: string;
+  } | null>(null);
+
+  const queueNewsNavigation = useCallback((data: Record<string, unknown> | undefined, notificationId?: string): boolean => {
+    const pending = pendingNewsNavigationFromData(data, notificationId);
+    if (!pending) return false;
+    if (pending.notificationId && handledNotificationIdsRef.current.has(pending.notificationId)) return true;
+    if (pending.notificationId) handledNotificationIdsRef.current.add(pending.notificationId);
+    setPendingNewsNavigation(pending);
+    setNavigationAttempt(0);
+    void AsyncStorage.setItem(PENDING_NEWS_NAVIGATION_KEY, JSON.stringify(pending))
+      .then(() => Notifications.clearLastNotificationResponseAsync())
+      .catch(() => undefined);
+    return true;
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(PENDING_NEWS_NAVIGATION_KEY)
+      .then((raw) => {
+        const restored = parsePendingNewsNavigation(raw);
+        if (!cancelled && restored) {
+          if (restored.notificationId) handledNotificationIdsRef.current.add(restored.notificationId);
+          setPendingNewsNavigation((current) => current ?? restored);
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => { if (!cancelled) setPendingNavigationHydrated(true); });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (checkedInitialNotificationRef.current) return;
+    checkedInitialNotificationRef.current = true;
+    Notifications.getLastNotificationResponseAsync()
+      .then((response) => {
+        if (!response) return;
+        const data = response.notification.request.content.data as Record<string, unknown>;
+        const notificationId = response.notification.request.identifier;
+        if (!queueNewsNavigation(data, notificationId)) {
+          setPendingInitialNotification({ data, notificationId });
+        }
+      })
+      .catch(() => undefined);
+  }, [queueNewsNavigation]);
+
+  useEffect(() => {
+    if (
+      isLoading
+      || !anonymousInstallId
+      || !newsGuestSessionId
+      || !pendingNavigationHydrated
+      || !pendingNewsNavigation
+      || pathname === "/"
+    ) return;
+
+    if (isPendingNewsDestination(pathname, pendingNewsNavigation.postId)) {
+      const trackingKey = pendingNewsNavigation.notificationId ?? `${pendingNewsNavigation.postId}:${pendingNewsNavigation.queuedAt}`;
+      if (!pushOpenLoggedRef.current.has(trackingKey)) {
+        pushOpenLoggedRef.current.add(trackingKey);
+        void fetch(`${getApiBase()}/news/${encodeURIComponent(pendingNewsNavigation.postId)}/push-open`, {
+          method: "POST",
+          headers: getApiHeaders(),
+        }).catch(() => undefined);
+      }
+      void AsyncStorage.removeItem(PENDING_NEWS_NAVIGATION_KEY);
+      void Notifications.clearLastNotificationResponseAsync().catch(() => undefined);
+      setPendingNewsNavigation(null);
+      return;
+    }
+
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const routeTimer = setTimeout(() => {
+      router.replace({
+        pathname: "/news/[postId]",
+        params: { postId: pendingNewsNavigation.postId, source: "push" },
+      } as never);
+      retryTimer = setTimeout(() => setNavigationAttempt((attempt) => attempt + 1), 1_000);
+    }, navigationAttempt === 0 ? 75 : 250);
+
+    return () => {
+      clearTimeout(routeTimer);
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [
+    anonymousInstallId,
+    getApiHeaders,
+    isLoading,
+    navigationAttempt,
+    newsGuestSessionId,
+    pathname,
+    pendingNavigationHydrated,
+    pendingNewsNavigation,
+    router,
+  ]);
 
   useEffect(() => {
     if (isLoading || !anonymousInstallId || !newsGuestSessionId) return;
@@ -233,6 +342,7 @@ function NotificationSetup() {
 
     const openFromNotificationData = (data: Record<string, unknown> | undefined, notificationId?: string) => {
       if (!data || typeof data !== "object") return;
+      if (queueNewsNavigation(data, notificationId)) return;
       if (notificationId) {
         if (handledNotificationIdsRef.current.has(notificationId)) return;
         handledNotificationIdsRef.current.add(notificationId);
@@ -252,16 +362,6 @@ function NotificationSetup() {
       if (type === "watchlist_change") {
         DeviceEventEmitter.emit("projectAlpha:notificationsChanged");
         router.push({ pathname: "/(tabs)/history", params: { tab: "watchlist" } } as never);
-        return;
-      }
-      if (type === "news_post") {
-        const postId = typeof data.postId === "string" ? data.postId : undefined;
-        if (!postId) return;
-        void fetch(`${getApiBase()}/news/${encodeURIComponent(postId)}/push-open`, {
-          method: "POST",
-          headers: getApiHeaders(),
-        }).catch(() => undefined);
-        router.push({ pathname: "/news/[postId]", params: { postId, source: "push" } } as never);
         return;
       }
       if (threadId) {
@@ -288,15 +388,9 @@ function NotificationSetup() {
       );
     });
 
-    if (!checkedInitialNotificationRef.current) {
-      checkedInitialNotificationRef.current = true;
-      Notifications.getLastNotificationResponseAsync().then((response) => {
-        if (!response) return;
-        openFromNotificationData(
-          response.notification.request.content.data as Record<string, unknown>,
-          response.notification.request.identifier,
-        );
-      });
+    if (pendingInitialNotification) {
+      openFromNotificationData(pendingInitialNotification.data, pendingInitialNotification.notificationId);
+      setPendingInitialNotification(null);
     }
 
     return () => {
@@ -306,7 +400,7 @@ function NotificationSetup() {
       notificationListener.current?.remove();
       responseListener.current?.remove();
     };
-  }, [anonymousInstallId, getApiHeaders, isLoading, newsGuestSessionId, router, segments, user?.id]);
+  }, [anonymousInstallId, getApiHeaders, isLoading, newsGuestSessionId, pendingInitialNotification, queueNewsNavigation, router, segments, user?.id]);
 
   return null;
 }
