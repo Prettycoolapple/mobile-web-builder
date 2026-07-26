@@ -183,7 +183,10 @@ function NotificationComposer({ postId, bulkEnabled, onChanged }: { postId: stri
   useEffect(() => { void load(); }, [load]);
 
   const save = useCallback(async (silent = false): Promise<PostDetail | null> => {
-    if (!post || deletingRef.current || post.status !== "draft" || post.stagedAt || !dirtyRef.current) return post;
+    if (!post || deletingRef.current || post.status !== "draft" || post.stagedAt) return post;
+    // Autosave usually beats the button, so an explicit click would otherwise
+    // look like nothing happened at all.
+    if (!dirtyRef.current) { if (!silent) setNotice("Draft is already saved"); return post; }
     if (savingRef.current) return null;
     const snapshot = post;
     const saveVersion = editVersionRef.current;
@@ -461,7 +464,7 @@ function NotificationComposer({ postId, bulkEnabled, onChanged }: { postId: stri
         </>}
       </div>)}</div>
       {isEditable && <button className="btn-secondary translate-button" onClick={() => void translate()} disabled={translating}>{translating ? "Translating…" : `Generate ${effectiveSourceLanguage === "en" ? "Chinese" : "English"} translation`}</button>}
-      {post.translationStale && <p className="translation-warning">Translation needs regeneration or review before sending.</p>}
+      {post.translationStale && <p className="translation-warning">“Send with push” and “Stage for launch” stay disabled until both languages are confirmed. Generate the translation, or fill the translated title and every translated text block by hand.</p>}
     </section><aside className="news-preview-panel"><div className="preview-tabs"><button className={previewLanguage === "en" ? "active" : ""} onClick={() => setPreviewLanguage("en")}>English</button><button className={previewLanguage === "zh" ? "active" : ""} onClick={() => setPreviewLanguage("zh")}>中文</button></div><div className="push-preview"><small>PUSH NOTIFICATION</small><strong>Project Alpha</strong><p>{previewTitle || "Your post title will appear here"}</p><em>Only the title is sent. Readers open the app for the article.</em></div><article className="article-preview"><h1>{previewTitle || "Untitled post"}</h1>{post.blocks.map((block) => block.type === "text" ? <MarkdownPreview key={block.id} value={(previewLanguage === "en" ? block.textEn : block.textZh) || "Your text preview will appear here."} /> : <AuthenticatedImage key={block.id} article image={{ ...(post.images.find((image) => image.id === block.imageId) ?? { id: block.imageId, objectPath: "", contentType: "", byteSize: 0, sortOrder: 0 }), url: block.url }} />)}</article></aside></div>
   </div>;
 }

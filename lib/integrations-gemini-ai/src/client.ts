@@ -7,6 +7,13 @@ type GenerateContentArgs = {
     systemInstruction?: string;
     maxOutputTokens?: number;
     temperature?: number;
+    /**
+     * Abort the upstream request after this many milliseconds. Without it a
+     * stalled provider call keeps the caller (and the mobile client waiting on
+     * it) hanging until the platform kills the whole function. Callers that
+     * have a fallback path should always set this.
+     */
+    timeoutMs?: number;
     // Kept for compatibility with existing call sites.
     thinkingConfig?: { thinkingBudget?: number };
   };
@@ -29,20 +36,38 @@ function normalizeProvider(raw: string | undefined): ProviderMode {
   );
 }
 
-function mapRequestedModel(inputModel: string): string {
+/**
+ * DeepSeek retired the `deepseek-chat` and `deepseek-reasoner` aliases at
+ * 2026-07-24 15:59 UTC; calls using them now fail outright. Callsites across
+ * the app still pass the old names as tier hints, and a deployment env var may
+ * still pin one, so the dead names are rewritten here — the single point every
+ * request funnels through — rather than at ~30 callsites.
+ */
+const RETIRED_MODEL_ALIASES: Record<string, string> = {
+  "deepseek-chat": "deepseek-v4-flash",
+  "deepseek-reasoner": "deepseek-v4-pro",
+};
+
+function replaceRetiredAlias(model: string): string {
+  return RETIRED_MODEL_ALIASES[model.trim().toLowerCase()] ?? model;
+}
+
+type ModelTier = "fast" | "pro";
+
+function mapRequestedModel(inputModel: string): { model: string; tier: ModelTier } {
   const model = inputModel.trim().toLowerCase();
   const fastFallback = process.env.AI_OPENAI_COMPAT_MODEL_FAST?.trim();
   const proFallback = process.env.AI_OPENAI_COMPAT_MODEL_PRO?.trim();
   const defaultFallback = process.env.AI_OPENAI_COMPAT_MODEL_DEFAULT?.trim();
   const provider = process.env.AI_PROVIDER?.trim().toLowerCase() || "deepseek";
-  const providerFastDefault = provider === "deepseek" ? "deepseek-chat" : inputModel;
-  const providerProDefault = provider === "deepseek" ? "deepseek-reasoner" : providerFastDefault;
+  const providerFastDefault = provider === "deepseek" ? "deepseek-v4-flash" : inputModel;
+  const providerProDefault = provider === "deepseek" ? "deepseek-v4-pro" : providerFastDefault;
 
   // Legacy callsites use "flash" for fast ops and "pro" for heavier reasoning.
   if (model.includes("flash") || model.includes("chat")) {
-    return fastFallback ?? defaultFallback ?? proFallback ?? providerFastDefault;
+    return { model: replaceRetiredAlias(fastFallback ?? defaultFallback ?? proFallback ?? providerFastDefault), tier: "fast" };
   }
-  return proFallback ?? defaultFallback ?? fastFallback ?? providerProDefault;
+  return { model: replaceRetiredAlias(proFallback ?? defaultFallback ?? fastFallback ?? providerProDefault), tier: "pro" };
 }
 
 function mapRole(role: string): "user" | "assistant" {
@@ -90,20 +115,42 @@ function createOpenAICompatClient(): AiLike {
           messages.push({ role: mapRole(item.role), content });
         }
 
-        const model = mapRequestedModel(args.model);
-        const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({
-            model,
-            messages,
-            max_tokens: args.config?.maxOutputTokens,
-            temperature: args.config?.temperature,
-          }),
-        });
+        const { model, tier } = mapRequestedModel(args.model);
+        // Both v4 models think by default, but the retired `deepseek-chat` this
+        // replaces did not. Fast-tier callers are latency- and cost-sensitive,
+        // so they keep non-thinking behaviour unless they ask for a budget.
+        const thinkingBudget = args.config?.thinkingConfig?.thinkingBudget;
+        const disableThinking = thinkingBudget === 0 || (tier === "fast" && thinkingBudget === undefined);
+        const timeoutMs = args.config?.timeoutMs;
+        const abortController = timeoutMs && timeoutMs > 0 ? new AbortController() : null;
+        const timeoutHandle = abortController
+          ? setTimeout(() => abortController.abort(), timeoutMs)
+          : null;
+        let response: Awaited<ReturnType<typeof fetch>>;
+        try {
+          response = await fetch(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+              model,
+              messages,
+              max_tokens: args.config?.maxOutputTokens,
+              temperature: args.config?.temperature,
+              ...(disableThinking ? { thinking: { type: "disabled" } } : {}),
+            }),
+            signal: abortController?.signal,
+          });
+        } catch (err) {
+          if (abortController?.signal.aborted) {
+            throw new Error(`OpenAI-compatible provider timed out after ${timeoutMs}ms (model=${model})`);
+          }
+          throw err;
+        } finally {
+          if (timeoutHandle) clearTimeout(timeoutHandle);
+        }
 
         if (!response.ok) {
           const body = await response.text().catch(() => "");

@@ -21,6 +21,7 @@ Preserve Markdown structure, emojis, URLs, numbers, NZ place names, company name
 Return ONLY valid JSON with exactly two string fields: {"title":"...","body":"..."}. Do not add commentary.`,
       temperature: 0.1,
       maxOutputTokens: Math.min(8192, Math.max(512, input.body.length * 3)),
+      timeoutMs: 60_000,
       thinkingConfig: { thinkingBudget: 0 },
     },
     contents: [{
@@ -30,7 +31,23 @@ Return ONLY valid JSON with exactly two string fields: {"title":"...","body":"..
   });
 
   const raw = (response.text ?? "").trim().replace(/^```json\s*/i, "").replace(/\s*```$/, "");
-  const parsed = JSON.parse(raw) as { title?: unknown; body?: unknown };
+  if (!raw) throw new Error("Translation returned an empty response from the AI provider");
+  // The model occasionally wraps the object in a sentence. Fall back to the
+  // outermost {...} span so a stray preamble does not fail an otherwise good
+  // translation, and report what came back when even that is unparseable.
+  let parsed: { title?: unknown; body?: unknown };
+  try {
+    parsed = JSON.parse(raw) as { title?: unknown; body?: unknown };
+  } catch {
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    try {
+      if (start < 0 || end <= start) throw new Error("no object found");
+      parsed = JSON.parse(raw.slice(start, end + 1)) as { title?: unknown; body?: unknown };
+    } catch {
+      throw new Error(`Translation returned unparseable output: ${raw.slice(0, 200)}`);
+    }
+  }
   if (typeof parsed.title !== "string" || typeof parsed.body !== "string" || !parsed.title.trim() || !parsed.body.trim()) {
     throw new Error("Translation returned incomplete content");
   }

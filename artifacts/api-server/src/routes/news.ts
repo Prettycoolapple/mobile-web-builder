@@ -292,14 +292,20 @@ router.post("/admin/news-posts/:postId/translate", requireAdmin, async (req, res
   const texts: string[] = Array.isArray(req.body?.texts) ? (req.body.texts as unknown[]).filter((text): text is string => typeof text === "string") : [];
   if (!title || texts.length === 0 || texts.some((text) => !text.trim())) return void res.status(400).json({ error: "Title and text blocks are required" });
   try {
-    const [titleResult, ...blockResults] = await Promise.all([
+    // The first call carries the title, so its body is block one's translation
+    // — translating that block again would only add a second chance to fail.
+    const [firstResult, ...restResults] = await Promise.all([
       translateNewsPost({ sourceLanguage, title, body: texts[0]! }),
-      ...texts.map((body) => translateNewsPost({ sourceLanguage, title: "News", body })),
+      ...texts.slice(1).map((body) => translateNewsPost({ sourceLanguage, title: "News", body })),
     ]);
-    res.json({ title: titleResult.title, texts: blockResults.map((result) => result.body) });
+    res.json({ title: firstResult!.title, texts: [firstResult!.body, ...restResults.map((result) => result.body)] });
   } catch (error) {
     req.log.warn({ error }, "News translation failed");
-    res.status(502).json({ error: "Translation service is unavailable" });
+    // Admin-only route: the provider's own wording (bad key, insufficient
+    // balance, rate limit, timeout) is what makes this fixable without digging
+    // through deployment logs.
+    const reason = (error as Error)?.message?.slice(0, 300) ?? "unknown error";
+    res.status(502).json({ error: `Translation service is unavailable: ${reason}` });
   }
 });
 
