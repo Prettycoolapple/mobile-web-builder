@@ -90,6 +90,18 @@ const CONFIRMED_SUBDIVISIONS: Array<{
       "66C Marine Parade, Mellons Bay, Auckland 2014",
     ],
   },
+  {
+    number: "174",
+    streetKey: "eastcoastroad",
+    suburbKey: "forresthill",
+    subLots: [
+      "1/174 East Coast Road, Forrest Hill, Auckland 0620",
+      "2/174 East Coast Road, Forrest Hill, Auckland 0620",
+      "3/174 East Coast Road, Forrest Hill, Auckland 0620",
+      "4/174 East Coast Road, Forrest Hill, Auckland 0620",
+      "5/174 East Coast Road, Forrest Hill, Auckland 0620",
+    ],
+  },
 ];
 
 /**

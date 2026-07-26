@@ -87,6 +87,31 @@ describe("subdivision detection", () => {
     });
   });
 
+  it("offers the verified cross-lease child addresses instead of analysing the stale parent", async () => {
+    const result = await detectSubdivision(
+      "174 East Coast Road, Forrest Hill, North Shore City, Auckland",
+    );
+
+    expect(result.isSubdivided).toBe(true);
+    expect(result.subLots).toEqual([
+      "1/174 East Coast Road, Forrest Hill, Auckland 0620",
+      "2/174 East Coast Road, Forrest Hill, Auckland 0620",
+      "3/174 East Coast Road, Forrest Hill, Auckland 0620",
+      "4/174 East Coast Road, Forrest Hill, Auckland 0620",
+      "5/174 East Coast Road, Forrest Hill, Auckland 0620",
+    ]);
+  });
+
+  it("does not block an explicitly selected slash-unit child", async () => {
+    await expect(
+      detectSubdivision("5/174 East Coast Road, Forrest Hill, Auckland"),
+    ).resolves.toEqual({
+      isSubdivided: false,
+      parentAddress: "5/174 East Coast Road, Forrest Hill, Auckland",
+      subLots: [],
+    });
+  });
+
   it("lets a confirmed base address win over neighbouring LINZ suffix addresses", async () => {
     mockedFetchLINZAddressCandidates.mockResolvedValue([
       { address: "15 Amy Street, Ellerslie, Auckland 1051", id: "base-15", rank: 0.97 },

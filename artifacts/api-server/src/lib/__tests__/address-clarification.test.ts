@@ -139,6 +139,19 @@ describe("address clarification candidate dedupe", () => {
       },
     ]);
   });
+
+  it("accepts a geocoder-formatted slash unit whose unit token is comma-separated", () => {
+    const formatted = "5/174, East Coast Road, Forrest Hill, Devonport-Takapuna, Auckland, 0620";
+    const options = filterAddressOptionsForAnalysis(
+      "5/174 East Coast Road, Forrest Hill, North Shore City, Auckland",
+      [{ formatted, lat: -36.7618154, lng: 174.7563412 }],
+    );
+
+    expect(isFullStreetAddressForAnalysis(formatted)).toBe(true);
+    expect(options).toEqual([
+      { formatted, lat: -36.7618154, lng: 174.7563412 },
+    ]);
+  });
 });
 
 describe("multi-suburb address ambiguity", () => {
